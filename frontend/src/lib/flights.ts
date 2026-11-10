@@ -416,18 +416,59 @@ export function stripDots(f: Flight | FlightRow): string {
   return out;
 }
 
+/** Why a route halted, without the stop's own name in front — the words
+ * the Sky's halted stop shows under its name (flights/SkyChain `stopWhy`):
+ * "CI checks failed: 2 of 14 red" at "CI checks" says "Failed: 2 of 14 red".
+ * The rail chip's tooltip, the Sky's Needs you card and the pane strip's
+ * line (`stripLabel`) read it too. */
+export function haltedWhy(stopTitle: string | null | undefined, reason: string | null | undefined): string {
+  const r = String(reason || "").trim();
+  const t = String(stopTitle || "").trim();
+  if (t && r.toLowerCase().startsWith(t.toLowerCase() + " ")) {
+    const rest = r.slice(t.length).trim();
+    return rest ? rest[0].toUpperCase() + rest.slice(1) : r;
+  }
+  return r;
+}
+
+const short = (s: string, n = 48) => {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
+};
+
+/** What a route parked on you waits for, in a few words: a failure handed
+ * to you ("Failed: …"), else what its stop asks (its text, or the server's
+ * note); "" when that only repeats the stop's name. */
+function waitsFor(f: Flight | FlightRow, title: string): string {
+  let what = "";
+  if ("steps" in f) {
+    const cur = f.steps[f.cursor];
+    const ss = cur ? f.step_states?.[cur.id] : undefined;
+    const failed = String(ss?.detail?.failed_reason ?? "").trim();
+    what = failed ? "Failed: " + failed : youText(f);
+  } else what = String((f as { reason?: unknown }).reason ?? "");
+  what = short(haltedWhy(title, what));
+  return what.toLowerCase() === title.trim().toLowerCase() ? "" : what;
+}
+
 /** The pane strip's line: `Ticket to merge · ●●●○○○ · Reviews settle (4m)`
- * (the strip draws the bird glyph before it). A full flight carries the
- * step's `since`; a session row does not, so its line has no elapsed. */
+ * (the strip draws the bird glyph before it), led by why it is parked:
+ * `Halted · <what failed> · CI checks`, `Needs you · <what> · Approve`,
+ * `Paused · Push`. A full flight carries the step's `since`; a session row
+ * does not, so its line has no elapsed. */
 export function stripLabel(f: Flight | FlightRow, now = Date.now()): string {
   const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
   const elapsed = "steps" in f ? currentElapsed(f, now) : "";
-  const tail =
-    f.state === "done"
-      ? "Finished"
-      : f.state === "cancelled"
-        ? "Cancelled"
-        : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
+  let lead = "";
+  if (f.state === "paused") lead = "Paused · ";
+  else if (f.state === "halted") {
+    const why = short(haltedWhy(title, String((f as { reason?: unknown }).reason ?? "")));
+    lead = "Halted · " + (why ? why + " · " : "");
+  } else if (f.state === "waiting_you") {
+    const what = waitsFor(f, title);
+    lead = "Needs you · " + (what ? what + " · " : "");
+  }
+  const tail = f.state === "done" ? "Finished" : f.state === "cancelled" ? "Cancelled" : lead + title + (elapsed ? " (" + elapsed + ")" : "");
   return [f.plan_name, stripDots(f), tail].filter((x) => x.trim()).join(" · ");
 }
 

@@ -17,7 +17,7 @@ import { planForSession } from "../../lib/behaviors";
 import { openBehaviors } from "../../lib/behaviorsFocus";
 import { BehaviorsCard } from "../behaviors/BehaviorsCard";
 import { VerifyConfirm } from "../behaviors/VerifyConfirm";
-import { verifyOf } from "../../lib/sessionState";
+import { verifyLine, verifyOf } from "../../lib/sessionState";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { useNow } from "../../lib/useNow";
@@ -37,7 +37,7 @@ import {
   type FlightRow,
   type StepKindDef,
 } from "../../lib/flights";
-import { atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { HALT_POINT_REASON, atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
 import { controlFlight, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
@@ -72,13 +72,16 @@ export function flightHeadline(f: Flight): string {
   return f.session || f.plan_name;
 }
 
-/** A Verify stop parked on you (docs/behaviors.md §5). When the session's
- * own agent did its verify steps and left a person's (`verify.state`
- * "needs_you"), those steps and Confirm verified / Not verified… — the one
- * answer a person gives; the stop moves on once it is given, or on Skip.
- * Otherwise the Behaviors card. `compact` (the pane's one-line strip): Skip,
- * and a way to the card — the pane's own verify row carries the confirm.
- * Before the behaviors are written: what it waits for, and Skip. */
+/** A Verify stop parked on you (docs/behaviors.md §5), by the server's
+ * `detail.ask`: `confirm` — when the session's own agent did its verify
+ * steps and left a person's (`verify.state` "needs_you"), those steps and
+ * Confirm verified / Not verified… (the one answer a person gives; the stop
+ * moves on once it is given, or on Skip), else its card; `blocked` — the
+ * check couldn't finish: why, Retry (verify again) and Skip; `memory` —
+ * memory refused the check: why, Retry and Skip. `compact` (the pane's
+ * one-line strip): the buttons, and a way to the card — the pane's own
+ * verify row carries the confirm. Before its steps are written: what it
+ * waits for, and Skip. */
 export function VerifyStopActions({ flight, compact = false }: { flight: Flight; compact?: boolean }) {
   const step = flight.steps[flight.cursor];
   const plans = useTestPlans().data?.plans;
@@ -101,20 +104,19 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
       Skip
     </button>
   );
-  // The check came to you because it needs you to DO something (a manual
-  // step the checker reported as "needs you: …") or because memory refused
-  // its checker (docs/flights.md "When the check can't go on"): say what, and
-  // Done means "I did it" — the server turns it into a retry that checks again.
+  // The check couldn't finish (`blocked`: no report, a deadline, the window
+  // gone) or memory refused it (`memory`): say why, and Retry verifies again
+  // (the server's `op_retry` takes both).
   const ss = flight.step_states?.[step.id];
   const verify = verifyOf(row);
   const confirming = verify?.state === "needs_you";
-  // A person confirming answers it — never "I did it — check again" too.
   const ask = confirming ? "" : String(ss?.detail?.ask || "");
-  if (ask === "needs_you" || ask === "memory") {
+  if (ask === "blocked" || ask === "memory") {
     const items = Array.isArray(ss?.detail?.items) ? (ss?.detail?.items as unknown[]).map(String) : [];
+    const why = verifyStopWhy(ss?.note, ask);
     return (
       <div className={"fl-you fl-you-verify fl-you-needs" + (compact ? " fl-you-compact" : "")} onClick={stop} data-no-drag>
-        <p className="fl-you-text">{ss?.note || "The check needs you"}</p>
+        <p className="fl-you-text">{why}</p>
         {!compact && items.length > 0 && (
           <ul className="fl-you-needs-list">
             {items.map((t, i) => (
@@ -125,15 +127,15 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
         <div className="fl-you-acts">
           <button
             type="button"
-            className="btn-primary fl-btn fl-done"
+            className="btn-primary fl-btn fl-retry"
             disabled={busy}
-            title={ask === "memory" ? "Try to start the check again" : "You've done it — the agent checks these behaviors again"}
+            title={ask === "memory" ? "Try to start the check again" : "Its agent verifies its work again"}
             onClick={() => {
               setBusy(true);
-              void stepDone(flight.id, step.id).finally(() => setBusy(false));
+              void stepRetry(flight.id, step.id).finally(() => setBusy(false));
             }}
           >
-            {ask === "memory" ? "Retry" : "I did it — check again"}
+            Retry
           </button>
           {skip}
         </div>
@@ -143,7 +145,7 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
   if (confirming && !compact && !plan)
     return (
       <div className="fl-you fl-you-verify fl-you-needs" onClick={stop} data-no-drag>
-        <p className="fl-you-text">The agent did its steps — do yours, then confirm.</p>
+        <p className="fl-you-text">{verifyLine(verify)}</p>
         <VerifyConfirm verify={verify} />
         <div className="fl-you-acts">{skip}</div>
       </div>
@@ -151,11 +153,11 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
   if (compact || !plan)
     return (
       <div className={"fl-you fl-you-verify" + (compact ? " fl-you-compact" : "")} onClick={stop} data-no-drag>
-        {!compact && <p className="fl-you-text">Writing the behaviors… they show here once they are written.</p>}
+        {!compact && <p className="fl-you-text">{VERIFY_WRITING}</p>}
         <div className="fl-you-acts">
           {plan && (
-            <button type="button" className="btn-primary fl-btn fl-behaviors" title="The behaviors and their results, on the session's frame in the Sky" onClick={() => openBehaviors({ planId: plan.id })}>
-              Behaviors
+            <button type="button" className="btn-primary fl-btn fl-behaviors" title="Its verify steps and their results, on the session's frame in the Sky" onClick={() => openBehaviors({ planId: plan.id })}>
+              Verify
             </button>
           )}
           {skip}
@@ -167,6 +169,21 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
       <BehaviorsCard plan={plan} compact flightStep={{ flightId: flight.id, stepId: step.id }} />
     </div>
   );
+}
+
+/** The pane strip's button while this session's own agent verifies a Verify stop. */
+export const VERIFY_WALK_HERE = "Its agent is verifying its work — open the session to talk to it";
+
+/** A Verify stop parked before its steps are written. */
+export const VERIFY_WRITING = "Its agent is writing its verify steps… they show here once they are written.";
+
+/** Why a Verify stop parked on you couldn't go on, as its tile says it:
+ * the server's note with a capital ("The check couldn't finish: …"), else
+ * the plain words of its `ask`. */
+export function verifyStopWhy(note: unknown, ask: string): string {
+  const n = String(note ?? "").trim();
+  if (n) return n[0].toUpperCase() + n.slice(1);
+  return ask === "memory" ? "Couldn't start the check: memory is low" : "The check couldn't finish";
 }
 
 /** The session walking the flight's current Verify stop IN PLACE — the
@@ -182,22 +199,22 @@ export function verifyWalkSession(flight: Pick<Flight, "steps" | "cursor" | "sta
   return String(d.walk_session || flight.session || "");
 }
 
-/** "Walking here — talk to it": a Verify stop being walked by this session's
- * own agent. One press opens its Agent tab (`onOpen`), where the steps are
- * its tasks and the person can talk to it mid-walk. */
+/** "Its agent is verifying its work — open the session to talk to it": a
+ * Verify stop being worked by this session's own agent. One press opens its
+ * Agent tab (`onOpen`), where the person can talk to it mid-verify. */
 export function VerifyWalkHint({ session, here, onOpen }: { session: string; here: boolean; onOpen(): void }) {
   if (!session) return null;
   return (
     <button
       type="button"
       className="test-btn fl-btn fl-walk-hint"
-      title={"The behaviors are " + session + "'s tasks now — open its agent to follow them and talk to it"}
+      title={here ? "Opens its Agent tab, where it verifies its work and you can talk to it" : "Opens " + windowName(session) + ", where its agent verifies the work and you can talk to it"}
       onClick={(e) => {
         e.stopPropagation();
         onOpen();
       }}
     >
-      {here ? "Walking here — talk to it" : "Walking in " + session + " — talk to it there"}
+      {here ? VERIFY_WALK_HERE : windowName(session) + "'s agent is verifying the work — open it to talk to it"}
     </button>
   );
 }
@@ -230,20 +247,25 @@ export function nextIsHaltPoint(flight: Pick<Flight, "steps" | "cursor" | "step_
 }
 
 /** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
- * what enables Done); Retry / Skip on a halted stop, and Let the agent fix it
- * wherever the server takes it (`canFixStep`); Carry on / Skip at a reached
- * halt point (`atHaltPoint`: nothing failed, so nothing to retry). A Verify stop parked on you
- * answers its behaviors instead (`VerifyStopActions`). `inTile` (a stop on
- * the Sky): its text is the tile's own line under its name, not a paragraph
- * here. */
+ * what enables Done); Retry / Skip on a halted stop — and on one whose
+ * failure was handed to you (`on_fail: you`: Done would mark the failure
+ * done; Retry runs it again) — and Let the agent fix it wherever the server
+ * takes it (`canFixStep`); Carry on / Skip on a paused route, at a reached
+ * halt point (`atHaltPoint`: nothing failed, so nothing to retry) or where a
+ * person paused it. A Verify stop parked on you answers its verify instead
+ * (`VerifyStopActions`). `inTile` (a stop on the Sky): its text is the
+ * tile's own line under its name, not a paragraph here. */
 export function YouStepActions({ flight, compact = false, inTile = false }: { flight: Flight; compact?: boolean; inTile?: boolean }) {
   const step = flight.steps[flight.cursor];
   const items = youItems(step);
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const haltPoint = atHaltPoint(flight);
-  if (!step || (flight.state !== "waiting_you" && flight.state !== "halted" && !haltPoint)) return null;
-  if (step.kind === "verify" && flight.state === "waiting_you") return <VerifyStopActions flight={flight} compact={compact} />;
+  const paused = haltPoint || flight.state === "paused";
+  const failedReason = step ? String(flight.step_states?.[step.id]?.detail?.failed_reason ?? "").trim() : "";
+  const handed = flight.state === "waiting_you" && !!failedReason;
+  if (!step || (flight.state !== "waiting_you" && flight.state !== "halted" && !paused)) return null;
+  if (step.kind === "verify" && flight.state === "waiting_you" && !handed) return <VerifyStopActions flight={flight} compact={compact} />;
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -254,12 +276,12 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
   };
   const key = (i: number) => flight.id + ":" + step.id + ":" + i;
   const allTicked = items.every((_, i) => ticked[key(i)]);
-  const halted = flight.state === "halted" || haltPoint;
-  const fix = !haltPoint && canFixStep(flight);
-  const text = youText(flight);
+  const halted = flight.state === "halted" || paused || handed;
+  const fix = !paused && canFixStep(flight);
+  const text = handed ? (/^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason) : youText(flight);
   return (
     <div className={"fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : "")} onClick={stop} data-no-drag>
-      {!compact && !inTile && text && !halted && <p className="fl-you-text">{text}</p>}
+      {!compact && !inTile && text && (!halted || handed) && <p className="fl-you-text">{text}</p>}
       {!halted && items.length > 0 && (
         <ul className="fl-you-items">
           {items.map((it, i) => (
@@ -277,12 +299,12 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
         </ul>
       )}
       <div className="fl-you-acts">
-        {haltPoint ? (
+        {paused ? (
           <button
             type="button"
             className="btn-primary fl-btn fl-carry"
             disabled={busy}
-            title={"Carry on past the halt point — “" + step.title + "” runs, and the route goes on"}
+            title={haltPoint ? "Carry on past the halt point — “" + step.title + "” runs, and the route goes on" : "Carry on — the route goes on from “" + step.title + "”"}
             onClick={() => void run(() => controlFlight(flight.id, "resume"))}
           >
             Carry on
@@ -292,7 +314,7 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
             type="button"
             className="btn-primary fl-btn"
             disabled={busy}
-            title="Run this stop again"
+            title={handed ? "Run “" + step.title + "” again" : "Run this stop again"}
             onClick={() => void run(() => stepRetry(flight.id, step.id))}
           >
             Retry
@@ -324,10 +346,10 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
           className="test-btn fl-btn fl-skip"
           disabled={busy}
           title={"Skip “" + step.title + "” — the route goes on without it"}
-          // At a halt point the server keeps a paused route paused after a
-          // skip (`_advance_keeping_pause`): Skip carries on too, as it says
-          // — unless the next stop is a halt point itself (it halts there).
-          onClick={() => void run(async () => (await stepSkip(flight.id, step.id)) && haltPoint && flight.state === "paused" && !nextIsHaltPoint(flight) && controlFlight(flight.id, "resume"))}
+          // The server keeps a paused route paused after a skip
+          // (`_advance_keeping_pause`): Skip carries on too, as it says —
+          // unless the next stop is a halt point itself (it halts there).
+          onClick={() => void run(async () => (await stepSkip(flight.id, step.id)) && flight.state === "paused" && !nextIsHaltPoint(flight) && controlFlight(flight.id, "resume"))}
         >
           Skip
         </button>
@@ -425,13 +447,14 @@ export function useCancelAsk(flight: Flight | null) {
  * Behaviors card opens in the tile's place (docs/behaviors.md §1). */
 export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk: () => void, opts: { verifyInPlace?: boolean; inTile?: boolean } = {}) {
   const cur = flight ? flight.steps[flight.cursor] : null;
-  const verifyHere = !!flight && cur?.kind === "verify" && flight.state === "waiting_you";
+  // A Verify stop parked on its verify (not on a failure handed to you).
+  const verifyHere = !!flight && cur?.kind === "verify" && flight.state === "waiting_you" && !flight.step_states?.[cur.id]?.detail?.failed_reason;
   const expanded = (n: DiagramNode) =>
     !!flight &&
     expand &&
     n.kind === "stop" &&
     n.index === flight.cursor &&
-    (n.state === "perched" || n.state === "halted" || (n.state === "paused" && atHaltPoint(flight))) &&
+    (n.state === "perched" || n.state === "halted" || n.state === "paused") &&
     !(opts.verifyInPlace && verifyHere);
   const renderInBox = (n: DiagramNode): ReactNode => {
     if (!flight || n.kind !== "stop") return null;
@@ -452,7 +475,7 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
     // A Verify stop's behaviors: room for the card (it scrolls past it).
     if (verifyHere) return { w: Math.max(base.w, 320), h: base.h + 220 };
     const items = n.state === "perched" ? youItems(cur).length : 0;
-    const text = n.state === "perched" && youText(flight!) ? 24 : 0;
+    const text = n.state === "perched" && (youText(flight!) || n.reason) ? 24 : 0;
     return { w: Math.max(base.w, 250), h: base.h + text + items * 23 + 38 };
   };
   return { renderInBox, sizeOf };
@@ -530,8 +553,8 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
               <span className="fl-now-title">{you ? perchLabel(step.title) : step.title}</span>
               {elapsed && <span className="fl-now-elapsed">{elapsed}</span>}
               {flight.state === "paused" && (
-                <span className="fl-now-paused" title={flight.reason === "halt point" ? "The route reached a halt point and stopped before this stop — Carry on to go on" : "Halted by you — Carry on to go on"}>
-                  {flight.reason === "halt point" ? "Paused at a halt point" : "Paused"}
+                <span className="fl-now-paused" title={flight.reason === HALT_POINT_REASON ? "The route reached a halt point and stopped before this stop — Carry on to go on" : "Paused by you — Carry on to go on"}>
+                  {flight.reason === HALT_POINT_REASON ? "Paused at a halt point" : "Paused"}
                 </span>
               )}
               {flight.state === "halted" && flight.reason && <span className="fl-now-reason">{flight.reason}</span>}
@@ -574,6 +597,8 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
   if (!row || !live) return null;
   const line = full ? stripLabel(full, now) : stripLabel(row);
   const waiting = row.state === "waiting_you" || row.state === "halted";
+  // Parked (on you, halted) or paused: its one-click way on, right here.
+  const parked = waiting || row.state === "paused";
   const walking = verifyWalkSession(full);
   return (
     <div className={"fl-strip fl-state-" + row.state + (waiting || rowWaitsOnYou(row) ? " fl-needs" : "")} data-tour="flights-strip" onMouseDown={stop}>
@@ -587,7 +612,7 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
           <Bird size={13} />
           <span className="fl-strip-text">{line}</span>
         </button>
-        {full && waiting && <YouStepActions flight={full} compact />}
+        {full && parked && <YouStepActions flight={full} compact />}
         {walking && (
           <VerifyWalkHint
             session={walking}

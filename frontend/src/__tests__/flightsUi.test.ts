@@ -208,7 +208,7 @@ describe("a flight's card", () => {
 
   it("a paused flight says so, offers Carry on in its ⋯, and nothing pulses", () => {
     const p = card(flight({ state: "paused", cursor: 1, step_states: {} }));
-    expect(p).toMatch(/class="fl-now-paused" title="Halted by you[^"]*">Paused</);
+    expect(p).toMatch(/class="fl-now-paused" title="Paused by you[^"]*">Paused</);
     expect(p).toContain(">Carry on</button>");
     expect(p).not.toContain(">Halt now</button>");
     expect(p).not.toContain(">Done</button>");
@@ -247,7 +247,7 @@ describe("the pane strip", () => {
       c.setQueryData(["flights"], [flight()]);
       c.setQueryData(["flight-kinds"], KINDS);
     });
-    expect(html).toContain('class="fl-strip-text">Ticket to merge · ●●●○ · Approve the merge (5m)<');
+    expect(html).toContain('class="fl-strip-text">Ticket to merge · ●●●○ · Needs you · Look at the PR first · Approve the merge (5m)<');
     expect(html).toMatch(/<button type="button" class="fl-strip-line" title="Open the Route tab — [^"]*"><svg class="fl-bird"/);
     expect(html).toContain('class="fl-strip fl-state-waiting_you fl-needs"');
     expect(html).toContain(">Done</button>");

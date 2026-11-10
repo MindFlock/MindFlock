@@ -11,12 +11,15 @@
  *  - approval    the server's waiting rows: an approval you asked for, an
  *                escalation (a group's plan, its one PR, a budget, a conflict…)
  *  - wait_for_me a route waiting on you at a Wait for me stop (or a Verify
- *                stop whose behaviors wait on you)
+ *                stop whose verify waits on you), or one paused at a halt
+ *                point ("Paused at <stop> — Carry on"; a pause a person
+ *                made stays out: whoever paused it carries it on)
  *  - halted      a route halted at a stop until you Retry or Skip it
  *  - plan        a plan waiting for Go (the Map's Plan section)
  *  - broken      pre-commit / setup failed, offline, stuck
  *  - checks      checks failing
- *  - behaviors   behaviors that failed or wait on you
+ *  - behaviors   a verify that failed or waits on you, unless the session's
+ *                own row (its `verify`) or its route already says so
  *  - ready       pushed — ready for PR
  * One row per session (its most pressing reason); a row about no session (a
  * group's budget, a route with no session, behaviors) keeps its own key. */
@@ -32,6 +35,8 @@ import { selectSession } from "./sessionActions";
 import { windowName } from "./windowName";
 import { toast } from "./toast";
 import { perchedOnYou, rowWaitsOnYou, type Flight } from "./flights";
+import { HALT_POINT_REASON } from "./flightDiagram";
+import { planForSession } from "./behaviors";
 
 /** The kinds of the one list, in its order. mobile.js `NEEDS_YOU_KINDS`
  * names the same kinds in the same order. */
@@ -99,6 +104,29 @@ export function withFlightYou(
   return out;
 }
 
+/** The waiting kind of a route paused at a halt point: in the bell under
+ * Wait for me ("Paused at <stop> — Carry on"). */
+export const FLIGHT_PAUSED = "flight_paused";
+
+/** "Paused at Push — Carry on": a route that reached its halt point. */
+export function pausedAtLine(stepTitle: string | null | undefined): string {
+  const t = String(stepTitle || "").trim();
+  return "Paused at " + (t || "its halt point") + " — Carry on";
+}
+
+function pausedRow(title: string, f: { id: string; plan_name: string; step?: { id: string; title: string } | null }): FlightWaiting {
+  const stepTitle = f.step?.title || "";
+  return {
+    key: "flight:" + f.id,
+    title,
+    kind: FLIGHT_PAUSED,
+    reason: pausedAtLine(stepTitle),
+    text: f.plan_name,
+    actions: ["open"],
+    flight: { id: f.id, step_id: f.step?.id || "", step_title: stepTitle },
+  };
+}
+
 function flightRow(kind: "flight_you" | "flight_halted", title: string, f: {
   id: string;
   plan_name: string;
@@ -143,17 +171,18 @@ export function withFlightRows(
     const f = full.get(fl.id);
     if (fl.state === "waiting_you") add(flightRow("flight_you", inst.title, { ...fl, reason: f?.reason }));
     else if (fl.state === "halted") add(flightRow("flight_halted", inst.title, { ...fl, reason: f?.reason }));
+    else if (fl.state === "paused" && (f ? f.reason : (fl as { reason?: string }).reason) === HALT_POINT_REASON) add(pausedRow(inst.title, fl));
   }
   for (const f of flights || []) {
-    if (f.state !== "waiting_you" && f.state !== "halted") continue;
+    const atHalt = f.state === "paused" && f.reason === HALT_POINT_REASON;
+    if (f.state !== "waiting_you" && f.state !== "halted" && !atHalt) continue;
     const step = f.steps[f.cursor];
+    const title = f.session && live.has(f.session) ? f.session : "";
+    const at = step ? { id: step.id, title: step.title } : null;
     add(
-      flightRow(f.state === "halted" ? "flight_halted" : "flight_you", f.session && live.has(f.session) ? f.session : "", {
-        id: f.id,
-        plan_name: f.plan_name,
-        reason: f.reason,
-        step: step ? { id: step.id, title: step.title } : null,
-      })
+      atHalt
+        ? pausedRow(title, { id: f.id, plan_name: f.plan_name, step: at })
+        : flightRow(f.state === "halted" ? "flight_halted" : "flight_you", title, { id: f.id, plan_name: f.plan_name, reason: f.reason, step: at })
     );
   }
   return out;
@@ -162,7 +191,7 @@ export function withFlightRows(
 function kindOf(r: NeedsRow, byTitle: Map<string, Instance>): NeedsYouKind {
   if (r.plan) return "plan";
   if (r.waiting) {
-    if (r.waiting.kind === "flight_you") return "wait_for_me";
+    if (r.waiting.kind === "flight_you" || r.waiting.kind === FLIGHT_PAUSED) return "wait_for_me";
     if (r.waiting.kind === "flight_halted") return "halted";
     return "approval";
   }
@@ -196,7 +225,20 @@ export function needsYouRows(src: NeedsYouSources): NeedsYouRow[] {
     const flight = fid ? fullById.get(fid) : undefined;
     return flight ? { ...r, kind, flight } : { ...r, kind };
   });
+  // A verify the session's own row already says (its `verify` on this plan)
+  // or that its route is parked on (a Verify stop): one row, not two.
+  const spoken = new Set<string>();
+  for (const inst of instances) {
+    const v = (inst as { verify?: { plan?: string; state?: string } | null }).verify;
+    if (v && v.plan && v.state) spoken.add(v.plan);
+    const fl = inst.flight;
+    if (fl && fl.id && (fl.state === "waiting_you" || fl.state === "halted") && fl.step?.kind === "verify") {
+      const p = planForSession(src.testPlans, inst);
+      if (p) spoken.add(p.id);
+    }
+  }
   for (const p of src.testPlans || []) {
+    if (spoken.has(p.id)) continue;
     if (!isFailing(p) && !isWaitingOnYou(p)) continue;
     rows.push({ key: "behaviors:" + p.id, title: "", rank: 3, kind: "behaviors", behaviors: p });
   }
