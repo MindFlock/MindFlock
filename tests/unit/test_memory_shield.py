@@ -256,15 +256,10 @@ def test_an_automatic_start_waits_when_one_more_would_not_fit(monkeypatch):
     assert v["reason"].startswith("one more session needs ~1.0 GB")
     rec = gate.gate_auto("w1", lambda: None, kind="spawn")
     assert rec is not None and rec["reason"].startswith("one more session needs")
-    # A person is asked, and the dialog's line says what the room is.
+    # A person is NOT asked over the room estimate alone (the level reads
+    # ok): it paces automatic starts only (owner, 2026-11-10).
     p = gate.decide("person")
-    assert p["decision"] == "confirm"
-    body = gate.person_refusal(p)
-    assert body["message"].startswith("Memory is tight: 3.5 GB free.")
-    assert "No room for another session: one needs ~1.0 GB, 0.5 GB is free" in (
-        body["message"]
-    )
-    assert body["capacity"] == {"room": 0, "session_mb": 1000, "reserve_mb": 3072}
+    assert p["decision"] == "go" and gate.person_refusal(p) is None
 
 
 def test_a_person_sees_the_room_when_memory_is_low(monkeypatch):

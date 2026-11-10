@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load and keep loading, the accurate pass runs, and Voice Lab is never
   stopped for memory. Models still unload after the usual idle time.
 
+- **Your own starts ask only when memory is really in trouble.** New
+  session, Start and Resume no longer ask "are you sure?" over a guess (the
+  growth expected of agents still starting, or the room estimate) while
+  memory reads ok; they ask only at a real low or critical. The guesses
+  still pace automatic starts.
+
 ### Fixed
 
 - **Saying "over" presses Enter again.** An Enter-only send (the voice
