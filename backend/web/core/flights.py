@@ -2823,14 +2823,23 @@ def row_dto(
         "total": len(f["steps"]),
         "state": f["state"],
         "reason": f["reason"],
-        "step": (
-            {k: step[k] for k in ("id", "kind", "title", "state", "actor")}
-            if step
-            else None
-        ),
+        "step": _row_step(f, step) if step else None,
         "join": join_dto(f),
         "branch": branch,
     }
+
+
+def _row_step(f: dict, step: dict) -> dict:
+    """The session row's ``flight.step``: ``{id, kind, title, state, actor,
+    note}`` plus ``failed_reason`` when the stop failed — so the phone page
+    and the pane strip can say WHY a stop waits."""
+    out = {k: step[k] for k in ("id", "kind", "title", "state", "actor")}
+    out["note"] = str(step.get("note") or "")
+    ss = f["step_states"].get(step["id"]) or {}
+    failed = (ss.get("detail") or {}).get("failed_reason")
+    if failed:
+        out["failed_reason"] = str(failed)
+    return out
 
 
 def you_text(flight: dict) -> Tuple[str, List[str]]:
@@ -5222,7 +5231,9 @@ def _one_step(raw, index: int, taken, strict: bool = True) -> dict:
             raw, index, strict=True, config_strict=strict, taken=taken
         )
     except PlanError as err:
-        raise PlanError(err.message, re.sub(r"^steps\[\d+\]", "step", err.field))
+        raise PlanError(
+            err.message, re.sub(r"^steps\[\d+\]", "step", err.field), err.code
+        )
 
 
 def _insert_index(flight: dict, at, n: int = 1) -> int:

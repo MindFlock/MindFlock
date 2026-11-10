@@ -536,3 +536,25 @@ def test_ship_busy_and_turned_off_say_what_to_do():
     out = F.next_action(f, {"session": sess(), "autopilot": None}, NOW + 5)
     assert out["action"] == "fail"
     assert "Goes as far as" not in out["reason"] and "Retry" in out["reason"]
+
+
+# --------------------------------------------------------------------------- #
+# Merge notes from the round's other workers
+# --------------------------------------------------------------------------- #
+def test_the_session_row_says_why_its_stop_waits():
+    f = run_step(fly(step("command", on_fail="you", command="false"), session="row"))
+    a = F.next_action(
+        f, {"session": sess(), "command": {"exit": 1, "output": "boom"}}, NOW + 1
+    )
+    F.mutate(f["id"], lambda x: F.apply(x, a, NOW + 1))
+    row = F.row_dto("row")
+    assert row["step"]["note"].startswith("exited 1")
+    assert row["step"]["failed_reason"].startswith("exited 1")
+    assert {"id", "kind", "title", "state", "actor"} <= set(row["step"])
+
+
+def test_a_single_step_error_keeps_its_code():
+    with pytest.raises(F.PlanError) as err:
+        F._one_step({"kind": "checks", "config": {"timeout": 1}}, 0, set())
+    assert err.value.field == "step.config.timeout"
+    assert err.value.code == "bad_step"
