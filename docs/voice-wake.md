@@ -91,6 +91,14 @@ While standby is on, each client holds a listening lease (`POST
 /api/voice/listen`), which keeps the local whisper models — the wake
 check's `base.en` among them — loaded.
 
+**Held for memory.** The local recognizer is refused only while the memory
+guard reads `critical` (not at `low`). Then `/api/voice/wake` answers **503**
+`{error, wake: false, held: true}` and both clients **pause** instead of
+stopping: the mic stays open, the line reads *Standby paused: memory is low*
+(desktop) or *Paused — the server's memory is low* (phone), and the next
+answered check clears it. Any other 409 still means no recognizer and stops
+standby.
+
 ## Measured (2026-11-04): what the owner hit, and the fix
 
 The owner: "MindFlock" is rarely heard while "stop listening" is, and a

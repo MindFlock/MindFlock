@@ -711,8 +711,15 @@ cannot take memory back from it. Inside WSL the web server starts
 `backend/host_memory.py`: ONE long-lived `powershell.exe` printing Windows'
 available physical memory (`Win32_OperatingSystem.FreePhysicalMemory`, free +
 standby) every 10 s, read by a daemon thread. The host has its own lines —
-low at ≤ 8 % or ≤ 2.5 GB, critical at ≤ 4 % or ≤ 1.25 GB, leaving low at 11 %
-and 3.5 GB, critical at 6 % and 2 GB — and the level is the **worse** of the
+low at ≤ 6 % or ≤ 2 GB, critical at ≤ 4 % or ≤ 1.25 GB, leaving low at 8 %
+and 2.5 GB, critical at 6 % and 2 GB. A rise needs Windows past the line for
+30 s (low) or 10 s (critical) of readings, so one dip never moves it; a fall
+is immediate. The delay counts reading time (`_HOST_RISE_SECONDS`; with 10 s
+readings, about four readings past the low line and two past critical) from
+the first reading past a line, and the first reading back over it resets
+that count. A rise to critical that has not yet lasted 10 s settles at low if
+Windows has been past low for 30 s, else keeps the previous level. The counts
+reset when the reading goes stale or `MINDFLOCK_HOST_MEMORY=0`. The level is the **worse** of the
 guest's and the host's, so everything below (spawns waiting, the launch gate's
 budget, the [memory shield](#memory-shedding-before-it-bricks) shedding idle agents) acts on a
 short Windows too. The shield frees the bigger of the two shortfalls (memory
@@ -763,8 +770,9 @@ While the level is `low` or `critical`:
   (Ctrl+F still indexes on demand); and the memory watch unloads the local
   speech models unused for 2 minutes (`speech.shed_for_memory` — the resident
   whisper models too, ~1 GB of the server's own memory, then `malloc_trim`).
-  Model loads are refused while the level is low, so nothing reloads until it
-  recovers.
+  Local model loads (whisper, Moonshine, piper, Kokoro) are refused only while
+  the level is critical (`speech._memory_block`, raising `SpeechHeld`), so the
+  wake word and dictation keep working at low.
 
 ### Launch gate
 
@@ -873,7 +881,10 @@ shield** (`core/memory_shield.py`, called by the server's memory watch every
 A local voice host (Voice Lab, or any OpenAI-compatible model server on this
 machine or network) is never woken or called while the level reads low or
 critical: `TtsChain.pick` hands the line to piper, else the OS voice (piper
-itself is held back while low), else the client's own voice; warms, prewarms
+itself is held back only while critical), else the client's own voice. The
+small local models (whisper, Moonshine, piper, Kokoro) are refused only at
+`critical` (`core.speech._memory_block`, raising `SpeechHeld`); Voice Lab and
+other local voice hosts, which take GBs, still yield at `low`. Warms, prewarms
 and health probes are not sent; the host call itself refuses
 (`speech.host_held_back`). The log says why once per episode, and again when
 it may be used. When the level turns `critical` and Voice Lab's backend

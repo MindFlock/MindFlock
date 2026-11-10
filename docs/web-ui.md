@@ -7431,8 +7431,13 @@ back after 10 s, reopened on return. While standby is on the microphone stays
 open, so **the browser's mic light stays on**; the mic button shows it with a
 small still grey dot. Standby stops — with the reason on the switch's tooltip
 in the options and in Settings — when the server has no recogniser
-ready (409), when the microphone is refused, and on "mic off" (which also
-turns the switch off). After a reload it starts again by itself when the mic
+ready (409, *Standby stopped: server recognition isn't ready*), when the
+microphone is refused, and on "mic off" (which also turns the switch off). A
+check the server answers **503 `held`** (its local recognizer is held back
+because memory reads critical) only pauses it: the line reads *Standby
+paused: memory is low — it resumes on its own* (`WAKE_MEMORY_LINE`), the
+recognizer and mic stay open, nothing wakes, and the next 200 clears the
+line. After a reload it starts again by itself when the mic
 permission is already granted, else at your next click in the app.
 
 ### Voice words
@@ -8473,7 +8478,11 @@ mic stays open, the phone shows its mic-in-use indicator the whole time,
 and the 🎙 button shows a small grey dot (still); the warm-mic grace never gives the mic back while the wake word
 is on. It needs a server recognizer (Settings → Voice): if the server has
 none ready (409), or is too old for the wake word, or the microphone is
-refused, the switch turns itself off and the strip says why. With the
+refused, the switch turns itself off and the strip says why. A **503
+`held`** (recognition held back while the server's memory reads critical)
+only pauses it: the note reads *Paused — the server's memory is low; it
+resumes on its own* (`voiceWake_.held`, re-read from every answered check
+and reset when the wake word goes off), and the mic stays open. With the
 phone's own recognizer (not server recognition) the mic is handed back
 while it listens, since that recognizer needs it to itself. **iPhone
 limits:** it works only while the page is open in Safari and on screen —

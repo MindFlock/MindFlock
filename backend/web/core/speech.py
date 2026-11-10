@@ -30,8 +30,8 @@ flavour, plus a voice-only fourth, in preference order (:data:`BACKENDS`):
   the optional upgrade installed with ``uv sync --group voice`` (the
   ``voice`` dependency group in pyproject.toml). Both are imported lazily
   inside the call, never at module import, so the server starts without
-  them; both are refused while :func:`backend.memory_pressure.is_low` (this
-  box has been OOM-killed before); a loaded model stays in a module cache
+  them; both are refused while :func:`backend.memory_pressure.level` reads
+  ``critical`` (this box has been OOM-killed before); a loaded model stays in a module cache
   and is unloaded after :data:`IDLE_SECONDS` without use — a daemon timer
   armed on load sweeps it, and :func:`sweep_idle` is cheap enough for a
   server tick to call too. The exception: while ``voice.stt_backend`` is
@@ -117,6 +117,7 @@ from backend import memory_pressure
 __all__ = [
     "Backend",
     "SpeechError",
+    "SpeechHeld",
     "BACKENDS",
     "HINT_CHARS",
     "IDLE_SECONDS",
@@ -229,6 +230,13 @@ class SpeechError(Exception):
         self.down = down
 
 
+class SpeechHeld(SpeechError):
+    """A local model was not loaded because memory reads critical
+    (:func:`_memory_block`): a passing state, not a broken backend — the
+    wake route answers it 503 ``held`` so standby pauses instead of
+    stopping."""
+
+
 # --------------------------------------------------------------------------- #
 # Seams: settings, the clock, HTTP, the lazy runtimes
 # --------------------------------------------------------------------------- #
@@ -290,10 +298,15 @@ def _import(module: str):
 
 
 def _memory_block() -> str:
-    """Why a local model may not load right now ("" when it may)."""
+    """Why a local model may not load right now ("" when it may): only while
+    memory reads ``critical``. The local models are small (whisper base.en,
+    Moonshine, piper: tens to hundreds of MB), and holding them back at
+    ``low`` cost the wake word and dictation for hours on a machine that
+    merely idled near its low line (2026-11-09). Voice Lab, which takes GBs,
+    still yields at ``low`` (core.memory_shield.voice_lab_yield)."""
     try:
-        if memory_pressure.is_low():
-            return memory_pressure.describe() or "memory is low"
+        if memory_pressure.level() == "critical":
+            return memory_pressure.describe() or "memory is critically low"
     except Exception:  # noqa: BLE001 — the guard never breaks a request
         return ""
     return ""
@@ -1776,7 +1789,7 @@ class LocalSTT(Backend):
         def load():
             low = _memory_block()
             if low:
-                raise SpeechError("local recognition held back: " + low)
+                raise SpeechHeld("local recognition held back: " + low)
             return self._load(name)
 
         try:
@@ -2071,7 +2084,7 @@ class LocalTTS(Backend):
             raise SpeechError(NOT_INSTALLED)
         low = _memory_block()
         if low:
-            raise SpeechError("local voice held back: " + low)
+            raise SpeechHeld("local voice held back: " + low)
         try:
             return _cached("piper:" + name, lambda: self._load(name))
         except SpeechError:

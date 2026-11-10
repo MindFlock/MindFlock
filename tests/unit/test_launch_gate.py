@@ -283,15 +283,15 @@ _COST = {"session_mb": 1024, "peak_mb": 1024, "source": "measured", "samples": 3
 
 
 def test_budget_is_capped_by_windows_headroom_and_says_so():
-    # VM: 10 - 2 reserve = 8 GB; Windows: 6 - 2.56 (8% of 32) = 3.44 GB.
+    # VM: 10 - 2 reserve = 8 GB; Windows: 6 - 2 (its floor; 6% of 32 is 1.92) = 4 GB.
     snap = {"level": "ok", "available": 10 * GiB, "total": 20 * GiB}
     snap["host"] = _host(6 * GiB)
     b = gate.budget(snap, _COST, reserve=2 * GiB)
-    assert b["room"] == 3 and b["free_mb"] == 3523  # 6144 - 2621.4
+    assert b["room"] == 4 and b["free_mb"] == 4096  # 6144 - 2048
     assert b["available_mb"] == 10240  # the guest's own number still reported
     assert b["why"] == (
-        "room for 3 more sessions: Windows has 6.0 GB available over its own "
-        "reserve of 2.6 GB, each ~1.0 GB (measured over 3 sessions)"
+        "room for 4 more sessions: Windows has 6.0 GB available over its own "
+        "reserve of 2.0 GB, each ~1.0 GB (measured over 3 sessions)"
     )
 
 
@@ -305,17 +305,37 @@ def test_budget_keeps_the_guest_sum_when_the_guest_binds():
 
 
 def test_windows_with_no_headroom_leaves_no_room_while_still_ok():
-    # Windows at 3 GB is ok (it came down from above), the low line 2.56 GB;
+    # Windows at 3 GB is ok (it came down from above), the low line 2 GB;
     # an agent warming with 1 GB still to come eats past it.
     snap = {"level": "ok", "available": 10 * GiB, "total": 20 * GiB}
     snap["host"] = _host(3 * GiB)
     b = gate.budget(snap, _COST, [None], reserve=2 * GiB)
     assert b["room"] == 0 and b["to_come_mb"] == 1024
-    host_free = 3 * GiB - 0.08 * 32 * GiB - 1 * GiB
+    host_free = 3 * GiB - 2 * GiB - 1 * GiB
     assert b["free_mb"] == round(host_free / 1024**2)
     assert b["short_mb"] == 1024  # all of one session: nothing is free
     assert b["why"].startswith("one more session needs ~1.0 GB; only 0.0 GB")
     assert "Windows has 3.0 GB available over its own reserve" in b["why"]
+
+
+def test_a_big_windows_reserves_its_six_percent_share():
+    # 64 GB Windows: the low line is 6% (3.84 GB), over the 2 GB floor.
+    snap = {"level": "ok", "available": 10 * GiB, "total": 20 * GiB}
+    snap["host"] = _host(8 * GiB, total=64 * GiB)
+    b = gate.budget(snap, _COST, reserve=2 * GiB)
+    assert b["free_mb"] == round((8 - 0.06 * 64) * 1024)  # 4260
+    assert b["room"] == 4
+    assert "Windows has 8.0 GB available over its own reserve of 3.8 GB" in b["why"]
+
+
+def test_windows_under_its_line_but_not_yet_low_has_no_room():
+    # A dip still inside the rise delay: the host level reads ok, but the
+    # budget sizes by headroom (under the 2 GB line), never by the level.
+    snap = {"level": "ok", "available": 10 * GiB, "total": 20 * GiB}
+    snap["host"] = _host(int(1.5 * GiB), level="ok")
+    b = gate.budget(snap, _COST, reserve=2 * GiB)
+    assert b["room"] == 0 and b["free_mb"] == -512  # 1.5 - 2 GB
+    assert "Windows has 1.5 GB available over its own reserve" in b["why"]
 
 
 @pytest.mark.parametrize("host", [None, {}, {"available": GiB, "total": 0}])

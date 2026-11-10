@@ -9357,7 +9357,8 @@
   var voiceWake_ = { inflight: false, at: 0, speaking: false, spokeAt: 0, timer: null, needTap: false,
                      tapArmed: false, gestureAt: 0, checks: 0, wakes: 0, chimes: 0, last: null, note: "",
                      endAt: 0, wakeMs: -1,     // the last word's end (wall clock), and its end → listening (ms)
-                     pending: null, pendTimer: null };   // the word kept while a check was in flight: {blob, r}
+                     pending: null, pendTimer: null,   // the word kept while a check was in flight: {blob, r}
+                     held: false };   // the server held recognition back for memory (503 held): paused, not off
   voice.wakeState = voiceWake_;   // tests read it
   // Any tap: a refused microphone right after one is the person's answer.
   document.addEventListener("click", function () { voiceWake_.gestureAt = Date.now(); }, true);
@@ -9484,6 +9485,7 @@
   function voiceWakeOff(msg) {
     voice.prefs.wake = false;
     voiceWake_.note = msg || "";
+    voiceWake_.held = false;
     voiceWake_.needTap = false;
     voicePersist();
     voiceWakeEl.checked = false;
@@ -9529,6 +9531,10 @@
           : "Listening for “" + voiceWakeName() + "” is off: this server is too old for it.");
         return;
       }
+      // Memory is low on the server: paused, not off — the mic stays open
+      // and the next check that gets an answer clears it.
+      var held = x.r.status === 503 && x.j.held === true;
+      if (held !== W.held) { W.held = held; voiceWakeNoteShow(); }
       if (!x.r.ok) { W.last = { error: String(x.j.error || ("HTTP " + x.r.status)), at: Date.now() }; return; }
       W.last = { text: String(x.j.text || ""), wake: !!x.j.wake, ms: Number(x.j.ms) || (Date.now() - t0), error: "", at: Date.now() };
       if (x.j.wake) { W.pending = null; voiceWoke(); }
@@ -9586,6 +9592,7 @@
     if (!voice.prefs.wake) return W.note;
     if (W.needTap) return "Paused — tap anywhere to listen again";
     if (voice.state === "off") return "Starts with voice mode";
+    if (W.held) return "Paused — the server's memory is low; it resumes on its own";
     return voiceBtn.hasAttribute("data-standby") ? "Listening for “" + voiceWakeName() + "” — the mic is open" : "Paused while the phone listens or speaks";
   }
   function voiceWakeNoteShow() {

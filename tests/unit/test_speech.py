@@ -31,6 +31,7 @@ def _isolate(isolate_settings_store, monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_VOICE_DIR", str(tmp_path / "voice"))
     monkeypatch.setattr(speech, "_arm_timer", lambda: None)
     monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: False)
+    monkeypatch.setattr(memory_pressure, "level", lambda **kw: "ok")
     # Background lookups / probes run inline, from a clean slate.
     monkeypatch.setattr(speech, "_spawn", lambda target, name: target())
     # A loopback host here is a WARM one (its cold start, when Voice Lab
@@ -265,7 +266,7 @@ class TestLocalRefusals:
         monkeypatch.setattr(
             speech, "_import", lambda name: pytest.fail("must not import " + name)
         )
-        monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: True)
+        monkeypatch.setattr(memory_pressure, "level", lambda **kw: "critical")
         monkeypatch.setattr(
             memory_pressure,
             "describe",
@@ -279,11 +280,61 @@ class TestLocalRefusals:
         )
         ok, detail = speech.LocalTTS().ready()
         assert ok is False and detail.startswith("local voice held back: memory is low")
-        with pytest.raises(speech.SpeechError, match="held back"):
+        with pytest.raises(speech.SpeechHeld, match="held back"):
             speech.LocalSTT().transcribe(b"x", "audio/wav", "")
-        with pytest.raises(speech.SpeechError, match="held back"):
+        with pytest.raises(speech.SpeechHeld, match="held back"):
             speech.LocalTTS().speak("Hi", "")
         assert speech.loaded() == []
+
+    def test_low_memory_no_longer_holds_the_local_models_back(self, monkeypatch):
+        """2026-11-09: a machine idling near its low line lost the wake word
+        for hours; only critical holds whisper / Moonshine / piper back."""
+        monkeypatch.setattr(speech, "_installed", lambda name: True)
+        monkeypatch.setattr(speech.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+        monkeypatch.setattr(memory_pressure, "level", lambda **kw: "low")
+        monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: True)
+        assert speech._memory_block() == ""
+        assert speech.LocalSTT().ready()[0] is True
+        assert speech.LocalTTS().ready()[0] is True
+
+    def test_critical_memory_says_why_even_without_a_description(self, monkeypatch):
+        monkeypatch.setattr(memory_pressure, "level", lambda **kw: "critical")
+        monkeypatch.setattr(memory_pressure, "describe", lambda snap=None: "")
+        assert speech._memory_block() == "memory is critically low"
+        monkeypatch.setattr(
+            memory_pressure, "describe", lambda snap=None: "memory is critically low: x"
+        )
+        assert speech._memory_block() == "memory is critically low: x"
+
+    def test_the_memory_guard_never_breaks_a_request(self, monkeypatch):
+        def boom(**kw):
+            raise RuntimeError("no /proc")
+
+        monkeypatch.setattr(memory_pressure, "level", boom)
+        assert speech._memory_block() == ""
+
+    def test_held_is_a_speech_error_with_the_held_back_wording(self, monkeypatch):
+        """``routes.speech.voice_wake`` matches "held back" in a 409 from
+        ``LocalSTT.ready`` to answer 503 held: a rewording must fail here."""
+        assert issubclass(speech.SpeechHeld, speech.SpeechError)
+        monkeypatch.setattr(speech, "_installed", lambda name: True)
+        monkeypatch.setattr(
+            speech, "_import", lambda name: pytest.fail("must not import " + name)
+        )
+        monkeypatch.setattr(memory_pressure, "level", lambda **kw: "critical")
+        monkeypatch.setattr(memory_pressure, "describe", lambda snap=None: "")
+        assert speech.LocalSTT().ready() == (
+            False,
+            "local recognition held back: memory is critically low",
+        )
+        with pytest.raises(speech.SpeechError) as err:
+            speech.LocalSTT().transcribe(b"x", "audio/wav", "")
+        assert isinstance(err.value, speech.SpeechHeld)
+        assert str(err.value) == "local recognition held back: memory is critically low"
+        with pytest.raises(speech.SpeechError) as err:
+            speech.LocalTTS().speak("Hi", "")
+        assert isinstance(err.value, speech.SpeechHeld)
+        assert str(err.value) == "local voice held back: memory is critically low"
 
     def test_ready_mentions_ffmpeg_and_the_model(self, monkeypatch):
         monkeypatch.setattr(speech, "_installed", lambda name: True)
@@ -631,7 +682,7 @@ class TestLocalStream:
         from array import array
 
         run = speech.LocalSTT().stream_transcriber("")
-        monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: True)
+        monkeypatch.setattr(memory_pressure, "level", lambda **kw: "critical")
         with pytest.raises(speech.SpeechError, match="held back"):
             run(array("f", [0.0]), "")
         assert model["calls"] == []

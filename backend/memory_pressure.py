@@ -89,11 +89,19 @@ _RECOVER_FROM_CRITICAL_FIXED = (int(1.5 * _GiB), 30.0, 10.0)
 
 # The Windows host's lines (WSL only): (available share, available bytes).
 # Lower than the guest's: Windows keeps working at a few GB "available"
-# (standby cache counts), and below ~1 GB it pages apps out.
-_HOST_LOW = (0.08, int(2.5 * _GiB))
+# (standby cache counts), and below ~1 GB it pages apps out. The low band is
+# narrow (2 → 2.5 GB) on purpose: the owner's Windows idles at 2.5–3.5 GB, and
+# the old 2.5 → 3.5 GB band latched ``low`` for two hours on 2026-11-09 after
+# one dip, holding back the wake word the whole time.
+_HOST_LOW = (0.06, 2 * _GiB)
 _HOST_CRITICAL = (0.04, int(1.25 * _GiB))
-_HOST_RECOVER_FROM_LOW = (0.11, int(3.5 * _GiB))
+_HOST_RECOVER_FROM_LOW = (0.08, int(2.5 * _GiB))
 _HOST_RECOVER_FROM_CRITICAL = (0.06, 2 * _GiB)
+#: How long Windows must stay past a line (seconds of reading time) before
+#: the host level RISES to it: a dip shorter than this (one 10 s reading, a
+#: build's burst) never moves it. Critical rises after two readings; stepping
+#: DOWN is not delayed (the recovery lines are the hysteresis there).
+_HOST_RISE_SECONDS = {"low": 30.0, "critical": 10.0}
 
 _RANK = {"ok": 0, "low": 1, "critical": 2}
 
@@ -107,7 +115,13 @@ _MEMINFO = "/proc/meminfo"
 _PSI = "/proc/pressure/memory"
 
 _LOCK = threading.Lock()
-_STATE: Dict[str, object] = {"level": "ok", "host_level": "ok", "at": 0.0, "snap": None}
+_STATE: Dict[str, object] = {
+    "level": "ok",
+    "host_level": "ok",
+    "host_since": {},
+    "at": 0.0,
+    "snap": None,
+}
 
 
 def _enabled() -> bool:
@@ -284,8 +298,16 @@ def host_low_line(total: float) -> float:
     return max(share * float(total), float(floor))
 
 
-def _classify_host(prev: str, share: float, avail: int) -> str:
-    """The host's level for these readings, given its level before them."""
+def _classify_host(
+    prev: str, share: float, avail: int, at: Optional[float] = None
+) -> str:
+    """The host's level for these readings, given its level before them.
+
+    ``at`` is the reading's time: a rise to ``low`` / ``critical`` needs
+    Windows past that line since at least :data:`_HOST_RISE_SECONDS` before
+    it (the first reading past it starts the count, one back over it clears
+    it), so a short dip never moves the level. Without ``at`` it rises at
+    once."""
     th = host_thresholds()
 
     def past(line) -> bool:
@@ -294,15 +316,37 @@ def _classify_host(prev: str, share: float, avail: int) -> str:
     def clear(line) -> bool:
         return share >= line[0] and avail >= line[1]
 
+    since = _STATE.get("host_since")
+    if not isinstance(since, dict):
+        since = _STATE["host_since"] = {}
+    for lvl in ("low", "critical"):
+        if not past(th[lvl]):
+            since.pop(lvl, None)
+        elif at is not None:
+            since.setdefault(lvl, at)
+
     if past(th["critical"]):
+        raw = "critical"
+    elif prev == "critical" and not clear(th["recover_critical"]):
+        raw = "critical"
+    elif past(th["low"]):
+        raw = "low"
+    elif prev in ("low", "critical") and not clear(th["recover_low"]):
+        raw = "low"
+    else:
+        raw = "ok"
+    if at is None or _RANK[raw] <= _RANK.get(prev, 0):
+        return raw
+
+    def held(lvl: str) -> bool:
+        start = since.get(lvl)
+        return start is not None and at - float(start) >= _HOST_RISE_SECONDS[lvl]
+
+    if raw == "critical" and held("critical"):
         return "critical"
-    if prev == "critical" and not clear(th["recover_critical"]):
-        return "critical"
-    if past(th["low"]):
+    if prev == "ok" and held("low"):
         return "low"
-    if prev in ("low", "critical") and not clear(th["recover_low"]):
-        return "low"
-    return "ok"
+    return prev
 
 
 def _host() -> Optional[dict]:
@@ -316,10 +360,17 @@ def _host() -> Optional[dict]:
         return None
     if not r:
         _STATE["host_level"] = "ok"
+        _STATE["host_since"] = {}
         return None
     total, avail = float(r["total"]), float(r["available"])
     share = avail / total
-    lvl = _classify_host(str(_STATE.get("host_level") or "ok"), share, int(avail))
+    at = r.get("at")
+    lvl = _classify_host(
+        str(_STATE.get("host_level") or "ok"),
+        share,
+        int(avail),
+        float(at) if at is not None else None,
+    )
     _STATE["host_level"] = lvl
     return {
         "available": int(avail),
@@ -430,5 +481,13 @@ def describe(snap: Optional[dict] = None) -> str:
 
 def _reset_for_tests() -> None:
     with _LOCK:
-        _STATE.update({"level": "ok", "host_level": "ok", "at": 0.0, "snap": None})
+        _STATE.update(
+            {
+                "level": "ok",
+                "host_level": "ok",
+                "host_since": {},
+                "at": 0.0,
+                "snap": None,
+            }
+        )
     _SHARE_CACHE.update({"at": -1e18, "val": None})

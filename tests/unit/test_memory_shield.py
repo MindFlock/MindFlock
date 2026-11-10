@@ -341,7 +341,7 @@ def test_need_is_what_brings_it_back_over_the_low_line():
 
 def _host(available, total=32 * GiB, level="ok"):
     """A WSL host reading as ``memory_pressure.snapshot()["host"]`` carries
-    it (the low line of a 32 GB Windows is 8%: ~2.56 GB)."""
+    it (the low line of a 32 GB Windows is its 2 GB floor; 6% is 1.92)."""
     return {
         "available": available,
         "total": total,
@@ -352,7 +352,7 @@ def _host(available, total=32 * GiB, level="ok"):
 
 
 def test_need_is_the_bigger_of_the_guest_and_the_host_shortfall():
-    # Guest 1.2 GB under a 3 GB line (1843 MB) beats Windows' 0.56 GB.
+    # Guest 1.2 GB under a 3 GB line (1843 MB) beats Windows' 0 (at its line).
     snap = _snap("critical", int(1.2 * GiB), host=_host(2 * GiB, level="low"))
     assert shield.shed_need_mb(snap, 3 * GiB) == 1843
     # Both over their lines: nothing to free.
@@ -360,7 +360,14 @@ def test_need_is_the_bigger_of_the_guest_and_the_host_shortfall():
     assert shield.shed_need_mb(snap, 3 * GiB) == 0
     # The guest over its (explicit) line still sizes by Windows' shortfall.
     snap = _snap(available=5 * GiB, host=_host(1 * GiB, level="critical"))
-    assert shield.shed_need_mb(snap, 3 * GiB) == round((0.08 * 32 - 1) * 1024)
+    assert shield.shed_need_mb(snap, 3 * GiB) == round((2 - 1) * 1024)
+
+
+def test_a_big_windows_sizes_its_shortfall_by_the_six_percent_share():
+    # 64 GB Windows: the low line is 6% (3.84 GB), over the 2 GB floor.
+    host = _host(2 * GiB, total=64 * GiB, level="low")
+    snap = _snap(available=5 * GiB, host=host)
+    assert shield.shed_need_mb(snap, 3 * GiB) == round((0.06 * 64 - 2) * 1024)
 
 
 def test_no_host_or_a_hostless_reading_is_the_guest_need_alone():
@@ -486,19 +493,19 @@ def test_a_critical_minute_puts_the_needed_idle_agents_to_sleep(fake_pass):
 
 
 def test_a_critical_windows_alone_sheds_its_shortfall(fake_pass, monkeypatch):
-    # The VM has 10 GB free (guest ok); Windows has 1 GB of 32 (critical).
+    # The VM has 10 GB free (guest ok); Windows has 0.5 GB of 32 (critical).
     _memory(
         monkeypatch,
         level="critical",
         available=10 * GiB,
         guest_level="ok",
-        host=_host(1 * GiB, level="critical"),
+        host=_host(int(0.5 * GiB), level="critical"),
     )
     snap = memory_pressure.snapshot()
     srv = SimpleNamespace()
     assert shield.tick(srv, snap, 5000.0, sleeper=fake_pass.sleeper)["shed"] == []
     out = shield.tick(srv, snap, 5061.0, sleeper=fake_pass.sleeper)
-    # Windows needs ~1.56 GB back over its 2.56 GB line → a (1200) + b (900).
+    # Windows needs ~1.5 GB back over its 2 GB line → a (1200) + b (900).
     assert out["shed"] == ["a", "b"] == fake_pass.slept
     assert out["why"] == "memory has been critical for 61s"
     assert shield.status()["last_decision"] == (
@@ -551,6 +558,15 @@ def test_voice_lab_is_held_back_only_while_memory_is_short():
         "memory is low: 2.5 GB free"
     )
     assert "critically low" in shield.voice_lab_blocked(_snap("critical", GiB))
+
+
+def test_voice_lab_still_yields_to_a_windows_that_is_only_low(monkeypatch):
+    """The local models now load at ``low`` (speech._memory_block holds them
+    back only at critical); Voice Lab, which takes GBs, still yields."""
+    snap = _snap("low", 10 * GiB, guest_level="ok", host=_host(GiB, level="low"))
+    assert shield.voice_lab_blocked(snap) != ""
+    monkeypatch.setattr(memory_pressure, "snapshot", lambda fresh=False: snap)
+    assert shield.voice_lab_yield() != ""
 
 
 def test_the_yield_is_logged_once_per_episode(monkeypatch):
@@ -693,6 +709,25 @@ def test_once_memory_recovers_the_host_speaks_again(voice):
     assert engine is voice.host and not fell_back
 
 
+def test_while_low_piper_says_it_and_only_critical_holds_piper_back(voice, monkeypatch):
+    sp = voice.speech
+    piper = sp.LocalTTS()
+    monkeypatch.setattr(
+        sp, "BACKENDS", {"stt": [], "tts": [voice.host, piper, voice.system]}
+    )
+    monkeypatch.setattr(sp, "_installed", lambda name: True)
+    monkeypatch.setattr(memory_pressure, "level", lambda **kw: "low")
+    engine, fell_back, why = sp.TTS_CHAIN.pick(voice.host)
+    assert engine is piper and fell_back  # not the OS voice
+    assert why.startswith("voice host held back: memory is low")
+    voice.level["v"] = "critical"
+    monkeypatch.setattr(memory_pressure, "level", lambda **kw: "critical")
+    sp.TTS_CHAIN.reset()
+    engine, fell_back, _why = sp.TTS_CHAIN.pick(voice.host)
+    assert engine is voice.system and fell_back
+    assert voice.calls == []
+
+
 def test_a_remote_voice_api_is_never_held():
     from backend.web.core import speech
 
@@ -728,14 +763,14 @@ def test_the_capacity_route_names_windows_when_it_binds(monkeypatch):
     _memory(monkeypatch, available=10 * GiB, host=_host(6 * GiB))
     _sized({"a": 1000, "b": 1000, "c": 1000})
     body = TestClient(server.app).get("/api/memory/capacity").json()
-    # VM: 10 - 3 = 7 GB; Windows: 6 - 2.56 = 3.44 GB → 3 sessions of 1000 MB.
-    assert body["room"] == 3 and body["free_mb"] == 3523
+    # VM: 10 - 3 = 7 GB; Windows: 6 - 2 = 4 GB → 4 sessions of 1000 MB.
+    assert body["room"] == 4 and body["free_mb"] == 4096
     assert body["available_mb"] == 10240 and body["reserve_mb"] == 3072
     assert body["why"].startswith(
-        "room for 3 more sessions: Windows has 6.0 GB available over its own "
-        "reserve of 2.6 GB"
+        "room for 4 more sessions: Windows has 6.0 GB available over its own "
+        "reserve of 2.0 GB"
     )
-    assert body["hint"].startswith("room for 3 more sessions now")
+    assert body["hint"].startswith("room for 4 more sessions now")
 
 
 def test_unmeasured_memory_has_no_room_limit():

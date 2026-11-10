@@ -1511,6 +1511,79 @@ class TestWake:
         )
         assert r.status_code == 400
 
+    def test_a_model_held_back_for_memory_is_a_503_held(self, fakes, monkeypatch):
+        """Standby PAUSES on it (memory passes); a plain failure stays 502."""
+
+        def held(audio, mime, lang="", word=""):
+            raise speech.SpeechHeld("local recognition held back: memory is low")
+
+        monkeypatch.setattr(fakes.stt, "wake_transcribe", held, raising=False)
+        r = self._wake(fakes, "unused")
+        assert r.status_code == 503
+        assert r.json() == {
+            "error": "local recognition held back: memory is low",
+            "wake": False,
+            "held": True,
+        }
+
+        def broken(audio, mime, lang="", word=""):
+            raise speech.SpeechError("the model file is corrupt")
+
+        monkeypatch.setattr(fakes.stt, "wake_transcribe", broken, raising=False)
+        r = self._wake(fakes, "unused")
+        assert r.status_code == 502 and "held" not in r.json()
+
+    def test_no_recognizer_ready_for_memory_is_held_otherwise_409(
+        self, fakes, monkeypatch
+    ):
+        from fastapi.responses import JSONResponse
+
+        why = {"error": "local recognition held back: Windows memory is low"}
+        monkeypatch.setattr(
+            routes,
+            "_refusal",
+            lambda kind: (None, JSONResponse(why, status_code=409)),
+        )
+        r = self._wake(fakes, "MindFlock")
+        assert r.status_code == 503 and r.json()["held"] is True
+        assert r.json()["error"] == why["error"]
+        why = {"error": "no recognition backend is set up"}
+        r = self._wake(fakes, "MindFlock")
+        assert r.status_code == 409 and r.json() == why
+
+    def test_a_held_recognition_is_recorded_a_held_refusal_is_not(
+        self, fakes, monkeypatch
+    ):
+        """The check that ran and was held is kept for ``/wake/recent``; a
+        recognizer refused before any check (``_clip``'s 409) never ran."""
+        from fastapi.responses import JSONResponse
+
+        def held(audio, mime, lang="", word=""):
+            raise speech.SpeechHeld("local recognition held back: memory is low")
+
+        monkeypatch.setattr(fakes.stt, "wake_transcribe", held, raising=False)
+        routes._WAKE_RECENT.clear()
+        assert self._wake(fakes, "unused").status_code == 503
+        rows = client.get("/api/voice/wake/recent").json()["attempts"]
+        assert len(rows) == 1
+        assert rows[0]["wake"] is False and rows[0]["reason"] == "error: SpeechHeld"
+        why = {"error": "local recognition held back: memory is critically low"}
+        monkeypatch.setattr(
+            routes,
+            "_refusal",
+            lambda kind: (None, JSONResponse(why, status_code=409)),
+        )
+        assert self._wake(fakes, "MindFlock").status_code == 503
+        assert len(client.get("/api/voice/wake/recent").json()["attempts"]) == 1
+
+    def test_transcribe_keeps_its_502_for_a_held_model(self, fakes):
+        """Only the wake route answers ``held``: dictation's contract is the
+        same for the new subclass as for any SpeechError."""
+        fakes.stt.fail = speech.SpeechHeld("local recognition held back: x")
+        r = _transcribe()
+        assert r.status_code == 502
+        assert r.json() == {"error": "local recognition held back: x"}
+
 
 class TestWakeCheck:
     """The un-hinted check pass (``wake_verify_transcribe`` + ``core.wake.veto``)

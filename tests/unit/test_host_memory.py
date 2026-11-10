@@ -33,12 +33,15 @@ HOST_TOTAL = 32 * GiB
 @pytest.fixture
 def box(monkeypatch):
     """``box(guest_avail_gib, host_avail_gib | None)`` → level. The guest is
-    a 20 GB WSL VM with no PSI; the host a 32 GB Windows."""
+    a 20 GB WSL VM with no PSI; the host a 32 GB Windows. Windows reads
+    ``host_gib`` for ``held`` seconds (two readings that far apart; a rise
+    needs mp._HOST_RISE_SECONDS of them) — ``held=0`` is a one-reading dip."""
     monkeypatch.setenv("MINDFLOCK_MEMORY_GUARD", "1")
     mp._reset_for_tests()
     hm._reset_for_tests()
+    clock = {"t": time.time()}
 
-    def set_(guest_gib, host_gib, host_total=HOST_TOTAL):
+    def set_(guest_gib, host_gib, host_total=HOST_TOTAL, held=60.0):
         monkeypatch.setattr(
             mp,
             "_read_meminfo",
@@ -52,8 +55,14 @@ def box(monkeypatch):
         monkeypatch.setattr(mp, "_read_psi", lambda: None)
         if host_gib is None:
             hm._STATE["reading"] = None
-        else:
-            hm._set_reading({"available": int(host_gib * GiB), "total": host_total})
+            return mp.level(fresh=True)
+        reading = {"available": int(host_gib * GiB), "total": host_total}
+        clock["t"] += 10.0
+        hm._set_reading(reading, now=clock["t"])
+        if held:
+            mp.level(fresh=True)
+            clock["t"] += held
+            hm._set_reading(reading, now=clock["t"])
         return mp.level(fresh=True)
 
     yield set_
@@ -101,7 +110,8 @@ def test_no_host_reading_leaves_the_guest_level_alone(box):
 
 def test_a_short_windows_raises_the_level_while_the_vm_has_room(box):
     assert box(10, 16) == "ok"
-    assert box(10, 2.4) == "low"  # under 2.5 GiB
+    assert box(10, 2.4) == "ok"  # 7.5%, over 2 GiB: Windows idles here
+    assert box(10, 1.9) == "low"  # under 2 GiB
     snap = mp.snapshot()
     assert snap["guest_level"] == "ok" and snap["host"]["level"] == "low"
     assert box(10, 1.2) == "critical"
@@ -114,8 +124,8 @@ def test_the_worse_of_the_two_wins(box):
 
 def test_the_host_level_steps_down_only_past_its_recovery_lines(box):
     assert box(10, 2.0) == "low"
-    assert box(10, 3.0) == "low"  # over the entry line, under recovery (3.5)
-    assert box(10, 3.6) == "ok"
+    assert box(10, 2.4) == "low"  # over the entry line, under recovery (8%)
+    assert box(10, 2.6) == "ok"  # 8.1% and over 2.5 GiB
     assert box(10, 1.0) == "critical"
     assert box(10, 1.9) == "critical"  # recovery from critical needs 2 GiB + 6%
     assert box(10, 2.2) == "low"
@@ -132,21 +142,21 @@ def test_the_refusal_line_names_windows_when_windows_is_the_cause(box):
 def test_the_shield_frees_the_hosts_shortfall_when_it_is_bigger(box):
     box(10, 1.0)
     snap = mp.snapshot()
-    # guest needs nothing; the host needs its low line (max(8% of 32, 2.5) =
-    # 2.56 GiB) minus 1 GiB
-    want = int(round((0.08 * HOST_TOTAL - 1 * GiB) / MiB))
+    # guest needs nothing; the host needs its low line (max(6% of 32, 2) =
+    # 2 GiB) minus 1 GiB
+    want = int(round((2 * GiB - 1 * GiB) / MiB))
     assert shield.shed_need_mb(snap, 3 * GiB) == want
     box(10, 16)
     assert shield.shed_need_mb(mp.snapshot(), 3 * GiB) == 0
 
 
 def test_the_launch_budget_is_capped_by_the_hosts_headroom(box):
-    box(10, 6)  # host ok (6 GiB > 3.5), VM 10 GiB available
+    box(10, 6)  # host ok (6 GiB > 2.5), VM 10 GiB available
     snap = mp.snapshot()
     cost = {"session_mb": 1024, "peak_mb": 1024, "source": "measured", "samples": 3}
     b = gate.budget(snap, cost, reserve=2 * GiB)
-    # VM alone: (10 - 2) GiB → 8; host: 6 - 2.56 → 3
-    assert b["room"] == 3
+    # VM alone: (10 - 2) GiB → 8; host: 6 - 2 → 4
+    assert b["room"] == 4
     assert "Windows has 6.0 GB available" in b["why"]
     box(10, None)
     assert gate.budget(mp.snapshot(), cost, reserve=2 * GiB)["room"] == 8
@@ -372,9 +382,9 @@ def test_the_server_under_pytest_never_starts_the_reader(monkeypatch):
 # the host's level
 # --------------------------------------------------------------------------- #
 def test_host_low_line_is_the_bigger_of_the_share_and_the_floor():
-    assert mp.host_low_line(16 * GiB) == 2.5 * GiB  # 8% would be 1.28
-    assert mp.host_low_line(64 * GiB) == pytest.approx(0.08 * 64 * GiB)  # 5.12
-    assert mp.host_thresholds()["low"] == (0.08, int(2.5 * GiB))
+    assert mp.host_low_line(16 * GiB) == 2 * GiB  # 6% would be 0.96
+    assert mp.host_low_line(64 * GiB) == pytest.approx(0.06 * 64 * GiB)  # 3.84
+    assert mp.host_thresholds()["low"] == (0.06, 2 * GiB)
 
 
 def test_only_a_short_windows_still_reads_low_to_every_caller(box):
@@ -390,15 +400,15 @@ def test_from_critical_a_big_recovery_goes_straight_to_ok(box):
 
 
 def test_leaving_low_needs_both_the_share_and_the_bytes(box):
-    # 16 GB Windows: 3 GB is 18.75% (past 11%) but under 3.5 GB → stays low.
+    # 16 GB Windows: 2.3 GB is 14.4% (past 8%) but under 2.5 GB → stays low.
     assert box(10, 2.0, host_total=16 * GiB) == "low"
-    assert box(10, 3.0, host_total=16 * GiB) == "low"
-    assert box(10, 3.6, host_total=16 * GiB) == "ok"
+    assert box(10, 2.3, host_total=16 * GiB) == "low"
+    assert box(10, 2.6, host_total=16 * GiB) == "ok"
     mp._reset_for_tests()
-    # 64 GB Windows: 6 GB is past 3.5 GB but 9.4% (under 11%) → stays low.
-    assert box(10, 5.0, host_total=64 * GiB) == "low"  # under 8% (5.12)
-    assert box(10, 6.0, host_total=64 * GiB) == "low"
-    assert box(10, 7.1, host_total=64 * GiB) == "ok"  # 11.1%
+    # 64 GB Windows: 4.5 GB is past 2.5 GB but 7.0% (under 8%) → stays low.
+    assert box(10, 3.5, host_total=64 * GiB) == "low"  # under 6% (3.84)
+    assert box(10, 4.5, host_total=64 * GiB) == "low"
+    assert box(10, 5.2, host_total=64 * GiB) == "ok"  # 8.1%
 
 
 def test_leaving_critical_needs_both_the_share_and_the_bytes(box):
@@ -415,6 +425,38 @@ def test_a_lost_reading_forgets_the_hosts_level(box):
     assert mp._STATE["host_level"] == "ok"
     # 1.9 GB would hold critical by hysteresis; fresh from ok it is only low.
     assert box(10, 1.9) == "low"
+
+
+def test_a_dip_shorter_than_the_rise_window_never_moves_the_level(box):
+    assert box(10, 16) == "ok"
+    assert box(10, 1.9, held=0) == "ok"  # one reading under the low line
+    assert box(10, 1.9, held=10) == "ok"  # 20 s past it: short of 30
+    assert box(10, 3.0) == "ok"  # back over it: the count starts again
+    assert box(10, 1.9, held=10) == "ok"  # 10 s
+    assert box(10, 1.9, held=10) == "low"  # 30 s past the line, all told
+
+
+def test_critical_rises_after_two_readings(box):
+    assert box(10, 16) == "ok"
+    assert box(10, 1.0, held=0) == "ok"  # one reading: not yet
+    assert box(10, 1.0, held=0) == "critical"  # 10 s later: held
+    assert box(10, 16) == "ok"
+    # Past critical but not yet held: low still needs its own 30 s.
+    assert box(10, 1.0, held=0) == "ok"
+
+
+def test_a_low_level_steps_down_at_once(box):
+    assert box(10, 1.9) == "low"
+    assert box(10, 2.6, held=0) == "ok"
+
+
+def test_the_2026_11_09_plateau_reads_ok(box):
+    # Windows idled at ~2.8 GB of 31.4 for an hour after one dip to 2 GB:
+    # the old 3.5 GB recovery line held it low (and the wake word off).
+    total = int(31.4 * GiB)
+    assert box(10, 2.0, host_total=total, held=0) == "ok"
+    for _ in range(6):
+        assert box(10, 2.8, host_total=total) == "ok"
 
 
 def test_a_stale_reading_drops_out_of_the_snapshot(box):
@@ -442,3 +484,132 @@ def test_the_refusal_line_keeps_the_guest_wording_when_both_are_short(box):
     assert (
         mp.describe() == "Windows memory is critically low: 1.0 GB free of 32.0 GB (3%)"
     )
+
+
+# --------------------------------------------------------------------------- #
+# the host's rise delay (_classify_host with the reading's time)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def host():
+    """``host(prev, gib, at, total=32 GiB)`` → ``_classify_host``'s level for
+    one Windows reading of ``gib`` GiB available at ``at`` (seconds)."""
+    mp._reset_for_tests()
+
+    def classify(prev, gib, at=None, total=HOST_TOTAL):
+        avail = int(gib * GiB)
+        return mp._classify_host(prev, avail / total, avail, at)
+
+    yield classify
+    mp._reset_for_tests()
+
+
+def test_low_rises_at_exactly_the_rise_window(host):
+    assert mp._HOST_RISE_SECONDS == {"low": 30.0, "critical": 10.0}
+    assert host("ok", 1.9, at=100.0) == "ok"  # the first reading starts the count
+    assert host("ok", 1.9, at=129.9) == "ok"
+    assert host("ok", 1.9, at=130.0) == "low"
+
+
+def test_a_reading_back_over_the_line_restarts_the_count(host):
+    assert host("ok", 1.9, at=100.0) == "ok"
+    assert host("ok", 1.9, at=125.0) == "ok"
+    assert host("ok", 2.1, at=128.0) == "ok"  # over 2 GiB: the count clears
+    assert "low" not in mp._STATE["host_since"]
+    assert host("ok", 1.9, at=131.0) == "ok"  # 31 s after the FIRST dip: no
+    assert host("ok", 1.9, at=160.9) == "ok"
+    assert host("ok", 1.9, at=161.0) == "low"  # 30 s from the second dip
+
+
+def test_critical_needs_ten_seconds_and_one_reading_alone_never_does(host):
+    assert host("ok", 1.0, at=100.0) == "ok"
+    assert host("ok", 1.0, at=109.9) == "ok"
+    assert host("ok", 1.0, at=110.0) == "critical"
+
+
+def test_a_raw_critical_not_yet_held_falls_back_to_low_when_low_is_held(host):
+    # Past low since 100; past critical only since 128.
+    assert host("ok", 1.9, at=100.0) == "ok"
+    assert host("ok", 1.0, at=128.0) == "ok"  # low 28 s, critical 0 s
+    assert host("ok", 1.0, at=130.0) == "low"  # low 30 s, critical 2 s
+    # With less than 30 s past low and prev ok, it stays ok.
+    mp._reset_for_tests()
+    assert host("ok", 1.0, at=200.0) == "ok"
+    assert host("ok", 1.0, at=205.0) == "ok"
+
+
+def test_a_low_level_is_kept_while_a_raw_critical_is_not_yet_held(host):
+    assert host("low", 1.0, at=100.0) == "low"  # never back to ok
+    assert host("low", 1.0, at=109.0) == "low"
+    assert host("low", 1.0, at=110.0) == "critical"
+
+
+def test_stepping_down_is_never_delayed(host):
+    # From low: one reading at 8% and 2.5 GiB or more is ok at once.
+    assert host("low", 2.6, at=100.0) == "ok"
+    # Under the recovery line (7.5%) a low level holds.
+    assert host("low", 2.4, at=100.0) == "low"
+    # From critical: one reading past 6% and 2 GiB is low (or ok) at once.
+    assert host("critical", 2.1, at=100.0) == "low"
+    assert host("critical", 16, at=100.0) == "ok"
+    assert host("critical", 1.9, at=100.0) == "critical"  # under 2 GiB
+
+
+def test_without_a_reading_time_the_level_rises_at_once(host):
+    assert host("ok", 1.9) == "low"
+    assert host("ok", 1.0) == "critical"
+    assert host("low", 1.0) == "critical"
+    assert mp._STATE["host_since"] == {}  # no time, no count
+
+
+def test_a_corrupt_since_record_is_rebuilt(host):
+    mp._STATE["host_since"] = "junk"
+    assert host("ok", 1.9, at=100.0) == "ok"
+    assert mp._STATE["host_since"] == {"low": 100.0}
+    mp._STATE["host_since"] = None
+    assert host("ok", 16, at=100.0) == "ok"
+    assert mp._STATE["host_since"] == {}
+
+
+def test_reset_clears_the_since_record(host):
+    host("ok", 1.0, at=100.0)
+    assert mp._STATE["host_since"] == {"low": 100.0, "critical": 100.0}
+    mp._reset_for_tests()
+    assert mp._STATE["host_since"] == {}
+
+
+def test_a_stale_reading_forgets_when_windows_went_past_the_line(box):
+    assert box(10, 1.9, held=20) == "ok"  # past low for 20 s
+    assert mp._STATE["host_since"].get("low") is not None
+    hm._STATE["reading"]["at"] = time.time() - hm.STALE_SECONDS - 1
+    assert mp.level(fresh=True) == "ok"
+    assert mp._STATE["host_since"] == {}
+    # The next dip counts from itself, not from the one before the gap.
+    assert box(10, 1.9, held=0) == "ok"
+    assert box(10, 1.9, held=10) == "ok"  # 20 s since the new dip
+    assert box(10, 1.9, held=0) == "low"  # 30 s
+
+
+def test_a_host_reading_switched_off_forgets_the_since_record(box, monkeypatch):
+    assert box(10, 1.9, held=20) == "ok"
+    assert mp._STATE["host_since"]
+    monkeypatch.setattr(hm, "reading", lambda now=None: None)
+    assert mp.level(fresh=True) == "ok"
+    assert mp._STATE["host_since"] == {} and mp._STATE["host_level"] == "ok"
+
+
+def test_the_narrow_low_band_on_a_32_and_a_16_gb_windows(host):
+    # 32 GB: 2.4 GiB is 7.5% — under the 8% recovery share, stays low.
+    assert host("low", 2.4, at=100.0) == "low"
+    assert host("low", 2.6, at=100.0) == "ok"  # 8.1%, over 2.5 GiB
+    # 16 GB: the floor binds both ways (6% = 0.96 GiB, 8% = 1.28 GiB).
+    small = 16 * GiB
+    assert host("ok", 2.0, at=None, total=small) == "low"  # at the 2 GiB floor
+    assert host("ok", 2.1, at=None, total=small) == "ok"
+    assert host("low", 2.4, at=None, total=small) == "low"  # 15%, under 2.5 GiB
+    assert host("low", 2.5, at=None, total=small) == "ok"
+    # 64 GB: the share binds (6% = 3.84 GiB, 8% = 5.12 GiB).
+    big = 64 * GiB
+    assert host("ok", 3.8, at=None, total=big) == "low"
+    assert host("ok", 3.9, at=None, total=big) == "ok"
+    assert host("low", 5.1, at=None, total=big) == "low"
+    assert host("low", 5.2, at=None, total=big) == "ok"

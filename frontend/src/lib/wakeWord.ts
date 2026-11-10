@@ -27,8 +27,11 @@
  *    true` → listening at once (the microphone is already open) with the
  *    {@link chime} at the same moment — its audio skipped from the
  *    recording; false → nothing; 409 (no recognizer ready) → standby stops
- *    and says why. How long it took, from the word's end to listening, is
- *    {@link wakeLine} in the mic's diagnostics.
+ *    and says why; 503 `held` (recognition held back while the server's
+ *    memory is low) → standby stays on and says it is paused
+ *    ({@link WAKE_MEMORY_LINE}) until a check gets through. How long it
+ *    took, from the word's end to listening, is {@link wakeLine} in the
+ *    mic's diagnostics.
  *
  * {@link WakeStandby} is the lifecycle around that: it runs while wanted, the
  * page is visible and nothing records; it holds the microphone while it runs
@@ -202,6 +205,9 @@ export interface WakeVerdict {
   wake: boolean;
   text: string;
   error: string;
+  /** 503 `held`: the server's recognition is held back while memory is
+   * low — standby pauses (with {@link WAKE_MEMORY_LINE}), never stops. */
+  held?: boolean;
 }
 
 const langTag = () =>
@@ -219,8 +225,10 @@ export async function postWake(clip: Blob, lang = langTag()): Promise<WakeVerdic
       body: clip,
       signal: ac.signal,
     });
-    const j = (await r.json().catch(() => ({}))) as { wake?: unknown; text?: unknown; error?: unknown };
-    return { status: r.status, wake: r.ok && j.wake === true, text: String(j.text || ""), error: String(j.error || "") };
+    const j = (await r.json().catch(() => ({}))) as { wake?: unknown; text?: unknown; error?: unknown; held?: unknown };
+    const v: WakeVerdict = { status: r.status, wake: r.ok && j.wake === true, text: String(j.text || ""), error: String(j.error || "") };
+    if (r.status === 503 && j.held === true) v.held = true;
+    return v;
   } catch (err) {
     return { status: 0, wake: false, text: "", error: String((err as Error)?.message || err) };
   } finally {
@@ -241,6 +249,9 @@ export const WAKE_NO_RECOGNIZER_LINE = "Standby stopped: server recognition isn'
 export const WAKE_DENIED_LINE = "Standby stopped: the microphone was refused";
 export const WAKE_NO_MIC_LINE = "Standby stopped: no microphone";
 export const WAKE_GESTURE_LINE = "Click anywhere in the app to open the mic";
+/** Not a stop: the mic stays open and the next check after memory frees up
+ * clears it. */
+export const WAKE_MEMORY_LINE = "Standby paused: memory is low — it resumes on its own";
 
 /** Standby as the mic button and the options show it: `on` the mic is open
  * and listening for the word; `line` why it is not, when it should be. */
@@ -383,6 +394,12 @@ export class WakeStandby {
     this.report();
   }
 
+  private setLine(line: string) {
+    if (line === this.line) return;
+    this.line = line;
+    this.report();
+  }
+
   private report() {
     const s = { on: !!this.rec, line: this.want || this.blocked ? this.line : "" };
     publish(s);
@@ -521,6 +538,12 @@ export class WakeStandby {
     }
     if (!v || g !== this.gen) return;
     if (v.status === 409) return this.stop(WAKE_NO_RECOGNIZER_LINE);
+    // Memory is low on the server: say so and keep listening — it passes.
+    if (v.held) {
+      this.setLine(WAKE_MEMORY_LINE);
+      return;
+    }
+    if (v.status === 200) this.setLine(this.line === WAKE_MEMORY_LINE ? "" : this.line);
     // A wake while something else started recording meanwhile: that one wins.
     if (v.wake && !this.deps.recording()) {
       this.pending = null;

@@ -1178,8 +1178,10 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   5; `0` = never sleep for memory). The memory sleep applies even with
   `sleep_idle_minutes` 0, and each pass that sleeps any sends one notice.
   Per device, never synced; re-read within 30 s. Inside WSL these lines are
-  the VM's only: Windows' own lines (low at 8 % / 2.5 GB, critical at 4 % /
-  1.25 GB, `MINDFLOCK_HOST_MEMORY`) are fixed and not affected by them.
+  the VM's only: Windows' own lines (low at 6 % / 2 GB, leaving at 8 % /
+  2.5 GB; critical at 4 % / 1.25 GB, leaving at 6 % / 2 GB; a rise needs 30 s
+  (low) / 10 s (critical) of readings past the line; `MINDFLOCK_HOST_MEMORY`)
+  are fixed and not affected by them.
 - **Launch gate** (`general.max_live_agents`, `general.agent_warmup_mb`; JSON /
   `PUT /api/settings`): the most live agents that automatic starts bring this
   machine to (unset = one per 1.2 GB of RAM, 16 on 20 GB; `0` = no cap), and
@@ -1423,7 +1425,7 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     `assistant_voice`); `"local"` = faster-whisper /
     piper on this machine — the optional upgrade (models under
     `~/.mindflock/voice/` or `$MINDFLOCK_VOICE_DIR`, refused while memory is
-    low). With `stt_backend = "local"` the recognition models (`stt_model` for a
+    critical). With `stt_backend = "local"` the recognition models (`stt_model` for a
     phrase sent whole and the accurate pass, the live transcript's — Moonshine
     or `stt_stream_model`, below — `stt_stream_model`'s whisper model for the
     wake word, `stt_final` when it names a third) are loaded 8 s after boot
@@ -1507,7 +1509,7 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     also a regular voice backend (`tts_backend = "kokoro"`, voice `tts_voice`
     when it names a Kokoro voice, else `assistant_voice`) and the first local
     fallback when the configured voice is down, ahead of piper. Like the
-    other local models it is refused while memory is low and unloaded after
+    other local models it is refused while memory is critical and unloaded after
     30 idle minutes; `GET /api/voice?assistant=1` loads it ahead of the first
     reply. Its package, `kokoro-onnx`, rides the same release-survival record
     as the local models. **Licenses**: `kokoro-onnx` is MIT and the Kokoro-82M

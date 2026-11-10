@@ -33,6 +33,7 @@ const {
   WAKE_KEEP_S,
   WAKE_LEAD_MS,
   WAKE_MAX_MS,
+  WAKE_MEMORY_LINE,
   WAKE_MIN_MS,
   WAKE_NO_RECOGNIZER_LINE,
   WAKE_PENDING_MS,
@@ -362,6 +363,26 @@ describe("WakeStandby", () => {
     expect(r.statuses.at(-1)).toEqual({ on: true, line: "" });
   });
 
+  it("503 held (server memory low): standby stays on, says it is paused, and clears on the next check through", async () => {
+    let verdict: WakeVerdict = { status: 503, wake: false, text: "", error: "held back", held: true };
+    const r = rig({ check: async () => verdict });
+    r.sb.set(true, true);
+    await flush();
+    r.word();
+    await flush();
+    expect(r.onWake).not.toHaveBeenCalled();
+    expect(r.sb.on).toBe(true);
+    expect(r.recs[0].cancel).not.toHaveBeenCalled();
+    expect(r.statuses.at(-1)).toEqual({ on: true, line: WAKE_MEMORY_LINE });
+    // Memory frees up: the next check gets an answer and the line goes.
+    verdict = { status: 200, wake: false, text: "hm", error: "" };
+    r.feed(quiet(1000));
+    r.word();
+    await flush();
+    expect(r.check).toHaveBeenCalledTimes(2);
+    expect(r.statuses.at(-1)).toEqual({ on: true, line: "" });
+  });
+
   it("a refused microphone stops it with why", async () => {
     const r = rig({ deny: "NotAllowedError" });
     r.sb.set(true, true);
@@ -508,6 +529,8 @@ describe("POST /api/voice/wake", () => {
   it("409 is a status, a failure no answer — never a throw", async () => {
     apiRaw.mockResolvedValueOnce(resp(409, { error: "no recognizer" }));
     expect(await postWake(WAV, "en")).toEqual({ status: 409, wake: false, text: "", error: "no recognizer" });
+    apiRaw.mockResolvedValueOnce(resp(503, { error: "held back", wake: false, held: true }));
+    expect(await postWake(WAV, "en")).toEqual({ status: 503, wake: false, text: "", error: "held back", held: true });
     apiRaw.mockRejectedValueOnce(new Error("offline"));
     expect(await postWake(WAV, "en")).toMatchObject({ status: 0, wake: false });
   });

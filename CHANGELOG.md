@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The memory guard no longer panics over a short dip.** On WSL, Windows has
+  to stay under a line for 30 s before memory reads low (10 s for critical),
+  and the low band is narrower: low at 2 GB / 6% free, back to ok at 2.5 GB /
+  8% (was 2.5 GB / 8% and 3.5 GB / 11%, which held a machine idling near
+  3 GB on "low" for hours). Critical is unchanged.
+- **Local speech models are held back only when memory is critical**, not
+  merely low: the wake word and dictation keep working on a busy machine.
+  Voice Lab still yields at low.
+
+### Fixed
+
+- **Wake-word standby says when it is paused for memory.** While the server
+  holds recognition back for memory, standby shows "Standby paused: memory is
+  low" (desktop) or a paused note (phone) and keeps the mic open, instead of
+  failing every check silently; it clears on its own.
+
 ## [0.14.1] - 2026-11-09
 
 ### Added

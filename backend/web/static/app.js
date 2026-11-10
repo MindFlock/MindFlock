@@ -53324,12 +53324,14 @@ async function postWake(clip, lang = langTag()) {
 			signal: ac.signal
 		});
 		const j = await r.json().catch(() => ({}));
-		return {
+		const v = {
 			status: r.status,
 			wake: r.ok && j.wake === true,
 			text: String(j.text || ""),
 			error: String(j.error || "")
 		};
+		if (r.status === 503 && j.held === true) v.held = true;
+		return v;
 	} catch (err) {
 		return {
 			status: 0,
@@ -53347,6 +53349,7 @@ var WAKE_NO_RECOGNIZER_LINE = "Standby stopped: server recognition isn't ready â
 var WAKE_DENIED_LINE = "Standby stopped: the microphone was refused";
 var WAKE_NO_MIC_LINE = "Standby stopped: no microphone";
 var WAKE_GESTURE_LINE = "Click anywhere in the app to open the mic";
+var WAKE_MEMORY_LINE = "Standby paused: memory is low â€” it resumes on its own";
 var status = {
 	on: false,
 	line: ""
@@ -53433,6 +53436,11 @@ var WakeStandby = class {
 		if (run && !this.running) this.open(gesture);
 		else if (!run && this.running) this.close();
 		if (!this.want) this.line = this.blocked = "";
+		this.report();
+	}
+	setLine(line) {
+		if (line === this.line) return;
+		this.line = line;
 		this.report();
 	}
 	report() {
@@ -53567,6 +53575,11 @@ var WakeStandby = class {
 		}
 		if (!v || g !== this.gen) return;
 		if (v.status === 409) return this.stop(WAKE_NO_RECOGNIZER_LINE);
+		if (v.held) {
+			this.setLine(WAKE_MEMORY_LINE);
+			return;
+		}
+		if (v.status === 200) this.setLine(this.line === WAKE_MEMORY_LINE ? "" : this.line);
 		if (v.wake && !this.deps.recording()) {
 			this.pending = null;
 			this.deps.onWake(soundEnd);

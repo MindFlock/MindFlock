@@ -235,6 +235,13 @@ def test_wake_request_shape_and_answers():
     assert "W.inflight = true;" in check and "W.at = Date.now();" in check
     assert "x.r.status === 409" in check and "voiceWakeOff(" in check
     assert "if (x.j.wake) { W.pending = null; voiceWoke(); }" in check
+    # 503 held (the server's memory is low): paused with a note, never off;
+    # any answer after it clears the note.
+    assert "var held = x.r.status === 503 && x.j.held === true;" in check
+    assert "if (held !== W.held) { W.held = held; voiceWakeNoteShow(); }" in check
+    assert check.index("var held =") < check.index("if (!x.r.ok)")
+    assert check.count("voiceWakeOff(") == 1  # only the 409/404/405 branch
+    assert "the server's memory is low" in _fn(js, "voiceWakeNoteText")
     # A word said while a check was in flight is kept and goes on the no.
     assert "W.pending = { blob: blob, r: r };" in check
     assert check.count("voiceWakeFlush();") == 2
@@ -296,6 +303,64 @@ def test_wake_request_shape_and_answers():
     assert "var VOICE_WAKE_AFTER_SPEECH_MS = 500;" in js
 
 
+def test_wake_held_state_is_reset_and_only_a_503_held_sets_it():
+    js = _js()
+    assert "held: false };" in js  # voiceWake_ starts un-held
+    assert "voiceWake_.held = false;" in _fn(js, "voiceWakeOff")
+    check = _fn(js, "voiceWakeCheck")
+    # A 409 (no recognizer) switches standby off before held is looked at.
+    assert check.index("x.r.status === 409") < check.index("var held =")
+
+
+@pytest.mark.skipif(_node() is None, reason="needs node")
+def test_wake_held_note_priority_under_node():
+    """``voiceWakeNoteText`` run as-is: wake off / needTap / voice off win
+    over the held note; held wins over listening and the phone's own pause."""
+    body = _fn(_js(), "voiceWakeNoteText")
+    script = (
+        "function voiceWakeName() { return 'MindFlock'; }\n"
+        "function run(o) {\n"
+        "  var voiceWake_ = { note: 'off note', needTap: !!o.needTap, held: !!o.held };\n"
+        "  var voice = { prefs: { wake: o.wake !== false }, state: o.state || 'idle' };\n"
+        "  var voiceBtn = { hasAttribute: function () { return !!o.standby; } };\n"
+        "  return (function () {" + body + "\n  })();\n"
+        "}\n"
+        "console.log(JSON.stringify({\n"
+        "  held: run({ held: true, standby: true }),\n"
+        "  heldBusy: run({ held: true }),\n"
+        "  listening: run({ standby: true }),\n"
+        "  busy: run({}),\n"
+        "  tap: run({ held: true, needTap: true }),\n"
+        "  voiceOff: run({ held: true, state: 'off' }),\n"
+        "  wakeOff: run({ held: true, wake: false }),\n"
+        "}));\n"
+    )
+    out = _run(script)
+    memory = "Paused — the server's memory is low; it resumes on its own"
+    assert out["held"] == memory and out["heldBusy"] == memory
+    assert out["listening"].startswith("Listening for “MindFlock”")
+    assert out["busy"] == "Paused while the phone listens or speaks"
+    assert out["tap"] == "Paused — tap anywhere to listen again"
+    assert out["voiceOff"] == "Starts with voice mode"
+    assert out["wakeOff"] == "off note"
+
+
+@pytest.mark.skipif(_node() is None, reason="needs node")
+def test_wake_held_verdict_under_node():
+    """The held test in ``voiceWakeCheck``: only a 503 that says held."""
+    line = "var held = x.r.status === 503 && x.j.held === true;"
+    assert line in _fn(_js(), "voiceWakeCheck")
+    script = (
+        "function held(status, j) { var x = { r: { status: status }, j: j }; "
+        + line
+        + " return held; }\n"
+        "console.log(JSON.stringify([held(503, { held: true }), held(503, {}),\n"
+        "  held(503, { held: 'yes' }), held(409, { held: true }),\n"
+        "  held(200, { held: true, wake: false }), held(502, { held: true })]));\n"
+    )
+    assert _run(script) == [True, False, False, False, False, False]
+
+
 def test_wake_lifecycle_wiring():
     js = _js()
     # Every state change, every line said or ended, the page hiding and
@@ -339,3 +404,18 @@ def test_wake_standby_look():
     rule = css.split(sel)[1].split("}")[0]
     assert "background: var(--muted);" in rule
     assert "animation" not in rule and "transform" not in rule
+
+
+def test_the_desktop_bundle_ships_the_held_pause():
+    """The committed build of ``frontend/src/lib/wakeWord.ts`` (its vitest
+    tests run the source; this pins that static/app.js was rebuilt)."""
+    js = client.get("/app.js").text
+    assert (
+        'var WAKE_MEMORY_LINE = "Standby paused: memory is low — it resumes on its own";'
+        in js
+    )
+    assert "if (r.status === 503 && j.held === true) v.held = true;" in js
+    assert "this.setLine(WAKE_MEMORY_LINE);" in js
+    # A 409 still stops standby, and is checked before the held pause.
+    stop = js.index("if (v.status === 409) return this.stop(WAKE_NO_RECOGNIZER_LINE);")
+    assert stop < js.index("if (v.held) {")

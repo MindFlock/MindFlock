@@ -411,6 +411,7 @@ def chain(isolate_settings_store, monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_VOICE_DIR", str(tmp_path / "voice"))
     monkeypatch.setattr(speech, "_arm_timer", lambda: None)
     monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: False)
+    monkeypatch.setattr(memory_pressure, "level", lambda **kw: "ok")
     monkeypatch.setattr(speech, "_spawn", lambda target, name: target())
     # The host is WARM unless a test says otherwise (TestColdStart: Voice Lab
     # stopped while idle and starts on the next request).

@@ -92,6 +92,7 @@ import concurrent.futures
 import contextlib
 import copy
 import hashlib
+import json
 import logging
 import os
 import re
@@ -912,6 +913,14 @@ def _record_wake(entry: dict) -> None:
     )
 
 
+def _wake_held(why: str) -> JSONResponse:
+    """A wake check refused because memory reads critical (a model could not
+    load: ``core.speech.SpeechHeld``): 503 ``{"error", "wake": false, "held":
+    true}`` — the clients' standby shows *paused: memory is low* and keeps
+    listening (it passes; a 409 means no recognizer and stops standby)."""
+    return JSONResponse({"error": why, "wake": False, "held": True}, status_code=503)
+
+
 @router.post("/api/voice/wake")
 async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
     """Is this short clip the wake word on its own — ``voice.words``'s
@@ -929,12 +938,23 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
     "Mind." and "Mine."); a no never pays for it. → ``{"wake": bool,
     "reason", "text", "plain", "word", "backend", "ms"}`` — ``plain`` the
     un-hinted text, ``null`` when that pass did not run; the same status
-    codes as ``/transcribe``. Every check is kept for ``/wake/recent``.
+    codes as ``/transcribe``, except a model held back for memory: 503
+    ``{"error", "wake": false, "held": true}`` (:func:`_wake_held`). Every
+    check is kept for ``/wake/recent``.
     The clients send only a short lone utterance bounded by silence (their
     standby), so the model sees a second of audio at a time, never the
     room."""
     got = await _clip(request)
     if not isinstance(got, tuple):
+        # No recognizer READY because local recognition is held back for
+        # memory (LocalSTT.ready): that passes too — a pause, not a stop.
+        body = bytes(getattr(got, "body", b"") or b"")
+        if getattr(got, "status_code", 0) == 409 and b"held back" in body:
+            try:
+                why = str(json.loads(body).get("error") or "")
+            except (ValueError, AttributeError):
+                why = body.decode("utf-8", "replace")
+            return _wake_held(why)
         return got
     audio, mime, backend = got
     word = _wake_word()
@@ -949,6 +969,8 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
         entry.update(wake=False, reason="error: %s" % type(err).__name__)
         entry["ms"] = int((time.monotonic() - started) * 1000)
         _record_wake(entry)
+        if isinstance(err, _speech.SpeechHeld):
+            return _wake_held(str(err))
         return _failed(err)
     wake, reason = _wake.judge(text, word)
     plain: Optional[str] = None
