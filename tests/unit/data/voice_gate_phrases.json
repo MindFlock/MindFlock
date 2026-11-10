@@ -1,0 +1,367 @@
+{
+ "_about": "Pinned phrases for every voice-command gate. route: [phrase, kind] pairs voice_router.command() accepts today \u2014 every client gate that decides whether to ask the router (desktop mayBeCommand/mayBeWake in frontend/src/lib/voiceDesktop.ts, phone VOICE_MAY_CMD in backend/web/static/mobile.js) must let each one through. want: phrasings a person naturally says that should route too (owned by the router work; move to route once command() accepts them). text: ordinary dictation that must stay words \u2014 never a command, at any gate. Sessions assumed: see sessions.",
+ "sessions": [
+  "docs",
+  "login fix",
+  "sitecheck bot 7",
+  "Mindflock"
+ ],
+ "route": [
+  [
+   "take me to docs",
+   "switch"
+  ],
+  [
+   "hop to docs",
+   "switch"
+  ],
+  [
+   "put me on docs",
+   "switch"
+  ],
+  [
+   "can you switch to docs",
+   "switch"
+  ],
+  [
+   "bring docs up",
+   "switch"
+  ],
+  [
+   "pull up docs",
+   "switch"
+  ],
+  [
+   "talk to docs",
+   "switch"
+  ],
+  [
+   "let me see docs",
+   "switch"
+  ],
+  [
+   "take me back",
+   "switch_back"
+  ],
+  [
+   "hop back",
+   "switch_back"
+  ],
+  [
+   "the one before",
+   "switch_back"
+  ],
+  [
+   "the third session",
+   "switch_index"
+  ],
+  [
+   "window 2",
+   "switch_index"
+  ],
+  [
+   "what's docs doing",
+   "status"
+  ],
+  [
+   "how is docs going",
+   "status"
+  ],
+  [
+   "what did docs say",
+   "read"
+  ],
+  [
+   "read it",
+   "read"
+  ],
+  [
+   "what was the last reply",
+   "read"
+  ],
+  [
+   "what does docs want",
+   "question"
+  ],
+  [
+   "read the question",
+   "question"
+  ],
+  [
+   "what's the question",
+   "question"
+  ],
+  [
+   "where are we",
+   "where"
+  ],
+  [
+   "what session is open",
+   "where"
+  ],
+  [
+   "which one am i in",
+   "where"
+  ],
+  [
+   "what do i say",
+   "commands"
+  ],
+  [
+   "voice help",
+   "commands"
+  ],
+  [
+   "list commands",
+   "commands"
+  ],
+  [
+   "what voice commands are there",
+   "commands"
+  ],
+  [
+   "now scroll up",
+   "scroll"
+  ],
+  [
+   "just scroll up",
+   "scroll"
+  ],
+  [
+   "half page up",
+   "scroll"
+  ],
+  [
+   "take me to the bottom",
+   "scroll"
+  ],
+  [
+   "a bit more",
+   "scroll_more"
+  ],
+  [
+   "again",
+   "scroll_more"
+  ],
+  [
+   "once more",
+   "scroll_more"
+  ],
+  [
+   "keep scrolling",
+   "scroll_more"
+  ],
+  [
+   "one more time",
+   "scroll_more"
+  ],
+  [
+   "press the escape key",
+   "interrupt"
+  ],
+  [
+   "esc",
+   "interrupt"
+  ],
+  [
+   "create a session to fix the login bug",
+   "new"
+  ],
+  [
+   "i want to start a new session",
+   "new"
+  ],
+  [
+   "spin one up",
+   "new"
+  ],
+  [
+   "new agent to fix the tests",
+   "new"
+  ],
+  [
+   "launch a new session for the docs",
+   "new"
+  ],
+  [
+   "yes and don't ask again",
+   "answer"
+  ],
+  [
+   "the second option",
+   "answer"
+  ],
+  [
+   "docs yes",
+   "answer"
+  ],
+  [
+   "yes to docs",
+   "answer"
+  ],
+  [
+   "session one",
+   "switch_index"
+  ],
+  [
+   "session six",
+   "switch_index"
+  ],
+  [
+   "session ten",
+   "switch_index"
+  ],
+  [
+   "session twelve",
+   "switch_index"
+  ],
+  [
+   "switch to docs",
+   "switch"
+  ],
+  [
+   "go to docs",
+   "switch"
+  ],
+  [
+   "next session",
+   "switch_rel"
+  ],
+  [
+   "previous session",
+   "switch_rel"
+  ],
+  [
+   "scroll up",
+   "scroll"
+  ],
+  [
+   "scroll down",
+   "scroll"
+  ],
+  [
+   "page down",
+   "scroll"
+  ],
+  [
+   "interrupt",
+   "interrupt"
+  ],
+  [
+   "go back",
+   "switch_back"
+  ],
+  [
+   "where am i",
+   "where"
+  ],
+  [
+   "what can i say",
+   "commands"
+  ],
+  [
+   "status",
+   "status"
+  ],
+  [
+   "what needs me",
+   "needs"
+  ],
+  [
+   "list sessions",
+   "list"
+  ],
+  [
+   "repeat that",
+   "repeat"
+  ],
+  [
+   "summarize that",
+   "condense"
+  ],
+  [
+   "stop",
+   "stop"
+  ],
+  [
+   "stop listening",
+   "stop"
+  ],
+  [
+   "be quiet",
+   "hush"
+  ],
+  [
+   "cancel",
+   "cancel"
+  ],
+  [
+   "never mind",
+   "cancel"
+  ],
+  [
+   "new session to fix the build",
+   "new"
+  ],
+  [
+   "take me to the sitecheck session",
+   "switch"
+  ],
+  [
+   "mindflock open settings",
+   "assistant"
+  ],
+  [
+   "mindflock, which sessions need me",
+   "assistant"
+  ],
+  [
+   "my flock, open settings",
+   "assistant"
+  ],
+  [
+   "mine flock, open intake",
+   "assistant"
+  ]
+ ],
+ "want": [
+  "um switch to docs",
+  "so scroll up",
+  "now next session",
+  "now status",
+  "can you go to the next session",
+  "session number three",
+  "session twenty one",
+  "switch the docs",
+  "scroll a bit up",
+  "scroll up more",
+  "go up",
+  "row 2",
+  "stop it",
+  "the other one",
+  "what am i looking at",
+  "pause",
+  "mindful, i'll open settings",
+  "mindful i've opened settings",
+  "mindfulout open intake",
+  "mindful luck tell me what's going on",
+  "line flock open settings"
+ ],
+ "text": [
+  "open the settings file and check the port",
+  "so that's all i wanted to say about it",
+  "stop the server before you run the migration",
+  "switch the database driver to postgres",
+  "scroll position is wrong in the sidebar",
+  "next we need to fix the login page",
+  "session cookies are not being set",
+  "go ahead and refactor the router module",
+  "help me understand why the build fails",
+  "what's the difference between these two functions",
+  "i mind that the flock test is slow",
+  "my flag is not being read",
+  "top of the file has a stale import",
+  "can you check the logs for errors",
+  "new sessions should start with a clean worktree config"
+ ]
+}
