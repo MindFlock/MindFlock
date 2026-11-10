@@ -328,8 +328,8 @@ describe("a quieter main screen", () => {
 
   it("Verify's ways in say Behaviors, one way", () => {
     expect(code("components/TopBar.tsx")).not.toContain("VERIFY_BLURB");
-    expect(code("components/palette/CommandPalette.tsx")).toContain('label: "Behaviors — next that needs you"');
-    expect(code("lib/keymap.ts")).toContain('"Behaviors — the next that needs you"');
+    expect(code("components/palette/CommandPalette.tsx")).toContain('label: "Verify — next that needs you"');
+    expect(code("lib/keymap.ts")).toContain('"Verify — the next that needs you"');
   });
 
   it('"Agent" is the coding agent only: the assistant\'s file is its Instructions', () => {

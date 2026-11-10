@@ -59,8 +59,8 @@ export const closeSkyGuide = () => useSkyGuide.getState().close();
 
 /** The keyboard table (Tools and the keyboard), exported for the test. */
 export const SKY_GUIDE_KEYS: readonly (readonly [string, string])[] = [
-  ["V", "Drag tool: routes move by their bars, a drag on empty sky selects"],
-  ["H", "Click tool: any drag pans the sky, a click selects"],
+  ["V", "Select tool: routes move by their bars, a drag on empty sky selects"],
+  ["H", "Pan tool: any drag pans the sky, a click selects"],
   ["Space (held)", "Pan with the mouse, in either tool"],
   ["0", "Fit every route, titles still readable"],
   ["1", "Fit the focused route to the window"],
@@ -199,11 +199,11 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   keys: (
-    <Sketch label="The tool toggle: Drag (V) and Click (H)" h={80}>
+    <Sketch label="The tool toggle: Select (V) and Pan (H)" h={80}>
       <rect className="sg-toggle" x={60} y={20} width={200} height={34} rx={17} />
       <rect className="sg-toggle-on" x={63} y={23} width={97} height={28} rx={14} />
-      <text className="sg-text sg-strong" x={84} y={42}>✥ Drag · V</text>
-      <text className="sg-text" x={180} y={42}>☝ Click · H</text>
+      <text className="sg-text sg-strong" x={84} y={42}>Select (V)</text>
+      <text className="sg-text" x={180} y={42}>Pan (H)</text>
       <text className="sg-text" x={98} y={74}>hold Space: pan in either</text>
     </Sketch>
   ),
@@ -323,13 +323,13 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   ),
   select: (
     <>
-      <p>Drag across empty sky to draw a marquee — everything it touches is selected, routes and stops both (in the Click tool, Shift+drag). <kbd>Ctrl+A</kbd> selects every route; <kbd>Esc</kbd> clears.</p>
+      <p>Drag across empty sky to draw a marquee — everything it touches is selected, routes and stops both (in the Pan tool, Shift+drag). <kbd>Ctrl+A</kbd> selects every route; <kbd>Esc</kbd> clears.</p>
       <p>The selection bar then offers: drag any selected route's bar and they all move; <b>Remove…</b> (it asks first: a session's route closes its session, a route with no session goes); and for stops of one route, <b>Group into a stop</b> and <b>Save to the shelf</b>.</p>
     </>
   ),
   keys: (
     <>
-      <p>The toolbar's toggle picks how a drag behaves. <b>✥ Drag</b> (<kbd>V</kbd>): routes move by their bars and a drag on empty sky selects. <b>☝ Click</b> (<kbd>H</kbd>): nothing moves by dragging — any drag pans, a click focuses a route or selects a stop. Hold <kbd>Space</kbd> to pan in either; the wheel and the middle button pan too.</p>
+      <p>The toolbar's toggle picks how a drag behaves. <b>Select</b> (<kbd>V</kbd>): routes move by their bars and a drag on empty sky selects. <b>Pan</b> (<kbd>H</kbd>): nothing moves by dragging — any drag pans, a click focuses a route or selects a stop. Hold <kbd>Space</kbd> to pan in either; the wheel and the middle button pan too.</p>
       <Keys />
     </>
   ),

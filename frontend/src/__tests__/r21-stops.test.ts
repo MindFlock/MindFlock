@@ -172,7 +172,7 @@ describe("Let the agent fix it — wherever the server's fix op takes it", () =>
 describe("a stop's subtitle in the vocabulary's words", () => {
   it("Verify says who checks in words, never `who: both`", () => {
     expect(stopSummary(st("a", "verify", "Verify"))).toBe("Verify on this branch · agent, then you · right away");
-    expect(stopSummary(st("a", "verify", "Verify", { who: "you" }))).toBe("Verify on this branch · you · right away");
+    expect(stopSummary(st("a", "verify", "Verify", { who: "you" }))).toBe("Verify on this branch · agent, then your sign-off · right away");
     // A legacy `wait_live` reads as where "live", ready "on_branch".
     expect(stopSummary(st("a", "verify", "Verify", { who: "agent", wait_live: true }))).toBe("Verify on live · agent only · once on live");
   });

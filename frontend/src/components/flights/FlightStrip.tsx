@@ -142,11 +142,15 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
       </div>
     );
   }
+  // A plain sign-off (no step left for a person): VerifyConfirm's heading
+  // is the agent's own word (`verify.detail`) — no line above it saying the
+  // same, and never "do yours" when there is nothing of yours.
+  const signOff = confirming && !(verify.human_steps || []).length && !(Number(verify.steps?.human) || 0);
   if (confirming && !compact && !plan)
     return (
       <div className="fl-you fl-you-verify fl-you-needs" onClick={stop} data-no-drag>
-        <p className="fl-you-text">{verifyLine(verify)}</p>
-        <VerifyConfirm verify={verify} />
+        {!signOff && <p className="fl-you-text">{verifyLine(verify)}</p>}
+        <VerifyConfirm verify={verify} session={row?.title} />
         <div className="fl-you-acts">{skip}</div>
       </div>
     );
@@ -335,7 +339,7 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
             type="button"
             className="test-btn fl-btn fl-fix"
             disabled={busy}
-            title={step.kind === "verify" ? "Hand the failure to the agent — the behaviors are checked again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix"}
+            title={step.kind === "verify" ? "Hand the failure to the agent — Verify runs again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix"}
             onClick={() => void run(() => stepFix(flight.id, step.id))}
           >
             Let the agent fix it

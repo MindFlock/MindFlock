@@ -231,9 +231,9 @@ describe("4. answering it", () => {
 });
 
 describe("5. settled results", () => {
-  it("a glyph per state", () => {
+  it("a glyph per state — lib/sessionState verifyGlyph's, one source", () => {
     const g = (state: SessionVerify["state"]) => verifyStripView(verify({ state }), "sc-1", NOW_S).glyph;
-    expect([g("verifying"), g("needs_you"), g("passed"), g("failed"), g("blocked")]).toEqual(["…", "!", "✓", "✗", "!"]);
+    expect([g("verifying"), g("needs_you"), g("passed"), g("failed"), g("blocked")]).toEqual(["…", "?", "✓", "✗", "!"]);
   });
 
   it("passed: one line with Steps; blocked: Verify again first and Dismiss", () => {

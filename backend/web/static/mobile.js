@@ -472,8 +472,10 @@
     word.className = "sess-state tone-" + ss.tone;
     // A halted route's word names its stop here ("Halted at CI checks"); the
     // full reason is its tooltip.
-    word.textContent = ss.reason === "flight_halted" ? haltedWords(inst) : ss.label;
-    if (ss.reason === "flight_halted") word.title = ss.hint;
+    // A route paused at its halt point says so, and what moves it on.
+    var haltPoint = atHaltPoint(inst) && ss.label === "Paused route";
+    word.textContent = ss.reason === "flight_halted" ? haltedWords(inst) : haltPoint ? pausedAtWords(inst) : ss.label;
+    if (ss.reason === "flight_halted" || haltPoint) word.title = ss.hint;
     sub.appendChild(word);
     if (needsYouKind(inst) === "halted" && ss.reason !== "flight_halted") {
       // A halted route needs you whatever the agent does (lib/needsYou.ts) —
@@ -1146,7 +1148,8 @@
     // A paused flight: calm and out of the bell (sessionState.ts).
     if (inst.flight && inst.flight.id && inst.flight.state === "paused")
       return st("idle", { label: "Paused route",
-                          hint: "Route “" + (inst.flight.plan_name || "") + "” is paused at " +
+                          hint: "Route “" + (inst.flight.plan_name || "") + "” " +
+                                (inst.flight.reason === "halt point" ? "reached its halt point at " : "is paused at ") +
                                 (inst.flight.step && inst.flight.step.title || "its current stop") + " — Carry on is under ⋯" });
     if (verify && verify.state === "passed")
       return st("idle", { label: "Verified", hint: "Verified" + (verify.detail ? " — " + verify.detail : "") });
@@ -1189,6 +1192,10 @@
     if (ss.reason === "question") return "asking";
     var fl = rowFlight(inst);
     if (fl && fl.state === "waiting_you") return "wait_for_me";
+    // A route paused at its halt point waits on the person's Carry on
+    // (lib/needsYou.ts FLIGHT_PAUSED, under Wait for me); one a person
+    // paused by hand stays calm.
+    if (atHaltPoint(inst)) return "wait_for_me";
     if (fl && fl.state === "halted") return "halted";
     if (planPending(inst)) return "plan";
     if (ss.inBell) return ss.reason === "checks_failing" ? "checks" : "broken";
@@ -1196,6 +1203,18 @@
     var lane = inst.lane && inst.lane.target ? inst.lane.target : inst.autopilot && inst.autopilot.depth;
     if (inst.stage === "pushed" && lane !== "push") return "ready";
     return "";
+  }
+  // A route paused at a halt point a person set (flightDiagram.ts
+  // HALT_POINT_REASON) — not one paused by hand.
+  function atHaltPoint(inst) {
+    var fl = rowFlight(inst);
+    return !!fl && fl.state === "paused" && fl.reason === "halt point";
+  }
+  // "Paused at Push — Carry on" (lib/needsYou.ts pausedAtLine).
+  function pausedAtWords(inst) {
+    var fl = rowFlight(inst);
+    var at = fl && fl.step ? String(fl.step.title || "").trim() : "";
+    return "Paused at " + (at || "its halt point") + " — Carry on";
   }
   // "Halted at CI checks" — what a halted route's row says beside its state.
   function haltedWords(inst) {
@@ -9335,6 +9354,10 @@
       var ss = sessionState(i), name = nameOf(i.title), kind = needsYouKind(i);
       if (ss.reason === "question") return endSentence(name + " is asking: " + (i.last_say || "a question"));
       if (kind === "halted") return endSentence(name + "'s route is " + haltedWords(i).toLowerCase());
+      if (atHaltPoint(i)) {
+        var hp = rowFlight(i), hpAt = hp && hp.step ? String(hp.step.title || "").trim() : "";
+        return endSentence(name + "'s route is paused at " + (hpAt || "its halt point") + ", waiting for Carry on");
+      }
       if (kind === "plan") return endSentence(name + " has a plan waiting for Go");
       if (kind === "ready") return endSentence(name + " is pushed and ready for its PR");
       return endSentence(name + " is " + voiceStateWord(ss));

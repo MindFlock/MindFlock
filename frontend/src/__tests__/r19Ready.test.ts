@@ -37,8 +37,8 @@ describe("a ready flight", () => {
     const html = renderToStaticMarkup(createElement(ReadyHead, { flight: ready() }));
     expect(html).toContain(">Ready<");
     expect(html).toContain("▶ Run");
-    expect(html).toContain("starts on next prompt");
-    expect(startWord({ start_on: "run" })).toBe("starts on ▶ Run");
+    expect(html).toContain("runs on your next prompt");
+    expect(startWord({ start_on: "run" })).toBe("runs when you press Run");
     expect(startTitle({ start_on: "run" })).toMatch(/Click to start it on this session's next prompt/);
     expect(startTitle({ start_on: "prompt" })).toMatch(/Click to start it only on ▶ Run/);
   });
@@ -49,7 +49,7 @@ describe("a ready flight", () => {
     expect(html).not.toMatch(/class="[^"]*\bsky-run\b/);
     expect(html).toMatch(/<span class="sky-ready-row"><span class="sky-head-chip tone-ready"[^>]*>Ready<\/span><button type="button" class="sky-ready-run"/);
     // The toggle is a quiet button, not a link (`.sky button.linklike` is accent + underlined).
-    expect(html).toMatch(/<button type="button" class="sky-start-on" title="Starts only when you press ▶ Run\.[^"]*">starts on ▶ Run<\/button>/);
+    expect(html).toMatch(/<button type="button" class="sky-start-on" title="Starts only when you press ▶ Run\.[^"]*">runs when you press Run<\/button>/);
     expect(html).not.toContain("linklike");
     const sheet = css("components/flights/SkyChain.css");
     expect(sheet).toMatch(/\.sky-ready-run \{[^}]*border-radius: 999px;[^}]*\}/);

@@ -130,7 +130,7 @@ describe("the diagram gets the tile (lib/flightDiagram withBehaviors)", () => {
     const tile = main[main.length - 1];
     expect(tile.id).toBe(BEHAVIORS_ID);
     expect(tile.kind).toBe("behaviors");
-    expect(tile.title).toBe("Behaviors");
+    expect(tile.title).toBe("Verify");
     expect(tile.sub).toBe("2 of 5 verified");
     expect(tile.step).toBeUndefined();
     expect(tile.index).toBeUndefined();
@@ -212,14 +212,14 @@ describe("the tile's face (SkyChain)", () => {
   const graphWith = (m: Mark) => chainGraph(withBehaviors(withMe(flightDiagram(flight(STOPS, 0))), m), { head, key: "lead", flightId: "f_live" });
   const tileHtml = (html: string) => html.slice(html.indexOf('data-node="behaviors"') - 400);
 
-  it("a ✓-shield, “Behaviors”, the summary, its tone class", () => {
+  it("a ✓-shield, “Verify”, the summary, its tone class", () => {
     const html = render(graphWith(mark("you", "Needs you · 2", "Needs you")));
     expect(html).toContain("sky-node-behaviors");
     expect(html).toMatch(/class="[^"]*sky-behaviors is-you[^"]*"[^>]*data-node="behaviors"/);
     expect(html).toContain('data-icon="behaviors"');
-    expect(html).toContain('<div class="sky-node-title">Behaviors</div>');
+    expect(html).toContain('<div class="sky-node-title">Verify</div>');
     expect(html).toContain('<div class="sky-node-sub">Needs you · 2</div>');
-    expect(html).toContain('aria-label="Behaviors — Needs you, Needs you · 2"');
+    expect(html).toContain('aria-label="Verify — Needs you, Needs you · 2"');
   });
 
   it.each(["quiet", "busy", "you", "bad", "ok"] as const)("tone %s → is-%s", (tone) => {
@@ -247,7 +247,7 @@ describe("the tile's face (SkyChain)", () => {
     expect(html).toMatch(/class="[^"]*sky-node-stop[^"]*sky-behaviors is-you/);
     expect(html).toContain('data-icon="behaviors"');
     expect(html).toContain('<div class="sky-node-sub">Needs you · 1</div>');
-    expect(html).toContain("Verify, the behaviors — Needs you, Needs you · 1");
+    expect(html).toContain("Verify — Needs you, Needs you · 1");
   });
 
   it("opened, the card is drawn in the tile's place (renderOpen)", () => {
@@ -260,7 +260,7 @@ describe("the tile's face (SkyChain)", () => {
   });
 
   it("the label a screen reader hears", () => {
-    expect(behaviorsLabel({ kind: "behaviors", title: "Behaviors" }, mark("quiet", "Not checked", "Not checked"))).toBe("Behaviors — Not checked");
+    expect(behaviorsLabel({ kind: "behaviors", title: "Verify" }, mark("quiet", "Not checked", "Not checked"))).toBe("Verify — Not checked");
   });
 });
 

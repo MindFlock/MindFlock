@@ -1424,8 +1424,10 @@ export function Pane({
           for me stop; the line itself opens the Chain tab. */}
       {inst.flight && <PaneFlightStrip inst={inst} />}
       {/* Verify: the agent checking its own work, and — when a person's
-          steps are left — those steps with Confirm verified. */}
-      {inst.verify && <PaneVerifyStrip inst={inst} />}
+          steps are left — those steps with Confirm verified. Drawn on a
+          never-verified session too (it returns null until "Verify" opens
+          its start form). */}
+      <PaneVerifyStrip inst={inst} />
       {strip && (
         <div
           className={"peer-strip" + (strip.offline ? " off" : "") + (theirs ? " theirs" : " here")}

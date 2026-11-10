@@ -136,7 +136,7 @@ export function buildPaletteActions({ config, host, extensions }: PaletteSources
   // Verify lives on the route now (docs/behaviors.md §4): both rows fly the
   // Sky; the words people learned still find them.
   acts.push({
-    label: "Behaviors — next that needs you",
+    label: "Verify — next that needs you",
     hint: "Alt+V",
     top: TOP.verify,
     keywords: "verify behaviors check checklist test plan pushed changes work",

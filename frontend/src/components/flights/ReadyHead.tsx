@@ -18,9 +18,10 @@ import type { Flight } from "../../lib/flights";
 import { runFlight, setStartOn } from "../../lib/flightsApi";
 import { toast } from "../../lib/toast";
 
-/** The head's start-on line: short enough for one line under a 132px tile. */
+/** The head's start-on line — the server's own words (flights.py's ready
+ * detail), so the tile and the CLI / MCP say the same. */
 export function startWord(f: Pick<Flight, "start_on">): string {
-  return f.start_on === "run" ? "starts on ▶ Run" : "starts on next prompt";
+  return f.start_on === "run" ? "runs when you press Run" : "runs on your next prompt";
 }
 
 /** The start-on toggle's tooltip: what it does now and what a click does. */

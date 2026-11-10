@@ -82,6 +82,8 @@ import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { canFixStep, currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
 import { StopPalette, type PaletteSaved } from "./StopParts";
 import { StopDialog } from "./StopDialog";
+import { stopVerifyOf } from "./VerifyStopFields";
+import { verifyOf } from "../../lib/sessionState";
 import { useBehaviorsTile } from "./SkyChain";
 
 export interface LineSource {
@@ -867,7 +869,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         node={open}
         def={def}
         lineSteps={flight?.steps}
-        behaviorsPlanId={open.step?.kind === "verify" ? String(rec?.detail?.plan || "") : undefined}
+        verify={open.step?.kind === "verify" && row ? stopVerifyOf(verifyOf(row), String(rec?.detail?.plan || ""), here) : null}
+        verifySession={title}
         loopAgent
         busy={busy}
         note={[why, clears, here ? "" : open.reason || rec?.note || ""].filter(Boolean).join(" ")}

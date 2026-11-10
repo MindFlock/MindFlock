@@ -163,10 +163,20 @@ def describe(text: str, want: str = "step", program: str = "") -> dict:
         "model": _model_name(argv),
         "sentence": _cookbook.sentence(steps, _labels()),
     }
-    issues = _cookbook.lint(steps, known=_flights.STEP_KINDS)
+    issues = _cookbook.lint(steps, known=_flights.STEP_KINDS, fields=_kind_fields())
     if issues:
         out["warnings"] = [_cookbook.issue_line(x) for x in issues]
     return out
+
+
+def _kind_fields():
+    """Each kind's option names (the kinds' own definitions), so the lint
+    flags an option a kind doesn't have; None — no option check — if the
+    kinds can't be read."""
+    try:
+        return _cookbook.kind_fields(_flights.kinds_dto()) or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _labels() -> dict:

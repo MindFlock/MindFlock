@@ -55,7 +55,9 @@ export function SkyEmpty({ blank, className, children, newSession = false }: { b
       <h2>{SKY_EMPTY_TITLE}</h2>
       <p>{SKY_LINE}</p>
       <VisionPicture compact />
-      <p>{VISION_BREATH[1]} Start one, or let work arrive by itself from your tracker.</p>
+      <p>
+        {VISION_BREATH[1]} {VISION_BREATH[2]} Start one, or let work arrive by itself from your tracker.
+      </p>
       <div className="empty-actions">
         <button type="button" className="btn-primary sky-empty-new" onClick={() => open("new-session")}>
           New session

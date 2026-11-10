@@ -30,13 +30,14 @@
 import { useState, type ReactNode } from "react";
 import { isSaveResult } from "../../lib/flightsApi";
 import { LOOP_AGENT, loopsToAgent, type DiagramNode } from "../../lib/flightDiagram";
+import type { SessionVerify } from "../../api/types";
 import type { FlightStep, StepKindDef } from "../../lib/flights";
 import { InlineConfirm } from "../InlineConfirm";
 import { Modal } from "../Modal";
 import { StopIcon } from "./Bird";
 import { FlField, PromptBox, TextField, Toggle } from "./controls";
-import { StopForm, kindName } from "./StopParts";
-import { VerifyStopBehaviors } from "./VerifyStopFields";
+import { StopForm, formFieldNames, kindName } from "./StopParts";
+import { VerifyStopLive } from "./VerifyStopFields";
 import "./StopDialog.css";
 
 /** A box's state in words, for the dialog's read-only line and its rows. */
@@ -69,10 +70,12 @@ export interface StopDialogProps {
   busy?: boolean;
   /** Why it can't change, and what the flight noted on it (read-only). */
   note?: string;
-  /** A Verify stop's checklist (its step detail's `plan`): its behaviors
-   * show inside the stop, each marked agent or you. Falls back to the
-   * behaviors the node wears (`node.behaviors.planId`). */
-  behaviorsPlanId?: string;
+  /** A Verify stop's live Verify (the session row's `verify`, when it is
+   * this stop's — VerifyStopFields `stopVerifyOf`): its state, how far the
+   * agent got, and Steps. Nothing shows without one. */
+  verify?: SessionVerify | null;
+  /** The session the Verify runs in (Steps opens its Verify). */
+  verifySession?: string;
   /** More under the form (a Split's hint, its "+ Join"). */
   extra?: ReactNode;
   /** The line's steps in flight order: a `dynamic: "stops_before"` field
@@ -224,7 +227,7 @@ export const SAVE_LOST = "The route reached this stop — your changes can't be 
 function Problem({ problem, def }: { problem: FieldProblem; def: StepKindDef | undefined }) {
   const label = fieldLabelOf(problem.field, def);
   return (
-    <p className="fl-note stop-dialog-error" role="alert" data-field={fieldNameOf(problem.field) || undefined} style={{ color: "var(--red)" }}>
+    <p className="fl-note stop-dialog-error" role="alert" data-field={fieldNameOf(problem.field) || undefined}>
       {label && <strong>{label}: </strong>}
       {problem.detail}
     </p>
@@ -258,6 +261,11 @@ function StepDialog(p: StopDialogProps) {
   const parked = acts.length > 0 && (n.state === "halted" || n.state === "perched" || n.state === "paused");
   const check = editable ? clientCheck(shown) : null;
   const problem = refused || check;
+  // A refusal for a field the form draws goes under that field, in red; any
+  // other (a whole-stop refusal, a field drawn elsewhere) above the form.
+  const formDef = shown ? loopFormDef(p.def, shown) : p.def;
+  const problemName = problem ? fieldNameOf(problem.field) : "";
+  const inForm = !!problem && !!shown && !!problemName && formFieldNames(shown, formDef).has(problemName);
   /** Save; true when it went through (a caller that resolves to nothing
    * closes the dialog itself). */
   const save = async (): Promise<boolean> => {
@@ -337,7 +345,14 @@ function StepDialog(p: StopDialogProps) {
         </div>
       )}
       {shown ? (
-        <StopForm step={shown} def={loopFormDef(p.def, shown)} lineSteps={p.lineSteps} readOnly={!editable} onChange={(patch) => change((d) => ({ ...d, ...patch }))} />
+        <StopForm
+          step={shown}
+          def={formDef}
+          lineSteps={p.lineSteps}
+          readOnly={!editable}
+          errors={inForm ? { [problemName]: problem!.detail } : null}
+          onChange={(patch) => change((d) => ({ ...d, ...patch }))}
+        />
       ) : (
         <p className="fl-note muted">This stop's details haven't loaded yet.</p>
       )}
@@ -346,7 +361,7 @@ function StepDialog(p: StopDialogProps) {
           Prompt: {AGENT_EMPTY_HINT}
         </p>
       )}
-      {kind === "verify" && <VerifyStopBehaviors planId={p.behaviorsPlanId || n.behaviors?.planId || ""} />}
+      {kind === "verify" && <VerifyStopLive verify={p.verify} session={p.verifySession || ""} />}
       {shown && (editable || p.onToggleHalt) && (
         <div className="stop-dialog-halt">
           <Toggle
@@ -402,9 +417,9 @@ function StepDialog(p: StopDialogProps) {
             {SAVE_LOST}
           </p>
         )}
-        {problem && <Problem problem={problem} def={p.def} />}
+        {problem && !inForm && <Problem problem={problem} def={p.def} />}
         {parked ? (
-          <details className="stop-dialog-settings" open={dirty || !!refused || lost || undefined}>
+          <details className="stop-dialog-settings" open={dirty || !!refused || inForm || lost || undefined}>
             <summary>Its settings</summary>
             {editable && p.saveHint && <p className="fl-note muted stop-dialog-save-hint">{p.saveHint}</p>}
             {settings}

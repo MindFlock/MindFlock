@@ -182,7 +182,7 @@ export async function setStartOn(flightId: string, startOn: FlightStartOn): Prom
   }
 }
 
-/** ⏸ Halt here / Carry on past here on a stop of a live flight: `{halt}`
+/** ⏸ Add halt point / Remove halt point on a stop of a live flight: `{halt}`
  * alone, which the server takes on a pending stop or the current one. */
 export async function setHalt(flightId: string, stepId: string, halt: boolean): Promise<boolean> {
   try {
@@ -190,7 +190,7 @@ export async function setHalt(flightId: string, stepId: string, halt: boolean): 
     toast(halt ? "Halt point set — the route pauses before this stop" : "Halt point taken off");
     return true;
   } catch (err) {
-    errorPop(halt ? "Halt here failed" : "Carry on past here failed", errMsg(err));
+    errorPop(halt ? "Adding the halt point failed" : "Removing the halt point failed", errMsg(err));
     return false;
   } finally {
     void refreshFlights();
@@ -370,7 +370,7 @@ export async function tackOnNew(title: string, steps: FlightStep[], startOn?: Fl
     });
     return d?.flight || null;
   } catch (err) {
-    errorPop("Tack on failed", errMsg(err));
+    errorPop("Adding the stops failed", errMsg(err));
     return null;
   } finally {
     void refreshFlights();
@@ -381,7 +381,7 @@ export async function tackOnNew(title: string, steps: FlightStep[], startOn?: Fl
 /** Tack one stop onto a live flight: appended, or at `at` (only after its
  * current stop — the server refuses anything earlier). */
 export function tackOn(flightId: string, step: FlightStep, at?: number, opts: TackOnOpts = {}): Promise<boolean> {
-  return flightAction("Tack on", flightPath(flightId, "/steps"), {
+  return flightAction("Adding the stop", flightPath(flightId, "/steps"), {
     step: wireStep(step),
     ...(at === undefined ? {} : { at }),
     ...(opts.parallel_with ? { parallel_with: opts.parallel_with } : {}),
@@ -519,12 +519,12 @@ export function moveStop(flightId: string, stepId: string, at: number): Promise<
 /** A saved stop tacked onto a live (or grounded) flight as ONE group: the
  * server copies its steps under a fresh group id named after it. */
 export function tackOnPlan(flightId: string, planId: string, at?: number): Promise<boolean> {
-  return flightAction("Tack on", flightPath(flightId, "/steps"), { plan_id: planId, ...(at === undefined ? {} : { at }) });
+  return flightAction("Adding the stop", flightPath(flightId, "/steps"), { plan_id: planId, ...(at === undefined ? {} : { at }) });
 }
 
 /** Several stops tacked on at once, grouped under `groupName` when given. */
 export function tackOnSteps(flightId: string, steps: FlightStep[], at?: number, groupName?: string): Promise<boolean> {
-  return flightAction("Tack on", flightPath(flightId, "/steps"), {
+  return flightAction("Adding the stop", flightPath(flightId, "/steps"), {
     // Their ids ride along: the server gives them new ones and re-aims a Loop
     // among them that repeats from one of them.
     steps: steps.map((s) => ({ ...wireStep(s), id: s.id })),

@@ -24,7 +24,7 @@ const G = await import("../lib/groundedLines");
 const { GroundedLine } = await import("../components/flights/GroundedLine");
 const { freeStopRemedies } = await import("../components/flights/useGroundedLine");
 const { needsNote, perchLine } = await import("../components/flights/SkyDrawer");
-const { frameState, frameBoxStyle } = await import("../components/flights/SkyLine");
+const { frameState } = await import("../components/flights/SkyLine");
 const { SaveRouteAsk, savedMenuItems, NO_SAVED_ROUTES } = await import("../components/flights/StopShelf");
 
 // After the imports: the store reads the real (absent) document as it loads.
@@ -186,9 +186,9 @@ describe("4. a paused route looks paused", () => {
     expect(frameState({ flight: "paused", tone: "attention" })).toBe("you");
     expect(frameState({ flight: "paused", tone: "broken" })).toBe("broken");
     expect(frameState({ flight: "halted" })).toBe("halted");
-    expect(frameBoxStyle("paused")).toEqual({ borderStyle: "dashed" });
-    expect(frameBoxStyle("working")).toBeUndefined();
-    expect(code("components/flights/SkyLine.tsx")).toContain("style={{ left: frameX, top: frameY, ...frameBoxStyle(frame) }}");
+    // The dashed frame lives in SkyLine.css (fp-seams), not inline.
+    expect(code("components/flights/SkyLine.css")).toContain('.skl-frame[data-frame="paused"] > .skl-frame-box {\n  border: calc(1.5px / var(--sky-z, 1)) dashed color-mix(in srgb, var(--muted) 70%, transparent);');
+    expect(code("components/flights/SkyLine.tsx")).toContain("style={{ left: frameX, top: frameY }}");
   });
 });
 
