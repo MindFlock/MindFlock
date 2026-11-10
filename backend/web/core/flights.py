@@ -915,12 +915,14 @@ def _check_options(kind: str, raw: dict, config: dict, where: str) -> None:
     quietly dropped, clamped or defaulted."""
     spec = STEP_KINDS.get(kind) or {}
     label = str(spec.get("label") or kind)
+    # "on a CI checks stop" / "on an Agent stop"
+    label = ("n " if label[:1].lower() in "aeiou" else " ") + label
     fields = {f["name"]: f for f in spec.get("fields") or []}
     allowed = set(fields) | set(config) | set(_LEGACY_OPTIONS.get(kind, ()))
     unknown = sorted(str(k) for k in raw if str(k) not in allowed)
     if unknown:
         raise PlanError(
-            "unknown option %r on a %s stop — it has: %s"
+            "unknown option %r on a%s stop — it has: %s"
             % (unknown[0], label, ", ".join(fields) or "no options"),
             "%s.%s" % (where, unknown[0]),
         )
@@ -939,14 +941,14 @@ def _check_options(kind: str, raw: dict, config: dict, where: str) -> None:
                     ok = False
             if not ok:
                 raise PlanError(
-                    "%s on a %s stop must be a whole number (got %s)"
+                    "%s on a%s stop must be a whole number (got %s)"
                     % (name, label, _option_value(value)),
                     at,
                 )
             got = config.get(name)
             if isinstance(got, int) and not isinstance(got, bool) and got != n:
                 raise PlanError(
-                    "%s on a %s stop must be %s %d (got %d)"
+                    "%s on a%s stop must be %s %d (got %d)"
                     % (name, label, "at most" if got < n else "at least", got, n),
                     at,
                 )
@@ -958,7 +960,7 @@ def _check_options(kind: str, raw: dict, config: dict, where: str) -> None:
             ):
                 continue
             raise PlanError(
-                "%s on a %s stop is true or false (got %s)"
+                "%s on a%s stop is true or false (got %s)"
                 % (name, label, _option_value(value)),
                 at,
             )
@@ -966,7 +968,7 @@ def _check_options(kind: str, raw: dict, config: dict, where: str) -> None:
             options = [str(o) for o in f["options"]]
             if str(value).strip().lower() not in [o.lower() for o in options]:
                 raise PlanError(
-                    "%s on a %s stop is one of %s (got %s)"
+                    "%s on a%s stop is one of %s (got %s)"
                     % (name, label, ", ".join(options), _option_value(value)),
                     at,
                 )

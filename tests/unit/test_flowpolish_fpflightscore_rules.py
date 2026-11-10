@@ -168,7 +168,7 @@ def test_legacy_spellings_still_read_strictly():
         (
             "agent",
             {"prompt": "x", "fresh": "maybe"},
-            "fresh on a Agent stop is true or false",
+            "fresh on an Agent stop is true or false",
         ),
         ("ship", {"lane": "deploy"}, "a ship step goes to commit, push, pr or merge"),
         ("join", {"of": "some"}, "of is all or spawned"),
