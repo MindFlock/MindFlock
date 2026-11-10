@@ -16,7 +16,9 @@
  *  - Tack on a stop        a session with no flight: POST /api/flights/start
  *                          {title, steps, absorb_fasttrack: true}; a live flight:
  *                          POST /api/flights/{id}/steps {step, at?}
- *  - Edit / drop a stop    PATCH · DELETE /api/flights/{id}/steps/{sid} (pending only)
+ *  - Edit / drop a stop    PATCH · DELETE /api/flights/{id}/steps/{sid} (a stop ahead;
+ *                          PATCH also the current one when it failed or waits
+ *                          at its halt point — `saveStop` resolves to the refusal)
  *  - Halt here             PATCH /api/flights/{id}/steps/{sid} {halt} (a pending stop or
  *                          the current one)
  *  - Move a stop           POST /api/flights/{id}/steps/{sid}/move {at} (pending only,
@@ -114,7 +116,7 @@ export async function stepDone(flightId: string, stepId: string, note = ""): Pro
     return true;
   } catch (err) {
     if (isAnswerBehaviors(err)) {
-      toast("Answer its behaviors (or Skip it) — the route goes on once each one has an answer");
+      toast("Answer it on its Verify card (or Skip it) — the route goes on once it has an answer");
       answerBehaviors(flightId);
     } else errorPop("Done failed", errMsg(err));
     return false;
@@ -150,13 +152,13 @@ export function jumpFlight(flightId: string, stepId: string, title = ""): Promis
 export function controlFlight(flightId: string, verb: "pause" | "resume" | "cancel" | "run"): Promise<boolean> {
   const said =
     verb === "pause"
-      ? "Route halted — Carry on picks it up again"
+      ? "Route paused — Carry on picks it up again"
       : verb === "resume"
         ? "Route carrying on"
         : verb === "run"
           ? "Route started"
           : "Route stopped — its session is kept";
-  const what = verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Stop the route";
+  const what = verb === "pause" ? "Pause" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Stop the route";
   return flightAction(what, flightPath(flightId, "/" + verb), {}, said);
 }
 
@@ -185,7 +187,7 @@ export async function setStartOn(flightId: string, startOn: FlightStartOn): Prom
 export async function setHalt(flightId: string, stepId: string, halt: boolean): Promise<boolean> {
   try {
     await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: { halt } });
-    toast(halt ? "Halt point set — the route stops before this stop" : "Halt point taken off");
+    toast(halt ? "Halt point set — the route pauses before this stop" : "Halt point taken off");
     return true;
   } catch (err) {
     errorPop(halt ? "Halt here failed" : "Carry on past here failed", errMsg(err));
@@ -226,10 +228,9 @@ export interface StartBody {
   start_at?: string;
 }
 
-/** Take off: a manual flight of a plan (the server creates its session from
- * the plan's session defaults, or attaches to `title`). Resolves to the
- * flight, null on a refusal (the error card says why). */
-export async function takeOff(body: StartBody): Promise<Flight | null> {
+/** Take off, resolving to the flight or the server's refusal with the field
+ * it names — for a form that shows it under that field (no card). */
+export async function takeOffResult(body: StartBody): Promise<SaveResult & { flight: Flight | null }> {
   try {
     const d = await api<{ flight?: Flight }>("/api/flights/start", { json: body });
     const flight = d?.flight || null;
@@ -238,11 +239,19 @@ export async function takeOff(body: StartBody): Promise<Flight | null> {
       toast("Started: " + flight.plan_name);
       void openWhenReady(flight.session);
     }
-    return flight;
+    return { ...SAVED, flight };
   } catch (err) {
-    errorPop("Starting the route failed", errMsg(err));
-    return null;
+    return { ...refusalOf(err), flight: null };
   }
+}
+
+/** Take off: a manual flight of a plan (the server creates its session from
+ * the plan's session defaults, or attaches to `title`). Resolves to the
+ * flight, null on a refusal (the error card says why). */
+export async function takeOff(body: StartBody): Promise<Flight | null> {
+  const r = await takeOffResult(body);
+  if (!r.ok) errorPop("Starting the route failed", r.detail);
+  return r.flight;
 }
 
 /** Fly a saved flyway on an existing session (a line on the Sky). */
@@ -296,13 +305,24 @@ export async function flyWaiting(
 // --- Flyways -----------------------------------------------------------------
 
 /** Save a flyway (no id = create). Throws the server's refusal ({error, field})
- * so the editor can point at the stop. */
+ * so the editor can point at the stop — `refusalOf(err)` reads it, or call
+ * `savePlanResult`. */
 export async function savePlan(plan: FlightPlan): Promise<FlightPlan> {
   const body: Partial<FlightPlan> = { ...plan };
   if (!body.id) delete body.id;
   const d = await api<{ plan: FlightPlan }>("/api/flights/plans", { json: body });
   void refreshFlights();
   return d.plan;
+}
+
+/** `savePlan` that resolves instead of throwing: the saved plan, or the
+ * server's refusal with the field it names (`steps[2].config.timeout_minutes`). */
+export async function savePlanResult(plan: FlightPlan): Promise<SaveResult & { plan: FlightPlan | null }> {
+  try {
+    return { ...SAVED, plan: await savePlan(plan) };
+  } catch (err) {
+    return { ...refusalOf(err), plan: null };
+  }
 }
 
 export async function deletePlan(id: string): Promise<void> {
@@ -411,8 +431,56 @@ export async function tackOnAll(flightId: string, steps: FlightStep[]): Promise<
   return true;
 }
 
-/** Edit a pending stop of a live flight in place (title / config / on_fail). */
-export async function patchStop(flightId: string, stepId: string, patch: Partial<Pick<FlightStep, "title" | "config" | "on_fail" | "halt" | "when">>): Promise<boolean> {
+/** How a save went: `ok`, else the server's refusal — `detail` its sentence
+ * (verbatim: it says what is allowed), `field` the path it names
+ * (`steps[2].config.timeout_minutes`, `step.title`; "" when it names none)
+ * and `error` its code. A form shows `detail` under the field `field` ends
+ * with (StopDialog `fieldNameOf`). */
+export interface SaveResult {
+  ok: boolean;
+  field: string;
+  detail: string;
+  error: string;
+}
+
+export const SAVED: SaveResult = { ok: true, field: "", detail: "", error: "" };
+
+/** A thrown request error as a refusal: the server's `{error, detail, field}`
+ * (any of them may be missing — an older server, a network failure). */
+export function refusalOf(err: unknown): SaveResult {
+  const b = err instanceof ApiError && err.body && typeof err.body === "object" ? (err.body as Record<string, unknown>) : {};
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  return { ok: false, field: str(b.field), detail: str(b.detail) || errMsg(err), error: str(b.error) };
+}
+
+/** Whether a value is a `SaveResult` (a dialog's `onSave` may resolve to
+ * one, or to nothing from an older caller). */
+export function isSaveResult(v: unknown): v is SaveResult {
+  return !!v && typeof v === "object" && typeof (v as SaveResult).ok === "boolean" && "field" in v && "detail" in v;
+}
+
+type StopPatchBody = Partial<Pick<FlightStep, "title" | "config" | "on_fail" | "halt" | "when">>;
+
+/** Edit a stop of a live flight in place (title / config / on_fail / when /
+ * halt) — one still ahead, or (flow-polish) the CURRENT one while the route
+ * is paused at its halt point or the stop failed: the server resets it, so
+ * Retry / Carry on runs the new settings. No card on a refusal — the dialog
+ * shows it under the field; the flights are refetched before it resolves so
+ * the dialog reads the saved stop. */
+export async function saveStop(flightId: string, stepId: string, patch: StopPatchBody): Promise<SaveResult> {
+  try {
+    await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: patch });
+    return SAVED;
+  } catch (err) {
+    return refusalOf(err);
+  } finally {
+    await refreshFlights();
+  }
+}
+
+/** `saveStop` for a caller with no form to point at: a refusal opens the
+ * error card. Resolves true when it went through. */
+export async function patchStop(flightId: string, stepId: string, patch: StopPatchBody): Promise<boolean> {
   try {
     await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: patch });
     return true;
