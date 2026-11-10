@@ -504,8 +504,75 @@ def test_system_without_windows_reads_null_host_keys(monkeypatch, host):
 
     monkeypatch.setattr(memory_pressure, "snapshot", lambda **kw: _reading(host))
     sysm = _REAL_SYSTEM()
-    for k in ("host_total_mb", "host_available_mb", "host_level"):
+    for k in (
+        "host_total_mb",
+        "host_available_mb",
+        "host_level",
+        "host_headroom_mb",
+        "host_commit_pct",
+        "host_pages_in_median",
+    ):
         assert k in sysm and sysm[k] is None
+    # an older snapshot without the distress keys: null, and ``why`` a list
+    for k in ("psi_some_avg60", "psi_full_avg60", "swap_in_mb_s", "pending"):
+        assert k in sysm and sysm[k] is None
+    assert sysm["why"] == []
+
+
+def test_system_carries_the_distress_signals(monkeypatch):
+    """Every signal the level rests on goes into the history line, so
+    :func:`memory_pressure.replay` can rerun the rule over it."""
+    from backend import memory_pressure
+
+    host = {
+        "available": int(0.7 * GiB),
+        "total": 32 * GiB,
+        "available_pct": 2.2,
+        "headroom": int(3.5 * GiB) + 1000,  # floors to whole MiB
+        "commit_pct": 75.0,
+        "pages_in_median": 40,
+        "level": "ok",
+        "at": 0.0,
+    }
+    snap = _reading(host, level="low")
+    snap.update(
+        psi={"some_avg10": 1, "some_avg60": 25.0, "full_avg10": 0, "full_avg60": 0.5},
+        swap_in_mb_s=1.6,
+        oom_kills=0,
+        pending="critical",
+        why=["processes stalled on memory 25% of the last minute"],
+    )
+    monkeypatch.setattr(memory_pressure, "snapshot", lambda **kw: snap)
+    sysm = _REAL_SYSTEM()
+    assert {k: sysm[k] for k in sysm if k not in _OLD_SYSTEM_KEYS} == {
+        "psi_some_avg60": 25.0,
+        "psi_full_avg60": 0.5,
+        "swap_in_mb_s": 1.6,
+        "oom_kills": 0,
+        "host_headroom_mb": 3584,
+        "host_commit_pct": 75.0,
+        "host_pages_in_median": 40,
+        "pending": "critical",
+        "why": ["processes stalled on memory 25% of the last minute"],
+    }
+    assert sysm["why"] is not snap["why"]  # a copy, not the live list
+    del host["headroom"]  # an older host reading
+    assert _REAL_SYSTEM()["host_headroom_mb"] is None
+
+
+_OLD_SYSTEM_KEYS = {
+    "total_mb",
+    "available_mb",
+    "swap_total_mb",
+    "swap_used_mb",
+    "psi_some_avg10",
+    "psi_full_avg10",
+    "level",
+    "host_total_mb",
+    "host_available_mb",
+    "host_level",
+    "guest_level",
+}
 
 
 def test_get_memory_system_has_the_host_keys(fake, monkeypatch, client):
@@ -542,3 +609,63 @@ def test_get_memory_history(fake, client):
     assert len(got) == 3
     assert client.get("/api/memory/history?minutes=abc").status_code == 400
     assert client.get("/api/memory/history?minutes=nan").status_code == 400
+
+
+def test_the_history_replays_to_the_live_level(fake, monkeypatch, client):
+    """A line the memory loop writes, read back through the route, replays
+    to the level the gauge read live: the history shape and
+    :func:`memory_pressure.replay` stay in step."""
+    from backend import host_memory
+    from backend import memory_pressure as mp
+
+    monkeypatch.setenv("MINDFLOCK_MEMORY_GUARD", "1")
+    monkeypatch.setattr(mp, "SUSTAIN_SECONDS", 0.0)
+    mp._reset_for_tests()
+    host_memory._reset_for_tests()
+    monkeypatch.setattr(
+        mp,
+        "_read_meminfo",
+        lambda: {
+            "total": 20 * GiB,
+            "available": 10 * GiB,
+            "free": 2 * GiB,
+            "swap_total": 0,
+            "swap_free": 0,
+        },
+    )
+    psi = {"some_avg10": 25.0, "some_avg60": 25.0, "full_avg10": 0.0}
+    psi["full_avg60"] = 0.0
+    monkeypatch.setattr(mp, "_read_psi", lambda: dict(psi))  # guest: low
+    monkeypatch.setattr(mp, "_read_vmstat", lambda: None)
+    host_memory._set_reading(  # Windows: commit at 93%, critical
+        {
+            "available": 4 * GiB,
+            "total": 32 * GiB,
+            "committed": int(0.93 * 60 * GiB),
+            "commit_limit": 60 * GiB,
+            "pages_in": 0,
+        }
+    )
+    monkeypatch.setattr(mw, "_system", _REAL_SYSTEM)
+    monkeypatch.setattr(mw, "_sessions", lambda srv: [])
+    monkeypatch.setattr(mw, "pane_pids", lambda: {})
+    try:
+        mw.tick(object())
+        live = mp.snapshot()
+        samples = client.get("/api/memory/history").json()["samples"]
+        rows = [dict(s["system"], at=s["at"]) for s in samples]
+        assert len(rows) == 1
+        (got,) = mp.replay(rows)
+        assert (
+            (got["level"], got["guest_level"], got["host_level"])
+            == (
+                live["level"],
+                live["guest_level"],
+                live["host"]["level"],
+            )
+            == ("critical", "low", "critical")
+        )
+        assert got["why"][0].startswith("Windows commit charge is at 93%")
+    finally:
+        host_memory._reset_for_tests()
+        mp._reset_for_tests()

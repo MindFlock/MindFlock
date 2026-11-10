@@ -8,8 +8,12 @@ apps out and the whole PC stalls — the guest never sees a thing
 (2026-11-05: the owner rebooted a "bricked" PC with WSL itself not even full).
 
 This module keeps ONE long-lived ``powershell.exe`` that prints the host's
-available and total physical memory every :data:`INTERVAL_SECONDS`; a daemon
-thread reads its lines into :func:`reading`. Spawning PowerShell per sample
+available and total physical memory, its commit charge and commit limit, and
+its hard-paging rate every :data:`INTERVAL_SECONDS`; a daemon thread reads
+its lines into :func:`reading`, which also carries the MEDIAN paging rate of
+the last :data:`PAGING_WINDOW` readings (one burst of page-ins — an app
+starting, a file scan — is not distress; a minute of them is. A mean would
+keep one 20000 pages/s spike over the line for the whole window). Spawning PowerShell per sample
 costs ~1.5 s of wall time and a process start each time; one loop costs one
 idle process. The loop exits on its own when its stdout pipe breaks (the
 server is gone), and the thread restarts it with a backoff if it dies.
@@ -32,7 +36,14 @@ import threading
 import time
 from typing import Dict, Optional
 
-__all__ = ["start", "stop", "reading", "parse_line", "INTERVAL_SECONDS"]
+__all__ = [
+    "start",
+    "stop",
+    "reading",
+    "parse_line",
+    "INTERVAL_SECONDS",
+    "PAGING_WINDOW",
+]
 
 #: How often the PowerShell loop prints a reading.
 INTERVAL_SECONDS = 10
@@ -41,17 +52,30 @@ STALE_SECONDS = 45.0
 #: Restart backoff after the loop exits: doubles from the first to the cap.
 _BACKOFF_FIRST = 15.0
 _BACKOFF_CAP = 300.0
+#: The paging rate in :func:`reading` is the median of this many readings
+#: (~1 minute at :data:`INTERVAL_SECONDS`).
+PAGING_WINDOW = 6
 
 _WIN_POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 
 # Win32_OperatingSystem: FreePhysicalMemory is what Windows calls
 # "Available" (free + standby), TotalVisibleMemorySize the usable RAM; both kB.
-# A write to a closed pipe throws, and with Stop that ends the loop.
+# Win32_PerfFormattedData_PerfOS_Memory: CommittedBytes / CommitLimit (the
+# commit charge — what Windows has promised — and RAM plus page file: at the
+# limit an allocation FAILS), and PagesInputPersec (hard page faults read from
+# disk, a rate over the interval since the previous query). The perf class
+# can be missing (perf counters disabled): then the line is the short
+# ``mem <avail> <total>`` form. A write to a closed pipe throws, and with
+# Stop that ends the loop.
 _SCRIPT = (
     "$ErrorActionPreference='Stop'; "
     "while ($true) { "
     "$o = Get-CimInstance Win32_OperatingSystem; "
-    "[Console]::Out.WriteLine(('mem {0} {1}' -f $o.FreePhysicalMemory, $o.TotalVisibleMemorySize)); "
+    "$x = ''; "
+    "try { $p = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory; "
+    "$x = (' {0} {1} {2}' -f [math]::Floor($p.CommittedBytes / 1024), "
+    "[math]::Floor($p.CommitLimit / 1024), $p.PagesInputPersec) } catch { $x = '' }; "
+    "[Console]::Out.WriteLine(('mem {0} {1}' -f $o.FreePhysicalMemory, $o.TotalVisibleMemorySize) + $x); "
     "[Console]::Out.Flush(); "
     "Start-Sleep -Seconds %d }" % INTERVAL_SECONDS
 )
@@ -62,6 +86,7 @@ _STATE: Dict[str, object] = {
     "thread": None,
     "proc": None,
     "stop": False,
+    "paging": [],
 }
 
 
@@ -84,9 +109,14 @@ def _powershell() -> Optional[str]:
 
 def parse_line(line: str) -> Optional[Dict[str, int]]:
     """``"mem <available kB> <total kB>"`` → ``{"available", "total"}`` in
-    bytes, or None for anything else (PowerShell banners, errors, garbage)."""
+    bytes, or None for anything else (PowerShell banners, errors, garbage).
+
+    The long form ``"mem <available kB> <total kB> <committed kB> <commit
+    limit kB> <pages input/s>"`` adds ``"committed"``, ``"commit_limit"``
+    (bytes) and ``"pages_in"`` (pages/s); impossible extras (a limit of 0, a
+    negative rate) drop the extras and keep the short reading."""
     parts = (line or "").strip().split()
-    if len(parts) != 3 or parts[0] != "mem":
+    if len(parts) not in (3, 6) or parts[0] != "mem":
         return None
     try:
         avail, total = int(parts[1]) * 1024, int(parts[2]) * 1024
@@ -94,13 +124,25 @@ def parse_line(line: str) -> Optional[Dict[str, int]]:
         return None
     if total <= 0 or avail < 0 or avail > total:
         return None
-    return {"available": avail, "total": total}
+    out = {"available": avail, "total": total}
+    if len(parts) == 6:
+        try:
+            committed, limit = int(parts[3]) * 1024, int(parts[4]) * 1024
+            pages_in = int(float(parts[5]))
+        except ValueError:
+            return out
+        if limit > 0 and 0 <= committed and pages_in >= 0:
+            out.update(committed=committed, commit_limit=limit, pages_in=pages_in)
+    return out
 
 
 def reading(now: Optional[float] = None) -> Optional[Dict[str, float]]:
     """The latest host reading ``{"available", "total", "at"}`` (bytes,
-    epoch), or None: not WSL, not started, or nothing fresh within
-    :data:`STALE_SECONDS`. Never raises, never blocks."""
+    epoch) — plus, from the long line, ``"committed"``, ``"commit_limit"``,
+    ``"pages_in"`` (this reading's rate), ``"pages_in_median"`` (the median
+    of the last :data:`PAGING_WINDOW` readings) and ``"pages_in_samples"`` (how
+    many that mean holds) — or None: not WSL, not started, or nothing fresh
+    within :data:`STALE_SECONDS`. Never raises, never blocks."""
     r = _STATE.get("reading")
     if not isinstance(r, dict):
         return None
@@ -111,7 +153,28 @@ def reading(now: Optional[float] = None) -> Optional[Dict[str, float]]:
 
 
 def _set_reading(parsed: Dict[str, int], now: Optional[float] = None) -> None:
-    _STATE["reading"] = dict(parsed, at=time.time() if now is None else now)
+    out: Dict[str, float] = dict(parsed, at=time.time() if now is None else now)
+    window = list(_STATE.get("paging") or [])  # type: ignore[arg-type]
+    prev = _STATE.get("reading")
+    if (
+        not isinstance(prev, dict)
+        or out["at"] - float(prev.get("at") or 0) > STALE_SECONDS
+    ):
+        window = []  # a gap (the loop restarted): the old minute is not this one
+    if "pages_in" in parsed:
+        window = (window + [float(parsed["pages_in"])])[-PAGING_WINDOW:]
+        ordered = sorted(window)
+        mid = len(ordered) // 2
+        out["pages_in_median"] = (
+            ordered[mid]
+            if len(ordered) % 2
+            else round((ordered[mid - 1] + ordered[mid]) / 2.0, 1)
+        )
+        out["pages_in_samples"] = len(window)
+    else:
+        window = []
+    _STATE["paging"] = window
+    _STATE["reading"] = out
 
 
 def _run() -> None:
@@ -188,4 +251,6 @@ def stop() -> None:
 
 def _reset_for_tests() -> None:
     stop()
-    _STATE.update({"reading": None, "thread": None, "proc": None, "stop": False})
+    _STATE.update(
+        {"reading": None, "thread": None, "proc": None, "stop": False, "paging": []}
+    )
