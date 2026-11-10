@@ -536,3 +536,58 @@ def test_ship_busy_and_turned_off_say_what_to_do():
     out = F.next_action(f, {"session": sess(), "autopilot": None}, NOW + 5)
     assert out["action"] == "fail"
     assert "Goes as far as" not in out["reason"] and "Retry" in out["reason"]
+
+
+# --------------------------------------------------------------------------- #
+# Merge notes from the round's other workers
+# --------------------------------------------------------------------------- #
+def test_the_session_row_says_why_its_stop_waits():
+    f = run_step(fly(step("command", on_fail="you", command="false"), session="row"))
+    a = F.next_action(
+        f, {"session": sess(), "command": {"exit": 1, "output": "boom"}}, NOW + 1
+    )
+    F.mutate(f["id"], lambda x: F.apply(x, a, NOW + 1))
+    row = F.row_dto("row")
+    assert row["step"]["note"].startswith("exited 1")
+    assert row["step"]["failed_reason"].startswith("exited 1")
+    assert {"id", "kind", "title", "state", "actor"} <= set(row["step"])
+
+
+def test_a_single_step_error_keeps_its_code():
+    with pytest.raises(F.PlanError) as err:
+        F._one_step({"kind": "checks", "config": {"timeout": 1}}, 0, set())
+    assert err.value.field == "step.config.timeout"
+    assert err.value.code == "bad_step"
+
+
+def test_memory_wait_parks_at_five_minutes_and_says_how_long():
+    assert F.VERIFY_MEMORY_WAIT_S == 5 * 60.0
+    f = run_step(fly(step("verify", who="agent")))
+    a = _vnext(f, _verify_facts(), NOW + 1)
+    f = F.apply(
+        f,
+        {
+            "action": "wait",
+            "note": "",
+            "detail": dict(
+                a["detail"],
+                run_wait="memory",
+                memory_since=NOW + 1,
+                memory_detail="1 GB free",
+                last_try=NOW + 200,
+            ),
+        },
+        NOW + 1,
+    )
+    w = _vnext(f, _verify_facts(), NOW + 1 + 3 * 60 + 5)
+    assert w["action"] == "wait"
+    assert (
+        w["note"] == "waiting for memory to start the check (1 GB free) · waited 3 min"
+    )
+    y = _vnext(f, _verify_facts(), NOW + 1 + 5 * 60 + 1)
+    assert y["action"] == "you" and y["detail"]["ask"] == "memory"
+
+
+def test_evidence_already_in_the_text_is_not_said_twice():
+    r = F._verify_failed_reason(["login works — saw: 500 on /login"], ["500 on /login"])
+    assert r == "Failed · 1: login works — saw: 500 on /login"

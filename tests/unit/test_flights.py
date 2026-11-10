@@ -1108,6 +1108,8 @@ def test_row_dto_and_event_data():
             "title": "Check it",
             "state": "waiting_you",
             "actor": "you",
+            # Why it waits (flow-polish round): the stop's own note.
+            "note": "Approve",
         },
         "join": None,
         "branch": None,

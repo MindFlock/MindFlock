@@ -154,7 +154,8 @@ VERIFY_WRITE_DEADLINE_S = 3600.0
 #: A check the memory guard refused is retried this often…
 VERIFY_START_RETRY_S = 30.0
 #: …for this long, then the stop parks on you with the reason.
-VERIFY_MEMORY_WAIT_S = 30 * 60.0
+#: (5 min: the same as the driver's own memory park.)
+VERIFY_MEMORY_WAIT_S = 5 * 60.0
 #: A check marked started with no run record this long after → it never started.
 VERIFY_START_CHECK_S = 60.0
 #: No new answer for this long and the checker's turn over → one nudge.
@@ -2823,14 +2824,23 @@ def row_dto(
         "total": len(f["steps"]),
         "state": f["state"],
         "reason": f["reason"],
-        "step": (
-            {k: step[k] for k in ("id", "kind", "title", "state", "actor")}
-            if step
-            else None
-        ),
+        "step": _row_step(f, step) if step else None,
         "join": join_dto(f),
         "branch": branch,
     }
+
+
+def _row_step(f: dict, step: dict) -> dict:
+    """The session row's ``flight.step``: ``{id, kind, title, state, actor,
+    note}`` plus ``failed_reason`` when the stop failed — so the phone page
+    and the pane strip can say WHY a stop waits."""
+    out = {k: step[k] for k in ("id", "kind", "title", "state", "actor")}
+    out["note"] = str(step.get("note") or "")
+    ss = f["step_states"].get(step["id"]) or {}
+    failed = (ss.get("detail") or {}).get("failed_reason")
+    if failed:
+        out["failed_reason"] = str(failed)
+    return out
 
 
 def you_text(flight: dict) -> Tuple[str, List[str]]:
@@ -3627,7 +3637,10 @@ def _verify_guard(ss: dict, v: dict, now: float, up: dict) -> Optional[dict]:
                 "note": "trying again to start the check",
                 "detail": dict(up),
             }
-        return _wait("waiting for memory to start the check (%s)" % why, **up)
+        note = "waiting for memory to start the check (%s)" % why
+        if now - since >= 60:
+            note += " · waited %s" % _mins(now - since)
+        return _wait(note, **up)
     state = v.get("state") or ""
     if d.get("run_started") and state != "running" and "latest_run_at" in v:
         started = float(d.get("run_started_at") or ss["since"] or 0.0)
@@ -3767,6 +3780,8 @@ def _verify_failed_reason(failed: list, notes=None) -> str:
             note = str(item.get("note") or "")
         else:
             text, note = str(item), str(notes[k] if k < len(notes) else "")
+        if "— saw:" in text:
+            note = ""  # the driver's text carries its evidence already
         note = re.sub(r"\s+", " ", note).strip()
         if len(note) > VERIFY_EVIDENCE_CLIP:
             note = note[: VERIFY_EVIDENCE_CLIP - 1].rstrip() + "…"
@@ -5222,7 +5237,9 @@ def _one_step(raw, index: int, taken, strict: bool = True) -> dict:
             raw, index, strict=True, config_strict=strict, taken=taken
         )
     except PlanError as err:
-        raise PlanError(err.message, re.sub(r"^steps\[\d+\]", "step", err.field))
+        raise PlanError(
+            err.message, re.sub(r"^steps\[\d+\]", "step", err.field), err.code
+        )
 
 
 def _insert_index(flight: dict, at, n: int = 1) -> int:
