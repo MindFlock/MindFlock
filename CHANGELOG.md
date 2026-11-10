@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Developer tooling: running the test suite from a git hook no longer
+  corrupts the repo.** git exports `GIT_DIR` / `GIT_INDEX_FILE` to hooks,
+  and one test module captured them at import. Its tmp-repo `git init` /
+  `git add` then hit the real checkout, leaving `core.bare = true` in
+  `.git/config` and an index holding only a tmp repo's file.
+  `tests/conftest.py` now scrubs every repo-redirecting `GIT_*` variable at
+  import, and a new test runs that module under hook-style variables to keep
+  it fixed.
+
 ## [0.14.5] - 2026-11-10
 
 ### Fixed

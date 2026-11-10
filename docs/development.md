@@ -140,6 +140,16 @@ Two conventions to know:
 - **CI enforces the same checks incrementally.** The `format` job runs
   `black --check` only on files a PR touches (the tree predates formatting
   enforcement, so files converge as they're edited).
+- **Running the test suite from a git hook is safe, but only because of an
+  import-time scrub.** git exports `GIT_DIR` / `GIT_INDEX_FILE` (and in a
+  linked worktree an absolute `GIT_DIR=<repo>/.git/worktrees/<name>`) to
+  every hook. `tests/conftest.py` deletes every repo-redirecting `GIT_*`
+  variable from `os.environ` at import, before collection; the per-test
+  `_isolate_git_config` fixture clears them again. A test helper that runs
+  git must build its `env=` when it is called, never as a module-level
+  `dict(os.environ, ...)`, and a hook or wrapper that runs pytest should
+  `env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE …` first. See Known
+  issues #10 for what happens otherwise.
 
 Refresh the secrets baseline after intentionally adding something
 high-entropy. Use the **same** exclude regex the hook scans with
@@ -592,6 +602,25 @@ Re-verified against the codebase 2026-10-10; useful when touching these areas:
    check `main.log` for GPU restarts; the untried next step is
    `app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')`
    (Windows occlusion tracking), held back until there is evidence for it.
+10. **A commit through a hook that runs pytest flipped the repo to
+    `core.bare = true`** (seen 2026-11-03, 11-09 and 11-10). The shared
+    `.git/config` gained `core.bare = true` (once
+    `core.worktree = /tmp/pytest-of-…/test_default_branch_and_fetch_0/upstream`),
+    the committing worktree's index held only a tmp repo's `a.txt` (every
+    real file staged as deleted), and every git command failed with "must be
+    run in a work tree". Cause: `test_flight_triggers` built its git env with
+    `dict(os.environ, ...)` at import, before the per-test scrub. Under the
+    hook's `GIT_DIR` / `GIT_INDEX_FILE`, its `git -C <tmp> init`
+    re-initialised the real repo and its `git add -A` / `commit` rewrote the
+    real index. Fixed: the root conftest scrubs those variables at import,
+    the helper builds its env per call, and
+    `tests/unit/test_git_env_isolation.py` runs the module under hook-style
+    variables aimed at a stand-in repo and checks that the stand-in is
+    unchanged. To recover a repo hit by this, run
+    `git config --file <repo>/.git/config core.bare false`, unset a stray
+    `core.worktree` the same way, then `git reset` (mixed) in the affected
+    worktree to rebuild its index from `HEAD`. If a stray "a.txt" commit
+    landed on the branch, drop it too.
 
 Two other lists are kept next to the code they describe and are not repeated
 here — read them before touching those areas:
