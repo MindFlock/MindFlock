@@ -221,6 +221,7 @@
     updateActions();
     updatePlanCard();
     updateFlightCard();
+    updateVerifyCard();
     voiceOnSelect(title);
     if (view === "diff") loadDiff();
   }
@@ -392,6 +393,11 @@
   // out. Closed, the next render sorts afresh.
   var rowOrder = [];
   function renderRows() {
+    // A Not verified… note being typed under a row keeps its focus across the
+    // redraw (its words are kept in verifyDrafts).
+    var typing = document.activeElement;
+    var typingPlan = typing && typing.classList && typing.classList.contains("vc-note")
+      ? typing.getAttribute("data-plan") : null;
     sessionListEl.innerHTML = "";
     var ranked = instances.slice().sort(function (a, b) {
       return attnRank(a) - attnRank(b);
@@ -432,7 +438,21 @@
       num.setAttribute("aria-hidden", "true");
       main.insertBefore(num, main.firstChild);
       sessionListEl.appendChild(row);
+      // A verify waiting on you: your steps and the two answers, right under
+      // its row — the bell's Confirm verified row, on the phone.
+      var vc = isPeerRow(inst) ? null : verifyConfirmEl(inst);
+      if (vc) {
+        var wrap = document.createElement("div");
+        wrap.className = "approve-card sess-verify";
+        wrap.appendChild(vc);
+        sessionListEl.appendChild(wrap);
+      }
     });
+    if (typingPlan !== null) {
+      sessionListEl.querySelectorAll(".vc-note").forEach(function (el) {
+        if (el.getAttribute("data-plan") === typingPlan) el.focus();
+      });
+    }
   }
 
   // "Erik · shared with you" over a peer's rows.
@@ -1022,10 +1042,14 @@
     return Math.min(done, mine) + " of " + mine + (mine === 1 ? " step" : " steps") + " done";
   }
   // Waits on a person, failed or blocked: a needs-you state (null otherwise).
+  // Confirm verified / Not verified… are on the session's card and under its
+  // row in the Sessions sheet (verifyConfirmEl).
   function verifyNeedsYou(v) {
     if (v.state === "needs_you") {
       var list = verifyLines(v.human_steps, "expect");
-      return needsYou("verify_confirm", "The agent checked what it can. Do these steps, then confirm verified on the desktop:" + (list ? "\n" + list : ""));
+      var n = (v.human_steps || []).length || Number(v.steps && v.steps.human) || 0;
+      return needsYou("verify_confirm", "The agent checked what it can. Do " + (n === 1 ? "this step" : "these steps") +
+                                        ", then press Confirm verified (or Not verified…):" + (list ? "\n" + list : ""));
     }
     if (v.state === "failed") {
       var failed = verifyLines(v.failed_steps, "note");
@@ -1037,6 +1061,44 @@
                                hint: "Verify couldn't go on" + (v.detail ? " — " + v.detail : "") });
     return null;
   }
+  // Whether "Verify" is offered in a session's ⋯ sheet (sidebar/verifyMenu.ts
+  // canStartVerify): never for a remote, peer, provisioning, paused or
+  // workspace-missing session, and only while no verify runs or waits on you
+  // — the pill says those.
+  function canStartVerify(inst) {
+    if (!inst || !inst.title || inst.workspace_missing || inst.peer_share || inst.device || inst.pending) return false;
+    if (inst.status === "paused") return false;
+    var v = verifyOf(inst);
+    return !v || v.state === "passed" || v.state === "failed" || v.state === "blocked";
+  }
+  // POST /api/test-plans/{plan}/confirm (verifyActions.ts requestVerifyConfirm):
+  // {verified: true}, or {verified: false, note} — the note only when there is
+  // one, and never with a yes.
+  function verifyConfirmBody(verified, note) {
+    var n = verified ? "" : String(note || "").trim();
+    return n ? { verified: false, note: n } : { verified: !!verified };
+  }
+  function postVerifyConfirm(plan, verified, note) {
+    return fetch("/api/test-plans/" + encodeURIComponent(plan) + "/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(verifyConfirmBody(verified, note)),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw apiError((j && (j.error || j.detail)) || "request failed (" + r.status + ")", r.status, j);
+        return j;
+      });
+    });
+  }
+  // What the page says about an answer: the desktop's toast words, and on a
+  // refusal its error card's title — a 409 means it stopped waiting.
+  function verifyConfirmWords(verified, err) {
+    if (!err) return verified ? "Confirmed verified" : "Marked not verified — the agent gets your note";
+    var head = verified ? "Couldn't confirm verified" : "Couldn't mark it not verified";
+    if (err.status === 409) return head + " — it isn't waiting for you any more (someone already answered)";
+    return head + ": " + (err.message || "couldn't reach MindFlock");
+  }
+
   // "Perch: Approve the merge" — once: a stop already titled "Perch: …" (or
   // the old "You: …") is read without it (lib/flights.ts perchLabel).
   function youStepLabel(title) {
@@ -1117,8 +1179,8 @@
     // The agent checking its own work: its own pill, mid-turn or between
     // steps — a usage limit and a dead terminal still say so below.
     if (verify && verify.state === "verifying" && act !== "limit" && act !== "offline")
-      // Painted in the phone's working tone (mobile.css has no violet).
-      return st("working", { label: "Verifying", hint: "Checking its work: " + verifyProgress(verify) });
+      // The desktop's violet (mobile.css --tone-verifying), out of the bell.
+      return st("working", { label: "Verifying", tone: "verifying", hint: "Checking its work: " + verifyProgress(verify) });
     if (act === "working") return st("working", { hint: "Agent is working" });
     if (act === "limit") {
       var until = Number(inst.queue && inst.queue.limited_until) || 0;
@@ -1146,7 +1208,7 @@
       return st("idle", { label: "Paused route",
                           hint: "Route “" + (inst.flight.plan_name || "") + "” is paused — resume it from the desktop" });
     if (verify && verify.state === "passed")
-      return st("idle", { label: "Verified", hint: "Verified" + (verify.detail ? " — " + verify.detail : "") });
+      return st("idle", { label: "Verified", tone: "verified", hint: "Verified" + (verify.detail ? " — " + verify.detail : "") });
     if (idleFor > STUCK_IDLE_S && dirty)
       return st("idle", { reason: "stuck", inBell: true, hint: "Idle with unfinished work — possibly stuck" });
     return st("idle", { hint: "Agent is idle — waiting for input" });
@@ -1283,7 +1345,8 @@
         var sig = instances.map(function (i) {
           var rz = rzChip(i);
           return attnRank(i) + i.title + "\u0000" + (i.name || "") + "\u0000" + sessionState(i).label +
-            "\u0000" + (rz ? rz.label : "") + "\u0000" + (i.asking ? String(i.asking.ts) + String(i.asking.text || "") : "");
+            "\u0000" + (rz ? rz.label : "") + "\u0000" + (i.asking ? String(i.asking.ts) + String(i.asking.text || "") : "") +
+            "\u0000" + verifyKey(i);
         }).join("|");
         if (sig !== poll._sig) { poll._sig = sig; renderPicker(); }
         // After renderPicker, before the dot: a session created from the "+"
@@ -1298,6 +1361,7 @@
         updateActions();
         updatePlanCard();
         updateFlightCard();
+        updateVerifyCard();
         voiceOnPoll();
         askOnPoll();
       })
@@ -1589,6 +1653,176 @@
         flightKey = "";
         flightEl.querySelectorAll(".flight-act").forEach(function (b) { b.disabled = false; });
       });
+  }
+
+  // --- a verify waiting on you (components/behaviors/VerifyConfirm.tsx) ----
+  // The session's own agent checked what it can (`verify.state ===
+  // "needs_you"`); the steps only a person can do are listed — each with what
+  // should happen — over the desktop's two answers: Confirm verified, and
+  // Not verified…, which opens an inline note the agent gets (never
+  // window.prompt: Electron has none, and the phone keeps the one rule).
+  // Drawn on the current session's card (under the flight card) and under the
+  // session's row in the Sessions sheet; both post
+  // POST /api/test-plans/{plan}/confirm (postVerifyConfirm).
+  //
+  // The open note and what is typed in it are kept per plan, so a poll that
+  // redraws the Sessions sheet (or the card) doesn't lose them; a press in
+  // flight is per plan too, so the card and the sheet can't answer twice.
+  var verifyDrafts = {};   // plan → { open: bool, note: string }
+  var verifyBusy = {};     // plan → "yes" | "no" while its request is out
+  function verifyStepsEl(steps) {
+    var ol = document.createElement("ol");
+    ol.className = "vc-steps";
+    ol.setAttribute("aria-label", "Steps for you");
+    (steps || []).forEach(function (s) {
+      var li = document.createElement("li");
+      li.className = "vc-step";
+      var t = document.createElement("span");
+      t.className = "vc-step-text";
+      t.textContent = String(s.text || "").trim();
+      li.appendChild(t);
+      var expect = String(s.expect || "").trim();
+      if (expect) {
+        var e = document.createElement("span");
+        e.className = "vc-step-expect";
+        e.textContent = "Expect: " + expect;
+        li.appendChild(e);
+      }
+      ol.appendChild(li);
+    });
+    return ol;
+  }
+  // The steps and the two answers for one session's verify, or null when it
+  // isn't waiting on a person.
+  function verifyConfirmEl(inst) {
+    var v = verifyOf(inst);
+    if (!v || v.state !== "needs_you" || !v.plan) return null;
+    var plan = String(v.plan);
+    var draft = verifyDrafts[plan] || (verifyDrafts[plan] = { open: false, note: "" });
+    var box = document.createElement("div");
+    box.className = "vc-confirm";
+    box.setAttribute("role", "group");
+    box.setAttribute("aria-label", "Confirm verified");
+    box.setAttribute("data-plan", plan);
+    if ((v.human_steps || []).length) box.appendChild(verifyStepsEl(v.human_steps));
+    var acts = document.createElement("div");
+    acts.className = "vc-acts";
+    box.appendChild(acts);
+    var msg = document.createElement("div");
+    msg.className = "vc-msg";
+    msg.setAttribute("role", "status");
+    box.appendChild(msg);
+    function button(cls, label, title, run) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "act " + cls;
+      b.textContent = label;
+      if (title) b.title = title;
+      b.disabled = !!verifyBusy[plan];
+      b.addEventListener("click", run);
+      acts.appendChild(b);
+      return b;
+    }
+    function paint() {
+      acts.innerHTML = "";
+      var busy = verifyBusy[plan] || "";
+      if (!draft.open) {
+        button("is-next vc-yes", busy === "yes" ? "…" : "Confirm verified",
+          "You did the steps above and they behaved as expected — verification is complete",
+          function () { send(true); });
+        button("vc-no", "Not verified…", "Something didn't behave — say what, and the agent gets it",
+          function () { draft.open = true; msg.textContent = ""; paint(); focusNote(); });
+        return;
+      }
+      var input = document.createElement("input");
+      input.type = "text";
+      input.className = "vc-note";
+      input.placeholder = "What did you see? The agent gets this";
+      input.setAttribute("aria-label", "What wasn't verified");
+      input.setAttribute("autocomplete", "off");
+      input.setAttribute("data-plan", plan);
+      input.value = draft.note;
+      input.disabled = !!busy;
+      input.addEventListener("input", function () { draft.note = input.value; });
+      input.addEventListener("keydown", function (ev) {
+        ev.stopPropagation();
+        if (ev.key === "Enter") { ev.preventDefault(); send(false); }
+        else if (ev.key === "Escape") { ev.preventDefault(); draft.open = false; paint(); }
+      });
+      acts.appendChild(input);
+      button("is-next vc-send", busy === "no" ? "…" : "Not verified", "", function () { send(false); });
+      button("vc-cancel", "Cancel", "", function () { draft.open = false; paint(); });
+    }
+    function focusNote() {
+      var el = acts.querySelector ? acts.querySelector(".vc-note") : null;
+      if (el && el.focus) el.focus();
+    }
+    function send(verified) {
+      if (verifyBusy[plan]) return;
+      verifyBusy[plan] = verified ? "yes" : "no";
+      msg.textContent = "";
+      paint();
+      postVerifyConfirm(plan, verified, verified ? "" : draft.note)
+        .then(function () {
+          delete verifyDrafts[plan];
+          flashStatus(verifyConfirmWords(verified, null));
+        }, function (err) {
+          // Said where it was pressed (the card or the sheet, which stays up)
+          // and in the status line, as the flight card's Done says it.
+          var words = verifyConfirmWords(verified, err);
+          msg.textContent = words;
+          flashStatus(words);
+        })
+        .then(function () {
+          delete verifyBusy[plan];
+          paint();
+          setTimeout(poll, 600);
+        });
+    }
+    paint();
+    return box;
+  }
+  // The current session's card: under the flight card, built here like it.
+  var verifyEl = document.createElement("div");
+  verifyEl.id = "verify-card";
+  verifyEl.className = "hidden";
+  verifyEl.setAttribute("aria-live", "polite");
+  if (flightEl.parentNode) flightEl.parentNode.insertBefore(verifyEl, flightEl.nextSibling);
+  var verifyCardKey = "";
+  // What the card shows — a new key redraws it; the same key leaves it (and
+  // a note being typed) alone.
+  function verifyKey(inst) {
+    var v = verifyOf(inst);
+    if (!v || v.state !== "needs_you" || !v.plan) return "";
+    return [inst.title, v.plan, v.at || "", (v.human_steps || []).map(function (s) {
+      return String(s.id) + ":" + String(s.text || "") + ":" + String(s.expect || "");
+    }).join(",")].join("|");
+  }
+  function updateVerifyCard() {
+    var inst = currentInst();
+    var key = inst ? verifyKey(inst) : "";
+    if (!key) {
+      verifyCardKey = "";
+      if (!verifyEl.classList.contains("hidden")) {
+        verifyEl.classList.add("hidden");
+        verifyEl.innerHTML = "";
+        fitSoon();
+      }
+      return;
+    }
+    if (key === verifyCardKey) return;
+    verifyCardKey = key;
+    verifyEl.innerHTML = "";
+    var card = document.createElement("div");
+    card.className = "approve-card verify-card";
+    var head = document.createElement("div");
+    head.className = "vc-head";
+    head.textContent = REASON_LABEL.verify_confirm + " — the agent did its steps; do yours, then confirm";
+    card.appendChild(head);
+    card.appendChild(verifyConfirmEl(inst));
+    verifyEl.appendChild(card);
+    verifyEl.classList.remove("hidden");
+    fitSoon();
   }
 
   // Like the Map's: no Go while the agent waits on a question in the terminal.
@@ -2645,6 +2879,12 @@
         if (inst.status === "paused")
           actListEl.appendChild(actRow("Resume session", "starts the agent again in the same worktree",
             function () { sessionCall(title, "resume", "Resuming " + nameOf(title) + "…", "Resume failed"); }));
+        // Verify: its own agent writes the steps to check its work and works
+        // them in its terminal (sidebar/verifyMenu.ts) — offered only while no
+        // verify runs or waits on you.
+        if (canStartVerify(inst))
+          actListEl.appendChild(actRow(verifyOf(inst) ? "Verify again" : "Verify", "its agent checks its own work",
+            function () { startVerify(title); }));
         actListEl.appendChild(actRow("Close", "stops the agent and moves it to Recently closed",
           function () { closeSession(title); }));
         // A peer (sandboxed shared-folder) session is unshared, never deleted —
@@ -2679,6 +2919,28 @@
           sessionCall(title, route, okMsg, failWord, { start_anyway: true });
         })) return;
         actError(failWord + ": " + err.message);
+      });
+  }
+
+  // POST /api/instances/{title}/verify (verifyActions.ts startSessionVerify):
+  // the sheet closes, the session opens on its Agent tab — the terminal where
+  // its agent works the steps and you talk to it — and the status line says
+  // so; a refusal stays on the sheet in the server's words.
+  function startVerify(title) {
+    actBusy = true;
+    actError("");
+    postFor(title, "verify", {})
+      .then(function () {
+        actBusy = false;
+        closeActSheet();
+        if (title !== current) select(title);
+        if (view !== "agent") switchTab("agent");
+        flashStatus("Verifying " + nameOf(title) + " — its agent writes its steps and works them in its terminal");
+        poll();
+      })
+      .catch(function (err) {
+        actBusy = false;
+        actError("Couldn't start verifying " + nameOf(title) + ": " + err.message);
       });
   }
 

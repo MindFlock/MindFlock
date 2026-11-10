@@ -5611,10 +5611,8 @@ The session row carries it as `verify` (`null`, or `{state, plan, steps:
 sit under the person's steps — each step's text and what should happen — on
 the pane's **verify row** (under its head, beside the route strip;
 `grid/PaneVerifyStrip.tsx`), on the bell's row, on the **Behaviors card**, and
-on a **Verify stop** parked on you. The phone (`/m`) shows the same pills
-(`mobile.js` mirrors the words and the ranking, in its existing working and
-neutral tones); it has no confirm buttons yet — its tooltip says to confirm on
-the desktop. Both post `POST /api/test-plans/{plan}/confirm` with
+on a **Verify stop** parked on you. The phone (`/m`) has them too — see
+[On the phone](#verify-on-the-phone) below. Both post `POST /api/test-plans/{plan}/confirm` with
 `{verified: true}` or `{verified: false, note}`; **Not verified…** opens an
 inline note (*What did you see? The agent gets this*) — never
 `window.prompt()`, which Electron doesn't have. A 409 means it stopped waiting
@@ -5631,6 +5629,35 @@ then the person's steps and **Confirm verified** / **Not verified…**;
 again**; `blocked` — why, with the same two buttons. Because this row carries
 the confirm, a Verify stop's compact one-line strip in the pane shows only
 **Skip** and a way to the Behaviors card.
+
+<a id="verify-on-the-phone"></a>
+**On the phone (`/m`).** `mobile.js` mirrors the pills, their words and their
+ranking (`sessionState`, `needsYouKind`), in tones of its own in `mobile.css`:
+**Verifying** in the desktop's violet (`--tone-verifying`, a pulsing dot) and
+**Verified** in a calm green (`--tone-verified`, no glow). A verify in
+`needs_you` draws the person's steps (each with *Expect: …*) and **Confirm
+verified** / **Not verified…** in two places: a card for the current session
+under the header (`#verify-card`, under the plan and flight cards), and under
+that session's row in the **Sessions** sheet — the phone's Needs-you list.
+**Not verified…** turns the buttons into an inline note (*What did you see?
+The agent gets this*) with **Not verified** and **Cancel** (Enter sends, Esc
+cancels); never `window.prompt()`. The note and an answer in flight are kept
+per plan, so the 4 s poll redrawing the sheet loses neither, and the card and
+the sheet can't answer twice. Both post the same `POST
+/api/test-plans/{plan}/confirm` body as the desktop (`{verified: true}`, or
+`{verified: false, note}` — no `note` when it is empty). The result is said
+the phone's way, in the status line: *Confirmed verified* / *Marked not
+verified — the agent gets your note*; a refusal is said there and stays under
+the buttons — a 409 as *… it isn't waiting for you any more (someone already
+answered)*. The pill's tooltip says to press Confirm verified (no longer "on
+the desktop"). A session's **⋯** sheet (or a long press on its row) offers
+**Verify** — **Verify again** once a verify has passed, failed or been blocked
+— under the desktop's rule (`canStartVerify`: hidden while one runs or waits on
+you, and for a paused, remote, peer, provisioning or workspace-missing
+session). It posts `POST /api/instances/{title}/verify` with `{}`, closes the
+sheet and opens the session on its **Agent** tab, where its agent works the
+steps; a refusal stays on the sheet in the server's words.
+`tests/unit/test_mobile_verify.py` runs these pieces of `mobile.js` under node.
 
 **Without the session.** With the work session closed, the Behaviors card's
 **Verify** falls back to `POST /api/test-plans/{plan}/run` (the older
@@ -7755,10 +7782,17 @@ state table ([One session state](#one-session-state)) copied into
 `mobile.js` `SESSION_STATES`: *Starting*, *Working*, *Question* / *Pre-commit
 failed* / *Checks failing* / *Setup failed*, *Idle*, *Waiting on limit*
 (*, resumes HH:MM*), *Offline*, plus *Paused*, *Missing* and *Sleeping* (with
-a **Wake** action in its sheet) outside the table;
-CSS classes `tone-muted|working|attention|neutral|waiting|broken`. A row's
+a **Wake** action in its sheet) outside the table, and Verify's *Verifying* /
+*Confirm verified* / *Verify failed* / *Verify blocked* / *Verified*;
+CSS classes `tone-muted|working|attention|neutral|waiting|broken`, plus
+`tone-verifying|verified` for Verify's own two. A verify waiting on you puts
+its steps and **Confirm verified** / **Not verified…** on a card under the
+header and under its row in the Sessions sheet ([Verify on the
+phone](#verify-on-the-phone)). A row's
 **⋯** (or a long press on it), or the header's **⋯** for the current session,
 opens its actions: **Restart** (only when offline — `POST /revive`),
+**Verify** / **Verify again** (only while no verify runs or waits on you —
+`POST /verify`),
 **Resume session** (only on a paused session — the phone has no Pause, as the
 desktop's menus don't; the palette, `mindflock pause` and the API still
 pause), **Close**
