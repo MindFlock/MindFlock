@@ -553,16 +553,17 @@ describe("the chime", () => {
 describe("the mic's wiring (components/TopBarMic.tsx)", () => {
   const MIC = code("components/TopBarMic.tsx");
 
-  it("a wake starts listening at once, as a click does, the chime in the same moment (skipped), a quiet miss after WAKE_LISTEN_MS", () => {
+  it("a wake starts listening at once, as a click does, the chime in the same moment (skipped), a captioned miss after WAKE_LISTEN_MS", () => {
     // start() first — no delay before it — then the chime, synchronously.
     expect(MIC).toMatch(
-      /const woken = \(soundEnd: number\) => \{\s*if \(live\.current\) return;\s*const d = start\(textField\(document\.activeElement\), \{ hint: WAKE_HINT, idle: false \}\);\s*if \(!d\) return;\s*wakeFrom = \{ d, at: soundEnd \};/
+      /const woken = \(soundEnd: number, rest\?: string\) => \{\s*if \(live\.current\) return;\s*const d = start\(textField\(document\.activeElement\), \{ hint: WAKE_HINT, idle: false \}\);\s*if \(!d\) return;\s*wakeFrom = \{ d, at: soundEnd \};/
     );
     // start() chimes (every start does), its sound skipped from the recording.
     expect(MIC).toMatch(/sound\("start"\);\s*chimed\.current = true;/);
     expect(MIC).toMatch(/const chimeSkip = prefsRef\.current\.sounds !== false \? queue\.cueLead \+ CHIME_MS \+ 30 : 0;/);
-    expect(MIC).toContain("onWake: (soundEnd) => latestWake.current(soundEnd),");
-    expect(MIC).toMatch(/if \(live\.current === d && !d\.heardAnything\) d\.drop\(\);\s*\}, WAKE_LISTEN_MS\);/);
+    // The standby's `rest` (the words after the wake word, one breath) rides along.
+    expect(MIC).toContain("onWake: (soundEnd: number, rest?: string) => latestWake.current(soundEnd, rest),");
+    expect(MIC).toMatch(/if \(live\.current === d && !d\.heardAnything\) d\.drop\(WAKE_MISS_LINE\);\s*\}, WAKE_LISTEN_MS\);/);
     // start() honours the extra skip next to the barge-in's.
     expect(MIC).toMatch(/const skipMs = Math\.max\(bargeIn\([^;]*\), opts\.skipMs \|\| 0\);/);
   });
