@@ -16,11 +16,11 @@ import threading
 import time
 
 import anyio.from_thread
-import ptyprocess
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from backend.session import mux
 from backend.web import server
 from backend.web.core import terminal_ws as tw
 
@@ -101,7 +101,7 @@ def spawner(monkeypatch, tmp_path):
         state["procs"].append(state["make"]())
         return state["procs"][-1]
 
-    monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", spawn)
+    monkeypatch.setattr(mux, "spawn_pty", spawn)
     monkeypatch.setattr(server.ENGINE, "instances", {"w": _Inst()})
     monkeypatch.setattr(server, "ensure_terminal_session", lambda i, t: ("mf_w", None))
     monkeypatch.setattr(
@@ -184,7 +184,7 @@ def test_a_failing_spawn_still_closes_with_its_error(
             "The command was not found or was not executable: tmux."
         )
 
-    monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", boom)
+    monkeypatch.setattr(mux, "spawn_pty", boom)
     with one_loop.websocket_connect("/api/instances/w/" + pane) as ws:
         frame = _within(ws.receive_json)
         assert frame == {

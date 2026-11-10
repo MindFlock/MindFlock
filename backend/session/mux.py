@@ -22,7 +22,7 @@ Rules for callers:
   ``-S <socket>`` / ``-L <name>`` may follow it). The keywords are
   ``subprocess.run``'s.
 * Never spawn ``tmux attach-session`` in a PTY yourself: :func:`attach`
-  returns a :class:`Terminal`.
+  returns a :class:`Terminal` (started by :func:`spawn_pty`).
 * :func:`available` instead of ``shutil.which("tmux")``.
 
 One rule is added on the way through: in a session that MindFlock itself put
@@ -253,14 +253,13 @@ def attach(
     env: Optional[dict] = None,
 ) -> Terminal:
     """An interactive client on ``session`` (``readonly``: ``attach -r``),
-    sized ``dimensions`` (rows, cols)."""
+    sized ``dimensions`` (rows, cols) — started by :func:`spawn_pty`
+    (``posix_spawn`` on Linux, never a fork of the server)."""
     if not IS_WINDOWS:
-        import ptyprocess
-
         argv = (
             ["tmux", "attach-session"] + (["-r"] if readonly else []) + ["-t", session]
         )
-        return ptyprocess.PtyProcess.spawn(
+        return spawn_pty(
             argv,
             dimensions=dimensions,
             env=env if env is not None else {**os.environ, "TERM": "xterm-256color"},

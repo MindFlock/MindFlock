@@ -17,9 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attach timed out* and the socket closes with 1013 (new on the terminal
   websockets; a client should treat it as transient) while the server keeps
   answering. Keystrokes to the client and the detach (which slept up to
-  0.4 s per pane on the loop) are off the loop too. `mux.spawn_pty` starts a
-  PTY client with `posix_spawn` (no page-table copy, no GIL held through a
-  fork), ready for `mux.attach` to adopt.
+  0.4 s per pane on the loop) are off the loop too. And the client no longer
+  forks the server at all: `mux.attach` starts it with `posix_spawn`
+  (`mux.spawn_pty`), which copies no page tables and runs no Python in the
+  child — a fork holds the GIL, so even on a thread it stalled every request.
 
 ## [0.14.3] - 2026-11-10
 

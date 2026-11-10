@@ -307,15 +307,14 @@ loop:
 A thread alone does not make a slow fork harmless: CPython forks while
 holding the GIL, and the copy of the page tables stalls every thread (≈13 ms
 at 600 MB resident, measured; unbounded under memory pressure).
-`mux.spawn_pty` starts a client with `posix_spawn` instead (glibc's
+So `mux.attach` starts every client with `mux.spawn_pty`: `posix_spawn` (glibc's
 `clone(CLONE_VM|CLONE_VFORK)`: nothing copied, no Python in the child, ~1 ms):
 `openpty`, the window size set on the slave, the child a session leader that
 opens the slave by path as fd 0 — on Linux that makes it the controlling tty
 with the child's group in the foreground, as `forkpty` does, so resizes still
 SIGWINCH the client and closing the master still hangs it up. It returns the
-same `ptyprocess.PtyProcess`. Off Linux it is ptyprocess's spawn. (`mux.attach`
-still spawns through `ptyprocess.PtyProcess.spawn`, the seam the web terminal
-tests stub; it switches to `spawn_pty` together with those stubs.)
+same `ptyprocess.PtyProcess`. Off Linux it is ptyprocess's spawn. Tests that
+must not start a real client stub `mux.spawn_pty`.
 
 `spawn_pty(argv, *, dimensions=(24, 80), env=None)` contract: it returns a
 `ptyprocess.PtyProcess`; a missing command raises `FileNotFoundError` with
@@ -324,10 +323,7 @@ ptyprocess's exact message; the child inherits only fds 0/1/2. The
 `os.posix_spawn`) — on macOS opening a tty does not make it the controlling
 tty, so it falls back.
 
-**Limits and recovery.** Until `mux.attach` adopts `spawn_pty` the root cause
-stands: CPython forks holding the GIL, so a fork that never returns stalls
-every thread, the loop included — the thread and timeout only keep a *slow*
-fork from taking down HTTP. A spawn that never returns holds its slot for
+**Limits and recovery.** A spawn that never returns holds its slot for
 good: after two, every attach times out after 15 s until the server
 restarts (nothing frees a wedged slot, and no health signal shows it). Look
 for these WARNINGs on the `mindflock.terminal` logger: *attach timed out
@@ -336,10 +332,13 @@ up; reaped*, *PTY writer still blocked; leaving its fd open* (the writer was
 still blocked 2 s into a detach, so the fd is left open rather than risk a
 write into a reused fd number). Each terminal socket costs up to three
 daemon threads (`pty-attach`, `pty-writer`, `pty-reap`). Not yet routed
-through `attach_off_loop`, so they may still fork on the loop: the provider
-and `gh` login terminals (`/api/providers/{name}/login-terminal`,
-`/api/github/gh-login-terminal`), the assistant terminal, and peer-forwarded
-terminals (`term_open`).
+through `attach_off_loop`: the assistant terminal, `core.pty_run`'s tmux
+attach and peer-forwarded terminals (`term_open`) spawn on the loop, but
+through `mux.attach`, so by `posix_spawn` — no fork. Still a real `fork()`
+(ptyprocess): the provider and `gh` login terminals (`core.pty_run`'s
+command PTY, `/api/providers/{name}/login-terminal`,
+`/api/github/gh-login-terminal`), the ticket log stream (`spawn_tail`), and
+the engine's own PTY (`session/tmux/pty.py`).
 
 ### Other people's keystrokes
 
