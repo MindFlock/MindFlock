@@ -328,7 +328,9 @@ def test_the_start_answer_is_read(monkeypatch, status, body, started, reason):
     monkeypatch.setattr(D, "_server", lambda: srv)
     got = asyncio.run(D._start_verify_run("p", "sandbox", "n"))
     assert got["started"] is started and got["reason"] == reason
-    assert srv.calls == [("p", {"environment": "sandbox", "notes": "n"})]
+    assert srv.calls == [
+        ("p", {"environment": "sandbox", "notes": "n", "walk": "agent"})
+    ]
 
 
 def test_any_other_refusal_fails_with_the_servers_sentence(monkeypatch):

@@ -795,6 +795,51 @@ def _normalize_steps(raw) -> List[dict]:
     return steps
 
 
+#: A run's ``walk`` mode: ``"agent"`` (the default) asks the walker for the
+#: actor=agent steps only; ``"all"`` also has it attempt a person's steps with
+#: whatever tools it has, answering one pass/fail only with evidence.
+WALKS = ("agent", "all")
+WALK_AGENT = "agent"
+WALK_ALL = "all"
+
+
+def _walk(value) -> str:
+    """A stored/requested walk mode, coerced: anything unrecognised is the
+    default ``"agent"`` — the mode in which no agent settles a person's step."""
+    value = str(value or "").strip().lower()
+    return value if value in WALKS else WALK_AGENT
+
+
+def _walked_answer(walk: str, value: str, note: str) -> bool:
+    """Whether an AGENT's ``value`` for a HUMAN step is accepted (a "walked"
+    answer): only in a run walked ``"all"``, only ``pass``/``fail``, and only
+    with a non-empty note saying what it observed — a ``needs you:`` note is a
+    handover, not evidence. Anything else stays today's refusal (``blocked``,
+    the step still waiting on a person)."""
+    note = str(note or "").strip()
+    return (
+        _walk(walk) == WALK_ALL
+        and value in ("pass", "fail")
+        and bool(note)
+        and not note.lower().startswith(NEEDS_YOU)
+    )
+
+
+def _agent_human_answer(walk: str, value: str, note: str) -> tuple:
+    """An agent's answer to a HUMAN step → ``(result, note, walked)``: the
+    evidenced pass/fail of a walk-"all" run stands (``walked``); anything else
+    is ``blocked`` with its note kept, and a refused unevidenced claim says
+    why so the person reading it knows what is still owed."""
+    if _walked_answer(walk, value, note):
+        return value, note, True
+    if value in ("pass", "fail") and _walk(walk) == WALK_ALL and not note.strip():
+        note = (
+            "the agent answered %s without saying what it observed — a person "
+            "has to check this" % value
+        )
+    return "blocked", note, False
+
+
 def _normalize_result(raw) -> dict:
     """One ``{result, note, at, by}`` cell of a run's results map."""
     if not isinstance(raw, dict):
@@ -805,6 +850,10 @@ def _normalize_result(raw) -> dict:
         "note": _text(raw.get("note")),
         "at": _f(raw.get("at")),
         "by": str(raw.get("by") or "").strip() or "agent",
+        # An AGENT answered a PERSON's step, in a run walked with ``walk``
+        # "all", and backed it with evidence (see :func:`_walked_answer`).
+        # Present only when true, so every older cell keeps its exact shape.
+        **({"walked": True} if raw.get("walked") else {}),
     }
 
 
@@ -989,6 +1038,11 @@ def _normalize_run(raw, steps: List[dict]) -> dict:
         # the results comment and the tree check can say where it was checked.
         "where": _text(raw.get("where"), 40),
         "checkout": _text(raw.get("checkout"), 250),
+        # WHICH STEPS THE WALKER WAS ASKED TO WALK (:data:`WALKS`): "agent"
+        # (the default, and every run written before the field) works only
+        # actor=agent steps; "all" also attempts a person's steps, and only
+        # then may an agent's evidenced pass/fail settle one.
+        "walk": _walk(raw.get("walk")),
         "results": results,
         # Made while the work was only on its branch — a check before merge.
         # Once the plan ships, such a run is history rather than the current
@@ -1736,8 +1790,13 @@ def start_run(
     where: str = "",
     target: Optional[str] = None,
     checkout: str = "",
+    walk: str = WALK_AGENT,
 ) -> Optional[dict]:
     """A verify session has been created for this plan.
+
+    ``walk`` (:data:`WALKS`) is stamped on the run: ``"all"`` is what lets
+    :func:`finish_run` / :func:`record_progress` accept an agent's evidenced
+    answer to a person's step.
 
     ``where``/``target``/``checkout`` record what a run with an explicit
     environment was pointed at (see the ``where`` note in
@@ -1755,6 +1814,7 @@ def start_run(
     nothing on the agent's side is allowed to make again.
     """
     session_title = str(session_title or "")
+    walk = _walk(walk)
 
     def apply(plan: dict) -> None:
         prelive = _unshipped(plan)
@@ -1789,6 +1849,7 @@ def start_run(
             "results": carried,
             "verdict": _verdict(plan["steps"], carried),
             "prelive": prelive,
+            "walk": walk,
         }
         if where:
             run["where"] = _text(where, 40)
@@ -1877,8 +1938,9 @@ def record_progress(plan_id: str, results: List[dict]) -> Optional[dict]:
     settles, so whoever waits on the run (a route's Verify stop) sees progress
     and can tell a slow check from a stalled one. Same author rules as
     :func:`finish_run`: an unrecognised result is ``blocked``, an agent's
-    answer to a human step is ``blocked``, a person's answer is never
-    overwritten. ``progress_at`` on the run is stamped only when an answer
+    answer to a human step is ``blocked`` (unless the run walks ``"all"`` and
+    it is an evidenced pass/fail — stored ``walked``), a person's answer is
+    never overwritten. ``progress_at`` on the run is stamped only when an answer
     actually changed — it is the clock a stall is measured by. The state,
     ``run_session`` and the run's end are left alone: only ``finish_run`` (or
     a close) ends a run."""
@@ -1907,16 +1969,19 @@ def record_progress(plan_id: str, results: List[dict]) -> Optional[dict]:
             if value not in RESULTS:
                 value = "blocked"
             note = _text(entry.get("note"))
+            walked = False
             if actors[sid] == "human":
-                value = "blocked"
-            if mine.get("result") == value and mine.get("note", "") == note:
+                value, note, walked = _agent_human_answer(run.get("walk"), value, note)
+            if (
+                mine.get("result") == value
+                and mine.get("note", "") == note
+                and bool(mine.get("walked")) == walked
+            ):
                 continue
-            run["results"][sid] = {
-                "result": value,
-                "note": note,
-                "at": now,
-                "by": "agent",
-            }
+            cell = {"result": value, "note": note, "at": now, "by": "agent"}
+            if walked:
+                cell["walked"] = True
+            run["results"][sid] = cell
             changed = True
         if changed:
             run["progress_at"] = now
@@ -1929,13 +1994,14 @@ def run_progress(plan: dict) -> dict:
     ``{"answered", "total", "started_at", "progress_at", "session",
     "needs_you": [{"step", "text", "do", "at"}], "blocked": [{"step",
     "text", "why", "at"}]}``. ``progress_at`` falls back to the start when nothing has been
-    answered yet. ``total`` counts the AGENT's steps (the ones a run answers);
-    ``needs_you`` / ``blocked`` are the agent steps it handed to a person —
-    ``needs you:`` notes (:data:`NEEDS_YOU`) apart from plain blocks."""
+    answered yet. ``total`` counts the steps the run walks — the AGENT's, or
+    every step for a run walked ``"all"``; ``needs_you`` / ``blocked`` are
+    those it handed to a person — ``needs you:`` notes (:data:`NEEDS_YOU`)
+    apart from plain blocks."""
     runs = plan.get("runs") or []
     run = runs[-1] if runs else {}
     results = run.get("results") or {}
-    agent = [st for st in plan.get("steps") or [] if st.get("actor") == "agent"]
+    agent = agent_steps(plan, walk=run.get("walk") or WALK_AGENT)
     answered = 0
     needs: List[dict] = []
     blocked: List[dict] = []
@@ -2005,6 +2071,13 @@ def finish_run(
     ``"blocked"``, keeping its note (what the agent believed is useful context
     for the person who now has to look). ``by="human"`` is the caller saying a
     person worked the plan, and is left alone.
+
+    THE ONE OPT-IN: a run started with ``walk="all"`` asked the walker to
+    attempt the person's steps too (browser automation, the Slack API, …).
+    There an agent's ``pass``/``fail`` for a human step stands — stored
+    ``by="agent", walked=True`` — but only with a non-empty note saying what it
+    observed and how (:func:`_walked_answer`). No evidence, a ``needs you:``
+    note or a ``blocked`` is today's refusal: the step parks on the person.
 
     **An agent may not overwrite an answer a PERSON already gave**, for the same
     reason and in the same spirit. The dialog lets you work your own steps while
@@ -2086,19 +2159,20 @@ def finish_run(
             value = str(entry.get("result") or "").strip().lower()
             if value not in RESULTS or not value:
                 value = "blocked"
+            note = _text(entry.get("note"))
+            walked = False
             if by != "human" and actors.get(step_id) == "human":
                 # Not a coercion of a bad value but of a bad AUTHOR: whatever
                 # this says, the thing that said it could not see the screen.
                 # "blocked" is the honest record — the step is still waiting on
                 # a person — and it is what keeps the plan out of the dialog's
-                # "done" group until one answers.
-                value = "blocked"
-            run["results"][step_id] = {
-                "result": value,
-                "note": _text(entry.get("note")),
-                "at": now,
-                "by": by,
-            }
+                # "done" group until one answers. Unless the run was walked
+                # "all" and the answer carries its evidence (see the docstring).
+                value, note, walked = _agent_human_answer(run.get("walk"), value, note)
+            cell = {"result": value, "note": note, "at": now, "by": by}
+            if walked:
+                cell["walked"] = True
+            run["results"][step_id] = cell
         # A PASS ON THE WRONG TREE IS NOT A PASS. After the answers land, not
         # before: the incoming report is what is being judged. Fails and
         # blockeds are kept — a failure found on a near-enough tree is still
@@ -2114,6 +2188,7 @@ def finish_run(
                 if cell.get("result") != "pass" or cell.get("by") == "human":
                     continue
                 cell["result"] = "blocked"
+                cell.pop("walked", None)
                 cell["note"] = (
                     "not checked on the live tree — this run was on %s. %s"
                     % (short, cell.get("note") or "")
@@ -5371,19 +5446,29 @@ def give_up_generating(plan_id: str, reason: str = "") -> Optional[dict]:
 # --------------------------------------------------------------------------- #
 # Running — the real session
 # --------------------------------------------------------------------------- #
-def agent_steps(plan: dict, only: Optional[list] = None) -> list:
-    """The steps an agent is allowed to work, optionally narrowed to ``only``.
+def agent_steps(
+    plan: dict, only: Optional[list] = None, walk: str = WALK_AGENT
+) -> list:
+    """The steps an agent is asked to work, optionally narrowed to ``only``.
 
-    The single place that answers "may a machine settle this?", so the run route,
-    the prompt builder and the per-step button cannot drift into three different
-    answers. ``actor == "human"`` is excluded unconditionally and there is no
-    parameter to override it: a step is human precisely because no shell can
-    observe what it asks about, so "run it anyway" has no meaning that is not a
-    guess. :func:`finish_run` refuses such an answer at the store as well —
-    belt and braces, because this one is about what we ASK for and that one is
-    about what we ACCEPT.
+    The single place that answers "may a machine attempt this?", so the run
+    route, the prompt builder and the per-step button cannot drift into three
+    different answers. By DEFAULT (``walk="agent"``) ``actor == "human"`` is
+    excluded: a step is human because no shell can observe what it asks about,
+    so "run it anyway" has no meaning that is not a guess.
+
+    ``walk="all"`` is the explicit opt-in (a Verify stop's "Agent only", or
+    ``{"walk": "all"}`` on the run route): every step is returned, and the
+    walker attempts a person's step with whatever tools it has — browser
+    automation, the Slack API, an HTTP call. It may only ANSWER one with
+    evidence: :func:`finish_run` accepts an agent's pass/fail for a human step
+    only in such a run and only with a note saying what it observed and how;
+    anything else is refused at the store as before — this one is about what
+    we ASK for, that one about what we ACCEPT.
     """
-    steps = [s for s in (plan.get("steps") or []) if s.get("actor") == "agent"]
+    steps = list(plan.get("steps") or [])
+    if _walk(walk) != WALK_ALL:
+        steps = [s for s in steps if s.get("actor") == "agent"]
     if only is None:
         return steps
     wanted = {str(s).strip() for s in only if str(s).strip()}
@@ -5399,8 +5484,23 @@ def build_run_prompt(
     where: str = "",
     checkout_branch: str = "",
     notes: str = "",
+    walk: str = WALK_AGENT,
+    prepared: bool = False,
 ) -> str:
     """The seed prompt for a verify session.
+
+    ``walk`` (:data:`WALKS`): ``"all"`` hands the walker the person's steps
+    too, with the evidence rule (see :func:`agent_steps`). ``prepared=True``
+    says the server has already put this checkout at the commit under test
+    (the driver does it before the walker starts), so step 1 becomes "confirm
+    you are at <sha> with ``git rev-parse HEAD``, stop blocked if not" instead
+    of a checkout the agent runs itself. Both default to today's text.
+
+    THE STEPS ARE A WALKTHROUGH: each is printed as what to DO (its text, after
+    the id and tag), what to OBSERVE for a pass (``Expect:``) and the earlier
+    steps it relies on (``Needs:``). The walker goes in order, triggers each
+    behaviour itself, and answers a step whose needs failed or were blocked
+    ``blocked`` "needs sN" rather than guessing.
 
     ``where`` is a route Verify stop's explicit choice, and when it is given it
     decides the tree and the system under test instead of ``live``:
@@ -5501,7 +5601,9 @@ def build_run_prompt(
     # so a narrowed run can never be handed a human step even if one is named in
     # `only` — the route rejects that too, but the prompt must not depend on the
     # route having done so.
-    mine = {s.get("id") for s in agent_steps(plan, only)}
+    walk = _walk(walk)
+    walk_all = walk == WALK_ALL
+    mine = {s.get("id") for s in agent_steps(plan, only, walk=walk)}
     # Same two-sha rule as ``_range_diff``: a pre-live run detaches to the newest
     # commit pushed on the branch, which is the tree these steps were written
     # about, not to the anchor the due loop happens to watch.
@@ -5599,6 +5701,46 @@ def build_run_prompt(
             'mark every step "blocked" with a note saying you could not reach '
             "the commit, and report that." % (sha, live_branch)
         )
+    if prepared:
+        # THE SERVER ALREADY CHECKED IT OUT. An agent running its own checkout
+        # in this worktree is what died on "this operation must be run in a
+        # work tree" and recorded another session's HEAD as tested; the driver
+        # now prepares the tree, and all the walker does is confirm it.
+        if env_name:
+            ref = (
+                ("origin/%s" % checkout_branch) if checkout_branch else (sha or "HEAD")
+            )
+        elif where == BRANCH_WHERE and sha:
+            ref = sha
+        elif live or not sha:
+            ref = "origin/%s" % live_branch
+        else:
+            ref = sha
+        is_sha = bool(re.fullmatch(r"[0-9a-fA-F]{7,40}", ref))
+        confirm = (
+            "Confirm with `git rev-parse HEAD`"
+            if is_sha
+            else "Confirm with `git rev-parse HEAD` (it must equal "
+            "`git rev-parse %s`)" % ref
+        )
+        step_one = (
+            "1. First: you are already at %s in this directory — the server "
+            "checked it out for you before you started. Do NOT run `git "
+            "checkout`, `git switch` or `git pull`. %s." % (ref, confirm)
+        )
+        if env_name:
+            step_one += (
+                " You use this tree ONLY TO READ CODE: the thing you are "
+                "checking is the %s environment itself (below), never this "
+                "tree. If HEAD differs, carry on against the environment and "
+                "say so, with both shas, in your first note." % env_name
+            )
+        else:
+            step_one += (
+                ' If it differs, stop: mark every step "blocked" with a note '
+                "giving both shas (the checkout is at the wrong commit), and "
+                "report that."
+            )
     summary = str(plan.get("summary") or "").strip()
     parts = [opening]
     if summary:
@@ -5667,10 +5809,23 @@ def build_run_prompt(
         'when no tool of yours can reach the thing is it "blocked". A step '
         "being long, fiddly or multi-part is not a reason to hand it back — "
         "work it.",
-        '4. Steps marked [human] or [skip] are NOT yours. Answer them "blocked", '
-        "with a one-line note saying what a person has to do. They are printed "
-        "only so the steps that are yours make sense in context. Do not guess at "
-        "them, and never mark one passed because it looks like it should be.",
+        (
+            "4. Steps marked [human, try it] are a PERSON's step, and in this "
+            "run you attempt them too: perform it with the browser-automation, "
+            "Slack, API or other tools you have, and observe the result "
+            'yourself. Answer one "pass" or "fail" ONLY with a note stating '
+            "your evidence — what you observed and how (the tool, the request, "
+            "the page, the message); a pass or fail without it is not accepted. "
+            'If no tool of yours can do it or see it, answer it "blocked" '
+            'with a note that starts with "needs you: " and says why. Never '
+            "mark one passed because it looks like it should be. Steps marked "
+            '[skip] are NOT yours: answer them "blocked", with a one-line note.'
+            if walk_all
+            else '4. Steps marked [human] or [skip] are NOT yours. Answer them "blocked", '
+            "with a one-line note saying what a person has to do. They are printed "
+            "only so the steps that are yours make sense in context. Do not guess at "
+            "them, and never mark one passed because it looks like it should be."
+        ),
         '5. A step whose expected result did not happen is "fail", with a note '
         "saying what happened instead. Finding a real failure is a successful "
         "run.",
@@ -5689,6 +5844,13 @@ def build_run_prompt(
         'Answer it "blocked" and say why. Refusing one is always the right call; '
         "you are checking whether something works, and nothing here is worth "
         "that.",
+        "8. WALK THE STEPS IN ORDER. Each step below is what to DO (the line "
+        "after its id), then `Expect:` — what you must OBSERVE for a pass — and "
+        "`Needs:` — the earlier steps whose action it relies on (do those "
+        "first). Do the trigger yourself — send the request, run the command, "
+        "post the message — never wait for someone else to have done it. A step "
+        'whose needs failed or were blocked is answered "blocked" with the '
+        'note "needs sN" (naming that step), never guessed.',
     ]
     if repo_notes:
         parts += [
@@ -5716,14 +5878,17 @@ def build_run_prompt(
         # [skip] says "an agent could, but this run was not asked to". Collapsing
         # them would tell the model something false about the plan in the one
         # place it is most likely to act on it.
-        tag = (
-            "YOURS"
-            if sid in mine
-            else ("human" if step.get("actor") == "human" else "skip")
-        )
+        human = step.get("actor") == "human"
+        if sid in mine:
+            tag = "human, try it" if human else "YOURS"
+        else:
+            tag = "human" if human else "skip"
         parts.append("%s [%s] %s" % (sid, tag, step.get("text", "")))
         if step.get("expect"):
             parts.append("    Expect: %s" % step["expect"])
+        needs = [str(n) for n in (step.get("needs") or []) if str(n).strip()]
+        if needs:
+            parts.append("    Needs: %s" % ", ".join(needs))
     parts += [
         "",
         "Write your answers to %s in the root of this worktree, and change "

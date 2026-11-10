@@ -11505,10 +11505,26 @@ async def run_test_plan(
     is a 400, never a silent fallback to somewhere else: a check run in the
     wrong place reports on the wrong system. ``notes`` (≤ 2000 chars, longer is
     cut) reach the checker after the repo's standing notes.
+
+    ``{"walk": "agent" | "all"}`` (default ``"agent"``, anything else a 400)
+    is which steps the walker attempts: ``"all"`` hands it the person's steps
+    too — it may settle one only with stated evidence
+    (``test_plans.agent_steps``) — so a plan of human steps alone, or a
+    ``steps`` list naming one, is no longer refused.
     """
     payload = payload or {}
     if not isinstance(payload, dict):
         return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    walk = payload.get("walk")
+    if walk is None:
+        walk = _test_plans.WALK_AGENT
+    if not isinstance(walk, str) or walk.strip().lower() not in _test_plans.WALKS:
+        return JSONResponse(
+            {"error": "walk must be one of: %s" % ", ".join(_test_plans.WALKS)},
+            status_code=400,
+        )
+    walk = walk.strip().lower()
+    walk_all = walk == _test_plans.WALK_ALL
     where = payload.get("environment")
     if where is not None and not isinstance(where, str):
         return JSONResponse({"error": "environment must be a string"}, status_code=400)
@@ -11552,7 +11568,7 @@ async def run_test_plan(
             },
             status_code=409,
         )
-    if not any(s["actor"] != "human" for s in plan["steps"]):
+    if not walk_all and not any(s["actor"] != "human" for s in plan["steps"]):
         # Every step is a person's own. An agent is FORBIDDEN from settling one
         # (see ``finish_run``, which coerces any answer it gives to a human step
         # back to "blocked"), so this would provision a workspace and minutes of
@@ -11601,7 +11617,7 @@ async def run_test_plan(
                 {"error": "no such step: %s" % ", ".join(unknown)}, status_code=400
             )
         human = [str(s) for s in only if by_id[str(s)]["actor"] == "human"]
-        if human:
+        if human and not walk_all:
             return JSONResponse(
                 {
                     "error": "%s %s for a person to check, not an agent"
@@ -11668,6 +11684,7 @@ async def run_test_plan(
         where=where,
         checkout_branch=checkout_branch,
         notes=notes,
+        walk=walk,
     )
     # Clear the previous run's answers BEFORE starting another one. The result
     # file is the session's only return channel and the poller believes the
@@ -11766,6 +11783,7 @@ async def run_test_plan(
         where=where,
         target=run_target,
         checkout=checkout,
+        walk=walk,
     )
     if started is None:
         # The plan was deleted while the session was being provisioned. Answering
@@ -12120,6 +12138,9 @@ async def add_test_plan_step(plan_id: str, payload: dict) -> JSONResponse:
         return JSONResponse(
             {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
+    # ``needs`` (earlier step ids this one relies on) only when sent, so a
+    # body without it calls ``add_step`` exactly as before.
+    extra = {"needs": payload["needs"]} if "needs" in payload else {}
     try:
         updated = await asyncio.to_thread(
             _test_plans.add_step,
@@ -12127,6 +12148,7 @@ async def add_test_plan_step(plan_id: str, payload: dict) -> JSONResponse:
             str(payload.get("text") or ""),
             str(payload.get("expect") or ""),
             str(payload.get("actor") or "agent"),
+            **extra,
         )
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
@@ -12160,7 +12182,7 @@ async def remove_test_plan_step(plan_id: str, step_id: str) -> JSONResponse:
 async def edit_test_plan_step(
     plan_id: str, step_id: str, payload: dict
 ) -> JSONResponse:
-    """Fix one step in place — ``{"text"?, "expect"?, "actor"?}``.
+    """Fix one step in place — ``{"text"?, "expect"?, "actor"?, "needs"?}``.
 
     The proportionate alternative to Rewrite. Correcting a single wrong sentence
     used to cost a model call, three minutes and every recorded answer on the
@@ -12173,12 +12195,12 @@ async def edit_test_plan_step(
     """
     fields = {
         key: payload[key]
-        for key in ("text", "expect", "actor")
+        for key in ("text", "expect", "actor", "needs")
         if isinstance(payload, dict) and key in payload
     }
     if not fields:
         return JSONResponse(
-            {"error": "nothing to change — send text, expect or actor"},
+            {"error": "nothing to change — send text, expect, actor or needs"},
             status_code=400,
         )
     try:
