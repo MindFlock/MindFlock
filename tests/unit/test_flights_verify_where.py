@@ -360,7 +360,9 @@ def test_driver_passes_where_and_notes_to_the_checklist_and_the_run(
     assert srv.asked == [("s", True, "sandbox", "log in as qa")]
     facts_now.update(facts(env=SANDBOX))
     run(D.step_flight(f["id"]))
-    assert srv.ran == [("tp1", {"environment": "sandbox", "notes": "log in as qa"})]
+    assert srv.ran == [
+        ("tp1", {"environment": "sandbox", "notes": "log in as qa", "walk": "agent"})
+    ]
 
 
 def test_unknown_environment_fails_at_the_start(srv, envs):
@@ -893,12 +895,18 @@ def test_agent_run_passes_where_and_notes_and_legacy_defaults_to_branch(srv):
     action = {"action": "run", "phase": "agent_run", "detail": {"plan": "tp1"}}
     out = run(D._perform(f, action, NOW))
     assert out["detail"]["run_started"] is True
-    assert srv.ran == [("tp1", {"environment": "sandbox", "notes": "as qa"})]
+    assert srv.ran == [
+        ("tp1", {"environment": "sandbox", "notes": "as qa", "walk": "agent"})
+    ]
     # An unnormalised snapshot still carrying {who, wait_live}.
     g = started(fly(vstep(), session="t"))
     g["steps"][0]["config"] = {"who": "agent", "wait_live": True}
     run(D._perform(g, action, NOW))
-    assert srv.ran[-1] == ("tp1", {"environment": "branch", "notes": ""})
+    # who "agent" ("Agent only") walks every step.
+    assert srv.ran[-1] == (
+        "tp1",
+        {"environment": "branch", "notes": "", "walk": "all"},
+    )
 
 
 # --------------------------------------------------------------------------- #

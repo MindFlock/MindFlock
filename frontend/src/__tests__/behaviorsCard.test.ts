@@ -230,11 +230,12 @@ describe("the ⋯ menu", () => {
   const labels = (p: TestPlan, withSession = true) =>
     cardMenuItems(p, { summary: behaviorSummary(p), session: withSession ? (session as unknown as { title: string; pr_url?: string }) : null }).map((i) => i.label);
 
-  it("on a failure: rewrite, fix, rerun, the checking run, the work session, diff, delete last", () => {
+  it("on a failure: rewrite, fix, rerun, walk every behavior, the checking run, the work session, diff, delete last", () => {
     expect(labels(FAILED)).toEqual([
       "Rewrite behaviors",
       "Fix in a new session",
       "Rerun",
+      "Let the agent walk every behavior",
       "Open the checking run",
       "Open the work session",
       "View diff",

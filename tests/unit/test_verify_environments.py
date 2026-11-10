@@ -108,6 +108,19 @@ def client(monkeypatch):
 
     monkeypatch.setattr(server, "git_available", lambda: True)
     monkeypatch.setattr(server, "_is_verify_repo_usable", lambda root: True)
+    # The server prepares the checker's checkout before the agent starts
+    # (real repos: tests/unit/test_verify_checkout.py); these repos are fake.
+    monkeypatch.setattr(
+        server,
+        "_prepare_verify_checkout",
+        lambda repo, title, ref: {
+            "ok": True,
+            "path": repo,
+            "sha": ref,
+            "reused": False,
+            "warning": "",
+        },
+    )
     monkeypatch.setattr(server, "_kill_orphan_plan_tmux", lambda t: "")
     monkeypatch.setattr(server, "_free_stale_verify_worktree", lambda r, t: "")
     monkeypatch.setattr(server, "_clear_verify_results", lambda t: None)
@@ -384,6 +397,7 @@ def test_no_environment_is_todays_run_exactly(client, acme):
         live=True,
         repo_notes=tp.repo_notes(acme),
         target=tp.verify_target(acme),
+        prepared=True,  # the route checks the tree out before the agent starts
     )
     r = client.post("/api/test-plans/sc-1/run", json={})
     assert r.status_code == 202, r.text
@@ -398,7 +412,8 @@ def test_branch_checks_the_plans_own_commit_with_no_deployment(client, acme):
     assert r.status_code == 202, r.text
     prompt = client.made[0]["prompt"]
     assert "THIS BRANCH'S OWN CODE" in prompt
-    assert "git checkout --detach %s" % ("b" * 40) in prompt
+    # The server checked it out; the checker only confirms it.
+    assert "you are already at %s" % ("b" * 40) in prompt
     # The repo's deployment is NOT what is under test.
     assert "https://app.example.com" not in prompt
     assert "NOTHING IS RUNNING HERE" in prompt
@@ -413,7 +428,7 @@ def test_an_environment_puts_its_deployment_under_test(client, acme):
     r = client.post("/api/test-plans/sc-1/run", json={"environment": "sandbox"})
     assert r.status_code == 202, r.text
     prompt = client.made[0]["prompt"]
-    assert "git fetch origin sandbox && git checkout --detach origin/sandbox" in prompt
+    assert "you are already at origin/sandbox" in prompt
     assert "ONLY TO READ CODE" in prompt
     assert "THE SANDBOX ENVIRONMENT" in prompt.upper()
     assert "https://sandbox.example.com" in prompt
@@ -439,7 +454,7 @@ def test_an_environment_with_no_branch_checks_out_the_plans_commit(
     r = client.post("/api/test-plans/sc-1/run", json={"environment": "canary"})
     assert r.status_code == 202, r.text
     prompt = client.made[0]["prompt"]
-    assert "git checkout --detach %s" % ("b" * 40) in prompt
+    assert "you are already at %s" % ("b" * 40) in prompt
     assert "Nobody wrote down how to reach it" in prompt
     assert tp.get("sc-1")["runs"][-1]["checkout"] == "b" * 40
 

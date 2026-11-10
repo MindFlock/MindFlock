@@ -3179,8 +3179,23 @@ def client(store, monkeypatch):
     # put the real check back through `client.real_repo_usable`.
     real_usable = server._is_verify_repo_usable
     monkeypatch.setattr(server, "_is_verify_repo_usable", lambda root: True)
+    # ...and the server prepares the checker's checkout in that repo before the
+    # agent starts (tested on real repos in tests/unit/test_verify_checkout.py).
+    real_prepare = server._prepare_verify_checkout
+    monkeypatch.setattr(
+        server,
+        "_prepare_verify_checkout",
+        lambda repo, title, ref: {
+            "ok": True,
+            "path": repo,
+            "sha": ref,
+            "reused": False,
+            "warning": "",
+        },
+    )
     c = TestClient(server.app)
     c.real_repo_usable = real_usable
+    c.real_prepare_checkout = real_prepare
     return c
 
 
@@ -4544,7 +4559,8 @@ def test_the_route_picks_the_tree_from_the_plans_state(
     # about WHICH TREE gets checked out, not about how the session is named.
     tp.upsert(_plan("sc-1", state=state, live_branch="release"))
     assert client.post("/api/test-plans/sc-1/run").status_code == 202
-    assert ("checkout --detach origin/release" in sent[0]) is expect_live
+    # The server prepared that tree; the checker is told which one it is on.
+    assert ("already at origin/release" in sent[0]) is expect_live
 
 
 # --------------------------------------------------------------------------- #
@@ -8145,12 +8161,17 @@ def test_the_example_models_the_shape_the_rules_ask_for(store):
         for setup in ("start the", "build the", "install ", "run the test", "docker "):
             assert setup not in low, "example models a setup step: %r" % step["text"]
 
-    # The last two state the state they need as a CONDITION, not a command —
-    # and the third reads telemetry from the deployment's own log search, not
-    # from a scratch file an earlier step tee'd a process into.
-    assert steps[2]["text"].lower().startswith("on a deployment where")
+    # The third reads telemetry from the deployment's own log search, not from a
+    # scratch file an earlier step tee'd a process into — and it no longer waits
+    # for somebody to have applied the code "within the last hour" (the fourth
+    # failure class): the walker applied it in s1, so the step NEEDS s1.
     assert "log explorer" in steps[2]["text"].lower()
+    assert "within the last hour" not in steps[2]["text"].lower()
+    assert steps[2]["needs"] == ["s1"]
+    # The last states the state it needs as a CONDITION, not a command, and
+    # names the step that creates it.
     assert steps[3]["text"].lower().startswith("on an order that already has")
+    assert steps[3]["needs"] == ["s1"]
 
 
 # --------------------------------------------------------------------------- #

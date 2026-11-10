@@ -22,6 +22,7 @@ import { api } from "../api/client";
 import type {
   TestPlan,
   TestPlansResponse,
+  TestRunWalk,
   TestStep,
   TestStepActor,
   TestStepResult,
@@ -68,11 +69,16 @@ export function patchPlan(id: string, apply: (plan: TestPlan) => TestPlan) {
 }
 
 /** The bare run request — the row's Run, the per-step Re-check and the bulk
- * bar's Run all send exactly this. `only` scopes it to those step ids. */
-export function requestPlanRun(planId: string, only?: string[]) {
+ * bar's Run all send exactly this. `only` scopes it to those step ids.
+ * `walk: "all"` asks the walker to attempt the person's steps too (it answers
+ * one only with evidence, else "needs you"); absent = the server's default,
+ * "agent" — so the ordinary call's body is unchanged. */
+export function requestPlanRun(planId: string, only?: string[], walk?: TestRunWalk) {
+  const json: { steps?: string[]; walk?: TestRunWalk } = only ? { steps: only } : {};
+  if (walk === "all") json.walk = walk;
   return api<{ session?: string; plan?: TestPlan }>(planPath(planId) + "/run", {
     method: "POST",
-    json: only ? { steps: only } : {},
+    json,
   });
 }
 
@@ -91,10 +97,10 @@ export function requestPlanDelete(planId: string) {
  * terminal there. */
 export async function startChecklistRun(
   plan: TestPlan,
-  opts: { only?: string[]; onStarted?(): void } = {}
+  opts: { only?: string[]; walk?: TestRunWalk; onStarted?(): void } = {}
 ): Promise<void> {
   try {
-    const r = await requestPlanRun(plan.id, opts.only);
+    const r = await requestPlanRun(plan.id, opts.only, opts.walk);
     // The server already has a provisioning row for the verify session: pull
     // it now rather than leaving the grid unable to attach a pane to a
     // session it has never heard of, which is what Watch needs a moment later.
@@ -122,7 +128,10 @@ export async function startChecklistRun(
     // tmux all happen afterwards, and when they fail the app's only statement
     // about this run must not have been a claim that it was under way.
     // `session.create_failed` retracts it (see bridgeTestPlanEvents).
-    toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session"));
+    toast(
+      "Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session") +
+        (opts.walk === "all" ? " — it walks every behavior, yours too" : "")
+    );
   } catch (err) {
     errorPop("Couldn't start the check for " + planName(plan), errMsg(err));
     // The optimistic state above never landed on a failure, but the plan may
@@ -365,7 +374,7 @@ export async function removePlanStep(plan: TestPlan, step: TestStep): Promise<vo
  * undefined); rejects with its message — the composer keeps its text then. */
 export async function addPlanStep(
   plan: TestPlan,
-  fields: { text: string; expect: string; actor: TestStepActor }
+  fields: { text: string; expect: string; actor: TestStepActor; needs?: string[] }
 ): Promise<TestPlan | undefined> {
   const r = await api<{ plan?: TestPlan }>(planPath(plan.id) + "/steps", {
     method: "POST",

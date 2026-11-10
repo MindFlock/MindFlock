@@ -29,6 +29,7 @@ export type CardMenuKey =
   | "deployed"
   | "fix"
   | "run"
+  | "walk"
   | "watch"
   | "cancel"
   | "session"
@@ -74,6 +75,8 @@ export function cardMenuItems(plan: TestPlan, ctx: CardMenuCtx): CardMenuItem[] 
     items.push({ key: "fix", label: "Fix in a new session", title: "Starts a new session with what failed attached" });
   if (!running && steps.length && plan.state !== "generating" && agentCan && primary !== "check" && primary !== "rerun")
     items.push({ key: "run", label: latestRun(plan) ? "Rerun" : "Check now", title: "The agent checks the behaviors it can" });
+  // Next to the head's Check now / Rerun when that is the primary; here otherwise.
+  if (offersWalkAll(plan) && !walkAllBesidePrimary(plan, primary)) items.push(WALK_ALL_ITEM);
   const watch = watchSessionOf(plan);
   if (watch) items.push({ key: "watch", label: "Open the checking run", title: "Open " + watch + " as a pane — closing it doesn't stop the check" });
   if (running) items.push({ key: "cancel", label: "Cancel the check", title: "Stop the agent — what it found so far is kept" });
@@ -184,4 +187,59 @@ export function verifyStopStand(
  * its face ("Failed · 2 — halted"). */
 export function haltedLine(failed: number): string {
   return (failed > 0 ? "Failed · " + failed + " — halted" : "Halted") + ". The route waits here until you Retry, Skip or let the agent fix it.";
+}
+
+/** "Let the agent walk every behavior" — a run with walk "all": the agent
+ * also attempts the behaviors only a person was asked to check, using its
+ * tools (a browser, an API), and answers one of yours only with evidence;
+ * what it truly can't do still comes back to you. */
+export const WALK_ALL_ITEM: CardMenuItem = {
+  key: "walk",
+  label: "Let the agent walk every behavior",
+  title: "It tries yours too, with its tools — it answers one only with evidence, and asks you only for what it can't do",
+};
+
+/** Whether to offer walking every behavior: there is at least one person's
+ * behavior to walk, and nothing is being checked or written right now. */
+export function offersWalkAll(plan: TestPlan): boolean {
+  if (plan.state === "running" || plan.state === "generating") return false;
+  return (plan.steps || []).some((s) => s.actor === "human");
+}
+
+/** Whether the walk-all action sits beside the head's primary (Check now /
+ * Rerun) rather than in ⋯ — it is that same press, one step wider. */
+export function walkAllBesidePrimary(plan: TestPlan, primary: string): boolean {
+  return offersWalkAll(plan) && (primary === "check" || primary === "rerun");
+}
+
+/** The marker on a result an agent recorded for a person's behavior
+ * (`walked`): "" for any other entry. A pass/fail carries its evidence in the
+ * note; a "blocked" means it tried and the behavior is back with you. */
+export function walkedWords(entry: TestStepResultEntry | null | undefined): string {
+  if (!entry?.walked || entry.by === "human" || !entry.result) return "";
+  return entry.result === "blocked" ? "the agent tried — needs you" : "walked by the agent";
+}
+
+/** A behavior's `needs`, as chips: "after #2" for each EARLIER behavior it
+ * relies on (numbered as the card shows them), with that behavior's text as
+ * the title. Unknown and forward ids are dropped — the server does too. */
+export function needsChips(plan: TestPlan, step: TestStep): Array<{ id: string; label: string; title: string }> {
+  const steps = plan.steps || [];
+  const at = steps.findIndex((s) => s.id === step.id);
+  const out: Array<{ id: string; label: string; title: string }> = [];
+  for (const id of step.needs || []) {
+    const i = steps.findIndex((s) => s.id === id);
+    if (i < 0 || (at >= 0 && i >= at) || out.some((c) => c.id === id)) continue;
+    out.push({ id, label: "after #" + (i + 1), title: "Relies on behavior " + (i + 1) + ": " + steps[i].text });
+  }
+  return out;
+}
+
+/** The behaviors a step may rely on: every one before it (all of them for a
+ * new behavior, which is added at the end). */
+export function earlierSteps(plan: TestPlan, stepId?: string): Array<{ step: TestStep; n: number }> {
+  const steps = plan.steps || [];
+  const at = stepId ? steps.findIndex((s) => s.id === stepId) : -1;
+  const end = at >= 0 ? at : stepId ? 0 : steps.length;
+  return steps.slice(0, end).map((step, i) => ({ step, n: i + 1 }));
 }

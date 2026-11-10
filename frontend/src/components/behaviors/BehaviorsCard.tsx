@@ -24,7 +24,19 @@ import { rewriteBlockedReason, rewriteWarning } from "../dialogs/verify";
 import { StopMenu, type SkyMenuItem } from "../flights/StopMenu";
 import { InlineConfirm } from "../InlineConfirm";
 import { BehaviorRow } from "./BehaviorRow";
-import { cardMenuItems, haltedLine, primaryTarget, verifyStopStand, watchSessionOf, type CardMenuItem, type CardMenuKey } from "./cardModel";
+import { NeedsPicker } from "./NeedsPicker";
+import {
+  WALK_ALL_ITEM,
+  cardMenuItems,
+  earlierSteps,
+  haltedLine,
+  primaryTarget,
+  verifyStopStand,
+  walkAllBesidePrimary,
+  watchSessionOf,
+  type CardMenuItem,
+  type CardMenuKey,
+} from "./cardModel";
 import "./BehaviorsCard.css";
 
 export interface BehaviorsCardProps {
@@ -111,6 +123,9 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
         break;
       case "run":
         void withBusy("primary", () => actions.startChecklistRun(plan));
+        break;
+      case "walk":
+        void withBusy("walk", () => actions.startChecklistRun(plan, { walk: "all" }));
         break;
       case "watch":
         // The checking run is a grid window (read-only "Verifying" pane).
@@ -252,6 +267,18 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
             {s.action ? (
               <button type="button" className="btn-primary bh-primary" data-action={s.action.key} disabled={!!busy} onClick={primary}>
                 {busy === "primary" ? "…" : s.action.label}
+              </button>
+            ) : null}
+            {walkAllBesidePrimary(plan, s.action?.key || "") ? (
+              <button
+                type="button"
+                className="test-btn bh-walk-all"
+                data-action="walk"
+                title={WALK_ALL_ITEM.title}
+                disabled={!!busy}
+                onClick={() => void withBusy("walk", () => actions.startChecklistRun(plan, { walk: "all" }))}
+              >
+                {busy === "walk" ? "…" : WALK_ALL_ITEM.label}
               </button>
             ) : null}
             {flightStep && stand !== "fixing" ? (
@@ -399,6 +426,7 @@ export function AddBehavior({ plan, onDone }: { plan: TestPlan; onDone(): void }
   const [text, setText] = useState("");
   const [expect, setExpect] = useState("");
   const [actor, setActor] = useState<TestStepActor>("agent");
+  const [needs, setNeeds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const textRef = useRef<HTMLInputElement>(null);
   const add = async () => {
@@ -406,9 +434,10 @@ export function AddBehavior({ plan, onDone }: { plan: TestPlan; onDone(): void }
     if (!body || busy) return;
     setBusy(true);
     try {
-      await addBehavior(plan, { text: body, expect: expect.trim(), actor });
+      await addBehavior(plan, { text: body, expect: expect.trim(), actor, ...(needs.length ? { needs } : {}) });
       setText("");
       setExpect("");
+      setNeeds([]);
       textRef.current?.focus();
     } catch (err) {
       errorPop("Couldn't add that behavior", errMsg(err));
@@ -441,6 +470,7 @@ export function AddBehavior({ plan, onDone }: { plan: TestPlan; onDone(): void }
         >
           {actor === "human" ? "🙋 you" : "🤖 agent"}
         </button>
+        <NeedsPicker earlier={earlierSteps(plan)} value={needs} disabled={busy} onChange={setNeeds} />
         <button type="button" className="btn-primary" disabled={busy || !text.trim()} onClick={() => void add()}>
           {busy ? "Adding…" : "Add"}
         </button>
@@ -454,7 +484,7 @@ export function AddBehavior({ plan, onDone }: { plan: TestPlan; onDone(): void }
 
 /** Add one behavior and apply the server's copy of the plan to the cache.
  * Rejects with the server's message (the form keeps its text then). */
-export async function addBehavior(plan: TestPlan, fields: { text: string; expect: string; actor: TestStepActor }): Promise<void> {
+export async function addBehavior(plan: TestPlan, fields: { text: string; expect: string; actor: TestStepActor; needs?: string[] }): Promise<void> {
   const next = await actions.addPlanStep(plan, fields);
   if (next) actions.patchPlan(plan.id, () => next);
   void refreshTestPlans();

@@ -375,3 +375,49 @@
   flex: none;
   padding: 1px 7px;
 }
+
+/* Walkthrough: an agent answered a person's behavior (walk "all"), what a
+ * behavior relies on ("after #2"), and the picker for it. */
+.bh-walked {
+  align-self: flex-start;
+  padding: 0 6px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: calc(10.5px * var(--bh-s));
+  white-space: nowrap;
+}
+.bh-evidence.is-walked {
+  border-left: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  padding-left: 6px;
+}
+.bh-needs,
+.bh-needs-pick {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.bh-need-chip,
+.bh-need {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: calc(10.5px * var(--bh-s));
+  white-space: nowrap;
+}
+.bh-need {
+  cursor: pointer;
+}
+.bh-need.is-on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  color: var(--text);
+}
+.bh-need:disabled {
+  cursor: default;
+  opacity: 0.75;
+}

@@ -385,6 +385,14 @@ def _verify_env(flight: dict, where: str) -> Tuple[Optional[dict], bool]:
     return dict(env), False
 
 
+def _verify_walk(cfg: Optional[dict]) -> str:
+    """The run ``walk`` a Verify stop asks for: who "agent" ("Agent only")
+    walks ALL steps — the agent attempts a person's too, and only what it
+    truly cannot do (``needs you:`` / blocked) parks on the person; "both"
+    and "you" keep "agent" (the person's steps stay theirs)."""
+    return "all" if str((cfg or {}).get("who") or "both") == "agent" else "agent"
+
+
 def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
     """The behaviors' facts for a verify step (blocking): the checklist, plus
     ``env`` (the stop's environment, None for "branch") and, for ``ready``
@@ -433,10 +441,14 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
             }
         except Exception:  # noqa: BLE001
             checker = {}
+    # The steps the AGENT walks: its own, or — for an "Agent only" stop, whose
+    # run walks "all" — every step, so a plan of person's steps still starts
+    # the walker and the stop is done only once each one is settled.
+    walks = {s["id"] for s in _tp.agent_steps(plan, walk=_verify_walk(cfg))}
     open_agent = [
         s["text"]
         for s in plan["steps"]
-        if s.get("actor") == "agent" and not (results.get(s["id"]) or {}).get("result")
+        if s["id"] in walks and not (results.get(s["id"]) or {}).get("result")
     ]
     return {
         "plan": pid,
@@ -1252,10 +1264,12 @@ def _ensure_checklist(flight: dict) -> dict:
 
 
 async def _start_verify_run(
-    plan_id: str, where: str = "branch", notes: str = ""
+    plan_id: str, where: str = "branch", notes: str = "", walk: str = "agent"
 ) -> dict:
     """``POST /api/test-plans/{id}/run`` in process (its body is the route):
-    checked on ``where`` (this branch or an environment), with ``notes`` →
+    checked on ``where`` (this branch or an environment), with ``notes``,
+    walking ``walk`` ("agent" = the agent's steps; "all" = a who:"agent" stop,
+    where the walker attempts the person's steps too) →
     ``{"started": bool, "reason": str, "detail": str}``.
 
     THE ANSWER IS READ, never assumed. Every 409 used to count as "already
@@ -1268,7 +1282,13 @@ async def _start_verify_run(
 
     srv = _server()
     resp = await srv.run_test_plan(
-        plan_id, None, {"environment": where or "branch", "notes": notes or ""}
+        plan_id,
+        None,
+        {
+            "environment": where or "branch",
+            "notes": notes or "",
+            "walk": walk or "agent",
+        },
     )
     if resp.status_code < 400:
         return {"started": True, "reason": "", "detail": ""}
@@ -1775,7 +1795,10 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
             if extra:
                 notes = (notes + "\n" + extra).strip()
             res = await _start_verify_run(
-                pid, str(cfg.get("where") or _flights.VERIFY_WHERE_BRANCH), notes
+                pid,
+                str(cfg.get("where") or _flights.VERIFY_WHERE_BRANCH),
+                notes,
+                _verify_walk(cfg),
             )
             if res["started"]:
                 return dict(

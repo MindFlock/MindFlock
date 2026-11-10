@@ -28040,7 +28040,7 @@ var WHO_CHOICES = [
 	{
 		value: "agent",
 		label: "Agent only",
-		explain: "Person-only checks stay open on the checklist but don't hold the route."
+		explain: "The agent walks every behavior, yours too — it asks you only for what it can't do."
 	},
 	{
 		value: "you",
@@ -88908,10 +88908,12 @@ function patchPlan(id, apply) {
 		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
 	} : prev);
 }
-function requestPlanRun(planId, only) {
+function requestPlanRun(planId, only, walk) {
+	const json = only ? { steps: only } : {};
+	if (walk === "all") json.walk = walk;
 	return api(planPath$1(planId) + "/run", {
 		method: "POST",
-		json: only ? { steps: only } : {}
+		json
 	});
 }
 function requestPlanDelete(planId) {
@@ -88919,7 +88921,7 @@ function requestPlanDelete(planId) {
 }
 async function startChecklistRun(plan, opts = {}) {
 	try {
-		const r = await requestPlanRun(plan.id, opts.only);
+		const r = await requestPlanRun(plan.id, opts.only, opts.walk);
 		await refreshInstances();
 		const started = r?.plan;
 		patchPlan(plan.id, (p) => started || {
@@ -88929,7 +88931,7 @@ async function startChecklistRun(plan, opts = {}) {
 		});
 		opts.onStarted?.();
 		await refreshTestPlans();
-		toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session"));
+		toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session") + (opts.walk === "all" ? " — it walks every behavior, yours too" : ""));
 	} catch (err) {
 		errorPop("Couldn't start the check for " + planName(plan), errMsg(err));
 		refreshTestPlans();
@@ -89188,6 +89190,7 @@ function cardMenuItems(plan, ctx) {
 		label: latestRun(plan) ? "Rerun" : "Check now",
 		title: "The agent checks the behaviors it can"
 	});
+	if (offersWalkAll(plan) && !walkAllBesidePrimary(plan, primary)) items.push(WALK_ALL_ITEM);
 	const watch = watchSessionOf(plan);
 	if (watch) items.push({
 		key: "watch",
@@ -89289,6 +89292,72 @@ function verifyStopStand(flight, stepId) {
 function haltedLine(failed) {
 	return (failed > 0 ? "Failed · " + failed + " — halted" : "Halted") + ". The route waits here until you Retry, Skip or let the agent fix it.";
 }
+var WALK_ALL_ITEM = {
+	key: "walk",
+	label: "Let the agent walk every behavior",
+	title: "It tries yours too, with its tools — it answers one only with evidence, and asks you only for what it can't do"
+};
+function offersWalkAll(plan) {
+	if (plan.state === "running" || plan.state === "generating") return false;
+	return (plan.steps || []).some((s) => s.actor === "human");
+}
+function walkAllBesidePrimary(plan, primary) {
+	return offersWalkAll(plan) && (primary === "check" || primary === "rerun");
+}
+function walkedWords(entry) {
+	if (!entry?.walked || entry.by === "human" || !entry.result) return "";
+	return entry.result === "blocked" ? "the agent tried — needs you" : "walked by the agent";
+}
+function needsChips(plan, step) {
+	const steps = plan.steps || [];
+	const at = steps.findIndex((s) => s.id === step.id);
+	const out = [];
+	for (const id of step.needs || []) {
+		const i = steps.findIndex((s) => s.id === id);
+		if (i < 0 || at >= 0 && i >= at || out.some((c) => c.id === id)) continue;
+		out.push({
+			id,
+			label: "after #" + (i + 1),
+			title: "Relies on behavior " + (i + 1) + ": " + steps[i].text
+		});
+	}
+	return out;
+}
+function earlierSteps(plan, stepId) {
+	const steps = plan.steps || [];
+	const at = stepId ? steps.findIndex((s) => s.id === stepId) : -1;
+	const end = at >= 0 ? at : stepId ? 0 : steps.length;
+	return steps.slice(0, end).map((step, i) => ({
+		step,
+		n: i + 1
+	}));
+}
+//#endregion
+//#region src/components/behaviors/NeedsPicker.tsx
+function NeedsPicker({ earlier, value, disabled, onChange }) {
+	if (!earlier.length) return null;
+	const on = new Set(value);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "bh-needs-pick",
+		role: "group",
+		"aria-label": "Relies on (done first)",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "bh-hint",
+			children: "after"
+		}), earlier.map(({ step, n }) => {
+			const pressed = on.has(step.id);
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "bh-need" + (pressed ? " is-on" : ""),
+				"aria-pressed": pressed,
+				disabled,
+				title: "Relies on behavior " + n + ": " + step.text,
+				onClick: () => onChange(earlier.map((e) => e.step.id).filter((id) => id === step.id ? !pressed : on.has(id))),
+				children: ["#", n]
+			}, step.id);
+		})]
+	});
+}
 //#endregion
 //#region src/components/behaviors/BehaviorRow.tsx
 var NOTES$1 = /* @__PURE__ */ new Map();
@@ -89356,6 +89425,8 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 	const answers = showsAnswers(plan, step, entry);
 	const shown = pending ?? entry?.result ?? "";
 	const yourEntry = entry?.by === "human";
+	const walked = walkedWords(entry);
+	const needs = needsChips(plan, step);
 	const locked = pending !== null || busy;
 	const isOpen = open || editing || noteOpen || confirmRemove;
 	const record = async (result) => {
@@ -89394,7 +89465,7 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		ref,
-		className: "bh-row is-" + chip.state + (who.you ? " is-yours" : ""),
+		className: "bh-row is-" + chip.state + (who.you ? " is-yours" : "") + (walked ? " is-walked" : ""),
 		"data-step-id": step.id,
 		"data-manual": step.manual ? "1" : void 0,
 		tabIndex: 0,
@@ -89431,38 +89502,56 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 			className: "bh-row-body",
 			children: [
 				editing && onEdit ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BehaviorEditor, {
+					plan,
 					step,
 					onCancel: () => setEditing(false),
 					onSave: async (fields) => {
 						if (await onEdit(step, fields)) setEditing(false);
 					}
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-text-line",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "bh-text bh-text-toggle" + (isOpen ? "" : " is-clamped"),
-						"aria-expanded": isOpen,
-						title: isOpen ? "Show less" : "Show the whole behavior and its answers",
-						onClick: () => setOpen(!isOpen),
-						children: step.text
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "bh-caret",
-						"aria-label": isOpen ? "Collapse" : "Expand",
-						onClick: () => setOpen(!isOpen),
-						children: isOpen ? "▾" : "▸"
-					})]
-				}), isOpen && step.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-expect",
-					children: ["Expect: ", step.expect]
-				}) : null] }),
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "bh-text-line",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "bh-text bh-text-toggle" + (isOpen ? "" : " is-clamped"),
+							"aria-expanded": isOpen,
+							title: isOpen ? "Show less" : "Show the whole behavior and its answers",
+							onClick: () => setOpen(!isOpen),
+							children: step.text
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "bh-caret",
+							"aria-label": isOpen ? "Collapse" : "Expand",
+							onClick: () => setOpen(!isOpen),
+							children: isOpen ? "▾" : "▸"
+						})]
+					}),
+					isOpen && step.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "bh-expect",
+						children: ["Expect: ", step.expect]
+					}) : null,
+					isOpen && needs.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "bh-needs",
+						"aria-label": "Relies on",
+						children: needs.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "bh-need-chip",
+							title: c.title,
+							children: c.label
+						}, c.id))
+					}) : null
+				] }),
+				walked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "bh-walked",
+					title: "The agent answered this behavior of yours with its own tools — open it for its evidence; your own answer replaces it",
+					children: walked
+				}) : null,
 				!isOpen ? null : entry?.note && !yourEntry ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-evidence",
-					title: "What the agent recorded",
+					className: "bh-evidence" + (walked ? " is-walked" : ""),
+					title: walked ? "What the agent observed, and how" : "What the agent recorded",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "bh-evidence-by",
-							children: "The agent:"
+							children: walked ? "The agent walked it:" : "The agent:"
 						}),
 						" ",
 						entry.note
@@ -89623,17 +89712,21 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 		})]
 	});
 }
-function BehaviorEditor({ step, onCancel, onSave }) {
+function BehaviorEditor({ plan, step, onCancel, onSave }) {
 	const [text, setText] = (0, import_react.useState)(step.text);
 	const [expect, setExpect] = (0, import_react.useState)(step.expect || "");
+	const earlier = earlierSteps(plan, step.id);
+	const [needs, setNeeds] = (0, import_react.useState)(() => (step.needs || []).filter((id) => earlier.some((e) => e.step.id === id)));
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const save = async () => {
 		if (!text.trim()) return;
 		setBusy(true);
 		try {
+			const was = (step.needs || []).join("\0");
 			await onSave({
 				text: text.trim(),
-				expect: expect.trim()
+				expect: expect.trim(),
+				...needs.join("\0") !== was ? { needs } : {}
 			});
 		} finally {
 			setBusy(false);
@@ -89678,19 +89771,28 @@ function BehaviorEditor({ step, onCancel, onSave }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "bh-edit-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "btn-primary",
-					disabled: busy || !text.trim(),
-					onClick: () => void save(),
-					children: busy ? "Saving…" : "Save"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy,
-					onClick: onCancel,
-					children: "Cancel"
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NeedsPicker, {
+						earlier,
+						value: needs,
+						disabled: busy,
+						onChange: setNeeds
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary",
+						disabled: busy || !text.trim(),
+						onClick: () => void save(),
+						children: busy ? "Saving…" : "Save"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy,
+						onClick: onCancel,
+						children: "Cancel"
+					})
+				]
 			})
 		]
 	});
@@ -89781,6 +89883,9 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 				break;
 			case "run":
 				withBusy("primary", () => startChecklistRun(plan));
+				break;
+			case "walk":
+				withBusy("walk", () => startChecklistRun(plan, { walk: "all" }));
 				break;
 			case "watch":
 				ui.openVerifyPane(watch);
@@ -89925,21 +90030,33 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 						]
 					}) : s.action || flightStep ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "bh-head-actions",
-						children: [s.action ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "btn-primary bh-primary",
-							"data-action": s.action.key,
-							disabled: !!busy,
-							onClick: primary,
-							children: busy === "primary" ? "…" : s.action.label
-						}) : null, flightStep && stand !== "fixing" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn bh-skip",
-							title: "The route moves on without these answers",
-							disabled: !!busy,
-							onClick: () => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId)),
-							children: busy === "skip" ? "…" : "Skip this stop"
-						}) : null]
+						children: [
+							s.action ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "btn-primary bh-primary",
+								"data-action": s.action.key,
+								disabled: !!busy,
+								onClick: primary,
+								children: busy === "primary" ? "…" : s.action.label
+							}) : null,
+							walkAllBesidePrimary(plan, s.action?.key || "") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn bh-walk-all",
+								"data-action": "walk",
+								title: WALK_ALL_ITEM.title,
+								disabled: !!busy,
+								onClick: () => void withBusy("walk", () => startChecklistRun(plan, { walk: "all" })),
+								children: busy === "walk" ? "…" : WALK_ALL_ITEM.label
+							}) : null,
+							flightStep && stand !== "fixing" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn bh-skip",
+								title: "The route moves on without these answers",
+								disabled: !!busy,
+								onClick: () => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId)),
+								children: busy === "skip" ? "…" : "Skip this stop"
+							}) : null
+						]
 					}) : null
 				]
 			}),
@@ -90084,6 +90201,7 @@ function AddBehavior({ plan, onDone }) {
 	const [text, setText] = (0, import_react.useState)("");
 	const [expect, setExpect] = (0, import_react.useState)("");
 	const [actor, setActor] = (0, import_react.useState)("agent");
+	const [needs, setNeeds] = (0, import_react.useState)([]);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const textRef = (0, import_react.useRef)(null);
 	const add = async () => {
@@ -90094,10 +90212,12 @@ function AddBehavior({ plan, onDone }) {
 			await addBehavior(plan, {
 				text: body,
 				expect: expect.trim(),
-				actor
+				actor,
+				...needs.length ? { needs } : {}
 			});
 			setText("");
 			setExpect("");
+			setNeeds([]);
 			textRef.current?.focus();
 		} catch (err) {
 			errorPop("Couldn't add that behavior", errMsg(err));
@@ -90155,6 +90275,12 @@ function AddBehavior({ plan, onDone }) {
 						disabled: busy,
 						onClick: () => setActor(actor === "human" ? "agent" : "human"),
 						children: actor === "human" ? "🙋 you" : "🤖 agent"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NeedsPicker, {
+						earlier: earlierSteps(plan),
+						value: needs,
+						disabled: busy,
+						onChange: setNeeds
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -98072,8 +98198,8 @@ function verifySteps(v) {
 	const on = v.where === WHERE_BRANCH ? "this branch's code" : v.where;
 	return [
 		"behaviors are written from the branch's changes",
-		v.who === "you" ? "you check every one on " + on : "the agent checks its ones on " + on,
-		v.who === "agent" ? "yours stay open on the checklist — the route goes on" : v.who === "you" ? "they park the route here until you answer" : "yours park the route here (a perch)"
+		v.who === "you" ? "you check every one on " + on : v.who === "agent" ? "the agent walks every one on " + on + ", yours too" : "the agent checks its ones on " + on,
+		v.who === "agent" ? "it asks you only for what it can't do — the route goes on" : v.who === "you" ? "they park the route here until you answer" : "yours park the route here (a perch)"
 	];
 }
 function VerifyExplainer({ v }) {

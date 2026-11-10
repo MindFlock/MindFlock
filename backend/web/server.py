@@ -546,6 +546,7 @@ from backend.web.core.test_plans_driver import (
     _notify_test_plan_due,
     _on_session_pushed,
     _poll_running_test_plans,
+    _prepare_verify_checkout,
     _read_verify_results,
     _reclaim_plan_worktree,
     _recover_stalled_test_plans,
@@ -561,6 +562,7 @@ from backend.web.core.test_plans_driver import (
     _test_plans_due_loop,
     _test_plans_due_pass,
     _verify_auto_for,
+    _verify_checkout_ref,
     _verify_enabled,
     _verify_run_trees,
     _verify_session_usable,
@@ -11505,10 +11507,26 @@ async def run_test_plan(
     is a 400, never a silent fallback to somewhere else: a check run in the
     wrong place reports on the wrong system. ``notes`` (≤ 2000 chars, longer is
     cut) reach the checker after the repo's standing notes.
+
+    ``{"walk": "agent" | "all"}`` (default ``"agent"``, anything else a 400)
+    is which steps the walker attempts: ``"all"`` hands it the person's steps
+    too — it may settle one only with stated evidence
+    (``test_plans.agent_steps``) — so a plan of human steps alone, or a
+    ``steps`` list naming one, is no longer refused.
     """
     payload = payload or {}
     if not isinstance(payload, dict):
         return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    walk = payload.get("walk")
+    if walk is None:
+        walk = _test_plans.WALK_AGENT
+    if not isinstance(walk, str) or walk.strip().lower() not in _test_plans.WALKS:
+        return JSONResponse(
+            {"error": "walk must be one of: %s" % ", ".join(_test_plans.WALKS)},
+            status_code=400,
+        )
+    walk = walk.strip().lower()
+    walk_all = walk == _test_plans.WALK_ALL
     where = payload.get("environment")
     if where is not None and not isinstance(where, str):
         return JSONResponse({"error": "environment must be a string"}, status_code=400)
@@ -11552,7 +11570,7 @@ async def run_test_plan(
             },
             status_code=409,
         )
-    if not any(s["actor"] != "human" for s in plan["steps"]):
+    if not walk_all and not any(s["actor"] != "human" for s in plan["steps"]):
         # Every step is a person's own. An agent is FORBIDDEN from settling one
         # (see ``finish_run``, which coerces any answer it gives to a human step
         # back to "blocked"), so this would provision a workspace and minutes of
@@ -11601,7 +11619,7 @@ async def run_test_plan(
                 {"error": "no such step: %s" % ", ".join(unknown)}, status_code=400
             )
         human = [str(s) for s in only if by_id[str(s)]["actor"] == "human"]
-        if human:
+        if human and not walk_all:
             return JSONResponse(
                 {
                     "error": "%s %s for a person to check, not an agent"
@@ -11657,10 +11675,14 @@ async def run_test_plan(
             run_target = env["reach"]
             checkout_branch = env["branch"]
             checkout = ("origin/%s" % checkout_branch) if checkout_branch else sha
+    live = plan["state"] in ("due", "running", "done")
+    # The commit the checker must start on, the one step one of the prompt
+    # names. The SERVER checks it out (below), not the agent.
+    want = _verify_checkout_ref(plan, live, checkout)
     prompt = _test_plans.build_run_prompt(
         plan,
         only,
-        live=plan["state"] in ("due", "running", "done"),
+        live=live,
         repo_notes=_test_plans.repo_notes(repo_root),
         target=(
             _test_plans.verify_target(repo_root) if run_target is None else run_target
@@ -11668,6 +11690,8 @@ async def run_test_plan(
         where=where,
         checkout_branch=checkout_branch,
         notes=notes,
+        walk=walk,
+        prepared=True,
     )
     # Clear the previous run's answers BEFORE starting another one. The result
     # file is the session's only return channel and the poller believes the
@@ -11704,6 +11728,16 @@ async def run_test_plan(
         )
         if freed and log.ErrorLog is not None:
             log.ErrorLog.Printf("verify: reclaimed stale worktree %s", freed)
+    # THE CHECKER STARTS IN THE RIGHT TREE OR NOT AT ALL. A detached linked
+    # worktree at `want`, verified to be a work tree at that HEAD — prepared
+    # here, before any agent starts (a reused session's tree is re-detached).
+    # Handing `repo_root` to create_instance is what put sc-25811's checker
+    # in-place in the base clone when its shared config said core.bare=true.
+    prep = await asyncio.to_thread(_prepare_verify_checkout, repo_root, title, want)
+    if not prep["ok"]:
+        return JSONResponse(
+            {"error": prep["error"], "reason": prep["reason"]}, status_code=409
+        )
     if title in ENGINE.instances:
         # A verify session for this plan is already open — the normal state of
         # things once you have run the plan and are now re-checking one step.
@@ -11725,7 +11759,10 @@ async def run_test_plan(
                 # The MAIN repo, which is why the plan stores it: the worktree
                 # this branch was written in is normally reclaimed by the time a
                 # plan comes due.
-                "repo_path": plan["repo_root"],
+                "repo_path": prep["path"],
+                # In the prepared checkout itself: no second worktree, no
+                # branch, and no fallback that could land it in the base clone.
+                "in_place": True,
                 "prompt": prompt,
                 # What keeps it off the rail (the row's `hidden_by`). The
                 # title prefix is NOT the signal: a user may name a session
@@ -11766,6 +11803,7 @@ async def run_test_plan(
         where=where,
         target=run_target,
         checkout=checkout,
+        walk=walk,
     )
     if started is None:
         # The plan was deleted while the session was being provisioned. Answering
@@ -12120,6 +12158,9 @@ async def add_test_plan_step(plan_id: str, payload: dict) -> JSONResponse:
         return JSONResponse(
             {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
+    # ``needs`` (earlier step ids this one relies on) only when sent, so a
+    # body without it calls ``add_step`` exactly as before.
+    extra = {"needs": payload["needs"]} if "needs" in payload else {}
     try:
         updated = await asyncio.to_thread(
             _test_plans.add_step,
@@ -12127,6 +12168,7 @@ async def add_test_plan_step(plan_id: str, payload: dict) -> JSONResponse:
             str(payload.get("text") or ""),
             str(payload.get("expect") or ""),
             str(payload.get("actor") or "agent"),
+            **extra,
         )
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
@@ -12160,7 +12202,7 @@ async def remove_test_plan_step(plan_id: str, step_id: str) -> JSONResponse:
 async def edit_test_plan_step(
     plan_id: str, step_id: str, payload: dict
 ) -> JSONResponse:
-    """Fix one step in place — ``{"text"?, "expect"?, "actor"?}``.
+    """Fix one step in place — ``{"text"?, "expect"?, "actor"?, "needs"?}``.
 
     The proportionate alternative to Rewrite. Correcting a single wrong sentence
     used to cost a model call, three minutes and every recorded answer on the
@@ -12173,12 +12215,12 @@ async def edit_test_plan_step(
     """
     fields = {
         key: payload[key]
-        for key in ("text", "expect", "actor")
+        for key in ("text", "expect", "actor", "needs")
         if isinstance(payload, dict) and key in payload
     }
     if not fields:
         return JSONResponse(
-            {"error": "nothing to change — send text, expect or actor"},
+            {"error": "nothing to change — send text, expect, actor or needs"},
             status_code=400,
         )
     try:
