@@ -2049,15 +2049,17 @@ def _flight_needs(f: dict) -> Optional[Tuple[str, List[str]]]:
                 why or "Verify needs you: confirm what the agent checked",
                 ["done (Confirm verified)", "skip", "cancel"],
             )
-        if ask in ("needs_you", "memory"):
-            return why or "Verify needs you to do something", [
-                "done (I did it: check again)",
+        if ask in ("blocked", "memory"):
+            # Verify couldn't finish (or couldn't start for memory): Retry
+            # verifies again, and Done there means the same.
+            return why or "Verify couldn't finish", [
+                "retry (verify again)",
                 "skip",
                 "cancel",
             ]
         return (
-            why or "Verify needs you: answer its steps in the app",
-            ["answer its steps in the app", "skip", "cancel"],
+            why or "Verify needs you: confirm its steps in the app",
+            ["confirm its steps in the app", "skip", "cancel"],
         )
     return why or "waiting for you", ["done", "skip", "cancel"]
 

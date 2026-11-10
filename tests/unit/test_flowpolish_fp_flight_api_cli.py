@@ -122,3 +122,16 @@ class TestWhy:
         }
         assert cli.main(["flights"]) == 0
         assert "do:" not in capsys.readouterr().out
+
+
+def test_a_blocked_verify_stop_is_told_to_retry_not_to_answer_steps():
+    """Retry verifies again on a Verify stop that couldn't finish; there are
+    no steps to answer there (the advice the CLI used to print)."""
+    import inspect
+
+    from backend import cli
+
+    src = inspect.getsource(cli._flight_needs)
+    assert 'ask in ("blocked", "memory")' in src
+    assert "retry (verify again)" in src
+    assert "answer its steps in the app" not in src
