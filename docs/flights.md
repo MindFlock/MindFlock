@@ -1840,7 +1840,8 @@ stop that failed (Retry / Skip / Let the agent fix it):
 
 A route paused at a halt point shows **Carry on** (primary) and **Skip** on
 its stop's tile ("Your halt point") and in the pane strip, and is listed in
-Needs you as "Paused at <stop> — Carry on" (outbox kind `flight_paused`); a
+Needs you as "Paused at <stop> — Carry on" (a row the UI builds from the
+session row's `flight`, kind `flight_paused` in `lib/needsYou.ts`); a
 route you paused yourself reads "Paused by you", with the same two buttons,
 and stays out of the bell.
 
