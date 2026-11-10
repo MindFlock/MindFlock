@@ -1622,8 +1622,16 @@ export type TestPlanState =
 
 export interface TestStep {
   id: string;
+  /** What to DO — the walker performs it itself (an API call, a request, a
+   * command, a browser), never "after someone has done X". */
   text: string;
-  expect: string;
+  /** What must be OBSERVED for a pass (a response, a row, a log line, a UI
+   * state). Optional: an older plan has only `text`. */
+  expect?: string;
+  /** Ids of EARLIER steps whose action this one relies on: the walker does
+   * them first, and answers this one blocked ("needs s2") when one of them
+   * failed. Optional, default none. */
+  needs?: string[];
   /** Who can settle this step. "agent" = checkable from a shell (a command, a
    * file, an HTTP endpoint); "human" = visual judgement, a real browser, or an
    * external service. The server defaults anything it doesn't recognise to
@@ -1642,6 +1650,9 @@ export interface TestStepResultEntry {
   note: string;
   at: number;
   by: string;
+  /** An AGENT answered a person's step (a run with walk "all"): `by` is the
+   * agent and `note` is its evidence — what it observed and how. */
+  walked?: boolean;
 }
 
 export interface TestRun {
@@ -1668,7 +1679,12 @@ export interface TestRun {
   /** A check of the BRANCH, made before the work merged ("Check now" before
    * merge). Absent on an older store: an ordinary run. */
   prelive?: boolean;
+  /** What the walker was asked to work: "agent" (default) = the agent's steps
+   * only; "all" = it also attempted the person's steps with its tools. */
+  walk?: TestRunWalk;
 }
+
+export type TestRunWalk = "agent" | "all";
 
 export interface TestPlan {
   id: string;

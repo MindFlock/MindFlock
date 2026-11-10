@@ -9,7 +9,8 @@ import type { TestPlan, TestStep, TestStepResult } from "../../api/types";
 import { stepResult } from "../dialogs/verify";
 import { errorPop } from "../../lib/errorPop";
 import { errMsg, relTime } from "../../lib/format";
-import { byWords, noteDraftAfter, rowAnswered, rowChip, rowKey, showsAnswers, whoOf } from "./cardModel";
+import { byWords, earlierSteps, needsChips, noteDraftAfter, rowAnswered, rowChip, rowKey, showsAnswers, walkedWords, whoOf } from "./cardModel";
+import { NeedsPicker } from "./NeedsPicker";
 
 /** Drafts survive the row remounting (a poll re-renders the card; the Sky
  * may re-mount it when the frame moves). Keyed plan id + behavior id. */
@@ -85,6 +86,9 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
   const answers = showsAnswers(plan, step, entry);
   const shown = pending ?? entry?.result ?? "";
   const yourEntry = entry?.by === "human";
+  // An agent answered this person's behavior (a walk-every-behavior run).
+  const walked = walkedWords(entry);
+  const needs = needsChips(plan, step);
   const locked = pending !== null || busy;
   // Something in progress keeps the row open whatever the toggle says.
   const isOpen = open || editing || noteOpen || confirmRemove;
@@ -130,7 +134,7 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
   return (
     <li
       ref={ref}
-      className={"bh-row is-" + chip.state + (who.you ? " is-yours" : "")}
+      className={"bh-row is-" + chip.state + (who.you ? " is-yours" : "") + (walked ? " is-walked" : "")}
       data-step-id={step.id}
       data-manual={step.manual ? "1" : undefined}
       tabIndex={0}
@@ -153,6 +157,7 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
       <div className="bh-row-body">
         {editing && onEdit ? (
           <BehaviorEditor
+            plan={plan}
             step={step}
             onCancel={() => setEditing(false)}
             onSave={async (fields) => {
@@ -176,11 +181,25 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
               </button>
             </div>
             {isOpen && step.expect ? <div className="bh-expect">Expect: {step.expect}</div> : null}
+            {isOpen && needs.length ? (
+              <div className="bh-needs" aria-label="Relies on">
+                {needs.map((c) => (
+                  <span key={c.id} className="bh-need-chip" title={c.title}>
+                    {c.label}
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </>
         )}
+        {walked ? (
+          <span className="bh-walked" title="The agent answered this behavior of yours with its own tools — open it for its evidence; your own answer replaces it">
+            {walked}
+          </span>
+        ) : null}
         {!isOpen ? null : entry?.note && !yourEntry ? (
-          <div className="bh-evidence" title="What the agent recorded">
-            <span className="bh-evidence-by">The agent:</span> {entry.note}
+          <div className={"bh-evidence" + (walked ? " is-walked" : "")} title={walked ? "What the agent observed, and how" : "What the agent recorded"}>
+            <span className="bh-evidence-by">{walked ? "The agent walked it:" : "The agent:"}</span> {entry.note}
           </div>
         ) : entry?.note && yourEntry && !noteOpen ? (
           <div className="bh-evidence">
@@ -326,15 +345,20 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
 }
 
 /** A behavior corrected in place: what to do + what should happen. */
-function BehaviorEditor({ step, onCancel, onSave }: { step: TestStep; onCancel(): void; onSave(fields: Partial<TestStep>): Promise<void> }) {
+function BehaviorEditor({ plan, step, onCancel, onSave }: { plan: TestPlan; step: TestStep; onCancel(): void; onSave(fields: Partial<TestStep>): Promise<void> }) {
   const [text, setText] = useState(step.text);
   const [expect, setExpect] = useState(step.expect || "");
+  const earlier = earlierSteps(plan, step.id);
+  // Only ids that are still earlier behaviors (the server drops the rest too).
+  const [needs, setNeeds] = useState<string[]>(() => (step.needs || []).filter((id) => earlier.some((e) => e.step.id === id)));
   const [busy, setBusy] = useState(false);
   const save = async () => {
     if (!text.trim()) return;
     setBusy(true);
     try {
-      await onSave({ text: text.trim(), expect: expect.trim() });
+      // `needs` only when it changed: the ordinary edit's body stays as it was.
+      const was = (step.needs || []).join("\u0000");
+      await onSave({ text: text.trim(), expect: expect.trim(), ...(needs.join("\u0000") !== was ? { needs } : {}) });
     } finally {
       setBusy(false);
     }
@@ -367,6 +391,7 @@ function BehaviorEditor({ step, onCancel, onSave }: { step: TestStep; onCancel()
         }}
       />
       <div className="bh-edit-actions">
+        <NeedsPicker earlier={earlier} value={needs} disabled={busy} onChange={setNeeds} />
         <button type="button" className="btn-primary" disabled={busy || !text.trim()} onClick={() => void save()}>
           {busy ? "Saving…" : "Save"}
         </button>
