@@ -1323,7 +1323,8 @@ class TestKillAndStartSession:
             await pr_runner._kill_session("pr-7-c-1")
         args = spawn.await_args.args
         assert args[:3] == ("tmux", "kill-session", "-t")
-        assert args[3] == "pr-7-c-1"
+        # Exact match: a bare -t would prefix-match a sibling session.
+        assert args[3] == "=pr-7-c-1"
 
     async def test_start_tmux_session_success_sets_options(self, tmp_path, monkeypatch):
         from backend.ticket_ingestion import pr_runner

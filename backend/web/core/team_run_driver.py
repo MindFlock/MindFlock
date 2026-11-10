@@ -257,10 +257,16 @@ def observe(run: dict, now: float, boot: bool = False) -> dict:
                 o["branch_exists"] = _branch_exists(_task_repo(run, t), t["branch"])
         cost += o["cost"]
         tasks[t["id"]] = o
+    gate_why = _gate_why()
+    if not gate_why and _memory_pressure.is_low():
+        gate_why = "memory"
     out = {
         "boot": boot,
         "limited_providers": sorted(limited),
-        "memory_low": _memory_pressure.is_low() or _gate_holds(),
+        "memory_low": bool(gate_why),
+        # What holds it (the gate's ``why``), so the run's badge can say
+        # "agents still starting" or "the live cap" rather than "memory".
+        "memory_why": gate_why,
         "start_budget": _gate_room(),
         "provider": provider,
         "cost": round(cost, 4),
@@ -297,17 +303,24 @@ def _observe_sf_report(run: dict, t: dict) -> dict:
     return {}
 
 
-def _gate_holds() -> bool:
-    """Whether the launch gate (core.launch_gate) holds new automatic starts
-    for memory: low now, low once the agents still starting have grown, or the
-    machine's live-agent cap reached. Its spacing alone does not hold a run
-    (the pass's start budget, :func:`_gate_room`, paces it). Never raises."""
+def _gate_why() -> str:
+    """What holds new automatic starts at the launch gate (core.launch_gate),
+    as its ``why``: ``"memory"`` (low now), ``"warming"`` (low once the agents
+    still starting have grown) or ``"cap"`` (the machine's live-agent cap);
+    ``""`` when nothing does. Its spacing alone does not hold a run (the
+    pass's start budget, :func:`_gate_room`, paces it). Never raises."""
     try:
         from backend.web.core import launch_gate
 
-        return launch_gate.decide("auto").get("why") in ("memory", "warming", "cap")
+        why = launch_gate.decide("auto").get("why") or ""
+        return why if why in ("memory", "warming", "cap") else ""
     except Exception:  # noqa: BLE001 — advisory
-        return False
+        return ""
+
+
+def _gate_holds() -> bool:
+    """Whether the launch gate holds new automatic starts (:func:`_gate_why`)."""
+    return bool(_gate_why())
 
 
 def _gate_room():
@@ -2088,6 +2101,10 @@ def _plan_and_apply(run_id: str, obs: dict, now: float) -> Tuple[List[dict], boo
         )
         run["waiting_for_memory"] = bool(obs.get("memory_low")) and any(
             t["state"] == "queued" and not t.get("start_now") for t in run["tasks"]
+        )
+        # The gate's why behind it (memory|warming|cap), "" when not waiting.
+        run["waiting_for_memory_why"] = (
+            str(obs.get("memory_why") or "memory") if run["waiting_for_memory"] else ""
         )
         after = (
             run["state"],

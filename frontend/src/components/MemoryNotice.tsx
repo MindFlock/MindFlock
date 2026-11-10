@@ -17,6 +17,7 @@
 import { useState } from "react";
 import { useMemory, useSlots } from "../state/queries";
 import type { MemoryReading, SlotJob, SlotsReading } from "../api/types";
+import { memoryReasons } from "./usage/memoryModel";
 
 const GB = 1024 ** 3;
 const RANK: Record<string, number> = { ok: 0, unknown: 0, low: 1, critical: 2 };
@@ -101,11 +102,15 @@ export function MemoryNotice() {
 
   const critical = data.level === "critical";
   const windows = windowsIsShort(data);
+  // What the server saw (stalls, swap-in, OOM kills, Windows' commit
+  // charge): "running low · 13 GB free" alone read as a bug.
+  const why = memoryReasons(data);
   return (
     <div id="memory-notice" role="status" className={critical ? "critical" : ""}>
       <div className="mn-head">
         ⚠ {windows ? "Windows is " + (critical ? "critically low" : "running low") + " on memory" : "Memory is " + (critical ? "critically low" : "running low")}
       </div>
+      {why && <div className="mn-detail mn-why">Why: {why}</div>}
       <div className="mn-detail">{windows ? windowsDetail(data) : memoryDetail(data)}</div>
       {windows && (
         <div className="mn-detail">

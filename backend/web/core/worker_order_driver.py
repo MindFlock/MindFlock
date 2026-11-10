@@ -32,6 +32,9 @@ from backend.web.core import worker_order as _order
 
 __all__ = [
     "on_create",
+    "check_create",
+    "after_of",
+    "waiting_creates",
     "set_fence",
     "clear_fence",
     "set_order",
@@ -299,6 +302,137 @@ def clear_fence(title: str, by: str = "") -> Tuple[int, dict]:
 # --------------------------------------------------------------------------- #
 # Creation
 # --------------------------------------------------------------------------- #
+def after_of(payload: Mapping) -> List[str]:
+    """The titles a create's ``after`` names (a string or a list), cleaned."""
+    after_raw = payload.get("after")
+    if isinstance(after_raw, str):
+        after_raw = [after_raw]
+    return [
+        str(a).strip()
+        for a in (after_raw if isinstance(after_raw, list) else [])
+        if str(a or "").strip()
+    ]
+
+
+def _after_shape_error(parent: str, after: List[str]) -> Optional[str]:
+    if not parent and after:
+        return "after needs a parent session (an orchestrator's worker)"
+    if parent and parent in after:
+        return (
+            "a worker can't run after its own orchestrator (it never reports) — "
+            "name the workers it waits for"
+        )
+    return None
+
+
+def waiting_creates(parent: str, but: str = "") -> Tuple[set, Dict[str, str]]:
+    """``(waiting, failed)`` for ``parent``'s workers that are not sessions
+    yet: the titles still waiting to be created (in the launch gate's queue,
+    or a start in flight), and ``{title: error}`` of the ones whose create
+    waited and then FAILED (core.pending's failed rows). ``but``: the asking
+    create's own title. Never raises."""
+    waiting: set = set()
+    failed: Dict[str, str] = {}
+    if not parent:
+        return waiting, failed
+    try:
+        from backend.web.core import launch_gate as _gate
+
+        for it in _gate.items():
+            if it.get("creates") and str(it.get("parent") or "") == parent:
+                waiting.add(str(it.get("title") or ""))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from backend.web.core import pending as _pending
+
+        for t, meta in _pending.snapshot().items():
+            if str(meta.get("parent") or "") == parent:
+                waiting.add(t)
+        for t, meta in _pending.failed_rows(parent).items():
+            failed[t] = str((meta.get("start_failed") or {}).get("error") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    waiting.discard("")
+    waiting.discard(but)
+    failed.pop(but, None)
+    return waiting, failed
+
+
+def _after_error(
+    srv, parent: str, title: str, after: List[str], rec: Optional[dict]
+) -> Optional[str]:
+    """Why ``after`` can't be ``title``'s order (names, then a cycle), or None.
+    A name may be a live session, a worker or step of ``parent``'s order, or
+    one of ``parent``'s workers still WAITING to be created (the launch
+    gate's queue): it is then held as a step not spawned yet, like a planned
+    one. A predecessor whose own create waited and then failed is named as
+    such — a worker held after it would wait for ever."""
+    if not after:
+        return None
+    waiting, failed = waiting_creates(parent, but=title)
+    live = set(srv.ENGINE.instances)
+    lost = [a for a in after if a in failed and a not in live and a not in waiting]
+    if lost:
+        return "after names %s, whose create failed: %s" % (
+            ", ".join(lost),
+            "; ".join(failed[a] or "it could not start" for a in lost),
+        )
+    known = live | waiting
+    if rec is not None:
+        known |= set(rec.get("workers") or {}) | set(rec.get("planned") or {})
+    unknown = [a for a in after if a not in known]
+    if unknown:
+        return "after names no session of yours: %s" % ", ".join(unknown)
+    if _order.would_cycle(
+        dict(
+            {
+                t: x.get("after") or []
+                for t, x in ((rec or {}).get("workers") or {}).items()
+            },
+            **{title: after},
+        )
+    ):
+        return "that order has a cycle"
+    return None
+
+
+def held_after(parent: str, title: str) -> List[str]:
+    """``parent``'s workers held until ``title`` is done (it names them in
+    the note saying ``title`` could not start). Never raises."""
+    try:
+        rec = (_order.load().get("parents") or {}).get(parent) or {}
+        return sorted(
+            t
+            for t, w in (rec.get("workers") or {}).items()
+            if isinstance(w, dict)
+            and w.get("state") == "held"
+            and title in (w.get("after") or [])
+        )
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def check_create(parent: str, title: str, payload: Mapping) -> Optional[str]:
+    """What :func:`on_create` would refuse about a create's fence and order
+    (``after`` shape, names, cycle), asked BEFORE anything is claimed — a
+    create about to wait in the launch gate hears it now, not when the
+    queue gets to it. No writes. → the error, or None."""
+    if payload.get("run_member"):
+        return None
+    _f, problems = fence_from(payload)
+    if problems:
+        return "; ".join(problems)
+    after = after_of(payload)
+    err = _after_shape_error(parent, after)
+    if err or not after:
+        return err
+    srv = _server()
+    pinst = srv.ENGINE.instances.get(parent) if parent else None
+    rec = _order.parent_rec(_order.load(), parent, _created(pinst)) if parent else None
+    return _after_error(srv, parent, title, after, rec)
+
+
 def on_create(
     parent: str,
     title: str,
@@ -322,21 +456,10 @@ def on_create(
     fence, problems = fence_from(payload)
     if problems:
         return None, "; ".join(problems)
-    after_raw = payload.get("after")
-    if isinstance(after_raw, str):
-        after_raw = [after_raw]
-    after = [
-        str(a).strip()
-        for a in (after_raw if isinstance(after_raw, list) else [])
-        if str(a or "").strip()
-    ]
-    if not parent and after:
-        return None, "after needs a parent session (an orchestrator's worker)"
-    if parent and parent in after:
-        return None, (
-            "a worker can't run after its own orchestrator (it never reports) — "
-            "name the workers it waits for"
-        )
+    after = after_of(payload)
+    err = _after_shape_error(parent, after)
+    if err:
+        return None, err
     pinst = srv.ENGINE.instances.get(parent) if parent else None
     pcreated = _created(pinst) if parent else None
     # Decide on a snapshot: most spawns are not ordered and must not write.
@@ -360,22 +483,9 @@ def on_create(
                 overlaps[t] = shared
     if not (after or fence or ordered or overlaps):
         return None, None
-    known = set(srv.ENGINE.instances)
-    if rec is not None:
-        known |= set(rec.get("workers") or {}) | set(rec.get("planned") or {})
-    unknown = [a for a in after if a not in known]
-    if unknown:
-        return None, "after names no session of yours: %s" % ", ".join(unknown)
-    if _order.would_cycle(
-        dict(
-            {
-                t: x.get("after") or []
-                for t, x in ((rec or {}).get("workers") or {}).items()
-            },
-            **{title: after},
-        )
-    ):
-        return None, "that order has a cycle"
+    err = _after_error(srv, parent, title, after, rec)
+    if err:
+        return None, err
     # Park the task BEFORE the record exists: a pass that sees the worker
     # held always finds its task parked (never an empty queue it would
     # "release", leaving the task stuck behind a held flag).

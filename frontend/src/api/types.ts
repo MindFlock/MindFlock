@@ -239,6 +239,10 @@ export interface Instance {
    * allows. null when nothing waits. Its Start anyway is `POST
    * /api/launch-gate/{title}/start`. */
   waiting_for_memory?: LaunchWait | null;
+  /** An automatic start that waited in the launch gate and then failed: the
+   * row says "Couldn't start" with the error for ~10 min. Absent otherwise
+   * (and on an older server). */
+  start_failed?: StartFailed | null;
   /** Held offline (backend core/held.py): its agent DIED (a crash, the
    * server restarting, the OOM killer) and nothing starts it by itself —
    * no tmux, no agent, no memory — until a person presses Start (POST
@@ -2336,6 +2340,18 @@ export interface LaunchWait {
   position: number;
   /** The launch creates the session (no row of its own until then). */
   creates?: boolean;
+  /** What holds it (lib/waitWhy): "memory" | "warming" | "cap" | "spacing" |
+   * "queue" | "restart". Absent on an older server: read from `reason`. */
+  why?: string;
+}
+
+/** An automatic start that waited in the launch gate and then failed to
+ * start (the row keeps it ~10 min). `at` is epoch seconds. */
+export interface StartFailed {
+  error: string;
+  at: number;
+  /** The start's prompt, shortened, when it had one. */
+  prompt_preview?: string;
 }
 
 /** What the launch gate is holding back (`gate` in `GET /api/system/memory`,
@@ -2344,6 +2360,13 @@ export interface LaunchGateStatus {
   holding: boolean;
   queued: LaunchWait[];
   reason: string;
+  /** What holds the head of the queue (LaunchWait.why's vocabulary); absent
+   * on an older server. */
+  why?: string;
+  /** How many more sessions fit now (null = no limit known), and the learned
+   * per-session cost. */
+  room?: number | null;
+  session_mb?: number | null;
   live: number | null;
   cap: number;
   warming: number;
@@ -2366,6 +2389,12 @@ export interface MemoryReading {
   at?: number;
   /** One-line reason ("memory is low: 2.1 GB free of 24.0 GB (9%)"); "" when ok. */
   message?: string;
+  /** The signals behind a low/critical level, in plain words ("processes
+   * stalled on memory 34% of the last minute", swap-in, OOM kills, Windows'
+   * commit charge); [] when ok. While a step up waits to be sustained, the
+   * pending side's reasons (`pending` names that level). */
+  why?: string[];
+  pending?: "low" | "critical" | null;
   /** WSL only: the Windows host's own reading (memory_pressure._host). The
    * overall `level` is the worse of the guest's (`guest_level`) and this. */
   host?: {

@@ -54,7 +54,9 @@ modules under
     ide_launch       launching the configured IDE on a folder
     lanes            ship lanes: how far a session is carried (the /fast-track
                      body, /lane, /ship-now), the row's lane, copy windows
-    lineage          parent/child sessions: chain walks, spawn limits, base_ref
+    launch_gate_push the launch gate's on_change: coalesced row patches +
+                     system.memory_changed on every queue change
+    lineage         parent/child sessions: chain walks, spawn limits, base_ref
     thread           a session's family thread (members, spawn records, the
                      mail between them) and the row's last_report
     mailbox          inter-agent messages: store, exactly-once states, the
@@ -411,6 +413,7 @@ from backend.web.core import restart as _restart
 from backend.web.core import held as _held
 from backend.web.core import revive as _revive
 from backend.web.core import launch_gate as _launch_gate
+from backend.web.core import launch_gate_push as _launch_gate_push
 from backend.web.core import sleep as _sleep
 from backend.web.core import memory_watch as _memory_watch
 from backend.web.core import loop_watchdog as _loop_watchdog
@@ -643,6 +646,7 @@ from backend.web.core.queue_driver import (
     _drain_one_queue,
     _drain_prompt_queues,
     _human_at_keys,
+    gate_full_reason as _queue_gate_full_reason,
     _idle_settled,
     _limited_titles,
     _live_limit_reset,
@@ -1018,6 +1022,9 @@ async def lifespan(app: FastAPI):
     # one at a time. Off under pytest (ENGINE is the developer's real state).
     if not _restart._under_pytest():
         _session_create._LAUNCH_LOOP["loop"] = asyncio.get_running_loop()
+        # Push every queue change (rows + system.memory_changed) instead of
+        # leaving it to the 4 s tick and the UI's poll (core.launch_gate_push).
+        _launch_gate_push.install(sys.modules[__name__], asyncio.get_running_loop())
         _back = await asyncio.to_thread(_launch_gate.restore)
         if _back and log.InfoLog is not None:
             log.InfoLog.Printf(
@@ -1389,7 +1396,11 @@ def _free_untitled() -> str:
     title = "untitled"
     n = 2
     branches = _session_branches()
-    while title in ENGINE.instances or _aliases.owner_of(title, branches):
+    while (
+        title in ENGINE.instances
+        or _aliases.owner_of(title, branches)
+        or _launch_gate.waiting(title) is not None
+    ):
         title = "untitled-%d" % n
         n += 1
     return title
@@ -1854,7 +1865,7 @@ def _queue_summary(title: str, queues: dict) -> dict:
             "wait_for_limit": True,
             "limited_until": 0.0,
         }
-    return {
+    out = {
         "pending": len(q["items"]),
         "enabled": q["enabled"],
         "loop": q["loop"],
@@ -1863,6 +1874,12 @@ def _queue_summary(title: str, queues: dict) -> dict:
         # the pane's Queue tab show a live "resumes in MM:SS" badge.
         "limited_until": _session_limited_until(title),
     }
+    # Why the queue can't relaunch its agent: the launch gate's own queue is
+    # full (core.queue_driver). Omitted when nothing holds it.
+    waiting = _queue_gate_full_reason(title)
+    if waiting:
+        out["waiting"] = waiting
+    return out
 
 
 def _session_snapshot(i, queues: dict) -> dict:
@@ -3038,7 +3055,9 @@ def get_launch_gate() -> JSONResponse:
     """What the launch gate (core.launch_gate) is holding: ``{"holding",
     "queued": [{"id", "title", "kind", "source", "parent", "since",
     "reason", "position", "creates"}], "reason", "live", "cap", "warming",
-    "projected_available", "projected_level"}``."""
+    "projected_available", "projected_level"}``. ``why`` (each item, and the
+    head's at the top) names what holds it: memory|warming|cap|spacing|queue|
+    restart."""
     return JSONResponse(_launch_gate.status())
 
 
@@ -3046,14 +3065,19 @@ def get_launch_gate() -> JSONResponse:
 async def post_launch_gate_start(title: str, request: Request) -> JSONResponse:
     """Start anyway: launch a session waiting for memory now, past the gate
     (the row's Start-anyway action). Owner only (it launches an agent). **404**
-    when nothing by that name waits. → ``{"title", "started": bool,
-    "error"}``."""
+    when nothing by that name waits. A person's start like Start/Restart:
+    while memory is low or critical it is **409** ``{"memory_confirm": true,
+    ...}`` until resent with ``{"start_anyway": true}``. → ``{"title",
+    "started": bool, "error"}``."""
     if not await _auth.may_configure(request.scope):
         return _auth.configure_refused()
     if _launch_gate.waiting(title) is None:
         return JSONResponse(
             {"error": "%s is not waiting for memory" % title}, status_code=404
         )
+    refusal = await _person_memory_refusal(await _body_dict(request))
+    if refusal is not None:
+        return refusal
     loops = _session_create._LAUNCH_LOOP
     loops["loop"] = loops["loop"] or asyncio.get_running_loop()
     _was, err = await asyncio.to_thread(_launch_gate.start_now, title)
@@ -3071,6 +3095,10 @@ async def post_launch_gate_cancel(title: str, request: Request) -> JSONResponse:
         return _auth.configure_refused()
     rec = _launch_gate.waiting(title)
     if not _launch_gate.cancel(title):
+        # Nothing waits: a start that failed after its wait leaves a row
+        # (core.pending start_failed); this is also how a person dismisses it.
+        if _pending.dismiss(title):
+            return JSONResponse({"title": title, "cancelled": True, "dismissed": True})
         return JSONResponse(
             {"error": "%s is not waiting for memory" % title}, status_code=404
         )
@@ -7381,6 +7409,9 @@ def _queue_state_json(title: str) -> dict:
         # Epoch the queue is holding until because the agent is usage-limited
         # (0 = not limited). Lets the panel show a "resets in MM:SS" countdown.
         "limited_until": _session_limited_until(title),
+        # Why the queue can't relaunch its agent ("" = nothing holds it): the
+        # launch gate's own queue is full (core.queue_driver).
+        "waiting": _queue_gate_full_reason(title),
     }
 
 
@@ -7650,6 +7681,10 @@ _MSG_WAITING_FOR_MEMORY = (
     "the recipient is asleep and waits for memory to wake (it is queued) — "
     "the message is typed in once it is running"
 )
+_MSG_LAUNCH_QUEUE_FULL = (
+    "the recipient is asleep and can't wake yet (%s) — the message stays in "
+    "its inbox and is typed in once it is running"
+)
 _MSG_HUMAN_TYPING = (
     "someone is typing in the recipient's pane — it is typed in once they stop"
 )
@@ -7702,6 +7737,10 @@ def _mail_deliver_now(inst, title: str, msg: dict, activities=_MSG_NOW_ACTIVITIE
         _woke, werr = _sleep.ensure_awake(inst, title, "a message arrived", auto=True)
         if werr == _launch_gate.WAITING_FOR_MEMORY:
             return "pending", _MSG_WAITING_FOR_MEMORY
+        if werr is not None and "already waiting for memory" in werr:
+            # The gate's queue is full (core.launch_gate.QueueFull): say so,
+            # not "isn't running" — the wake is asked again next pass.
+            return "pending", _MSG_LAUNCH_QUEUE_FULL % werr
         if werr is not None:
             return "pending", _MSG_NOT_RUNNING
         return "pending", _MSG_WAKING

@@ -94,6 +94,14 @@ class _Srv(SimpleNamespace):
     def _live_session_name(self, name):
         return name if any(name.endswith("_" + t) for t in self.alive) else None
 
+    #: Titles whose tmux probe gets no answer (a has-session timeout).
+    unanswered = ()
+
+    def session_probe(self, name):
+        if any(name.endswith("_" + t) for t in self.unanswered):
+            return "unknown"
+        return "live" if self._live_session_name(name) else "gone"
+
     def _session_limited_until(self, title):
         return time.time() + 3600 if title in self.limited else 0.0
 
@@ -119,6 +127,9 @@ def _fresh(monkeypatch):
     revive._auto_reset_for_tests()
     monkeypatch.setattr(revive.memory_pressure, "is_low", lambda **kw: False)
     monkeypatch.setattr(revive, "died_mid_turn", lambda srv, inst, title: False)
+    # No OOM kill anywhere unless a test says so (the real counters move).
+    monkeypatch.setattr(revive, "_fleet_oom_kills", lambda: None)
+    monkeypatch.setattr(revive, "_machine_oom_kills", lambda: 0)
     yield
     revive._auto_reset_for_tests()
 
@@ -186,7 +197,7 @@ def test_the_store_round_trips_and_survives_a_reload(tmp_path, monkeypatch):
     assert held.info("b")["reason"] == held.REASON_CRASH  # unknown → crashed
     assert set(held.held()) == {"a", "b"}
     # Persisted: a fresh process reads it back.
-    monkeypatch.setattr(held, "_CACHE", None)
+    held._STORE.reset()
     assert json.loads(path.read_text())["a"]["reason"] == held.REASON_RESTART
     assert held.is_held("a") and held.info("a")["since"] == first["since"]
     assert held.release("a") is True and held.release("a") is False
@@ -240,12 +251,68 @@ def test_the_boot_holds_every_session_whose_agent_died(wt, tmp_path):
     out = revive.hold_on_boot(srv)
     assert sorted(out["held"]) == ["killed", "limited", "restarted"]
     assert out["total"] == 3
-    assert held.info("restarted")["reason"] == held.REASON_RESTART
+    assert held.info("restarted")["reason"] == held.REASON_NOT_RUNNING
     assert held.info("killed")["reason"] == held.REASON_KILLED
     # A usage-limited session is held like any other: the limit watch would
     # otherwise relaunch it the moment the window reopens.
-    assert held.info("limited")["reason"] == held.REASON_RESTART
+    assert held.info("limited")["reason"] == held.REASON_NOT_RUNNING
     assert srv.launched == []
+
+
+def test_the_boot_hold_names_the_real_reason(wt, monkeypatch):
+    """The restart is not why an agent is down: one that crashed (or was
+    OOM-killed) hours earlier says so; one with nothing on record says it
+    was not running when the server started (``held.REASON_NOT_RUNNING``,
+    once held.py has it; until then the old wording)."""
+    monkeypatch.setattr(revive, "_machine_oom_kills", lambda: 0)
+    srv = _Srv(
+        {
+            "crashed": _Inst(wt),
+            "nomarker": _Inst(wt),
+            "hangup": _Inst(wt),
+            "termed": _Inst(wt),
+        },
+        markers={"crashed": 1, "hangup": 129, "termed": 143},
+    )
+    revive.hold_on_boot(srv)
+    not_running = getattr(held, "REASON_NOT_RUNNING", held.REASON_RESTART)
+    assert held.info("crashed")["reason"] == held.REASON_CRASH
+    assert held.info("nomarker")["reason"] == not_running
+    assert held.info("hangup")["reason"] == not_running
+    # A plain SIGTERM with no OOM kill seen is an unnatural exit: crashed.
+    assert held.info("termed")["reason"] == held.REASON_CRASH
+
+
+def test_the_boot_hold_reads_a_sigterm_after_an_oom_kill_as_killed(wt, monkeypatch):
+    monkeypatch.setattr(revive, "_machine_oom_kills", lambda: 2)
+    srv = _Srv({"termed": _Inst(wt)}, markers={"termed": 143})
+    revive.hold_on_boot(srv)
+    assert held.info("termed")["reason"] == held.REASON_KILLED
+
+
+def test_the_boot_never_holds_on_a_probe_tmux_did_not_answer(wt):
+    """A has-session that timed out under the boot's load says nothing about
+    the agent — it may be alive. Holding it would refuse its pane."""
+    srv = _Srv({"slow": _Inst(wt), "dead": _Inst(wt)})
+    srv.unanswered = ("slow",)
+    out = revive.hold_on_boot(srv)
+    assert out["held"] == ["dead"]
+    assert not held.is_held("slow")
+
+
+def test_the_boot_probe_without_a_server_probe_uses_tmux_exactly(monkeypatch):
+    from backend.web.core import proc
+    import subprocess
+
+    seen = []
+
+    def run(args, **kw):
+        seen.append(list(args))
+        return subprocess.CompletedProcess(args, 124, b"", b"timed out")
+
+    monkeypatch.setattr(proc, "run_capped", run)
+    assert revive._boot_probe(SimpleNamespace(), "a") == "unknown"
+    assert seen == [["tmux", "has-session", "-t=mindflock_a"]]
 
 
 def test_the_boot_keeps_old_holds_and_drops_gone_sessions(wt):
@@ -307,6 +374,33 @@ def test_an_unclean_death_is_held(wt, code, reason):
     assert revive.auto_state("a") is None and not revive.holds_offline("a")
     assert revive.auto_tick(srv, start=lambda fn, *a: fn(*a)) is None
     assert srv.launched == []
+
+
+def test_a_sigterm_right_after_an_oom_kill_is_held_as_killed(wt, monkeypatch):
+    """Exit 143 because systemd stopped the agent's scope over one child's
+    OOM kill (OOMPolicy=stop): out of memory, not "the agent crashed"."""
+    monkeypatch.setattr(revive, "_machine_oom_kills", lambda: 1)
+    srv = _Srv({"a": _Inst(wt)})
+    _die(srv, "a", 143)
+    assert held.info("a")["reason"] == held.REASON_KILLED
+
+
+def test_an_offline_tmux_did_not_confirm_is_no_death(wt, monkeypatch):
+    """The activity probe timed out (no answer) and had no earlier reading to
+    fall back on, so it said "offline": not evidence of a death."""
+    from backend.web.core import agent_state
+
+    monkeypatch.setitem(agent_state._LAST_PROBE, "a", "unknown")
+    srv = _Srv({"a": _Inst(wt)})
+    _die(srv, "a", 137)
+    assert not held.is_held("a")
+    # Once tmux answers that it is gone (confirmed), the death counts.
+    monkeypatch.setitem(agent_state._LAST_PROBE, "a", "gone")
+    monkeypatch.setitem(
+        agent_state._MISSES, "a", {"first": 0.0, "count": 2, "confirmed": True}
+    )
+    revive.observe(srv, "a", srv.ENGINE.instances["a"], "offline")
+    assert held.info("a")["reason"] == held.REASON_KILLED
 
 
 def test_a_sigkill_with_no_exit_marker_mid_turn_is_held(wt, monkeypatch):

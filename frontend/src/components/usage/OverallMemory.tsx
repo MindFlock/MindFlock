@@ -15,12 +15,14 @@ import {
   machineFromDetail,
   machineFromReading,
   memoryPopModel,
+  memoryReasons,
   memoryRowText,
   memoryRowTone,
   sparkPoints,
   type MemoryPopRow,
 } from "./memoryModel";
 import { fmtMb } from "../../lib/sessionMemory";
+import { gateWhy } from "../../lib/waitWhy";
 
 const SPARK_W = 200;
 const SPARK_H = 28;
@@ -83,11 +85,18 @@ export function OverallMemory() {
     () => (detail ? machineFromDetail(detail.system) : machineFromReading(reading)),
     [detail, reading],
   );
-  const { head, title, share } = memoryRowText(machine);
+  // The same words as the rail's wait bar (lib/waitWhy) and the memory
+  // notice's reasons: an OK level beside a queue never reads "room to spare",
+  // and a low one says what the server saw (stalls, swap-in, OOM kills…).
+  const ctx = useMemo(
+    () => ({ gate: gateWhy(reading?.gate), reasons: memoryReasons(reading) }),
+    [reading],
+  );
+  const { head, title, share } = memoryRowText(machine, ctx);
   const tone = memoryRowTone(machine.level);
   const model = useMemo(
-    () => (open ? memoryPopModel(detail, machine, aliases) : null),
-    [open, detail, machine, aliases],
+    () => (open ? memoryPopModel(detail, machine, aliases, ctx) : null),
+    [open, detail, machine, aliases, ctx],
   );
   const spark = useMemo(
     () => (open && hist ? sparkPoints(hist.samples, SPARK_W, SPARK_H) : null),

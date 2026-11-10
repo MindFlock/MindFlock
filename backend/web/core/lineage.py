@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from typing import Mapping, Optional
+from typing import Iterable, Mapping, Optional, Tuple
 
 from backend import gitutil
 
@@ -200,7 +200,12 @@ def parent_error(instances: Mapping, title: str, parent: str) -> Optional[str]:
     return None
 
 
-def spawn_limit_error(instances: Mapping, parent: str, spawned: bool) -> Optional[str]:
+def spawn_limit_error(
+    instances: Mapping,
+    parent: str,
+    spawned: bool,
+    waiting: Iterable[Tuple[str, str, bool]] = (),
+) -> Optional[str]:
     """The create-time limit a new session would break, or None.
 
     Applied while the caller holds the registry lock, right before the title
@@ -210,15 +215,35 @@ def spawn_limit_error(instances: Mapping, parent: str, spawned: bool) -> Optiona
     ``MINDFLOCK_MAX_SPAWN_DEPTH``. A ``spawned`` session (agent-created, with
     or without a parent) must also keep the live total of spawned sessions
     within ``MINDFLOCK_MAX_SPAWNED``. Each message names its knob.
+
+    ``waiting``: ``(title, parent, spawned)`` of creates accepted but not made
+    yet (waiting in the launch gate's queue): each holds the slot it will
+    take, so a create about to wait is refused NOW rather than when the queue
+    gets to it. A title already live is counted once, as live.
     """
+    pending = [(t, p, bool(s)) for t, p, s in waiting if t and t not in instances]
     if parent:
         max_children = limit(MAX_CHILDREN_ENV, DEFAULT_MAX_CHILDREN)
-        n_children = len(children_of(instances, parent))
+        n_live = len(children_of(instances, parent))
+        n_wait = sum(1 for _t, p, _s in pending if p == parent)
+        n_children = n_live + n_wait
         if n_children >= max_children:
-            return "session %s already has %d live children (%s)" % (
-                parent,
-                n_children,
-                _limit_note(MAX_CHILDREN_ENV, max_children),
+            if not n_wait:
+                return "session %s already has %d live children (%s)" % (
+                    parent,
+                    n_children,
+                    _limit_note(MAX_CHILDREN_ENV, max_children),
+                )
+            return (
+                "session %s already has %d children (%d live, %d waiting to "
+                "start) (%s)"
+                % (
+                    parent,
+                    n_children,
+                    n_live,
+                    n_wait,
+                    _limit_note(MAX_CHILDREN_ENV, max_children),
+                )
             )
         max_depth = limit(MAX_SPAWN_DEPTH_ENV, DEFAULT_MAX_SPAWN_DEPTH)
         depth = depth_of(instances, parent) + 1
@@ -230,11 +255,18 @@ def spawn_limit_error(instances: Mapping, parent: str, spawned: bool) -> Optiona
             )
     if spawned:
         max_spawned = limit(MAX_SPAWNED_ENV, DEFAULT_MAX_SPAWNED)
-        n_spawned = sum(
+        n_live = sum(
             1 for inst in instances.values() if bool(getattr(inst, "Spawned", False))
         )
+        n_wait = sum(1 for _t, _p, s in pending if s)
+        n_spawned = n_live + n_wait
         if n_spawned >= max_spawned:
-            return "%d agent-spawned sessions are already live (%s)" % (
+            if not n_wait:
+                return "%d agent-spawned sessions are already live (%s)" % (
+                    n_spawned,
+                    _limit_note(MAX_SPAWNED_ENV, max_spawned),
+                )
+            return "%d agent-spawned sessions already live or waiting to start (%s)" % (
                 n_spawned,
                 _limit_note(MAX_SPAWNED_ENV, max_spawned),
             )
@@ -342,6 +374,26 @@ def resolve_base_ref(repo: str, ref: str) -> str:
     return sha if cp.returncode == 0 and sha else ""
 
 
+#: What ``git rev-parse --abbrev-ref HEAD`` answers on a detached HEAD — an
+#: orchestrator forking workers from a detached checkout sends it as its
+#: ``base_branch``. It names no branch.
+DETACHED_HEAD = "HEAD"
+
+
+def normalize_base_branch(base_ref: str, base_branch: str) -> str:
+    """``base_branch`` as a create should record it: ``""`` for the literal
+    ``HEAD`` (case-sensitive) given with a ``base_ref`` — a detached HEAD is
+    not a branch, so the session forks from ``base_ref`` with no diff-base
+    branch named (the engine's own inference applies) instead of a 400
+    ``invalid base_branch: HEAD``. Anything else comes back unchanged (and
+    ``HEAD`` without a ``base_ref`` stays, to be refused like any lone
+    ``base_branch``)."""
+    base_branch = str(base_branch or "").strip()
+    if base_ref and base_branch == DETACHED_HEAD:
+        return ""
+    return base_branch
+
+
 def base_ref_error(repo: str, base_ref: str, base_branch: str) -> Optional[str]:
     """Why a ``base_ref`` / ``base_branch`` pair cannot fork a session off
     ``repo``, or None.
@@ -349,9 +401,11 @@ def base_ref_error(repo: str, base_ref: str, base_branch: str) -> Optional[str]:
     ``base_ref`` must resolve to a commit in ``repo``; ``base_branch`` (only
     meaningful with a ``base_ref``) must be a well-formed branch name — it need
     not exist locally, since it names the branch the fork point came from for
-    diffing, which may live only on a remote. Blocking — call via
-    ``asyncio.to_thread``.
+    diffing, which may live only on a remote. A ``base_branch`` of ``HEAD``
+    (a detached checkout) reads as none (:func:`normalize_base_branch`).
+    Blocking — call via ``asyncio.to_thread``.
     """
+    base_branch = normalize_base_branch(base_ref, base_branch)
     if base_branch and not base_ref:
         return "base_branch requires base_ref"
     if not base_ref:

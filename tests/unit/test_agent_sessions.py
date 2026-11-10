@@ -11,6 +11,7 @@ exit-marker / launcher plumbing it consults.
 from __future__ import annotations
 
 import os
+import subprocess
 
 import pytest
 
@@ -183,7 +184,7 @@ def test_send_to_agent_enter_only_presses_enter(rec, monkeypatch):
     assert agent_sessions._send_to_agent("s", "", submit=True) is True
     assert all(argv != ["tmux"] for argv in rec.calls)
     sends = rec.argvs("send-keys")
-    assert sends == [["tmux", "send-keys", "-t", "s", "Enter"]]
+    assert sends == [["tmux", "send-keys", "-t", "=s:", "Enter"]]
 
 
 def test_multi_line_text_goes_in_as_one_bracketed_paste(rec, monkeypatch):
@@ -210,10 +211,10 @@ def test_multi_line_text_goes_in_as_one_bracketed_paste(rec, monkeypatch):
     (paste,) = rec.argvs("paste-buffer")
     buf = load[load.index("-b") + 1]
     assert paste[paste.index("-b") + 1] == buf
-    assert "-p" in paste and "-d" in paste and paste[-2:] == ["-t", "s"]
+    assert "-p" in paste and "-d" in paste and paste[-2:] == ["-t", "=s:"]
     sends = rec.argvs("send-keys")
     # No literal typing of the text — only the submitting Enter.
-    assert sends == [["tmux", "send-keys", "-t", "s", "Enter"]]
+    assert sends == [["tmux", "send-keys", "-t", "=s:", "Enter"]]
     assert not os.path.exists(load[-1])  # the temp file is cleaned up
 
 
@@ -256,19 +257,112 @@ def test_concurrent_typers_never_interleave_text_and_enter(rec, monkeypatch):
 # kill helpers
 # --------------------------------------------------------------------------- #
 def test_kill_named_session(rec):
+    """EXACT match (``-t=name``): tmux resolves a missing name as a unique
+    prefix, so closing ``x`` whose agent was already dead killed the live
+    ``x-w1`` beside it."""
     agent_sessions._kill_named_session("mindflock_x")
     kills = rec.argvs("kill-session")
-    assert kills == [["tmux", "kill-session", "-t", "mindflock_x"]]
+    assert kills == [["tmux", "kill-session", "-t=mindflock_x"]]
 
 
 def test_kill_shell_session_targets_sh_name(rec):
     agent_sessions._kill_shell_session("Title")
-    assert rec.argvs("kill-session")[0][-1] == "mindflock_Title_sh"
+    assert rec.argvs("kill-session")[0][-1] == "-t=mindflock_Title_sh"
 
 
 def test_kill_agent_session_targets_agent_name(rec):
     agent_sessions._kill_agent_session("Title")
-    assert rec.argvs("kill-session")[0][-1] == "mindflock_Title"
+    assert rec.argvs("kill-session")[0][-1] == "-t=mindflock_Title"
+
+
+class _PrefixTmux:
+    """A tmux stand-in that resolves ``-t`` the way tmux 3.x does (verified
+    read-only against the real one): ``=name`` / ``-t=name`` / ``=name:`` only
+    exactly; a bare name exactly, else as a UNIQUE prefix."""
+
+    def __init__(self, *names):
+        self.sessions = set(names)
+        self.typed = []
+
+    def _resolve(self, t):
+        if t.startswith("="):
+            name = t[1:].split(":", 1)[0]
+            return name if name in self.sessions else None
+        name = t.split(":", 1)[0]
+        if name in self.sessions:
+            return name
+        hits = [s for s in self.sessions if s.startswith(name)]
+        return hits[0] if len(hits) == 1 else None
+
+    def __call__(self, args, **kw):
+        argv = list(args)
+        if any(a.startswith("-t=") for a in argv):
+            target = next(a for a in argv if a.startswith("-t="))[2:]
+        else:
+            target = argv[argv.index("-t") + 1]
+        hit = self._resolve(target)
+        if hit is None:
+            return FakeProc(1, stderr=b"can't find session: x\n")
+        if argv[1] == "kill-session":
+            self.sessions.discard(hit)
+        elif argv[1] == "send-keys":
+            self.typed.append(hit)
+        return FakeProc(0)
+
+
+def test_kill_of_a_dead_session_spares_its_prefix_sibling(monkeypatch):
+    """``orch``'s agent is dead (its tmux gone); ``orch-w1`` is live. Closing
+    / deleting / profile-swapping ``orch`` kills ITS session — with the bare
+    ``-t mindflock_orch`` tmux resolved that to ``mindflock_orch-w1``."""
+    fake = _PrefixTmux("mindflock_orch-w1")
+    monkeypatch.setattr(proc, "run_capped", fake)
+    agent_sessions._kill_agent_session("orch")
+    agent_sessions._kill_named_session("mindflock_orch")
+    assert fake.sessions == {"mindflock_orch-w1"}
+    assert agent_sessions.session_probe("mindflock_orch") == "gone"
+    assert agent_sessions._send_escape_to_agent("mindflock_orch") is False
+    assert fake.typed == []
+    # …and the stand-in really does reproduce the bug for the bare form.
+    fake(["tmux", "kill-session", "-t", "mindflock_orch"])
+    assert fake.sessions == set()
+
+
+# --- session_probe: a failed probe is not a missing session -------------------
+@pytest.mark.parametrize(
+    "rc,stderr,want",
+    [
+        (0, b"", "live"),
+        (1, b"can't find session: mindflock_x\n", "gone"),
+        (1, b"no server running on /tmp/tmux-1000/default\n", "gone"),
+        (
+            1,
+            b"error connecting to /tmp/tmux-1000/default (No such file or directory)\n",
+            "gone",
+        ),
+        (1, b"", "gone"),  # a test double's bare exit 1
+        (124, b"timed out after 10s: tmux has-session -t=mindflock_x", "unknown"),
+        (1, b"server exited unexpectedly\n", "unknown"),
+        (1, b"lost server\n", "unknown"),
+    ],
+)
+def test_session_probe_tells_gone_from_no_answer(monkeypatch, rc, stderr, want):
+    seen = []
+
+    def run(args, **kw):
+        seen.append(list(args))
+        return subprocess.CompletedProcess(args, rc, b"", stderr)
+
+    monkeypatch.setattr(proc, "run_capped", run)
+    assert agent_sessions.session_probe("mindflock_x") == want
+    assert seen == [["tmux", "has-session", "-t=mindflock_x"]]
+
+
+def test_session_probe_exception_is_unknown(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("fork failed")
+
+    monkeypatch.setattr(proc, "run_capped", boom)
+    assert agent_sessions.session_probe("mindflock_x") == "unknown"
 
 
 # --------------------------------------------------------------------------- #
@@ -466,7 +560,7 @@ def test_literal_keys_argv_sends_trailing_semicolons_as_hex():
         "tmux",
         "send-keys",
         "-t",
-        "s",
+        "=s:",
         "-l",
         "--",
         "fix it",
@@ -475,14 +569,14 @@ def test_literal_keys_argv_sends_trailing_semicolons_as_hex():
         "tmux",
         "send-keys",
         "-t",
-        "s",
+        "=s:",
         "-l",
         "--",
         "a; b",
         ";",
         "send-keys",
         "-t",
-        "s",
+        "=s:",
         "-H",
         "3b",
         "3b",
@@ -491,7 +585,7 @@ def test_literal_keys_argv_sends_trailing_semicolons_as_hex():
         "tmux",
         "send-keys",
         "-t",
-        "s",
+        "=s:",
         "-H",
         "3b",
     ]

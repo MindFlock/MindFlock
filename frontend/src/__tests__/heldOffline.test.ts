@@ -176,10 +176,12 @@ describe("the session state", () => {
     expect(ss.hint).toBe(heldHint("the server restarted"));
   });
 
-  it("whatever the activity reads, and never for a paused or sleeping session", () => {
+  it("whatever the activity reads, never for a paused session, and ahead of Sleeping", () => {
     expect(deriveSessionState(row(HELD), { activity: "idle" }).held).toBe(true);
     expect(deriveSessionState(row({ ...HELD, status: "paused" })).label).toBe("Paused");
-    expect(deriveSessionState(row({ ...HELD, sleeping: { since: 1, reason: "idle" } as Instance["sleeping"] })).held).toBeFalsy();
+    // Held AND asleep: the server refuses the wake, so it reads Offline ·
+    // Start with its reason — never "opening it wakes it".
+    expect(deriveSessionState(row({ ...HELD, sleeping: { since: 1, reason: "idle" } as Instance["sleeping"] })).held).toBe(true);
     // A plain crashed agent (not held) is still in the bell with Restart.
     const plain = deriveSessionState(row({}), { activity: "offline" });
     expect(plain.held).toBeFalsy();

@@ -36,4 +36,5 @@ def test_cleanup_kills_only_mindflock_prefixed_sessions():
     mock = cmd_pkg.MockCmdExec(run_func=run_func, output_func=output_func)
     err = tmux.cleanup_sessions(mock)
     assert err is None
-    assert sorted(killed) == ["mindflock_MindFlock", "mindflock_sc-20005"]
+    # Each kill targets the exact name (``=name``), never a prefix.
+    assert sorted(killed) == ["=mindflock_MindFlock", "=mindflock_sc-20005"]

@@ -17,6 +17,7 @@
  * `withMemoryConfirm(send)` wraps any start. */
 
 import { api, type ApiError } from "../api/client";
+import { toast } from "./toast";
 
 /** The 409 body (core/launch_gate.person_refusal). */
 export interface MemoryConfirmBody {
@@ -118,6 +119,8 @@ export interface SleepIdleAnswer {
 export const memoryConfirmDeps = {
   ask: askMemoryConfirm,
   sleepIdle: () => api<SleepIdleAnswer>("/api/server/sleep-idle", { json: {} }),
+  /** Where the slept line goes when the caller passes no `onSlept`. */
+  say: (line: string) => toast(line),
 };
 
 /** Thrown by `withMemoryConfirm` when the person chose Cancel. Callers that
@@ -134,7 +137,9 @@ export function isMemoryCancel(e: unknown): boolean {
 
 /** Run a person's start `send(startAnyway)`. On a memory-confirm 409 ask, then
  * resend as the person chose. Rethrows every other failure, and
- * MemoryCancelled on Cancel. `onSlept` hears what the sleep choice freed. */
+ * MemoryCancelled on Cancel. `onSlept` hears what the sleep choice freed;
+ * without one the slept line is toasted — "Put idle agents to sleep first"
+ * never passes in silence, whichever start it was chosen from. */
 export async function withMemoryConfirm<T>(
   what: string,
   send: (startAnyway: boolean) => Promise<T>,
@@ -152,7 +157,12 @@ export async function withMemoryConfirm<T>(
       if (choice === "cancel" || slept) throw new MemoryCancelled();
       slept = true;
       const a = await memoryConfirmDeps.sleepIdle();
-      onSlept?.(a);
+      try {
+        if (onSlept) onSlept(a);
+        else memoryConfirmDeps.say(sleptLine(a));
+      } catch {
+        // Only the feedback failed: the sleep happened, so try the start.
+      }
     }
   }
 }

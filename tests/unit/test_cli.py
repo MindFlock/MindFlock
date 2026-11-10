@@ -1086,6 +1086,38 @@ class TestNewCommand:
         assert cli.main(["new"]) == 1
         assert "mindflock serve" in capsys.readouterr().err
 
+    def test_memory_confirm_names_the_flag_and_the_flag_sends_it(
+        self, monkeypatch, capsys, tmp_path
+    ):
+        api = _FakeApi(
+            monkeypatch, listings=[[], [{"title": "r", "status": "running"}]]
+        )
+        refusal = {
+            "error": "Memory is low: 3.0 GB free. (send it again with "
+            "start_anyway: true to start it regardless)",
+            "memory_confirm": True,
+            "level": "low",
+            "message": "Memory is low: 3.0 GB free. Starting another agent may "
+            "freeze the machine.",
+        }
+
+        def _refuse(base, path, payload=None, timeout=None):
+            api.posts.append((path, payload))
+            raise client.ApiError(409, refusal["error"], refusal)
+
+        monkeypatch.setattr(client, "post", _refuse)
+        repo = tmp_path / "r"
+        repo.mkdir()
+        assert cli.main(["new", str(repo), "-t", "r"]) == 1
+        err = capsys.readouterr().err
+        assert "Memory is low: 3.0 GB free." in err and "--start-anyway" in err
+        assert "start_anyway: true" not in err
+        assert "start_anyway" not in api.posts[0][1]
+        # --start-anyway: the create carries it.
+        monkeypatch.setattr(client, "post", api._post)
+        assert cli.main(["new", str(repo), "-t", "r", "--start-anyway"]) == 0
+        assert api.posts[-1][1]["start_anyway"] is True
+
 
 class TestNewCommandPolling:
     """The post-create readiness poll: a transient GET error is tolerated, and a
@@ -1185,6 +1217,33 @@ class TestLsCommand:
         _FakeApi(monkeypatch, listings=[[]])
         assert cli.main(["ls"]) == 0
         assert "mindflock new" in capsys.readouterr().out
+
+    def test_a_session_waiting_in_the_launch_gate_says_why_and_where(
+        self, monkeypatch, capsys
+    ):
+        listing = [
+            {
+                "title": "w1",
+                "status": "running",
+                "activity": "offline",
+                "sleeping": {"since": 1},
+                "waiting_for_memory": {"title": "w1", "why": "cap", "position": 2},
+            },
+            # A server before `why`: the cause defaults to memory.
+            {
+                "title": "w2",
+                "activity": "offline",
+                "waiting_for_memory": {"title": "w2", "position": 3},
+            },
+            {"title": "z", "activity": "offline", "sleeping": {"since": 1}},
+        ]
+        _FakeApi(monkeypatch, listings=[listing])
+        assert cli.main(["ls"]) == 0
+        lines = capsys.readouterr().out.splitlines()
+        row = {ln.split()[0]: ln for ln in lines[1:]}
+        assert "waiting #2 (cap)" in row["w1"] and "sleeping" not in row["w1"]
+        assert "waiting #3 (memory)" in row["w2"]
+        assert "sleeping" in row["z"]
 
 
 class TestAttachCommand:
@@ -1594,6 +1653,34 @@ class TestPauseResumeCommands:
         assert posted == ["/api/instances/docs/resume"]
         assert "resumed session docs" in capsys.readouterr().out
 
+    def test_resume_memory_confirm_and_start_anyway(self, monkeypatch, capsys):
+        sent = []
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client, "get", lambda base, path, timeout=None: self._LISTING
+        )
+
+        def _post(base, path, payload=None, timeout=None):
+            sent.append((path, payload))
+            if not (payload or {}).get("start_anyway"):
+                body = {"memory_confirm": True, "message": "Memory is critically low."}
+                raise client.ApiError(
+                    409,
+                    "Memory is critically low. (send it again with "
+                    "start_anyway: true)",
+                    body,
+                )
+            return {}
+
+        monkeypatch.setattr(client, "post", _post)
+        assert cli.main(["resume", "docs"]) == 1
+        err = capsys.readouterr().err
+        assert "could not resume 'docs': Memory is critically low." in err
+        assert "--start-anyway" in err
+        assert cli.main(["resume", "docs", "--start-anyway"]) == 0
+        assert sent[-1] == ("/api/instances/docs/resume", {"start_anyway": True})
+        assert "resumed session docs" in capsys.readouterr().out
+
     def test_refusal_is_reported_and_others_still_run(self, monkeypatch, capsys):
         calls = []
         monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
@@ -1689,6 +1776,65 @@ class TestSleepWakeCommands:
         cli.main(["attach", "docs"])
         assert calls == ["/api/instances/docs/wake"]
         assert execd == [["tmux", "attach-session", "-t", "mindflock_docs"]]
+
+    def test_wake_and_attach_carry_start_anyway(self, monkeypatch, capsys):
+        sent = []
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client,
+            "get",
+            lambda base, path, timeout=None: [
+                {
+                    "title": "docs",
+                    "tmux_name": "mindflock_docs",
+                    "sleeping": {"since": 1},
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            client,
+            "post",
+            lambda base, path, payload=None, timeout=None: sent.append((path, payload))
+            or {"woke": True},
+        )
+        assert cli.main(["wake", "docs", "--start-anyway"]) == 0
+        assert sent == [("/api/instances/docs/wake", {"start_anyway": True})]
+        monkeypatch.setattr(cli, "_stdout_is_tty", lambda: True)
+        monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/tmux")
+        monkeypatch.setattr(cli.os, "execvp", lambda f, argv: None)
+        cli.main(["attach", "docs", "--start-anyway"])
+        assert sent[-1] == ("/api/instances/docs/wake", {"start_anyway": True})
+
+    def test_attach_names_the_flag_when_the_wake_asks_first(self, monkeypatch, capsys):
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client,
+            "get",
+            lambda base, path, timeout=None: [
+                {
+                    "title": "docs",
+                    "tmux_name": "mindflock_docs",
+                    "sleeping": {"since": 1},
+                }
+            ],
+        )
+
+        def _post(base, path, payload=None, timeout=None):
+            raise client.ApiError(
+                409,
+                "x",
+                {"memory_confirm": True, "message": "Memory is low: 2.0 GB free."},
+            )
+
+        monkeypatch.setattr(client, "post", _post)
+        monkeypatch.setattr(cli, "_stdout_is_tty", lambda: True)
+        monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/tmux")
+        execd = []
+        monkeypatch.setattr(cli.os, "execvp", lambda f, argv: execd.append(argv))
+        assert cli.main(["attach", "docs"]) == 1
+        err = capsys.readouterr().err
+        assert "Memory is low: 2.0 GB free." in err and "--start-anyway" in err
+        assert execd == []
 
 
 class TestClientDelete:

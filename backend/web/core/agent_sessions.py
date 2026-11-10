@@ -27,6 +27,7 @@ from backend import git_auth_hints, providers
 from backend import session
 from backend.session import provisioned as provisioning
 from backend.session import tmux
+from backend.session.tmux.tmux import exact_pane_target
 from backend.web.core import proc as _proc
 from backend.web.core.terminal import (
     apply_scroll_speed,
@@ -62,6 +63,58 @@ def _live_session_name(name: str):
     ):
         return name
     return None
+
+
+#: :func:`session_probe`'s answers.
+PROBE_LIVE = "live"
+PROBE_GONE = "gone"
+PROBE_UNKNOWN = "unknown"
+
+#: What tmux says when the session is definitely not there: no session by
+#: that name, or no server at all (no socket, or a dead one's socket). Any
+#: other failure — a timeout (``run_capped``'s 124), a server too busy to
+#: answer, a protocol error — says nothing about the session.
+_GONE_SAYINGS = (
+    "can't find session",
+    "no server running",
+    "no such file or directory",
+    "connection refused",
+)
+
+
+def session_probe(name: str, timeout: float = 10) -> str:
+    """Whether tmux session ``name`` (exact match) is there:
+    :data:`PROBE_LIVE`, :data:`PROBE_GONE` (tmux ANSWERED that it is not), or
+    :data:`PROBE_UNKNOWN` (no answer: the probe timed out, tmux failed some
+    other way, or running it raised).
+
+    :func:`_live_session_name` folds UNKNOWN into "not there", which is right
+    for a caller about to (re)create the session but wrong for one about to
+    announce a death: under load (a 35 s event-loop stall at load 29 was
+    recorded) a ``has-session`` times out on a perfectly healthy session.
+    A failed probe with nothing on stderr is read as GONE — real tmux always
+    names its error, so that is a test double's exit 1. Never raises."""
+    try:
+        cp = _proc.run_capped(
+            ["tmux", "has-session", "-t=" + name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except Exception:  # noqa: BLE001
+        return PROBE_UNKNOWN
+    rc = getattr(cp, "returncode", None)
+    if rc == 0:
+        return PROBE_LIVE
+    if rc != 1:
+        return PROBE_UNKNOWN
+    err = getattr(cp, "stderr", None) or b""
+    if isinstance(err, bytes):
+        err = err.decode("utf-8", "replace")
+    err = str(err).strip().lower()
+    if not err or any(s in err for s in _GONE_SAYINGS):
+        return PROBE_GONE
+    return PROBE_UNKNOWN
 
 
 #: ``_ensure_agent_session``'s error for a PAUSED session whose agent is not
@@ -194,7 +247,7 @@ def _ensure_shell_session(title: str, wt: str):
         ("alternate-screen", "off"),
     ):
         _proc.run_capped(
-            ["tmux", "set-option", "-t", name, opt, val],
+            ["tmux", "set-option", "-t", exact_pane_target(name), opt, val],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -452,7 +505,7 @@ def _ensure_agent_session(inst, title: str):
         ("alternate-screen", "off"),
     ):
         _proc.run_capped(
-            ["tmux", "set-option", "-t", name, opt, val],
+            ["tmux", "set-option", "-t", exact_pane_target(name), opt, val],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -464,13 +517,13 @@ def _ensure_agent_session(inst, title: str):
 def _send_to_shell(name: str, command: str) -> None:
     """Type ``command`` into the shell tmux session and press Enter."""
     _proc.run_capped(
-        ["tmux", "send-keys", "-t", name, "-l", command],
+        ["tmux", "send-keys", "-t", exact_pane_target(name), "-l", command],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         timeout=10,
     )
     _proc.run_capped(
-        ["tmux", "send-keys", "-t", name, "Enter"],
+        ["tmux", "send-keys", "-t", exact_pane_target(name), "Enter"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         timeout=10,
@@ -519,7 +572,17 @@ def _paste_into(name: str, text: str) -> bool:
         if loaded.returncode != 0:
             return False
         pasted = _proc.run_capped(
-            ["tmux", "paste-buffer", "-b", buf, "-p", "-r", "-d", "-t", name],
+            [
+                "tmux",
+                "paste-buffer",
+                "-b",
+                buf,
+                "-p",
+                "-r",
+                "-d",
+                "-t",
+                exact_pane_target(name),
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -543,19 +606,21 @@ def _paste_into(name: str, text: str) -> bool:
 
 
 def literal_keys_argv(name: str, text: str) -> list:
-    """``tmux send-keys -l -- text`` as ONE invocation. tmux reads an
+    """``tmux send-keys -l -- text`` as ONE invocation, into session ``name``
+    matched exactly (:func:`tmux.exact_pane_target`). tmux reads an
     argument that ENDS in ``;`` as a command separator and drops it (``fix
     it;`` arrived as ``fix it``), so trailing semicolons go as their hex key
     (``-H 3b``) after the literal text."""
     body = text.rstrip(";")
+    target = exact_pane_target(name)
     argv = ["tmux"]
     if body:
-        argv += ["send-keys", "-t", name, "-l", "--", body]
+        argv += ["send-keys", "-t", target, "-l", "--", body]
     tail = len(text) - len(body)
     if tail:
         if body:
             argv.append(";")
-        argv += ["send-keys", "-t", name, "-H", *(["3b"] * tail)]
+        argv += ["send-keys", "-t", target, "-H", *(["3b"] * tail)]
     return argv
 
 
@@ -605,7 +670,7 @@ def _send_to_agent(name: str, text: str, submit: bool = True) -> bool:
         if submit:
             time.sleep(settle)  # end the paste burst so Enter submits, not newlines
             _proc.run_capped(
-                ["tmux", "send-keys", "-t", name, "Enter"],
+                ["tmux", "send-keys", "-t", exact_pane_target(name), "Enter"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
@@ -634,7 +699,7 @@ def _send_escape_to_agent(name: str) -> bool:
     if not exists:
         return False
     rc = _proc.run_capped(
-        ["tmux", "send-keys", "-t", name, "Escape"],
+        ["tmux", "send-keys", "-t", exact_pane_target(name), "Escape"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         timeout=10,
@@ -643,9 +708,13 @@ def _send_escape_to_agent(name: str) -> bool:
 
 
 def _kill_named_session(name: str) -> None:
-    """Kill the tmux session ``name`` (best-effort)."""
+    """Kill the tmux session ``name`` (best-effort) — EXACTLY that one.
+
+    ``-t=name``, never ``-t name``: tmux resolves a missing name as a unique
+    PREFIX, so closing ``orch`` whose agent had already died (or was asleep)
+    killed the live ``orch-w1`` beside it."""
     _proc.run_capped(
-        ["tmux", "kill-session", "-t", name],
+        ["tmux", "kill-session", "-t=" + name],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         timeout=10,

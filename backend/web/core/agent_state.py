@@ -32,6 +32,7 @@ from backend.providers.usage_limits import is_limit_screen
 from backend.session import mux
 from backend.session import tmux
 from backend.session.storage import Loading
+from backend.web.core import agent_sessions as _agent_sessions
 from backend.web.core import events as _events
 from backend.web.core import proc as _proc
 from backend.web.core import stage_reset as _stage_reset
@@ -1825,16 +1826,8 @@ def _agent_activity(
         if not inst.Started() or inst.Status == session.Paused:
             return "offline"
         name = tmux.to_mindflock_tmux_name(title)
-        exists = (
-            _proc.run_capped(
-                ["tmux", "has-session", "-t=" + name],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            ).returncode
-            == 0
-        )
-        if not exists:
+        probe = _agent_sessions.session_probe(name)
+        if probe != _agent_sessions.PROBE_LIVE:
             # NOT a cache pop. The record used to be dropped here on every
             # offline poll, which guaranteed that the moment the session came
             # back the pane layer had no history and fell into its
@@ -1842,7 +1835,9 @@ def _agent_activity(
             # belongs to a tmux INCARNATION, and `_activity_record` retires it
             # against tmux's own `session_created` when a genuinely new one
             # appears; a dead session simply has no reading to report.
-            return "offline"
+            # And NOT an instant "offline" either: see :func:`_missing_reading`.
+            return _missing_reading(title, probe)
+        _note_probe(title, _agent_sessions.PROBE_LIVE)
         fg, created, pane_pid, pane_size = srv._pane_meta(name)
         now = time.time()
         rec = _activity_record(title, created)
@@ -2043,6 +2038,118 @@ def _agent_activity(
                 since = rec.get("hard_since")
                 arms = bool(since) and (now - float(since)) >= _CPU_ONLY_ARMS_AFTER_S
         return _verdict(rec, pane_state, now, arms=arms, source="pane")
+    except Exception as err:  # noqa: BLE001
+        # A bug or a failed read somewhere in the layers is not a death.
+        return _missing_reading(title, _agent_sessions.PROBE_UNKNOWN, err)
+
+
+# --------------------------------------------------------------------------- #
+# Offline only on a CONFIRMED absence
+# --------------------------------------------------------------------------- #
+# "offline" used to be the answer to ANY failed probe: a `has-session` that
+# timed out under load (run_capped's 124), a tmux error, an exception anywhere
+# in the layers. The emitter announces a move to offline at once (a default-ON
+# push) and revive.observe reads the first offline after a live reading as a
+# death — holding the session as "out of memory"/"crashed". Under a recorded
+# 35 s event-loop stall at load 29 healthy sessions flickered offline and
+# rang alarms. So:
+#
+# * an INDETERMINATE probe (timeout, other tmux error, exception) reports the
+#   last known reading, unchanged — logged, rate-limited;
+# * a DEFINITE miss (tmux answered "can't find session" / "no server") must
+#   be seen twice, at least ``_OFFLINE_CONFIRM_S`` apart (two independent
+#   polls, not one memoized answer served twice), before it reads "offline";
+#   the first one reports the last known reading too.
+#
+# A session never seen live by this process has no reading to fall back on:
+# it reads "offline" at once, as before (nothing to flicker from).
+_OFFLINE_CONFIRM_S = 2.0
+#: title -> {"first": epoch of the first miss in this run, "count": n,
+#: "confirmed": bool}. Dropped by the next live probe.
+_MISSES: Dict[str, dict] = {}
+#: title -> the last probe's answer (agent_sessions.PROBE_*).
+_LAST_PROBE: Dict[str, str] = {}
+_PROBE_LOCK = threading.Lock()
+#: Log an indeterminate probe at most this often per session.
+_PROBE_LOG_EVERY_S = 60.0
+_PROBE_LOGGED_AT: Dict[str, float] = {}
+
+
+def _note_probe(title: str, probe: str) -> None:
+    with _PROBE_LOCK:
+        _LAST_PROBE[title] = probe
+        if probe == _agent_sessions.PROBE_LIVE:
+            _MISSES.pop(title, None)
+
+
+def last_probe(title: str) -> Optional[str]:
+    """The last session probe's answer for ``title`` (``"live"`` / ``"gone"``
+    / ``"unknown"``), or None before any. ``"unknown"`` means the reading
+    :func:`_agent_activity` last returned was carried over, not observed —
+    :func:`backend.web.core.revive.observe` does not count an "offline" made
+    of it as a death."""
+    with _PROBE_LOCK:
+        return _LAST_PROBE.get(title)
+
+
+def offline_confirmed(title: str) -> bool:
+    """Whether ``title``'s session is CONFIRMED gone: two definite misses at
+    least ``_OFFLINE_CONFIRM_S`` apart, or one with no earlier reading."""
+    with _PROBE_LOCK:
+        st = _MISSES.get(title)
+        return bool(st and st.get("confirmed"))
+
+
+def _previous_reading(title: str) -> Optional[str]:
+    rec = _ACTIVITY_CACHE.get(title)
+    prev = rec.get("reported") if rec else None
+    return prev if prev and prev != "offline" else None
+
+
+def _log_indeterminate(title: str, why) -> None:
+    now = time.time()
+    with _PROBE_LOCK:
+        if now - _PROBE_LOGGED_AT.get(title, 0.0) < _PROBE_LOG_EVERY_S:
+            return
+        _PROBE_LOGGED_AT[title] = now
+    from backend import log
+
+    logger = log.InfoLog or log.ErrorLog
+    if logger is not None:
+        logger.Printf(
+            "activity %s: probe inconclusive (%s) — keeping its last reading",
+            title,
+            why or "tmux did not answer",
+        )
+
+
+def _missing_reading(title: str, probe: str, err=None) -> str:
+    """The reading for a poll whose tmux probe did NOT find the session live
+    (see the block comment above). Never raises."""
+    try:
+        now = time.time()
+        prev = _previous_reading(title)
+        if probe != _agent_sessions.PROBE_GONE:
+            _log_indeterminate(title, err)
+            with _PROBE_LOCK:
+                _LAST_PROBE[title] = _agent_sessions.PROBE_UNKNOWN
+                st = _MISSES.get(title)
+                if st and st.get("confirmed"):
+                    return "offline"  # already known gone: nothing new
+            return prev or "offline"
+        with _PROBE_LOCK:
+            _LAST_PROBE[title] = _agent_sessions.PROBE_GONE
+            st = _MISSES.get(title)
+            if st is None:
+                st = _MISSES[title] = {"first": now, "count": 0, "confirmed": False}
+            st["count"] += 1
+            if prev is None or (
+                st["count"] >= 2 and now - float(st["first"]) >= _OFFLINE_CONFIRM_S
+            ):
+                st["confirmed"] = True
+            if st["confirmed"]:
+                return "offline"
+        return prev
     except Exception:  # noqa: BLE001
         return "offline"
 
