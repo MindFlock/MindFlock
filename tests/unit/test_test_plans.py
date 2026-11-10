@@ -3179,8 +3179,23 @@ def client(store, monkeypatch):
     # put the real check back through `client.real_repo_usable`.
     real_usable = server._is_verify_repo_usable
     monkeypatch.setattr(server, "_is_verify_repo_usable", lambda root: True)
+    # ...and the server prepares the checker's checkout in that repo before the
+    # agent starts (tested on real repos in tests/unit/test_verify_checkout.py).
+    real_prepare = server._prepare_verify_checkout
+    monkeypatch.setattr(
+        server,
+        "_prepare_verify_checkout",
+        lambda repo, title, ref: {
+            "ok": True,
+            "path": repo,
+            "sha": ref,
+            "reused": False,
+            "warning": "",
+        },
+    )
     c = TestClient(server.app)
     c.real_repo_usable = real_usable
+    c.real_prepare_checkout = real_prepare
     return c
 
 
@@ -4544,7 +4559,8 @@ def test_the_route_picks_the_tree_from_the_plans_state(
     # about WHICH TREE gets checked out, not about how the session is named.
     tp.upsert(_plan("sc-1", state=state, live_branch="release"))
     assert client.post("/api/test-plans/sc-1/run").status_code == 202
-    assert ("checkout --detach origin/release" in sent[0]) is expect_live
+    # The server prepared that tree; the checker is told which one it is on.
+    assert ("already at origin/release" in sent[0]) is expect_live
 
 
 # --------------------------------------------------------------------------- #

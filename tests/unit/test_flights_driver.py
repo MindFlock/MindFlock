@@ -298,7 +298,9 @@ def test_verify_step_asks_for_the_checklist_then_runs_it(srv, row, monkeypatch):
         live=False,
     )
     run(D.step_flight(f["id"]))
-    assert ran == [("s", {"environment": "branch", "notes": ""})]
+    # who "both": the agent walks only its own steps ("agent"); "Agent only"
+    # would send walk "all" (tests/unit/test_verify_walker.py).
+    assert ran == [("s", {"environment": "branch", "notes": "", "walk": "agent"})]
     assert F.get(f["id"])["step_states"]["s1"]["detail"]["run_started"] is True
     facts.update(open_agent=[])
     run(D.step_flight(f["id"]))

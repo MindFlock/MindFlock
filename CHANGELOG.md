@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Verify is a walkthrough one agent writes and another walks.** A
+  checklist's steps now say what to DO and what to EXPECT, and can name the
+  earlier steps they build on, so the checker triggers each behaviour itself
+  instead of waiting for "someone to have run it in the last hour". **Agent
+  only** on a Verify stop (and "Let the agent walk every behavior" on the
+  Behaviors card) has the agent walk every step, a person's ones too, using
+  its tools; a person's step counts only with evidence of what it saw, and
+  whatever it can't do still comes to you (docs/flights.md).
+
+### Fixed
+
+- **The checker always starts on the right commit.** The server now checks
+  out the commit under test in a worktree of its own before the agent starts,
+  instead of the agent doing it. A shared `core.bare=true` (left by a git hook)
+  had put checkers inside the base clone, where every checkout failed and
+  another session's commit was recorded as tested.
+
 ## [0.14.1] - 2026-11-09
 
 ### Added

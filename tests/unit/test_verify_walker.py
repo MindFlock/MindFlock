@@ -306,6 +306,19 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_TEST_PLANS_FILE", str(tmp_path / "tp.json"))
     monkeypatch.setattr(server, "git_available", lambda: True)
     monkeypatch.setattr(server, "_is_verify_repo_usable", lambda root: True)
+    # The server prepares the checker's checkout before the agent starts
+    # (real repos: tests/unit/test_verify_checkout.py); these repos are fake.
+    monkeypatch.setattr(
+        server,
+        "_prepare_verify_checkout",
+        lambda repo, title, ref: {
+            "ok": True,
+            "path": repo,
+            "sha": ref,
+            "reused": False,
+            "warning": "",
+        },
+    )
     monkeypatch.setattr(server, "_kill_orphan_plan_tmux", lambda t: "")
     monkeypatch.setattr(server, "_free_stale_verify_worktree", lambda r, t: "")
     monkeypatch.setattr(server, "_clear_verify_results", lambda t: None)
