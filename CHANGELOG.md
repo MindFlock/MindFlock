@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-11-10
+
 ### Changed
 
 - **The memory gauge reads real distress, not a share of "available".** It
@@ -18,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget), OOM kills, and an available floor that is genuinely small (the
   `general.memory_low_pct` / `memory_critical_pct` defaults drop from 15 / 7
   to 8 / 4, with 1.5 GB / 1 GB floors). Inside WSL, Windows reads on its
-  commit charge (low at 85 %, critical at 90 % of its limit) and on sustained
-  hard paging; its raw "available" no longer counts except under 256 MB, and
+  commit charge (low at 85 %, critical at 90 % of its limit; hard paging is
+  shown but never blocks on its own); its raw "available" no longer counts except under 256 MB, and
   its headroom is only a floor. A step up must hold 30 s before it counts, so
   one bad sample moves nothing, and the memory shield acts only on that
   sustained critical. Every memory message now names the signal: *memory is
@@ -37,7 +39,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load and keep loading, the accurate pass runs, and Voice Lab is never
   stopped for memory. Models still unload after the usual idle time.
 
+- **Your own starts ask only when memory is really in trouble.** New
+  session, Start and Resume no longer ask "are you sure?" over a guess (the
+  growth expected of agents still starting, or the room estimate) while
+  memory reads ok; they ask only at a real low or critical. The guesses
+  still pace automatic starts.
+
 ### Fixed
+
+- **"MindFlock, open settings" works mid-message, and says what it does.**
+  A phrase that starts with the wake word is a command wherever it falls in
+  a dictation (it used to count only as a message's first phrase, so with
+  words already in the box it was typed). "My flock," / "Mine flock,"
+  followed by a pause count as the wake word, and the app says the action
+  out loud ("Opening Settings.").
 
 - **Saying "over" presses Enter again.** An Enter-only send (the voice
   "over", `/send {"enter": true}`) ran a bare `tmux` for its empty text,
@@ -5225,7 +5240,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.3...HEAD
+[0.14.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.3
 [0.14.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.2
 [0.14.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.1
 [0.14.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.0

@@ -766,7 +766,7 @@ minutes on 2026-11-10 with nothing short. The host's signals:
 | Signal | low at | critical at | leaves low / critical |
 |---|---|---|---|
 | Commit charge / commit limit (at the limit an allocation fails) | ≥ 85 % | ≥ 90 % | ≤ 80 % / ≤ 87 % |
-| Hard paging: the **median** `PagesInputPersec` of the last 6 readings (≥ 3), only while Windows' own available is under 2 GB | ≥ 3000 pages/s | ≥ 8000 pages/s | ≤ 1500 / ≤ 4000 |
+| Hard paging (`PagesInputPersec`, the median of the last 6 readings) | reported only (`pages_in_median`) — never a level by itself: it counts file-backed reads too, and read 30-100 MB/s on 2026-11-10 with WSL barely stalled | — | — |
 | Headroom (below) | ≤ 2 GB | ≤ 1 GB | ≥ 3 GB / ≥ 1.5 GB |
 | Windows' own available | — | ≤ 256 MB | > 512 MB |
 

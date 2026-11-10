@@ -473,31 +473,17 @@ def test_host_lines(prev, reading, want):
     assert mp.classify_host(prev, reading)[0] == want
 
 
-def test_host_paging_counts_only_sustained_and_while_windows_is_short():
-    """Hard paging needs :data:`~mp.HOST_PAGING_MIN_SAMPLES` readings and
-    Windows' OWN available under 2 GB (the headroom the guest could give
-    back does not make page-ins cold file reads)."""
+def test_host_paging_alone_is_never_a_level():
+    """PagesInputPersec counts file-backed reads too: on 2026-11-10 it read
+    30-100 MB/s with WSL barely stalled, and "critical" held every start for
+    nothing. Paging is reported; it never sets the host's level by itself."""
     room = 10 * GiB  # the headroom floor never trips here
-    short = int(1.9 * GiB)
-    assert (
-        mp.classify_host("ok", _h(short, headroom=room, paging=9000, samples=2))[0]
-        == "ok"
-    )
-    lvl, why = mp.classify_host("ok", _h(short, headroom=room, paging=9000, samples=3))
-    assert lvl == "critical"
-    assert why == ["Windows is paging 37 MB/s in from disk over the last minute"]
-    assert mp.classify_host("ok", _h(short, headroom=room, paging=3000))[0] == "low"
-    assert mp.classify_host("ok", _h(short, headroom=room, paging=2999))[0] == "ok"
-    assert mp.classify_host("ok", _h(2 * GiB, headroom=room, paging=9000))[0] == "ok"
-    # recovering: from critical past 4000, from low past 1500
-    assert (
-        mp.classify_host("critical", _h(short, headroom=room, paging=4001))[0]
-        == "critical"
-    )
-    assert (
-        mp.classify_host("critical", _h(short, headroom=room, paging=4000))[0] == "low"
-    )
-    assert mp.classify_host("low", _h(short, headroom=room, paging=1500))[0] == "ok"
+    short = int(1.0 * GiB)
+    for prev in ("ok", "low", "critical"):
+        lvl, why = mp.classify_host(
+            prev, _h(short, headroom=room, paging=30000, samples=6)
+        )
+        assert lvl == "ok" and why == []
 
 
 def test_describe_falls_back_to_the_numbers_without_why():

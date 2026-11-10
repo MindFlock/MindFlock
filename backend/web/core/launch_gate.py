@@ -806,9 +806,11 @@ def decide(
     ``kind="auto"``: ``"go"`` or ``"wait"`` (memory low/critical now or once
     the warming agents grow; the live cap reached; or within
     :func:`auto_spacing` of the previous automatic launch).
-    ``kind="person"``: ``"go"``, ``"confirm"`` (low, or no room left in the
-    budget) or ``"refuse"`` (critical). Both need the person's Start anyway;
-    they differ only in wording. ``level`` is the worse of now and
+    ``kind="person"``: ``"go"``, ``"confirm"`` (low now) or ``"refuse"``
+    (critical now). Both need the person's Start anyway; they differ only in
+    wording. A person is never asked over the projection of agents still
+    warming or the room estimate — those pace automatic starts only.
+    ``level`` is the level now for a person, else the worse of now and
     projected. Never raises.
 
     The budget (:func:`budget`): an automatic start also waits (``why``
@@ -819,12 +821,18 @@ def decide(
     worst = _worst(a)
     out = {"decision": "go", "reason": "", "why": "", "level": worst, "assess": a}
     if kind == "person":
-        if worst == "critical":
+        # A person's start asks only on memory that is in trouble NOW (the
+        # level: sustained stalls, swap-in, OOM kills, a truly small floor,
+        # Windows' commit charge). The projection of agents still warming
+        # and the room estimate are guesses that pace AUTOMATIC starts; a
+        # person asked "are you sure?" with 13 GB free over them read as
+        # arbitrary (owner, 2026-11-10).
+        now_level = str(a.get("level") or "ok")
+        out["level"] = now_level
+        if now_level == "critical":
             out.update(decision="refuse", reason=_memory_reason(a))
-        elif worst == "low":
+        elif now_level == "low":
             out.update(decision="confirm", reason=_memory_reason(a))
-        elif _budget_full(a):
-            out.update(decision="confirm", reason=a["budget"]["why"])
         return out
     if worst in ("low", "critical"):
         out.update(

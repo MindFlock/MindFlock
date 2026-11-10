@@ -75,13 +75,11 @@ signals:
 * **Commit charge** against the commit limit (RAM plus page file): at the
   limit an allocation fails — the real "can't allocate" danger. Low at
   :data:`HOST_COMMIT_LOW` %, critical at :data:`HOST_COMMIT_CRITICAL` %.
-* **Sustained hard paging**: PagesInputPersec, the median of the last minute
-  (:data:`backend.host_memory.PAGING_WINDOW` readings, at least
-  :data:`HOST_PAGING_MIN_SAMPLES`), and only while Windows' own available is
-  under :data:`HOST_PAGING_RELEVANT_BYTES` — with GBs available, page-ins are
-  cold file reads (an app starting, a scan), not memory being evicted and
-  read back. Low at :data:`HOST_PAGING_LOW` pages/s, critical at
-  :data:`HOST_PAGING_CRITICAL`.
+* **Hard paging** (PagesInputPersec, the median of the last minute) is
+  REPORTED (``pages_in_median``) but never sets the level: the counter
+  includes file-backed reads, and on 2026-11-10 it read 30-100 MB/s with
+  WSL barely stalled and 13 GB of headroom, holding every start for nothing.
+  Paging that hurts shows up as guest stalls (PSI) — which count.
 * **A headroom floor** (:func:`host_headroom`): Windows' available PLUS the
   guest memory the VM already holds and the guest can hand to a new process
   without asking Windows for more — MemAvailable minus MemFree, the guest's
@@ -551,17 +549,12 @@ def _host_reasons(th, h: dict, recover: bool = False) -> List[str]:
                 _gb(h.get("commit_limit")),
             )
         )
-    paging = h.get("pages_in_median")
-    if (
-        paging is not None
-        and int(h.get("pages_in_samples") or 0) >= HOST_PAGING_MIN_SAMPLES
-        and avail < HOST_PAGING_RELEVANT_BYTES
-        and over(float(paging), th[2])
-    ):
-        out.append(
-            "Windows is paging %.0f MB/s in from disk over the last minute"
-            % (float(paging) * _PAGE / 1e6)
-        )
+    # Hard paging (``pages_in_median``) is reported, never a level on its
+    # own: PagesInputPersec counts file-backed reads too, and on 2026-11-10
+    # it read 30-100 MB/s with WSL barely stalled (PSI full 3.75 %) and
+    # 13 GB of headroom — "critical" there held every start for nothing
+    # (owner: "pretty arbitrary"). Real trouble shows as guest stalls,
+    # swap-in, OOM kills or the commit charge, which do count.
     return out
 
 

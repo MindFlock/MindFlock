@@ -87,10 +87,22 @@ def test_warming_agents_count_against_headroom(monkeypatch):
     v = gate.decide("auto")
     assert v["decision"] == "wait"
     assert "4 agents still starting" in v["reason"]
-    assert gate.decide("person")["decision"] == "refuse"
+    # A person is asked only on the level NOW (ok here): the projection
+    # paces automatic starts, never a person's own (owner, 2026-11-10).
+    assert gate.decide("person")["decision"] == "go"
     # Long-running agents are not warming.
     _agents(4, created=time.time() - 600)
     assert gate.decide("auto", fresh=True)["decision"] == "go"
+
+
+def test_a_person_is_never_asked_over_the_room_estimate(monkeypatch):
+    """13 GB free and the level ok, but the room estimate full (a big
+    learned cost): automatic starts wait, a person's start just goes."""
+    _memory(monkeypatch, available=13 * GiB)
+    monkeypatch.setattr(gate, "_budget_full", lambda a: True)
+    assert gate.decide("auto")["decision"] == "wait"
+    v = gate.decide("person")
+    assert v["decision"] == "go" and gate.person_refusal(v) is None
 
 
 def test_note_start_counts_before_tmux_exists(monkeypatch):
