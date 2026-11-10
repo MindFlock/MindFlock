@@ -12,7 +12,7 @@
  *    reason), skipped struck through, pending outlined;
  *  - a session's live diagram — its parent above, the session box, its
  *    children branching below, the fast-track's rungs or the flight's stops,
- *    and the trailing + ("Tack on a stop"); children spawned at a stop run as
+ *    and the trailing + ("Add a stop"); children spawned at a stop run as
  *    a column of small branch boxes between it and the next box, fanning
  *    out of the stop and back in at the join point, which wears a "2 of 5"
  *    pill while it waits (an indented group on a phone);
@@ -26,9 +26,9 @@
  *
  * Editing a stop works the way n8n edits a node (docs/flights-stop-editing.md,
  * the rules in lib/stopEditing): a stop that can change wears a toolbar on
- * hover or focus (Edit · Earlier · Later · Duplicate · Halt here · Remove),
- * the flight's current stop one of its own (Halt now / Carry on · Halt
- * here: docs/flights.md "Halt points"), a halt point wears a ⏸ badge, any box
+ * hover or focus (Edit · Earlier · Later · Duplicate · Add halt point · Remove),
+ * the flight's current stop one of its own (Pause / Carry on · Add halt
+ * point: docs/flights.md "Halt points"), a halt point wears a ⏸ badge, any box
  * opens a menu on right-click (StopMenu), Delete removes the selected stop,
  * the + between boxes inserts one, and a stop chip dragged from the shelf
  * (`STOP_MIME`) — or a saved stop (`FLYWAY_MIME`) — lights the gap it would
@@ -189,7 +189,7 @@ export interface FlywayCanvasProps {
   onRemove?(n: DiagramNode): void;
   /** Duplicate (the toolbar, the menu): the same stop again, right after it. */
   onDuplicate?(n: DiagramNode): void;
-  /** ⏸ Halt here / Carry on past here (the toolbar, the menu): make a stop not
+  /** ⏸ Add halt point / Remove halt point (the toolbar, the menu): make a stop not
    * yet flown a halt point, or no longer one. */
   onToggleHalt?(n: DiagramNode): void;
   /** A stop chip (`STOP_MIME`, its value the stop kind: `{kind}`) or a saved
@@ -197,7 +197,7 @@ export interface FlywayCanvasProps {
    * line: tack it on before stop `at` — null = at the end. */
   onDropStop?(drop: StopDrop, at: number | null): void;
   /** The name of a stop kind being dragged from the shelf (the host's, like
-   * `dropLabel`): the end + reads "Tack on <it>". */
+   * `dropLabel`): the end + reads "Add <it>". */
   dragStop?: string | null;
   /** The + between two boxes: insert a stop before stop `at`. */
   onInsert?(at: number): void;
@@ -235,11 +235,11 @@ export interface FlywayCanvasProps {
   className?: string;
 }
 
-/** ⏸ on a stop's toolbar: Halt here, pressed (Carry on past here) while the
- * stop is a halt point. */
+/** ⏸ on a stop's toolbar: Add halt point, pressed (Remove halt point) while
+ * the stop is a halt point. */
 function HaltTool({ n, onToggle }: { n: DiagramNode; onToggle(n: DiagramNode): void }) {
   const t = haltToggle(n);
-  const on = t.label !== "Halt here";
+  const on = !!t.pressed;
   return (
     <button type="button" className={"fl-icon-btn fl-tool fl-tool-halt" + (on ? " fl-tool-on" : "")} aria-pressed={on} aria-label={t.label + " — “" + n.title + "”"} title={t.title} onClick={() => onToggle(n)}>
       ⏸
@@ -385,7 +385,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   const [stopOver, setStopOver] = useState<{ at: number | null; label: string } | null>(null);
   const stopLabel = stopOver?.label || p.dragStop || "";
   const stopAt = stopOver ? stopOver.at : null;
-  const addLabel = p.dropLabel || (stopLabel && stopAt === null ? "Tack on " + stopLabel : null);
+  const addLabel = p.dropLabel || (stopLabel && stopAt === null ? "Add " + stopLabel : null);
   // The right-click menu: on which box, where in the stage.
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   // Round 15: "Rewind to here" asked on a flown checkpoint — the inline
@@ -566,8 +566,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   const gaps = (p.onInsert || stopAt !== null) && !drag ? insertGaps(shown.boxes, p.diagram.insertFrom, vertical) : [];
 
   // The live flight's current stop (under way, perched, held or halted): it
-  // wears a toolbar of its own — Halt now / Carry on, Halt here — on a line
-  // whose host marks halt points (its menu offers Halt now on any line).
+  // wears a toolbar of its own — Pause / Carry on, Add halt point — on a line
+  // whose host marks halt points (its menu offers Pause on any line).
   const flying = (n: DiagramNode) => n.state === "current" || n.state === "perched" || n.state === "paused" || n.state === "halted";
   const isHere = (n: DiagramNode) =>
     !!p.diagram.flightId &&
@@ -1211,7 +1211,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                       title={hold.title}
                       onClick={() => void controlFlight(p.diagram.flightId, hold.key as "pause" | "resume")}
                     >
-                      {hold.key === "pause" ? "⏹" : "▶"}
+                      {hold.key === "pause" ? "⏸" : "▶"}
                     </button>
                   )}
                   {(p.onEdit || p.onSelect) && (
@@ -1234,8 +1234,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                 </div>
               )}
               {tools && n.kind === "stop" && here && !n.editable && (
-                <div className="fl-tools" role="toolbar" aria-label={"Halt or carry on at “" + n.title + "”"} data-no-drag onClick={(e) => e.stopPropagation()}>
-                  {/* Halt now on the line of a host that marks halt points (its menu has it on any line). */}
+                <div className="fl-tools" role="toolbar" aria-label={(hold && p.onToggleHalt ? "Pause or carry on at “" : haltable ? "Halt point on “" : "Remove “") + n.title + "”"} data-no-drag onClick={(e) => e.stopPropagation()}>
+                  {/* Pause on the line of a host that marks halt points (its menu has it on any line). */}
                   {hold && p.onToggleHalt && (
                     <button
                       type="button"
@@ -1244,7 +1244,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                       title={hold.title}
                       onClick={() => void controlFlight(p.diagram.flightId, hold.key as "pause" | "resume")}
                     >
-                      {hold.key === "pause" ? "⏹" : "▶"}
+                      {hold.key === "pause" ? "⏸" : "▶"}
                     </button>
                   )}
                   {haltable && <HaltTool n={n} onToggle={p.onToggleHalt!} />}
@@ -1435,7 +1435,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
           if (g.at === stopAt)
             return (
               <span key={"gap" + g.at} className="fl-gap-add fl-gap-lit" style={style} aria-hidden="true">
-                + <span className="fl-gap-label">Tack on here</span>
+                + <span className="fl-gap-label">Add here</span>
               </span>
             );
           return p.onInsert ? (

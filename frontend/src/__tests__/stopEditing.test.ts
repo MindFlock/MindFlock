@@ -262,9 +262,9 @@ describe("the canvas", () => {
 
   it("a stop chip dragged from the shelf: the end + says what it tacks on", () => {
     const html = render({ diagram: flyway, onDropStop: () => {}, dragStop: "Ship" });
-    expect(html).toMatch(/class="fl-box fl-box-add fl-drop[^"]*"[^>]*aria-label="Tack on Ship"/);
-    expect(html).toContain('<span class="fl-add-label">Tack on Ship</span>');
-    expect(render({ diagram: flyway, onDropStop: () => {} })).not.toContain("Tack on Ship");
+    expect(html).toMatch(/class="fl-box fl-box-add fl-drop[^"]*"[^>]*aria-label="Add Ship"/);
+    expect(html).toContain('<span class="fl-add-label">Add Ship</span>');
+    expect(render({ diagram: flyway, onDropStop: () => {} })).not.toContain("Add Ship");
   });
 
   it("the gap + is counter-scaled by the Sky's zoom", () => {
@@ -357,8 +357,8 @@ describe("halt points", () => {
       expect(html).toContain('aria-label="Add halt point — “Merge”"');
       expect(html).toContain('aria-label="Add halt point — “Wait for me: Approve the merge”"');
       const cur = boxOf(html, "stop:s2");
-      expect(cur).toContain('role="toolbar" aria-label="Halt or carry on at “Push”"');
-      expect(cur).toMatch(/aria-label="Pause — “Push”" title="Pause the route where it is[^"]*">⏹</);
+      expect(cur).toContain('role="toolbar" aria-label="Pause or carry on at “Push”"');
+      expect(cur).toMatch(/aria-label="Pause — “Push”" title="Pause the route where it is[^"]*">⏸</);
       expect(cur).toContain('aria-label="Add halt point — “Push”"');
       // The current stop's own toolbar never edits it — it can only come off.
       expect(cur).not.toContain("Edit “Push”");
