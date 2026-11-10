@@ -68,7 +68,7 @@ def _detector(js: str) -> str:
 @pytest.mark.skipif(_node() is None, reason="needs node")
 def test_wake_detector_takes_only_a_lone_utterance():
     """Level sequences of 40 ms blocks (quiet 0.002, loud 0.2): a word of
-    250..1600 ms with 350 ms of quiet before and 200 ms after is a clip —
+    250..4000 ms with 350 ms of quiet before and 200 ms after is a clip —
     its lead-in 100 ms before the first loud block, its end the block the
     quiet tail reached 200 ms (the clip goes then, ``end`` = the sound's
     end); shorter is "short", longer "long" (never a clip, however it ends);
@@ -88,18 +88,18 @@ def test_wake_detector_takes_only_a_lone_utterance():
         "var Q = 0.002, L = 0.2, out = {};\n"
         "out.right = run([[Q, 20], [L, 15], [Q, 12]]);\n"
         "out.short = run([[Q, 20], [L, 5], [Q, 12]]);\n"
-        "out.long = run([[Q, 20], [L, 45], [Q, 20]]);\n"
+        "out.long = run([[Q, 20], [L, 105], [Q, 20]]);\n"
         "out.dip = run([[Q, 20], [L, 10], [Q, 4], [L, 10], [Q, 12]]);\n"
         "out.openTail = run([[Q, 20], [L, 15], [Q, 4]]);\n"
         "out.followOn = run([[Q, 20], [L, 10], [Q, 6], [L, 10], [Q, 12]]);\n"
-        "out.threeParts = run([[Q, 20], [L, 10], [Q, 6], [L, 10], [Q, 6], [L, 15], [Q, 12]]);\n"
+        "out.threeParts = run([[Q, 20], [L, 30], [Q, 6], [L, 30], [Q, 6], [L, 45], [Q, 12]]);\n"
         "out.noQuietBefore = run([[L, 10], [Q, 12]]);\n"
-        "out.afterSentence = run([[Q, 20], [L, 45], [Q, 9], [L, 10], [Q, 12]]);\n"
+        "out.afterSentence = run([[Q, 20], [L, 105], [Q, 9], [L, 10], [Q, 12]]);\n"
         "out.shortGap = run([[Q, 20], [L, 10], [Q, 12], [L, 5], [Q, 4], [L, 10], [Q, 12]]);\n"
         "out.hum = run([[0.03, 30], [0.03, 15], [0.03, 12]]);\n"
         "out.humWord = run([[0.01, 20], [0.3, 10], [0.01, 12]]);\n"
         "out.edgeMin = run([[Q, 20], [L, 7], [Q, 12]]);\n"
-        "out.edgeMax = run([[Q, 20], [L, 40], [Q, 12]]);\n"
+        "out.edgeMax = run([[Q, 20], [L, 100], [Q, 12]]);\n"
         "var blocks = [0, 1, 2, 3, 4, 5].map(function (i) { var x = new Float32Array(640); x.fill(i); return { at: i * 40, x: x }; });\n"
         "var s = voiceWakeSlice(blocks, 50, 130, 16000);\n"
         "out.slice = { len: s.length, first: s[0], last: s[s.length - 1] };\n"
@@ -109,7 +109,7 @@ def test_wake_detector_takes_only_a_lone_utterance():
         "console.log(JSON.stringify(out));\n"
     )
     out = _run(script)
-    assert out["k"] == [350, 200, 250, 1600, 100, 2048]
+    assert out["k"] == [350, 200, 250, 4000, 100, 2048]
     # The right length: one clip, the lead-in 100 ms before its first loud
     # block (800 ms), out the block the tail reaches 200 ms (5 blocks) after
     # its last (1400) — 160 ms sooner than the old 350 ms tail.
@@ -117,7 +117,7 @@ def test_wake_detector_takes_only_a_lone_utterance():
         {"kind": "clip", "from": 700, "to": 1600, "ms": 600, "end": 1400, "at": 1600}
     ]
     assert out["short"] == [{"kind": "short", "ms": 200, "at": 1200}]
-    # A sentence: "long" the block it passes 1600 ms, and never a clip after.
+    # A sentence: "long" the block it passes 4000 ms, and never a clip after.
     assert [r["kind"] for r in out["long"]] == ["long"]
     # The stop inside the word (160 ms < 200): one clip over both halves.
     assert [(r["kind"], r["ms"]) for r in out["dip"]] == [("clip", 960)]
@@ -143,7 +143,8 @@ def test_wake_detector_takes_only_a_lone_utterance():
     assert kinds == [("clip", 400), ("clip", 760)], kinds
     assert out["hum"] == []
     assert [r["kind"] for r in out["humWord"]] == ["clip"]
-    # 280 ms (7 blocks) is a word, 1600 ms (40 blocks) still one.
+    # 280 ms (7 blocks) is a word, 4000 ms (100 blocks: the word and a
+    # command in one breath) still one.
     assert [r["kind"] for r in out["edgeMin"]] == ["clip"]
     assert [r["kind"] for r in out["edgeMax"]] == ["clip"]
     # The slice: every block that overlaps 50..130 ms (40, 80, 120), joined.
@@ -234,7 +235,11 @@ def test_wake_request_shape_and_answers():
     assert "if (why) return;" in check
     assert "W.inflight = true;" in check and "W.at = Date.now();" in check
     assert "x.r.status === 409" in check and "voiceWakeOff(" in check
-    assert "if (x.j.wake) { W.pending = null; voiceWoke(); }" in check
+    # {wake, rest}: the command said in the same breath rides along (voiceWoke).
+    assert (
+        'if (x.j.wake) { W.pending = null; voiceWoke(typeof x.j.rest === "string" ? x.j.rest.trim() : "", r); }'
+        in check
+    )
     # A word said while a check was in flight is kept and goes on the no.
     assert "W.pending = { blob: blob, r: r };" in check
     assert check.count("voiceWakeFlush();") == 2
@@ -257,7 +262,7 @@ def test_wake_request_shape_and_answers():
         'voiceListen("prompt", VOICE_TAP_MS, false, true);'
     )
     assert (
-        "voiceListen_.woke = { skipUntil: now + VOICE_WAKE_CHIME_MS + VOICE_WAKE_SKIP_PAD_MS, wakeMs: W.wakeMs };"
+        "voiceListen_.woke = { skipUntil: now + VOICE_WAKE_CHIME_MS + VOICE_WAKE_SKIP_PAD_MS, wakeMs: W.wakeMs, lead: lead };"
         in woke
     )
     assert "W.wakeMs = Math.max(0, now - (W.endAt || now));" in woke
@@ -323,7 +328,7 @@ def test_wake_lifecycle_wiring():
     assert "if (asking) return asking;" in stt
     assert "ctx.createScriptProcessor(VOICE_WAKE_BLOCK, 1, 1)" in stt
     assert (
-        "standby: standby, standbyStop: standbyStop, standbyOn: standbyOn, hold: hold"
+        "standby: standby, standbyStop: standbyStop, standbyOn: standbyOn, standbyAfter: standbyAfter, hold: hold"
         in stt
     )
     # The meter stays hidden: the standby moves the ring only.
