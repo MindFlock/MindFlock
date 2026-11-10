@@ -19,7 +19,7 @@ describe("the verdict where merges happen", () => {
   });
 
   it("flies the Sky to the session's behaviors — Verify is a stop on the route, not a place", () => {
-    expect(has(CHIP, "openBehaviors({ planId: plan.id, title: inst.title, branch });")).toBe(true);
+    expect(has(CHIP, "openBehaviors({ planId: verify?.plan || plan?.id, title: inst.title, branch });")).toBe(true);
     expect(CHIP).not.toContain('openDialogFor("verify"');
   });
 

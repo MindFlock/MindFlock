@@ -79,7 +79,7 @@ describe("every way in flies the Sky", () => {
     openChecklist("feature/x");
     expect(useUi.getState().view).toBe("sky");
     expect(useBehaviorsFocus.getState().request).toMatchObject({ branch: "feature/x" });
-    expect(code("components/dialogs/VerdictChip.tsx")).toContain("openBehaviors({ planId: plan.id, title: inst.title, branch });");
+    expect(code("components/dialogs/VerdictChip.tsx")).toContain("openBehaviors({ planId: verify?.plan || plan?.id, title: inst.title, branch });");
   });
 
   it("an old Verify-dialog target is tried as a plan id, a title and a branch", () => {

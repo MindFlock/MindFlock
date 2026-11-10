@@ -1,4 +1,4 @@
-/** The Behaviors card (components/behaviors/BehaviorsCard.tsx): what it
+/** The Verify card (components/behaviors/BehaviorsCard.tsx): what it
  * renders for a plan — read-only steps, each with who does it and its result
  * (the steps are the agent's own since 2026-11-10; a person's part is one
  * Confirm verified, pinned in verifySelf.test.ts) — and which ⋯ items it
@@ -85,14 +85,17 @@ beforeEach(() => {
 });
 
 describe("BehaviorsCard renders", () => {
-  it("the head: status, sentence, ONE primary action (Verify), ⋯ and ×", () => {
+  it("the head: titled Verify, status, sentence, the tally, ONE primary action (Let its agent fix it), ⋯ and ×", () => {
     const html = render(FAILED, { onClose() {} });
     expect(html).toContain('class="bh-card is-bad"');
-    expect(html).toContain('<span class="bh-status" data-tone="bad">Failed</span>');
+    expect(html).toContain('<span class="bh-title">Verify</span>');
+    expect(html).toContain('aria-label="Verify — Verify failed"');
+    expect(html).toContain('<span class="bh-status" data-tone="bad">Verify failed</span>');
     expect(html).toContain(behaviorSummary(FAILED).sentence);
+    expect(visible(html)).toContain("1 failed · 1 needs you");
     expect(html.match(/class="btn-primary bh-primary"/g)).toHaveLength(1);
-    expect(html).toMatch(/data-action="verify"[^>]*>Verify again</);
-    expect(html).toContain('aria-label="More for these behaviors"');
+    expect(html).toMatch(/data-action="agentfix"[^>]*>Let its agent fix it</);
+    expect(html).toContain('aria-label="More for Verify"');
     expect(html).toContain('aria-label="Close"');
     expect(html).not.toContain("Skip this stop");
   });
@@ -105,13 +108,15 @@ describe("BehaviorsCard renders", () => {
     expect(html).toContain("🤖 agent");
     expect(html).toContain("🙋 you");
     expect(html).toMatch(/class="bh-chip" data-check="fail"[^>]*>.*Failed/);
-    expect(html).toMatch(/class="bh-chip" data-check="yours"[^>]*>.*A person&#x27;s/);
+    expect(html).toMatch(/class="bh-chip" data-check="yours"[^>]*>.*Needs you/);
   });
 
-  it("READ-ONLY: no answers, edits, removes, rewrite or add — the agent's note as evidence, Fix on a failure", () => {
+  it("READ-ONLY: no answers, edits, removes, rewrite or add — the result, who answered, the evidence, Let its agent fix it", () => {
     const html = render(FAILED, { expanded: true });
     expect(html).toContain("The agent:</span> badge read 0 with 3 queued");
-    expect(html).toContain(">Fix</button>");
+    expect(visible(html)).toContain("Failed · by the agent");
+    expect(html).toContain(">Let its agent fix it</button>");
+    expect(html).not.toContain(">Fix</button>");
     for (const gone of ["bh-answer", ">Can&#x27;t check</button>", ">Edit</button>", ">Remove</button>", "+ Add a behavior", "Rewrite behaviors", "Let the agent walk every behavior", "bh-need"])
       expect(html, gone).not.toContain(gone);
     // Who does it is a mark, not a toggle.
@@ -163,9 +168,9 @@ describe("BehaviorsCard renders", () => {
     expect(render(FAILED, { compact: true })).toContain('class="bh-card is-bad is-compact"');
   });
 
-  it("never says checklist or test plan", () => {
+  it("never says checklist, test plan, behaviors or checker", () => {
     for (const p of [FAILED, plan({ state: "generating" }), plan({ state: "generated", origin: "manual" })]) {
-      expect(visible(render(p, { onClose() {}, flightStep: { flightId: "f", stepId: "s" } }))).not.toMatch(/checklist|test plan/i);
+      expect(visible(render(p, { onClose() {}, flightStep: { flightId: "f", stepId: "s" } }))).not.toMatch(/checklist|test plan|behaviou?rs?|checker/i);
     }
   });
 });
@@ -175,7 +180,7 @@ describe("who does it", () => {
     const handed = plan({ state: "done", steps: [step("a")], runs: [run({ results: results({ a: "blocked" }) })] });
     expect(whoOf(handed, handed.steps[0])).toMatchObject({ you: true, handed: true, label: "🙋 you" });
     expect(whoOf(FAILED, FAILED.steps[0])).toMatchObject({ you: false, label: "🤖 agent" });
-    expect(rowChip(handed, "a")).toEqual({ state: "yours", glyph: "●", label: "A person's" });
+    expect(rowChip(handed, "a")).toEqual({ state: "yours", glyph: "●", label: "Needs you" });
   });
 });
 
@@ -187,24 +192,25 @@ describe("the ⋯ menu", () => {
       session: withSession ? (session as unknown as { title: string; pr_url?: string }) : null,
     }).map((i) => i.label);
 
-  it("on a failure: fix, the checking run, the work session, diff, delete last — no rewrite or walk", () => {
+  it("on a failure: Verify again, a new session's fix, the agent verifying, the work session, diff, delete last — no rewrite or walk", () => {
     expect(labels(FAILED)).toEqual([
+      "Verify again",
       "Fix in a new session",
-      "Open the checking run",
+      "Open the agent verifying",
       "Open the work session",
       "View diff",
       "What could break",
       "Open PR ↗",
-      "Delete these behaviors",
+      "Delete these steps",
     ]);
     const del = cardMenuItems(FAILED, { summary: behaviorSummary(FAILED) }).at(-1);
     expect(del).toMatchObject({ key: "delete", danger: true });
   });
 
-  it("while checking: Cancel the check, no Verify again", () => {
+  it("while verifying: Stop verifying, no Verify again", () => {
     const p = plan({ state: "running", run_session: "verify-p1", steps: [step("a")], runs: [run({ session: "verify-p1" })] });
     const items = cardMenuItems(p, { summary: behaviorSummary(p) });
-    expect(items.map((i) => i.label)).toEqual(["Open the checking run", "Cancel the check", "Delete these behaviors"]);
+    expect(items.map((i) => i.label)).toEqual(["Open the agent verifying", "Stop verifying", "Delete these steps"]);
   });
 
   it("merged and waiting for the deploy: It's deployed — check now", () => {

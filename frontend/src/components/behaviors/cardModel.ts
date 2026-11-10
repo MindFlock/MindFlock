@@ -1,4 +1,4 @@
-/** The Behaviors card's decisions, kept pure (vitest here is node-only — no
+/** The Verify card's decisions, kept pure (vitest here is node-only — no
  * DOM — so everything worth pinning lives outside the components): what the
  * head says and its one action, which ⋯ items a card offers, what a row's
  * chip says and who does each step.
@@ -9,7 +9,7 @@
  * adds or answers them one by one. A person's part is one confirm: "Confirm
  * verified" / "Not verified…" once the agent is done (the row's `verify`). */
 
-import type { SessionVerify, SessionVerifyFailedStep, SessionVerifyHumanStep, TestPlan, TestStep } from "../../api/types";
+import type { SessionVerify, SessionVerifyFailedStep, TestPlan, TestStep } from "../../api/types";
 import { CHECK_MARK, isFailing, latestRun, stepCheck, stepIsYours, type CheckState } from "../dialogs/verify";
 import type { BehaviorSummary } from "../../lib/behaviors";
 import type { Flight } from "../../lib/flights";
@@ -55,18 +55,18 @@ export function cardMenuItems(plan: TestPlan, ctx: CardMenuCtx): CardMenuItem[] 
   if (plan.state === "generated" && plan.merged_at && !plan.live_at)
     items.push({ key: "deployed", label: "It's deployed — check now", title: "Don't wait out the deploy timer" });
   if (isFailing(plan) || verify?.state === "failed")
-    items.push({ key: "fix", label: "Fix in a new session", title: "Starts a new session with what failed attached" });
+    items.push({ key: "fix", label: "Fix in a new session", title: "Start a new session with what failed attached" });
   const watch = watchSessionOf(plan);
   if (watch && watch !== ctx.session?.title)
-    items.push({ key: "watch", label: "Open the checking run", title: "Open " + watch + " as a pane — closing it doesn't stop the check" });
-  if (running) items.push({ key: "cancel", label: "Cancel the check", title: "Stop the agent — what it found so far is kept" });
+    items.push({ key: "watch", label: "Open the agent verifying", title: "Open " + watch + " as a pane — closing it doesn't stop Verify" });
+  if (running) items.push({ key: "cancel", label: "Stop verifying", title: "Stop the agent — what it found so far is kept" });
   if (ctx.session) {
     items.push({ key: "session", label: "Open the work session", title: "Show " + ctx.session.title + " in the Sky" });
     items.push({ key: "diff", label: "View diff", title: "Show what changed on " + (plan.branch || "this branch") });
     items.push({ key: "risk", label: "What could break", title: "Open the map on what imports these changes" });
     if (ctx.session.pr_url) items.push({ key: "pr", label: "Open PR ↗", title: ctx.session.pr_url });
   }
-  items.push({ key: "delete", label: "Delete these behaviors", title: "Delete these behaviors and their results", danger: true });
+  items.push({ key: "delete", label: "Delete these steps", title: "Delete these steps and their results", danger: true });
   return items;
 }
 
@@ -78,9 +78,9 @@ export const VERIFY_TITLE =
 export const CHIP_WORDS: Record<CheckState, string> = {
   pass: "Passed",
   fail: "Failed",
-  cant: "Couldn't check",
-  yours: "A person's",
-  pending: "Not checked",
+  cant: "Blocked",
+  yours: "Needs you",
+  pending: "Not done",
 };
 
 export function rowChip(plan: TestPlan, stepId: string): { state: CheckState; glyph: string; label: string } {
@@ -112,22 +112,32 @@ export function byWords(by: string): string {
 
 /** What the card's head says and offers, read from the session's `verify`
  * when there is one (an older server, or a session that never verified,
- * falls back to the behaviors' own summary). */
+ * falls back to the plan's own summary, lib/behaviors). */
 export interface VerifyCardView {
   tone: BehaviorSummary["tone"];
   status: string;
   sentence: string;
-  /** The ONE primary action: start a verify, or open the agent doing it. */
-  action: null | { key: "verify" | "open"; label: string; title: string };
-  /** Failed behaviors (the halted line's count). */
+  /** The ONE primary action: start a verify, open the agent doing it, or
+   * hand what failed to the session's own agent ("Let its agent fix it"). */
+  action: null | { key: "verify" | "open" | "agentfix"; label: string; title: string };
+  /** Failed steps (the halted line's count). */
   failed: number;
-  /** needs_you: the steps only a person can do, with Confirm verified. */
-  humanSteps: SessionVerifyHumanStep[];
   /** failed: what failed, with the agent's note. */
   failedSteps: SessionVerifyFailedStep[];
   /** Show Confirm verified / Not verified…. */
   confirm: boolean;
+  /** The confirm is a sign-off: every step was the agent's, nothing is left
+   * for a person to DO — they sign the check off. */
+  signOff: boolean;
 }
+
+/** "Let its agent fix it": what failed, with its evidence, goes to the
+ * session's own agent. */
+export const AGENT_FIX = {
+  key: "agentfix" as const,
+  label: "Let its agent fix it",
+  title: "Send what failed, with the agent's evidence, to this session's own agent",
+};
 
 export function verifyCardView(
   plan: TestPlan,
@@ -141,9 +151,9 @@ export function verifyCardView(
     sentence: summary.sentence,
     action: null,
     failed: summary.failed,
-    humanSteps: [],
     failedSteps: [],
     confirm: false,
+    signOff: false,
   };
   const again = { key: "verify" as const, label: "Verify again", title: VERIFY_TITLE };
   const open = { key: "open" as const, label: "Open its agent", title: "Follow the agent's steps in its terminal, and talk to it there" };
@@ -153,19 +163,21 @@ export function verifyCardView(
       case "verifying":
         return { ...base, tone: "busy", status: VERIFYING_LABEL, sentence: "Its agent is checking its work in its terminal: " + verifyProgress(verify) + ".", action: session ? open : null };
       case "needs_you": {
-        const steps = verify.human_steps || [];
-        const n = steps.length || Number(verify.steps?.human) || 0;
+        const n = (verify.human_steps || []).length || Number(verify.steps?.human) || 0;
+        // The server's own line ("2 steps need you — check them, then
+        // confirm." / "Every step passed — confirm it works."); a sign-off
+        // with no person steps never says there are some.
+        const fallback = n
+          ? "The agent did its steps. " + (n === 1 ? "One step needs you — do it" : n + " steps need you — do them") + ", then confirm."
+          : "Every step passed — sign it off.";
         return {
           ...base,
           tone: "you",
           status: REASON_LABEL.verify_confirm,
-          sentence:
-            "The agent did its steps. " +
-            (n === 1 ? "One step needs a person" : (n || "Some") + " steps need a person") +
-            " — do " + (n === 1 ? "it" : "them") + ", then confirm.",
+          sentence: detail || fallback,
           action: null,
-          humanSteps: steps,
           confirm: true,
+          signOff: !n,
         };
       }
       case "failed":
@@ -174,7 +186,7 @@ export function verifyCardView(
           tone: "bad",
           status: REASON_LABEL.verify_failed,
           sentence: detail || "Some of its steps failed.",
-          action: session ? again : null,
+          action: session ? AGENT_FIX : null,
           failed: Math.max(base.failed, (verify.failed_steps || []).length),
           failedSteps: verify.failed_steps || [],
         };
@@ -185,6 +197,7 @@ export function verifyCardView(
     }
   }
   if (plan.state === "running" || plan.state === "generating") return base;
+  if (session && isFailing(plan)) return { ...base, action: AGENT_FIX };
   const before = !!latestRun(plan) || !!verify;
   return { ...base, action: session || (plan.steps || []).length ? { key: "verify", label: before ? "Verify again" : "Verify", title: VERIFY_TITLE } : null };
 }
