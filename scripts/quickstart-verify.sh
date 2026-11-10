@@ -14,7 +14,12 @@
 set -eu
 
 say()  { printf '\033[1;35m[quickstart]\033[0m %s\n' "$*"; }
-fail() { printf '\033[1;31m[quickstart] FAIL:\033[0m %s\n' "$*" >&2; cleanup; exit 1; }
+fail() {
+  printf '\033[1;31m[quickstart] FAIL:\033[0m %s\n' "$*" >&2
+  diagnose >&2 || true
+  cleanup
+  exit 1
+}
 
 PORT="${MINDFLOCK_QS_PORT:-8971}"
 WORK="$(mktemp -d)"
@@ -26,6 +31,60 @@ cleanup() {
   rm -rf "$WORK" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
+
+# The interpreter the installed `mindflock` runs on (its entry point's
+# shebang): a uv tool install brings its own CPython when the system has no
+# 3.12 (Debian bookworm), and that build's os.posix_spawn differs from a
+# distro one — the engine's PTY spawn is probed with it, not with python3.
+mf_python() {
+  sed -n '1s/^#![[:space:]]*//p' "$(command -v mindflock)" | cut -d' ' -f1
+}
+
+# On failure: the server log, then the engine's PTY spawn
+# (mux.spawn_pty, what `tmux new-session -d` goes through at session create)
+# re-run by hand on a private tmux socket — argv, env keys, the exception or
+# the child's exit status, and everything it printed (tmux's stderr).
+diagnose() {
+  if [ -f "$WORK/server.log" ]; then
+    printf '%s\n' '----- server.log (last 200 lines) -----'
+    tail -n 200 "$WORK/server.log" || true
+    printf '%s\n' '----- end server.log -----'
+  fi
+  PY="$(mf_python)"
+  [ -x "$PY" ] || { echo "spawn diagnostic: no interpreter found for mindflock ($PY)"; return 0; }
+  printf '%s\n' '----- engine PTY spawn diagnostic -----'
+  env -u TMUX "$PY" -I - "$WORK" <<'EOF' || true
+import os, sys, time, traceback
+from backend.session import mux
+sock = "qs-diag-%d" % os.getpid()
+argv = ["tmux", "-L", sock, "new-session", "-d", "-s", "diag", "-c", sys.argv[1], "sleep 5"]
+print("python:", sys.version.split()[0], sys.executable)
+print("argv:", argv)
+print("env keys:", sorted(os.environ))
+try:
+    proc = mux.spawn_pty(argv)
+except BaseException:
+    traceback.print_exc(file=sys.stdout)
+else:
+    out = b""
+    end = time.time() + 10
+    while time.time() < end:
+        try:
+            chunk = os.read(proc.fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        out += chunk
+    _, status = os.waitpid(proc.pid, 0)
+    print("child exit status:", os.waitstatus_to_exitcode(status))
+    print("child output (tmux stderr):", out.decode("utf-8", "replace") or "<none>")
+    rc = os.system("tmux -L %s has-session -t diag" % sock)
+    print("tmux has-session:", "yes" if rc == 0 else "no (%s)" % rc)
+    os.system("tmux -L %s kill-server 2>/dev/null" % sock)
+EOF
+  printf '%s\n' '----- end diagnostic -----'
+}
 
 command -v mindflock >/dev/null 2>&1 || fail "mindflock is not installed (run install.sh first)"
 
@@ -46,6 +105,21 @@ EOF
   if [ ! -e "$HOME/.claude.json" ]; then
     printf '{"oauthAccount": {"stub": true}}\n' > "$HOME/.claude.json"
   fi
+fi
+
+# Which posix_spawn the engine's PTY gets on this interpreter (see
+# backend/session/mux.py spawn_pty): CPython's own setsid=, or libc's
+# POSIX_SPAWN_SETSID through ctypes when the build lacks it.
+PY="$(mf_python)"
+if [ -x "$PY" ]; then
+  say "interpreter: $("$PY" -I -c 'import os, sys
+try:
+    os.posix_spawn("/nonexistent", ["x"], {}, setsid=True)
+except NotImplementedError:
+    s = "unavailable (libc fallback)"
+except OSError:
+    s = "native"
+print(sys.version.split()[0], "- os.posix_spawn setsid:", s)' 2>&1)"
 fi
 
 # --- 1. doctor -----------------------------------------------------------------
