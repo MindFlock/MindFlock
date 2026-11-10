@@ -587,3 +587,20 @@ def test_log_levels(monkeypatch):
         "warning": ["unreadable y"],
         "error": ["broke z"],
     }
+
+
+def test_confirm_items_prefer_verifys_own_reason(srv, monkeypatch):
+    """Contract with fp-verify-core: ``verify_status(plan)["human_steps"][i]
+    ["why"]`` ("agent couldn't: <note>") is read when it is there."""
+    plan = _plan_with({"a2": {"result": "blocked", "note": "raw", "by": "agent"}})
+    monkeypatch.setattr(D, "_verify_env", lambda flight, where: (None, False))
+    monkeypatch.setattr(T, "get", lambda pid: plan)
+    monkeypatch.setattr(
+        T,
+        "verify_status",
+        lambda p: {"human_steps": [{"id": "a2", "why": "agent couldn't: no card"}]},
+        raising=False,
+    )
+    f = fly({"kind": "verify"})
+    v = D._verify_obs(f, {"detail": {"plan": "p"}}, {})
+    assert "Open billing — agent couldn't: no card" in v["confirm_items"]

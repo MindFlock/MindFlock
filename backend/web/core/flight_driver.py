@@ -469,6 +469,7 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
     # The steps the AGENT walks: its own, or — for an "Agent only" stop, whose
     # run walks "all" — every step, so a plan of person's steps still starts
     # the walker and the stop is done only once each one is settled.
+    left = _agent_left(plan)
     walks = {s["id"] for s in _tp.agent_steps(plan, walk=_verify_walk(cfg))}
     open_agent = [
         s["text"]
@@ -523,7 +524,7 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         "outcome": str((run or {}).get("outcome") or ""),
         "outcome_note": str((run or {}).get("outcome_note") or ""),
         "confirm_items": [
-            _confirm_line(s, results.get(s["id"]) or {})
+            _confirm_line(s, results.get(s["id"]) or {}, left.get(s["id"]))
             for s in _tp.confirm_steps(plan)
         ],
     }
@@ -546,13 +547,36 @@ def _failed_line(f: dict) -> str:
     return "%s — saw: %s" % (text, saw) if saw else text
 
 
-def _confirm_line(step: dict, entry: dict) -> str:
+def _agent_left(plan: dict) -> Dict[str, str]:
+    """``{step id: why}`` for the steps the agent left to the person, from
+    ``test_plans.verify_status(plan)["human_steps"][i]["why"]`` ("agent
+    couldn't: <note>") — ``{}`` when that is not there to read."""
+    from backend.web.core import test_plans as _tp
+
+    status_of = getattr(_tp, "verify_status", None)
+    if status_of is None:
+        return {}
+    try:
+        steps = (status_of(plan) or {}).get("human_steps") or []
+    except Exception:  # noqa: BLE001 — the result's own note is the fallback
+        return {}
+    return {
+        str(h.get("id") or ""): _one_line(h.get("why"))
+        for h in steps
+        if isinstance(h, dict) and h.get("why")
+    }
+
+
+def _confirm_line(step: dict, entry: dict, left: Optional[str] = None) -> str:
     """One thing a person is asked to check before confirming: the step, what
-    to look for, and — for a step the agent could not do — why not (the
-    result's ``why`` when it has one, else its note)."""
+    to look for, and — for a step the agent could not do — why not
+    (``left``: Verify's own "agent couldn't: …" for it; else the result's
+    ``why``, else its note)."""
     line = step["text"]
     if step.get("expect"):
         line = "%s — look for: %s" % (line, step["expect"])
+    if left:
+        return "%s — %s" % (line, left)
     if entry.get("result") == "blocked" and str(entry.get("by") or "") != "human":
         why = _one_line(entry.get("why") or entry.get("note"))
         if why:
