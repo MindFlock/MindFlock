@@ -529,7 +529,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         data-diagram-node={dn.id}
         aria-label={said}
         aria-current={isSel(n) ? "true" : undefined}
-        title={isHead ? undefined : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : why ? dn.title + " — " + why : sub ? dn.title + " — " + sub + (dn.summary && dn.summary !== sub ? " · " + dn.summary : "") : dn.title}
+        title={isHead ? undefined : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : why ? dn.title + " — " + why : sub || dn.summary ? dn.title + " — " + [sub, dn.summary !== sub ? dn.summary : ""].filter(Boolean).join(" · ") : dn.title}
         style={{
           transform: `translate(${n.x}px, ${n.y}px)`,
           width: n.w,

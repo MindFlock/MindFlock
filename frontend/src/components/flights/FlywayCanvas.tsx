@@ -1145,7 +1145,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               data-tour={n.kind === "session" ? "sky-session-box" : tools && i === stops.findIndex((s) => tooled(s)) ? "sky-stop" : undefined}
               aria-label={said}
               aria-current={p.selected === n.id ? "true" : undefined}
-              title={open ? undefined : n.kind === "add" ? (drop ? addLabel! : n.title) : n.reason ? n.title + " — " + n.reason : n.sub ? n.title + " — " + n.sub : n.title}
+              title={open ? undefined : n.kind === "add" ? (drop ? addLabel! : n.title) : n.reason ? n.title + " — " + n.reason : n.sub || n.summary ? n.title + " — " + [n.sub, n.summary !== n.sub ? n.summary : ""].filter(Boolean).join(" · ") : n.title}
               // A card sizes itself (and is measured); a box takes the layout's.
               style={open ? { transform: `translate(${x}px, ${y}px)` } : { transform: `translate(${x}px, ${y}px)`, width: b.w, minHeight: b.h }}
               onPointerDown={(e) => onBoxDown(e, n)}

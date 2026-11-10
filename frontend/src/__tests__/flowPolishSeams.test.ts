@@ -188,3 +188,21 @@ describe("one vocabulary across the pieces", () => {
     expect(src).not.toMatch(/"(Tack on|Halt here|Carry on past here)[^"]*"/);
   });
 });
+
+describe("a tile's tooltip names its options", () => {
+  it("halt point, Only when and a non-default If it fails go in the tooltip summary, never on the face", async () => {
+    const { stopOptionsLine } = await import("../lib/flightDiagram");
+    const plain = step("s1", "agent", "Work");
+    const opted = step("s2", "ship", "Push", { halt: true, when: "weekday", on_fail: "skip" });
+    expect(stopOptionsLine(plain, KINDS)).toBe("");
+    const d = flywayDiagram([plain, opted], KINDS);
+    const [a, b] = d.nodes.filter((n) => n.kind === "stop");
+    expect(a.summary).toBeUndefined();
+    expect(b.summary).toBe(
+      "The route pauses here first (a halt point) — Carry on to run it. It runs only when weekday — otherwise it is skipped. If it fails, the route goes on without it."
+    );
+    expect(b.sub).not.toContain("halt point");
+    const html = render([plain, opted]);
+    expect(html.match(/title="Push[^"]*"/)?.[0]).toContain("Push — The route pauses here first (a halt point)");
+  });
+});

@@ -51,7 +51,9 @@ import { LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
 import { deriveSessionState } from "./sessionState";
 import { windowName } from "./windowName";
 import { riskOf, type RiskTag } from "./stopRisk";
+import { stopSentence } from "./stopEditing";
 import {
+  defaultOnFail,
   isLive,
   isShown,
   newStep,
@@ -149,8 +151,10 @@ export interface DiagramNode {
   /** Why it stopped (a halted stop or rung), or why a stop whose failure was
    * handed to you waits (`detail.failed_reason`). */
   reason?: string;
-  /** A current stop whose `sub` says what it is doing right now (the
-   * server's live note): its config summary, for the tooltip. */
+  /** The tooltip's second half, after `sub`: a current stop's config
+   * summary when `sub` says what it is doing right now (the server's live
+   * note), and a stop's options — halt point, Only when, If it fails — when
+   * it has any (`stopOptionsLine`). The tile's face never shows it. */
   summary?: string;
   /** A branch box: the stop it fans out of, the box it joins at, its state
    * and its own line in brief ("2/4 stops · Push"). */
@@ -779,6 +783,17 @@ export function insertFromOf(f: Pick<Flight, "cursor" | "steps"> & { state?: str
   return Math.max(f.cursor + 1, parallelSpan(f.steps, f.cursor)[1]);
 }
 
+/** A stop's options read back in lib/stopEditing's sentence — its halt
+ * point, "Only when", and "If it fails" — for its tile's tooltip; "" when
+ * it has none of them (no halt point, no condition, the kind's own failure
+ * handling), so a plain stop's tooltip stays its summary. */
+export function stopOptionsLine(s: Pick<FlightStep, "kind" | "halt" | "when" | "on_fail">, kinds?: readonly StepKindDef[] | null): string {
+  const fallback = defaultOnFail(kinds?.find((k) => k.kind === s.kind));
+  const failSet = !!s.on_fail && s.on_fail !== fallback;
+  if (!s.halt && !(s.when || "").trim() && !failSet) return "";
+  return stopSentence(s, fallback);
+}
+
 function addNode(title: string): DiagramNode {
   return { id: "add", kind: "add", row: "main", title, sub: "", state: "pending", icon: "add" };
 }
@@ -791,6 +806,7 @@ export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly Ste
     row: "main",
     title: stopTitle(s, kinds),
     sub: stopSub(stopTitle(s, kinds), stopSummary(s)),
+    ...(stopOptionsLine(s, kinds) ? { summary: stopOptionsLine(s, kinds) } : {}),
     state: "edit",
     icon: s.kind,
     perch: stepActor(s, kinds) === "you",
@@ -852,13 +868,16 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
     const note = live && state === "current" && !looping && !fix?.active ? liveNote(rec?.note) : "";
     // A failure handed to you (`on_fail: you`) waits amber: why, on the tile.
     const handed = state === "perched" ? String(rec?.detail?.failed_reason ?? "").trim() : "";
+    // The tooltip: the settings a live note stands in for, then the stop's
+    // options (halt point, Only when, If it fails) — never on the face.
+    const tip = [note && summary && note !== summary ? summary : "", stopOptionsLine(s, kinds)].filter(Boolean).join(" · ");
     return {
       id: stopId(s, i),
       kind: "stop" as const,
       row: "main" as const,
       title: stopTitle(s, kinds),
       sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : note || summary,
-      ...(note && summary && note !== summary ? { summary } : {}),
+      ...(tip ? { summary: tip } : {}),
       state,
       icon: s.kind,
       perch: stepActor(s, kinds) === "you",
