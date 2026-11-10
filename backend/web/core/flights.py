@@ -3511,7 +3511,7 @@ def _verify_guard(ss: dict, v: dict, now: float, up: dict) -> Optional[dict]:
         return {
             "action": "run",
             "phase": "nudge",
-            "note": "nudging the checker: nothing new for %d min" % int(quiet // 60),
+            "note": "nudging the agent: nothing new for %d min" % int(quiet // 60),
             "detail": dict(up),
         }
     answered, total = int(p.get("answered") or 0), int(p.get("total") or 0)

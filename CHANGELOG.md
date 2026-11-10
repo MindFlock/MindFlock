@@ -26,8 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   critical: processes stalled on memory 34% of the last minute*. Replayed
   over the last two days of memory history, today's 140 low/critical samples
   drop to 4 low (a real stall).
+- **Verify walks in the session that wrote the work.** Once the behaviors
+  are written, Check now (and a route's Verify stop) hands the steps to the
+  ticket session's own agent: it puts them on its todo list, walks them, and
+  you talk to it right there. No separate checker session, so no "couldn't
+  start the check: memory is low". A separate checker is only the fallback
+  when that session is gone; Cancel tells the agent to stop and never closes
+  your session (docs/flights.md).
+- **Voice stays on when memory is low.** Local recognition and speech models
+  load and keep loading, the accurate pass runs, and Voice Lab is never
+  stopped for memory. Models still unload after the usual idle time.
 
 ### Fixed
+
+- **"Over and out" sends what is in the box.** With nothing dictated since
+  the last "over" (words left by an earlier listen, or typed or pasted
+  text), it stopped the mic without pressing Enter. It now sends; it only
+  just stops when "over" already sent this listen's message.
 
 - **WSL no longer reads "Windows memory is critically low" while it holds
   gigabytes it can reuse.** Windows counts WSL's page cache as used, so

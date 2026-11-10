@@ -536,6 +536,8 @@ from backend.web.core.test_plans_driver import (
     _closed_session_plan_inputs,
     _deliver_walk,
     _end_verify_session,
+    _run_is_in_session,
+    _tell_walk_closed,
     _ensure_test_plan,
     _ensure_test_plan_blocking,
     _free_stale_verify_worktree,
@@ -12484,6 +12486,11 @@ async def cancel_test_plan_run(plan_id: str) -> JSONResponse:
             {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     session_title = plan["run_session"]
+    # A walk in the session that wrote the work: the session stays (it is the
+    # person's own; _end_verify_session never closes it), but its agent is
+    # told to stop walking.
+    if _run_is_in_session(plan) and session_title:
+        await asyncio.to_thread(_tell_walk_closed, session_title, "cancelled")
     closed = await _end_verify_session(session_title)
     updated = await asyncio.to_thread(_test_plans.cancel_run, plan_id)
     return JSONResponse(

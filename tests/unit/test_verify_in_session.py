@@ -438,6 +438,30 @@ def test_close_run_keeps_the_session_and_tells_its_agent(monkeypatch, tmp_path):
     assert not told[0][1].startswith(T.WALK_MARK)
 
 
+def test_cancel_keeps_the_session_and_tells_its_agent_to_stop(monkeypatch, tmp_path):
+    from backend.web import server
+
+    told: list = []
+    monkeypatch.setattr(server.ENGINE, "instances", {"sc-1": _inst(tmp_path)})
+    monkeypatch.setattr(
+        server,
+        "_deliver_to_agent",
+        lambda inst, title, text: told.append((title, text)) or ("queued", None),
+    )
+
+    async def _never(title):
+        raise AssertionError("closed the person's session")
+
+    monkeypatch.setattr(server, "close_instance", _never)
+    T.upsert(_plan())
+    T.start_run("sc-1", "sc-1", in_session=True)
+    resp = asyncio.run(server.cancel_test_plan_run("sc-1"))
+    body = json.loads(resp.body)
+    assert body["ok"] is True and body["closed"] is False
+    assert body["plan"]["state"] != "running"
+    assert told and told[0][0] == "sc-1" and "cancelled" in told[0][1]
+
+
 # --------------------------------------------------------------------------- #
 # A flight's Verify stop
 # --------------------------------------------------------------------------- #
