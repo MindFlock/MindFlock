@@ -205,17 +205,29 @@ const plan = (over: Partial<TestPlan> = {}): TestPlan =>
 const visible = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/&[a-z#0-9]+;/g, " ").replace(/\s+/g, " ");
 const card = (p: TestPlan) => renderToStaticMarkup(createElement(BehaviorsCard, { plan: p }));
 
-describe("the Behaviors card", () => {
-  it("needs_you: the person's steps and Confirm verified / Not verified…", () => {
-    instances = [row({ verify: verify({ state: "needs_you", human_steps: HUMAN }) }) as Instance];
+describe("the Verify card", () => {
+  it("needs_you: the server's line, the person's step listed ONCE (in the rows), Confirm verified / Not verified…", () => {
+    instances = [row({ verify: verify({ state: "needs_you", human_steps: HUMAN.slice(0, 1), detail: "1 step needs you — check it, then confirm." }) }) as Instance];
     const html = card(plan());
     expect(html).toContain('<span class="bh-status" data-tone="you">Confirm verified</span>');
-    expect(html).toContain('<ol class="vc-steps" aria-label="Steps for you">');
-    expect(visible(html)).toContain("Open the app on a phone Expect: the banner fits");
+    expect(visible(html)).toContain("1 step needs you — check it, then confirm.");
+    // VerifyConfirm is passed hideSteps: the rows below already list the step.
+    expect(html).not.toContain("vc-steps");
+    expect(visible(html).split("Open the app on a phone")).toHaveLength(2);
+    expect(html).not.toContain("bh-signoff");
     expect(html).toMatch(/class="btn-primary vc-yes"[^>]*>Confirm verified</);
     expect(html).toMatch(/class="test-btn vc-no"[^>]*>Not verified…</);
     // Nothing to start while it waits on you.
     expect(html).not.toContain("bh-primary");
+  });
+
+  it("a sign-off with NO person steps: the server's line and Sign off — never \"steps need a person\"", () => {
+    instances = [row({ verify: verify({ state: "needs_you", steps: { total: 1, agent_done: 1, human: 0 }, human_steps: [], detail: "Every step passed — confirm it works." }) }) as Instance];
+    const html = card(plan({ steps: [{ id: "s1", text: "Run the unit tests", expect: "all green", actor: "agent" }] }));
+    expect(visible(html)).toContain("Every step passed — confirm it works.");
+    expect(html).toContain('<div class="bh-signoff">Sign off</div>');
+    expect(visible(html)).not.toMatch(/need a person|needs a person/);
+    expect(html).toMatch(/class="btn-primary vc-yes"[^>]*>Confirm verified</);
   });
 
   it("no verify: Verify is its one action (the session's own agent)", () => {
@@ -225,7 +237,7 @@ describe("the Behaviors card", () => {
     expect(html).not.toContain("vc-confirm");
   });
 
-  it("verifying: Open its agent; failed: what failed and Verify again", () => {
+  it("verifying: Open its agent; failed: what failed and Let its agent fix it", () => {
     instances = [row({ verify: verify() }) as Instance];
     let html = card(plan());
     expect(html).toContain('data-tone="busy">Verifying</span>');
@@ -234,7 +246,7 @@ describe("the Behaviors card", () => {
     html = card(plan());
     expect(html).toContain('data-tone="bad">Verify failed</span>');
     expect(visible(html)).toContain("GET /api/thing 500 with a stack trace");
-    expect(html).toMatch(/data-action="verify"[^>]*>Verify again</);
+    expect(html).toMatch(/data-action="agentfix"[^>]*>Let its agent fix it</);
   });
 
   it("the view: with the session gone, Verify still offered (the older run route)", () => {
@@ -286,12 +298,14 @@ describe("the bell and the ⋯ menu", () => {
     expect(attentionItems([row({ verify: verify() }) as Instance])).toEqual([]);
   });
 
-  it("the bell's row carries the steps with Confirm verified / Not verified…, its name opening the session", () => {
+  it("the bell's row carries the steps with Confirm verified / Not verified…, its name opening its Verify steps", () => {
     const bell = code("components/NotificationsBell.tsx");
     expect(bell).toContain('if (v?.state === "needs_you")');
     expect(bell).toContain("<VerifyConfirm verify={v} />");
-    // Not a role="button" row (its buttons would also jump): the name does.
-    expect(bell).toMatch(/className="attn-title linklike" title="Open the session" onClick=\{\(\) => jump\(it\.title\)\}/);
+    // Not a role="button" row (its buttons would also jump): the name does —
+    // to the session's Verify steps, where the chip and the Ship menu go.
+    expect(bell).toMatch(/className="attn-title linklike" title="See its Verify steps" onClick=\{\(\) => toSteps\(it\.title\)\}/);
+    expect(bell).toContain("openBehaviors({ planId: v?.plan || title, title });");
   });
 
   it("Verify sits before Behaviors… in Ship — only while nothing is verifying or waiting", () => {

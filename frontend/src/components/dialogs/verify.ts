@@ -43,13 +43,13 @@
  */
 
 import type {
-  Instance,
   TestPlan,
   TestRun,
   TestStep,
   TestStepResult,
   TestStepResultEntry,
 } from "../../api/types";
+import { REASON_LABEL, VERIFIED_LABEL, VERIFYING_LABEL } from "../../lib/sessionState";
 
 /** A plan's human label. `title` is what the generator was told the work was
  * called; `id` is the session title it was keyed by, and is never empty. */
@@ -109,7 +109,7 @@ function answeredByYou(entry: TestStepResultEntry | undefined): boolean {
  * the step, the other reassigns it — so every rule that touches `blocked` has
  * to say which one it means, and saying it by repeating `by === "human"` at
  * each site is how the two drifted apart in the first place. */
-export function handedBack(entry: TestStepResultEntry | null | undefined): boolean {
+function handedBack(entry: TestStepResultEntry | null | undefined): boolean {
   return entry?.result === "blocked" && entry?.by !== "human";
 }
 
@@ -383,8 +383,8 @@ export function isWaitingOnYou(plan: TestPlan): boolean {
   // under the reader's heading, and the row under it then said "Agent
   // checking", which is the contradiction the single axis exists to remove.
   if (plan.state === "running" || plan.state === "generating") return false;
-  // An empty checklist a person started is theirs to fill in.
-  if (isEmptyByChoice(plan)) return true;
+  // An empty plan asks nothing of a person: its way on is Verify, which has
+  // the session's own agent write the steps (no Add since the redesign).
   // A wait that CANNOT END ("origin has no branch 'production'") is a setting
   // only the reader can fix, so it waits on them, not on a merge (m10).
   if (isConfigBlocked(plan)) return true;
@@ -404,9 +404,27 @@ export function isConfigBlocked(plan: TestPlan): boolean {
   );
 }
 
-/** A checklist created empty on purpose (`origin: "manual"`) that has no
- * steps yet: a person is writing them. Not a failure, and not "Couldn't be
- * written" — nothing was asked of the model. */
+/** A run the session's OWN agent made (self-verify: it wrote the steps and
+ * worked them). `self` is optional on the wire — an older server and every
+ * checker run leave it out — so it is read through this local shape. */
+type SelfRun = TestRun & { self?: boolean };
+
+export function isSelfRun(run: TestRun | null | undefined): boolean {
+  return !!(run as SelfRun | null | undefined)?.self;
+}
+
+/** Verify asked the session's own agent to check its work, and it wrote NO
+ * steps. Verify creates the plan empty (`origin: "manual"`), so before this
+ * rule it read "Empty — add a step" with an Add nobody can reach since the
+ * redesign, and sat in Needs you forever. It is "Verify blocked — its agent
+ * wrote no steps", and the way on is Verify again. */
+export function isSelfBlocked(plan: TestPlan): boolean {
+  if (plan.state === "running" || plan.state === "generating") return false;
+  return !(plan.steps || []).length && isSelfRun(latestRun(plan));
+}
+
+/** A plan created empty on purpose (`origin: "manual"`) that has no steps
+ * yet, and that no Verify has run on (that is :func:`isSelfBlocked`). */
 export function isEmptyByChoice(plan: TestPlan): boolean {
   // A rewrite asked of it that is in flight or FAILED is the model's state
   // again, and says so.
@@ -414,7 +432,9 @@ export function isEmptyByChoice(plan: TestPlan): boolean {
     plan.origin === "manual" &&
     !(plan.steps || []).length &&
     plan.state !== "generating" &&
-    plan.state !== "failed"
+    plan.state !== "failed" &&
+    !isSelfBlocked(plan) &&
+    !(plan.state === "running" && isSelfRun(latestRun(plan)))
   );
 }
 
@@ -449,124 +469,12 @@ export function isNoCommits(plan: TestPlan): boolean {
   return text.includes("this branch has no commits") || text.includes("this branch changed nothing");
 }
 
-/** The sessions a plan can be written for right now, in list order.
- *
- * A session qualifies when it has a branch (there is no diff to read a plan out
- * of before that — `Instance.branch` is "" until the session starts) and does
- * not already have one. A session that already carries a plan is not an error
- * to explain, it is simply not a candidate: its plan is in the list below,
- * which is a better answer than a disabled row with a tooltip.
- *
- * Exported rather than left inside the picker because the EMPTY STATE has to
- * ask the same question. "Pick a session above and press Write plan" is the
- * first-run instruction, and the picker it points at renders nothing when this
- * list is empty — which is precisely the fresh install where that paragraph is
- * read. One rule, so the instruction cannot describe furniture that is not on
- * the screen. */
-/** The one thing this needs off a closed session: its name and its branch. */
-export interface ClosedTarget {
-  title: string;
-  branch?: string;
-}
-
-/** `repo/branch`, or "" when either half is missing (which matches nothing). */
-function coverageKey(repo: string, branch: string): string {
-  const r = (repo || "").trim();
-  const b = (branch || "").trim();
-  return r && b ? r + "\u0000" + b : "";
-}
-
 /** A plan stores its repo as an absolute path; `Instance.repo` is the display
  * name, which for every non-provisioned session is that path's basename. This
  * is the one place the two are compared, so it is the one place that converts. */
 function repoName(repoRoot: string): string {
   const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
   return parts[parts.length - 1] || "";
-}
-
-/** One entry in "Ask the agent for a checklist": a branch, the session it
- * belongs to, and why it can't be picked (or "").
- *
- * EVERY session with a branch is listed — open or closed — rather than only the
- * ones that can be picked. The old picker silently dropped a closed session
- * whose branch already had a checklist, under help text promising closed
- * sessions were offered, and nothing said why it was missing. Now it is there,
- * greyed, saying so. A session sitting on the branch its repo ships from has no
- * diff to read, so it is listed last and disabled too. */
-export interface ChecklistTarget {
-  /** The session title — what the write route is addressed by. */
-  title: string;
-  branch: string;
-  closed: boolean;
-  /** Why it can't be picked, in a few words; "" when it can. */
-  reason: string;
-  /** The session's branch has nothing on it yet — no commits and no edits
-   * (its `diff_stat` counts zero files). Also set in `reason`; kept apart so
-   * "Start an empty checklist" can still offer the branch. */
-  noCommits?: boolean;
-  /** The checklist that already covers this branch, when one does. */
-  planId: string;
-}
-
-export function checklistTargets(
-  instances: Instance[],
-  plans: TestPlan[],
-  closed: ClosedTarget[] = [],
-  liveBranch = "",
-): ChecklistTarget[] {
-  const byTitle = new Map((plans || []).map((p) => [p.id, p]));
-  const byBranch = new Map<string, TestPlan>();
-  for (const plan of plans || []) {
-    const key = coverageKey(repoName(plan.repo_root), plan.branch);
-    if (key && !byBranch.has(key)) byBranch.set(key, plan);
-  }
-  // A closed session carries no repo, so it is matched by branch alone — the
-  // server refuses a second checklist for a branch either way, and this only
-  // decides what the picker SAYS.
-  const plansByBranchOnly = new Map<string, TestPlan>();
-  for (const plan of plans || []) {
-    if (plan.branch && !plansByBranchOnly.has(plan.branch))
-      plansByBranchOnly.set(plan.branch, plan);
-  }
-  const shipsFrom = new Set(
-    [liveBranch, "main", "master"].map((b) => (b || "").trim()).filter(Boolean),
-  );
-  const out: ChecklistTarget[] = [];
-  const seen = new Set<string>();
-  const take = (
-    title: string,
-    branch: string | undefined,
-    repo: string,
-    isClosed: boolean,
-    empty = false,
-  ) => {
-    const b = (branch || "").trim();
-    if (!title || !b || seen.has(title)) return;
-    seen.add(title);
-    const covering =
-      byTitle.get(title) ||
-      (repo ? byBranch.get(coverageKey(repo, b)) : plansByBranchOnly.get(b));
-    const onLive = shipsFrom.has(b);
-    // M1: a branch with nothing on it yet has nothing for the agent to read —
-    // the server refuses it, so the picker says so first.
-    const noCommits = !covering && !onLive && empty;
-    const reason = covering
-      ? "has behaviors"
-      : onLive
-        ? "on " + b + " — nothing to compare"
-        : noCommits
-          ? "no commits yet"
-          : "";
-    out.push({ title, branch: b, closed: isClosed, reason, planId: covering?.id || "", noCommits });
-  };
-  const live = new Set((instances || []).map((i) => i.title));
-  for (const inst of instances || [])
-    take(inst.title, inst.branch, inst.repo, false, !!inst.diff_stat && inst.diff_stat.files === 0);
-  for (const entry of closed || [])
-    take(entry.title, entry.branch, "", !live.has(entry.title));
-  // Pickable first, in the order they came (open sessions, then closed); the
-  // ones that can't be picked after them, so the default is always a real one.
-  return [...out.filter((t) => !t.reason), ...out.filter((t) => !!t.reason)];
 }
 
 /** Which group one plan belongs to.
@@ -861,9 +769,11 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
       "Try rewriting again",
     );
 
-  // Made empty on purpose ("Start an empty checklist"): nothing failed, a
-  // person is about to write the steps.
-  if (isEmptyByChoice(plan)) return at("you", "Empty — add the behaviors to check.", "answer", "Add a behavior");
+  // Verify ran and its agent wrote no steps: blocked, and Verify again is the
+  // way on (no Add since the redesign). A plan merely made empty asks the
+  // same press — Verify has the session's own agent write the steps.
+  if (isSelfBlocked(plan)) return at("broken", REASON_LABEL.verify_blocked + " — its agent wrote no steps.", "rerun", "Verify again");
+  if (isEmptyByChoice(plan)) return at("wait", "No steps yet — Verify has its agent write them.", "rerun", "Verify");
 
   // A plan that came back empty looks identical to one still being written, so
   // it has to say which it is.
@@ -1131,29 +1041,25 @@ function clip(text: string, max: number): string {
   return (space > max / 2 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, "") + "…";
 }
 
-/** THE VERDICT — the yes-or-no a lead wants before merging, in a few words.
+/** THE VERDICT — the yes-or-no a lead wants before merging, in a few words,
+ * when the session row carries no `verify` (an older server, or a verify that
+ * settled more than ten minutes ago). The words are Verify's own
+ * (lib/sessionState's labels), so the chip, the card and the pill agree:
  *
- * The status sentence says whose turn it is; this says what the checklist
- * concluded, and it is the one thing shown OUTSIDE Verify too (the session's
- * sidebar row and pane head, through `VerdictChip`). Ordered like
- * :func:`planGroup`, and read off the same rules, so the chip on a row and the
- * heading above it cannot disagree:
- *
- * - **Being written** / **Agent checking** — an agent is at work;
- * - **Empty — add a step** — made empty on purpose (`origin: "manual"`): no
- *   steps yet because a person is writing them, not because writing failed;
- * - **Not written yet** — no steps (failed, empty, or stalled), in grey;
- * - **Failed** — a step didn't do what was expected;
- * - **Verified on branch** / **Verified live** — every step passed, before or
- *   after it shipped;
+ * - **Verifying** — an agent is at work;
+ * - **Verify blocked** — its agent wrote no steps (:func:`isSelfBlocked`);
+ * - **No steps yet** — nothing to check (writing failed, came back empty, or
+ *   a plan made empty that nobody verified), in grey;
+ * - **Verify failed** — a step didn't do what was expected;
+ * - **Verified** / **Verified live** — every step passed;
  * - **Waiting to ship** — merged, waiting out the deploy, nothing checked;
- * - **n of m checked** — anything else: n steps passed of m.
+ * - **n of m steps done** — anything else.
  *
  * `short` is the sidebar's version, where a row has room for two words. */
 export type VerdictKey =
   | "writing"
-  | "empty"
   | "checking"
+  | "blocked"
   | "unwritten"
   | "failed"
   | "branch"
@@ -1190,31 +1096,29 @@ export function planVerdict(plan: TestPlan): PlanVerdict {
   const v = (key: VerdictKey, label: string, tone: PlanVerdict["tone"], glyph: string, short = label) =>
     ({ key, label, short, tone, glyph }) as PlanVerdict;
   const steps = plan.steps || [];
-  if (plan.state === "generating" && !isGenerationStalled(plan))
-    return v("writing", "Being written", "busy", "\u2026", "Writing…");
-  if (plan.state === "running") return v("checking", "Agent checking", "busy", "\u2026", "Checking…");
-  if (isEmptyByChoice(plan)) return v("empty", "Empty — add a step", "you", "+", "Empty");
+  if (plan.state === "generating" && !isGenerationStalled(plan)) return v("writing", VERIFYING_LABEL, "busy", "\u2026");
+  if (plan.state === "running") return v("checking", VERIFYING_LABEL, "busy", "\u2026");
+  if (isSelfBlocked(plan)) return v("blocked", REASON_LABEL.verify_blocked + " — its agent wrote no steps", "bad", "!", REASON_LABEL.verify_blocked);
   // Grey, not red: nothing about the change is known yet (M4).
-  if (!steps.length || isGenerationStalled(plan))
-    return v("unwritten", "Not written yet", "wait", "\u25cb", "Not written");
+  if (!steps.length || isGenerationStalled(plan)) return v("unwritten", "No steps yet", "wait", "\u25cb");
   const verdict = verdictOf(plan);
-  if (verdict === "fail") return v("failed", "Failed", "bad", "\u2717");
+  if (verdict === "fail") return v("failed", REASON_LABEL.verify_failed, "bad", "\u2717");
   if (verdict === "pass") {
     const by = passedBy(plan);
     const who = by ? " \u00b7 by " + by : "";
     return plan.live_at
-      ? v("live", "Verified live" + who, "ok", "\u2713", "Verified live")
-      : v("branch", "Verified on branch" + who, "ok", "\u2713", "Verified");
+      ? v("live", VERIFIED_LABEL + " live" + who, "ok", "\u2713", VERIFIED_LABEL + " live")
+      : v("branch", VERIFIED_LABEL + who, "ok", "\u2713", VERIFIED_LABEL);
   }
   if (!latestRun(plan) && plan.merged_at && !plan.live_at)
     return v("shipping", "Waiting to ship", "wait", "\u25f7");
   const t = checkTally(plan);
   return v(
     "partial",
-    t.passed + " of " + t.total + " checked",
+    t.passed + " of " + t.total + (t.total === 1 ? " step" : " steps") + " done",
     isWaitingOnYou(plan) ? "you" : latestRun(plan) ? "warn" : "wait",
     "\u25d0",
-    t.passed + "/" + t.total + " checked",
+    t.passed + "/" + t.total,
   );
 }
 
@@ -1329,7 +1233,7 @@ export function planShipped(plan: TestPlan): boolean {
  * asked the narrower question and answered "not checked yet" about the very
  * steps the sentence above them was asking for. One condition now, so the
  * heading, the sentence, the tally and the row cannot disagree. */
-export function asksHumanSteps(plan: TestPlan): boolean {
+function asksHumanSteps(plan: TestPlan): boolean {
   return planShipped(plan) || !!latestRun(plan);
 }
 
@@ -1352,112 +1256,6 @@ export const CHECK_MARK: Record<CheckState, string> = {
   yours: "\u25cf",
   pending: "\u25cb",
 };
-
-/** A keypress on a step row, mapped to the answer it records.
- *
- * WHY A PURE FUNCTION AND NOT A SWITCH IN THE HANDLER. `frontend/vitest.config`
- * is node-only by design — there is no jsdom here and adding one to test a
- * keyboard shortcut would be the tail wagging the dog — so every decision the
- * dialog makes that is worth pinning lives out here, where a test can call it.
- * This one is worth pinning: answering is the single most repeated act on the
- * surface, and before these keys existed it cost a Tab past roughly seven
- * focusable controls per step.
- *
- * Two spellings each, digits and initials, because both are things people
- * reach for and neither is more obvious than the other. `""` means "not a key
- * this row handles" and the event is left alone — which is what stops these
- * from eating a keystroke meant for the note box beside them. */
-export function stepKeyAction(key: string): TestStepResult | "note" | "" {
-  switch (key) {
-    case "1":
-    case "p":
-    case "P":
-      return "pass";
-    case "2":
-    case "f":
-    case "F":
-      return "fail";
-    case "3":
-    case "b":
-    case "B":
-      return "blocked";
-    case "u":
-    case "U":
-      return "";  // handled as "undo" by the caller — see stepKeyIsUndo
-    case "n":
-    case "N":
-      return "note";
-    default:
-      return "";
-  }
-}
-
-/** `u` — take back the answer on this step. Split from the map above because
- * "no answer" and "not a key I handle" are the same value there, and the caller
- * has to be able to tell them apart. */
-/** What the note composer should hold after an answer is recorded.
- *
- * THE BUG THIS REPLACES WAS A LIE ABOUT WHAT YOU TYPED. The composer wrote
- * itself into a draft map on every keystroke (so the row survives being
- * re-parented under a new heading mid-answer), and the "clear it" path cleared
- * the field and then re-saved the OLD text from a stale closure — so a sentence
- * you deliberately discarded came back on the next paint and was posted, by
- * blur, as the reason for the NEXT answer. A note on this surface is evidence;
- * attaching one to the wrong answer is the worst thing it can do quietly.
- *
- * Out here as a pure rule because the composer's behaviour is worth pinning and
- * `frontend/vitest.config` is node-only by design — the same reason
- * :func:`stepKeyAction` lives here.
- */
-export function noteDraftAfter(
-  result: TestStepResult,
-  noteOpen: boolean,
-  note: string,
-): { open: boolean; text: string } {
-  // Un-answered: whatever was typed described an answer that no longer exists.
-  if (result === "") return { open: false, text: "" };
-  // A fail or a blocked with no sentence is an answer nobody can act on, so the
-  // box opens itself rather than waiting to be found — EMPTY, because anything
-  // still in it belonged to the answer before this one.
-  if ((result === "fail" || result === "blocked") && !noteOpen)
-    return { open: true, text: "" };
-  // It rode along with the answer just given and now renders above as the
-  // step's note; leaving it in the composer would show the same sentence twice
-  // and invite a second, identical POST.
-  if (noteOpen && note.trim()) return { open: false, text: "" };
-  return { open: noteOpen, text: note };
-}
-
-export function stepKeyIsUndo(key: string): boolean {
-  return key === "u" || key === "U";
-}
-
-/** The warning a rewrite has to carry, or "" when it costs nothing.
- *
- * A pure function rather than a line of JSX, so the rule "only warn when there
- * is something to lose" is pinned by a test — the dialog's `vitest` setup is
- * node-only by design, and this seam is what keeps it that way. */
-export function rewriteWarning(plan: TestPlan): string {
-  if (!latestRun(plan)) return "";
-  return (
-    "Answers on steps that change are lost. Steps you added or edited yourself " +
-    "are kept."
-  );
-}
-
-/** Whether Rewrite may be pressed at all right now.
- *
- * A run in flight is the one hard no: `generate` sets `generating`
- * unconditionally while the poller only ever looks at plans in `running`, so
- * rewriting mid-run orphans a real, billed session — its result file never read,
- * its give-up clock never started, and Cancel gone from the row along with the
- * state that offered it. The server 409s it; the button should not offer it. */
-export function rewriteBlockedReason(plan: TestPlan): string {
-  if (plan.state === "running")
-    return "An agent is checking this right now — cancel the run first.";
-  if (plan.state === "generating") return "It is already being written.";
-  return "";
-}
 
 // The session-identity half lives in verifySession.ts; re-exported so the
 // existing `from "./verify"` imports keep working.

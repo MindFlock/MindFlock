@@ -1,4 +1,4 @@
-/** The words one session's behaviors wear (lib/behaviors.ts `behaviorSummary`,
+/** The words one session's Verify wears with no row `verify` (lib/behaviors.ts `behaviorSummary`,
  * docs/behaviors.md "Words" + §2): tone, status, the tile's short line, the
  * card head's sentence and its ONE primary action — for every state a plan
  * can be in. Plus the seam's lookups (planForSession, orphanPlans,
@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { TestPlan, TestRun, TestStep, TestStepActor, TestStepResult, TestStepResultEntry } from "../api/types";
 import { GENERATION_STALE_S } from "../components/dialogs/verify";
-import { behaviorSummary, nextNeedingYou, orphanPlans, planForSession, timingLine } from "../lib/behaviors";
+import { behaviorSummary, nextNeedingYou, orphanPlans, planForSession, planProgress, tallyLine, timingLine } from "../lib/behaviors";
 
 const step = (id: string, actor: TestStepActor = "agent", text = "do " + id): TestStep => ({ id, text, expect: id + " worked", actor });
 
@@ -73,25 +73,27 @@ const ALL: Record<string, TestPlan> = {
   stoppedEarly: plan({ state: "done", live_at: 50, steps: TWO, runs: [run({ session: "", by: "agent", results: results({ a: "pass" }) })] }),
   cantCheck: plan({ state: "done", live_at: 50, steps: MIXED, runs: [run({ results: { ...results({ a: "pass" }), ...results({ h: "blocked" }, "human") } })] }),
   rewriteFailed: plan({ state: "failed", live_at: 50, steps: TWO, error: "Rewriting failed. boom", runs: [run({ results: results({ a: "pass", b: "pass" }) })] }),
+  // Verify ran (the run carries `self`) and its agent wrote no steps.
+  selfBlocked: plan({ state: "done", origin: "manual", runs: [run({ session: "p1", ...({ self: true } as Partial<TestRun>) })] }),
 };
 
 describe("behaviorSummary — status, tone, short line, action", () => {
-  it("Writing… while the agent writes them; nothing to press", () => {
+  it("Verifying while the agent writes the steps; nothing to press", () => {
     const s = behaviorSummary(ALL.writing);
-    expect(s).toMatchObject({ tone: "busy", status: "Writing…", short: "Writing…", action: null });
-    expect(s.sentence).toBe("Writing the behaviors from the diff — up to three minutes.");
+    expect(s).toMatchObject({ tone: "busy", status: "Verifying", short: "Verifying", action: null });
+    expect(s.sentence).toBe("Writing the steps from the diff — up to three minutes.");
   });
 
-  it("writing that stalled offers Write them", () => {
+  it("writing that stalled offers Verify again", () => {
     const s = behaviorSummary(ALL.stalled);
-    expect(s).toMatchObject({ tone: "quiet", status: "Not checked", action: { key: "write", label: "Write them" } });
-    expect(s.sentence).toContain("Writing stopped part-way");
+    expect(s).toMatchObject({ tone: "quiet", status: "Not verified", action: { key: "write", label: "Verify again" } });
+    expect(s.sentence).toContain("Writing its steps stopped part-way");
   });
 
-  it("the agent couldn't write them: quiet, the reason, Write them", () => {
+  it("the agent couldn't write them: quiet, the reason, Verify again", () => {
     const s = behaviorSummary(ALL.unwritten);
-    expect(s).toMatchObject({ tone: "quiet", status: "Not checked", short: "None yet", action: { key: "write" } });
-    expect(s.sentence).toBe("The agent couldn't write behaviors — the writer timed out.");
+    expect(s).toMatchObject({ tone: "quiet", status: "Not verified", short: "No steps yet", action: { key: "write" } });
+    expect(s.sentence).toBe("The agent couldn't write steps — the writer timed out.");
   });
 
   it("no commits yet fixes itself, so nothing to press", () => {
@@ -100,15 +102,23 @@ describe("behaviorSummary — status, tone, short line, action", () => {
     expect(s.sentence).toContain("They're written once the session commits.");
   });
 
-  it("empty on purpose: Needs you, Write them (you add them)", () => {
+  it("empty on purpose: asks nothing of a person — Verify has its agent write the steps", () => {
     const s = behaviorSummary(ALL.emptyByChoice);
-    expect(s).toMatchObject({ tone: "you", status: "Needs you", short: "Needs you", action: { key: "write", label: "Write them" } });
+    expect(s).toMatchObject({ tone: "quiet", status: "Not verified", short: "No steps yet", action: { key: "check", label: "Verify" } });
+    expect(s.sentence).toBe("No steps yet — Verify has its agent write them and work them.");
   });
 
-  it("not merged and never checked: Not checked, Check now (only when the agent has one)", () => {
+  it("Verify ran and its agent wrote no steps: Verify blocked and Verify again — not empty-by-choice", () => {
+    const s = behaviorSummary(ALL.selfBlocked);
+    expect(s).toMatchObject({ tone: "bad", status: "Verify blocked", action: { key: "rerun", label: "Verify again" } });
+    expect(s.sentence).toBe("Its agent wrote no steps. Verify again to have it look once more.");
+    expect(nextNeedingYou([ALL.selfBlocked])).toBe(null);
+  });
+
+  it("not merged and never verified: Not verified, Verify (only when the agent has a step)", () => {
     const s = behaviorSummary(ALL.notMerged);
-    expect(s).toMatchObject({ tone: "quiet", status: "Not checked", short: "Not checked", action: { key: "check", label: "Check now" } });
-    expect(s.sentence).toBe("Not merged yet — check the branch now, or they're checked once it reaches main.");
+    expect(s).toMatchObject({ tone: "quiet", status: "Not verified", short: "Not verified", action: { key: "check", label: "Verify" } });
+    expect(s.sentence).toBe("Not merged yet — verify the branch now, or it's verified once it reaches main.");
     expect(behaviorSummary(ALL.notMergedHuman).action).toBe(null);
   });
 
@@ -120,41 +130,42 @@ describe("behaviorSummary — status, tone, short line, action", () => {
 
   it("live and unchecked: Needs you; Check now when the agent can, Answer when all are yours", () => {
     const a = behaviorSummary(ALL.dueAgent);
-    expect(a).toMatchObject({ tone: "you", status: "Needs you", short: "Needs you · 1", action: { key: "check", label: "Check now" } });
-    expect(a.sentence).toBe("Live — nobody has checked it yet. The agent can check 1 of 2; the rest are yours.");
+    expect(a).toMatchObject({ tone: "you", status: "Needs you", short: "Needs you · 1", action: { key: "check", label: "Verify" } });
+    expect(a.sentence).toBe("Live — nobody has verified it yet. The agent can do 1 of 2 steps; the rest are yours.");
     const h = behaviorSummary(ALL.dueHuman);
-    expect(h).toMatchObject({ short: "Needs you · 2", action: { key: "answer", label: "Answer" } });
-    expect(h.sentence).toBe("Live — all 2 behaviors are yours to check.");
+    expect(h).toMatchObject({ short: "Needs you · 2", action: { key: "answer", label: "Confirm verified" } });
+    expect(h.sentence).toBe("Live — all 2 steps are yours to do.");
   });
 
-  it("Checking… while an agent runs them; nothing to press", () => {
+  it("Verifying while an agent works them, in the pill's progress phrase; nothing to press", () => {
     const s = behaviorSummary(ALL.checking);
-    expect(s).toMatchObject({ tone: "busy", status: "Checking…", short: "Checking…", action: null });
-    expect(s.sentence).toMatch(/^An agent is checking the behaviors it can/);
+    expect(s).toMatchObject({ tone: "busy", status: "Verifying", short: "Verifying", action: null });
+    expect(s.sentence).toBe("Its agent is checking its work: 0 of 2 steps done.");
+    expect(planProgress(ALL.checking)).toBe("0 of 2 steps done");
   });
 
-  it("a run whose agent is gone: Rerun", () => {
+  it("a run whose agent is gone: Verify again", () => {
     const s = behaviorSummary(ALL.gone);
-    expect(s).toMatchObject({ tone: "quiet", action: { key: "rerun", label: "Rerun" } });
+    expect(s).toMatchObject({ tone: "quiet", action: { key: "rerun", label: "Verify again" } });
     expect(s.sentence).toContain("nothing is running now");
   });
 
-  it("Failed names the first failed behavior and offers See what failed", () => {
+  it("Verify failed names the first failed step and offers See what failed", () => {
     const s = behaviorSummary(ALL.failed);
-    expect(s).toMatchObject({ tone: "bad", status: "Failed", short: "Failed · 2", failed: 2, action: { key: "failed", label: "See what failed" } });
+    expect(s).toMatchObject({ tone: "bad", status: "Verify failed", short: "Verify failed · 2", failed: 2, action: { key: "failed", label: "See what failed" } });
     expect(s.sentence).toBe("Failed: “The badge shows the queue count” (+1 more).");
   });
 
-  it("behaviors left for you after a run: Needs you · n, Answer", () => {
+  it("steps left for you after a run: Needs you · n, Confirm verified", () => {
     const s = behaviorSummary(ALL.yours);
-    expect(s).toMatchObject({ tone: "you", status: "Needs you", short: "Needs you · 1", yours: 1, verified: 1, action: { key: "answer", label: "Answer" } });
-    expect(s.sentence).toBe("1 behavior needs you — an agent can't judge it.");
+    expect(s).toMatchObject({ tone: "you", status: "Needs you", short: "Needs you · 1", yours: 1, verified: 1, action: { key: "answer", label: "Confirm verified" } });
+    expect(s.sentence).toBe("1 step needs you — an agent can't judge it.");
   });
 
-  it("Verified live: every behavior passed, nothing to press", () => {
+  it("Verified live: every step passed, nothing to press", () => {
     const s = behaviorSummary(ALL.verifiedLive);
     expect(s).toMatchObject({ tone: "ok", status: "Verified live", short: "Verified live", verified: 2, total: 2, action: null });
-    expect(s.sentence).toBe("Every behavior passed — checked by the agent.");
+    expect(s.sentence).toBe("Every step passed — checked by the agent.");
   });
 
   it("Verified on the branch says the honest timing line", () => {
@@ -167,44 +178,52 @@ describe("behaviorSummary — status, tone, short line, action", () => {
   it("shipped after a pre-merge check: Needs you, and names what that check found", () => {
     const s = behaviorSummary(ALL.shippedAfterBranch);
     expect(s).toMatchObject({ tone: "you", action: { key: "check" } });
-    expect(s.sentence).toContain("Checked before merge (every behavior passed) · checks again once live.");
+    expect(s.sentence).toContain("Checked before merge (every step passed) · checks again once live.");
     expect(timingLine(ALL.verifiedLive)).toBe("");
   });
 
-  it("a check that stopped early: n of m verified, Rerun", () => {
+  it("a check that stopped early: n of m steps done, Verify again", () => {
     const s = behaviorSummary(ALL.stoppedEarly);
-    expect(s).toMatchObject({ tone: "quiet", status: "Not checked", short: "1 of 2 verified", action: { key: "rerun" } });
-    expect(s.sentence).toBe("1 of 2 verified · the check stopped early — 1 with no answer.");
+    expect(s).toMatchObject({ tone: "quiet", status: "Not verified", short: "1 of 2 steps done", action: { key: "rerun" } });
+    expect(s.sentence).toBe("1 of 2 steps passed · verifying stopped early — 1 with no answer.");
   });
 
   it("your Can't check is an answer, not a pass", () => {
     const s = behaviorSummary(ALL.cantCheck);
-    expect(s).toMatchObject({ tone: "quiet", status: "Not checked", short: "1 of 2 verified" });
-    expect(s.sentence).toBe("1 of 2 verified · you couldn't check 1.");
+    expect(s).toMatchObject({ tone: "quiet", status: "Not verified", short: "1 of 2 steps done" });
+    expect(s.sentence).toBe("1 of 2 steps passed · 1 blocked.");
   });
 
-  it("a rewrite that failed keeps the old behaviors and says so", () => {
+  it("a rewrite that failed keeps the old steps and says so", () => {
     const s = behaviorSummary(ALL.rewriteFailed);
     expect(s.tone).toBe("ok");
-    expect(s.sentence).toMatch(/^Rewriting didn't work — these are unchanged\. Every behavior passed/);
+    expect(s.sentence).toMatch(/^Rewriting didn't work — these steps are unchanged\. Every step passed/);
   });
 
-  it("uses only the contract's status words and never the old vocabulary", () => {
-    const WORDS = ["Writing…", "Not checked", "Checking…", "Needs you", "Failed", "Verified", "Verified live"];
+  it("uses only Verify's status words and never the old vocabulary", () => {
+    const WORDS = ["Verifying", "Not verified", "Needs you", "Verify failed", "Verify blocked", "Verified", "Verified live"];
     for (const [name, p] of Object.entries(ALL)) {
       const s = behaviorSummary(p);
       expect(WORDS, name).toContain(s.status);
       for (const text of [s.status, s.short, s.sentence, s.action?.label || ""]) {
-        expect(text, name).not.toMatch(/checklist|test plan|\bsteps?\b|not verified|in progress|partial/i);
+        expect(text, name).not.toMatch(/checklist|test plan|behaviou?rs?|checker|in progress|partial/i);
       }
     }
   });
 
-  it("the primary action is always one of the five", () => {
+  it("the primary action is always one of four", () => {
     for (const p of Object.values(ALL)) {
       const a = behaviorSummary(p).action;
-      if (a) expect(["Check now", "Rerun", "See what failed", "Write them", "Answer"]).toContain(a.label);
+      if (a) expect(["Verify", "Verify again", "See what failed", "Confirm verified"]).toContain(a.label);
     }
+  });
+
+  it("the card head's tally: \"4 passed · 1 failed · 1 needs you\"", () => {
+    expect(tallyLine(ALL.failed)).toBe("2 failed");
+    expect(tallyLine(ALL.yours)).toBe("1 passed · 1 needs you");
+    expect(tallyLine(ALL.cantCheck)).toBe("1 passed · 1 blocked");
+    expect(tallyLine(ALL.notMerged)).toBe("2 not done");
+    expect(tallyLine(ALL.emptyByChoice)).toBe("");
   });
 });
 

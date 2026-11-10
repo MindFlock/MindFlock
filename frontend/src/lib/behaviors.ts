@@ -1,16 +1,16 @@
-/** A session's behaviors (the Verify redesign, docs/behaviors.md): what the
- * work should do in real use, each checked by the agent or by you, drawn on
- * the session's frame in the Sky.
+/** A session's Verify, in one set of words (docs/behaviors.md): the steps its
+ * agent checks (or a person does), drawn on the session's frame in the Sky.
  *
- * SEAM (pre-committed by the integrator). The signatures below are frozen —
- * the Sky tile, the Behaviors board and the shell code against them. vs-card
- * owns the bodies. The decisions are the old Verify rules
- * (components/dialogs/verify.ts: isFailing, isWaitingOnYou, latestRun,
- * openHumanSteps, …), imported rather than copied, so the tile, the card, the
- * board and the old verdict chip cannot disagree about a plan; only the WORDS
- * are new (docs/behaviors.md "Words"). */
+ * ONE VOCABULARY. The row's pill (lib/sessionState), the card, the chip, the
+ * Ship menu and the bell all say a verify's state with the SAME label
+ * constants — `verifyStateLabel` maps the session row's `verify.state`
+ * through them — and the same progress phrase ("3 of 5 steps done",
+ * `verifyProgress`). When the row carries no `verify` (an older server, or a
+ * verify that settled more than ten minutes ago), `behaviorSummary` reads the
+ * plan with the old Verify rules (components/dialogs/verify.ts), imported
+ * rather than copied, in the same words. */
 
-import type { Instance, TestPlan } from "../api/types";
+import type { Instance, SessionVerify, SessionVerifyState, TestPlan } from "../api/types";
 import {
   agoText,
   beforeMergeRun,
@@ -26,25 +26,87 @@ import {
   isGenerationSlow,
   isGenerationStalled,
   isNoCommits,
+  isSelfBlocked,
   isVerifySession,
   isWaitingOnYou,
   latestRun,
   openHumanSteps,
   passedBy,
   planForSession as legacyPlanFor,
-  runElapsed,
+  stepIsYours,
   unansweredCount,
 } from "../components/dialogs/verify";
+import { REASON_LABEL, VERIFIED_LABEL, VERIFYING_LABEL, verifyLine, verifyProgress } from "./sessionState";
+
+/** A verify's state in the pill's own words: Verifying · Confirm verified
+ * (the needs-you label) · Verified · Verify failed · Verify blocked. */
+export function verifyStateLabel(state: SessionVerifyState): string {
+  switch (state) {
+    case "verifying":
+      return VERIFYING_LABEL;
+    case "needs_you":
+      return REASON_LABEL.verify_confirm;
+    case "passed":
+      return VERIFIED_LABEL;
+    case "failed":
+      return REASON_LABEL.verify_failed;
+    case "blocked":
+      return REASON_LABEL.verify_blocked;
+  }
+  return VERIFYING_LABEL;
+}
+
+/** The one mark per verify state (chip, Ship menu note). */
+export const VERIFY_GLYPH: Record<SessionVerifyState, string> = {
+  verifying: "\u2026",
+  needs_you: "\u25cf",
+  passed: "\u2713",
+  failed: "\u2717",
+  blocked: "!",
+};
+
+/** A session's `verify` in the shared words: the state's label and mark, its
+ * tone, and its one line ("Verifying — 3 of 5 steps done", "Verify failed —
+ * 2 steps", …) — what the chip, the Ship menu and the bell say. */
+export function verifyWords(v: SessionVerify): { label: string; glyph: string; tone: BehaviorTone; line: string } {
+  const tone: BehaviorTone = v.state === "verifying" ? "busy" : v.state === "needs_you" ? "you" : v.state === "passed" ? "ok" : "bad";
+  return { label: verifyStateLabel(v.state), glyph: VERIFY_GLYPH[v.state] || "", tone, line: verifyLine(v) };
+}
+
+/** "3 of 5 steps done" for a plan — the pill's phrase (the agent's own steps;
+ * a person's are not its to do), counted off the plan's latest run. */
+export function planProgress(plan: TestPlan): string {
+  const steps = plan.steps || [];
+  const run = latestRun(plan);
+  const human = steps.filter((s) => stepIsYours(plan, s)).length;
+  const done = steps.filter((s) => !stepIsYours(plan, s) && !!run?.results?.[s.id]?.result).length;
+  return verifyProgress({ steps: { total: steps.length, human, agent_done: done } });
+}
+
+/** The card head's compact summary: "4 passed · 1 failed · 1 needs you"
+ * ("" with no steps). */
+export function tallyLine(plan: TestPlan): string {
+  const t = checkTally(plan);
+  return [
+    t.passed ? t.passed + " passed" : "",
+    t.failed ? t.failed + " failed" : "",
+    t.cant ? t.cant + " blocked" : "",
+    t.yours ? t.yours + (t.yours === 1 ? " needs" : " need") + " you" : "",
+    t.pending ? t.pending + " not done" : "",
+  ]
+    .filter(Boolean)
+    .join(" \u00b7 ");
+}
 
 /** Five tones, one per status family. */
 export type BehaviorTone = "quiet" | "busy" | "you" | "bad" | "ok";
 
-/** The words one session's behaviors wear everywhere (tile, card, board, chip). */
+/** The words one session's Verify wears when its row carries no `verify` (tile, card, board, chip). */
 export interface BehaviorSummary {
   tone: BehaviorTone;
-  /** One of: Writing… · Not checked · Checking… · Needs you · Failed · Verified · Verified live */
+  /** One of: Verifying · Not verified · Needs you · Verify failed · Verify blocked · Verified · Verified live */
   status: string;
-  /** The tile's sub line: "3 of 5 verified", "Needs you · 2", "Failed · 1", "Writing…". */
+  /** The tile's sub line: "3 of 5 steps done", "Needs you · 2", "Verify failed · 1", "Verifying". */
   short: string;
   /** The card head's one sentence. */
   sentence: string;
@@ -53,24 +115,24 @@ export interface BehaviorSummary {
   total: number;
   verified: number;
   failed: number;
-  /** Behaviors waiting on you. */
+  /** Steps waiting on you. */
   yours: number;
 }
 
 type Action = BehaviorSummary["action"];
 
-const CHECK: Action = { key: "check", label: "Check now" };
-const RERUN: Action = { key: "rerun", label: "Rerun" };
+const CHECK: Action = { key: "check", label: "Verify" };
+const RERUN: Action = { key: "rerun", label: "Verify again" };
 const FAILED: Action = { key: "failed", label: "See what failed" };
-const WRITE: Action = { key: "write", label: "Write them" };
-const ANSWER: Action = { key: "answer", label: "Answer" };
+const WRITE: Action = { key: "write", label: "Verify again" };
+const ANSWER: Action = { key: "answer", label: "Confirm verified" };
 
-/** "1 behavior" / "3 behaviors". */
-export function behaviorsCount(n: number): string {
-  return n + (n === 1 ? " behavior" : " behaviors");
+/** "1 step" / "3 steps". */
+export function stepsCount(n: number): string {
+  return n + (n === 1 ? " step" : " steps");
 }
 
-/** A behavior's text cut to fit the head's sentence, at a word boundary. */
+/** A step's text cut to fit the head's sentence, at a word boundary. */
 function clip(text: string, max = 70): string {
   const t = String(text || "").trim().replace(/\s+/g, " ").replace(/[.]$/, "");
   if (t.length <= max) return t;
@@ -90,13 +152,13 @@ export function timingLine(plan: TestPlan): string {
   if (run && isBeforeMerge(run) && !plan.live_at) return "Checked before merge · checks again once live";
   if (!run && plan.live_at) {
     const earlier = beforeMergeRun(plan);
-    if (earlier) return "Checked before merge (" + beforeMergeSummary(plan, earlier).replace(/steps?/g, (m) => (m === "step" ? "behavior" : "behaviors")) + ") · checks again once live";
+    if (earlier) return "Checked before merge (" + beforeMergeSummary(plan, earlier) + ") · checks again once live";
   }
   return "";
 }
 
 /** The card's one primary action for "run it": Rerun once an agent has had a
- * go, Check now before. Null when no behavior is the agent's. */
+ * go, Verify before. Null when no step is the agent's. */
 function runAction(plan: TestPlan): Action {
   const agentCan = (plan.steps || []).some((s) => s.actor !== "human");
   if (!agentCan) return null;
@@ -121,48 +183,54 @@ function said(plan: TestPlan): Said {
 
   if (plan.state === "generating") {
     if (isGenerationStalled(plan))
-      return { tone: "quiet", sentence: "Writing stopped part-way — nothing for five minutes.", action: WRITE };
+      return { tone: "quiet", sentence: "Writing its steps stopped part-way — nothing for five minutes.", action: WRITE };
     return {
       tone: "busy",
-      status: "Writing…",
-      sentence: isGenerationSlow(plan)
-        ? "Writing the behaviors — taking longer than usual…"
-        : "Writing the behaviors from the diff — up to three minutes.",
+      sentence: isGenerationSlow(plan) ? "Writing the steps — taking longer than usual…" : "Writing the steps from the diff — up to three minutes.",
       action: null,
     };
   }
 
   if (plan.state === "failed" && !steps.length) {
     if (isNoCommits(plan))
-      return { tone: "quiet", sentence: "No behaviors yet — this branch has no commits. They're written once the session commits.", action: null };
+      return { tone: "quiet", sentence: "No steps yet — this branch has no commits. They're written once the session commits.", action: null };
     const why = errorHeadline(plan);
     return {
       tone: "quiet",
-      sentence: why ? "The agent couldn't write behaviors — " + why.charAt(0).toLowerCase() + why.slice(1) : "The agent couldn't write behaviors for this.",
+      sentence: why ? "The agent couldn't write steps — " + why.charAt(0).toLowerCase() + why.slice(1) : "The agent couldn't write steps for this.",
       action: WRITE,
     };
   }
 
-  if (isEmptyByChoice(plan)) return { tone: "you", sentence: "No behaviors yet — add what this work should do.", action: WRITE };
-  if (!steps.length) return { tone: "quiet", sentence: "The agent came back with no behaviors.", action: WRITE };
+  // Verify ran and its agent wrote no steps: blocked, not "add some" — the
+  // card has no Add, and the way on is Verify again (isSelfBlocked).
+  if (isSelfBlocked(plan))
+    return {
+      tone: "bad",
+      status: REASON_LABEL.verify_blocked,
+      sentence: "Its agent wrote no steps. Verify again to have it look once more.",
+      action: RERUN,
+    };
+  if (isEmptyByChoice(plan)) return { tone: "quiet", sentence: "No steps yet — Verify has its agent write them and work them.", action: CHECK };
+  // (A running Verify with no steps yet is its agent writing them — below.)
+  if (!steps.length && plan.state !== "running") return { tone: "quiet", sentence: "The agent came back with no steps.", action: WRITE };
 
-  // A rewrite that failed leaves the old behaviors standing — say so first.
-  const kept = plan.state === "failed" ? "Rewriting didn't work — these are unchanged. " : "";
+  // A rewrite that failed leaves the old steps standing — say so first.
+  const kept = plan.state === "failed" ? "Rewriting didn't work — these steps are unchanged. " : "";
 
   if (plan.state === "running") {
     if (plan.run_session) {
       const mine = openHumanSteps(plan).length;
       return {
         tone: "busy",
-        status: "Checking…",
         sentence:
-          "An agent is checking the behaviors it can" +
-          runElapsed(latestRun(plan)) +
-          (mine ? " — " + behaviorsCount(mine) + (mine === 1 ? " needs" : " need") + " you." : "."),
+          "Its agent is checking its work: " +
+          planProgress(plan) +
+          (mine ? " — " + stepsCount(mine) + (mine === 1 ? " needs" : " need") + " you after." : "."),
         action: null,
       };
     }
-    return { tone: "quiet", sentence: "The agent that was checking these is gone — nothing is running now.", action: runAction(plan) };
+    return { tone: "quiet", sentence: "The agent that was verifying this is gone — nothing is running now.", action: runAction(plan) };
   }
 
   const run = latestRun(plan);
@@ -174,10 +242,10 @@ function said(plan: TestPlan): Said {
       tone: "bad",
       sentence:
         kept +
-        (first ? "Failed: “" + clip(first.text) + "”" : "Failed") +
+        (first ? "Failed: “" + clip(first.text) + "”" : "A step failed") +
         (failed > 1 ? " (+" + (failed - 1) + " more)" : "") +
         "." +
-        (open ? " " + behaviorsCount(open) + " still " + (open === 1 ? "needs" : "need") + " you." : ""),
+        (open ? " " + stepsCount(open) + " still " + (open === 1 ? "needs" : "need") + " you." : ""),
       action: FAILED,
     };
   }
@@ -188,17 +256,17 @@ function said(plan: TestPlan): Said {
       if (!agentCan)
         return {
           tone: "you",
-          sentence: kept + (steps.length === 1 ? "Live — its one behavior is yours to check." : "Live — all " + steps.length + " behaviors are yours to check."),
+          sentence: kept + (steps.length === 1 ? "Live — its one step is yours to do." : "Live — all " + steps.length + " steps are yours to do."),
           action: ANSWER,
         };
       return {
         tone: "you",
         sentence:
           kept +
-          "Live — nobody has checked it yet. " +
+          "Live — nobody has verified it yet. " +
           (agentCan === steps.length
-            ? "The agent can check " + (steps.length === 1 ? "it." : "all " + steps.length + ".")
-            : "The agent can check " + agentCan + " of " + steps.length + "; the rest are yours."),
+            ? "The agent can do " + (steps.length === 1 ? "its step." : "all " + steps.length + " steps.")
+            : "The agent can do " + agentCan + " of " + steps.length + " steps; the rest are yours."),
         action: CHECK,
       };
     }
@@ -206,18 +274,18 @@ function said(plan: TestPlan): Said {
     if (plan.live_problem) return { tone: "quiet", sentence: kept + plan.live_problem, action: agentCan ? CHECK : null };
     return {
       tone: "quiet",
-      sentence: kept + "Not merged yet — check the branch now, or they're checked once it reaches " + (plan.live_branch || "the live branch") + ".",
+      sentence: kept + "Not merged yet — verify the branch now, or it's verified once it reaches " + (plan.live_branch || "the live branch") + ".",
       action: agentCan ? CHECK : null,
     };
   }
 
   const open = openHumanSteps(plan).length;
   if (!open && isWaitingOnYou(plan))
-    return { tone: "you", sentence: kept + "Live — not checked since it shipped.", action: runAction(plan) || ANSWER };
+    return { tone: "you", sentence: kept + "Live — not verified since it shipped.", action: runAction(plan) || ANSWER };
   if (open)
     return {
       tone: "you",
-      sentence: kept + (open === 1 ? "1 behavior needs you — an agent can't judge it." : behaviorsCount(open) + " need you — an agent can't judge them."),
+      sentence: kept + (open === 1 ? "1 step needs you — an agent can't judge it." : stepsCount(open) + " need you — an agent can't judge them."),
       action: ANSWER,
     };
 
@@ -227,16 +295,16 @@ function said(plan: TestPlan): Said {
     const passed = steps.length - missing - failCount(plan);
     const blank = missing - cant;
     const bits = [
-      passed ? passed + " of " + steps.length + " verified" : "",
-      cant ? "you couldn't check " + cant : "",
-      blank ? (run.session || run.by === "agent" ? "the check stopped early — " : "") + blank + " with no answer" : "",
+      passed ? passed + " of " + steps.length + " steps passed" : "",
+      cant ? cant + " blocked" : "",
+      blank ? (run.session || run.by === "agent" ? "verifying stopped early — " : "") + blank + " with no answer" : "",
     ].filter(Boolean);
     const line = bits.join(" · ");
     return { tone: "quiet", sentence: kept + line.charAt(0).toUpperCase() + line.slice(1) + ".", action: runAction(plan) };
   }
 
   const by = passedBy(plan);
-  return { tone: "ok", sentence: kept + "Every behavior passed" + (by ? " — checked by " + by : "") + ".", action: null };
+  return { tone: "ok", sentence: kept + "Every step passed" + (by ? " — checked by " + by : "") + ".", action: null };
 }
 
 export function behaviorSummary(plan: TestPlan): BehaviorSummary {
@@ -244,11 +312,21 @@ export function behaviorSummary(plan: TestPlan): BehaviorSummary {
   const s = said(plan);
   const status =
     s.status ||
-    (s.tone === "bad" ? "Failed" : s.tone === "you" ? "Needs you" : s.tone === "ok" ? (plan.live_at ? "Verified live" : "Verified") : s.tone === "busy" ? "Checking…" : "Not checked");
+    (s.tone === "bad"
+      ? REASON_LABEL.verify_failed
+      : s.tone === "you"
+        ? "Needs you"
+        : s.tone === "ok"
+          ? VERIFIED_LABEL + (plan.live_at ? " live" : "")
+          : s.tone === "busy"
+            ? VERIFYING_LABEL
+            : "Not verified");
   const total = (plan.steps || []).length;
   const short =
     s.tone === "bad"
-      ? "Failed · " + Math.max(1, t.failed)
+      ? t.failed
+        ? REASON_LABEL.verify_failed + " · " + t.failed
+        : status
       : s.tone === "you"
         ? t.yours
           ? "Needs you · " + t.yours
@@ -256,9 +334,9 @@ export function behaviorSummary(plan: TestPlan): BehaviorSummary {
         : s.tone === "busy" || s.tone === "ok"
           ? status
           : !total
-            ? "None yet"
+            ? "No steps yet"
             : t.passed
-              ? t.passed + " of " + total + " verified"
+              ? t.passed + " of " + total + (total === 1 ? " step" : " steps") + " done"
               : status;
   const timing = timingLine(plan);
   // Errors carry a self-describing first sentence; the head shows it after

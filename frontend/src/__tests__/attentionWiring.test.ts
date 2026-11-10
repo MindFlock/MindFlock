@@ -72,7 +72,7 @@ describe("O1: needs-attention, surfaced via the notification bell", () => {
     expect(all).not.toContain("attn-box");
     expect(all).not.toContain("updateAttention");
     // Clicking a pinned row focuses the session and closes the popover.
-    expect(has(bell, "onClick={() => jump(it.title)}")).toBe(true);
+    expect(has(bell, "jump(it.title)")).toBe(true);
   });
 
   it("the clarify notification carries the snippet", () => {

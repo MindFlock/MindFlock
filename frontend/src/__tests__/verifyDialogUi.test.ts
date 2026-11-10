@@ -24,9 +24,10 @@ describe("Cancel run", () => {
 });
 
 describe("the second-window rule", () => {
-  it("never offers a session whose (repo, branch) another window's plan covers", () => {
-    // Driven in testPlans.test.ts (checklistTargets).
-    expect(src("components/dialogs/verify.ts")).toContain("coverageKey(repoName(plan.repo_root), plan.branch)");
+  it("one window's plan covers its (repo, branch) for another window on it", () => {
+    // The picker that offered sessions (checklistTargets) went with "Start
+    // empty"; the rule lives on in planForSession's (repo, branch) match.
+    expect(src("components/dialogs/verify.ts")).toContain("p.branch === branch && repoName(p.repo_root) === repo");
   });
 
   it("names the window the behaviors are under when a press lands on it", async () => {

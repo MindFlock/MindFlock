@@ -30,25 +30,18 @@ import {
   planShipped,
   planStatus,
   planVerdict,
-  rewriteBlockedReason,
-  rewriteWarning,
   stepCheck,
   errorHeadline,
   HEADLINE_MAX,
-  noteDraftAfter,
   runElapsed,
-  stepKeyAction,
-  stepKeyIsUndo,
   stepResult,
   unansweredCount,
   verdictOf,
   beforeMergeRun,
   beforeMergeSummary,
-  checklistTargets,
   isBeforeMerge,
 } from "../components/dialogs/verify";
 import type {
-  Instance,
   TestPlan,
   TestRun,
   TestStep,
@@ -694,12 +687,12 @@ describe("planVerdict (the yes-or-no on every row)", () => {
     run({ results: results(r), ...over }),
   ];
 
-  it("says Verified on branch for an unmerged branch whose every step passed", () => {
+  it("says Verified for an unmerged branch whose every step passed", () => {
     const v = planVerdict(
       plan({ state: "generated", steps: one, runs: ran({ s1: "pass" }, { prelive: true }) }),
     );
     // M7: who checked it is on the pill; the sidebar's short stays one word.
-    expect(v.label).toBe("Verified on branch · by the agent");
+    expect(v.label).toBe("Verified · by the agent");
     expect(v.short).toBe("Verified");
     expect(v.tone).toBe("ok");
   });
@@ -732,15 +725,22 @@ describe("planVerdict (the yes-or-no on every row)", () => {
     expect(by({ s1: "agent", s2: "human" })).toBe("Verified live · by you and the agent");
   });
 
-  it("says Failed, Agent checking, Being written, Not written yet", () => {
+  it("says Verify failed, Verifying, No steps yet — the pill's words", () => {
     expect(planVerdict(plan({ state: "done", steps: one, runs: ran({ s1: "fail" }) })).label).toBe(
-      "Failed",
+      "Verify failed",
     );
     expect(
       planVerdict(plan({ state: "running", steps: one, run_session: "verify-a" })).label,
-    ).toBe("Agent checking");
-    expect(planVerdict(plan({ state: "generating" })).label).toBe("Being written");
-    expect(planVerdict(plan({ state: "failed", error: "x" })).label).toBe("Not written yet");
+    ).toBe("Verifying");
+    expect(planVerdict(plan({ state: "generating" })).label).toBe("Verifying");
+    expect(planVerdict(plan({ state: "failed", error: "x" })).label).toBe("No steps yet");
+  });
+
+  it("says Verify blocked when Verify ran and its agent wrote no steps — never \"add a step\"", () => {
+    const p = plan({ state: "done", origin: "manual", runs: [run({ session: "a", ...({ self: true } as Partial<TestRun>) })] });
+    expect(planVerdict(p)).toMatchObject({ key: "blocked", label: "Verify blocked — its agent wrote no steps", short: "Verify blocked", tone: "bad" });
+    expect(isWaitingOnYou(p)).toBe(false);
+    expect(planStatus(p)).toMatchObject({ action: "rerun", actionLabel: "Verify again" });
   });
 
   it("says Waiting to ship while a merged branch waits out its deploy", () => {
@@ -764,8 +764,8 @@ describe("planVerdict (the yes-or-no on every row)", () => {
         ],
       }),
     );
-    expect(v.label).toBe("1 of 2 checked");
-    expect(v.short).toBe("1/2 checked");
+    expect(v.label).toBe("1 of 2 steps done");
+    expect(v.short).toBe("1/2");
     expect(v.tone).toBe("warn");
   });
 
@@ -1255,39 +1255,6 @@ describe("how long a run has been going", () => {
   });
 });
 
-describe("the note composer after an answer", () => {
-  it("never re-attaches a sentence you discarded to the next answer", () => {
-    // The old path cleared the field and then re-saved the OLD text from a
-    // stale closure, so a discarded note came back on the next paint and was
-    // posted, by blur, as the reason for the answer after it. A note here is
-    // evidence; putting one against the wrong answer is the worst thing this
-    // surface can do quietly.
-    expect(noteDraftAfter("fail", false, "left over from last time")).toEqual({
-      open: true,
-      text: "",
-    });
-  });
-
-  it("sheds the sentence when the answer is taken back", () => {
-    expect(noteDraftAfter("", true, "because the modal never opened")).toEqual({
-      open: false,
-      text: "",
-    });
-  });
-
-  it("stops holding a note that already rode along with the answer", () => {
-    expect(noteDraftAfter("fail", true, "the modal never opened")).toEqual({
-      open: false,
-      text: "",
-    });
-  });
-
-  it("leaves an empty open composer exactly where it is", () => {
-    expect(noteDraftAfter("pass", true, "   ")).toEqual({ open: true, text: "   " });
-    expect(noteDraftAfter("pass", false, "")).toEqual({ open: false, text: "" });
-  });
-
-});
 
 describe("a run that died says so on the row", () => {
   it("keeps whose turn it is first, then names the failure", () => {
@@ -1344,49 +1311,7 @@ describe("a run that died says so on the row", () => {
   });
 });
 
-describe("the rewrite box", () => {
-  it("warns only when there is something to lose", () => {
-    expect(rewriteWarning(plan())).toBe("");
-    expect(rewriteWarning(plan({ runs: [run()] }))).toContain("Answers on steps that change");
-  });
 
-  it("refuses to rewrite out from under a running agent", () => {
-    // The server 409s this; the button must not offer it. Rewriting mid-run
-    // orphans a real, billed session — the poller only looks at plans in
-    // `running`, so its result file is never read and its give-up clock never
-    // starts.
-    expect(rewriteBlockedReason(plan({ state: "running" }))).toContain("cancel the run");
-    expect(rewriteBlockedReason(plan({ state: "generating" }))).toBeTruthy();
-    expect(rewriteBlockedReason(plan({ state: "due" }))).toBe("");
-  });
-});
-
-describe("answering from the keyboard", () => {
-  it("maps both spellings of each answer", () => {
-    expect(stepKeyAction("1")).toBe("pass");
-    expect(stepKeyAction("p")).toBe("pass");
-    expect(stepKeyAction("2")).toBe("fail");
-    expect(stepKeyAction("f")).toBe("fail");
-    expect(stepKeyAction("3")).toBe("blocked");
-    expect(stepKeyAction("b")).toBe("blocked");
-    expect(stepKeyAction("n")).toBe("note");
-  });
-
-  it("leaves every other key alone", () => {
-    // What stops these eating a keystroke meant for the note box beside them —
-    // the row handler returns early on "" rather than preventing the default.
-    for (const key of ["a", "Enter", "Tab", "Escape", "ArrowDown", " ", "4"])
-      expect(stepKeyAction(key)).toBe("");
-  });
-
-  it("tells undo apart from a key it does not handle", () => {
-    // Both are "" in the map above — "no answer" and "not mine" are the same
-    // value there — so the caller needs a second question to distinguish them.
-    expect(stepKeyIsUndo("u")).toBe(true);
-    expect(stepKeyIsUndo("U")).toBe(true);
-    expect(stepKeyIsUndo("a")).toBe(false);
-  });
-});
 
 /* ---------------------------------------------------------------------------
  * A wait that cannot end has to say so.
@@ -1488,30 +1413,4 @@ describe("a check before merge, and the check after it", () => {
   });
 });
 
-describe("checklistTargets (Ask the agent for a checklist)", () => {
-  const inst = (title: string, branch: string): Instance =>
-    ({ title, branch, repo: "", folder: "", folder_label: "" }) as unknown as Instance;
-  it("lists closed sessions, and says why one can't be picked instead of hiding it", () => {
-    const targets = checklistTargets(
-      [inst("open-a", "feature/a"), inst("on-main", "main")],
-      [plan({ id: "closed-b", branch: "feature/b" })],
-      [
-        { title: "closed-b", branch: "feature/b" },
-        { title: "closed-c", branch: "feature/c" },
-      ],
-      "main",
-    );
-    expect(targets.map((t) => [t.title, t.closed, t.reason])).toEqual([
-      ["open-a", false, ""],
-      ["closed-c", true, ""],
-      ["on-main", false, "on main — nothing to compare"],
-      ["closed-b", true, "has behaviors"],
-    ]);
-    expect(targets.find((t) => t.title === "closed-b")?.planId).toBe("closed-b");
-  });
-
-  it("skips sessions with no branch", () => {
-    expect(checklistTargets([inst("x", "")], [], [])).toEqual([]);
-  });
-});
 

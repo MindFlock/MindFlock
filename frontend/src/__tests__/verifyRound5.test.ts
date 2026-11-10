@@ -1,19 +1,18 @@
-/** Verify, round 5's rules that outlived the Verify dialog: "Not written yet"
- * apart from "Failed", no behaviors for a branch with nothing on it, a config
- * block waits on you, and the verdict beside Open PR (the session menu's
- * "Behaviors" item flies to the Sky — docs/behaviors.md §4). */
+/** Verify, round 5's rules that outlived the Verify dialog: "No steps yet"
+ * apart from "Verify failed", a config block waits on you, and the verdict
+ * beside Open PR (the session menu's ONE "Verify" item flies to the Sky —
+ * docs/behaviors.md §4). */
 
 import { describe, expect, it, vi } from "vitest";
 import { code, has } from "./sourceText";
 import {
-  checklistTargets,
   isConfigBlocked,
   isUnwritten,
   planGroup,
   planStatus,
   planVerdict,
 } from "../components/dialogs/verify";
-import type { Instance, TestPlan, TestStep } from "../api/types";
+import type { SessionVerify, TestPlan, TestStep } from "../api/types";
 import type { SessionMenuModel } from "../lib/sessionMenu";
 
 const confirmPop = vi.fn();
@@ -60,32 +59,12 @@ const failed = plan({
   ],
 } as Partial<TestPlan>);
 
-describe("a branch with nothing on it yet (M1)", () => {
-  const inst = (title: string, files: number | null): Instance =>
-    ({
-      title,
-      branch: "feature/" + title,
-      repo: "app",
-      diff_stat: files === null ? null : { files, additions: 0, deletions: 0 },
-    }) as unknown as Instance;
-
-  it("is listed, disabled, as \"no commits yet\" — and still offered an empty checklist", () => {
-    const targets = checklistTargets([inst("fresh", 0), inst("worked", 2), inst("asleep", null)], [], [], "main");
-    expect(targets.map((t) => [t.title, t.reason, !!t.noCommits])).toEqual([
-      ["worked", "", false],
-      // Unknown (a paused session has no diff_stat) is never guessed empty.
-      ["asleep", "", false],
-      ["fresh", "no commits yet", true],
-    ]);
-  });
-});
-
 describe("Not written yet is its own grey state (M4)", () => {
   it("is not red, not Failed", () => {
     const p = plan({ state: "failed", error: "the agent didn't answer in 3 minutes. Rewrite to try again" });
     expect(isUnwritten(p)).toBe(true);
     expect(planGroup(p)).toBe("failed");
-    expect(planVerdict(p)).toMatchObject({ label: "Not written yet", short: "Not written", tone: "wait" });
+    expect(planVerdict(p)).toMatchObject({ label: "No steps yet", short: "No steps yet", tone: "wait" });
     // The headline stops at the reason; the Rewrite button says the rest.
     expect(planStatus(p).line).toBe("Not written yet — the agent didn't answer in 3 minutes.");
   });
@@ -119,27 +98,29 @@ describe("the verdict where you open a PR (M6)", () => {
       more: [],
     }) as unknown as SessionMenuModel;
 
-  it("rides on Open PR, and a failed behavior asks first", () => {
-    expect(verdictNote(failed)).toBe("Behaviors ✗ Failed");
-    expect(prVerdictConfirm(failed)).toBe("A behavior failed — open the PR anyway?");
+  it("rides on Open PR, and a failed Verify asks first", () => {
+    expect(verdictNote(failed)).toBe("Verify ✗ Verify failed");
+    expect(prVerdictConfirm(failed)).toBe("Verify failed — open the PR anyway?");
     const m = withVerifyVerdict(menu(), { title: "p1" }, failed);
     const ship = m.groups.find((g) => g.id === "ship")!;
     const pr = ship.items.find((i) => i.key === "pr")!;
-    expect(pr.note).toBe("Behaviors ✗ Failed");
+    expect(pr.note).toBe("Verify ✗ Verify failed");
     // Its own question card — never the menu's `confirm` strip, which is Delete's.
     expect(pr.confirm).toBeUndefined();
     pr.run();
     expect(confirmPop).toHaveBeenCalledWith(
-      "A behavior failed — open the PR anyway?",
+      "Verify failed — open the PR anyway?",
       expect.any(String),
       [
-        expect.objectContaining({ label: "Show the behaviors" }),
+        expect.objectContaining({ label: "Show the steps" }),
         expect.objectContaining({ label: "Open PR anyway", primary: true }),
       ],
     );
-    const item = ship.items.find((i) => i.key === "checklist")!;
-    expect(item.label).toBe("Behaviors");
-    // It flies the Sky to the behaviors on the route — no Verify dialog.
+    // ONE Verify entry: the steps item is "Verify" now, and shows the steps.
+    expect(ship.items.filter((i) => /Verify|Behaviors|Checklist/.test(i.label)).map((i) => i.label)).toEqual(["Verify"]);
+    const item = ship.items.find((i) => i.key === "verify")!;
+    expect(item.note).toBe("✗ Verify failed");
+    // It flies the Sky to the steps on the route — no Verify dialog.
     openBehaviors.mockReset();
     void item.run();
     expect(openBehaviors).toHaveBeenCalledWith({ planId: "p1", title: "p1", branch: "feature/p1" });
@@ -149,11 +130,33 @@ describe("the verdict where you open a PR (M6)", () => {
     expect(openBehaviors).toHaveBeenCalledWith({ planId: "p1", title: "p1", branch: "feature/p1" });
   });
 
-  it("says nothing, and asks nothing, with no checklist", () => {
+  it("says nothing, and asks nothing, with nothing verified — and drops the steps item", () => {
     const m = withVerifyVerdict(menu(), { title: "p1" }, null);
     const pr = m.groups[0].items[0];
     expect(pr.note).toBeUndefined();
     expect(prVerdictConfirm(null)).toBe("");
+    // The Verify that STARTS one (verifyMenu's withVerifyItem) is the entry.
+    expect(m.groups[0].items.map((i) => i.key)).toEqual(["pr"]);
+  });
+
+  it("reads the session row's verify first, in the pill's words", () => {
+    const verify: SessionVerify = {
+      state: "failed",
+      plan: "p1",
+      steps: { total: 3, agent_done: 3, human: 0 },
+      human_steps: [],
+      failed_steps: [{ id: "s1", text: "do s1", note: "500" }],
+      detail: "1 step failed: do s1.",
+      at: 1,
+    };
+    expect(verdictNote(null, verify)).toBe("Verify ✗ Verify failed");
+    expect(prVerdictConfirm(null, verify)).toBe("Verify failed — open the PR anyway?");
+    const m = withVerifyVerdict(menu(), { title: "p1", verify } as never, null);
+    const item = m.groups[0].items.find((i) => i.key === "verify")!;
+    expect(item.label).toBe("Verify");
+    openBehaviors.mockReset();
+    void item.run();
+    expect(openBehaviors).toHaveBeenCalledWith({ planId: "p1", title: "p1", branch: "" });
   });
 });
 
