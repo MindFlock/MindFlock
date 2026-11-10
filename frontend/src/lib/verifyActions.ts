@@ -21,6 +21,7 @@
 import { api } from "../api/client";
 import type {
   TestPlan,
+  TestPlanRunStarted,
   TestPlansResponse,
   TestRunWalk,
   TestStep,
@@ -31,6 +32,7 @@ import { isWaitingOnYou, planName } from "../components/dialogs/verify";
 import { behaviorSummary } from "./behaviors";
 import { queryClient, refreshInstances, refreshTestPlans } from "../state/queries";
 import { useUi } from "../state/store";
+import { selectSession } from "./sessionActions";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { toast } from "./toast";
@@ -76,10 +78,44 @@ export function patchPlan(id: string, apply: (plan: TestPlan) => TestPlan) {
 export function requestPlanRun(planId: string, only?: string[], walk?: TestRunWalk) {
   const json: { steps?: string[]; walk?: TestRunWalk } = only ? { steps: only } : {};
   if (walk === "all") json.walk = walk;
-  return api<{ session?: string; plan?: TestPlan }>(planPath(planId) + "/run", {
+  return api<TestPlanRunStarted>(planPath(planId) + "/run", {
     method: "POST",
     json,
   });
+}
+
+/** What the app says once a run has started (pure — the toast's text).
+ *
+ * IN THE SESSION when the server handed the steps to the plan's own session's
+ * agent (`in_session`): that agent walks them as its tasks, in its own
+ * terminal, and the person talks to it there — so the sentence names it and
+ * says so. Otherwise a separate checker session was started (the plan's own
+ * session is gone): "Starting", because nothing has been provisioned yet. */
+export function runStartedMessage(plan: TestPlan, r: TestPlanRunStarted | null | undefined, walk?: TestRunWalk): string {
+  const all = walk === "all";
+  if (r?.in_session && r.session) {
+    return (
+      "Handed the steps to " + r.session + "'s agent" +
+      (r.queued ? " — it takes them once its current turn ends" : "") +
+      (all ? ". It walks every behavior, yours too" : "") +
+      ". Talk to it there"
+    );
+  }
+  return (
+    "Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session") +
+    (all ? " — it walks every behavior, yours too" : "")
+  );
+}
+
+/** Open the session walking a check on its Agent tab — the terminal where
+ * its agent works the steps and the person talks to it. The dialog goes first:
+ * a pane opening behind a modal is invisible. */
+export function openWalkingSession(title: string) {
+  if (!title) return;
+  const ui = useUi.getState();
+  ui.closeDialog();
+  selectSession(title, { noKeyboard: true });
+  ui.setLastTab(title, "agent");
 }
 
 /** The bare delete request (the row's Delete and the bulk bar's). Deleting the
@@ -128,10 +164,11 @@ export async function startChecklistRun(
     // tmux all happen afterwards, and when they fail the app's only statement
     // about this run must not have been a claim that it was under way.
     // `session.create_failed` retracts it (see bridgeTestPlanEvents).
-    toast(
-      "Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session") +
-        (opts.walk === "all" ? " — it walks every behavior, yours too" : "")
-    );
+    toast(runStartedMessage(plan, r, opts.walk));
+    // IN THE SESSION: the steps are that agent's tasks now, in its own
+    // terminal — open it there, which is the whole point of walking it in
+    // place (unlike a checker, which Watch reaches on purpose; see above).
+    if (r?.in_session && r.session) openWalkingSession(r.session);
   } catch (err) {
     errorPop("Couldn't start the check for " + planName(plan), errMsg(err));
     // The optimistic state above never landed on a failure, but the plan may

@@ -1682,9 +1682,25 @@ export interface TestRun {
   /** What the walker was asked to work: "agent" (default) = the agent's steps
    * only; "all" = it also attempted the person's steps with its tools. */
   walk?: TestRunWalk;
+  /** Walked by the session that WROTE the work (`session` is that session):
+   * the steps were handed to its own agent as a prompt, not to a separate
+   * checker. Absent on a checker's run and on an older server. */
+  in_session?: boolean;
 }
 
 export type TestRunWalk = "agent" | "all";
+
+/** `POST /api/test-plans/{id}/run` → 202. `in_session`: the steps were
+ * handed to the plan's own session's agent (`session`), `queued` while it
+ * was mid-turn; absent/false: a separate checker session `session` was
+ * started (the plan's own session is gone). */
+export interface TestPlanRunStarted {
+  ok?: boolean;
+  session?: string;
+  in_session?: boolean;
+  queued?: boolean;
+  plan?: TestPlan;
+}
 
 export interface TestPlan {
   id: string;
