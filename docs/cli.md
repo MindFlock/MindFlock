@@ -610,9 +610,15 @@ The routes running ([flights.md](flights.md)) — one row each: `ID`,
 (`halted: <reason>` / `cancelled: <reason>` say why) and `STOP` (*2/3 Approve
 the merge (needs you)* — the stop it is at, and whether it needs you).
 Unfinished routes plus the last 20 that finished; `--all` lists every stored
-one. `--json` prints `GET /api/flights` as is.
+one. Under the table, every route that waits on you, is halted or is paused
+gets two more lines: the stop's own reason (else the route's), and the
+commands that work from there, ready to paste — e.g. *mindflock flight retry
+f_1a2b3c*, *mindflock flight skip f_1a2b3c*, *mindflock flight resume
+f_1a2b3c* for a halted route; *resume* and *cancel* for a paused one; *done
+(Confirm verified)* on a Verify stop waiting for your confirm. `--json`
+prints `GET /api/flights` as is.
 
-### `mindflock flight [plans|start|done|skip|cancel]`
+### `mindflock flight [plans|start|done|skip|retry|resume|pause|jump|cancel]`
 
 A **route** is the row of stops one session's work goes through, a **saved
 route** is one kept on the shelf to reuse, a **stop** is one box on a route
@@ -626,17 +632,32 @@ feature's internal word, *flight*.)
 * `flight start ROUTE [--repo PATH] [--title SESSION]` — run a saved route.
   `ROUTE` is a saved route's id or name (any case; a unique prefix of either is
   enough, an ambiguous one lists the matches). `--title` runs it on an open
-  session (an unambiguous title prefix is fine; the route starts at its first
-  non-agent stop), otherwise a new session is created from the saved route in
+  session (an unambiguous title prefix is fine; the route passes its leading
+  Agent stops that have no prompt — the session's work so far is them — and
+  sends any that have one), otherwise a new session is created from the saved route in
   `--repo`, else the saved route's own folder, else the current directory.
   Prints the route id, its session and the stop it starts at. `POST
   /api/flights/start`.
 * `flight done ROUTE [--note TEXT]` / `flight skip ROUTE` — tick off (or
   skip) the stop the route is at, the Sky's **Done** / **Skip**: a Wait for me
-  stop, or a Verify stop that needs you (its open behaviors that are yours are
-  recorded as verified). `flight cancel ROUTE` stops the route (**Stop the
-  route**); its session stays open. Here `ROUTE` is a route id (a unique
-  prefix is enough) or its session's title.
+  stop; on a Verify stop waiting for your confirm, Done is **Confirm
+  verified**, and on one parked because its check couldn't finish or start it
+  checks again. Done never passes a Verify stop's open steps (the server's
+  sentence says to Retry or Skip). `flight cancel ROUTE` stops the route
+  (**Stop the route**); its session stays open.
+* `flight retry ROUTE` — run the halted (failed) stop again, the Sky's
+  **Retry**; it also re-runs a Verify stop parked because its check couldn't
+  finish.
+* `flight resume ROUTE` — **Carry on**: a paused route goes on where it was
+  (past its halt point), a halted one runs its stop again. `flight pause
+  ROUTE` — **Pause** it where it is. Both print the route's state and the
+  stop it is at.
+* `flight jump ROUTE STOP` — **Jump here**: move the route to one of its
+  stops; `STOP` is the stop's id (`s3`), its number (`3`) or its title (a
+  unique prefix is enough).
+
+Here `ROUTE` is a route id (a unique prefix is enough) or its session's
+title.
 
 A refusal prints the server's sentence (`error: sc-42 is already on a route
 (Ticket to merge)`) and exits 1.
