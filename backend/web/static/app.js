@@ -46187,6 +46187,26 @@ function popupTurn(q) {
 //#region src/whatsNew/releases.ts
 var RELEASES = [
 	{
+		version: "0.14.8",
+		date: "2026-11-11",
+		big: false,
+		headline: "Your team's PR rules as a route.",
+		features: [
+			{
+				title: "Review against your rules",
+				body: "A route's Review stop can now run a security review, or a standards review that follows your team's own rules, and every finding must be fixed or answered in writing."
+			},
+			{
+				title: "Wait for the bot reviewer",
+				body: "Reviews settle can require a reviewer such as CodeRabbit: it waits for its review, and says the PR needs a human when it never comes or comments stay open after five rounds."
+			},
+			{
+				title: "A round of fixes from a code review",
+				body: "Verify, held workers, the memory gauge, terminals and diff counts each got fixes for edge cases a review turned up."
+			}
+		]
+	},
+	{
 		version: "0.14.7",
 		date: "2026-11-10",
 		big: false,
