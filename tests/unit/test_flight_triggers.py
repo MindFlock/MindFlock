@@ -24,13 +24,35 @@ from backend.web.core import flights as F
 from backend.web.core import template_schedule as ts
 from backend.web.routes import flights as routes
 
-_GIT_ENV = dict(
-    os.environ,
+_GIT_IDENT = dict(
     GIT_AUTHOR_NAME="t",
     GIT_AUTHOR_EMAIL="t@x",
     GIT_COMMITTER_NAME="t",
     GIT_COMMITTER_EMAIL="t@x",
 )
+# Never let git be pointed anywhere but the ``-C`` folder. This module used to
+# snapshot ``dict(os.environ, ...)`` at IMPORT — before conftest's per-test
+# scrub — so under a git hook (which exports GIT_DIR/GIT_INDEX_FILE) every
+# ``_git(tmp, "init")`` re-initialised the real repo (core.bare = true) and
+# ``_git(tmp, "add", "-A")`` rewrote its index. tests/unit/test_git_env_isolation.py
+# pins that this stays fixed.
+_GIT_REDIRECT = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+)
+
+
+def _git_env() -> dict:
+    """The env for one git call: built per call, from the current (scrubbed)
+    environment, minus anything that redirects git."""
+    env = dict(os.environ, **_GIT_IDENT)
+    for var in _GIT_REDIRECT:
+        env.pop(var, None)
+    return env
 
 
 @pytest.fixture(autouse=True)
@@ -55,7 +77,7 @@ def _git(folder, *args) -> str:
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=_GIT_ENV,
+        env=_git_env(),
     )
     return cp.stdout.decode().strip()
 

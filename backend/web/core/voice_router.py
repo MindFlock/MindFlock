@@ -1472,7 +1472,8 @@ def session_state(row: dict, now: Optional[float] = None) -> dict:
     """mobile.js ``sessionState`` → ``{"state", "label", "reason", "in_bell"}``.
 
     ``in_bell`` is the rail bell's attention set — a question, a failed
-    setup or pre-commit, failing checks, a gone terminal, or idle with
+    setup or pre-commit, failing checks, a gone terminal, a Verify waiting
+    on you (or failed, or blocked), or idle with
     unfinished work for :data:`STUCK_IDLE_S` — the one rule the phone's "what
     needs me" reads too."""
     now = time.time() if now is None else now
@@ -1495,8 +1496,17 @@ def session_state(row: dict, now: Optional[float] = None) -> dict:
     if setup.get("state") == "failed":
         return st("needs_you", "Setup failed", "setup_failed", True)
     act = row.get("activity") or "idle"
-    if act == "clarify" or (act == "idle" and _prose_question(row)):
+    verify = row.get("verify") if isinstance(row.get("verify"), dict) else {}
+    vstate = verify.get("state")
+    # A verify waiting on a person: its reply IS the person's steps, so a
+    # prose question in it reads Confirm verified, not Question (mobile.js).
+    verify_waits = vstate in ("needs_you", "failed", "blocked")
+    if act == "clarify" or (
+        act == "idle" and not verify_waits and _prose_question(row)
+    ):
         return st("needs_you", "Question", "question", True)
+    if vstate == "verifying" and act not in ("limit", "offline"):
+        return st("working", "Verifying", "verifying")
     if act == "working":
         return st("working", "Working")
     if act == "limit":
@@ -1508,6 +1518,16 @@ def session_state(row: dict, now: Optional[float] = None) -> dict:
         return st("limit", label)
     if act == "offline":
         return st("offline", "Offline", "", True)
+    if verify_waits:
+        reason = {"needs_you": "verify_confirm", "failed": "verify_failed"}.get(
+            vstate, "verify_blocked"
+        )
+        label = {
+            "verify_confirm": "Confirm verified",
+            "verify_failed": "Verify failed",
+            "verify_blocked": "Verify blocked",
+        }[reason]
+        return st("needs_you", label, reason, True)
     if row.get("stage") == "interrupt":
         return st("needs_you", "Pre-commit failed", "precommit_failed", True)
     check = row.get("check") if isinstance(row.get("check"), dict) else {}
@@ -1518,6 +1538,8 @@ def session_state(row: dict, now: Optional[float] = None) -> dict:
     ds = row.get("diff_stat") if isinstance(row.get("diff_stat"), dict) else {}
     un = ds.get("uncommitted") if isinstance(ds.get("uncommitted"), dict) else {}
     dirty = _num(un.get("additions")) + _num(un.get("deletions")) > 0
+    if vstate == "passed":
+        return st("idle", "Verified", "verified")
     if idle_for > STUCK_IDLE_S and dirty:
         return st("idle", "Idle", "stuck", True)
     return st("idle", "Idle")
@@ -1554,6 +1576,19 @@ def _state_word(ss: dict) -> str:
         "checks_failing": "waiting on failing checks",
         "setup_failed": "stuck on a failed setup",
     }.get(ss["reason"], ss["label"].lower())
+
+
+def _state_clause(name: str, ss: dict) -> str:
+    """mobile.js ``voiceStateLine``: "<name> is <state word>", or a Verify
+    state's own sentence (its pills are chips, not words after "is")."""
+    verify = {
+        "verify_confirm": "%s needs you to confirm it's verified",
+        "verify_failed": "%s failed its verify",
+        "verify_blocked": "%s's verify is blocked",
+        "verifying": "%s is verifying its work",
+        "verified": "%s is verified",
+    }.get(ss["reason"])
+    return verify % name if verify else "%s is %s" % (name, _state_word(ss))
 
 
 def _names(rows: List[dict], n: int = MAX_NAMES) -> str:
@@ -1761,7 +1796,10 @@ def _list(rows, now: float) -> dict:
     parts = []
     for r in listed[:MAX_LIST]:
         ss = session_state(r, now)
-        word = "needs you" if ss["reason"] == "question" else _state_word(ss)
+        word = {
+            "question": "needs you",
+            "verify_confirm": "needs you to confirm it's verified",
+        }.get(ss["reason"]) or _state_word(ss)
         parts.append("%s (%s)" % (_name(r), word))
     more = len(listed) - MAX_LIST
     tail = ", and %d more" % more if more > 0 else ""
@@ -1778,7 +1816,7 @@ def _needs(rows, now: float) -> dict:
             said = asking_text(r) or r.get("last_say") or "a question"
             lines.append(_end("%s is asking: %s" % (_name(r), strip_markdown(said))))
         else:
-            lines.append(_end("%s is %s" % (_name(r), _state_word(ss))))
+            lines.append(_end(_state_clause(_name(r), ss)))
     return {"kind": "needs", "say": " ".join(lines) if lines else "Nothing needs you."}
 
 
@@ -1794,7 +1832,7 @@ def _status(session: str, rows, now: float) -> dict:
     dur = ""
     if row.get("activity") == "working" and mins >= 1:
         dur = " for %d minute%s" % (mins, "" if mins == 1 else "s")
-    say = "%s is %s%s." % (_name(row), _state_word(ss), dur)
+    say = "%s%s." % (_state_clause(_name(row), ss), dur)
     if row.get("last_turn"):
         say += " " + _end(strip_markdown(row["last_turn"]))
     return {"kind": "status", "say": say}

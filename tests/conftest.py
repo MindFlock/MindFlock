@@ -51,6 +51,53 @@ os.environ.setdefault(
 # it here, at import, like CI never sets it; tests that need it set their own.
 os.environ.pop("MINDFLOCK_REPO_ROOT", None)
 
+# Every variable that points ``git`` at a repository, index, object store, ref
+# namespace or config OTHER than the one its cwd / ``-C`` names.
+_GIT_REDIRECT_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_QUARANTINE_PATH",
+    "GIT_PREFIX",
+    "GIT_TEMPLATE_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+)
+
+
+def _scrub_git_env(environ):
+    """Drop every git-redirecting variable from *environ* (a mapping)."""
+    for var in _GIT_REDIRECT_VARS:
+        environ.pop(var, None)
+    # GIT_CONFIG_COUNT=n is read together with GIT_CONFIG_KEY_i/VALUE_i.
+    count = environ.pop("GIT_CONFIG_COUNT", "")
+    if count.isdigit():
+        for i in range(int(count)):
+            environ.pop("GIT_CONFIG_KEY_{}".format(i), None)
+            environ.pop("GIT_CONFIG_VALUE_{}".format(i), None)
+
+
+# Scrub them from the PROCESS env now, at import of the root conftest — before
+# collection, before any test module is imported, before any session fixture.
+# A git hook runs with these exported: a pre-commit hook in a linked worktree
+# gets GIT_DIR=<app>/.git/worktrees/<name> and an absolute GIT_INDEX_FILE, so a
+# suite launched from the local ``run-tests`` hook inherits them. The per-test
+# scrub in ``_isolate_git_config`` comes too late for anything that captured or
+# used os.environ earlier — test_flight_triggers built its git env with
+# ``dict(os.environ, ...)`` at module import, so its ``git -C <tmp> init``
+# re-initialised the REAL repo (``core.bare = true`` in the shared .git/config,
+# or ``core.worktree = <tmp>/upstream``) and its ``git add -A`` rewrote the
+# committing worktree's index to the tmp repo's one file (``a.txt``). Both
+# scrubs stay: this one covers import/collection/session scope, the per-test
+# one covers a test or fixture that set its own.
+# GIT_CEILING_DIRECTORIES / GIT_DISCOVERY_ACROSS_FILESYSTEM are left alone: they
+# only ever NARROW repo discovery, and git hooks do not set them.
+_scrub_git_env(os.environ)
+
 
 @pytest.fixture(autouse=True)
 def _redirect_tempfiles(tmp_path, monkeypatch):
@@ -498,19 +545,9 @@ def _isolate_git_config(_isolated_gitconfig_path, monkeypatch):
     # A stray process/shell must not be able to redirect these subprocesses at the
     # repo, index, object-store or ref-namespace level either — nor inject config
     # through the environment, which bypasses the file variables set above.
-    for _var in (
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_CONFIG",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_NAMESPACE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_QUARANTINE_PATH",
-        "GIT_TEMPLATE_DIR",
-    ):
+    # The same list was scrubbed at import (see _GIT_REDIRECT_VARS); this pass
+    # catches anything set since, by a test module or an earlier fixture.
+    for _var in _GIT_REDIRECT_VARS:
         monkeypatch.delenv(_var, raising=False)
     # GIT_CONFIG_COUNT=n is read together with GIT_CONFIG_KEY_i/VALUE_i; dropping
     # the count alone disarms the pairs, but they are cheap to clear too.

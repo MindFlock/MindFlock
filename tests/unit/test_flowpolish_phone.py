@@ -311,18 +311,20 @@ def test_sheet_draws_route_and_verify_blocks():
     # Not on a peer's shared session: those are the sharer's to answer.
     assert "var vm = peer ? null" in fn and "var rm = peer ? null" in fn
     # What waits on you comes first; a plain Verify after Restart / Wake /
-    # Resume, never on an agent that is gone or still starting.
+    # Resume. Who may START one is the desktop's rule (canStartVerify): never
+    # a remote, peer, provisioning, paused or workspace-missing session.
     assert fn.index("if (vm && vm.waits)") < fn.index('actRow("Restart"')
     plain = fn.index("if (vm && !vm.waits")
     assert fn.index('actRow("Resume session"') < plain < fn.index('actRow("Close"')
-    assert (
-        'ss.state !== "offline" && ss.state !== "starting"' in fn[plain : plain + 120]
-    )
+    assert "if (vm && !canStartVerify(inst))" in fn
 
 
 def test_wait_actions_post_the_desktops_routes():
     fn = _fn("waitAct")
-    assert '"/api/instances/" + encodeURIComponent(title) + "/verify", {}' in fn
+    # One start for the phone: startVerify posts /api/instances/{t}/verify,
+    # closes the sheet and opens the session on its Agent tab.
+    assert "startVerify(title);" in fn
+    assert 'postFor(title, "verify", {})' in _fn("startVerify")
     assert 'planApi(plan, "confirm"), { verified: true }' in fn
     assert "{ verified: false, note: note }" in fn
     assert 'planApi(plan, "fix"), { in_session: true }' in fn
@@ -337,7 +339,7 @@ def test_wait_actions_post_the_desktops_routes():
     )
     # Every response field the other side adds is optional.
     assert (
-        "j && j.queued" in fn
+        "j && j.queued" in _fn("startVerify")
         and "j && j.delivered === false" in fn
         and "j && j.session" in fn
     )

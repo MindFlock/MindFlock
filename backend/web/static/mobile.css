@@ -22,6 +22,11 @@
   --tone-neutral: #a3abbe;
   --tone-waiting: #4ea8de;
   --tone-broken: #de613e;
+  /* Verify's two (sessionState.ts tone "verifying" / "verified"): the
+     desktop's violet while the agent checks its own work, and a calm green —
+     no glow, unlike Working — once it passed. */
+  --tone-verifying: #8b6cf0;
+  --tone-verified: #4fa874;
 }
 
 /* The multi-color surface sets (Macaw, Toucan…) also carry --topbar-* /
@@ -102,6 +107,8 @@ html, body {
 .dot.tone-neutral   { background: var(--tone-neutral); }
 .dot.tone-waiting   { background: var(--tone-waiting); }
 .dot.tone-broken    { background: var(--tone-broken); }
+.dot.tone-verifying { background: var(--tone-verifying); animation: dot-pulse 1.4s ease-in-out infinite; }
+.dot.tone-verified  { background: var(--tone-verified); }
 .dot.st-starting    { animation: dot-pulse 1.4s ease-in-out infinite; }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
@@ -111,6 +118,8 @@ html, body {
 .tone-neutral   { --tone: var(--tone-neutral); }
 .tone-waiting   { --tone: var(--tone-waiting); }
 .tone-broken    { --tone: var(--tone-broken); }
+.tone-verifying { --tone: var(--tone-verifying); }
+.tone-verified  { --tone: var(--tone-verified); }
 
 #picker {
   flex: 1 1 auto;
@@ -324,6 +333,48 @@ html, body {
   flex: none;
   color: var(--accent);
 }
+
+/* --- a verify waiting on you (built by mobile.js: the card under the flight
+   card, and the same block under the row in the Sessions sheet) --------- */
+#verify-card {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+#verify-card.hidden { display: none; }
+.verify-card, .sess-verify { border-color: var(--tone-attention); }
+.verify-card .vc-head { font-weight: 600; }
+.vc-confirm { display: flex; flex-direction: column; gap: 6px; }
+.vc-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 30vh;
+  overflow-y: auto;
+  font-size: 12px;
+}
+.vc-step-expect { display: block; color: var(--muted); }
+.vc-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.vc-acts .act { flex: 1 1 0; }
+/* Not verified…'s inline note — never window.prompt (Electron has none).
+   16px keeps iOS from zooming the page on focus. */
+.vc-note {
+  flex: 1 1 100%;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px;
+  font-size: 16px;
+  font-family: inherit;
+}
+.vc-note:focus { outline: none; border-color: var(--accent); }
+.vc-msg { color: var(--tone-broken); font-size: 12px; }
+.vc-msg:empty { display: none; }
 
 /* The rail's zone chip on a session row (redZoneChip's tones). */
 .rz-chip {
