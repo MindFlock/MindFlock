@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Verify that couldn't reach the session no longer loses the plan's
+  steps.** When the hand-off failed (the session paused, over budget or
+  unreachable), or the check was cancelled, given up on or closed before
+  the agent wrote its own steps, the plan kept only your own steps. Once the
+  session closed, the separate checker then refused with "no steps". The
+  earlier steps now come back.
+- **A stopped re-verify no longer brings back the previous check's "needs
+  you".** Cancelling or giving up on a second Verify used to make the first
+  one current again, now showing the new steps. Confirm then marked them
+  passed for a check that never ran, and a flight moved on. The stopped
+  check now settles as "blocked" with its reason.
+- **Verify starts once.** A double click, or a flight stop and a row press
+  together, opened two checks, sent the prompt twice and could delete the
+  first check's results. The second press now answers "busy".
+- **The background liveness check no longer cancels a Verify started while
+  it was asking the remote.**
+- **A Verify given up on after two hours shows its "blocked" pill** for 10
+  minutes from when it stopped. Before, it counted from the start and never
+  showed.
+- **Waking a sleeping session for Verify waits for memory.** The Verify
+  prompt and its close notice went past the low-memory launch gate. They now
+  wait their turn, and the prompt stays queued until the session is up.
+- **Session rows notice every Verify change.** Two same-size writes inside
+  one coarse file-timestamp tick (seen on WSL) could leave a row's Verify
+  pill one step behind.
 - **A quick same-size edit no longer hides from the diff counts.** The
   throwaway index copy behind the change stat, Diff tab and Code Map got a
   fresh timestamp, which switched off git's check for files edited in the
