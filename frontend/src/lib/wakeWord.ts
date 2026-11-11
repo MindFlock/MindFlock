@@ -25,8 +25,12 @@
  *    POST /api/voice/wake, which recognises it with the word as the hint and
  *    says whether it is the word alone (backend/web/core/wake.py). `wake:
  *    true` → listening at once (the microphone is already open) with the
- *    {@link chime} at the same moment — its audio skipped from the
- *    recording; false → nothing; 409 (no recognizer ready) → standby stops
+ *    {@link chime} at the same moment — recorded, but no word starts under
+ *    it; what was said after the word while the server checked (a command
+ *    said without waiting for the chime) goes to the new recording as its
+ *    lead-in (lib/voiceMic MicKeeper.markLead); `rest` (the words after the
+ *    word in one breath, "MindFlock, next session") goes to `onWake`
+ *    instead; false → nothing; 409 (no recognizer ready) → standby stops
  *    and says why. How long it took, from the word's end to listening, is
  *    {@link wakeLine} in the mic's diagnostics.
  *
@@ -51,8 +55,14 @@ export const WAKE_QUIET_MS = 350;
 export const WAKE_TAIL_MS = 200;
 /** Shorter speech is a click, a cough, a "hm" — not two syllables. */
 export const WAKE_MIN_MS = 250;
-/** Longer speech is a sentence: never a wake, however it starts. */
-export const WAKE_MAX_MS = 1600;
+/** Longer speech is a sentence: never a wake, however it starts. The
+ * word and a command in one breath ("MindFlock, next session") fit: the
+ * server answers `rest` with the words after the word. */
+export const WAKE_MAX_MS = 4000;
+/** The word alone is never longer than this: a longer candidate (the word
+ * with a command, or ordinary talk) is not kept while a check is in flight
+ * — more talk is not more checks queued up. */
+export const WAKE_WORD_MAX_MS = 1600;
 /** Audio before the onset sent with the clip (the first consonant's attack). */
 export const WAKE_LEAD_MS = 100;
 /** At most one check this often (the detector itself needs ~0.8 s between
@@ -65,12 +75,13 @@ export const WAKE_PENDING_MS = 2500;
 /** …and none for a clip that began less than this after the app stopped talking. */
 export const WAKE_AFTER_SPEECH_MS = 500;
 /** The rolling window standby keeps (s): the longest clip and then some. */
-export const WAKE_KEEP_S = 3;
+export const WAKE_KEEP_S = 5;
 /** A wake that hears nothing this long stops listening (a miss, quietly). */
 export const WAKE_LISTEN_MS = 8000;
 /** The caption's line while a wake listens, before the first word. */
 export const WAKE_HINT = "Yes?";
-/** The chime's length; the dictation skips this much of its first audio. */
+/** The chime's length; no word starts in this much of a dictation's first
+ * audio (it is recorded: a word said over it keeps its start). */
 export const CHIME_MS = 120;
 /** The stop chime's length (listening is over: nothing to skip). */
 export const STOP_CHIME_MS = 140;
@@ -196,12 +207,15 @@ export function wakeGate(g: {
   return "ok";
 }
 
-/** POST /api/voice/wake's answer: `status` the HTTP status (0: no answer). */
+/** POST /api/voice/wake's answer: `status` the HTTP status (0: no answer);
+ * `rest` the words after the wake word in the same clip ("next session" of
+ * "MindFlock, next session"; "" for the word alone, or an older server). */
 export interface WakeVerdict {
   status: number;
   wake: boolean;
   text: string;
   error: string;
+  rest?: string;
 }
 
 const langTag = () =>
@@ -219,8 +233,9 @@ export async function postWake(clip: Blob, lang = langTag()): Promise<WakeVerdic
       body: clip,
       signal: ac.signal,
     });
-    const j = (await r.json().catch(() => ({}))) as { wake?: unknown; text?: unknown; error?: unknown };
-    return { status: r.status, wake: r.ok && j.wake === true, text: String(j.text || ""), error: String(j.error || "") };
+    const j = (await r.json().catch(() => ({}))) as { wake?: unknown; text?: unknown; error?: unknown; rest?: unknown };
+    const rest = typeof j.rest === "string" ? j.rest.trim() : "";
+    return { status: r.status, wake: r.ok && j.wake === true, text: String(j.text || ""), error: String(j.error || ""), rest };
   } catch (err) {
     return { status: 0, wake: false, text: "", error: String((err as Error)?.message || err) };
   } finally {
@@ -271,16 +286,21 @@ function publish(s: WakeStatus) {
 }
 
 export interface StandbyDeps {
-  mic: Pick<MicKeeper, "get" | "hold" | "done" | "warm">;
+  mic: Pick<MicKeeper, "get" | "hold" | "done" | "warm"> & Partial<Pick<MicKeeper, "markLead">>;
   /** The page's AudioContext (voiceAudioCtx); null: none here. */
   ctx(): AudioContext | null;
-  /** The app is talking now (the SpeechQueue). */
+  /** The app is heard talking now (the SpeechQueue's line sounds — not a
+   * reply still being synthesised: that is silence, and the word may come). */
   speaking(): boolean;
   /** A dictation is live (it has the microphone). */
   recording(): boolean;
   /** A wake: listening and the chime. `soundEnd`: when the word ended
-   * ({@link now}'s clock) — the wake latency is measured from it. */
-  onWake(soundEnd: number): void;
+   * ({@link now}'s clock) — the wake latency is measured from it. `rest`:
+   * the words said after the word in the same breath ("next session"),
+   * handled as a first phrase that began with the word; absent for the
+   * word alone — then what was heard since the word's end is the new
+   * recording's lead-in (`mic.markLead`), never both. */
+  onWake(soundEnd: number, rest?: string): void;
   /** Each block's RMS while standby runs (the button's ring). */
   onLevel?(rms: number): void;
   /** Standby turned on/off or stopped with a line (also {@link wakeStatus}). */
@@ -468,6 +488,9 @@ export class WakeStandby {
       return;
     }
     const gate = this.gate(now, cand.clipMs, speaking);
+    // A check in flight: only a candidate the word alone could be is kept
+    // (ordinary talk must not queue up checks).
+    if (gate === "busy" && cand.loudMs > WAKE_WORD_MAX_MS) return;
     if (gate === "busy" || gate === "soon") {
       // Taken now: the rolling window moves on.
       this.pending = { clip: rec.last(cand.clipMs / 1000), soundEnd: now - cand.tailMs, clipMs: cand.clipMs };
@@ -524,7 +547,15 @@ export class WakeStandby {
     // A wake while something else started recording meanwhile: that one wins.
     if (v.wake && !this.deps.recording()) {
       this.pending = null;
-      this.deps.onWake(soundEnd);
+      const rest = (v.rest || "").trim();
+      // The word alone: what came after it (a command said over the check)
+      // is the new recording's lead-in. With `rest` the command was in the
+      // clip: handed over as words, never heard twice.
+      if (rest) this.deps.onWake(soundEnd, rest);
+      else {
+        this.deps.mic.markLead?.(soundEnd);
+        this.deps.onWake(soundEnd);
+      }
       this.sync();
       return;
     }

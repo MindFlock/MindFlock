@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Voice commands trigger the first time, and a miss says why.**
+  - *Said naturally.* A filler in front ("um", "so", "now", "okay so", "can
+    you…") no longer turns a navigation command into typed words. Session
+    numbers go to 99 and take "session number three", "row 2" and the
+    mishearings "session to / for / won". Scrolling takes "scroll a bit up",
+    "go up", "up", "bottom", "next page". "Switch the docs" and a close
+    sound-alike ("switch to docks") switch when a session matches. "Stop it"
+    interrupts when nothing is being asked (it still answers No to a
+    permission dialog).
+  - *The desktop asked the router too rarely.* Its own list of what may be a
+    command had fallen about 45 phrasings behind the router ("take me to
+    docs", "what's docs doing", "session ten"…), so those were typed. The
+    desktop, the phone and the router are now pinned to one phrase list.
+  - *The wake word, misheard or in one breath.* "Mine flock, open intake",
+    "Mindful, I'll open settings" and the like now count as "MindFlock, …"
+    when a request follows. From standby, "MindFlock, next session" in one
+    breath wakes and does it; what is said right after the word, before the
+    chime, is no longer lost; and the listen a wake starts takes its first
+    phrase as said to MindFlock ("open settings" opens Settings instead of
+    being typed into the agent).
+  - *Nothing clipped.* The desktop no longer throws away the first 150 ms
+    (and the pre-roll) of every listen, keeps 300 ms before a word's first
+    loud block, and no longer turns short noise into empty phrases.
+  - *Names from the better ear.* "Switch to <name>" waits for the accurate
+    text instead of acting on the fast guess.
+  - *Misses are captioned, never spoken.* "Typed — no session called docks
+    (did you mean docs?)", "Typed — nothing is being asked", a router that
+    did not answer in time, a wake that heard nothing.
+  - *Phone.* "MindFlock, …" requests reach the assistant on the phone (what
+    it cannot do there is captioned, not typed).
+
 ## [0.14.7] - 2026-11-10
 
 ### Fixed

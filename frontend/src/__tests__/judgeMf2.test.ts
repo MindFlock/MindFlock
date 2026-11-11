@@ -186,7 +186,9 @@ describe("a held sighting the row doesn't confirm is read again (recheckDialog)"
     const asked: string[] = [];
     const x = dictation({ hooks: { dialogCheck: (t) => void asked.push(t) } });
     await x.d.stream("", "yes");
-    await x.d.stream("", "yes and");
+    // "yes and" may still be "yes and don't ask again" (the router's): held
+    // whole. Words that can be no command are what would be typed.
+    await x.d.stream("", "yes and run the tests");
     expect(asked).toEqual(["t1"]);
   });
 

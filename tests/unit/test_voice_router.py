@@ -854,9 +854,16 @@ def test_answer_by_name(text, title, choice):
 
 
 def test_answer_by_name_ambiguous_and_unknown():
-    which = {"kind": "ambiguous", "say": "Which one: login-fix or login-page?"}
-    assert ans("tell login yes") == which
-    assert ans("login, yes") == which
+    for said in ("tell login yes", "login, yes"):
+        got = ans(said)
+        assert got["kind"] == "ambiguous"
+        assert got["say"] == "Which one: login-fix or login-page?"
+        # The pick answers the one picked (the yes rides in ``pending``).
+        assert got["pending"]["then"] == {
+            "kind": "answer",
+            "choice": "yes",
+            "words": "yes",
+        }
     assert ans("tell narnia yes")["kind"] == "no-session"
     assert ans("answer yes to verify")["kind"] == "no-session"  # hidden off the rail
     # Said without a verb, an unknown name was never a target: words.
@@ -945,9 +952,14 @@ def test_finish_numbers_never_pick_a_permission():
 
 
 def test_finish_without_a_dialog():
-    # Bare: the agent may have asked in words — the words go to it, as before.
-    assert fin("yes", None) == {"kind": "prompt"}
-    assert fin("yes", UNPARSED) == {"kind": "prompt"}
+    # Bare: the agent may have asked in words — the words go to it, as before
+    # (``near`` tells the client why it was typed).
+    typed = {
+        "kind": "prompt",
+        "near": {"kind": "answer", "why": "no_dialog", "arg": "yes"},
+    }
+    assert fin("yes", None) == typed
+    assert fin("yes", UNPARSED) == typed
     # Targeted: said so.
     got = fin("docs, yes", None, session="")
     assert got["no_dialog"] is True and "keys" not in got
@@ -1156,7 +1168,10 @@ def test_route_answer_carries_the_dialogs_keys(env):
 
 
 def test_route_answer_without_a_dialog(env):
-    assert route("yes", "docs") == {"kind": "prompt"}
+    assert route("yes", "docs") == {
+        "kind": "prompt",
+        "near": {"kind": "answer", "why": "no_dialog", "arg": "yes"},
+    }
     got = route("docs, yes", "invoice-parser")
     assert got["no_dialog"] is True
     assert got["say"] == "API docs is not asking anything."
@@ -1916,7 +1931,13 @@ def test_several_matches_ask_which_one(text):
     ],
 )
 def test_plain_speech_that_stays_a_prompt(text):
-    assert fleet(text) == {"kind": "prompt"}
+    got = fleet(text)
+    # Words for the agent; a short name after a plain switch verb ("let's
+    # go to lunch") says what it nearly was (``near``), still typed.
+    assert got.get("kind") == "prompt", got
+    assert set(got) <= {"kind", "near"}
+    if "near" in got:
+        assert text == "let's go to lunch" and got["near"]["why"] == "no_session"
 
 
 def test_a_plain_go_to_still_says_there_is_no_such_session():
@@ -2137,7 +2158,10 @@ def test_read_names_and_states():
         == "settings-ui hasn't said anything yet."
     )
     assert fleet("what did it say", session="")["say"] == "No session is open."
-    assert fleet("what did narnia say") == {"kind": "prompt"}
+    assert fleet("what did narnia say") == {
+        "kind": "prompt",
+        "near": {"kind": "read", "why": "no_session", "arg": "narnia"},
+    }
     # "read it again" is still the question read out again.
     assert fleet("read it again")["kind"] == "question"
 
@@ -2907,17 +2931,19 @@ def test_route_heard_decides_a_switch_back(env):
 
 
 def test_route_heard_only_when_it_is_a_no_text_command(env):
-    """Moonshine's text wins whenever IT is a command with no words in it
-    (the contract); a heard prompt or a heard command with words never does."""
+    """Moonshine's text wins when IT is a command with no words in it and
+    whisper's is no command (voice_router.heard_text); a heard prompt or a
+    heard command with words never does."""
     r = client.post(
         "/api/voice/route",
-        json={
-            "text": "new session to fix the login bug",
-            "heard": "go back",
-            "session": "docs",
-        },
+        json={"text": "go bag", "heard": "go back", "session": "docs"},
     )
     assert r.json() == {"kind": "switch_back"}  # heard IS a no-text command
+    r = client.post(
+        "/api/voice/route",
+        json={"text": "where am i", "heard": "go back", "session": "docs"},
+    )
+    assert r.json() == {"kind": "where"}  # both commands: whisper's wins
     r = client.post(
         "/api/voice/route",
         json={"text": "go back", "heard": "fix the go back button", "session": "docs"},

@@ -77,7 +77,7 @@ Status codes, in the order they are checked:
   ``"heard"`` and ``"final_by"`` (``core.speech_moonshine``) — and the
   stream is gone.
   ``DELETE stream/{id}`` — 204, always.
-* ``wake`` — ``transcribe``'s codes; 200 ``{"wake", "reason", "text",
+* ``wake`` — ``transcribe``'s codes; 200 ``{"wake", "reason", "rest", "text",
   "plain", "word", "backend", "ms"}``. ``GET wake/recent`` — 200, the last
   :data:`WAKE_RECENT_MAX` checks (docs/voice-wake.md).
 * ``install-local`` — ``POST`` 403 not the owner; 400 an unknown ``what``;
@@ -943,10 +943,16 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
     (``Backend.wake_verify_transcribe``; local faster-whisper only, the
     others skip it) and turned down when that plainly heard another word
     (``core.wake.veto``: the hint makes whisper write "MindFlock" for
-    "Mind." and "Mine."); a no never pays for it. → ``{"wake": bool,
-    "reason", "text", "plain", "word", "backend", "ms"}`` — ``plain`` the
-    un-hinted text, ``null`` when that pass did not run; the same status
-    codes as ``/transcribe``. Every check is kept for ``/wake/recent``.
+    "Mind." and "Mine."); a no never pays for it. The word with a request
+    after it in one breath ("MindFlock, next session": ``core.wake.
+    judge_rest``) is a yes with ``rest`` the request's words (reason
+    ``"rest"``; the plain pass checks it with ``core.wake.veto_rest``): the
+    client starts listening and handles ``rest`` as a phrase said to
+    MindFlock. → ``{"wake": bool, "reason", "rest", "text", "plain",
+    "word", "backend", "ms"}`` — ``rest`` ``""`` for the word alone and
+    for a no, ``plain`` the un-hinted text, ``null`` when that pass did not
+    run; the same status codes as ``/transcribe``. Every check is kept for
+    ``/wake/recent``.
     The clients send only a short lone utterance bounded by silence (their
     standby), so the model sees a second of audio at a time, never the
     room."""
@@ -957,7 +963,7 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
     word = _wake_word()
     language = _lang_hint(lang)
     started = time.monotonic()
-    entry = {"ts": time.time(), "text_prompted": "", "text_plain": None}
+    entry = {"ts": time.time(), "text_prompted": "", "text_plain": None, "rest": ""}
     try:
         text = await _stt(
             backend.wake_transcribe, audio, mime, language, _wake.hint(word)
@@ -967,7 +973,7 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
         entry["ms"] = int((time.monotonic() - started) * 1000)
         _record_wake(entry)
         return _failed(err)
-    wake, reason = _wake.judge(text, word)
+    wake, reason, rest = _wake.judge_rest(text, word)
     plain: Optional[str] = None
     if wake and _wake.normalize(word) == _wake.WAKE_WORD:
         try:
@@ -976,16 +982,19 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
             _logger.debug("voice wake: the plain pass failed: %s", err)
             plain = None
         if plain is not None:
-            vetoed = _wake.veto(plain)
+            vetoed = _wake.veto_rest(plain, rest) if rest else _wake.veto(plain)
             if vetoed:
-                wake, reason = False, vetoed
+                wake, reason, rest = False, vetoed, ""
     ms = int((time.monotonic() - started) * 1000)
-    entry.update(text_prompted=text, text_plain=plain, wake=wake, reason=reason, ms=ms)
+    entry.update(
+        text_prompted=text, text_plain=plain, wake=wake, reason=reason, rest=rest, ms=ms
+    )
     _record_wake(entry)
     return JSONResponse(
         {
             "wake": wake,
             "reason": reason,
+            "rest": rest,
             "text": text,
             "plain": plain,
             "word": word,
@@ -999,7 +1008,7 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
 def voice_wake_recent() -> JSONResponse:
     """The last :data:`WAKE_RECENT_MAX` wake checks, newest first →
     ``{"attempts": [{"ts", "text_prompted", "text_plain", "wake", "reason",
-    "ms"}]}`` (``text_plain`` ``null`` when the un-hinted pass did not
+    "rest", "ms"}]}`` (``text_plain`` ``null`` when the un-hinted pass did not
     run). In memory: a restart empties it."""
     with _WAKE_RECENT_LOCK:
         rows = [dict(e) for e in reversed(_WAKE_RECENT)]

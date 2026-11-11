@@ -800,7 +800,7 @@ def test_voice_route_answers_read_the_dialog_route(env, monkeypatch):
     # Not asking: the route's 204 → no dialog.
     env.state.activity = "idle"
     seen["dialog"] = ({"id": "x", "parsed": False, "options": []}, None)
-    assert route("yes", "w") == {"kind": "prompt"}
+    assert route("yes", "w")["kind"] == "prompt"  # typed (``near``: no_dialog)
     got = route("tell worker yes")
     assert got["no_dialog"] is True and got["say"] == "worker is not asking anything."
     # Unknown session: the route's 404 → no dialog, never an error.

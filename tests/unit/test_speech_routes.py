@@ -1584,7 +1584,7 @@ class TestWakeCheck:
         self._wake(fakes, "MindFlock is great")
         rows = client.get("/api/voice/wake/recent").json()["attempts"]
         assert [set(r) for r in rows] == [
-            {"ts", "text_prompted", "text_plain", "wake", "reason", "ms"}
+            {"ts", "text_prompted", "text_plain", "wake", "reason", "rest", "ms"}
         ] * 2
         assert rows[0]["text_prompted"] == "MindFlock is great"
         assert rows[0]["text_plain"] is None and rows[0]["reason"] == "long"

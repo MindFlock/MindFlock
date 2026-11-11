@@ -659,7 +659,10 @@ def test_voice_router_reads_a_prose_question():
         {"kind": "answer", "title": "api", "name": "api", "bare": True, "words": "yes"},
         dialog,
     )
-    assert bare == {"kind": "prompt"}
+    assert bare == {
+        "kind": "prompt",
+        "near": {"kind": "answer", "why": "no_dialog", "arg": "yes"},
+    }
 
 
 # --------------------------------------------------------------------------- #

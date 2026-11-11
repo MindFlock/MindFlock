@@ -2000,6 +2000,34 @@ moment, the client's epoch ms — informational>, "dialog_seen": {"<title>":
 leading `ok`/`okay`/`hey`/`please` and a trailing `please` are dropped (the
 scroll, interrupt, back, where and commands forms also drop a leading
 `mindflock`, `now`, `just`, `can you`, … and a trailing `now` / `for me`).
+Every navigation and read command (switch by name, number or next/previous,
+scroll, status, list, read, repeat…) also drops a leading filler — `um`,
+`uh`, `so`, `alright`, `well`, `now`, `then`, `okay so` — never an answer, a
+send, a stop or a new session. Session numbers go to 99 ("session twenty
+one", "session number three", "row 2") and take the homophones `to`/`too`,
+`for`, `won`, `free`, `ate` right after session/window/row only — an option
+or a permission answer never does.
+
+**`near`: a miss that says why.** A `{"kind": "prompt"}` reply may carry
+`"near": {"kind": "switch"|"status"|"read"|"question"|"interrupt"|"answer",
+"why": "no_session"|"no_dialog"|"no_focus", "arg"?: "<the name said>",
+"suggest"?: "<a session that sounds like it>"}` when a clear command verb was
+heard but nothing could be done. The words are still typed; clients show a
+caption (*Typed — no session called docks (did you mean docs?)*, *Typed —
+nothing is being asked*), never speech. After a plain switch verb a unique
+close sound-alike is switched to instead ("switch to docks" → docs).
+
+**`pending.then`.** Every *Which one: a or b?* now carries a `pending` pick,
+with `then` when the pick continues something: `{"kind": "interrupt"}`,
+`{"kind": "answer", "choice", "number"?, "words"}`, `{"kind": "question"}`,
+`{"kind": "read"}` or `{"kind": "status"}`. Clients send `pending` back
+unchanged, as before.
+
+**`heard` beside `text`.** When both are commands, `text` (whisper) wins;
+`heard` (Moonshine) is used only when it is a no-words command and `text` is
+no command. A session NAME is always read from `text`'s words. "stop it" /
+"stop that" is the answer *No* while a permission dialog is up, and an
+interrupt (Escape) when none is.
 
 **`heard`.** When the phrase's Moonshine text routes to a command that carries
 none of the person's words — `switch`, `switch_index`, `switch_rel`,

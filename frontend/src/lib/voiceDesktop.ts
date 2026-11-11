@@ -123,79 +123,271 @@ function routerWords(text: string): string[] {
     .filter(Boolean);
 }
 
-/** A number as it is spoken or recognised (a slot: "one|first|1|…"). */
+// --- the command gate: may a phrase be the router's? ------------------------ //
+
+/** The counts a session is said by (voice_router `_NUM_RX`): one … twenty,
+ * the tens (a "twenty one" is two words, the second slot optional), and
+ * the digits to 99. */
+const NUM_WORDS = new Set(
+  (
+    "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen" +
+    " seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety"
+  ).split(" ")
+);
+const ORD_WORDS = new Set("first second third fourth fifth sixth seventh eighth ninth tenth".split(" "));
+/** A dialog option's number as said or recognised ({@link isAnswerPhrase}):
+ * "one|first|1|…" to nine. */
 const NUMS = [
   "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
   "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
   "1", "2", "3", "4", "5", "6", "7", "8", "9",
 ].join("|");
+const isNumWord = (w: string) => NUM_WORDS.has(w) || /^[1-9][0-9]?$/.test(w);
+const isOrdWord = (w: string) => ORD_WORDS.has(w) || /^[1-9][0-9]?(?:st|nd|rd|th)$/.test(w);
+/** What a recogniser writes for a session's number right after "session" /
+ * "window" / "row" ("session to"): voice_router `_SESSION_HOMOPHONES`. */
+const SESSION_HOMOPHONES = ["won", "to", "too", "free", "tree", "for", "fore", "ate"];
 
-/** The router's commands as word patterns (backend/web/core/voice_router.py
- * `_CMDS` and `_NEW_RE`): each slot lists the words it takes, and a final "*"
- * takes the rest of the phrase. Every command matches the WHOLE phrase. */
-const COMMANDS: string[][][] = [
-  "cancel", "never mind", "nevermind", "scratch that", "forget it",
-  "switch|go|change|jump to *", "switch|go|change|jump over to *",
-  "what|which sessions do i have", "what|which sessions are up|open|running",
-  "list sessions *", "list the|my sessions",
-  "what's|whats up|open|running", "what is up|open|running",
-  "what|who needs me|attention", "what|who needs my attention",
-  "what's|whats it doing", "what is it doing", "status",
-  "what's|whats happening", "what's|whats going on",
-  "summarize|summarise", "summarize|summarise that|it", "what did it say", "summary",
-  "say that again", "repeat", "repeat that",
-  "voice off", "turn voice off", "turn off voice",
-  "stop listening|recording", "stop", "mic|microphone off", "turn mic|microphone off",
-  "stop talking|speaking|reading", "be quiet", "quiet", "shut up", "hush", "enough", "that's|thats enough",
-  "that's|thats all", "that is all",
-  // Focus by name or by the rail's number, or the next / previous row.
-  "focus|open|show|select *",
-  "next|previous session|one", `session|number|row ${NUMS} *`,
-  // Answers to a dialog or a question ("session three yes" targets one).
-  "yes|yeah|yep|yup|sure|ok|okay|allow|approve|no|nope|deny|reject|always",
-  "yes|yeah always", "always allow *", "don't|dont ask again", "do not ask again",
-  "go ahead", "do it", `option|choice ${NUMS}`, NUMS, `the ${NUMS} one`,
-  "answer|tell|reply *",
-  "what is|what's|whats it asking", "what's|whats|what is the question", "what does it want",
-  "new session *", "a|another new session *",
-  "start|open|create|make new session *", "start|open|create|make a|another new session *",
-  "spin up new session *", "spin up a|another new session *",
-  // Scroll the focused session's pane (the server scrolls it: kind `scroll`),
-  // and "more" / "keep going" after one.
-  "scroll *", "page up|down *", "go|jump|back to the top|bottom *", "top|bottom", "up|down",
-  "to the top|bottom", "more", "keep going", "some more", "further",
-  // Interrupt the agent (the server presses Escape: kind `interrupt`).
-  "interrupt *", "escape", "press|hit escape *", "stop it", "stop that",
+/** The words a slot that takes "the rest" may be made of (`+NAME`). */
+const VOCAB: Record<string, Set<string>> = {
+  // scroll|roll … up / down, how far, to which end (voice_router _SCROLL_*).
+  SCROLL: new Set(
+    (
+      "up down it this that the output screen terminal session window pane text page log logs conversation" +
+      " back by a bit little touch slightly tad half line lines pages screens times twice couple of few way" +
+      " lot lots some further more to top bottom end beginning latest newest very all again right"
+    ).split(" ")
+  ),
+  PAGE: new Set("times twice".split(" ")),
+  BIT: new Set("a bit little".split(" ")),
+  // go back (again | to the last one | to where I was).
+  BACK: new Set("again to the last previous other one session window where i was".split(" ")),
+  // what can I say (to you | here).
+  SAY: new Set("to you here".split(" ")),
+  // read it / the last reply / its question again / what it said.
+  READ: new Set("me it out that the its it's last reply answer message question again what said".split(" ")),
+  // An answer's words (voice_router `_BODY_WORDS`) and "please".
+  ANSWER: new Set(
+    (
+      "yes yeah yep yup sure ok okay approve approved allow allowed go ahead do it that this all no nope deny" +
+      " denied reject don't dont not skip cancel stop always and ask me again never thanks thank you please"
+    ).split(" ")
+  ),
+};
+
+/** One word slot of a pattern: one of `alts` (word keys; "#" a count, "#o"
+ * an ordinal), optional when `opt`; or `any` words (1…any, `grow`: no bound
+ * once the phrase is whole; `opt`: none at all is fine too); or the rest
+ * of the phrase, every word from `vocab`. */
+type GateSlot =
+  | { alts: Set<string>; opt?: boolean }
+  | { any: number; grow?: boolean; opt?: boolean }
+  | { vocab: Set<string> };
+interface GatePattern {
+  slots: GateSlot[];
+  /** Decided only on the WHOLE phrase: a prefix never holds for it (a name
+   * said first, "docs yes" — holding every phrase's first words for it
+   * would stop prompts typing live). */
+  whole?: boolean;
+}
+
+/** A slot from its spelling: "a|b" (one of), "a|b?" (optional), "#" / "#o"
+ * (a count / an ordinal, among the alternatives), "*" (the rest, at least
+ * one word), "*?" (the rest, maybe none), "*3" (one to three words), "~2"
+ * (one or two words while the phrase streams, any number once it is whole —
+ * a name before a closing word: "what's <name> doing"), "+NAME" (the rest,
+ * every word from {@link VOCAB}). */
+function gateSlot(s: string): GateSlot {
+  if (s === "*") return { any: Infinity };
+  if (s === "*?") return { any: Infinity, opt: true };
+  if (/^\*\d+$/.test(s)) return { any: Number(s.slice(1)) };
+  if (/^~\d+$/.test(s)) return { any: Number(s.slice(1)), grow: true };
+  if (s.startsWith("+")) return { vocab: new Set([...VOCAB[s.slice(1)]].map(wordKey)) };
+  const opt = s.endsWith("?");
+  return { alts: new Set((opt ? s.slice(0, -1) : s).split("|").map(wordKey)), opt };
+}
+const gatePattern = (p: string): GatePattern => {
+  const whole = p.startsWith("!");
+  return { slots: (whole ? p.slice(1) : p).split(" ").map(gateSlot), whole };
+};
+
+/** The router's commands as word patterns — backend/web/core/voice_router.py
+ * `command()`, `_CMDS`, `_NEW_RE` and the navigation / read / answer
+ * patterns — wide enough that every phrase it takes passes (the pinned
+ * phrases: tests/unit/data/voice_gate_phrases.json, voiceGateParity.test),
+ * narrow enough that a prompt types live once its words say it is none. A
+ * name is bounded where a soft verb takes it ("open <name>": "open the
+ * settings file and check the port" is a prompt). The person's stop and
+ * hush phrases come from {@link matchers}. */
+const S = "switch|switched|twitch|go|change|jump|hop|focus|open|show|select";
+const YES_NO = "yes|yeah|yep|yup|sure|ok|okay|allow|approve|no|nope|deny|reject|always";
+const ENDS = "top|bottom|end|beginning|latest|newest";
+/** A session's name after a soft verb ("open the login fix session"): a
+ * short one, said whole. */
+const NAMED = "the|my? *3 session|one?";
+const GATE: GatePattern[] = [
+  "cancel", "never mind", "nevermind", "never mine", "forget it",
+  // Switch by name: the strong verbs take any name; the soft ones a short one.
+  `${S} me? over? to *`, "take|bring|get me over? to *", "put|get me on|onto|in *",
+  `open up? ${NAMED}`, `show me? ${NAMED}`, `focus on? ${NAMED}`, `select ${NAMED}`, `pull|bring up ${NAMED}`,
+  `talk to ${NAMED}`, `let me see ${NAMED}`, `go? back to ${NAMED}`, "bring|pull|call ~2 up", "switch|switched the *2",
+  // By number: "session three", "session number twenty one", "row 2",
+  // "session to"; "session three yes" answers there.
+  `session|window|row number? #|${SESSION_HOMOPHONES.join("|")} #? +ANSWER`, "number # #?",
+  "the? #o session|window|row|one|option|choice", "option|choice #", "#|#o",
+  // The next / previous row (and page: a scroll).
+  "the? next|previous|prev session|one|window|page?",
   // The session focused before (kind `switch_back`).
-  "go|switch|jump|flip|change back *", "back", "last session|one", "the other one", "previous",
+  "go|switch|jump|flip|hop|change back +BACK", "take|bring me back +BACK", "back +BACK",
+  "the? last|other session|window|one", "the one before that|this?",
   // Which session is this (kind `where`).
-  "where am i *", "which|what session is this|that", "which|what session am i in|on", "what am i looking at",
+  "where am|are i|we", "which|what session is|am|are this|that|it|open|i|we in|on?",
+  "what's|whats this|the current? session called?", "what is this|the current? session called?",
+  "which one am|is i|this|that in|on?", "what am i looking at",
   // The cheat sheet (kind `commands`).
-  "what can i say *", "commands", "voice commands", "show|list|read the|my commands *", "what are the commands *",
-  "what commands *", "help",
-].map((p) => p.split(" ").map((slot) => slot.split("|")));
-const ROUTER_LEADS = new Set(["ok", "okay", "hey", "please"]);
+  "what can|do i say +SAY", "what voice? commands *4", "what are the|my voice? commands",
+  "list|show|tell|read|give me? all? the|my? voice? commands", "voice? help|commands|command",
+  // Lists, what needs me, status — by name too ("what's docs doing").
+  "what|who needs|need me|attention", "what|who needs|need my attention",
+  "what|which|with sessions do i have", "what|which|with sessions are up|open|running",
+  "list the|my? sessions", "what's|whats up|open|running|happening", "what is up|open|running|happening",
+  "what's|whats going on", "what is going on", "status",
+  "what's|whats ~2 doing|up|working to|on?", "what is ~2 doing|up|working to|on?",
+  "how's|hows ~2 doing|going|getting|coming on|along?", "how is ~2 doing|going|getting|coming on|along?",
+  // The last reply (kind `read`) and the question asked (kind `question`).
+  "what did ~2 just? say|reply|answer|write last?", "what was the|its|it's last? reply|answer|message",
+  "what was the last thing it|they said", "read +READ",
+  "what's|whats ~2 asking me? for|about?", "what is ~2 asking me? for|about?",
+  "what does ~2 want me? to? do?", "what's|whats the question", "what is the question",
+  // Summaries, again, voice off.
+  "summarize|summarise|summerize|summerise that|it?", "summary", "say|save that again", "repeat that?",
+  "voice off", "turn voice off", "turn off voice",
+  // The stop and hush words' defaults and kin (the person's own: matchers()).
+  "stop listening|recording|dictating", "stop the mic|microphone", "stop", "mic|microphone off",
+  "turn mic|microphone off", "turn off the mic|microphone", "turn the mic|microphone off",
+  "stop talking|speaking|reading", "stop saying that", "be quiet", "quiet", "shut up", "hush",
+  "enough", "enough talking", "enough of that", "that's|thats enough", "that is enough",
+  "that's|thats all", "that is all", "done talking", "i'm|im done talking", "i am done talking", "pause listening",
+  // Scroll the focused pane (kind `scroll`), and again after one.
+  "scroll|roll|growl|crawl +SCROLL", "page up|down # +PAGE", "page up|down +PAGE", "half page up|down",
+  "go|move up|down +BIT", "up|down", "top|bottom", "the very? top|bottom", "to the very? top|bottom",
+  "all the way up|down", "all the way to the very? top|bottom", `skip to the? very? ${ENDS}`,
+  "more|further|again", "a bit|little|touch bit? more|further", "some more|further",
+  "keep going|scrolling", "keep on scrolling", "once more", "one more time",
+  // Interrupt the agent (the server presses Escape). Not "push / send /
+  // tap escape" (the router's too): a prompt's "… and push" would wait.
+  "interrupt|interrupts", "interrupt|interrupts *", "press|hit the|an? escape|esc key?",
+  "escape|esc key?", "stop it|that|this",
+  // Answers to a dialog or a question; "docs yes", "yes to docs" whole only.
+  `${YES_NO}|allowed|approved|denied|don't|dont|do|go|skip|never|thanks|thank +ANSWER`,
+  `!*2 ${YES_NO} +ANSWER`, `${YES_NO} to *3`, "tell|answer|reply *",
+  // A new session ("new session to fix the build", "spin one up").
+  "a|another? new session|agent *?", "another session|agent *?",
+  "start|open|create|make|launch a|another? new? session|agent *?",
+  "spin|fire|set up a|another? new? session|agent *?", "kick off a|another? new? session|agent *?",
+  "give me a|another? new? session|agent *?", "i want|need a|another? new? session|agent *?",
+  "i'd like a|another? new? session|agent *?",
+  "spin one up", "spin another one? up", "spin a new one up", "spin up a new one", "spin up another one",
+].map(gatePattern);
+
+/** Said before a command and never part of it (voice_router `_FILLER_RE`,
+ * `_FILL_LEAD_RE`, `_POLITE_RX`, `_LEAD`): "um, switch to docs", "okay so
+ * status", "can you go to the next session". */
+const FILLERS: string[][] = [
+  "um", "umm", "uh", "uhh", "uhm", "er", "erm", "hmm", "mm", "mmm", "ah", "oh", "so", "alright", "all right",
+  "right", "well", "and", "now", "then", "actually", "anyway", "just", "please", "ok", "okay", "hey",
+  "can you", "could you", "would you", "will you", "go ahead and", "i want to", "i'd like to",
+  "i would like to", "i wanna", "i need to", "let's", "lets",
+].map((f) => f.split(" ").map(wordKey));
+/** Said after a command: "scroll up please", "status now". */
+const TAILS = ["please", "now", "thanks"];
+
+/** The words of a phrase as the router reads them (see {@link routerWords}),
+ * a doubled word said once ("stop stop"), as word keys (no apostrophes). */
+function gateWords(text: string): string[] {
+  return routerWords(text)
+    .filter((x, i, a) => i === 0 || x !== a[i - 1])
+    .map(wordKey);
+}
+
+const fillerAt = (w: string[], i: number): number => {
+  for (const f of FILLERS) if (f.every((x, k) => w[i + k] === x)) return f.length;
+  return 0;
+};
+
+/** `w` without its leading fillers, its trailing "please" / "now" / "for
+ * me" — and whether what is left is still only the start of a filler ("can",
+ * "i want"). */
+function stripFillers(w: string[]): { words: string[]; partial: boolean } {
+  let i = 0;
+  for (let n = fillerAt(w, i); n && i < w.length; n = fillerAt(w, i)) i += n;
+  let words = w.slice(i);
+  const partial = words.length > 0 && FILLERS.some((f) => f.length > words.length && words.every((x, k) => f[k] === x));
+  while (words.length > 1 && TAILS.includes(words[words.length - 1])) words = words.slice(0, -1);
+  if (words.length > 2 && words[words.length - 2] === "for" && words[words.length - 1] === "me") words = words.slice(0, -2);
+  return { words, partial };
+}
+
+function slotHas(s: { alts: Set<string> }, w: string): boolean {
+  return s.alts.has(w) || (s.alts.has("#") && isNumWord(w)) || (s.alts.has("#o") && isOrdWord(w));
+}
+
+/** Do `w` fit the pattern — all of it (`whole`), or as its start so far? */
+function fits(w: string[], p: GateSlot[], whole: boolean, i = 0, j = 0): boolean {
+  if (i === w.length) {
+    if (!whole) return true;
+    return p.slice(j).every((s) => "vocab" in s || !!s.opt);
+  }
+  if (j === p.length) return false;
+  const s = p[j];
+  if ("vocab" in s) return w.slice(i).every((x) => s.vocab.has(x));
+  if ("any" in s) {
+    if (s.opt && fits(w, p, whole, i, j + 1)) return true;
+    const most = Math.min(whole && s.grow ? Infinity : s.any, w.length - i);
+    for (let n = 1; n <= most; n++) if (fits(w, p, whole, i + n, j + 1)) return true;
+    return false;
+  }
+  if (s.opt && fits(w, p, whole, i, j + 1)) return true;
+  return slotHas(s, w[i]) && fits(w, p, whole, i + 1, j + 1);
+}
+
+/** The person's stop and hush phrases ({@link VoiceMatchers.commands}) as
+ * patterns, per matcher build. */
+const wordPatterns = new WeakMap<VoiceMatchers, GatePattern[]>();
+function personPatterns(): GatePattern[] {
+  const M = matchers();
+  let got = wordPatterns.get(M);
+  if (!got) {
+    got = M.commands.map((p) => ({ slots: p.map((alts) => ({ alts: new Set(alts.map(wordKey)) })) }));
+    wordPatterns.set(M, got);
+  }
+  return got;
+}
 
 /** Could the phrase that starts with `text` be a router command? A streamed
- * first phrase that could waits whole for its end (the router reads whole
- * phrases); one that can't — almost every prompt — is typed as it comes. The
- * router's lead word and trailing "please" are dropped as it drops them. */
-export function mayBeCommand(text: string): boolean {
-  // A doubled word ("stop stop", "Stop. Stop.") is said once, as the router
-  // (voice_router.command) reads it.
-  let w = routerWords(text).filter((x, i, a) => i === 0 || x !== a[i - 1]);
-  if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
-  if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
-  if (!w.length) return true;
-  const keys = w.map(wordKey);
-  return COMMANDS.concat(matchers().commands).some((p) => {
-    for (let i = 0; i < w.length; i++) {
-      if (i >= p.length) return false;
-      if (p[i][0] === "*") return true;
-      if (!p[i].includes(w[i]) && !p[i].includes(keys[i])) return false;
-    }
-    return true;
-  });
+ * phrase that could waits whole for its end (the router reads whole
+ * phrases); one that can't — almost every prompt — is typed as it comes.
+ * `whole`: `text` is the whole phrase (its end is here) — then the question
+ * is whether the router may take it as said, and a name may run past the
+ * bound a streamed guess is held for ("what does sitecheck bot 7 want"),
+ * and a name said first ("docs yes") counts. Fillers before ("um", "so",
+ * "can you") and "please" after are dropped as the router drops them. */
+export function mayBeCommand(text: string, whole = false): boolean {
+  const raw = gateWords(text);
+  if (!raw.length) return true;
+  const { words, partial } = stripFillers(raw);
+  if (!whole && (partial || !words.length)) return true;
+  const tries = words.length && words.length !== raw.length ? [raw, words] : [raw];
+  const all = GATE.concat(personPatterns());
+  return tries.some((w) => all.some((p) => (whole || !p.whole) && fits(w, p.slots, whole)));
+}
+
+/** A phrase that may start a session ("new session to fix the build"): its
+ * route may take as long as the session's creation, so it is waited for
+ * longer ({@link ROUTE_NEW_TIMEOUT_MS}). */
+export function mayStartSession(text: string): boolean {
+  const w = stripFillers(gateWords(text)).words.join(" ");
+  return /\b(?:new|another) (?:session|agent)\b|\bspin\b|^(?:start|open|create|make|launch|give me|i want|i need) a session\b/.test(w);
 }
 
 /** A whole session-switch command ("switch to the login fix", "focus 3",
@@ -205,17 +397,77 @@ export function isSwitchCommand(text: string): boolean {
   let w = routerWords(text);
   if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
   if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
-  // A whole scroll ("scroll up", "page down", "scroll to the bottom") or
-  // "switch back": acted on as soon as the voice is quiet, like a switch.
-  const all = w.join(" ");
-  if (/^(?:scroll (?:up|down)(?: a bit| more)?|page (?:up|down)|scroll to the (?:top|bottom)|switch back)$/.test(all)) return true;
+  if (isFastCommand(w.join(" "))) return true;
   if (/^(?:switch|go|change|jump)$/.test(w[0] || "")) {
     const at = w[1] === "over" ? 2 : 1;
     return w[at] === "to" && w.length > at + 1;
   }
-  if (/^(?:focus|select)$/.test(w[0] || "")) return w.length > 1;
-  if (/^(?:next|previous)$/.test(w[0] || "")) return w.length === 2 && /^(?:session|one)$/.test(w[1]);
-  return w.length >= 2 && /^(?:session|number|row)$/.test(w[0]) && new RegExp("^(?:" + NUMS + ")$").test(w[1]);
+  return /^(?:focus|select)$/.test(w[0] || "") && w.length > 1;
+}
+const ROUTER_LEADS = new Set(["ok", "okay", "hey", "please"]);
+const FAST_NUM = "[1-9][0-9]?|" + [...NUM_WORDS, ...ORD_WORDS].join("|");
+
+/** A whole command that carries no free words — a scroll ("scroll up",
+ * "page down", "scroll to the bottom"), "switch back", "next session", a
+ * session by number ("session three") — acted on from the fast guess as
+ * soon as the voice is quiet. One with a NAME ("switch to the login fix")
+ * waits for the accurate final: the fast guess mishears names. */
+export function isFastCommand(text: string): boolean {
+  let w = routerWords(text);
+  if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
+  if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
+  const all = w.join(" ");
+  if (/^(?:scroll (?:up|down)(?: a bit| more)?|page (?:up|down)|scroll to the (?:top|bottom)|switch back)$/.test(all)) return true;
+  if (/^(?:next|previous) (?:session|one)$/.test(all)) return true;
+  if (/^(?:focus|select) (?:[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine)$/.test(all)) return true;
+  return new RegExp("^(?:session|number|row)(?: number)? (?:" + FAST_NUM + ")(?: (?:" + FAST_NUM + "))?$").test(all);
+}
+
+/** A first word that may be the wake word misheard ("Mindful, I'll …",
+ * "mindfulout …"), and the "flock" half of a two-word one ("line flock",
+ * "my flock"): a phrase that starts so is held whole and asked of the
+ * router ({@link mayAddress}), which decides with the server's wake rule —
+ * holding costs a prompt that starts so only its live typing. */
+const WAKE_FIRST = new Set(["my", "mine", "mind", "min", "mi", "me", "mai", "line", "mime"]);
+const FLOCKISH = new Set(["flock", "flocks", "flog", "flak", "fluck", "flunk", "lock", "luck", "block", "clock", "fock", "flop"]);
+const WAKE_LEAD_WORDS = new Set(["hey", "ok", "okay", "please", "ask"]);
+
+/** Could the phrase that starts with `text` be said TO MindFlock — its wake
+ * word ({@link mayBeWake}: lib/voiceWords, the server's rule), or a first
+ * word the recogniser makes of it ("Mindful", "Line flock")? Such a phrase
+ * waits whole wherever it falls in a message, so a command is never typed
+ * only to be taken back. */
+export function mayAddress(text: string): boolean {
+  if (mayBeWake(text)) return true;
+  let w = routerWords(text).map(wordKey);
+  if (w.length > 1 && WAKE_LEAD_WORDS.has(w[0])) w = w.slice(1);
+  if (!w.length) return false;
+  if (/^min[det]/.test(w[0]) && w[0].length > 4) return true;
+  if (!WAKE_FIRST.has(w[0])) return false;
+  return w.length === 1 || FLOCKISH.has(w[1]);
+}
+
+/** Leads of a phrase said to MindFlock that ask it for something the router
+ * itself does not do (open a dialog, change a setting, answer a question):
+ * after the wake word, such a phrase is the assistant's. */
+const ASSIST_LEADS = new Set(
+  "open show close hide turn toggle enable disable tell ask what whats which who how hows where is are".split(" ")
+);
+
+/** A phrase said to MindFlock — after a wake that started listening, or a
+ * lone wake word mid-message ("My flock." … "open settings") — as it goes
+ * to the router: a command of its own ("next session", "status") as said;
+ * a request for the app ("open settings", "what needs me") with the wake
+ * word before it (the router's `assistant`); else null: dictation, typed
+ * as ever ("fix the login bug"). */
+export function addressedRoute(text: string, wake = wakeName()): string | null {
+  const said = String(text || "").trim();
+  const { words } = stripFillers(gateWords(said));
+  if (!words.length) return null;
+  if (wakeAt(said) !== null) return said;
+  if (mayBeCommand(said, true) && !/^(?:open|show)$/.test(words[0])) return said;
+  if (ASSIST_LEADS.has(words[0])) return wake + ", " + said;
+  return null;
 }
 
 const bareWord = (w: string) => w.toLowerCase().replace(/[’`]/g, "'").replace(/[^\p{L}\p{N}']+/gu, "");
@@ -224,7 +476,18 @@ const bareWord = (w: string) => w.toLowerCase().replace(/[’`]/g, "'").replace(
 
 // The sound-alike tolerance (lib/voiceWords: `heard`, soundTail, soundsLikeAny),
 // imported here beside the matchers that use it.
-import { heardOf, isWakePhrase, mayBeWake, soundTail, soundsLikeAny, STOP_FILLERS, stopAlone } from "./voiceWords";
+import {
+  heardOf,
+  isWakePhrase,
+  mayBeWake,
+  soundTail,
+  soundsLikeAny,
+  STOP_FILLERS,
+  stopAlone,
+  wakeAt,
+  wakeName,
+  wakeRest,
+} from "./voiceWords";
 
 /** The radio words' optional tails: "disregard that", "over it". */
 const RADIO_TAILS = ["that", "it", "all", "everything"];
@@ -551,8 +814,8 @@ export interface VoicePrefs {
    * "MindFlock" starts listening. Off by default; absent reads as off. */
   wake?: boolean;
   /** Spoken confirmations of what YOUR words did ("Sent.", "Cleared.") —
-   * {@link CONFIRM_LINES}. On by default, whatever `replies` says; absent
-   * reads as on. */
+   * {@link CONFIRM_LINES}. OFF by default (the owner heard them as echoes,
+   * 2026-10-28), whatever `replies` says; absent reads as off. */
   confirm?: boolean;
   /** The mic's chimes (lib/wakeWord chime): rising as listening starts,
    * falling as it stops. On by default; absent reads as on. */
@@ -808,7 +1071,7 @@ export type DictOutcome =
    * can't be a router command, so it goes straight in. `guess`: the phrase
    * is not over — typed only where it can go now, never past the router, a
    * dialog on screen or a missing session (the phrase's end decides then). */
-  | { kind: "type"; text: string; erase?: string; route?: boolean; guess?: boolean }
+  | { kind: "type"; text: string; erase?: string; route?: boolean; guess?: boolean; addressed?: boolean }
   /** Push to talk let go, silence: type `text` (if any), stop — the words
    * stay in the field. `stop`: it was a stop phrase ("stop recording"). */
   | { kind: "leave"; text: string; erase?: string; stop?: boolean }
@@ -865,6 +1128,18 @@ export const STOPPED_LINE = "Stopped listening";
 /** The caption after "stop talking" — shown {@link HUSH_CAPTION_MS}. */
 export const HUSH_LINE = "Quiet.";
 export const HUSH_CAPTION_MS = 1000;
+/** A phrase the router did not take, typed, and why ({@link RouteVerdict}'s
+ * note, {@link routeMissLine}): the caption shows it this long before the
+ * running words come back. */
+export const NOTE_CAPTION_MS = 3000;
+/** A lone wake word ("My flock.") said in a listen: the next phrase begun
+ * within this long is said to MindFlock ({@link Dictation.address}). */
+export const ADDRESSED_MS = 6000;
+/** The caption after a lone wake word: nothing typed, the next phrase is
+ * MindFlock's. */
+export const ADDRESSED_LINE = "Yes? — say the command";
+/** The caption when a listen the wake word started hears nothing. */
+export const WAKE_MISS_LINE = "Didn't catch anything";
 /** The mic's tooltip while listening and a line plays (the recorder muted
  * for it): what it hears now is not typed. */
 export const MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
@@ -1121,6 +1396,23 @@ export class Dictation {
    * order: "scratch that" said alone takes back from the last one. A mark
    * past the end of {@link typed} (its phrase never went in) is skipped. */
   private marks: number[] = [];
+  /** Until when (ms) a phrase that begins is said TO MindFlock (a wake
+   * started listening, or a lone wake word was said: {@link address}). */
+  private addressedUntil = 0;
+  /** The phrase under way began inside {@link addressedUntil}. */
+  private phraseAddressed = false;
+
+  /** The next phrase — one beginning within `ms` — is said to MindFlock:
+   * it waits whole for the router, wherever it falls in the message. */
+  address(ms: number): void {
+    this.addressedUntil = Date.now() + ms;
+  }
+
+  /** The phrase under way (or, between phrases, one beginning now) is said
+   * to MindFlock. */
+  private get addressed(): boolean {
+    return this.phraseAt >= 0 ? this.phraseAddressed : Date.now() < this.addressedUntil;
+  }
 
   begin(): void {
     this.listening = true;
@@ -1144,7 +1436,9 @@ export class Dictation {
     if (before !== null) return { kind: parseRadio(before).kind === "out" ? "out" : "stop", text: all };
     const r = parseRadio(all).kind;
     if (r) return { kind: r, text: all };
-    if (this.routes && !this.before && isSwitchCommand(all)) return { kind: "route", text: all };
+    // Only a command without a name acts from the fast guess ("next
+    // session", "scroll up", "session three"); a name waits for the final.
+    if (this.routes && !this.before && isFastCommand(all)) return { kind: "route", text: all };
     return null;
   }
 
@@ -1350,7 +1644,10 @@ export class Dictation {
 
   /** The phrase under way, typed as far as it may be now. */
   private guess(): DictOutcome {
-    if (this.phraseAt < 0) this.phraseAt = this.typed.length;
+    if (this.phraseAt < 0) {
+      this.phraseAddressed = Date.now() < this.addressedUntil;
+      this.phraseAt = this.typed.length;
+    }
     const all = joinWords(this.held, this.partial);
     // A first phrase that may be a command waits whole for the router —
     // asked of the words that would be typed, the radio word held back, as
@@ -1359,7 +1656,7 @@ export class Dictation {
     // So does a phrase said to MindFlock ("MindFlock, open settings"),
     // wherever it falls in the message.
     const hb = holdBack(all);
-    const want = this.mayRoute(hb.type) ? "" : hb.type;
+    const want = this.mayRoute(hb.type, false) ? "" : hb.type;
     const fix = retype(this.guessed, want);
     if (!fix.erase && !fix.type) return { kind: "continue" };
     return withErase({ kind: "type" as const, text: fix.type, route: false, guess: true }, fix.erase);
@@ -1368,24 +1665,33 @@ export class Dictation {
   /** The phrase under way ends as `text`: the keys from its guess to that.
    * A first phrase the router may take is taken back whole first, so the
    * router reads it before any of it is in the field. */
-  private settle(text: string): { text: string; erase?: string } {
+  private settle(text: string): { text: string; erase?: string; addressed?: boolean } {
     const guessed = this.guessed;
-    const whole = this.mayRoute(text);
+    const addressed = this.addressed && !!text.trim();
+    const whole = this.mayRoute(text, true);
     if (text.trim()) this.marks.push(this.phraseAt < 0 ? this.typed.length : this.phraseAt);
     this.phraseAt = -1;
     this.held = "";
     this.partial = "";
+    if (text.trim()) {
+      // Said to MindFlock: this phrase was it.
+      this.phraseAddressed = false;
+      if (addressed) this.addressedUntil = 0;
+    }
     const fix = whole ? { erase: guessed, type: text } : retype(guessed, text);
-    return withErase({ text: fix.type }, fix.erase);
+    return withErase(addressed ? { text: fix.type, addressed } : { text: fix.type }, fix.erase);
   }
 
   /** The phrase `text` may be the router's, so its guess waits whole: a
-   * message's first phrase that may be a command ({@link mayBeCommand}), or
-   * a phrase that starts with the wake word ({@link mayBeWake}) anywhere in
-   * the message — "MindFlock, open settings" after words already typed is
-   * the router's too ({@link LiveDictation}'s put). Never in a text box. */
-  private mayRoute(text: string): boolean {
-    return this.routes && ((!this.before && mayBeCommand(text)) || mayBeWake(text));
+   * message's first phrase that may be a command ({@link mayBeCommand}:
+   * `whole`, the phrase is over — else its words so far), a phrase that
+   * starts with the wake word or what the recogniser makes of it
+   * ({@link mayAddress}), or one said to MindFlock after a wake
+   * ({@link address}), anywhere in the message — "MindFlock, open
+   * settings" after words already typed is the router's too
+   * ({@link LiveDictation}'s put). Never in a text box. */
+  private mayRoute(text: string, whole: boolean): boolean {
+    return this.routes && ((!this.before && mayBeCommand(text, whole)) || mayAddress(text) || this.addressed);
   }
 
   /** The control phrases: "stop talking" said as a whole phrase (`whole`:
@@ -1730,7 +2036,7 @@ export interface LiveHooks {
    * talking" in words only the router knows (listening goes on); "end" when
    * what it did ends listening even in a continuous dictation ("stop",
    * "cancel", or the ask pop-up opened a field the mic starts again into). */
-  route(text: string, spokeAt?: number): Promise<boolean | "hush" | "end">;
+  route(text: string, spokeAt?: number): Promise<RouteVerdict>;
   /** When the phrase being recorded now began (ms; 0: no speech yet, or the
    * recognizer can't say) — the server recognizer's first loud block. */
   spokeAt?(): number;
@@ -1779,6 +2085,12 @@ export interface LiveHooks {
    * {@link SWALLOW_MAX_MS}. */
   endsSurely?(): boolean;
 }
+
+/** What the page did with a phrase it routed ({@link LiveHooks.route}): acted
+ * (true), "hush", "end", not a command (false: typed) — or not a command
+ * with a `note` for the caption ("Typed — no session called docks"),
+ * never said aloud. */
+export type RouteVerdict = boolean | "hush" | "end" | { note: string };
 
 /** The spoken confirmations of the dictation's actions — about what YOU did,
  * so they speak with replies off too (Settings → Voice "Spoken
@@ -1909,6 +2221,10 @@ export class LiveDictation {
    * as typed until it is through, but they are gone — a phrase opening
    * meanwhile starts the next message ({@link streamContext}: none). */
   private sending = false;
+  /** A note on the last phrase ({@link RouteVerdict}): the caption until then (ms). */
+  private note = "";
+  private noteUntil = 0;
+  private noteTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private target: DictTarget | null,
@@ -1922,6 +2238,13 @@ export class LiveDictation {
     this.dict.routes = target?.kind !== "field";
     this.dict.continuous = !!opts.continuous;
     this.watch(target);
+  }
+
+  /** The next phrase (one begun within `ms`) is said to MindFlock: a listen
+   * the wake word started, or after a lone wake word ({@link put}). Never
+   * in a text box (its words are the box's). */
+  address(ms: number = ADDRESSED_MS): void {
+    if (!this.done && this.dict.routes) this.dict.address(ms);
   }
 
   /** For the recognizer's next phrase (its stream's open): the message's
@@ -2271,15 +2594,25 @@ export class LiveDictation {
     this.end(kept ? line + " — the words so far stay in the field" : line, true, "stopped");
   }
 
-  /** Hands-free listening ran out with nothing said: stop quietly, a miss. */
-  drop(): void {
-    this.end("", false, "missed");
+  /** Listening ran out with nothing said: stop, a miss — quietly
+   * (hands-free), or with `line` (a wake that heard nothing:
+   * {@link WAKE_MISS_LINE}). */
+  drop(line = ""): void {
+    this.end(line, false, "missed");
   }
 
   /** The running text — the words in, then the unsure tail (greyed) — or,
    * before a word, whether the mic hears you and what to say. */
   show(): void {
     if (this.done) return;
+    const noteLeft = this.noteUntil - Date.now();
+    if (this.note && noteLeft > 0) {
+      this.hooks.caption(this.note, true);
+      clearTimeout(this.noteTimer);
+      this.noteTimer = setTimeout(() => this.show(), noteLeft);
+      return;
+    }
+    this.note = "";
     if (this.dict.shown || this.dict.partial) {
       this.hooks.caption(this.dict.shown, true, this.dict.partial);
       return;
@@ -2313,6 +2646,7 @@ export class LiveDictation {
     clearTimeout(this.sendWait);
     this.sendNow = null;
     clearTimeout(this.swallowing);
+    clearTimeout(this.noteTimer);
     clearInterval(this.early?.timer);
     this.early = null;
     this.dict.listening = false;
@@ -2337,7 +2671,7 @@ export class LiveDictation {
         this.end("");
         return;
       case "type":
-        if (await this.put(out.text, out.route !== false, out.erase, out.guess)) this.show();
+        if (await this.put(out.text, out.route !== false, out.erase, out.guess, { phrase: true, addressed: !!out.addressed })) this.show();
         return;
       case "erase":
         if (out.text && t && this.dialogBlocks(t)) {
@@ -2520,7 +2854,13 @@ export class LiveDictation {
    * isn't over) goes in only where it can now: with no session or a dialog
    * up it waits for the phrase's end, which decides. False when it did not
    * go in (and listening ended). */
-  private async put(text: string, route = true, erase = "", guess = false): Promise<boolean> {
+  private async put(
+    text: string,
+    route = true,
+    erase = "",
+    guess = false,
+    o: { phrase?: boolean; addressed?: boolean } = {}
+  ): Promise<boolean> {
     const t = this.target;
     if (guess) {
       if (!t) return true;
@@ -2531,10 +2871,31 @@ export class LiveDictation {
       }
       return this.keys(t, erase, text);
     }
+    const toRouter = route && t?.kind !== "field" && this.dict.routes;
+    // The wake word alone ("My flock." — then a breath, then "open
+    // settings"): nothing typed, and the next phrase is MindFlock's.
+    if (toRouter && o.phrase && this.dict.listening && wakeRest(text) === "") {
+      if (erase && t && !this.keys(t, erase, "")) return false;
+      this.dict.address(ADDRESSED_MS);
+      voiceTrace("wake", { phrase: text.trim(), alone: true, typed: this.dict.typed.length });
+      this.hooks.caption(ADDRESSED_LINE, true);
+      return false;
+    }
+    // Said to MindFlock after a wake: a command of its own, a request for
+    // the app (to the router with the wake word before it) — else words.
+    if (toRouter && o.addressed) {
+      const said = addressedRoute(text);
+      if (said !== null) {
+        const r = await this.wakeCommand(t, said, erase);
+        if (r !== null) return r;
+        erase = "";
+        route = false;
+      }
+    }
     // Said to MindFlock mid-message ("My flock, open settings."): the
     // router's, never typed — the words before it stay in the box, and
     // listening goes on (unless what it did ends it).
-    if (route && t?.kind !== "field" && this.dict.routes && this.dict.typed.length > erase.length && isWakePhrase(text)) {
+    else if (toRouter && this.dict.typed.length > erase.length && isWakePhrase(text)) {
       const wake = await this.wakeCommand(t, text, erase);
       if (wake !== null) return wake;
       erase = "";
@@ -2551,7 +2912,7 @@ export class LiveDictation {
       // The words show at once, muted — not typed yet: the router (a round
       // trip) decides whether they are a command or the prompt.
       if (route) this.hooks.caption(this.dict.shown, true, words);
-      const routed = route ? await this.hooks.route(words, this.stepSpoke) : false;
+      const routed = this.verdict(route ? await this.hooks.route(words, this.stepSpoke) : false);
       if (routed === "hush") {
         this.hushed();
         return false;
@@ -2587,7 +2948,7 @@ export class LiveDictation {
     if (erase && t && !this.keys(t, erase, "")) return false;
     const words = text.trim();
     this.hooks.caption(this.dict.shown, true, words);
-    const routed = await this.hooks.route(words, this.stepSpoke);
+    const routed = this.verdict(await this.hooks.route(words, this.stepSpoke));
     voiceTrace("wake", { phrase: words, routed, typed: this.dict.typed.length });
     if (routed === "hush") {
       this.hushed();
@@ -2596,10 +2957,28 @@ export class LiveDictation {
     if (routed) {
       this.acted = true;
       if (routed === "end") this.end(null);
-      else this.show();
+      // Nothing of this message typed yet: the next words start one, as
+      // after a first phrase the router took.
+      else if (!this.dict.typed) {
+        if (this.dict.continuous) this.next(null);
+        else this.end(null);
+      } else this.show();
       return false;
     }
     return this.done ? false : null;
+  }
+
+  /** The route's verdict, its note (if any) kept for the caption
+   * ({@link show}) — a phrase not taken is typed, and the caption says why. */
+  private verdict(v: RouteVerdict): boolean | "hush" | "end" {
+    if (v && typeof v === "object") {
+      if (v.note) {
+        this.note = v.note;
+        this.noteUntil = Date.now() + NOTE_CAPTION_MS;
+      }
+      return false;
+    }
+    return v;
   }
 
   /** A dialog is up on the session words go to (MF2: typed words could
@@ -2759,6 +3138,49 @@ export interface RouteReply {
    * phrase ({@link PendingChoice}), which it reads as the pick, the project
    * or the task. */
   pending?: Record<string, unknown>;
+  /** prompt: the command it nearly was, and why it is words (the router's
+   * `_near`) — the caption says so ({@link routeMissLine}). Read
+   * defensively: an older server sends none. */
+  near?: RouteNear;
+  /** The router did not answer — "timeout" (past {@link ROUTE_TIMEOUT_MS})
+   * or "error" (an error, the network, a body that is no answer): `kind`
+   * is what this page made of the words itself ({@link localRoute}), else
+   * a prompt. */
+  failed?: "timeout" | "error";
+  /** prompt: the router answered a kind this page does not know (a newer
+   * server). */
+  unknown?: string;
+}
+
+/** A prompt that nearly was a command: `kind` (switch, status, read,
+ * question, interrupt, answer), `why` (no_session, no_dialog, no_focus),
+ * the name said (`arg`) and the session it sounds like (`suggest`). */
+export interface RouteNear {
+  kind?: string;
+  why?: string;
+  arg?: string;
+  suggest?: string;
+}
+
+/** The caption for a phrase the router did not take and that is typed — a
+ * near miss, the router not answering, a kind this page does not know —
+ * else "" (an ordinary prompt: nothing to say). Never spoken. */
+export function routeMissLine(r: Pick<RouteReply, "kind" | "near" | "failed" | "unknown">): string {
+  if (r.kind !== "prompt") return "";
+  if (r.failed === "timeout") return "Typed — the voice router didn't answer in time";
+  if (r.failed) return "Typed — couldn't reach the voice router";
+  if (typeof r.unknown === "string") return "Typed — this page doesn't know “" + (r.unknown || "?") + "” yet (reload it)";
+  const n = r.near && typeof r.near === "object" ? r.near : null;
+  if (!n) return "";
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  if (n.why === "no_dialog") return "Typed — nothing is being asked";
+  if (n.why === "no_focus") return "Typed — no session is focused";
+  if (n.why === "no_session") {
+    const arg = str(n.arg);
+    const suggest = str(n.suggest);
+    return (arg ? "Typed — no session called " + arg : "Typed — no such session") + (suggest ? " (did you mean " + suggest + "?)" : "");
+  }
+  return "";
 }
 
 const ROUTE_KINDS = new Set<string>([
@@ -2937,16 +3359,27 @@ export async function recheckDialog(
 /** The line for an answer begun before its dialog was there. */
 export const earlyLine = (name: string) => name + " asked just now: say your answer again";
 
+/** How long a phrase waits for the router before this page decides alone
+ * ({@link localRoute}): the phone's `VOICE_ROUTE_TIMEOUT_MS`. */
+export const ROUTE_TIMEOUT_MS = 2000;
+/** …a phrase that may start a session ({@link mayStartSession}): the
+ * route creates it before it answers, and giving up early would type the
+ * words into the focused session as well. */
+export const ROUTE_NEW_TIMEOUT_MS = 15_000;
+
 /** Ask the router what one phrase means, with what it last asked back —
  * and when the phrase began (`spokeAt`, ms: sent as an age, `spoke_ms_ago`,
  * so the server reads it on its own clock; `spoke_at` is this page's clock,
  * for the record) and which dialogs this page has had since when
  * (`dialog_seen`): the server presses an answer only when the phrase began
  * after its dialog was there; `heard`, the fast recognizer's text of the
- * same phrase when the stream gave one. Anything but a well-formed 200 — the route
- * missing (an older server), an error, the network — means "it is a
- * prompt": the words were meant for the session, never lost to the
- * router. */
+ * same phrase when the stream gave one. No answer within `timeoutMs` (the
+ * route missing, an error, the network, a body that is no answer): a
+ * command that needs no server is carried out here ({@link localRoute}:
+ * "next session", "session three", "stop"…), anything else is a prompt
+ * marked `failed` — the words were meant for the session, never lost to
+ * the router, and the caption says why ({@link routeMissLine}). A kind
+ * this page does not know is a prompt marked `unknown`. */
 export async function routePhrase(
   text: string,
   session: string,
@@ -2954,7 +3387,10 @@ export async function routePhrase(
   spokeAt?: number,
   seen: DialogSeen = dialogSeen,
   heard?: string,
+  timeoutMs?: number,
 ): Promise<RouteReply> {
+  const ms = timeoutMs ?? (mayStartSession(text) ? ROUTE_NEW_TIMEOUT_MS : ROUTE_TIMEOUT_MS);
+  let failed: "timeout" | "error" = "error";
   try {
     // `session`: the focused session (the one a scroll or an interrupt acts
     // on); `heard`: Moonshine's text of the phrase (/end's `heard`), which
@@ -2969,13 +3405,76 @@ export async function routePhrase(
     }
     const had = seen.body();
     if (Object.keys(had).length) json.dialog_seen = had;
-    const r = await api<RouteReply>("/api/voice/route", { json });
-    if (r && typeof r === "object") pending.keep(r);
-    if (r && typeof r === "object" && ROUTE_KINDS.has(String(r.kind))) return r;
+    // Past the wait the page decides; the request runs out on its own (the
+    // server finishes what it started, as the phone's does).
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<null>((resolve) => {
+      timer = setTimeout(() => {
+        failed = "timeout";
+        resolve(null);
+      }, ms);
+    });
+    const r = await Promise.race([api<RouteReply>("/api/voice/route", { json }), late]).finally(() => clearTimeout(timer));
+    if (r && typeof r === "object") {
+      pending.keep(r);
+      if (ROUTE_KINDS.has(String(r.kind))) return r;
+      return { kind: "prompt", unknown: String(r.kind ?? "") };
+    }
   } catch {
     /* fall through */
   }
-  return { kind: "prompt" };
+  const local = localRoute(text);
+  return local ? { ...local, failed } : { kind: "prompt", failed };
+}
+
+/** A spoken count (1–99): "three", "twenty one", "12", a session homophone
+ * right after its noun ("session to"). */
+function spokenCount(words: string[], homophones: boolean): number | null {
+  const units = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+  const teens = ["ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+  const tens = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+  const homo: Record<string, number> = { won: 1, to: 2, too: 2, free: 3, tree: 3, for: 4, fore: 4, ate: 8 };
+  const [a, b] = words;
+  if (words.length === 1) {
+    if (/^[1-9][0-9]?$/.test(a)) return Number(a);
+    if (units.includes(a)) return units.indexOf(a) + 1;
+    if (teens.includes(a)) return teens.indexOf(a) + 10;
+    if (tens.includes(a)) return (tens.indexOf(a) + 2) * 10;
+    if (homophones && a in homo) return homo[a];
+    return null;
+  }
+  if (words.length === 2 && tens.includes(a) && units.includes(b)) return (tens.indexOf(a) + 2) * 10 + units.indexOf(b) + 1;
+  return null;
+}
+
+/** The commands this page can carry out with no answer from the router —
+ * the ones that take no name and need nothing done on the server (a scroll
+ * or an interrupt does): the next / previous session, a session by number,
+ * back, where am I, the cheat sheet, cancel, again, the stop and hush
+ * words. Null: anything else (typed). */
+export function localRoute(text: string): RouteReply | null {
+  const said = String(text || "").trim();
+  if (!said) return null;
+  if (isHushPhrase(said)) return { kind: "hush" };
+  if (stopTail(said) === "") return { kind: "stop" };
+  const w = stripFillers(gateWords(said)).words;
+  const all = w.join(" ");
+  if (!all) return null;
+  if (all === "stop") return { kind: "stop" };
+  if (/^(?:cancel|never ?mind|forget it)$/.test(all)) return { kind: "cancel" };
+  if (/^(?:repeat(?: that)?|say that again)$/.test(all)) return { kind: "repeat" };
+  let m = /^(?:(?:switch|go|change|jump|focus) (?:over )?to )?(?:the )?(next|previous|prev) (?:session|one|window)$|^(next|previous)$/.exec(all);
+  if (m) return { kind: "switch_rel", delta: (m[1] || m[2]) === "next" ? 1 : -1 };
+  m = /^(?:(?:switch|go|change|jump|focus) (?:over )?to )?(?:(session|window|row)(?: number)?|number) (.+)$/.exec(all);
+  if (m) {
+    const n = spokenCount(m[2].split(" "), !!m[1]);
+    if (n) return { kind: "switch_index", index: n };
+  }
+  if (/^(?:(?:go|switch|jump|flip|hop|change) back|take me back|back|the other one|the one before)$/.test(all)) return { kind: "switch_back" };
+  if (/^(?:where am i|where are we|(?:which|what) session (?:is this|am i (?:in|on))|which one am i (?:in|on)|what am i looking at)$/.test(all))
+    return { kind: "where" };
+  if (/^(?:what can i say|what do i say|voice commands|commands|help|voice help|list commands)$/.test(all)) return { kind: "commands" };
+  return null;
 }
 
 // --- numbered sessions, answers, questions --------------------------------------- //
@@ -3045,11 +3544,13 @@ export function builtinCommands(w: VoiceWords = voiceWords()): VoiceCommandItem[
     { say: q("undo"), does: "Take back the last phrase", group: dict },
     { say: q("stop"), does: "Stop listening; words stay unsent", group: dict },
     { say: q("hush"), does: "Stop reading aloud", group: dict },
-    { say: "switch to <name>", does: "Focus a session by name", group: "Sessions" },
+    { say: "switch to <name> / take me to <name>", does: "Focus a session by name", group: "Sessions" },
     { say: "session 3", does: "Focus the rail's row 3", group: "Sessions" },
     { say: "next session / previous session", does: "Step along the rail", group: "Sessions" },
     { say: "go back", does: "The session you were on before", group: "Sessions" },
     { say: "where am I", does: "Says the focused session's name", group: "Sessions" },
+    { say: "what needs me", does: "The sessions waiting on you", group: "Sessions" },
+    { say: "what's <name> doing", does: "What a session is up to", group: "Sessions" },
     { say: "new session for <task>", does: "Start a session", group: "Sessions" },
     { say: "scroll up / scroll down", does: "Scroll the focused pane a page", group: "Reading" },
     { say: "scroll to the top / bottom", does: "Jump to either end", group: "Reading" },
@@ -3057,6 +3558,7 @@ export function builtinCommands(w: VoiceWords = voiceWords()): VoiceCommandItem[
     { say: "what did it say", does: "Read the last reply", group: "Reading" },
     { say: "interrupt", does: "Press Escape on the agent", group: "Agent" },
     { say: "yes / no / option 2", does: "Answer the dialog on screen", group: "Agent" },
+    { say: wakeName(w) + ", <request>", does: "Ask MindFlock itself: open settings, what needs me…", group: "Agent" },
     { say: "what can I say", does: "This list", group: "Agent" },
   ];
   return rows.filter((r) => r.say.replace(/[…\s]/g, ""));
@@ -4779,7 +5281,7 @@ export interface Recognizer {
   /** `skipMs`: the first audio to drop — the app's own voice was cut just
    * before (barge-in, {@link BARGE_SKIP_MS}); the server's recognizer
    * honours it, Web Speech can't. */
-  start(h: RecognizerHandlers, opts?: { skipMs?: number }): boolean;
+  start(h: RecognizerHandlers, opts?: { skipMs?: number; chimeMs?: number }): boolean;
   /** End listening but deliver what was said (a final, or the clip's words)
    * before onEnd. */
   finish(): void;
@@ -5060,6 +5562,7 @@ export class RecordingClock {
     return Number.isFinite(this.zero) ? Math.round(this.zero + s * 1000) : 0;
   }
 }
+import { CAPTURE_MUTE_HOLD_S, PRE_ROLL_RATE } from "./voiceMic";
 const CLIP_MAX_MS = 12_000; // the hard cap on one clip
 const UPLOAD_TIMEOUT_MS = 45_000;
 const CLIP_RATE = 16_000; // the built-in recognizers' rate; whisper's too
@@ -5122,6 +5625,78 @@ export const MIC_LOST_LINE = "The microphone went away — listening on the defa
 /** …and when it goes away again this soon after, listening stops with this. */
 export const MIC_GONE_LINE = "The microphone went away — check it, then click the mic";
 export const MIC_LOST_RETRY_MS = 3000;
+/** A stream open answered 409 for the server's stream cap ({@link
+ * streamFull}: a stream still ending, another window) is asked again this
+ * often… */
+export const STREAM_OPEN_RETRY_MS = 300;
+/** …this many times (≈1.5 s, the phone's VOICE_STREAM_FULL_MAX_MS); still
+ * full, that phrase goes as a clip and the next one streams again — never
+ * a downgrade that sticks for the rest of the dictation. */
+export const STREAM_OPEN_RETRIES = 5;
+/** A 409 on POST /api/voice/stream that is the server's stream CAP ("…
+ * already open: end one first") — passing — not "this backend does not
+ * stream" (clips for the rest of the dictation). mobile.js voiceStreamFull. */
+export const streamFull = (error: unknown) => /already open|end one first/i.test(String(error || ""));
+/** Before its first word a streamed phrase is sent this much of what came
+ * before its first loud block (the word's soft start: "stop", not "top") —
+ * a rolling window, the phone's VOICE_LEAD_MS. */
+export const LEAD_IN_MS = 300;
+/** Loud blocks in a row that are a voice, not a blip: a click, a knock, a
+ * key is one ~85 ms block; a syllable is two or more. A streamed phrase
+ * that never had this many, and of which the server heard no word, is
+ * dropped as noise instead of ending as an (empty) phrase. */
+export const ONSET_RUN = 2;
+/** A phrase's speech this long (ms) lets its noise floor learn again (a fan
+ * switched on is a new room) — lib/wakeWord's RELEARN_MS. */
+export const FLOOR_RELEARN_MS = 5000;
+
+/** The dictation's level detector for one phrase, fed each block's RMS: the
+ * noise floor (from the room's quiet, lib/voiceMic {@link noiseFloor}) and
+ * whether a block is loud ({@link isLoud}). As the standby's detector
+ * (lib/wakeWord LoneUtterance): the floor never creeps up while the phrase
+ * is in speech (for {@link FLOOR_RELEARN_MS}) — a steady voice would turn
+ * "quiet" and a sentence end early — and never under the start chime
+ * (`hush`: no word starts in it; the floor only goes down). `run` / `best`:
+ * loud blocks in a row now / at most ({@link ONSET_RUN}). Pure. */
+export class PhraseLevel {
+  run = 0;
+  best = 0;
+  private speechMs = 0;
+  constructor(public floor = 0) {}
+
+  /** One block (`blockMs` long): loud or not. `speech`: the phrase is in
+   * speech (its first word was heard). */
+  feed(rms: number, blockMs: number, o: { hush?: boolean; speech?: boolean } = {}): boolean {
+    if (o.speech) this.speechMs += Math.max(0, blockMs);
+    const learn = !o.hush && (!o.speech || this.speechMs > FLOOR_RELEARN_MS);
+    this.floor = learn || this.floor === 0 ? noiseFloor(this.floor, rms) : Math.min(this.floor, rms);
+    const loud = !o.hush && isLoud(rms, this.floor);
+    this.run = loud ? this.run + 1 : 0;
+    this.best = Math.max(this.best, this.run);
+    return loud;
+  }
+}
+
+/** Speech in `pcm` (at `rate`): cut in ~85 ms blocks through a
+ * {@link PhraseLevel} from `floor`, the first run of {@link ONSET_RUN} loud
+ * blocks — its start and the last loud block's end (s into `pcm`) — or null
+ * (quiet, or blips only). A wake's lead-in is read so ({@link MicKeeper.takeLead}). */
+export function leadSpeech(pcm: Float32Array, rate: number, floor = 0): { startS: number; endS: number } | null {
+  const n = Math.max(1, Math.round(rate * 0.085));
+  const lv = new PhraseLevel(floor);
+  let start = -1;
+  let end = -1;
+  let runAt = 0;
+  for (let at = 0; at + n / 2 <= pcm.length; at += n) {
+    const b = pcm.subarray(at, Math.min(pcm.length, at + n));
+    const loud = lv.feed(rmsOf(b), (b.length / rate) * 1000, { speech: start >= 0 });
+    if (!loud) continue;
+    if (lv.run === 1) runAt = at;
+    if (start < 0 && lv.run >= ONSET_RUN) start = runAt;
+    if (start >= 0) end = at + b.length;
+  }
+  return start < 0 ? null : { startS: start / rate, endS: end / rate };
+}
 
 /** Hears for the person while the app talks. What reaches the microphone
  * of the app's own voice — what the browser's echo cancellation leaves of
@@ -5189,8 +5764,11 @@ interface Phrase {
    * server): the quiet that ends it ({@link turnHoldMs}). */
   turn: TurnVerdict | null;
   /** The pre-roll (16 kHz) its speech began in — sent in front of its first
-   * audio ({@link PRE_ROLL_ONSET_S}); null once sent, or none. */
+   * audio ({@link PRE_ROLL_ONSET_S}), or its lead-in ({@link LEAD_IN_MS}, a
+   * wake's: what was said after the word); null once sent, or none. */
   pre: Float32Array | null;
+  /** The most loud blocks in a row it had ({@link ONSET_RUN}). */
+  run: number;
   /** Its committed words so far, and the latest unstable tail (streaming). */
   said: string;
   partial: string;
@@ -5247,8 +5825,9 @@ export const VOICE_CLIENT_ID = (() => {
  *    (unstable) go to onStream together (else onWords, onPartial). The same quiet ends the
  *    phrase: /end flushes its last words to onFlush, and the next phrase
  *    opens a new stream (a phrase that heard nothing DELETEs its). No cap. A
- *    409 on the open, or any failed request, falls back to clips for the rest
- *    of the dictation.
+ *    409 that says the server does not stream, or any failed request, falls
+ *    back to clips for the rest of the dictation; the stream cap's 409 is
+ *    asked again ({@link STREAM_OPEN_RETRIES}), then only that phrase is a clip.
  * While listening is wanted the next phrase starts recording as soon as one
  * ends, so phrases arrive one by one like Chrome's finals. The microphone is
  * `opts.mic`'s (lib/voiceMic): held while listening, kept warm a while after,
@@ -5256,6 +5835,9 @@ export const VOICE_CLIENT_ID = (() => {
 export function serverRecognizer(
   opts: { stream?: () => boolean; mic?: MicKeeper } = {}
 ): Recognizer & {
+  /** `chimeMs`: the start chime's span — recorded, but no word starts in it
+   * (`skipMs` drops audio: the app's own voice cut just before). */
+  start(h: RecognizerHandlers, opts?: { skipMs?: number; chimeMs?: number }): boolean;
   lastError: string;
   mic: MicKeeper;
   passMs: number | null;
@@ -5301,13 +5883,22 @@ export function serverRecognizer(
   /** Barge-in: audio before this (ms) is the app's own voice dying away. */
   let skipUntil = 0;
   /** start()'s skip, until the dictation's first recording takes it: on a
-   * cold AudioContext the chime it covers plays only once the context runs,
-   * so the skip is counted again from then. */
+   * cold AudioContext the line's tail it covers dies away only once the
+   * context runs, so the skip is counted again from then. */
   let firstSkipMs = 0;
-  /** `ctx` runs now: the skip start() asked for runs from now. */
+  /** The start chime: until then (ms) no word starts — its audio is
+   * recorded (a word said over it keeps its start, the pre-roll stays), the
+   * detector sits it out. Counted again from when a cold context runs. */
+  let hushUntil = 0;
+  let firstHushMs = 0;
+  /** `ctx` runs now: the skip and the chime start() asked for run from now. */
   const skipFromNow = () => {
     if (firstSkipMs) skipUntil = Math.max(skipUntil, Date.now() + firstSkipMs);
+    if (firstHushMs) hushUntil = Math.max(hushUntil, Date.now() + firstHushMs);
   };
+  /** A wake's lead-in (lib/voiceMic MicKeeper.takeLead: what was said after
+   * the word, before the chime), for the dictation's first recording. */
+  let wakeLead: Float32Array | null = null;
   /** The app says a line: its audio is not the person's — the recorder
    * drops it ({@link Recognizer.mute}) while an analyser on the microphone
    * listens for a voice over it ({@link BargeDetector} → onBarge). */
@@ -5316,6 +5907,11 @@ export function serverRecognizer(
   let bargeTimer: ReturnType<typeof setInterval> | undefined;
   let bargeTap: { src: MediaStreamAudioSourceNode; an: AnalyserNode; buf: Float32Array<ArrayBuffer>; stream: MediaStream } | null = null;
   let lastBargeAt = 0;
+  /** This mute's first barge-in (ms; 0: none) and the last loud read after
+   * it: a voice over a line that plays on (a confirmation) is rewound from
+   * its start when the mute lifts ({@link CAPTURE_MUTE_HOLD_S} at most). */
+  let bargeFrom = 0;
+  let loudOver = 0;
   /** When the microphone last went away mid-listen (ms). */
   let lostAt = 0;
   /** The microphone and the context the phrase records with. */
@@ -5342,8 +5938,11 @@ export function serverRecognizer(
       const t = bargeTap;
       if (!t || !muted || !h) return;
       t.an.getFloatTimeDomainData(t.buf);
-      if (!barge.block(rmsOf(t.buf))) return;
+      const hit = barge.block(rmsOf(t.buf));
+      if (bargeFrom && barge.loud) loudOver = Date.now();
+      if (!hit) return;
       lastBargeAt = Date.now();
+      if (!bargeFrom) bargeFrom = loudOver = lastBargeAt;
       h.onBarge?.();
     }, BARGE_POLL_MS);
   };
@@ -5507,11 +6106,20 @@ export function serverRecognizer(
         } catch {
           ctx = null;
         }
-        const r = await call("/api/voice/stream", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(streamOpenBody(langTag(), VOICE_CLIENT_ID, ctx)),
-        });
+        const ask = () =>
+          call("/api/voice/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(streamOpenBody(langTag(), VOICE_CLIENT_ID, ctx)),
+          });
+        let r = await ask();
+        // A 409 for the stream cap: passing — asked again (the phone's
+        // 300 ms × 1.5 s) before this phrase goes as a clip.
+        for (let n = 0; r.status === 409 && streamFull(r.j.error) && n < STREAM_OPEN_RETRIES; n++) {
+          await new Promise((res) => setTimeout(res, STREAM_OPEN_RETRY_MS));
+          if (h !== hh || !c.stream) return;
+          r = await ask();
+        }
         const id = String(r.j.id || "");
         if (h !== hh || !c.stream) {
           if (r.ok && id) void apiRaw(streamPath(id, ""), { method: "DELETE" }).catch(() => {});
@@ -5524,6 +6132,16 @@ export function serverRecognizer(
           voiceMark("stream");
           // Nobody was listening: the model loads now, the first words wait.
           if (r.j.loading === true) setLoading(true);
+        } else if (r.status === 409 && streamFull(r.j.error)) {
+          // Still full: this phrase is a clip; the next one streams again.
+          self.lastError = String(r.j.error);
+          c.stream = false;
+          if (cur === c) {
+            clearTimeout(capTimer);
+            capTimer = setTimeout(() => {
+              if (cur === c) endClip();
+            }, CLIP_MAX_MS);
+          }
         } else if (r.status === 409) {
           self.lastError = String(r.j.error || "the server can't stream");
           fallBack(c, "");
@@ -5578,7 +6196,9 @@ export function serverRecognizer(
    * is new: the first {@link FIRST_CHUNK_S} of speech, then {@link chunkMinS}. */
   const pump = (c: Phrase) => {
     if (!c.stream || !c.sid || !c.heard || c.busy || c.ending || !c.rec || h === null) return;
-    const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS) + FIRST_CHUNK_S;
+    // (A lead-in taken from the ring at the first word holds that block:
+    // speechS before trimS, the first chunk goes that much sooner.)
+    const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS + FIRST_CHUNK_S);
     const takenAt = Date.now();
     const blob = c.rec.take(min);
     if (!blob) return;
@@ -5637,12 +6257,16 @@ export function serverRecognizer(
         return;
       }
       if (!c.sid) return; // its open failed (it fell back), or it was dropped
+      // A blip (a click, a knock, a key): never two loud blocks in a row,
+      // and the server, answered, heard no word in it — noise, not a phrase
+      // (never an empty one typed, nor its /end's pass).
+      if (c.heard && c.run < ONSET_RUN && c.passAt && !c.said && !c.partial) c.heard = false;
       if (!c.heard) {
         // Nothing said: the stream opened for it goes unused.
         discard(c);
         return;
       }
-      if (tail && tail.size > TAIL_MIN_BYTES && c.fresh) await sendChunk(c, tail, hh);
+      if (tail && c.fresh && (tail.size > TAIL_MIN_BYTES || (c.pre && tail.size > 44))) await sendChunk(c, tail, hh);
       heard(); // its words are all in: a next phrase's may go once it is flushed
       if (h !== hh || !c.stream || !c.sid) return;
       const sid = c.sid;
@@ -5769,6 +6393,7 @@ export function serverRecognizer(
       loudAt: 0,
       turn: null,
       pre: null,
+      run: 0,
       said: "",
       partial: "",
       passAt: 0,
@@ -5830,23 +6455,33 @@ export function serverRecognizer(
     }
     const skip = Math.max(0, skipUntil - Date.now());
     firstSkipMs = 0;
-    // Not after a barge-in or under the chime's skip (that audio is not the
-    // person's), nor while muted.
+    firstHushMs = 0;
+    // Not after a barge-in (that audio is the app's voice dying away), nor
+    // while muted. Under the start chime it is kept: no word starts there,
+    // but one said over it keeps its start.
     const pre = skip || muted ? null : mic.preRoll();
     // The silence detector: the recorder's RMS per block against a noise
     // floor that follows the quiet moments — from the room's quiet as the
-    // pre-roll heard it, when there is one.
-    let floor = mic.quietFloor();
+    // pre-roll heard it, when there is one ({@link PhraseLevel}).
+    const level = new PhraseLevel(mic.quietFloor());
+    // A wake's lead-in (the first recording only): a command said after the
+    // word while the server checked it — the phrase has begun already.
+    const lead = wakeLead;
+    wakeLead = null;
+    const said = lead && !skip && !muted ? leadSpeech(lead, PRE_ROLL_RATE, level.floor) : null;
     let blockAt = 0; // the recording's time before this block
     const onLevel = (rms: number) => {
       if (cur !== c) return;
       const at = blockAt;
       blockAt = c.rec?.seconds() ?? 0;
       h?.onLevel?.(rms);
-      floor = noiseFloor(floor, rms);
       const now = Date.now();
       c.clock.block(blockAt, now);
-      if (isLoud(rms, floor)) {
+      // The start chime: no word starts under it.
+      const hush = !c.heard && hushUntil > 0 && c.clock.at(at) < hushUntil;
+      const loud = level.feed(rms, (blockAt - at) * 1000, { hush, speech: c.heard });
+      c.run = Math.max(c.run, level.best);
+      if (loud) {
         if (!c.heard) {
           lastHeard = null; // a new phrase: the last one's `heard` is not its
           c.speechS = at;
@@ -5856,9 +6491,20 @@ export function serverRecognizer(
           // earliest it can have begun).
           c.spokeAt = c.clock.at(at);
           // Speech from its first moments: it began before the recording.
-          if (at < PRE_ROLL_ONSET_S) {
+          if (at < PRE_ROLL_ONSET_S && !c.trimS) {
             c.pre = pre;
             if (pre) c.spokeAt -= PRE_ROLL_MS;
+          } else if (c.stream && cap) {
+            // Later: its lead-in is the LEAD_IN_MS before this block and the
+            // block, from the capture's ring (the recording's own blocks,
+            // in step) — never the 0–255 ms the trims below happen to leave.
+            const blockS = blockAt - at;
+            const ring = mic.preRoll(LEAD_IN_MS + blockS * 1000);
+            if (ring && ring.length >= Math.floor(blockS * PRE_ROLL_RATE)) {
+              c.rec?.take(0);
+              c.pre = ring;
+              c.trimS = blockAt;
+            }
           }
           h?.onSpeech?.();
           // Opened so long ago the server may have forgotten it: a new one.
@@ -5894,8 +6540,21 @@ export function serverRecognizer(
     }
     if (muted) c.rec.mute?.(true);
     cur = c;
+    if (said && lead) {
+      // The wake's command, said before the recording: it goes in front of
+      // the first chunk, and the phrase ends on the quiet after it.
+      const t0 = Date.now() - (lead.length / PRE_ROLL_RATE) * 1000;
+      lastHeard = null;
+      c.pre = lead;
+      c.heard = true;
+      c.fresh = true;
+      c.run = ONSET_RUN;
+      c.spokeAt = Math.round(t0 + said.startS * 1000);
+      c.loudAt = Math.round(t0 + said.endS * 1000);
+    }
     voiceMark("mic");
     h?.onReady?.();
+    if (said && lead && cur === c) h?.onSpeech?.();
     if (!c.stream)
       capTimer = setTimeout(() => {
         if (cur === c) endClip();
@@ -5952,15 +6611,40 @@ export function serverRecognizer(
       return cur?.heard ? cur.spokeAt : 0;
     },
     mute(on: boolean) {
+      const was = muted;
       muted = on;
       if (on) listenOver();
       else unlistenOver();
-      // Lifted for a barge-in: the tail is the person's, kept — and so is
-      // the start of their word, heard while the detector was counting.
-      const barged = !on && Date.now() - lastBargeAt < BARGE_FRESH_MS;
-      cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1000, barged ? BARGE_REWIND_MS / 1000 : 0);
+      if (on && !was) bargeFrom = loudOver = 0;
+      const now = Date.now();
+      // A voice was heard over this line: it was cut for it (a barge-in), or
+      // it played on (a confirmation, "Sent."). Either way the tail is the
+      // person's, kept — and so is everything they said since their voice
+      // began, heard while the detector counted and the line went on
+      // (lib/voiceMic CAPTURE_MUTE_HOLD_S at most): a command said over
+      // "Sent." is not lost.
+      const over = !on && was && bargeFrom > 0;
+      const barged = over || (!on && now - lastBargeAt < BARGE_FRESH_MS);
+      const rewindMs = over ? Math.min(CAPTURE_MUTE_HOLD_S * 1000, now - bargeFrom + BARGE_REWIND_MS) : BARGE_REWIND_MS;
+      cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1000, barged ? rewindMs / 1000 : 0);
       // Muted, its blocks aren't counted: the count no longer follows time.
       cur?.clock.reset();
+      const c = cur;
+      if (over && c?.rec) {
+        // What was rewound is speech: the phrase has begun (it may be over
+        // by now — the quiet after it ends it, as any phrase).
+        if (!c.heard) {
+          lastHeard = null;
+          c.heard = true;
+          c.speechS = c.trimS;
+          c.spokeAt = Math.max(0, bargeFrom - BARGE_REWIND_MS);
+          h?.onSpeech?.();
+        }
+        c.fresh = true;
+        c.run = Math.max(c.run, ONSET_RUN);
+        c.loudAt = Math.max(c.loudAt, loudOver);
+      }
+      if (!on) bargeFrom = loudOver = 0;
     },
     endPhrase() {
       if (cur?.heard && want) {
@@ -5968,15 +6652,19 @@ export function serverRecognizer(
         endClip();
       }
     },
-    start(handlers: RecognizerHandlers, o: { skipMs?: number } = {}) {
+    start(handlers: RecognizerHandlers, o: { skipMs?: number; chimeMs?: number } = {}) {
       self.stop();
       if (!self.available()) return false;
+      // A wake's lead-in: taken now, before the start chime plays.
+      wakeLead = mic.takeLead();
       skipUntil = Date.now() + Math.max(0, o.skipMs || 0);
       firstSkipMs = Math.max(0, o.skipMs || 0);
+      firstHushMs = Math.max(0, o.chimeMs || 0);
+      hushUntil = firstHushMs ? Date.now() + firstHushMs : 0;
       // A cold context (resuming since the press): the chime waits for it,
       // and so does the skip — even when the microphone opens later still.
       const cold = audioCtx && audioCtx.state !== "running" ? audioCtx : null;
-      if (cold && firstSkipMs) {
+      if (cold && (firstSkipMs || firstHushMs)) {
         const mine = handlers;
         void whenRunning(cold).then((ok) => {
           if (ok && h === mine) skipFromNow();

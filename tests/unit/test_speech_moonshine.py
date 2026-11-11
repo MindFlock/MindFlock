@@ -572,7 +572,7 @@ class TestControlWords:
             "Over.",
             "Mindflock, stop.",
             "Stop talking.",
-            "Switch to sitecheck.",
+            "Session three.",  # a switch to a NAME waits for whisper
             "Next one.",
         ],
     )
@@ -586,6 +586,18 @@ class TestControlWords:
         assert time.monotonic() - t0 < 0.3
         assert out["final"] == out["heard"] == said and out["final_by"] == "moonshine"
 
+    def test_a_switch_to_a_name_takes_whispers_words(self):
+        """Moonshine heard "sitecheck bot seven" 0/16 on the bench, whisper
+        14/16: a switch by NAME is no instant control phrase — ``final``
+        is whisper's, ``heard`` Moonshine's beside it."""
+        acc = Accurate("Switch to sitecheck bot seven.")
+        st, _t = make([[(1, "Switch to sight check bot 7.", True)]], accurate=acc)
+        st.feed(loud(1.0))
+        out = st.finish()
+        assert out["final"] == "Switch to sitecheck bot seven."
+        assert out["final_by"] == "whisper"
+        assert out["heard"] == "Switch to sight check bot 7."
+
     @pytest.mark.parametrize(
         "heard, only",
         [
@@ -594,7 +606,8 @@ class TestControlWords:
             ("Send the report over.", False),
             ("Add a docstring to the new function, disregard.", True),
             ("Open a pull request for this branch, over.", False),  # no switch
-            ("Switch to sitecheck.", True),
+            ("Switch to sitecheck.", False),  # a name waits for whisper
+            ("Next session.", True),
             ("Run the tests, stop listening.", False),
             ("Fix the bug.", False),
             ("new session in app that fixes login", False),

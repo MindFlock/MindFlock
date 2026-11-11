@@ -576,24 +576,26 @@ def test_mobile_js_router_first_then_the_local_table():
         assert '"%s"' % kind in kinds, kind
     # voiceHeard asks the router; the local table is the fallback in voiceRouted.
     heard = _fn(js, "voiceHeard")
-    assert 'voiceRoute(p.text, "", false, p.spokeAt).then(' in heard
+    then = _fn(js, "voiceRouteThen")
+    assert (
+        "voiceRouteThen(p.text, p.spokeAt, typed, function (res) { return voiceRouted(res, p); });"
+        in heard
+    )
+    assert 'voiceRoute(text, "", false, spokeAt).then(' in then
     assert "voiceCommand(" not in heard
-    assert "if (L.gen !== gen) return;" in heard
+    assert "if (L.gen !== gen) return;" in then
     assert "if (L.routing) { L.routeQ.push([text, mode, spokeAt]); return; }" in heard
     routed = _fn(js, "voiceRouted")
     fallback = routed.split("if (!res) {")[1].split("\n    }\n")[0]
     assert (
         "var cmd = voiceCommand(p.text);" in fallback
-        and "if (!cmd) return voiceHeardRest(p);" in fallback
+        and "var acted = voiceHeardRest(p);   // an answer, or the words" in fallback
     )
     # A prompt is still checked for an answer at its end (voiceHeardRest).
-    assert 'case "prompt": return voiceHeardRest(p);' in routed
+    assert 'case "prompt": {\n        var did = voiceHeardRest(p);' in routed
     assert "voiceHeardWords(p);" in _fn(js, "voiceHeardRest")
     # A command ends the listen: nothing queued behind it is dictated.
-    assert (
-        "if (voiceRouted(res, p)) { L.draining = false; L.routeQ = []; return; }"
-        in heard
-    )
+    assert "if (handle(res)) { L.draining = false; L.routeQ = []; return; }" in then
     assert 'voiceRouteSelect(String(res.title || ""), res.kind === "new")' in routed
     assert "speakLine(say ||" in routed
     assert 'voiceRunCommand({ kind: res.kind, arg: "" });' in routed
@@ -647,9 +649,10 @@ def test_mobile_js_wider_vocabulary_numbers_stops_and_answers():
     kinds = v.split("var VOICE_ROUTE_KINDS = [")[1].split("];")[0]
     for kind in ("switch_index", "switch_rel", "answer", "question"):
         assert '"%s"' % kind in kinds, kind
-    # An unknown kind (a newer server) is a prompt, not the local table.
+    # An unknown kind (a newer server) is not the local table: its words
+    # are typed and the strip says why nothing was done.
     route = _fn(js, "voiceRoute")
-    assert 'return { kind: "prompt" };' in route
+    assert 'return { kind: "unknown", said: String(j.kind) };' in route
     # Stop phrases: first in voiceHeard (any mode, before a dialog's "no"),
     # and the moment a stream settles one.
     heard = _fn(js, "voiceHeard")
@@ -1166,13 +1169,12 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     assert "box.setSelectionRange(put.value.length, put.value.length);" in gs
     # A first phrase typed as it was said stays in the box while the router
     # reads its final words, and goes with the answer: no blink.
-    heard = _fn(js, "voiceHeard")
-    route = heard.split("if (p.text && !composeEl.value.trim()) {")[1]
+    route = _fn(js, "voiceRouteThen")
     assert route.index("if (typed) voiceGuessHold(typed);") < route.index(
-        "voiceRoute(p.text, "
+        "voiceRoute(text, "
     )
-    assert route.index("L.routing = false;\n        voiceGuessDrop();") < route.index(
-        "voiceRouted(res, p)"
+    assert route.index("L.routing = false;\n      voiceGuessDrop();") < route.index(
+        "handle(res)"
     )
     # Listening that ends before the phrase's end keeps the guess as text.
     assert "if (!voiceIsListening()) { voiceLevel(null); voiceGuessKeep(); }" in _fn(
