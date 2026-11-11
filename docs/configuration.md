@@ -460,6 +460,18 @@ the local overlay wins on env and the profile's routing flags are dropped, so a
 session configured to stay on this machine cannot be pulled off it by an account
 pin.
 
+### Routes (`flights`, settings store only)
+
+The `flights` group of `~/.mindflock/settings.json` (`FlightsSettings` in
+`backend/config/settings.py`). Saved with the usual partial `POST
+/api/settings` (`{"flights": {"pr_review_plan": "…"}}`; `""` clears it) and
+returned by `GET /api/settings` under `settings.flights` **only when set** —
+an absent key reads as `""`.
+
+| Key | Values | Notes |
+|---|---|---|
+| `pr_review_plan` | a saved route's id (`p_xxxxxx`) or name | The route **Run the PR review** flies on an open PR's session (`POST /api/pr-review`, MCP `run_pr_review`, docs/flights.md "Run the PR review on an open PR") when the call names none. `""` (the default) = none: the action then answers 400 `no_plan` unless a `plan` is passed. A name is matched case-insensitively; a route deleted later answers 404 `unknown_plan` |
+
 ### Auth profiles (`[auth_profiles]`, settings store only)
 
 Which identity a session's CLI runs as — a second Claude subscription, an API

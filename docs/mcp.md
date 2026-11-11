@@ -333,7 +333,7 @@ against every fresh listing.
 
 ## The tools
 
-The 36 tools. Every result is JSON text. Clients that negotiate protocol
+The 37 tools. Every result is JSON text. Clients that negotiate protocol
 `2025-06-18` or later also get `structuredContent`. Arguments are checked
 against each tool's JSON schema, and a violation comes back as a tool error
 with a fix-it message, not a protocol error. The check is lenient about what
@@ -381,6 +381,7 @@ it.
 | `control_flight` | write (run, pause, resume, cancel, skip, retry, jump, done) | **no** |
 | `edit_flight` | write (add, remove, edit, rename stops) | **no** |
 | `save_flight_plan` | write (a saved route on the shelf) | **no** |
+| `run_pr_review` | write, flies the PR review route (may push; a merge stop needs `confirm_merge`) | **no** |
 
 "Auto-approved" is the `--allowedTools` list for Claude and the
 `approval_mode = "approve"` table for Codex. The server also sends
@@ -413,8 +414,9 @@ skip-permissions**:
 - `start_team_run` starts sessions that MindFlock then commits, pushes and
   opens PRs for; `control_run` cancels, retries and releases a team run
   (`openWorldHint` true).
-- `start_flight`, `control_flight` and `edit_flight` run stops that may push
-  or merge (`openWorldHint` true); `save_flight_plan` writes the shelf. The
+- `start_flight`, `control_flight`, `edit_flight` and `run_pr_review` run
+  stops that may push or merge (`openWorldHint` true); `save_flight_plan`
+  writes the shelf. The
   two route reads, `describe_flight` and `flight_status`, are not on the
   pre-approved list yet (see [Routes](#routes-from-a-sentence-to-a-running-route)).
 
@@ -1165,7 +1167,7 @@ the merge queue (MindFlock also notices a finished merge on its own).
 A [route](flights.md) is a row of stops that MindFlock's route driver carries
 one session through: an agent prompt, a test run, a ship rung, a wait, a
 Wait for me stop where a person presses Done, a Loop back to an earlier stop, and more.
-Six tools let an agent set one up from a description and run it. They use the
+Seven tools let an agent set one up from a description and run it (the seventh, `run_pr_review`, runs the user's saved PR review route on an open PR). They use the
 same `/api/flights*` routes as the Sky, so a route an agent starts shows up
 on the Sky like any other.
 
@@ -1191,12 +1193,12 @@ with write scope may create, edit or cancel one. Starting a route records
 
 **Local only.** A peer-mode server (a sandboxed shared-folder session) serves
 only its 10 peer tools ([Peer mode](#peer-mode-shared-folder-sessions)), so
-these six are never offered to a peer.
+these seven are never offered to a peer.
 
-**Permission prompts.** None of the six is pre-approved yet: the list lives in
+**Permission prompts.** None of the seven is pre-approved yet: the list lives in
 `providers/mcp_attach.py`. `describe_flight` and `flight_status` are annotated
 read-only. `start_flight`, `control_flight` and `edit_flight` run stops that
-may push or merge, so they are `openWorldHint: true`. `save_flight_plan` only
+may push or merge, so they are `openWorldHint: true` (and `run_pr_review`). `save_flight_plan` only
 writes to the shelf.
 
 ### `describe_flight`
@@ -1415,6 +1417,38 @@ so a described route stays on the user's shelf. `trigger` is
 `{kind: manual|ticket|pr|issue|schedule, schedule?, paused?}`: a `schedule`
 trigger (`{at: "HH:MM", days}`, `{cron}` or `{once}`) runs the plan by
 itself. `start_flight(plan_id=…)` runs it now.
+
+### `run_pr_review`
+
+`{session?, pr_url?, plan?, confirm_merge?}` → `{mode: "started" |
+"inserted" | "created", session, flight, stops: ["<id> <kind> <title>"],
+note?}`. Runs the user's saved **PR review route** (their review stops: a
+standards or security `review`, the PR's `reviews` loop with a required
+reviewer, a verdict…) on an open PR — also on a session that is already
+working on it. Sends `POST /api/pr-review` (docs/web-api.md, docs/flights.md
+"Run the PR review on an open PR"):
+
+- `session` — the PR's session; default yourself when no `pr_url` is given.
+  The scope rule above applies (you or a descendant).
+- `pr_url` — `https://github.com/<owner>/<repo>/pull/<n>`. Alone, the server
+  finds the session working on that PR (its row shows the PR, or it is on
+  the PR's head branch in that repo) or, when there is none, makes one as
+  Intake's Pull requests tab does. Finding or making a session is a write
+  (`require_write`), not the ship scope: the session is not yours yet.
+- `plan` — a saved route's id or name (matched like `start_flight`'s
+  `plan_id`); absent = the user's `flights.pr_review_plan` setting (read
+  from `GET /api/settings`). Neither → the server's 400 `no_plan`.
+- `confirm_merge` — needed when the route has a stop that can't be undone
+  (as `start_flight`).
+
+`mode` says what happened: `started` (the session had no route: the review
+route takes off at its first stop, the work counted as done), `inserted`
+(one route per session, so the stops were merged into the route in the air:
+after the current stop, before a `reviews` / `ship` stop ahead, stops it
+already has left out — `stops` lists only the added ones, `[]` with a note
+when none were new) or `created` (a session for the PR is being made in the
+background). The session's own agent makes every fix in its own checkout;
+`flight_status(title=session)` follows the route.
 
 ### Worked example: describe → start on myself → status → control
 

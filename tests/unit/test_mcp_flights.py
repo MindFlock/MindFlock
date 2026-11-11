@@ -161,7 +161,7 @@ class TestRegistry:
 
         box, _, _ = _box()
         names = [t.name for t in build_tools(box)]
-        assert len(names) == 36
+        assert len(names) == 37
         for n in self.NAMES:
             assert n in names and n in playbooks.TOOL_NAMES
 

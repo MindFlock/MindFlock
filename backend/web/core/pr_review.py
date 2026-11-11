@@ -14,12 +14,18 @@ The forced path reuses the pipeline's own pieces (comment fetch, PR workspace
 provisioner, consolidated prompt) but runs inside the web server process, so
 it works even while ingestion is stopped. ``server.py`` owns the engine side
 (registering the session in the live grid).
+
+It also backs "Run the PR review" (:func:`run_pr_review`, ``POST
+/api/pr-review``, MCP ``run_pr_review``): the team's saved review route
+(``flights.pr_review_plan``) flown by an open PR's own session — started on
+it, merged into the route it already flies, or on a session made for the PR.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,7 +33,15 @@ from backend.providers import effort as _provider_effort
 from backend.web.core import pipeline_root
 from backend.web.core.ticket_start import LaunchError
 
-__all__ = ["LaunchError", "launch"]
+__all__ = [
+    "LaunchError",
+    "configured_plan",
+    "find_pr_session",
+    "launch",
+    "parse_pr_url",
+    "resolve_plan",
+    "run_pr_review",
+]
 
 _logger = logging.getLogger(__name__)
 
@@ -449,3 +463,347 @@ async def launch(
 
     srv._register_task(_bg_review())
     return {"started": True, "title": title}
+
+
+# --------------------------------------------------------------------------- #
+# "Run the PR review" on an open PR (docs/flights.md "Run the PR review on an
+# open PR"): the team's saved review route, flown by the PR's own session.
+# --------------------------------------------------------------------------- #
+_PR_URL_RE = re.compile(
+    r"^https?://(?:www\.)?github\.com/([^/\s?#]+)/([^/\s?#]+)/pulls?/(\d+)(?:[/?#].*)?$",
+    re.I,
+)
+
+
+def _flights_mod():
+    from backend.web.core import flights
+
+    return flights
+
+
+def _driver_mod():
+    from backend.web.core import flight_driver
+
+    return flight_driver
+
+
+def _err(code: str, status: int, detail: str):
+    return _flights_mod().FlightError(code, status, detail)
+
+
+def parse_pr_url(url: str) -> tuple[str, int]:
+    """``https://github.com/<owner>/<repo>/pull/<n>`` → ``("owner/repo", n)``.
+    400 ``bad_pr_url`` for anything else."""
+    m = _PR_URL_RE.match(str(url or "").strip())
+    if m is None:
+        raise _err(
+            "bad_pr_url",
+            400,
+            "not a GitHub pull request URL (https://github.com/<owner>/<repo>"
+            "/pull/<number>): %s" % str(url or "")[:200],
+        )
+    repo = m.group(2)
+    if repo.lower().endswith(".git"):
+        repo = repo[:-4]
+    return "%s/%s" % (m.group(1), repo), int(m.group(3))
+
+
+def _same_pr(a: str, b: str) -> bool:
+    """Whether two PR URLs name the same PR (case, a trailing slash and a
+    ``/files`` tail aside)."""
+    if not a or not b:
+        return False
+    try:
+        (ra, na), (rb, nb) = parse_pr_url(a), parse_pr_url(b)
+    except Exception:  # noqa: BLE001 — a row's url may be anything
+        return False
+    return na == nb and ra.lower() == rb.lower()
+
+
+def configured_plan() -> str:
+    """``flights.pr_review_plan`` (a plan id or name), ``""`` = none. A local
+    import, as every settings reader in the web layer does."""
+    try:
+        from backend.config.settings import load_settings
+
+        return str(load_settings().flights.pr_review_plan or "").strip()
+    except Exception:  # noqa: BLE001 — an unreadable store is "not configured"
+        return ""
+
+
+def resolve_plan(ref: str = "") -> dict:
+    """The review route: ``ref`` (a saved plan's id, else its name, case
+    aside), else the ``flights.pr_review_plan`` setting. 400 ``no_plan`` when
+    neither names one; 404 ``unknown_plan`` when it is not on the shelf."""
+    F = _flights_mod()
+    ref = str(ref or "").strip() or configured_plan()
+    if not ref:
+        raise _err(
+            "no_plan",
+            400,
+            "no PR review route: pick one in Settings (flights.pr_review_plan) "
+            "or pass plan",
+        )
+    plan = F.get_plan(ref)
+    if plan is None:
+        low = ref.lower()
+        plan = next(
+            (
+                p
+                for p in F.list_plans()
+                if str(p.get("name") or "").strip().lower() == low
+            ),
+            None,
+        )
+    if plan is None or not plan.get("steps"):
+        raise _err("unknown_plan", 404, "no saved route %s" % ref)
+    return plan
+
+
+def first_stop(plan: dict) -> str:
+    """Where the review route starts on a session that has none: its first
+    stop — past any leading Agent stop with no prompt of its own (that one
+    stands for "the work", which is already on the PR; flown, it would only
+    wait for a prompt nobody is going to type). An Agent stop WITH a prompt
+    is where it starts: its prompt is sent."""
+    for s in plan["steps"]:
+        if (
+            s["kind"] == "agent"
+            and not str((s.get("config") or {}).get("prompt") or "").strip()
+        ):
+            continue
+        return s["id"]
+    raise _err(
+        "bad_plan",
+        400,
+        "the route %s has only empty Agent stops: nothing to run on an open PR"
+        % (plan.get("name") or plan.get("id")),
+    )
+
+
+def _row_of(title: str) -> dict:
+    from backend.web.core import events as _events
+
+    for r in _events.sessions_snapshot():
+        if isinstance(r, dict) and r.get("title") == title:
+            return r
+    return {}
+
+
+def _repo_slug(title: str) -> str:
+    """``owner/repo`` behind the session's origin (lower-cased), ``""`` when
+    unknown (blocking: runs git)."""
+    from backend.web.core import github_pr as _gh
+
+    root = _driver_mod()._repo_root(title)
+    ref = _gh.repo_ref(root) if root else None
+    return ref.slug.lower() if ref is not None else ""
+
+
+async def pr_head(slug: str, number: int) -> str:
+    """The PR's head branch, ``""`` when it can't be read: the REST API with
+    the app's token, else the Intake monitor's own lookup (which needs
+    ``[github]`` configured)."""
+    from backend.web.core import github_pr as _gh
+
+    token = await _gh.api_token()
+    if token:
+        status, data = await _gh._request(
+            "GET", "/repos/%s/pulls/%d" % (slug, number), token=token
+        )
+        if status == 200 and isinstance(data, dict):
+            head = data.get("head") if isinstance(data.get("head"), dict) else {}
+            ref = str(head.get("ref") or "")
+            if ref:
+                return ref
+    try:
+        pr = await find_pr(slug, number)
+    except Exception:  # noqa: BLE001 — not configured / not open / offline
+        return ""
+    return str(getattr(pr, "head_ref", "") or "")
+
+
+async def find_pr_session(slug: str, number: int, url: str = "") -> str:
+    """The live session already working on PR ``slug#number``, ``""`` when
+    none: one whose row shows that PR, else Intake's own session for it
+    (``pr-<repo>-<n>``), else one whose branch is the PR's head in that
+    repo. Never a second session on the PR's branch."""
+    srv = _server()
+    live = dict(srv.ENGINE.instances)
+    url = url or "https://github.com/%s/pull/%d" % (slug, number)
+    from backend.web.core import events as _events
+
+    for r in _events.sessions_snapshot():
+        t = r.get("title") if isinstance(r, dict) else None
+        if t in live and _same_pr(str(r.get("pr_url") or ""), url):
+            return t
+    want = slug.lower()
+    from backend.ticket_ingestion.models import PullRequest, pr_slug
+
+    intake = "pr-%s" % pr_slug(
+        PullRequest(
+            number=number,
+            head_ref="",
+            head_sha="",
+            base_ref="",
+            title="",
+            url=url,
+            author="",
+            created_at=datetime.now(timezone.utc),
+            repo=slug,
+        )
+    )
+    if intake in live and await asyncio.to_thread(_repo_slug, intake) in ("", want):
+        return intake
+    head = await pr_head(slug, number)
+    if not head:
+        return ""
+    for t, inst in sorted(live.items()):
+        if str(getattr(inst, "Branch", "") or "") != head:
+            continue
+        if await asyncio.to_thread(_repo_slug, t) == want:
+            return t
+    return ""
+
+
+def _refuse_stopped(title: str, inst) -> None:
+    """409 when the session can't take a route now: paused (its worktree is
+    put away) or held offline after a crash (nothing may start its agent
+    but a person)."""
+    from backend.web.core import held as _held
+
+    if _held.is_held(title):
+        raise _err(
+            "held",
+            409,
+            "%s is held offline since its agent died — start it first" % title,
+        )
+    paused = getattr(inst, "Paused", None)
+    try:
+        is_paused = bool(paused()) if callable(paused) else False
+    except Exception:  # noqa: BLE001
+        is_paused = False
+    if is_paused:
+        raise _err("paused", 409, "%s is paused — resume it first" % title)
+
+
+def _pr_subject(slug: str, number: int, url: str, title: str = "") -> dict:
+    return {
+        "kind": "pr",
+        "source": slug,
+        "id": str(number),
+        "title": title,
+        "url": url,
+    }
+
+
+def _stops(steps) -> list:
+    return [
+        {"id": s["id"], "kind": s["kind"], "title": s.get("title") or s["kind"]}
+        for s in steps
+    ]
+
+
+def _result(mode: str, title: str, flight, steps) -> dict:
+    return {
+        "mode": mode,
+        "session": title,
+        "flight": str((flight or {}).get("id") or ""),
+        "stops": _stops(steps),
+    }
+
+
+async def _run_on_session(title: str, plan: dict, by: str, subject) -> dict:
+    """Start the review route on ``title`` (no route yet) or merge it into
+    the route it flies (:func:`flights.op_merge_plan`)."""
+    F = _flights_mod()
+    D = _driver_mod()
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None:
+        raise _err("unknown_session", 404, "no session %s" % title)
+    _refuse_stopped(title, inst)
+    flight = F.for_session(title)
+    if flight is None:
+        if subject is None:
+            pr_url = str(_row_of(title).get("pr_url") or "")
+            try:
+                slug, number = parse_pr_url(pr_url)
+                subject = _pr_subject(slug, number, pr_url)
+            except F.FlightError:
+                subject = {"kind": "manual", "title": plan.get("name") or ""}
+        f = await D.start(
+            {
+                "plan_id": plan["id"],
+                "title": title,
+                "start_at": first_stop(plan),
+                "by": by,
+                "subject": subject,
+            }
+        )
+        return _result("started", title, f, f["steps"][f["cursor"] :])
+    added: list = []
+    after = await asyncio.to_thread(
+        D._changed,
+        flight["id"],
+        lambda f: F.op_merge_plan(f, plan, added=added),
+    )
+    return _result("inserted", title, after, added)
+
+
+async def run_pr_review(
+    session_title: str | None = None,
+    pr_url: str | None = None,
+    plan: str | None = None,
+    by: str = "user",
+) -> dict:
+    """Run the team's PR review route on an open PR's session → ``{"mode":
+    "started" | "inserted" | "created", "session", "flight", "stops":
+    [{id, kind, title}]}`` (``POST /api/pr-review``, MCP ``run_pr_review``).
+
+    * ``plan``: a saved route's id or name; ``None``/``""`` = the
+      ``flights.pr_review_plan`` setting (400 ``no_plan`` when neither).
+    * ``session_title``: the session to run it on (404 ``unknown_session``;
+      409 ``paused`` / ``held``). Without it, ``pr_url`` finds the session
+      (:func:`find_pr_session`: the one showing that PR, Intake's own, or
+      one on the PR's head branch in that repo).
+
+    One route per session, so what happens depends on the session:
+
+    * **No route** → ``started``: the plan takes off on it, the work already
+      done — it starts at the plan's first stop (:func:`first_stop`: past a
+      leading Agent stop with no prompt, so nothing waits for a prompt).
+      ``stops`` = the stops ahead.
+    * **Mid-route** → ``inserted``: the plan's stops are merged in after the
+      current stop (:func:`flights.op_merge_plan`): fresh ids, a stop the
+      route already ran or has ahead (same kind and config) left out, and
+      in front of a ``reviews`` / ``ship`` / Land stop already ahead.
+      ``stops`` = the stops added (``[]``: all were already there).
+    * **Only a PR URL, no session on it** → ``created``: a session for the
+      PR is made as Intake's Pull requests tab makes one (:func:`launch`,
+      provisioned on the PR's head branch) with this plan armed; it comes
+      up in the background. ``stops`` = the route's stops.
+
+    Fixes are made by the session's own agent in its own checkout; no second
+    session is ever put on the PR's branch. Raises
+    :class:`~backend.web.core.flights.FlightError` (400 / 404 / 409) and,
+    on the create path, :class:`LaunchError` (404 / 409 / 502)."""
+    F = _flights_mod()
+    route = resolve_plan(plan or "")
+    title = str(session_title or "").strip()
+    url = str(pr_url or "").strip()
+    if not title and not url:
+        raise _err("needs_target", 400, "name the session or the PR's URL")
+    subject = None
+    if url:
+        slug, number = parse_pr_url(url)
+        subject = _pr_subject(slug, number, url)
+    if title:
+        return await _run_on_session(title, route, by, subject)
+    found = await find_pr_session(slug, number, url)
+    if found:
+        return await _run_on_session(found, route, by, subject)
+    out = await launch(slug, number, plan=route["id"])
+    title = str(out.get("title") or "")
+    flight = F.for_session(title)
+    return _result("created", title, flight, (flight or route)["steps"])

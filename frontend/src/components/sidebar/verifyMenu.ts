@@ -11,6 +11,7 @@ import { sessionMenu as baseSessionMenu, type MenuItem, type SessionMenuModel } 
 import { verifyOf } from "../../lib/sessionState";
 import { stopVerifying } from "../../lib/verifyActions";
 import { openVerifyForm } from "../behaviors/VerifyStartForm";
+import { withPrReviewItem } from "./prReviewMenu";
 
 /** Whether a session can be asked to verify now. */
 export function canStartVerify(inst: Partial<Instance>): boolean {
@@ -68,8 +69,9 @@ export function withVerifyItem(model: SessionMenuModel, inst: Partial<Instance>)
   };
 }
 
-/** The rail row's menu: lib/sessionMenu's model with Verify in it (the pane
- * header wraps its own call the same way, with withVerifyItem). */
+/** The rail row's menu: lib/sessionMenu's model with Verify and Run PR review
+ * in it (the pane header wraps its own call the same way, with withVerifyItem
+ * and withPrReviewItem). */
 export function sessionMenu(...args: Parameters<typeof baseSessionMenu>): SessionMenuModel {
-  return withVerifyItem(baseSessionMenu(...args), args[0]);
+  return withPrReviewItem(withVerifyItem(baseSessionMenu(...args), args[0]), args[0]);
 }

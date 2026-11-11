@@ -1772,6 +1772,35 @@ export interface SessionVerifyFixStarted {
   reclaimed?: boolean;
 }
 
+/** `POST /api/pr-review` body: run the team's saved PR review route
+ * (Settings `flights.pr_review_plan`, or `plan`) on an open PR. `session`
+ * names the session; `pr_url` alone finds or makes the session for the PR's
+ * branch. */
+export interface PrReviewRequestBody {
+  session?: string;
+  pr_url?: string;
+  plan?: string;
+}
+
+/** One review stop the server put on the session's route. */
+export interface PrReviewStop {
+  id: string;
+  kind: string;
+  title: string;
+}
+
+/** `POST /api/pr-review` → 200. `started`: the session had no route and now
+ * flies the review route; `inserted`: its route took the review stops right
+ * after its current stop; `created`: only a PR link was given, and a session
+ * was opened for it first. Errors are `{error}` with 400 (no review route
+ * chosen), 404 (no such session or PR) or 409 (paused or held). */
+export interface PrReviewResult {
+  mode: "started" | "inserted" | "created";
+  session: string;
+  flight: string;
+  stops: PrReviewStop[];
+}
+
 /** `POST /api/test-plans/{id}/run` → 202. `in_session`: the steps were
  * handed to the plan's own session's agent (`session`), `queued` while it
  * was mid-turn; absent/false: a separate checker session `session` was

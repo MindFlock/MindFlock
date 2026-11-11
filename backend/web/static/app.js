@@ -12746,7 +12746,7 @@ var QueryObserver = class extends Subscribable {
 		if (this.#selectError) {
 			error = this.#selectError;
 			data = this.#selectResult;
-			errorUpdatedAt = Date.now();
+			errorUpdatedAt = prevResult?.error === error ? prevResult.errorUpdatedAt : Date.now();
 			status = "error";
 			isPlaceholderData = false;
 		}
@@ -24804,7 +24804,7 @@ function instApi(title, suffix, opts) {
 //#endregion
 //#region src/lib/guest.ts
 var locked = [];
-var listeners$9 = /* @__PURE__ */ new Set();
+var listeners$10 = /* @__PURE__ */ new Set();
 function splitLockedRows(list) {
 	if (!Array.isArray(list)) {
 		setLocked([]);
@@ -24828,7 +24828,7 @@ function splitLockedRows(list) {
 function setLocked(rows) {
 	if (rows.length === locked.length && rows.every((r, i) => r.title === locked[i].title && r.status === locked[i].status && r.device === locked[i].device)) return;
 	locked = rows;
-	for (const l of listeners$9) l();
+	for (const l of listeners$10) l();
 }
 function guestNote(guest) {
 	if (!guest) return "";
@@ -30910,13 +30910,13 @@ function memoryConfirmOf(e) {
 	};
 }
 var pending$3 = null;
-var listeners$8 = /* @__PURE__ */ new Set();
+var listeners$9 = /* @__PURE__ */ new Set();
 function emit$1() {
-	for (const l of listeners$8) l();
+	for (const l of listeners$9) l();
 }
 function subscribeMemoryConfirm(fn) {
-	listeners$8.add(fn);
-	return () => listeners$8.delete(fn);
+	listeners$9.add(fn);
+	return () => listeners$9.delete(fn);
 }
 function currentMemoryConfirm() {
 	return pending$3;
@@ -39604,7 +39604,7 @@ function installJoinLink() {
 var KEY$1 = "mf_codemap_seen";
 var MAX_TITLES = 200;
 var cache = null;
-var listeners$7 = /* @__PURE__ */ new Set();
+var listeners$8 = /* @__PURE__ */ new Set();
 function load() {
 	if (cache) return cache;
 	try {
@@ -39639,7 +39639,7 @@ function markCodemapSeen(title, ts) {
 	try {
 		localStorage.setItem(KEY$1, JSON.stringify(next));
 	} catch {}
-	listeners$7.forEach((l) => l());
+	listeners$8.forEach((l) => l());
 }
 function renameCodemapSeen(from, to) {
 	const cur = load();
@@ -39651,11 +39651,11 @@ function renameCodemapSeen(from, to) {
 	try {
 		localStorage.setItem(KEY$1, JSON.stringify(next));
 	} catch {}
-	listeners$7.forEach((l) => l());
+	listeners$8.forEach((l) => l());
 }
 function subscribeCodemapSeen(cb) {
-	listeners$7.add(cb);
-	return () => listeners$7.delete(cb);
+	listeners$8.add(cb);
+	return () => listeners$8.delete(cb);
 }
 function redZoneChip(rz, seenAt) {
 	if (!rz) return null;
@@ -39737,10 +39737,10 @@ function saveNodePos(chain, spots) {
 //#endregion
 //#region src/lib/renameSession.ts
 var VERIFY = "\0verify:";
-var listeners$6 = /* @__PURE__ */ new Set();
+var listeners$7 = /* @__PURE__ */ new Set();
 function onSessionRenamed(fn) {
-	listeners$6.add(fn);
-	return () => listeners$6.delete(fn);
+	listeners$7.add(fn);
+	return () => listeners$7.delete(fn);
 }
 function renameMapKey(m, from, to, opts = {}) {
 	if (m.has(from)) {
@@ -39853,7 +39853,7 @@ function moveSessionTitle(from, to) {
 			parent: r.parent === from ? to : r.parent
 		} : r);
 	});
-	for (const fn of listeners$6) try {
+	for (const fn of listeners$7) try {
 		fn(from, to);
 	} catch {}
 }
@@ -39942,10 +39942,29 @@ var assetsURL = function(dep) {
 	return "/" + dep;
 };
 var seen = {};
+var isCssPreloadUrl = function isCssPreloadUrl(url) {
+	return url.pathname.endsWith(".css");
+};
+var preloadOnce = function preloadOnce(seen, href, preload) {
+	if (href in seen) return seen[href];
+	const promise = preload();
+	if (!promise) {
+		seen[href] = void 0;
+		return;
+	}
+	const preloadPromise = promise.then(() => {
+		seen[href] = void 0;
+	}, (err) => {
+		seen[href] = void 0;
+		throw err;
+	});
+	seen[href] = preloadPromise;
+	return preloadPromise;
+};
 var __vitePreload = function preload(baseModule, deps, importerUrl) {
 	let promise = Promise.resolve();
 	if (deps && deps.length > 0) {
-		const links = document.getElementsByTagName("link");
+		let preloadedHrefs;
 		const cspNonceMeta = document.querySelector("meta[property=csp-nonce]");
 		const cspNonce = cspNonceMeta?.nonce || cspNonceMeta?.getAttribute("nonce");
 		function allSettled(promises) {
@@ -39958,29 +39977,44 @@ var __vitePreload = function preload(baseModule, deps, importerUrl) {
 			}))));
 		}
 		function importMetaResolve(specifier) {
-			if (import.meta.resolve) return import.meta.resolve(specifier);
-			return new URL(specifier, import.meta.url).href;
+			if (import.meta.resolve) return new URL(import.meta.resolve(specifier));
+			return new URL(specifier, import.meta.url);
 		}
-		promise = allSettled(deps.map((dep) => {
-			dep = assetsURL(dep, importerUrl);
-			dep = importMetaResolve(dep);
-			if (dep in seen) return;
-			seen[dep] = true;
-			const isCss = dep.endsWith(".css");
-			for (let i = links.length - 1; i >= 0; i--) {
-				const link = links[i];
-				if (link.href === dep && (!isCss || link.rel === "stylesheet")) return;
-			}
-			const link = document.createElement("link");
-			link.rel = isCss ? "stylesheet" : scriptRel;
-			if (!isCss) link.as = "script";
-			link.crossOrigin = "";
-			link.href = dep;
-			if (cspNonce) link.setAttribute("nonce", cspNonce);
-			document.head.appendChild(link);
-			if (isCss) return new Promise((res, rej) => {
-				link.addEventListener("load", res);
-				link.addEventListener("error", () => rej(/* @__PURE__ */ new Error(`Unable to preload CSS for ${dep}`)));
+		promise = allSettled(deps.map((depString) => {
+			depString = assetsURL(depString, importerUrl);
+			const dep = importMetaResolve(depString);
+			const isCss = isCssPreloadUrl(dep);
+			return preloadOnce(seen, dep.href, () => {
+				if (preloadedHrefs === void 0) {
+					preloadedHrefs = {
+						all: /* @__PURE__ */ new Set(),
+						styles: /* @__PURE__ */ new Set()
+					};
+					const links = document.getElementsByTagName("link");
+					for (let i = links.length - 1; i >= 0; i--) {
+						const link = links[i];
+						preloadedHrefs.all.add(link.href);
+						if (link.rel === "stylesheet") preloadedHrefs.styles.add(link.href);
+					}
+				}
+				if ((isCss ? preloadedHrefs.styles : preloadedHrefs.all).has(dep.href)) return;
+				const link = document.createElement("link");
+				link.rel = isCss ? "stylesheet" : scriptRel;
+				if (!isCss) link.as = "script";
+				link.crossOrigin = "";
+				link.href = dep.href;
+				if (cspNonce) link.setAttribute("nonce", cspNonce);
+				document.head.appendChild(link);
+				if (isCss) return new Promise((res, rej) => {
+					const handleSettle = (e) => {
+						link.removeEventListener("load", handleSettle);
+						link.removeEventListener("error", handleSettle);
+						if (e.type === "error") rej(/* @__PURE__ */ new Error(`Unable to preload CSS for ${dep}`));
+						else res(e);
+					};
+					link.addEventListener("load", handleSettle);
+					link.addEventListener("error", handleSettle);
+				});
 			});
 		}).filter((p) => p !== void 0));
 	}
@@ -40005,11 +40039,11 @@ var records = /* @__PURE__ */ new Map();
 var known = /* @__PURE__ */ new Map();
 var epochCounter = 0;
 var version$1 = 0;
-var listeners$5 = /* @__PURE__ */ new Set();
+var listeners$6 = /* @__PURE__ */ new Set();
 function subscribeHost(cb) {
-	listeners$5.add(cb);
+	listeners$6.add(cb);
 	return () => {
-		listeners$5.delete(cb);
+		listeners$6.delete(cb);
 	};
 }
 function hostVersion() {
@@ -40017,7 +40051,7 @@ function hostVersion() {
 }
 function bump() {
 	version$1++;
-	for (const cb of listeners$5) cb();
+	for (const cb of listeners$6) cb();
 }
 function buildTarget(extId, surfaceId, ref) {
 	return extId + ":" + surfaceId + (ref ? ":" + ref : "");
@@ -42601,6 +42635,9 @@ function VerifyConfirm({ verify, session, hideSteps }) {
 var enc$1 = encodeURIComponent;
 var flightPath = (id, rest = "") => "/api/flights/" + enc$1(id) + rest;
 var stepPath = (id, step, verb) => flightPath(id, "/steps/" + enc$1(step) + "/" + verb);
+async function fetchFlights(all = false) {
+	return (await api("/api/flights" + (all ? "?all=1" : "")))?.flights || [];
+}
 function refreshFlights() {
 	queryClient.invalidateQueries({ queryKey: ["flight-plans"] });
 	return queryClient.invalidateQueries({ queryKey: ["flights"] });
@@ -47317,7 +47354,7 @@ function wordsFrom(raw, fallback) {
 var defaults = BUILTIN_VOICE_WORDS;
 var current$1 = BUILTIN_VOICE_WORDS;
 var version = 0;
-var listeners$4 = /* @__PURE__ */ new Set();
+var listeners$5 = /* @__PURE__ */ new Set();
 function voiceWords() {
 	return current$1;
 }
@@ -47331,11 +47368,11 @@ function setVoiceWords(words, wordsDefault) {
 	defaults = d;
 	current$1 = w;
 	version++;
-	for (const fn of [...listeners$4]) fn(w);
+	for (const fn of [...listeners$5]) fn(w);
 }
 function onVoiceWords(fn) {
-	listeners$4.add(fn);
-	return () => void listeners$4.delete(fn);
+	listeners$5.add(fn);
+	return () => void listeners$5.delete(fn);
 }
 function applyVoiceView(j) {
 	const v = j && typeof j === "object" ? j : {};
@@ -49527,6 +49564,7 @@ function FeatureRow({ f }) {
 		})]
 	});
 }
+var STAR_URL = "https://github.com/MindFlock/MindFlock";
 function WhatsNew() {
 	useAutoWhatsNew();
 	const shown = useWhatsNew((s) => s.shown);
@@ -49588,15 +49626,21 @@ function WhatsNew() {
 						}, r.version))]
 					})]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "wn-actions",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+						className: "wn-star",
+						href: STAR_URL,
+						target: "_blank",
+						rel: "noreferrer",
+						children: "Finding MindFlock useful? A star on GitHub helps."
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "wn-primary",
 						onClick: closeWhatsNew,
 						autoFocus: true,
 						children: "Got it"
-					})
+					})]
 				})
 			]
 		})
@@ -57598,7 +57642,7 @@ var micState = {
 	caption: "",
 	unsure: ""
 };
-var listeners$3 = /* @__PURE__ */ new Set();
+var listeners$4 = /* @__PURE__ */ new Set();
 function publishMicState(patch) {
 	const next = {
 		...micState,
@@ -57606,15 +57650,15 @@ function publishMicState(patch) {
 	};
 	if (next.listening === micState.listening && next.title === micState.title && next.caption === micState.caption && next.unsure === micState.unsure) return;
 	micState = next;
-	listeners$3.forEach((l) => l());
+	listeners$4.forEach((l) => l());
 }
 function getMicState() {
 	return micState;
 }
 function subscribeMicState(cb) {
-	listeners$3.add(cb);
+	listeners$4.add(cb);
 	return () => {
-		listeners$3.delete(cb);
+		listeners$4.delete(cb);
 	};
 }
 //#endregion
@@ -64669,6 +64713,130 @@ function VerifyStartForm({ title, repo, onClose }) {
 	});
 }
 //#endregion
+//#region src/lib/prReview.ts
+function prReviewBody(req) {
+	const body = {};
+	if (req.session) body.session = req.session;
+	if (req.prUrl) body.pr_url = req.prUrl;
+	if (req.plan) body.plan = req.plan;
+	return body;
+}
+function runPrReview(req) {
+	return api("/api/pr-review", {
+		method: "POST",
+		json: prReviewBody(req)
+	});
+}
+var unsupported = false;
+var listeners$3 = /* @__PURE__ */ new Set();
+function prReviewSupported() {
+	return !unsupported;
+}
+function onPrReviewSupport(fn) {
+	listeners$3.add(fn);
+	return () => void listeners$3.delete(fn);
+}
+function isMissingRoute(err) {
+	if (!(err instanceof ApiError) || err.status !== 404) return false;
+	const b = err.body;
+	return !(b && typeof b === "object" && typeof b.error === "string" && b.error);
+}
+function stopBefore(flights, flightId, stops) {
+	const f = (flights || []).find((x) => x.id === flightId);
+	if (!f || !stops.length) return "";
+	const at = f.steps.findIndex((s) => s.id === stops[0].id);
+	return at > 0 ? f.steps[at - 1].title || "" : "";
+}
+function prReviewMessage(r, after = "") {
+	const who = r.session || "the session";
+	if (r.mode === "inserted") return "Review steps added to " + who + "'s route after " + (after || "the current stop");
+	if (r.mode === "created") return "Opened " + who + " for the PR and started its review";
+	return "PR review started on " + who;
+}
+function prReviewErrorText(err) {
+	if (isMissingRoute(err)) return "This MindFlock server can't run PR reviews yet — update it, then try again.";
+	if (err instanceof ApiError) {
+		const said = err.body?.error;
+		const why = typeof said === "string" && said ? said : "";
+		if (err.status === 400) return (why ? why.replace(/\.?$/, ". ") : "No PR review route is chosen. ") + "Choose a review route in Settings → Workspace → PR review route.";
+		if (err.status === 409) return why || "The session is paused or held — resume it, then run the review again.";
+		if (err.status === 404) return why || "MindFlock couldn't find that session or PR — it may have just closed.";
+	}
+	return errMsg(err);
+}
+function openReviewedSession(title) {
+	if (!title) return;
+	const ui = useUi.getState();
+	ui.closeDialog();
+	selectSession(title, { noKeyboard: true });
+	ui.setLastTab(title, "agent");
+}
+async function startPrReview(req, opts = {}) {
+	try {
+		const r = await runPrReview(req);
+		let after = "";
+		if (r.mode === "inserted") try {
+			after = stopBefore(await fetchFlights(), r.flight, r.stops || []);
+		} catch {}
+		toast(prReviewMessage(r, after));
+		refreshFlights();
+		refreshInstances();
+		if (opts.open !== false) openReviewedSession(r.session);
+		return r;
+	} catch (err) {
+		if (isMissingRoute(err)) {
+			unsupported = true;
+			for (const fn of listeners$3) fn();
+		}
+		const where = req.session || "this PR";
+		const toSettings = err instanceof ApiError && err.status === 400 ? [{
+			label: "Choose a route",
+			primary: true,
+			run: () => openSettings("workspace")
+		}] : void 0;
+		errorPop("Couldn't run the PR review on " + where, prReviewErrorText(err), toSettings);
+		return null;
+	}
+}
+//#endregion
+//#region src/components/sidebar/prReviewMenu.ts
+function canRunPrReview(inst) {
+	if (!inst.title || !inst.pr_url) return false;
+	if (inst.status === "paused") return false;
+	if (inst.workspace_missing || inst.peer_share || inst.device || inst.pending) return false;
+	return prReviewSupported();
+}
+function prReviewMenuItem(inst) {
+	if (!canRunPrReview(inst)) return null;
+	const title = inst.title;
+	return {
+		key: "pr-review",
+		label: "Run PR review",
+		note: "your team's review route on its PR",
+		title: "Runs the PR review route chosen in Settings → Workspace on this session's PR — right after its current stop when it is already on a route",
+		run: () => void startPrReview({ session: title })
+	};
+}
+function withPrReviewItem(model, inst) {
+	const item = prReviewMenuItem(inst);
+	if (!item || !model.groups.length) return model;
+	const at = Math.max(0, model.groups.findIndex((g) => g.id === "ship"));
+	return {
+		...model,
+		groups: model.groups.map((g, i) => {
+			if (i !== at) return g;
+			const items = [...g.items];
+			const verify = items.findIndex((it) => it.key === "verify");
+			const behaviors = items.findIndex((it) => it.key === "checklist");
+			items.splice(verify >= 0 ? verify + 1 : behaviors >= 0 ? behaviors : items.length, 0, item);
+			return {
+				...g,
+				items
+			};
+		})
+	};
+}
+//#endregion
 //#region src/components/sidebar/verifyMenu.ts
 function canStartVerify(inst) {
 	if (!inst.title || inst.workspace_missing || inst.peer_share || inst.device || inst.pending) return false;
@@ -64718,7 +64886,7 @@ function withVerifyItem(model, inst) {
 	};
 }
 function sessionMenu(...args) {
-	return withVerifyItem(sessionMenu$1(...args), args[0]);
+	return withPrReviewItem(withVerifyItem(sessionMenu$1(...args), args[0]), args[0]);
 }
 //#endregion
 //#region src/components/presence/Presence.tsx
@@ -103754,12 +103922,12 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		kind: tab === "shell" ? "shell" : "agent",
 		dragSel: null
 	});
-	const menu = () => withVerifyItem(withVerifyVerdict(sessionMenu$1(inst, menuCtx, {
+	const menu = () => withPrReviewItem(withVerifyItem(withVerifyVerdict(sessionMenu$1(inst, menuCtx, {
 		visibleTabs,
 		onHistory: shows("history") ? void 0 : openHistory,
 		onCopyHistory: termTab ? copyHistory : void 0,
 		onNextStep: shows("next") ? void 0 : shownStep ?? void 0
-	}), inst), inst);
+	}), inst), inst), inst);
 	const menuSummary = [
 		!shows("cost") && usageHeadline(inst),
 		!shows("diffstat") && hasDiffStat && diffStatText(inst),
@@ -119006,6 +119174,30 @@ function EpicsTab({ gotoTab }) {
 	});
 }
 //#endregion
+//#region src/components/intake/PrReviewAction.tsx
+async function reviewOpenPr(prUrl) {
+	if (!prUrl) return false;
+	return !!await startPrReview({ prUrl });
+}
+function PrReviewAction({ prUrl, reference }) {
+	const [supported, setSupported] = (0, import_react.useState)(prReviewSupported);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => onPrReviewSupport(() => setSupported(prReviewSupported())), []);
+	if (!prUrl || !supported) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "linklike ik-pr-review",
+		"data-pr-review": prUrl,
+		disabled: busy,
+		title: "Run your team's PR review route (Settings → Workspace → PR review route) on " + reference + " — in its session, after the current stop if it is already on a route",
+		onClick: () => {
+			setBusy(true);
+			reviewOpenPr(prUrl).finally(() => setBusy(false));
+		},
+		children: busy ? "Starting review…" : "Run PR review"
+	});
+}
+//#endregion
 //#region src/components/intake/PullRequestsTab.tsx
 var PR_GROUPS_KEY = "mf_intake_pr_groups";
 function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
@@ -119073,6 +119265,8 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 			"Each row says whether auto-start will take it. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 			" addresses a PR's comments now, whatever the filters say. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Run PR review" }),
+			" runs your team's review route on it. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Edit" }),
 			" on a repository changes how it is watched."
 		] }),
@@ -119125,6 +119319,10 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 					actionLabel: "Start",
 					failPrefix: "Start failed",
 					workspace: p.workspace,
+					actionExtra: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PrReviewAction, {
+						prUrl: p.url,
+						reference: "#" + p.number
+					}),
 					onReopen: async () => {
 						const title = await reopenIntakeItem({
 							kind: "prs",
@@ -128737,6 +128935,7 @@ function Workspace({ gotoScreen }) {
 				})
 			]
 		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PrReviewRoute, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoBranches, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
 			id: "workspace-advanced",
@@ -128875,6 +129074,53 @@ function FailureNotesRow() {
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
+	});
+}
+function PrReviewRoute() {
+	const s = useSettings();
+	const plans = useFlightPlans().data;
+	const stored = String(s.get("flights", "pr_review_plan") ?? "");
+	const match = (plans || []).find((p) => p.id === stored || p.name === stored);
+	const value = match ? match.id : stored;
+	const options = [{
+		value: "",
+		label: "None"
+	}, ...(plans || []).map((p) => ({
+		value: p.id,
+		label: p.name || p.id
+	}))];
+	if (stored && !match && plans) options.push({
+		value: stored,
+		label: stored + " (no longer saved)"
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		id: "workspace-pr-review-route",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "PR review route"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+				"data-group": "flights",
+				"data-field": "pr_review_plan",
+				value,
+				disabled: plans === null,
+				onChange: (e) => void s.saveField("flights", "pr_review_plan", e.target.value),
+				children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: o.value,
+					children: o.label
+				}, o.value || "none"))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: plans === null ? "This server has no saved routes yet." : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					"The saved route ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Run PR review" }),
+					" runs on an open PR — e.g. CodeRabbit plus your team's rules."
+				] })
+			})
+		]
 	});
 }
 //#endregion

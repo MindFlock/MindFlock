@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   work from there.
 - **Agents can start and answer Verify.** Two new MCP tools, `verify_session`
   (`title?`, `notes?`, `environment?`) and `confirm_verify` (`title?`,
-  `verified`, `note?`), act on the caller itself or a session it manages (36
+  `verified`, `note?`), act on the caller itself or a session it manages (37
   tools now). `edit_flight` takes `edit: [{step, title?, config?, on_fail?,
   when?, halt?}]` and a session `title`, and checks the whole request before
   writing anything; `save_flight_plan` takes `id` to replace a saved route,
@@ -51,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   route…**; a saved route's menu has **Edit its stops**, which puts an editable
   copy on the Sky with a Save button. Every save says that routes already
   running keep their own copy.
+- **Run the PR review on any open PR.** "Run PR review" on a session (its
+  ⋮ / ⋯ menu) and "Run PR review" on an open PR in Intake → GitHub PRs run
+  the route chosen in Settings → Workspace → *PR review route*
+  (`flights.pr_review_plan`). A session with no route starts it; a session
+  already flying a route gets the review stops spliced in after its current
+  stop (before any Push/Reviews/Land ahead; stops it already has are not
+  added twice); a PR with no session gets one on its branch, then the
+  review. The session's own agent does the fixes. Also `POST /api/pr-review`
+  and the MCP tool `run_pr_review`.
 
 ### Changed
 
