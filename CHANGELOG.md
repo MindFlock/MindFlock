@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+### Added
+
+- **Team PR rules as a route.** The Review stop gains a mode: bugs (as
+  before), security (a security checklist), or standards (the team's rules,
+  given in its focus, govern the review). Findings handed to the agent must
+  each be fixed or answered with a written rebuttal for the PR's
+  description. Reviews settle can require a reviewer (`require_reviewer`,
+  e.g. `coderabbit`): it waits for that reviewer's first review, fails "never
+  reviewed — it needs a human review" after `reviewer_wait_minutes`, and
+  exhausted rounds say "comments still open after N rounds — it needs a human
+  review". A cookbook recipe puts it together (docs/flights.md "Team PR rules
+  as a route").
 ### Changed
 
 - **Voice commands trigger the first time, and a miss says why.**
