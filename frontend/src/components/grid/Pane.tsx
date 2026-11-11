@@ -48,6 +48,7 @@ import { FastTrackMenu } from "./FastTrackMenu";
 import { PaneMoreMenu } from "./PaneMoreMenu";
 import { SessionMenu } from "../sidebar/SessionMenu";
 import { withVerifyItem } from "../sidebar/verifyMenu";
+import { withPrReviewItem } from "../sidebar/prReviewMenu";
 import { PaneVerifyStrip } from "./PaneVerifyStrip";
 import { MidName } from "../sidebar/MidName";
 import { hasUncommitted, sessionMenu } from "../../lib/sessionMenu";
@@ -918,16 +919,20 @@ export function Pane({
   const openHistory = () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
   // SHIP carries Verify's verdict beside Open PR, and asks first on a
   // failed checklist (lib/stage.ts withVerifyVerdict).
-  // Verify (the session's own agent checking its work) sits beside it.
+  // Verify (the session's own agent checking its work) sits beside it, and
+  // Run PR review (the team's review route on its PR) after that.
   const menu = () =>
-    withVerifyItem(
-      withVerifyVerdict(
-        sessionMenu(inst, menuCtx, {
-          visibleTabs,
-          onHistory: shows("history") ? undefined : openHistory,
-          onCopyHistory: termTab ? copyHistory : undefined,
-          onNextStep: shows("next") ? undefined : shownStep ?? undefined,
-        }),
+    withPrReviewItem(
+      withVerifyItem(
+        withVerifyVerdict(
+          sessionMenu(inst, menuCtx, {
+            visibleTabs,
+            onHistory: shows("history") ? undefined : openHistory,
+            onCopyHistory: termTab ? copyHistory : undefined,
+            onNextStep: shows("next") ? undefined : shownStep ?? undefined,
+          }),
+          inst,
+        ),
         inst,
       ),
       inst,

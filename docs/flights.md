@@ -7901,3 +7901,69 @@ standards`, the rules in `focus`, agent fixes or rebuts) → Security review
 fixes). The `review` / `reviews` cookbook lines name the new fields, and
 `step_phrase` reads a review by its mode and a reviews stop with "(waits for
 <reviewer>)".
+
+## Run the PR review on an open PR (2026-11-11)
+
+A team keeps its PR review — the rules-based reviews, a "Proof of Code
+Review" section on the PR, the review-bot loop, a verdict, a perch to merge
+or ask for review — as a **review-only saved route**. **Run the PR review**
+flies it on an open PR, also on one a session is already working on. Code:
+`core/pr_review.py` (`run_pr_review`, `find_pr_session`, `resolve_plan`,
+`first_stop`), `core/flights.py` (`op_merge_plan`, `merge_point`),
+`routes/flights.py` (`POST /api/pr-review`), `mcp/flights.py`
+(`run_pr_review`); setting `flights.pr_review_plan`
+(docs/configuration.md); tests `tests/unit/test_pr_review_action.py`.
+
+**Which route.** The call's `plan` (a saved route's id, or its name, case
+aside), else the `flights.pr_review_plan` setting; neither → 400 `no_plan`,
+not on the shelf → 404 `unknown_plan`. Nothing in the code names a review
+bot or a company: the rules live in the route's stops.
+
+**Which session.** `session` names it. With only `pr_url`
+(`https://github.com/<owner>/<repo>/pull/<n>`), `find_pr_session` looks, in
+order, for a live session whose row shows that PR (`pr_url`, no GitHub call),
+Intake's own session for it (`pr-<repo>-<n>`, same repo), then one whose
+branch is the PR's head (`GET /repos/{repo}/pulls/{n}` with the app's token,
+else the Intake monitor's lookup) in that repo (its origin). A session on the
+same branch name in another repo is not it. The fixes are made by that
+session's own agent in its own checkout: **no second session is ever put on
+the PR's branch**. A paused session (409 `paused`) or one held offline after
+a crash (409 `held`) is refused — start it first.
+
+**One route per session**, so what happens depends on the session:
+
+| The session | `mode` | What |
+|---|---|---|
+| has no route | `started` | `POST /api/flights/start`'s body (`flight_driver.start`) with `title`, `start_at` = `first_stop(plan)` and a `pr` subject (the PR it shows, when known). The work is already on the PR, so the route starts at its **first stop** — past a leading Agent stop with no prompt of its own (that stop stands for "the work"; flown, it would only wait for a prompt nobody types). An Agent stop with a prompt is where it starts: its prompt is sent. A route of nothing but empty Agent stops → 400 `bad_plan`. `stops` = the stops ahead. The session's own fast-track run, if any, is absorbed as with any start. |
+| is mid-route | `inserted` | `flights.op_merge_plan` under the store lock (through `flight_driver._changed`: `flight.changed`, the driver woken). `stops` = the stops added; `[]` when the route already had them all. |
+| none for the PR | `created` | `pr_review.launch(repo, n, plan=…)` — exactly Intake → Pull requests' **Begin review**: the PR's workspace provisioned on its head branch in the background, the route armed on the deterministic title first. `stops` = the route's. Its refusals pass through (404 no such open PR, 409 already starting, 502). |
+
+### The merge rule (`op_merge_plan`)
+
+1. **Where** (`merge_point`): right after the current stop — after its whole
+   parallel group; after the first stop on a route not yet in the air
+   (ready). When a `reviews` or `ship` stop, or a kind whose `risk` says
+   `irreversible` (Land), is already ahead, in front of the **first** of
+   them instead: the review runs and its fixes are made before the PR's
+   comment loop, a ship rung or a merge, which then carry them on. Never
+   strictly inside a parallel group.
+2. **Dedupe**: a plan stop is left out when the route has a stop of the same
+   `kind` and the same `config` that ran (done), is on now (running,
+   waiting on you) or is still ahead (pending at or after the cursor) — no
+   second CodeRabbit loop when one is already ahead. A skipped or failed one
+   does not count: its copy is added. A Loop whose target was left out goes
+   too. Titles are not compared.
+3. **Ids**: every added stop takes the next free `sN` (never one the steps or
+   the history name); a Loop aimed at another added stop follows it.
+4. **Group**: the added stops are one new group named after the plan
+   (`group.plan_id` = its id), as `POST /api/flights/{id}/steps {plan_id}`
+   makes one; a parallel group that lost a member is tidied.
+
+A route that is over → 409 `finished`; past 40 stops → 409
+`too_many_steps`. Nothing new to add changes nothing (no history line).
+
+### Where it is offered
+
+`POST /api/pr-review` (docs/web-api.md, the frontend's action on a PR row and
+on a session with a PR) and the MCP tool `run_pr_review` (docs/mcp.md), so an
+orchestrator agent can run a review on a PR its worker opened.
