@@ -73,6 +73,7 @@ def test_the_kind_is_registered():
     k = kinds["review"]
     assert k["family"] == "work" and k["actor"] == "robot" and k["risk"] == []
     assert [f["name"] for f in k["fields"]] == [
+        "mode",
         "program",
         "model",
         "focus",
@@ -85,6 +86,7 @@ def test_the_kind_is_registered():
 def test_config_defaults_and_title():
     s = F.normalize_step({"kind": "review", "config": {}})
     assert s["config"] == {
+        "mode": "bugs",
         "program": "",
         "model": "",
         "focus": "",

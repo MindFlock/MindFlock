@@ -524,6 +524,19 @@ STEP_KINDS: Dict[str, dict] = {
             _f("quiet_minutes", "int", "Quiet for (minutes)", default=10),
             _f("max_rounds", "int", "At most this many rounds", default=5),
             _f("include_bots", "bool", "Include bot reviewers", default=True),
+            _f(
+                "require_reviewer",
+                "text",
+                "Wait for this reviewer (empty = nobody)",
+                default="",
+                placeholder="e.g. coderabbit",
+            ),
+            _f(
+                "reviewer_wait_minutes",
+                "int",
+                "Give that reviewer (minutes)",
+                default=10,
+            ),
         ],
     },
     "checks": {
@@ -976,6 +989,10 @@ def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
             "quiet_minutes": _int(c.get("quiet_minutes"), 10, 1, 24 * 60),
             "max_rounds": _int(c.get("max_rounds"), 5, 1, 50),
             "include_bots": _bool(c.get("include_bots"), True),
+            "require_reviewer": _text(c.get("require_reviewer"), 100),
+            "reviewer_wait_minutes": _int(
+                c.get("reviewer_wait_minutes"), 10, 1, 24 * 60
+            ),
         }
     if kind == "checks":
         return {"timeout_minutes": _int(c.get("timeout_minutes"), 60, 1, 24 * 60)}
@@ -3724,22 +3741,29 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
                 idle_since=None,
             )
         return _wait(rec.get("note") or "pushing the review fixes")
-    ids = (obs.get("reviews") or {}).get("ids")
+    r = obs.get("reviews") or {}
+    ids = r.get("ids")
+    who = str(cfg.get("require_reviewer") or "")
+    first: dict = {}
     if isinstance(ids, list) and not d.get("seeded"):
         # What was already on the PR when this step began was the previous
         # step's business (a PR flight's first prompt carries it): only what
         # arrives from here on is "new".
-        return _wait(
-            "watching for new review comments", seen=[str(i) for i in ids], seeded=True
-        )
+        first.update(seen=[str(i) for i in ids], seeded=True)
+    if who and not d.get("pr_since"):
+        # The required reviewer's clock starts once there is a PR to review
+        # and this stop is watching it, whichever came later.
+        first["pr_since"] = now
+    if first:
+        return _wait("watching for new review comments", **first)
     seen = set(str(i) for i in d.get("seen") or [])
     new = [str(i) for i in ids if str(i) not in seen] if isinstance(ids, list) else []
     if new:
         if int(d.get("review_rounds") or 0) >= cfg["max_rounds"]:
             return {
                 "action": "fail",
-                "reason": "still getting review comments after %d rounds"
-                % cfg["max_rounds"],
+                "reason": "comments still open after %s — it needs a human review"
+                % plural(cfg["max_rounds"], "round"),
             }
         return {
             "action": "run",
@@ -3748,6 +3772,10 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
             % (len(new), "" if len(new) == 1 else "s"),
             "comments": new,
         }
+    if who and not d.get("reviewer_seen"):
+        held = _required_reviewer(cfg, d, r.get("reviewer"), now)
+        if held is not None:
+            return held
     quiet_since = float(d.get("quiet_since") or ss["since"])
     quiet = cfg["quiet_minutes"] * 60.0
     if now - quiet_since >= quiet:
@@ -3762,6 +3790,38 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
     return _wait(
         "quiet for %s of %d min" % (_mins(now - quiet_since), cfg["quiet_minutes"])
     )
+
+
+def _required_reviewer(cfg: dict, d: dict, posted, now: float) -> Optional[dict]:
+    """A reviews stop's ``require_reviewer`` gate (until it has seen that
+    reviewer post): it has posted → note it, and the quiet clock restarts
+    from here (``quiet_minutes`` is the wait after its first review, never a
+    settle on a PR nobody has looked at yet); not yet → wait, failing once
+    ``reviewer_wait_minutes`` have passed since ``pr_since``. ``posted`` is
+    True / False / None (GitHub could not be asked)."""
+    who = cfg["require_reviewer"]
+    if posted is True:
+        return _wait(
+            "%s reviewed — watching for new review comments" % who,
+            reviewer_seen=True,
+            quiet_since=now,
+        )
+    limit = cfg["reviewer_wait_minutes"]
+    since = float(d.get("pr_since") or now)
+    if now - since < limit * 60.0:
+        return _wait(
+            "waiting for %s to review (%s of %d min)" % (who, _mins(now - since), limit)
+        )
+    if posted is None:
+        return {
+            "action": "fail",
+            "reason": "could not tell whether %s reviewed this PR — it needs a "
+            "human review" % who,
+        }
+    return {
+        "action": "fail",
+        "reason": "%s never reviewed this PR — it needs a human review" % who,
+    }
 
 
 def _judge_checks(flight, step, ss, obs, now) -> dict:
