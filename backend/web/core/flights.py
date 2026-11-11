@@ -109,6 +109,8 @@ __all__ = [
     "op_remove_group",
     "op_add_steps",
     "op_add_plan",
+    "op_merge_plan",
+    "merge_point",
     "op_group",
     "op_ungroup",
     "ground",
@@ -5450,6 +5452,126 @@ def op_add_plan(
     for s in new:
         s["group"] = dict(g)
     return _insert_steps(flight, new, i, ts, [s["id"] for s in new])
+
+
+#: Kinds a merged-in plan goes in front of when one is already ahead
+#: (:func:`op_merge_plan`): the PR's own review loop and the ship rungs. A
+#: kind whose ``risk`` says ``irreversible`` (Land) counts too.
+MERGE_BEFORE_KINDS = frozenset({"reviews", "ship"})
+
+
+def _merge_gate(step: dict) -> bool:
+    """Whether a merged-in plan goes before ``step`` (see
+    :data:`MERGE_BEFORE_KINDS`)."""
+    kind = step.get("kind")
+    if kind in MERGE_BEFORE_KINDS:
+        return True
+    return "irreversible" in ((STEP_KINDS.get(kind) or {}).get("risk") or [])
+
+
+def _merge_counts(flight: dict, i: int) -> bool:
+    """Whether step ``i`` of ``flight`` makes a same step of a merged-in plan
+    redundant: it ran (done), is running or waiting on you now, or is still
+    ahead (pending at or after the cursor). One skipped, or one that failed,
+    did not do the work — the plan's copy is added."""
+    s = flight["steps"][i]
+    st = flight["step_states"].get(s["id"], {}).get("state")
+    if st in ("done", "running", "waiting_you"):
+        return True
+    return st == "pending" and i >= flight["cursor"]
+
+
+def merge_point(flight: dict) -> int:
+    """Where :func:`op_merge_plan` inserts: right after the current stop (its
+    whole parallel group), or, on a flight that has not taken off (ready /
+    grounded), after its first stop — then moved back in front of the first
+    :func:`_merge_gate` stop ahead, but never before the first open index
+    nor strictly inside a parallel group."""
+    steps = flight["steps"]
+    first = _first_open(flight)
+    if flight["cursor"] < len(steps):
+        at = max(first, current_group(flight)[1])
+    else:
+        at = len(steps)
+    at = min(at, len(steps))
+    for j in range(at, len(steps)):
+        if _merge_gate(steps[j]):
+            at = j
+            break
+    if _inside_group(steps, at):
+        at = max(first, group_span(steps, at)[0])
+    return at
+
+
+def op_merge_plan(
+    flight: dict, plan: dict, now: Optional[float] = None, added=None
+) -> dict:
+    """Merge a saved plan's steps into a flight already in the air — how "Run
+    the PR review" (``core.pr_review.run_pr_review``) adds a review route to a
+    session that already flies one (one route per session).
+
+    The merge rule:
+
+    1. **Where.** Right after the current stop (:func:`merge_point`); when a
+       ``reviews`` or ``ship`` stop (or a Land: anything irreversible) is
+       already ahead, in front of the first of them instead — so the review
+       runs, and its fixes are made, before the PR's comment loop, a ship
+       rung or a merge, which then carry those fixes on.
+    2. **Dedupe.** A plan step is left out when the flight already has a
+       step of the same ``kind`` and the same ``config`` that ran (done), is
+       on now, or is still ahead (:func:`_merge_counts`): no second CodeRabbit
+       loop when the route already waits for one. A skipped or failed one
+       does not count. A Loop whose target was left out goes too (it would
+       repeat stops that are not there).
+    3. **Ids.** Every added step takes the next free ``sN`` (never one the
+       steps or history name), so nothing collides with the flight's own
+       ids; a Loop aimed at another added step follows it to its new id.
+    4. **Group.** The added steps become ONE new group named after the plan
+       (``group.plan_id`` = its id), as ``POST /steps {plan_id}`` makes one.
+
+    ``added`` (a list): the added steps are appended to it. Nothing added
+    (every step already there) changes nothing. Raises :class:`FlightError`
+    (``finished`` 409, ``too_many_steps`` 409)."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    steps = flight["steps"]
+    have = [
+        (s["kind"], s.get("config") or {})
+        for i, s in enumerate(steps)
+        if _merge_counts(flight, i)
+    ]
+    keep: List[dict] = []
+    dropped: set = set()
+    for s in plan.get("steps") or []:
+        if (s["kind"], s.get("config") or {}) in have:
+            dropped.add(s["id"])
+            continue
+        keep.append(copy.deepcopy(s))
+    keep = [
+        s
+        for s in keep
+        if not (
+            s["kind"] == "loop"
+            and str((s.get("config") or {}).get("back_to") or "") in dropped
+        )
+    ]
+    if not keep:
+        return flight
+    # A parallel group that lost a member to the dedupe may be a run of one.
+    _tidy_parallel(keep)
+    i = merge_point(flight)
+    if len(steps) + len(keep) > MAX_STEPS:
+        raise FlightError(
+            "too_many_steps", 409, "a route has at most %d stops" % MAX_STEPS
+        )
+    g = _fresh_group(flight, plan.get("name") or "Stop", plan.get("id") or "")
+    for s in keep:
+        s["group"] = dict(g)
+    was = [s["id"] for s in keep]
+    _insert_steps(flight, keep, i, ts, was)
+    if added is not None:
+        added.extend(keep)
+    return flight
 
 
 def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> dict:

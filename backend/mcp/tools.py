@@ -1,12 +1,12 @@
-"""The 34 MindFlock MCP tools: schemas, descriptions and handlers.
+"""The 35 MindFlock MCP tools: schemas, descriptions and handlers.
 
 The ship and ticket tools (``ship_session``, ``set_autopilot``,
 ``spawn_ticket_session``, ``list_tickets``) live in :mod:`backend.mcp.ship`,
 and the team-run tools (``start_team_run``, ``get_run``, ``list_runs``,
 ``wait_for_run``, ``control_run``) in :mod:`backend.mcp.runs`, and the flight
 tools (``describe_flight``, ``start_flight``, ``flight_status``,
-``control_flight``, ``edit_flight``, ``save_flight_plan``) in
-:mod:`backend.mcp.flights` — all mixins of :class:`Toolbox`.
+``control_flight``, ``edit_flight``, ``save_flight_plan``, ``run_pr_review``)
+in :mod:`backend.mcp.flights` — all mixins of :class:`Toolbox`.
 
 Every handler goes through the HTTP API (:mod:`backend.mcp.api`) — the MCP
 server holds no engine state of its own beyond three in-memory facts: which
@@ -96,11 +96,11 @@ needs_input: read_output(view="screen"), then answer_prompt or ask your user.
 
 TEAM RUN ("3 at a time, PR each"): start_team_run; wait_for_run, get_run, list_runs; control_run steers. Split lead: propose_run_plan; report_integrated after a conflict.
 
-Routes: describe_flight → start_flight (dry_run first); flight_status, control_flight, edit_flight, save_flight_plan.
+Routes: describe_flight → start_flight (dry_run first); flight_status, control_flight, edit_flight, save_flight_plan, run_pr_review.
 
-Also: get_session, check_inbox, wait_for_message, set_parent. Steer/ship/close/delete only your descendants (ship/route yourself).
+Also: get_session, check_inbox, wait_for_message, set_parent. Steer/ship/close/delete only descendants (ship/route yourself).
 
-Long job: expect_background_job(duration) or prefix MINDFLOCK_EXPECT=6h."""
+Long job: expect_background_job(duration) or MINDFLOCK_EXPECT=6h."""
 
 _FOOTER = """
 
@@ -2909,5 +2909,13 @@ def build_tools(box: Toolbox) -> List[Tool]:
             _flights.S_SAVE_PLAN,
             box.save_flight_plan,
             _WRITE,
+        ),
+        Tool(
+            "run_pr_review",
+            "Run the PR review route",
+            _flights.D_PR_REVIEW,
+            _flights.S_PR_REVIEW,
+            box.run_pr_review,
+            _WRITE_WORLD,
         ),
     ]

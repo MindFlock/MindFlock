@@ -1,5 +1,6 @@
 """The flight tools: ``describe_flight``, ``start_flight``, ``flight_status``,
-``control_flight``, ``edit_flight`` and ``save_flight_plan``.
+``control_flight``, ``edit_flight``, ``save_flight_plan`` and
+``run_pr_review``.
 
 A mixin of :class:`backend.mcp.tools.Toolbox` (kept apart for size), driving
 the same ``/api/flights*`` routes the Sky does (docs/flights.md "Contract: the
@@ -148,6 +149,22 @@ D_SAVE_PLAN = (
     "name, steps, sentence}; start_flight(plan_id=…) runs it."
 )
 
+D_PR_REVIEW = (
+    "Run your user's PR review route (their saved review stops: a standards "
+    "or security review, the PR's review-comment loop, a verdict…) on an "
+    "open PR — also one a session is already working on. session: the "
+    "session that has the PR (you or a descendant; default you when no "
+    "pr_url), and/or pr_url: the PR (its session is found — the one on its "
+    "branch — or made as Intake's PRs tab makes one). plan: a saved route's "
+    "id or name (default: your user's Settings flights.pr_review_plan). No "
+    "route on the session: it starts at the route's first stop (the work is "
+    "already done). A route already flying: the stops are inserted after the "
+    "current one (stops it already has are left out; before a reviews / "
+    "ship stop ahead). The session's own agent makes the fixes. A stop that "
+    "can't be undone needs confirm_merge=true. Returns {mode: started|"
+    "inserted|created, session, flight, stops}; then flight_status."
+)
+
 
 def _obj(props: dict, required: Tuple[str, ...] = ()) -> dict:
     out: Dict[str, Any] = {
@@ -252,6 +269,19 @@ S_EDIT = _obj(
         "confirm_merge": {"type": "boolean", "default": False},
     },
     ("id",),
+)
+S_PR_REVIEW = _obj(
+    {
+        "session": dict(_TITLE, description="the PR's session (default: you)"),
+        "pr_url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "https://github.com/<owner>/<repo>/pull/<n>",
+        },
+        "plan": {"type": "string", "minLength": 1, "maxLength": 80},
+        "confirm_merge": {"type": "boolean", "default": False},
+    }
 )
 S_SAVE_PLAN = _obj(
     {
@@ -581,7 +611,7 @@ def _irreversible(steps: List[dict], kinds: Dict[str, dict]) -> List[str]:
 # Handlers
 # --------------------------------------------------------------------------- #
 class FlightTools:
-    """The six flight handlers; mixed into ``Toolbox``."""
+    """The seven flight handlers; mixed into ``Toolbox``."""
 
     # -- helpers -------------------------------------------------------------- #
     def _fl_api(self, method: str, path: str, payload=None, what: str = "", **kw):
@@ -1076,4 +1106,77 @@ class FlightTools:
         saved = plan.get("trigger")
         if isinstance(saved, dict) and saved.get("kind") not in (None, "manual"):
             out["trigger"] = saved
+        return out
+
+    # -- run_pr_review ---------------------------------------------------------- #
+    def _pr_review_setting(self) -> str:
+        """``flights.pr_review_plan`` as the server has it, "" when unset or
+        unreadable (the server then refuses with no_plan itself)."""
+        try:
+            resp = self._fl_api("GET", "/api/settings", what="settings")
+        except ToolError:
+            return ""
+        group = (resp.get("settings") or {}).get("flights")
+        return str((group or {}).get("pr_review_plan") or "").strip()
+
+    def run_pr_review(self, args: dict, ctx: ToolContext) -> dict:
+        flock = self.flock()
+        what = "run_pr_review"
+        url = str(args.get("pr_url") or "").strip()
+        title = str(args.get("session") or "").strip()
+        if not title and not url:
+            title = flock.self_title or ""
+        if not title and not url:
+            raise ToolError(
+                "run_pr_review needs session or pr_url: you are not inside a "
+                "MindFlock session"
+            )
+        ref = str(args.get("plan") or "").strip()
+        plan = None
+        lookup = ref or self._pr_review_setting()
+        if lookup:
+            plan = find_plan(self._plans(), lookup)
+            if plan is None and ref:
+                raise ToolError(
+                    "run_pr_review: no saved route %r — plan is a saved route's "
+                    "id or name" % ref
+                )
+        steps = list((plan or {}).get("steps") or [])
+        confirm = bool(args.get("confirm_merge"))
+        if title:
+            self._may_fly(flock, title, what, steps, confirm)
+        else:
+            # The server finds (or makes) the PR's session: a write.
+            self.policy.require_write(flock, what)
+            if steps:
+                self._require_confirm(steps, confirm, what)
+        payload: Dict[str, Any] = {"by": self._by(flock)}
+        if title:
+            payload["session"] = title
+        if url:
+            payload["pr_url"] = url
+        if plan is not None:
+            payload["plan"] = str(plan.get("id") or lookup)
+        elif ref:
+            payload["plan"] = ref
+        resp = self._fl_api(
+            "POST", "/api/pr-review", payload, what, timeout=START_TIMEOUT_S
+        )
+        out: Dict[str, Any] = {
+            "mode": resp.get("mode"),
+            "session": resp.get("session"),
+            "flight": resp.get("flight") or None,
+            "stops": [
+                "%s %s %s" % (s.get("id"), s.get("kind"), _cut(s.get("title"), 60))
+                for s in resp.get("stops") or []
+                if isinstance(s, dict)
+            ],
+        }
+        if resp.get("mode") == "inserted" and not out["stops"]:
+            out["note"] = "the route already had every one of those stops"
+        elif resp.get("mode") == "created":
+            out["note"] = (
+                "the PR's session is being made in the background; its route "
+                "flies once it is up"
+            )
         return out

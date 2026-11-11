@@ -105,6 +105,7 @@ TOOL_NAMES = (
     "control_flight",
     "edit_flight",
     "save_flight_plan",
+    "run_pr_review",
 )
 
 #: First line of a launch prompt decorated with ``split`` — also how

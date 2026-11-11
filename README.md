@@ -86,7 +86,7 @@ review comment in the prompt (outdated threads and top-level PR conversation are
 skipped).
 
 **Two ways in, and both are first-class.** The tracker path leads because
-nothing else does it — but MindFlock is also, plainly, a parallel-agent
+it's what moved the numbers [further down](#what-it-looks-like-in-use) — but MindFlock is also, plainly, a parallel-agent
 workspace, and plenty of days that is all it is: hit **+ New**, pick a repo and
 an agent, type a prompt, and you have another isolated worktree running beside
 the rest. Same grid, same live terminals, same Diff tab, same guided
@@ -301,12 +301,26 @@ happens on your hardware.
 
 <sub>Both comparisons are as of July 2026; these tools move fast. If a cell is out of date, please [open an issue or PR](CONTRIBUTING.md) and we'll correct it.</sub>
 
-**Nothing in either table sits where MindFlock does** — the queue starts the
-session *and* the session runs on your hardware. Seven local orchestrators were
-checked for a personal assigned-ticket poller and none of them has one: the
-closest, Conductor, can open a workspace from a GitHub or Linear issue but needs
-a click per issue. That is a narrow claim about a fast-moving space rather than a
-moat, and it's exactly the kind of cell worth correcting if you find one.
+**Neither table has a tool where the queue starts the session *and* it runs on
+your hardware — but that combination isn't unique any more, and that's good
+news for the idea.** Since MindFlock launched, several open-source tools start
+work from tickets on hardware you control. They differ mainly in what wakes
+them and where your tickets have to live:
+
+| | what starts the work | trackers | runs on | agents | merge |
+|---|---|---|---|---|---|
+| **MindFlock** | **polls the queue already assigned to *you*** — no bot user, no inbound URL | **Jira · Linear · GitHub Issues · Shortcut · Asana**, plus reviewed PRs | your machine | any CLI, by TOML | yours, by default |
+| [Cyrus](https://github.com/cyrusagents/cyrus) | issues assigned *to Cyrus*, by webhook — self-hosting needs your own OAuth app and a public URL | Linear, GitHub, GitLab, Slack | a machine you control, or Cyrus's cloud (paid) | Claude Code, Codex, Cursor, Gemini, OpenCode | not stated |
+| [no_human](https://github.com/no-human-ai/no_human) | polls with your filter (JQL, or team/state/label) | Jira Cloud, Linear, monday.com; GitHub/GitLab issues by URL | your machine | Claude (Agent SDK), Codex, local models | yours — "the agent never merges" |
+| [Frink](https://github.com/benord-labs/frink) | webhook events, through a relay Frink runs unless you set your own; also schedules | Linear, Shortcut, ClickUp, plus Sentry, PostHog, Vercel… | your computer, while Frink is open | Claude Code, Codex, OpenCode, Copilot, Cursor | approval steps optional |
+| [Open Session](https://github.com/tellahq/opensession) | Linear agent-session assignment, by webhook (HTTPS public ingress) | Linear, GitHub, Slack, Plain | your server, or Daytona/Boat sandboxes | Codex/Claude subscriptions via the Pi engine | a merge guard plus branch rules |
+
+<sub>From each project's own README and docs, read 2026-11-09. If a cell is out of date, please [open an issue or PR](CONTRIBUTING.md) and we'll correct it.</sub>
+
+If one of those fits your setup better — you live in Linear and want an
+assignable bot, or you want Sentry alerts to start work — use it. MindFlock's
+bet is the one in its first row: the work assigned to you is already the queue,
+so nothing has to be pointed at a bot or exposed to the internet to read it.
 
 The top two rows of the second table are the ones that matter. Everything else is
 a feature race; those two change what your day looks like:
@@ -971,7 +985,7 @@ On macOS the desktop app additionally leaves `/Applications/MindFlock.app`,
 | [docs/session-engine.md](docs/session-engine.md) | Session lifecycle, git worktrees, tmux/PTY, provisioned mode |
 | [docs/cli.md](docs/cli.md) | `mindflock` CLI: serve (`--setup`), init, doctor, update, uninstall, token, mcp, accounts, devices, peer, and terminal session control (new/ls/attach/rm/open/events/msg/inbox) |
 | [docs/team-runs.md](docs/team-runs.md) | Team runs and fast-track: several tickets / task lines at once, each fast-tracked (commit, push, PR, merge) by the server; what waits in the bell and what the team run header holds; restart semantics |
-| [docs/mcp.md](docs/mcp.md) | The MindFlock MCP: agent-to-agent messaging and orchestration — auto-attach, the 34 tools (plus 10 peer-only tools), message delivery, lineage and spawn limits, scopes, a worked orchestrator example |
+| [docs/mcp.md](docs/mcp.md) | The MindFlock MCP: agent-to-agent messaging and orchestration — auto-attach, the 35 tools (plus 10 peer-only tools), message delivery, lineage and spawn limits, scopes, a worked orchestrator example |
 | [docs/web-api.md](docs/web-api.md) | Complete HTTP + WebSocket API reference |
 | [docs/web-ui.md](docs/web-ui.md) | Frontend guide: grid, tabs, stages, shortcuts, mobile, addons |
 | [docs/providers.md](docs/providers.md) | Provider framework, adding a CLI via TOML, pricing & usage tracking |

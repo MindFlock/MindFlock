@@ -9,7 +9,12 @@
  * The paths come from GET /api/settings/workspace-paths: absolute, for every
  * kind of session — the ones you start (always <config dir>/worktrees) and
  * ticket/PR sessions (the Workspace folder field) — and a typed folder is
- * checked as you type (missing → "will be created", unwritable → warned). */
+ * checked as you type (missing → "will be created", unwritable → warned).
+ *
+ * PR review route (`flights.pr_review_plan`, 2026-11-11): which saved route
+ * "Run PR review" runs on an open PR (lib/prReview.ts) — picked from the same
+ * plans list the Sky uses. Stored as the route's id; an older value saved as
+ * a name still shows as that route. */
 
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
@@ -22,6 +27,7 @@ import { AdvancedFold } from "../settingsMode";
 import { PathField } from "../../PathField";
 import { RepoBranches } from "./RepoBranches";
 import { SetInIntake } from "./SetInIntake";
+import { useFlightPlans } from "../../../state/queries";
 
 /** GET /api/settings/workspace-paths. */
 export interface WorkspacePaths {
@@ -183,6 +189,7 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           Where <strong>Open PR</strong> points. Blank = the branch the session started from.
         </span>
       </label>
+      <PrReviewRoute />
       <RepoBranches />
       {/* What "shipped" means, fast-track's default reach and its hook
           retries: tuning for a flow that already works — advanced mode only. */}
@@ -274,5 +281,46 @@ function FailureNotesRow() {
         <span className="ca-slider" />
       </label>
     </div>
+  );
+}
+
+/** Which saved route "Run PR review" runs (a session's ⋯ menu, Intake → GitHub
+ * PRs). The plans are GET /api/flights/plans — the Sky's list. The setting
+ * may hold a route's id or its name; it is shown as that route either way and
+ * saved back as the id. A stored value no route matches any more stays
+ * visible (and says so) rather than silently reading as None. */
+function PrReviewRoute() {
+  const s = useSettings();
+  const plans = useFlightPlans().data;
+  const stored = String(s.get("flights", "pr_review_plan") ?? "");
+  const match = (plans || []).find((p) => p.id === stored || p.name === stored);
+  const value = match ? match.id : stored;
+  const options = [
+    { value: "", label: "None" },
+    ...(plans || []).map((p) => ({ value: p.id, label: p.name || p.id })),
+  ];
+  if (stored && !match && plans) options.push({ value: stored, label: stored + " (no longer saved)" });
+  return (
+    <label className="set-row" id="workspace-pr-review-route">
+      <span className="set-label">PR review route</span>
+      <select
+        data-group="flights"
+        data-field="pr_review_plan"
+        value={value}
+        disabled={plans === null}
+        onChange={(e) => void s.saveField("flights", "pr_review_plan", e.target.value)}
+      >
+        {options.map((o) => (
+          <option key={o.value || "none"} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <span className="set-hint">
+        {plans === null
+          ? "This server has no saved routes yet."
+          : <>The saved route <strong>Run PR review</strong> runs on an open PR — e.g. CodeRabbit plus your team's rules.</>}
+      </span>
+    </label>
   );
 }

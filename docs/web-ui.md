@@ -1400,6 +1400,10 @@ newest thing you actually asked.
   checklist** and **Open PR anyway** (`withVerifyVerdict`, lib/stage.ts). When a checklist
   exists, its verdict chip (*✓ Verified*, *✗ Failed*, *3/5 checked*) sits beside
   the PR chip and opens it in one click.
+- **⋯ → Run PR review** (Ship, right after **Verify**; also on the row's ⋮
+  menu) runs your team's saved PR review route on the session's PR — see
+  [Run PR review](#run-pr-review). Offered when the session has a PR and isn't
+  paused, even while its agent is working.
 - **An agent that isn't installed, or isn't signed in.** When the session's
   agent CLI is missing on this computer (`/api/setup`'s `logins`), a line over
   the terminal says so with **Install <agent>…** (the Setup checklist for the
@@ -1529,6 +1533,39 @@ session. That follow-up is the browser's (`submitMakePr` in
 `frontend/src/lib/sessionActions.ts` POSTs the same route), **not** the
 `/make-pr` route's, so a PR opened from `/m` or by Fast-track at `pr` depth
 leaves the ladder still asking for **Merge** until someone presses ↺.
+
+## Run PR review
+
+Runs the team's saved PR review route — e.g. CodeRabbit plus an agent review
+against the team's `CLAUDE.md` rules — on an **open PR**, whether or not the
+session's agent is still there (`lib/prReview.ts` → `POST /api/pr-review`).
+Three places ask for it:
+
+- **A session's ⋯ / ⋮ menu** (`components/sidebar/prReviewMenu.ts`, wrapped
+  into both menus beside Verify): shown when the row has a `pr_url`, isn't
+  paused, and is a session of this device's. It sends `{"session": <title>}`.
+- **Intake → GitHub PRs**: every open PR row has **Run PR review** in its action
+  column (`components/intake/PrReviewAction.tsx`), sending `{"pr_url": <link>}`;
+  the server finds the PR's session or opens one for its branch.
+- The route itself is chosen in **Settings → Workspace → PR review route**
+  (`flights.pr_review_plan`, a saved route's id; the picker lists the Sky's
+  saved routes from `GET /api/flights/plans`). None = the action answers 400.
+
+What it says, from the answer's `mode`:
+
+| mode | toast |
+|---|---|
+| `started` (no route yet) | *PR review started on X* |
+| `inserted` (already on a route) | *Review steps added to X's route after &lt;current stop&gt;* — the stop just before the first review stop on that route, else *the current stop* |
+| `created` (only a PR link) | *Opened X for the PR and started its review* |
+
+Then the session comes forward on its **Agent tab** (Intake closes first).
+Failures open an error card in plain words: a **400** says *Choose a review
+route in Settings → Workspace → PR review route* with a **Choose a route**
+button; a **409** says the session is paused or held; the action's own **404**
+says what it couldn't find. An **older server** has no such route at all
+(FastAPI's bare `{"detail": "Not Found"}`): the card says to update, and the
+menu item and the Intake button stay hidden for the rest of the page's life.
 
 ## Session row actions (the row's ⋮ or a right-click)
 
@@ -4860,7 +4897,9 @@ make a quiet queue look like a broken app.
 **It doesn't only watch.** Every row is the same `WorkItemRow` the other tabs
 use, with the same per-launch agent, depth and effort pickers and a **Start**
 button, so waiting for the sweep is the default rather than the only option — and
-when auto-start is off, starting from here is the entire point of the tab.
+when auto-start is off, starting from here is the entire point of the tab. On
+GitHub PRs each row also has **Run PR review** under its button: your team's
+review route on that PR ([Run PR review](#run-pr-review)).
 
 **One anatomy, three tabs** (`components/intake/kit.tsx`): an intro line → the
 **auto-start line** (where the switch stands, and the way to it) → (on the GitHub

@@ -15,7 +15,11 @@
  * There are no repository cards under the work any more.
  *
  * The GitHub credential has one home, the Connect GitHub dialog; this tab
- * shows its real state on one line ("connected as @you · Manage…"). */
+ * shows its real state on one line ("connected as @you · Manage…").
+ *
+ * The one exception to "address comments" is a row's own **Run PR review**
+ * (PrReviewAction.tsx): run the team's saved review route on that PR, asked
+ * for by name — never automatic. */
 
 import { api } from "../../api/client";
 import {
@@ -48,6 +52,7 @@ import { prsOn } from "./switches";
 import { prMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
 import { AutoStartLink } from "./AutoStartSwitches";
+import { PrReviewAction } from "./PrReviewAction";
 
 interface OpenPr {
   repo?: string;
@@ -179,8 +184,9 @@ export function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }: Ta
       hint={
         <>
           Each row says whether auto-start will take it. <strong>Start</strong> addresses a
-          PR's comments now, whatever the filters say. <strong>Edit</strong> on a repository
-          changes how it is watched.
+          PR's comments now, whatever the filters say. <strong>Run PR review</strong> runs
+          your team's review route on it. <strong>Edit</strong> on a repository changes how it
+          is watched.
         </>
       }
     >
@@ -237,6 +243,7 @@ export function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }: Ta
                 actionLabel="Start"
                 failPrefix="Start failed"
                 workspace={p.workspace}
+                actionExtra={<PrReviewAction prUrl={p.url} reference={"#" + p.number} />}
                 onReopen={async () => {
                   const title = await reopenIntakeItem({
                     kind: "prs",
