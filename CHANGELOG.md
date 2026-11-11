@@ -42,6 +42,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One out-of-memory kill no longer reads "critical" for 5 minutes with
+  gigabytes free.** A kill now escalates only alongside another signal past
+  its entry line, never a recovery-band hold. A person's start dialog names
+  the real cause (e.g. a memory stall) instead of "critically low: 13 GB
+  free. No room…", and the memory notice shows the reason.
+- **The memory shield no longer puts idle agents to sleep when only Windows
+  is critical** (e.g. commit charge): sleeping WSL agents doesn't give
+  Windows memory back. New starts still wait.
+- **Held workers:** a paused held worker isn't launched when its turn comes;
+  deleting a worker in a serial chain hands its successors to what it ran
+  after (no more stall); opening a waiting worker's pane says "waiting its
+  turn — press Start" instead of starting it; a full launch queue puts the
+  worker back to wait instead of reading it as finished; worker-order
+  notices wake a sleeping session through the launch gate.
+- **flights.json / plans.json** are locked across processes (server and
+  ticket pipeline), so a route update is no longer lost.
+
 - **A Verify that couldn't reach the session no longer loses the plan's
   steps.** When the hand-off failed (the session paused, over budget or
   unreachable), or the check was cancelled, given up on or closed before

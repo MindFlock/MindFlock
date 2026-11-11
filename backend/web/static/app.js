@@ -30815,6 +30815,7 @@ function memoryConfirmOf(e) {
 		level: b.level === "critical" ? "critical" : "low",
 		message: typeof b.message === "string" && b.message ? b.message : "Memory is low.",
 		error: b.error,
+		reason: typeof b.reason === "string" ? b.reason : void 0,
 		free: b.free,
 		total: b.total,
 		warming: b.warming,
@@ -58762,6 +58763,11 @@ function memoryDetail(m) {
 	if (stall >= 5) bits.push("stalled on memory " + Math.round(stall) + "% of the last minute");
 	return bits.join(" · ");
 }
+function memoryReason(m) {
+	const why = (m.why || []).filter((w) => typeof w === "string" && w.trim());
+	const line = why.length ? why.join("; ") : (m.message || "").trim();
+	return line ? line.charAt(0).toUpperCase() + line.slice(1) : "";
+}
 function windowsIsShort(m) {
 	const host = RANK$1[m.host?.level || "ok"] ?? 0;
 	const guest = RANK$1[m.guest_level || "ok"] ?? 0;
@@ -58801,6 +58807,7 @@ function MemoryNotice() {
 	const heavy = slotsLine(slots);
 	const critical = data.level === "critical";
 	const windows = windowsIsShort(data);
+	const reason = memoryReason(data);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "memory-notice",
 		role: "status",
@@ -58813,6 +58820,10 @@ function MemoryNotice() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "mn-detail",
 				children: windows ? windowsDetail(data) : memoryDetail(data)
+			}),
+			reason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mn-detail mn-why",
+				children: reason
 			}),
 			windows && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-detail",

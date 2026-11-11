@@ -287,7 +287,8 @@ def set_fence(title: str, payload: Mapping) -> Tuple[int, dict]:
             % ((" by %s" % by) if by else "", (": %s" % why) if why else "")
         )
         try:
-            told, _reason = srv._deliver_to_agent(inst, title, msg)
+            # Automatic: a sleeping worker is woken through the launch gate.
+            told, _reason = srv._deliver_to_agent(inst, title, msg, auto=True)
         except Exception:  # noqa: BLE001 — the fence holds either way
             told = False
     wake()
