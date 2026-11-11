@@ -262,10 +262,15 @@ def test_an_automatic_start_waits_when_one_more_would_not_fit(monkeypatch):
     assert p["decision"] == "go" and gate.person_refusal(p) is None
 
 
-def test_a_person_sees_the_room_when_memory_is_low(monkeypatch):
+def test_a_person_is_not_told_the_room_when_memory_is_low(monkeypatch):
+    # The level is always the cause of a person's ask (since 0.14.3), so the
+    # dialog never adds the room estimate (review of 0.14.7: "No room…"
+    # under a PSI refusal with 13 GB available). The capacity still rides
+    # along for a client that wants it.
     _memory(monkeypatch, level="low", available=3 * GiB)
     body = gate.person_refusal(gate.decide("person"))
-    assert "No room for another session" in body["message"]
+    assert "room" not in body["message"].lower()
+    assert body["capacity"]["room"] == 0
 
 
 def test_the_gate_status_carries_the_room(monkeypatch):
@@ -528,8 +533,11 @@ def test_a_critical_minute_puts_the_needed_idle_agents_to_sleep(fake_pass):
     assert shield.status()["last_shed"] == ["a", "b"]
 
 
-def test_a_critical_windows_alone_sheds_its_shortfall(fake_pass, monkeypatch):
+def test_a_critical_windows_alone_sheds_nothing(fake_pass, monkeypatch):
     # The VM has 10 GB free (guest ok); Windows has 1 GB of 32 (critical).
+    # Sleeping a WSL agent frees memory inside the VM that Windows gets back
+    # late if at all (2026-11-10: a 3 GB reclaim moved Windows by ~0), so
+    # the shield leaves it to the launch gate (memory_shield docstring).
     _memory(
         monkeypatch,
         level="critical",
@@ -541,12 +549,17 @@ def test_a_critical_windows_alone_sheds_its_shortfall(fake_pass, monkeypatch):
     srv = SimpleNamespace()
     assert shield.tick(srv, snap, 5000.0, sleeper=fake_pass.sleeper)["shed"] == []
     out = shield.tick(srv, snap, 5061.0, sleeper=fake_pass.sleeper)
-    # Windows needs 1 GB back over its 2 GB headroom floor → a (1200).
+    assert out["shed"] == [] == fake_pass.slept
+    assert shield.status()["last_decision"].startswith(
+        "memory is critical on Windows' side only"
+    )
+    # The guest joining in sheds as usual: Windows needs 1 GB back over its
+    # 2 GB headroom floor → a (1200).
+    snap = dict(snap, guest_level="critical")
+    assert shield.tick(srv, snap, 5070.0, sleeper=fake_pass.sleeper)["shed"] == []
+    out = shield.tick(srv, snap, 5131.0, sleeper=fake_pass.sleeper)
     assert out["shed"] == ["a"] == fake_pass.slept
     assert out["why"] == "memory has been critical for 61s"
-    assert shield.status()["last_decision"] == (
-        "memory has been critical for 61s: put 1 to sleep"
-    )
 
 
 def test_a_critical_stall_with_memory_free_sheds_one_and_logs_why(
