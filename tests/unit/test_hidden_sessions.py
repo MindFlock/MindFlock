@@ -242,7 +242,10 @@ def test_run_test_plan_creates_with_the_flag():
     """``run_test_plan`` is the one creator of verify sessions; its create call
     passes the flag and its reuse path stamps it. Pinned on the source: the
     route needs a whole plan store, a repo and a tmux to run for real."""
-    src = inspect.getsource(server.run_test_plan)
+    # The route's body moved to _start_test_plan_run (the double-start guard).
+    src = inspect.getsource(server.run_test_plan) + inspect.getsource(
+        server._start_test_plan_run
+    )
     assert '"hidden_by": "verify"' in src
     assert '_hidden_sessions.set_hidden_by, title, "verify"' in src
 
