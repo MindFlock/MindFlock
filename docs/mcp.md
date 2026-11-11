@@ -442,8 +442,10 @@ measured to cost. Plan a worker count from it rather than spawning blindly:
 past `room`, spawns queue (`hint` says so, e.g. *room for 2 more sessions now
 (~950 MB each); more will queue*). `room` is `null` where memory is not
 measured; `capacity` is absent from a server that predates it. `flock` is true when the person
-has Flock mode on for your session: they want its work split across
-MindFlock workers by default, so orchestrate unless a prompt says otherwise.
+has Flock mode on for your session: they want you to decide per prompt
+whether to do it here, split it across MindFlock workers, or start it as a
+separate session (`spawn_session` with `separate: true`) when it is a new
+idea rather than this branch's work.
 `fence` (a fenced worker only) is `{only,
 keep_out, by?, reason?, rule}`; `rule` is the contract in one sentence — *Work
 in `<only>`; read outside only to understand callers; never edit outside.
@@ -597,6 +599,7 @@ typed into your terminal.
 | `program` | your program | agent CLI for the worker |
 | `account` / `model` | — | auth profile id / model (`profile_id` / `profile_model`) |
 | `in_place` | false | run in **your** directory on your branch (read-only work only) |
+| `separate` | false | a separate idea, not part of your branch's work: its own branch off the repository's base branch, never merged into yours (see below). Refused with `in_place` |
 | `launch_args` | none | CLI flags **added to** your default flags for that CLI, e.g. `["--permission-mode","acceptEdits"]`. A list: a string such as `"--model opus"` is refused, not split |
 | `report_back` | true | append the report-back footer to the prompt |
 | `wait_ready` | true | wait up to 45 s for the session to leave `loading` |
@@ -607,7 +610,7 @@ typed into your terminal.
 | `overlap` | `wait` | a fence (`only`) that overlaps an unfinished worker's waits for it; `parallel` lets them run together |
 
 → `{title, branch, folder, base_sha, status, ready, report_back, reason?,
-prompt_delivery?, order?, warnings?, hint?}`. `prompt_delivery: "held"` and
+separate?, base?, note?, prompt_delivery?, order?, warnings?, hint?}`. `prompt_delivery: "held"` and
 `order: {held, after, why, fence, agent_deferred}` mean MindFlock is holding
 its task — and, with `agent_deferred: true`, its agent: it starts when its
 turn comes (see [Order](#order)).
@@ -628,6 +631,29 @@ How the worker is created:
   A 400 about the base retries first without `base_branch` (still your
   commit, a warning names the refused branch), and only then without
   `base_ref` too (the repository's HEAD, `base_sha: null`, a warning says so).
+- **`separate: true` forks from the base branch instead.** For a prompt that
+  is a new idea rather than part of your branch's work (a person
+  free-associating into one session), the worker gets its own branch cut
+  from the repository's default branch, so it ships as its own branch / PR
+  and never mixes into yours. The default branch is what
+  `refs/remotes/origin/HEAD` points at, else `main` or `master` when that
+  branch exists (the same resolution as the server's landing strip, minus its
+  "checked-out branch" last resort). First a best-effort `git fetch origin
+  <default>` (10 s, `GIT_TERMINAL_PROMPT=0`, any failure ignored) freshens
+  it; then the create sends `base_ref` = `origin/<default>` when that
+  remote-tracking ref exists (else the local `<default>`) and `base_branch` =
+  `<default>`, with the same `repo_path` as above (or your explicit
+  `repo_path`). No uncommitted-changes warning: your worktree is not its
+  starting point. The result adds `separate: true`, `base` (the `base_ref`
+  used), `base_sha` (its commit) and a `note`: do not merge it into your
+  branch; when it reports, review `get_diff` and `ship_session(title,
+  depth="pr")` it, or leave the branch for the person. Give it a `title` that
+  names the idea. It is still your child (`parent`, `spawned`, fence
+  inheritance unchanged), so its `report_result` reaches you. When no default
+  branch can be found it forks from your HEAD as usual and a warning says so
+  (with an explicit `repo_path`: from that repository's current HEAD). A
+  provisioned parent accepts the flag and changes nothing: its workers fork
+  from the base branch already.
 - The new session is created with `parent` = you and `spawned: true`.
 - A **provisioned** (ticket) orchestrator spawns provisioned workers from the
   same source repository, so they share its `_base_` clone and their branches

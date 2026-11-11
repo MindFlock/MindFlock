@@ -1260,6 +1260,22 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   adopted from another device by settings sync — re-writes every session's
   `.flock` flag so its next prompt carries the new words. `GET /api/config`
   serves the filled-in text as `flock.request`.
+- **Let the agent decide where each prompt goes** (`general.workers_decide`;
+  synced; Settings → Agent orchestration → Workers). What **Workers on every
+  prompt** adds. On (the default, and what unset means): the agent places
+  each prompt. A small follow-up to what the session is doing, it does
+  itself. A large one it splits across workers with the workers request above
+  and merges back. A separate idea, one that does not need the branch's
+  unfinished work, it starts as its own session with
+  `spawn_session(separate=true)`: its own worktree and branch off the base
+  branch, never merged into the session's branch ([mcp.md](mcp.md)). So you
+  can keep sending ideas to one session and unrelated work still lands on
+  separate branches. Off: every prompt carries the workers request, as
+  before. **Ask for workers once** always types the workers request itself.
+  A save re-writes every `.flock` flag, and the server re-writes them at
+  start, so an upgrade's new default words reach sessions already in the
+  mode. `GET /api/config` serves `flock.decide` and the mode's words as
+  `flock.every_prompt`.
 - **Goes as far as** (`repository.*`, synced; Settings → Workspace):
   `fasttrack_depth` is the rung new batches start on (`commit` · `push` ·
   `pr` · `merge` · `off`; blank = the built-in default).

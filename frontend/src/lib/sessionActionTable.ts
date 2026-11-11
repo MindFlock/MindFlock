@@ -54,6 +54,7 @@ import {
   FLOCK_KEYS,
   flockActionLabel,
   flockAvailable,
+  flockDecides,
   insertWorkersRequest,
   openWorkersMenu,
   toggleFlock,
@@ -236,7 +237,10 @@ export const SESSION_ACTIONS = {
   flock: {
     label: (c) => flockActionLabel(!!c.inst?.flock),
     keys: FLOCK_KEYS,
-    note: "adds the workers request to everything you send here",
+    note: () =>
+      flockDecides(cfg())
+        ? "the agent places each prompt: here, across workers, or on its own branch"
+        : "adds the workers request to everything you send here",
     enabled: (c) => flockAvailable(c.inst, cfg()),
     run: (t) => void toggleFlock(t),
   },

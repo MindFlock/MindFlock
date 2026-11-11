@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Workers on every prompt now lets the agent decide where each prompt
+  goes.** Keep sending ideas to one session. A small follow-up, its agent
+  does itself. A big one it splits across workers and merges back. A separate
+  idea it starts as its own session, in its own worktree, on its own branch
+  off the base branch, and tells you where it went; that branch is never
+  merged into the session's. Agents get this through
+  `spawn_session(separate=true)`. **Ask for workers once** still asks for
+  workers. Settings → Agent orchestration → **Let the agent decide where each
+  prompt goes** turns it off (`general.workers_decide`), and every prompt
+  asks for workers again. Sessions already in the mode get the new words at
+  the next server start.
+
 - **Verify asks what it should prove, right in the pane.** Verify on a
   session's ⋯ menu (or **Verify again** on its pane row) opens a small form in
   the pane: *What should it prove? (optional)* and, when the repo has Verify

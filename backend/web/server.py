@@ -793,6 +793,14 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(_person.ensure_id)
     except Exception:  # noqa: BLE001 — never block startup on a label
         pass
+    # Flock mode's flags hold the words each prompt carries: an upgrade may
+    # have changed the default ones, so sessions already in the mode get the
+    # current words (core.flock_mode). Not under pytest: the real flag dir.
+    if not _restart._under_pytest():
+        try:
+            await asyncio.to_thread(_flock_mode.rewrite_all)
+        except Exception:  # noqa: BLE001 — never block startup on a flag
+            pass
     # One name per session (core.rename): the aliases recorded before a
     # rename renamed become the sessions' real titles, once. Not under pytest:
     # ENGINE is the developer's real state there.
@@ -4150,7 +4158,8 @@ def get_config(request: Request) -> JSONResponse:
 
 
 def _flock_config() -> dict:
-    """``{request, model}`` for ``/api/config`` — never raises."""
+    """``{request, model, decide, every_prompt}`` for ``/api/config`` —
+    never raises."""
     from backend.config.settings import DEFAULT_WORKERS_MODEL, load_settings
 
     model = DEFAULT_WORKERS_MODEL
@@ -4158,7 +4167,14 @@ def _flock_config() -> dict:
         model = load_settings().general.workers_model or model
     except Exception:  # noqa: BLE001 — the defaults still ask for workers
         pass
-    return {"request": _flock_mode.request_text(), "model": model}
+    return {
+        "request": _flock_mode.request_text(),
+        "model": model,
+        # "Workers on every prompt": whether the agent places each prompt
+        # (general.workers_decide) and the words that mode adds.
+        "decide": _flock_mode.decides(),
+        "every_prompt": _flock_mode.every_prompt_text(),
+    }
 
 
 def _is_onboarded() -> bool:
@@ -7231,10 +7247,12 @@ def _voice_say_cancel(title: str) -> None:
         pass
 
 
-def _flock_suffix(text: str) -> str:
-    """``text`` with Flock mode's workers request typed after it
-    (``core.flock_mode.request_text``). Idempotent like :func:`_voice_suffix`."""
-    req = _flock_mode.request_text()
+def _flock_suffix(text: str, sticky: bool = False) -> str:
+    """``text`` with Flock mode's words typed after it: the workers request
+    (``core.flock_mode.request_text``) for a prompt that asked once, what the
+    sticky mode adds to every prompt (``every_prompt_text``) when ``sticky``.
+    Idempotent like :func:`_voice_suffix`."""
+    req = _flock_mode.every_prompt_text() if sticky else _flock_mode.request_text()
     if not req or text.rstrip().endswith(req):
         return text
     return text.rstrip("\n") + "\n\n" + req
@@ -7285,10 +7303,11 @@ async def instance_send(
     drain types it. Absent/false, or ``submit=false``: never asked for.
 
     ``flock=true`` (with ``submit``) asks THIS prompt for MindFlock workers:
-    Flock mode's request (``core.flock_mode``) is typed after the text. A
-    session in Flock mode (``POST …/flock``) gets it on every prompt without
-    asking — injected by Claude's prompt hook, typed after the text for any
-    other CLI (:func:`_flock_typed`). Applied before any queueing, so a
+    the workers request (``core.flock_mode``) is typed after the text. A
+    session in Flock mode (``POST …/flock``) gets the mode's every-prompt
+    words (by default: place the prompt — here, across workers, or as a
+    separate session) without asking — injected by Claude's prompt hook,
+    typed after the text for any other CLI (:func:`_flock_typed`). Applied before any queueing, so a
     queued prompt carries it in its text.
 
     ``{"enter": true}`` with NO (or empty) ``text``: press Enter on what is
@@ -7355,11 +7374,15 @@ async def instance_send(
     # ones a client marks (core.voice.say_all).
     say = submit and ((payload or {}).get("say") is True or _voice.say_all())
     extra = ""
-    if submit and _flock_typed(inst, title, (payload or {}).get("flock") is True):
+    asked_once = (payload or {}).get("flock") is True
+    if submit and _flock_typed(inst, title, asked_once):
+        # Asked for workers on THIS prompt: the workers request. Otherwise it
+        # is the sticky mode on a CLI with no prompt hook: its every-prompt
+        # words (by default the agent places the prompt).
         if enter:
-            extra = _flock_suffix("")
+            extra = _flock_suffix("", sticky=not asked_once)
         else:
-            text = _flock_suffix(text)
+            text = _flock_suffix(text, sticky=not asked_once)
     busy = _driven_elsewhere(request, title, payload)
     if busy is not None:
         return busy

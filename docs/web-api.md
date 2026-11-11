@@ -2410,17 +2410,25 @@ forms; a phrase the person adds is matched whole, or a letter off
 ### Flock mode: every prompt asks for workers
 
 `backend/web/routes/flock.py` over `core/flock_mode.py`. While a session's
-Flock mode is on, every prompt the person submits to it carries the
-**workers request** — `general.workers_request` with `{model}` replaced by
-`general.workers_model` ([configuration](configuration.md)), the same text
-`GET /api/config` serves as `flock.request` — without them typing it. The
+Flock mode is on, every prompt the person submits to it carries the mode's
+words without them typing anything. By default (`general.workers_decide`,
+[configuration](configuration.md)) the words ask the agent to **place the
+prompt**: do a small follow-up in the session, split a large one across
+workers (the **workers request** — `general.workers_request` with `{model}`
+replaced by `general.workers_model`, the text `GET /api/config` serves as
+`flock.request`), or start a separate idea as its own session on its own
+branch (`spawn_session(separate=true)`). With `workers_decide` off the words
+are the workers request alone. `GET /api/config` serves them as
+`flock.every_prompt`, with `flock.decide`. The
 flag is the file `<voice flag dir>/<tmux session>.flock` (the voice flags'
-directory and keying), and its **content is the request text**: Claude's
+directory and keying), and its **content is those words**: Claude's
 `UserPromptSubmit` hook (`provider.voice_prompt_hook()`) prints it on every
 prompt, after the voice instruction — terminal-typed prompts included —
 and Claude Code injects that as context. Every other CLI gets `"\n\n"` +
-the request typed after each `/send` text instead. A settings change re-writes
-every `.flock` file. No event: clients read the row's `flock` (the SPA polls
+the words typed after each `/send` text instead (one line, so nothing submits
+early). `/send`'s own `flock: true` asks that one prompt for workers: it
+types the workers request, whatever the mode says. A settings change re-writes
+every `.flock` file, and so does a server start. No event: clients read the row's `flock` (the SPA polls
 rows every 4 s).
 
 | Method | Path | Behavior |

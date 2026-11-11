@@ -28,6 +28,9 @@ client = TestClient(app)
 _DEFAULT = settings_mod.DEFAULT_WORKERS_REQUEST.replace(
     "{model}", settings_mod.DEFAULT_WORKERS_MODEL
 )
+#: What "Workers on every prompt" adds by default: the agent places the
+#: prompt (here / workers / a separate session), the workers request inside.
+_EVERY = settings_mod.DEFAULT_WORKERS_DECIDE.replace("{workers}", _DEFAULT)
 
 
 class _Inst:
@@ -100,8 +103,8 @@ def test_the_flag_file_lifecycle(cfg):
     assert flock_mode.is_on("mindflock_w") is False
     assert flock_mode.is_on("") is False
     assert flock_mode.set_on("mindflock_w", True) is True
-    # The file holds the request text the hook prints.
-    assert p.read_text() == _DEFAULT + "\n"
+    # The file holds the words the hook prints on every prompt.
+    assert p.read_text() == _EVERY + "\n"
     assert flock_mode.set_on("mindflock_w", True, "  Custom words. ") is True
     assert p.read_text() == "Custom words.\n"
     assert flock_mode.set_on("mindflock_w", False) is False
@@ -134,6 +137,51 @@ def test_the_defaults_are_never_written_to_disk(cfg):
     assert gen.to_dict() == {"workers_model": "m-2"}
 
 
+def test_every_prompt_lets_the_agent_place_the_prompt(cfg):
+    """The sticky mode's words: here, across workers (the person's own
+    workers request), or a separate session on its own branch — one line."""
+    text = flock_mode.every_prompt_text()
+    assert text == _EVERY and "\n" not in text
+    assert flock_mode.decides() is True
+    assert _DEFAULT in text and "{workers}" not in text
+    assert "do it here" in text
+    assert "spawn_session(separate=true)" in text
+    assert "never merged into yours" in text
+    # The person's own workers request is the middle option.
+    settings_mod.update_settings(general={"workers_request": "Fan out on {model}."})
+    assert (
+        "splittable: Fan out on claude-opus-5-5. (3)" in flock_mode.every_prompt_text()
+    )
+    assert flock_mode.request_text() == "Fan out on claude-opus-5-5."
+
+
+def test_decide_off_asks_for_workers_every_time(env):
+    """``general.workers_decide`` off: the mode is the workers request alone,
+    and saving it re-writes the flags."""
+    flock_mode.set_on("mindflock_w", True)
+    assert flock_mode.flag_path("mindflock_w").read_text() == _EVERY + "\n"
+    r = client.post("/api/settings", json={"general": {"workers_decide": False}})
+    assert r.status_code == 200, r.text
+    assert flock_mode.decides() is False
+    assert flock_mode.every_prompt_text() == _DEFAULT
+    assert flock_mode.flag_path("mindflock_w").read_text() == _DEFAULT + "\n"
+    cfg_flock = client.get("/api/config").json()["flock"]
+    assert cfg_flock["decide"] is False and cfg_flock["every_prompt"] == _DEFAULT
+    r = client.post("/api/settings", json={"general": {"workers_decide": True}})
+    assert r.status_code == 200, r.text
+    assert flock_mode.flag_path("mindflock_w").read_text() == _EVERY + "\n"
+    cfg_flock = client.get("/api/config").json()["flock"]
+    assert cfg_flock["decide"] is True and cfg_flock["every_prompt"] == _EVERY
+    assert cfg_flock["request"] == _DEFAULT
+
+
+def test_decide_is_stored_only_when_chosen(cfg):
+    gen = settings_mod.GeneralSettings.from_dict({})
+    assert gen.workers_decide is None and "workers_decide" not in gen.to_dict()
+    gen = settings_mod.GeneralSettings.from_dict({"workers_decide": False})
+    assert gen.to_dict() == {"workers_decide": False}
+
+
 def test_rewrite_all_puts_the_new_words_in_every_flag(cfg):
     assert flock_mode.rewrite_all() == 0  # no flag dir yet
     flock_mode.set_on("mindflock_a", True)
@@ -141,7 +189,7 @@ def test_rewrite_all_puts_the_new_words_in_every_flag(cfg):
     (cfg / "voice" / "mindflock_c.on").write_text("1\n")  # a voice flag: untouched
     settings_mod.update_settings(general={"workers_model": "m-3"})
     assert flock_mode.rewrite_all() == 2
-    want = _DEFAULT.replace("claude-opus-5-5", "m-3") + "\n"
+    want = _EVERY.replace("claude-opus-5-5", "m-3") + "\n"
     assert flock_mode.flag_path("mindflock_a").read_text() == want
     assert flock_mode.flag_path("mindflock_b").read_text() == want
     assert (cfg / "voice" / "mindflock_c.on").read_text() == "1\n"
@@ -246,7 +294,12 @@ def test_rows_carry_flock(monkeypatch, cfg):
 
 def test_config_carries_the_request(cfg):
     body = client.get("/api/config").json()
-    assert body["flock"] == {"request": _DEFAULT, "model": "claude-opus-5-5"}
+    assert body["flock"] == {
+        "request": _DEFAULT,
+        "model": "claude-opus-5-5",
+        "decide": True,
+        "every_prompt": _EVERY,
+    }
     settings_mod.update_settings(general={"workers_model": "m-5"})
     body = client.get("/api/config").json()
     assert body["flock"]["model"] == "m-5"
@@ -293,7 +346,7 @@ def test_sticky_flock_on_a_hookless_cli_types_the_request(typed, env):
     env.state.hook = False
     flock_mode.set_on("mindflock_w", True)
     _send(text="fix it\n")
-    assert typed.sent == [("mindflock_w", "fix it\n\n" + _DEFAULT, True)]
+    assert typed.sent == [("mindflock_w", "fix it\n\n" + _EVERY, True)]
 
 
 def test_sticky_flock_on_a_hook_cli_leaves_it_to_the_hook(typed, env):
@@ -340,7 +393,7 @@ def test_enter_types_the_request_after_the_draft(typed, env):
     env.state.hook = False
     flock_mode.set_on("mindflock_w", True)
     assert _send(enter=True)["entered"] is True
-    assert typed.sent == [("mindflock_w", "\n\n" + _DEFAULT, True)]
+    assert typed.sent == [("mindflock_w", "\n\n" + _EVERY, True)]
 
 
 def test_a_queued_prompt_carries_the_request_in_its_text(typed, env):
@@ -357,6 +410,18 @@ def test_the_suffix_is_idempotent(cfg):
     once = server._flock_suffix("x")
     assert server._flock_suffix(once + "\n") == once + "\n"
     assert json.dumps(once).count("Use MindFlock workers") == 1
+    sticky = server._flock_suffix("x", sticky=True)
+    assert sticky == "x\n\n" + _EVERY
+    assert server._flock_suffix(sticky + "\n", sticky=True) == sticky + "\n"
+
+
+def test_asking_once_in_the_sticky_mode_types_the_workers_request(typed, env):
+    """A CLI with no prompt hook, Flock mode on, and THIS prompt asks for
+    workers: the person decided, so the workers request is what is typed."""
+    env.state.hook = False
+    flock_mode.set_on("mindflock_w", True)
+    _send(text="split it", flock=True)
+    assert typed.sent == [("mindflock_w", "split it\n\n" + _DEFAULT, True)]
 
 
 def test_listing_stamps_the_live_flag_over_a_cached_snapshot(monkeypatch, tmp_path):

@@ -1168,6 +1168,25 @@ DEFAULT_WORKERS_REQUEST = (
 )
 #: The model Flock mode's request names for the workers (``general.workers_model``).
 DEFAULT_WORKERS_MODEL = "claude-opus-5-5"
+#: What "Workers on every prompt" adds while ``general.workers_decide`` is on
+#: (the default): the agent places each prompt — here, across workers, or as a
+#: separate session on its own branch — instead of always splitting.
+#: ``{workers}`` is replaced by the filled-in workers request. ONE line: a CLI
+#: with no prompt hook gets it typed, and a newline there would submit early.
+DEFAULT_WORKERS_DECIDE = (
+    "MindFlock workers are on for this session. Before you start, decide where "
+    "this prompt belongs. (1) Part of what this session is already doing, and "
+    "small: do it here. (2) Part of it, but large or splittable: {workers} "
+    "(3) A separate idea that does not need this branch's unfinished work (on "
+    "the base branch itself, anything beyond a small fix): keep it off this "
+    "branch. Start it with spawn_session(separate=true) and a title naming the "
+    "idea, so it gets its own worktree and branch off the base branch; write "
+    "its brief to stand alone, with what the person is going for. Say in one "
+    "line where it went and carry on here; when it reports, review its diff "
+    'and leave it on its own branch (ship_session depth "pr" if that is how '
+    "the person ships), never merged into yours. Not sure between here and "
+    "separate: stay here and say so."
+)
 
 
 @dataclass
@@ -1364,6 +1383,12 @@ class GeneralSettings:
     :data:`DEFAULT_WORKERS_REQUEST` / :data:`DEFAULT_WORKERS_MODEL`; a blank
     value reads as the default, and the default is never written to disk.
     Synced: they are the person's words, not this machine's.
+
+    ``workers_decide``: whether "Workers on every prompt" lets the agent
+    place each prompt (here / across workers / a separate session on its own
+    branch — :data:`DEFAULT_WORKERS_DECIDE` around the workers request) rather
+    than asking for workers every time. ``None`` (the default) = on; only an
+    explicit choice is stored. Synced with the words above.
     """
 
     session_budget_usd: Optional[float] = None
@@ -1401,6 +1426,7 @@ class GeneralSettings:
     default_folder: str = ""
     workers_request: str = DEFAULT_WORKERS_REQUEST
     workers_model: str = DEFAULT_WORKERS_MODEL
+    workers_decide: Optional[bool] = None  # None = on (see docstring)
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -1468,6 +1494,8 @@ class GeneralSettings:
             d["workers_request"] = self.workers_request
         if self.workers_model and self.workers_model != DEFAULT_WORKERS_MODEL:
             d["workers_model"] = self.workers_model
+        if self.workers_decide is not None:
+            d["workers_decide"] = self.workers_decide
         return d
 
     @classmethod
@@ -1515,6 +1543,7 @@ class GeneralSettings:
             or DEFAULT_WORKERS_REQUEST,
             workers_model=str(d.get("workers_model", "") or "").strip()
             or DEFAULT_WORKERS_MODEL,
+            workers_decide=_opt_bool(d.get("workers_decide")),
         )
 
 

@@ -179,6 +179,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         # Flock mode's words (core.flock_mode): the person's, not the machine's.
         "workers_request",
         "workers_model",
+        "workers_decide",
     ),
     "notifications": (
         "muted_rules",
@@ -446,6 +447,7 @@ LABELS: Dict[str, str] = {
     "general.agent_max_spawned": "Agent limit: total spawned",
     "general.workers_request": "Workers request",
     "general.workers_model": "Workers model",
+    "general.workers_decide": "Workers: the agent decides",
     "notifications.muted_rules": "Muted notifications",
     "notifications.enabled_rules": "Enabled notifications",
     "notifications.ntfy_enabled": "Phone notifications on/off",

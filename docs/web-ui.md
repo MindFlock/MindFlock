@@ -3201,9 +3201,14 @@ Asking a session to hand its task to MindFlock workers takes no typing
   keeps the keystroke, and nothing happens behind a dialog. Also in the
   palette (**Ask for workers — <session>**).
 - **`Alt+Shift+G` — Workers on every prompt (Flock).** A per-session switch:
-  while on, the server adds the request to every prompt submitted in that
+  while on, the server adds its words to every prompt submitted in that
   session (`POST /api/instances/{title}/flock {on}`; rows carry `flock`), so
-  you type nothing extra. The pane header's **Flock** control (the MindFlock raven, filled (filled when
+  you type nothing extra. By default the words ask the agent to place each
+  prompt: do a small follow-up in the session, split a large one across
+  workers, or start a separate idea as its own session on its own branch
+  (Settings → Agent orchestration → **Let the agent decide where each prompt
+  goes**; off, every prompt asks for workers). The picker's line under the
+  switch says which. The pane header's **Flock** control (the MindFlock raven, filled (filled when
   on), the row's ⋯ menu (**Workers on every prompt**, ✓ when on, under
   Session) and the palette flip the same switch. Offered on this machine's own
   sessions only — not a peer's, a shared folder, another device's, or to a
