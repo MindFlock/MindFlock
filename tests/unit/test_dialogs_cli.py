@@ -711,7 +711,7 @@ def test_current_dialog_captures_the_colours(monkeypatch):
     monkeypatch.setattr(proc, "run_capped", run)
     body, err = agent_io.current_dialog("mindflock_w", "opencode")
     assert err is None
-    assert calls == [["tmux", "capture-pane", "-p", "-e", "-J", "-t", "mindflock_w"]]
+    assert calls == [["tmux", "capture-pane", "-p", "-e", "-J", "-t", "=mindflock_w:"]]
     assert body["options"][1] == {
         "key": "2",
         "label": "Allow always",

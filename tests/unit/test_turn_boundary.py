@@ -154,7 +154,10 @@ def test_offline_no_longer_wipes_the_record():
 
     with mock.patch.object(server.subprocess, "run", fake_run):
         with mock.patch.object(server.tmux, "to_mindflock_tmux_name", lambda t: t):
-            assert server._agent_activity(inst, "s") == "offline"
+            # One miss is not a death; the second confirms it.
+            with mock.patch.object(agent_state, "_OFFLINE_CONFIRM_S", 0.0):
+                server._agent_activity(inst, "s")
+                assert server._agent_activity(inst, "s") == "offline"
     assert agent_state.worked_at("s") == 1000.0
     assert "s" in agent_state._ACTIVITY_CACHE
 

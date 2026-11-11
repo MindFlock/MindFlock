@@ -26,6 +26,7 @@ import time
 from typing import Callable, Dict, List, Optional
 
 from backend.session import tmux
+from backend.session.tmux.tmux import exact_session_target
 from backend.web.core import agent_state as _agent_state
 from backend.web.core import asking as _asking
 from backend.web.core import autopilot as _autopilot
@@ -595,7 +596,14 @@ def _tmux_client_input_recent(title: str, within: float) -> bool:
     try:
         name = tmux.to_mindflock_tmux_name(title)
         cp = _server()._run_capped(
-            ["tmux", "list-clients", "-t", name, "-F", "#{client_activity}"],
+            [
+                "tmux",
+                "list-clients",
+                "-t",
+                exact_session_target(name),
+                "-F",
+                "#{client_activity}",
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=5,

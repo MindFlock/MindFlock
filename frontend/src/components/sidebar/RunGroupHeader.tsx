@@ -26,11 +26,20 @@ import { errMsg } from "../../lib/format";
 import { groupTitle, queuedLine, queuedTitle, shippedBadge, type RunGroup } from "../../lib/runs";
 import { cancelRun, runAction as runAct, runPath, taskPath } from "../../lib/runsApi";
 import { summaryFor, summaryText } from "../outbox/outbox";
+import { useMemory } from "../../state/queries";
+import { gateWhy, runWaitBadge } from "../../lib/waitWhy";
 
 export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?: string }) {
   const toggle = useUi((s) => s.toggleRunCollapsed);
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const more = useRef<HTMLButtonElement | null>(null);
+  // The run's `waiting_for_memory` is true whenever the launch gate holds
+  // anything back — the agent limit and the spacing between starts too — so
+  // the badge says what the gate's why is (lib/waitWhy), memory only when
+  // it is memory. Nothing held at the gate: memory read low.
+  const { data: mem } = useMemory();
+  const why = gateWhy(mem?.gate) ?? "memory";
+  const waitBadge = runWaitBadge(why);
   const cls =
     "device-group run-group-head" +
     (group.done ? " is-done" : "") +
@@ -40,7 +49,7 @@ export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?
     <li
       className={cls}
       data-run={group.id}
-      title={groupTitle(group)}
+      title={groupTitle(group, why)}
       onClick={() => toggle(group.id)}
     >
       <span className="dev-caret">{group.collapsed ? "▸" : "▾"}</span>
@@ -60,7 +69,9 @@ export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?
       ) : group.waitingUsage && !group.done ? (
         <span className="dev-badge rg-usage">usage</span>
       ) : group.waitingMemory && !group.done ? (
-        <span className="dev-badge rg-usage" title="Memory is low — queued tasks start once it recovers">memory</span>
+        <span className="dev-badge rg-usage" title={waitBadge.title}>
+          {waitBadge.label}
+        </span>
       ) : null}
       <span className={"dev-badge rg-shipped" + (group.done && !group.cancelled ? " ok" : "")}>{shippedBadge(group)}</span>
       {group.failed > 0 && <span className="dev-badge rg-failed">{group.failed} failed</span>}

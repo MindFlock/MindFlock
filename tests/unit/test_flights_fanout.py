@@ -606,7 +606,14 @@ def test_a_split_goes_through_the_real_launch_gate_when_memory_is_fine(
         srv.ENGINE.instances[payload["title"]] = FakeInst(parent=payload["parent"])
         return JSONResponse({"title": payload["title"]}, status_code=202)
 
+    async def fake_preflight(payload):
+        # The parent "s" lives in this test's fake server, not the real
+        # engine create's checks read: the request checks are not under test.
+        ctx = {"parent": payload["parent"], "spawned": True, "base_ref": ""}
+        return None, dict(ctx, repo="")
+
     monkeypatch.setattr(_session_create, "create", fake_create)
+    monkeypatch.setattr(_session_create, "preflight", fake_preflight)
     got = drive(driver_fly(step("split", prompts="a\nb")))
     assert made == [("s-w1", True), ("s-w2", True)]
     assert _gate.items() == []

@@ -420,7 +420,7 @@ def test_instance_json_exposes_parent_and_spawned(reg, tmp_path):
 
 def test_pending_rows_carry_lineage_defaults(monkeypatch):
     monkeypatch.setattr(
-        pending_mod, "snapshot", lambda: {"sc-1": {"branch": "feature/sc-1/x"}}
+        pending_mod, "snapshot", lambda **kw: {"sc-1": {"branch": "feature/sc-1/x"}}
     )
     eng = SimpleNamespace(instances={}, default_program=lambda: "claude")
     (row,) = pending_mod.rows(eng)
@@ -893,7 +893,12 @@ def test_start_anyway_on_a_queued_spawn_is_not_refused_again(create, monkeypatch
     _memory(monkeypatch, "low")
     create.reg.add("orch")
     assert create.post(title="w5", parent="orch", spawned=True).json()["queued"]
-    r = client.post("/api/launch-gate/w5/start")
+    # Memory is low, so the route asks first, like any other person's start…
+    asked = client.post("/api/launch-gate/w5/start")
+    assert asked.status_code == 409 and asked.json()["memory_confirm"] is True
+    assert launch_gate.waiting("w5") is not None
+    # …and the dialog's Start anyway is the override.
+    r = client.post("/api/launch-gate/w5/start", json={"start_anyway": True})
     assert r.json() == {"title": "w5", "started": True, "error": ""}
     assert [o.title for o in create.captured] == ["w5"]
     assert launch_gate.items() == []

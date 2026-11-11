@@ -32,6 +32,9 @@ from backend.config import settings as S
 from backend.session.storage import Status
 from backend.web.core import revive
 
+#: The real reader, before the autouse fixture stands it in.
+_REAL_FLEET_OOM_KILLS = revive._fleet_oom_kills
+
 
 class _Inst:
     def __init__(self, wt, *, status=Status.Running, program="claude"):
@@ -94,6 +97,9 @@ def _fresh(monkeypatch):
     revive._auto_reset_for_tests()
     monkeypatch.setattr(revive, "AUTO_ENABLED", True)
     monkeypatch.setattr(revive.memory_pressure, "is_low", lambda **kw: False)
+    # No OOM kill anywhere unless a test says so (the real counters move).
+    monkeypatch.setattr(revive, "_fleet_oom_kills", lambda: None)
+    monkeypatch.setattr(revive, "_machine_oom_kills", lambda: 0)
     # The auto-revive is the opt-in old behaviour (unset = held offline).
     S.update_settings(general={"revive_on_start": True})
     yield
@@ -155,6 +161,51 @@ def test_only_sigkill_counts_never_a_quit_or_a_crash(wt, code):
     assert not revive.holds_offline("a")
     assert revive.auto_tick(srv, start=_sync) is None
     assert srv.launched == []
+
+
+def test_a_sigterm_right_after_an_oom_kill_counts_as_killed(wt, monkeypatch):
+    """systemd stopped the agent's scope (OOMPolicy=stop) because the OOM
+    killer took one of its children: exit 143, but the OOM killer's doing —
+    queued for the auto-revive like a 137."""
+    counts = iter([5, 5, 6])  # baseline at the tick, then a rise at the death
+    monkeypatch.setattr(revive, "_fleet_oom_kills", lambda: next(counts, 6))
+    srv = _Srv({"a": _Inst(wt)})
+    revive.note_oom_counters()  # a tick's baseline
+    revive.note_oom_counters()
+    _kill(srv, "a", code=143)
+    assert revive.auto_state("a")["state"] == revive.AUTO_PENDING
+    assert revive.auto_tick(srv, start=_sync) == "a"
+
+
+def test_a_machine_wide_oom_kill_explains_a_sigterm_too(wt, monkeypatch):
+    monkeypatch.setattr(revive, "_machine_oom_kills", lambda: 1)
+    srv = _Srv({"a": _Inst(wt)})
+    _kill(srv, "a", code=143)
+    assert revive.auto_state("a")["state"] == revive.AUTO_PENDING
+
+
+def test_an_old_oom_kill_explains_nothing(wt, monkeypatch):
+    counts = iter([5, 6])
+    monkeypatch.setattr(revive, "_fleet_oom_kills", lambda: next(counts, 6))
+    long_ago = time.time() - revive.OOM_EVIDENCE_SECONDS - 60
+    revive.note_oom_counters(now=long_ago)
+    revive.note_oom_counters(now=long_ago)  # the rise, long ago
+    srv = _Srv({"a": _Inst(wt)})
+    _kill(srv, "a", code=143)
+    assert revive.auto_state("a") is None
+
+
+def test_the_fleet_oom_counter_lives_in_the_agents_slice(monkeypatch, tmp_path):
+    path = revive._fleet_oom_events_path()
+    if path is None:
+        pytest.skip("no getuid here")
+    assert path.endswith("/app.slice/app-mindflock.slice/memory.events")
+    f = tmp_path / "memory.events"
+    f.write_text("low 0\nhigh 3\nmax 0\noom 2\noom_kill 7\noom_group_kill 0\n")
+    monkeypatch.setattr(revive, "_fleet_oom_events_path", lambda: str(f))
+    assert _REAL_FLEET_OOM_KILLS() == 7
+    monkeypatch.setattr(revive, "_fleet_oom_events_path", lambda: str(tmp_path / "x"))
+    assert _REAL_FLEET_OOM_KILLS() is None
 
 
 def test_no_exit_marker_counts_only_when_it_died_mid_turn(wt, monkeypatch):

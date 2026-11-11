@@ -130,9 +130,9 @@ class TestInvokeCommandSequence:
 
         args = _cmd(mock_exec.call_args_list[0])
         assert args[0] == "tmux"
-        assert args[1] == "kill-session"
-        assert "-t" in args
-        assert _tmux_session_name(story) in args
+        # Exact match (``=name``): a bare -t would prefix-match a sibling
+        # session (``sc-12345`` also names ``sc-123456``) and kill that.
+        assert args == ("tmux", "kill-session", "-t", "=" + _tmux_session_name(story))
 
     @pytest.mark.asyncio
     @patch("backend.ticket_ingestion.claude_runner.asyncio.create_subprocess_exec")

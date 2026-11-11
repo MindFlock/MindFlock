@@ -15,6 +15,7 @@
 
 import type { MemoryReading } from "../../api/types";
 import { fmtMb } from "../../lib/sessionMemory";
+import { gaugeOkWords, type WaitWhy } from "../../lib/waitWhy";
 
 /** `system` of GET /api/memory (binary MB; any field may be null). */
 export interface MemorySystem {
@@ -168,11 +169,13 @@ export function memoryRowTone(level: string | null | undefined): MemoryRowTone {
   return "";
 }
 
-/** The pressure level in words, for the popover and the tooltip. */
-export function levelWords(level: string | null | undefined): string {
+/** The pressure level in words, for the popover and the tooltip. `gate`:
+ * what the launch gate holds starts back for right now (lib/waitWhy), so an
+ * OK level beside a queue never reads "room to spare". */
+export function levelWords(level: string | null | undefined, gate?: WaitWhy | null): string {
   switch (level) {
     case "ok":
-      return "OK — room to spare";
+      return gate ? gaugeOkWords(gate) : "OK — room to spare";
     case "low":
       return "Low — new agents wait";
     case "critical":
@@ -189,8 +192,31 @@ export function hostIsCause(m: MachineMemory): boolean {
   return m.guestLevel == null || m.guestLevel !== m.level;
 }
 
+/** The server's reasons behind a low/critical level, as one line ("Processes
+ * stalled on memory 34% of the last minute; swap-in 40 MB/s"): its `why`
+ * list, else its `message` — but not a message that only restates the free
+ * figures every surface already shows. "" when there is nothing to add. */
+export function memoryReasons(r: { why?: unknown; message?: string | null } | null | undefined): string {
+  const raw = r && Array.isArray(r.why) ? (r.why as unknown[]) : [];
+  const list = raw.filter((w): w is string => typeof w === "string" && !!w.trim()).map((w) => w.trim());
+  let line = list.join("; ");
+  if (!line) {
+    const msg = String(r?.message || "").trim();
+    if (!msg || /GB free of/.test(msg)) return "";
+    line = msg.replace(/^(windows )?memory is (critically low|critical|low):\s*/i, "");
+  }
+  return line ? line[0].toUpperCase() + line.slice(1) : "";
+}
+
+/** What the gauge reads beside the machine's numbers: the gate's why while
+ * it holds anything, and the server's reasons for the level. */
+export interface MemoryContext {
+  gate?: WaitWhy | null;
+  reasons?: string;
+}
+
 /** The collapsed row ("Memory 9.8 / 19.5 GB") and its tooltip. */
-export function memoryRowText(m: MachineMemory): { head: string; title: string; share: number | null } {
+export function memoryRowText(m: MachineMemory, ctx: MemoryContext = {}): { head: string; title: string; share: number | null } {
   const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
   const share = m.usedMb != null && m.totalMb ? Math.min(1, m.usedMb / m.totalMb) : null;
   const head = "Memory " + (pair ?? "—");
@@ -199,6 +225,9 @@ export function memoryRowText(m: MachineMemory): { head: string; title: string; 
     : "This machine's memory";
   if (m.level === "low" || m.level === "critical") {
     title += " — " + (hostIsCause(m) ? "Windows is short of memory: " : "") + levelWords(m.level).toLowerCase();
+    if (ctx.reasons) title += " (" + ctx.reasons[0].toLowerCase() + ctx.reasons.slice(1) + ")";
+  } else if (m.level === "ok" && ctx.gate) {
+    title += " — " + gaugeOkWords(ctx.gate).replace(/^OK(, but| —) /, "");
   }
   return { head, title: title + " — click for what holds it", share };
 }
@@ -242,6 +271,7 @@ export function memoryPopModel(
   detail: MemoryDetail | null | undefined,
   fallback: MachineMemory,
   aliases: Record<string, string> = {},
+  ctx: MemoryContext = {},
 ): MemoryPopModel {
   const m = detail ? machineFromDetail(detail.system) : fallback;
   const machine: [string, string][] = [];
@@ -258,7 +288,8 @@ export function memoryPopModel(
     const pct = Math.round(((m.hostUsedMb || 0) / (m.hostTotalMb || 1)) * 100);
     machine.push(["Windows", host + " (" + pct + "%)"]);
   }
-  machine.push(["Pressure", (hostIsCause(m) ? "Windows: " : "") + levelWords(m.level)]);
+  machine.push(["Pressure", (hostIsCause(m) ? "Windows: " : "") + levelWords(m.level, ctx.gate)]);
+  if (ctx.reasons && (m.level === "low" || m.level === "critical")) machine.push(["Why", ctx.reasons]);
 
   const sess = detail && Array.isArray(detail.sessions) ? detail.sessions.filter((r) => r && r.mb > 0) : [];
   const oth = detail && Array.isArray(detail.others) ? detail.others.filter((r) => r && r.mb > 0) : [];

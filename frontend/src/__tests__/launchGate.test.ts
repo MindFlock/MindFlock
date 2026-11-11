@@ -12,7 +12,7 @@ import { code } from "./sourceText";
 
 const { ApiError } = await import("../api/client");
 const mc = await import("../lib/memoryConfirm");
-const { holdingLine } = await import("../lib/launchGate");
+const { holdingLine, launchGateDeps, startWaiting, cancelWaiting } = await import("../lib/launchGate");
 const { deriveSessionState, WAITING_FOR_MEMORY_LABEL } = await import("../lib/sessionState");
 const { sweepToast } = await import("../components/sidebar/OfflineBar");
 const { MemoryConfirm } = await import("../components/MemoryConfirm");
@@ -189,14 +189,17 @@ describe("Waiting for memory", () => {
     expect(ss.hint).toContain("memory is low: 2.0 GB free");
     expect(ss.hint).toContain("Start anyway");
     const third = deriveSessionState({ title: "x", status: "running", waiting_for_memory: wait({ position: 3 }) } as Partial<Instance>);
-    expect(third.hint).toContain("(3 in line)");
+    expect(third.hint).toContain("3rd in line");
+    expect(third.hint).toContain("Stop waiting");
     expect(deriveSessionState({ title: "x", status: "loading", pending: true } as Partial<Instance>).waiting).toBeUndefined();
   });
 
-  it("the rail chip starts it anyway", () => {
+  it("the rail chip starts it anyway, and Stop waiting sits beside it", () => {
     const src = code("components/sidebar/SidebarRow.tsx");
     expect(src).toContain("ss.waiting && !inst.device");
     expect(src).toContain("startWaiting(title)");
+    expect(src).toContain("cancelWaiting(title, !!wait?.creates)");
+    expect(src).toMatch(/>\s*Stop waiting\s*</);
   });
 
   it("the rail line while the gate holds anything", () => {
@@ -217,6 +220,128 @@ describe("Waiting for memory", () => {
     );
     expect(holdingLine(g({ holding: false, queued: [] }))).toBe("");
     expect(holdingLine(undefined)).toBe("");
+  });
+
+  it("the rail line keys on the gate's why, and says memory only for memory", () => {
+    const g = (why: string, over: Partial<LaunchGateStatus> = {}): LaunchGateStatus => ({
+      holding: true,
+      queued: [wait({ why, reason: "" })],
+      reason: "",
+      live: 3,
+      cap: 16,
+      warming: 0,
+      projected_available: null,
+      projected_level: "ok",
+      why,
+      ...over,
+    });
+    expect(holdingLine(g("memory"))).toBe("Memory low — new agents wait (1 waiting)");
+    expect(holdingLine(g("warming"))).toBe("Agents still starting — new agents wait (1 waiting)");
+    expect(holdingLine(g("cap"))).toBe("Agent limit reached — new agents wait (1 waiting)");
+    expect(holdingLine(g("spacing"))).toBe("Starting agents one at a time (1 waiting)");
+    expect(holdingLine(g("queue"))).toBe("New agents queued (1 waiting)");
+    // The gate's own why wins over a stale reason text.
+    expect(holdingLine(g("spacing", { reason: "memory is low: 2 GB free" }))).toBe("Starting agents one at a time (1 waiting)");
+    // No gate why: the head of the queue's.
+    expect(holdingLine(g("cap", { why: undefined }))).toMatch(/^Agent limit reached/);
+  });
+
+  it("a waiting row's chip, line and tooltip key on its why", () => {
+    const now = 1_000_000 * 1000;
+    const row = (over: Partial<LaunchWait>) =>
+      deriveSessionState({ title: "w", status: "running", waiting_for_memory: wait({ since: 1_000_000 - 180, ...over }) } as Partial<Instance>, { now });
+    expect(row({ why: "memory" }).label).toBe("Waiting for memory");
+    expect(row({ why: "warming" }).label).toBe("Waiting — other agents are still starting");
+    expect(row({ why: "spacing" }).label).toBe("Starting shortly");
+    expect(row({ why: "cap" }).label).toBe("Waiting for a free agent slot");
+    expect(row({ why: "queue", position: 3 }).label).toBe("Queued — 2 ahead");
+    expect(row({ why: "restart" }).label).toBe("Queued");
+    // An older server: no why, read from the reason.
+    expect(row({ reason: "16 agents are running; automatic starts stop at 16 on this machine" }).label).toBe(
+      "Waiting for a free agent slot"
+    );
+    expect(row({ reason: "the last agent started 4s ago; automatic starts are 20s apart" }).label).toBe("Starting shortly");
+    const hint = row({ why: "cap", position: 2, reason: "" }).hint || "";
+    expect(hint).toContain("New worker · waiting 3m · 2nd in line");
+    expect(hint).not.toMatch(/memory/i);
+  });
+});
+
+describe("Start anyway and Stop waiting", () => {
+  function stub() {
+    const said: string[] = [];
+    const posts: { path: string; init: unknown }[] = [];
+    const say = vi.spyOn(launchGateDeps, "say").mockImplementation((l: string) => void said.push(l));
+    const refresh = vi.spyOn(launchGateDeps, "refresh").mockImplementation(() => {});
+    return { said, posts, restore: () => (say.mockRestore(), refresh.mockRestore()) };
+  }
+
+  it("Start anyway goes through the memory confirm on a 409 memory_confirm", async () => {
+    const s = stub();
+    const ask = vi.spyOn(mc.memoryConfirmDeps, "ask").mockResolvedValue("start");
+    const post = vi.spyOn(launchGateDeps, "post").mockImplementation(async (path: string, init: unknown) => {
+      s.posts.push({ path, init });
+      if (s.posts.length === 1) throw refusal({ ...LOW, level: "critical" });
+      return { started: true } as never;
+    });
+    await expect(startWaiting("w1")).resolves.toBe(true);
+    expect(s.posts.map((p) => p.path)).toEqual(["/api/launch-gate/w1/start", "/api/launch-gate/w1/start"]);
+    expect(s.posts[1].init).toEqual({ json: { start_anyway: true } });
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ level: "critical" }), "w1", true);
+    expect(s.said).toEqual(["Starting w1 now…"]);
+    ask.mockRestore();
+    post.mockRestore();
+    s.restore();
+  });
+
+  it("Cancel in that dialog keeps it waiting, and says so", async () => {
+    const s = stub();
+    const ask = vi.spyOn(mc.memoryConfirmDeps, "ask").mockResolvedValue("cancel");
+    const post = vi.spyOn(launchGateDeps, "post").mockImplementation(async () => {
+      throw refusal();
+    });
+    await expect(startWaiting("w1")).resolves.toBe(false);
+    expect(s.said).toEqual(["w1 keeps waiting"]);
+    ask.mockRestore();
+    post.mockRestore();
+    s.restore();
+  });
+
+  it("Stop waiting cancels it and toasts what that means", async () => {
+    const s = stub();
+    const post = vi.spyOn(launchGateDeps, "post").mockImplementation(async (path: string, init: unknown) => {
+      s.posts.push({ path, init });
+      return {} as never;
+    });
+    await expect(cancelWaiting("w1", true)).resolves.toBe(true);
+    await expect(cancelWaiting("w2")).resolves.toBe(true);
+    expect(s.posts[0]).toEqual({ path: "/api/launch-gate/w1/cancel", init: { method: "POST" } });
+    expect(s.said).toEqual([
+      "Cancelled w1 — it won't be started",
+      "w2 stopped waiting — start it yourself when you need it",
+    ]);
+    post.mockRestore();
+    s.restore();
+  });
+});
+
+describe("Put idle agents to sleep first always says what it did", () => {
+  it("toasts the slept line when the caller passes no onSlept", async () => {
+    const ask = vi.spyOn(mc.memoryConfirmDeps, "ask").mockResolvedValue("sleep");
+    const sleepIdle = vi.spyOn(mc.memoryConfirmDeps, "sleepIdle").mockResolvedValue({ slept: ["a"], freed_mb: 2048 });
+    const said: string[] = [];
+    const say = vi.spyOn(mc.memoryConfirmDeps, "say").mockImplementation((l: string) => void said.push(l));
+    let n = 0;
+    const send = async () => {
+      n += 1;
+      if (n === 1) throw refusal();
+      return "started";
+    };
+    await expect(mc.withMemoryConfirm("a new agent", send)).resolves.toBe("started");
+    expect(said).toEqual(["Put 1 idle agent to sleep (freed ~2.0 GB)."]);
+    ask.mockRestore();
+    sleepIdle.mockRestore();
+    say.mockRestore();
   });
 
   it("Start all says which wait for memory instead of failing them", () => {

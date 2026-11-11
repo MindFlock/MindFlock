@@ -13,17 +13,20 @@ Like the other extracted modules this calls back through the server namespace
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import os
 import re
+import threading
 import time
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from fastapi.responses import JSONResponse
 
 from backend.web.core import git_merge as _git_merge
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import launch_gate as _launch_gate
+from backend.web.core import lineage as _lineage
 from backend.web.core import pending as _pending
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import plain_repo as _plain_repo
@@ -55,6 +58,9 @@ async def create(
     carry_ref: str = "",
     branched_from: str = "",
     gated: bool = False,
+    drained: bool = False,
+    kind: str = "",
+    admitted: str = "",
 ) -> JSONResponse:
     """Create a session and Start it in the background (returns 202 immediately).
 
@@ -167,137 +173,81 @@ async def create(
     worktree before its agent starts (needs ``base_ref``; the engine's
     ``InstanceOptions.carry_ref``), and the source's title, which
     ``session.created`` carries as ``branched_from``.
+
+    A typed title that is already WAITING to be created (the launch gate's
+    queue, an intake start in flight) is taken too: 409, as for a live one.
+    ``drained`` (keyword; :func:`queued_launch` only): this IS that waiting
+    create, made now — its own placeholder row is no collision, and a failed
+    background Start keeps the row as a visible failure
+    (:func:`note_start_failed`; ``kind`` = what queued it). The checks a
+    create can answer before anything is claimed are shared with
+    :func:`create_gated` (:func:`_check_request`, :func:`_check_shape`), so
+    a create about to wait hears the same 4xx at once.
+
+    ``admitted`` (keyword): the launch-gate key :func:`create_gated` let
+    this create go under (its start noted as warming); a refusal takes that
+    back (``launch_gate.unnote_start``) so a create that never started
+    holds no warming slot.
     """
+    resp = await _create(
+        payload,
+        peer_share=peer_share,
+        person=person,
+        carry_ref=carry_ref,
+        branched_from=branched_from,
+        gated=gated,
+        drained=drained,
+        kind=kind,
+    )
+    if admitted and resp.status_code >= 400:
+        try:
+            await asyncio.to_thread(_launch_gate.unnote_start, admitted)
+        except Exception:  # noqa: BLE001 — the refusal stands either way
+            pass
+    return resp
+
+
+async def _create(
+    payload: dict,
+    *,
+    peer_share: str = "",
+    person: str = "",
+    carry_ref: str = "",
+    branched_from: str = "",
+    gated: bool = False,
+    drained: bool = False,
+    kind: str = "",
+) -> JSONResponse:
+    """:func:`create`'s body (the wrapper takes back a gate admission whose
+    create was refused)."""
     srv = _server()
     payload = payload or {}
     title = (payload.get("title", "") or "").strip()
     program = (payload.get("program", "") or "").strip() or srv.ENGINE.default_program()
 
-    # --- Peer links -------------------------------------------------------------
-    # ``peer_share`` is a keyword only the peer service passes (never a payload
-    # key): it creates THAT share's sandboxed session, in place, on exactly its
-    # folder. Every other create is refused a folder under the peer root —
-    # checked on the RESOLVED path (symlinks, "..") before anything touches it.
+    err_resp, req = await _check_request(payload, program, peer_share)
+    if err_resp is not None:
+        return err_resp
+    launch_args = req["launch_args"]
+    profile_id = req["profile_id"]
+    profile_model = req["profile_model"]
+    parent = req["parent"]
+    spawned = req["spawned"]
+    hidden_by = req["hidden_by"]
     from backend.web.core import peer_guard as _peer_guard
 
-    if peer_share:
-        err = _peer_share_payload_error(payload, peer_share, program)
-        if err:
-            return JSONResponse({"error": err}, status_code=400)
-    else:
-        import os as _os
-
-        raw_repo = str(payload.get("repo_path", "") or "")
-        refused = _peer_guard.path_refusal(_os.path.expanduser(raw_repo))
-        if refused is not None:
-            return refused
-        parent_title = str(payload.get("parent", "") or "").strip()
-        if parent_title and _peer_guard.is_peer_session(
-            srv.ENGINE.instances.get(parent_title)
-        ):
-            return JSONResponse(
-                {"error": "a shared-folder (peer) session can't spawn sessions"},
-                status_code=409,
-            )
-
-    # --- Optional provisioned mode --------------------------------------------
-    is_provisioned = bool(payload.get("provisioned", False))
-    workspace_strategy = (payload.get("workspace_strategy") or "worktree").strip()
-    story_id = str(payload.get("story_id", "") or "").strip()
-    prompt = payload.get("prompt", "") or ""
-    repo_path = str(payload.get("repo_path", "") or "")
-    new_branch = ""
-    # Per-session launch flags (e.g. --dangerously-skip-permissions for just
-    # this session), appended after the provider's own saved defaults every time
-    # this session's agent (re)starts. The New dialog pre-fills this field with
-    # the global default and always sends the key, so what arrives IS the
-    # session's flags — a default the user toggled off is honored, not
-    # re-applied. When the key is ABSENT (other creators / API callers), we pass
-    # None so the session inherits the global default (Settings → Coding CLI).
-    # Validated with the same rules as provider-level saved args so a malformed
-    # payload never reaches the shell command builder.
-    if "launch_args" in payload:
-        try:
-            launch_args = srv.provider_config.validate_launch_args(
-                payload.get("launch_args") or []
-            )
-        except ValueError as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-    elif "extra_launch_args" in payload:
-        # ADDITIVE flags (the MCP's spawn_session): the user's configured
-        # defaults for this CLI stay, these are appended — an orchestrator
-        # adding "--model x" must not strip a worker's skip-permissions.
-        try:
-            extra = srv.provider_config.validate_launch_args(
-                payload.get("extra_launch_args") or []
-            )
-        except ValueError as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        launch_args = srv._instance.merge_launch_args(
-            srv._instance.provider_default_launch_args(program), extra
-        )
-    else:
-        launch_args = None  # not specified -> inherit the global default
-
-    # Auth profile pin. Rejecting an unknown id HERE beats a session that
-    # launches half-authenticated and only fails when the CLI does.
-    profile_id = str(payload.get("profile_id", "") or "").strip()
-    err = srv._profile_id_error(profile_id)
-    if err:
-        return JSONResponse({"error": err}, status_code=400)
-    profile_model = str(payload.get("profile_model", "") or "").strip()
-    err = srv._profile_model_error(profile_model)
-    if err:
-        return JSONResponse({"error": err}, status_code=400)
-
-    # Lineage. ``parent`` names the live session this one works for (an
-    # orchestrator spawning a worker); ``spawned`` marks an agent-made session
-    # and is only ever set here. Both are checked again under the registry lock
-    # below, with the spawn limits, at the moment the title is claimed.
-    parent = str(payload.get("parent", "") or "").strip()
-    spawned = payload.get("spawned", False)
-    if spawned is None:
-        spawned = False
-    if not isinstance(spawned, bool):
-        # Strict on purpose: "spawned" unlocks agent-driven deletion, so a
-        # string "false" must not read as True.
-        return JSONResponse({"error": "spawned must be a boolean"}, status_code=400)
-    if parent and parent not in srv.ENGINE.instances:
-        return JSONResponse(
-            {"error": "unknown parent session: %s" % parent}, status_code=400
-        )
-    # ``hidden_by``: the feature that owns this session and keeps it off the
-    # rail (core.hidden_sessions). Validated here, recorded once the title is
-    # claimed below. The TITLE is never the signal — ``verify-anything`` is a
-    # fine name for a person's own session and it stays listed.
-    hidden_by = payload.get("hidden_by") or ""
-    hidden_err = _hidden_sessions.validate(hidden_by)
-    if hidden_err:
-        return JSONResponse({"error": hidden_err}, status_code=400)
-    # Worker order + fences (see core.worker_order): checked before anything
-    # is claimed, so a bad fence costs nothing.
+    # Worker order + fences (see core.worker_order): the fence was checked
+    # above, before anything is claimed, so a bad fence costs nothing.
     order_files = None
-    if payload.get("fence") or payload.get("after"):
-        _f, fence_problems = srv._worker_order_driver.fence_from(payload)
-        if fence_problems:
-            return JSONResponse({"error": "; ".join(fence_problems)}, status_code=400)
-        if _f and _f.get("only") and parent:
-            # The parent's tracked files: two fences covering one existing
-            # file overlap even when their globs look unrelated.
-            try:
-                pwt = srv.ENGINE.instances[parent].GetWorktreePath()
-                order_files = await asyncio.to_thread(_git_merge.tracked_files, pwt)
-            except Exception:  # noqa: BLE001
-                order_files = None
-    if parent and await asyncio.to_thread(srv._budget_locked, parent):
-        return JSONResponse(
-            {
-                "error": "parent session %s is over budget — raise its budget "
-                "before it spawns more sessions" % parent,
-                "budget_locked": True,
-            },
-            status_code=409,
-        )
+    _f = req["fence"]
+    if _f and _f.get("only") and parent:
+        # The parent's tracked files: two fences covering one existing
+        # file overlap even when their globs look unrelated.
+        try:
+            pwt = srv.ENGINE.instances[parent].GetWorktreePath()
+            order_files = await asyncio.to_thread(_git_merge.tracked_files, pwt)
+        except Exception:  # noqa: BLE001
+            order_files = None
     # Memory guard: an agent fanning out workers is how a big job runs the
     # machine out of memory, so an agent's create waits for headroom. A team
     # run's own members are held by its planner instead (they stay queued
@@ -310,81 +260,26 @@ async def create(
         mem_refusal = await asyncio.to_thread(memory_refusal)
         if mem_refusal is not None:
             return JSONResponse(mem_refusal, status_code=409)
-    # Split across workers: the agent fans the task out through its own
-    # MindFlock tools, so it must GET them (attach on, a CLI that attaches)
-    # and must have a task. Workers fork from its commits, so it runs in a
-    # worktree of its own — never in place.
-    playbook = payload.get("playbook")
-    if playbook is not None and playbook != "":
-        if playbook != "split":
-            return JSONResponse(
-                {"error": 'playbook must be "split" (got %r)' % (playbook,)},
-                status_code=400,
-            )
-        reason = srv._mcp_unattachable(program)
-        if reason is not None:
-            return JSONResponse(
-                {
-                    "error": "Split across workers needs the MindFlock tools: %s"
-                    % reason
-                },
-                status_code=400,
-            )
-        if not str(prompt).strip():
-            return JSONResponse(
-                {"error": "Split across workers needs a task: describe what to split"},
-                status_code=400,
-            )
-    split = playbook == "split"
+
+    # --- Optional provisioned mode --------------------------------------------
+    is_provisioned = bool(payload.get("provisioned", False))
+    workspace_strategy = (payload.get("workspace_strategy") or "worktree").strip()
+    story_id = str(payload.get("story_id", "") or "").strip()
+    prompt = payload.get("prompt", "") or ""
+    repo_path = str(payload.get("repo_path", "") or "")
+    new_branch = ""
+    err_resp, shape = _check_shape(payload, program, prompt, is_provisioned)
+    if err_resp is not None:
+        return err_resp
+    split = shape["split"]
     # Fork point: cut the worktree from this commit-ish instead of the repo's
     # HEAD (a worker forking from its orchestrator's commit), recording
     # ``base_branch`` as the session's diff base. Plain worktree sessions only.
-    base_ref = str(payload.get("base_ref", "") or "").strip()
-    base_branch = str(payload.get("base_branch", "") or "").strip()
-    continue_branch = str(payload.get("continue_branch", "") or "").strip()
-    if continue_branch and is_provisioned:
-        return JSONResponse(
-            {
-                "error": "continue_branch is only supported for plain worktree "
-                "sessions (not provisioned)"
-            },
-            status_code=400,
-        )
-    if (base_ref or base_branch) and is_provisioned:
-        return JSONResponse(
-            {
-                "error": "base_ref is only supported for plain worktree sessions "
-                "(not provisioned)"
-            },
-            status_code=400,
-        )
+    base_ref = shape["base_ref"]
+    base_branch = shape["base_branch"]
+    continue_branch = shape["continue_branch"]
 
     if is_provisioned:
-        # Provisioning is all git (base clone + worktree/clone per session).
-        if not srv.git_available():
-            return JSONResponse(
-                {
-                    "error": "provisioned mode needs git installed — install git, "
-                    "or start a plain session (any folder works)"
-                },
-                status_code=400,
-            )
-        # Provisioning works for the configured [repository].url OR any local
-        # repo the user picked (repo_path). Only the no-repo-chosen flow needs
-        # the config to resolve.
-        if not repo_path and not srv.provisioning.provisioning_available():
-            return JSONResponse(
-                {
-                    "error": "provisioned mode needs a configured repository "
-                    "(config.toml [repository].url) or a chosen local repo"
-                },
-                status_code=400,
-            )
-        if workspace_strategy not in ("worktree", "clone"):
-            return JSONResponse(
-                {"error": "workspace_strategy must be 'worktree' or 'clone'"},
-                status_code=400,
-            )
         # If the Name field is itself a full branch (e.g. a Shortcut ticket
         # branch like "feature/sc-17436/grafana-dashboard-…"), use it verbatim
         # as the branch and set the session name to just its last segment.
@@ -434,6 +329,14 @@ async def create(
                 "session": renamed,
             },
             status_code=409,
+        )
+    # …and so is a name WAITING to be created (the launch gate's queue, an
+    # intake start in flight): claiming it now would make the waiting
+    # create fail later, its task lost. Not for that create itself (nor for
+    # the gated create whose admission reserved this title for it).
+    if not auto_title and not drained and title in _waiting_names(claiming=False):
+        return JSONResponse(
+            {"error": "instance %s already exists" % title}, status_code=409
         )
 
     # --- Sessions based off a user-chosen local repo --------------------------
@@ -657,6 +560,9 @@ async def create(
     # next attempt at that title died in Start with "tmux session already
     # exists". That is where the orphan verify sessions come from, and it is why
     # this re-check is not merely defensive.
+    # Read before the lock: the launch gate's own lock is taken around its
+    # change callback, which may want the registry lock.
+    waiting_now = _waiting_names() if auto_title and title_base else None
     with srv.ENGINE.lock:
         if title in srv.ENGINE.instances:
             # A NAME WE INVENTED IS OURS TO RE-INVENT. The numbering above ran
@@ -667,7 +573,11 @@ async def create(
             # from the title too, and re-naming here would leave the two saying
             # different things.
             if auto_title and not is_provisioned:
-                title = free_title(title_base) if title_base else srv._free_untitled()
+                title = (
+                    free_title(title_base, waiting=waiting_now)
+                    if title_base
+                    else srv._free_untitled()
+                )
                 inst.Title = title
             else:
                 return JSONResponse(
@@ -839,6 +749,17 @@ async def create(
             # Surface the failure to watchers (UI toast, `mindflock events`,
             # the CLI's create poll) — a session silently vanishing from the
             # list is the worst failure mode.
+            if drained:
+                # It waited in the launch gate's queue: its row stays as a
+                # failure (with the task to retry) and its parent is told.
+                note_start_failed(
+                    title,
+                    str(err),
+                    parent=parent,
+                    kind=kind or "spawn",
+                    prompt=str(payload.get("prompt") or ""),
+                )
+                return
             srv._note_create_failure(title, str(err))
             srv._events.BUS.emit(
                 "session.create_failed", session=title, data={"error": str(err)}
@@ -889,6 +810,274 @@ async def create(
     return JSONResponse(body, status_code=202)
 
 
+# --------------------------------------------------------------------------- #
+# The checks a create answers before anything is claimed — shared by create()
+# itself and create_gated(), so a create about to WAIT hears them at once
+# --------------------------------------------------------------------------- #
+async def _check_request(
+    payload: dict, program: str, peer_share: str
+) -> Tuple[Optional[JSONResponse], dict]:
+    """The request-level checks of :func:`create`, in its order: peer links,
+    launch flags, auth profile, lineage (``spawned``, ``parent``),
+    ``hidden_by``, the fence, the parent's budget. → ``(refusal, req)``;
+    ``req`` = ``{launch_args, profile_id, profile_model, parent, spawned,
+    hidden_by, fence}`` when there is no refusal. No side effects."""
+    srv = _server()
+    # --- Peer links -------------------------------------------------------------
+    # ``peer_share`` is a keyword only the peer service passes (never a payload
+    # key): it creates THAT share's sandboxed session, in place, on exactly its
+    # folder. Every other create is refused a folder under the peer root —
+    # checked on the RESOLVED path (symlinks, "..") before anything touches it.
+    from backend.web.core import peer_guard as _peer_guard
+
+    if peer_share:
+        err = _peer_share_payload_error(payload, peer_share, program)
+        if err:
+            return JSONResponse({"error": err}, status_code=400), {}
+    else:
+        raw_repo = str(payload.get("repo_path", "") or "")
+        refused = _peer_guard.path_refusal(os.path.expanduser(raw_repo))
+        if refused is not None:
+            return refused, {}
+        parent_title = str(payload.get("parent", "") or "").strip()
+        if parent_title and _peer_guard.is_peer_session(
+            srv.ENGINE.instances.get(parent_title)
+        ):
+            return (
+                JSONResponse(
+                    {"error": "a shared-folder (peer) session can't spawn sessions"},
+                    status_code=409,
+                ),
+                {},
+            )
+    # Per-session launch flags (e.g. --dangerously-skip-permissions for just
+    # this session), appended after the provider's own saved defaults every time
+    # this session's agent (re)starts. The New dialog pre-fills this field with
+    # the global default and always sends the key, so what arrives IS the
+    # session's flags — a default the user toggled off is honored, not
+    # re-applied. When the key is ABSENT (other creators / API callers), we pass
+    # None so the session inherits the global default (Settings → Coding CLI).
+    # Validated with the same rules as provider-level saved args so a malformed
+    # payload never reaches the shell command builder.
+    if "launch_args" in payload:
+        try:
+            launch_args = srv.provider_config.validate_launch_args(
+                payload.get("launch_args") or []
+            )
+        except ValueError as err:
+            return JSONResponse({"error": str(err)}, status_code=400), {}
+    elif "extra_launch_args" in payload:
+        # ADDITIVE flags (the MCP's spawn_session): the user's configured
+        # defaults for this CLI stay, these are appended — an orchestrator
+        # adding "--model x" must not strip a worker's skip-permissions.
+        try:
+            extra = srv.provider_config.validate_launch_args(
+                payload.get("extra_launch_args") or []
+            )
+        except ValueError as err:
+            return JSONResponse({"error": str(err)}, status_code=400), {}
+        launch_args = srv._instance.merge_launch_args(
+            srv._instance.provider_default_launch_args(program), extra
+        )
+    else:
+        launch_args = None  # not specified -> inherit the global default
+
+    # Auth profile pin. Rejecting an unknown id HERE beats a session that
+    # launches half-authenticated and only fails when the CLI does.
+    profile_id = str(payload.get("profile_id", "") or "").strip()
+    err = srv._profile_id_error(profile_id)
+    if err:
+        return JSONResponse({"error": err}, status_code=400), {}
+    profile_model = str(payload.get("profile_model", "") or "").strip()
+    err = srv._profile_model_error(profile_model)
+    if err:
+        return JSONResponse({"error": err}, status_code=400), {}
+
+    # Lineage. ``parent`` names the live session this one works for (an
+    # orchestrator spawning a worker); ``spawned`` marks an agent-made session
+    # and is only ever set here. Both are checked again under the registry lock
+    # in create(), with the spawn limits, at the moment the title is claimed.
+    parent = str(payload.get("parent", "") or "").strip()
+    spawned = payload.get("spawned", False)
+    if spawned is None:
+        spawned = False
+    if not isinstance(spawned, bool):
+        # Strict on purpose: "spawned" unlocks agent-driven deletion, so a
+        # string "false" must not read as True.
+        return (
+            JSONResponse({"error": "spawned must be a boolean"}, status_code=400),
+            {},
+        )
+    if parent and parent not in srv.ENGINE.instances:
+        return (
+            JSONResponse(
+                {"error": "unknown parent session: %s" % parent}, status_code=400
+            ),
+            {},
+        )
+    # ``hidden_by``: the feature that owns this session and keeps it off the
+    # rail (core.hidden_sessions). Validated here, recorded once the title is
+    # claimed. The TITLE is never the signal — ``verify-anything`` is a fine
+    # name for a person's own session and it stays listed.
+    hidden_by = payload.get("hidden_by") or ""
+    hidden_err = _hidden_sessions.validate(hidden_by)
+    if hidden_err:
+        return JSONResponse({"error": hidden_err}, status_code=400), {}
+    # Worker order + fences (see core.worker_order): checked before anything
+    # is claimed, so a bad fence costs nothing.
+    fence = None
+    if payload.get("fence") or payload.get("after"):
+        fence, fence_problems = srv._worker_order_driver.fence_from(payload)
+        if fence_problems:
+            return (
+                JSONResponse({"error": "; ".join(fence_problems)}, status_code=400),
+                {},
+            )
+    if parent and await asyncio.to_thread(srv._budget_locked, parent):
+        return (
+            JSONResponse(
+                {
+                    "error": "parent session %s is over budget — raise its budget "
+                    "before it spawns more sessions" % parent,
+                    "budget_locked": True,
+                },
+                status_code=409,
+            ),
+            {},
+        )
+    return None, {
+        "launch_args": launch_args,
+        "profile_id": profile_id,
+        "profile_model": profile_model,
+        "parent": parent,
+        "spawned": spawned,
+        "hidden_by": hidden_by,
+        "fence": fence,
+    }
+
+
+def _check_shape(
+    payload: dict, program: str, prompt: str, is_provisioned: bool
+) -> Tuple[Optional[JSONResponse], dict]:
+    """The mode checks of :func:`create`, in its order: the playbook, the fork
+    point (``base_ref`` / ``base_branch`` / ``continue_branch``) against the
+    mode, and what provisioned mode needs. → ``(refusal, shape)``; ``shape``
+    = ``{split, base_ref, base_branch, continue_branch}`` (``base_branch``
+    with a detached ``HEAD`` read as none: lineage.normalize_base_branch).
+    No side effects, no git probes but ``git --version``."""
+    srv = _server()
+    # Split across workers: the agent fans the task out through its own
+    # MindFlock tools, so it must GET them (attach on, a CLI that attaches)
+    # and must have a task. Workers fork from its commits, so it runs in a
+    # worktree of its own — never in place.
+    playbook = payload.get("playbook")
+    if playbook is not None and playbook != "":
+        if playbook != "split":
+            return (
+                JSONResponse(
+                    {"error": 'playbook must be "split" (got %r)' % (playbook,)},
+                    status_code=400,
+                ),
+                {},
+            )
+        reason = srv._mcp_unattachable(program)
+        if reason is not None:
+            return (
+                JSONResponse(
+                    {
+                        "error": "Split across workers needs the MindFlock tools: %s"
+                        % reason
+                    },
+                    status_code=400,
+                ),
+                {},
+            )
+        if not str(prompt).strip():
+            return (
+                JSONResponse(
+                    {
+                        "error": "Split across workers needs a task: describe what to split"
+                    },
+                    status_code=400,
+                ),
+                {},
+            )
+    split = playbook == "split"
+    base_ref = str(payload.get("base_ref", "") or "").strip()
+    # A detached HEAD's "branch" is the literal HEAD: no branch at all, so the
+    # session forks from base_ref and names no diff-base branch (a 400
+    # "invalid base_branch: HEAD" lost every worker of a detached orchestrator).
+    base_branch = _lineage.normalize_base_branch(
+        base_ref, str(payload.get("base_branch", "") or "")
+    )
+    continue_branch = str(payload.get("continue_branch", "") or "").strip()
+    if continue_branch and is_provisioned:
+        return (
+            JSONResponse(
+                {
+                    "error": "continue_branch is only supported for plain worktree "
+                    "sessions (not provisioned)"
+                },
+                status_code=400,
+            ),
+            {},
+        )
+    if (base_ref or base_branch) and is_provisioned:
+        return (
+            JSONResponse(
+                {
+                    "error": "base_ref is only supported for plain worktree sessions "
+                    "(not provisioned)"
+                },
+                status_code=400,
+            ),
+            {},
+        )
+    if is_provisioned:
+        repo_path = str(payload.get("repo_path", "") or "")
+        workspace_strategy = (payload.get("workspace_strategy") or "worktree").strip()
+        # Provisioning is all git (base clone + worktree/clone per session).
+        if not srv.git_available():
+            return (
+                JSONResponse(
+                    {
+                        "error": "provisioned mode needs git installed — install "
+                        "git, or start a plain session (any folder works)"
+                    },
+                    status_code=400,
+                ),
+                {},
+            )
+        # Provisioning works for the configured [repository].url OR any local
+        # repo the user picked (repo_path). Only the no-repo-chosen flow needs
+        # the config to resolve.
+        if not repo_path and not srv.provisioning.provisioning_available():
+            return (
+                JSONResponse(
+                    {
+                        "error": "provisioned mode needs a configured repository "
+                        "(config.toml [repository].url) or a chosen local repo"
+                    },
+                    status_code=400,
+                ),
+                {},
+            )
+        if workspace_strategy not in ("worktree", "clone"):
+            return (
+                JSONResponse(
+                    {"error": "workspace_strategy must be 'worktree' or 'clone'"},
+                    status_code=400,
+                ),
+                {},
+            )
+    return None, {
+        "split": split,
+        "base_ref": base_ref,
+        "base_branch": base_branch,
+        "continue_branch": continue_branch,
+    }
+
+
 # Words that say nothing about a task, dropped from a name made from it.
 _TITLE_FILLER = frozenset(
     "a an the to of in on at for and or with by from into please can could "
@@ -932,16 +1121,71 @@ def title_from_place(repo_path: str) -> str:
     return "-".join(words)[:TITLE_FROM_PROMPT_MAX].strip("-")
 
 
-def free_title(base: str) -> str:
-    """``base``, or ``base-2``, ``base-3``… — the first name no session (live
-    or renamed) has. :func:`server._free_untitled` for a name made from a task."""
+def free_title(base: str, *, waiting: Optional[set] = None) -> str:
+    """``base``, or ``base-2``, ``base-3``… — the first name no session (live,
+    renamed, or still WAITING to be created: :func:`_waiting_names`) has.
+    :func:`server._free_untitled` for a name made from a task. ``waiting``:
+    those names read beforehand (a caller holding the registry lock must not
+    take the launch gate's)."""
     srv = _server()
     branches = srv._session_branches()
+    if waiting is None:
+        waiting = _waiting_names()
     title, n = base, 2
-    while title in srv.ENGINE.instances or srv._aliases.owner_of(title, branches):
+    while (
+        title in srv.ENGINE.instances
+        or title in waiting
+        or srv._aliases.owner_of(title, branches)
+    ):
         title = "%s-%d" % (base, n)
         n += 1
     return title
+
+
+#: Typed titles a gated create was let through for, until its create()
+#: returns (title -> expiry): a second gated create of that name, which would
+#: otherwise pass the checks while the first is still preparing its repo and
+#: then wait for a name about to be taken, is refused at once.
+_CLAIMING: Dict[str, float] = {}
+_CLAIM_TTL_S = 300.0
+_CLAIM_LOCK = threading.Lock()
+
+
+def _claim(title: str) -> None:
+    if title:
+        with _CLAIM_LOCK:
+            _CLAIMING[title] = time.time() + _CLAIM_TTL_S
+
+
+def _unclaim(title: str) -> None:
+    if title:
+        with _CLAIM_LOCK:
+            _CLAIMING.pop(title, None)
+
+
+def _claiming() -> set:
+    now = time.time()
+    with _CLAIM_LOCK:
+        for t in [t for t, exp in _CLAIMING.items() if exp <= now]:
+            _CLAIMING.pop(t, None)
+        return set(_CLAIMING)
+
+
+def _waiting_names(*, claiming: bool = True) -> set:
+    """Names taken by creates that are accepted but not sessions yet: the
+    launch gate's queue, the starts in flight (core.pending — not a failed
+    one's row, whose retry is welcome) and, with ``claiming``, the titles
+    gated creates were just let through for. Never raises; takes the launch
+    gate's lock (never call it holding the registry lock)."""
+    names = set(_pending.snapshot())
+    try:
+        names |= {str(it.get("title") or "") for it in _launch_gate.items()}
+    except Exception:  # noqa: BLE001
+        pass
+    if claiming:
+        names |= _claiming()
+    names.discard("")
+    return names
 
 
 def _creator(person: str) -> str:
@@ -1027,10 +1271,22 @@ async def create_result(
     waiting for memory", ...}`` and the session is created later. Its title is
     listed as a pending row meanwhile, the way an intake start is."""
     if auto:
-        held = await create_gated(payload, person=person, kind=auto)
+        held, key = await _create_gated(payload, person=person, kind=auto)
         if held is not None:
             return _json_result(held)
-    resp = await create(payload, peer_share=peer_share, person=person, gated=bool(auto))
+        title = str(payload.get("title") or "").strip()
+        try:
+            resp = await create(
+                payload,
+                peer_share=peer_share,
+                person=person,
+                gated=True,
+                admitted=key,
+            )
+        finally:
+            _unclaim(title)
+        return _json_result(resp)
+    resp = await create(payload, peer_share=peer_share, person=person, gated=False)
     return _json_result(resp)
 
 
@@ -1052,39 +1308,132 @@ _LAUNCH_LOOP: dict = {"loop": None}
 #: The kinds of create the gate may queue (and bring back after a restart).
 QUEUED_CREATE_KINDS = ("spawn", "flight", "schedule")
 
+#: How long a queued create's launch (in the drainer thread) waits for its
+#: create() to answer on the server's loop.
+QUEUED_CREATE_TIMEOUT_S = 600.0
 
-def queued_launch(title: str, payload: dict, person: str = ""):
+
+def _tell_parent(parent: str, title: str, error: str) -> bool:
+    """One line to the orchestrator whose worker could not start — "worker X
+    could not start: <error>" — through its mailbox, as MindFlock's own note
+    (typed in once it is idle, like any message). Names the workers held
+    after it, which would otherwise wait for ever. True if posted; never
+    raises (a note is never worth a second failure)."""
+    if not parent:
+        return False
+    try:
+        srv = _server()
+        if parent not in srv.ENGINE.instances:
+            return False
+        from backend.web.core import mailbox as _mailbox
+
+        text = "worker %s could not start: %s" % (title, error)
+        held = srv._worker_order_driver.held_after(parent, title)
+        if held:
+            text += " (held after it, so still waiting: %s)" % ", ".join(held)
+        _mailbox.post(parent, text[:1000], kind=_mailbox.NOTE_KIND)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def note_start_failed(
+    title: str,
+    error: str,
+    *,
+    parent: str = "",
+    kind: str = "spawn",
+    prompt: str = "",
+    spawned: Optional[bool] = None,
+) -> dict:
+    """A start that WAITED (the launch gate's queue) and then could not start,
+    made visible on every channel instead of a row that just vanishes: its
+    placeholder row stays with ``start_failed`` (core.pending: ``error``,
+    ``at``, ``prompt_preview`` — the task's first characters, to retry it —
+    and ``kind``) for ten minutes or until dismissed; the create-failure note
+    (``GET /api/create_failures``); a ``session.create_failed`` event with
+    ``{title, parent, error, kind}``; and one line to ``parent``'s mailbox.
+    → the ``start_failed`` record. Never raises."""
+    error = str(error or "").strip() or "the session could not be started"
+    meta: dict = {}
+    if parent:
+        meta["parent"] = parent
+    if spawned is not None:
+        meta["spawned"] = bool(spawned)
+    rec = _pending.fail(title, error, kind=kind, prompt=prompt, **meta)
+    try:
+        srv = _server()
+        srv._note_create_failure(title, error)
+        srv._events.BUS.emit(
+            "session.create_failed",
+            session=title,
+            data={"title": title, "parent": parent, "error": error, "kind": kind},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    _tell_parent(parent, title, error)
+    return rec
+
+
+def queued_launch(title: str, payload: dict, person: str = "", kind: str = "spawn"):
     """The gate's launch for a create that waited: make the session now →
     the error, or None. Runs in the gate's drainer thread (or a Start anyway
-    route's worker thread), on the server's loop when it is running."""
+    route's worker thread), on the server's loop when it is running.
+
+    Every way it can fail — a refusal (4xx), the create raising, or no
+    answer within :data:`QUEUED_CREATE_TIMEOUT_S` (the create is cancelled)
+    — is :func:`note_start_failed`: the row stays, as a failure. Made, its
+    placeholder row goes (the real row replaces it)."""
 
     async def _create() -> Tuple[int, dict]:
         # gated: the gate admitted it (or a person chose Start anyway), so its
-        # own memory check doesn't refuse it a second time.
-        resp = await create(dict(payload, title=title), person=person, gated=True)
+        # own memory check doesn't refuse it a second time. drained: its own
+        # placeholder row is not a name collision.
+        resp = await create(
+            dict(payload, title=title),
+            person=person,
+            gated=True,
+            drained=True,
+            kind=kind,
+        )
         return _json_result(resp)
+
+    def _failed(err: str) -> str:
+        note_start_failed(
+            title,
+            err,
+            parent=str(payload.get("parent") or ""),
+            kind=kind,
+            prompt=str(payload.get("prompt") or ""),
+            spawned=bool(payload.get("spawned")),
+        )
+        return err
 
     def _launch() -> Optional[str]:
         coro = _create()
         loop = _LAUNCH_LOOP.get("loop")
         try:
             if isinstance(loop, asyncio.AbstractEventLoop) and loop.is_running():
-                status, body = asyncio.run_coroutine_threadsafe(coro, loop).result(
-                    timeout=600
-                )
+                fut = asyncio.run_coroutine_threadsafe(coro, loop)
+                try:
+                    status, body = fut.result(timeout=QUEUED_CREATE_TIMEOUT_S)
+                except concurrent.futures.TimeoutError:
+                    # Cancelled before it claims the title (nothing after the
+                    # claim awaits), so a late create can't follow the failure.
+                    fut.cancel()
+                    raise TimeoutError(
+                        "the create did not finish within %d s"
+                        % QUEUED_CREATE_TIMEOUT_S
+                    ) from None
             else:
                 # The loop is gone (a test client between requests).
                 status, body = asyncio.run(coro)
-        finally:
-            # Created (its real row replaces the placeholder) or failed.
-            _pending.drop(title)
+        except Exception as exc:  # noqa: BLE001 — the gate records it too
+            return _failed(str(exc) or exc.__class__.__name__)
         if status >= 400:
-            err = str(body.get("error") or "create failed (%d)" % status)
-            try:
-                _server()._note_create_failure(title, err)
-            except Exception:  # noqa: BLE001
-                pass
-            return err
+            return _failed(str(body.get("error") or "create failed (%d)" % status))
+        # Created: its real row replaces the placeholder.
+        _pending.drop(title)
         return None
 
     return _launch
@@ -1092,33 +1441,259 @@ def queued_launch(title: str, payload: dict, person: str = ""):
 
 def _restore_create(rec: dict):
     """A saved queued create, after a restart: its placeholder row again, and
-    its launch. None (dropped) when its name was taken meanwhile."""
+    its launch. None (dropped) when its name was taken meanwhile or its
+    saved request can't be read — then recorded as a failed start
+    (:func:`note_start_failed`), not only logged."""
     args = rec.get("args") or {}
     title = str(rec.get("title") or "")
+    kind = str(rec.get("kind") or "spawn")
     payload = args.get("payload")
-    if not title or not isinstance(payload, dict):
+    if not title:
         return None
+    if not isinstance(payload, dict):
+        note_start_failed(
+            title,
+            "its saved request could not be read back after a restart",
+            parent=str(rec.get("parent") or ""),
+            kind=kind,
+        )
+        return None
+    parent = str(rec.get("parent") or payload.get("parent") or "")
     try:
-        if title in _server().ENGINE.instances:
-            return None
+        taken = title in _server().ENGINE.instances
     except Exception:  # noqa: BLE001
-        pass
+        taken = False
+    if taken:
+        note_start_failed(
+            title,
+            "another session took the name %s while this one waited for memory "
+            "(across a restart) — its task was not started" % title,
+            parent=parent,
+            kind=kind,
+            prompt=str(payload.get("prompt") or ""),
+            spawned=bool(payload.get("spawned")),
+        )
+        return None
     _pending.add(
         title,
-        str(rec.get("kind") or "spawn"),
-        parent=str(rec.get("parent") or ""),
+        kind,
+        parent=parent,
         spawned=bool(payload.get("spawned")),
     )
-    return queued_launch(title, payload, str(args.get("person") or ""))
+    return queued_launch(title, payload, str(args.get("person") or ""), kind=kind)
 
 
 for _kind in QUEUED_CREATE_KINDS:
     _launch_gate.register_kind(_kind, _restore_create)
 
 
+#: One per event loop: a gated create's check → name → queue is one step, so
+#: two of them can't both pass the "already waiting" check (the second would
+#: replace the first's queued launch) or both pick one free name.
+_GATE_LOCKS: Dict[object, asyncio.Lock] = {}
+
+
+def _gate_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _GATE_LOCKS.get(loop)
+    if lock is None:
+        for old in [lp for lp in _GATE_LOCKS if lp is not loop]:
+            if old.is_closed():  # type: ignore[attr-defined]
+                _GATE_LOCKS.pop(old, None)
+        lock = _GATE_LOCKS[loop] = asyncio.Lock()
+    return lock
+
+
+def _waiting_creates() -> list:
+    """``(title, parent, spawned)`` of every create accepted but not made yet
+    (the starts in flight, the creates in the launch gate's queue) — the
+    slots they will take (lineage.spawn_limit_error). Never raises."""
+    out: Dict[str, tuple] = {}
+    for t, meta in _pending.snapshot().items():
+        out[t] = (t, str(meta.get("parent") or ""), bool(meta.get("spawned")))
+    try:
+        for it in _launch_gate.items():
+            t = str(it.get("title") or "")
+            if it.get("creates") and t and t not in out:
+                out[t] = (
+                    t,
+                    str(it.get("parent") or ""),
+                    it.get("kind") == "spawn" or it.get("source") == "agent",
+                )
+    except Exception:  # noqa: BLE001
+        pass
+    return list(out.values())
+
+
+def _title_refusal(title: str) -> Optional[JSONResponse]:
+    """The 409 a gated create gets for a name that is taken: a live session,
+    a renamed one, a create waiting in the gate's queue (its record rides
+    along), a start in flight, or a gated create just let through."""
+    srv = _server()
+    if title in srv.ENGINE.instances:
+        return JSONResponse(
+            {"error": "instance %s already exists" % title}, status_code=409
+        )
+    renamed = srv._aliases.owner_of(title, srv._session_branches())
+    if renamed:
+        return JSONResponse(
+            {
+                "error": "another session is already named “%s”" % title,
+                "session": renamed,
+            },
+            status_code=409,
+        )
+    rec = _launch_gate.waiting(title)
+    if rec is not None:
+        return JSONResponse(
+            {
+                "error": "a session named %s already exists (it is waiting for "
+                "memory)" % title,
+                "waiting_for_memory": rec,
+            },
+            status_code=409,
+        )
+    if _pending.has(title) or title in _claiming():
+        return JSONResponse(
+            {"error": "a session named %s already exists (it is starting)" % title},
+            status_code=409,
+        )
+    return None
+
+
+def _check_folder(
+    payload: dict, shape: dict, is_provisioned: bool
+) -> Tuple[Optional[JSONResponse], str]:
+    """The fork-point checks create() makes once its folder is prepared,
+    asked without preparing it (no init, no folder made, no first commit):
+    only for a folder that already IS a git repo with commits. → ``(refusal,
+    repo)``; ``repo`` = the resolved repo when a ``base_ref`` was checked
+    against it (for the branch-name probe), else ``""``. Blocking."""
+    repo_path = str(payload.get("repo_path", "") or "").strip()
+    base_ref, base_branch = shape["base_ref"], shape["base_branch"]
+    if is_provisioned or not repo_path or shape["continue_branch"]:
+        return None, ""
+    if not (base_ref or base_branch):
+        return None, ""
+    srv = _server()
+    abs_path = os.path.realpath(os.path.expanduser(repo_path))
+    if not os.path.isdir(abs_path):
+        return None, ""
+    try:
+        git_ok = bool(srv._is_git_repo(abs_path))
+    except Exception:  # noqa: BLE001 — create() asks again
+        return None, ""
+    in_place = bool(payload.get("in_place", False)) and not shape["split"]
+    if in_place or (not git_ok and not payload.get("init_repo")):
+        if not git_ok and shape["split"]:
+            return None, ""  # create() names the missing repo first
+        return (
+            JSONResponse(
+                {
+                    "error": "base_ref is only supported for plain worktree sessions "
+                    "(not in-place)"
+                },
+                status_code=400,
+            ),
+            "",
+        )
+    try:
+        if not git_ok or not srv._git_has_commits(abs_path):
+            return None, ""
+    except Exception:  # noqa: BLE001
+        return None, ""
+    err = srv._lineage.base_ref_error(abs_path, base_ref, base_branch)
+    if err:
+        return JSONResponse({"error": err}, status_code=400), ""
+    return None, abs_path if base_ref else ""
+
+
+async def _branch_free(
+    repo: str, title: str, base: str
+) -> Tuple[Optional[JSONResponse], str]:
+    """create()'s branch-name probe for a fork-point create, asked before it
+    waits: a typed name whose branch is taken is a 409; a name WE made
+    (``base`` set) is renumbered, as create() does. → ``(refusal, title)``."""
+    srv = _server()
+
+    def _taken(t: str) -> Optional[str]:
+        return srv._lineage.branch_taken_error(repo, srv._session_branch_name(t))
+
+    err = await asyncio.to_thread(_taken, title)
+    n = 2
+    while err and base and n < 10:
+        cand = await asyncio.to_thread(free_title, "%s-%d" % (base, n))
+        n += 1
+        err = await asyncio.to_thread(_taken, cand)
+        if not err:
+            title = cand
+    if err:
+        return JSONResponse({"error": err}, status_code=409), title
+    return None, title
+
+
+async def preflight(payload: dict) -> Tuple[Optional[JSONResponse], dict]:
+    """Everything a create would refuse that does not depend on its name,
+    asked BEFORE it waits (so a doomed create is a 4xx now, not a task lost
+    when the queue gets to it): the request and mode checks create() itself
+    uses (:func:`_check_request`, :func:`_check_shape`) and the fork point
+    against an existing repo. → ``(refusal, ctx)``; ``ctx`` = ``{parent,
+    spawned, base_ref, repo}``. No side effects."""
+    srv = _server()
+    program = (payload.get("program", "") or "").strip() or srv.ENGINE.default_program()
+    err_resp, req = await _check_request(payload, program, "")
+    if err_resp is not None:
+        return err_resp, {}
+    is_provisioned = bool(payload.get("provisioned", False))
+    err_resp, shape = _check_shape(
+        payload, program, str(payload.get("prompt") or ""), is_provisioned
+    )
+    if err_resp is not None:
+        return err_resp, {}
+    err_resp, repo = await asyncio.to_thread(
+        _check_folder, payload, shape, is_provisioned
+    )
+    if err_resp is not None:
+        return err_resp, {}
+    return None, {
+        "parent": req["parent"],
+        "spawned": req["spawned"],
+        "base_ref": shape["base_ref"],
+        "repo": repo,
+    }
+
+
+def _queue_checks(title: str, payload: dict, ctx: dict) -> Optional[JSONResponse]:
+    """The name-dependent checks, under the gate lock: the spawn limits
+    counting the creates still waiting (each holds its slot), and the
+    worker order (``after`` may name a sibling still waiting to be created;
+    one whose create failed is refused, naming it)."""
+    srv = _server()
+    parent, spawned = ctx["parent"], ctx["spawned"]
+    waiting = [w for w in _waiting_creates() if w[0] != title]
+    with srv.ENGINE.lock:
+        limit_err = srv._lineage.spawn_limit_error(
+            srv.ENGINE.instances, parent, spawned, waiting
+        )
+    if limit_err:
+        return JSONResponse({"error": limit_err}, status_code=409)
+    order_err = srv._worker_order_driver.check_create(parent, title, payload)
+    if order_err:
+        return JSONResponse({"error": order_err}, status_code=400)
+    return None
+
+
 async def create_gated(
     payload: dict, *, person: str = "", kind: str = "spawn"
 ) -> Optional[JSONResponse]:
+    """:func:`_create_gated` without the admission key."""
+    held, _key = await _create_gated(payload, person=person, kind=kind)
+    return held
+
+
+async def _create_gated(
+    payload: dict, *, person: str = "", kind: str = "spawn"
+) -> Tuple[Optional[JSONResponse], str]:
     """An automatic create (an agent's ``spawn_session``, a flight step, a
     schedule) asks the launch gate. None = go: create it now (the start is
     noted). Otherwise the **202** ``{"title", "queued": true, "status":
@@ -1127,66 +1702,103 @@ async def create_gated(
     queue creates it when memory allows, one at a time. A full queue is
     **409** ``{"memory_queue_full": true}``; a title already waiting is
     **409** ``… already exists``. A blank title is named now, by the rule
-    create itself uses."""
+    create itself uses, skipping every name still waiting to be created.
+
+    Before it can wait, the create is checked as create() would check it
+    (:func:`preflight`, then the spawn limits counting the parent's waiting
+    creates and the worker order) and refused INLINE with the same 4xx —
+    the queue never holds a create that is bound to fail. Check → name →
+    queue is one step (:func:`_gate_lock`).
+
+    → ``(refusal | queued 202 | None, key)``: ``key`` is what the gate noted
+    the start under when it let the create go (``create(admitted=key)``
+    takes it back should the create be refused)."""
     title = str(payload.get("title") or "").strip()
-    if title and _launch_gate.waiting(title) is not None:
-        return JSONResponse(
-            {
-                "error": "a session named %s already exists (it is waiting for "
-                "memory)" % title,
-                "waiting_for_memory": _launch_gate.waiting(title),
-            },
-            status_code=409,
-        )
-    go, _why = await asyncio.to_thread(
-        _launch_gate.admit_auto, title or "%s-%d" % (kind, time.time_ns())
-    )
-    if go:
-        return None
-    if not title:
-        base = title_from_prompt(str(payload.get("prompt") or ""))
-        title = await asyncio.to_thread(free_title, base or "worker")
-    queued_payload = dict(payload, title=title)
-    _LAUNCH_LOOP["loop"] = asyncio.get_running_loop()
-    parent = str(payload.get("parent") or "")
-    try:
-        rec = await asyncio.to_thread(
-            _launch_gate.gate_auto,
-            title,
-            queued_launch(title, queued_payload, person),
-            kind=kind,
-            source="agent" if kind == "spawn" else kind,
-            parent=parent,
-            creates=True,
-            args={"payload": queued_payload, "person": person},
-        )
-    except _launch_gate.QueueFull as err:
-        return JSONResponse(
-            {
-                "error": "%s — try again later, or finish/close some sessions" % err,
-                "memory_queue_full": True,
-            },
-            status_code=409,
-        )
-    if rec is None:
-        return None
-    # Its row meanwhile: the provisioning placeholder intake starts use
-    # (core.pending), so the rail, a flight and an orchestrator's
-    # wait_for_session see it from now on, marked waiting_for_memory.
-    _pending.add(title, kind, parent=parent, spawned=bool(payload.get("spawned")))
-    return JSONResponse(
-        {
-            "title": title,
-            "queued": True,
-            "status": "queued: waiting for memory",
-            "reason": rec["reason"],
-            "position": rec["position"],
-            "waiting_for_memory": rec,
-            "parent": parent,
-            "spawned": bool(payload.get("spawned")),
-        },
-        status_code=202,
-    )
+    err_resp, ctx = await preflight(payload)
+    if err_resp is not None:
+        return err_resp, ""
+    async with _gate_lock():
+        if title:
+            refusal = _title_refusal(title)
+            if refusal is not None:
+                return refusal, ""
+        refusal = _queue_checks(title, payload, ctx)
+        if refusal is not None:
+            return refusal, ""
+        if title and ctx["repo"]:
+            refusal, title = await _branch_free(ctx["repo"], title, "")
+            if refusal is not None:
+                return refusal, ""
+        key = title or "%s-%d" % (kind, time.time_ns())
+        go, _reason, _why = await asyncio.to_thread(_launch_gate.admit, key)
+        if go:
+            _claim(title)
+            return None, key
+        typed = bool(title)
+        if not typed:
+            base = title_from_prompt(str(payload.get("prompt") or "")) or "worker"
+            title = await asyncio.to_thread(free_title, base)
+            if ctx["repo"]:
+                refusal, title = await _branch_free(ctx["repo"], title, base)
+                if refusal is not None:
+                    return refusal, ""
+        queued_payload = dict(payload, title=title)
+        _LAUNCH_LOOP["loop"] = asyncio.get_running_loop()
+        parent = ctx["parent"]
+        spawned = bool(payload.get("spawned"))
+        # Its row first: the name is taken from now on (a create or a
+        # free_title that runs while the gate is asked sees it). Meanwhile it
+        # is the provisioning placeholder intake starts use (core.pending), so
+        # the rail, a flight and an orchestrator's wait_for_session see it,
+        # marked waiting_for_memory.
+        _pending.add(title, kind, parent=parent, spawned=spawned)
+        try:
+            rec = await asyncio.to_thread(
+                _launch_gate.gate_auto,
+                title,
+                queued_launch(title, queued_payload, person, kind=kind),
+                kind=kind,
+                source="agent" if kind == "spawn" else kind,
+                parent=parent,
+                creates=True,
+                args={"payload": queued_payload, "person": person},
+            )
+        except _launch_gate.QueueFull as err:
+            _pending.drop(title)
+            return (
+                JSONResponse(
+                    {
+                        "error": "%s — try again later, or finish/close some sessions"
+                        % err,
+                        "memory_queue_full": True,
+                    },
+                    status_code=409,
+                ),
+                "",
+            )
+        except BaseException:
+            _pending.drop(title)
+            raise
+        if rec is None:
+            # Let go after all (gate_auto noted it under this title). A
+            # blank-titled create names itself, so only a typed one claims.
+            _pending.drop(title)
+            if typed:
+                _claim(title)
+            return None, title
+    body = {
+        "title": title,
+        "queued": True,
+        "status": "queued: waiting for memory",
+        "reason": rec["reason"],
+        "position": rec["position"],
+        "waiting_for_memory": rec,
+        "parent": parent,
+        "spawned": spawned,
+    }
+    if rec.get("why"):
+        body["why"] = rec.get("why")
+    return JSONResponse(body, status_code=202), ""
 
 
 async def create_requested(payload: dict, *, person: str = "") -> JSONResponse:
@@ -1210,10 +1822,14 @@ async def create_requested(payload: dict, *, person: str = "") -> JSONResponse:
     if payload.get("run_member"):
         return await create(payload, person=person)
     if payload.get("spawned") is True:
-        held = await create_gated(payload, person=person, kind="spawn")
+        held, key = await _create_gated(payload, person=person, kind="spawn")
         if held is not None:
             return held
-        return await create(payload, person=person, gated=True)
+        title = str(payload.get("title") or "").strip()
+        try:
+            return await create(payload, person=person, gated=True, admitted=key)
+        finally:
+            _unclaim(title)
     if not start_anyway:
         verdict = await asyncio.to_thread(_launch_gate.decide, "person")
         body = _launch_gate.person_refusal(verdict)

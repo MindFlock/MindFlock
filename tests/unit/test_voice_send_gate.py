@@ -52,9 +52,9 @@ def _send(client, **body):
 def test_argv_erase_then_type_is_one_tmux_invocation():
     assert agent_io.dictation_argv("s", 3, "bag ") == [
         "tmux",
-        "send-keys", "-t", "s", "BSpace", "BSpace", "BSpace",
+        "send-keys", "-t", "=s:", "BSpace", "BSpace", "BSpace",
         ";",
-        "send-keys", "-t", "s", "-l", "--", "bag ",
+        "send-keys", "-t", "=s:", "-l", "--", "bag ",
     ]  # fmt: skip
 
 
@@ -63,7 +63,7 @@ def test_argv_erase_only_and_type_only():
         "tmux",
         "send-keys",
         "-t",
-        "s",
+        "=s:",
         "BSpace",
         "BSpace",
     ]
@@ -71,7 +71,7 @@ def test_argv_erase_only_and_type_only():
         "tmux",
         "send-keys",
         "-t",
-        "s",
+        "=s:",
         "-l",
         "--",
         "-x hi",
@@ -176,14 +176,14 @@ def test_erase_only(client, screens, tmux_calls, monkeypatch):
     monkeypatch.setattr(server, "_agent_activity", lambda i, t: "idle")
     r = _send(client, erase=5)
     assert r.json() == {"sent": True, "submitted": False, "erased": 5}
-    assert tmux_calls == [["tmux", "send-keys", "-t", "agent_t1"] + ["BSpace"] * 5]
+    assert tmux_calls == [["tmux", "send-keys", "-t", "=agent_t1:"] + ["BSpace"] * 5]
 
 
 def test_erase_zero_types(client, screens, tmux_calls, monkeypatch):
     monkeypatch.setattr(server, "_agent_activity", lambda i, t: "working")
     r = _send(client, erase=0, text=" ")
     assert r.json() == {"sent": True, "submitted": False, "erased": 0}
-    assert tmux_calls == [["tmux", "send-keys", "-t", "agent_t1", "-l", "--", " "]]
+    assert tmux_calls == [["tmux", "send-keys", "-t", "=agent_t1:", "-l", "--", " "]]
 
 
 def test_the_screen_is_read_at_send_time(client, screens, tmux_calls, monkeypatch):

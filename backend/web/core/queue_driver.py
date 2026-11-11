@@ -33,6 +33,7 @@ from backend import log
 from backend import providers
 from backend import session
 from backend.session import mux
+from backend.session.tmux.tmux import exact_pane_target
 from backend.session import tmux
 from backend.web.core import agent_io as _agent_io
 from backend.web.core import agent_state as _agent_state
@@ -240,7 +241,7 @@ def _refresh_limit_state(inst, title: str, name: str) -> float:
     now = time.time()
     try:
         cp = mux.run(
-            ["tmux", "capture-pane", "-p", "-t", name],
+            ["tmux", "capture-pane", "-p", "-t", exact_pane_target(name)],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -503,6 +504,12 @@ _QUEUE_WORKER_GRACE = 30.0  # after a child's report, the orchestrator's turn fi
 _QUEUE_WORKER_HOLD_MAX = 3 * 3600.0  # one hold episode, at most
 #: title -> {"since": epoch the current hold began, "key": what it waits on}
 _WORKER_HOLD: Dict[str, dict] = {}
+#: title -> {"since", "reason"}: a queued prompt's relaunch the launch gate
+#: turned away because its own queue is full (core.launch_gate.QueueFull). The
+#: prompt stays queued and the drain asks again each pass; the reason is the
+#: row's ``queue.waiting`` (and ``session.queue_changed``'s ``data.waiting``)
+#: until the relaunch gets in, the agent is back, or the queue empties.
+_GATE_FULL: Dict[str, dict] = {}
 
 
 def _created_epoch(inst) -> float:
@@ -726,6 +733,52 @@ def _announce_hold(title: str, reason: Optional[dict]) -> None:
         pass
 
 
+def gate_full_reason(title: str) -> str:
+    """Why ``title``'s queued prompt can't relaunch its agent because the
+    launch gate's queue is full ("" when it isn't). A dict read."""
+    rec = _GATE_FULL.get(title)
+    return str(rec.get("reason") or "") if rec else ""
+
+
+def _note_gate_full(title: str, err: Exception) -> None:
+    """The launch gate turned the relaunch away (its queue is full): keep the
+    prompt queued, and say so once — one log line and one
+    ``session.queue_changed`` per episode, not one per drain pass."""
+    if title in _GATE_FULL:
+        return
+    reason = "can't relaunch the agent yet: %s" % (
+        str(err) or "the launch queue is full"
+    )
+    _GATE_FULL[title] = {"since": time.time(), "reason": reason}
+    if log.ErrorLog is not None:
+        log.ErrorLog.Printf("[MONITORING] queue for %s holds: %s", title, reason)
+    _announce_waiting(title, reason)
+
+
+def _clear_gate_full(title: str) -> None:
+    if _GATE_FULL.pop(title, None) is not None:
+        _announce_waiting(title, "")
+
+
+def _announce_waiting(title: str, waiting: str) -> None:
+    """``session.queue_changed`` with ``data.waiting`` (like a worker hold's).
+    Never raises."""
+    try:
+        st = _prompt_queue.get_state(title)
+        _events.BUS.emit(
+            "session.queue_changed",
+            session=title,
+            data={
+                "pending": len(st["items"]),
+                "enabled": st["enabled"],
+                "loop": st["loop"],
+                "waiting": waiting,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _send_consumed(inst, title: str, rec: dict) -> bool:
     """Evidence that the drain's last send into ``title`` (``rec["sent_at"]``,
     ``rec["sent_text"]``) was taken by the agent although the drain never read
@@ -773,6 +826,7 @@ def _drain_one_queue(title: str) -> None:
     # "held": parked by its worker order — only the order loop releases it
     # (after its fence lands), even when someone switched the queue on.
     if not st["enabled"] or not st["items"] or st.get("held"):
+        _clear_gate_full(title)
         return
     inst = srv.ENGINE.instances.get(title)
     if inst is None:
@@ -788,6 +842,8 @@ def _drain_one_queue(title: str) -> None:
     # double-feed a prompt inside the memo window. The probes are per queued
     # session only, on the 5s drain cadence.
     activity = srv._agent_activity(inst, title)
+    if activity != "offline":
+        _clear_gate_full(title)  # the agent is back: nothing to relaunch
     if activity == "working":
         rec["armed"] = True  # agent picked the last prompt up; ok to send again
         rec["idle_since"] = None  # not parked — reset the idle-dwell timer
@@ -863,8 +919,11 @@ def _drain_one_queue(title: str) -> None:
                     source="prompt queue",
                     args={},
                 )
-            except _launch_gate.QueueFull:
+            except _launch_gate.QueueFull as err:
+                # The prompt stays queued; the row says why (queue.waiting).
+                _note_gate_full(title, err)
                 return
+            _clear_gate_full(title)
             if queued is not None:
                 return
         _queue_relaunch(title, rec, inst)
@@ -1380,6 +1439,8 @@ def _drain_prompt_queues() -> None:
         _LIMIT_STATE.pop(gone, None)
     for gone in [t for t in _WORKER_HOLD if t not in srv.ENGINE.instances]:
         _WORKER_HOLD.pop(gone, None)
+    for gone in [t for t in _GATE_FULL if t not in srv.ENGINE.instances]:
+        _GATE_FULL.pop(gone, None)
     # Drop budget overrides for sessions that no longer exist (so a reused title
     # doesn't inherit an old raise).
     for gone in [t for t in srv._budget_overrides() if t not in srv.ENGINE.instances]:

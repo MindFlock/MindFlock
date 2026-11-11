@@ -811,7 +811,14 @@ def jobs_under(pane_pid, now: Optional[float] = None) -> Optional[List[dict]]:
 def _pane_pid(session_name: str) -> Optional[str]:
     try:
         cp = osflags.tmux_run(
-            ["tmux", "display-message", "-p", "-t", session_name, "#{pane_pid}"],
+            [
+                "tmux",
+                "display-message",
+                "-p",
+                "-t",
+                "=" + session_name + ":",
+                "#{pane_pid}",
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=5,

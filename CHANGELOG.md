@@ -19,6 +19,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   review. The session's own agent does the fixes. Also `POST /api/pr-review`
   and the MCP tool `run_pr_review`.
 
+### Fixed
+
+- **A session that waited to start no longer loses its task.** An automatic
+  start (an agent's `spawn_session`, a flight step, a schedule) is now
+  checked before it waits, not when its turn comes: a bad base, a taken
+  name, a full child limit or a broken `after=` answers at once. A worker
+  spawned from a detached HEAD forks from the parent's commit instead of
+  dying later with `invalid base_branch: HEAD`. Two untitled starts with the
+  same first line get two names. A start that still fails after waiting
+  leaves a "Couldn't start" row with the error and the task, tells its
+  parent, and `wait_for_session` answers `failed_to_start`.
+- **"Waiting for memory" only when it is memory.** The launch gate records
+  why each start waits (`why`: memory, warming, cap, spacing, queue,
+  restart) and the row, the rail bar, the gauge, the team-run badge, the
+  CLI and the MCP results word it from that: "Starting shortly", "Waiting
+  for a free agent slot", "Queued — 2 ahead". The memory notice and gauge
+  show the reason behind a low reading. Waiting rows show how long and what
+  place, and have "Stop waiting" next to "Start anyway" (which now asks
+  first when memory is low).
+- **Starts come sooner and survive more.** With room for three or more
+  sessions automatic starts are 5 s apart instead of 20 s
+  (`MINDFLOCK_AUTO_SPACING_FAST`). A start that fails no longer counts as a
+  warming agent or delays the next one. A slow create no longer holds up
+  the queue behind it. A server restart in the middle of a start no longer
+  drops it, a waiting ticket start comes back after a restart, and two
+  servers on one `~/.mindflock` no longer overwrite each other's queue.
+  Queue changes reach the app at once instead of on the next poll.
+- **Sessions going offline for no reason.** Closing a session could kill a
+  live one whose name started the same way (`orch` took `orch-w1` with it):
+  tmux kills, keystrokes, screen reads and attaches now match the exact name. One slow or failed tmux probe no
+  longer reads as a dead agent: offline needs two definite misses, and a
+  timeout changes nothing. An out-of-memory kill of one child process inside
+  an agent's memory limit no longer stops the whole agent
+  (`OOMPolicy=continue`), and an agent that does die that way says "out of
+  memory (killed)" and revives like one. A boot no longer blames "the server
+  restarted" for an agent that was already down.
+- **Two servers on one state folder agree on who is asleep or held.** The
+  held and sleeping records are re-read when the other server changes them
+  and saved by merging under a file lock. A session is never both; a hold
+  wins. Only one server runs the idle-sleep sweep and the memory shield's
+  shedding. "Put idle agents to sleep first" always says what it slept, and
+  those agents say "memory was low".
+
 ## [0.14.8] - 2026-11-11
 
 

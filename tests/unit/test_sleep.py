@@ -458,7 +458,7 @@ def test_a_kill_that_did_not_take_leaves_no_record():
 
 def test_the_record_survives_a_reload_and_is_dropped_with_the_session():
     sleep.mark("a", sleep.REASON_MEMORY, 780)
-    sleep._CACHE = None  # a fresh process
+    sleep._STORE.reset()  # a fresh process
     assert sleep.info("a")["freed_mb"] == 780
     sleep.drop("a")
     assert sleep.info("a") is None
@@ -878,3 +878,48 @@ def test_wait_for_session_reads_a_sleeper_as_idle_not_offline():
     }
     assert obs._observe("zz", row, st, time.time(), None) == "idle"
     assert "sleeping" in tools._COMPACT_OPTIONAL
+
+
+# --------------------------------------------------------------------------- #
+# two servers on one config dir
+# --------------------------------------------------------------------------- #
+def test_the_sweep_runs_in_one_server_only(monkeypatch):
+    """The other server holds the sweep's lease: this one sheds nothing."""
+    import json
+    import os
+
+    rows = [_row("a", activity_since=NOW - 2 * IDLE_S)]
+    srv = _tick_world(monkeypatch, rows)
+    os.makedirs(os.path.dirname(sleep._lease_path()), exist_ok=True)
+    with open(sleep._lease_path(), "w") as f:
+        json.dump(
+            {
+                sleep.SWEEP_LEASE: {
+                    "owner": "the other server",
+                    "pid": os.getppid(),
+                    "until": time.time() + 600,
+                }
+            },
+            f,
+        )
+    assert sleep.tick(srv, NOW) == [] and srv.killed == []
+    with open(sleep._lease_path(), "w") as f:
+        json.dump({}, f)  # it shut down and handed the lease on
+    assert sleep.tick(srv, NOW) == ["a"]
+
+
+def test_sleep_idle_now_says_memory_was_low(monkeypatch):
+    """The memory dialog's "Put idle agents to sleep first": the tooltip must
+    say "— memory was low", which reads reason ``memory``."""
+    srv = _tick_world(monkeypatch, [_row("a")])
+    assert sleep.sleep_idle_now(srv)["slept"] == ["a"]
+    assert sleep.info("a")["reason"] == sleep.REASON_MEMORY
+
+
+def test_putting_a_running_agent_to_sleep_drops_its_stale_hold():
+    from backend.web.core import held
+
+    held.hold("a", held.REASON_CRASH)  # stale: its agent runs
+    srv = _Srv(live={"a"})
+    assert sleep.put_to_sleep(srv, _Inst(), "a", sleep.REASON_IDLE) is None
+    assert sleep.is_sleeping("a") and not held.is_held("a")

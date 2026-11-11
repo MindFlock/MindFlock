@@ -128,6 +128,9 @@ def test_scope_command_shape(monkeypatch):
         "--collect",
         "--slice=app-mindflock.slice",
         "--unit=mindflock-mindflock_td_docs_-1700000000000",
+        # One child's OOM kill must not stop the whole agent (exit 143).
+        "-p",
+        "OOMPolicy=continue",
         "-p",
         "MemoryHigh=%d" % (2 * GB),
         "-p",
@@ -204,6 +207,7 @@ def test_wrap_launch_composes_scope_and_path(monkeypatch):
         'PATH=/r/bin:"$PATH"; export PATH; '
         "/usr/bin/systemd-run --user --scope --quiet --collect "
         "--slice=app-mindflock.slice --unit=mindflock-s1-1 "
+        "-p OOMPolicy=continue "
         "-p MemoryHigh=%d -p MemoryMax=%d -p MemorySwapMax=%d -- "
         "sh -c 'claude --x '\"'\"'a b'\"'\"''"
         % (int(20 * GB * 0.30), int(20 * GB * 0.40), int(20 * GB * 0.15))

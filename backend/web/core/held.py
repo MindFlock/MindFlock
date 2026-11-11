@@ -24,6 +24,12 @@ whose agent DIED is **held**: nothing starts it but a person's explicit Start.
 The records live in ``<config dir>/held.json`` (``title -> {since, reason}``),
 so a hold survives the next crash. ``MINDFLOCK_HELD_FILE`` points it elsewhere
 (the test suite does). Keyed by title like :mod:`backend.web.core.sleep`.
+Two servers on one config dir share the file (:class:`title_store.SharedMap`):
+each sees the other's holds without a restart and never drops them on save.
+
+A hold outranks a sleep: a title is never both held and asleep. :func:`hold`
+drops the sleep record, and ``core.sleep`` drops any it finds on a held title
+(the pair two servers' lost updates used to leave on disk).
 """
 
 from __future__ import annotations
@@ -31,7 +37,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, Optional
 
 from backend import config
 from backend.web.core import title_store
@@ -40,11 +46,11 @@ from backend.web.core import title_store
 REASON_RESTART = "the server restarted"
 REASON_KILLED = "out of memory (killed)"
 REASON_CRASH = "the agent crashed"
-REASONS = (REASON_RESTART, REASON_KILLED, REASON_CRASH)
+#: A boot found it down and its exit marker says nothing about why.
+REASON_NOT_RUNNING = "it was not running when the server started"
+REASONS = (REASON_RESTART, REASON_KILLED, REASON_CRASH, REASON_NOT_RUNNING)
 
 _LOCK = threading.Lock()
-#: ``(path, {title: record})`` — keyed by path so a per-test store reloads.
-_CACHE: Optional[Tuple[str, Dict[str, dict]]] = None
 
 
 def _path() -> str:
@@ -71,52 +77,74 @@ def _clean(d: dict) -> Dict[str, dict]:
     return out
 
 
+#: The records, shared with every other server on this config dir
+#: (:class:`title_store.SharedMap`: re-read when the file changes, saved
+#: read-merge-write under ``held.json.lock``, so one server's save never
+#: drops another's hold).
+_STORE = title_store.SharedMap(_path, _clean, "held sessions")
+
+
 def _load() -> Dict[str, dict]:
-    global _CACHE
-    try:
-        p = _path()
-    except OSError:
-        p = ""
-    if _CACHE is None or _CACHE[0] != p:
-        _CACHE = (p, title_store.load(lambda: p, _clean) if p else {})
-    return _CACHE[1]
+    return _STORE.data()
 
 
 def _persist() -> None:
-    if _CACHE is not None and _CACHE[0]:
-        path = _CACHE[0]
-        title_store.persist(lambda: path, _CACHE[1], "held sessions")
+    _STORE.persist()
+
+
+def _sleep_yields(title: str) -> None:
+    """A hold outranks a sleep (the agent is down and stays down until a
+    person's Start): drop ``title``'s sleep record, if any, so the pair —
+    "Sleeping, opening it wakes it" over a wake that is refused — never
+    stands. Called outside :data:`_LOCK`: ``core.sleep`` reads the holds
+    under its own lock, never the other way round."""
+    try:
+        from backend.web.core import sleep as _sleep
+
+        _sleep.reconcile([title])
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def hold(title: str, reason: str) -> bool:
     """Hold ``title`` offline. A session already held keeps its first record
-    (when and why it went down). True when this call made the hold. Never
-    raises."""
+    (when and why it went down); a sleep record it had is dropped (a hold
+    outranks a sleep). True when this call made the hold. Never raises."""
     if reason not in REASONS:
         reason = REASON_CRASH
     try:
-        with _LOCK:
-            recs = _load()
-            if str(title) in recs:
-                return False
-            recs[str(title)] = {"since": time.time(), "reason": reason}
-            _persist()
-        return True
+        with _LOCK, _STORE.transaction() as recs:
+            made = str(title) not in recs
+            if made:
+                recs[str(title)] = {"since": time.time(), "reason": reason}
     except Exception:  # noqa: BLE001
         return False
+    _sleep_yields(str(title))
+    return made
 
 
 def release(title: str) -> bool:
     """Drop ``title``'s hold (missing is fine). True when there was one.
     Never raises."""
     try:
+        t = str(title or "")
         with _LOCK:
-            if _load().pop(str(title or ""), None) is None:
+            if t not in _load():
                 return False
-            _persist()
-        return True
+            with _STORE.transaction() as recs:
+                return recs.pop(t, None) is not None
     except Exception:  # noqa: BLE001
         return False
+
+
+def rename(old: str, new: str) -> None:
+    """Move ``old``'s hold to ``new`` (``core.rename_stores`` calls this)."""
+    with _LOCK:
+        if str(old) not in _load():
+            return
+        with _STORE.transaction() as recs:
+            if str(old) in recs:
+                recs[str(new)] = recs.pop(str(old))
 
 
 def info(title: str) -> Optional[dict]:
@@ -149,11 +177,11 @@ def release_all() -> int:
     Returns how many there were."""
     try:
         with _LOCK:
-            recs = _load()
-            n = len(recs)
-            if n:
+            if not _load():
+                return 0
+            with _STORE.transaction() as recs:
+                n = len(recs)
                 recs.clear()
-                _persist()
         return n
     except Exception:  # noqa: BLE001
         return 0
@@ -179,16 +207,20 @@ def drop(title: str) -> None:
 
 
 def prune(live_titles: Iterable[str]) -> None:
-    """Drop the holds of sessions no longer in the engine."""
+    """Drop the holds of sessions no longer in the engine — nor in the shared
+    ``state.json``: a session another server on this config dir just created
+    or renamed reaches this server's engine only on its next state sync."""
     live = set(live_titles or ())
     try:
         with _LOCK:
-            recs = _load()
-            gone = [t for t in recs if t not in live]
-            for t in gone:
-                recs.pop(t, None)
+            gone = [t for t in _load() if t not in live]
             if gone:
-                _persist()
+                on_disk = title_store.state_titles(_STORE.path())
+                gone = [t for t in gone if t not in on_disk]
+            if gone:
+                with _STORE.transaction() as recs:
+                    for t in gone:
+                        recs.pop(t, None)
     except Exception:  # noqa: BLE001
         pass
 

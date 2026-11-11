@@ -40,6 +40,7 @@ from backend.mcp.protocol import Tool, ToolContext, ToolError
 from backend.mcp import flights as _flights
 from backend.mcp import runs as _runs
 from backend.mcp import ship as _ship
+from backend.mcp import waiting as _waiting
 
 _log = logging.getLogger(__name__)
 
@@ -217,7 +218,9 @@ _D_LIST = (
     "folder, parent, spawned, last_turn, is_self, managed (you may steer it), "
     "plus autopilot, pr_url and background (jobs the agent left running after "
     "its turn, each running | waiting | stuck) when set, and sleeping when "
-    "its agent was put to sleep to free memory (send_message wakes it). Rows "
+    "its agent was put to sleep to free memory (send_message wakes it), "
+    "waiting {why, position, reason} while its start is queued, start_failed "
+    "{error} when a queued start failed. Rows "
     "titled <peer>::<title> with peer (their name) and shared_mode (full | "
     "gated) are sessions another person shares with you: only send_message "
     "reaches them. filter: children (default when you have children), descendants, siblings, "
@@ -298,8 +301,8 @@ _D_SPAWN = (
     "are not included: commit first). prompt must "
     "be self-contained (the worker cannot see your conversation): name the "
     "files or areas it owns, and give parallel workers disjoint file sets. A "
-    "report-back footer asking it to call report_result is appended when its "
-    "CLI gets the MindFlock tools (report_back in the result says whether). "
+    "footer asking it to call report_result is appended when its CLI gets the "
+    "MindFlock tools (report_back says whether). "
     'Defaults: your program, your repository, title "<you>-w<N>". Returns '
     "{title, branch, folder, base_sha, status, ready}; it waits up to 45s for "
     "the session to start (wait_ready). Then call wait_for_session or end your "
@@ -314,7 +317,8 @@ _D_SPAWN = (
     "it (see fence_session) before it starts, and a fence that overlaps an "
     'unfinished worker\'s waits for it (overlap="parallel" to allow); '
     "set_order sets serial / N at a time. A fenced caller's workers inherit "
-    'its fence. Low memory: "queued: waiting for memory"; capacity = room left.'
+    "its fence. Gated start: queued: true, why (memory|cap|spacing|queue), "
+    "position; capacity = room left."
 )
 _D_WAIT = (
     "Block until the given sessions are done, then return a result per "
@@ -324,13 +328,21 @@ _D_WAIT = (
     "- idle: its turn ended without a report. Check last_reply or read_output.\n"
     '- needs_input: blocked on a dialog. Use read_output(view="screen") and '
     "answer_prompt (or ask your user).\n"
+    "- failed_to_start: its queued start failed (error, prompt_preview): "
+    "respawn it.\n"
     "- usage_limit, paused, offline, gone.\n"
     "With return_on_message (default true) a message for you ends the wait "
     'first: reason "message", returned and marked read. A session that has '
     'already finished returns immediately. mode "all" (default) waits for '
     'every session; "any" returns at the first. On timeout (timeout_s, '
     "default 600, max 1500) it returns {timed_out: true, still_running}: call "
-    "it again. Prefer this over list_sessions and never poll in a loop."
+    "it again; queued {title: {why, position}} names those not started yet. "
+    "Prefer this over list_sessions and never poll in a loop."
+)
+#: wait_for_session's advice on a worker whose queued start failed.
+_FAILED_TO_START_HINT = (
+    "it never started (see error): fix the cause if it is yours, then "
+    "spawn_session it again with the same task"
 )
 _D_ANSWER = (
     "Answer a dialog that a session you manage is blocked on: activity "
@@ -1047,6 +1059,15 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
         for key in _COMPACT_OPTIONAL:
             if row.get(key):
                 out[key] = row[key]
+        # Queued by the launch gate (create or restart): why and where.
+        waiting = _waiting.gate_record(
+            {"waiting_for_memory": row.get("waiting_for_memory")}
+        )
+        if waiting is not None:
+            out["waiting"] = waiting
+        failed = _waiting.start_failure(row)
+        if failed is not None:
+            out["start_failed"] = failed
         return out
 
     def _children(self, flock: Flock) -> List[str]:
@@ -1699,6 +1720,37 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
             )
         return True, "", provider
 
+    def _post_spawn(self, payload: Dict[str, Any], warnings: List[str]) -> Any:
+        """``POST /api/instances``; a 400 about the fork base retries without
+        ``base_branch`` first (still forked from our commit), then without
+        ``base_ref`` too (the repository's HEAD). Mutates ``payload``."""
+        refused_branch = ""
+        while True:
+            try:
+                created = self.api.post("/api/instances", payload, timeout=60.0)
+            except client.ApiError as err:
+                if err.status != 400 or "base" not in err.message:
+                    raise
+                if "base_branch" in payload:
+                    refused_branch = (
+                        "the server refused %r as the worker's base branch (%s); "
+                        "it still forks from your HEAD commit"
+                        % (payload.pop("base_branch"), err.message)
+                    )
+                elif "base_ref" in payload:
+                    refused_branch = ""  # moot: not forked from our HEAD at all
+                    payload.pop("base_ref")
+                    warnings.append(
+                        "the server could not fork from your HEAD (%s); the worker "
+                        "starts from the repository's current HEAD" % err.message
+                    )
+                else:
+                    raise
+                continue
+            if refused_branch:
+                warnings.append(refused_branch)
+            return created
+
     def spawn_session(self, args: dict, ctx: ToolContext) -> dict:
         flock = self.flock()
         me = flock.self_title
@@ -1767,8 +1819,12 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
                 base_sha = gitlocal.head_sha(folder) if folder else None
                 if base_sha:
                     payload["base_ref"] = base_sha
-                    if my_row.get("branch"):
-                        payload["base_branch"] = str(my_row["branch"])
+                    # A detached HEAD's row reads branch "HEAD", which the
+                    # server rejects as a base_branch: base_ref alone still
+                    # forks from our commit.
+                    my_branch = str(my_row.get("branch") or "").strip()
+                    if my_branch and my_branch != "HEAD":
+                        payload["base_branch"] = my_branch
                     if gitlocal.is_dirty(folder):
                         warnings.append(
                             "uncommitted changes in your worktree are NOT visible "
@@ -1849,33 +1905,16 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
                 report_footer(title, me or "", provider) if footer else ""
             )
             try:
-                created = self.api.post("/api/instances", payload, timeout=60.0)
+                created = self._post_spawn(payload, warnings)
                 break
             except client.ApiError as err:
                 if err.status == 409 and not explicit_title and "exists" in err.message:
                     continue  # lost a race for the default title: next number
-                if (
-                    err.status == 400
-                    and "base_ref" in payload
-                    and "base" in err.message
-                ):
-                    # A server that can't fork from a commit: fall back to its
-                    # default base and say so.
-                    payload.pop("base_ref", None)
-                    payload.pop("base_branch", None)
-                    warnings.append(
-                        "the server could not fork from your HEAD (%s); the worker "
-                        "starts from the repository's current HEAD" % err.message
-                    )
-                    base_sha = None
-                    try:
-                        created = self.api.post("/api/instances", payload, timeout=60.0)
-                        break
-                    except client.ApiError as err2:
-                        raise self._api_error(err2, "spawn_session") from None
                 raise self._api_error(err, "spawn_session") from None
         if created is None:
             raise ToolError("spawn_session failed: could not find a free title")
+        if "base_ref" not in payload:
+            base_sha = None  # the fallback dropped it: not forked from our HEAD
         created = created if isinstance(created, dict) else {}
         title = str(created.get("title") or title)
         self.policy.spawned_by_me.add(title)
@@ -1884,28 +1923,23 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
             # The server's launch gate queued it (memory is short, the agent
             # cap is reached, or the last start was seconds ago): queued, not
             # failed. The server creates it once the gate lets it.
-            queued: Dict[str, Any] = {
-                "title": title,
-                "status": "queued: waiting for memory",
-                "queued": True,
-                "ready": False,
-                "reason": created.get("reason") or "",
-                "position": created.get("position"),
-                "base_sha": base_sha,
-                "report_back": footer,
-                "hint": (
-                    "MindFlock starts it on its own — `reason` says what it "
-                    "waits for (memory, the agent cap, or starts spaced a few "
-                    "seconds apart); one at a time, oldest first. Keep "
-                    "working, or wait_for_session, which "
-                    "waits through the queue. Don't spawn more workers to make "
-                    "up for it: they would only queue behind it."
-                ),
-            }
+            queued: Dict[str, Any] = {"title": title}
+            queued.update(_waiting.queued_fields(created))
+            queued.update(
+                {
+                    "ready": False,
+                    "base_sha": base_sha,
+                    "report_back": footer,
+                    "hint": _waiting.QUEUED_HINT
+                    + " Keep working, or wait_for_session, which waits through "
+                    "the queue. Don't spawn more workers to make up for it: "
+                    "they would only queue behind it.",
+                }
+            )
             cap = self._capacity()
             if cap is not None:
                 queued["capacity"] = cap
-                if cap.get("short_mb"):
+                if cap.get("short_mb") and queued["why"] in (None, "memory", "warming"):
                     queued["hint"] += (
                         " One more session needs ~%s MB; %s MB more would have "
                         "to be free." % (cap.get("session_mb"), cap["short_mb"])
@@ -2100,9 +2134,43 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
             # Measured when the report was posted; the row's is the listing's
             # cached value (it can lag the worktree by ~10s).
             out["diff_stat"] = data["diff_stat"]
-        if reason != "gone":
+        if reason == "failed_to_start":
+            rec = _waiting.start_failure(row) or {}
+            out["error"] = (
+                str(rec.get("error") or "") or self._create_failure(title) or ""
+            )
+            if rec.get("prompt_preview"):
+                out["prompt_preview"] = rec["prompt_preview"]
+            out["hint"] = _FAILED_TO_START_HINT
+        elif reason == "gone":
+            why = self._create_failure(title)
+            if why:
+                out["error"] = why
+        else:
             out["last_reply"] = self._last_reply(title)
         return out
+
+    @staticmethod
+    def _with_queued(flock: Flock, result: dict) -> dict:
+        """``result`` plus ``queued: {title: {status, why, position, reason}}``
+        for those of its ``still_running`` whose start (or restart) the launch
+        gate still holds: queued, not working."""
+        queued: Dict[str, dict] = {}
+        for t in result.get("still_running") or []:
+            row = flock.row(t) or {}
+            rec = _waiting.gate_record(
+                {"waiting_for_memory": row.get("waiting_for_memory")}
+            )
+            if rec is not None:
+                queued[t] = dict(rec, status=_waiting.queued_status(rec))
+        if queued:
+            result["queued"] = queued
+            if result.get("hint"):
+                result["hint"] += (
+                    "; those in `queued` have not started yet (see why), "
+                    "MindFlock starts them on its own"
+                )
+        return result
 
     def wait_for_session(self, args: dict, ctx: ToolContext) -> dict:
         titles: List[str] = []
@@ -2121,7 +2189,22 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
         settle_override = args.get("settle_s")
 
         flock = self.flock(retry_s=WAIT_RETRY_S, sleep=ctx.sleep)
-        unknown = [t for t in titles if t not in flock.by_title]
+        done: Dict[str, dict] = {}
+        unknown = []
+        for t in titles:
+            if t in flock.by_title:
+                continue
+            # A queued create that failed and whose row has since expired.
+            why = self._create_failure(t)
+            if why:
+                done[t] = {
+                    "reason": "failed_to_start",
+                    "report": None,
+                    "error": why,
+                    "hint": _FAILED_TO_START_HINT,
+                }
+            else:
+                unknown.append(t)
         if unknown:
             raise ToolError(
                 "no session named %s (call list_sessions to see the titles)"
@@ -2131,11 +2214,12 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
         ctx.start_progress(timeout)
         start_wall = self.clock()
         deadline = self.monotonic() + timeout
-        report_after = {t: self._report_after(t, me, flock.row(t)) for t in titles}
+        report_after = {
+            t: self._report_after(t, me, flock.row(t)) for t in titles if t not in done
+        }
         state: Dict[str, Dict[str, Any]] = {
             t: {"busy": False, "idle_seen": None, "offline_seen": None} for t in titles
         }
-        done: Dict[str, dict] = {}
         inbox: Dict[str, dict] = {}
         anchor: Optional[str] = None
         inbox_ok = bool(me)
@@ -2196,12 +2280,15 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
                 if incoming:
                     ctx.check_cancelled()
                     self._mark_read(me, [m["id"] for m in incoming])
-                    return {
-                        "reason": "message",
-                        "messages": [_compact_message(m) for m in incoming],
-                        "sessions": done,
-                        "still_running": [t for t in titles if t not in done],
-                    }
+                    return self._with_queued(
+                        flock,
+                        {
+                            "reason": "message",
+                            "messages": [_compact_message(m) for m in incoming],
+                            "sessions": done,
+                            "still_running": [t for t in titles if t not in done],
+                        },
+                    )
             # (3) observed state.
             for t in titles:
                 if t in done:
@@ -2211,14 +2298,20 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
                     done[t] = self._finish(t, reason, flock.row(t))
             running = [t for t in titles if t not in done]
             if not running or (mode == "any" and done):
-                return {"sessions": done, "still_running": running}
+                return self._with_queued(
+                    flock, {"sessions": done, "still_running": running}
+                )
             if self.monotonic() >= deadline:
-                return {
-                    "timed_out": True,
-                    "sessions": done,
-                    "still_running": running,
-                    "hint": "call wait_for_session again with the titles in still_running",
-                }
+                return self._with_queued(
+                    flock,
+                    {
+                        "timed_out": True,
+                        "sessions": done,
+                        "still_running": running,
+                        "hint": "call wait_for_session again with the titles in "
+                        "still_running",
+                    },
+                )
             ctx.sleep(self.wait_poll_s)
             flock = self.flock(retry_s=WAIT_RETRY_S, sleep=ctx.sleep)
 
@@ -2233,6 +2326,13 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
         """One poll's verdict for one session: a done reason, or None."""
         if row is None:
             return "gone"
+        if _waiting.start_failure(row) is not None:
+            return "failed_to_start"  # its queued create failed: respawn it
+        if row.get("waiting_for_memory"):
+            # The launch gate holds its start or restart: its row may read
+            # loading, paused or offline meanwhile, but it is not finished.
+            st["offline_seen"] = None
+            return None
         status = str(row.get("status") or "")
         activity = str(row.get("activity") or "")
         if row.get("sleeping") and activity == "offline":

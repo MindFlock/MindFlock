@@ -490,6 +490,13 @@ def tick(
             from backend.web import server as srv  # type: ignore[no-redef]
         elif sleeper is None and _under_pytest():
             return out
+        if sleeper is None:
+            # Two servers on one state dir both run this tick over the same
+            # agents: only the one holding the lease sheds (core.sleep).
+            from backend.web.core import sleep as _sleep
+
+            if not _sleep.hold_lease("memory-shield", 30.0):
+                return out
         slept = _shed(srv, snap, why, now, sleeper)
         out["shed"] = slept
         with _LOCK:

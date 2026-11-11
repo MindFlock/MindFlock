@@ -57,8 +57,9 @@ a reboot every session not on screen sat Offline until someone clicked it.
 
 * **After a kill** — :func:`observe` / :func:`auto_tick`, driven by the
   server's 4s instances tick: an agent this server saw running that then dies
-  to SIGKILL (exit marker 137, or no marker and its hooks last said
-  ``working`` — a SIGKILL fires no Stop hook) is relaunched through
+  to the OOM killer (exit marker 137; 143 right after an OOM kill — systemd
+  stopping its scope, :func:`oom_seen_recently`; or no marker and its hooks
+  last said ``working`` — a SIGKILL fires no Stop hook) is relaunched through
   :func:`relaunch` (so a mid-turn death gets its continue) once memory reads
   ok again — one at a time, :data:`GAP_SECONDS` apart, at most
   :data:`AUTO_MAX_PER_WINDOW` times per session per hour; after that it stays
@@ -368,6 +369,8 @@ def _revive_one(
     launch_gate.note_start(title)
     _name, err, continued = relaunch(inst, title, srv, release=release_held)
     if err is not None:
+        # Not an agent warming up: hand the launch slot back.
+        launch_gate.unnote_start(title)
         _info("revive %s: not started (%s)", title, err)
         return False, err
     _info(
@@ -610,8 +613,8 @@ async def sweep(
                     args={"include_quit": include_quit, "release_held": release_held},
                 )
                 waiting.append(title)
-            except launch_gate.QueueFull:
-                pass
+            except launch_gate.QueueFull as full:
+                _info("revive %s: left offline, not queued (%s)", title, full)
 
         queue: "asyncio.Queue[str]" = asyncio.Queue()
         for t in todo:
@@ -737,22 +740,137 @@ def _auto_on() -> bool:
     return not restart._under_pytest()
 
 
-def killed_code(srv, inst, title: str) -> Tuple[bool, Optional[int]]:
-    """``(killed, exit_code)``: whether ``title``'s dead agent died to SIGKILL —
-    the OOM killer's signature, never a person's quit. Exit marker 137 says so
-    outright; no marker at all (a launch with no exit wrapper, the engine's
-    first start) counts only when the agent died mid-turn
-    (:func:`died_mid_turn`: a SIGKILL fires no Stop/SessionEnd hook, while a
-    quit does). Blocking (file + tmux reads). Never raises."""
+# --------------------------------------------------------------------------- #
+# OOM evidence: was an exit 143 the OOM killer's doing?
+# --------------------------------------------------------------------------- #
+# An agent runs in its own systemd scope (providers.agent_limits). Before
+# that scope carried ``OOMPolicy=continue``, the OOM killer taking ONE process
+# in it (a pytest worker over MemoryMax) made systemd STOP the whole unit:
+# the agent got SIGTERM and exited 143 — read as "the agent crashed", and
+# never auto-revived (only 137 was). Scopes launched before the fix still
+# behave that way, and a machine-wide OOM can end the same. So a 143 counts
+# as killed when an OOM kill was seen shortly before: the fleet slice's own
+# ``memory.events`` ``oom_kill`` counter rising (hierarchical: every agent
+# scope under it, and it outlives a collected scope), or the kernel-wide
+# counter :mod:`backend.memory_pressure` already tracks.
+
+#: Exit code of a process ended by SIGTERM (128 + 15) — how systemd stops a
+#: unit, OOMPolicy=stop included.
+TERM_EXIT_CODE = 143
+#: An OOM kill this recent explains a SIGTERM/SIGKILL death.
+OOM_EVIDENCE_SECONDS = 300.0
+_OOM_LOCK = threading.Lock()
+#: The fleet slice's last ``oom_kill`` count and the epoch it last rose.
+_OOM_SEEN: Dict[str, Optional[float]] = {"count": None, "at": None}
+
+
+def _fleet_oom_events_path() -> Optional[str]:
+    """``memory.events`` of the agents' slice under this user's systemd
+    manager (cgroup v2), or None where there is no such thing."""
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        return None
+    from backend.providers import agent_limits
+
+    uid = getuid()
+    stem = agent_limits.FLEET_SLICE
+    if stem.endswith(".slice"):
+        stem = stem[: -len(".slice")]
+    parts = stem.split("-")
+    # systemd nests "a-b.slice" inside "a.slice".
+    chain = ["-".join(parts[: i + 1]) + ".slice" for i in range(len(parts))]
+    return os.path.join(
+        "/sys/fs/cgroup/user.slice",
+        "user-%d.slice" % uid,
+        "user@%d.service" % uid,
+        *chain,
+        "memory.events",
+    )
+
+
+def _fleet_oom_kills() -> Optional[int]:
+    """The fleet slice's cumulative ``oom_kill`` count, or None."""
+    try:
+        path = _fleet_oom_events_path()
+        if not path:
+            return None
+        with open(path, encoding="ascii", errors="replace") as fh:
+            for line in fh:
+                k, _, v = line.partition(" ")
+                if k == "oom_kill":
+                    return int(v.strip())
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _machine_oom_kills() -> int:
+    """Recent kernel-wide OOM kills (memory_pressure's window), 0 if none."""
+    try:
+        return int(memory_pressure.snapshot().get("oom_kills") or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def note_oom_counters(now: Optional[float] = None) -> None:
+    """Read the fleet slice's OOM counter and stamp when it rises. Run each
+    instances tick (:func:`auto_tick`) so a baseline exists before a death.
+    Never raises."""
+    if now is None:
+        now = time.time()
+    count = _fleet_oom_kills()
+    if count is None:
+        return
+    with _OOM_LOCK:
+        prev = _OOM_SEEN["count"]
+        if prev is not None and count > prev:
+            _OOM_SEEN["at"] = now
+        _OOM_SEEN["count"] = count
+
+
+def oom_seen_recently(now: Optional[float] = None) -> bool:
+    """Whether an OOM kill — in the agents' slice or anywhere on the machine
+    — happened within :data:`OOM_EVIDENCE_SECONDS`. Never raises."""
+    if now is None:
+        now = time.time()
+    try:
+        note_oom_counters(now)
+        with _OOM_LOCK:
+            at = _OOM_SEEN["at"]
+        if at is not None and now - float(at) < OOM_EVIDENCE_SECONDS:
+            return True
+        return _machine_oom_kills() > 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _oom_killed_code(code: Optional[int], now: Optional[float] = None) -> bool:
+    """An exit code the OOM killer explains: 137 (SIGKILL) always; 143
+    (SIGTERM — systemd stopping the agent's scope under OOMPolicy=stop) when
+    an OOM kill was seen just before."""
     from backend.providers import launch_script
 
+    if code == launch_script.KILLED_EXIT_CODE:
+        return True
+    return code == TERM_EXIT_CODE and oom_seen_recently(now)
+
+
+def killed_code(srv, inst, title: str) -> Tuple[bool, Optional[int]]:
+    """``(killed, exit_code)``: whether ``title``'s dead agent died to the OOM
+    killer, never a person's quit. Exit marker 137 (SIGKILL) says so outright;
+    143 (SIGTERM) does when an OOM kill was seen just before
+    (:func:`oom_seen_recently` — systemd stopped the agent's scope over one
+    child's OOM kill); no marker at all (a launch with no exit wrapper, the
+    engine's first start) counts only when the agent died mid-turn
+    (:func:`died_mid_turn`: a SIGKILL fires no Stop/SessionEnd hook, while a
+    quit does). Blocking (file + tmux reads). Never raises."""
     try:
         from backend.session import tmux
 
         code = srv._read_exit_marker(tmux.to_mindflock_tmux_name(title))
     except Exception:  # noqa: BLE001
         code = None
-    if code == launch_script.KILLED_EXIT_CODE:
+    if _oom_killed_code(code):
         return True, code
     if code is None and died_mid_turn(srv, inst, title):
         return True, None
@@ -781,8 +899,9 @@ def hold_reason_after_death(srv, inst, title: str) -> Optional[str]:
     (natural exit code), a sleep (stopped on purpose), a peer-shared session
     (the peer service owns its launches), an agent that is somehow up again,
     or no exit marker with no sign it died mid-turn (undecidable — the same
-    line :func:`killed_code` draws). Killed by SIGKILL → ``out of memory
-    (killed)``; any other unnatural exit → ``the agent crashed``. Blocking
+    line :func:`killed_code` draws). Killed by the OOM killer (137, or 143
+    right after an OOM kill) → ``out of memory (killed)``; any other
+    unnatural exit → ``the agent crashed``. Blocking
     (marker + tmux reads). Never raises."""
     from backend.web.core import held as _held
     from backend.web.core import sleep as _sleep
@@ -803,6 +922,20 @@ def hold_reason_after_death(srv, inst, title: str) -> Optional[str]:
         return _held.REASON_CRASH
     except Exception:  # noqa: BLE001
         return None
+
+
+def _indeterminate(title: str) -> bool:
+    """Whether ``title``'s last activity probe got NO answer from tmux
+    (:func:`backend.web.core.agent_state.last_probe` ``"unknown"``) and its
+    absence was never confirmed — an "offline" made of it is not a death."""
+    try:
+        from backend.web.core import agent_state as _agent_state
+
+        return _agent_state.last_probe(
+            title
+        ) == "unknown" and not _agent_state.offline_confirmed(title)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def observe(srv, title: str, inst, activity: str, now: Optional[float] = None):
@@ -826,6 +959,10 @@ def observe(srv, title: str, inst, activity: str, now: Optional[float] = None):
 
                 if _held.release(title):
                     _info("held %s: released (its agent is running again)", title)
+            return
+        if _indeterminate(title):
+            # The probe behind this "offline" got no answer (a has-session
+            # timeout under load, a tmux error): no evidence of a death.
             return
         with _AUTO_LOCK:
             if title not in _AUTO_LIVE:
@@ -912,6 +1049,9 @@ def auto_tick(
     if now is None:
         now = time.time()
     start = start or _start_thread
+    # The OOM counter's baseline, kept fresh so a death can be read against
+    # it (:func:`oom_seen_recently`). One small file read per tick.
+    note_oom_counters(now)
     try:
         with _AUTO_LOCK:
             if not _AUTO_PENDING:
@@ -1003,6 +1143,7 @@ def _auto_revive_one(srv, title: str, nth: int = 1) -> None:
         launch_gate.note_start(title, auto=True)
         _name, err, continued = relaunch(inst, title, srv)
         if err is not None:
+            launch_gate.unnote_start(title)
             with _AUTO_LOCK:
                 _AUTO_GAVE_UP[title] = "Restart after it was killed failed: %s" % err
             _info("auto-revive %s: not started (%s)", title, err)
@@ -1043,6 +1184,59 @@ def _auto_reset_for_tests() -> None:
         _AUTO_GAVE_UP.clear()
         _AUTO_REVIVED_AT.clear()
         _AUTO_RUN.update({"busy": False, "last": 0.0, "held": False})
+    with _OOM_LOCK:
+        _OOM_SEEN.update({"count": None, "at": None})
+
+
+#: SIGHUP's exit code: the agent's terminal went away (its tmux server died
+#: with the machine/WSL) — the session was simply not running afterwards.
+_HANGUP_EXIT_CODE = 129
+
+
+def _not_running_reason(held_mod) -> str:
+    """``held.REASON_NOT_RUNNING`` ("it was not running when the server
+    started") once :mod:`backend.web.core.held` defines it — its REASONS set
+    is closed (an unknown reason is stored as "crashed") — else the old
+    ``the server restarted``."""
+    return getattr(held_mod, "REASON_NOT_RUNNING", held_mod.REASON_RESTART)
+
+
+def boot_reason(srv, inst, code: Optional[int], now: Optional[float] = None) -> str:
+    """Why :func:`hold_on_boot` holds a session whose agent is not running,
+    from its exit marker: the OOM killer's codes (137; 143 right after an OOM
+    kill) → ``out of memory (killed)``; another unnatural exit → ``the agent
+    crashed``; no marker, a hang-up (its terminal died with the machine) or
+    anything undecidable → it was not running when the server started. The
+    restart itself is never the reason: the agent may have died hours
+    before it."""
+    from backend.web.core import held as _held
+
+    try:
+        if code is None or code == _HANGUP_EXIT_CODE:
+            return _not_running_reason(_held)
+        if _oom_killed_code(code, now):
+            return _held.REASON_KILLED
+        provider = providers.resolve(getattr(inst, "Program", "") or "")
+        if not provider.is_natural_exit(code):
+            return _held.REASON_CRASH
+    except Exception:  # noqa: BLE001
+        pass
+    return _not_running_reason(_held)
+
+
+def _boot_probe(srv, title: str) -> str:
+    """``"live"`` / ``"gone"`` / ``"unknown"`` for ``title``'s agent tmux
+    (:func:`backend.web.core.agent_sessions.session_probe`; ``srv`` may
+    provide its own ``session_probe``). Never raises."""
+    try:
+        from backend.session import tmux as _tmux
+
+        probe = getattr(srv, "session_probe", None)
+        if probe is None:
+            from backend.web.core.agent_sessions import session_probe as probe
+        return str(probe(_tmux.to_mindflock_tmux_name(title)))
+    except Exception:  # noqa: BLE001
+        return "unknown"
 
 
 def hold_on_boot(srv=None, now: Optional[float] = None) -> dict:
@@ -1052,13 +1246,13 @@ def hold_on_boot(srv=None, now: Optional[float] = None) -> dict:
     ``general.revive_on_start`` off (the default) every session whose
     persisted state says its agent was running — exactly the ones the
     startup sweep would have revived, a usage-limited one included — and
-    whose agent tmux is gone is held: ``out of memory (killed)`` when its
-    exit marker says SIGKILL, else ``the server restarted``. Holds already on
-    disk stay; those of sessions no longer in the engine go. With the
-    setting on, every hold is dropped instead (old behaviour: the sweep
-    revives them). → ``{"held": [new titles], "total": n, "released": n}``.
-    Blocking (tmux reads) — run it off the event loop. Never raises."""
-    from backend.providers import launch_script
+    whose agent tmux is CONFIRMED gone (tmux answered; a probe that timed
+    out holds nothing) is held, with the reason its exit marker gives
+    (:func:`boot_reason`). Holds already on disk stay; those of sessions no
+    longer in the engine go. With the setting on, every hold is dropped
+    instead (old behaviour: the sweep revives them). → ``{"held": [new
+    titles], "total": n, "released": n}``. Blocking (tmux reads) — run it off
+    the event loop. Never raises."""
     from backend.session import tmux as _tmux
     from backend.web.core import held as _held
 
@@ -1092,15 +1286,19 @@ def hold_on_boot(srv=None, now: Optional[float] = None) -> dict:
                     continue  # paused, peer, no workspace, asleep, quit…
                 if _alive(srv, title):
                     continue
+                probe = _boot_probe(srv, title)
+                if probe != "gone":
+                    # No answer from tmux (a has-session timeout under the
+                    # boot's load, a tmux error): the agent may well be alive.
+                    # Holding it would refuse its pane; the instances tick
+                    # decides once tmux answers.
+                    _info("held %s: not checked at boot (tmux probe: %s)", title, probe)
+                    continue
                 try:
                     code = srv._read_exit_marker(_tmux.to_mindflock_tmux_name(title))
                 except Exception:  # noqa: BLE001
                     code = None
-                reason = (
-                    _held.REASON_KILLED
-                    if code == launch_script.KILLED_EXIT_CODE
-                    else _held.REASON_RESTART
-                )
+                reason = boot_reason(srv, inst, code, now)
                 if _held.hold(title, reason):
                     out["held"].append(title)
             except Exception:  # noqa: BLE001 — one bad session

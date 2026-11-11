@@ -1005,8 +1005,9 @@ class TestSpawn:
         assert out["reason"] == reason and out["position"] == 1
         assert "wait_for_session" in out["hint"]
         # The gate also queues for the agent cap and start spacing: the hint
-        # points at `reason` instead of always blaming memory.
-        assert "`reason` says what it waits for" in out["hint"]
+        # points at `why` instead of always blaming memory.
+        assert "`why` says what it waits for" in out["hint"]
+        assert out["why"] is None  # an older server's body: no why
         assert "once memory allows" not in out["hint"]
         assert "orch-w1" in box.policy.spawned_by_me
         assert ctx.progress_total is None or ctx.progress_total == 0
@@ -1015,6 +1016,64 @@ class TestSpawn:
             {"titles": ["orch-w1"], "timeout_s": 30}, _ctx(clock)
         )
         assert out["timed_out"] is True and out["still_running"] == ["orch-w1"]
+
+    def test_a_start_queued_for_the_agent_cap_says_so(self):
+        """The gate's record names why it queued: the status is worded from
+        it, and a full agent cap is never blamed on memory."""
+        clock = FakeClock()
+        box, api, _ = make_box(_tree(), clock=clock)
+        reason = "the live-agent cap (6) is reached"
+        record = {
+            "kind": "spawn",
+            "since": 1.0,
+            "reason": reason,
+            "position": 2,
+            "creates": True,
+            "why": "cap",
+        }
+
+        def queued(payload, q):
+            api.rows.append(
+                row(
+                    payload["title"],
+                    status="loading",
+                    activity="offline",
+                    activity_since=0,
+                    parent="orch",
+                    spawned=True,
+                    pending=True,
+                    waiting_for_memory=dict(record),
+                )
+            )
+            return {
+                "title": payload["title"],
+                "queued": True,
+                "status": "queued: waiting for memory",
+                "reason": reason,
+                "position": 2,
+                "waiting_for_memory": dict(record),
+            }
+
+        api.top_routes[("POST", "/api/instances")] = queued
+        api.top_routes[("GET", "/api/memory/capacity")] = {
+            "room": 0,
+            "session_mb": 950,
+            "short_mb": 400,
+        }
+        ctx = _ctx(clock)
+        out = box.spawn_session({"prompt": "p"}, ctx)
+        assert out["status"] == "queued: waiting for a free agent slot"
+        assert out["queued"] is True and out["ready"] is False
+        assert out["why"] == "cap" and out["position"] == 2
+        assert out["reason"] == reason
+        assert "MB more would have to be free" not in out["hint"]
+        assert ctx.slept == []
+        # wait_for_session names it as queued, not as still working.
+        out = box.wait_for_session(
+            {"titles": ["orch-w1"], "timeout_s": 30}, _ctx(clock)
+        )
+        assert out["timed_out"] is True and out["still_running"] == ["orch-w1"]
+        assert out["queued"]["orch-w1"]["why"] == "cap"
 
     def test_vanished_while_loading_is_an_error(self):
         clock = FakeClock()
@@ -1066,6 +1125,15 @@ class TestSpawn:
         out = box.spawn_session({"prompt": "p"}, _ctx(clock))
         assert out["base_sha"] is None
         assert "could not fork from your HEAD" in out["warnings"][0]
+        # Two steps: without base_branch first, then without base_ref; only
+        # the warning that is true in the end is given.
+        posts = [c[2] for c in api.calls if c[:2] == ("POST", "/api/instances")]
+        assert [sorted(k for k in p if k.startswith("base")) for p in posts] == [
+            ["base_branch", "base_ref"],
+            ["base_ref"],
+            [],
+        ]
+        assert len(out["warnings"]) == 1
 
     def test_create_error_surfaces(self):
         box, api, clock = make_box(_tree())
