@@ -52,7 +52,18 @@ word (``voice_words``' ``undo``).
 The default is ``{"kind": "prompt"}``: anything that is not plainly a command
 is words for the current session. A false command is worse than a missed one
 (the missed one still reaches the agent), so every pattern matches the WHOLE
-phrase.
+phrase. A prompt that nearly was a command — a plain switch, status, read,
+question or interrupt naming no session, an answer with nothing asking —
+says so in ``near`` (:func:`_near`: ``{"kind", "why", "arg"?, "suggest"?}``)
+for the client to caption; the words are still typed. Fillers said before a
+navigation or read command ("um", "so", "now", "okay so") are dropped
+(:data:`_FILLER_RE`), never before an answer, a send or a new session. A
+name that matches nothing but sounds like exactly one session's
+(:func:`_near_row`) is that session after a switch verb.
+
+Every "Which one: a or b?" carries a ``pending`` pick, and its ``then`` —
+what the picked session was wanted for (an interrupt, an answer, a question,
+a read, a status) — so "the first one" does that to it (:func:`pick`).
 """
 
 from __future__ import annotations
@@ -85,6 +96,7 @@ __all__ = [
     "find_sessions",
     "finish",
     "fresh_reply",
+    "heard_text",
     "is_select",
     "list_say",
     "match_repo",
@@ -162,7 +174,36 @@ _ORDS = {
         "first second third fourth fifth sixth seventh eighth ninth tenth".split()
     )
 }
-_NUM_RX = r"(?:[1-9][0-9]?|" + "|".join(_NUMS) + ")"
+#: The tens, said: "twenty" … "ninety", and "twenty one" … "ninety nine"
+#: (a hyphen is a space by then) — a count to 99 said in words.
+_TENS = {
+    w: (i + 2) * 10
+    for i, w in enumerate(
+        "twenty thirty forty fifty sixty seventy eighty ninety".split()
+    )
+}
+_SPOKEN = dict(_NUMS)
+_SPOKEN.update(_TENS)
+_SPOKEN.update(
+    {"%s %s" % (t, u): n + _NUMS[u] for t, n in _TENS.items() for u in list(_NUMS)[:9]}
+)
+#: What a recogniser writes for a SESSION's number said alone after
+#: "session" / "window" / "row" ("session to", "session for"): never read
+#: as a number anywhere else (an option, a dialog's answer — a wrong number
+#: there is costly).
+_SESSION_HOMOPHONES = {
+    "won": 1,
+    "to": 2,
+    "too": 2,
+    "free": 3,
+    "tree": 3,
+    "for": 4,
+    "fore": 4,
+    "ate": 8,
+}
+_NUM_RX = (
+    r"(?:[1-9][0-9]?|" + "|".join(sorted(_SPOKEN, key=lambda s: (-len(s), s))) + ")"
+)
 _ORD_RX = r"(?:[1-9][0-9]?(?:st|nd|rd|th)|" + "|".join(_ORDS) + ")"
 # The verbs that move the focus: "(switch|go|…) (over )?to …" ("go back to the
 # old approach" stays words for the agent).
@@ -193,6 +234,10 @@ _VARIANTS = {
 }
 #: The kinds whose words the person may change (``voice.words``).
 _WORD_KINDS = ("hush", "stop")
+#: ``voice_words.KIN`` by phrase, whatever the kind.
+_KIN = {p: tuple(kin) for by in _voice_words.KIN.values() for p, kin in by.items()}
+#: The :data:`_CMDS` kinds matched past the fillers (``command``'s ``nav``).
+_NAV_CMDS = ("list", "needs", "status", "condense", "repeat")
 #: The fillers said before a stop phrase that leave it the whole phrase
 #: ("Um, that's all."): ``voice_words.STOP_FILLERS``, the clients' rule for
 #: a stop phrase said on its own.
@@ -208,6 +253,10 @@ def _words_rx(phrases: Tuple[str, ...]) -> "re.Pattern":
     list."""
     parts = [_VARIANTS[p] for p in phrases if p in _VARIANTS]
     literal = [norm(p) for p in phrases if p not in _VARIANTS]
+    # The older wordings each phrase brings along, as voice_words.KIN (the
+    # clients' table) lists them: the one source, so "ok stop" means here
+    # what it means to voice_words.control_kind.
+    literal += [norm(k) for p in phrases for k in _KIN.get(p, ())]
     literal += [norm(f) for f in _voice_words.heard_of(phrases)]
     alt = _voice_words.phrase_regex([p for p in literal if p])
     parts.append(alt.replace("'", "'?"))
@@ -261,19 +310,36 @@ _CMDS = [
 
 # "switch to session three", "go to 2", "session three", "number 4", "the
 # third session" — the client's own numbering (its rail / list order).
+# "Session number three", "row 2" (the rail's rows: the client says when one
+# is a window), "session twenty one"; "session to" / "session for" — the
+# recogniser's homophones of a number — only right after the noun.
+_NOUN_NUM_RX = r"(?:(?:session|window|row)(?: number)?|number)"
 _INDEX_RES = [
-    re.compile(r"^%s (?:(?:session|window|number) )?(%s)$" % (_VERB_RX, _NUM_RX)),
-    re.compile(r"^%s the (%s) (?:one|session|window)$" % (_VERB_RX, _ORD_RX)),
-    re.compile(r"^(?:session|window|number) (%s)$" % _NUM_RX),
-    re.compile(r"^the (%s) (?:session|window)$" % _ORD_RX),
+    re.compile(r"^%s (?:%s )?(%s)$" % (_VERB_RX, _NOUN_NUM_RX, _NUM_RX)),
+    re.compile(r"^%s the (%s) (?:one|session|window|row)$" % (_VERB_RX, _ORD_RX)),
+    re.compile(r"^%s (%s)$" % (_NOUN_NUM_RX, _NUM_RX)),
+    re.compile(r"^the (%s) (?:session|window|row)$" % _ORD_RX),
+    re.compile(
+        r"^(?:%s )?(?:session|window|row)(?: number)? (%s)$"
+        % (_VERB_RX, "|".join(_SESSION_HOMOPHONES))
+    ),
 ]
 # "the second one" alone: an option when the session is asking, else a session.
 _PICK_RE = re.compile(r"^(?:the )?(%s) one$" % _ORD_RX)
 # "next session", "go to the previous one", a bare "next" — the client's own
 # order ("go back" and "last session" are ``switch_back``: :data:`_BACK_RE`).
 _REL_RE = re.compile(
-    r"^(?:(?:%s )?(?:the )?(next|previous|prev) (?:session|one|window)"
+    r"^(?:(?:(?:can|could|would) you |let'?s |i want to |i'd like to |i wanna )?"
+    r"(?:%s )?(?:the )?(next|previous|prev) (?:session|one|window)"
     r"|(next|previous))$" % _VERB_RX
+)
+# Said before a navigation or read command and never part of it: "um,
+# switch to docs", "so scroll up", "okay so, status" (the phone's "ok" /
+# "okay" lead is already gone: _Words). Only for the commands that move or
+# read — never before an answer, a send or a new session.
+_FILLER_RE = re.compile(
+    r"^(?:(?:um+|uh+|uhm|er+|erm|hmm+|mm+|ah|oh|so|alright|all right|right|well"
+    r"|and|now|then|actually|anyway) )+"
 )
 # --- acting on the session: scroll, interrupt; where am I, back, help --------
 # Said around a command and never part of it: "now scroll up", "mindflock,
@@ -301,6 +367,17 @@ _SCROLL_RE = re.compile(
     r"^(?:scroll|roll|growl|crawl)%s (?:back )?(?P<dir>up|down)%s$"
     % (_SCROLL_OBJ, _SCROLL_AMT)
 )
+# The looser ways a scroll is said: "scroll a bit up" (the amount first),
+# "scroll up more", "scroll way up" (three pages), "go up", "move down",
+# "up" / "down" alone, "next page" / "previous page".
+_SCROLL_LOOSE_RE = re.compile(
+    r"^(?:(?:scroll|roll)(?: (?:(?P<bit>a bit|a little(?: bit)?|a touch|a tad"
+    r"|slightly)|(?P<way>way|way way|a lot|lots)|some|further))?"
+    r" (?P<dir>up|down)(?: (?:more|further|some more|(?P<bit3>a bit|a little)(?: more)?))?"
+    r"|(?:go|move) (?P<dir2>up|down)(?: (?P<bit2>a bit|a little(?: bit)?))?"
+    r"|(?P<dir3>up|down)"
+    r"|(?P<pg>next|previous|prev) page)$"
+)
 _PAGE_RE = re.compile(
     r"^(?P<half>half )?page ?(?P<dir>up|down)(?: (?P<n>%s) times| (?P<twice>twice))?$"
     % _NUM_RX
@@ -312,7 +389,8 @@ _SCROLL_END_RE = re.compile(
     r"(?P<end>top|bottom|end|beginning|latest|newest)"
     r"(?: of (?:it|the (?:output|screen|terminal|session|page|log|conversation)))?"
     r"|scroll all the way (?P<dir>up|down)"
-    r"|show(?: me)? the (?P<last>latest|newest|end|bottom)(?: output)?)$"
+    r"|show(?: me)? the (?P<last>latest|newest|end|bottom)(?: output)?"
+    r"|(?:(?:all the way )?to )?the (?:very )?(?P<bare>top|bottom)|(?P<bot>bottom))$"
 )
 _SCROLL_ENDS = {
     "top": "top",
@@ -358,12 +436,14 @@ _BACK_RE = re.compile(
     r"(?: (?:again|to (?:the )?(?:last|previous|other) (?:one|session|window)"
     r"|to where i was))?"
     r"|back|(?:(?:switch|go|change|jump) (?:over )?to )?(?:the )?last (?:session|window"
-    r"|one)|the one before(?: (?:that|this))?)$"
+    r"|one)|the one before(?: (?:that|this))?"
+    r"|(?:(?:switch|go|change|jump|flip|hop) (?:over )?to )?the other (?:one|session|window))$"
 )
 _WHERE_RE = re.compile(
     r"^(?:where am i|where are we|(?:which|what) session (?:is this|am i (?:in|on)"
     r"|are we (?:in|on)|is open)|what(?:'?s| is) (?:this|the current) session"
-    r"(?: called)?|which one am i (?:in|on))$"
+    r"(?: called)?|which one am i (?:in|on)|what am i looking at"
+    r"|(?:which|what) session is (?:that|it)|which one is (?:this|that))$"
 )
 _COMMANDS_RE = re.compile(
     r"^(?:what can i say(?: to you| here)?|what (?:can|do) i say"
@@ -423,6 +503,9 @@ _BODY_WORDS = frozenset(
     " always and ask me again never thanks thank you".split()
 )
 _PICK_NOUNS = ("one", "option", "choice")
+# "Stop it", "stop that": No to a permission dialog, else an interrupt
+# (:func:`finish`).
+_STOP_IT_RE = re.compile(r"^stop (?:it|that|this)$")
 # Who "it" is: the session being talked to.
 _SELF = frozenset(
     (
@@ -488,6 +571,9 @@ _SHOW_RE = re.compile(
     r"^%s?(?:open(?: up)?|show(?: me)?|focus(?: on)?|select|pull up|bring up"
     r"|go back to|back to|talk to|let me see) (?!(?:over )?to )(.+)$" % _POLITE_RX
 )
+#: Said before a name that is likely no session's ("the tests", "my code").
+_ARTICLES = frozenset(("the", "my", "a", "an", "this", "that", "our", "your", "these"))
+_SWITCH_THE_RE = re.compile(r"^(?:switch|switched) the (.+)$")
 #: Words said around a session's name, never part of it.
 _AROUND = frozenset(
     "the my a an our this that session sessions window windows one ones called"
@@ -567,6 +653,7 @@ GUIDE = (
     ("switch", "switch to <name>", "Go to a session by its name"),
     ("switch", "show me <name>", "Go to a session by its name"),
     ("switch_index", "session three", "Go to a session by its number in the list"),
+    ("switch_back", "the other one", "Back to the session you were on before"),
     ("switch_rel", "next session", "Go to the next session in the list"),
     ("switch_rel", "previous session", "Go to the session above in the list"),
     ("switch_back", "go back", "Back to the session you were on before"),
@@ -576,6 +663,7 @@ GUIDE = (
     ("scroll", "scroll up a bit", "Scroll half a page"),
     ("scroll", "scroll up five lines", "Scroll by lines or pages"),
     ("scroll", "page up", "Scroll up a page"),
+    ("scroll", "go down", "Scroll down a page"),
     ("scroll", "scroll to the top", "Jump to the oldest output"),
     ("scroll", "back to the bottom", "Back to the latest output"),
     ("scroll_more", "more", "Scroll again the same way, right after a scroll"),
@@ -592,6 +680,11 @@ GUIDE = (
     ("new", "new session in <project> to <task>", "Start a new session"),
     ("answer", "yes", "Answer a question: yes, no, always, option two"),
     ("answer", "tell <name> yes", "Answer another session's question"),
+    (
+        "answer",
+        "stop it",
+        "No to a session's question; with none, stop the agent",
+    ),
     ("radio", "over", "Send what you said, and keep listening"),
     ("radio", "over and out", "Send it and stop listening"),
     ("radio", "disregard", "Throw away everything said so far"),
@@ -714,7 +807,7 @@ def _count(word: str) -> Optional[int]:
     m = re.fullmatch(r"([1-9][0-9]?)(?:st|nd|rd|th)?", word or "")
     if m:
         return int(m.group(1))
-    return _NUMS.get(word) or _ORDS.get(word)
+    return _SPOKEN.get(word) or _ORDS.get(word)
 
 
 def _ordinal(word: str) -> Optional[int]:
@@ -738,11 +831,20 @@ def _switch_command(text: str) -> Optional[dict]:
     m = _SHOW_RE.match(text) or _UP_RE.match(text)
     if m:
         named = any(x in ("session", "sessions", "window") for x in m.group(1).split())
+        # A soft verb is no plain switch: a miss is words, no ``near``
+        # ("open a new session tab") unless the name sounds like one.
         return {
             "kind": "switch",
             "arg": m.group(1),
             "mode": "must" if named else "strict",
+            "quiet": True,
         }
+    m = _SWITCH_THE_RE.match(text)
+    if m:
+        # "switch the docs": the recogniser's "the" for "to" — a switch only
+        # when a session is called that ("switch the driver to postgres" is
+        # words for the agent).
+        return {"kind": "switch", "arg": m.group(1), "mode": "must", "quiet": True}
     return None
 
 
@@ -794,9 +896,24 @@ def scroll_of(text) -> Optional[dict]:
             "amount": "half" if m.group("half") else "page",
             "count": count,
         }
+    m = _SCROLL_LOOSE_RE.match(t)
+    if m:
+        pg = m.group("pg")
+        direction = (
+            m.group("dir")
+            or m.group("dir2")
+            or m.group("dir3")
+            or ("down" if pg == "next" else "up")
+        )
+        if m.group("bit") or m.group("bit2") or m.group("bit3"):
+            amount, count = "half", 1
+        else:
+            amount, count = "page", 3 if m.group("way") else 1
+        return {"kind": "scroll", "dir": direction, "amount": amount, "count": count}
     m = _SCROLL_END_RE.match(t)
     if m:
-        end = m.group("end") or m.group("last")
+        # "top" alone is no scroll: it is how "stop" is often written.
+        end = m.group("end") or m.group("last") or m.group("bare") or m.group("bot")
         if end:
             amount = _SCROLL_ENDS[end]
         else:
@@ -1080,6 +1197,13 @@ def _assistant_command(w: "_Words", words: Optional[dict]) -> Optional[dict]:
             return None
         start = w.at(m.start("rest"))
     rest = w.original(start)
+    if at is not None:
+        # A misheard word can carry the request's first word off with it
+        # ("Mindful, I've opened settings"): voice_words knows the request.
+        fixed = _voice_words.rest_after(" ".join(w.toks), at).split()
+        said = rest.split()
+        if fixed and len(fixed) == len(said) and norm(fixed[0]) != norm(said[0]):
+            rest = " ".join(fixed[:1] + said[1:])
     if not norm(rest):
         return None
     got = command(rest, words)
@@ -1141,7 +1265,12 @@ def command(text, words: Optional[dict] = None) -> Optional[dict]:
             "repo": " ".join(w.words[p["repo"][0] : p["repo"][1]]) if p["repo"] else "",
             "task": w.original(p["task"]) if p["task"] is not None else "",
         }
-    bare = _bare(w.text)
+    # The navigation and read commands are matched past the fillers said
+    # before them ("um, switch to docs", "so scroll up", "now status"):
+    # ``nav``. Answers, sends and new sessions never are.
+    nav = _FILLER_RE.sub("", w.text) or w.text
+    filled = nav != w.text
+    bare = _bare(nav)
     got = scroll_of(bare)
     if got is not None:
         return got
@@ -1157,21 +1286,34 @@ def command(text, words: Optional[dict] = None) -> Optional[dict]:
     ):
         if rx.match(bare):
             return {"kind": kind}
-    m = _REL_RE.match(w.text)
+    m = _REL_RE.match(nav)
     if m:
         rel = m.group(1) or m.group(2)
         return {"kind": "switch_rel", "delta": 1 if rel == "next" else -1}
     for rx in _INDEX_RES:
-        m = rx.match(w.text)
+        m = rx.match(nav)
         if m:
-            return {"kind": "switch_index", "index": _count(m.group(1))}
-    got = _switch_command(w.text) or _read_command(w.text) or _status_command(w.text)
+            said = m.group(1)
+            return {
+                "kind": "switch_index",
+                "index": _SESSION_HOMOPHONES.get(said) or _count(said),
+            }
+    got = _switch_command(nav)
+    if got is not None and filled and not got.get("mode"):
+        got["mode"] = "must"  # "so switch to …": a match, else words
+    got = got or _read_command(nav) or _status_command(nav)
     if got is not None:
         return got
+    full = norm(text)
     for kind, rx in _CMDS[1:]:
-        if kind in _WORD_KINDS and words is not None:
-            rx = _kind_rx(kind, words)
-        m = rx.match(w.text)
+        if kind in _WORD_KINDS:
+            if words is not None:
+                rx = _kind_rx(kind, words)
+            # A stop or hush phrase is matched as said, the "ok" lead kept:
+            # "ok stop" is hush (voice_words.KIN), "stop" alone is stop.
+            m = rx.match(full) or rx.match(w.text)
+        else:
+            m = rx.match(nav if kind in _NAV_CMDS else w.text)
         if m:
             return {
                 "kind": kind,
@@ -1199,6 +1341,38 @@ def command(text, words: Optional[dict] = None) -> Optional[dict]:
     if m:
         return {"kind": "pick", "index": _count(m.group(1)), "words": w.text}
     return _answer_command(w.words)
+
+
+def heard_text(text, heard, words: Optional[dict] = None, kinds=NO_TEXT_KINDS):
+    """Which text the route reads a phrase from, given whisper's ``text``
+    and Moonshine's ``heard`` → ``(text to route, name text or None)``.
+
+    Moonshine (keyterm-biased, fast) decides the control words only when
+    whisper's text is no command at all: whisper is the better command ear
+    (the 2026-11 bench: the kind alone 264/272 against 240/272), so when
+    both parse as commands — and disagree — whisper's wins. Moonshine's
+    counts only when it is a command of ``kinds`` (no words of the person's
+    in it). A switch by NAME Moonshine heard takes its name from whisper's
+    words when it can ("switch to site check about seven" over whisper's
+    "which is sitecheck bot seven"): the second value is Moonshine's verb
+    with whisper's words in place of its name, for the route to try first —
+    it stands only if it switches."""
+    text = str(text or "")
+    if not isinstance(heard, str) or not heard.strip():
+        return text, None
+    hcmd = command(heard, words)
+    if hcmd is None or hcmd["kind"] not in kinds:
+        return text, None
+    if command(text, words) is not None:
+        return text, None
+    alt = None
+    if hcmd["kind"] == "switch" and hcmd.get("arg"):
+        hw = norm(heard).split()
+        verb = len(hw) - len(norm(hcmd["arg"]).split())
+        tail = norm(text).split()[verb:]
+        if verb > 0 and tail:
+            alt = " ".join(hw[:verb] + tail)
+    return heard, alt
 
 
 # --- sessions ----------------------------------------------------------------
@@ -1600,26 +1774,80 @@ def _or(names: List[str]) -> str:
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
 
 
-def _ambiguous(cands: List[dict], lead: str = "") -> dict:
+def _ambiguous(cands: List[dict], lead: str = "", then: Optional[dict] = None) -> dict:
     """ "Which one: a or b?" — and the candidates, as the ``pending`` choice
-    the client sends back with the next phrase (:func:`pick`)."""
+    the client sends back with the next phrase (:func:`pick`). ``then``:
+    what the picked session is for when it is not a switch — ``{"kind":
+    "interrupt"}``, ``{"kind": "answer", "choice", "number"?, "words"}``,
+    ``{"kind": "question"}``, ``{"kind": "read"}`` or ``{"kind":
+    "status"}`` — carried in ``pending`` so "the first one" does THAT to
+    it."""
     picks = [{"title": r["title"], "name": _name(r)} for r in cands[:MAX_NAMES]]
+    pending = {"kind": "pick", "candidates": picks}
+    if then:
+        pending["then"] = dict(then)
     return {
         "kind": "ambiguous",
         "say": "%sWhich one: %s?" % (lead, _or([p["name"] for p in picks])),
         "candidates": picks,
-        "pending": {"kind": "pick", "candidates": picks},
+        "pending": pending,
     }
 
 
-def _unmatched(arg: str, rows, cands) -> dict:
+#: How close (difflib ratio, 0..1) a said name must SOUND to one session's
+#: — and no other's — for a switch to take it ("docks" for docs).
+NEAR_RATIO = 0.75
+
+
+def _near_row(arg: str, rows) -> Optional[dict]:
+    """The one session whose name the said ``arg`` is a near miss of — the
+    words around a name dropped, spelt together ("docks" ↔ docs, "site
+    check bot seven" ↔ sitecheck-bot7) at least :data:`NEAR_RATIO` alike,
+    and clearly closer than any other — else None."""
+    from difflib import SequenceMatcher
+
+    said = "".join(_said_variants(arg)[-1])
+    if len(said) < 3:
+        return None
+    scored = []
+    for r in _listed(rows):
+        best = 0.0
+        for label in {_name(r), str(r.get("title") or "")}:
+            name = "".join(_toks(label))
+            if name:
+                best = max(best, SequenceMatcher(None, said, name).ratio())
+        scored.append((best, r))
+    scored.sort(key=lambda x: -x[0])
+    if not scored or scored[0][0] < NEAR_RATIO:
+        return None
+    if len(scored) > 1 and scored[1][0] >= scored[0][0] - 0.1:
+        return None
+    return scored[0][1]
+
+
+def _near(kind: str, arg: str, why: str, rows=(), suggest: Optional[dict] = None):
+    """A ``prompt`` that says what command it nearly was (the client
+    captions it; the words are typed): ``{"kind": "prompt", "near":
+    {"kind", "why", "arg"?, "suggest"?}}`` — ``why`` ``no_session`` (no
+    session called ``arg``; ``suggest``: the one whose name it sounds like),
+    ``no_dialog`` (an answer with nothing asking), ``no_focus`` (no session
+    open). "More" with nothing to repeat stays a bare prompt: "more", "again"
+    are as likely words for the agent."""
+    near = {"kind": kind, "why": why}
+    if arg:
+        near["arg"] = arg
+    if suggest is None and why == "no_session" and arg:
+        suggest = _near_row(arg, rows)
+    if suggest is not None:
+        near["suggest"] = _name(suggest)
+    return {"kind": "prompt", "near": near}
+
+
+def _unmatched(arg: str, rows, cands, then: Optional[dict] = None) -> dict:
     """The ``ambiguous`` / ``no-session`` answer for a name that picked no
-    single session."""
+    single session (``then``: as :func:`_ambiguous`'s)."""
     if cands:
-        return {
-            "kind": "ambiguous",
-            "say": "Which one: %s?" % _or([_name(r) for r in cands[:MAX_NAMES]]),
-        }
+        return _ambiguous(cands, then=then)
     everyone = _listed(rows)
     if not everyone:
         return {"kind": "no-session", "say": "There are no sessions."}
@@ -1665,14 +1893,32 @@ def _switched(hit: dict, now: Optional[float] = None) -> dict:
     }
 
 
-def _switch(arg: str, rows, now: Optional[float] = None, mode: str = "") -> dict:
+def _switch(
+    arg: str, rows, now: Optional[float] = None, mode: str = "", quiet: bool = False
+) -> dict:
     """``mode``: :func:`_switch_command`'s — "must" / "strict" without a
-    match is a prompt."""
+    match is a prompt, with ``near`` (:func:`_near`) when the verb was
+    plainly a switch (not ``strict``, not ``quiet``: "switch the …") or the
+    name sounds like one session's. A name that matches nothing but SOUNDS
+    like exactly one session (:func:`_near_row`: "switch to docks") is that
+    session, said with a switch verb ("switch to", "go to", "take me to");
+    after a soft verb ("open docks") or "switch the" it is only suggested."""
     hit, cands = find_sessions(
         arg, rows, "strict" if mode == "strict" else "" if not mode else "must"
     )
-    if hit is None and not cands and mode:
-        return {"kind": "prompt"}
+    if hit is None and not cands:
+        near = _near_row(arg, rows)
+        if near is not None and mode != "strict" and not quiet:
+            return _switched(near, now)
+        if mode:
+            # A miss after a polite lead or a soft verb is most likely words
+            # for the agent: ``near`` only for a short name, or one that
+            # sounds like a session's.
+            if near is None and (
+                mode == "strict" or quiet or len(norm(arg).split()) > 3
+            ):
+                return {"kind": "prompt"}
+            return _near("switch", arg, "no_session", rows, near)
     if hit is None:
         if cands:
             return _ambiguous(cands)
@@ -1700,6 +1946,15 @@ def pick(text, pending, rows, now: Optional[float] = None) -> Optional[dict]:
     cands = [r for r in (_row(rows, t) for t in titles) if r is not None]
     if not cands:
         return None
+    then = (pending or {}).get("then")
+    then = then if isinstance(then, dict) and then.get("kind") else None
+
+    def picked(row):
+        return _picked(row, then, rows, now)
+
+    def again(cs, lead=""):
+        return _ambiguous(cs, lead, then)
+
     t = _PICK_LEAD_RE.sub("", _Words(text).text)
     if not t:
         return None
@@ -1707,8 +1962,8 @@ def pick(text, pending, rows, now: Optional[float] = None) -> Optional[dict]:
     if m:
         n = len(cands) if m.group(3) else _count(m.group(1) or m.group(2))
         if n and 1 <= n <= len(cands):
-            return _switched(cands[n - 1], now)
-        return _ambiguous(cands, "There are %d. " % len(cands))
+            return picked(cands[n - 1])
+        return again(cands, "There are %d. " % len(cands))
     m = _PICK_STATE_RE.match(t)
     if m:
         want = _PICK_STATES.get(m.group(1))
@@ -1724,17 +1979,45 @@ def pick(text, pending, rows, now: Optional[float] = None) -> Optional[dict]:
             elif want is None and ss["reason"] == "question":
                 got.append(r)
         if len(got) == 1:
-            return _switched(got[0], now)
+            return picked(got[0])
         if got:
-            return _ambiguous(got)
+            return again(got)
         said = "has a question" if m.group(1).startswith("with") else "is " + m.group(1)
-        return _ambiguous(cands, "None of them %s. " % said)
+        return again(cands, "None of them %s. " % said)
     hit, more = find_sessions(t, cands, "must", pick=True)
     if hit is not None:
-        return _switched(hit, now)
+        return picked(hit)
     if more:
-        return _ambiguous(more)
+        return again(more)
     return None
+
+
+#: The ``then`` kinds :func:`_picked` carries out (a switch otherwise).
+_THEN_KINDS = ("interrupt", "answer", "question", "read", "status")
+
+
+def _picked(row: dict, then: Optional[dict], rows, now: float) -> dict:
+    """What a pick does to the session picked: a switch, or the ``then`` the
+    question was asked for (:func:`_ambiguous`) — ``interrupt`` (the route
+    presses Escape), ``answer`` / ``question`` (the route finishes them with
+    the dialog, :func:`finish`), ``read`` / ``status`` (said here)."""
+    kind = (then or {}).get("kind")
+    if kind not in _THEN_KINDS:
+        return _switched(row, now)
+    if kind == "read":
+        return _read({"target": None}, row["title"], rows, now, "")
+    if kind == "status":
+        return _status(row["title"], rows, now)
+    got = {"kind": kind, "title": row["title"], "name": _name(row)}
+    if kind == "answer":
+        choice = str(then.get("choice") or "")
+        if choice not in ("yes", "no", "always", "number"):
+            return _switched(row, now)
+        got["choice"] = choice
+        if choice == "number":
+            got["number"] = then.get("number")
+        got["words"] = str(then.get("words") or choice)
+    return got
 
 
 def _strict_match(query: str, rows) -> Tuple[Optional[dict], List[dict]]:
@@ -1762,14 +2045,25 @@ def _strict_match(query: str, rows) -> Tuple[Optional[dict], List[dict]]:
     return None, cands
 
 
-def _resolve(tgt, session: str, rows, title: str):
+def _resolve(tgt, session: str, rows, title: str, then: Optional[dict] = None):
     """An answer's or a question's target → ``(row, None)``, ``(None,
     {"index": N})`` (the client maps it), or ``(None, final answer)``.
     ``tgt`` None is the session being talked to; ``title`` is the client's
-    own mapping of an index (or of next/previous) to a title."""
+    own mapping of an index (or of next/previous) to a title. ``then``: what
+    the target is wanted for (:func:`_ambiguous`), so a "Which one" asked
+    here carries it; a read, status or question whose name matched nothing
+    is a prompt with ``near`` (an answer's stays a bare prompt: "update the
+    docs, yes" is words)."""
+    kind = (then or {}).get("kind", "")
     if tgt is None or tgt.get("self"):
         row = _row(rows, session)
-        return (row, None) if row is not None else (None, {"kind": "prompt"})
+        if row is not None:
+            return row, None
+        return None, (
+            {"kind": "prompt"}
+            if kind == "answer" or not kind
+            else _near(kind, "", "no_focus")
+        )
     if "index" in tgt:
         if not title:
             return None, {"index": tgt["index"]}
@@ -1781,11 +2075,18 @@ def _resolve(tgt, session: str, rows, title: str):
     if tgt.get("strict"):
         hit, cands = _strict_match(said, rows)
         if hit is None and not cands:
+            # "What did narnia say": ``near``; "what did the tests say" is
+            # words for the agent, unless it sounds like a session's name.
+            near = _near_row(said, rows)
+            if kind in ("read", "status", "question") and (
+                near is not None or said.split()[0] not in _ARTICLES
+            ):
+                return None, _near(kind, said, "no_session", rows, near)
             return None, {"kind": "prompt"}
     else:
         hit, cands = match_session(said, rows)
     if hit is None:
-        return None, _unmatched(said, rows, cands)
+        return None, _unmatched(said, rows, cands, then)
     return hit, None
 
 
@@ -1859,7 +2160,7 @@ def _read(cmd: dict, session: str, rows, now: float, title: str) -> dict:
     tgt = cmd.get("target")
     if tgt is not None and "index" in tgt and not title:
         return {"kind": "read", "say": "Say its name: what did <name> say."}
-    row, out = _resolve(tgt, session, rows, title)
+    row, out = _resolve(tgt, session, rows, title, {"kind": "read"})
     if row is None:
         if tgt is None:
             return {"kind": "read", "say": "No session is open."}
@@ -1875,8 +2176,19 @@ def _read(cmd: dict, session: str, rows, now: float, title: str) -> dict:
     return {"kind": "read", "title": row["title"], "name": name, "say": say}
 
 
+def _then_of(cmd: dict) -> dict:
+    """What an ``answer`` / ``question`` command does once its session is
+    picked (:func:`_ambiguous`'s ``then``)."""
+    if cmd["kind"] != "answer":
+        return {"kind": cmd["kind"]}
+    then = {"kind": "answer", "choice": cmd["choice"], "words": cmd["words"]}
+    if cmd["choice"] == "number":
+        then["number"] = cmd["number"]
+    return then
+
+
 def _answer_or_question(cmd: dict, session: str, rows, title: str) -> dict:
-    row, out = _resolve(cmd.get("target"), session, rows, title)
+    row, out = _resolve(cmd.get("target"), session, rows, title, _then_of(cmd))
     if row is None:
         if cmd["kind"] == "question" and cmd.get("target") is None:
             return {"kind": "question", "say": "No session is open."}
@@ -1940,7 +2252,9 @@ def answer(
     if kind == "new":
         return cmd
     if kind == "switch":
-        return _switch(cmd["arg"], rows, now, cmd.get("mode", ""))
+        return _switch(
+            cmd["arg"], rows, now, cmd.get("mode", ""), bool(cmd.get("quiet"))
+        )
     if kind == "read":
         return _read(cmd, session, rows, now, title)
     if kind == "pick":
@@ -1982,7 +2296,7 @@ def answer(
     if kind == "commands":
         return commands_answer(words)
     if cmd.get("target"):
-        row, out = _resolve(cmd["target"], session, rows, title)
+        row, out = _resolve(cmd["target"], session, rows, title, {"kind": "status"})
         if row is None:
             return out
         return _status(row["title"], rows, now)
@@ -1993,18 +2307,21 @@ def _interrupt(cmd: dict, session: str, rows, title: str) -> dict:
     """``{"kind": "interrupt", "title"}`` — the session to press Escape in
     (the route presses it): the named one, else the one the client names
     (``title``), else the one talked to. A name that matches no session is
-    a prompt; several are asked about (no ``pending``: say it again)."""
+    a prompt (with ``near`` when "session" was said or the name sounds like
+    one); several are asked about, the ``pending`` pick interrupting the one
+    picked."""
     said = cmd.get("name")
     if not said:
         return {"kind": "interrupt", "title": title or session}
-    hit, cands = find_sessions(said, rows, cmd.get("mode") or "strict")
+    mode = cmd.get("mode") or "strict"
+    hit, cands = find_sessions(said, rows, mode)
     if hit is None and not cands:
-        return {"kind": "prompt"}
+        near = _near_row(said, rows)
+        if near is None and mode == "strict":
+            return {"kind": "prompt"}  # "interrupt handler is broken"
+        return _near("interrupt", said, "no_session", rows, near)
     if hit is None:
-        return {
-            "kind": "ambiguous",
-            "say": "Which one: %s?" % _or([_name(r) for r in cands[:MAX_NAMES]]),
-        }
+        return _ambiguous(cands, then={"kind": "interrupt"})
     return {"kind": "interrupt", "title": hit["title"], "name": _name(hit)}
 
 
@@ -2317,8 +2634,10 @@ def finish(ans: dict, dialog, spoken=None, remote: bool = False) -> dict:
     :func:`parse_answer` picks; ``[]`` and a "didn't catch that" ``say`` when
     none) — never pressed here, the client POSTs ``/answer``. No parsed
     dialog → ``no_dialog`` and why; but a BARE answer ("yes" said to the
-    session being talked to) with no parsed dialog is ``{"kind": "prompt"}``:
-    the agent may have asked in words, and the words reach it as typed. A
+    session being talked to) with no parsed dialog is ``{"kind": "prompt"}``
+    (``near``: ``{"kind": "answer", "why": "no_dialog"}``): the agent may
+    have asked in words, and the words reach it as typed — except "stop it"
+    / "stop that", which then is ``interrupt`` (the route presses Escape). A
     question asked in prose (``/dialog``'s ``kind: "question"``) is read out
     like a dialog's; an answer to it that names the session is
     ``no_dialog`` with a ``say`` that it was asked in words — switch to it
@@ -2343,7 +2662,15 @@ def finish(ans: dict, dialog, spoken=None, remote: bool = False) -> dict:
         return out
     if not _parsed(dialog):
         if bare:
-            return {"kind": "prompt"}
+            if _STOP_IT_RE.match(norm(out.get("words") or "")):
+                # "Stop it" with nothing asking: the agent, stopped (Escape —
+                # the route presses it), as the desktop gate reads it.
+                return {
+                    "kind": "interrupt",
+                    "title": out.get("title") or "",
+                    "name": name,
+                }
+            return _near("answer", str(out.get("words") or ""), "no_dialog")
         out["no_dialog"] = True
         if remote:
             out["say"] = "%s is on another device: answer it there." % name

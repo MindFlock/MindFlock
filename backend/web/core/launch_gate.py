@@ -32,7 +32,7 @@ The gate answers **go / wait / refuse** from three things:
   back in, and a rising PSI stall. An automatic start waits while the room
   is 0, and while memory reads ``low`` or ``critical``
   (:mod:`backend.memory_pressure`: real distress, sustained); a person's
-  start asks.
+  start asks only on the latter.
 * **How many agents are live**, against a machine-wide cap
   (``MINDFLOCK_MAX_LIVE_AGENTS``; by default one agent per
   :data:`GB_PER_AGENT` GB of RAM, so 16 on 20 GB; ``0`` turns the cap off).
@@ -81,9 +81,12 @@ Two kinds of caller:
   and keeps every other one; a boot adopts only items whose owner is gone
   (and untagged ones from an older version).
 * **A person** (``kind="person"``): New session, Duplicate, Start, Start all,
-  Resume, Wake. A person is never queued or capped. *Confirm* (memory low, or
-  would read low once the warming agents grow) and *refuse* (critical) mean
-  the route answers 409 ``{"memory_confirm": true, ...}``. The app then shows
+  Resume, Wake. A person is never queued or capped, and is asked only on the
+  level NOW (since 0.14.3): the projection of agents still warming and the
+  room estimate pace automatic starts only. *Confirm* (memory reads low) and
+  *refuse* (critical) mean the route answers 409 ``{"memory_confirm": true,
+  ...}`` whose message leads with the signals behind the level
+  (:func:`person_refusal`). The app then shows
   its own dialog (Start anyway / Put idle agents to sleep first), and its
   Start anyway resends the request with ``start_anyway: true``.
 
@@ -1003,26 +1006,35 @@ def room(now: Optional[float] = None) -> Optional[int]:
 def person_refusal(verdict: dict) -> Optional[dict]:
     """The 409 body for a person's start that needs their Start anyway, or
     None when ``verdict`` (from :func:`decide` ``kind="person"``) is go.
-    ``{"error", "memory_confirm": true, "level", "message", "free",
-    "memory", "warming", "live"}``. ``message`` is the dialog's own line."""
+    ``{"error", "memory_confirm": true, "level", "reason", "message", "free",
+    "memory", "warming", "live"}``. ``message`` is the dialog's own line.
+
+    It leads with the verdict's reason, the signals that set the level
+    (:func:`memory_pressure.describe`): ``"Memory is critical: processes
+    stalled on memory 34% of the last minute."``. A person is asked only on
+    the level now (since 0.14.3), so the level is always the cause: the
+    line never adds the room estimate, which once read "No room for another
+    session" under a PSI refusal with 13 GB available. A snapshot without
+    ``why`` (an older shape) falls back to the free amount."""
     if verdict.get("decision") == "go":
         return None
     a = verdict.get("assess") or {}
     snap = a.get("memory") or {}
     critical = verdict.get("decision") == "refuse"
-    free = _gb(snap.get("available"))
-    tight = verdict.get("level") == "ok"  # the budget, not the level
-    head = "Memory is %s: %s free." % (
-        "critically low" if critical else ("tight" if tight else "low"),
-        free,
-    )
+    reason = str(verdict.get("reason") or "").strip().rstrip(".")
+    if reason and any(snap.get("why") or []):
+        head = reason[:1].upper() + reason[1:] + "."
+    else:
+        head = "Memory is %s: %s free." % (
+            "critically low" if critical else "low",
+            _gb(snap.get("available")),
+        )
     if a.get("warming"):
         head += " %d agent%s still starting will take ~%s more." % (
             a["warming"],
             "" if a["warming"] == 1 else "s",
             _gb(a.get("to_come", a["warming"] * a.get("warmup_bytes", 0))),
         )
-    head += " " + _room_sentence(a.get("budget") or {})
     tail = (
         " Starting another agent will likely freeze the machine."
         if critical
@@ -1040,6 +1052,7 @@ def person_refusal(verdict: dict) -> Optional[dict]:
         "regardless)" % (head, tail),
         "memory_confirm": True,
         "level": "critical" if critical else "low",
+        "reason": reason,
         "message": head + tail,
         "free": snap.get("available"),
         "total": snap.get("total"),
@@ -1047,40 +1060,6 @@ def person_refusal(verdict: dict) -> Optional[dict]:
         "live": a.get("live"),
         "memory": snap,
     }
-
-
-def _room_sentence(b: dict) -> str:
-    """The person's dialog line about the room: ``"No room for another
-    session: one needs ~0.7 GB, 0.3 GB is free above the 3.0 GB this
-    machine keeps in reserve."``. When the room is 0 because memory reads
-    low or critical (not because the arithmetic ran out), the sum may well
-    show GBs free, so it gives the level's own reason instead; when it is 0
-    because of the live cap, the cap."""
-    room = b.get("room")
-    each = float(b.get("session_mb") or 0) / 1024.0
-    if room is None or b.get("reserve_mb") is None:
-        return ""
-    if room > 0:
-        return "There is room for %d more session%s (~%.1f GB each)." % (
-            room,
-            "" if room == 1 else "s",
-            each,
-        )
-    if b.get("level") in ("low", "critical"):
-        why = str(b.get("why") or "memory is %s" % b.get("level")).rstrip(".")
-        return "No room for another session until memory recovers: %s." % why
-    if not b.get("short_mb"):
-        why = str(b.get("why") or "").rstrip(".")
-        return "No room for another automatic start: %s." % why if why else ""
-    return (
-        "No room for another session: one needs ~%.1f GB, %.1f GB is free "
-        "above the %.1f GB this machine keeps in reserve."
-        % (
-            each,
-            max(0.0, float(b.get("free_mb") or 0)) / 1024.0,
-            float(b.get("reserve_mb") or 0) / 1024.0,
-        )
-    )
 
 
 # --------------------------------------------------------------------------- #

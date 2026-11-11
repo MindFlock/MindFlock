@@ -161,7 +161,7 @@ describe("the memory reading's reasons", () => {
 
   it("the notice renders it", () => {
     const src = code("components/MemoryNotice.tsx");
-    expect(src).toContain("memoryReasons(data)");
+    expect(src).toContain("memoryReason(data)");
     expect(src).toContain("mn-why");
   });
 });

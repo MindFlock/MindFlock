@@ -6799,7 +6799,14 @@ def _say_kw(say: bool) -> dict:
 
 
 def _deliver_to_sleeper(
-    inst, title: str, text: str, *, boot: bool, submit: bool, say: bool = False
+    inst,
+    title: str,
+    text: str,
+    *,
+    boot: bool,
+    submit: bool,
+    say: bool = False,
+    auto: bool = False,
 ):
     """``_deliver_to_agent`` for a SLEEPING session (core.sleep): wake it,
     then put the text on its prompt queue — at the front for a person's
@@ -6809,16 +6816,24 @@ def _deliver_to_sleeper(
     prompt and settled idle. Not queueable (an unsubmitted paste; a looping
     queue, which would re-send it forever): it just wakes →
     ``(False, _SEND_WAKING)``. ``say`` rides the queue entry (armed when the
-    drain types it)."""
+    drain types it).
+
+    ``auto``: nobody asked for this wake (a Verify walk, a close notice, a
+    fence notice), so it goes through the launch gate like a queued prompt's
+    (``ensure_awake(auto=True)``). When the gate says wait for memory the
+    text is still QUEUED — ``("queued", None)``: the wake runs when memory
+    allows and the drain sends it then — never a failure."""
     _woke, err = _sleep.ensure_awake(
         inst,
         title,
         "a prompt was sent" if boot else "MindFlock sent it a message",
+        auto=auto,
     )
-    if err is not None:
+    waiting = auto and err == _launch_gate.WAITING_FOR_MEMORY
+    if err is not None and not waiting:
         return False, err
     if not submit or _prompt_queue.get_state(title)["loop"]:
-        return False, _SEND_WAKING
+        return False, err if waiting else _SEND_WAKING
     try:
         _prompt_queue.enqueue(title, text, index=0 if boot else None, **_say_kw(say))
     except ValueError as qerr:
@@ -6836,6 +6851,7 @@ def _deliver_to_agent(
     submit: bool = True,
     dialog_safe: bool = False,
     say: bool = False,
+    auto: bool = False,
 ):
     """Type ``text`` into ``title``'s agent → ``(told, reason)``.
 
@@ -6861,6 +6877,8 @@ def _deliver_to_agent(
 
     A SLEEPING agent (core.sleep) is woken either way, and the text queued
     rather than typed into the booting CLI (:func:`_deliver_to_sleeper`).
+    ``auto=True`` (a message no person sent — a Verify walk or close notice,
+    a fence notice) makes that wake wait its turn in the launch gate.
 
     A PAUSED session is never typed into nor relaunched, either way:
     ``(False, PAUSED_REFUSED)`` — Resume starts its agent again.
@@ -6893,7 +6911,9 @@ def _deliver_to_agent(
     if _sleep.is_sleeping(title):
         if not boot and _budget_locked(title):
             return False, "over budget"
-        return _deliver_to_sleeper(inst, title, text, boot=boot, submit=submit, say=say)
+        return _deliver_to_sleeper(
+            inst, title, text, boot=boot, submit=submit, say=say, auto=auto
+        )
     if boot:
         name, err = _agent_session_ready(inst, title)
         if err is not None:
@@ -11516,6 +11536,27 @@ async def instance_write_test_plan(
     return JSONResponse({"ok": True, "plan": title, "existing": False}, status_code=202)
 
 
+#: Plans whose run route is between its "already running?" check and the
+#: run it opens (``test_plans.start_run``) — several awaits apart. A second
+#: press meanwhile (a double click, a flight stop and a row press) is
+#: answered 409 ``busy`` instead of opening a second run, handing the prompt
+#: over twice and clearing the first walk's results file. In-process only;
+#: ``start_run``'s compare-and-set (``expect``) covers another server.
+_VERIFY_STARTING: set = set()
+
+
+def _verify_busy(session: str) -> JSONResponse:
+    """The run route's 409 for a plan another start is already verifying."""
+    return JSONResponse(
+        {
+            "error": "%s is already verifying this plan" % (session or "another check"),
+            "session": session,
+            "reason": "busy",
+        },
+        status_code=409,
+    )
+
+
 @app.post("/api/test-plans/{plan_id:path}/run")
 async def run_test_plan(
     plan_id: str, request: Request, payload: Optional[dict] = None
@@ -11572,7 +11613,25 @@ async def run_test_plan(
     too — it may settle one only with stated evidence
     (``test_plans.agent_steps``) — so a plan of human steps alone, or a
     ``steps`` list naming one, is no longer refused.
+
+    ONE START AT A TIME per plan: a second press while the first is still
+    starting is 409 ``reason: "busy"`` (:data:`_VERIFY_STARTING`), and so is
+    one that loses ``start_run``'s compare-and-set to a run opened meanwhile.
     """
+    if plan_id in _VERIFY_STARTING:
+        plan = _test_plans.get(plan_id) or {}
+        return _verify_busy(str(plan.get("run_session") or ""))
+    _VERIFY_STARTING.add(plan_id)
+    try:
+        return await _start_test_plan_run(plan_id, request, payload)
+    finally:
+        _VERIFY_STARTING.discard(plan_id)
+
+
+async def _start_test_plan_run(
+    plan_id: str, request: Request, payload: Optional[dict]
+) -> JSONResponse:
+    """:func:`run_test_plan`'s body, run at most once at a time per plan."""
     payload = payload or {}
     if not isinstance(payload, dict):
         return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
@@ -11610,14 +11669,10 @@ async def run_test_plan(
     if plan["state"] == "running" and await asyncio.to_thread(
         _verify_session_usable, plan["run_session"]
     ):
-        return JSONResponse(
-            {
-                "error": "%s is already verifying this plan" % plan["run_session"],
-                "session": plan["run_session"],
-                "reason": "busy",
-            },
-            status_code=409,
-        )
+        return _verify_busy(plan["run_session"])
+    # What this start saw running ("" — nothing): start_run refuses to open a
+    # run when the plan has moved on from it by then.
+    expect = _test_plans.run_token(plan)
     # SELF-VERIFY WHEN THE SESSION IS STILL OPEN: its own agent is told to
     # verify the work it just did — it writes its own steps and walks them —
     # so no steps are needed here and none are checked.
@@ -11638,6 +11693,7 @@ async def run_test_plan(
             notes=notes,
             walk=walk,
             confirm=confirm,
+            expect=expect,
         )
     if not plan["steps"]:
         # A plan still generating, or one that failed to: there is nothing for a
@@ -11768,6 +11824,12 @@ async def run_test_plan(
     # the agent had so much as checked out the branch — and the plan would take
     # the old verdict as the new one. Silent, and wrong in the direction that
     # matters, since the usual reason to re-run is that something failed.
+    #
+    # Asked once more first: a run opened since the check above (another
+    # server on this state dir) is writing into that very file.
+    busy = await _verify_started_meanwhile(plan_id, expect)
+    if busy is not None:
+        return busy
     await asyncio.to_thread(_clear_verify_results, title)
     # A RECORD IS NOT A USABLE SESSION. The reuse path below tests only for a
     # record, and a verify session whose workspace has since been cleared keeps
@@ -11864,15 +11926,19 @@ async def run_test_plan(
     # Only now: start_run stamps the plan "running" and opens the run record the
     # due loop's give-up clock reads, and a plan claiming a session that was
     # never created would be stuck there for two hours.
-    started = await asyncio.to_thread(
-        _test_plans.start_run,
-        plan_id,
-        title,
-        where=where,
-        target=run_target,
-        checkout=checkout,
-        walk=walk,
-    )
+    try:
+        started = await asyncio.to_thread(
+            _test_plans.start_run,
+            plan_id,
+            title,
+            where=where,
+            target=run_target,
+            checkout=checkout,
+            walk=walk,
+            expect=expect,
+        )
+    except _test_plans.RunBusy as busy_err:
+        return _verify_busy(str(busy_err.args[0] if busy_err.args else ""))
     if started is None:
         # The plan was deleted while the session was being provisioned. Answering
         # `ok` here left a real, billed agent working a checklist that no longer
@@ -11923,6 +11989,16 @@ async def _run_where(plan: dict, where: str) -> tuple:
     return env["reach"], ("origin/%s" % branch) if branch else sha, branch, None
 
 
+async def _verify_started_meanwhile(plan_id: str, expect: str):
+    """The run route's 409 ``busy`` when the plan's run is no longer the one
+    the route saw (``test_plans.run_token`` ≠ ``expect``) — asked right
+    before a results file is cleared — else ``None``."""
+    cur = await asyncio.to_thread(_test_plans.get, plan_id)
+    if cur is not None and _test_plans.run_token(cur) != expect:
+        return _verify_busy(str(cur.get("run_session") or ""))
+    return None
+
+
 async def _run_test_plan_in_session(
     plan: dict,
     owner: str,
@@ -11936,6 +12012,7 @@ async def _run_test_plan_in_session(
     notes: str,
     walk: str,
     confirm: bool = False,
+    expect: Optional[str] = None,
 ) -> JSONResponse:
     """``run_test_plan``'s SELF-VERIFY in the plan's OWN session ``owner``:
     one prompt — "verify the work you just did"
@@ -11946,8 +12023,11 @@ async def _run_test_plan_in_session(
 
     The run is opened FIRST and the prompt handed over second: a session that
     is idle starts answering at once, and its answers need a running plan to
-    land on. A hand-over that fails puts the plan back (``cancel_run``) and
-    says why — nothing was created, so there is nothing to close."""
+    land on. A hand-over that fails puts the plan back (``cancel_run``: the
+    run settles ``blocked`` with the reason and the plan's steps come back)
+    and says why — nothing was created, so there is nothing to close.
+    ``expect`` is the run the route saw (``test_plans.run_token``): a run
+    opened since is 409 ``busy``, before its results file is touched."""
     plan_id = str(plan["id"])
     repo_root = str(plan.get("repo_root") or "")
     prompt = _test_plans.build_self_verify_prompt(
@@ -11970,28 +12050,41 @@ async def _run_test_plan_in_session(
     except Exception:  # noqa: BLE001 — unknown, never a refusal
         tip = ""
     # The previous run's answers go first, exactly as for a checker: the
-    # poller believes the first `finished: true` it reads.
+    # poller believes the first `finished: true` it reads. Not when a run
+    # was opened meanwhile, though — that file is its walk's.
+    if expect is not None:
+        busy = await _verify_started_meanwhile(plan_id, expect)
+        if busy is not None:
+            return busy
     await asyncio.to_thread(_clear_verify_results, owner)
-    started = await asyncio.to_thread(
-        _test_plans.start_run,
-        plan_id,
-        owner,
-        where=where,
-        target=run_target,
-        checkout=checkout,
-        walk=walk,
-        in_session=True,
-        self_authored=True,
-        confirm=confirm,
-        tip_sha=str(tip or ""),
-    )
+    try:
+        started = await asyncio.to_thread(
+            _test_plans.start_run,
+            plan_id,
+            owner,
+            where=where,
+            target=run_target,
+            checkout=checkout,
+            walk=walk,
+            in_session=True,
+            self_authored=True,
+            confirm=confirm,
+            tip_sha=str(tip or ""),
+            expect=expect,
+        )
+    except _test_plans.RunBusy as busy_err:
+        return _verify_busy(str(busy_err.args[0] if busy_err.args else ""))
     if started is None:
         return JSONResponse(
             {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     told, reason = await asyncio.to_thread(_deliver_walk, owner, prompt)
     if not told:
-        await asyncio.to_thread(_test_plans.cancel_run, plan_id)
+        await asyncio.to_thread(
+            _test_plans.cancel_run,
+            plan_id,
+            "couldn't hand the check to %s: %s" % (owner, reason),
+        )
         return JSONResponse(
             {
                 "error": "couldn't hand the check to %s: %s" % (owner, reason),

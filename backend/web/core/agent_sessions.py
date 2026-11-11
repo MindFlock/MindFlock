@@ -136,6 +136,48 @@ PAUSED_REFUSED = "session is paused — resume it first"
 HELD_REFUSED = "offline since a crash — press Start to bring it back"
 
 
+#: ``_ensure_agent_session``'s error for an ORDERED worker still waiting its
+#: turn whose agent has never run (``worker_order_driver.waiting_turn``):
+#: opening its pane — or anything else that relaunches on touch — must not
+#: start it with no launch gate and no person behind it (the row would go on
+#: reading Waiting over an agent idling at an empty prompt). Its turn starts
+#: it (through the launch gate); a person's Start (``POST /revive``, which
+#: notes the start first) starts it early. The terminal socket shows it as
+#: the pane's error line.
+WAITING_TURN_REFUSED = "waiting its turn — press Start to start it early"
+
+#: How recently a person's start must have been noted
+#: (``launch_gate.note_start``) for a waiting worker's launch to go ahead.
+START_NOTED_S = 30.0
+
+
+def _start_noted(title: str) -> bool:
+    """A start of ``title`` was just noted with the launch gate — the
+    person's Start route (``/revive``, ``/resume``) or an automatic start the
+    gate admitted — rather than a pane attaching."""
+    try:
+        from backend.web.core import launch_gate as _lg
+
+        with _lg._LOCK:
+            at = _lg._ADMITTED.get(_lg._tmux_name(title))
+        return at is not None and time.time() - float(at) < START_NOTED_S
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _waiting_turn(inst, title: str) -> bool:
+    """``title`` is an ordered worker waiting its turn that never ran, and
+    no start of it was noted: refused with :data:`WAITING_TURN_REFUSED`."""
+    try:
+        from backend.web.core import worker_order_driver as _wod
+
+        if not _wod.waiting_turn(title, inst):
+            return False
+    except Exception:  # noqa: BLE001 — never block a launch over this
+        return False
+    return not _start_noted(title)
+
+
 def _is_paused(inst) -> bool:
     """Whether ``inst`` is Paused. An unreadable status is not paused (the
     caller's other gates still hold)."""
@@ -281,7 +323,11 @@ def _ensure_agent_session(inst, title: str):
 
     A session HELD OFFLINE (:mod:`backend.web.core.held`) is never relaunched
     here either: :data:`HELD_REFUSED` until a person's Start releases it. One
-    whose agent is alive after all is attached, and its stale hold dropped."""
+    whose agent is alive after all is attached, and its stale hold dropped.
+
+    An ordered worker WAITING ITS TURN whose agent never ran is not launched
+    here either (:data:`WAITING_TURN_REFUSED`) unless a person's Start was
+    just noted: its turn launches it through the launch gate."""
     from backend.web.core import held as _held
     from backend.web.core import sleep as _sleep
 
@@ -300,6 +346,8 @@ def _ensure_agent_session(inst, title: str):
         return name, PAUSED_REFUSED
     if _held.is_held(title):
         return name, HELD_REFUSED
+    if _waiting_turn(inst, title):
+        return name, WAITING_TURN_REFUSED
     wt = inst.GetWorktreePath()
     if not wt or not os.path.isdir(wt):
         return name, "workspace no longer exists"

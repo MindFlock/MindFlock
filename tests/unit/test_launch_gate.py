@@ -953,19 +953,8 @@ def test_low_memory_gives_its_reason_not_the_arithmetic(monkeypatch):
     snap["why"] = ["swapping 9.5 MB/s back in from disk"]
     body = gate.person_refusal(gate.decide("person"))
     assert "is free above" not in body["message"]
-    assert "No room for another session until memory recovers" in body["message"]
+    assert body["message"].startswith("Memory is low: ")
     assert "swapping 9.5 MB/s back in from disk" in body["message"]
-
-
-def test_the_room_sentence_by_cause():
-    base = {"room": 0, "session_mb": 700, "reserve_mb": 3072, "free_mb": 300}
-    s = gate._room_sentence(dict(base, level="ok", short_mb=400))
-    assert s.startswith("No room for another session: one needs ~0.7 GB, 0.3 GB")
-    cap = "16 agents are running; automatic starts stop at 16"
-    s = gate._room_sentence(dict(base, level="ok", short_mb=0, why=cap))
-    assert s == "No room for another automatic start: %s." % cap
-    s = gate._room_sentence(dict(base, level="critical", why="memory is critical."))
-    assert s == "No room for another session until memory recovers: memory is critical."
 
 
 # --------------------------------------------------------------------------- #

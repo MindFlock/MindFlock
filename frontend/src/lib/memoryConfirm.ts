@@ -2,9 +2,12 @@
  * is short of memory (backend core/launch_gate.py).
  *
  * A person's New session, Duplicate, Start, Start all, Resume and Wake are
- * never queued like an agent's starts, but while memory reads low (or would,
- * once the agents still starting have grown) the server answers 409
- * `{memory_confirm: true, level, message}` instead of starting. The app
+ * never queued like an agent's starts, but while memory reads low or
+ * critical NOW (never over a projection: those pace automatic starts only)
+ * the server answers 409 `{memory_confirm: true, level, reason, message}`
+ * instead of starting; `message` leads with the signals behind the level,
+ * so the dialog never says "critically low" over 13 GB free without the
+ * stall that set it. The app
  * asks (components/MemoryConfirm.tsx):
  *  - "Start anyway" resends the request with `start_anyway: true`;
  *  - "Put idle agents to sleep first" asks the server to sleep the idle,
@@ -23,9 +26,13 @@ import { toast } from "./toast";
 export interface MemoryConfirmBody {
   memory_confirm: true;
   level: "low" | "critical";
-  /** The dialog's own line: "Memory is low: 3.1 GB free. Starting another
-   * agent may freeze the machine." */
+  /** The dialog's own line, leading with the reason: "Memory is critical:
+   * processes stalled on memory 34% of the last minute. Starting another
+   * agent will likely freeze the machine." (an older snapshot without `why`:
+   * "Memory is low: 3.1 GB free. …"). */
   message: string;
+  /** The verdict's reason alone (memory_pressure.describe), "" if none. */
+  reason?: string;
   error?: string;
   free?: number;
   total?: number;
@@ -49,6 +56,7 @@ export function memoryConfirmOf(e: unknown): MemoryConfirmBody | null {
     level: b.level === "critical" ? "critical" : "low",
     message: typeof b.message === "string" && b.message ? b.message : "Memory is low.",
     error: b.error,
+    reason: typeof b.reason === "string" ? b.reason : undefined,
     free: b.free,
     total: b.total,
     warming: b.warming,

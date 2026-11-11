@@ -13,9 +13,9 @@ The launch gate (:mod:`backend.web.core.launch_gate`) keeps new agents out
 when there is no room. This module handles what is already running:
 
 * **Shed idle agents** (:func:`tick`, from the server's memory watch every
-  10 s). Only on SUSTAINED critical distress: the level itself steps up to
-  ``critical`` only once a distress signal (PSI stalls, swap-in, OOM kills,
-  a tiny available floor, Windows' commit charge or hard paging — see
+  10 s). Only on SUSTAINED critical distress of the GUEST (the machine the
+  agents run on): its level steps up to ``critical`` only once a distress
+  signal (PSI stalls, swap-in, OOM kills, a tiny available floor — see
   :mod:`backend.memory_pressure`) has held for its
   :data:`~backend.memory_pressure.SUSTAIN_SECONDS`; it must then stay
   ``critical`` for :data:`SHED_AFTER_SECONDS` more — or, already critical,
@@ -38,6 +38,20 @@ when there is no room. This module handles what is already running:
   decision is logged with the signal that made the shield act. ``general.agent_memory.shed_idle`` (default
   on) turns it off; :data:`SHED_COOLDOWN_SECONDS` separates two sheds so
   the next one acts on readings taken after the memory came back.
+
+* **Not for Windows alone.** Inside WSL the level also goes critical on the
+  host's signals (Windows' commit charge at 97 %, its headroom or its own
+  available at a floor). A critical that rests ONLY on those sheds
+  nothing (:func:`host_only_critical`): putting a guest agent to sleep
+  frees memory inside the VM, and WSL hands that back to Windows late if
+  at all — on 2026-11-10 a 3 GB ``memory.reclaim`` moved Windows' available
+  by ~0 in 30 s, and the commit charge counts the VM's whole ``memory=``
+  size whatever it holds. Shedding there put an idle agent to sleep every
+  :data:`SHED_COOLDOWN_SECONDS` for a reading it could not move. (The
+  alternative, stopping after N sheds that changed nothing, would still
+  spend N agents on that.) New starts stay held by the launch gate, the
+  decision is in :func:`status` and the log, and a guest signal joining in
+  sheds as usual.
 
 * **Voice is left alone.** The owner's rule (2026-11-10: "I don't want
   voice models off when memory gets low"): the shield never stops Voice Lab
@@ -64,6 +78,7 @@ __all__ = [
     "FULL_AVG10_SHED",
     "shed_enabled",
     "shed_due",
+    "host_only_critical",
     "shed_need_mb",
     "choose_shed",
     "shed_notice_text",
@@ -142,20 +157,35 @@ def shed_enabled() -> bool:
 # --------------------------------------------------------------------------- #
 # shedding: when, how much, which (pure)
 # --------------------------------------------------------------------------- #
+def host_only_critical(snap: dict) -> bool:
+    """Whether ``snap`` reads ``critical`` on the Windows host's signals
+    alone (WSL: the guest's own level is below critical). Shedding cannot
+    fix that (module docstring, "Not for Windows alone"). A snapshot without
+    ``guest_level`` (an older shape, no host) counts as the guest's."""
+    return (
+        snap.get("level") == "critical"
+        and snap.get("guest_level", "critical") != "critical"
+    )
+
+
 def shed_due(state: dict, snap: dict, now: float) -> Tuple[bool, str]:
     """Whether to shed now → ``(due, why)``; updates ``state``'s
-    ``critical_since`` (pure apart from that). Due when the level has read
-    ``critical`` for :data:`SHED_AFTER_SECONDS`, or reads ``critical`` with
-    PSI ``full`` avg10 at :data:`FULL_AVG10_SHED` or past it; never within
-    :data:`SHED_COOLDOWN_SECONDS` of the last shed. ``why`` names the signal
-    (the snapshot's ``why``, see :func:`memory_pressure.describe`)."""
+    ``critical_since`` (pure apart from that). Due when the guest has read
+    ``critical`` for :data:`SHED_AFTER_SECONDS`, or the level reads
+    ``critical`` with PSI ``full`` avg10 (a guest stall) at
+    :data:`FULL_AVG10_SHED` or past it; never within
+    :data:`SHED_COOLDOWN_SECONDS` of the last shed, and never on a critical
+    that rests on the Windows host alone (:func:`host_only_critical`; the
+    PSI fast path still applies there: that stall is the guest's own).
+    ``why`` names the signal (the snapshot's ``why``, see
+    :func:`memory_pressure.describe`)."""
     lvl = snap.get("level")
     psi = snap.get("psi") or {}
     try:
         full10 = float(psi.get("full_avg10") or 0.0)
     except (TypeError, ValueError, AttributeError):
         full10 = 0.0
-    if lvl == "critical":
+    if lvl == "critical" and not host_only_critical(snap):
         if state.get("critical_since") is None:
             state["critical_since"] = now
     else:
@@ -181,7 +211,7 @@ def shed_need_mb(snap: dict, low_line_bytes: Optional[float] = None) -> int:
     """MB to free to bring available memory back over the ``low`` floor
     (``max(low share of RAM, absolute floor)``), 0 when already over — the
     shed then takes one session at a time (critical came from a stall,
-    swap-in or Windows' commit charge, which have no byte target; the
+    swap-in or an OOM kill, which have no byte target; the
     cooldown lets the next pass see the effect). Inside WSL with a host
     reading, also the host's shortfall under its headroom floor
     (:func:`memory_pressure.host_low_line`), measured on its headroom
@@ -433,6 +463,18 @@ def tick(
             due, why = shed_due(_STATE, snap, now)
         out["why"] = why
         if not due:
+            if host_only_critical(snap):
+                held = (
+                    "memory is critical on Windows' side only (%s): idle agents "
+                    "are not put to sleep, which would not give Windows its "
+                    "memory back"
+                    % ("; ".join(w for w in (snap.get("why") or []) if w) or "host")
+                )
+                with _LOCK:
+                    first = _STATE.get("last_decision") != held
+                    _STATE["last_decision"] = held
+                if first:
+                    _info("%s", held)
             return out
         if not shed_enabled():
             with _LOCK:

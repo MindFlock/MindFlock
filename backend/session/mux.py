@@ -289,47 +289,135 @@ _SH = "/bin/sh"
 _CD_EXEC = 'cd "$1" && shift && exec "$@"'
 #: ``POSIX_SPAWN_SETSID`` in glibc's (≥ 2.26) and musl's ``<spawn.h>``.
 _LIBC_POSIX_SPAWN_SETSID = 0x80
+#: How the child opens its tty as fd 0 (a test makes this open block).
+_TTY_OPEN_FLAGS = os.O_RDWR
+#: The libc calls :func:`_libc_spawn_session_leader` needs; without any of
+#: them libc is "not usable" and :func:`_spawn_session_leader` falls back.
+_LIBC_NEEDS = (
+    "posix_spawn",
+    "posix_spawn_file_actions_init",
+    "posix_spawn_file_actions_destroy",
+    "posix_spawn_file_actions_addopen",
+    "posix_spawn_file_actions_adddup2",
+    "posix_spawn_file_actions_addclose",
+    "posix_spawnattr_init",
+    "posix_spawnattr_destroy",
+    "posix_spawnattr_setflags",
+)
+#: glibc ≥ 2.34: close every fd from N up in the child, in one action.
+_LIBC_CLOSEFROM = "posix_spawn_file_actions_addclosefrom_np"
+
+
+class _NoLibc(Exception):
+    """libc's ``posix_spawn`` cannot be reached through ctypes here (no
+    ctypes, no libc handle, a missing symbol). Raised before anything is
+    spawned."""
+
+
+#: The ctypes libc handle, or the :class:`_NoLibc` that loading it raised.
+_LIBC: Any = None
+_LIBC_LOCK = threading.Lock()
+
+
+def _libc() -> Any:
+    """libc through ctypes (loaded once), or :class:`_NoLibc`."""
+    global _LIBC
+    with _LIBC_LOCK:
+        if _LIBC is None:
+            try:
+                import ctypes
+
+                lib = ctypes.CDLL(None, use_errno=True)
+                for name in _LIBC_NEEDS:
+                    getattr(lib, name)
+                lib.posix_spawnattr_setflags.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_short,
+                ]
+                if hasattr(lib, _LIBC_CLOSEFROM):
+                    getattr(lib, _LIBC_CLOSEFROM).argtypes = [
+                        ctypes.c_void_p,
+                        ctypes.c_int,
+                    ]
+                _LIBC = lib
+            except (ImportError, OSError, AttributeError) as err:
+                _LIBC = _NoLibc("libc posix_spawn unavailable: %s" % err)
+        if isinstance(_LIBC, _NoLibc):
+            raise _LIBC
+        return _LIBC
+
+
+def _inheritable_fds() -> List[int]:
+    """This process's fds above 2 that a child would inherit (not
+    close-on-exec), from ``/proc/self/fd``; ``[]`` without ``/proc``."""
+    try:
+        names = os.listdir("/proc/self/fd")
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        try:
+            fd = int(name)
+            if fd > 2 and os.get_inheritable(fd):
+                out.append(fd)
+        except (ValueError, OSError):  # listdir's own fd, closed since
+            pass
+    return sorted(out)
 
 
 def _spawn_session_leader(path: str, argv: List[str], env: dict, tty: str) -> int:
     """``posix_spawn`` ``path`` as a session leader whose fd 0 is ``tty``
-    opened by path (so it is the controlling tty), 1 and 2 dups of it.
+    opened by path (so it is the controlling tty), 1 and 2 dups of it, and
+    no other fd of ours.
 
-    CPython compiles ``os.posix_spawn``'s ``setsid=`` in only when ITS build
-    headers define ``POSIX_SPAWN_SETSID``. python-build-standalone — the
-    CPython uv installs when the system has no 3.12 (Debian bookworm ships
-    3.11; ``install.sh`` pins 3.12) — is built against an older glibc, so
-    ``setsid=True`` raises ``NotImplementedError: posix_spawn: setsid
-    unavailable on this platform`` (before anything is spawned) although the
-    libc it runs on has had the flag since 2.26. That is why moving the
-    engine's PTY here failed the bare-container quickstart. There the same
-    call goes to libc's ``posix_spawn`` through ctypes with the flag set:
-    the same ``clone(CLONE_VM | CLONE_VFORK)``, the GIL released, no Python
-    in the child."""
+    On Linux this is libc's own ``posix_spawn`` through ctypes
+    (:func:`_libc_spawn_session_leader`), always — not ``os.posix_spawn``:
+
+    * CPython's ``os.posix_spawn`` holds the GIL until the child execs. glibc
+      suspends the calling thread (``CLONE_VFORK``) while the child runs its
+      file actions, so a slow one — opening the tty, a loaded box — froze
+      every Python thread, the event loop included. ctypes releases the GIL
+      around the call: only the spawning thread waits.
+    * CPython compiles ``setsid=`` in only when ITS build headers define
+      ``POSIX_SPAWN_SETSID``. python-build-standalone (the CPython uv installs
+      when the system has no 3.12) is built against an older glibc, so
+      ``setsid=True`` raises ``NotImplementedError`` there, although the libc
+      it runs on has had the flag since 2.26.
+
+    Fds: ptyprocess closed every fd ≥ 3 in its child; ``posix_spawn`` passes
+    on any INHERITABLE one (``os.set_inheritable``, ``pass_fds`` leftovers),
+    and a long-lived child — the tmux server an attach may start — would
+    hold it open for good. So the child also closes them: one
+    ``closefrom(3)`` action where libc has it (glibc ≥ 2.34), else one close
+    per inheritable fd > 2 read from ``/proc/self/fd``.
+
+    ``os.posix_spawn`` (same actions) only when ctypes or libc is not
+    usable here (:class:`_NoLibc`)."""
     try:
-        return os.posix_spawn(
-            path,
-            argv,
-            env,
-            setsid=True,
-            file_actions=[
-                (os.POSIX_SPAWN_OPEN, 0, tty, os.O_RDWR, 0),
-                (os.POSIX_SPAWN_DUP2, 0, 1),
-                (os.POSIX_SPAWN_DUP2, 0, 2),
-            ],
-        )
-    except NotImplementedError:
         return _libc_spawn_session_leader(path, argv, env, tty)
+    except _NoLibc:
+        pass
+    actions: List[tuple] = [
+        (os.POSIX_SPAWN_OPEN, 0, tty, _TTY_OPEN_FLAGS, 0),
+        (os.POSIX_SPAWN_DUP2, 0, 1),
+        (os.POSIX_SPAWN_DUP2, 0, 2),
+    ]
+    closefrom = getattr(os, "POSIX_SPAWN_CLOSEFROM", None)  # CPython ≥ 3.13
+    if closefrom is not None:
+        actions.append((closefrom, 3))
+    else:
+        actions.extend((os.POSIX_SPAWN_CLOSE, fd) for fd in _inheritable_fds())
+    return os.posix_spawn(path, argv, env, setsid=True, file_actions=actions)
 
 
 def _libc_spawn_session_leader(path: str, argv: List[str], env: dict, tty: str) -> int:
     """:func:`_spawn_session_leader` through libc's own ``posix_spawn``
-    (ctypes), for a CPython built without ``setsid=``. A libc that predates
+    (ctypes: the GIL is released for the call). Raises :class:`_NoLibc`
+    (nothing spawned) when ctypes/libc is not usable. A libc that predates
     ``POSIX_SPAWN_SETSID`` (glibc < 2.26) refuses the flag: ``OSError``."""
     import ctypes
 
-    libc = ctypes.CDLL(None, use_errno=True)
-    libc.posix_spawnattr_setflags.argtypes = [ctypes.c_void_p, ctypes.c_short]
+    libc = _libc()
     # The opaque structs (glibc: file actions 80 bytes, attr 336), oversized.
     actions = ctypes.create_string_buffer(512)
     attr = ctypes.create_string_buffer(1024)
@@ -348,7 +436,7 @@ def _libc_spawn_session_leader(path: str, argv: List[str], env: dict, tty: str) 
             )
             _check(
                 libc.posix_spawn_file_actions_addopen(
-                    actions, 0, os.fsencode(tty), os.O_RDWR, 0
+                    actions, 0, os.fsencode(tty), _TTY_OPEN_FLAGS, 0
                 ),
                 "posix_spawn_file_actions_addopen",
             )
@@ -357,6 +445,15 @@ def _libc_spawn_session_leader(path: str, argv: List[str], env: dict, tty: str) 
                     libc.posix_spawn_file_actions_adddup2(actions, 0, fd),
                     "posix_spawn_file_actions_adddup2",
                 )
+            closefrom = getattr(libc, _LIBC_CLOSEFROM, None)
+            if closefrom is not None:
+                _check(closefrom(actions, 3), _LIBC_CLOSEFROM)
+            else:
+                for fd in _inheritable_fds():
+                    _check(
+                        libc.posix_spawn_file_actions_addclose(actions, fd),
+                        "posix_spawn_file_actions_addclose",
+                    )
             c_argv = (ctypes.c_char_p * (len(argv) + 1))(
                 *[os.fsencode(a) for a in argv], None
             )
@@ -400,8 +497,10 @@ def spawn_pty(
     the child's group in the foreground, exactly what ``forkpty`` sets up,
     so a resize (``TIOCSWINSZ`` on the master) still SIGWINCHes the client
     and closing the master still SIGHUPs it. Window size is set before the
-    spawn, so the client starts at ``dimensions``. Fds: the server's are
-    close-on-exec (Python's default), so the client inherits only 0/1/2.
+    spawn, so the client starts at ``dimensions``. Fds: the client gets
+    0/1/2 and nothing else — the server's are close-on-exec (Python's
+    default), and any made inheritable are closed in the child, as
+    ptyprocess did (:func:`_spawn_session_leader`).
 
     ``cwd``: ``os.posix_spawn`` has no chdir action (glibc's
     ``posix_spawn_file_actions_addchdir_np`` is not exposed), and changing
@@ -415,9 +514,11 @@ def spawn_pty(
     rest of ``env`` passes through untouched. A missing ``cwd`` raises
     ``FileNotFoundError`` here, before anything is spawned.
 
-    A CPython built without ``os.posix_spawn``'s ``setsid=`` (uv's
-    python-build-standalone) gets the same spawn from libc's own
-    ``posix_spawn`` (:func:`_spawn_session_leader`).
+    The spawn itself is libc's own ``posix_spawn`` through ctypes
+    (:func:`_spawn_session_leader`): the GIL is released while the child
+    gets to its ``exec`` (``os.posix_spawn`` holds it), and it works on a
+    CPython built without ``os.posix_spawn``'s ``setsid=`` (uv's
+    python-build-standalone).
 
     Off Linux this is ``ptyprocess.PtyProcess.spawn`` itself."""
     import ptyprocess

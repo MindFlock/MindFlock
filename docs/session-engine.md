@@ -335,19 +335,39 @@ That is why the first move of the engine's PTY here (PR #348) failed the
 bare-container quickstart: every `tmux new-session` raised, and
 `mindflock new` reported "failed to start" (found on PR #350; the
 quickstart's failure diagnostic re-runs this spawn with the installed tool's
-interpreter). On `NotImplementedError` `spawn_pty` calls libc's own
-`posix_spawn` through ctypes with `POSIX_SPAWN_SETSID` (0x80) and the same
-file actions: the same `clone`, the GIL released, no Python in the child. A
-libc older than the flag refuses it with `OSError`.
+interpreter). A libc older than the flag refuses it with `OSError`.
 `tests/unit/test_engine_pty_spawn.py` stands that interpreter in (an
 `os.posix_spawn` that refuses `setsid=`) and checks the child is still a
 session leader on its PTY, in the foreground, at the given size, and that
 the engine's real tmux create and restore work, without a fork.
 
+**libc's `posix_spawn`, always, on Linux.** `_spawn_session_leader` calls
+libc's own `posix_spawn` through ctypes (`POSIX_SPAWN_SETSID` = 0x80, the
+same file actions) on every Linux spawn, not `os.posix_spawn`, for two
+reasons. The `setsid=` build gap above. And CPython's `os.posix_spawn` holds
+the GIL until the child execs: glibc suspends the calling thread
+(`CLONE_VFORK`) while the child runs its file actions, so a slow one (the
+tty open on a loaded box) froze every Python thread, the event loop included
+(a FIFO-opening spawn froze another thread for the full second it blocked).
+A ctypes call releases the GIL, so only the spawning thread waits.
+`os.posix_spawn` is the fallback only when ctypes or libc is not usable
+(`_NoLibc`: no ctypes, no libc handle, a missing symbol).
+
+**Inherited fds.** ptyprocess closed every fd ≥ 3 in its child;
+`posix_spawn` passes on every *inheritable* one (`os.set_inheritable`, a
+`pass_fds` leftover), and a long-lived child — the tmux server an attach or
+`new-session` starts — would hold it open for good (a pipe that never sees
+EOF, a deleted file never freed). So the child also gets close actions: one
+`posix_spawn_file_actions_addclosefrom_np(3)` where glibc has it (≥ 2.34;
+`os.POSIX_SPAWN_CLOSEFROM` on the CPython ≥ 3.13 fallback), else one close
+per inheritable fd > 2 listed from `/proc/self/fd` (`_inheritable_fds`).
+`tests/unit/test_spawn_review_fixes.py` covers the GIL, the libc-first
+choice and its fallback, and the fds on all three paths.
+
 `spawn_pty(argv, *, dimensions=(24, 80), env=None, cwd=None)` contract: it
 returns a `ptyprocess.PtyProcess`; a missing command raises
 `FileNotFoundError` with ptyprocess's exact message; the child inherits only
-fds 0/1/2. The `posix_spawn` path is gated on `_POSIX_SPAWN_PTY` (Linux with
+fds 0/1/2 (inheritable ones are closed in the child, above). The `posix_spawn` path is gated on `_POSIX_SPAWN_PTY` (Linux with
 `os.posix_spawn`) — on macOS opening a tty does not make it the controlling
 tty, so it falls back.
 
@@ -372,11 +392,13 @@ after 15 s (queued|spawning)*, *a PTY client started after its socket gave
 up; reaped*, *PTY writer still blocked; leaving its fd open* (the writer was
 still blocked 2 s into a detach, so the fd is left open rather than risk a
 write into a reused fd number). Each terminal socket costs up to three
-daemon threads (`pty-attach`, `pty-writer`, `pty-reap`). Not yet routed
-through `attach_off_loop`: the assistant terminal, `core.pty_run`'s tmux
-attach, peer-forwarded terminals (`term_open`) and the ticket log stream
-spawn on the loop, but through `mux.spawn_pty`, so by `posix_spawn` — no
-fork, ~1 ms.
+daemon threads (`pty-attach`, `pty-writer`, `pty-reap`). The Assistant
+pane, the ticket log stream (`spawn_tail`) and `core.pty_run.serve`'s tmux
+attach (the onboarding, settings and doctor helper terminals) take the same
+path and cap through `terminal_ws.attach_or_close` (1013 on a timeout, 4500
+on the spawn's own error, as before). Not yet routed through it:
+peer-forwarded terminals (`term_open`), which spawn on the loop, but through
+`mux.spawn_pty` — no fork, GIL released, ~1 ms.
 
 `core.terminal.pump_pty` itself (every websocket terminal: session shell,
 assistant, ticket log, login attach, peer terminals) keeps the same rules:
@@ -817,13 +839,17 @@ is in trouble (held, it lets the shield put idle agents to sleep).
 | PSI `full avg60` (`/proc/pressure/memory`) — every non-idle task stalled | ≥ 5 % | ≥ 15 % |
 | PSI `some avg60` — at least one task stalled | ≥ 20 % | ≥ 50 % |
 | Swap-in rate (`pswpin` in `/proc/vmstat`, over the last ~60 s) | ≥ 256 pages/s (~1 MB/s) | ≥ 2048 pages/s (~8 MB/s) |
-| OOM kills (`oom_kill` rising in the last 5 min) | any | any, plus another low signal |
+| OOM kills (`oom_kill` rising in the last 5 min) | any | any, plus another signal past its low *entry* line |
 | `MemAvailable` (`/proc/meminfo`) | ≤ 8 % of `MemTotal` (`general.memory_low_pct`) or ≤ 1.5 GB | ≤ 4 % (`general.memory_critical_pct`) or ≤ 1 GB |
 
 Swap merely **in use** is not a signal (cold pages parked there cost
 nothing); reading them back at a rate is. An OOM kill alone is only `low`:
 the counter also counts kills inside a memory-capped cgroup (a test suite in
-its own scope), which say nothing about the machine. The available floor is
+its own scope), which say nothing about the machine. The "other signal" that
+makes it `critical` must be past an entry line: a reading held only by the
+recovery band (PSI some at 11 % after the kill itself made the level `low`)
+does not count — through 0.14.7 it did, and one kill read `critical` for the
+whole 5-minute window with half the RAM free. The available floor is
 genuinely small: under ~1 GB one agent starting or a test run pushes the
 kernel into direct reclaim and swap whatever the box; the share keeps the line
 proportional on a big box. The two shares are settings (per device, never
@@ -841,7 +867,8 @@ pages/s to leave `critical`), so a box hovering at a line doesn't flap.
 
 **Explained.** The snapshot's `why` lists the signals that set the level in
 plain words, and `describe()` (every refusal, the banner's message, the
-shield's log) joins them: *memory is critical: processes stalled on memory
+shield's log, a person's start dialog, the banner's reason line under its
+GB numbers) joins them: *memory is critical: processes stalled on memory
 34% of the last minute*, *memory is low: swapping 1.6 MB/s back in from
 disk*, *memory is critical: Windows commit charge is at 98% of its limit
 (55.8 GB of 60.0 GB)*. A reading is cached for 2 s, and the level is per
@@ -875,8 +902,9 @@ limit and `PagesInputPersec` (`mem <avail kB> <total kB> <committed kB>
 line still goes, and the parser takes both). A daemon thread reads it. The
 host has its own level, sustained on its own, and the level is the **worse**
 of the guest's and the host's, so everything below (spawns waiting, the
-launch gate's budget, the [memory shield](#memory-shedding-before-it-bricks)
-shedding idle agents) acts on a Windows in distress too. Windows' raw
+launch gate's budget, a person's start asking) acts on a Windows in distress
+too — except the [memory shield](#memory-shedding-before-it-bricks), which
+sheds only on the guest's own critical. Windows' raw
 available is **not** a signal — it swung between 0.7 and 3.4 GB within
 minutes on 2026-11-10 with nothing short. The host's signals:
 
@@ -899,8 +927,9 @@ start and the accurate voice pass were held back with nothing short. Freeing
 that cache does not hand it back to Windows soon (a 3 GB `memory.reclaim`
 moved Windows' available by nothing in 30 s). Only when Windows' own
 available is at or under 256 MB does it read critical whatever the guest
-holds. The shield frees the bigger of the two shortfalls, the host's measured
-on its headroom under the 2 GB floor (`host_low_line`); the launch budget is
+holds. When the guest is critical too, the shield frees the bigger of the
+two shortfalls, the host's measured on its headroom under the 2 GB floor
+(`host_low_line`); the launch budget is
 capped by that headroom over the same floor. The snapshot carries `host`
 (with `guest_reusable`, `headroom`, `headroom_pct`, `commit_pct`,
 `committed`, `commit_limit`, `pages_in_median`, its own `level`, `pending`
@@ -974,7 +1003,8 @@ agent start asks first. It answers **go / wait / refuse** from:
   have grown, and that projection counts like the level;
 - **the budget** — how many more sessions fit, at what one has been
   *measured* to cost (below). An automatic start waits while the room is 0,
-  checked after the cap; a person's start asks;
+  checked after the cap. A person's start is never asked over the budget or
+  the warming projection (since 0.14.3): only over the level now;
 - **live agents** against a machine-wide cap (`general.max_live_agents`,
   the `MINDFLOCK_MAX_LIVE_AGENTS` env var wins; default one per 1.2 GB of
   RAM, 16 on 20 GB; `0` = no cap). The cap applies to automatic starts only.
@@ -1019,10 +1049,14 @@ waiting for memory`, the reason saying what one more needs: *one more
 session needs ~1.0 GB; only 0.4 GB is free above the reserve*); a team
 run's pass starts at most `room` new lines; the MCP `whoami`,
 `spawn_session` and `start_team_run` results carry `capacity: {room,
-session_mb, hint}` so an orchestrator plans its worker count from it; a
-person's own start asks first (`Memory is tight: … No room for another
-session: one needs ~1.0 GB, 0.4 GB is free above the 3.0 GB this machine
-keeps in reserve.`).
+session_mb, hint}` so an orchestrator plans its worker count from it. A
+person's own start asks only while the level reads low or critical, and the
+dialog (`launch_gate.person_refusal`, the 409's `message`) leads with the
+signals behind the level — *Memory is critical: processes stalled on memory
+34% of the last minute. Starting another agent will likely freeze the
+machine.* — never the room estimate (the level is always the cause; it
+once read "critically low: 13.0 GB free. No room for another session" over a
+stall). The 409 also carries `reason` and `capacity`.
 
 #### Memory: shedding before it bricks
 
@@ -1032,9 +1066,8 @@ Voice Lab's F5 voice (4.1 GB + 1 GB swap) on 19.5 GB of WSL. The **memory
 shield** (`core/memory_shield.py`, called by the server's memory watch every
 10 s) acts:
 
-- **When**: only on **sustained** critical distress. The level itself turns
-  `critical` only after a distress signal held 30 s (above; inside WSL that
-  includes Windows alone — see [Windows under WSL](#memory-guard)); it must
+- **When**: only on **sustained** critical distress of the guest. Its level
+  turns `critical` only after a distress signal held 30 s (above); it must
   then read `critical` for 60 s more — or, already critical, PSI `full avg10`
   is at 25 % or past it (every runnable task stalled on memory a quarter of
   the last 10 s: a thrash under way, where waiting the minute would cost
@@ -1042,6 +1075,15 @@ shield** (`core/memory_shield.py`, called by the server's memory watch every
   nothing. At most once per 90 s, so the next shed acts on readings taken
   after the memory came back. The log line names the signal: *acting on
   memory has been critical for 61s (swapping 9.5 MB/s back in from disk)*.
+- **Not for Windows alone**: a `critical` that rests only on the host's
+  signals inside WSL (Windows' commit charge at 97 %, its headroom or own
+  available at a floor; `guest_level` below critical) sheds nothing
+  (`memory_shield.host_only_critical`). Sleeping a WSL agent frees memory
+  inside the VM, which Windows gets back late if at all — on 2026-11-10 a
+  3 GB `memory.reclaim` moved Windows' available by ~0 — and the commit
+  charge counts the VM's whole `memory=` size; through 0.14.7 the shield put an
+  idle agent to sleep every 90 s for a reading it could not move. New starts
+  stay held; `shield.last_decision` and one log line say why.
 - **Which**: idle agent sessions that `sleep.veto` allows with a two-minute
   idle window — never one working, asking or on a dialog, open in a
   terminal, driven by a person, typed into or woken in the last two minutes,
@@ -1049,9 +1091,9 @@ shield** (`core/memory_shield.py`, called by the server's memory watch every
   Largest-and-longest-idle first (measured MB × idle time, capped at an hour).
 - **How many**: only enough to bring available memory back over the `low`
   floor, counting each at its measured size (else the learned cost); at least
-  one (critical from a stall, a swap-in storm or Windows' commit charge has
-  no byte target: one at a time, the cooldown letting the next pass see the
-  effect), at most six. Inside WSL the need is the larger of the guest's
+  one (critical from a stall, a swap-in storm or an OOM kill has no byte
+  target: one at a time, the cooldown letting the next pass see the effect),
+  at most six. Inside WSL the need is the larger of the guest's
   shortfall and Windows' shortfall under its 2 GB headroom floor
   (`host_low_line`).
 - They are put to sleep exactly as *Put idle agents to sleep* does (Wake,

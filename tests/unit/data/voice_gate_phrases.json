@@ -1,5 +1,5 @@
 {
- "_about": "Pinned phrases for every voice-command gate. route: [phrase, kind] pairs voice_router.command() accepts today \u2014 every client gate that decides whether to ask the router (desktop mayBeCommand/mayBeWake in frontend/src/lib/voiceDesktop.ts, phone VOICE_MAY_CMD in backend/web/static/mobile.js) must let each one through. want: phrasings a person naturally says that should route too (owned by the router work; move to route once command() accepts them). text: ordinary dictation that must stay words \u2014 never a command, at any gate. Sessions assumed: see sessions.",
+ "_about": "Pinned phrases for every voice-command gate. route: [phrase, kind] pairs voice_router.command() accepts today \u2014 every client gate that decides whether to ask the router (desktop mayBeCommand/mayBeWake in frontend/src/lib/voiceDesktop.ts, phone VOICE_MAY_CMD in backend/web/static/mobile.js) must let each one through. want: phrasings a person naturally says that should route too (owned by the router work; move to route once command() accepts them) \u2014 the wake-word mishearings are voice_words' (wake_at), and \"pause\" stays out on purpose: it could mean the mic or the agent, and a wrong guess either stops the agent or the mic. text: ordinary dictation that must stay words \u2014 never a command, at any gate. Sessions assumed: see sessions.",
  "sessions": [
   "docs",
   "login fix",
@@ -322,30 +322,178 @@
   [
    "mine flock, open intake",
    "assistant"
+  ],
+  [
+   "um switch to docs",
+   "switch"
+  ],
+  [
+   "so scroll up",
+   "scroll"
+  ],
+  [
+   "now next session",
+   "switch_rel"
+  ],
+  [
+   "now status",
+   "status"
+  ],
+  [
+   "can you go to the next session",
+   "switch_rel"
+  ],
+  [
+   "session number three",
+   "switch_index"
+  ],
+  [
+   "session twenty one",
+   "switch_index"
+  ],
+  [
+   "switch the docs",
+   "switch"
+  ],
+  [
+   "scroll a bit up",
+   "scroll"
+  ],
+  [
+   "scroll up more",
+   "scroll"
+  ],
+  [
+   "go up",
+   "scroll"
+  ],
+  [
+   "row 2",
+   "switch_index"
+  ],
+  [
+   "stop it",
+   "answer"
+  ],
+  [
+   "the other one",
+   "switch_back"
+  ],
+  [
+   "what am i looking at",
+   "where"
+  ],
+  [
+   "okay so status",
+   "status"
+  ],
+  [
+   "alright next session",
+   "switch_rel"
+  ],
+  [
+   "uh go back",
+   "switch_back"
+  ],
+  [
+   "um, what's docs doing",
+   "status"
+  ],
+  [
+   "switch to session number three",
+   "switch_index"
+  ],
+  [
+   "go to row two",
+   "switch_index"
+  ],
+  [
+   "window number 2",
+   "switch_index"
+  ],
+  [
+   "session ninety nine",
+   "switch_index"
+  ],
+  [
+   "session to",
+   "switch_index"
+  ],
+  [
+   "session for",
+   "switch_index"
+  ],
+  [
+   "scroll way up",
+   "scroll"
+  ],
+  [
+   "go down",
+   "scroll"
+  ],
+  [
+   "next page",
+   "scroll"
+  ],
+  [
+   "previous page",
+   "scroll"
+  ],
+  [
+   "bottom",
+   "scroll"
+  ],
+  [
+   "to the top",
+   "scroll"
+  ],
+  [
+   "up",
+   "scroll"
+  ],
+  [
+   "down",
+   "scroll"
+  ],
+  [
+   "which session is that",
+   "where"
+  ],
+  [
+   "switch to docks",
+   "switch"
+  ],
+  [
+   "stop that",
+   "answer"
+  ],
+  [
+   "mindful, i'll open settings",
+   "assistant"
+  ],
+  [
+   "mindful i've opened settings",
+   "assistant"
+  ],
+  [
+   "mindfulout open intake",
+   "assistant"
+  ],
+  [
+   "mindful luck tell me what's going on",
+   "assistant"
+  ],
+  [
+   "line flock open settings",
+   "assistant"
+  ],
+  [
+   "mindful, i've opened settings",
+   "assistant"
   ]
  ],
  "want": [
-  "um switch to docs",
-  "so scroll up",
-  "now next session",
-  "now status",
-  "can you go to the next session",
-  "session number three",
-  "session twenty one",
-  "switch the docs",
-  "scroll a bit up",
-  "scroll up more",
-  "go up",
-  "row 2",
-  "stop it",
-  "the other one",
-  "what am i looking at",
-  "pause",
-  "mindful, i'll open settings",
-  "mindful i've opened settings",
-  "mindfulout open intake",
-  "mindful luck tell me what's going on",
-  "line flock open settings"
+  "pause"
  ],
  "text": [
   "open the settings file and check the port",

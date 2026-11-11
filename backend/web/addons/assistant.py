@@ -26,6 +26,7 @@ from backend.session.tmux.tmux import exact_pane_target
 from backend.session import tmux
 
 from backend.web.core import proc as _proc
+from backend.web.core import terminal_ws
 from backend.web.core.terminal import (
     apply_scroll_speed,
     pump_pty,
@@ -595,11 +596,11 @@ class AssistantAddon(Addon):
                 await ws.send_text(json.dumps({"type": "error", "message": err}))
                 await ws.close(code=4500)
                 return
-            try:
-                proc = spawn_tmux_attach(name)
-            except Exception as err:  # noqa: BLE001
-                await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
-                await ws.close(code=4500)
+            # Off the event loop, capped and with a deadline (terminal_ws).
+            proc = await terminal_ws.attach_or_close(
+                ws, lambda: spawn_tmux_attach(name)
+            )
+            if proc is None:
                 return
             await pump_pty(ws, proc, allow_input=True)
 

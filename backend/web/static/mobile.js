@@ -4207,7 +4207,8 @@
   var VOICE_WAKE_QUIET_MS = 350;         // quiet that must come before a lone utterance
   var VOICE_WAKE_TAIL_MS = 200;          // quiet after it that ends it (the clip goes then)
   var VOICE_WAKE_MIN_MS = 250;           // its sound lasts at least this long...
-  var VOICE_WAKE_MAX_MS = 1600;          // ...and at most this (longer is a sentence: never a wake)
+  var VOICE_WAKE_MAX_MS = 4000;          // ...and at most this (longer is a sentence: never a wake) — the
+                                         // word and a command in one breath ("MindFlock, next session") fit
   var VOICE_WAKE_LEAD_MS = 100;          // audio kept from before its first loud block (the word's soft start)
   function voiceWakeNew() {
     return { t: 0, floor: 0, phase: "wait", quiet: 0, from: 0, last: 0, tail: 0, prev: -1 };
@@ -4222,7 +4223,11 @@
     var at = d.t, k = ms / 85;
     rms = Number(rms) || 0;
     d.t += ms;
-    d.floor = d.floor === 0 ? rms : Math.min(rms, d.floor * (1 + 0.05 * k) + 0.001 * k);
+    // The floor creeps up in the quiet only: inside a word it may only go
+    // down — a voice held for seconds (the word and a command in one
+    // breath, a sentence) never turns "quiet" and ends early.
+    d.floor = d.floor === 0 ? rms : d.phase === "word" ? Math.min(rms, d.floor)
+      : Math.min(rms, d.floor * (1 + 0.05 * k) + 0.001 * k);
     var loud = rms > Math.max(VOICE_RMS_SPEECH, d.floor * 3);
     if (d.phase === "word") {
       if (loud) {
@@ -4263,6 +4268,22 @@
     var out = new Float32Array(n);
     keep.forEach(function (b) { out.set(b.x, at); at += b.x.length; });
     return out;
+  }
+  // A wake's lead-in: the standby's blocks that start at or after `from` (the
+  // word's clip's end, the detector's clock) — what was said after the word
+  // while the server checked it — joined, the last VOICE_WAKE_HANDOFF_MS at
+  // most: {pcm, rate, floor, ms}, or null (nothing yet).
+  var VOICE_WAKE_HANDOFF_MS = 3000;
+  function voiceWakeLead(blocks, from, rate, floor) {
+    var keep = (blocks || []).filter(function (b) { return b.at >= from; });
+    var n = 0;
+    keep.forEach(function (b) { n += b.x.length; });
+    if (!n || !rate) return null;
+    var pcm = new Float32Array(n), at = 0;
+    keep.forEach(function (b) { pcm.set(b.x, at); at += b.x.length; });
+    var max = Math.round(rate * VOICE_WAKE_HANDOFF_MS / 1000);
+    if (pcm.length > max) pcm = pcm.subarray(pcm.length - max);
+    return { pcm: pcm, rate: rate, floor: Number(floor) || 0, ms: Math.round(pcm.length * 1000 / rate) };
   }
   function ServerSTT() {
     var stream = null;        // the microphone, kept across turns
@@ -4654,6 +4675,7 @@
       // and the ring sit it out, so a chime never counts as speech and never
       // delays the first word.
       var muted = (h.skipUntil && Date.now() < h.skipUntil) || voiceMicMuted();
+      if (g.handing) muted = false;   // a wake's lead-in (recLead): said before the chime, it may start a word
       // The engine reuses the input buffer between callbacks: copy it.
       var block = new Float32Array(ev.inputBuffer.getChannelData(0));
       if (!block.length) return;
@@ -4836,6 +4858,25 @@
       }
       if (token === mine && rec === g && g.mode === "stream") streamPump(g, mine);
     }
+    // A wake's lead-in (voiceWoke: the standby's audio after the word, before
+    // the chime) goes first into the new recording, block by block through
+    // recBlock — as if heard now: a word said while the server checked the
+    // word starts the phrase (its first chunk, its tick), the chime's skip
+    // not applied to it (g.handing). The standby's floor is the room's.
+    function recLead(g, mine, h, lead) {
+      if (!lead || !lead.pcm || !lead.pcm.length || !g.rate) return;
+      var pcm = lead.rate === g.rate ? lead.pcm : voiceResample(lead.pcm, lead.rate, g.rate);
+      if (lead.floor > 0 && (g.floor === 0 || lead.floor < g.floor)) g.floor = lead.floor;
+      var n = Math.max(1, Math.round(g.rate * VOICE_CAP_BLOCK / VOICE_WAV_RATE));
+      voice.rec.lead = { ms: Math.round(pcm.length * 1000 / g.rate), at: Date.now() };
+      g.handing = true;
+      try {
+        for (var at = 0; at < pcm.length && token === mine && rec === g; at += n) {
+          var x = pcm.subarray(at, Math.min(pcm.length, at + n));
+          recBlock(g, mine, h, { inputBuffer: { length: x.length, getChannelData: function () { return x; } } });
+        }
+      } finally { g.handing = false; }
+    }
     function recStop(g) {
       clearInterval(clockTimer);
       clockTimer = null;
@@ -4904,6 +4945,7 @@
           return;
         }
         recRun(g, mine, h, capMs);
+        if (h.lead) recLead(g, mine, h, h.lead);
       }).catch(function (err) {
         if (token !== mine) return;
         token = null;
@@ -5441,6 +5483,12 @@
       if (!token) keep();
     }
     function standbyOn() { return !!standing; }
+    // The standby's audio after `t` (its clock: a clip's `to`), joined, with
+    // its noise floor — a wake's lead-in (voiceWakeLead); null when none.
+    function standbyAfter(t) {
+      var w = standing;
+      return w && w.rate ? voiceWakeLead(w.blocks, t, w.rate, w.d.floor) : null;
+    }
     // The standby wants the microphone (on, the page in front), running or
     // paused: the grace never gives it back meanwhile. Off: the grace that
     // is already running (keep() re-arms it while held; a hidden page's is
@@ -5470,7 +5518,7 @@
     function paused() { return !!(token || carry) && micMuted(stream); }
     return { name: "server", available: available, start: start, stop: stop, finish: finish,
              active: active, pending: pending, release: release, warm: warm, paused: paused,
-             standby: standby, standbyStop: standbyStop, standbyOn: standbyOn, hold: hold,
+             standby: standby, standbyStop: standbyStop, standbyOn: standbyOn, standbyAfter: standbyAfter, hold: hold,
              warmStt: warmStt, preload: preload };
   }
 
@@ -6779,7 +6827,8 @@
   var voiceListen_ = { netErrs: 0, mode: "", until: 0, restarts: 0, timer: null, reprompted: false,
                        heard: false, startedAt: 0, rapid: 0, stopAfter: false, held: false,
                        overAfter: false, overBy: 0, routing: false, routeQ: [], draining: false, gen: 0,
-                       muteUntil: 0, woke: null, cont: false, restartTok: 0, early: null, lastFinalAt: 0, listenAt: 0 };
+                       muteUntil: 0, woke: null, cont: false, restartTok: 0, early: null, lastFinalAt: 0, listenAt: 0,
+                       addressed: "" };
   voice.listen = voiceListen_;   // tests age the window with it
   function voiceListen(mode, windowMs, held, cont) {
     var L = voiceListen_;
@@ -6803,6 +6852,10 @@
     L.routeQ = [];
     L.draining = false;
     L.early = null;
+    // The listen that follows the assistant's question takes its answer;
+    // voiceWoke marks the wake word's listen after this (voiceAddressed).
+    L.addressed = Date.now() - (voice.assistListen || 0) < VOICE_ASSIST_LISTEN_MS && voiceAssistWaiting() ? "answer" : "";
+    voice.assistListen = 0;
     L.listenAt = Date.now();   // this listen's start: a dialog listen opened after its dialog was had (voiceAnswerInTime)
     L.gen++;
     L.restartTok++;
@@ -6874,7 +6927,7 @@
     voiceListen_.startedAt = Date.now();
     voiceListen_.restartTok++;   // a restart still on its way is stale now (onEnd)
     voiceGuessKeep();   // a new phrase: an old guess is text now
-    var woke = voiceListen_.woke;   // the wake word opened this listen: {skipUntil, wakeMs}
+    var woke = voiceListen_.woke;   // the wake word opened this listen: {skipUntil, wakeMs, lead}
     voiceListen_.woke = null;
     // THIS listen, for the phrase carried between its phrases (ServerSTT's
     // carryFrom): a carried phrase is taken only by a start with the same
@@ -6888,6 +6941,7 @@
       until: voiceListenUntil(),
       skipUntil: woke ? woke.skipUntil : 0,
       wakeMs: woke ? woke.wakeMs : -1,
+      lead: woke ? woke.lead : null,   // what was said after the wake word, before the chime
       onInterim: function (t, tail) { if (voiceIsListening() && !voiceEchoing()) { voiceHeardSome(); voiceCaption(t || voiceDictHint(), t ? tail : ""); } },
       // A streamed phrase so far: into the box as a guess (voiceGuessShow).
       onGuess: function (t) { if (!voiceIsListening()) return false; voiceHeardSome(); return voiceGuessShow(t); },
@@ -7113,25 +7167,86 @@
     // Into the ask sheet's field every phrase is the answer's words: no
     // router, no commands — "over" sends it, "over and out" too and stops.
     if (voice.box) { voiceHeardWords(p); return; }
+    // Said TO MindFlock (voiceAddressed): routed even mid-message.
+    var how = p.text ? voiceAddressed(p.text) : null;
+    if (how) {
+      if (how.alone) { voiceStripNote("Yes?"); voiceListenContinue(); return; }   // the word alone: the next phrase is said to it
+      if (how.mode === "answer") { voiceStopForCommand(); voiceAssistTurn(how.text); return; }   // the assistant's question answered
+      var q = { text: how.text, kind: p.kind, spokeAt: p.spokeAt };
+      voiceRouteThen(how.text, p.spokeAt, typed, function (res) { return voiceAddressedRouted(res, q, how.mode); });
+      return;
+    }
     if (p.text && !composeEl.value.trim()) {
-      var gen = L.gen;
-      L.routing = true;
-      // Its guess stays in the box while the router answers, and goes the
-      // moment the answer is in — for the final words, or for a command —
-      // so the words never blink out.
-      if (typed) voiceGuessHold(typed);
-      voiceRoute(p.text, "", false, p.spokeAt).then(function (res) {
-        if (L.gen !== gen) return;      // a newer listen (or none): this answer is for nobody
-        L.routing = false;
-        voiceGuessDrop();
-        if (!voiceIsListening()) { L.routeQ = []; return; }
-        L.draining = true;            // the queued phrases first, then listen on / send
-        if (voiceRouted(res, p)) { L.draining = false; L.routeQ = []; return; }   // a command: listening is over
-        voiceRouteDrain();
-      });
+      voiceRouteThen(p.text, p.spokeAt, typed, function (res) { return voiceRouted(res, p); });
       return;
     }
     voiceHeardRest(p);
+  }
+  // One phrase to the router, then handle(res) — true when it was a command
+  // (listening is over). Its guess stays in the box while the router
+  // answers, and goes the moment the answer is in — for the final words, or
+  // for a command — so the words never blink out.
+  function voiceRouteThen(text, spokeAt, typed, handle) {
+    var L = voiceListen_, gen = L.gen;
+    L.routing = true;
+    if (typed) voiceGuessHold(typed);
+    voiceRoute(text, "", false, spokeAt).then(function (res) {
+      if (L.gen !== gen) return;      // a newer listen (or none): this answer is for nobody
+      L.routing = false;
+      voiceGuessDrop();
+      if (!voiceIsListening()) { L.routeQ = []; return; }
+      L.draining = true;            // the queued phrases first, then listen on / send
+      if (handle(res)) { L.draining = false; L.routeQ = []; return; }   // a command: listening is over
+      voiceRouteDrain();
+    });
+  }
+  // Is this phrase said to MindFlock? → {mode, text, alone?} or null:
+  //  "rest"   — it starts with the wake word ("MindFlock, open intake";
+  //             a form vc-words' wake_at twin accepts: "Mine flock, …"),
+  //             or it is the words said after the wake word in one breath
+  //             (voiceWoke's `rest`): the router's command, else the
+  //             assistant — never typed;
+  //  "answer" — the assistant asked something (ask / confirm): its answer;
+  //  "first"  — the first phrase of a listen the wake word started: a
+  //             command the router knows, or one it nearly knows (a
+  //             `near` switch / status / read / question: the assistant's),
+  //             else dictation as any phrase.
+  // `alone`: the wake word and nothing after it.
+  function voiceAddressed(text) {
+    var L = voiceListen_, A = L.addressed || "";
+    L.addressed = "";
+    if (A === "rest") return { mode: "rest", text: text };
+    var rest = voiceWakeRestOf(text);
+    if (rest !== null) {
+      if (!rest.trim()) { L.addressed = "first"; return { mode: "first", text: "", alone: true }; }
+      return { mode: "rest", text: rest };
+    }
+    if (A === "answer" && voiceAssistWaiting()) return { mode: "answer", text: text };
+    if (A === "first") return { mode: "first", text: text };
+    return null;
+  }
+  var VOICE_NEAR_ASSIST = ["switch", "status", "read", "question"];
+  function voiceAddressedRouted(res, p, mode) {
+    if (res && res.kind !== "prompt") return voiceRouted(res, p);   // a command (or the assistant)
+    if (!res) {
+      // No router: the phone's own commands; an addressed request it can't
+      // do is not typed into the agent — the strip says so.
+      var cmd = voiceCommand(p.text);
+      if (mode === "rest" && (!cmd || (cmd.kind === "focus" && !voiceStrictMatch(cmd.arg)))) {
+        voice.routeWhy = "";
+        voiceStopForCommand();
+        voiceIdle("Couldn't reach MindFlock — nothing done");
+        return true;
+      }
+      return voiceRouted(null, p);
+    }
+    var near = res.near && typeof res.near === "object" ? String(res.near.kind || "") : "";
+    if (mode === "rest" || VOICE_NEAR_ASSIST.indexOf(near) >= 0) {
+      voiceStopForCommand();
+      voiceAssistTurn(p.text);
+      return true;
+    }
+    return voiceRouted(res, p);   // dictation, as any phrase
   }
   // A phrase that is not a command: a whole-phrase answer to ANOTHER
   // session ("session three yes") answers it, voice staying here; while
@@ -7214,6 +7329,7 @@
     if (G.box !== box) { voiceGuessDrop(); G.box = box; }
     var cur = box.value, base = voiceGuessBase(box);
     var words = !voice.box && !base.trim() && voiceMayBeCommand(all) ? ""
+      : !voice.box && voiceWakeLed(all, true) ? ""   // said to MindFlock mid-message: held whole for the router
       : voiceHoldBack(all, !voice.box && !!voiceAsks(voice.session))[0];
     var put = voiceGuessPut(cur, G.typed, words);
     G.typed = put.typed;
@@ -7376,12 +7492,19 @@
   var VOICE_HOLD_ANSWER = ["yes always", "yes and always", "yeah always", "ok always", "always allow", "don't ask again",
                            "do not ask again", "never ask again", "no thanks", "no thank you", "go ahead", "do it",
                            "option", "number", "choice", "the first", "the second", "the third", "answer", "reply"];
-  var VOICE_NUM_WORDS = { ten: 10, eleven: 11, twelve: 12 };
-  // "two" / "2" / "second" → 2; 0 when it is not a number.
+  var VOICE_NUM_WORDS = { ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
+                          seventeen: 17, eighteen: 18, nineteen: 19 };
+  var VOICE_NUM_TENS = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+  // "two" / "2" / "second" → 2, "twenty one" / "twenty-one" → 21 (to 99,
+  // as the router reads a row); 0 when it is not a number.
   function voiceNumber(word) {
-    var w = String(word || "").toLowerCase();
+    var w = String(word || "").toLowerCase().trim().replace(/-/g, " ");
     if (/^\d+$/.test(w)) return parseInt(w, 10);
-    return VOICE_NUM_VALUE[w] || VOICE_NUM_WORDS[w] || 0;
+    var two = w.split(/\s+/);
+    if (two.length === 2 && VOICE_NUM_TENS[two[0]] && /^(?:one|two|three|four|five|six|seven|eight|nine)$/.test(two[1])) {
+      return VOICE_NUM_TENS[two[0]] + VOICE_NUM_VALUE[two[1]];
+    }
+    return VOICE_NUM_VALUE[w] || VOICE_NUM_WORDS[w] || VOICE_NUM_TENS[w] || 0;
   }
   // Could these (normalized) words be the start of a control phrase?
   function voiceMayStart(words, answers) {
@@ -7415,10 +7538,30 @@
   // into the box (it waits whole for the router); one that cannot be — most
   // prompts — is typed as it comes (the router still reads its final words).
   // The stop and hush phrases are the owner's (VOICE_W.mayCmd).
+  // Numbers to 99 (a tens word takes its unit in the "*" after it), digits,
+  // and what a recognizer writes for a number said alone ("session to").
   var VOICE_NUMS = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|first|second|third|fourth|" +
-                   "fifth|sixth|seventh|eighth|ninth|1|2|3|4|5|6|7|8|9";
+                   "fifth|sixth|seventh|eighth|ninth|1|2|3|4|5|6|7|8|9|thirteen|fourteen|fifteen|sixteen|" +
+                   "seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|to|too|for|won|" +
+                   "10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|30|40|50|60|70|80|90|99";
   var VOICE_VERBS = "switch|go|change|jump|move|focus|open|show|select";
   var VOICE_LEADS = ["ok", "okay", "hey", "please"];
+  // Said before a command and never part of it — the router drops them as
+  // it reads (voice_router _FILLER_RE / _FILL_LEAD_RE): "um, switch to
+  // docs", "so scroll up", "can you go back". Two-word ones as one entry.
+  var VOICE_FILLERS = ["um", "umm", "uh", "uhh", "uhm", "er", "erm", "hmm", "so", "alright", "all right", "right",
+                       "well", "now", "then", "actually", "anyway", "just", "can you", "could you", "would you",
+                       "ok", "okay", "hey", "please"];
+  // The wake word said first, as written for it — the router's assistant
+  // path (voice_router._assistant_command): its own word, "mind flock",
+  // and the forms a recognizer writes for it. A phrase that starts so is
+  // held whole for the router.
+  var VOICE_WAKE_SAID = ["mindflock", "mind flock", "mine flock", "my flock", "mind block", "mindful", "mindfulout",
+                          "mindlock", "line flock", "flock", "hey mindflock", "hey mind flock"];
+  // ...of which these are the word itself: a request even with no pause
+  // written after them; the others are ordinary words ("my flock", "mindful")
+  // and address MindFlock only with the pause ("My flock, open settings").
+  var VOICE_WAKE_HARD = ["mindflock", "mind flock", "mindlock", "hey mindflock", "hey mind flock"];
   var VOICE_ANSWER_WORDS = ("yes yeah yep yup sure ok okay approve approved allow allowed go ahead do it that this all " +
                             "no nope nah deny denied reject don't dont not skip cancel stop always and ask me again never " +
                             "thanks thank you please").split(" ");
@@ -7442,13 +7585,96 @@
     "option|choice " + VOICE_NUMS, "always allow *", "answer|tell|reply *",
     "new session *", "a|another new session *", "start|create|make new session *",
     "start|create|make a|another new session *", "spin up new session *", "spin up a|another new session *",
+    // The router's wider phrasings (tests/unit/data/voice_gate_phrases.json
+    // `route`, pinned by test_mobile_voice_polish.py).
+    "take me *", "hop to|back|over *", "put me on|in *", "talk to *", "let me see|look *",
+    "how is|are|was|'s|s *", "how's|hows *", "what did|do|am|are|voice *", "which one *", "the other one",
+    "voice help|commands", "list commands|sessions *", "one more time", "esc", "go up|down|top|bottom *",
+    "up", "down", "top", "bottom", "to the top|bottom *", "next|previous|prev|last page",
+    "create|launch|make|start|open a|an|another|new session|agent *", "create|launch|start *",
+    "spin one|a|it|another up *", "spin up *", "new agent *", "i want|need|wanna to start|create|make|launch|open *",
+    "i want|need|wanna a new session|agent *", "i'd|id like a|to *",
+    "yes|no|yeah|nope to *", "session|window|row number *",
   ].map(function (p) { return p.split(" ").map(function (slot) { return slot.split("|"); }); });
-  function voiceMayBeCommand(text) {
-    // A doubled word ("stop stop") is said once, as the router reads it.
+  // The phrase's words with the fillers said before a command dropped (as
+  // the router reads it), and a doubled word said once.
+  function voiceGateWords(text) {
     var w = voiceNorm(text).split(" ").filter(function (x, i, a) { return x && (i === 0 || x !== a[i - 1]); });
-    if (w.length > 1 && VOICE_LEADS.indexOf(w[0]) >= 0) w = w.slice(1);
+    for (var go = true; go && w.length > 1;) {
+      go = false;
+      for (var i = 0; i < VOICE_FILLERS.length; i++) {
+        var f = VOICE_FILLERS[i].split(" ");
+        if (w.length > f.length && w.slice(0, f.length).join(" ") === VOICE_FILLERS[i]) { w = w.slice(f.length); go = true; break; }
+      }
+    }
+    return w;
+  }
+  // Does the phrase (so far) start with the wake word — said to MindFlock?
+  // vc-words' wake_at twin (voiceWakeRest: the misheard forms it accepts)
+  // when the page has it, else the written forms (VOICE_WAKE_SAID); a
+  // prefix of one of them ("mind", "my") may still become one.
+  function voiceWakeLed(text, prefix) {
+    try { if (typeof voiceWakeRest === "function" && voiceWakeRest(text) !== null) return true; } catch (e) {}
+    var t = voiceNorm(text).replace(/^(?:hey|ok|okay) /, "");
+    if (!t) return false;
+    var own = voiceNorm((VOICE_W && VOICE_W.words && VOICE_W.words.wake) || "");
+    var leads = own ? VOICE_WAKE_SAID.concat([own]) : VOICE_WAKE_SAID;
+    for (var i = 0; i < leads.length; i++) {
+      if (t === leads[i] || t.indexOf(leads[i] + " ") === 0) return true;
+      if (prefix && (leads[i] + " ").indexOf(t + " ") === 0) return true;
+    }
+    return false;
+  }
+  // The words after a leading wake word ("MindFlock, next session" → "next
+  // session"), "" for the word alone, null when the phrase is not said to
+  // MindFlock — vc-words' twin when the page has it, else the written forms.
+  function voiceWakeRestOf(text) {
+    try { if (typeof voiceWakeRest === "function") return voiceWakeRest(text); } catch (e) {}
+    var toks = String(text || "").trim().split(/\s+/).filter(Boolean);
+    var own = voiceNorm((VOICE_W && VOICE_W.words && VOICE_W.words.wake) || "");
+    var leads = (own ? VOICE_WAKE_SAID.concat([own]) : VOICE_WAKE_SAID).slice().sort(function (a, b) { return b.length - a.length; });
+    for (var k = 3; k >= 1; k--) {
+      if (toks.length < k) continue;
+      var said = voiceNorm(toks.slice(0, k).join(" "));
+      if (leads.indexOf(said) < 0) continue;
+      var paused = k === toks.length || /[,:;.!?—–-]$/.test(toks[k - 1]);
+      if (VOICE_WAKE_HARD.indexOf(said) < 0 && said !== own && !paused) continue;
+      return toks.slice(k).join(" ").replace(/^[\s:;,.!?—–-]+/, "").trim();
+    }
+    return null;
+  }
+  // "docs yes", "docs, no": a session's name said first (the page's list),
+  // then only answer words.
+  function voiceGateNamed(w, bare) {
+    var list = typeof instances !== "undefined" && instances ? instances : [];
+    var t = w.join(" ");
+    for (var i = 0; i < list.length; i++) {
+      var title = String((list[i] && list[i].title) || "");
+      var names = [voiceNorm(typeof nameOf === "function" ? nameOf(title) : title), voiceNorm(title.replace(/[-_]+/g, " "))];
+      for (var k = 0; k < names.length; k++) {
+        var n = names[k];
+        if (!n) continue;
+        // The name alone — or its first words — is not held: a prompt that
+        // starts with a word of a session's name types as it comes, and
+        // "docs yes" is taken back from the box when its answer word lands.
+        // (`bare`, after "switch the": the name, or its first words, is enough.)
+        if (bare && (n + " ").indexOf(t + " ") === 0) return true;
+        if (t.indexOf(n + " ") === 0 && t.slice(n.length + 1).split(" ").every(function (x) {
+          return VOICE_ANSWER_WORDS.indexOf(x) >= 0;
+        })) return true;
+      }
+    }
+    return false;
+  }
+  function voiceMayBeCommand(text) {
+    if (voiceWakeLed(text, true)) return true;   // said to MindFlock: the router's (assistant) path
+    var w = voiceGateWords(text);
     if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
     if (!w.length || w.every(function (x) { return VOICE_ANSWER_WORDS.indexOf(x) >= 0 || VOICE_LEADS.indexOf(x) >= 0; })) return true;
+    // "docs yes": a session's name, then (maybe) an answer to it.
+    if (voiceGateNamed(w)) return true;
+    // "switch the docs": only a session's name after it ("switch the bug" is words).
+    if (w[0] === "switch" && w[1] === "the") return w.length === 2 || voiceGateNamed(w.slice(2), true);
     return VOICE_MAY_CMD.concat(VOICE_W.mayCmd).some(function (p) {
       for (var i = 0; i < w.length; i++) {
         if (i >= p.length) return false;
@@ -7737,6 +7963,115 @@
     }
     return null;
   }
+  // --- a phrase said TO MindFlock: it starts with the wake word (core.voice_words
+  // wake_at / wake_rest, kept identical; tests/unit/data/voice_sounds.json `wake`) ---
+  var VOICE_WAKE_LEADS = ["hey", "ok", "okay", "please", "ask"];
+  // The default's forms that address MindFlock with no pause after them.
+  var VOICE_WAKE_PLAIN = ["mindflock", "mind flock", "mine flock", "minflock", "min flock",
+                          "mindlock", "mind lock", "mindflog", "mind flog", "minh flock"];
+  // The default as it SOUNDS (the server's WAKE_SOUND, pattern for pattern):
+  // first+second ("mind fog", "mindful", "mindfulout") or my+my_second ("my clock").
+  var VOICE_WAKE_SOUND = {
+    first: "(?:mind|mined|mine|mynd|min|minh|mint|mend|men|myn)",
+    second: "(?:(?:[fcbpkg]l|fr|ph)[aeiouy]|f[aou])[a-z]{0,5}",
+    my: "(?:my|mi|mai)",
+    my_second: "(?:[fck]l|fr|f)[ou][a-z]{0,4}",
+  };
+  var VOICE_WAKE_RX = (function (S) {
+    return {
+      one: new RegExp("^(?:" + S.first + S.second + "|" + S.my + S.my_second + ")$"),
+      first: new RegExp("^" + S.first + "$"), second: new RegExp("^" + S.second + "$"),
+      my: new RegExp("^" + S.my + "$"), mySecond: new RegExp("^" + S.my_second + "$"),
+    };
+  })(VOICE_WAKE_SOUND);
+  // "Mindful" and the word's last sound as a word ("Mindful, I'll", "Mindful luck").
+  var VOICE_WAKE_TAILS = ["ill", "ive", "luck", "lock", "look", "out"];
+  var VOICE_WAKE_NEAR = 2;
+  var VOICE_WAKE_MINE = ["my", "mi", "mai", "me"];   // a "my"-led two-word form wants a pause after it
+  // What a request to MindFlock starts with: the gate a misheard wake word
+  // must pass mid-dictation (navigation and questions; nothing that sends).
+  var VOICE_WAKE_ASKS = ["open", "opened", "go", "show", "tell me", "which", "what", "whats", "where", "who", "how",
+    "list", "start", "new", "create", "spin", "switch", "next", "previous", "session", "scroll",
+    "page", "read", "summarize", "summarise", "status", "help", "turn", "focus", "jump"];
+  var VOICE_WAKE_ASK_FILLERS = ["please", "um", "uh", "so", "now", "ok", "okay"];
+  var VOICE_WAKE_ASK_YOU = ["can", "could", "would", "will"];
+  var VOICE_WAKE_PAUSE = /[,.:;!?—–-]$/;
+  // A token's matcher words: lower case, apostrophes dropped, the rest a break.
+  function voiceWakeWords(t) {
+    return String(t || "").toLowerCase().replace(/['’]/g, "").split(/[^a-z0-9]+/).filter(Boolean);
+  }
+  function voiceWakeApos(toks) { return /['’]/.test(toks.join("")); }
+  // The words (cleaned, voiceWordsClean) the wake checks read: the page's.
+  function voiceWakeOf(w) { return w || (VOICE_W ? VOICE_W.words : voiceWordsClean(null)); }
+  // Whether `ws` (one or two matcher words) are the DEFAULT wake word as heard:
+  // "word" | "form" | "sound" | "near", else "" (core.voice_words.wake_like).
+  function voiceWakeLike(ws, w) {
+    ws = ws.filter(Boolean);
+    if (!ws.length || ws.length > 2) return "";
+    var heard = ws.join(""), word = VOICE_WORDS_DEFAULT.wake, R = VOICE_WAKE_RX;
+    if (heard === word) return "word";
+    if ((voiceWakeOf(w).heard.wake || []).map(voiceLetters).indexOf(heard) >= 0) return "form";
+    if (ws.length === 1 && R.one.test(heard)) return "sound";
+    if (ws.length === 2 && ((R.first.test(ws[0]) && R.second.test(ws[1])) || (R.my.test(ws[0]) && R.mySecond.test(ws[1])) ||
+        (ws[0] === "mindful" && VOICE_WAKE_TAILS.indexOf(ws[1]) >= 0))) return "sound";
+    if (Math.abs(heard.length - word.length) <= VOICE_WAKE_NEAR && voiceEdits(heard, word) <= VOICE_WAKE_NEAR) return "near";
+    return "";
+  }
+  // The words after a leading wake form are a request (or nothing).
+  function voiceWakeAsks(text) {
+    var ws = voiceWakeWords(text), i = 0;
+    if (!ws.length) return true;
+    while (i < ws.length && i < 2 && VOICE_WAKE_ASK_FILLERS.indexOf(ws[i]) >= 0) i++;
+    if (i + 1 < ws.length && VOICE_WAKE_ASK_YOU.indexOf(ws[i]) >= 0 && ws[i + 1] === "you") i += 2;
+    if (i >= ws.length) return false;
+    return VOICE_WAKE_ASKS.indexOf(ws[i]) >= 0 || VOICE_WAKE_ASKS.indexOf(ws.slice(i, i + 2).join(" ")) >= 0;
+  }
+  function voiceWakeSpan(span, w) {
+    var ws = [];
+    span.forEach(function (t) { ws = ws.concat(voiceWakeWords(t)); });
+    if (voiceWakeApos(span)) {
+      var tail = span.length === 2 && !voiceWakeApos(span.slice(0, 1)) && ws[0] === "mindful";
+      if (!tail || ["ill", "ive"].indexOf(ws[ws.length - 1]) < 0) return "";
+    }
+    return voiceWakeLike(ws, w);
+  }
+  // The index of the whitespace token after a LEADING wake word, else null
+  // (core.voice_words.wake_at): a lead word may come first; the word, a
+  // WAKE_PLAIN form, a heard form or a sound-alike with a pause after it, or
+  // the default as it sounds before a request ("Mindful, I'll open settings").
+  function voiceWakeAt(text, w) {
+    w = voiceWakeOf(w);
+    var toks = String(text || "").trim().split(/\s+/).filter(Boolean);
+    var own = (w.wake || "").toLowerCase().replace(/\s+/g, " ").trim() || VOICE_WORDS_DEFAULT.wake;
+    var names = own === VOICE_WORDS_DEFAULT.wake ? [own] : [own, VOICE_WORDS_DEFAULT.wake];
+    var plain = VOICE_WAKE_PLAIN.concat([own]).map(voiceLetters), heard = (w.heard.wake || []).map(voiceLetters);
+    var start = toks.length > 1 && VOICE_WAKE_LEADS.indexOf(voiceWakeWords(toks[0]).join(" ")) >= 0 ? 1 : 0;
+    for (var k = 1; k <= 2; k++) {
+      var span = toks.slice(start, start + k);
+      if (span.length < k) continue;
+      var said = span.map(function (t) { return voiceWakeWords(t).join(""); }).join("");
+      if (!said) continue;
+      var paused = VOICE_WAKE_PAUSE.test(span[span.length - 1]);
+      if (!voiceWakeApos(span)) {
+        if (plain.indexOf(said) >= 0) return start + k;
+        if (paused && (heard.indexOf(said) >= 0 || names.some(function (n) { return voiceSoundsLike(said, n); }))) return start + k;
+      }
+      // "my flock open settings" is about one's flock: a "my"-led form wants the pause.
+      var mine = k === 2 && VOICE_WAKE_MINE.indexOf(voiceWakeWords(span[0]).join(" ")) >= 0;
+      if (voiceWakeSpan(span, w) && (paused || !mine) && voiceWakeAsks(toks.slice(start + k).join(" "))) return start + k;
+    }
+    return null;
+  }
+  // The words after the leading wake word ("" when none), else null; a first
+  // "opened" after "Mindful, I've" read as "open" (core.voice_words.wake_rest).
+  function voiceWakeRest(text, w) {
+    var at = voiceWakeAt(text, w);
+    if (at === null) return null;
+    var toks = String(text || "").trim().split(/\s+/).filter(Boolean);
+    var rest = toks.slice(at).join(" ").replace(/^[\s:;,.!?—–-]+/, "").trim();
+    if (at >= 1 && voiceWakeWords(toks[at - 1]).join(" ") === "ive") rest = rest.replace(/^opened\b/i, "open");
+    return rest;
+  }
   // The phrases with their variants and (`heard`: the server's forms for
   // that kind) what is heard for them, normalized, each once.
   function voiceWordsWide(list, heard) {
@@ -7819,7 +8154,7 @@
     { kind: "cancel",   re: /^(?:cancel|never ?mind|forget it)$/ },   // "scratch that" is the undo radio word (voiceUndoParse)
     { kind: "switch_back", re: /^(?:(?:go|switch|take me) back|back|go back to the (?:last|previous) one|(?:the )?last session|the one before)$/ },
     { kind: "where",    re: /^(?:where am i|(?:which|what) session is this|what session am i (?:in|on))$/ },
-    { kind: "switch_index", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?session (?:number )?(\S+)$/ },
+    { kind: "switch_index", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?session (?:number )?(\S+|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[ -](?:one|two|three|four|five|six|seven|eight|nine))$/ },
     { kind: "switch_rel", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?(?:the )?(next|previous|prev) (?:session|one)$/ },
     { kind: "switch",   re: /^(?:switch|go|change|jump) (?:over )?to (.+)$/ },
     { kind: "focus",    re: /^(?:focus(?: on)?|open|show|select) (.+)$/ },
@@ -7955,6 +8290,7 @@
       timer = setTimeout(function () {
         if (aborter) { try { aborter.abort(); } catch (e) {} }
         voice.lastRoute = "timed out — the local table";
+        voice.routeWhy = "timeout";
         resolve(null);
       }, VOICE_ROUTE_TIMEOUT_MS);
     });
@@ -7964,16 +8300,19 @@
       body: JSON.stringify(voiceRouteBody(text, session || voice.session || current, spokeAt)),
       signal: aborter ? aborter.signal : undefined,
     }).then(function (r) {
-      if (!r.ok) { voice.lastRoute = "HTTP " + r.status + " — the local table"; return null; }
+      if (!r.ok) { voice.lastRoute = "HTTP " + r.status + " — the local table"; voice.routeWhy = "http"; return null; }
       return r.json().catch(function () { return null; }).then(function (j) {
         if (!j || typeof j !== "object" || !j.kind) {
           voice.lastRoute = "no answer — the local table";
+          voice.routeWhy = "empty";
           return null;
         }
         voicePendingKeep(j);
+        voice.routeWhy = "";
         if (VOICE_ROUTE_KINDS.indexOf(j.kind) < 0) {
+          // A newer server's kind: typed as words, and the strip says so.
           voice.lastRoute = String(j.kind) + " (unknown here: a prompt)";
-          return { kind: "prompt" };
+          return { kind: "unknown", said: String(j.kind) };
         }
         voice.lastRoute = String(j.kind) + (j.kind === "switch_index" || (j.kind === "answer" && j.index) ? " " + j.index
                         : j.kind === "switch_rel" ? " " + (Number(j.delta) > 0 ? "+" : "") + j.delta
@@ -7981,7 +8320,7 @@
         return j;
       });
     }).catch(function () {
-      if (!voice.lastRoute || voice.lastRoute.indexOf("timed out") < 0) voice.lastRoute = "unreachable — the local table";
+      if (!voice.lastRoute || voice.lastRoute.indexOf("timed out") < 0) { voice.lastRoute = "unreachable — the local table"; voice.routeWhy = "net"; }
       return null;
     });
     return Promise.race([asked, late]).then(function (j) { clearTimeout(timer); return j; });
@@ -8049,19 +8388,45 @@
   // (a switch may still be fetching the list); false when it was words.
   function voiceRouted(res, p) {
     if (!res) {
+      // The router did not answer (voiceRoute: why in voice.routeWhy — ""
+      // when it did and said nothing to say): the strip says the page fell
+      // back, for a phrase that may have been a command.
+      var why = voice.routeWhy || "";
+      voice.routeWhy = "";
       var cmd = voiceCommand(p.text);
       if (cmd && cmd.kind === "hush") { voiceHush(); return false; }   // the mic goes on, nothing typed
       // "open the readme" is a prompt: open / show / select / focus switch
       // only to a session named so.
       if (cmd && cmd.kind === "focus" && !voiceStrictMatch(cmd.arg)) cmd = null;
-      if (!cmd) return voiceHeardRest(p);   // an answer, or the words
+      if (!cmd) {
+        var acted = voiceHeardRest(p);   // an answer, or the words
+        if (why && (acted || voiceMayBeCommand(p.text))) voiceStripNote(voiceRouteMissNote(why, acted));
+        return acted;
+      }
       voiceStopForCommand();
       voiceRunCommand(cmd);
+      if (why) voiceStripNote(voiceRouteMissNote(why, true));
       return true;
     }
     var say = String(res.say || "").trim();
     switch (res.kind) {
-      case "prompt": return voiceHeardRest(p);
+      case "prompt": {
+        var did = voiceHeardRest(p);
+        var near = did ? "" : voiceNearNote(res.near);
+        if (near) voiceStripNote(near);
+        return did;
+      }
+      case "assistant":
+        voiceStopForCommand();
+        voiceAssistTurn(String(res.text || "").trim() || voiceWakeRestOf(p.text) || p.text);
+        return true;
+      case "unknown": {
+        // A newer server's kind: the words stay words (in the box, as the
+        // desktop keeps them) and the strip says why nothing was done.
+        var kept = voiceHeardRest(p);
+        voiceStripNote("Typed — this page doesn't know “" + String(res.said || "?") + "” yet (reload it)");
+        return kept;
+      }
       case "hush": voiceHush(); return false;   // the mic goes on, nothing typed or said
       case "switch":
       case "new":
@@ -8153,6 +8518,214 @@
       if (voice.state === "off") return;
       speakLine("Couldn't look that up.").then(function (ok) { if (ok) voiceIdle(); });
     });
+  }
+  // --- the assistant: a phrase said TO MindFlock ----------------------------------
+  // The router's {kind: "assistant", text} ("MindFlock, open intake", "Hey
+  // MindFlock, what needs me?"): the words go to POST /api/voice/assistant
+  // (docs/voice-assistant.md) with this page's conversation and what it shows
+  // (the focused session), and its NDJSON events are done in order: `say`
+  // spoken (an answer, never an echo), `did` (the server did it) captioned with
+  // the done chime — a new session it started is selected —, `ask` / `confirm`
+  // spoken and the mic opens for the answer (the next phrase goes back to the
+  // assistant: a yes / no as the confirm's), `error` captioned and spoken.
+  // An `act` is the page's to do: focusing a session and typing words are
+  // the phone's too; a dialog, a Settings screen, the sky, a command or a
+  // click are not here — the strip says so, nothing is typed.
+  VOICE_ROUTE_KINDS.push("assistant");
+  var VOICE_ASSIST_CONV_MS = 120000;     // a new conversation after this long without a turn (the desktop's)
+  var VOICE_ASSIST_WAIT_MS = 60000;      // an ask / confirm waits this long for its answer (the server holds a confirm so long)
+  var VOICE_ASSIST_TIMEOUT_MS = 20000;   // a turn's own cap
+  var VOICE_ASSIST_FAILED = "MindFlock couldn't answer that.";
+  var voiceAssist_ = { conv: "", at: 0, pending: null, turns: 0, last: "" };
+  voice.assist = voiceAssist_;   // tests and Diagnostics read it
+  function voiceAssistConv(now) {
+    var A = voiceAssist_;
+    if (!A.conv || now - A.at > VOICE_ASSIST_CONV_MS) A.conv = "m" + now.toString(36) + Math.random().toString(36).slice(2, 10);
+    A.at = now;
+    return A.conv;
+  }
+  // The assistant asked something and the answer is still awaited.
+  function voiceAssistWaiting(now) {
+    var P = voiceAssist_.pending;
+    return !!P && (now || Date.now()) - P.at <= VOICE_ASSIST_WAIT_MS;
+  }
+  // A confirm's answer: true (yes), false (no), null (anything else: sent as
+  // words, and the confirm drops) — the desktop's yesNo.
+  var VOICE_ASSIST_YES = ["yes", "yeah", "yep", "yup", "sure", "do it", "go ahead", "ok", "okay", "yes please", "please do", "confirm"];
+  var VOICE_ASSIST_NO = ["no", "nope", "cancel", "never mind", "nevermind", "don't", "do not", "no thanks"];
+  function voiceAssistYesNo(text) {
+    var t = voiceNorm(text), rest = voiceWakeRestOf(t);
+    if (rest) t = voiceNorm(rest);
+    t = t.replace(/ (?:please|thanks|thank you)$/, "");
+    if (VOICE_ASSIST_YES.indexOf(t) >= 0) return true;
+    if (VOICE_ASSIST_NO.indexOf(t) >= 0) return false;
+    return null;
+  }
+  // The body of one turn (the pending question answered, or dropped).
+  function voiceAssistBody(text, now) {
+    var body = { text: String(text || "").trim(), conversation: voiceAssistConv(now),
+                 snapshot: { focused: voice.session || current || null } };
+    var P = voiceAssistWaiting(now) ? voiceAssist_.pending : null;
+    if (P && P.kind === "confirm") {
+      var yn = voiceAssistYesNo(text);
+      if (yn !== null) body.confirm = { id: P.id, yes: yn };
+    }
+    voiceAssist_.pending = null;
+    return body;
+  }
+  // The NDJSON answer → its events (lines that are not one: skipped).
+  function voiceAssistEvents(text) {
+    var out = [];
+    String(text || "").split("\n").forEach(function (line) {
+      line = line.trim();
+      if (!line) return;
+      try {
+        var e = JSON.parse(line);
+        if (e && typeof e === "object" && typeof e.type === "string") out.push(e);
+      } catch (err) {}
+    });
+    return out;
+  }
+  // "settings:voice" / "command_palette" → "Settings voice" / "Command palette".
+  function voiceAssistName(v) {
+    var t = String(v || "").replace(/[_:.-]+/g, " ").replace(/\s+/g, " ").trim();
+    return t ? t.charAt(0).toUpperCase() + t.slice(1) : "That";
+  }
+  // What the phone does for an `act`: {focus} a session, {type} words, or
+  // {note}: it is not on the phone (said in the strip, nothing typed).
+  function voiceAssistAct(a) {
+    a = a && typeof a === "object" ? a : {};
+    switch (a["do"]) {
+      case "focus": return a.session ? { focus: String(a.session) } : { note: "No session to go to" };
+      case "type": return a.text ? { type: String(a.text) } : { note: "Nothing to type" };
+      case "open": return { note: voiceAssistName(a.target) + " isn't on the phone — open it on the desktop" };
+      case "view": return { note: "The " + (a.mode === "sky" ? "sky" : "grid") + " isn't on the phone" };
+      case "close": return { note: "Nothing to close on the phone" };
+      case "command":
+      case "click": return { note: "“" + String(a.label || "That") + "” isn't on the phone" };
+      case "session_action": return { note: "“" + voiceAssistName(a.action) + "” isn't on the phone — use the desktop" };
+      case "pref": return { note: "That setting isn't on the phone" };
+    }
+    return { note: "That isn't on the phone" };
+  }
+  // The events of one turn → what the page does (pure): {speak: [lines],
+  // notes: [strip lines], focus, type, select (a new session's title),
+  // pending: {kind, id} | null, chime, failed}.
+  function voiceAssistPlan(events) {
+    var plan = { speak: [], notes: [], focus: "", type: "", select: "", pending: null, chime: false, failed: false };
+    (events || []).forEach(function (e) {
+      var text = String(e.text || "").trim();
+      switch (e.type) {
+        case "act": {
+          var r = voiceAssistAct(e.action);
+          if (r.focus) { plan.focus = r.focus; plan.chime = true; }
+          else if (r.type) { plan.type = plan.type ? plan.type + " " + r.type : r.type; plan.chime = true; }
+          else plan.notes.push(r.note);
+          return;
+        }
+        case "did": {
+          var d = e.detail && typeof e.detail === "object" ? e.detail : {};
+          if (e.ok === false) { if (text) plan.notes.push(text); return; }   // its `error` follows: said there
+          if (e.action && e.action["do"] === "new_session" && d.title) plan.select = String(d.title);
+          if (text) plan.notes.push(text);
+          plan.chime = true;
+          return;
+        }
+        case "say":
+          if (text) plan.speak.push(text);
+          return;
+        case "ask":
+        case "confirm":
+          if (text) plan.speak.push(text);
+          plan.pending = { kind: e.type, id: String(e.id || "") };
+          return;
+        case "error":
+          plan.failed = true;
+          if (text) { plan.speak.push(text); plan.notes.push(text); }
+          return;
+      }
+    });
+    return plan;
+  }
+  // One phrase to the assistant (the listen is over: a command's end).
+  function voiceAssistTurn(text) {
+    var words = String(text || "").trim();
+    if (!words) { voiceIdle(); return; }
+    var A = voiceAssist_, my = ++A.turns;
+    var body = voiceAssistBody(words, Date.now());
+    voiceSetState("working", "Asking MindFlock…");
+    var a = window.AbortController ? new AbortController() : null;
+    var timer = a ? setTimeout(function () { try { a.abort(); } catch (e) {} }, VOICE_ASSIST_TIMEOUT_MS) : null;
+    fetch("/api/voice/assistant", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      signal: a ? a.signal : undefined,
+    }).then(function (r) {
+      return r.text().catch(function () { return ""; }).then(function (t) {
+        if (r.ok) return voiceAssistEvents(t);
+        var j = null;
+        try { j = JSON.parse(t); } catch (e) {}
+        return [{ type: "error", text: (j && typeof j.error === "string" && j.error) || VOICE_ASSIST_FAILED }];
+      });
+    }).catch(function () {
+      return [{ type: "error", text: VOICE_ASSIST_FAILED }];
+    }).then(function (events) {
+      clearTimeout(timer);
+      if (A.turns !== my || voice.state === "off") return;
+      voiceAssistDo(voiceAssistPlan(events), words);
+    });
+  }
+  function voiceAssistDo(plan, words) {
+    var A = voiceAssist_;
+    A.at = Date.now();
+    A.last = plan.failed ? "error" : plan.pending ? plan.pending.kind : plan.focus ? "focus" : plan.speak.length ? "say" : plan.notes.length ? "note" : "done";
+    if (plan.pending) A.pending = { kind: plan.pending.kind, id: plan.pending.id, at: Date.now() };
+    if (plan.type) voiceAppend(plan.type);
+    if (plan.chime) voiceChime("done");
+    var note = plan.notes.length ? plan.notes[plan.notes.length - 1] : "";
+    if (note) voiceStripNote(note);
+    if (plan.select) {
+      voiceRouteSelect(plan.select, true);
+      if (!plan.speak.length && !plan.pending) { voiceIdle(note || undefined); return; }
+    }
+    if (plan.focus && !plan.speak.length && !plan.pending) { voiceSwitch(plan.focus); return; }
+    if (plan.focus) voiceSwitch(plan.focus);
+    if (!plan.speak.length) {
+      if (plan.pending) voiceAssistListen();
+      else voiceIdle(note || (plan.chime ? undefined : "Nothing came back for “" + words + "”"));
+      return;
+    }
+    speakLine(plan.speak.join(" ")).then(function (ok) {
+      if (!ok) return;
+      if (plan.pending) voiceAssistListen(); else voiceIdle(note || undefined);
+    });
+  }
+  // The mic opens for the assistant's question; that listen's first phrase
+  // is its answer (voiceListen → voiceAddressed "answer").
+  var VOICE_ASSIST_LISTEN_MS = 15000;
+  function voiceAssistListen() {
+    voice.assistListen = Date.now();
+    voiceListenAfter("prompt", VOICE_TAP_MS);
+  }
+  // The router's reply named a kind this page does not know (a newer
+  // server): never typed — the words may be a command it can't do here.
+  // A phrase typed because the router read it as a near miss of a command
+  // ({kind: "prompt", near: {kind, why, arg?, suggest?}}): the strip says why.
+  function voiceNearNote(near) {
+    if (!near || typeof near !== "object") return "";
+    var why = String(near.why || ""), arg = String(near.arg || "").trim(), sug = String(near.suggest || "").trim();
+    if (why === "no_session") {
+      var line = arg ? "Typed — no session called " + arg : "Typed — no such session";
+      return sug ? line + " (did you mean " + sug + "?)" : line;
+    }
+    if (why === "no_dialog") return "Typed — nothing is being asked";
+    if (why === "no_focus") return "Typed — no session is open";
+    return "";
+  }
+  // Why the router did not answer (voiceRoute's null) → the strip line for
+  // what the page did instead: the phone's own commands, or the words typed.
+  function voiceRouteMissNote(why, acted) {
+    var what = why === "timeout" ? "The server was slow" : why === "http" ? "The server failed" : "The server didn't answer";
+    return acted ? what + " — done with the phone's own commands" : what + " — typed";
   }
   // The router's answer to a question or a dialog: {choice, number?,
   // index?, title?, dialog_id?, keys?, no_dialog?, say?}. With dialog_id +
@@ -9904,7 +10477,9 @@
       }
       if (!x.r.ok) { W.last = { error: String(x.j.error || ("HTTP " + x.r.status)), at: Date.now() }; return; }
       W.last = { text: String(x.j.text || ""), wake: !!x.j.wake, ms: Number(x.j.ms) || (Date.now() - t0), error: "", at: Date.now() };
-      if (x.j.wake) { W.pending = null; voiceWoke(); }
+      // {wake, rest}: the word and a command in one breath — `rest` is
+      // that command, said to MindFlock (voiceWoke); absent / "" alone.
+      if (x.j.wake) { W.pending = null; voiceWoke(typeof x.j.rest === "string" ? x.j.rest.trim() : "", r); }
       else voiceWakeFlush();
     }).catch(function (err) {
       clearTimeout(timer);
@@ -9930,21 +10505,33 @@
   // and one block of the engine's latency), so the chime is never
   // transcribed. W.wakeMs: the word's end → listening (Diagnostics, the
   // trace). A tap or a send that came first wins.
-  function voiceWoke() {
+  // `rest`: the words said after the word in the same breath (POST
+  // /api/voice/wake's `rest`): the listen's first phrase, said to MindFlock
+  // (voiceAddressed "rest") — handled at once, never repeated. Else the
+  // listen's first phrase is addressed ("first"). `clip`: the word's clip
+  // (its `to` on the standby's clock): what was said after it, before the
+  // chime, is the new recording's lead-in (voiceWakeLead) — the words said
+  // while the server checked the word are not lost.
+  function voiceWoke(rest, clip) {
     var W = voiceWake_;
     if (voice.state === "off" || voice.state === "sending" || voiceIsListening() || document.hidden) return;
     W.wakes++;
     var now = Date.now();
     W.wakeMs = Math.max(0, now - (W.endAt || now));
+    // Before the chime sounds: the standby's audio after the word.
+    var lead = !rest && clip && voiceAdapters.serverStt.standbyAfter ? voiceAdapters.serverStt.standbyAfter(clip.to) : null;
     voiceWakeChime();
     voice.buzzAt = now;
     if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e) {} }
     voiceCaption("Yes?");
     voiceBargeIn();
     voice.box = null;
-    voiceListen_.woke = { skipUntil: now + VOICE_WAKE_CHIME_MS + VOICE_WAKE_SKIP_PAD_MS, wakeMs: W.wakeMs };
+    voiceListen_.woke = { skipUntil: now + VOICE_WAKE_CHIME_MS + VOICE_WAKE_SKIP_PAD_MS, wakeMs: W.wakeMs, lead: lead };
     voiceListen("prompt", VOICE_TAP_MS, false, true);
     voiceListen_.woke = null;   // a listen that did not start now (a barge-in's mute) is a plain one
+    if (!voiceIsListening()) return;
+    voiceListen_.addressed = rest ? "rest" : "first";
+    if (rest) voiceHeard(rest, "prompt", "", W.endAt || now);
   }
   // The wake word's chime is the start chime (voiceChime).
   function voiceWakeChime() {

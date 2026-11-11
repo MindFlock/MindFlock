@@ -63,9 +63,22 @@ def scratch_index_env(
     empty index would report every tracked file as changed. The ``add -N``
     itself is best-effort: if it fails, the diff simply leaves untracked files
     out, as the old in-place probe did.
+
+    Two things keep the copy honest and the real gitdir untouched:
+
+    * ``shutil.copy2``, not ``copyfile``: the copy keeps the index's mtime.
+      git's racy-git check compares each entry's mtime with the index file's
+      own; a fresh mtime on the copy turned "edited in the same second as the
+      last ``git add``" (same size) into "clean", and every scratch diff
+      missed that edit until something rewrote the real index.
+    * ``core.splitIndex=false`` (and no ``GIT_TEST_SPLIT_INDEX``): with split
+      index on, ``add -N`` writes a new full ``sharedindex.<sha>`` into the
+      REAL gitdir (kept two weeks) on every poll. Off, the scratch index is
+      written whole, next to itself; the real shared index is only read.
     """
     env = dict(os.environ)
     env.pop("GIT_INDEX_FILE", None)
+    env.pop("GIT_TEST_SPLIT_INDEX", None)
     env["GIT_OPTIONAL_LOCKS"] = "0"
     cp = subprocess.run(
         ["git", "-C", worktree_path, "rev-parse", "--git-path", "index"],
@@ -86,12 +99,21 @@ def scratch_index_env(
     try:
         scratch = os.path.join(os.path.abspath(tmpdir), "index")
         try:
-            shutil.copyfile(real, scratch)
+            shutil.copy2(real, scratch)  # keeps the mtime: racy-git (above)
         except FileNotFoundError:
             pass  # no index yet (fresh repo): an empty one is the truth
         env["GIT_INDEX_FILE"] = scratch
         subprocess.run(
-            ["git", "-C", worktree_path, "add", "-N", "."],
+            [
+                "git",
+                "-C",
+                worktree_path,
+                "-c",
+                "core.splitIndex=false",
+                "add",
+                "-N",
+                ".",
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,

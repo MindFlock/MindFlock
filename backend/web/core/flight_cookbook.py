@@ -137,8 +137,10 @@ STOPS: Dict[str, dict] = {
         "after Open PR: send review comments (CodeRabbit, people) to the agent "
         "and push, until the PR goes quiet",
         "before a PR exists",
-        "quiet_minutes=10, max_rounds=5, include_bots=true",
-        "the PR to go quiet",
+        "quiet_minutes=10, max_rounds=5, include_bots=true; "
+        "require_reviewer=coderabbit (+ reviewer_wait_minutes=10) waits for "
+        "that reviewer's first review and fails if it never comes",
+        "the PR to go quiet (and the required reviewer)",
     ),
     "checks": _s(
         "after a push / Open PR: wait for CI to pass; on_fail=agent lets the "
@@ -178,10 +180,11 @@ STOPS: Dict[str, dict] = {
         fixable=True,
     ),
     "review": _s(
-        "a second agent reviews the diff for bugs before the PR; findings go "
-        "to the agent with on_fail=agent",
+        "a second agent reviews the diff before the PR — mode=bugs, security "
+        "or standards (the team's rules in focus); findings go to the agent "
+        "to fix or rebut with on_fail=agent",
         "answering PR review comments (reviews)",
-        "focus, block=true",
+        "mode=bugs|security|standards, focus (the rules), block=true",
         "the reviewer",
         fixable=True,
     ),
@@ -480,7 +483,45 @@ RECIPES: List[dict] = [
             _R("ship", "Open PR", lane="pr"),
         ],
     },
+    {
+        "id": "team_rules_review_bot_loop",
+        "when": "self-review against the team's rules, then a review-bot loop "
+        "(CodeRabbit) on the PR",
+        "steps": [
+            _R("agent", "Work the ticket", prompt="{ticket}"),
+            _R("test", "Tests pass", on_fail="agent"),
+            _R(
+                "review",
+                "Standards review",
+                on_fail="agent",
+                mode="standards",
+                focus=(
+                    "Every change has unit tests and evidence it was tested "
+                    "locally. New code paths log meaningfully and emit metrics."
+                ),
+            ),
+            _R("review", "Security review", on_fail="agent", mode="security"),
+            _R("ship", "Open PR", lane="pr"),
+            _R(
+                "reviews",
+                "Review bot loop",
+                on_fail="you",
+                require_reviewer="coderabbit",
+                reviewer_wait_minutes=10,
+                quiet_minutes=5,
+                max_rounds=5,
+            ),
+            _R("checks", "CI checks", on_fail="agent"),
+        ],
+    },
 ]
+
+#: How a review stop reads, by ``mode`` (``flight_kinds.review.MODES``).
+REVIEW_MODE_WORD = {
+    "bugs": "Second opinion",
+    "security": "Security review",
+    "standards": "Standards review (the team's rules)",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -646,6 +687,10 @@ def step_phrase(step: dict, labels: Optional[Dict[str, str]] = None) -> str:
         p = "CI checks"
     elif kind == "reviews":
         p = "Reviews settle"
+        if c.get("require_reviewer"):
+            p += " (waits for %s)" % _cut(c["require_reviewer"], 30)
+    elif kind == "review":
+        p = REVIEW_MODE_WORD.get(str(c.get("mode") or "bugs"), "Second opinion")
     elif kind == "verify":
         p = verify_sentence(c)
         if c.get("post_to_pr"):

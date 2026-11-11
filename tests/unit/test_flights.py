@@ -161,6 +161,8 @@ def test_steps_get_ids_titles_and_defaults():
         "quiet_minutes": 10,
         "max_rounds": 5,
         "include_bots": True,
+        "require_reviewer": "",
+        "reviewer_wait_minutes": 10,
     }
 
 
@@ -805,7 +807,8 @@ def test_reviews_step_rounds():
     )
     # A third comment past max_rounds fails.
     a = F.next_action(f, dict(o, reviews={"ids": ["1", "2", "3"]}), NOW + 300)
-    assert a["action"] == "fail" and "1 rounds" in a["reason"]
+    assert a["action"] == "fail"
+    assert a["reason"] == "comments still open after 1 round — it needs a human review"
     # Quiet long enough: done.
     a = F.next_action(f, dict(o, reviews={"ids": ["1", "2"]}), NOW + 140 + 600)
     assert a["action"] == "done"
@@ -1269,11 +1272,12 @@ def test_the_store_is_read_once_per_change(monkeypatch):
     """Review #5: N session rows asking for_session cost one parse."""
     fly(step("notify"), session="c1")
     reads = []
-    real = F.read_json
+    real = F._parse_flights
     monkeypatch.setattr(
-        F, "read_json", lambda *a, **kw: reads.append(1) or real(*a, **kw)
+        F, "_parse_flights", lambda *a, **kw: reads.append(1) or real(*a, **kw)
     )
-    F._CACHE["key"] = None  # as if another process had written it
+    # As if another process had written it.
+    F._CACHE["key"] = F._CACHE["digest"] = None
     assert F.for_session("c1") is not None
     assert F.for_session("nobody") is None
     assert F.row_dto("c1")["state"] == "running"
