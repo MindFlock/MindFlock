@@ -39,6 +39,17 @@ export function memoryDetail(m: MemoryReading): string {
   return bits.join(" · ");
 }
 
+/** Why the level is what it is, in the server's words: "Processes stalled
+ * on memory 34% of the last minute" (the snapshot's `why`), else its
+ * `message`, "" when neither says. Shown under the GB numbers so a
+ * "critically low" header over 13 GB free names its real cause (a stall,
+ * swap-in, an OOM kill, Windows' commit charge). Exported for tests. */
+export function memoryReason(m: MemoryReading): string {
+  const why = (m.why || []).filter((w) => typeof w === "string" && w.trim());
+  const line = why.length ? why.join("; ") : (m.message || "").trim();
+  return line ? line.charAt(0).toUpperCase() + line.slice(1) : "";
+}
+
 /** Whether WINDOWS (the WSL host), not the Linux side, is what reads low:
  * the host's level is set and at least as bad as the guest's. Then the
  * notice must show Windows' numbers — "13.4 GB free of 19.5 GB" under
@@ -101,12 +112,14 @@ export function MemoryNotice() {
 
   const critical = data.level === "critical";
   const windows = windowsIsShort(data);
+  const reason = memoryReason(data);
   return (
     <div id="memory-notice" role="status" className={critical ? "critical" : ""}>
       <div className="mn-head">
         ⚠ {windows ? "Windows is " + (critical ? "critically low" : "running low") + " on memory" : "Memory is " + (critical ? "critically low" : "running low")}
       </div>
       <div className="mn-detail">{windows ? windowsDetail(data) : memoryDetail(data)}</div>
+      {reason && <div className="mn-detail mn-why">{reason}</div>}
       {windows && (
         <div className="mn-detail">
           Closing Windows apps frees memory now. Restarting WSL (<code>wsl --shutdown</code>, then reopen) makes it hand back what it

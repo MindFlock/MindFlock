@@ -36,7 +36,8 @@ mean the machine IS in trouble, or about to be:
   (~8 MB/s: on WSL's VHD-backed swap that rate stalls every session).
 * **OOM kills** (``oom_kill`` in ``/proc/vmstat`` going up in the last
   :data:`OOM_WINDOW_SECONDS`): low on its own, critical together with any
-  other low signal. Not critical alone: the counter also counts kills inside
+  other signal past its low ENTRY line (a reading held only by the recovery
+  band does not count: the kill itself made the level low). Not critical alone: the counter also counts kills inside
   a memory-capped cgroup (a test suite in a 6 GB systemd scope), which say
   nothing about the machine.
 * **An available floor** that is genuinely small: MemAvailable (the kernel's
@@ -488,22 +489,24 @@ def classify_guest(prev: str, r: dict) -> Tuple[str, List[str]]:
     th = thresholds()
     lvl, why = "ok", []
     crit = _guest_reasons(th["critical"], r)
+    low = _guest_reasons(th["low"], r)
     if crit:
         lvl, why = "critical", crit
     elif prev == "critical" and _guest_reasons(th["recover_critical"], r, True):
         lvl, why = "critical", _guest_reasons(th["recover_critical"], r, True)
-    else:
-        low = _guest_reasons(th["low"], r)
-        if low:
-            lvl, why = "low", low
-        elif prev in ("low", "critical") and _guest_reasons(th["recover_low"], r, True):
-            lvl, why = "low", _guest_reasons(th["recover_low"], r, True)
+    elif low:
+        lvl, why = "low", low
+    elif prev in ("low", "critical") and _guest_reasons(th["recover_low"], r, True):
+        lvl, why = "low", _guest_reasons(th["recover_low"], r, True)
     kills = int(r.get("oom") or 0)
     if kills:
         # Alone: low (a capped cgroup's kill counts too). With another
-        # signal: the machine itself ran out.
+        # signal past an ENTRY line: the machine itself ran out. A
+        # recovery-band hold is not "another signal": the OOM kill itself
+        # made the level low, so prev=low plus PSI some at 11% would read
+        # critical for the whole OOM window with GBs free.
         why = [_oom_reason(kills)] + why
-        lvl = "critical" if lvl in ("low", "critical") else "low"
+        lvl = "critical" if (lvl == "critical" or crit or low) else "low"
     return lvl, why
 
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { windowsDetail, windowsIsShort } from "../components/MemoryNotice";
+import { memoryReason, windowsDetail, windowsIsShort } from "../components/MemoryNotice";
 
 const GB = 1024 ** 3;
 
@@ -26,5 +26,26 @@ describe("the memory notice names Windows when Windows is the one short", () => 
   it("names what WSL can reuse when the server counts it", () => {
     const m = { ...live, host: { ...live.host, guest_reusable: 0.4 * GB } };
     expect(windowsDetail(m)).toContain("Windows: 0.5 GB free of 31.4 GB (2%) · WSL can reuse 0.4 GB it already holds · ");
+  });
+});
+
+describe("the memory notice names the reason under the numbers", () => {
+  const base = { level: "critical" as const, available: 13 * GB, total: 24 * GB, available_pct: 54 };
+  it("reads the snapshot's why first", () => {
+    const m = {
+      ...base,
+      why: ["processes stalled on memory 34% of the last minute"],
+      message: "memory is critical: processes stalled on memory 34% of the last minute",
+    };
+    expect(memoryReason(m)).toBe("Processes stalled on memory 34% of the last minute");
+    const two = { ...base, why: ["swapping 9.5 MB/s back in from disk", "Windows commit charge is at 98% of its limit"] };
+    expect(memoryReason(two)).toBe("Swapping 9.5 MB/s back in from disk; Windows commit charge is at 98% of its limit");
+  });
+  it("falls back to the message, and to nothing", () => {
+    expect(memoryReason({ ...base, message: "memory is low: 2.1 GB free of 24.0 GB (9%)" })).toBe(
+      "Memory is low: 2.1 GB free of 24.0 GB (9%)",
+    );
+    expect(memoryReason({ ...base, why: [""], message: "" })).toBe("");
+    expect(memoryReason(base)).toBe("");
   });
 });
