@@ -46715,6 +46715,7 @@ function FeatureRow({ f }) {
 		})]
 	});
 }
+var STAR_URL = "https://github.com/MindFlock/MindFlock";
 function WhatsNew() {
 	useAutoWhatsNew();
 	const shown = useWhatsNew((s) => s.shown);
@@ -46776,15 +46777,21 @@ function WhatsNew() {
 						}, r.version))]
 					})]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "wn-actions",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+						className: "wn-star",
+						href: STAR_URL,
+						target: "_blank",
+						rel: "noreferrer",
+						children: "Finding MindFlock useful? A star on GitHub helps."
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "wn-primary",
 						onClick: closeWhatsNew,
 						autoFocus: true,
 						children: "Got it"
-					})
+					})]
 				})
 			]
 		})
