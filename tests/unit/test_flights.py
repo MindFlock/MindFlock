@@ -1269,11 +1269,12 @@ def test_the_store_is_read_once_per_change(monkeypatch):
     """Review #5: N session rows asking for_session cost one parse."""
     fly(step("notify"), session="c1")
     reads = []
-    real = F.read_json
+    real = F._parse_flights
     monkeypatch.setattr(
-        F, "read_json", lambda *a, **kw: reads.append(1) or real(*a, **kw)
+        F, "_parse_flights", lambda *a, **kw: reads.append(1) or real(*a, **kw)
     )
-    F._CACHE["key"] = None  # as if another process had written it
+    # As if another process had written it.
+    F._CACHE["key"] = F._CACHE["digest"] = None
     assert F.for_session("c1") is not None
     assert F.for_session("nobody") is None
     assert F.row_dto("c1")["state"] == "running"
