@@ -170,6 +170,8 @@ __all__ = [
     "remove_step",
     "edit_step",
     "start_run",
+    "RunBusy",
+    "run_token",
     "finish_run",
     "run_tree_mismatch",
     "delete",
@@ -1227,6 +1229,56 @@ def _after_run_state(plan: dict) -> str:
     return "done" if (plan["live_at"] and _all_settled(plan)) else "due"
 
 
+#: The note a self-verify run settles ``blocked`` with when it is cancelled
+#: (:func:`cancel_run`) without a reason of the caller's own.
+CANCELLED_NOTE = "the check was cancelled"
+
+
+def _release_run(plan: dict, note: str, now: Optional[float] = None) -> bool:
+    """The newest run ENDED WITHOUT A REPORT (a cancel, a failed start or
+    hand-off, the two-hour give-up, a deleted session): settle what it showed
+    → whether the run is a SELF-VERIFY one, which the caller must then keep
+    rather than pop. Mutates ``plan`` in place; call it inside a mutation.
+
+    Two things, both about a self-verify run (:func:`start_run`
+    ``self_authored=True``), plus the pill's clock for any run:
+
+    * THE STEPS COME BACK. A self-verify run dropped the plan's generated
+      steps when it opened, expecting the agent to write its own. One that
+      ended before any were adopted (its ``prior_steps`` snapshot is still
+      there) puts the old steps back: otherwise the plan is left with only a
+      person's own steps — often none — and once the session closes the
+      checker fallback refuses it with ``no_steps``.
+    * IT IS SETTLED, NOT POPPED. Popping it would make the run BEFORE it the
+      newest again — with whatever steps this run adopted, which are not that
+      run's. A ``needs_you`` there would then show the new steps, and
+      Confirm would write ``pass`` by a person into the old run: a verify
+      "passed" on a check that never ran.
+
+    And a run still ``verifying`` is settled ``blocked`` with ``note`` and
+    ``outcome_at`` now, so the pill's 10-minute linger counts from the
+    release, not from a start (or a last answer) hours ago."""
+    run = plan["runs"][-1] if plan["runs"] else None
+    if run is None:
+        return False
+    prior = run.pop("prior_steps", None)
+    if isinstance(prior, list):
+        plan["steps"] = prior
+        ids = {s["id"] for s in prior}
+        run["results"] = {
+            k: v for k, v in (run.get("results") or {}).items() if k in ids
+        }
+        run["verdict"] = _verdict(prior, run["results"])
+    if run.get("outcome") == "verifying":
+        run["outcome"] = "blocked"
+        run["outcome_at"] = time.time() if now is None else now
+        run.pop("outcome_note", None)
+        text = _text(note or "The check stopped before it finished.", 500)
+        if text:
+            run["outcome_note"] = text
+    return bool(run.get("self"))
+
+
 def _normalize_run(raw, steps: List[dict]) -> dict:
     if not isinstance(raw, dict):
         raw = {}
@@ -1300,6 +1352,17 @@ def _normalize_run(raw, steps: List[dict]) -> dict:
         # present only when set, so every older run keeps its exact shape.
         **({"self": True} if raw.get("self") else {}),
         **({"confirm": True} if raw.get("confirm") else {}),
+        # A SELF-VERIFY run's snapshot of the plan's steps from before it
+        # dropped the generated ones (:func:`start_run`), kept until the
+        # agent's own steps are adopted (:func:`adopt_reported_steps`). A run
+        # that ends without them — a failed hand-off, a cancel, a give-up, a
+        # deleted session — puts these back (:func:`_release_run`), so the
+        # plan never loses the checklist a checker would fall back to.
+        **(
+            {"prior_steps": _normalize_steps(raw["prior_steps"])}
+            if isinstance(raw.get("prior_steps"), list)
+            else {}
+        ),
         **_outcome_fields(raw),
         # Why the agent's results file could not be read on the last try
         # (:func:`note_file_error`); cleared by the next good read. Present
@@ -1908,6 +1971,16 @@ def mark_due(plan_id: str, reason: str = "") -> Optional[dict]:
             if not plan["live_at"]:
                 plan["live_at"] = time.time()
             return
+        # ...nor a plan whose check is IN FLIGHT, when this is the liveness
+        # pass (no ``reason``). That pass filters a snapshot to "generated" and
+        # then spends its budget on fetches, so a verify started meanwhile
+        # would have its ``run_session`` cleared here and its report never
+        # read. Asked under the store lock, of the plan as it is now. Nothing
+        # is lost: the run lands the plan back in ``generated`` when it ends
+        # (a check before merge), and the next pass marks it due.
+        if plan["state"] == "running" and not reason:
+            return
+        was_running = plan["state"] == "running"
         plan["run_session"] = ""
         if not plan["live_at"]:
             plan["live_at"] = time.time()
@@ -1932,7 +2005,11 @@ def mark_due(plan_id: str, reason: str = "") -> Optional[dict]:
             # survived after all. :func:`_run_recorded_nothing` asks the honest
             # version. A run somebody DID write into while it hung is history,
             # and keeps both itself and its session.
-            if plan["runs"] and _run_recorded_nothing(plan["runs"][-1]):
+            # A SELF-VERIFY run is settled ``blocked`` instead, never popped
+            # (:func:`_release_run`); any other run still verifying is settled
+            # too, so the pill's linger counts from now.
+            kept = was_running and _release_run(plan, reason)
+            if not kept and plan["runs"] and _run_recorded_nothing(plan["runs"][-1]):
                 plan["runs"].pop()
         # AFTER the pop, deliberately: ``_all_settled`` reads ``runs[-1]``, so
         # deciding first asked the question of the very record about to be
@@ -1963,13 +2040,16 @@ def _release(plan: dict, reason: str) -> None:
     run = runs[-1] if runs else None
     reason = _text(reason, 500)
     if run is not None and run.get("outcome") == "verifying":
-        run["outcome"] = "blocked"
-        run["outcome_at"] = time.time()
-        run.pop("outcome_note", None)
-        if reason:
-            run["outcome_note"] = reason
+        # Settled ``blocked`` with the reason, and any steps a self-verify
+        # took away come back (:func:`_release_run`).
+        _release_run(plan, reason)
+        if not reason:
+            run.pop("outcome_note", None)
         run.pop("dismissed", None)
         run["verdict"] = _verdict(plan["steps"], run.get("results") or {})
+    elif run is not None:
+        # Settled already: only the steps snapshot, if it is still there.
+        _release_run(plan, reason)
     plan["run_session"] = ""
     plan["error"] = ""
     if plan["state"] == "running":
@@ -2049,13 +2129,17 @@ def fail_run(plan_id: str, session_title: str, error: str) -> Optional[dict]:
             outcome["stale"] = True
             return
         plan["run_session"] = ""
+        kept = False
         if plan["state"] == "running":
+            # A self-verify run is settled ``blocked``, not popped, and its
+            # steps come back (:func:`_release_run`).
+            kept = _release_run(plan, "Verify couldn't start. " + str(error or ""))
             # Work that has not shipped goes back to waiting for it, not to
             # ``due`` — a check before merge that could not start must not make
             # the plan claim to be live.
             plan["state"] = _after_run_state(plan)
         # An in-flight run with nothing in it is litter, not history.
-        if plan["runs"] and not (plan["runs"][-1].get("results") or {}):
+        if not kept and plan["runs"] and not (plan["runs"][-1].get("results") or {}):
             plan["runs"].pop()
         plan["error"] = _text("Verify couldn't start. " + str(error or ""))
 
@@ -2119,6 +2203,23 @@ def mark_notified(plan_id: str) -> Optional[dict]:
     return _mutate(plan_id, apply)
 
 
+class RunBusy(RuntimeError):
+    """:func:`start_run`'s compare-and-set lost: another run started first.
+    ``args[0]`` is the session now running it (the route's 409 ``busy``)."""
+
+
+def run_token(plan: Optional[dict]) -> str:
+    """What :func:`start_run`'s ``expect`` compares (pure): ``""`` when the
+    plan is not running, else its run session and the newest run's start —
+    so a husk replaced by a new run of the SAME session name still reads as
+    a different run."""
+    if not plan or plan.get("state") != "running":
+        return ""
+    runs = plan.get("runs") or []
+    at = float((runs[-1] if runs else {}).get("at") or 0.0)
+    return "%s@%r" % (str(plan.get("run_session") or ""), at)
+
+
 def start_run(
     plan_id: str,
     session_title: str,
@@ -2130,8 +2231,16 @@ def start_run(
     self_authored: bool = False,
     confirm: bool = False,
     tip_sha: str = "",
+    expect: Optional[str] = None,
 ) -> Optional[dict]:
     """A verify session has been created for this plan.
+
+    ``expect`` is a COMPARE-AND-SET: the :func:`run_token` the caller saw
+    when it decided to start ("" — nothing running). When the plan's token is
+    something else by now — another start won the race (a double click, a
+    flight stop and a row press) — :class:`RunBusy` is raised and nothing is
+    written, so one plan never opens two runs nor hands its prompt over
+    twice. ``None`` (the default) skips the check.
 
     ``self_authored=True`` is SELF-VERIFY: the session's own agent was told
     to verify the work it just did — write its own steps into the results
@@ -2172,6 +2281,13 @@ def start_run(
     walk = _walk(walk)
 
     def apply(plan: dict) -> None:
+        if expect is not None and run_token(plan) != expect:
+            raise RunBusy(str(plan.get("run_session") or ""))
+        if plan["state"] == "running":
+            # Replacing a run nobody can finish (its session is a husk — the
+            # route checked): settle it, and get back any steps a
+            # self-verify of its took away, before this one snapshots them.
+            _release_run(plan, "replaced by a new check")
         prelive = _unshipped(plan)
         plan["state"] = "running"
         plan["run_session"] = session_title
@@ -2208,9 +2324,13 @@ def start_run(
                 if self_authored and entry.get("result") != "pass":
                     continue
                 carried[step_id] = dict(entry)
+        prior = None
         if self_authored:
             # The agent writes this run's steps itself; only a person's own
-            # steps survive (it is told to walk them too).
+            # steps survive (it is told to walk them too). The rest are kept
+            # on the run until its report is adopted, so a run that ends
+            # without one gives them back (:func:`_release_run`).
+            prior = [dict(s) for s in plan["steps"]]
             plan["steps"] = [s for s in plan["steps"] if s.get("manual")]
             if tip_sha:
                 plan["tip_sha"] = str(tip_sha)
@@ -2228,6 +2348,7 @@ def start_run(
         }
         if self_authored:
             run["self"] = True
+            run["prior_steps"] = prior
         if confirm:
             run["confirm"] = True
         if in_session:
@@ -2243,7 +2364,7 @@ def start_run(
     return _mutate(plan_id, apply)
 
 
-def cancel_run(plan_id: str) -> Optional[dict]:
+def cancel_run(plan_id: str, reason: str = "") -> Optional[dict]:
     """Stop treating this plan as being verified, without recording a verdict.
 
     The user's half of :func:`start_run`: a run is minutes of an agent checking
@@ -2264,12 +2385,25 @@ def cancel_run(plan_id: str) -> Optional[dict]:
     it, so a cancelled run leaves no "last run by agent" line about a run that
     never answered anything. One that already holds answers (a person recording
     a human step while the agent worked) is kept — those are real observations.
+
+    A SELF-VERIFY run is never removed: it is settled ``blocked`` with
+    ``reason`` (else :data:`CANCELLED_NOTE`) and the steps it took away come
+    back (:func:`_release_run`) — popping it would bring back the run before
+    it, verdict and all, over steps that are not its own.
     """
 
     def apply(plan: dict) -> None:
         session_title = plan["run_session"]
         runs = plan["runs"]
         if (
+            session_title
+            and plan["state"] == "running"
+            and runs
+            and runs[-1].get("self")
+            and runs[-1].get("session") == session_title
+        ):
+            _release_run(plan, reason or CANCELLED_NOTE)
+        elif (
             runs
             and runs[-1].get("session") == session_title
             and not runs[-1].get("results")
@@ -2508,6 +2642,14 @@ def finish_run(
             }
             plan["runs"].append(run)
             del plan["runs"][:-MAX_RUNS]
+        # A self-verify run closed before its agent's steps were adopted gets
+        # the plan's steps back (and is then settled ``blocked`` below); one
+        # that reported keeps what it reported — the snapshot goes either way.
+        if closed and isinstance(run.get("prior_steps"), list):
+            plan["steps"] = run["prior_steps"]
+            ids = {s["id"] for s in plan["steps"]}
+            actors = {s["id"]: s["actor"] for s in plan["steps"]}
+        run.pop("prior_steps", None)
         # A run that REPORTED supersedes one that could not start. Same reason as
         # in :func:`cancel_run`: the row reads the stored sentence, and a
         # checklist that has just been fully answered must not carry "The verify
@@ -2914,6 +3056,8 @@ def adopt_reported_steps(plan_id: str, raw_steps) -> Optional[dict]:
             return
         ids = {s["id"] for s in steps}
         plan["steps"] = steps
+        # The agent's own steps are the plan's now: nothing to give back.
+        run.pop("prior_steps", None)
         run["results"] = {k: v for k, v in run["results"].items() if k in ids}
         run["verdict"] = _verdict(steps, run["results"])
         changed["v"] = True
@@ -3147,7 +3291,8 @@ def dismiss_verify(plan_id: str) -> Optional[dict]:
     return _mutate(plan_id, apply)
 
 
-#: ``verify_index``'s memo: the store's ``(mtime_ns, size)`` → the newest-run
+#: ``verify_index``'s memo: the store's ``(mtime_ns, size, ino, ctime_ns)``
+#: → the newest-run
 #: facts each session title maps to. The row build asks once per session per
 #: poll; re-reading the store each time would be a file read per row.
 _INDEX_MEMO: dict = {"key": None, "plans": {}}
@@ -3159,7 +3304,10 @@ def _verify_plans_by_title() -> Dict[str, dict]:
     to it (the run's session, else the plan's own id), newest run winning."""
     try:
         st = os.stat(store_path())
-        key = (st.st_mtime_ns, st.st_size)
+        # The inode and ctime too: ``_save`` replaces the file (a new inode
+        # each write), and on WSL two equal-size writes inside one coarse
+        # mtime tick would otherwise leave the rows on the older one.
+        key = (st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns)
     except OSError:
         key = None
     with _INDEX_LOCK:
@@ -3602,6 +3750,7 @@ def prune(live_titles=None) -> None:
                 plan = _normalize(pid, raw)
                 plan["run_session"] = ""
                 if plan["state"] == "running":
+                    _release_run(plan, "its session was closed before it finished")
                     # Same deferred close as cancel_run / mark_due: the session
                     # is gone, so nothing else will ever ask whether the person
                     # already answered everything themselves.

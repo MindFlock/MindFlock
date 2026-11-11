@@ -17,6 +17,10 @@ the loop:
   reaped, never leaked. A spawn that never returns keeps its slot (and its
   thread) — so at most :data:`MAX_CONCURRENT_ATTACHES` threads can be
   stuck, and later attaches time out cleanly instead of piling up more.
+  :func:`attach_or_close` is it for a socket that closes on failure: every
+  PTY a websocket opens (session terminals, the Assistant pane, the ticket
+  log stream, the onboarding/settings/doctor helper terminals) comes
+  through here.
 * :class:`PtyWriter` — keystrokes to the client in order on one thread per
   connection: a blocking write to a PTY whose client is not reading (a
   stopped or wedged ``tmux attach``, a long paste) would otherwise hold the
@@ -37,6 +41,7 @@ stalling the loop: the spawn's own cost is :func:`backend.session.mux.spawn_pty`
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import queue
 import threading
@@ -51,6 +56,7 @@ __all__ = [
     "MAX_CONCURRENT_ATTACHES",
     "PtyWriter",
     "attach_off_loop",
+    "attach_or_close",
     "detaching",
     "reap",
 ]
@@ -154,6 +160,26 @@ async def attach_off_loop(
                 "terminal attach timed out after %.0f s: %s — try again" % (limit, why)
             ) from None
         raise
+
+
+async def attach_or_close(
+    ws: Any, spawn: Callable[[], Any], *, timeout: Optional[float] = None
+) -> Any:
+    """:func:`attach_off_loop` for a websocket: the client, or ``None`` once
+    ``ws`` got an ``{"type": "error"}`` frame and was closed — code
+    :data:`TIMEOUT_CLOSE` for a timeout, 4500 for the spawn's own error."""
+    try:
+        return await attach_off_loop(spawn, timeout=timeout)
+    except AttachTimeout as err:
+        frame, code = {"type": "error", "message": str(err)}, TIMEOUT_CLOSE
+    except Exception as err:  # noqa: BLE001
+        frame, code = {"type": "error", "message": str(err)}, 4500
+    try:
+        await ws.send_text(json.dumps(frame))
+        await ws.close(code=code)
+    except Exception:  # noqa: BLE001 — the browser already left
+        pass
+    return None
 
 
 def _terminate(proc: Any, writer: "Optional[PtyWriter]" = None) -> None:

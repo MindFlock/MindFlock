@@ -310,12 +310,11 @@ async def serve(ws, session: str) -> None:
     if run is not None:
         await bridge(ws, run)
         return
+    from backend.web.core import terminal_ws
     from backend.web.core.terminal import pump_pty, spawn_tmux_attach
 
-    try:
-        proc = spawn_tmux_attach(session)
-    except Exception as exc:  # noqa: BLE001
-        await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
-        await ws.close(code=4500)
+    # Off the event loop, capped and with a deadline (terminal_ws).
+    proc = await terminal_ws.attach_or_close(ws, lambda: spawn_tmux_attach(session))
+    if proc is None:
         return
     await pump_pty(ws, proc, allow_input=True)

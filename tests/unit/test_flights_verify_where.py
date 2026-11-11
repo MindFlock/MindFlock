@@ -824,7 +824,12 @@ def test_kinds_dto_passes_option_labels_through_for_verify_only():
         for fld in k["fields"]
         if "option_labels" in fld
     ]
-    assert sorted(with_labels) == [("verify", "ready"), ("verify", "who")]
+    # Review's mode (bugs / security / standards) carries labels too.
+    assert sorted(with_labels) == [
+        ("review", "mode"),
+        ("verify", "ready"),
+        ("verify", "who"),
+    ]
     # A copy: editing the payload never edits the registry.
     by["who"]["option_labels"]["both"] = "x"
     assert spec["who"]["option_labels"]["both"] == "Agent, then me"

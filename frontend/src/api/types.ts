@@ -2446,8 +2446,22 @@ export interface MemoryReading {
   swap_free?: number;
   psi?: { some_avg10?: number; some_avg60?: number; full_avg10?: number; full_avg60?: number } | null;
   at?: number;
-  /** One-line reason ("memory is low: 2.1 GB free of 24.0 GB (9%)"); "" when ok. */
+  /** One-line reason, the level plus `why` joined ("memory is critical:
+   * processes stalled on memory 34% of the last minute"); "" when ok. An
+   * older server without `why` reads its numbers ("memory is low: 2.1 GB
+   * free of 24.0 GB (9%)"). */
   message?: string;
+  /** The signals behind `level`, in plain words ("processes stalled on
+   * memory 34% of the last minute", "Windows commit charge is at 98% of its
+   * limit (…)"); while a step up waits out its sustain, the pending side's.
+   * Empty when ok. */
+  why?: string[];
+  /** The level the readings point at while it is not yet sustained (30 s). */
+  pending?: "low" | "critical" | null;
+  /** Swap-in rate over the last ~60 s, MB/s (null until enough history). */
+  swap_in_mb_s?: number | null;
+  /** OOM kills in the last 5 minutes. */
+  oom_kills?: number;
   /** WSL only: the Windows host's own reading (memory_pressure._host). The
    * overall `level` is the worse of the guest's (`guest_level`) and this. */
   host?: {
@@ -2459,7 +2473,16 @@ export interface MemoryReading {
     /** available + guest_reusable: what the host's level is read against. */
     headroom?: number;
     headroom_pct?: number;
+    /** Windows' commit charge, % of its commit limit (critical at 97). */
+    commit_pct?: number | null;
+    committed?: number;
+    commit_limit?: number;
+    /** Hard paging (PagesInputPersec median), pages/s — reported, never a level. */
+    pages_in_median?: number | null;
     level?: string;
+    pending?: string | null;
+    /** The host's own signals, in plain words. */
+    why?: string[];
   } | null;
   guest_level?: "ok" | "low" | "critical" | "unknown";
   /** The launch gate: what waits for memory (absent on an older server). */

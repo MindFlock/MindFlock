@@ -624,23 +624,80 @@ def _is_bot(author: str) -> bool:
     return a.endswith("[bot]") or "coderabbit" in a
 
 
+def _is_reviewer(author: str, who: str) -> bool:
+    """``author`` is the ``require_reviewer`` named ``who`` — a
+    case-insensitive substring, as :func:`_is_bot` matches ("coderabbit"
+    matches ``coderabbitai`` and ``coderabbitai[bot]``)."""
+    who = str(who or "").strip().lower()
+    return bool(who) and who in str(author or "").lower()
+
+
+async def _reviewer_posted(pr, who: str) -> bool:
+    """Has ``who`` posted on ``pr`` at all: a review in any state (an
+    approval, a comment-only review, "changes requested" — every inline
+    comment belongs to one) or a conversation comment (where a bot such as
+    CodeRabbit posts its summary)? Raises when GitHub can't be asked."""
+    import aiohttp
+
+    from backend.ticket_ingestion.github_auth import resolve_token
+    from backend.web.core import github_pr as _gh
+
+    token = await resolve_token(_gh._github_config())
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = "Bearer %s" % token
+    api = "https://api.github.com/repos/%s" % pr.repo
+    urls = (
+        "%s/pulls/%d/reviews" % (api, pr.number),
+        "%s/issues/%d/comments" % (api, pr.number),
+    )
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as http:
+        for url in urls:
+            async with http.get(
+                url, params={"per_page": "100"}, headers=headers
+            ) as resp:
+                if resp.status != 200:
+                    raise RuntimeError("%s returned %d" % (url, resp.status))
+                data = await resp.json()
+            for row in data if isinstance(data, list) else []:
+                user = (row.get("user") or {}) if isinstance(row, dict) else {}
+                if _is_reviewer(str(user.get("login") or ""), who):
+                    return True
+    return False
+
+
 async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict:
     """``{"ids"}`` of the PR's actionable comments (None = could not ask),
-    fetched at most once a minute per flight."""
+    fetched at most once a minute per flight. With ``require_reviewer`` (and
+    until the stop has seen it post), also ``reviewer``: whether it has
+    posted on the PR (None = could not ask)."""
     from backend.ticket_ingestion import pr_comments as _prc
     from backend.web.core import github_pr as _gh
 
+    who = str(step["config"].get("require_reviewer") or "")
+    d = ((flight.get("step_states") or {}).get(step["id"]) or {}).get("detail") or {}
+    ask = bool(who) and not d.get("reviewer_seen")
     cache = _REVIEWS.get(flight["id"])
     if cache and now - cache["at"] < _REVIEWS_EVERY_S:
-        return {"ids": cache["ids"]}
+        out = {"ids": cache["ids"]}
+        if ask:
+            out["reviewer"] = cache.get("reviewer")
+        return out
     ids = None
     comments: Dict[str, object] = {}
     pr = None
+    posted: Optional[bool] = None
     try:
         pr, _slug = await _pr_of(sess, flight)
         if pr is not None:
             got = await _prc.fetch_actionable_comments(pr, _gh._github_config())
             for c in got:
+                if ask and _is_reviewer(c.author, who):
+                    posted = True
                 if not step["config"].get("include_bots", True) and _is_bot(c.author):
                     continue
                 comments[str(c.id)] = c
@@ -648,8 +705,23 @@ async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict
     except Exception as err:  # noqa: BLE001 — "could not ask" is not "no comments"
         _warn("flight %s: review comments unavailable: %v", flight["id"], err)
         ids = None
-    _REVIEWS[flight["id"]] = {"at": now, "ids": ids, "comments": comments, "pr": pr}
-    return {"ids": ids}
+    if ask and pr is not None and posted is None:
+        try:
+            posted = await _reviewer_posted(pr, who)
+        except Exception as err:  # noqa: BLE001 — unknown, not "never posted"
+            _log("flight %s: %s's reviews unavailable: %v", flight["id"], who, err)
+            posted = None
+    _REVIEWS[flight["id"]] = {
+        "at": now,
+        "ids": ids,
+        "comments": comments,
+        "pr": pr,
+        "reviewer": posted,
+    }
+    out = {"ids": ids}
+    if ask:
+        out["reviewer"] = posted
+    return out
 
 
 async def _checks_obs(flight: dict, sess: dict, now: float) -> dict:
@@ -2302,15 +2374,24 @@ def _deliver_fix(flight: dict, step: dict, action: dict) -> None:
 
 def _fix_note(step: dict, action: dict, flight: Optional[dict] = None) -> str:
     """What the agent is told when a stop's failure is handed to it — for a
-    Verify stop, with each failed step's evidence."""
+    Verify stop, with each failed step's evidence; for a reviews stop, with
+    each finding to fix or rebut on the record."""
+    reason = action.get("reason") or "failed"
     text = "[MindFlock route] %s failed: %s" % (
         step.get("title") or step.get("kind") or "a stop",
-        action.get("reason") or "failed",
+        reason,
     )
     evidence = _verify_evidence(flight, step)
     if evidence:
         text += "\nWhat Verify saw:\n" + "\n".join(evidence)
-    return text + "\nFix it; the route retries the stop once you are done."
+    then = ""
+    if step.get("kind") == "review":
+        # A reviewer's findings: each one fixed or rebutted, on the record.
+        from backend.web.core.flight_kinds import review as _review
+
+        then = _review.fix_instructions(step, reason)
+    then = then or "Fix it; the route retries the stop once you are done."
+    return text + "\n" + then
 
 
 # --------------------------------------------------------------------------- #

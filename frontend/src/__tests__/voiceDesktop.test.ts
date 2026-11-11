@@ -2149,7 +2149,8 @@ describe("the router's new answers", () => {
     // A failed call keeps it (it still expires on its own).
     held.keep({ kind: "ask", pending: { kind: "new", await: "task" } });
     mocks.api.mockRejectedValueOnce(new Error("offline"));
-    expect(await routePhrase("fix it", "t1", held)).toEqual({ kind: "prompt" });
+    // Typed (no command of its own), marked failed for the caption.
+    expect(await routePhrase("fix it", "t1", held)).toEqual({ kind: "prompt", failed: "error" });
     expect(held.take()).toEqual({ kind: "new", await: "task" });
   });
 
@@ -2167,7 +2168,8 @@ describe("the router's new answers", () => {
     mocks.api.mockResolvedValueOnce({ kind: "switch_index", index: 2 });
     expect(await routePhrase("focus two", "t1")).toEqual({ kind: "switch_index", index: 2 });
     mocks.api.mockResolvedValueOnce({ kind: "teleport" });
-    expect(await routePhrase("teleport", "t1")).toEqual({ kind: "prompt" });
+    // Typed — and marked, so the caption can say the page doesn't know it.
+    expect(await routePhrase("teleport", "t1")).toEqual({ kind: "prompt", unknown: "teleport" });
   });
 
   it("switch_index maps through railOrder (windows count, as the badges do); out of range says so", async () => {

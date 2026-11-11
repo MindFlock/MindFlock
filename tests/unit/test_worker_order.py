@@ -286,7 +286,7 @@ def fake(monkeypatch, tmp_path):
         _red_zones=rz,
         _team_runs=team_runs,
         _created_epoch=lambda inst: getattr(inst, "created", None),
-        _deliver_to_agent=lambda inst, title, msg: (
+        _deliver_to_agent=lambda inst, title, msg, **kw: (
             told.append((title, msg)),
             ("sent", None),
         )[1],

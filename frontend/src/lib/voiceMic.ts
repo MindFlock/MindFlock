@@ -94,6 +94,8 @@ export class MicKeeper {
   private cap: { stream: MediaStream; ctx: AudioContext; p: Promise<MicCapture | null> } | null = null;
   /** {@link onLost}'s listeners. */
   private lostSubs = new Set<() => void>();
+  /** {@link markLead}: the wake word's end, and when it was marked. */
+  private lead: { from: number; at: number } | null = null;
 
   constructor(
     private keepMs = KEEP_STREAM_MS,
@@ -279,6 +281,28 @@ export class MicKeeper {
     return r && r.stream === this.live() ? r.floor() : 0;
   }
 
+  /** The wake word ended at `soundEnd` (ms, Date.now's clock) and listening
+   * starts now: the next recording takes what the microphone heard since
+   * as its lead-in ({@link takeLead}) — "MindFlock — next session" said
+   * without waiting for the chime keeps its command. */
+  markLead(soundEnd: number, now = Date.now()): void {
+    this.lead = { from: soundEnd, at: now };
+  }
+
+  /** What the microphone heard since {@link markLead}'s word ended (16 kHz),
+   * once — taken as listening starts, before its chime plays. Null without
+   * a mark made in the last {@link LEAD_MARK_FRESH_MS}, without a pre-roll,
+   * or when more than the ring holds ({@link RING_KEEP_MS}) went by since
+   * the word: a command cut at its start is worse than none. */
+  takeLead(now = Date.now()): Float32Array | null {
+    const m = this.lead;
+    this.lead = null;
+    if (!m || now - m.at > LEAD_MARK_FRESH_MS) return null;
+    const ms = now - m.from;
+    if (!(ms > 0) || ms > RING_KEEP_MS) return null;
+    return this.preRoll(ms);
+  }
+
   /** `cb` runs when the open stream's microphone goes away (its track
    * ended: unplugged, taken by the OS) — the stream is dropped first, so
    * {@link get} opens a new one (the system's default microphone now). */
@@ -322,6 +346,15 @@ export const PRE_ROLL_MS = 500;
 export const PRE_ROLL_ONSET_S = 0.3;
 /** The pre-roll's rate: the recordings' (whisper's) 16 kHz. */
 export const PRE_ROLL_RATE = 16_000;
+/** The ring keeps this much (ms) — more than {@link PRE_ROLL_MS}: a wake's
+ * lead-in ({@link MicKeeper.markLead}) reaches back to the word's end, over
+ * the server's check (typically well under a second; 4 s covers a slow one).
+ * The room's quiet ({@link MicKeeper.quietFloor}) is still read from the
+ * last PRE_ROLL_MS only. */
+export const RING_KEEP_MS = 4000;
+/** A {@link MicKeeper.markLead} is for the listening started right then:
+ * a recording started later (a click, after a failed start) never takes it. */
+export const LEAD_MARK_FRESH_MS = 1000;
 /** The pre-roll's block: half the recorder's, so at most ~40 ms (48 kHz)
  * not yet delivered is missing between it and a recording that starts. */
 const RING_BLOCK = 2048;
@@ -354,8 +387,20 @@ export function downsample(src: Float32Array, from: number, to: number): Float32
   return out;
 }
 
+/** The quietest block's RMS among the newest blocks covering `span`
+ * samples (0: none) — the room's quiet over the last {@link PRE_ROLL_MS}. */
+function ringFloor(blocks: ReadonlyArray<{ pcm: Float32Array; rms: number }>, span: number): number {
+  let min = Infinity;
+  let n = 0;
+  for (let i = blocks.length - 1; i >= 0 && n < span; i--) {
+    min = Math.min(min, blocks[i].rms);
+    n += blocks[i].pcm.length;
+  }
+  return Number.isFinite(min) ? min : 0;
+}
+
 /** The ring on `stream`: a ScriptProcessor keeping the last
- * {@link PRE_ROLL_MS} (and a block) of samples and each block's RMS. Null
+ * {@link RING_KEEP_MS} (and a block) of samples and each block's RMS. Null
  * when the audio engine can't (a context without nodes). */
 function startPreRoll(stream: MediaStream, ctx: AudioContext): PreRollRing | null {
   try {
@@ -363,7 +408,8 @@ function startPreRoll(stream: MediaStream, ctx: AudioContext): PreRollRing | nul
     const proc = ctx.createScriptProcessor(RING_BLOCK, 1, 1);
     const zero = ctx.createGain();
     zero.gain.value = 0;
-    const keep = Math.round((PRE_ROLL_MS / 1000) * ctx.sampleRate) + RING_BLOCK;
+    const keep = Math.round((RING_KEEP_MS / 1000) * ctx.sampleRate) + RING_BLOCK;
+    const quietSpan = Math.round((PRE_ROLL_MS / 1000) * ctx.sampleRate) + RING_BLOCK;
     let blocks: Array<{ pcm: Float32Array; rms: number }> = [];
     let frames = 0;
     /** Samples heard since the last cut (capped: only its order matters). */
@@ -412,7 +458,7 @@ function startPreRoll(stream: MediaStream, ctx: AudioContext): PreRollRing | nul
         return downsample(out, ctx.sampleRate, rate);
       },
       floor() {
-        return blocks.length ? Math.min(...blocks.map((b) => b.rms)) : 0;
+        return ringFloor(blocks, quietSpan);
       },
     };
   } catch {
@@ -498,7 +544,7 @@ export async function openCapture(stream: MediaStream, ctx: AudioContext): Promi
 }
 
 /** The capture graph's blocks, as the page gets them: the {@link
- * PRE_ROLL_MS} ring (a {@link PreRollRing}), and the recordings ({@link
+ * RING_KEEP_MS} ring (a {@link PreRollRing}), and the recordings ({@link
  * record}) each block goes to. */
 export class MicCapture implements PreRollRing {
   private subs = new Set<(b: CaptureBlock) => void>();
@@ -506,7 +552,8 @@ export class MicCapture implements PreRollRing {
   private kept = 0;
   private fresh = 0;
   private stopped = false;
-  private readonly keep = Math.round((PRE_ROLL_MS / 1000) * CAPTURE_RATE) + Math.ceil(CAPTURE_BLOCK_FRAMES / 2);
+  private readonly keep = Math.round((RING_KEEP_MS / 1000) * CAPTURE_RATE) + Math.ceil(CAPTURE_BLOCK_FRAMES / 2);
+  private readonly quietSpan = Math.round((PRE_ROLL_MS / 1000) * CAPTURE_RATE) + Math.ceil(CAPTURE_BLOCK_FRAMES / 2);
 
   constructor(
     readonly stream: MediaStream,
@@ -560,7 +607,7 @@ export class MicCapture implements PreRollRing {
   }
 
   floor(): number {
-    return this.blocks.length ? Math.min(...this.blocks.map((b) => b.rms)) : 0;
+    return ringFloor(this.blocks, this.quietSpan);
   }
 
   /** A recording of the blocks from now on — lib/wavRecorder's
@@ -620,7 +667,7 @@ function recordBlocks(cap: MicCapture, opts: WavRecorderOptions): WavRecording {
   let muted = false;
   let held: Float32Array[] = [];
   let heldFrames = 0;
-  const hold = Math.round(MUTE_HOLD_S * rate);
+  const hold = Math.round(CAPTURE_MUTE_HOLD_S * rate);
   const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * rate)) : 0;
   const wav = (pcm: Float32Array) => pcmWav(downsample(pcm, rate, outRate), outRate);
 
@@ -719,8 +766,12 @@ function recordBlocks(cap: MicCapture, opts: WavRecorderOptions): WavRecording {
   };
 }
 
-/** lib/wavRecorder's MUTE_HOLD_S and TAKE_MIN_S (values, not imported: see {@link pcmWav}). */
-const MUTE_HOLD_S = 0.5;
+/** How much of the muted audio a capture recording keeps for a rewind (s) —
+ * more than lib/wavRecorder's MUTE_HOLD_S (0.5): a voice heard over a
+ * confirmation ("Sent.") plays on to the line's end before the mute lifts,
+ * and the whole command said over it is rewound into the phrase. */
+export const CAPTURE_MUTE_HOLD_S = 1.5;
+/** lib/wavRecorder's TAKE_MIN_S (the value, not imported: see {@link pcmWav}). */
 const TAKE_MIN_S = 0.3;
 
 /** `wav` (16-bit PCM mono at `rate`, as lib/wavRecorder encodes it) with

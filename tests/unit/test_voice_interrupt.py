@@ -61,9 +61,12 @@ def test_named_interrupt_resolves_the_session():
 
 
 def test_named_interrupt_needs_a_whole_name_without_session():
-    # "login" starts two names: asked, never guessed (and no say → no press).
+    # "login" starts two names: asked, never guessed; the pick that answers
+    # it carries the interrupt on to the session picked.
     got = vr.answer("interrupt login", "docs", ROWS)
-    assert got["kind"] == "ambiguous" and "pending" not in got
+    assert got["kind"] == "ambiguous" and got["pending"]["then"] == {
+        "kind": "interrupt"
+    }
 
 
 def test_bare_interrupt_is_the_session_talked_to():

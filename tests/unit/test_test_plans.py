@@ -2289,7 +2289,9 @@ def test_mark_due_stamps_live_at_once(store):
 
 def test_mark_due_releases_a_running_plan(store):
     tp.upsert(_plan("sc-1", state="running", run_session="verify-sc-1"))
-    plan = tp.mark_due("sc-1")
+    # The release is the give-up's, which always says why: without a reason
+    # this is the liveness pass, and that leaves a check in flight alone.
+    plan = tp.mark_due("sc-1", reason="no answer in 2 hours")
     assert plan["state"] == "due" and plan["run_session"] == ""
 
 
@@ -2616,7 +2618,7 @@ def test_every_way_a_run_ends_honours_an_answer_given_during_it(store, stop):
     if stop == "cancel":
         plan = tp.cancel_run("sc-1")
     elif stop == "give_up":
-        plan = tp.mark_due("sc-1")
+        plan = tp.mark_due("sc-1", reason="no answer in 2 hours")
     else:
         tp.prune(live_titles=[])
         plan = tp.get("sc-1")

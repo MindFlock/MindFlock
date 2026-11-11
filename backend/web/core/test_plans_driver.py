@@ -1110,7 +1110,7 @@ def _results_file_broken(plan: dict, inst, path: str, why: str) -> None:
         "every answer you have already recorded." % (_test_plans.RESULT_FILE, why)
     )
     try:
-        _server()._deliver_to_agent(inst, title, text)
+        _server()._deliver_to_agent(inst, title, text, auto=True)
     except Exception:  # noqa: BLE001
         pass
 
@@ -1462,7 +1462,9 @@ def _deliver_walk(title: str, prompt: str) -> Tuple[str, str]:
             _ws.exclude_artifacts(wt)
     except Exception:  # noqa: BLE001 — best-effort, as everywhere else
         pass
-    told, reason = srv._deliver_to_agent(inst, title, prompt)
+    # auto: nobody typed this — a sleeping session's wake waits its turn in
+    # the launch gate (queued, never refused, while memory is short).
+    told, reason = srv._deliver_to_agent(inst, title, prompt, auto=True)
     if told:
         return str(told), ""
     if str(reason or "") == WALK_NOT_RUNNING:
@@ -2335,7 +2337,7 @@ def _tell_walk_closed(title: str, reason: str) -> bool:
         % str(reason or "closed").strip()
     )
     try:
-        told, _why = srv._deliver_to_agent(inst, title, text)
+        told, _why = srv._deliver_to_agent(inst, title, text, auto=True)
         return bool(told)
     except Exception:  # noqa: BLE001
         return False

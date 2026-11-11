@@ -1746,9 +1746,15 @@ launch gate as an automatic start — while memory is short it waits in the
 gate's queue, its row saying *Waiting for memory* — and lifts the hold, and
 the ordinary drain types the task in once the agent is idle. The user can
 press **Start** on a held worker to run its agent early (a fresh
-conversation); its task still waits for its turn. A spawn with no task has
-nothing to hold: it starts at once (its fence still lands). What decides its
-turn:
+conversation); its task still waits for its turn. Nothing else starts it
+early: opening its pane shows *waiting its turn — press Start to start it
+early* instead of launching an agent with no launch gate behind it. A held
+worker whose agent can't start when its turn comes — **paused** (only Resume
+starts it), held offline after a crash, or the launch gate's queue full —
+stays held (its row says why) and takes no slot; a later pass releases it
+once it can start, so it never reads as a finished `running` worker with no
+agent. A spawn with no task has nothing to hold: it starts at once (its fence
+still lands). What decides its turn:
 
 - **`after`** (on `spawn_session`): every named session is done first. A
   name may be a worker you have not spawned yet.
@@ -1766,7 +1772,11 @@ turn:
 
 A worker is **done** when it reports `done` (since it started) or is gone
 (closed or deleted) — a report counts from the mailbox, so it still does
-after your session closes. One that reports `blocked` or `failed` frees its slot
+after your session closes. A worker deleted **while still held** never ran
+and never will: it is dropped from the order, and every worker that ran
+after it now runs after what *it* ran after (`X → A → B`, delete A: B runs
+once X is done — it is released, never left waiting for a session that is
+gone, nor let past X). A declared step naming it is rewired the same way. One that reports `blocked` or `failed` frees its slot
 but the workers after it stay held until it reports `done` — or you
 `set_order(start_now=[…])`. The user can start a held worker by hand by
 switching its queue on (its Queue tab) — MindFlock then releases it on its

@@ -239,9 +239,11 @@ def test_a_relative_cwd_is_the_servers_relative_one(tmp_path, monkeypatch):
 @needs_posix_spawn
 def test_a_missing_cwd_raises_before_anything_spawns(tmp_path, monkeypatch):
     spawns: list = []
-    real = os.posix_spawn
+    real = mux._spawn_session_leader
     monkeypatch.setattr(
-        os, "posix_spawn", lambda *a, **k: (spawns.append(a), real(*a, **k))[1]
+        mux,
+        "_spawn_session_leader",
+        lambda *a, **k: (spawns.append(a), real(*a, **k))[1],
     )
     before = set(os.listdir("/proc/self/fd"))
     with pytest.raises(FileNotFoundError):

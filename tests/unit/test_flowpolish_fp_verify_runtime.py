@@ -294,7 +294,7 @@ def test_a_broken_results_file_is_noted_and_the_agent_told_once(monkeypatch, tmp
     monkeypatch.setattr(
         server,
         "_deliver_to_agent",
-        lambda inst, title, text: told.append((title, text)) or ("queued", None),
+        lambda inst, title, text, **_kw: told.append((title, text)) or ("queued", None),
     )
     noted: list = []
     monkeypatch.setattr(

@@ -22,7 +22,10 @@ TWO FILES under ``<config dir>/flights/`` (``$MINDFLOCK_FLIGHTS_DIR`` in
 tests): ``plans.json`` (synced across devices like templates, through
 ``sync_stores``) and ``flights.json`` (local, like ``autopilot.json``). Every
 accessor takes the module lock and re-reads the file under it; every write is
-atomic. ``_normalize_*`` IS the migration mechanism — there is no version key:
+atomic, and every read-modify-write also holds an advisory lock file
+(``<store>.lock``, :func:`_store_write`) so the ticket pipeline's process and
+the server's flight driver, which both rewrite ``flights.json``, never lose
+each other's update. ``_normalize_*`` IS the migration mechanism — there is no version key:
 a record written by an older build gains new fields at their defaults, and a
 hand-mangled one cannot crash a pass.
 """
@@ -39,7 +42,8 @@ import re
 import secrets
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from contextlib import contextmanager
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
@@ -117,9 +121,16 @@ __all__ = [
     "join_dto",
 ]
 
+#: This process's lock on both stores. Readers take only this one.
 _LOCK = threading.Lock()
 _PLANS_FILE = "plans.json"
 _FLIGHTS_FILE = "flights.json"
+#: One thread of this process at a time at the cross-process lock file.
+_FLOCK_MUTEX = threading.Lock()
+#: How long a writer waits for another process's hold on a store before
+#: going on without it. A write takes milliseconds: only a wedged holder
+#: keeps it this long.
+FLOCK_WAIT_S = 5.0
 
 # --- Limits and clocks --------------------------------------------------------
 MAX_STEPS = 40
@@ -516,6 +527,19 @@ STEP_KINDS: Dict[str, dict] = {
             _f("quiet_minutes", "int", "Quiet for (minutes)", default=10),
             _f("max_rounds", "int", "At most this many rounds", default=5),
             _f("include_bots", "bool", "Include bot reviewers", default=True),
+            _f(
+                "require_reviewer",
+                "text",
+                "Wait for this reviewer (empty = nobody)",
+                default="",
+                placeholder="e.g. coderabbit",
+            ),
+            _f(
+                "reviewer_wait_minutes",
+                "int",
+                "Give that reviewer (minutes)",
+                default=10,
+            ),
         ],
     },
     "checks": {
@@ -1072,6 +1096,10 @@ def _step_config_body(kind: str, raw: dict, strict: bool, where: str) -> dict:
             "quiet_minutes": _int(c.get("quiet_minutes"), 10, 1, 24 * 60),
             "max_rounds": _int(c.get("max_rounds"), 5, 1, 50),
             "include_bots": _bool(c.get("include_bots"), True),
+            "require_reviewer": _text(c.get("require_reviewer"), 100),
+            "reviewer_wait_minutes": _int(
+                c.get("reviewer_wait_minutes"), 10, 1, 24 * 60
+            ),
         }
     if kind == "checks":
         return {"timeout_minutes": _int(c.get("timeout_minutes"), 60, 1, 24 * 60)}
@@ -1732,6 +1760,56 @@ def flights_path() -> str:
     return os.path.join(flights_dir(), _FLIGHTS_FILE)
 
 
+@contextmanager
+def _store_write(path: str) -> Iterator[None]:
+    """The lock for one read-modify-write of the store at ``path``: an
+    exclusive advisory lock on ``<path>.lock`` (``fcntl.flock``; on Windows
+    ``LockFileEx`` through :func:`backend.compat.flock`), then :data:`_LOCK`.
+
+    Two processes rewrite ``flights.json``: the server (its flight driver,
+    the routes) and the ticket pipeline (``session_runner`` arms a flight
+    for each ticket session and cancels one it abandons). With only the
+    in-process lock and an atomic replace, one process's whole-file rewrite
+    dropped what the other had just written — an arm that its autopilot hand
+    -off then disarmed left the session with neither. The flock FIRST, then
+    :data:`_LOCK`: while another process holds the file, this one's readers
+    (every row build) carry on; only its writers wait. The kernel releases
+    the flock if its holder dies. A holder wedged past :data:`FLOCK_WAIT_S`
+    is not waited for (the write goes on unlocked, as before) — a route
+    calls this on the event loop. Where the lock file can't be opened at all
+    (a read-only dir) the write goes on under :data:`_LOCK` alone."""
+    from backend import compat
+
+    with _FLOCK_MUTEX:
+        fd: Optional[int] = None
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError:
+            fd = None
+        if fd is not None:
+            deadline = time.monotonic() + FLOCK_WAIT_S
+            while True:
+                try:
+                    compat.flock(fd, compat.LOCK_EX | compat.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        os.close(fd)
+                        fd = None
+                        break
+                    time.sleep(0.01)
+                except BaseException:
+                    os.close(fd)
+                    raise
+        try:
+            with _LOCK:
+                yield
+        finally:
+            if fd is not None:
+                os.close(fd)  # closing releases the flock
+
+
 def _load_plans_raw() -> List[dict]:
     data = read_json(plans_path(), {}, expect=dict)
     items = data.get("plans") if isinstance(data, dict) else None
@@ -1881,7 +1959,7 @@ def save_plan(raw, now: Optional[float] = None) -> dict:
     for a bad plan, :class:`FlightError` 404 for an id nobody has."""
     plan = normalize_plan(raw, strict=True)
     ts = float(now if now is not None else time.time())
-    with _LOCK:
+    with _store_write(plans_path()):
         plans = _plans_locked()
         pid = plan["id"]
         if pid:
@@ -1907,7 +1985,7 @@ def put_plan(pid: str, raw, now: Optional[float] = None) -> dict:
     plan = normalize_plan(raw, strict=False)
     if not plan["steps"]:
         raise ValueError("a synced plan with no usable steps")
-    with _LOCK:
+    with _store_write(plans_path()):
         plans = _plans_locked()
         plan["id"] = pid
         plan["builtin"] = pid in BUILTIN_IDS
@@ -1926,7 +2004,7 @@ def delete_plan(plan_id: str) -> str:
     """Remove a plan: ``"deleted"``, ``"reset"`` (a built-in goes back to its
     default instead) or ``""`` (no such plan)."""
     pid = str(plan_id or "")
-    with _LOCK:
+    with _store_write(plans_path()):
         plans = _plans_locked()
         if pid not in plans:
             return ""
@@ -1951,9 +2029,10 @@ def reset_plan(plan_id: str) -> Optional[dict]:
 # --- flights.json -------------------------------------------------------------
 #: The parsed flights.json, keyed on the file's identity: every session row
 #: of every instances snapshot asks :func:`for_session`, and N rows must cost
-#: one read, not N. ``(path, ino, mtime_ns, size)`` -> {id: flight}. Never
-#: handed out: readers copy what they return. Guarded by :data:`_LOCK`.
-_CACHE: Dict[str, object] = {"key": None, "flights": {}}
+#: one read, not N. ``(path, ino, mtime_ns, size)`` -> {id: flight}, plus
+#: the digest of the bytes it was parsed from. Never handed out: readers copy
+#: what they return. Guarded by :data:`_LOCK`.
+_CACHE: Dict[str, object] = {"key": None, "flights": {}, "digest": None}
 
 
 def _file_key(path: str):
@@ -1964,14 +2043,23 @@ def _file_key(path: str):
     return (path, st.st_ino, st.st_mtime_ns, st.st_size)
 
 
-def _cached_flights_locked() -> Dict[str, dict]:
-    """The parsed store (shared — callers must not mutate it). Re-read only
-    when the file changed (another process, an atomic replace)."""
-    path = flights_path()
-    key = _file_key(path)
-    if _CACHE["key"] == key and key[1] is not None:
-        return _CACHE["flights"]  # type: ignore[return-value]
-    data = read_json(path, {}, expect=dict)
+def _read_bytes(path: str) -> Optional[bytes]:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _digest(blob: Optional[bytes]):
+    return hashlib.sha1(blob).digest() if blob is not None else None
+
+
+def _parse_flights(blob: Optional[bytes]) -> Dict[str, dict]:
+    try:
+        data = json.loads(blob.decode("utf-8")) if blob is not None else {}
+    except ValueError:
+        data = {}
     items = data.get("flights") if isinstance(data, dict) else None
     out: Dict[str, dict] = {}
     if isinstance(items, dict):
@@ -1979,14 +2067,35 @@ def _cached_flights_locked() -> Dict[str, dict]:
             f = _normalize_flight(fid, raw)
             if f is not None:
                 out[f["id"]] = f
+    return out
+
+
+def _cached_flights_locked(verify: bool = False) -> Dict[str, dict]:
+    """The parsed store (shared — callers must not mutate it). Re-read only
+    when the file changed (another process, an atomic replace). ``verify``
+    (a read-modify-write): compare the BYTES, not just the stat key — an
+    atomic replace can reuse the old inode within one mtime tick, and a
+    stale copy written back is exactly the lost update the lock prevents."""
+    path = flights_path()
+    key = _file_key(path)
+    if not verify and _CACHE["key"] == key and key[1] is not None:
+        return _CACHE["flights"]  # type: ignore[return-value]
+    blob = _read_bytes(path)
+    digest = _digest(blob)
+    if digest is not None and digest == _CACHE["digest"]:
+        _CACHE["key"] = key
+        return _CACHE["flights"]  # type: ignore[return-value]
+    out = _parse_flights(blob)
     _CACHE["key"] = key
     _CACHE["flights"] = out
+    _CACHE["digest"] = digest
     return out
 
 
 def _load_flights_locked() -> Dict[str, dict]:
-    """A private, mutable copy of the store (for read-modify-write)."""
-    return copy.deepcopy(_cached_flights_locked())
+    """A private, mutable copy of the store as it is on disk NOW (for
+    read-modify-write, under :func:`_store_write`)."""
+    return copy.deepcopy(_cached_flights_locked(verify=True))
 
 
 def _save_flights_locked(flights: Dict[str, dict]) -> None:
@@ -1994,6 +2103,9 @@ def _save_flights_locked(flights: Dict[str, dict]) -> None:
     atomic_write_json(path, {"flights": flights}, prefix=".flf.")
     _CACHE["key"] = _file_key(path)
     _CACHE["flights"] = copy.deepcopy(flights)
+    # Read back (cheap; no parse): the writer still holds the lock, so these
+    # are this write's bytes, and the next read-modify-write skips the parse.
+    _CACHE["digest"] = _digest(_read_bytes(path))
 
 
 def _blank_step_state() -> dict:
@@ -2190,7 +2302,7 @@ def for_session(title: str, unfinished_only: bool = True) -> Optional[dict]:
 def mutate(flight_id: str, fn: Callable[[dict], None]) -> Optional[dict]:
     """Read-modify-write one flight under the lock; ``fn`` may raise
     :class:`FlightError` (nothing is written then)."""
-    with _LOCK:
+    with _store_write(flights_path()):
         flights = _load_flights_locked()
         f = flights.get(str(flight_id or ""))
         if f is None:
@@ -2203,7 +2315,7 @@ def mutate(flight_id: str, fn: Callable[[dict], None]) -> Optional[dict]:
 
 
 def delete(flight_id: str) -> bool:
-    with _LOCK:
+    with _store_write(flights_path()):
         flights = _load_flights_locked()
         if flights.pop(str(flight_id or ""), None) is None:
             return False
@@ -2217,7 +2329,7 @@ def _put_new(flight: dict, replaced: Optional[list] = None) -> dict:
     is cancelled ("replaced") so a parked flight never blocks a fresh start.
     Each replaced flight is appended to ``replaced`` (the caller announces
     it; the driver's pass also sweeps any it missed)."""
-    with _LOCK:
+    with _store_write(flights_path()):
         flights = _load_flights_locked()
         title = flight["session"]
         for f in flights.values():
@@ -2644,7 +2756,7 @@ def claim(
     if not flight_id or not owner:
         return None, False
     ts = float(now if now is not None else time.time())
-    with _LOCK:
+    with _store_write(flights_path()):
         flights = _load_flights_locked()
         f = flights.get(flight_id)
         if f is None:
@@ -2672,7 +2784,7 @@ def prune(live_titles, now: Optional[float] = None) -> List[dict]:
     live = set(live_titles or [])
     ts = float(now if now is not None else time.time())
     out = []
-    with _LOCK:
+    with _store_write(flights_path()):
         flights = _load_flights_locked()
         changed = False
         for f in flights.values():
@@ -3863,22 +3975,29 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
                 idle_since=None,
             )
         return _wait(rec.get("note") or "pushing the review fixes")
-    ids = (obs.get("reviews") or {}).get("ids")
+    r = obs.get("reviews") or {}
+    ids = r.get("ids")
+    who = str(cfg.get("require_reviewer") or "")
+    first: dict = {}
     if isinstance(ids, list) and not d.get("seeded"):
         # What was already on the PR when this step began was the previous
         # step's business (a PR flight's first prompt carries it): only what
         # arrives from here on is "new".
-        return _wait(
-            "watching for new review comments", seen=[str(i) for i in ids], seeded=True
-        )
+        first.update(seen=[str(i) for i in ids], seeded=True)
+    if who and not d.get("pr_since"):
+        # The required reviewer's clock starts once there is a PR to review
+        # and this stop is watching it, whichever came later.
+        first["pr_since"] = now
+    if first:
+        return _wait("watching for new review comments", **first)
     seen = set(str(i) for i in d.get("seen") or [])
     new = [str(i) for i in ids if str(i) not in seen] if isinstance(ids, list) else []
     if new:
         if int(d.get("review_rounds") or 0) >= cfg["max_rounds"]:
             return {
                 "action": "fail",
-                "reason": "still getting review comments after %d rounds — "
-                "raise its rounds and Retry, or Skip" % cfg["max_rounds"],
+                "reason": "comments still open after %s — it needs a human review"
+                % plural(cfg["max_rounds"], "round"),
             }
         return {
             "action": "run",
@@ -3887,6 +4006,10 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
             % (len(new), "" if len(new) == 1 else "s"),
             "comments": new,
         }
+    if who and not d.get("reviewer_seen"):
+        held = _required_reviewer(cfg, d, r.get("reviewer"), now)
+        if held is not None:
+            return held
     quiet_since = float(d.get("quiet_since") or ss["since"])
     quiet = cfg["quiet_minutes"] * 60.0
     if now - quiet_since >= quiet:
@@ -3901,6 +4024,38 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
     return _wait(
         "quiet for %s of %d min" % (_mins(now - quiet_since), cfg["quiet_minutes"])
     )
+
+
+def _required_reviewer(cfg: dict, d: dict, posted, now: float) -> Optional[dict]:
+    """A reviews stop's ``require_reviewer`` gate (until it has seen that
+    reviewer post): it has posted → note it, and the quiet clock restarts
+    from here (``quiet_minutes`` is the wait after its first review, never a
+    settle on a PR nobody has looked at yet); not yet → wait, failing once
+    ``reviewer_wait_minutes`` have passed since ``pr_since``. ``posted`` is
+    True / False / None (GitHub could not be asked)."""
+    who = cfg["require_reviewer"]
+    if posted is True:
+        return _wait(
+            "%s reviewed — watching for new review comments" % who,
+            reviewer_seen=True,
+            quiet_since=now,
+        )
+    limit = cfg["reviewer_wait_minutes"]
+    since = float(d.get("pr_since") or now)
+    if now - since < limit * 60.0:
+        return _wait(
+            "waiting for %s to review (%s of %d min)" % (who, _mins(now - since), limit)
+        )
+    if posted is None:
+        return {
+            "action": "fail",
+            "reason": "could not tell whether %s reviewed this PR — it needs a "
+            "human review" % who,
+        }
+    return {
+        "action": "fail",
+        "reason": "%s never reviewed this PR — it needs a human review" % who,
+    }
 
 
 #: A CI checks stop whose checks can't be read this long in a row fails
@@ -6071,7 +6226,7 @@ def attach(
     """:func:`op_attach` under the store lock, refusing (404 ``unknown_flight``,
     409 ``not_grounded``, 409 ``in_flight`` when ``title`` already has an
     unfinished flight) against the store as it is."""
-    with _LOCK:
+    with _store_write(flights_path()):
         flights = _load_flights_locked()
         f = flights.get(str(flight_id or ""))
         if f is None:
@@ -6159,7 +6314,7 @@ def split_off(
 ) -> Tuple[dict, dict]:
     """:func:`op_split_off` under the store lock → ``(flight, chain)``, both
     written at once (404 ``unknown_flight``)."""
-    with _LOCK:
+    with _store_write(flights_path()):
         flights = _load_flights_locked()
         f = flights.get(str(flight_id or ""))
         if f is None:
@@ -6276,7 +6431,7 @@ def on_prompt(title: str, now: Optional[float] = None) -> Optional[Tuple[dict, d
     if not title:
         return None
     ts = float(now if now is not None else time.time())
-    with _LOCK:
+    with _store_write(flights_path()):
         flights = _load_flights_locked()
         f = None
         for g in flights.values():

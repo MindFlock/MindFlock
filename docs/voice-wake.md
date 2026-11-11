@@ -13,7 +13,7 @@ and how to tune it to a real voice.
    fast streaming model, `base.en` for English) decodes the clip with the
    word as `initial_prompt` (`"MindFlock"`), the way `core/wake.py`
    `decode_options()` says: greedy, **once** (`temperature` 0 — no
-   fallback), no VAD, **no no-speech filter**, at most `MAX_TOKENS` (12)
+   fallback), no VAD, **no no-speech filter**, at most `MAX_TOKENS` (32; 12 until 2026-11-10)
    tokens, on a `PAD_SECONDS` (10 s) encoder input instead of Whisper's
    30 s (`core/speech.py`'s short padding, as the streaming passes have).
    Never with `word_timestamps`: it turns the prompted decode into
@@ -69,10 +69,14 @@ of it.
 `frontend/src/lib/wakeWord.ts` (desktop) and `backend/web/static/mobile.js`
 (phone, `voiceWakeStep` / `voiceWakeCheck`) follow the same rules:
 
-- **A lone utterance**: speech after 350 ms of quiet, 250 ms–1.6 s of it,
+- **A lone utterance**: speech after 350 ms of quiet, 250 ms–4 s of it,
   then 200 ms of quiet (the tail: the clip goes in that block — on the
   desktop's 85 ms blocks, ~256 ms after the word ends). Longer is a
-  sentence, shorter a click; both are never sent.
+  sentence, shorter a click; both are never sent. Up to 1.6 s is the word
+  alone; up to 4 s (since 2026-11-10) is the word with its request in one
+  breath — "MindFlock, next session" — see "The word with a request" below.
+  A candidate longer than 1.6 s is not kept while another check is in
+  flight.
 - **A pause inside it** ("Hey, MindFlock", or "Mind… flock" said slowly)
   is longer than the tail, so its first part goes alone. Speech that
   resumes less than 350 ms after a stretch that started after quiet (and
@@ -85,7 +89,40 @@ of it.
   a yes drops it. Before, it was dropped, with a 1.5 s gap: with the
   server's check taking 1.5–8 s on a loaded CPU, a cough, a key click or a
   first try just before "MindFlock" swallowed the word itself.
-- Nothing while the page talks (and 500 ms after), records, or is hidden.
+- Nothing while the page is audibly talking (and 500 ms after), records,
+  or is hidden. A reply that is still being synthesised is silent, so the
+  standby keeps listening through it.
+- **What is said right after the word is kept.** On a yes the standby
+  hands the audio after the word's end (what came in while the server was
+  checking) to the new recording as its lead-in, taken before the start
+  chime plays: "MindFlock — next session" works without waiting for the
+  chime. The word itself is not in it.
+- **The listen a wake starts is addressed.** Its first phrase is offered to
+  the router as if it began with the word: a command acts, an app request
+  ("open settings") goes to the assistant, anything else is dictation as
+  before. Nothing heard in 8 s: the strip says *Didn't catch anything*.
+
+## The word with a request (one breath)
+
+When the hinted decode starts with the word (or a form the judge takes) and
+1–8 more words follow, `core/wake.py` `judge_rest` says yes with reason
+`rest`, and `POST /api/voice/wake` answers `{"wake": true, "rest": "next
+session", …}` (`rest` is always present: `""` for the word alone or a no).
+The clients start listening and handle `rest` as that listen's addressed
+first phrase; nothing has to be said again. The decode takes up to
+`MAX_TOKENS` 32 tokens for it (12 before). The veto for this path is
+`veto_rest`: the plain decode must also start wake-like, or end with the
+same request words — "Mind, open settings." and a bare "open settings." are
+turned down, and a sentence that merely starts with "my…" / "mind…"
+("My clock is broken.", "MindFlock is great") never wakes. No bench cache
+existed when this was written: it is pinned by text pairs
+(`tests/unit/test_wake_rest.py`), not yet measured on audio.
+
+The same family of forms (`voice_words.wake_like`: the known forms, the
+sound shape, two letters off) now also starts a request **while
+listening**: "Mine flock, open intake", "Mindful, I'll open settings",
+"mindfulout open intake" route as "MindFlock, …" when a request follows
+(`wake_asks`), and stay words otherwise ("mindful of the deadline…").
 
 While standby is on, each client holds a listening lease (`POST
 /api/voice/listen`), which keeps the local whisper models — the wake

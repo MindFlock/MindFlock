@@ -1307,6 +1307,9 @@ describe("a dialog is answered only by words begun after it was there (R8-bis)",
   it("LiveDictation hands the router when the phrase began: the recognizer's word, else its first words' start, else the early bound", async () => {
     const got: Array<number | undefined> = [];
     let rec = 0;
+    // Read BEFORE the dictation exists: it stamps its own start at
+    // construction, and a clock tick between the two made t0 1 ms late (CI).
+    const t0 = Date.now();
     const d = new LiveDictation(session(), {
       caption: () => {},
       halt: () => {},
@@ -1319,7 +1322,6 @@ describe("a dialog is answered only by words begun after it was there (R8-bis)",
       submitted: () => {},
       spokeAt: () => rec,
     }, { continuous: true });
-    const t0 = Date.now();
     // 1. the recognizer says (the phrase's end carries it).
     await d.flush("yes", undefined, t0 - 4000);
     expect(got[0]).toBe(t0 - 4000);

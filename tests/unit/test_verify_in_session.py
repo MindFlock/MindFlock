@@ -386,7 +386,7 @@ def test_close_run_keeps_the_session_and_tells_its_agent(monkeypatch, tmp_path):
     monkeypatch.setattr(
         server,
         "_deliver_to_agent",
-        lambda inst, title, text: told.append((title, text)) or ("queued", None),
+        lambda inst, title, text, **kw: told.append((title, text)) or ("queued", None),
     )
 
     async def _never(title):
@@ -413,7 +413,7 @@ def test_cancel_keeps_the_session_and_tells_its_agent_to_stop(monkeypatch, tmp_p
     monkeypatch.setattr(
         server,
         "_deliver_to_agent",
-        lambda inst, title, text: told.append((title, text)) or ("queued", None),
+        lambda inst, title, text, **kw: told.append((title, text)) or ("queued", None),
     )
 
     async def _never(title):

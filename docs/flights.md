@@ -320,8 +320,11 @@ contains it has its passes downgraded); for an environment the deployment is
 under test and the tree is only read.
 
 A session mid-turn gets the prompt on its prompt queue (never typed over a
-running turn); a sleeping one is woken; one whose agent is not running is
-relaunched by the queue's drain. The stop's stall and budget clocks start when
+running turn); a sleeping one is woken through the launch gate, like any wake
+nobody asked for (low memory: the prompt waits on the queue and the wake
+waits for memory — queued, not refused; the close notice below wakes the
+same way); one whose agent is not running is relaunched by the queue's
+drain. The stop's stall and budget clocks start when
 the agent picks it up, not while it waits on the queue. A paused session
 refuses it (409 `reason: "send_failed"` → the stop fails with the sentence).
 The run record carries `in_session: true`, `self: true` and `session` = that
@@ -331,6 +334,17 @@ it**. A nudge goes
 to that agent; the stop closing the check (stall, budget) tells it the check
 is over, and nothing that ends a run — that close, Cancel, Delete — **ever
 closes the session**.
+
+A check that ends **before the agent's steps were adopted** (the hand-off
+refused, Cancel, the two-hour give-up, the session deleted, a close) puts
+the plan's previous steps back, so the checker fallback below still has
+them. Any such end settles the run `blocked` with its reason, stamped at the
+moment it ended (the pill shows for 10 minutes from then). It is never
+removed: removing it would bring back the check before it, and a
+`needs_you` there would be confirmed against this run's steps. One plan
+starts one check at a time: a second Run while one is starting or running
+answers 409 `reason: "busy"` (a stop waits on the running check), and the
+liveness pass never releases a check in flight.
 
 Only when the plan's session is gone (closed or deleted) does a separate
 `verify-<plan>-<sha7>` checker session walk the plan's **written** steps, as
@@ -487,7 +501,7 @@ editor's palette and forms are driven by the server):
 | `verify` | robot (+you) | `where` (`branch` or an environment's name, default branch); `ready`: `now` \| `on_branch` \| `after_prev` (default now); `ready_minutes` (0..1440, 0 = the environment's deploy minutes); `who`: `both` \| `agent` \| `you` (default both); `notes` (≤2000 chars); `post_to_pr` (bool, default false) — see [Verify stops](#verify-stops); a legacy `wait_live` true reads as `live` + `on_branch` | the session's self-verify `passed` (or a person confirmed it); `needs_you` parks the flight on you until confirmed, `failed` fails the stop, `blocked` parks on you (Retry / Skip) |
 | `you` | you | `text` (what to do), `items` (list of strings, optional checklist), `notify` (bool, default true) | you press **Done** (or **Skip**) in the Sky (its box, or the drawer), the pane strip, or the bell |
 | `wait` | robot | `minutes` (int) or `until` ("HH:MM" local) | the time has passed |
-| `reviews` | robot | `quiet_minutes` (default 10), `max_rounds` (default 5), `include_bots` (default true) | the PR has had no new unresolved review comments for `quiet_minutes`; each batch of new comments is sent to the agent (the pipeline's consolidated PR prompt) followed by an automatic push; `max_rounds` reached → fail |
+| `reviews` | robot | `quiet_minutes` (default 10), `max_rounds` (default 5), `include_bots` (default true), `require_reviewer` (default empty), `reviewer_wait_minutes` (default 10) | the PR has had no new unresolved review comments for `quiet_minutes` (with `require_reviewer`: counted from that reviewer's first post, which it waits for); each batch of new comments is sent to the agent (the pipeline's consolidated PR prompt) followed by an automatic push; `max_rounds` reached → fail "comments still open after N rounds — it needs a human review"; the required reviewer silent for `reviewer_wait_minutes` → fail "<reviewer> never reviewed this PR — it needs a human review" (see "Team PR rules as a route") |
 | `checks` | robot | `timeout_minutes` (default 60) | the PR's checks are all passing; a failing check → fail (so `on_fail: agent` hands the failing check names to the agent and re-waits); checks it can't read for 5 min in a row → fail, "can't read the CI checks: <why> — fix that and Retry, or Skip" (until then it waits saying why) |
 | `command` | robot | `command` (shell, run in the worktree with the session's env), `timeout_minutes` (default 30) | exit 0; non-zero → fail with the tail of the output |
 | `ticket` | robot | `state` (target state name or id, optional), `comment` (text, optional) | the tracker call returned; a flight without a ticket subject skips it |
@@ -1059,6 +1073,8 @@ had to choose. Field and route names are unchanged.
   treated as seen; each batch of new ones goes to the agent as the pipeline's
   consolidated prompt (which leaves the changes uncommitted), then a `push`
   lane is armed. `include_bots: false` drops `*[bot]` and CodeRabbit authors.
+  `require_reviewer` holds the stop until that reviewer has posted (see
+  "Team PR rules as a route").
 - **`checks` step**: `none` (nothing reports) counts as passed only after 2
   minutes; the failing names come from the check-runs API.
 - **`verify` step** finds or makes the session's plan
@@ -4524,7 +4540,7 @@ Frontend part of this task is in `when-ui` below.
 | `checkpoint` | ship · — · robot | `note` (text) | HEAD's sha and, for uncommitted work, a `git stash create` object are recorded (`detail.sha`, `detail.stash`) and kept alive under `refs/mindflock/flights/<fid>/<sid>`; ops `rewind` (`POST …/op/rewind`): the session idle (409 `working` otherwise) → `git reset --hard <sha>`, re-apply the stash, then the flight jumps to the step after the checkpoint (`op_jump`); the ref is dropped when the flight is deleted (`remove`) | "at a1b2c3d" | `sync-checkpoint` |
 | `land` | ship · irreversible · robot | `delete_branch` bool (true), `remote_branch` bool (true: delete on origin too), `close` delete\|close (default delete: `kill_session(mode="delete")` removes the worktree) | the branch is merged into the default branch (else fail "not merged"); the flight is finished `done` FIRST, then the session is closed on a thread a second later (the flight must not lose its session mid-step). Must be the LAST step of a plan (strict `PlanError` otherwise). `needs_session` true | "landed" | `land-budget` |
 | `budget` | outside · — · robot · `default_on_fail: you` | `max_usd` (float, 0 = none), `max_minutes` (the flight's elapsed, 0 = none), `max_tokens` (0 = none), `scope` here\|flight (default flight) | immediately when within budget; over → fail "over budget: $5.20 of $5" (so the default perches you with Carry on). `scope: flight`: the check is a **guard** — the core re-evaluates every done budget stop of the flight before judging the current step (`Kind.guard(flight, step, obs, now) -> action|None`, added to the registry by this task; the driver observes guard steps into `obs["guard"][sid]`); a guard that trips fails the CURRENT step with the budget's reason and `on_fail` of the budget stop. Cost from the session's usage (`session_stats`/the usage ledger) | "$1.20 of $5" | `land-budget` |
-| `review` | work · — · robot | `program` (CLI id, empty = the session's), `model`, `focus` (textarea appended to the review brief), `block` bool (true: findings fail the stop) | a worker spawned by `spawn_worker` with a brief: review `git diff <base>...HEAD` for correctness, report findings as a numbered list in its report (`report_result`, as children do); done when the worker has finished (the join machinery: `detail.children = [title]`); `detail.findings` (text), `block` + non-empty → fail with them (`on_fail: agent` hands them to the agent). The worker is killed (mode delete) when the stop is done unless `keep` bool (false) | "no findings" / "3 findings" | `review-pilot` |
+| `review` | work · — · robot | `mode` select (`bugs` · `security` · `standards`, see "Team PR rules as a route"), `program` (CLI id, empty = the session's), `model`, `focus` (textarea appended to the review brief; the governing rules in the security / standards modes), `block` bool (true: findings fail the stop) | a worker spawned by `spawn_worker` with a brief: review `git diff <base>...HEAD` for correctness, report findings as a numbered list in its report (`report_result`, as children do); done when the worker has finished (the join machinery: `detail.children = [title]`); `detail.findings` (text), `block` + non-empty → fail with them (`on_fail: agent` hands them to the agent). The worker is killed (mode delete) when the stop is done unless `keep` bool (false) | "no findings" / "3 findings" | `review-pilot` |
 | (agent) | | `agent` gains `program` + `model` (used only with `fresh`: the new session's CLI and model — "switch pilot"); `_run_agent`'s fresh path passes them | | | `review-pilot` |
 | `call` | outside · remote · robot | `method` GET\|POST\|PUT (POST), `url`, `headers` (textarea, `K: V` lines), `body` (textarea; placeholders incl. `{receipt}` = the previous stop's receipt), `expect` (status prefix, default "2"), `timeout_minutes` 5 | the response status matches `expect`; `detail` {status, body tail ≤ 2000}; secrets: headers are stored as given (the plan is local) but never logged | "200" | `hooks` |
 | `listen` | outside · — · robot · `needs_session` false | `match` (substring the body must contain, optional), `timeout_minutes` (0 = forever) | an inbound `POST /api/hooks/flight/{token}` arrives (token = 32 hex minted at run, `detail.token`; the box shows the URL); `detail.payload` ≤ 8 KB; timeout → fail. The route is public (auth.py: `_PUBLIC_FLIGHT_HOOK = re.compile(r"/api/hooks/flight/[a-f0-9]{32}(/done)?")`, POST only) and answers 404 for an unknown or spent token | "heard" | `hooks` |
@@ -7976,3 +7992,96 @@ form opens on one sentence of what the route will do there (its halt point,
 "Start a new session for this stop"; a Wait stop greys How long once a time
 is set. The dialog's layout, remedies and discard confirm are in
 docs/web-ui.md.
+
+## Team PR rules as a route: review modes and a required reviewer (2026-11-11)
+
+Two generic knobs let a team encode its PR rules (its SDLC) as a saved route:
+the rules themselves live in the route's step config, never in the repo.
+Code: `flight_kinds/review.py`, `flights.py` (`STEP_KINDS["reviews"]`,
+`_judge_reviews`, `_required_reviewer`), `flight_driver.py` (`_fix_note`,
+`_reviews_obs`, `_reviewer_posted`, `_is_reviewer`); tests
+`tests/unit/test_flight_review_modes.py`.
+
+### `review` modes
+
+`mode` (select, default `bugs`; anything else is a `PlanError` on
+`steps[i].config.mode`, read as `bugs` leniently) picks the reviewer's brief
+and the stop's default title:
+
+| `mode` | title | brief |
+|---|---|---|
+| `bugs` | Second opinion | unchanged: correctness bugs only, "Ignore style, naming and refactoring ideas"; `focus` is an `Also: …` line at the end |
+| `security` | Security review | a security reviewer with a checklist: authn/authz, secrets and credentials, injection (SQL, shell, template), SSRF, path traversal, crypto misuse, IAM / infrastructure-as-code / RBAC, unsafe deserialization, sensitive data in logs, dependency risk; only real, exploitable issues, each with file:line |
+| `standards` | Standards review | reviews against the team's rules in `focus`, including code quality, observability (meaningful logging, metrics, dashboards / alerts), testing (unit tests plus evidence of local testing) and anything the rules demand; no "ignore style" |
+
+A program still suffixes the title ("Security review (codex)"). In
+`security` and `standards`, a non-empty `focus` is the governing rules: it
+leads the brief, right after the opening, as "The team's rules for this
+review (they govern it):" between `----- rules -----` markers — never as
+"Also:". `standards` with no `focus` reviews against sound engineering
+standards. `focus` keeps `MAX_TEXT` (8000) characters with its newlines, so
+a whole rules document fits (a 5000-character one survives normalize, save
+and the brief). Every mode ends with the same report contract (`No findings`
+or a numbered list of ≤ 10 `file:line — …`), so `judge`, `block` and
+`on_fail` work unchanged; the notes and the fail reason name the mode ("the
+security review has 2 findings:\n…", "standards review in progress").
+
+**Fix or rebut.** When findings go to the agent (`on_fail: agent`, and the
+"send it to the agent" button), `_fix_note` replaces "Fix it" with
+`review.fix_instructions`: each finding must be FIXED or answered with a
+written rebuttal; each rebuttal goes in a commit message (an empty commit
+will do), where the next reviewer reads it (`git log <base>..HEAD`); every
+fix and rebuttal is recorded, numbered, for the PR's description; then the
+route asks for a fresh review. The security / standards briefs say a
+finding answered by a rebuttal in the commit messages is not reported
+again (the `bugs` brief is unchanged). Other fails keep "Fix it".
+
+### `reviews`: a required reviewer
+
+`require_reviewer` (text ≤ 100, default empty) names a reviewer the PR must
+hear from, matched as `_is_bot` matches: a case-insensitive substring of the
+author's login (`coderabbit` matches `coderabbitai` and
+`coderabbitai[bot]`). `reviewer_wait_minutes` (int 1..1440, default 10) is
+how long it gets.
+
+- **Has it posted?** `_reviews_obs` adds `reviewer` (True / False / None =
+  GitHub could not be asked) while the stop has not yet seen it post: True
+  when an actionable comment is its own, else `_reviewer_posted` reads
+  `GET /repos/{repo}/pulls/{n}/reviews` (a review in any state — every
+  inline comment belongs to one) and `GET /repos/{repo}/issues/{n}/comments`
+  (where a bot posts its summary). The actionable-comment fetch alone cannot
+  answer: it drops resolved / outdated threads, and a clean review has none.
+  Once `detail.reviewer_seen`, it stops asking.
+- **The clock** starts at `detail.pr_since`: the first watch tick with a PR
+  (the later of "the PR opened" and "the stop started"), stored with the
+  seeding.
+- **Waiting**: until it has posted, the stop never settles as quiet (a short
+  `quiet_minutes` such as 5 still waits for the first review), noting
+  "waiting for <reviewer> to review (3m of 10 min)". New comments from anyone
+  still go to the agent meanwhile.
+- **It posted** → `reviewer_seen`, and `quiet_since` restarts there: the PR
+  then settles after `quiet_minutes` more without new comments, so
+  "`quiet_minutes: 5`" reads "wait 5 minutes after the bot's review".
+- **It never came** within `reviewer_wait_minutes` → fail "<reviewer> never
+  reviewed this PR — it needs a human review" ("could not tell whether
+  <reviewer> reviewed this PR — …" when GitHub could not be asked); the
+  stop's `on_fail` decides what then (`you` asks you).
+- **Rounds exhausted**: new comments past `max_rounds` fail "comments still
+  open after N rounds — it needs a human review" (with or without a
+  required reviewer; it read "still getting review comments after N rounds").
+
+`include_bots: false` still drops a bot's comments from the rounds; it does
+not hide the bot from the required-reviewer check.
+
+### The cookbook recipe
+
+`flight_cookbook.RECIPES` gains `team_rules_review_bot_loop` ("self-review
+against the team's rules, then a review-bot loop (CodeRabbit) on the PR"):
+Work the ticket → Tests pass (agent fixes) → Standards review (`mode:
+standards`, the rules in `focus`, agent fixes or rebuts) → Security review
+(`mode: security`, agent fixes or rebuts) → Open PR → Review bot loop
+(`reviews`: `require_reviewer: coderabbit`, `reviewer_wait_minutes: 10`,
+`quiet_minutes: 5`, `max_rounds: 5`, `on_fail: you`) → CI checks (agent
+fixes). The `review` / `reviews` cookbook lines name the new fields, and
+`step_phrase` reads a review by its mode and a reviews stop with "(waits for
+<reviewer>)".

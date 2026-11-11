@@ -69,8 +69,16 @@ condensation:
   ``heard`` (the phrase's Moonshine text, ``/api/voice/stream/…/end``'s
   ``heard``) is routed instead of ``text`` when it is a command that carries
   no words (``speech_moonshine.NO_TEXT_KINDS``,
-  ``voice_router.NO_TEXT_KINDS``): Moonshine is keyterm-biased, so it is
-  what decides the control words.
+  ``voice_router.NO_TEXT_KINDS``) AND ``text`` (whisper's) is no command:
+  whisper is the better command ear, so when both are commands whisper's
+  wins; a switch by name Moonshine heard takes the name from whisper's
+  words when that switches (``voice_router.heard_text``). A ``prompt`` may
+  carry ``near`` — ``{kind, why: "no_session" | "no_dialog" | "no_focus",
+  arg?, suggest?}``, the command it nearly was — for the client's caption
+  (the words are typed as ever). A ``pending`` pick may carry ``then``
+  (``interrupt`` / ``answer`` / ``question`` / ``read`` / ``status``): the
+  pick is carried out on the session picked — Escape pressed, the dialog
+  answered — instead of a switch to it.
 
 Routes only translate HTTP into core calls; the registry lookup, the tmux
 name and the providers are read through the server module at call time, so
@@ -598,18 +606,16 @@ async def voice_route(request: Request) -> JSONResponse:
     # this clock (read at arrival): an answer pressed only after its dialog.
     spoke, seen = _voice_router.phrase_timing(payload)
     words = await asyncio.to_thread(_words)
-    if isinstance(heard, str) and heard.strip():
-        # Moonshine decides the control words: a command with no words in
-        # it, as Moonshine heard it, is that command.
-        hcmd = _voice_router.command(heard, words)
-        if hcmd is not None and hcmd["kind"] in _heard_kinds():
-            text = heard
+    # Moonshine's text decides the control words only when whisper's is no
+    # command (voice_router.heard_text); a switch it heard takes its name
+    # from whisper's words when that switches (``named``).
+    text, named = _voice_router.heard_text(text, heard, words, _heard_kinds())
     rows = None
     if isinstance(pending, dict) and text.strip():
         rows = await asyncio.to_thread(_session_rows, request)
         got = await _pending_answer(text, session, pending, rows, words, request)
         if got is not None:
-            return JSONResponse(got)
+            return JSONResponse(await _settle(got, rows, spoke, seen))
     cmd = _voice_router.command(text, words)
     client = _client_key(request, payload)
     if cmd is not None and cmd["kind"] == "scroll_more":
@@ -644,13 +650,27 @@ async def voice_route(request: Request) -> JSONResponse:
         rows = await asyncio.to_thread(_session_rows, request)
     if cmd["kind"] == "new":
         return JSONResponse(await _start_new(text, session, rows, request))
+    if named:
+        got = _voice_router.answer(named, session, rows, title=title, words=words)
+        if got.get("kind") == "switch":
+            return JSONResponse(got)
     ans = _voice_router.answer(text, session, rows, title=title, words=words)
-    if ans.get("kind") == "interrupt":
-        ok = await asyncio.to_thread(_press_escape, ans["title"])
-        return JSONResponse({"kind": "interrupt", "title": ans["title"], "ok": ok})
+    return JSONResponse(await _settle(ans, rows, spoke, seen))
+
+
+async def _settle(ans: dict, rows: list, spoke, seen) -> dict:
+    """Carry out what an answer from the router still needs done here: an
+    ``interrupt`` presses Escape (``ok``), an ``answer`` / ``question``
+    naming a session is finished with its dialog (``_finish_answer`` — a
+    bare "stop it" with nothing asking comes back an ``interrupt`` too),
+    and an answer to a dialog begun before it showed is ``early``."""
     if ans.get("kind") in ("answer", "question") and ans.get("title"):
         ans = await _finish_answer(ans, rows)
-    return JSONResponse(_voice_router.answer_in_time(ans, spoke, seen, rows))
+    if ans.get("kind") == "interrupt":
+        title = str(ans.get("title") or "")
+        ok = bool(title) and await asyncio.to_thread(_press_escape, title)
+        return {"kind": "interrupt", "title": title, "ok": ok}
+    return _voice_router.answer_in_time(ans, spoke, seen, rows)
 
 
 # ---- voice help: questions about MindFlock -------------------------------------

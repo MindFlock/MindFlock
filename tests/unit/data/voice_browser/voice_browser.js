@@ -2511,9 +2511,9 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await sleep(800);
     check("wake: not the word → nothing (idle, no chime, not listening)", (await W(() => window.mfVoice.state === "idle" && window.mfVoice.wakeState.chimes === 0)));
     await sleep(800);
-    await lone(2000);
+    await lone(4600);
     await sleep(900);
-    check("wake: a sentence (2 s of sound) is never sent", state.wakes.length === 3, JSON.stringify(state.wakes));
+    check("wake: a sentence (4.6 s of sound, past the 4 s a word with its request may take) is never sent", state.wakes.length === 3, JSON.stringify(state.wakes));
     await lone(120);
     await sleep(900);
     check("wake: …nor a click (120 ms)", state.wakes.length === 3, JSON.stringify(state.wakes));
