@@ -164,8 +164,13 @@ def test_branch_name_with_uppercase_and_slashes_stays_exact(world):
         _git(wt.worktreePath, "symbolic-ref", "--short", "HEAD") == "Feature/Fix-Login"
     )
     base = provisioned.resolve_base_repo_dir(world.settings)
-    with pytest.raises(subprocess.CalledProcessError):
-        _git(base, "rev-parse", "--verify", "refs/heads/feature/fix-login")
+    # No lower-cased twin was made. Asked through `for-each-ref`, which lists
+    # ref names as spelled: on a case-insensitive file system (macOS) a
+    # `rev-parse refs/heads/feature/fix-login` finds the loose
+    # `Feature/Fix-Login` ref file and would wrongly look like a twin.
+    heads = _git(base, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+    assert "Feature/Fix-Login" in heads.split()
+    assert "feature/fix-login" not in heads.split()
 
 
 def test_new_branches_are_still_sanitized(world):
