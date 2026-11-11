@@ -1001,13 +1001,19 @@ def test_restore_adopts_only_items_whose_owner_is_gone(monkeypatch, tmp_path):
         ],
     )
     monkeypatch.setitem(gate._FACTORIES, "k", lambda r: (lambda: None))
-    assert gate.restore() == 3
-    assert [i["title"] for i in gate.items()] == ["gone", "legacy", "reused"]
-    # The file now: the three, owned by this process, and the live server's.
+    # A reused pid is told apart only where a process's start time can be
+    # read (/proc on Linux). Elsewhere (macOS) the owner reads as alive and
+    # its item is left to it — the conservative choice.
+    detects_reuse = gate._proc_start(os.getppid()) is not None
+    adopted = ["gone", "legacy"] + (["reused"] if detects_reuse else [])
+    kept = ["live"] + ([] if detects_reuse else ["reused"])
+    assert gate.restore() == len(adopted)
+    assert [i["title"] for i in gate.items()] == adopted
+    # The file now: the adopted ones, owned by this process, then the rest.
     doc = json.loads(path.read_text())["items"]
-    assert [i["title"] for i in doc] == ["gone", "legacy", "reused", "live"]
-    assert all(i["owner"]["pid"] == os.getpid() for i in doc[:3])
-    assert doc[3]["owner"] == live
+    assert [i["title"] for i in doc] == adopted + kept
+    assert all(i["owner"]["pid"] == os.getpid() for i in doc[: len(adopted)])
+    assert doc[len(adopted)]["owner"] == live
 
 
 def test_a_stopped_servers_items_wait_for_the_next_boot(monkeypatch, tmp_path):
