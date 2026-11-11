@@ -41,6 +41,7 @@ __all__ = [
     "defer_agent",
     "agent_deferred",
     "mark_never_ran",
+    "waiting_turn",
     "start_agent",
     "start_on_turn",
     "TURN_KIND",
@@ -286,7 +287,8 @@ def set_fence(title: str, payload: Mapping) -> Tuple[int, dict]:
             % ((" by %s" % by) if by else "", (": %s" % why) if why else "")
         )
         try:
-            told, _reason = srv._deliver_to_agent(inst, title, msg)
+            # Automatic: a sleeping worker is woken through the launch gate.
+            told, _reason = srv._deliver_to_agent(inst, title, msg, auto=True)
         except Exception:  # noqa: BLE001 — the fence holds either way
             told = False
     wake()
@@ -513,6 +515,12 @@ def observe(rec: dict, instances: Mapping, parent: str = "") -> Dict[str, dict]:
             "report": rep,
             "fenced": not fence or bool(fence.get("applied")),
         }
+        if w is not None and w.get("state") == "held":
+            # Its agent can't be started now (paused, held offline): it
+            # stays held — its turn comes again once it can.
+            why = start_refusal(t, inst)
+            if why:
+                obs[t]["blocked"] = why
     return obs
 
 
@@ -619,7 +627,7 @@ def on_failed_start(title: str, created: Optional[float]) -> None:
                 continue
             hit = True
             if w.get("state") == "held":
-                rec["workers"].pop(title, None)
+                _order.forget_worker(rec, title)
             elif w.get("state") in ("running", "stopped"):
                 w.update(state="done", ended_at=now, how="gone")
     if hit:
@@ -707,11 +715,89 @@ def _undefer(inst) -> None:
         pass
 
 
+def _never_ran(title: str, inst=None) -> bool:
+    """``title``'s agent has never run: its first launch is still deferred
+    in this process, or :func:`mark_never_ran`'s marker is still there (the
+    launch wrapper replaces it once an agent runs)."""
+    if inst is not None and agent_deferred(inst):
+        return True
+    try:
+        from backend.web.core import terminal as _terminal
+
+        return _terminal._read_exit_marker(_tmux_of(title)) == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def start_refusal(title: str, inst) -> Optional[str]:
+    """Why ``title``'s agent may not be launched for its turn now, or None —
+    the gates ``_ensure_agent_session`` keeps for every other launch, so a
+    turn behaves the same before and after a restart: PAUSED (only Resume
+    starts it) and HELD OFFLINE after a crash (only a person's Start). A
+    hold on an agent that never ran is not a crash's: it does not refuse
+    (:func:`start_agent` drops it). A shared-folder session is not refused
+    here — :func:`start_agent` launches it through the relaunch path, which
+    sandboxes it or refuses."""
+    from backend.web.core import agent_sessions as _as
+    from backend.web.core import held as _held
+
+    if inst is not None and _as._is_paused(inst):
+        return _as.PAUSED_REFUSED
+    if _held.is_held(title) and not _never_ran(title, inst):
+        return _as.HELD_REFUSED
+    return None
+
+
+def _peer_folder(inst, wdir: str) -> bool:
+    """A shared-folder (peer) session, or a folder under the peer root: never
+    the deferred plain launch (undecidable reads as one)."""
+    if getattr(inst, "PeerShare", "") or "":
+        return True
+    try:
+        from backend.peer import paths as _peer_paths
+
+        return bool(wdir) and bool(_peer_paths.is_inside_peer_root(wdir))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+#: Titles :func:`start_agent` is launching right now: their turn came, so
+#: :func:`waiting_turn` lets the relaunch path start them.
+_LAUNCHING: set = set()
+
+
+def waiting_turn(title: str, inst=None) -> bool:
+    """``title`` is an ordered worker still waiting its turn (held) whose
+    agent has never run. Opening its pane must not start its agent — that
+    launch had no launch gate and no person behind it, and left the row
+    reading "Waiting" with an agent idling at an empty prompt.
+    ``_ensure_agent_session`` refuses it (``WAITING_TURN_REFUSED``) unless
+    a person's Start was just noted; its turn starts it here."""
+    if title in _LAUNCHING:
+        return False
+    try:
+        data = _order.load()
+        parent = _order.parent_of_worker(data, title)
+        if parent is None:
+            return False
+        w = _order.worker_rec((data.get("parents") or {}).get(parent), title)
+        if w is None or w.get("state") != "held":
+            return False
+        if inst is not None and not _order._same(w.get("created"), _created(inst)):
+            return False  # a namesake's record
+    except Exception:  # noqa: BLE001 — never block a launch over this
+        return False
+    return _never_ran(title, inst)
+
+
 def start_agent(title: str, inst=None) -> Optional[str]:
     """Launch ``title``'s agent now → the error, or None (also when it is
     already up: a person pressed Start early). The deferred first launch
     when this process still holds it, else the relaunch path (after a
-    restart; :func:`mark_never_ran` makes it a fresh start). Blocking."""
+    restart; :func:`mark_never_ran` makes it a fresh start). A paused or
+    crash-held session is refused here exactly as the relaunch path refuses
+    it (:func:`start_refusal`), and a shared-folder one always goes through
+    that path. Blocking."""
     srv = _server()
     if inst is None:
         inst = srv.ENGINE.instances.get(title)
@@ -724,6 +810,9 @@ def start_agent(title: str, inst=None) -> Optional[str]:
     from backend.web.core import queue_driver as _queue_driver
 
     with _LAUNCH_LOCK:
+        refused = start_refusal(title, inst)
+        if refused:
+            return refused
         ts = getattr(inst, "_tmux_session", None)
         own = getattr(ts, "__dict__", {})
         wdir = own.get(_DEFERRED_DIR)
@@ -732,8 +821,11 @@ def start_agent(title: str, inst=None) -> Optional[str]:
             # way launches it after all.
             own.pop("start", None)
             return None
-        _held.release(title)  # a worker that never ran is not held offline
-        if wdir and os.path.isdir(wdir):
+        if _held.is_held(title):
+            # Only a hold on an agent that never ran gets here
+            # (start_refusal): no crash put it there.
+            _held.release(title)
+        if wdir and os.path.isdir(wdir) and not _peer_folder(inst, wdir):
             err = ts.start(wdir)
             if err is not None and _agent_live(srv, title):
                 err = None  # launched meanwhile by another path
@@ -742,21 +834,48 @@ def start_agent(title: str, inst=None) -> Optional[str]:
             _undefer(inst)
         else:
             _undefer(inst)
-            _name, err = srv._ensure_agent_session(inst, title)
+            _LAUNCHING.add(title)
+            try:
+                _name, err = srv._ensure_agent_session(inst, title)
+            finally:
+                _LAUNCHING.discard(title)
             if err is not None:
                 return str(err)
     _queue_driver.note_launched(title)
     return None
 
 
+class _NotYet(Exception):
+    """A turn whose agent can't start now (paused, held offline, the launch
+    queue full): the worker stays held and a later pass tries again."""
+
+
+def _gate_full(title: str) -> bool:
+    """The launch gate's queue is full and ``title`` is not in it: an
+    automatic start would be refused (``QueueFull``)."""
+    try:
+        cap = _launch_gate.queue_max()
+        its = _launch_gate.items()
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(cap) and len(its) >= cap and all(it.get("title") != title for it in its)
+
+
 def start_on_turn(srv, title: str, inst, parent: str = "") -> str:
     """Start ``title``'s agent for its turn, as an automatic start through
     the launch gate: launched now when the gate says go, else queued there
     ("Waiting for memory" on its row; the gate launches it). → a note for
-    the record ("" when it started, or was already up)."""
+    the record ("" when it started, or was already up). Raises
+    :class:`_NotYet` when it can't start now — paused, held offline, or the
+    gate's queue full — so the caller leaves it held: released anyway, it
+    read running/offline with no "waiting for memory" and ``wait_for_session``
+    took it for finished."""
     if _agent_live(srv, title):
         _undefer(inst)
         return ""
+    why = start_refusal(title, inst)
+    if why:
+        raise _NotYet(why)
     try:
         queued = _launch_gate.gate_auto(
             title,
@@ -766,12 +885,13 @@ def start_on_turn(srv, title: str, inst, parent: str = "") -> str:
             parent=parent,
             args={},
         )
-    except _launch_gate.QueueFull:
-        # The queue drain relaunches it through the gate once its queue is on.
-        return "its agent waits to start (the launch queue is full)"
+    except _launch_gate.QueueFull as err:
+        raise _NotYet("the launch queue is full (%s)" % err) from err
     if queued is not None:
         return "its agent waits for memory to start"
     err = start_agent(title, inst)
+    if err and start_refusal(title, inst):
+        raise _NotYet(err)  # paused (or held) since the check above
     return ("its agent did not start: %s" % err)[:200] if err else ""
 
 
@@ -872,13 +992,20 @@ def _carry(srv, title: str, inst, rec: dict, w: dict) -> str:
     return " ".join(lines)
 
 
-def _release(srv, title: str, rec: dict, w: dict, detail: str, parent: str = "") -> str:
+def _release(
+    srv, title: str, rec: dict, w: dict, detail: str, parent: str = ""
+) -> Optional[str]:
     """Hand a held worker its task: catch its branch up, start its agent
     (through the launch gate), then switch its queue on. → a short note for
-    the record."""
+    the record, or None when its agent can't start now (:class:`_NotYet`):
+    nothing was handed over, and the caller puts it back to held."""
     inst = srv.ENGINE.instances.get(title)
     if inst is None:
         return ""
+    if not _agent_live(srv, title) and (
+        start_refusal(title, inst) or _gate_full(title)
+    ):
+        return None  # before the fast-forward: a later pass does it all
     preds = list(w.get("after") or [])
     lines: List[str] = []
     if preds and detail != "started by hand":
@@ -908,6 +1035,8 @@ def _release(srv, title: str, rec: dict, w: dict, detail: str, parent: str = "")
     started = ""
     try:
         started = start_on_turn(srv, title, inst, parent)
+    except _NotYet:
+        return None  # its task stays parked; a later pass releases it
     except Exception:  # noqa: BLE001 — the queue drain relaunches it anyway
         started = ""
     try:
@@ -1002,11 +1131,11 @@ def _pass_sync() -> None:
             },
             now,
         )
-        notes: Dict[str, Tuple[str, str]] = {}
+        notes: Dict[str, Tuple[Optional[str], str]] = {}
         for kind, t, detail in acts:
             w = _order.worker_rec(rec, t)
             if kind == "release" and w is not None and t in claimed:
-                note = ""
+                note: Optional[str] = ""
                 try:
                     note = _release(srv, t, rec, w, detail, parent)
                 except Exception:  # noqa: BLE001
@@ -1060,10 +1189,21 @@ def _pass_sync() -> None:
                     continue
                 inst = instances.get(t)
                 if kind == "forget":
-                    live["workers"].pop(t, None)
+                    # Its successors run after what it ran after: it will
+                    # never finish (worker_order.forget_worker).
+                    _order.forget_worker(live, t)
                 elif kind == "release" and t in notes:
                     # Claimed (state running) before _release ran.
                     note, branch = notes[t]
+                    if note is None:
+                        # Its agent couldn't start (paused, held offline,
+                        # the launch queue full): it waits on, held, and a
+                        # later pass releases it — never "running" with no
+                        # agent, which wait_for_session reads as finished.
+                        w.update(state="held", released_at=None)
+                        if detail == "started by hand":
+                            w["start_now"] = True
+                        continue
                     w.update(note=note)
                     if branch:
                         w["branch"] = branch

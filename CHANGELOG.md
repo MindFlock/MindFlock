@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+### Added
+
+- **Team PR rules as a route.** The Review stop gains a mode: bugs (as
+  before), security (a security checklist), or standards (the team's rules,
+  given in its focus, govern the review). Findings handed to the agent must
+  each be fixed or answered with a written rebuttal for the PR's
+  description. Reviews settle can require a reviewer (`require_reviewer`,
+  e.g. `coderabbit`): it waits for that reviewer's first review, fails "never
+  reviewed — it needs a human review" after `reviewer_wait_minutes`, and
+  exhausted rounds say "comments still open after N rounds — it needs a human
+  review". A cookbook recipe puts it together (docs/flights.md "Team PR rules
+  as a route").
 ### Changed
 
 - **Voice commands trigger the first time, and a miss says why.**
@@ -39,6 +52,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     did not answer in time, a wake that heard nothing.
   - *Phone.* "MindFlock, …" requests reach the assistant on the phone (what
     it cannot do there is captioned, not typed).
+
+### Fixed
+
+- **One out-of-memory kill no longer reads "critical" for 5 minutes with
+  gigabytes free.** A kill now escalates only alongside another signal past
+  its entry line, never a recovery-band hold. A person's start dialog names
+  the real cause (e.g. a memory stall) instead of "critically low: 13 GB
+  free. No room…", and the memory notice shows the reason.
+- **The memory shield no longer puts idle agents to sleep when only Windows
+  is critical** (e.g. commit charge): sleeping WSL agents doesn't give
+  Windows memory back. New starts still wait.
+- **Held workers:** a paused held worker isn't launched when its turn comes;
+  deleting a worker in a serial chain hands its successors to what it ran
+  after (no more stall); opening a waiting worker's pane says "waiting its
+  turn — press Start" instead of starting it; a full launch queue puts the
+  worker back to wait instead of reading it as finished; worker-order
+  notices wake a sleeping session through the launch gate.
+- **flights.json / plans.json** are locked across processes (server and
+  ticket pipeline), so a route update is no longer lost.
+
+- **A Verify that couldn't reach the session no longer loses the plan's
+  steps.** When the hand-off failed (the session paused, over budget or
+  unreachable), or the check was cancelled, given up on or closed before
+  the agent wrote its own steps, the plan kept only your own steps. Once the
+  session closed, the separate checker then refused with "no steps". The
+  earlier steps now come back.
+- **A stopped re-verify no longer brings back the previous check's "needs
+  you".** Cancelling or giving up on a second Verify used to make the first
+  one current again, now showing the new steps. Confirm then marked them
+  passed for a check that never ran, and a flight moved on. The stopped
+  check now settles as "blocked" with its reason.
+- **Verify starts once.** A double click, or a flight stop and a row press
+  together, opened two checks, sent the prompt twice and could delete the
+  first check's results. The second press now answers "busy".
+- **The background liveness check no longer cancels a Verify started while
+  it was asking the remote.**
+- **A Verify given up on after two hours shows its "blocked" pill** for 10
+  minutes from when it stopped. Before, it counted from the start and never
+  showed.
+- **Waking a sleeping session for Verify waits for memory.** The Verify
+  prompt and its close notice went past the low-memory launch gate. They now
+  wait their turn, and the prompt stays queued until the session is up.
+- **Session rows notice every Verify change.** Two same-size writes inside
+  one coarse file-timestamp tick (seen on WSL) could leave a row's Verify
+  pill one step behind.
+- **A quick same-size edit no longer hides from the diff counts.** The
+  throwaway index copy behind the change stat, Diff tab and Code Map got a
+  fresh timestamp, which switched off git's check for files edited in the
+  same second they were staged or committed: such an edit stayed invisible
+  until something else rewrote your index. The copy now keeps the
+  original's timestamp.
+
+- **No more `sharedindex.*` files piling up in a split-index repo.** With
+  `core.splitIndex` on, every diff poll wrote a new full-size
+  `.git/sharedindex.<sha>` into your real repository (kept for two weeks).
+  The throwaway index is now written whole, beside itself.
+
+- **Starting a terminal no longer pauses the whole server.** The PTY spawn
+  now goes through libc's own `posix_spawn` on Linux, which lets the rest of
+  the server run while the child starts (Python's `os.posix_spawn` held
+  every thread until it did).
+
+- **The Assistant pane, the ticket log and the onboarding, settings and
+  doctor helper terminals start their terminal off the event loop**, with
+  the same two-at-a-time cap and 15 s deadline as session terminals.
+
+- **Terminal clients and tmux no longer inherit stray file descriptors.**
+  Any inheritable descriptor the server held was passed on to every PTY
+  child, and a tmux server it started could keep it open indefinitely; the
+  child now closes everything above stdin/stdout/stderr, as it did before
+  0.14.4 moved terminals to `posix_spawn`.
 
 ## [0.14.7] - 2026-11-10
 

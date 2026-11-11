@@ -35,6 +35,10 @@ What "finished" means, per worker:
   the workers after it stay held until it reports ``done`` or the
   orchestrator starts them anyway (``start_now``).
 
+A worker deleted (or closed) while still held is forgotten
+(:func:`forget_worker`): it will never finish, so it must not hold the
+workers after it for ever — they run after what IT ran after instead.
+
 This module is the store plus the PURE planner (:func:`plan`) and the diagram
 view (:func:`view`); ``worker_order_driver`` observes the live sessions and
 carries the planner's actions out. Persisted at ``<config dir>/worker_order.json``
@@ -65,6 +69,7 @@ __all__ = [
     "worker_rec",
     "parent_of_worker",
     "add_worker",
+    "forget_worker",
     "set_policy",
     "plan",
     "steps_of",
@@ -347,6 +352,52 @@ def _trim(rec: dict) -> None:
         workers.pop(t, None)
 
 
+def forget_worker(rec: dict, title: str) -> Optional[dict]:
+    """Drop ``title`` — a worker deleted before it started — from ``rec``
+    AND from its siblings' order. Every worker that ran after it now runs
+    after what it ran after (its own ``after``, with the reasons it had):
+    a deleted worker never finishes, and a successor still naming it read
+    it as "not spawned yet" for ever (``X → A → B``, A deleted: B waited
+    for good), while dropping the name alone would let B overtake X. A
+    declared step (``planned``) is rewired the same way and its own entry
+    dropped. → the dropped record, or None."""
+    workers = rec.get("workers") or {}
+    gone = workers.pop(title, None)
+    gone = gone if isinstance(gone, dict) else None
+    inherit = [p for p in ((gone or {}).get("after") or []) if p != title]
+    gone_why = dict((gone or {}).get("why") or {})
+    for t, w in workers.items():
+        if not isinstance(w, dict) or title not in (w.get("after") or []):
+            continue
+        why = dict(w.get("why") or {})
+        reason = why.pop(title, None)
+        new: List[str] = []
+        for p in w.get("after") or []:
+            if p != title:
+                if p not in new:
+                    new.append(p)
+                continue
+            for q in inherit:
+                if q != t and q not in new and q not in (w.get("after") or []):
+                    new.append(q)
+                    why.setdefault(q, gone_why.get(q) or reason or "asked")
+        w["after"] = new
+        w["why"] = {p: why.get(p) or "asked" for p in new}
+    planned = rec.get("planned")
+    if isinstance(planned, dict):
+        mine = [p for p in (planned.pop(title, None) or []) if p != title]
+        for t, pre in list(planned.items()):
+            if title not in (pre or []):
+                continue
+            out: List[str] = []
+            for p in pre:
+                for q in ([p] if p != title else mine):
+                    if q != t and q not in out:
+                        out.append(q)
+            planned[t] = out
+    return gone
+
+
 def set_policy(
     rec: dict,
     *,
@@ -518,7 +569,9 @@ def plan(rec: dict, obs: Mapping[str, dict]) -> List[Tuple[str, str, str]]:
     "elsewhere": bool (alive, but not in this server's engine yet: left
     alone),
     "report": "done"|"blocked"|"failed"|None (since it was created/released),
-    "fenced": bool (its fence is in place, or it has none)}``.
+    "fenced": bool (its fence is in place, or it has none),
+    "blocked": str (a held worker whose agent can't start now — paused, held
+    offline: left held, and it takes no slot)}``.
 
     Order of a pass: settle running workers first (a report or a gone
     session frees its slot), then release held ones oldest first while slots
@@ -558,9 +611,16 @@ def plan(rec: dict, obs: Mapping[str, dict]) -> List[Tuple[str, str, str]]:
         workers={
             t: dict(w, state=states.get(t, w.get("state")))
             for t, w in workers.items()
-            if isinstance(w, dict) and states.get(t) != "gone"
+            if isinstance(w, dict)
         },
+        planned={t: list(p or []) for t, p in (rec.get("planned") or {}).items()},
     )
+    for t, s in states.items():
+        if s == "gone":
+            # Forgotten this pass: whoever ran after it runs after what it
+            # ran after — now, not from the next pass (it would read as
+            # "done" here and let them overtake its own predecessors).
+            forget_worker(view_rec, t)
     for t, w in sorted(workers.items(), key=lambda kv: int(kv[1].get("seq") or 0)):
         if not isinstance(w, dict) or states.get(t) != "held":
             continue
@@ -569,6 +629,8 @@ def plan(rec: dict, obs: Mapping[str, dict]) -> List[Tuple[str, str, str]]:
             continue  # nothing to release it into here: its own server does
         if not o.get("fenced", True):
             continue  # its fence lands first — never a minute unfenced
+        if o.get("blocked"):
+            continue  # can't start now (paused…): its turn comes again later
         if w.get("start_now"):
             acts.append(("release", t, "started by hand"))
             states[t] = "running"
@@ -615,10 +677,16 @@ def steps_of(rec: dict) -> Dict[str, int]:
 
 
 def _word(
-    w: dict, waits: List[Tuple[str, str]], cap: int, rec: dict
+    w: dict,
+    waits: List[Tuple[str, str]],
+    cap: int,
+    rec: dict,
+    blocked: str = "",
 ) -> Tuple[str, str]:
     """``(state word, one-line detail)`` for the diagram and the row."""
     st = w.get("state")
+    if st == "held" and blocked and not waits:
+        return "waiting", "its turn — but it can't start: " + blocked
     if st == "held":
         if w.get("start_now"):
             return "starting", "started by hand"
@@ -664,7 +732,9 @@ def view(rec: Optional[dict], obs: Mapping[str, dict]) -> Optional[dict]:
     cards: Dict[int, List[dict]] = {}
     for t, w in sorted(workers.items(), key=lambda kv: int(kv[1].get("seq") or 0)):
         waits = waiting_on(rec, t, obs) if w.get("state") == "held" else []
-        word, detail = _word(w, waits, cap, rec)
+        word, detail = _word(
+            w, waits, cap, rec, str((obs.get(t) or {}).get("blocked") or "")
+        )
         card = {
             "title": t,
             "state": w.get("state"),
@@ -712,7 +782,13 @@ def row_order(
     if w is None:
         return None
     waits = waiting_on(rec, title, obs) if w.get("state") == "held" else []
-    word, detail = _word(w, waits, cap_of(rec or {}), rec or {})
+    word, detail = _word(
+        w,
+        waits,
+        cap_of(rec or {}),
+        rec or {},
+        str((obs.get(title) or {}).get("blocked") or ""),
+    )
     return {
         "state": w.get("state"),
         "word": word,
