@@ -250,7 +250,9 @@ def test_unknown_and_garbage_ids():
     p = _proof(inv.code, b"t")
     assert not book.check("0" * 16, p, b"t")
     assert not book.check(None, p, b"t")
-    assert not book.check(inv.invite_id.upper(), p, b"t")
+    # Ids are case-sensitive (an all-digit id has no other spelling to try).
+    if inv.invite_id.upper() != inv.invite_id:
+        assert not book.check(inv.invite_id.upper(), p, b"t")
     assert not book.check(inv.invite_id, None, b"t")
     assert not book.check(inv.invite_id, p.hex(), b"t")
     assert book.check(inv.invite_id, p, b"t")
