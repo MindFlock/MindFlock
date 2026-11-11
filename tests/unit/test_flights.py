@@ -161,6 +161,8 @@ def test_steps_get_ids_titles_and_defaults():
         "quiet_minutes": 10,
         "max_rounds": 5,
         "include_bots": True,
+        "require_reviewer": "",
+        "reviewer_wait_minutes": 10,
     }
 
 
@@ -805,7 +807,8 @@ def test_reviews_step_rounds():
     )
     # A third comment past max_rounds fails.
     a = F.next_action(f, dict(o, reviews={"ids": ["1", "2", "3"]}), NOW + 300)
-    assert a["action"] == "fail" and "1 rounds" in a["reason"]
+    assert a["action"] == "fail"
+    assert a["reason"] == "comments still open after 1 round — it needs a human review"
     # Quiet long enough: done.
     a = F.next_action(f, dict(o, reviews={"ids": ["1", "2"]}), NOW + 140 + 600)
     assert a["action"] == "done"
