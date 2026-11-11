@@ -29,6 +29,7 @@ from backend.session import provisioned as provisioning
 
 from backend.web.core import pending as _pending
 from backend.web.core import pipeline_root
+from backend.web.core import terminal_ws
 from backend.web.core.terminal import pump_pty, spawn_tail
 
 from .base import Addon, AppContext, FrontendDescriptor
@@ -1129,11 +1130,11 @@ class TicketIngestionAddon(Addon):
                 log_path.touch(exist_ok=True)
             except Exception:  # noqa: BLE001
                 pass
-            try:
-                proc = spawn_tail(log_path, lines=500)
-            except Exception as err:  # noqa: BLE001
-                await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
-                await ws.close(code=4500)
+            # Off the event loop, capped and with a deadline (terminal_ws).
+            proc = await terminal_ws.attach_or_close(
+                ws, lambda: spawn_tail(log_path, lines=500)
+            )
+            if proc is None:
                 return
             await pump_pty(ws, proc, allow_input=False)
 

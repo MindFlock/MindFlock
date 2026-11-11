@@ -335,19 +335,39 @@ That is why the first move of the engine's PTY here (PR #348) failed the
 bare-container quickstart: every `tmux new-session` raised, and
 `mindflock new` reported "failed to start" (found on PR #350; the
 quickstart's failure diagnostic re-runs this spawn with the installed tool's
-interpreter). On `NotImplementedError` `spawn_pty` calls libc's own
-`posix_spawn` through ctypes with `POSIX_SPAWN_SETSID` (0x80) and the same
-file actions: the same `clone`, the GIL released, no Python in the child. A
-libc older than the flag refuses it with `OSError`.
+interpreter). A libc older than the flag refuses it with `OSError`.
 `tests/unit/test_engine_pty_spawn.py` stands that interpreter in (an
 `os.posix_spawn` that refuses `setsid=`) and checks the child is still a
 session leader on its PTY, in the foreground, at the given size, and that
 the engine's real tmux create and restore work, without a fork.
 
+**libc's `posix_spawn`, always, on Linux.** `_spawn_session_leader` calls
+libc's own `posix_spawn` through ctypes (`POSIX_SPAWN_SETSID` = 0x80, the
+same file actions) on every Linux spawn, not `os.posix_spawn`, for two
+reasons. The `setsid=` build gap above. And CPython's `os.posix_spawn` holds
+the GIL until the child execs: glibc suspends the calling thread
+(`CLONE_VFORK`) while the child runs its file actions, so a slow one (the
+tty open on a loaded box) froze every Python thread, the event loop included
+(a FIFO-opening spawn froze another thread for the full second it blocked).
+A ctypes call releases the GIL, so only the spawning thread waits.
+`os.posix_spawn` is the fallback only when ctypes or libc is not usable
+(`_NoLibc`: no ctypes, no libc handle, a missing symbol).
+
+**Inherited fds.** ptyprocess closed every fd ≥ 3 in its child;
+`posix_spawn` passes on every *inheritable* one (`os.set_inheritable`, a
+`pass_fds` leftover), and a long-lived child — the tmux server an attach or
+`new-session` starts — would hold it open for good (a pipe that never sees
+EOF, a deleted file never freed). So the child also gets close actions: one
+`posix_spawn_file_actions_addclosefrom_np(3)` where glibc has it (≥ 2.34;
+`os.POSIX_SPAWN_CLOSEFROM` on the CPython ≥ 3.13 fallback), else one close
+per inheritable fd > 2 listed from `/proc/self/fd` (`_inheritable_fds`).
+`tests/unit/test_spawn_review_fixes.py` covers the GIL, the libc-first
+choice and its fallback, and the fds on all three paths.
+
 `spawn_pty(argv, *, dimensions=(24, 80), env=None, cwd=None)` contract: it
 returns a `ptyprocess.PtyProcess`; a missing command raises
 `FileNotFoundError` with ptyprocess's exact message; the child inherits only
-fds 0/1/2. The `posix_spawn` path is gated on `_POSIX_SPAWN_PTY` (Linux with
+fds 0/1/2 (inheritable ones are closed in the child, above). The `posix_spawn` path is gated on `_POSIX_SPAWN_PTY` (Linux with
 `os.posix_spawn`) — on macOS opening a tty does not make it the controlling
 tty, so it falls back.
 
@@ -372,11 +392,13 @@ after 15 s (queued|spawning)*, *a PTY client started after its socket gave
 up; reaped*, *PTY writer still blocked; leaving its fd open* (the writer was
 still blocked 2 s into a detach, so the fd is left open rather than risk a
 write into a reused fd number). Each terminal socket costs up to three
-daemon threads (`pty-attach`, `pty-writer`, `pty-reap`). Not yet routed
-through `attach_off_loop`: the assistant terminal, `core.pty_run`'s tmux
-attach, peer-forwarded terminals (`term_open`) and the ticket log stream
-spawn on the loop, but through `mux.spawn_pty`, so by `posix_spawn` — no
-fork, ~1 ms.
+daemon threads (`pty-attach`, `pty-writer`, `pty-reap`). The Assistant
+pane, the ticket log stream (`spawn_tail`) and `core.pty_run.serve`'s tmux
+attach (the onboarding, settings and doctor helper terminals) take the same
+path and cap through `terminal_ws.attach_or_close` (1013 on a timeout, 4500
+on the spawn's own error, as before). Not yet routed through it:
+peer-forwarded terminals (`term_open`), which spawn on the loop, but through
+`mux.spawn_pty` — no fork, GIL released, ~1 ms.
 
 `core.terminal.pump_pty` itself (every websocket terminal: session shell,
 assistant, ticket log, login attach, peer terminals) keeps the same rules:

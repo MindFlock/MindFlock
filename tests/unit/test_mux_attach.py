@@ -254,7 +254,7 @@ def test_a_failed_spawn_closes_both_ends_of_the_pty(monkeypatch):
         raise OSError("posix_spawn refused")
 
     before = set(os.listdir("/proc/self/fd"))
-    monkeypatch.setattr(os, "posix_spawn", refuse)
+    monkeypatch.setattr(mux, "_libc_spawn_session_leader", refuse)
     with pytest.raises(OSError, match="posix_spawn refused"):
         mux.spawn_pty(["true"])
     assert set(os.listdir("/proc/self/fd")) <= before
