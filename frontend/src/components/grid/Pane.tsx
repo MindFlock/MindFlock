@@ -430,7 +430,9 @@ export function Pane({
   // The window coming back (focus, restore, un-occlusion, another display, a
   // GPU restart — lib/wsTerm installRepaintTriggers) repaints the terminal
   // this pane is showing. Read at repaint time: the tab and the xterm (a
-  // reconnect builds a new one) may both have changed since.
+  // reconnect builds a new one) may both have changed since. Rows only, no
+  // fit: these fire on every alt-tab, and a size that really changed already
+  // reaches the pane-body ResizeObserver below — a repaint never resizes tmux.
   useEffect(() => {
     if (missing || loading) return;
     const kind = tab === "shell" ? "shell" : tab === "agent" ? "agent" : null;
@@ -439,7 +441,7 @@ export function Pane({
       shown: () => isShown(peekTerm(title, kind)?.container),
       repaint: () => {
         const t = peekTerm(title, kind);
-        if (t) repaintTerm(t.term, () => t.doFit());
+        if (t) repaintTerm(t.term);
       },
     });
   }, [title, tab, missing, loading]);

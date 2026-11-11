@@ -161,6 +161,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Panes no longer jump around their history on alt-tab.** The repaint that
+  runs when the window comes back no longer re-fits terminals, so it never
+  sends tmux a size, and the Verify watcher sends one only when its size
+  actually changed. Before, each return to the window resized the session
+  between the watcher's size and the grid pane's, so the agent re-rendered.
 - **A Verify whose agent's window closed shows "Verify blocked"** with the
   reason, instead of losing the check or showing the previous result, and no
   longer marks unshipped work as shipped.

@@ -29700,17 +29700,23 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 			} catch {
 				return;
 			}
-			if (sendResize && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
+			if (!sendResize || !ws || ws.readyState !== WebSocket.OPEN) return;
+			const size = term.cols + "x" + term.rows;
+			if (sentSize === size) return;
+			sentSize = size;
+			ws.send(JSON.stringify({
 				type: "resize",
 				cols: term.cols,
 				rows: term.rows
 			}));
 		};
+		let sentSize = "";
 		const connect = () => {
 			if (dead) return;
 			const proto = location.protocol === "https:" ? "wss" : "ws";
 			const sock = new WebSocket(proto + "://" + location.host + wsPath);
 			ws = sock;
+			sentSize = "";
 			sock.binaryType = "arraybuffer";
 			sock.onopen = () => {
 				if (dead) return;
@@ -29764,7 +29770,7 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 		const t = setTimeout(() => doFit(true), 50);
 		const untrack = trackRepaint({
 			shown: () => isShown(host),
-			repaint: () => repaintTerm(term, () => doFit(true))
+			repaint: () => repaintTerm(term)
 		});
 		connect();
 		return () => {
@@ -103799,7 +103805,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			shown: () => isShown(peekTerm(title, kind)?.container),
 			repaint: () => {
 				const t = peekTerm(title, kind);
-				if (t) repaintTerm(t.term, () => t.doFit());
+				if (t) repaintTerm(t.term);
 			}
 		});
 	}, [

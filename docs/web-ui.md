@@ -1072,7 +1072,7 @@ renderer (no WebGL addon, so there is no GL context to lose); what went stale
 was the painted surface after the window was minimized, covered, moved to
 another display, or the GPU process restarted, on a pane with no new output.
 
-Now every terminal on screen is repainted (fit + a full `refresh`) when the
+Now every terminal on screen is repainted (a full `refresh`) when the
 page regains focus or visibility, on `pageshow`, and on the desktop shell's
 `mindflock:repaint` event (restore / show / move / display change / wake / GPU
 restart — [development.md](development.md#known-issues)); a burst coalesces
@@ -1082,6 +1082,14 @@ trip to the sky and back) and on every refit, including a tab revealing the
 terminal again. The rules live in `lib/wsTerm.ts` (`repaintTerm`,
 `repaintShown`, `installRepaintTriggers`, installed in `main.tsx`); each grid
 pane and each `useWsTerm` terminal registers itself with `trackRepaint`.
+
+These window-trigger repaints redraw rows only: they never fit, so they never
+send tmux a size. A real size change already reaches each pane's
+ResizeObserver, and a repaint that re-fit made the Verify watcher (which sent
+its size on every fit) yank the tmux window between its size and the grid
+pane's under `window-size latest` on every alt-tab: the agent re-rendered and
+the pane jumped around its history. `useWsTerm` now sends a size only when it
+changed on that connection, like the grid panes (`repaintNoResize.test.ts`).
 
 ## Workflow stages and the guided next step
 
