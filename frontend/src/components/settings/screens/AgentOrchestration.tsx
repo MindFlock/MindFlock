@@ -79,8 +79,32 @@ function WorkersRows() {
   const display = typeof stored === "string" ? stored : "";
   const [value, setValue] = useState(display);
   useEffect(() => setValue(display), [display]);
+  // Unset reads as on (settings.GeneralSettings.workers_decide).
+  const decideStored = s.get("general", "workers_decide");
+  const decide = decideStored !== false && decideStored !== "false" && decideStored !== "0";
   return (
     <>
+      <div className="set-row set-switch-row workers-decide-row">
+        <span className="notif-rule-text">
+          <span className="set-label">Let the agent decide where each prompt goes</span>
+          <span className="set-hint notif-rule-desc">
+            With "Workers on every prompt" on ({FLOCK_KEYS}), keep sending ideas to one session: its agent
+            does a small follow-up itself, splits a big one across workers and merges them back, and starts
+            a separate idea as its own session on its own branch, off the base branch. Off: every prompt
+            asks for workers.
+          </span>
+        </span>
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            data-group="general"
+            data-field="workers_decide"
+            checked={decide}
+            onChange={(e) => void s.saveField("general", "workers_decide", e.target.checked)}
+          />
+          <span className="ca-slider" />
+        </label>
+      </div>
       <label className="set-row" id="orch-workers">
         <span className="set-label">Workers request</span>
         <textarea
@@ -98,9 +122,9 @@ function WorkersRows() {
           }}
         />
         <span className="set-hint">
-          What "Ask for workers once" types ({ASK_WORKERS_KEYS}), and what "Workers on every prompt" adds to
-          everything you send ({FLOCK_KEYS}). <code>{"{model}"}</code> becomes the model below; empty uses the
-          default.
+          What "Ask for workers once" types ({ASK_WORKERS_KEYS}), and how "Workers on every prompt" asks for
+          workers ({FLOCK_KEYS}) — every time, or when the agent decides a prompt needs them.{" "}
+          <code>{"{model}"}</code> becomes the model below; empty uses the default.
         </span>
       </label>
       <label className="set-row">

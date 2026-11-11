@@ -258,13 +258,14 @@ def test_now_from_a_grandparent_types(env):
     assert body["delivery"] == "delivered"
 
 
-def test_now_from_a_non_ancestor_falls_back_to_auto(env):
+def test_now_from_a_non_ancestor_types_too(env):
+    """Any local session may type into another now: one session can direct
+    the others without being their parent."""
     _, st = env
     body = _post(st, "orch", text="go", delivery="now", **{"from": "w1"}).json()
-    assert body["delivery"] == "pending"
-    assert "only for your own descendants" in body["detail"]
-    assert body["message"]["delivery"] == "auto"
-    assert st.typed == []
+    assert body["delivery"] == "delivered"
+    assert body["message"]["delivery"] == "now"
+    assert len(st.typed) == 1
 
 
 @pytest.mark.parametrize("activity", ["clarify", "limit", "offline"])

@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Any session can direct any other.** An agent can type into another
+  session's prompt right away (`send_message` with `delivery: "now"`) and
+  start, steer or edit a route on it, without being its parent. So one
+  session can run the rest. Answering another session's dialogs, closing or
+  deleting it and merging its PR still need it to be that session's own
+  worker (or the MCP scope **All**). Read-only agents can do none of it.
+
+- **Workers on every prompt now lets the agent decide where each prompt
+  goes.** Keep sending ideas to one session. A small follow-up, its agent
+  does itself. A big one it splits across workers and merges back. A separate
+  idea it starts as its own session, in its own worktree, on its own branch
+  off the base branch, and tells you where it went; that branch is never
+  merged into the session's. Agents get this through
+  `spawn_session(separate=true)`. **Ask for workers once** still asks for
+  workers. Settings → Agent orchestration → **Let the agent decide where each
+  prompt goes** turns it off (`general.workers_decide`), and every prompt
+  asks for workers again. Sessions already in the mode get the new words at
+  the next server start.
+
+- **Your own instructions for every review round.** A route's Reviews settle
+  stop has a new **Also, every round** box: whatever you type there goes to
+  the agent with each batch of review comments, for example "re-run your
+  code review before the push" or "reply on the PR to comments you decline".
+  A **Reply on the PR to comments it declines** switch asks the agent to
+  answer each comment it won't act on, on the PR, with the reason. Both are
+  off by default, and the round's prompt is unchanged until you set them.
 - **Verify asks what it should prove, right in the pane.** Verify on a
   session's ⋯ menu (or **Verify again** on its pane row) opens a small form in
   the pane: *What should it prove? (optional)* and, when the repo has Verify
@@ -161,6 +187,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Panes no longer jump around their history on alt-tab.** The repaint that
+  runs when the window comes back no longer re-fits terminals, so it never
+  sends tmux a size, and the Verify watcher sends one only when its size
+  actually changed. Before, each return to the window resized the session
+  between the watcher's size and the grid pane's, so the agent re-rendered.
+- **A PR review starts as fast as a ticket: it reuses the repo's existing clone
+  instead of cloning from GitHub every time.** The first review of a PR took
+  40–100 s, because each PR got its own full clone. It now fetches just the PR
+  (fork PRs too) into the repo's shared clone and adds a worktree, in a few
+  seconds. Setup commands run once, not twice. The branch keeps its exact name
+  (`Feature/X` is no longer lower-cased), and a PR into a branch other than the
+  repo's base is diffed against that branch. Reviewing the same PR again
+  reuses its branch. A closed review's leftover worktree is removed if it holds
+  nothing new, or else set aside with its changes kept. The PR's own clone is
+  now only a fallback: when a live session is on the branch, when no shared
+  clone can be made, or when workspaces are set to `mode = "clone"`.
+- **A route's Second opinion reviews the right repository.** On a ticket or PR
+  started from Intake, the reviewer (and any worker a route starts) used to
+  land in a copy of the folder MindFlock runs in, not the PR's repository, and
+  could not see the change. It now works in the session's own checkout,
+  starting from its latest commit.
+- **A Second opinion that can't start no longer halts the route with "the
+  reviewer did not finish".** The route skips names a closed reviewer's
+  leftover folder or branch still holds. If a reviewer still can't start, the
+  route starts one more under a new name. If that fails too, it stops for you
+  with "couldn't start the reviewer: <why>". The agent is not asked to fix it,
+  and no fix round is used.
 - **A Verify whose agent's window closed shows "Verify blocked"** with the
   reason, instead of losing the check or showing the previous result, and no
   longer marks unshipped work as shipped.

@@ -29700,17 +29700,23 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 			} catch {
 				return;
 			}
-			if (sendResize && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
+			if (!sendResize || !ws || ws.readyState !== WebSocket.OPEN) return;
+			const size = term.cols + "x" + term.rows;
+			if (sentSize === size) return;
+			sentSize = size;
+			ws.send(JSON.stringify({
 				type: "resize",
 				cols: term.cols,
 				rows: term.rows
 			}));
 		};
+		let sentSize = "";
 		const connect = () => {
 			if (dead) return;
 			const proto = location.protocol === "https:" ? "wss" : "ws";
 			const sock = new WebSocket(proto + "://" + location.host + wsPath);
 			ws = sock;
+			sentSize = "";
 			sock.binaryType = "arraybuffer";
 			sock.onopen = () => {
 				if (dead) return;
@@ -29764,7 +29770,7 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 		const t = setTimeout(() => doFit(true), 50);
 		const untrack = trackRepaint({
 			shown: () => isShown(host),
-			repaint: () => repaintTerm(term, () => doFit(true))
+			repaint: () => repaintTerm(term)
 		});
 		connect();
 		return () => {
@@ -33629,6 +33635,13 @@ function flockChipLabel(on = false) {
 function flockTooltip(on, keys = [FLOCK_KEYS, ASK_WORKERS_KEYS]) {
 	return `Workers — let the agent split this now, ask for workers once, or on every prompt (${keys[1]} asks once; ${keys[0]} turns every prompt on or off)` + (on ? "\nWorkers on every prompt: on" : "");
 }
+function flockDecides(config = cachedConfig()) {
+	return config?.flock?.decide === true;
+}
+function flockModeNote(on, decides = flockDecides()) {
+	if (decides) return on ? "On — the agent places each prompt: here, across workers, or on its own branch" : "The agent places each prompt you send here: here, across workers, or on its own branch";
+	return on ? "On — everything you send asks for workers" : "Adds the workers request to everything you send here";
+}
 function flockActionLabel(on) {
 	return on ? "Workers on every prompt: turn off" : "Workers on every prompt: turn on";
 }
@@ -33824,7 +33837,7 @@ var SESSION_ACTIONS = {
 	flock: {
 		label: (c) => flockActionLabel(!!c.inst?.flock),
 		keys: FLOCK_KEYS,
-		note: "adds the workers request to everything you send here",
+		note: () => flockDecides(cfg()) ? "the agent places each prompt: here, across workers, or on its own branch" : "adds the workers request to everything you send here",
 		enabled: (c) => flockAvailable(c.inst, cfg()),
 		run: (t) => void toggleFlock(t)
 	},
@@ -35770,6 +35783,8 @@ var FIELD_HINT = {
 	"reviews.quiet_minutes": "Done once no new review comment has come for this long. 1 to 1440 min, default 10.",
 	"reviews.max_rounds": "Each round sends the new comments to the agent and pushes; more comments after this many rounds fail the stop. 1 to 50, default 5.",
 	"reviews.include_bots": "Off: comments from bot reviewers are left out. Default on.",
+	"reviews.reply_declined": "On: a comment the agent decides not to act on also gets a reply on the PR giving the reason, not only a line in its summary. Default off.",
+	"reviews.each_round": "Added to every round's prompt, after the comments — e.g. re-run your code review before the push, reply on the PR to comments you decline. Empty: nothing added.",
 	"checks.timeout_minutes": "The stop fails if CI hasn't finished by then; a failing check fails it at once. 1 to 1440 min, default 60.",
 	"command.command": "Runs in the session's folder; a non-zero exit fails the stop.",
 	"command.timeout_minutes": "Still running then: it is stopped and the stop fails. 1 to 1440 min, default 30.",
@@ -64789,7 +64804,7 @@ function workersModes(inst, ctx) {
 			letter: "E",
 			keys: FLOCK_KEYS,
 			checked: on,
-			note: on ? "On — everything you send asks for workers" : "Adds the workers request to everything you send here",
+			note: flockModeNote(on),
 			why: "",
 			run: () => void toggleFlock(title)
 		}
@@ -103799,7 +103814,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			shown: () => isShown(peekTerm(title, kind)?.container),
 			repaint: () => {
 				const t = peekTerm(title, kind);
-				if (t) repaintTerm(t.term, () => t.doFit());
+				if (t) repaintTerm(t.term);
 			}
 		});
 	}, [
@@ -128684,62 +128699,93 @@ function WorkersRows() {
 	const display = typeof stored === "string" ? stored : "";
 	const [value, setValue] = (0, import_react.useState)(display);
 	(0, import_react.useEffect)(() => setValue(display), [display]);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "set-row",
-		id: "orch-workers",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Workers request"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				className: "workers-request",
-				"data-group": "general",
-				"data-field": "workers_request",
-				rows: 4,
-				style: {
-					resize: "vertical",
-					lineHeight: 1.45
-				},
-				spellCheck: false,
-				placeholder: DEFAULT_WORKERS_TEMPLATE,
-				value,
-				onChange: (e) => setValue(e.target.value),
-				onBlur: () => {
-					if (value !== display) s.saveField("general", "workers_request", value);
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "set-hint",
-				children: [
-					"What \"Ask for workers once\" types (",
-					ASK_WORKERS_KEYS,
-					"), and what \"Workers on every prompt\" adds to everything you send (",
-					FLOCK_KEYS,
-					"). ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "{model}" }),
-					" becomes the model below; empty uses the default."
-				]
-			})
-		]
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "set-row",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Workers model"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-				group: "general",
-				field: "workers_model",
-				placeholder: DEFAULT_WORKERS_MODEL
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: "The model the request asks workers to run on."
-			})
-		]
-	})] });
+	const decideStored = s.get("general", "workers_decide");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row workers-decide-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "notif-rule-text",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Let the agent decide where each prompt goes"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint notif-rule-desc",
+					children: [
+						"With \"Workers on every prompt\" on (",
+						FLOCK_KEYS,
+						"), keep sending ideas to one session: its agent does a small follow-up itself, splits a big one across workers and merges them back, and starts a separate idea as its own session on its own branch, off the base branch. Off: every prompt asks for workers."
+					]
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					"data-group": "general",
+					"data-field": "workers_decide",
+					checked: decideStored !== false && decideStored !== "false" && decideStored !== "0",
+					onChange: (e) => void s.saveField("general", "workers_decide", e.target.checked)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			id: "orch-workers",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Workers request"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					className: "workers-request",
+					"data-group": "general",
+					"data-field": "workers_request",
+					rows: 4,
+					style: {
+						resize: "vertical",
+						lineHeight: 1.45
+					},
+					spellCheck: false,
+					placeholder: DEFAULT_WORKERS_TEMPLATE,
+					value,
+					onChange: (e) => setValue(e.target.value),
+					onBlur: () => {
+						if (value !== display) s.saveField("general", "workers_request", value);
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint",
+					children: [
+						"What \"Ask for workers once\" types (",
+						ASK_WORKERS_KEYS,
+						"), and how \"Workers on every prompt\" asks for workers (",
+						FLOCK_KEYS,
+						") — every time, or when the agent decides a prompt needs them.",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "{model}" }),
+						" becomes the model below; empty uses the default."
+					]
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Workers model"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "general",
+					field: "workers_model",
+					placeholder: DEFAULT_WORKERS_MODEL
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "The model the request asks workers to run on."
+				})
+			]
+		})
+	] });
 }
 function CapRow({ cap, field, label, hint }) {
 	const { data: config } = useConfig();

@@ -558,7 +558,17 @@ def test_the_workers_request_syncs_and_rewrites_the_flock_flags(
     run(settings_sync.sync_once())
     assert devices.get("general", "workers_request") == "Split it ({model})"
     assert devices.get("general", "workers_model") == "m-9"
-    # The adopted words reach the session's next prompt.
+    # The adopted words reach the session's next prompt: the workers option
+    # of the every-prompt words (the agent places the prompt by default).
+    flag = flock_mode.flag_path("mindflock_w").read_text()
+    assert flag == flock_mode.every_prompt_text() + "\n"
+    assert "splittable: Split it (m-9) (3)" in flag
+    # So does the choice of who decides.
+    assert "workers_decide" in settings_sync.SYNCED["general"]
+    clock.tick()
+    with devices.on("rig"):
+        store.update_settings(general={"workers_decide": False})
+    run(settings_sync.sync_once())
     assert flock_mode.flag_path("mindflock_w").read_text() == "Split it (m-9)\n"
 
 

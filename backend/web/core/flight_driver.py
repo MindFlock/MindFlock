@@ -33,7 +33,7 @@ import threading
 import time
 import traceback
 import uuid
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from backend import compat
 from backend.web.core import autopilot as _autopilot
@@ -1091,8 +1091,10 @@ _LAUNCHED_WORKER = {"review": "the reviewer"}
 def _launch_obs(ss: dict) -> Optional[dict]:
     """Whether the worker a stop spawned ever started (blocking): ``{"title",
     "waiting": True, "why", "since"}`` while the launch gate still holds it
-    (memory), ``{"title", "failed": <error>}`` when its queued launch failed,
-    else None (it started, or nothing is known)."""
+    (memory), ``{"title", "failed": <error>}`` when its queued launch failed
+    or its background create failed after the 202 (the server's create
+    failure record, newer than the stop's start), else None (it started, or
+    nothing is known)."""
     from backend.web.core import launch_gate as _lg
 
     kids = (ss.get("detail") or {}).get("children") or []
@@ -1112,27 +1114,67 @@ def _launch_obs(ss: dict) -> Optional[dict]:
     done = _lg.last_outcome(title)
     if done and not done.get("started") and done.get("error"):
         return {"title": title, "failed": str(done["error"])}
+    why = _create_failure(title, float(ss.get("since") or 0.0))
+    if why:
+        return {"title": title, "failed": why}
     return None
+
+
+#: What a worker that vanished before it ever started is said to have done
+#: when nothing recorded why.
+GONE_BEFORE_START = "it was gone before it started"
+
+
+def _never_started(step: dict, obs: dict, action: dict) -> bool:
+    """Whether the stop's judge failed it over a worker that is gone without
+    ever having started (its join entry never left ``loading``) and left no
+    report: a create that died in the background, nothing it did."""
+    if action.get("action") != "fail":
+        return False
+    o = obs.get(step["kind"])
+    entry = (o.get("entry") if isinstance(o, dict) else None) or {}
+    return (
+        entry.get("state") == "gone"
+        and not entry.get("started")
+        and not entry.get("report")
+        and not o.get("report")
+    )
 
 
 def _launch_verdict(flight: dict, obs: dict, action: dict, now: float) -> dict:
     """``action`` for a stop whose spawned worker never started: while the
     launch gate holds it, a wait saying why and for how long — a park on the
-    person past :data:`MEMORY_PARK_S` — and a launch that failed fails the
-    stop with "couldn't start the reviewer: <why>" (not "did not finish").
-    Any other stop, or a worker that started, keeps ``action``."""
+    person past :data:`MEMORY_PARK_S`. A launch or background create that
+    failed (or a worker gone before it ever started) is never "did not
+    finish" handed to the agent: the stop spawns ONE fresh worker (a new
+    title: ``_free_worker_title`` skips one whose create just failed), and
+    if that one cannot start either it halts for the person with "couldn't
+    start the reviewer: <why>" — no fix round spent, nothing typed to the
+    agent. Any other stop, or a worker that started, keeps ``action``."""
     step = _flights._current(flight)
     if step is None or step["kind"] not in _LAUNCHED_WORKER:
         return action
     ss = flight["step_states"][step["id"]]
-    launch = obs.get("launch")
-    if ss["state"] != "running" or not isinstance(launch, dict):
+    if ss["state"] != "running" or ss["detail"].get("phase") == "fix":
         return action
+    launch = obs.get("launch")
+    if not isinstance(launch, dict):
+        if not _never_started(step, obs, action):
+            return action
+        launch = {"failed": GONE_BEFORE_START}
     what = _LAUNCHED_WORKER[step["kind"]]
     if launch.get("failed"):
-        out = _flights.fail_action(
-            flight, "couldn't start %s: %s" % (what, launch["failed"]), obs
-        )
+        why = "couldn't start %s: %s" % (what, launch["failed"])
+        if not ss["detail"].get("respawned"):
+            # Once, automatically: a stale title or a passing hiccup.
+            return {
+                "action": "run",
+                "note": why + " — starting another",
+                "detail": {"respawned": why},
+            }
+        # The stop's own on_fail (skip still skips), with the real reason —
+        # no "(after N fix rounds)": the agent's rounds are not why.
+        out = dict(_flights.fail_action(flight, why, obs), reason=why)
         # Memory or a refused create is nothing the agent can fix.
         return dict(out, then="halt") if out.get("then") == "agent" else out
     if not launch.get("waiting") or action.get("action") not in ("wait", "fail"):
@@ -1838,8 +1880,13 @@ async def _send_reviews(flight: dict, step: dict, action: dict, now: float) -> d
     if pr is None or not comments:
         raise _StepFailed("the new review comments could not be read")
     sess = await asyncio.to_thread(_session_obs, flight, now, False)
+    cfg = step.get("config") or {}
     text = _pr_runner.build_consolidated_pr_prompt(
-        pr, comments, sess.get("folder") or ""
+        pr,
+        comments,
+        sess.get("folder") or "",
+        each_round=str(cfg.get("each_round") or ""),
+        reply_declined=bool(cfg.get("reply_declined")),
     )
     await asyncio.to_thread(_deliver, flight["session"], text)
     d = flight["step_states"][step["id"]]["detail"]
@@ -1860,9 +1907,19 @@ def _split_base(
     flight: dict, step: dict, cfg: Optional[dict] = None
 ) -> Tuple[dict, str, str]:
     """What every worker of a split is created with (blocking) — the payload
-    ``spawn_session`` builds for a worker of this session: forked from its
-    HEAD (a provisioned session's workers come from the same source), on its
-    CLI, under its fence — plus the workers' provider and title prefix."""
+    ``spawn_session`` builds for a worker of this session: a worktree of the
+    session's own repository forked from its HEAD, on its CLI, under its
+    fence — plus the workers' provider and title prefix.
+
+    A provisioned session (a ticket or PR started from Intake) gets the same
+    plain worktree of ITS checkout, never a provisioned twin: its ``Path`` is
+    the server's own folder when Intake cloned a repository URL, so
+    provisioning "from the same source" put a reviewer of a sitecheck PR in a
+    clone of MindFlock; and a provisioned twin forks from the base branch,
+    so it could not see the session's change at all. The clone (clone
+    strategy) or the ``_base_`` clone (worktree strategy) is a full repo
+    holding the session's branch and its base, so ``git diff <base>...HEAD``
+    works in the worker and its branch merges from the session as is."""
     from backend.mcp import gitlocal as _gitlocal
     from backend.mcp import tools as _mcp_tools
 
@@ -1884,28 +1941,19 @@ def _split_base(
     except Exception:  # noqa: BLE001
         folder = str(row.get("folder") or "")
     path = str(getattr(inst, "Path", "") or row.get("path") or "")
-    if getattr(inst, "Provisioned", False):
-        if (
-            path
-            and path != "."
-            and os.path.isabs(path)
-            and not os.path.basename(os.path.normpath(path)).startswith("_base_")
-            and _gitlocal.head_sha(path)
-        ):
-            payload["repo_path"] = path
-        payload["provisioned"] = True
-        payload["workspace_strategy"] = str(
-            getattr(inst, "WorkspaceStrategy", "") or "worktree"
+    root = _gitlocal.canonical_repo_root(folder) if folder else None
+    sha = _gitlocal.head_sha(folder) if folder else None
+    if getattr(inst, "Provisioned", False) and not (root and sha):
+        # Its Path may be an unrelated repository (see above): never guess.
+        raise _StepFailed(
+            "couldn't read %s's checkout to start a worker from it" % parent
         )
-    else:
-        root = _gitlocal.canonical_repo_root(folder) if folder else None
-        payload["repo_path"] = root or path or folder
-        sha = _gitlocal.head_sha(folder) if folder else None
-        if sha:
-            payload["base_ref"] = sha
-            branch = str(getattr(inst, "Branch", "") or row.get("branch") or "")
-            if branch:
-                payload["base_branch"] = branch
+    payload["repo_path"] = root or path or folder
+    if sha:
+        payload["base_ref"] = sha
+        branch = str(getattr(inst, "Branch", "") or row.get("branch") or "")
+        if branch and branch != "HEAD":
+            payload["base_branch"] = branch
     if cfg.get("model"):
         payload["profile_model"] = cfg["model"]
     only = [p.strip() for p in str(cfg.get("fence_only") or "").split(",") if p.strip()]
@@ -1929,9 +1977,67 @@ def _footer_ok(provider: str) -> bool:
     return bool(caps.get("enabled")) and provider in (caps.get("providers") or [])
 
 
-def _free_worker_title(prefix: str, repo: str, branch_prefix: Optional[str]) -> str:
+def _create_failure(title: str, since: float = 0.0) -> str:
+    """Why the server's background create of ``title`` failed at or after
+    ``since`` (``GET /api/create_failures``' record: kept ten minutes), else
+    "" (blocking-free)."""
+    from backend.web.core import session_removal as _removal
+
+    srv = _server()
+    with _removal._CREATE_FAILURES_LOCK:
+        rec = dict((getattr(srv, "_CREATE_FAILURES", None) or {}).get(title) or {})
+    if not rec.get("error") or float(rec.get("ts") or 0.0) < since:
+        return ""
+    if time.time() - float(rec.get("ts") or 0.0) > _removal._CREATE_FAILURE_TTL_S:
+        return ""
+    return str(rec["error"])
+
+
+def _leftover_probe(parent: str) -> Optional[Callable[[str], bool]]:
+    """``taken(title)`` for a provisioned session's would-be workers (blocking),
+    or None: the MCP's ``_provisioned_branch_probe`` — a closed provisioned
+    worker keeps its ``<workspace_dir>/mindflock-<title>`` clone or its
+    ``mindflock/<title>`` branch in the ``_base_`` clone, and a create under
+    that title fails in the background after its 202."""
+    from backend.mcp import tools as _mcp_tools
+
+    inst = _server().ENGINE.instances.get(parent)
+    if inst is None or not getattr(inst, "Provisioned", False):
+        return None
+    try:
+        folder = inst.GetWorktreePath() or ""
+    except Exception:  # noqa: BLE001
+        folder = str(_row(parent).get("folder") or "")
+    strategy = str(getattr(inst, "WorkspaceStrategy", "") or "worktree")
+    try:
+        return _mcp_tools._provisioned_branch_probe(folder, strategy)
+    except Exception:  # noqa: BLE001 — no probe: the create's own 409 is the backstop
+        return None
+
+
+def _taken_by(
+    leftover: Optional[Callable[[str], bool]], refused: set
+) -> Callable[[str], bool]:
+    """``_free_worker_title``'s extra probe for one spawn: a provisioned
+    leftover, or a title the create already refused as existing."""
+
+    def taken(cand: str) -> bool:
+        return cand in refused or bool(leftover is not None and leftover(cand))
+
+    return taken
+
+
+def _free_worker_title(
+    prefix: str,
+    repo: str,
+    branch_prefix: Optional[str],
+    taken_by: Optional[Callable[[str], bool]] = None,
+) -> str:
     """The lowest free ``<prefix><N>`` — no live or starting title, no tmux
-    name and (when it can tell) no leftover branch: ``spawn_session``'s rule."""
+    name, (when it can tell) no leftover branch: ``spawn_session``'s rule —
+    and none ``taken_by`` says is taken (a provisioned session's leftover
+    clone or branch, :func:`_leftover_probe`; a title already refused this
+    spawn), nor one whose create just failed in the background."""
     from backend.mcp import gitlocal as _gitlocal
     from backend.mcp import tools as _mcp_tools
 
@@ -1942,17 +2048,29 @@ def _free_worker_title(prefix: str, repo: str, branch_prefix: Optional[str]) -> 
     except Exception:  # noqa: BLE001
         pass
     tmux = {_mcp_tools._tmux_name(t) for t in taken}
+    # The branch a plain worktree session of that title gets in ``repo``: the
+    # server's own prefix, which a provisioned session's row does not show.
+    session_branch = getattr(srv, "_session_branch_name", None)
+
+    def _leftover(cand: str) -> bool:
+        if repo and branch_prefix is not None:
+            if _gitlocal.branch_exists(repo, branch_prefix + cand):
+                return True
+        if repo and session_branch is not None:
+            name = session_branch(cand)
+            if name and _gitlocal.branch_exists(repo, name):
+                return True
+        if taken_by is not None and taken_by(cand):
+            return True
+        return bool(_create_failure(cand))
+
     n = 1
     while True:
         cand = "%s%d" % (prefix, n)
         if (
             cand not in taken
             and _mcp_tools._tmux_name(cand) not in tmux
-            and not (
-                repo
-                and branch_prefix is not None
-                and _gitlocal.branch_exists(repo, branch_prefix + cand)
-            )
+            and not _leftover(cand)
         ):
             return cand
         n += 1
@@ -2026,6 +2144,8 @@ async def _run_split(flight: dict, step: dict, action: dict) -> dict:
         _footer_ok, provider
     )
     branch_prefix = _mcp_tools.Toolbox._branch_prefix(_row(parent), parent)
+    tried: set = set()
+    taken_by = _taken_by(await asyncio.to_thread(_leftover_probe, parent), tried)
     for text in todo:
         payload = dict(base)
         body: dict = {}
@@ -2036,6 +2156,7 @@ async def _run_split(flight: dict, step: dict, action: dict) -> dict:
                 prefix,
                 str(payload.get("repo_path") or ""),
                 branch_prefix,
+                taken_by,
             )
             payload["title"] = title
             payload["prompt"] = text + (
@@ -2044,6 +2165,7 @@ async def _run_split(flight: dict, step: dict, action: dict) -> dict:
             status, body = await _session_create.create_result(payload, auto="flight")
             err = str(body.get("error") or "")
             if status == 409 and "exists" in err:
+                tried.add(title)
                 continue  # lost a race for the title: the next number
             if status == 400 and "base_ref" in payload and "base" in err:
                 # Can't fork from the session's HEAD: its default base, as
@@ -2106,6 +2228,8 @@ async def spawn_worker(
         raise _StepFailed(refused)
     footer = report_back and await asyncio.to_thread(_footer_ok, provider)
     branch_prefix = _mcp_tools.Toolbox._branch_prefix(_row(parent), parent)
+    tried: set = set()
+    taken_by = _taken_by(await asyncio.to_thread(_leftover_probe, parent), tried)
     payload = dict(base)
     body: dict = {}
     status = 0
@@ -2115,6 +2239,7 @@ async def spawn_worker(
             prefix,
             str(payload.get("repo_path") or ""),
             branch_prefix,
+            taken_by,
         )
         payload["title"] = title
         payload["prompt"] = prompt + (
@@ -2123,6 +2248,7 @@ async def spawn_worker(
         status, body = await _session_create.create_result(payload, auto="flight")
         err = str(body.get("error") or "")
         if status == 409 and "exists" in err:
+            tried.add(title)  # a leftover the probes can't see: the next one
             continue
         if status == 400 and "base_ref" in payload and "base" in err:
             payload.pop("base_ref", None)

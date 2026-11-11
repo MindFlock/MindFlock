@@ -4,15 +4,20 @@ The person very often tells a session to split its task across MindFlock
 worker sessions; this saves typing the request each time. Two shapes:
 
 * STICKY — ``<flag dir>/<tmux session>.flock``, set by ``POST
-  /api/instances/{title}/flock {on}``. The file's CONTENT is the request text
+  /api/instances/{title}/flock {on}``. The file's CONTENT is what every
+  prompt carries (:func:`every_prompt_text`): by default a request to PLACE
+  the prompt — do it here, split it across workers, or start it as a separate
+  session on its own branch — built around the workers request
   (:func:`request_text`, the ``general.workers_request`` template with
-  ``{model}`` filled in from ``general.workers_model``). A CLI whose
+  ``{model}`` filled in from ``general.workers_model``); with
+  ``general.workers_decide`` off, the workers request alone. A CLI whose
   prompt-submit hook injects context (Claude, ``voice_prompt_hook``) prints
   it on EVERY submitted prompt — prompts typed straight into the terminal
   included (:func:`backend.providers.activity_markers.hook_command`). Any
   other CLI gets it typed after each ``/send`` text instead.
-* ONE-SHOT — ``/send``'s ``flock: true``: the text typed after that one
-  prompt (unless the sticky flag already asks a hook CLI for it).
+* ONE-SHOT — ``/send``'s ``flock: true``: the workers request itself (the
+  person asked for workers, so nothing is left to decide) typed after that
+  one prompt (unless the sticky flag already asks a hook CLI for it).
 
 A file, like voice's flags (:mod:`backend.web.core.voice`, whose
 :func:`flag_dir` it shares): the hook reads it at fire time from inside the
@@ -86,15 +91,41 @@ def _claude_default() -> bool:
         return True
 
 
+def decides() -> bool:
+    """Whether the sticky mode lets the agent place each prompt
+    (``general.workers_decide``; unset or unreadable reads as on)."""
+    from backend.config import settings as _settings
+
+    try:
+        return _settings.load_settings().general.workers_decide is not False
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def every_prompt_text() -> str:
+    """What the sticky mode adds to every prompt: the request to place it
+    (:data:`~backend.config.settings.DEFAULT_WORKERS_DECIDE` around
+    :func:`request_text`), or — ``general.workers_decide`` off — the workers
+    request alone. One line. Never raises."""
+    from backend.config import settings as _settings
+
+    req = request_text()
+    if not decides():
+        return req
+    # A plain replace, like the model's: a brace in the person's words is text.
+    text = _settings.DEFAULT_WORKERS_DECIDE.replace("{workers}", req)
+    return " ".join(text.split())
+
+
 def set_on(session_name: str, on: bool, text: str = "") -> bool:
-    """Turn Flock mode on (writing ``text``, else :func:`request_text`) or
+    """Turn Flock mode on (writing ``text``, else :func:`every_prompt_text`) or
     off for ``session_name``; returns the new state, read back.
 
     Idempotent. An ``OSError`` propagates so the route can say why."""
     path = flag_path(session_name)
     if on:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text((text or request_text()).strip() + "\n", encoding="utf-8")
+        path.write_text((text or every_prompt_text()).strip() + "\n", encoding="utf-8")
     else:
         try:
             path.unlink()
@@ -105,14 +136,15 @@ def set_on(session_name: str, on: bool, text: str = "") -> bool:
 
 def rewrite_all() -> int:
     """Re-write every existing ``.flock`` file with the current
-    :func:`request_text` — after the settings changed — so each session's
+    :func:`every_prompt_text` — after the settings changed, and once at server
+    start (an upgrade may have changed the default words) — so each session's
     next prompt carries the new words. Returns how many were re-written.
     Never raises (one unwritable file never blocks the rest)."""
     try:
         files = list(flag_dir().glob("*" + SUFFIX))
     except Exception:  # noqa: BLE001 — no flag dir: nothing is on
         return 0
-    text = request_text() + "\n"
+    text = every_prompt_text() + "\n"
     done = 0
     for path in files:
         try:

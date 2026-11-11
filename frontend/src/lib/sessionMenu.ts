@@ -44,6 +44,7 @@ import { copyText } from "./clipboard";
 import {
   ASK_WORKERS_KEYS,
   FLOCK_KEYS,
+  flockModeNote,
   insertWorkersRequest,
   toggleFlock,
 } from "./workersRequest";
@@ -451,8 +452,10 @@ export interface WorkersMode {
  *                                  approve them on its Thread tab
  *   Ask for workers once           Alt+G: the workers request typed into its
  *                                  terminal, no Enter
- *   Workers on every prompt        Alt+Shift+G: a ✓ switch, the server adds the
- *                                  request to everything you send */
+ *   Workers on every prompt        Alt+Shift+G: a ✓ switch, the server adds its
+ *                                  words to everything you send — by default
+ *                                  the agent places each prompt (here,
+ *                                  workers, or its own branch) */
 export function workersModes(inst: Instance, ctx: ActionCtx): WorkersMode[] {
   const title = inst.title;
   const name = displayName(title);
@@ -483,7 +486,7 @@ export function workersModes(inst: Instance, ctx: ActionCtx): WorkersMode[] {
       letter: "E",
       keys: FLOCK_KEYS,
       checked: on,
-      note: on ? "On — everything you send asks for workers" : "Adds the workers request to everything you send here",
+      note: flockModeNote(on),
       why: "",
       run: () => void toggleFlock(title),
     },

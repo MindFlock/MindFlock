@@ -163,6 +163,8 @@ def test_steps_get_ids_titles_and_defaults():
         "include_bots": True,
         "require_reviewer": "",
         "reviewer_wait_minutes": 10,
+        "reply_declined": False,
+        "each_round": "",
     }
 
 

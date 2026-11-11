@@ -20,7 +20,7 @@ strategies:
 |---|---|---|
 | Default | — | New git worktree + branch off HEAD, under `~/.mindflock/worktrees/` |
 | Provisioned | `provisioned=True`, `workspace_strategy="worktree"\|"clone"` (+ optional `provision_repo=<local repo>`) | Fully provisioned workspace (below) |
-| Adopt | `workspace_path=<dir>` | Adopts an already-provisioned directory (used for PR workspaces) |
+| Adopt | `workspace_path=<dir>` | Adopts an already-provisioned directory (a PR review's fallback clone) |
 | In place | `in_place=True` | Runs directly in `path` — no worktree, no branch; several sessions can share one working copy; never deleted on cleanup |
 
 `auto_yes` is accepted but **forced off** (matching the Go engine).
@@ -35,7 +35,10 @@ strategies:
   commit-ish instead of HEAD.
 - `base_branch`, given with `base_ref`, is recorded as `BaseBranch` instead
   of the inferred one. Without it, `BaseBranch` is `base_ref` when that is a
-  local branch, else the repo's current branch.
+  local branch, else the repo's current branch. A **provisioned** session
+  honors `base_branch` on its own: it becomes `BaseBranch` and the branch the
+  workspace's diff base is resolved against (a PR review into `develop` on a
+  repo whose base is `main`).
 - `carry_ref`, given with `base_ref`, is a snapshot commit of another
   worktree's uncommitted changes (`git.snapshot_changes`, below). The first
   `Start` lays it over the new worktree right after creating it and before
@@ -200,7 +203,10 @@ every stored tmux session as a side effect of changing one field.
 
 - `GitWorktree` composes ops/git/diff/branch mixins. Worktree dirs live at
   `~/.mindflock/worktrees/<sanitized-branch>_<hex-nanotime>`.
-- Branch names are sanitized (lowercase, spaces→dash, `[a-z0-9-_/.]` only).
+- New branch names are sanitized (lowercase, spaces→dash, `[a-z0-9-_/.]`
+  only). A provisioned worktree session whose branch already exists in the base
+  clone under exactly that spelling uses it as spelled — a PR's `Feature/X`
+  stays `Feature/X`.
   Default branch = `<branch_prefix><title>`; `branch_prefix` defaults to your
   lowercased username + `/`.
 - **Diff** — `git add -N .` (so untracked files count) then
@@ -546,6 +552,31 @@ without: `mindflock/<slug-of-title>`.
   copy is merely behind it; a checkout with commits of its own keeps them.
 - `clone` — a full standalone `git clone --depth=1` per session. Strongest
   isolation; the clone survives pause.
+
+**PR review workspaces** — a PR review uses the `worktree` strategy too
+(`pr_provisioner.prepare_pr_worktree`, called by `core/pr_review.py` before
+the session is created). Against the PR repo's base clone it runs one
+`git fetch origin +refs/pull/<n>/head:refs/mindflock/pr/<n>
++refs/heads/<base_ref>:refs/remotes/origin/<base_ref>` (fork PRs included),
+then `git branch -f <head_ref> <head>`. The session is created with
+`new_branch=<head_ref>`, so `Setup` takes the existing-branch path and
+provisioning runs once. The PR's `base_ref` is recorded as
+`branch.<head_ref>.mindflock-base` in the base clone's config, so the diff base
+survives a restart. A base clone is only cloned here when none exists yet; an
+existing one is refreshed by `ensure_base_repo` at Start, as for a ticket.
+
+A leftover worktree on the branch (a closed review's kept worktree) is removed
+when it holds nothing beyond the PR head. Otherwise it is detached in place, so
+its uncommitted changes stay there. A local `<head_ref>` branch with commits
+in neither the new PR head nor the one an earlier review fetched (a paused
+session's branch, say) is never moved. The review falls back to the PR's own
+clone (`PRProvisioner`, `workspaces/pr-<repo>-<n>`, adopted with
+`workspace_path`) in five cases: a live session has the head branch, the base
+clone has it checked out itself (a fork PR from `main` into `main`), the local
+branch has commits of its own, no base clone can be made or fetched into, or
+workspaces are configured `mode = "clone"`. In the
+fallback `PRProvisioner` only does the git work, and the session's `Setup`
+provisions it once.
 
 **Provisioning sequence** (idempotent, mirrors the pipeline's provisioner):
 

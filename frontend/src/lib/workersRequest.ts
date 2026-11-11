@@ -11,9 +11,15 @@
  *                space, no Enter), so you add the task after it or just press
  *                Enter.
  *   Alt+Shift+G  "Workers on every prompt" — the sticky Flock mode: while on,
- *                the server adds the request to every prompt submitted in
+ *                the server adds its words to every prompt submitted in
  *                that session (`POST /api/instances/{title}/flock {on}`), so
- *                you type nothing extra. The pane's Workers control (the
+ *                you type nothing extra. By default (Settings → Agent
+ *                orchestration "Let the agent decide", `flock.decide`) the
+ *                words ask the agent to PLACE each prompt — do it here, split
+ *                it across workers, or start it as a separate session on its
+ *                own branch — so you can keep thinking out loud in one
+ *                session; off, they are the workers request every time. The
+ *                pane's Workers control (the
  *                MindFlock raven, lib/flock's sprite as a mask) reads
  *                "Workers ✓" while it is on.
  *
@@ -90,6 +96,23 @@ export function flockTooltip(on: boolean, keys: [string, string] = [FLOCK_KEYS, 
     ` (${keys[1]} asks once; ${keys[0]} turns every prompt on or off)` +
     (on ? "\nWorkers on every prompt: on" : "")
   );
+}
+
+/** Whether "Workers on every prompt" lets the agent place each prompt
+ * (`flock.decide`; an older server, which always asks for workers, sends
+ * none). */
+export function flockDecides(config: Pick<Config, "flock"> | null | undefined = cachedConfig()): boolean {
+  return config?.flock?.decide === true;
+}
+
+/** The Workers… picker's line under "Workers on every prompt". */
+export function flockModeNote(on: boolean, decides: boolean = flockDecides()): string {
+  if (decides) {
+    return on
+      ? "On — the agent places each prompt: here, across workers, or on its own branch"
+      : "The agent places each prompt you send here: here, across workers, or on its own branch";
+  }
+  return on ? "On — everything you send asks for workers" : "Adds the workers request to everything you send here";
 }
 
 /** The row menu's / palette's label for the toggle. */

@@ -150,7 +150,10 @@ STOPS: Dict[str, dict] = {
         "before a PR exists",
         "quiet_minutes=10, max_rounds=5, include_bots=true; "
         "require_reviewer=coderabbit (+ reviewer_wait_minutes=10) waits for "
-        "that reviewer's first review and fails if it never comes",
+        "that reviewer's first review and fails if it never comes; "
+        "each_round='…' adds the route's own instructions to every round "
+        "(re-run a review before the push, merge the base on conflict); "
+        "reply_declined=true has the agent answer declined comments on the PR",
         "the PR to go quiet (and the required reviewer)",
     ),
     "checks": _s(

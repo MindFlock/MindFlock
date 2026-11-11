@@ -1014,7 +1014,11 @@ export interface Config {
   /** The workers request (Settings → General "Workers request", `{model}`
    * already filled in) and the model it names. Absent on an older server:
    * lib/workersRequest falls back to its default. */
-  flock?: { request: string; model: string };
+  /** `decide` (absent on an older server = it asks for workers every time):
+   * "Workers on every prompt" lets the agent place each prompt — here, across
+   * workers, or as a separate session on its own branch; `every_prompt` is
+   * what that mode adds. */
+  flock?: { request: string; model: string; decide?: boolean; every_prompt?: string };
 }
 
 /** What a guest link opens (`/api/config` → `guest`). */

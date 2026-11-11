@@ -19,10 +19,15 @@ __all__ = [
     "canonical_repo_root",
     "branch_exists",
     "commits_between",
+    "default_branch",
+    "branch_ref",
+    "fetch_branch",
     "set_runner",
 ]
 
 _GIT_TIMEOUT_S = 20
+#: The best-effort ``git fetch`` before a separate spawn never waits longer.
+_FETCH_TIMEOUT_S = 10
 
 #: subprocess.run stand-in (tests swap it to count or fail calls).
 _RUN: Callable[..., subprocess.CompletedProcess] = subprocess.run
@@ -128,3 +133,62 @@ def commits_between(
     if out is None:
         return None
     return [line for line in out.splitlines() if line.strip()]
+
+
+def _ref_exists(folder: str, ref: str) -> bool:
+    return (
+        git(folder, "rev-parse", "--verify", "--quiet", ref + "^{commit}") is not None
+    )
+
+
+def default_branch(folder: str) -> Optional[str]:
+    """The repository's default branch: what ``refs/remotes/origin/HEAD``
+    points at, else ``main`` or ``master`` when that branch exists (locally,
+    or as ``origin/<name>``). None when none can be found. Mirrors
+    ``backend.web.core.landing.default_branch`` minus its last resort (the
+    checked-out branch, which is exactly what a separate spawn must avoid)."""
+    ref = git(folder, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    if ref:
+        name = ref.split("/", 1)[1] if ref.startswith("origin/") else ref
+        if name and not name.startswith("-"):
+            return name
+    for name in ("main", "master"):
+        if _ref_exists(folder, "refs/heads/" + name) or _ref_exists(
+            folder, "refs/remotes/origin/" + name
+        ):
+            return name
+    return None
+
+
+def branch_ref(folder: str, branch: str) -> Optional[str]:
+    """``origin/<branch>`` when that remote-tracking ref exists, else the local
+    ``<branch>`` when it exists; None when neither does."""
+    if not branch or branch.startswith("-"):
+        return None
+    if _ref_exists(folder, "refs/remotes/origin/" + branch):
+        return "origin/" + branch
+    if _ref_exists(folder, "refs/heads/" + branch):
+        return branch
+    return None
+
+
+def fetch_branch(folder: str, branch: str, timeout: float = _FETCH_TIMEOUT_S) -> bool:
+    """Best-effort ``git fetch origin <branch>`` (bounded, never prompts for
+    credentials). True when it succeeded; every failure — no ``origin``, no
+    network, a timeout — is False and otherwise ignored."""
+    if not folder or not os.path.isdir(folder) or not branch or branch.startswith("-"):
+        return False
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+    try:
+        cp = _RUN(
+            ["git", "-C", folder, "fetch", "--quiet", "--no-tags", "origin", branch],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return cp.returncode == 0

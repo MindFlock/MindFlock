@@ -71,6 +71,19 @@ describe("the request text", () => {
     expect(W.workersRequestText({ flock: { request: "", model: "claude-sonnet-5-5" } })).toContain("(model claude-sonnet-5-5)");
   });
 
+  it("says who decides: the agent places each prompt when the server says so", () => {
+    // An older server sends no `decide`: it asks for workers every time.
+    expect(W.flockDecides(undefined)).toBe(false);
+    expect(W.flockDecides({ flock: { request: "r", model: "m" } })).toBe(false);
+    expect(W.flockDecides({ flock: { request: "r", model: "m", decide: true } })).toBe(true);
+    expect(W.flockModeNote(false, true)).toBe(
+      "The agent places each prompt you send here: here, across workers, or on its own branch"
+    );
+    expect(W.flockModeNote(true, true)).toMatch(/^On — the agent places each prompt/);
+    expect(W.flockModeNote(true, false)).toBe("On — everything you send asks for workers");
+    expect(W.flockModeNote(false, false)).toBe("Adds the workers request to everything you send here");
+  });
+
   it("fills every {model}, and a blank model is the default", () => {
     expect(W.fillWorkersTemplate("a {model} b {model}", "x")).toBe("a x b x");
     expect(W.fillWorkersTemplate("{model}", "  ")).toBe(W.DEFAULT_WORKERS_MODEL);
@@ -275,6 +288,11 @@ describe("the pane control and the settings", () => {
     expect(ORCH_SRC).toContain("Workers request");
     expect(ORCH_SRC).toContain("Workers model");
     expect(ORCH_SRC).toMatch(/<WorkersRows \/>\s*<h3 className="set-section-title">Spawn limits<\/h3>/);
+    // "Workers on every prompt" lets the agent place each prompt, unless
+    // this switch is off (general.workers_decide; unset reads as on).
+    expect(ORCH_SRC).toContain('data-field="workers_decide"');
+    expect(ORCH_SRC).toContain("Let the agent decide where each prompt goes");
+    expect(ORCH_SRC).toMatch(/saveField\("general", "workers_decide", e\.target\.checked\)/);
     expect(ORCH_SRC).not.toMatch(/\bFlock\b/);
     // A move, not a copy: General no longer has them.
     expect(GENERAL_SRC).not.toContain("workers_request");
@@ -283,7 +301,7 @@ describe("the pane control and the settings", () => {
   });
 
   it("the types carry the contract", () => {
-    expect(TYPES_SRC).toContain("flock?: { request: string; model: string };");
+    expect(TYPES_SRC).toContain("flock?: { request: string; model: string; decide?: boolean; every_prompt?: string };");
     expect(TYPES_SRC).toContain("flock?: boolean;");
   });
 });

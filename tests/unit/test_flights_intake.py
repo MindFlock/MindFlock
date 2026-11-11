@@ -148,7 +148,9 @@ def _stub_pr(monkeypatch, title="pr-repo-7"):
         return pr
 
     async def _prepare(p):
-        return "/tmp/ws-pr-7", "review the PR", 2
+        return pr_review.PreparedReview(
+            prompt="review the PR", n_comments=2, strategy="worktree"
+        )
 
     monkeypatch.setattr(pr_review, "find_pr", _find)
     monkeypatch.setattr(pr_review, "session_title", lambda p: title)

@@ -442,8 +442,10 @@ measured to cost. Plan a worker count from it rather than spawning blindly:
 past `room`, spawns queue (`hint` says so, e.g. *room for 2 more sessions now
 (~950 MB each); more will queue*). `room` is `null` where memory is not
 measured; `capacity` is absent from a server that predates it. `flock` is true when the person
-has Flock mode on for your session: they want its work split across
-MindFlock workers by default, so orchestrate unless a prompt says otherwise.
+has Flock mode on for your session: they want you to decide per prompt
+whether to do it here, split it across MindFlock workers, or start it as a
+separate session (`spawn_session` with `separate: true`) when it is a new
+idea rather than this branch's work.
 `fence` (a fenced worker only) is `{only,
 keep_out, by?, reason?, rule}`; `rule` is the contract in one sentence — *Work
 in `<only>`; read outside only to understand callers; never edit outside.
@@ -543,8 +545,8 @@ external diff tool), so your gitconfig can't break the per-file split. The
 | `delivery` | `auto` | `auto`, `inbox` or `now` (see [Messages](#messages)) |
 
 → `{sent: [{to, id, delivery, detail?}], failed?}`. Every recipient is
-validated before any message is sent. `delivery: "now"` needs every recipient
-to be a session you manage. `to` may be a `<peer>::<title>` row another person
+validated before any message is sent. `delivery: "now"` reaches any local session
+(never your own), in every scope but `readonly`. `to` may be a `<peer>::<title>` row another person
 shares with you: `delivery` must be `auto`, and the entry reads `{to, id,
 delivery: "sent", peer: true, detail}` — see [Across people](#across-people-peer-links).
 A `device::title` row of your own other device is still refused. In Claude
@@ -597,6 +599,7 @@ typed into your terminal.
 | `program` | your program | agent CLI for the worker |
 | `account` / `model` | — | auth profile id / model (`profile_id` / `profile_model`) |
 | `in_place` | false | run in **your** directory on your branch (read-only work only) |
+| `separate` | false | a separate idea, not part of your branch's work: its own branch off the repository's base branch, never merged into yours (see below). Refused with `in_place` |
 | `launch_args` | none | CLI flags **added to** your default flags for that CLI, e.g. `["--permission-mode","acceptEdits"]`. A list: a string such as `"--model opus"` is refused, not split |
 | `report_back` | true | append the report-back footer to the prompt |
 | `wait_ready` | true | wait up to 45 s for the session to leave `loading` |
@@ -607,7 +610,7 @@ typed into your terminal.
 | `overlap` | `wait` | a fence (`only`) that overlaps an unfinished worker's waits for it; `parallel` lets them run together |
 
 → `{title, branch, folder, base_sha, status, ready, report_back, reason?,
-prompt_delivery?, order?, warnings?, hint?}`. `prompt_delivery: "held"` and
+separate?, base?, note?, prompt_delivery?, order?, warnings?, hint?}`. `prompt_delivery: "held"` and
 `order: {held, after, why, fence, agent_deferred}` mean MindFlock is holding
 its task — and, with `agent_deferred: true`, its agent: it starts when its
 turn comes (see [Order](#order)).
@@ -628,6 +631,29 @@ How the worker is created:
   A 400 about the base retries first without `base_branch` (still your
   commit, a warning names the refused branch), and only then without
   `base_ref` too (the repository's HEAD, `base_sha: null`, a warning says so).
+- **`separate: true` forks from the base branch instead.** For a prompt that
+  is a new idea rather than part of your branch's work (a person
+  free-associating into one session), the worker gets its own branch cut
+  from the repository's default branch, so it ships as its own branch / PR
+  and never mixes into yours. The default branch is what
+  `refs/remotes/origin/HEAD` points at, else `main` or `master` when that
+  branch exists (the same resolution as the server's landing strip, minus its
+  "checked-out branch" last resort). First a best-effort `git fetch origin
+  <default>` (10 s, `GIT_TERMINAL_PROMPT=0`, any failure ignored) freshens
+  it; then the create sends `base_ref` = `origin/<default>` when that
+  remote-tracking ref exists (else the local `<default>`) and `base_branch` =
+  `<default>`, with the same `repo_path` as above (or your explicit
+  `repo_path`). No uncommitted-changes warning: your worktree is not its
+  starting point. The result adds `separate: true`, `base` (the `base_ref`
+  used), `base_sha` (its commit) and a `note`: do not merge it into your
+  branch; when it reports, review `get_diff` and `ship_session(title,
+  depth="pr")` it, or leave the branch for the person. Give it a `title` that
+  names the idea. It is still your child (`parent`, `spawned`, fence
+  inheritance unchanged), so its `report_result` reaches you. When no default
+  branch can be found it forks from your HEAD as usual and a warning says so
+  (with an explicit `repo_path`: from that repository's current HEAD). A
+  provisioned parent accepts the flag and changes nothing: its workers fork
+  from the base branch already.
 - The new session is created with `parent` = you and `spawned: true`.
 - A **provisioned** (ticket) orchestrator spawns provisioned workers from the
   same source repository, so they share its `_base_` clone and their branches
@@ -1229,10 +1255,11 @@ fields, `on_fail` is `halt | agent | skip | you`, and `when` is a condition
 (round 15's grammar): when it is false, the stop is skipped.
 
 **Scope.** A session may start, steer and edit routes on **itself** or on
-one of its descendants. This is `ship_session`'s rule
-(`Policy.require_ship`), and it carries two of that rule's refusals: a session
-in a team run is driven by its run, and a stop that can't be undone needs
-`confirm_merge: true`. A stop can't be undone when it is a `ship` stop at lane
+**any other local session**, so one session can direct the rest without
+being their parent. Two of `ship_session`'s refusals
+(`Policy.require_ship`) still hold: a session in a team run is driven by its
+run, and a stop that can't be undone needs `confirm_merge: true` and a
+target that is the caller's descendant (or scope `all`). A stop can't be undone when it is a `ship` stop at lane
 `merge`, or when its kind's `risk` (from the kinds list) includes
 `irreversible`, as the `land` kind's does. Under `children` scope, a session
 may not run such a stop on **itself**: `start_flight` refuses and suggests
@@ -1479,7 +1506,7 @@ working on it. Sends `POST /api/pr-review` (docs/web-api.md, docs/flights.md
 "Run the PR review on an open PR"):
 
 - `session` — the PR's session; default yourself when no `pr_url` is given.
-  The scope rule above applies (you or a descendant).
+  The scope rule above applies (any local session).
 - `pr_url` — `https://github.com/<owner>/<repo>/pull/<n>`. Alone, the server
   finds the session working on that PR (its row shows the PR, or it is on
   the PR's head branch in that repo) or, when there is none, makes one as
@@ -1553,10 +1580,9 @@ typed into it a minute later.
   below).
 - **`inbox`**: stored only (`held`). The recipient reads it with `check_inbox`.
 - **`now`**: typed immediately, **even mid-turn**. The CLI queues the text in
-  its input box. It is allowed only from an ancestor of the recipient (or from
-  `""`, the CLI or an external client). From anyone else it is downgraded to
-  `auto` with a `detail`, and the MCP refuses it outright for sessions you
-  don't manage. It types only when the recipient's activity is `idle` or
+  its input box. Any local session may send it to any other (never to
+  itself; a `readonly` MCP may not), so one session can direct the rest.
+  It types only when the recipient's activity is `idle` or
   `working`. It never types into a `clarify` dialog (the text would *answer*
   the permission prompt) or a `limit` menu — nor into a dialog on the screen
   whatever the activity reads — and never into an offline agent.
@@ -1974,11 +2000,16 @@ stop. `wait_for_session` is unchanged.
 
 The scope decides what an MCP server may **steer**. It never limits reading.
 
-| Scope | Read tools, `wait_*`, `check_inbox`, `list_tickets` | `send_message` (`auto`/`inbox`), `report_result`, `spawn_session`, `spawn_ticket_session` | Steer (`now`, `answer_prompt`, `kill_session`, `set_parent`, `fence_session`, `set_order`) | Ship (`ship_session`, `set_autopilot`) and run (`start_flight`, `control_flight`, `edit_flight`) |
+| Scope | Read tools, `wait_*`, `check_inbox`, `list_tickets` | `send_message` (`auto`/`inbox`/`now`), `report_result`, `spawn_session`, `spawn_ticket_session`, and routes (`start_flight`, `control_flight`, `edit_flight`) | Manage (`answer_prompt`, `kill_session`, `set_parent`, `fence_session`, `set_order`) | Ship (`ship_session`, `set_autopilot`) |
 |---|---|---|---|---|
 | `readonly` | yes | no | no | no |
-| `children` (default) | yes | yes, to any local session | sessions it **manages** | itself and sessions it manages; `merge` only for sessions it manages |
+| `children` (default) | yes | yes, on any local session; a route stop that can't be undone only on sessions it manages | sessions it **manages** | itself and sessions it manages; `merge` only for sessions it manages |
 | `all` | yes | yes | any local session | any local session, itself included |
+
+Typing into a session now and giving it a route are open to every session on
+purpose: one session can direct all the others. Answering a session's
+dialogs, closing or deleting it, re-parenting it and shipping it stay with
+the sessions that manage it.
 
 What "manages" means under `children`:
 
@@ -2010,8 +2041,8 @@ past a Goes as far as the user set (a Goes as far as an agent set — the row's 
 `agent:<title>` — it may change). `set_autopilot` records `by: "agent:<you>"`
 on the Goes as far as it arms.
 
-**Flights.** `start_flight`, `control_flight` and `edit_flight` follow the
-shipping rule: on the caller itself or a session it manages, never a team-run
+**Flights.** `start_flight`, `control_flight` and `edit_flight` work on the
+caller itself or any other local session, never a team-run
 member, and `confirm_merge: true` for a stop that can't be undone (a `ship`
 stop at lane `merge`, or a kind whose `risk` includes `irreversible`), whose
 target under `children` must be a descendant. A grounded flight (no session)

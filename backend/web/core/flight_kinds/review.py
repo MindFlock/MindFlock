@@ -269,11 +269,13 @@ async def _run(flight: dict, step: dict, action: dict, now: float) -> dict:
         report_back=True,
         title_prefix="review",
     )
-    return dict(
-        action,
-        note="asking %s for a %s" % (title, _NOUNS[mode]),
-        detail={"children": [title], "base": base},
-    )
+    note = "asking %s for a %s" % (title, _NOUNS[mode])
+    # The driver's one automatic re-spawn (a reviewer that couldn't start)
+    # rides in on the action: kept, so a second failure halts.
+    detail = dict(action.get("detail") or {}, children=[title], base=base)
+    if detail.get("respawned"):
+        note += " (%s)" % detail["respawned"]
+    return dict(action, note=note, detail=detail)
 
 
 # --------------------------------------------------------------------------- #
@@ -345,12 +347,19 @@ def _facts(flight: dict, step: dict, title: str) -> dict:
 
 def _entry(facts: dict, msg: Optional[dict], prev, since: float, now: float) -> dict:
     """The reviewer's join entry; a gone worker is judged by the report it
-    left in the session's mailbox, if any."""
+    left in the session's mailbox, if any. ``started`` sticks once it has
+    been seen past ``loading``: one gone without it never started."""
     from backend.web.core import thread as _thread
 
+    started = bool(isinstance(prev, dict) and prev.get("started"))
     if facts.get("present"):
-        return _flights.child_state(facts, prev, since, now)
-    out: dict = {"title": str(facts.get("title") or ""), "state": "gone"}
+        out = _flights.child_state(facts, prev, since, now)
+        if started or str(facts.get("status") or "") not in ("", "loading"):
+            out["started"] = True
+        return out
+    out = {"title": str(facts.get("title") or ""), "state": "gone"}
+    if started:
+        out["started"] = True
     rep = _thread.report_json(msg)
     if rep is not None and rep["ts"] > since:
         out["report"] = rep
