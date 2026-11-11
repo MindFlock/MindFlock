@@ -290,8 +290,11 @@ contains it has its passes downgraded); for an environment the deployment is
 under test and the tree is only read.
 
 A session mid-turn gets the prompt on its prompt queue (never typed over a
-running turn); a sleeping one is woken; one whose agent is not running is
-relaunched by the queue's drain. The stop's stall and budget clocks start when
+running turn); a sleeping one is woken through the launch gate, like any wake
+nobody asked for (low memory: the prompt waits on the queue and the wake
+waits for memory — queued, not refused; the close notice below wakes the
+same way); one whose agent is not running is relaunched by the queue's
+drain. The stop's stall and budget clocks start when
 the agent picks it up, not while it waits on the queue. A paused session
 refuses it (409 `reason: "send_failed"` → the stop fails with the sentence).
 The run record carries `in_session: true`, `self: true` and `session` = that
@@ -300,6 +303,17 @@ strip offers **Walking here — talk to it** (opens the Agent tab). A nudge goes
 to that agent; the stop closing the check (stall, budget) tells it the check
 is over, and nothing that ends a run — that close, Cancel, Delete — **ever
 closes the session**.
+
+A check that ends **before the agent's steps were adopted** (the hand-off
+refused, Cancel, the two-hour give-up, the session deleted, a close) puts
+the plan's previous steps back, so the checker fallback below still has
+them. Any such end settles the run `blocked` with its reason, stamped at the
+moment it ended (the pill shows for 10 minutes from then). It is never
+removed: removing it would bring back the check before it, and a
+`needs_you` there would be confirmed against this run's steps. One plan
+starts one check at a time: a second Run while one is starting or running
+answers 409 `reason: "busy"` (a stop waits on the running check), and the
+liveness pass never releases a check in flight.
 
 Only when the plan's session is gone (closed or deleted) does a separate
 `verify-<plan>-<sha7>` checker session walk the plan's **written** steps, as
