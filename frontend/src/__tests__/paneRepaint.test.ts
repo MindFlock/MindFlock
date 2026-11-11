@@ -3,9 +3,11 @@
  * The content was never lost — a wheel tick made tmux redraw, xterm rewrote
  * its rows, and that rewrite is what got the pane painted again. Nothing else
  * ever did after the window came back from minimized / covered / another
- * display / a GPU restart. The fix repaints (fit + full refresh) every
+ * display / a GPU restart. The fix repaints (a full refresh, rows only) every
  * terminal on screen on those triggers; these pin the rules with fake
- * terminals, since vitest here is node-only (no DOM, no xterm).
+ * terminals, since vitest here is node-only (no DOM, no xterm). A window
+ * trigger never fits, so it never sends tmux a size: repaintNoResize.test.ts
+ * pins that.
  */
 import { describe, it, expect } from "vitest";
 import {

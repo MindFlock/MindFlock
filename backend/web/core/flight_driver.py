@@ -1838,8 +1838,13 @@ async def _send_reviews(flight: dict, step: dict, action: dict, now: float) -> d
     if pr is None or not comments:
         raise _StepFailed("the new review comments could not be read")
     sess = await asyncio.to_thread(_session_obs, flight, now, False)
+    cfg = step.get("config") or {}
     text = _pr_runner.build_consolidated_pr_prompt(
-        pr, comments, sess.get("folder") or ""
+        pr,
+        comments,
+        sess.get("folder") or "",
+        each_round=str(cfg.get("each_round") or ""),
+        reply_declined=bool(cfg.get("reply_declined")),
     )
     await asyncio.to_thread(_deliver, flight["session"], text)
     d = flight["step_states"][step["id"]]["detail"]

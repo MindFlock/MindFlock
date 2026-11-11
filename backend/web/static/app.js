@@ -29700,17 +29700,23 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 			} catch {
 				return;
 			}
-			if (sendResize && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
+			if (!sendResize || !ws || ws.readyState !== WebSocket.OPEN) return;
+			const size = term.cols + "x" + term.rows;
+			if (sentSize === size) return;
+			sentSize = size;
+			ws.send(JSON.stringify({
 				type: "resize",
 				cols: term.cols,
 				rows: term.rows
 			}));
 		};
+		let sentSize = "";
 		const connect = () => {
 			if (dead) return;
 			const proto = location.protocol === "https:" ? "wss" : "ws";
 			const sock = new WebSocket(proto + "://" + location.host + wsPath);
 			ws = sock;
+			sentSize = "";
 			sock.binaryType = "arraybuffer";
 			sock.onopen = () => {
 				if (dead) return;
@@ -29764,7 +29770,7 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 		const t = setTimeout(() => doFit(true), 50);
 		const untrack = trackRepaint({
 			shown: () => isShown(host),
-			repaint: () => repaintTerm(term, () => doFit(true))
+			repaint: () => repaintTerm(term)
 		});
 		connect();
 		return () => {
@@ -35777,6 +35783,8 @@ var FIELD_HINT = {
 	"reviews.quiet_minutes": "Done once no new review comment has come for this long. 1 to 1440 min, default 10.",
 	"reviews.max_rounds": "Each round sends the new comments to the agent and pushes; more comments after this many rounds fail the stop. 1 to 50, default 5.",
 	"reviews.include_bots": "Off: comments from bot reviewers are left out. Default on.",
+	"reviews.reply_declined": "On: a comment the agent decides not to act on also gets a reply on the PR giving the reason, not only a line in its summary. Default off.",
+	"reviews.each_round": "Added to every round's prompt, after the comments — e.g. re-run your code review before the push, reply on the PR to comments you decline. Empty: nothing added.",
 	"checks.timeout_minutes": "The stop fails if CI hasn't finished by then; a failing check fails it at once. 1 to 1440 min, default 60.",
 	"command.command": "Runs in the session's folder; a non-zero exit fails the stop.",
 	"command.timeout_minutes": "Still running then: it is stopped and the stop fails. 1 to 1440 min, default 30.",
@@ -103806,7 +103814,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			shown: () => isShown(peekTerm(title, kind)?.container),
 			repaint: () => {
 				const t = peekTerm(title, kind);
-				if (t) repaintTerm(t.term, () => t.doFit());
+				if (t) repaintTerm(t.term);
 			}
 		});
 	}, [

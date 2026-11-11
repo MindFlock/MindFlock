@@ -138,6 +138,8 @@ FLOCK_WAIT_S = 5.0
 MAX_STEPS = 40
 MAX_HISTORY = 200
 MAX_TEXT = 8000
+#: A Reviews stop's "Also, every round" text (added to each round's prompt).
+MAX_EACH_ROUND = 8000
 #: Finished flights kept on disk (the Board shows the last 20).
 KEEP_FINISHED = 200
 #: The driver's pass interval (it also wakes on bus taps and route changes).
@@ -541,6 +543,20 @@ STEP_KINDS: Dict[str, dict] = {
                 "int",
                 "Give that reviewer (minutes)",
                 default=10,
+            ),
+            _f(
+                "reply_declined",
+                "bool",
+                "Reply on the PR to comments it declines",
+                default=False,
+            ),
+            _f(
+                "each_round",
+                "textarea",
+                "Also, every round",
+                default="",
+                placeholder="e.g. re-run your code review on this round's "
+                "changes before the push",
             ),
         ],
     },
@@ -1102,6 +1118,8 @@ def _step_config_body(kind: str, raw: dict, strict: bool, where: str) -> dict:
             "reviewer_wait_minutes": _int(
                 c.get("reviewer_wait_minutes"), 10, 1, 24 * 60
             ),
+            "reply_declined": _bool(c.get("reply_declined"), False),
+            "each_round": _text(c.get("each_round"), MAX_EACH_ROUND),
         }
     if kind == "checks":
         return {"timeout_minutes": _int(c.get("timeout_minutes"), 60, 1, 24 * 60)}

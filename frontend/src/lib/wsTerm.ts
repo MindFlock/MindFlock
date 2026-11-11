@@ -148,8 +148,10 @@ export function controlNotice(frame: unknown): { notice: string } | { notice: nu
 // the page), moved to another display, or the GPU process restarted (the
 // owner switches the laptop dGPU off and on), and the raster of a pane that
 // had no new output was never redone. Each of those now ends in a repaint of
-// every terminal on screen: fit (in case the size changed meanwhile) plus a
-// full `refresh` — exactly the row rewrite the scroll used to provoke.
+// every terminal on screen: a full `refresh` — exactly the row rewrite the
+// scroll used to provoke. Rows only, never a fit: a fit can send tmux a size,
+// and a resize per alt-tab made panes jump around their history (see
+// repaintNoResize.test.ts); real size changes reach the ResizeObservers.
 
 /** A terminal surface that can be repainted. Kept to the two xterm members
  * used so the tests can hand in fakes (vitest is node-only: no DOM, no xterm). */
@@ -159,7 +161,10 @@ export interface RepaintTerm {
 }
 
 /** Fit (when given) then redraw every row of `term`. Never throws: a terminal
- * disposed between the trigger and the frame is simply skipped. */
+ * disposed between the trigger and the frame is simply skipped.
+ *
+ * No production caller passes `fit` any more, and a `trackRepaint` entry must
+ * not: a fit there turns every window trigger into a tmux resize. */
 export function repaintTerm(term: RepaintTerm | null | undefined, fit?: () => void): boolean {
   if (!term) return false;
   try {
@@ -352,15 +357,25 @@ export function useWsTerm(
       } catch {
         return;
       }
-      if (sendResize && ws && ws.readyState === WebSocket.OPEN)
-        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      if (!sendResize || !ws || ws.readyState !== WebSocket.OPEN) return;
+      // Only when the size CHANGED on this connection (the grid panes' rule,
+      // lib/terminals doFit). The Verify watcher attaches to a session the
+      // grid shows too, at another size, and sessions run `window-size
+      // latest`: every needless send yanked the tmux window to this size, the
+      // agent re-rendered, and the grid pane jumped around its history.
+      const size = term.cols + "x" + term.rows;
+      if (sentSize === size) return;
+      sentSize = size;
+      ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     };
+    let sentSize = "";
 
     const connect = () => {
       if (dead) return;
       const proto = location.protocol === "https:" ? "wss" : "ws";
       const sock = new WebSocket(proto + "://" + location.host + wsPath);
       ws = sock;
+      sentSize = ""; // a fresh attach (the PTY spawns 24x80) always gets one real size
       sock.binaryType = "arraybuffer";
       sock.onopen = () => {
         if (dead) return;
@@ -427,9 +442,11 @@ export function useWsTerm(
     const t = setTimeout(() => doFit(true), 50);
     // Repainted with the grid's panes when the window comes back (see
     // installRepaintTriggers): the Verify watcher can go white the same way.
+    // Rows only, no fit: a real size change already reaches the observer
+    // above, and a window trigger must never become a tmux resize.
     const untrack = trackRepaint({
       shown: () => isShown(host),
-      repaint: () => repaintTerm(term, () => doFit(true)),
+      repaint: () => repaintTerm(term),
     });
     connect();
 

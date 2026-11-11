@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asks for workers again. Sessions already in the mode get the new words at
   the next server start.
 
+- **Your own instructions for every review round.** A route's Reviews settle
+  stop has a new **Also, every round** box: whatever you type there goes to
+  the agent with each batch of review comments, for example "re-run your
+  code review before the push" or "reply on the PR to comments you decline".
+  A **Reply on the PR to comments it declines** switch asks the agent to
+  answer each comment it won't act on, on the PR, with the reason. Both are
+  off by default, and the round's prompt is unchanged until you set them.
 - **Verify asks what it should prove, right in the pane.** Verify on a
   session's ⋯ menu (or **Verify again** on its pane row) opens a small form in
   the pane: *What should it prove? (optional)* and, when the repo has Verify
@@ -173,6 +180,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Panes no longer jump around their history on alt-tab.** The repaint that
+  runs when the window comes back no longer re-fits terminals, so it never
+  sends tmux a size, and the Verify watcher sends one only when its size
+  actually changed. Before, each return to the window resized the session
+  between the watcher's size and the grid pane's, so the agent re-rendered.
+- **A PR review starts as fast as a ticket: it reuses the repo's existing clone
+  instead of cloning from GitHub every time.** The first review of a PR took
+  40–100 s, because each PR got its own full clone. It now fetches just the PR
+  (fork PRs too) into the repo's shared clone and adds a worktree, in a few
+  seconds. Setup commands run once, not twice. The branch keeps its exact name
+  (`Feature/X` is no longer lower-cased), and a PR into a branch other than the
+  repo's base is diffed against that branch. Reviewing the same PR again
+  reuses its branch. A closed review's leftover worktree is removed if it holds
+  nothing new, or else set aside with its changes kept. The PR's own clone is
+  now only a fallback: when a live session is on the branch, when no shared
+  clone can be made, or when workspaces are set to `mode = "clone"`.
 - **A Verify whose agent's window closed shows "Verify blocked"** with the
   reason, instead of losing the check or showing the previous result, and no
   longer marks unshipped work as shipped.

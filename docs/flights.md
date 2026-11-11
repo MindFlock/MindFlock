@@ -501,7 +501,7 @@ editor's palette and forms are driven by the server):
 | `verify` | robot (+you) | `where` (`branch` or an environment's name, default branch); `ready`: `now` \| `on_branch` \| `after_prev` (default now); `ready_minutes` (0..1440, 0 = the environment's deploy minutes); `who`: `both` \| `agent` \| `you` (default both); `notes` (≤2000 chars); `post_to_pr` (bool, default false) — see [Verify stops](#verify-stops); a legacy `wait_live` true reads as `live` + `on_branch` | the session's self-verify `passed` (or a person confirmed it); `needs_you` parks the flight on you until confirmed, `failed` fails the stop, `blocked` parks on you (Retry / Skip) |
 | `you` | you | `text` (what to do), `items` (list of strings, optional checklist), `notify` (bool, default true) | you press **Done** (or **Skip**) in the Sky (its box, or the drawer), the pane strip, or the bell |
 | `wait` | robot | `minutes` (int) or `until` ("HH:MM" local) | the time has passed |
-| `reviews` | robot | `quiet_minutes` (default 10), `max_rounds` (default 5), `include_bots` (default true), `require_reviewer` (default empty), `reviewer_wait_minutes` (default 10) | the PR has had no new unresolved review comments for `quiet_minutes` (with `require_reviewer`: counted from that reviewer's first post, which it waits for); each batch of new comments is sent to the agent (the pipeline's consolidated PR prompt) followed by an automatic push; `max_rounds` reached → fail "comments still open after N rounds — it needs a human review"; the required reviewer silent for `reviewer_wait_minutes` → fail "<reviewer> never reviewed this PR — it needs a human review" (see "Team PR rules as a route") |
+| `reviews` | robot | `quiet_minutes` (default 10), `max_rounds` (default 5), `include_bots` (default true), `require_reviewer` (default empty), `reviewer_wait_minutes` (default 10), `reply_declined` (default false), `each_round` (default empty) | the PR has had no new unresolved review comments for `quiet_minutes` (with `require_reviewer`: counted from that reviewer's first post, which it waits for); each batch of new comments is sent to the agent (the pipeline's consolidated PR prompt) followed by an automatic push; `max_rounds` reached → fail "comments still open after N rounds — it needs a human review"; the required reviewer silent for `reviewer_wait_minutes` → fail "<reviewer> never reviewed this PR — it needs a human review" (see "Team PR rules as a route"); `each_round` / `reply_declined` add to every round's prompt (see "Reviews: instructions for every round") |
 | `checks` | robot | `timeout_minutes` (default 60) | the PR's checks are all passing; a failing check → fail (so `on_fail: agent` hands the failing check names to the agent and re-waits); checks it can't read for 5 min in a row → fail, "can't read the CI checks: <why> — fix that and Retry, or Skip" (until then it waits saying why) |
 | `command` | robot | `command` (shell, run in the worktree with the session's env), `timeout_minutes` (default 30) | exit 0; non-zero → fail with the tail of the output |
 | `ticket` | robot | `state` (target state name or id, optional), `comment` (text, optional) | the tracker call returned; a flight without a ticket subject skips it |
@@ -1074,7 +1074,8 @@ had to choose. Field and route names are unchanged.
   consolidated prompt (which leaves the changes uncommitted), then a `push`
   lane is armed. `include_bots: false` drops `*[bot]` and CodeRabbit authors.
   `require_reviewer` holds the stop until that reviewer has posted (see
-  "Team PR rules as a route").
+  "Team PR rules as a route"). `each_round` and `reply_declined` add to
+  every round's prompt (see "Reviews: instructions for every round").
 - **`checks` step**: `none` (nothing reports) counts as passed only after 2
   minutes; the failing names come from the check-runs API.
 - **`verify` step** finds or makes the session's plan
@@ -8073,6 +8074,37 @@ how long it gets.
 `include_bots: false` still drops a bot's comments from the rounds; it does
 not hide the bot from the required-reviewer check.
 
+### Reviews: instructions for every round
+
+Two optional fields on the `reviews` stop add to the prompt each round
+sends the agent (`_send_reviews` passes them to
+`pr_runner.build_consolidated_pr_prompt`). With both at their defaults the
+prompt is the pipeline's, byte for byte.
+
+- **`each_round`** — "Also, every round" (textarea, ≤ 8000 characters,
+  trimmed, default empty): the route's own instructions, sent with every
+  batch of comments under a `## Also, every round` heading, after the
+  comments and before `## When done`. This is where a team's rules for each
+  round live, not in MindFlock. For example:
+
+  ```text
+  Before the push, re-run your code review and security review on this
+  round's changes and fix what they find.
+  Reply on the PR to each comment you decline, giving the reason.
+  If the branch conflicts with the base, merge the base in and resolve it.
+  ```
+
+- **`reply_declined`** — "Reply on the PR to comments it declines" (bool,
+  default false): the "When done" list gains a step asking the agent to
+  reply on the PR to each comment it decides not to act on (in the review
+  thread for an inline comment), giving the reason, so the reviewer sees it
+  on the PR and not only in the agent's summary. The pipeline's own PR
+  runner never sets it.
+
+The route editor's stop form shows both from `GET /api/flights/kinds` (the
+text as a multi-line box); `FIELD_HINT` in `frontend/src/lib/stopEditing.ts`
+explains each.
+
 ### The cookbook recipe
 
 `flight_cookbook.RECIPES` gains `team_rules_review_bot_loop` ("self-review
@@ -8120,7 +8152,7 @@ a crash (409 `held`) is refused — start it first.
 |---|---|---|
 | has no route | `started` | `POST /api/flights/start`'s body (`flight_driver.start`) with `title`, `start_at` = `first_stop(plan)` and a `pr` subject (the PR it shows, when known). The work is already on the PR, so the route starts at its **first stop** — past a leading Agent stop with no prompt of its own (that stop stands for "the work"; flown, it would only wait for a prompt nobody types). An Agent stop with a prompt is where it starts: its prompt is sent. A route of nothing but empty Agent stops → 400 `bad_plan`. `stops` = the stops ahead. The session's own fast-track run, if any, is absorbed as with any start. |
 | is mid-route | `inserted` | `flights.op_merge_plan` under the store lock (through `flight_driver._changed`: `flight.changed`, the driver woken). `stops` = the stops added; `[]` when the route already had them all. |
-| none for the PR | `created` | `pr_review.launch(repo, n, plan=…)` — exactly Intake → Pull requests' **Begin review**: the PR's workspace provisioned on its head branch in the background, the route armed on the deterministic title first. `stops` = the route's. Its refusals pass through (404 no such open PR, 409 already starting, 502). |
+| none for the PR | `created` | `pr_review.launch(repo, n, plan=…)` — exactly Intake → Pull requests' **Begin review**: in the background, the PR head is fetched into the repo's base clone and a worktree is added on its head branch, as for a ticket (the PR's own clone only as a fallback); the route armed on the deterministic title first. `stops` = the route's. Its refusals pass through (404 no such open PR, 409 already starting, 502). |
 
 ### The merge rule (`op_merge_plan`)
 

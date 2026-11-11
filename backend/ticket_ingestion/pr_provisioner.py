@@ -2,10 +2,13 @@
 
 import asyncio
 import logging
+import os
 import shutil
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from backend.ticket_ingestion._subprocess import run_capture
 from backend.ticket_ingestion.clone_transport import (
@@ -20,6 +23,7 @@ from backend.ticket_ingestion.models import (
     PullRequest,
     pr_slug,
 )
+from backend.session.provisioned import record_base_branch
 from backend.workspace_setup import (
     pin_cache_env,
     resolve_setup_commands,
@@ -56,8 +60,14 @@ class PRProvisioner:
         self.config = config
 
     async def provision(
-        self, pr: PullRequest, launch_cursor: bool = True
+        self, pr: PullRequest, launch_cursor: bool = True, run_setup: bool = True
     ) -> ProvisionedPRWorkspace:
+        """Clone (or refresh) ``pr``'s own workspace at its head.
+
+        ``run_setup=False`` stops after the git work: the caller hands the
+        directory to a provisioned engine session, whose ``Setup`` runs the
+        setup commands and cache seeds itself (once, not twice).
+        """
         # Absolute path: the workspace is handed to MindFlock, whose tmux
         # session runs the launcher via `-c <dir>` and execs the workspace
         # launcher script (.mindflock_launch.sh). tmux resolves a relative path against the tmux *server's*
@@ -98,6 +108,13 @@ class PRProvisioner:
         stale_lock = directory / ".pr-edit-lock"
         if stale_lock.exists():
             stale_lock.unlink()
+        # Diff base for the session's Setup when the PR is not into the repo's
+        # configured base branch.
+        record_base_branch(directory, pr.head_ref, pr.base_ref)
+        if not run_setup:
+            return ProvisionedPRWorkspace(
+                directory=directory, head_ref=pr.head_ref, head_sha=pr.head_sha
+            )
         with _step(pr.number, "workspace setup"):
             await run_setup_commands_async(
                 resolve_setup_commands(self.config.setup_commands, directory),
@@ -248,3 +265,238 @@ async def _run_network(
     # credential prompts disabled and stdin closed so a missing SSH key or PAT
     # errors in seconds instead of hanging until the wall-clock cap.
     return await run_network_git(*args, cwd=cwd, timeout=timeout)
+
+
+# --------------------------------------------------------------------------- #
+# Fast path: the PR head as a worktree of the repo's shared base clone
+# --------------------------------------------------------------------------- #
+#: Where a PR's head is fetched to inside the base clone. A private namespace:
+#: never a branch (so nothing pushes it) and never a remote-tracking ref (so no
+#: `git fetch` prunes it).
+PR_REF_PREFIX = "refs/mindflock/pr/"
+
+
+class PRWorktreeUnavailable(Exception):
+    """The base-clone fast path can't serve this PR; the reason is the message.
+
+    The caller falls back to the per-PR clone (:class:`PRProvisioner`).
+    """
+
+
+@dataclass
+class PRWorktree:
+    """What :func:`prepare_pr_worktree` left ready for a worktree session."""
+
+    base_repo: str
+    branch: str  # the PR's head_ref, spelled exactly
+    head_sha: str  # what the branch now points at
+    base_branch: str  # the PR's base_ref ("" = the repo's configured base)
+    reclaimed: str = ""  # a leftover worktree freed for this run, if any
+
+
+def pr_head_ref(number: int) -> str:
+    """The base-clone ref a PR's head is fetched to."""
+    return f"{PR_REF_PREFIX}{number}"
+
+
+def _git(base: str, *args: str, timeout: float = _LOCAL_GIT_TIMEOUT):
+    from backend.session import provisioned as _prov
+
+    return _prov._run("git", "-C", base, *args, timeout=timeout)
+
+
+def _out(cp) -> str:
+    return (cp.stdout or b"").decode("utf-8", "replace").strip()
+
+
+def prepare_pr_worktree(
+    pr: PullRequest,
+    *,
+    repo_url: str = "",
+    is_live: Callable[[str], bool] | None = None,
+) -> PRWorktree:
+    """Make ``pr``'s head a local branch of the repo's shared base clone.
+
+    The ticket path's workspace, for a PR: the base clone
+    (``workspaces/_base_<repo>``) already holds the repo's history, so one
+    incremental ``git fetch origin pull/<n>/head`` brings the PR in (a fork PR
+    too — GitHub serves ``refs/pull/<n>/head`` for both) and the session then
+    gets an ordinary ``git worktree add`` of it. The old per-PR full clone
+    downloaded every file of the repo on each PR's first review.
+
+    Steps: resolve the provisioning settings for ``repo_url`` (the PR's clone
+    URL; ``""`` = the configured repo) exactly as the engine will at Start;
+    clone the base only when there is none yet (an existing one is refreshed by
+    the engine's own ``ensure_base_repo`` at Start — doing it here too would
+    fetch the base branch twice); fetch the PR head to
+    ``refs/mindflock/pr/<n>`` and the PR's base branch to
+    ``origin/<base_ref>`` (the diff base) in ONE fetch; then point a local
+    branch named exactly ``pr.head_ref`` at the head.
+
+    A worktree already holding ``head_ref``: a LIVE session's (``is_live``)
+    or the base clone's own checkout makes this raise. A leftover one (a
+    closed session's kept worktree) is freed: removed when it holds nothing
+    beyond the PR's head, otherwise detached in place so its uncommitted
+    changes and commits stay exactly where they are. A local ``head_ref``
+    branch with commits that are in neither the PR's new head nor the head an
+    earlier review fetched (a paused session's branch, whose worktree is gone
+    while it sleeps) is never moved: that raises too.
+
+    Blocking (git subprocesses) — run it off the event loop. Raises
+    :class:`PRWorktreeUnavailable` whenever the caller should fall back to the
+    per-PR clone instead.
+    """
+    from backend.session import provisioned as _prov
+
+    branch = pr.head_ref or ""
+    if not branch or branch.startswith("-"):
+        raise PRWorktreeUnavailable(f"PR #{pr.number} has no usable head branch")
+    try:
+        settings = _prov.load_provision_settings(repo_url_override=repo_url or None)
+    except Exception as err:  # noqa: BLE001
+        raise PRWorktreeUnavailable(f"no provisioning settings: {err}") from err
+    if settings is None:
+        raise PRWorktreeUnavailable("no repository is configured to provision from")
+
+    base_dir = _prov.resolve_base_repo_dir(settings)
+    if not (base_dir / ".git").is_dir():
+        try:
+            with _step(pr.number, "base clone (one-time per repo)"):
+                _prov.ensure_base_repo(settings)
+        except Exception as err:  # noqa: BLE001
+            raise PRWorktreeUnavailable(f"no base clone: {err}") from err
+    base = str(base_dir)
+
+    # Two repos with one name share a base-clone dirname; never fetch a PR
+    # into the wrong repo's clone.
+    want = repo_url or pr.clone_url or settings.repo_url
+    origin = _prov._git_origin_url(base)
+    if want and origin and not _prov._same_repo_url(origin, want):
+        raise PRWorktreeUnavailable(f"base clone {base} tracks {origin}, not {want}")
+
+    if (
+        _git(base, "check-ref-format", "--branch", branch).returncode != 0
+        or branch == "HEAD"
+    ):
+        raise PRWorktreeUnavailable(f"{branch!r} is not a valid local branch name")
+
+    held = _prov.worktree_holding_branch(base, branch)
+    if held and os.path.realpath(held) == os.path.realpath(base):
+        raise PRWorktreeUnavailable(
+            f"{branch} is the base clone's own checkout (the repo's base branch)"
+        )
+    if held and is_live is not None and is_live(held):
+        raise PRWorktreeUnavailable(
+            f"{branch} is checked out by a live session at {held}"
+        )
+
+    ref = pr_head_ref(pr.number)
+    # The head an earlier review fetched, before this fetch replaces it: a
+    # branch tip within it holds only PR history even after a force-push.
+    previous = _out(_git(base, "rev-parse", "--verify", "--quiet", ref))
+    pull = f"+refs/pull/{pr.number}/head:{ref}"
+    refspecs = [pull]
+    if pr.base_ref and not pr.base_ref.startswith("-"):
+        refspecs.append(f"+refs/heads/{pr.base_ref}:refs/remotes/origin/{pr.base_ref}")
+    with _step(pr.number, "fetch PR head into the base clone"):
+        cp = _git(
+            base,
+            "fetch",
+            "--no-tags",
+            "origin",
+            *refspecs,
+            timeout=_NETWORK_GIT_TIMEOUT,
+        )
+        if cp.returncode != 0 and len(refspecs) > 1:
+            # The base branch may be gone or renamed; the head alone still works.
+            cp = _git(
+                base, "fetch", "--no-tags", "origin", pull, timeout=_NETWORK_GIT_TIMEOUT
+            )
+    if cp.returncode != 0:
+        raise PRWorktreeUnavailable(
+            f"git fetch pull/{pr.number}/head failed: {_out(cp)[-500:]} "
+            f"[{clone_failure_hint(origin or want)}]"
+        )
+
+    # The recorded head SHA when it is here (what the prompt names), else the
+    # fetched tip — the PR was force-pushed since it was listed.
+    target = _out(_git(base, "rev-parse", "--verify", "--quiet", ref + "^{commit}"))
+    if pr.head_sha and not pr.head_sha.startswith("-"):
+        recorded = _git(
+            base, "rev-parse", "--verify", "--quiet", pr.head_sha + "^{commit}"
+        )
+        if recorded.returncode == 0 and _out(recorded):
+            target = _out(recorded)
+    if not target:
+        raise PRWorktreeUnavailable(f"pull/{pr.number}/head did not resolve")
+
+    known = [target] + ([previous] if previous else [])
+
+    # Never move a branch off commits of its own: a paused session's branch
+    # (its worktree is removed while paused) or a ticket's unpushed work that
+    # shares the PR's branch name. Those stay put and the review falls back.
+    old = _out(_git(base, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch))
+    if old and not _within(base, old, known):
+        raise PRWorktreeUnavailable(
+            f"local branch {branch} has commits that are not in the PR"
+        )
+
+    reclaimed = ""
+    if held:
+        reclaimed = _free_leftover_worktree(base, held, branch, known)
+
+    if old and old != target:
+        _logger.info(
+            "PR #%d: moving %s from %s to %s", pr.number, branch, old[:8], target[:8]
+        )
+    cp = _git(base, "branch", "-f", branch, target)
+    if cp.returncode != 0:
+        raise PRWorktreeUnavailable(f"git branch -f {branch} failed: {_out(cp)}")
+    _prov.record_base_branch(base, branch, pr.base_ref)
+    return PRWorktree(
+        base_repo=base,
+        branch=branch,
+        head_sha=target,
+        base_branch=pr.base_ref or "",
+        reclaimed=reclaimed,
+    )
+
+
+def _within(repo: str, commit: str, heads: list) -> bool:
+    """Whether ``commit`` is one of ``heads`` or an ancestor of one."""
+    return any(
+        _git(repo, "merge-base", "--is-ancestor", commit, h).returncode == 0
+        for h in heads
+    )
+
+
+def _free_leftover_worktree(base: str, held: str, branch: str, known: list) -> str:
+    """Free ``branch`` from a leftover (no live session) worktree at ``held``.
+
+    Removed when it holds nothing but PR history (clean, and its HEAD within
+    one of the ``known`` PR heads); detached in place otherwise, which keeps
+    every changed file and every commit right there. Returns ``held``; raises
+    :class:`PRWorktreeUnavailable` if neither works.
+    """
+    status = _git(held, "status", "--porcelain=v1")
+    clean = status.returncode == 0 and not _out(status)
+    head = _out(_git(held, "rev-parse", "--verify", "--quiet", "HEAD"))
+    if clean and head and _within(base, head, known):
+        cp = _git(base, "worktree", "remove", held)
+        if cp.returncode != 0:
+            cp = _git(base, "worktree", "remove", "--force", held)
+        if cp.returncode == 0:
+            _git(base, "worktree", "prune")
+            _logger.info("removed leftover review worktree %s (%s)", held, branch)
+            return held
+    cp = _git(held, "checkout", "--detach")
+    if cp.returncode != 0:
+        raise PRWorktreeUnavailable(
+            f"{branch} is held by a leftover worktree at {held}: {_out(cp)}"
+        )
+    _logger.info(
+        "detached leftover worktree %s from %s (its local work stays there)",
+        held,
+        branch,
+    )
+    return held
