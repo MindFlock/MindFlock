@@ -161,6 +161,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A PR review starts as fast as a ticket: it reuses the repo's existing clone
+  instead of cloning from GitHub every time.** The first review of a PR took
+  40–100 s, because each PR got its own full clone. It now fetches just the PR
+  (fork PRs too) into the repo's shared clone and adds a worktree, in a few
+  seconds. Setup commands run once, not twice. The branch keeps its exact name
+  (`Feature/X` is no longer lower-cased), and a PR into a branch other than the
+  repo's base is diffed against that branch. Reviewing the same PR again
+  reuses its branch. A closed review's leftover worktree is removed if it holds
+  nothing new, or else set aside with its changes kept. The PR's own clone is
+  now only a fallback: when a live session is on the branch, when no shared
+  clone can be made, or when workspaces are set to `mode = "clone"`.
 - **A Verify whose agent's window closed shows "Verify blocked"** with the
   reason, instead of losing the check or showing the previous result, and no
   longer marks unshipped work as shipped.

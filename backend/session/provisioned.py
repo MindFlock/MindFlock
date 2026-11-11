@@ -813,6 +813,80 @@ def _resolve_base_sha(worktree_dir: str, base_branch: str) -> str:
     return ""
 
 
+#: Per-branch git-config key naming the branch a branch should be diffed
+#: against when it is NOT the repo's configured base — a PR into ``develop`` on a
+#: repo whose base is ``main``. Set by the PR-review provisioning
+#: (``pr_provisioner.prepare_pr_worktree`` / ``PRProvisioner``) and read by both
+#: worktree strategies' ``Setup``. It lives in the repo's own config, so worktrees
+#: share it, it survives a restart or a pause/resume, and ``git branch -D`` drops
+#: it along with the branch.
+PR_BASE_CONFIG_KEY = "mindflock-base"
+
+
+def record_base_branch(repo_dir: str | Path, branch: str, base_branch: str) -> None:
+    """Record ``base_branch`` as ``branch``'s diff base in ``repo_dir``. Best-effort."""
+    if not branch or not base_branch:
+        return
+    _run(
+        "git",
+        "-C",
+        str(repo_dir),
+        "config",
+        "branch.{}.{}".format(branch, PR_BASE_CONFIG_KEY),
+        base_branch,
+    )
+
+
+def recorded_base_branch(repo_dir: str | Path, branch: str) -> str:
+    """The diff base recorded for ``branch`` by :func:`record_base_branch`, or ``""``."""
+    if not branch:
+        return ""
+    cp = _run(
+        "git",
+        "-C",
+        str(repo_dir),
+        "config",
+        "--get",
+        "branch.{}.{}".format(branch, PR_BASE_CONFIG_KEY),
+    )
+    if cp.returncode != 0:
+        return ""
+    return (cp.stdout or b"").decode("utf-8", "replace").strip()
+
+
+def _session_base_branch(
+    repo_dir: str | Path,
+    branch: str,
+    settings: Optional[ProvisionSettings],
+    override: str = "",
+) -> str:
+    """The branch a provisioned workspace's diff base is resolved against: the
+    creator's override, else the branch's own recorded base (a PR's
+    ``base_ref``, which outlives a restart), else the configured one."""
+    if override:
+        return override
+    recorded = recorded_base_branch(repo_dir, branch)
+    if recorded:
+        return recorded
+    return settings.base_branch if settings is not None else "HEAD"
+
+
+def local_branch_exists(repo_dir: str | Path, branch: str) -> bool:
+    """Whether ``refs/heads/<branch>`` exists in ``repo_dir`` (spelled exactly)."""
+    if not branch or branch.startswith("-"):
+        return False
+    cp = _run(
+        "git",
+        "-C",
+        str(repo_dir),
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/heads/" + branch,
+    )
+    return cp.returncode == 0
+
+
 # ---------------------------------------------------------------------------
 # Base repo (worktree strategy)
 # ---------------------------------------------------------------------------
@@ -862,6 +936,10 @@ def provisioned_branch_taken_error(
         base = resolve_base_repo_dir(settings)
         if not base.is_dir():
             return None
+        # Same spelling rule as build_provisioned_worktree: an existing branch
+        # is used exactly as named.
+        if local_branch_exists(base, branch_name):
+            branch = branch_name
         held_at = worktree_holding_branch(str(base), branch)
         if held_at:
             return (
@@ -1520,9 +1598,16 @@ class ProvisionedWorktree(GitWorktree):
     re-provisioned on resume.
     """
 
-    def __init__(self, *, settings: Optional[ProvisionSettings], **kwargs) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Optional[ProvisionSettings],
+        base_branch: str = "",
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._provision_settings = settings
+        self._base_branch = base_branch
 
     def Setup(self) -> None:  # noqa: N802 - mirror Go-cased API
         super().Setup()
@@ -1531,10 +1616,11 @@ class ProvisionedWorktree(GitWorktree):
         # which makes the Diff view run `git diff ''` and error. Backfill the
         # fork point so Diff has a valid comparison base.
         if not self.baseCommitSHA:
-            base_branch = (
-                self._provision_settings.base_branch
-                if self._provision_settings is not None
-                else "HEAD"
+            base_branch = _session_base_branch(
+                self.worktreePath,
+                self.branchName,
+                self._provision_settings,
+                getattr(self, "_base_branch", ""),
             )
             self.baseCommitSHA = _resolve_base_sha(self.worktreePath, base_branch)
         if self._provision_settings is not None:
@@ -1558,9 +1644,16 @@ class ProvisionedCloneWorktree(GitWorktree):
     (``Cleanup``).
     """
 
-    def __init__(self, *, settings: Optional[ProvisionSettings], **kwargs) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Optional[ProvisionSettings],
+        base_branch: str = "",
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._provision_settings = settings
+        self._base_branch = base_branch
 
     def Setup(self) -> None:  # noqa: N802
         d = Path(self.worktreePath)
@@ -1587,10 +1680,11 @@ class ProvisionedCloneWorktree(GitWorktree):
         # reloads leave baseCommitSHA empty, which would make Diff run `git diff
         # ''` and error.
         if not self.baseCommitSHA:
-            base_branch = (
-                self._provision_settings.base_branch
-                if self._provision_settings is not None
-                else "HEAD"
+            base_branch = _session_base_branch(
+                str(d),
+                self.branchName,
+                self._provision_settings,
+                getattr(self, "_base_branch", ""),
             )
             self.baseCommitSHA = _resolve_base_sha(str(d), base_branch)
         if self._provision_settings is not None:
@@ -1670,6 +1764,7 @@ def build_provisioned_worktree(
     session_name: str,
     settings: ProvisionSettings,
     workspace_path: Optional[str] = None,
+    base_branch: str = "",
 ) -> GitWorktree:
     """Construct the right provisioned worktree for ``strategy``
     (``'worktree'``|``'clone'``).
@@ -1682,6 +1777,16 @@ def build_provisioned_worktree(
     ``PRProvisioner``). The branch is used verbatim (not sanitized — it is a real
     existing ref) and treated clone-style: a standalone repo with an idempotent
     Setup that just re-checks-out the branch and re-provisions.
+
+    Worktree strategy: a branch that already exists in the base clone under
+    exactly this spelling is used verbatim too. A PR review fetches the PR head
+    into the base clone as a local branch named after the PR's ``head_ref``
+    (``pr_provisioner.prepare_pr_worktree``), and ``Feature/X`` sanitized to
+    ``feature/x`` would be a different, nonexistent branch. A NEW branch is
+    still sanitized.
+
+    ``base_branch`` overrides the branch the workspace's diff base is resolved
+    against (``""`` = the branch's recorded base, then ``settings.base_branch``).
     """
     if workspace_path is not None:
         return ProvisionedCloneWorktree(
@@ -1690,10 +1795,11 @@ def build_provisioned_worktree(
             worktreePath=workspace_path,
             sessionName=session_name,
             branchName=branch_name,
+            base_branch=base_branch,
         )
 
-    branch_name = sanitize_branch_name(branch_name) or branch_name
     if strategy == "clone":
+        branch_name = sanitize_branch_name(branch_name) or branch_name
         worktree_path = str(settings.workspace_dir / branch_name.replace("/", "-"))
         return ProvisionedCloneWorktree(
             settings=settings,
@@ -1701,10 +1807,13 @@ def build_provisioned_worktree(
             worktreePath=worktree_path,
             sessionName=session_name,
             branchName=branch_name,
+            base_branch=base_branch,
         )
 
     # Default: worktree strategy off the canonical base clone.
     base_repo = ensure_base_repo(settings)
+    if not local_branch_exists(base_repo, branch_name):
+        branch_name = sanitize_branch_name(branch_name) or branch_name
     # Worktree-strategy branch names are deterministic and the base repo is
     # shared, so a second live session on the same branch would otherwise fail
     # deep in `git worktree add` with an opaque error. Surface it clearly up
@@ -1717,4 +1826,5 @@ def build_provisioned_worktree(
         worktreePath=worktree_path,
         sessionName=session_name,
         branchName=branch_name,
+        base_branch=base_branch,
     )

@@ -728,6 +728,11 @@ provisioning.
 - **Engine path** — one consolidated session per PR (`pr-<n>` →
   `mindflock_pr-<n>`): the PR's head is checked out via `refs/pull/<n>/head` (fork
   PRs work) into `workspaces/pr-<n>`, provisioned, and adopted by the engine.
+  (A review started from the web server — Intake → Pull requests' **Begin
+  review**, `POST /api/pr-review`, a flight — instead fetches the head into the
+  repo's shared `_base_<repo>` clone and starts a worktree off it, like a ticket.
+  It uses the per-PR clone only as a fallback; see
+  [session-engine.md](session-engine.md#provisioned-mode-sessionprovisionedpy).)
   One prompt lists every comment (author, file:line, diff hunk, body) and
   instructs Claude to work through all of them in one pass and **leave changes
   unstaged** — no commit/push — for human review.

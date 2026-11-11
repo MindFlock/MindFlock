@@ -8120,7 +8120,7 @@ a crash (409 `held`) is refused — start it first.
 |---|---|---|
 | has no route | `started` | `POST /api/flights/start`'s body (`flight_driver.start`) with `title`, `start_at` = `first_stop(plan)` and a `pr` subject (the PR it shows, when known). The work is already on the PR, so the route starts at its **first stop** — past a leading Agent stop with no prompt of its own (that stop stands for "the work"; flown, it would only wait for a prompt nobody types). An Agent stop with a prompt is where it starts: its prompt is sent. A route of nothing but empty Agent stops → 400 `bad_plan`. `stops` = the stops ahead. The session's own fast-track run, if any, is absorbed as with any start. |
 | is mid-route | `inserted` | `flights.op_merge_plan` under the store lock (through `flight_driver._changed`: `flight.changed`, the driver woken). `stops` = the stops added; `[]` when the route already had them all. |
-| none for the PR | `created` | `pr_review.launch(repo, n, plan=…)` — exactly Intake → Pull requests' **Begin review**: the PR's workspace provisioned on its head branch in the background, the route armed on the deterministic title first. `stops` = the route's. Its refusals pass through (404 no such open PR, 409 already starting, 502). |
+| none for the PR | `created` | `pr_review.launch(repo, n, plan=…)` — exactly Intake → Pull requests' **Begin review**: in the background, the PR head is fetched into the repo's base clone and a worktree is added on its head branch, as for a ticket (the PR's own clone only as a fallback); the route armed on the deterministic title first. `stops` = the route's. Its refusals pass through (404 no such open PR, 409 already starting, 502). |
 
 ### The merge rule (`op_merge_plan`)
 
