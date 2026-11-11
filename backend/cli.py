@@ -1691,7 +1691,7 @@ def _cmd_attach(args: argparse.Namespace) -> int:
     if mux.IS_WINDOWS:
         mux.exec_attach(tmux_name)
     else:
-        os.execvp("tmux", ["tmux", "attach-session", "-t", tmux_name])
+        os.execvp("tmux", ["tmux", "attach-session", "-t", "=" + tmux_name])
     return 0  # pragma: no cover — execvp does not return
 
 

@@ -24,6 +24,7 @@ import subprocess
 from typing import Optional
 
 from backend.session import mux
+from backend.session.tmux.tmux import exact_pane_target
 from backend.web.core.find_query import Hit, Query, find_hits
 
 # The tmux invocation; tests point it at a private server (``-L``).
@@ -37,7 +38,9 @@ def _tmux(*args: str) -> subprocess.CompletedProcess:
 def _capture(name: str) -> Optional[list[str]]:
     # No -J: lines must stay one-per-grid-row so a line index is a row the
     # copy-mode cursor can report.
-    out = _tmux("capture-pane", "-p", "-t", name, "-S", "-", "-E", "-")
+    out = _tmux(
+        "capture-pane", "-p", "-t", exact_pane_target(name), "-S", "-", "-E", "-"
+    )
     if out.returncode != 0:
         return None
     return out.stdout.split("\n")
@@ -61,7 +64,7 @@ def find_mode(name: str) -> Optional[str]:
         "display-message",
         "-p",
         "-t",
-        name,
+        exact_pane_target(name),
         "#{session_name}\t#{mouse_any_flag}#{alternate_on}",
     )
     sess, _, flags = out.stdout.rstrip("\n").partition("\t")
@@ -74,9 +77,11 @@ def find_mode(name: str) -> Optional[str]:
 
 def close(name: str) -> None:
     """Back to the live screen (leave copy-mode, dropping its highlights)."""
-    out = _tmux("display-message", "-p", "-t", name, "#{pane_in_mode}")
+    out = _tmux(
+        "display-message", "-p", "-t", exact_pane_target(name), "#{pane_in_mode}"
+    )
     if out.returncode == 0 and out.stdout.strip() == "1":
-        _tmux("send-keys", "-t", name, "-X", "cancel")
+        _tmux("send-keys", "-t", exact_pane_target(name), "-X", "cancel")
 
 
 # Per tmux session: the query being stepped through, its hits, the current one.
@@ -89,7 +94,7 @@ def _view(name: str) -> Optional[tuple[bool, int, int, int]]:
         "display-message",
         "-p",
         "-t",
-        name,
+        exact_pane_target(name),
         "#{session_name}\t#{pane_in_mode}\t#{history_size}\t#{scroll_position}\t#{pane_height}",
     )
     try:
@@ -151,14 +156,30 @@ def find(name: str, query, op: str) -> Optional[dict]:
         if want > 0 and not in_mode:
             # -e: scrolling back down to the bottom returns to live, as with
             # a wheel-entered copy-mode.
-            _tmux("copy-mode", "-e", "-t", name)
+            _tmux("copy-mode", "-e", "-t", exact_pane_target(name))
             in_mode, pos = True, 0
         if in_mode:
             delta = want - pos
             if delta > 0:
-                _tmux("send-keys", "-t", name, "-X", "-N", str(delta), "scroll-up")
+                _tmux(
+                    "send-keys",
+                    "-t",
+                    exact_pane_target(name),
+                    "-X",
+                    "-N",
+                    str(delta),
+                    "scroll-up",
+                )
             elif delta < 0:
-                _tmux("send-keys", "-t", name, "-X", "-N", str(-delta), "scroll-down")
+                _tmux(
+                    "send-keys",
+                    "-t",
+                    exact_pane_target(name),
+                    "-X",
+                    "-N",
+                    str(-delta),
+                    "scroll-down",
+                )
         view = _view(name)
         if view is None:
             return None

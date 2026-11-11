@@ -194,7 +194,7 @@ def test_output_last_reply_falls_back_to_the_screen(env):
     assert body["text"] == "screen line\n"
     (cap,) = [c for c in env.tm.calls if c[1] == "capture-pane"]
     # Visible screen only: no -S scrollback range.
-    assert cap == ["tmux", "capture-pane", "-p", "-J", "-t", "mindflock_w"]
+    assert cap == ["tmux", "capture-pane", "-p", "-J", "-t", "=mindflock_w:"]
 
 
 def test_output_blank_reply_also_falls_back(env):
@@ -293,7 +293,7 @@ def test_answer_types_text_then_keys_without_enter(env):
     # Every send targets the agent's tmux session.
     for c in env.tm.calls:
         if c[1] == "send-keys":
-            assert c[2:4] == ["-t", "mindflock_w"]
+            assert c[2:4] == ["-t", "=mindflock_w:"]
     # An agent answered, not a human.
     assert env.human == []
 

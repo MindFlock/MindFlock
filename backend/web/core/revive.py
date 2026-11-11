@@ -369,6 +369,8 @@ def _revive_one(
     launch_gate.note_start(title)
     _name, err, continued = relaunch(inst, title, srv, release=release_held)
     if err is not None:
+        # Not an agent warming up: hand the launch slot back.
+        launch_gate.unnote_start(title)
         _info("revive %s: not started (%s)", title, err)
         return False, err
     _info(
@@ -611,8 +613,8 @@ async def sweep(
                     args={"include_quit": include_quit, "release_held": release_held},
                 )
                 waiting.append(title)
-            except launch_gate.QueueFull:
-                pass
+            except launch_gate.QueueFull as full:
+                _info("revive %s: left offline, not queued (%s)", title, full)
 
         queue: "asyncio.Queue[str]" = asyncio.Queue()
         for t in todo:
@@ -1141,6 +1143,7 @@ def _auto_revive_one(srv, title: str, nth: int = 1) -> None:
         launch_gate.note_start(title, auto=True)
         _name, err, continued = relaunch(inst, title, srv)
         if err is not None:
+            launch_gate.unnote_start(title)
             with _AUTO_LOCK:
                 _AUTO_GAVE_UP[title] = "Restart after it was killed failed: %s" % err
             _info("auto-revive %s: not started (%s)", title, err)

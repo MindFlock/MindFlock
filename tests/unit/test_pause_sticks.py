@@ -191,7 +191,7 @@ def test_the_shell_socket_still_attaches_while_paused(paused, monkeypatch):
     with c.websocket_connect("/api/instances/p/shell") as ws:
         ws.receive_text()  # the driver frame: attached
     assert shells == [("p", paused.GetWorktreePath())]
-    assert len(procs) == 1 and "mindflock_p_sh" in procs[0][0][0]
+    assert len(procs) == 1 and "=mindflock_p_sh" in procs[0][0][0]
     assert paused.launched == []  # the agent was never touched
 
 

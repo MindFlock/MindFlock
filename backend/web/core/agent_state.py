@@ -30,6 +30,7 @@ from backend import providers
 from backend import session
 from backend.providers.usage_limits import is_limit_screen
 from backend.session import mux
+from backend.session.tmux.tmux import exact_pane_target
 from backend.session import tmux
 from backend.session.storage import Loading
 from backend.web.core import agent_sessions as _agent_sessions
@@ -641,7 +642,7 @@ def _pane_meta(name: str):
             "display-message",
             "-p",
             "-t",
-            name,
+            exact_pane_target(name),
             "#{pane_current_command}\t#{session_created}\t#{pane_pid}\t#{pane_width}x#{pane_height}",
         ],
         stdout=subprocess.PIPE,
@@ -996,7 +997,7 @@ def _dismiss_trust_prompt(inst, title: str, name: str, text: str) -> bool:
             # (named keys, so tmux emits the pane's own arrow sequences).
             for key in spec.nav_keys_for(text):
                 mux.run(
-                    ["tmux", "send-keys", "-t", name, key],
+                    ["tmux", "send-keys", "-t", exact_pane_target(name), key],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=10,
@@ -1006,7 +1007,7 @@ def _dismiss_trust_prompt(inst, title: str, name: str, text: str) -> bool:
                     "tmux",
                     "send-keys",
                     "-t",
-                    name,
+                    exact_pane_target(name),
                     "-l",
                     spec.keystroke.decode("utf-8", "replace"),
                 ],
@@ -1099,7 +1100,7 @@ def _startup_trust_gate_clarify(srv, inst, title: str, name: str, created) -> bo
             and (time.time() - float(created)) <= _TRUST_GATE_STARTUP_WINDOW_S
         ):
             cp0 = mux.run(
-                ["tmux", "capture-pane", "-p", "-t", name],
+                ["tmux", "capture-pane", "-p", "-t", exact_pane_target(name)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
@@ -1170,7 +1171,7 @@ def _limit_on_pane(srv, name: str, provider, screen: Optional[str] = None) -> bo
             return False
     try:
         cp = _proc.run_capped(
-            ["tmux", "capture-pane", "-p", "-t", name],
+            ["tmux", "capture-pane", "-p", "-t", exact_pane_target(name)],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -1212,7 +1213,7 @@ def _capture_visible(srv, name: str) -> Optional[str]:
     """The pane's visible screen, or None when the capture fails."""
     try:
         cp = _proc.run_capped(
-            ["tmux", "capture-pane", "-p", "-t", name],
+            ["tmux", "capture-pane", "-p", "-t", exact_pane_target(name)],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -1252,7 +1253,7 @@ def capture_visible_many(names) -> Dict[str, Optional[str]]:
             if idx:
                 argv.append(";")
             argv += ["display-message", "-p", "%s%d" % (header, idx)]
-            argv += [";", "capture-pane", "-p", "-t", name]
+            argv += [";", "capture-pane", "-p", "-t", exact_pane_target(name)]
         try:
             cp = _proc.run_capped(
                 argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5
@@ -1524,7 +1525,7 @@ def _pane_hash_activity(
     # Layer 3: hardened pane-hash fallback.
     if text is None:
         cp = _proc.run_capped(
-            ["tmux", "capture-pane", "-p", "-t", name],
+            ["tmux", "capture-pane", "-p", "-t", exact_pane_target(name)],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -2282,7 +2283,16 @@ def _capture_shell_pane(title: str, lines: int = 400) -> Optional[str]:
     try:
         name = _server()._shell_tmux_name(title)
         cp = mux.run(
-            ["tmux", "capture-pane", "-p", "-J", "-S", "-%d" % int(lines), "-t", name],
+            [
+                "tmux",
+                "capture-pane",
+                "-p",
+                "-J",
+                "-S",
+                "-%d" % int(lines),
+                "-t",
+                exact_pane_target(name),
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -2323,7 +2333,16 @@ def _failed_precommit_step(title: str) -> Optional[str]:
             # line and the badge read as a mid-word fragment ("ffic-reduction'."
             # out of "…'traffic-reduction'."). tmux.py and server.py already
             # capture with -J for the same reason.
-            ["tmux", "capture-pane", "-p", "-J", "-S", "-400", "-t", name],
+            [
+                "tmux",
+                "capture-pane",
+                "-p",
+                "-J",
+                "-S",
+                "-400",
+                "-t",
+                exact_pane_target(name),
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,

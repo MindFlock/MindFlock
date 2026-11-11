@@ -179,6 +179,7 @@ from backend.session import instance as _instance
 from backend.session import mux
 from backend.session import provisioned as provisioning
 from backend.session import tmux
+from backend.session.tmux.tmux import exact_pane_target as _exact_pane_target
 from backend.session.git import gh_available
 from backend.session.git import remote_url as _remote_url
 from backend.session.storage import Loading, Paused
@@ -2732,7 +2733,11 @@ def _find_index_tick() -> None:
             and still >= _FIND_INDEX_QUIET_S
         ):
             out = _pane_find._tmux(
-                "display-message", "-p", "-t", name, "#{session_attached}"
+                "display-message",
+                "-p",
+                "-t",
+                _exact_pane_target(name),
+                "#{session_attached}",
             )
             if out.returncode == 0 and int(out.stdout.strip() or 0) <= 1:
                 pick = (title, name)
@@ -13244,7 +13249,16 @@ def pane_history(title: str, pane: str = "agent") -> PlainTextResponse:
         out = mux.run(
             # -p print to stdout, -J join wrapped lines, -S - from the very
             # start of the scrollback. Targets the session's active pane.
-            ["tmux", "capture-pane", "-p", "-J", "-t", name, "-S", "-"],
+            [
+                "tmux",
+                "capture-pane",
+                "-p",
+                "-J",
+                "-t",
+                _exact_pane_target(name),
+                "-S",
+                "-",
+            ],
             capture_output=True,
             text=True,
             timeout=15,

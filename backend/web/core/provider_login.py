@@ -25,6 +25,7 @@ from typing import Optional, Tuple
 
 from backend import providers
 from backend.session import mux
+from backend.session.tmux.tmux import exact_pane_target
 from backend.web.core import proc as _proc
 
 # tmux session name prefix — kept distinct from instance/shell/assistant names.
@@ -182,7 +183,7 @@ def ensure_command_session(session: str, cmd: str) -> Optional[str]:
     ):
         try:
             mux.run(
-                ["tmux", "set-option", "-t", session, opt, val],
+                ["tmux", "set-option", "-t", exact_pane_target(session), opt, val],
                 stdout=_DN,
                 stderr=_DN,
                 timeout=10,

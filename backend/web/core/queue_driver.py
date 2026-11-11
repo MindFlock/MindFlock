@@ -33,6 +33,7 @@ from backend import log
 from backend import providers
 from backend import session
 from backend.session import mux
+from backend.session.tmux.tmux import exact_pane_target
 from backend.session import tmux
 from backend.web.core import agent_io as _agent_io
 from backend.web.core import agent_state as _agent_state
@@ -240,7 +241,7 @@ def _refresh_limit_state(inst, title: str, name: str) -> float:
     now = time.time()
     try:
         cp = mux.run(
-            ["tmux", "capture-pane", "-p", "-t", name],
+            ["tmux", "capture-pane", "-p", "-t", exact_pane_target(name)],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,

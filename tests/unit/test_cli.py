@@ -1268,13 +1268,13 @@ class TestAttachCommand:
         _FakeApi(monkeypatch, listings=[self._LISTING])
         cli.main(["attach", "fix-auth"])
         assert execvp_spy == [
-            ("tmux", ["tmux", "attach-session", "-t", "mindflock_fix-auth"])
+            ("tmux", ["tmux", "attach-session", "-t", "=mindflock_fix-auth"])
         ]
 
     def test_unambiguous_prefix_resolves(self, monkeypatch, execvp_spy):
         _FakeApi(monkeypatch, listings=[self._LISTING])
         cli.main(["attach", "do"])
-        assert execvp_spy[0][1][-1] == "mindflock_docs"
+        assert execvp_spy[0][1][-1] == "=mindflock_docs"
 
     def test_ambiguous_prefix_lists_candidates(self, monkeypatch, execvp_spy, capsys):
         _FakeApi(monkeypatch, listings=[self._LISTING])
@@ -1298,7 +1298,7 @@ class TestAttachCommand:
     def test_tmux_name_derived_when_field_missing(self, monkeypatch, execvp_spy):
         _FakeApi(monkeypatch, listings=[[{"title": "a b.c"}]])
         cli.main(["attach", "a b.c"])
-        assert execvp_spy[0][1][-1] == "mindflock_ab_c"
+        assert execvp_spy[0][1][-1] == "=mindflock_ab_c"
 
     def test_non_tty_refused_with_scripting_hint(self, monkeypatch, capsys):
         """L10: attach inside a pipe/script fails fast with a friendly pointer
@@ -1775,7 +1775,7 @@ class TestSleepWakeCommands:
         monkeypatch.setattr(cli.os, "execvp", lambda f, argv: execd.append(argv))
         cli.main(["attach", "docs"])
         assert calls == ["/api/instances/docs/wake"]
-        assert execd == [["tmux", "attach-session", "-t", "mindflock_docs"]]
+        assert execd == [["tmux", "attach-session", "-t", "=mindflock_docs"]]
 
     def test_wake_and_attach_carry_start_anyway(self, monkeypatch, capsys):
         sent = []

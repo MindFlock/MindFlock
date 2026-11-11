@@ -207,7 +207,7 @@ def test_mux_attach_on_posix_is_the_same_tmux_client(monkeypatch):
     monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", spawn)
     assert terminal.spawn_tmux_attach("mf_x") == "proc"
     assert seen == {
-        "argv": ["tmux", "attach-session", "-t", "mf_x"],
+        "argv": ["tmux", "attach-session", "-t", "=mf_x"],
         "dimensions": (24, 80),
         "term": "xterm-256color",
     }

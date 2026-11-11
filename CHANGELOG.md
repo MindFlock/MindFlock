@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Queue changes reach the app at once instead of on the next poll.
 - **Sessions going offline for no reason.** Closing a session could kill a
   live one whose name started the same way (`orch` took `orch-w1` with it):
-  tmux kills now match the exact name. One slow or failed tmux probe no
+  tmux kills, keystrokes, screen reads and attaches now match the exact name. One slow or failed tmux probe no
   longer reads as a dead agent: offline needs two definite misses, and a
   timeout changes nothing. An out-of-memory kill of one child process inside
   an agent's memory limit no longer stops the whole agent

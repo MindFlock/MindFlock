@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from backend import log, providers, session
 from backend.fsutil import atomic_write_text
 from backend.session import mux
+from backend.session.tmux.tmux import exact_pane_target
 from backend.session import tmux
 
 from backend.web.core import proc as _proc
@@ -295,7 +296,7 @@ def _ensure_assistant_session():
     ):
         try:
             mux.run(
-                ["tmux", "set-option", "-t", name, opt, val],
+                ["tmux", "set-option", "-t", exact_pane_target(name), opt, val],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
