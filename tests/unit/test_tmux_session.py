@@ -150,7 +150,7 @@ def test_capture_pane_content_argv():
         "-e",
         "-J",
         "-t",
-        "mindflock_demo",
+        "=mindflock_demo:",
     ]
 
 
@@ -181,7 +181,7 @@ def test_capture_pane_content_with_options_argv_and_error():
         "-E",
         "-",
         "-t",
-        "mindflock_demo",
+        "=mindflock_demo:",
     ]
     assert content == ""
     assert "failed to capture tmux pane content with options: bad range" in str(err)
@@ -298,12 +298,12 @@ def test_restore_sets_ptmx_and_monitor():
     assert sess.restore() is None
     assert sess.ptmx is ptmx
     assert sess._monitor is not None
-    # attach-session -t <name>
+    # attach-session -t =<name> (exact match, never a prefix sibling)
     assert factory.started_cmds[0].args == [
         "tmux",
         "attach-session",
         "-t",
-        "mindflock_demo",
+        "=mindflock_demo",
     ]
 
 
@@ -329,7 +329,9 @@ def test_close_kills_session_and_clears_ptmx():
     assert sess.close() is None
     assert ptmx.closed is True
     assert sess.ptmx is None
-    assert killed["args"] == ["tmux", "kill-session", "-t", "mindflock_demo"]
+    # EXACT match: a bare `-t mindflock_demo` would be resolved by prefix and,
+    # with this session already gone, kill a live `mindflock_demo-w1`.
+    assert killed["args"] == ["tmux", "kill-session", "-t", "=mindflock_demo"]
 
 
 def test_close_returns_kill_error():
@@ -808,3 +810,57 @@ def test_a_first_launch_records_its_exit_code_for_real(tmp_path):
     launch = factory.started_cmds[0].args[-1]
     subprocess.run(["sh", "-c", launch], cwd=tmp_path, capture_output=True, timeout=30)
     assert _terminal._read_exit_marker("mindflock_demo") == 127
+
+
+# ---------------------------------------------------------------------------
+# Exact targets: a session name is never resolved by prefix
+# ---------------------------------------------------------------------------
+def test_exact_target_helpers():
+    assert tmux.exact_session_target("mindflock_orch") == "=mindflock_orch"
+    assert tmux.exact_pane_target("mindflock_orch") == "=mindflock_orch:"
+    # Targets that already say what they are pass through untouched.
+    for t in ("%3", "@1", "$0", "=x", "=x:", "sess:1.0", ""):
+        assert tmux.exact_pane_target(t) == t
+
+
+def test_every_session_targeting_command_is_exact():
+    """Every tmux argv the engine builds for a session names it exactly — the
+    bare form kills/types into `mindflock_demo-w1` once `mindflock_demo` is
+    gone (tmux resolves a missing name as a unique prefix)."""
+    seen = []
+
+    def run_func(c):
+        seen.append(list(c.args))
+        return None
+
+    def output_func(c):
+        seen.append(list(c.args))
+        return b"", None
+
+    sess, _, _ = _session(run_func=run_func, output_func=output_func)
+    sess.close()
+    sess.capture_pane_content()
+    sess.capture_pane_content_with_options("-", "-")
+    sess.does_session_exist()
+    for argv in seen:
+        tgt = argv[argv.index("-t") + 1] if "-t" in argv else None
+        flat = [a for a in argv if a.startswith("-t=")]
+        assert tgt in ("=mindflock_demo", "=mindflock_demo:") or flat == [
+            "-t=mindflock_demo"
+        ], argv
+
+
+def test_cleanup_sessions_kills_exact_names():
+    listing = b"mindflock_a: 1 windows\nmindflock_a-w1: 1 windows\n"
+    kills = []
+
+    def run_func(c):
+        kills.append(list(c.args))
+        return None
+
+    mock = cmd_pkg.MockCmdExec(run_func=run_func, output_func=lambda c: (listing, None))
+    assert tmux.cleanup_sessions(mock) is None
+    assert kills == [
+        ["tmux", "kill-session", "-t", "=mindflock_a"],
+        ["tmux", "kill-session", "-t", "=mindflock_a-w1"],
+    ]

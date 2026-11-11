@@ -25281,6 +25281,155 @@ function heldNoticeHidden(dismissed, current) {
 	return current.split("\n").every((t) => seen.has(t));
 }
 //#endregion
+//#region src/lib/waitWhy.ts
+var WAIT_WHYS = [
+	"memory",
+	"warming",
+	"cap",
+	"spacing",
+	"queue",
+	"restart"
+];
+function asWaitWhy(v) {
+	return typeof v === "string" && WAIT_WHYS.includes(v) ? v : null;
+}
+function whyFromReason(reason) {
+	const r = String(reason || "");
+	if (/automatic starts stop at/i.test(r)) return "cap";
+	if (/automatic starts are \d+\s*s apart|the last agent started/i.test(r)) return "spacing";
+	if (/before the restart/i.test(r)) return "restart";
+	if (/still starting/i.test(r)) return "warming";
+	return "memory";
+}
+function waitWhyOf(w) {
+	return asWaitWhy(w?.why) ?? whyFromReason(w?.reason);
+}
+function gateWhy(g) {
+	if (!g || !g.holding || !g.queued?.length) return null;
+	const head = g.queued[0];
+	return asWaitWhy(g.why) ?? asWaitWhy(head?.why) ?? whyFromReason(g.reason || head?.reason);
+}
+function waitChip(why, position = 1) {
+	switch (why) {
+		case "memory": return "Waiting for memory";
+		case "warming": return "Waiting — other agents are still starting";
+		case "spacing": return "Starting shortly";
+		case "cap": return "Waiting for a free agent slot";
+		case "queue": {
+			const ahead = Math.max(0, (Number(position) || 1) - 1);
+			return ahead ? "Queued — " + ahead + " ahead" : "Queued";
+		}
+		case "restart": return "Queued";
+	}
+}
+function waitClears(why) {
+	switch (why) {
+		case "memory": return "It starts by itself once there is room";
+		case "warming": return "It starts by itself once the agents starting now have settled";
+		case "spacing": return "Automatic starts are spaced out, so it starts in a few seconds";
+		case "cap": return "It starts by itself when a running agent finishes or goes to sleep";
+		case "queue": return "It starts by itself after the ones ahead of it";
+		case "restart": return "It was waiting before MindFlock restarted and starts by itself when its turn comes";
+	}
+}
+function waitKindWord(kind, creates) {
+	switch (String(kind || "")) {
+		case "spawn": return "New worker";
+		case "ticket": return "New ticket session";
+		case "queued prompt": return "Restart for a queued prompt";
+		case "wake": return "Wake";
+		case "revive": return "Restart";
+		default: return creates ? "New session" : "Start";
+	}
+}
+function ordinal(n) {
+	const k = Math.max(0, Math.floor(Number(n) || 0));
+	return k + (k % 100 >= 11 && k % 100 <= 13 ? "th" : k % 10 === 1 ? "st" : k % 10 === 2 ? "nd" : k % 10 === 3 ? "rd" : "th");
+}
+function waitedFor(sinceS, nowMs) {
+	const since = Number(sinceS) || 0;
+	if (since <= 0) return "";
+	return "waiting " + relTime(since, {
+		suffix: "",
+		now: nowMs / 1e3
+	});
+}
+function inLine(position) {
+	const p = Math.floor(Number(position) || 0);
+	if (p < 1) return "";
+	return p === 1 ? "next in line" : ordinal(p) + " in line";
+}
+function waitLine(w, nowMs) {
+	return [
+		waitKindWord(w.kind, !!w.creates),
+		waitedFor(w.since, nowMs),
+		inLine(w.position)
+	].filter(Boolean).join(" · ");
+}
+function waitHint(w, nowMs) {
+	const why = waitWhyOf(w);
+	const reason = String(w.reason || "").trim();
+	return waitChip(why, Number(w.position) || 1) + (reason ? " — " + reason : "") + "\n" + waitLine(w, nowMs) + "\n" + waitClears(why) + ". Start anyway starts it now; Stop waiting cancels it.";
+}
+function holdHead(why) {
+	switch (why) {
+		case "memory": return "Memory low — new agents wait";
+		case "warming": return "Agents still starting — new agents wait";
+		case "cap": return "Agent limit reached — new agents wait";
+		case "spacing": return "Starting agents one at a time";
+		case "queue":
+		case "restart": return "New agents queued";
+	}
+}
+function runWaitBadge(why) {
+	switch (why) {
+		case "memory": return {
+			label: "memory",
+			title: "Memory is low — queued tasks start once it recovers"
+		};
+		case "warming": return {
+			label: "starting",
+			title: "Other agents are still starting and need memory — queued tasks start once they settle"
+		};
+		case "cap": return {
+			label: "agent limit",
+			title: "The live-agent limit is reached — queued tasks start as agents finish"
+		};
+		case "spacing": return {
+			label: "starting",
+			title: "Automatic starts are spaced out — queued tasks start in a moment"
+		};
+		case "queue":
+		case "restart": return {
+			label: "queued",
+			title: "Queued tasks start in turn"
+		};
+	}
+}
+function runWaitLine(why) {
+	switch (why) {
+		case "memory": return "waiting for memory — queued lines start once it recovers";
+		case "warming": return "waiting — other agents are still starting; queued lines start once they settle";
+		case "cap": return "waiting for a free agent slot — queued lines start as agents finish";
+		case "spacing": return "starting queued lines one at a time";
+		case "queue":
+		case "restart": return "queued lines start in turn";
+	}
+}
+function gaugeOkWords(why) {
+	switch (why) {
+		case "memory": return "OK, but no room for one more agent — new agents wait";
+		case "warming": return "OK — new agents wait while others start";
+		case "cap": return "OK — agent limit reached, new agents wait";
+		case "spacing": return "OK — starting agents one at a time";
+		case "queue":
+		case "restart": return "OK — new agents queued";
+	}
+}
+function stopWaitingToast(name, creates) {
+	return creates ? "Cancelled " + name + " — it won't be started" : name + " stopped waiting — start it yourself when you need it";
+}
+//#endregion
 //#region src/lib/sessionState.ts
 var actShown = /* @__PURE__ */ new Map();
 var actPending = /* @__PURE__ */ new Map();
@@ -25414,16 +25563,35 @@ function haltedState(fl) {
 }
 var PAUSED_FLIGHT_LABEL = "Paused route";
 var HELD_WORKER_LABEL = "Waiting";
-var WAITING_FOR_MEMORY_LABEL = "Waiting for memory";
-function waitingState(w) {
+function waitingState(w, now) {
 	return {
 		state: "starting",
-		label: WAITING_FOR_MEMORY_LABEL,
+		label: waitChip(waitWhyOf(w), Number(w.position) || 1),
 		tone: "muted",
 		inBell: false,
 		restartable: false,
 		waiting: true,
-		hint: "Waiting for memory" + (w.reason ? " — " + w.reason : "") + (w.position > 1 ? " (" + w.position + " in line)" : "") + ". It starts by itself once there is room; Start anyway starts it now."
+		hint: waitHint(w, now)
+	};
+}
+var START_FAILED_LABEL = "Couldn't start";
+function startFailedHint(f) {
+	const err = String(f.error || "").trim() || "it failed to start";
+	const at = Number(f.at) || 0;
+	let hint = START_FAILED_LABEL + (at > 0 ? " at " + fmtClock(at) : "") + ": " + err;
+	const prompt = String(f.prompt_preview || "").trim();
+	if (prompt) hint += "\nIts prompt: " + prompt;
+	return hint + "\nNothing retries it by itself — its ⋯ menu has what you can do.";
+}
+function startFailedState(f) {
+	return {
+		state: "offline",
+		label: START_FAILED_LABEL,
+		tone: "broken",
+		inBell: false,
+		restartable: false,
+		startFailed: true,
+		hint: startFailedHint(f)
 	};
 }
 var SLEEPING_LABEL = "Sleeping";
@@ -25561,7 +25729,8 @@ function deriveSessionState(inst, extras) {
 		restartable: false,
 		hint: "Moving the session's folder — it resumes there when the move is done"
 	};
-	if (inst.waiting_for_memory) return waitingState(inst.waiting_for_memory);
+	if (inst.waiting_for_memory) return waitingState(inst.waiting_for_memory, now);
+	if (inst.start_failed) return startFailedState(inst.start_failed);
 	if (inst.pending || inst.status === "loading") return {
 		state: "starting",
 		label: STATE_LABEL.starting,
@@ -25570,7 +25739,6 @@ function deriveSessionState(inst, extras) {
 		restartable: false,
 		hint: "Provisioning workspace"
 	};
-	if (inst.sleeping) return sleepingState(inst.sleeping, now);
 	if (isHeldOffline(inst)) return {
 		state: "offline",
 		label: STATE_LABEL.offline,
@@ -25580,6 +25748,7 @@ function deriveSessionState(inst, extras) {
 		held: true,
 		hint: heldHint(inst.held_reason)
 	};
+	if (inst.sleeping) return sleepingState(inst.sleeping, now);
 	if (inst.setup && inst.setup.state === "running") return {
 		state: "starting",
 		label: STATE_LABEL.starting,
@@ -28373,6 +28542,7 @@ function useInstances() {
 		queryFn: async () => {
 			const fetched = normalizeFlightRows(splitLockedRows(await api("/api/instances")));
 			window.mindflock?.__setSessions?.(fetched);
+			noteGateRows(fetched);
 			return mergePending(withMoving(fetched, Date.now()), queryClient.getQueryData(["instances"]), Date.now());
 		},
 		refetchInterval: pollInterval,
@@ -28483,7 +28653,41 @@ function useMindflockStatus() {
 		retry: false
 	});
 }
+function refreshMemory() {
+	return queryClient.invalidateQueries({ queryKey: ["system-memory"] });
+}
+var memoryBridged = false;
+function bridgeMemoryEvents() {
+	const ev = window.mindflock?.events;
+	if (memoryBridged || !ev) return;
+	memoryBridged = true;
+	const bump = () => {
+		refreshMemory();
+		queryClient.invalidateQueries({ queryKey: ["memory-detail"] });
+	};
+	for (const name of ["system.memory_changed", "system.sessions_slept"]) ev.subscribe(name, bump);
+	ev.onStatus((status) => {
+		if (status === "connected") refreshMemory();
+	});
+}
+function gateRowsKey(rows) {
+	const bits = [];
+	for (const r of rows || []) {
+		const w = r.waiting_for_memory;
+		if (w) bits.push("w:" + r.title + ":" + (w.why || "") + ":" + w.position);
+		if (r.start_failed) bits.push("f:" + r.title + ":" + r.start_failed.at);
+	}
+	return bits.sort().join("|");
+}
+var lastGateRows = null;
+function noteGateRows(rows) {
+	const key = gateRowsKey(rows);
+	const was = lastGateRows;
+	lastGateRows = key;
+	if (was !== null && was !== key) refreshMemory();
+}
 function useMemory() {
+	(0, import_react.useEffect)(bridgeMemoryEvents, []);
 	return useQuery({
 		queryKey: ["system-memory"],
 		queryFn: () => api("/api/system/memory"),
@@ -30942,7 +31146,8 @@ function askMemoryConfirm(body, what, canSleep = true) {
 }
 var memoryConfirmDeps = {
 	ask: askMemoryConfirm,
-	sleepIdle: () => api("/api/server/sleep-idle", { json: {} })
+	sleepIdle: () => api("/api/server/sleep-idle", { json: {} }),
+	say: (line) => toast(line)
 };
 var MemoryCancelled = class extends Error {
 	constructor() {
@@ -30964,7 +31169,10 @@ async function withMemoryConfirm(what, send, onSlept) {
 		if (choice === "cancel" || slept) throw new MemoryCancelled();
 		slept = true;
 		const a = await memoryConfirmDeps.sleepIdle();
-		onSlept?.(a);
+		try {
+			if (onSlept) onSlept(a);
+			else memoryConfirmDeps.say(sleptLine(a));
+		} catch {}
 	}
 }
 function sleptLine(a) {
@@ -31190,14 +31398,14 @@ function laneDoneWord(lane) {
 		merge: "merged"
 	}[lane] || "done";
 }
-function groupTitle(g) {
+function groupTitle(g, why = "memory") {
 	const bits = [g.name + (g.lane ? " — each line goes " + g.lane.replace(/^→\s*/, "to ") : ""), shippedBadge(g) + (g.failed ? ", " + g.failed + " failed" : "")];
 	if (g.needs) bits.push(g.needs + (g.needs === 1 ? " needs" : " need") + " you");
 	if (g.queued.length) bits.push(g.queued.length + " queued — they start as slots free");
 	if (g.cancelled) bits.push("cancelled — its sessions and branches were kept");
 	else if (g.paused) bits.push(g.pauseReason === "budget" ? "paused: the budget is used up" : g.pauseReason === "limit" ? "paused: waiting for usage to come back" : "paused — nothing new starts and nothing ships");
 	else if (g.waitingUsage) bits.push("waiting for usage to come back");
-	else if (g.waitingMemory) bits.push("waiting for memory — queued lines start once it recovers");
+	else if (g.waitingMemory) bits.push(runWaitLine(why));
 	bits.push("Click to fold");
 	return bits.join("\n");
 }
@@ -61828,26 +62036,46 @@ function StateNotice() {
 function gatePath(title, act) {
 	return "/api/launch-gate/" + encodeURIComponent(title) + "/" + act;
 }
+var launchGateDeps = {
+	post: (path, init) => api(path, init),
+	say: (line) => toast(line),
+	refresh: () => void refreshInstances()
+};
 async function startWaiting(title) {
+	const name = displayName(title);
 	try {
-		const r = await api(gatePath(title, "start"), { method: "POST" });
+		const r = await withMemoryConfirm(name, (anyway) => launchGateDeps.post(gatePath(title, "start"), anyway ? { json: { start_anyway: true } } : { method: "POST" }), (a) => launchGateDeps.say(sleptLine(a)));
 		if (!r.started) {
-			toast("Couldn't start " + displayName(title) + " — " + (r.error || "it failed to start"));
+			launchGateDeps.say("Couldn't start " + name + " — " + (r.error || "it failed to start"));
 			return false;
 		}
-		toast("Starting " + displayName(title) + " now…");
+		launchGateDeps.say("Starting " + name + " now…");
 		return true;
 	} catch (e) {
-		toast("Couldn't start " + displayName(title) + " — " + errMsg(e));
+		if (isMemoryCancel(e)) launchGateDeps.say(name + " keeps waiting");
+		else launchGateDeps.say("Couldn't start " + name + " — " + errMsg(e));
 		return false;
 	} finally {
-		refreshInstances();
+		launchGateDeps.refresh();
+	}
+}
+async function cancelWaiting(title, creates) {
+	const name = displayName(title);
+	try {
+		await launchGateDeps.post(gatePath(title, "cancel"), { method: "POST" });
+		launchGateDeps.say(stopWaitingToast(name, creates));
+		return true;
+	} catch (e) {
+		launchGateDeps.say("Couldn't stop " + name + " waiting — " + errMsg(e));
+		return false;
+	} finally {
+		launchGateDeps.refresh();
 	}
 }
 function holdingLine(g) {
-	if (!g || !g.holding || !g.queued.length) return "";
-	const n = g.queued.length;
-	return (/automatic starts stop at/.test(g.reason || "") ? "Agent limit reached" : "Memory low") + " — new agents wait (" + n + " waiting)";
+	const why = gateWhy(g);
+	if (!g || !why) return "";
+	return holdHead(why) + " (" + g.queued.length + " waiting)";
 }
 //#endregion
 //#region src/components/sidebar/MemoryWaitBar.tsx
@@ -61855,20 +62083,23 @@ function MemoryWaitBar() {
 	const { data } = useMemory();
 	const g = data?.gate;
 	const line = holdingLine(g);
-	if (!g || !line) return null;
+	const why = gateWhy(g);
+	if (!g || !line || !why) return null;
 	const next = g.queued[0];
+	const reason = (g.reason || "").trim();
+	const tip = (reason ? reason + "\n" : "") + (next ? "Next: " + displayName(next.title) + ". " + waitClears(why) + ". " : "") + "Waiting agents start one at a time.";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "memory-wait-bar",
 		role: "status",
-		"aria-label": "Agents waiting for memory",
+		"aria-label": "Agents waiting to start",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "mw-text",
-			title: (g.reason || "") + " — they start one at a time once there is room",
+			title: tip,
 			children: line
 		}), next && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			className: "ob-btn",
-			title: "Start " + next.title + " now, past the memory gate",
+			title: "Start " + displayName(next.title) + " now, without waiting",
 			onClick: () => void startWaiting(next.title),
 			children: "Start next anyway"
 		})]
@@ -65992,9 +66223,13 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const answering = (inFamily(inst, isWorker, kids.length) || shipLane || !onScreen) && activity === "clarify" && !missing && !paused;
 	const askedWords = !answering && !onScreen && !missing && !paused ? askedQuestion(inst) : void 0;
 	const task = taskLineOf(inst).text;
-	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !!task;
-	const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent);
+	const wait = ss.waiting && inst.waiting_for_memory ? inst.waiting_for_memory : null;
+	const waitText = wait ? waitLine(wait, Date.now()) : "";
+	const failText = ss.startFailed && inst.start_failed ? startFailedHint(inst.start_failed).split("\n")[0] : "";
+	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !!task;
+	const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
 	useNow(wline?.state === "working" || ship?.state === "working" ? 3e4 : false);
+	useNow(wait ? 3e4 : false);
 	useNow(backgroundJobs(inst).some((j) => expectOf(j)) ? 6e4 : false);
 	const agentWs = (0, import_react.useSyncExternalStore)(subscribeTermStates, (0, import_react.useCallback)(() => peekTerm(title, "agent")?.state, [title]));
 	const disconnected = inst.status === "running" && onScreen && agentWs === "disconnected";
@@ -66266,6 +66501,16 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 								title: ss.hint,
 								children: agentBlockedLine(noAgent)
 							}),
+							!editing && waitText && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lineage waitmem-line",
+								title: ss.hint,
+								children: waitText
+							}),
+							!editing && failText && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lineage startfail-line",
+								title: ss.hint,
+								children: failText
+							}),
 							!editing && taskLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TaskLine, { inst }),
 							!editing && !ship && !lline && !wline && lineage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "lineage" + (lineage.spawned ? " spawned" : ""),
@@ -66296,11 +66541,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							})
 						]
 					}),
-					ss.waiting && !inst.device ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					ss.waiting && !inst.device ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: "stagechip chip-restart chip-waitmem " + chip.cls,
 						title: chip.title,
-						"aria-label": "Waiting for memory — start it anyway",
+						"aria-label": chip.label + " — start it anyway",
 						onClick: (e) => act(() => void startWaiting(title), e),
 						onDoubleClick: (e) => e.stopPropagation(),
 						children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -66308,7 +66553,15 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							"aria-hidden": "true",
 							children: "Start anyway"
 						})]
-					}) : lchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "stagechip chip-restart chip-waitstop",
+						title: "Stop waiting — it won't start by itself",
+						"aria-label": "Stop waiting — " + shown + " won't start by itself",
+						onClick: (e) => act(() => void cancelWaiting(title, !!wait?.creates), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: "Stop waiting"
+					})] }) : lchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "stagechip wrapchip leadchip",
 						title: lchip.title,
@@ -66333,6 +66586,14 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 						title,
 						className: "stagechip chip-restart " + chip.cls,
 						hint: ss.hint
+					}) : ss.startFailed && !pending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "stagechip chip-needs chip-startfail " + chip.cls,
+						title: chip.title,
+						"aria-label": "Couldn't start — open its actions",
+						onClick: (e) => act(() => openAtKebab(e.detail === 0), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: chip.label
 					}) : ss.held && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: "stagechip chip-restart chip-held " + chip.cls,
@@ -68062,9 +68323,9 @@ function memoryRowTone(level) {
 	if (level === "low") return "warn";
 	return "";
 }
-function levelWords(level) {
+function levelWords(level, gate) {
 	switch (level) {
-		case "ok": return "OK — room to spare";
+		case "ok": return gate ? gaugeOkWords(gate) : "OK — room to spare";
 		case "low": return "Low — new agents wait";
 		case "critical": return "Critical — close something";
 		default: return "Not measured";
@@ -68075,12 +68336,24 @@ function hostIsCause(m) {
 	if (m.level !== "low" && m.level !== "critical") return false;
 	return m.guestLevel == null || m.guestLevel !== m.level;
 }
-function memoryRowText(m) {
+function memoryReasons(r) {
+	let line = (r && Array.isArray(r.why) ? r.why : []).filter((w) => typeof w === "string" && !!w.trim()).map((w) => w.trim()).join("; ");
+	if (!line) {
+		const msg = String(r?.message || "").trim();
+		if (!msg || /GB free of/.test(msg)) return "";
+		line = msg.replace(/^(windows )?memory is (critically low|critical|low):\s*/i, "");
+	}
+	return line ? line[0].toUpperCase() + line.slice(1) : "";
+}
+function memoryRowText(m, ctx = {}) {
 	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
 	const share = m.usedMb != null && m.totalMb ? Math.min(1, m.usedMb / m.totalMb) : null;
 	const head = "Memory " + (pair ?? "—");
 	let title = pair ? "This machine's memory: " + pair + " in use (" + Math.round((share || 0) * 100) + "%)" : "This machine's memory";
-	if (m.level === "low" || m.level === "critical") title += " — " + (hostIsCause(m) ? "Windows is short of memory: " : "") + levelWords(m.level).toLowerCase();
+	if (m.level === "low" || m.level === "critical") {
+		title += " — " + (hostIsCause(m) ? "Windows is short of memory: " : "") + levelWords(m.level).toLowerCase();
+		if (ctx.reasons) title += " (" + ctx.reasons[0].toLowerCase() + ctx.reasons.slice(1) + ")";
+	} else if (m.level === "ok" && ctx.gate) title += " — " + gaugeOkWords(ctx.gate).replace(/^OK(, but| —) /, "");
 	return {
 		head,
 		title: title + " — click for what holds it",
@@ -68091,7 +68364,7 @@ function shortCmd(cmd, max = 40) {
 	const t = (cmd || "").replace(/\s+/g, " ").trim().split(" ").map((w) => /^\/\S+\/[^/]+$/.test(w) ? w.slice(w.lastIndexOf("/") + 1) : w).join(" ");
 	return t.length <= max ? t : t.slice(0, max - 1) + "…";
 }
-function memoryPopModel(detail, fallback, aliases = {}) {
+function memoryPopModel(detail, fallback, aliases = {}, ctx = {}) {
 	const m = detail ? machineFromDetail(detail.system) : fallback;
 	const machine = [];
 	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
@@ -68105,7 +68378,8 @@ function memoryPopModel(detail, fallback, aliases = {}) {
 		const pct = Math.round((m.hostUsedMb || 0) / (m.hostTotalMb || 1) * 100);
 		machine.push(["Windows", host + " (" + pct + "%)"]);
 	}
-	machine.push(["Pressure", (hostIsCause(m) ? "Windows: " : "") + levelWords(m.level)]);
+	machine.push(["Pressure", (hostIsCause(m) ? "Windows: " : "") + levelWords(m.level, ctx.gate)]);
+	if (ctx.reasons && (m.level === "low" || m.level === "critical")) machine.push(["Why", ctx.reasons]);
 	const sess = detail && Array.isArray(detail.sessions) ? detail.sessions.filter((r) => r && r.mb > 0) : [];
 	const oth = detail && Array.isArray(detail.others) ? detail.others.filter((r) => r && r.mb > 0) : [];
 	sess.sort((a, b) => b.mb - a.mb);
@@ -68229,13 +68503,18 @@ function OverallMemory() {
 	const detail = detailQ.isError ? null : detailQ.data ?? null;
 	const { data: hist } = useMemoryHistory(open && !!detail);
 	const machine = (0, import_react.useMemo)(() => detail ? machineFromDetail(detail.system) : machineFromReading(reading), [detail, reading]);
-	const { head, title, share } = memoryRowText(machine);
+	const ctx = (0, import_react.useMemo)(() => ({
+		gate: gateWhy(reading?.gate),
+		reasons: memoryReasons(reading)
+	}), [reading]);
+	const { head, title, share } = memoryRowText(machine, ctx);
 	const tone = memoryRowTone(machine.level);
-	const model = (0, import_react.useMemo)(() => open ? memoryPopModel(detail, machine, aliases) : null, [
+	const model = (0, import_react.useMemo)(() => open ? memoryPopModel(detail, machine, aliases, ctx) : null, [
 		open,
 		detail,
 		machine,
-		aliases
+		aliases,
+		ctx
 	]);
 	const spark = (0, import_react.useMemo)(() => open && hist ? sparkPoints(hist.samples, SPARK_W, SPARK_H) : null, [open, hist]);
 	if (machine.totalMb == null) return null;
@@ -69385,11 +69664,14 @@ function RunGroupHeader({ group, repoPath }) {
 	const toggle = useUi((s) => s.toggleRunCollapsed);
 	const [menu, setMenu] = (0, import_react.useState)(null);
 	const more = (0, import_react.useRef)(null);
+	const { data: mem } = useMemory();
+	const why = gateWhy(mem?.gate) ?? "memory";
+	const waitBadge = runWaitBadge(why);
 	const cls = "device-group run-group-head" + (group.done ? " is-done" : "") + (group.paused ? " is-paused" : "") + (group.collapsed ? " is-folded" : "");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: cls,
 		"data-run": group.id,
-		title: groupTitle(group),
+		title: groupTitle(group, why),
 		onClick: () => toggle(group.id),
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -69425,8 +69707,8 @@ function RunGroupHeader({ group, repoPath }) {
 				children: "usage"
 			}) : group.waitingMemory && !group.done ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dev-badge rg-usage",
-				title: "Memory is low — queued tasks start once it recovers",
-				children: "memory"
+				title: waitBadge.title,
+				children: waitBadge.label
 			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dev-badge rg-shipped" + (group.done && !group.cancelled ? " ok" : ""),

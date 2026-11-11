@@ -146,11 +146,11 @@ def test_the_dismisser_steers_onto_yes_before_pressing_enter(monkeypatch):
     inst = SimpleNamespace(Program="claude")
     assert agent_state._dismiss_trust_prompt(inst, "t", "mindflock_t", NEW_GATE) is True
     assert sent == [
-        ["tmux", "send-keys", "-t", "mindflock_t", "Down"],
-        ["tmux", "send-keys", "-t", "mindflock_t", "-l", "\r"],
+        ["tmux", "send-keys", "-t", "=mindflock_t:", "Down"],
+        ["tmux", "send-keys", "-t", "=mindflock_t:", "-l", "\r"],
     ]
     # The old gate rests on "Yes" already: Enter alone, as before.
     sent.clear()
     monkeypatch.setattr(agent_state, "_TRUST_DISMISS_AT", {})
     assert agent_state._dismiss_trust_prompt(inst, "t", "mindflock_t", OLD_GATE) is True
-    assert sent == [["tmux", "send-keys", "-t", "mindflock_t", "-l", "\r"]]
+    assert sent == [["tmux", "send-keys", "-t", "=mindflock_t:", "-l", "\r"]]

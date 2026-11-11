@@ -948,6 +948,38 @@ class TestSpawnTicket:
         assert "wait_for_session" in out["hint"]
         assert ctx.progress_total is None
         assert "sc-23588" in box.policy.spawned_by_me
+        # An older server's body (no waiting_for_memory, no why): the memory
+        # wording, and `reason` is the gate's, as on spawn_session.
+        assert out["why"] is None
+        assert out["reason"] == out["memory_reason"]
+        assert "reason_no_report" not in out
+        assert "`why` says what it waits for" in out["hint"]
+        assert "`memory_reason` says" not in out["hint"]
+
+    def test_a_started_tickets_reason_is_still_the_report_back_note(self):
+        """Not queued: `reason` says why no report-back footer was added, and
+        none of the queued keys appear."""
+        note = "this CLI does not attach the MindFlock tools"
+
+        def started(payload):
+            return {
+                "started": True,
+                "title": "sc-23588",
+                "branch": "feature/sc-23588/fix",
+                "program": "aider",
+                "parent": payload.get("parent", ""),
+                "spawned": True,
+                "report_back": False,
+                "reason": note,
+            }
+
+        box, api, clock, _ = self._box(start=started)
+        api.rows.append(row("sc-23588", status="running", parent="orch", spawned=True))
+        out = box.spawn_ticket_session({"ticket": "SC-23588"}, FakeCtx(clock))
+        assert out["ready"] is True and out["reason"] == note
+        for key in ("queued", "why", "position", "memory_reason", "reason_no_report"):
+            assert key not in out, key
+        assert out["status"] == "running" and "hint" not in out
 
     def test_autopilot_and_report_back_pass_through(self):
         box, api, clock, posted = self._box()

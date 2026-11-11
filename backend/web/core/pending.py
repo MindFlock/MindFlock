@@ -19,6 +19,14 @@ Three consumers, which is why this is its own module rather than more of
 * The ingestion addon's status — :func:`provisioning_kinds` is what turns the
   sidebar bars' dots green while work is being brought in by THIS server
   (the pipeline's own beacon only knows about the pipeline's own queue).
+
+A start that waited (in the launch gate's queue) and then FAILED is not
+dropped: :func:`fail` keeps its row with ``start_failed: {"error", "at",
+"prompt_preview", "kind"}`` for :data:`FAILED_TTL_S` (or until
+:func:`dismiss` / :func:`drop`), so the person sees what was lost and can
+retry it. A failed row is no longer in flight: :func:`has`,
+:func:`snapshot` and :func:`provisioning_kinds` leave it out, and a new
+:func:`add` for its title (the retry) clears it.
 """
 
 from __future__ import annotations
@@ -37,6 +45,22 @@ from backend.web.core.engine import get_engine
 _PENDING: Dict[str, dict] = {}
 _LOCK = threading.Lock()
 
+#: How long a failed start's row stays (the create-failure note's TTL).
+FAILED_TTL_S = 600.0
+#: How much of the lost task a failed row keeps, so a person can retry it.
+PROMPT_PREVIEW_CHARS = 200
+
+
+def _prune_failed(now: float) -> None:
+    """Drop failed rows past their TTL. Caller holds ``_LOCK``."""
+    for t in [
+        t
+        for t, m in _PENDING.items()
+        if m.get("start_failed")
+        and now - float((m.get("start_failed") or {}).get("at") or 0) > FAILED_TTL_S
+    ]:
+        _PENDING.pop(t, None)
+
 
 def add(title: str, kind: str, **meta) -> None:
     """Record (or enrich) an accepted force-start.
@@ -44,18 +68,91 @@ def add(title: str, kind: str, **meta) -> None:
     Called twice per start: once from the request path with only what the
     payload knows, then again once the upstream lookup has filled in the
     branch. ``since`` survives the second call so it stays the moment the user
-    actually asked for the work.
+    actually asked for the work. A new start for a title whose last start
+    failed (a retry) begins afresh: the failure and its ``since`` go.
     """
     if not title:
         return
     with _LOCK:
         prev = _PENDING.get(title) or {}
+        if prev.get("start_failed"):
+            prev = {}
         _PENDING[title] = {
             "kind": kind,
             "since": prev.get("since") or time.time(),
             **{k: v for k, v in prev.items() if k not in ("kind", "since")},
             **meta,
         }
+
+
+def fail(
+    title: str,
+    error: str,
+    *,
+    kind: str = "",
+    prompt: str = "",
+    now: Optional[float] = None,
+    **meta,
+) -> dict:
+    """Keep ``title``'s row as a start that FAILED (instead of dropping it):
+    ``start_failed = {"error", "at", "prompt_preview", "kind"}``. Made when
+    there is no row (a restore that could not even queue it). → the
+    ``start_failed`` record."""
+    now = time.time() if now is None else float(now)
+    rec = {
+        "error": str(error or "the session could not be started"),
+        "at": now,
+        "prompt_preview": str(prompt or "")[:PROMPT_PREVIEW_CHARS],
+        "kind": str(kind or ""),
+    }
+    if not title:
+        return rec
+    with _LOCK:
+        _prune_failed(now)
+        prev = _PENDING.get(title) or {}
+        _PENDING[title] = {
+            **prev,
+            **meta,
+            "kind": prev.get("kind") or kind or "spawn",
+            "since": prev.get("since") or now,
+            "start_failed": rec,
+        }
+    return dict(rec)
+
+
+def failed(title: str) -> Optional[dict]:
+    """``title``'s ``start_failed`` record while its row stays, else None."""
+    if not title:
+        return None
+    with _LOCK:
+        _prune_failed(time.time())
+        rec = (_PENDING.get(title) or {}).get("start_failed")
+        return dict(rec) if rec else None
+
+
+def failed_rows(parent: Optional[str] = None) -> Dict[str, dict]:
+    """``{title: meta}`` of the failed rows (of ``parent``'s workers when
+    given)."""
+    with _LOCK:
+        _prune_failed(time.time())
+        return {
+            t: dict(m)
+            for t, m in _PENDING.items()
+            if m.get("start_failed")
+            and (parent is None or str(m.get("parent") or "") == parent)
+        }
+
+
+def dismiss(title: str) -> bool:
+    """A person read a failed start's row: drop it. Only a FAILED row — an
+    in-flight start is not this call's to forget. True if one went."""
+    if not title:
+        return False
+    with _LOCK:
+        if (_PENDING.get(title) or {}).get("start_failed"):
+            _PENDING.pop(title, None)
+            return True
+    return False
 
 
 def drop(title: str) -> None:
@@ -68,13 +165,25 @@ def drop(title: str) -> None:
 
 
 def has(title: str) -> bool:
-    """Whether a start for ``title`` is in flight — the double-click guard."""
-    return bool(title) and title in _PENDING
-
-
-def snapshot() -> Dict[str, dict]:
+    """Whether a start for ``title`` is in flight — the double-click guard.
+    A failed start's row is not in flight (its retry is welcome)."""
+    if not title:
+        return False
     with _LOCK:
-        return {t: dict(m) for t, m in _PENDING.items()}
+        meta = _PENDING.get(title)
+        return meta is not None and not meta.get("start_failed")
+
+
+def snapshot(*, failed: bool = False) -> Dict[str, dict]:
+    """``{title: meta}`` of the starts in flight; ``failed=True`` adds the
+    failed rows (their meta carries ``start_failed``)."""
+    with _LOCK:
+        _prune_failed(time.time())
+        return {
+            t: dict(m)
+            for t, m in _PENDING.items()
+            if failed or not m.get("start_failed")
+        }
 
 
 def session_kind(title: str, branch: str) -> str:
@@ -156,13 +265,15 @@ def rows(engine=None) -> list:
     """Sidebar entries for accepted starts with no instance yet.
 
     Same key set as ``_instance_json`` plus ``pending``, which tells the UI the
-    row has no tmux session behind it yet (so it offers no actions on it).
+    row has no tmux session behind it yet (so it offers no actions on it),
+    and ``start_failed`` (None, or the record :func:`fail` left on a start
+    that waited and then could not start).
     """
     engine = engine if engine is not None else get_engine()
     program = engine.default_program()
     provider = providers.resolve(program).name
     out = []
-    for title, meta in snapshot().items():
+    for title, meta in snapshot(failed=True).items():
         # The instance exists now: the real snapshot entry is the truth.
         if title in engine.instances:
             continue
@@ -253,6 +364,9 @@ def rows(engine=None) -> list:
                 "check": None,
                 "ports": None,
                 "pending": True,
+                "start_failed": (
+                    dict(meta["start_failed"]) if meta.get("start_failed") else None
+                ),
             }
         )
     return out

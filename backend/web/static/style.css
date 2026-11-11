@@ -21255,6 +21255,23 @@ p.set-hint {
   display: inline;
 }
 
+/* Stop waiting, beside it: drawn on the row's hover / keyboard focus only. */
+.inst .stagechip.chip-waitstop {
+  display: none;
+  margin-left: 4px;
+}
+
+.inst:hover .stagechip.chip-waitstop,
+.inst:focus-within .stagechip.chip-waitstop {
+  display: inline-flex;
+}
+
+/* An automatic start that waited and then failed: red, like a broken state. */
+.inst .stagechip.chip-startfail {
+  color: var(--tone-broken);
+  border-color: var(--tone-broken);
+}
+
 /* The session's actions (⋮), at the row's right end beside the ✕. Quiet
    until it's wanted: drawn on hover, on keyboard focus anywhere in the row,
    on the selected row and while its menu is open. Hidden by opacity, never
@@ -22044,6 +22061,11 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 /* An agent that isn't installed: the row says why it never started. */
 .inst .lineage.noagent-line {
+  color: var(--tone-broken);
+}
+
+/* A start that waited and then failed: what failed, in the broken tone. */
+.inst .lineage.startfail-line {
   color: var(--tone-broken);
 }
 

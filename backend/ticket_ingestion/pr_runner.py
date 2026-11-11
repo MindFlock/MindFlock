@@ -337,7 +337,7 @@ async def _kill_session(session: str) -> None:
         "tmux",
         "kill-session",
         "-t",
-        session,
+        "=" + session,  # exact: a bare -t prefix-matches a sibling
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )

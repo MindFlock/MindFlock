@@ -386,7 +386,13 @@ def scope_command(
     exe: str = "systemd-run",
 ) -> List[str]:
     """The ``systemd-run`` argv (up to and including ``--``) that starts one
-    agent launch in its own scope with the per-agent limits."""
+    agent launch in its own scope with the per-agent limits.
+
+    ``OOMPolicy=continue``: when the OOM killer takes ONE process of the
+    scope (a pytest worker or a build the agent ran hitting ``MemoryMax``),
+    only that process dies. The default (``DefaultOOMPolicy=stop``) stops the
+    whole unit, so the agent itself went down with exit 143 — a session gone
+    offline "for no reason" over one child's allocation."""
     limits = resolved_limits() if limits is None else limits
     argv = [
         exe,
@@ -396,6 +402,8 @@ def scope_command(
         "--collect",
         "--slice=" + FLEET_SLICE,
         "--unit=" + unit_name(session_name),
+        "-p",
+        "OOMPolicy=continue",
     ]
     for prop in _memory_props("", limits):
         argv += ["-p", prop]

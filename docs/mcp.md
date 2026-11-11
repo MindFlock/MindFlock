@@ -480,6 +480,12 @@ a terminal open on it) when set ([people.md](people.md#owner-driver-viewers)),
 `sleeping` when set (`{since, reason, freed_mb}`: its agent was put to sleep
 to free memory — `activity` reads `offline` meanwhile; a `send_message` wakes
 it, see [session-engine.md](session-engine.md#sleeping-agents)),
+`waiting` while the [launch gate](session-engine.md#launch-gate) holds its
+start or restart (`{why, position, reason}`, from the row's
+`waiting_for_memory`; `why` as in [spawn_session](#spawn_session)'s queued
+result), `start_failed` when the row carries one (a queued start that
+failed, passed through as the server sends it: `{error, at,
+prompt_preview?}`),
 and `background` when set: the jobs the agent backgrounded and left running
 past its turn, each `{id, pid, command, state: running|waiting|stuck, reason,
 started, quiet_s}` ([providers.md](providers.md#background-jobs)). Sessions you manage come first. Remote
@@ -611,12 +617,17 @@ How the worker is created:
 - **It forks from your HEAD commit.** The create request names your canonical
   repo root (`git rev-parse --git-common-dir`) as `repo_path`, your HEAD sha as
   `base_ref` and your branch as `base_branch`. The worker gets its own worktree
-  and branch cut from that commit, and its diff base is your branch.
+  and branch cut from that commit, and its diff base is your branch. On a
+  detached HEAD (your row's branch reads `HEAD`) no `base_branch` is sent:
+  `base_ref` alone still forks from your commit.
   Uncommitted changes in your worktree are **not** included, and a warning
   says so. Commit before you spawn. Without a canonical root (a bare repository
   with worktrees) `repo_path` is your session's own path, which shares your
   objects, so the fork from your HEAD still works. If your HEAD can't be read,
   the worker starts from the repository's current HEAD and a warning says so.
+  A 400 about the base retries first without `base_branch` (still your
+  commit, a warning names the refused branch), and only then without
+  `base_ref` too (the repository's HEAD, `base_sha: null`, a warning says so).
 - The new session is created with `parent` = you and `spawned: true`.
 - A **provisioned** (ticket) orchestrator spawns provisioned workers from the
   same source repository, so they share its `_base_` clone and their branches
@@ -648,13 +659,30 @@ How the worker is created:
   [Troubleshooting](#troubleshooting)).
 - A worker still loading after 45 s is not an error: `ready: false`, and
   `wait_for_session` will wait for it.
-- **Low memory queues the worker; it does not fail.** When the server's
+- **A gated start queues the worker; it does not fail.** When the server's
   [launch gate](session-engine.md#launch-gate) says wait (memory low now or
-  once the agents still starting have grown, or the machine-wide live-agent
-  cap reached), the create is queued. The result is `{title, status:
-  "queued: waiting for memory", queued: true, ready: false, reason,
-  position, base_sha, report_back, hint}`, returned at once with no 45 s
-  wait. The server creates the worker when memory allows: one at a time,
+  once the agents still starting have grown, the machine-wide live-agent
+  cap reached, or the last automatic start seconds ago), the create is
+  queued. The result is `{title, status, queued: true, why, position,
+  reason, ready: false, base_sha, report_back, hint}`, returned at once with
+  no 45 s wait. `why` is always present and picks `status`
+  (`backend/mcp/waiting.py`):
+
+  | `why` | `status` |
+  |---|---|
+  | `memory`, `warming` | *queued: waiting for memory* |
+  | `spacing` | *queued: starting shortly (automatic starts are staggered)* |
+  | `cap` | *queued: waiting for a free agent slot* |
+  | `queue` | *queued: N ahead of it* (position > 1), else *queued: next in line* |
+  | `restart` | *queued: waiting to restart* (a session row, never a spawn: `list_sessions`' `waiting`, `wait_for_session`'s `queued`) |
+  | null or unknown | *queued: waiting for memory* |
+
+  `why` is read from the gate's record (`waiting_for_memory.why`). A server
+  whose record has none gives `why: null` and the memory wording, whatever
+  holds the start; `reason` is then the only place that says what. Match on
+  `queued` and `why`, not on the `status` text. The server creates the
+  worker when the gate lets it go (memory, a free agent slot, start
+  spacing): one at a time,
   oldest first, at least 20 s apart. Meanwhile it is listed as a pending
   provisioning row, so `list_sessions` shows it and `wait_for_session` waits
   through the queue. Don't spawn more workers to make up for it: they queue
@@ -666,9 +694,9 @@ How the worker is created:
   reserve*).
 - **`capacity`** (both results, when the server has `GET
   /api/memory/capacity`): `{room, session_mb, short_mb?, hint}` after this
-  spawn (it counts as warming already), as in `whoami`. A queued result's
-  `hint` adds *One more session needs ~950 MB; 400 MB more would have to be
-  free.*
+  spawn (it counts as warming already), as in `whoami`. A result queued for
+  memory (`why` memory, warming or none) has a `hint` that adds *One more
+  session needs ~950 MB; 400 MB more would have to be free.*
 
 **The report-back footer** is appended only when all three hold:
 
@@ -693,7 +721,7 @@ with `done`, `failed` or `blocked`.
 
 It polls `/api/instances` about every 3 s and returns `{sessions: {title:
 {reason, report, activity, status, branch, diff_stat, last_reply}},
-still_running}`. `last_reply` is the last ≤ 1500 chars of the agent's final
+still_running, queued?}`. `last_reply` is the last ≤ 1500 chars of the agent's final
 message. The `reason`s:
 
 - `reported`: a `kind: "result"` from that session arrived after your last
@@ -714,15 +742,30 @@ message. The `reason`s:
   `read_output(view="screen")`, then `answer_prompt`, or ask your user. Within
   60 s of a dispatch, a `clarify` or `limit` reading that started before it
   is ignored: it is the dialog you just answered, not a new one.
-- `usage_limit`, `paused`, `gone` (no longer listed), and `offline` (for at
-  least 30 s while not loading). A **sleeping** session (its row's `sleeping`
+- `failed_to_start`: its queued create failed (the row's `start_failed`, or,
+  for a title no longer listed, a failure in
+  [`GET /api/create_failures`](web-api.md#get-apicreate_failures), kept 10
+  minutes). The result is `{reason: "failed_to_start", report: null, error,
+  prompt_preview?, hint}` (plus the row's fields while it is listed);
+  respawn it with the same task. Returned at once. A title that is not
+  listed and has no recorded failure still raises *no session named …*.
+- `usage_limit`, `paused`, `gone` (no longer listed; `error` says why when the
+  server recorded a create failure), and `offline` (for at
+  least 30 s while not loading). A session whose start or restart the launch
+  gate still holds (its row's `waiting_for_memory`) is never finished, whatever
+  its row reads. A **sleeping** session (its row's `sleeping`
   set) is read as `idle`, not `offline`: it was put to sleep only after its
   turn ended.
 
 With `return_on_message`, any other unread message for you ends the wait with
 `reason: "message"` and `messages` (consumed), plus whatever `sessions` had
 already finished. On timeout: `{timed_out: true, sessions, still_running,
-hint}`. Call it again with `still_running`. Inside the wait, connection errors
+hint}`. Call it again with `still_running`. Every result (finished, `mode:
+"any"`, message or timeout) whose `still_running` holds queued sessions adds
+`queued: {title: {status, why, position, reason}}` for them (`still_running`
+stays a list of titles); only the timeout's `hint` mentions them. A queued
+session keeps the wait going until it starts or `timeout_s` runs out: it is
+not read as offline. Inside the wait, connection errors
 are retried for up to 120 s, so a server restart mid-wait does not read as a
 failed worker.
 
@@ -876,12 +919,19 @@ token, the network) is listed in `errors` instead of failing the call.
 | `wait_ready` | true | wait up to 45 s for the session to finish provisioning |
 
 → `{title, ticket: {source, id, slug, name, url}, branch, program, status,
-ready, report_back, reason?, autopilot, warnings, hint?}`. When memory is
-short (the server's [launch gate](session-engine.md#launch-gate)) the start
-is queued, not refused: `status: "queued: waiting for memory"`, `queued:
-true`, `memory_reason`, `position`, returned at once with no ready wait. The
+ready, report_back, reason?, autopilot, warnings, hint?, queued?, why?,
+position?, memory_reason?, reason_no_report?}`. When the server's
+[launch gate](session-engine.md#launch-gate) holds it, the start is queued,
+not refused, with the same keys as a queued `spawn_session`: `status` (worded
+from `why`), `queued: true`, `why`, `position`, `reason` (the gate's;
+`memory_reason` is kept as an alias, and the report-back note moves to
+`reason_no_report`), returned at once with no ready wait. The
 server launches it when the queue lets it go, and `wait_for_session` waits
 through the queue.
+
+> **`reason` means two things.** In a queued result it is the gate's reason
+> (it used to be the report-back note, which is now `reason_no_report`). In
+> any other result it is still the report-back note. Check `queued` first.
 
 Why a separate tool rather than a `ticket` argument on `spawn_session`: almost
 nothing about the two creates is shared. A ticket session's title, branch,
@@ -2256,6 +2306,22 @@ background start failed, and the text after the colon is the server's reason
 event carry). An older server that keeps no reasons answers "failed to start
 (it disappeared while loading)"; check the server log then.
 
+**A worker shows `queued`, or never started.** The launch gate holds its
+start; nothing failed. `why` on the spawn result says what it waits for
+(null: read `reason`), `list_sessions` shows it as `waiting` and
+`wait_for_session` names it under `queued` and keeps waiting. Don't spawn a
+replacement: it queues behind the first. `wait_for_session` answering
+`failed_to_start` means the queued start ran and failed: read `error`, then
+`spawn_session` it again with the same task.
+
+**`spawn_session` warns that a branch was refused as the base, or that the
+worker started from the repository's HEAD.** The server answered 400 about
+the base. The first warning names the refused branch: the worker is still
+forked from your commit, only its diff base differs. The second (`base_sha:
+null`) means your commit was refused too, so the worker lacks your commits:
+close it, check `git rev-parse HEAD` in your worktree, and respawn. A
+detached HEAD needs neither: it forks from your commit without a warning.
+
 **409 from `spawn_session`.** The 409 message names the limit
 (`MINDFLOCK_MAX_CHILDREN`, `MINDFLOCK_MAX_SPAWN_DEPTH` or
 `MINDFLOCK_MAX_SPAWNED`), says the parent is over budget, or says the
@@ -2519,7 +2585,7 @@ saying a person decides it — see [peer-link.md](peer-link.md#joint-tasks--cont
 
 | What | Where |
 |---|---|
-| MCP server | `backend/mcp/` (`protocol.py`, `tools.py`, `ship.py`, `runs.py`, `flights.py`, `identity.py`, `policy.py`, `api.py`, `gitlocal.py`) |
+| MCP server | `backend/mcp/` (`protocol.py`, `tools.py`, `ship.py`, `runs.py`, `flights.py`, `waiting.py`, `identity.py`, `policy.py`, `api.py`, `gitlocal.py`) |
 | Flights | `backend/web/core/flights.py` (store + planner), `flight_driver.py` (loop + operations), `flight_kinds/` (plug-in kinds), `flight_describe.py` (the one-shot); routes `/api/flights*` ([flights.md](flights.md)) |
 | Team runs | `backend/web/core/team_runs.py` (store + planner), `team_run_driver.py` (loop + operations), `outbox.py`, `lanes.py`; routes `/api/runs*`, `/api/outbox` ([team-runs.md](team-runs.md)) |
 | Ship status | `backend/web/core/ship_status.py`; route `GET /api/instances/{title}/ship-status` |

@@ -439,9 +439,23 @@ mindflock new --provision --strategy clone   # run repo setup / warm caches
 | `--strategy worktree\|clone` | workspace strategy for `--provision` |
 | `--program` | agent program (default: the server's default provider) |
 | `--account` | auth profile the session runs under (`mindflock accounts`; `default` = the CLI's own login) |
+| `--start-anyway` | start it even while memory is low (see below) |
 
 The server creates the workspace in the background; `new` polls for up to ~15s
 and reports `ready (status: …)`, a start failure, or "still provisioning".
+
+**Memory confirm.** While the machine's memory reads low or critical, the
+server asks before a person's start, exactly as the app's *Start anyway*
+dialog does ([launch gate](session-engine.md#launch-gate)). `new`, `resume`,
+`wake` and `attach` (when it has to wake a sleeper) then print the server's
+sentence and the flag, and exit 1 without starting anything:
+
+```
+error: Memory is low: 3.0 GB free. Starting another agent may freeze the machine. Run it again with --start-anyway to start it regardless.
+```
+
+Pass `--start-anyway` to any of the four to start it regardless (it sends
+`start_anyway: true`).
 
 ### `mindflock ls`
 
@@ -452,7 +466,13 @@ the server reports a `diff_stat`; `COST` shows the estimated USD spend when
 token pricing is available (both blank otherwise). `--json` dumps the raw
 `/api/instances` payload for scripting.
 
-### `mindflock attach TITLE`
+`ACTIVITY` says what the raw `offline` would hide: `sleeping` for a sleeper,
+and `waiting #<position> (<why>)` for a session whose start waits in the
+launch gate's queue (its row's `waiting_for_memory`) — `why` is `memory`,
+`warming` (agents still starting), `cap` (the live agent cap), `spacing`,
+`queue` or `restart`; `#1` starts next.
+
+### `mindflock attach TITLE [--start-anyway]`
 
 Replace the current process with `tmux attach-session -t <session>` for the
 session's tmux (the `tmux_name` field of `/api/instances`, i.e.
@@ -461,7 +481,9 @@ any unambiguous prefix; ambiguous prefixes list the candidates. Detach with the
 normal tmux `Ctrl-b d`.
 
 A sleeping session is woken first (`POST /api/instances/{title}/wake`), so
-there is an agent to land in, back in its conversation.
+there is an agent to land in, back in its conversation. While memory is low
+that wake asks first (the memory confirm under `new`); `--start-anyway` wakes
+it regardless.
 
 `attach` requires a real terminal: when stdout isn't a TTY (a pipe, a script,
 CI) it exits 1 with ``attach needs a real terminal (running in a script? use
@@ -507,7 +529,8 @@ the agent in place in the same worktree. They print `paused session <title>` /
 `resumed session <title>`; a title the server refuses (a peer shared session
 can't be paused, say) is reported on stderr, the rest still run, and the
 command exits 1. Titles resolve like `close` (unambiguous prefixes, all before
-anything runs).
+anything runs). While memory is low `resume` is refused with the memory
+confirm (under `new`); `resume --start-anyway` starts them regardless.
 
 ### `mindflock sleep TITLE...` / `mindflock wake TITLE...`
 
@@ -524,7 +547,9 @@ also fall asleep on their own after `general.sleep_idle_minutes`. `wake` calls
 conversation, and prints `woke <title>` (or `<title> was not asleep`).
 Opening the session anywhere, or sending it anything, wakes it too — and
 `attach` wakes a sleeper before landing in its tmux. `ls` shows a sleeper's
-ACTIVITY as `sleeping`. Titles resolve like `close`.
+ACTIVITY as `sleeping`. Titles resolve like `close`. While memory is low `wake`
+is refused with the memory confirm (under `new`); `wake --start-anyway` wakes
+them regardless.
 
 ### `mindflock rename OLD NEW`
 

@@ -55,6 +55,13 @@ included. Nothing used to offload it. Sleeping does:
 Keyed by session title throughout (``foo`` and ``foo-copy`` share a folder
 and a branch, never a sleep record); remote rows (``device::title``) are
 never here — only this server's ENGINE sessions are swept.
+
+**Two servers, one config dir** (the service and a dev server on one
+``~/.mindflock`` and one tmux server): the records are a
+:class:`title_store.SharedMap` (each server sees the other's sleeps at once,
+and a save merges rather than overwrites); a title is never both asleep and
+held offline — the hold wins (:func:`reconcile`); and the sweep runs in one
+of them only (:func:`hold_lease`).
 """
 
 from __future__ import annotations
@@ -69,6 +76,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from backend import compat
 from backend import config, log, memory_pressure, providers, session
+from backend.fsutil import atomic_write_json, read_json
 from backend.session import tmux
 from backend.web.core import title_store
 
@@ -127,8 +135,6 @@ _TIME_VETOES = frozenset({V_RECENT, V_TYPED, V_WOKE})
 _BUSY_ACTIVITIES = ("working", "clarify", "limit")
 
 _LOCK = threading.Lock()
-#: ``(path, {title: record})`` — keyed by path so a per-test store reloads.
-_CACHE: Optional[Tuple[str, Dict[str, dict]]] = None
 #: Epoch of each title's last wake (the "woken recently" veto). In memory:
 #: a restart has no recent wakes worth honouring.
 _WOKE_AT: Dict[str, float] = {}
@@ -177,49 +183,108 @@ def _clean(d: dict) -> Dict[str, dict]:
     return out
 
 
+#: The records, shared with every other server on this config dir
+#: (:class:`title_store.SharedMap`: re-read when the file changes, saved
+#: read-merge-write under ``sleeping.json.lock``). Before, each server loaded
+#: the file once and rewrote it whole: a sleep one server recorded was an
+#: unexplained Offline (and an "agent offline" alarm) on the other, and each
+#: save dropped the other's records.
+_STORE = title_store.SharedMap(_path, _clean, "sleeping sessions")
+
+
 def _load() -> Dict[str, dict]:
-    global _CACHE
-    try:
-        p = _path()
-    except OSError:
-        p = ""
-    if _CACHE is None or _CACHE[0] != p:
-        _CACHE = (p, title_store.load(lambda: p, _clean) if p else {})
-    return _CACHE[1]
+    """The live records (under :data:`_LOCK`). Unreconciled: a record of a
+    held title is still here until :func:`reconcile` drops it."""
+    return _STORE.data()
 
 
 def _persist() -> None:
-    if _CACHE is not None and _CACHE[0]:
-        path = _CACHE[0]
-        title_store.persist(lambda: path, _CACHE[1], "sleeping sessions")
+    """Save what was changed in :func:`_load`'s dict (merged onto the file's
+    current content; ``core.rename_stores`` mutates it directly)."""
+    _STORE.persist()
+
+
+def _raw(title: str) -> Optional[dict]:
+    """``title``'s record as stored (held or not), or None."""
+    with _LOCK:
+        rec = _load().get(str(title or ""))
+        return dict(rec) if rec else None
+
+
+def _held_titles(titles: Iterable[str]) -> List[str]:
+    """Which of ``titles`` are held offline (``core.held``). Never raises."""
+    try:
+        from backend.web.core import held as _held
+
+        holds = _held.held()
+    except Exception:  # noqa: BLE001
+        return []
+    return [t for t in titles if t in holds]
+
+
+def reconcile(titles: Optional[Iterable[str]] = None) -> List[str]:
+    """Enforce "never both asleep and held": drop the sleep record of every
+    held title (of ``titles``, or all) → the titles dropped.
+
+    A hold outranks a sleep: the agent is down and stays down until a
+    person's Start, and a row that read "Sleeping, opening it wakes it" over
+    a wake that is refused (held) misled. The pair is what two servers on one
+    config dir left on disk when each rewrote the other's file from a stale
+    copy. Takes the holds first and :data:`_LOCK` after (never inside
+    ``core.held``'s lock). Never raises."""
+    try:
+        with _LOCK:
+            have = (
+                list(_load())
+                if titles is None
+                else [str(t) for t in titles if str(t) in _load()]
+            )
+        if not have:
+            return []
+        losers = _held_titles(have)
+        if not losers:
+            return []
+        with _LOCK, _STORE.transaction() as recs:
+            gone = [t for t in losers if recs.pop(t, None) is not None]
+        for t in gone:
+            _info(
+                "sleep %s: record dropped — it is held offline (a hold outranks a sleep)",
+                t,
+            )
+        return gone
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def info(title: str) -> Optional[dict]:
     """``{"since", "reason", "freed_mb"}`` while ``title`` is asleep, else
-    None. Never raises — a row must never fail to build over this."""
+    None. A held title is never asleep (its record is dropped here: a hold
+    outranks a sleep). Never raises — a row must never fail to build over
+    this."""
     try:
-        with _LOCK:
-            rec = _load().get(str(title or ""))
-            return dict(rec) if rec else None
+        rec = _raw(title)
+        if rec is not None and reconcile([str(title or "")]):
+            return None
+        return rec
     except Exception:  # noqa: BLE001
         return None
 
 
 def is_sleeping(title: str) -> bool:
-    """Whether ``title``'s agent is asleep (not dead). A dict read."""
+    """Whether ``title``'s agent is asleep (not dead). A dict read (plus a
+    stat: another server's sleep is seen at once)."""
     return info(title) is not None
 
 
 def mark(title: str, reason: str, freed_mb: int = 0) -> None:
     """Record ``title`` as asleep (before its agent is stopped, so no reader
     ever sees the dead agent without the record)."""
-    with _LOCK:
-        _load()[str(title)] = {
+    with _LOCK, _STORE.transaction() as recs:
+        recs[str(title)] = {
             "since": time.time(),
             "reason": reason,
             "freed_mb": max(0, int(freed_mb or 0)),
         }
-        _persist()
 
 
 def woke(title: str) -> None:
@@ -230,10 +295,11 @@ def woke(title: str) -> None:
     ``_ensure_agent_session`` on every launch of a sleeping session, whoever
     asked for it. Never raises."""
     try:
+        rec = None
         with _LOCK:
-            rec = _load().pop(str(title), None)
-            if rec is not None:
-                _persist()
+            if str(title) in _load():
+                with _STORE.transaction() as recs:
+                    rec = recs.pop(str(title), None)
         why = _WAKE_WHY.pop(title, "") or "relaunched"
         if rec is None:
             return
@@ -266,23 +332,28 @@ def drop(title: str) -> None:
     _WAKE_WHY.pop(title, None)
     try:
         with _LOCK:
-            if _load().pop(str(title), None) is not None:
-                _persist()
+            if str(title) in _load():
+                with _STORE.transaction() as recs:
+                    recs.pop(str(title), None)
     except Exception:  # noqa: BLE001
         pass
 
 
 def prune(live_titles: Iterable[str]) -> None:
-    """Drop the records of sessions no longer in the engine."""
+    """Drop the records of sessions no longer in the engine — nor in the
+    shared ``state.json``: a session another server on this config dir just
+    renamed reaches this server's engine only on its next state sync."""
     live = set(live_titles or ())
     try:
         with _LOCK:
-            recs = _load()
-            gone = [t for t in recs if t not in live]
-            for t in gone:
-                recs.pop(t, None)
+            gone = [t for t in _load() if t not in live]
             if gone:
-                _persist()
+                on_disk = title_store.state_titles(_STORE.path())
+                gone = [t for t in gone if t not in on_disk]
+            if gone:
+                with _STORE.transaction() as recs:
+                    for t in gone:
+                        recs.pop(t, None)
     except Exception:  # noqa: BLE001
         pass
     for d in (_WOKE_AT, _WAKE_WHY):
@@ -737,6 +808,15 @@ def put_to_sleep(
         return V_VIEWED
     tree = _pane_tree(name)
     freed = _tree_mb(tree)
+    # Its agent is running, so a hold left on it is stale (the rule
+    # _ensure_agent_session applies on attach) — and would outrank the
+    # record written next.
+    try:
+        from backend.web.core import held as _held
+
+        _held.release(title)
+    except Exception:  # noqa: BLE001
+        pass
     mark(title, reason, freed)
     srv._kill_agent_session(title)
     if srv._live_session_name(name) is not None:
@@ -800,9 +880,18 @@ def ensure_awake(
 
     A PAUSED session is never woken: Pause outranks a sleep (the pause route
     drops the record), so a leftover one is dropped here and the wake is
-    refused with ``PAUSED_REFUSED`` — only Resume starts its agent again."""
-    if not is_sleeping(title):
+    refused with ``PAUSED_REFUSED`` — only Resume starts its agent again.
+
+    A HELD session is never woken either: a hold outranks a sleep, so a
+    sleep record left on a held title is dropped and the wake is refused
+    with ``HELD_REFUSED`` — only Start brings it back."""
+    if _raw(title) is None:
         return False, None
+    if reconcile([title]):
+        from backend.web.core.agent_sessions import HELD_REFUSED
+
+        _info("wake %s: refused — the session is held offline", title)
+        return False, HELD_REFUSED
     try:
         paused = inst.Status == session.Paused
     except Exception:  # noqa: BLE001
@@ -882,7 +971,11 @@ def sleep_idle_now(srv=None, limit: int = 8) -> dict:
     choice): every session :func:`veto` allows with ``manual`` (every safety
     rule, none of the timing ones), longest-idle first, at most ``limit`` →
     ``{"slept": [titles], "freed_mb": n}``. Blocking — off the loop. Never
-    raises."""
+    raises.
+
+    They are recorded with :data:`REASON_MEMORY`, not ``manual``: the person
+    chose this BECAUSE memory was low (the dialog only offers it then), and
+    the row's tooltip should say so ("— memory was low")."""
     if srv is None:
         srv = _server()
     slept: List[str] = []
@@ -911,7 +1004,7 @@ def sleep_idle_now(srv=None, limit: int = 8) -> dict:
         candidates.sort(key=lambda c: c[0])
         for since, title, inst in candidates[: max(0, int(limit))]:
             try:
-                if put_to_sleep(srv, inst, title, REASON_MANUAL, now - since) is None:
+                if put_to_sleep(srv, inst, title, REASON_MEMORY, now - since) is None:
                     slept.append(title)
                     freed += int((info(title) or {}).get("freed_mb") or 0)
             except Exception as err:  # noqa: BLE001
@@ -919,6 +1012,125 @@ def sleep_idle_now(srv=None, limit: int = 8) -> dict:
     except Exception:  # noqa: BLE001
         pass
     return {"slept": slept, "freed_mb": freed}
+
+
+# --------------------------------------------------------------------------- #
+# one sweeper per config dir
+# --------------------------------------------------------------------------- #
+#: The lease the idle-sleep sweep runs under (:func:`hold_lease`).
+SWEEP_LEASE = "sleep-sweep"
+#: The sweep renews its lease every :data:`TICK_SECONDS`; a dead owner's
+#: lease is taken over at once (its pid is gone) or, at worst, after this.
+SWEEP_LEASE_TTL_S = 3 * TICK_SECONDS
+#: The lease file, next to ``sleeping.json`` (JSON inside; keyed by job, not
+#: by session — nothing for a rename to move).
+LEASE_FILE = "sweep.leases"
+#: ``(pid, token)`` naming this process in a lease (a pid alone could be a
+#: restarted server that got the same pid).
+_ME: Tuple[int, str] = (0, "")
+#: Last answer per lease, so a change of owner is logged once.
+_LEASE_HELD: Dict[str, bool] = {}
+
+
+def _lease_path() -> str:
+    return os.path.join(os.path.dirname(_path()) or ".", LEASE_FILE)
+
+
+def _me() -> str:
+    global _ME
+    if _ME[0] != os.getpid():  # a fork is someone else
+        import uuid
+
+        _ME = (os.getpid(), "%d-%s" % (os.getpid(), uuid.uuid4().hex[:12]))
+    return _ME[1]
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether ``pid`` runs (POSIX). Unknowable on Windows (``os.kill(pid,
+    0)`` is not a probe there): True, and the lease's expiry decides."""
+    if compat.IS_WINDOWS or pid <= 0:  # pragma: no cover - Windows
+        return pid > 0
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # EPERM: alive, someone else's
+        return True
+    return True
+
+
+def hold_lease(name: str, ttl: float, now: Optional[float] = None) -> bool:
+    """Whether THIS process may run the singleton job ``name`` now — taking
+    or renewing its lease when so.
+
+    Every server on one config dir runs the same background loops over the
+    same sessions (one ``~/.mindflock``, one tmux server); a job that acts on
+    them — the idle-sleep sweep here, the memory shield's shedding — must run
+    in ONE of them. The lease (``<config dir>/sweep.leases``, ``name ->
+    {owner, pid, until}``, written under its file lock) is held by whoever
+    renewed it last within ``ttl`` seconds; another process gets it once it
+    expires or its owner's pid is gone. The owner renews it each pass (a
+    write only once half the ttl has passed), so it stays put while that
+    server lives. When the file can't be read or written, every process
+    answers True — as before leases existed — rather than none.
+
+    ``memory_shield`` should guard its shedding the same way:
+    ``sleep.hold_lease("memory-shield", 3 * <its tick>)``."""
+    now = time.time() if now is None else now
+    me = _me()
+    try:
+        p = _lease_path()
+        with title_store.file_lock(p):
+            d = read_json(p, {}, expect=dict) or {}
+            cur = d.get(name)
+            if isinstance(cur, dict):
+                try:
+                    until = float(cur.get("until") or 0.0)
+                    pid = int(cur.get("pid") or 0)
+                except (TypeError, ValueError):
+                    until, pid = 0.0, 0
+                owner = str(cur.get("owner") or "")
+                if owner == me:
+                    if until - now > ttl / 2.0:
+                        return True  # fresh enough: no write
+                elif until > now and pid != os.getpid() and _pid_alive(pid):
+                    return False
+            d[name] = {"owner": me, "pid": os.getpid(), "until": now + float(ttl)}
+            atomic_write_json(p, d, indent=None, newline=False, ensure_ascii=True)
+        return True
+    except Exception:  # noqa: BLE001 — no coordination beats no sweep
+        return True
+
+
+def release_lease(name: str) -> None:
+    """Give up ``name``'s lease if this process holds it (a clean shutdown
+    hands it over at once). Never raises."""
+    try:
+        p = _lease_path()
+        with title_store.file_lock(p):
+            d = read_json(p, {}, expect=dict) or {}
+            cur = d.get(name)
+            if isinstance(cur, dict) and cur.get("owner") == _me():
+                d.pop(name, None)
+                atomic_write_json(p, d, indent=None, newline=False, ensure_ascii=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _lease_note(name: str, held_now: bool) -> bool:
+    """Log a change of hands of ``name`` once → ``held_now``."""
+    if _LEASE_HELD.get(name) != held_now:
+        _LEASE_HELD[name] = held_now
+        _info(
+            "%s: %s",
+            name,
+            (
+                "this server runs it"
+                if held_now
+                else "another MindFlock server on this config dir runs it; skipping here"
+            ),
+        )
+    return held_now
 
 
 # --------------------------------------------------------------------------- #
@@ -937,6 +1149,7 @@ def tick(srv=None, now: Optional[float] = None) -> List[str]:
     try:
         # A record whose agent runs again is not asleep. (Not a brand-new
         # one: put_to_sleep writes the record a moment BEFORE the kill.)
+        reconcile()  # a held title is not asleep (a hold outranks a sleep)
         with _LOCK:
             asleep = [
                 t for t, r in _load().items() if now - float(r["since"]) > HEAL_AFTER_S
@@ -948,6 +1161,10 @@ def tick(srv=None, now: Optional[float] = None) -> List[str]:
         level = memory_pressure.level()
         idle_s = threshold_seconds(level)
         if idle_s is None:
+            return slept
+        # One sweeper per config dir: two servers on one ~/.mindflock (and one
+        # tmux server) would each pick the same idle agents, shedding double.
+        if not _lease_note(SWEEP_LEASE, hold_lease(SWEEP_LEASE, SWEEP_LEASE_TTL_S)):
             return slept
         everyday = idle_minutes() * 60.0
         reason = (
@@ -1049,10 +1266,15 @@ async def run_loop(srv=None) -> None:
         left = 0.0
     if left > 0:
         await asyncio.sleep(left + 1.0)
-    while True:
-        try:
-            runner = getattr(srv, "_in_bg_pool", None)  # the ticks' own pool
-            await (runner(tick, srv) if runner else asyncio.to_thread(tick, srv))
-        except Exception:  # noqa: BLE001
-            pass
-        await asyncio.sleep(TICK_SECONDS)
+    try:
+        while True:
+            try:
+                runner = getattr(srv, "_in_bg_pool", None)  # the ticks' own pool
+                await (runner(tick, srv) if runner else asyncio.to_thread(tick, srv))
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(TICK_SECONDS)
+    finally:
+        # Shutting down: hand the sweep to the other server now, not in
+        # SWEEP_LEASE_TTL_S.
+        release_lease(SWEEP_LEASE)

@@ -45,10 +45,41 @@ Two kinds of caller:
   waking its agent, the ticket pipeline. On *wait* the launch goes into the
   FIFO queue here (:func:`enqueue` / :func:`gate_auto`) instead of starting.
   The session row says "Waiting for memory" and has a Start-anyway action.
-  The queue drains by itself, one launch at a time, at least
-  :data:`AUTO_SPACING_SECONDS` apart, as memory allows. Past
-  :func:`queue_max` queued launches a new one is refused
+  The queue drains by itself, one admission at a time, as memory allows.
+  Past :func:`queue_max` queued launches a new one is refused
   (:class:`QueueFull`).
+
+  **Spacing** (:func:`spacing_for`): two automatic starts are at most
+  :func:`auto_spacing` apart (``MINDFLOCK_AUTO_LAUNCH_SPACING``, 20 s), the
+  stagger that lets a reading catch up with a launch. The budget already
+  subtracts what the warming agents still have to grow, so while it shows
+  plenty of room the full stagger only holds launches back for nothing (a
+  burst of spawns "not spawning with memory free"). So: while the budget has
+  room for :data:`FAST_SPACING_ROOM` or more sessions AND the level and the
+  projected level both read ok, the stagger is the short one
+  (:data:`AUTO_SPACING_FAST_SECONDS`, ``MINDFLOCK_AUTO_SPACING_FAST``; never
+  over the ceiling). With room for 1-2 the full stagger stands.
+
+  **Why it waits.** Every queued record carries ``why``, the one thing
+  holding it: ``"memory"`` (the level is low/critical now, or the budget has
+  no room), ``"warming"`` (it would read low once the agents still starting
+  have grown), ``"cap"`` (the live-agent cap), ``"spacing"`` (the stagger),
+  ``"queue"`` (others are ahead of it) or ``"restart"`` (it came back after
+  a restart and has not been judged again yet). ``reason`` is the sentence.
+
+  **Starting.** An admitted launch leaves the queue for the in-flight list
+  and runs in its own daemon thread, so one slow create (provisioning can
+  take minutes) never holds up the launches behind it; the spacing and the
+  budget still pace admissions. It stays on disk until its launch returns,
+  so a restart in between brings it back through its factory. A launch that
+  fails takes its admission back (:func:`unnote_start`): no phantom warming
+  agent, no stagger after it.
+
+  **Two servers, one file.** Both servers (say :8765 and :9000) save to the
+  same ``launch_queue.json``. Each saved item names its owner (pid, a
+  per-boot id, the process start time). A save rewrites only its own items
+  and keeps every other one; a boot adopts only items whose owner is gone
+  (and untagged ones from an older version).
 * **A person** (``kind="person"``): New session, Duplicate, Start, Start all,
   Resume, Wake. A person is never queued or capped, and is asked only on the
   level NOW (since 0.14.3): the projection of agents still warming and the
@@ -69,12 +100,13 @@ loop (``ticket_ingestion.session_runner``).
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import os
 import subprocess
 import threading
 import time
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from backend import memory_pressure
 from backend.session import mux
@@ -83,12 +115,17 @@ __all__ = [
     "WAITING_FOR_MEMORY",
     "WARMUP_SECONDS",
     "AUTO_SPACING_SECONDS",
+    "AUTO_SPACING_FAST_SECONDS",
+    "WHYS",
     "QueueFull",
     "assess",
     "decide",
     "note_start",
+    "unnote_start",
+    "spacing_for",
     "enqueue",
     "gate_auto",
+    "admit",
     "admit_auto",
     "room",
     "register_kind",
@@ -124,6 +161,14 @@ GB_PER_AGENT = 1.2
 #: Minimum gap between two automatic launches the gate lets through
 #: (``MINDFLOCK_AUTO_LAUNCH_SPACING`` seconds).
 AUTO_SPACING_SECONDS = 20.0
+#: The short stagger used while the budget has plenty of room
+#: (``MINDFLOCK_AUTO_SPACING_FAST`` seconds; see :func:`spacing_for`).
+AUTO_SPACING_FAST_SECONDS = 5.0
+#: Room (in sessions, after the warming agents' growth) from which the short
+#: stagger applies.
+FAST_SPACING_ROOM = 3
+#: What can hold a queued automatic start (a record's ``why``).
+WHYS = ("memory", "warming", "cap", "spacing", "queue", "restart")
 #: Queued launches past which a new automatic one is refused (``MINDFLOCK_LAUNCH_QUEUE_MAX``).
 DEFAULT_QUEUE_MAX = 32
 #: How often the drainer re-reads while something waits.
@@ -184,7 +229,36 @@ def warmup_bytes() -> int:
 
 
 def auto_spacing() -> float:
+    """The full stagger between automatic starts, and the ceiling of
+    :func:`spacing_for` (``MINDFLOCK_AUTO_LAUNCH_SPACING``)."""
     return _env_float("MINDFLOCK_AUTO_LAUNCH_SPACING", AUTO_SPACING_SECONDS)
+
+
+def fast_spacing() -> float:
+    """The short stagger (``MINDFLOCK_AUTO_SPACING_FAST``), never over
+    :func:`auto_spacing`."""
+    return min(
+        auto_spacing(),
+        _env_float("MINDFLOCK_AUTO_SPACING_FAST", AUTO_SPACING_FAST_SECONDS),
+    )
+
+
+def spacing_for(a: dict) -> float:
+    """The stagger an automatic start keeps from the previous one, given an
+    :func:`assess` ``a``: :func:`fast_spacing` while the budget has room for
+    :data:`FAST_SPACING_ROOM` or more (that room already counts what the
+    warming agents still have to grow) and both the level and the projected
+    level read ok; the full :func:`auto_spacing` otherwise (room for 1-2,
+    memory not measured, anything not ok)."""
+    room = (a.get("budget") or {}).get("room")
+    if (
+        isinstance(room, int)
+        and room >= FAST_SPACING_ROOM
+        and a.get("level") == "ok"
+        and a.get("projected_level") == "ok"
+    ):
+        return fast_spacing()
+    return auto_spacing()
 
 
 def queue_max() -> int:
@@ -649,6 +723,11 @@ _LOCK = threading.RLock()
 _ADMITTED: Dict[str, float] = {}
 #: The last automatic launch the gate let through (epoch), for the spacing.
 _LAST_AUTO = {"at": 0.0}
+#: What each noted start replaced, so a launch that fails can take its
+#: admission back (:func:`unnote_start`): ``{key: (its stamp, the key's
+#: previous admitted stamp or None, the previous _LAST_AUTO or None when the
+#: start was not automatic)}``.
+_UNDO: Dict[str, Tuple[float, Optional[float], Optional[float]]] = {}
 
 
 def set_probe(fn: Optional[Callable[[], Optional[List[Tuple[str, float]]]]]) -> None:
@@ -684,14 +763,52 @@ def note_start(title: str, *, auto: bool = False, now: Optional[float] = None) -
     warming before its tmux session exists. ``auto``: the start was
     automatic, so the next automatic one is spaced from it."""
     now = time.time() if now is None else now
+    key = _tmux_name(title)
     with _LOCK:
-        _ADMITTED[_tmux_name(title)] = now
+        prev = _ADMITTED.get(key)
+        _ADMITTED[key] = now
         for k, t in list(_ADMITTED.items()):
             if now - t >= WARMUP_SECONDS:
                 _ADMITTED.pop(k, None)
+        for k, rec in list(_UNDO.items()):
+            if now - rec[0] >= WARMUP_SECONDS:
+                _UNDO.pop(k, None)
+        prev_auto: Optional[float] = None
         if auto:
+            prev_auto = _LAST_AUTO["at"]
             _LAST_AUTO["at"] = now
+        _UNDO[key] = (now, prev, prev_auto)
     _PROBE_CACHE.update({"at": -1e18})
+
+
+def unnote_start(title: str) -> bool:
+    """Take back :func:`note_start` for a launch that failed → True when it
+    was taken back. Without this a failed launch read as an agent warming up
+    for :data:`WARMUP_SECONDS` (memory "to come" that never comes) and held
+    the next automatic start a whole stagger. Its admitted entry goes (or
+    goes back to the one it replaced), and the stagger goes back to the
+    previous automatic start unless another start was noted since. Nothing
+    is taken back when a tmux session for ``title`` exists after all: then
+    an agent did start and it counts. Never raises."""
+    key = _tmux_name(title)
+    agents = _agents(fresh=True)
+    if agents and any(n == key for n, _c in agents):
+        return False
+    now = time.time()
+    with _LOCK:
+        rec = _UNDO.pop(key, None)
+        if rec is None:
+            return False
+        stamp, prev, prev_auto = rec
+        if _ADMITTED.get(key) == stamp:
+            if prev is None or now - prev >= WARMUP_SECONDS:
+                _ADMITTED.pop(key, None)
+            else:
+                _ADMITTED[key] = prev
+        if prev_auto is not None and _LAST_AUTO["at"] == stamp:
+            _LAST_AUTO["at"] = prev_auto
+    _PROBE_CACHE.update({"at": -1e18})
+    return True
 
 
 def assess(*, fresh: bool = False, now: Optional[float] = None) -> dict:
@@ -712,6 +829,10 @@ def assess(*, fresh: bool = False, now: Optional[float] = None) -> dict:
     agents = _agents(fresh=fresh)
     with _LOCK:
         admitted = {k: t for k, t in _ADMITTED.items() if now - t < WARMUP_SECONDS}
+        # A launch still in flight counts as warming whatever its age: a
+        # create can provision for minutes before its agent even starts.
+        for it in _INFLIGHT:
+            admitted.setdefault(it.get("tmux") or _tmux_name(it["title"]), now)
     names = {n for n, _c in agents or []}
     warming_names = {n for n, c in agents or [] if c and now - c < WARMUP_SECONDS}
     warming_names |= set(admitted)
@@ -808,7 +929,7 @@ def decide(
 
     ``kind="auto"``: ``"go"`` or ``"wait"`` (memory low/critical now or once
     the warming agents grow; the live cap reached; or within
-    :func:`auto_spacing` of the previous automatic launch).
+    :func:`spacing_for` of the previous automatic launch).
     ``kind="person"``: ``"go"``, ``"confirm"`` (low now) or ``"refuse"``
     (critical now). Both need the person's Start anyway; they differ only in
     wording. A person is never asked over the projection of agents still
@@ -856,16 +977,17 @@ def decide(
     if _budget_full(a):
         out.update(decision="wait", why="memory", reason=a["budget"]["why"])
         return out
-    spacing = auto_spacing()
+    spacing = spacing_for(a)
     with _LOCK:
         last = _LAST_AUTO["at"]
     if spacing and last and now - last < spacing:
-        out.update(
-            decision="wait",
-            why="spacing",
-            reason="the last agent started %ds ago; automatic starts are %ds apart"
-            % (int(now - last), int(spacing)),
+        reason = "the last agent started %ds ago; automatic starts are %ds apart" % (
+            int(now - last),
+            int(spacing),
         )
+        if spacing < auto_spacing():
+            reason += " while there is room for %d more" % a["budget"]["room"]
+        out.update(decision="wait", why="spacing", reason=reason)
     return out
 
 
@@ -947,14 +1069,24 @@ class QueueFull(Exception):
     """More launches are already waiting than :func:`queue_max` allows."""
 
 
-#: A queued launch: called with no arguments in the drainer thread. It returns
-#: an error string ("" / None = started) or raises.
+#: A queued launch: called with no arguments, in its own thread (the
+#: background drainer) or the caller's (:func:`drain_once`,
+#: :func:`start_now`). It returns an error string ("" / None = started) or
+#: raises.
 Launch = Callable[[], Optional[str]]
 
 _IDS = itertools.count(1)
 #: FIFO. Each item is ``{"id", "title", "kind", "source", "since", "reason",
-#: "launch", "parent"}``. ``launch`` stays server-side.
+#: "why", "launch", "parent", "creates", "args"}``. ``launch`` stays
+#: server-side.
 _QUEUE: List[dict] = []
+#: Admitted launches that have not returned yet, oldest first. They have
+#: left the queue (no row says "Waiting for memory" any more) but are still
+#: saved (``inflight: true``): a create can provision for minutes, and a
+#: restart in that window must not lose it. Each also carries ``tmux`` (its
+#: tmux name, counted as warming by :func:`assess`), ``done`` (an Event set
+#: once the launch returned) and ``error`` (its outcome).
+_INFLIGHT: List[dict] = []
 #: The most recent outcome per title (``{"title", "at", "started", "error"}``),
 #: so a caller can tell "started" from "failed" once an item has left the queue.
 _DONE: Dict[str, dict] = {}
@@ -966,6 +1098,9 @@ AUTO_DRAIN = True
 #: Called (no args) whenever the queue changes, so the server can republish
 #: rows and the memory reading. Set by the server.
 on_change: Optional[Callable[[], None]] = None
+#: How long Start anyway on a launch that is already starting waits for its
+#: outcome (a queued create's own wait is 600 s).
+START_NOW_WAIT_SECONDS = 660.0
 
 
 def _public(it: dict, position: int) -> dict:
@@ -977,6 +1112,7 @@ def _public(it: dict, position: int) -> dict:
         "parent": it.get("parent", ""),
         "since": it["since"],
         "reason": it.get("reason", ""),
+        "why": it.get("why", ""),
         "position": position,
         "creates": bool(it.get("creates")),
     }
@@ -1002,6 +1138,91 @@ def _log(fmt: str, *args) -> None:
         pass
 
 
+def _wait_line(title: str, kind: str, why: str, reason: str) -> str:
+    """The log line for a launch that waits. It says "waits for memory" only
+    when memory is what holds it (the level, or the growth of the agents
+    still starting); one held by the stagger, the cap or the queue says
+    that instead (the old line blamed memory for a 20 s stagger)."""
+    reason = reason or "queued"
+    if why == "memory":
+        return "%s waits for memory (%s): %s" % (title, kind, reason)
+    if why == "warming":
+        return "%s waits for memory (warming, %s): %s" % (title, kind, reason)
+    return "%s waits (%s, %s): %s" % (title, why or "queue", kind, reason)
+
+
+def _behind(n: int, head: dict) -> str:
+    """The reason on a launch with ``n`` others ahead of it in the queue."""
+    ahead = "%d launch%s ahead of it" % (n, "" if n == 1 else "es")
+    first = head.get("reason") or ""
+    return "%s; the first waits: %s" % (ahead, first) if first else ahead
+
+
+def _put(
+    title: str,
+    launch: Launch,
+    *,
+    kind: str,
+    source: str,
+    reason: str,
+    why: str,
+    parent: str,
+    creates: bool,
+    args: Optional[dict],
+    since: Optional[float],
+    force: bool,
+) -> Tuple[dict, bool]:
+    """Queue ``title`` or update its queued record (the caller holds
+    ``_LOCK``) → ``(public record, whether it is new)``. An update keeps the
+    place and replaces the launch AND what describes it (``kind``,
+    ``source``, ``creates``, ``args``), so the saved record always rebuilds
+    the launch that is really queued. ``force``: past :func:`queue_max`
+    (a restore never drops what was saved)."""
+    for i, it in enumerate(_QUEUE):
+        if it["title"] == title:
+            it.update(
+                launch=launch, kind=kind, source=source, creates=creates, args=args
+            )
+            if reason:
+                it["reason"] = reason
+            if why in WHYS:
+                it["why"] = why
+            if parent:
+                it["parent"] = parent
+            return _public(it, i + 1), False
+    cap = queue_max()
+    if not force and cap and len(_QUEUE) >= cap:
+        raise QueueFull(
+            "%d launches are already waiting for memory (the most is %d)"
+            % (len(_QUEUE), cap)
+        )
+    if why not in WHYS:
+        why = "queue" if _QUEUE else "memory"
+    it = {
+        "id": "lq%d" % next(_IDS),
+        "title": title,
+        "kind": kind,
+        "source": source,
+        "parent": parent,
+        "since": time.time() if since is None else since,
+        "reason": reason,
+        "why": why,
+        "launch": launch,
+        "creates": creates,
+        "args": args,
+    }
+    _QUEUE.append(it)
+    return _public(it, len(_QUEUE)), True
+
+
+def _after_put(pub: dict, added: bool, kind: str) -> None:
+    if added:
+        _log("%s", _wait_line(pub["title"], kind, pub["why"], pub["reason"]))
+    _save()
+    _ensure_drainer()
+    _changed()
+
+
 def enqueue(
     title: str,
     launch: Launch,
@@ -1009,6 +1230,7 @@ def enqueue(
     kind: str,
     source: str = "",
     reason: str = "",
+    why: str = "",
     parent: str = "",
     creates: bool = False,
     args: Optional[dict] = None,
@@ -1016,66 +1238,66 @@ def enqueue(
 ) -> dict:
     """Queue ``title``'s launch (FIFO) → its public record (``position`` 1 =
     next). A title already queued keeps its place; the newer ``launch``
-    replaces the older, so two relaunch paths don't double-launch.
+    replaces the older (with its ``kind``, ``source``, ``creates``,
+    ``args``), so two relaunch paths don't double-launch.
+    ``why``: what holds it (:data:`WHYS`); left out, ``"queue"`` when others
+    wait ahead of it, else ``"memory"``.
     ``creates``: the launch creates the session (no row exists yet).
     ``args``: what a restart needs to rebuild the launch (JSON); an item with
     ``args`` is saved to disk and comes back on the next boot through its
     kind's factory (:func:`register_kind`), one without is not.
     Raises :class:`QueueFull` past :func:`queue_max`."""
     with _LOCK:
-        for i, it in enumerate(_QUEUE):
-            if it["title"] == title:
-                it["launch"] = launch
-                if reason:
-                    it["reason"] = reason
-                if args is not None:
-                    it["args"] = args
-                return _public(it, i + 1)
-        cap = queue_max()
-        if cap and len(_QUEUE) >= cap:
-            raise QueueFull(
-                "%d launches are already waiting for memory (the most is %d)"
-                % (len(_QUEUE), cap)
-            )
-        it = {
-            "id": "lq%d" % next(_IDS),
-            "title": title,
-            "kind": kind,
-            "source": source,
-            "parent": parent,
-            "since": time.time() if since is None else since,
-            "reason": reason,
-            "launch": launch,
-            "creates": creates,
-            "args": args,
-        }
-        _QUEUE.append(it)
-        pub = _public(it, len(_QUEUE))
-    _log("%s waits for memory (%s): %s", title, kind, reason or "queued")
-    _save()
-    _ensure_drainer()
-    _changed()
+        pub, added = _put(
+            title,
+            launch,
+            kind=kind,
+            source=source,
+            reason=reason,
+            why=why,
+            parent=parent,
+            creates=creates,
+            args=args,
+            since=since,
+            force=False,
+        )
+    _after_put(pub, added, kind)
     return pub
 
 
-def admit_auto(key: str) -> Tuple[bool, str]:
-    """Check and note in one step → ``(go, reason)``. Go only when nothing
-    waits ahead (FIFO) and :func:`decide` says go; the start is then noted
-    (``key``: the title, or a placeholder) before the lock is let go, so two
-    concurrent automatic starts can't both pass on the same reading."""
-    # Warm the two cached reads first, so the lock is never held across a
-    # tmux call or a /proc read (every row's waiting() takes it too).
+def _warm() -> None:
+    """Warm the two cached reads, so ``_LOCK`` is never held across a tmux
+    call or a /proc read (every row's :func:`waiting` takes it too)."""
     _agents()
     memory_pressure.snapshot()
+
+
+def _admit_locked(key: str) -> Tuple[bool, str, str]:
+    if _QUEUE:
+        return False, _behind(len(_QUEUE), _QUEUE[0]), "queue"
+    verdict = decide("auto")
+    if verdict["decision"] != "go":
+        return False, verdict["reason"], verdict.get("why") or "memory"
+    note_start(key, auto=True)
+    return True, "", ""
+
+
+def admit(key: str) -> Tuple[bool, str, str]:
+    """Check and note in one step → ``(go, reason, why)`` (``why`` from
+    :data:`WHYS`, ``""`` on go). Go only when nothing waits ahead (FIFO) and
+    :func:`decide` says go; the start is then noted (``key``: the title, or
+    a placeholder) before the lock is let go, so two concurrent automatic
+    starts can't both pass on the same reading. A caller whose launch then
+    fails calls :func:`unnote_start`."""
+    _warm()
     with _LOCK:
-        if _QUEUE:
-            head = _QUEUE[0]
-            return False, head.get("reason") or "others are waiting ahead of it"
-        verdict = decide("auto")
-        if verdict["decision"] != "go":
-            return False, verdict["reason"]
-        note_start(key, auto=True)
-        return True, ""
+        return _admit_locked(key)
+
+
+def admit_auto(key: str) -> Tuple[bool, str]:
+    """:func:`admit` without the ``why``: ``(go, reason)``."""
+    go, reason, _why = admit(key)
+    return go, reason
 
 
 def gate_auto(
@@ -1089,31 +1311,38 @@ def gate_auto(
     args: Optional[dict] = None,
 ) -> Optional[dict]:
     """An automatic start's one call: None means go (the start is noted and
-    the caller launches inline now), else the queued record. Someone already
-    waiting goes first (FIFO): a launch never jumps the queue, and one
-    already queued keeps its place."""
+    the caller launches inline now; on failure it calls
+    :func:`unnote_start`), else the queued record. Someone already waiting
+    goes first (FIFO): a launch never jumps the queue, and one already
+    queued keeps its place."""
+    _warm()
     with _LOCK:
         queued = next((it for it in _QUEUE if it["title"] == title), None)
         if queued is None:
-            go, reason = admit_auto(title)
+            go, reason, why = _admit_locked(title)
             if go:
                 return None
         else:
-            reason = queued.get("reason") or ""
-        return enqueue(
+            reason, why = queued.get("reason") or "", queued.get("why") or ""
+        pub, added = _put(
             title,
             launch,
             kind=kind,
             source=source,
             reason=reason,
+            why=why,
             parent=parent,
             creates=creates,
             args=args,
+            since=None,
+            force=False,
         )
+    _after_put(pub, added, kind)
+    return pub
 
 
 def waiting(title: str) -> Optional[dict]:
-    """``title``'s queued record, or None."""
+    """``title``'s queued record, or None (also once it is starting)."""
     with _LOCK:
         for i, it in enumerate(_QUEUE):
             if it["title"] == title:
@@ -1122,6 +1351,7 @@ def waiting(title: str) -> Optional[dict]:
 
 
 def items() -> List[dict]:
+    """Every queued record, first first (not the ones already starting)."""
     with _LOCK:
         return [_public(it, i + 1) for i, it in enumerate(_QUEUE)]
 
@@ -1130,6 +1360,14 @@ def last_outcome(title: str) -> Optional[dict]:
     with _LOCK:
         rec = _DONE.get(title)
         return dict(rec) if rec else None
+
+
+def _in_flight(title: str) -> Optional[dict]:
+    """The in-flight item by title or id (the caller holds ``_LOCK``)."""
+    for it in _INFLIGHT:
+        if it["title"] == title or it["id"] == title:
+            return it
+    return None
 
 
 def _take(title: str) -> Optional[dict]:
@@ -1145,9 +1383,15 @@ def _take(title: str) -> Optional[dict]:
 
 
 def cancel(title: str) -> bool:
-    """Drop ``title`` (or an item id) from the queue. True if it was there."""
+    """Drop ``title`` (or an item id) from the queue. True if it was there.
+    A launch already starting can't be called back: False (its outcome
+    lands in :func:`last_outcome`)."""
     it = _take(title)
     if it is None:
+        with _LOCK:
+            flying = _in_flight(title) is not None
+        if flying:
+            _log("%s: not cancelled, it is already starting", title)
         return False
     _log("%s no longer waits (cancelled)", it["title"])
     _record(it["title"], False, "cancelled")
@@ -1167,59 +1411,139 @@ def _record(title: str, started: bool, error: str) -> None:
             _DONE.pop(next(iter(_DONE)))
 
 
-def _run(it: dict, *, auto: bool) -> Optional[str]:
+def _fly(it: dict, *, auto: bool) -> None:
+    """``it`` (already out of the queue; the caller holds ``_LOCK``) becomes
+    in flight: its start is noted (``auto``: the next automatic start is
+    spaced from it), and it stays saved until its launch returns."""
     note_start(it["title"], auto=auto)
+    it.update(
+        inflight=True,
+        tmux=_tmux_name(it["title"]),
+        done=threading.Event(),
+        error=None,
+    )
+    _INFLIGHT.append(it)
+
+
+def _finish(it: dict) -> Optional[str]:
+    """Run an in-flight launch and settle it → its error, or None. A failed
+    launch takes its admission back (:func:`unnote_start`), then the item
+    leaves the in-flight list and the disk."""
     try:
         err = it["launch"]() or None
     except Exception as exc:  # noqa: BLE001 — one bad launch never stops the queue
         err = str(exc) or exc.__class__.__name__
+    if err:
+        unnote_start(it["title"])
     _record(it["title"], err is None, err or "")
     if err:
         _log("%s could not start: %s", it["title"], err)
     else:
         _log("%s started (waited %ds)", it["title"], int(time.time() - it["since"]))
+    with _LOCK:
+        for i, x in enumerate(_INFLIGHT):
+            if x is it:
+                _INFLIGHT.pop(i)
+                break
+        it["error"] = err
+    done = it.get("done")
+    if done is not None:
+        done.set()
+    _save()
     _changed()
     return err
 
 
 def start_now(title: str) -> Tuple[bool, Optional[str]]:
     """Start anyway: launch ``title`` (or an item id) now, past the gate →
-    ``(was_queued, error)``. Blocking (the launch runs in this thread)."""
-    it = _take(title)
+    ``(was_queued, error)``. Blocking (the launch runs in this thread). One
+    already starting is not launched twice: this waits for its outcome
+    (up to :data:`START_NOW_WAIT_SECONDS`)."""
+    with _LOCK:
+        it: Optional[dict] = None
+        for i, x in enumerate(_QUEUE):
+            if x["title"] == title or x["id"] == title:
+                it = _QUEUE.pop(i)
+                break
+        flying = None
+        if it is None:
+            flying = _in_flight(title)
+        else:
+            _fly(it, auto=False)
     if it is None:
-        return False, None
+        if flying is None:
+            return False, None
+        if not flying["done"].wait(START_NOW_WAIT_SECONDS):
+            return True, "still starting"
+        return True, flying.get("error")
+    _save()
     _log("%s: started anyway by a person", it["title"])
-    return True, _run(it, auto=False)
+    return True, _finish(it)
 
 
-def drain_once(now: Optional[float] = None) -> Optional[str]:
-    """One drain step: when the gate says go for the head of the queue, launch
-    it (in this thread) → its title, else None. One launch per step; the
-    spacing keeps the next one at least :func:`auto_spacing` away."""
+def _rejudge(why: str, reason: str) -> bool:
+    """Bring every waiting record up to date (the caller holds ``_LOCK``):
+    the head gets the gate's verdict, each one behind it ``"queue"``. →
+    whether anything shown changed."""
+    head = _QUEUE[0]
+    changed = head.get("why") != why or head.get("reason") != reason
+    head["why"], head["reason"] = why, reason
+    for i, it in enumerate(_QUEUE[1:], 1):
+        r = _behind(i, head)
+        if it.get("why") != "queue" or it.get("reason") != r:
+            changed = True
+        it["why"], it["reason"] = "queue", r
+    return changed
+
+
+def drain_once(now: Optional[float] = None, *, wait: bool = True) -> Optional[str]:
+    """One drain step: when the gate says go for the head of the queue, admit
+    it → its title, else None (and the waiting records' ``why``/``reason``
+    are brought up to date: the head's own verdict, ``"queue"`` behind it).
+    The admitted launch leaves the queue for the in-flight list (still
+    saved) and runs in this thread (``wait``, the default: tests, and
+    callers that rely on it having run) or in its own daemon thread (the
+    background drainer, so one slow create never stalls the rest). One
+    admission per step; the stagger keeps the next one :func:`spacing_for`
+    away."""
     with _LOCK:
         if not _QUEUE:
             return None
+        last = _LAST_AUTO["at"]
     verdict = decide("auto", now=now, fresh=True)
+    line = ""
+    it: Optional[dict] = None
     with _LOCK:
         if not _QUEUE:
+            return None
+        if _LAST_AUTO["at"] != last:
+            # Another automatic start was admitted while this step read
+            # memory: its verdict is stale. The next step judges again.
             return None
         if verdict["decision"] != "go":
-            # Keep the shown reason current (memory → cap → spacing).
-            changed = _QUEUE[0].get("reason") != verdict["reason"]
-            for it in _QUEUE:
-                it["reason"] = verdict["reason"]
-            head = None
+            head = _QUEUE[0]
+            why = verdict.get("why") or "memory"
+            if head.get("why") != why:
+                line = _wait_line(head["title"], head["kind"], why, verdict["reason"])
+            changed = _rejudge(why, verdict["reason"])
         else:
-            head = _QUEUE.pop(0)
-            changed = False
-    if head is not None:
-        _save()
-    if head is None:
+            it = _QUEUE.pop(0)
+            _fly(it, auto=True)
+    if it is None:
+        if line:
+            _log("%s", line)
         if changed:
             _changed()
         return None
-    _run(head, auto=True)
-    return head["title"]
+    _save()
+    _changed()
+    if wait:
+        _finish(it)
+    else:
+        threading.Thread(
+            target=_finish, args=(it,), name="launch-gate-start", daemon=True
+        ).start()
+    return it["title"]
 
 
 def _drain_loop() -> None:
@@ -1229,7 +1553,7 @@ def _drain_loop() -> None:
                 if not _QUEUE:
                     return
             try:
-                drain_once()
+                drain_once(wait=False)
             except Exception:  # noqa: BLE001 — the loop outlives one bad step
                 pass
             time.sleep(DRAIN_POLL_SECONDS)
@@ -1264,6 +1588,18 @@ PERSIST = False
 #: launch again after a restart. Each module that queues a kind registers it.
 _FACTORIES: Dict[str, Callable[[dict], Optional[Launch]]] = {}
 _SAVE_LOCK = threading.Lock()
+#: Saves are numbered when their snapshot is taken; one older than the last
+#: written is skipped, so two threads saving at once never leave the older
+#: picture on disk.
+_SAVE_GEN = itertools.count(1)
+_SAVE_STATE: Dict[str, int] = {"written": 0}
+#: This process's boot. ``id`` is new on every boot: a restart is an
+#: ``execv`` that keeps the pid, so the pid alone can't tell this server
+#: from the one before it. ``owner`` caches :func:`_owner`.
+_BOOT: Dict[str, object] = {"id": os.urandom(6).hex(), "owner": None}
+#: Saved items of other owners this process adopted (or dropped) at boot
+#: (:func:`_rec_key`), so its saves stop carrying the old copies.
+_HANDLED: set = set()
 
 
 def register_kind(kind: str, factory: Callable[[dict], Optional[Launch]]) -> None:
@@ -1285,7 +1621,7 @@ def queue_path() -> str:
 
 
 def _saved(it: dict) -> dict:
-    return {
+    out = {
         k: it.get(k)
         for k in (
             "title",
@@ -1294,27 +1630,173 @@ def _saved(it: dict) -> dict:
             "parent",
             "since",
             "reason",
+            "why",
             "creates",
             "args",
         )
     }
+    out["inflight"] = bool(it.get("inflight"))
+    return out
+
+
+def _proc_start(pid: int) -> Optional[int]:
+    """When ``pid`` started (clock ticks since boot, ``/proc/<pid>/stat``
+    field 22), None where unreadable. Tells a live owner from a process
+    that reused its pid."""
+    try:
+        with open("/proc/%d/stat" % int(pid), "rb") as f:
+            raw = f.read().decode("ascii", "replace")
+        return int(raw[raw.rindex(")") + 2 :].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _owner() -> dict:
+    """``{"pid", "boot", "start"}``: who saved an item (this process)."""
+    pid = os.getpid()
+    cur = _BOOT.get("owner")
+    if (
+        not isinstance(cur, dict)
+        or cur.get("pid") != pid
+        or cur.get("boot") != _BOOT["id"]
+    ):
+        cur = {"pid": pid, "boot": _BOOT["id"], "start": _proc_start(pid)}
+        _BOOT["owner"] = cur
+    return dict(cur)
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether a process ``pid`` exists. On Windows ``os.kill(pid, 0)``
+    would TERMINATE it, so there it asks the kernel instead."""
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            h = k32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
+            if not h:
+                return False
+            try:
+                code = ctypes.c_ulong()
+                ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
+                return bool(ok) and code.value == 259  # STILL_ACTIVE
+            finally:
+                k32.CloseHandle(h)
+        except Exception:  # noqa: BLE001 — unknown: adopt it, as before owners
+            return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (OSError, ValueError, OverflowError):
+        return False
+    return True
+
+
+def _owner_alive(owner) -> bool:
+    """Whether the server that saved an item still runs. Untagged (an older
+    version) or unreadable: no. This pid: only under this boot (the same pid
+    with another boot id is the server before an ``execv`` restart). Another
+    pid: it exists and is still the same process (its start time matches
+    when both are known; a reused pid is not the owner)."""
+    if not isinstance(owner, dict):
+        return False
+    try:
+        pid = int(owner.get("pid"))
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return owner.get("boot") == _BOOT["id"]
+    if not _pid_alive(pid):
+        return False
+    start = owner.get("start")
+    if isinstance(start, int) and not isinstance(start, bool):
+        now_start = _proc_start(pid)
+        if now_start is not None and now_start != start:
+            return False
+    return True
+
+
+def _is_mine(rec: dict) -> bool:
+    o = rec.get("owner")
+    return (
+        isinstance(o, dict)
+        and o.get("pid") == os.getpid()
+        and o.get("boot") == _BOOT["id"]
+    )
+
+
+def _rec_key(rec: dict) -> str:
+    o = rec.get("owner") if isinstance(rec.get("owner"), dict) else {}
+    return "%s|%s|%s|%s" % (
+        o.get("pid"),
+        o.get("boot"),
+        rec.get("title"),
+        rec.get("since"),
+    )
+
+
+@contextlib.contextmanager
+def _file_lock(path: str) -> Iterator[None]:
+    """An exclusive lock on ``<path>.lock`` across processes (``flock``),
+    for the read-merge-write of a save. Where it can't be had (no fcntl,
+    no directory yet) the save goes ahead unlocked."""
+    fd: Optional[int] = None
+    try:
+        import fcntl
+
+        fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        if fd is not None:
+            os.close(fd)
+        fd = None
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)  # closing the descriptor lets the lock go
 
 
 def _save() -> None:
-    """Rewrite the saved queue (the items with ``args``), atomically. Never
-    raises."""
+    """Rewrite the saved queue atomically: this process's items with
+    ``args`` (in flight first, then waiting), and every item another owner
+    saved, kept as it is (a second server on the same file; a stopped one's
+    items wait there for the next boot to adopt), except the ones this
+    process adopted. Merged under a file lock. Never raises."""
     if not PERSIST:
         return
     with _LOCK:
-        doc = {
-            "v": 1,
-            "items": [_saved(it) for it in _QUEUE if it.get("args") is not None],
-        }
+        gen = next(_SAVE_GEN)
+        mine = [_saved(it) for it in _INFLIGHT + _QUEUE if it.get("args") is not None]
+        handled = set(_HANDLED)
+    owner = _owner()
+    for rec in mine:
+        rec["owner"] = owner
     try:
         from backend.web.core import title_store
 
         with _SAVE_LOCK:
-            title_store.persist(queue_path, doc, "the launch queue")
+            if gen < _SAVE_STATE["written"]:
+                return
+            path = queue_path()
+            with _file_lock(path):
+                on_disk = title_store.load(lambda: path, _clean).get("items") or []
+                theirs = [
+                    rec
+                    for rec in on_disk
+                    if isinstance(rec.get("owner"), dict)
+                    and not _is_mine(rec)
+                    and _rec_key(rec) not in handled
+                ]
+                title_store.persist(
+                    lambda: path, {"v": 1, "items": mine + theirs}, "the launch queue"
+                )
+            _SAVE_STATE["written"] = gen
     except Exception:  # noqa: BLE001 — a failed save never breaks a launch
         pass
 
@@ -1335,10 +1817,16 @@ def _clean(doc: dict) -> Dict:
 
 
 def restore() -> int:
-    """Boot: put every saved item back in the queue, in its old order, through
-    its kind's factory (an unknown kind, or a factory answering None, drops
-    it), and turn saving on. They are automatic starts, so they wait for the
-    gate like any other. → how many came back. Never raises."""
+    """Boot: adopt every saved item whose owner is gone (an earlier boot of
+    this server, a stopped second server, or untagged from an older
+    version) and put it back in the queue through its kind's factory (an
+    unknown kind, or a factory answering None, drops it). Items a running
+    server owns stay where they are, its own. Ones that were starting when
+    their server stopped come first, then the rest in their old order. All
+    come back with ``why: "restart"`` until the drainer judges them again;
+    they are automatic starts, so they wait for the gate like any other.
+    The queue cap does not apply: a restore never drops what was saved.
+    Turns saving on. → how many came back. Never raises."""
     global PERSIST
     PERSIST = True
     try:
@@ -1347,8 +1835,15 @@ def restore() -> int:
         doc = title_store.load(queue_path, _clean)
     except Exception:  # noqa: BLE001
         doc = {}
+    adopt = [r for r in doc.get("items") or [] if not _owner_alive(r.get("owner"))]
+    adopt.sort(key=lambda r: not r.get("inflight"))  # stable: old order kept
     back = 0
-    for rec in doc.get("items") or []:
+    for rec in adopt:
+        with _LOCK:
+            _HANDLED.add(_rec_key(rec))
+            have = any(it["title"] == rec["title"] for it in _QUEUE + _INFLIGHT)
+        if have:
+            continue  # queued again since this boot: the newer launch stands
         factory = _FACTORIES.get(rec["kind"])
         try:
             launch = factory(dict(rec)) if factory else None
@@ -1361,22 +1856,31 @@ def restore() -> int:
                 rec["kind"],
             )
             continue
-        try:
-            enqueue(
+        before = str(rec.get("reason") or "")
+        reason = "back after a server restart" + (
+            "; it was starting when the server stopped"
+            if rec.get("inflight")
+            else ("; before it: %s" % before if before else "")
+        )
+        with _LOCK:
+            _put(
                 rec["title"],
                 launch,
                 kind=rec["kind"],
                 source=str(rec.get("source") or ""),
-                reason=str(rec.get("reason") or "waiting since before the restart"),
+                reason=reason,
+                why="restart",
                 parent=str(rec.get("parent") or ""),
                 creates=bool(rec.get("creates")),
                 args=rec["args"],
                 since=float(rec.get("since") or time.time()),
+                force=True,
             )
-            back += 1
-        except QueueFull:
-            break
+        back += 1
     _save()
+    if back:
+        _ensure_drainer()
+        _changed()
     return back
 
 
@@ -1388,14 +1892,15 @@ def rename(old: str, new: str) -> None:
     factory (:func:`register_kind`), since a launch closes over the title it
     was queued with and would look up a session that no longer has that name;
     one with no factory, or whose factory declines, keeps the launch it had.
-    A create's own title is left alone: no session has it yet to rename.
-    Then the saved queue is rewritten."""
+    A launch already starting keeps its launch (it is running) but is saved
+    under the new name. A create's own title is left alone: no session has
+    it yet to rename. Then the saved queue is rewritten."""
     if not old or not new or old == new:
         return
     rebuild: List[dict] = []
     changed = False
     with _LOCK:
-        for it in _QUEUE:
+        for it in _INFLIGHT + _QUEUE:
             if it.get("parent") == old:
                 it["parent"] = new
                 changed = True
@@ -1406,14 +1911,19 @@ def rename(old: str, new: str) -> None:
                 changed = True
             if it["title"] == old and not it.get("creates"):
                 it["title"] = new
-                rebuild.append(it)
+                if it.get("inflight"):
+                    it["tmux"] = _tmux_name(new)
+                else:
+                    rebuild.append(it)
                 changed = True
         if old in _DONE:
             rec = _DONE.pop(old)
             _DONE[new] = dict(rec, title=new)
-        old_n = _tmux_name(old)
+        old_n, new_n = _tmux_name(old), _tmux_name(new)
         if old_n in _ADMITTED:
-            _ADMITTED[_tmux_name(new)] = _ADMITTED.pop(old_n)
+            _ADMITTED[new_n] = _ADMITTED.pop(old_n)
+        if old_n in _UNDO:
+            _UNDO[new_n] = _UNDO.pop(old_n)
     for it in rebuild:
         factory = _FACTORIES.get(it["kind"])
         try:
@@ -1430,11 +1940,15 @@ def rename(old: str, new: str) -> None:
 
 def status() -> dict:
     """For the UI (``GET /api/system/memory`` → ``gate``): ``{"holding",
-    "queued": [...], "reason", "live", "cap", "warming",
+    "queued": [...], "reason", "why", "starting", "live", "cap", "warming",
     "projected_available", "projected_level", "room", "session_mb"}``.
-    ``holding`` is true while anything waits. Never raises."""
+    ``holding`` is true while anything waits; ``reason`` / ``why`` are the
+    head's; ``starting`` the titles admitted and still launching. Never
+    raises."""
     a = assess()
     q = items()
+    with _LOCK:
+        starting = [it["title"] for it in _INFLIGHT]
     b = a.get("budget") or {}
     return {
         "room": b.get("room"),
@@ -1442,6 +1956,8 @@ def status() -> dict:
         "holding": bool(q),
         "queued": q,
         "reason": q[0]["reason"] if q else "",
+        "why": q[0]["why"] if q else "",
+        "starting": starting,
         "live": a["live"],
         "cap": a["cap"],
         "warming": a["warming"],
@@ -1456,8 +1972,15 @@ def _reset_for_tests() -> None:
     _SETTINGS_CACHE.update({"at": -1e18, "val": {}})
     with _LOCK:
         _QUEUE.clear()
+        _INFLIGHT.clear()
         _DONE.clear()
         _ADMITTED.clear()
+        _UNDO.clear()
+        _HANDLED.clear()
         _LAST_AUTO["at"] = 0.0
+    # A new boot: what this process saved before now reads as an earlier
+    # server's (the same pid after an execv restart).
+    _BOOT.update(id=os.urandom(6).hex(), owner=None)
+    _SAVE_STATE["written"] = 0
     _PROBE_CACHE.update({"at": -1e18, "val": None})
     set_sizes_source(lambda: ({}, {}))

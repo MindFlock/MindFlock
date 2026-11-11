@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend import client
 from backend.mcp.policy import Flock
 from backend.mcp.protocol import ToolContext, ToolError
+from backend.mcp import waiting as _waiting
 
 _log = logging.getLogger(__name__)
 
@@ -1030,16 +1031,14 @@ class ShipTools:
             ],
         }
         if queued:
-            # Memory is short (the server's launch gate): queued, not failed.
-            out.update(
-                {
-                    "status": "queued: waiting for memory",
-                    "queued": True,
-                    "memory_reason": resp.get("memory_reason") or "",
-                    "position": resp.get("position"),
-                }
-            )
-        if resp.get("reason"):
+            # The server's launch gate queued it (memory, the agent cap, start
+            # spacing): queued, not failed. Same keys as spawn_session's;
+            # memory_reason stays as an alias of reason.
+            out.update(_waiting.queued_fields(resp))
+            out["memory_reason"] = out["reason"]
+            if resp.get("reason"):
+                out["reason_no_report"] = resp["reason"]
+        elif resp.get("reason"):
             out["reason"] = resp["reason"]
         if "report_back" not in resp:
             out["warnings"].append(
@@ -1048,10 +1047,7 @@ class ShipTools:
             )
         if queued:
             out["hint"] = (
-                "MindFlock starts it on its own — `memory_reason` says what "
-                "it waits for (memory, the agent cap, or starts spaced a few "
-                "seconds apart); one at a time, oldest first. wait_for_session "
-                "waits through the queue"
+                _waiting.QUEUED_HINT + " wait_for_session waits through the queue"
             )
         elif not ready:
             out["hint"] = (

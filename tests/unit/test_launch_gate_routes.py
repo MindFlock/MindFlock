@@ -174,7 +174,13 @@ def test_start_anyway_and_cancel_routes(instances, monkeypatch):
     ran = []
     gate.enqueue("w1", lambda: ran.append("w1"), kind="spawn")
     gate.enqueue("w2", lambda: ran.append("w2"), kind="spawn")
+    # A person's start like Restart: at critical memory it asks first...
     r = client.post("/api/launch-gate/w1/start")
+    assert r.status_code == 409
+    assert r.json()["memory_confirm"] is True and r.json()["level"] == "critical"
+    assert ran == [] and gate.waiting("w1") is not None
+    # ...and goes with the confirm's Start anyway.
+    r = client.post("/api/launch-gate/w1/start", json={"start_anyway": True})
     assert r.json() == {"title": "w1", "started": True, "error": ""}
     assert ran == ["w1"]
     assert client.post("/api/launch-gate/w2/cancel").json() == {
@@ -184,6 +190,91 @@ def test_start_anyway_and_cancel_routes(instances, monkeypatch):
     assert ran == ["w1"] and gate.items() == []
     assert client.post("/api/launch-gate/w2/start").status_code == 404
     assert client.post("/api/launch-gate/w2/cancel").status_code == 404
+
+
+def test_start_anyway_goes_straight_through_when_memory_is_fine(instances, monkeypatch):
+    _memory(monkeypatch, "ok", available=12 * GiB)
+    ran = []
+    gate.enqueue("w1", lambda: ran.append("w1"), kind="spawn")
+    r = client.post("/api/launch-gate/w1/start")
+    assert r.status_code == 200 and r.json()["started"] is True and ran == ["w1"]
+
+
+# --------------------------------------------------------------------------- #
+# queue changes are pushed (core.launch_gate_push)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def pushed(monkeypatch):
+    from backend.web.core import events
+    from backend.web.core import launch_gate_push as push
+
+    push._reset_for_tests()
+    emitted, republished, patched = [], [], {}
+    rows = [{"title": "s1", "waiting_for_memory": None}]
+    monkeypatch.setattr(events, "sessions_snapshot", lambda: [dict(r) for r in rows])
+    monkeypatch.setattr(
+        events, "patch_session_snapshot", lambda t, row: patched.__setitem__(t, row)
+    )
+    monkeypatch.setattr(
+        events.BUS, "emit", lambda event, **kw: emitted.append((event, kw)) or kw
+    )
+    srv = SimpleNamespace(
+        ENGINE=SimpleNamespace(instances={"s1": object()}),
+        _republish_session=republished.append,
+    )
+    yield SimpleNamespace(
+        srv=srv, emitted=emitted, republished=republished, patched=patched, push=push
+    )
+    push._reset_for_tests()
+
+
+def test_a_queue_change_patches_the_row_and_says_so(pushed, monkeypatch):
+    _memory(monkeypatch, "low")
+    gate.enqueue("s1", lambda: None, kind="queued prompt", reason="memory is low")
+    env = pushed.push.push(pushed.srv)
+    # The waiting row is patched in place (no probes), and one event goes out.
+    assert pushed.patched["s1"]["waiting_for_memory"]["title"] == "s1"
+    assert pushed.republished == []
+    assert [e for e, _ in pushed.emitted] == ["system.memory_changed"]
+    assert env["old"] == env["new"] == "low"
+    assert env["data"]["cause"] == "launch_gate"
+    assert env["data"]["gate"]["queued"][0]["title"] == "s1"
+    # Nothing new: no second event.
+    assert pushed.push.push(pushed.srv) is None and len(pushed.emitted) == 1
+    # It leaves the queue: the row is republished in full (status moves too).
+    gate.cancel("s1")
+    pushed.push.push(pushed.srv)
+    assert pushed.republished == ["s1"] and len(pushed.emitted) == 2
+    assert pushed.emitted[-1][1]["data"]["gate"]["queued"] == []
+
+
+def test_the_nudge_is_thread_safe_and_coalesces_bursts(pushed, monkeypatch):
+    import asyncio
+    import threading
+
+    monkeypatch.setattr(gate, "on_change", None)
+    calls = []
+    monkeypatch.setattr(pushed.push, "push", lambda srv: calls.append(srv))
+    loop = asyncio.new_event_loop()
+    try:
+        pushed.push.install(pushed.srv, loop, delay=0.05)
+        assert gate.on_change is not None
+
+        def burst():
+            for _ in range(5):
+                gate.on_change()
+
+        th = threading.Thread(target=burst)
+        th.start()
+        th.join()
+        loop.run_until_complete(asyncio.sleep(0.3))
+        assert calls == [pushed.srv]
+        # A later change is pushed again.
+        gate.on_change()
+        loop.run_until_complete(asyncio.sleep(0.3))
+        assert len(calls) == 2
+    finally:
+        loop.close()
 
 
 def test_sleep_idle_route(monkeypatch):
@@ -248,6 +339,56 @@ def test_a_mailbox_wake_waits_for_memory(asleep, monkeypatch, tmp_path):
     _memory(monkeypatch, "ok", available=12 * GiB)
     assert gate.drain_once() == "zz"
     assert asleep.launched == ["zz"]
+
+
+def test_a_full_launch_queue_keeps_the_prompt_and_says_why(asleep, monkeypatch):
+    from backend.web.core import events, queue_driver
+
+    sent = []
+
+    def _emit(event, **kw):
+        if event == "session.queue_changed":
+            sent.append((event, kw))
+
+    monkeypatch.setattr(events.BUS, "emit", _emit)
+    monkeypatch.setenv("MINDFLOCK_LAUNCH_QUEUE_MAX", "1")
+    _memory(monkeypatch, "low")
+    monkeypatch.setattr(server, "_agent_activity", lambda inst, title: "offline")
+    gate.enqueue("other", lambda: None, kind="spawn")
+    prompt_queue.enqueue("zz", "next")
+    try:
+        server._drain_one_queue("zz")
+        server._drain_one_queue("zz")  # asked again; said once
+        why = queue_driver.gate_full_reason("zz")
+        assert "1 launches are already waiting" in why
+        assert asleep.launched == [] and gate.waiting("zz") is None
+        assert prompt_queue.get_state("zz")["items"]  # the prompt stays queued
+        assert len(sent) == 1 and sent[0][1]["data"]["waiting"] == why
+        assert server._queue_state_json("zz")["waiting"] == why
+        assert server._queue_summary("zz", prompt_queue.snapshot())["waiting"] == why
+        # Room again: the relaunch gets in and the reason clears.
+        gate.cancel("other")
+        _memory(monkeypatch, "ok", available=12 * GiB)
+        server._drain_one_queue("zz")
+        assert queue_driver.gate_full_reason("zz") == ""
+        assert asleep.launched and sent[-1][1]["data"]["waiting"] == ""
+        assert "waiting" not in server._queue_summary("zz", prompt_queue.snapshot())
+    finally:
+        queue_driver._GATE_FULL.pop("zz", None)
+
+
+def test_a_mailbox_wake_with_the_launch_queue_full_says_so(
+    asleep, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MINDFLOCK_MAILBOX_FILE", str(tmp_path / "mail.json"))
+    monkeypatch.setenv("MINDFLOCK_LAUNCH_QUEUE_MAX", "1")
+    _memory(monkeypatch, "critical", available=1 * GiB)
+    gate.enqueue("other", lambda: None, kind="spawn")
+    msg = mailbox.post("zz", "worker done", sender="w1")
+    result, detail = server._mail_deliver_now(server.ENGINE.instances["zz"], "zz", msg)
+    assert result == "pending" and "can't wake yet" in detail
+    assert "already waiting for memory" in detail
+    assert asleep.launched == []
 
 
 def test_a_person_wake_is_never_queued(asleep, monkeypatch):
@@ -335,8 +476,10 @@ def test_a_team_run_holds_on_warming_and_the_cap_not_spacing(monkeypatch):
     monkeypatch.setenv("MINDFLOCK_MAX_LIVE_AGENTS", "1")
     gate.note_start("a1")
     assert trd._gate_holds() is True and trd._gate_room() == 0
+    # The run's badge can say why: the cap, not "memory".
+    assert trd._gate_why() == "cap"
     monkeypatch.delenv("MINDFLOCK_MAX_LIVE_AGENTS")
     gate._reset_for_tests()
     monkeypatch.setenv("MINDFLOCK_AUTO_LAUNCH_SPACING", "600")
     gate.note_start("a2", auto=True)  # spacing alone never holds a run
-    assert trd._gate_holds() is False
+    assert trd._gate_holds() is False and trd._gate_why() == ""

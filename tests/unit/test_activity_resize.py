@@ -278,6 +278,10 @@ def test_the_record_survives_an_offline_poll_so_a_resize_still_rebaselines(
     live_run = server.subprocess.run  # the harness's tmux stand-in
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: dead)
     clock["t"] += 4
+    # One miss is not a death: the last state stands until a second miss, at
+    # least a couple of seconds later, confirms it.
+    assert server._agent_activity(inst, "t") == "working"
+    clock["t"] += 4
     assert server._agent_activity(inst, "t") == "offline"
     assert "t" in server._ACTIVITY_CACHE, "an absent reading is not an erased history"
 

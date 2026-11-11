@@ -401,7 +401,7 @@ def test_claude_runner_goes_through_the_session_host_on_windows(win, tmp_path):
     assert "oom_score_adj" not in new[9]
     assert [c[:2] for c in calls[1:]] == [["tmux", "set-option"]] * 2
     asyncio.run(runner._kill_existing_session("tkt"))
-    assert calls[-1] == ["tmux", "kill-session", "-t", "tkt"]
+    assert calls[-1] == ["tmux", "kill-session", "-t", "=tkt"]  # exact name
 
 
 @posix_harness

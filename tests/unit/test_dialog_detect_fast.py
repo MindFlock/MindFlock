@@ -339,7 +339,7 @@ def _fake_tmux(monkeypatch, panes, fail_on=None, rc=None):
                 out.append(argv[i + 2] + "\n")
                 i += 3
             elif argv[i] == "capture-pane":
-                name = argv[i + 3]
+                name = argv[i + 3].removeprefix("=").removesuffix(":")
                 if name == fail_on or name not in panes:
                     code = 1
                     break
@@ -1046,7 +1046,12 @@ def test_fingerprint_is_none_when_resolve_or_the_parser_fails(monkeypatch):
 
 # ---- capture_visible_many, harder --------------------------------------------------- #
 def _captured(argv):
-    return [argv[i + 3] for i, a in enumerate(argv) if a == "capture-pane"]
+    # The session each capture names (its target is the exact form, "=name:").
+    return [
+        argv[i + 3].removeprefix("=").removesuffix(":")
+        for i, a in enumerate(argv)
+        if a == "capture-pane"
+    ]
 
 
 def test_capture_many_keeps_every_non_newline_line_break(monkeypatch):
@@ -1386,7 +1391,7 @@ def test_capture_many_never_puts_a_name_through_a_tmux_format(monkeypatch):
         assert "#" not in h and ";" not in h
     # Each name is one whole argv element after -t, as given.
     assert _captured(argv) == odd
-    assert all(argv[argv.index(n) - 1] == "-t" for n in odd)
+    assert all(argv[argv.index("=" + n + ":") - 1] == "-t" for n in odd)
 
 
 # ---- the fingerprint ignores everything but the dialog ---------------------------------- #

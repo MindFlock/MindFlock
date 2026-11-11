@@ -24,13 +24,15 @@ import {
   agentBlockedState,
   deriveSessionState,
   needsYouAction,
+  startFailedHint,
   type NeedsYouAct,
 } from "../../lib/sessionState";
+import { waitLine as waitLineOf } from "../../lib/waitWhy";
 import { AgentBlockedChip } from "../setup/AgentBlocked";
 import { useSetup } from "../setup/useSetup";
 import { reviveSession, startSession } from "../../lib/revive";
 import { wakeSession } from "../../lib/wake";
-import { startWaiting } from "../../lib/launchGate";
+import { cancelWaiting, startWaiting } from "../../lib/launchGate";
 import { backgroundChip, backgroundJobs } from "../../lib/backgroundJobs";
 import { expectBackgroundJob, stopBackgroundJob } from "../../lib/stopBackgroundJob";
 import { EXPECT_PRESETS, expectOf, formatSpan, parseDuration } from "../../lib/jobExpectation";
@@ -400,11 +402,19 @@ export const SidebarRow = memo(function SidebarRow({
   // nothing more pressing (a ship line, a family line) has the slot.
   // "untitled · Idle" said nothing about the work.
   const task = taskLineOf(inst).text;
-  const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !!task;
-  const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent);
+  // A start waiting in the launch gate says what it is, for how long and
+  // where in line ("New worker · waiting 3m · 2nd in line"); one that waited
+  // and then failed says what failed. Either takes the task line's slot.
+  const wait = ss.waiting && inst.waiting_for_memory ? inst.waiting_for_memory : null;
+  const waitText = wait ? waitLineOf(wait, Date.now()) : "";
+  const failText = ss.startFailed && inst.start_failed ? startFailedHint(inst.start_failed).split("\n")[0] : "";
+  const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !!task;
+  const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
   useNow(wline?.state === "working" || ship?.state === "working" ? 30_000 : false);
+  // So does "waiting 3m" on a start the launch gate holds.
+  useNow(wait ? 30_000 : false);
   // "waiting on job · 2h 10m of ~6h" counts up by itself too.
   useNow(backgroundJobs(inst).some((j) => expectOf(j)) ? 60_000 : false);
   // Subscribed (not a render-time snapshot): the row must clear its red dot
@@ -764,6 +774,16 @@ export const SidebarRow = memo(function SidebarRow({
                 {agentBlockedLine(noAgent)}
               </span>
             )}
+            {!editing && waitText && (
+              <span className="lineage waitmem-line" title={ss.hint}>
+                {waitText}
+              </span>
+            )}
+            {!editing && failText && (
+              <span className="lineage startfail-line" title={ss.hint}>
+                {failText}
+              </span>
+            )}
             {!editing && taskLine && <TaskLine inst={inst} />}
             {!editing && !ship && !lline && !wline && lineage && (
               <span
@@ -804,21 +824,34 @@ export const SidebarRow = memo(function SidebarRow({
             )}
           </span>
           {ss.waiting && !inst.device ? (
-            // Waiting for memory (lib/launchGate): it starts by itself once
-            // there is room; the chip's remedy is Start anyway.
-            <button
-              type="button"
-              className={"stagechip chip-restart chip-waitmem " + chip.cls}
-              title={chip.title}
-              aria-label={"Waiting for memory — start it anyway"}
-              onClick={(e) => act(() => void startWaiting(title), e)}
-              onDoubleClick={(e) => e.stopPropagation()}
-            >
-              {chip.label}
-              <span className="chip-act" aria-hidden="true">
-                Start anyway
-              </span>
-            </button>
+            // Waiting in the launch gate (lib/launchGate): it starts by itself
+            // once the gate allows; the chip's remedy is Start anyway, and
+            // Stop waiting beside it takes it out of the queue.
+            <>
+              <button
+                type="button"
+                className={"stagechip chip-restart chip-waitmem " + chip.cls}
+                title={chip.title}
+                aria-label={chip.label + " — start it anyway"}
+                onClick={(e) => act(() => void startWaiting(title), e)}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                {chip.label}
+                <span className="chip-act" aria-hidden="true">
+                  Start anyway
+                </span>
+              </button>
+              <button
+                type="button"
+                className="stagechip chip-restart chip-waitstop"
+                title="Stop waiting — it won't start by itself"
+                aria-label={"Stop waiting — " + shown + " won't start by itself"}
+                onClick={(e) => act(() => void cancelWaiting(title, !!wait?.creates), e)}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                Stop waiting
+              </button>
+            </>
           ) : lchip ? (
             <button
               type="button"
@@ -847,6 +880,20 @@ export const SidebarRow = memo(function SidebarRow({
             </span>
           ) : noAgent ? (
             <AgentBlockedChip block={noAgent} title={title} className={"stagechip chip-restart " + chip.cls} hint={ss.hint} />
+          ) : ss.startFailed && !pending ? (
+            // An automatic start that waited and then failed: red, never a
+            // calm "Starting" or a plain "Offline". Its remedies are the
+            // row's own menu (Start, Close…), so the chip opens it.
+            <button
+              type="button"
+              className={"stagechip chip-needs chip-startfail " + chip.cls}
+              title={chip.title}
+              aria-label={"Couldn't start — open its actions"}
+              onClick={(e) => act(() => openAtKebab(e.detail === 0), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              {chip.label}
+            </button>
           ) : ss.held && !paused ? (
             // Held offline after a crash (lib/heldOffline): nothing starts it
             // by itself, so the chip says its one remedy — "Offline · Start".

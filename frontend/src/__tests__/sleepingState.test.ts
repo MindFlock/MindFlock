@@ -190,3 +190,63 @@ describe("the activity debounce across a wake", () => {
     expect(effectiveActivity(row({ title: "wk", activity: "idle" }))).toBe("idle");
   });
 });
+
+describe("held offline AND asleep", () => {
+  // A held session refuses the wake, so it must never read "opening it wakes it".
+  it("reads Offline · Start with its reason, not Sleeping", () => {
+    const inst = row({ activity: "offline", sleeping: asleep, held_offline: true, held_reason: "the server restarted" });
+    const ss = deriveSessionState(inst, { now: NOW });
+    expect(ss.label).toBe("Offline");
+    expect(ss.held).toBe(true);
+    expect(ss.hint).toContain("the server restarted");
+    expect(ss.hint).not.toContain("wakes it");
+    const html = render(inst);
+    expect(chip(html)?.[2]).toContain("chip-held");
+    expect(html).toContain("Start");
+    expect(html).not.toContain("chip-wake");
+  });
+});
+
+describe("an automatic start that waited and then failed", () => {
+  const failed = { error: "the worktree could not be created", at: NOW / 1000 - 60, prompt_preview: "Fix the login bug" };
+
+  it("says Couldn't start, red, out of the bell and out of Start all", () => {
+    const inst = row({ activity: "offline", start_failed: failed });
+    const ss = deriveSessionState(inst, { now: NOW });
+    expect(ss.label).toBe("Couldn't start");
+    expect(ss.tone).toBe("broken");
+    expect(ss.startFailed).toBe(true);
+    expect(ss.inBell).toBe(false);
+    expect(ss.restartable).toBe(false);
+    expect(ss.hint).toContain("the worktree could not be created");
+    expect(ss.hint).toContain("Its prompt: Fix the login bug");
+    expect(offlineRows([inst])).toEqual([]);
+  });
+
+  it("is never a calm Starting or Sleeping row", () => {
+    expect(deriveSessionState(row({ status: "loading", pending: true, start_failed: failed })).label).toBe("Couldn't start");
+    expect(deriveSessionState(row({ activity: "offline", sleeping: asleep, start_failed: failed })).label).toBe("Couldn't start");
+  });
+
+  it("renders its error on the row and a red chip that opens its menu", () => {
+    const html = render(row({ activity: "offline", start_failed: failed }));
+    expect(chip(html)?.[2]).toContain("chip-startfail");
+    expect(chip(html)?.[3]).toBe("Couldn&#x27;t start");
+    expect(html).toContain("startfail-line");
+    expect(html).toContain("the worktree could not be created");
+  });
+});
+
+describe("a waiting row", () => {
+  const w = { id: "lq1", title: "s", kind: "revive", since: Math.floor(Date.now() / 1000) - 180, reason: "", position: 2, why: "cap" };
+
+  it("says what it is, how long and where in line, with Stop waiting beside Start anyway", () => {
+    const html = render(row({ waiting_for_memory: w }));
+    expect(html).toContain("waitmem-line");
+    expect(html).toContain("Restart · waiting 3m · 2nd in line");
+    expect(html).toContain("Waiting for a free agent slot");
+    expect(html).toContain("Start anyway");
+    expect(html).toContain("Stop waiting");
+    expect(html).not.toMatch(/Waiting for memory/);
+  });
+});

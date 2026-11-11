@@ -91,6 +91,9 @@ export function useInstances() {
       // draw; nothing else (the grid, the pickers, the bell) ever sees them.
       const fetched = normalizeFlightRows(splitLockedRows(await api<Instance[]>("/api/instances")));
       window.mindflock?.__setSessions?.(fetched);
+      // A launch-gate queue change republishes rows: the wait bar's reading
+      // follows at once instead of on its next poll.
+      noteGateRows(fetched);
       // A session being moved keeps its "moving…" mark until the move's
       // event (`withMoving`).
       const list = withMoving(fetched, Date.now());
@@ -293,10 +296,62 @@ export function useMindflockStatus() {
   });
 }
 
+/** Refetch the memory reading now (the notice, the rail's wait bar, the
+ * gauge and the team-run badge all read it). */
+export function refreshMemory() {
+  return queryClient.invalidateQueries({ queryKey: ["system-memory"] });
+}
+
+let memoryBridged = false;
+/** The memory reading used to catch up only on its 5–15 s poll: the notice,
+ * the wait bar and the gauge lagged the server's own news. Refetch it at
+ * once on `system.memory_changed` (the level stepped) and
+ * `system.sessions_slept` (a sleep pass freed memory), and on a reconnect.
+ * Replays only refetch too — it is one cheap read. Installed once per page. */
+function bridgeMemoryEvents() {
+  const ev = window.mindflock?.events;
+  if (memoryBridged || !ev) return; // events.js may not have loaded yet
+  memoryBridged = true;
+  const bump = () => {
+    void refreshMemory();
+    // The gauge's own numbers (a disabled query ignores this).
+    void queryClient.invalidateQueries({ queryKey: ["memory-detail"] });
+  };
+  for (const name of ["system.memory_changed", "system.sessions_slept"]) ev.subscribe(name, bump);
+  ev.onStatus((status) => {
+    if (status === "connected") void refreshMemory();
+  });
+}
+
+/** What the launch gate shows on the rows: who waits, why, where in line,
+ * and whose automatic start failed. A change between two instance polls is a
+ * queue change (the server republishes rows on one), so the memory reading —
+ * whose `gate` the wait bar reads — is refetched at once. Pure. */
+export function gateRowsKey(rows: readonly Partial<Instance>[] | null | undefined): string {
+  const bits: string[] = [];
+  for (const r of rows || []) {
+    const w = r.waiting_for_memory;
+    if (w) bits.push("w:" + r.title + ":" + (w.why || "") + ":" + w.position);
+    if (r.start_failed) bits.push("f:" + r.title + ":" + r.start_failed.at);
+  }
+  return bits.sort().join("|");
+}
+
+let lastGateRows: string | null = null;
+/** Called with each fresh instance list: refetch the memory reading when the
+ * gate's rows changed (never on the first list — the reading loads itself). */
+export function noteGateRows(rows: readonly Partial<Instance>[]): void {
+  const key = gateRowsKey(rows);
+  const was = lastGateRows;
+  lastGateRows = key;
+  if (was !== null && was !== key) void refreshMemory();
+}
+
 /** The machine's memory headroom (`GET /api/system/memory`). ONE key for
  * the memory notice and the rail's Restart-all strip; 15s is plenty for a
  * level the server itself only steps with hysteresis. */
 export function useMemory() {
+  useEffect(bridgeMemoryEvents, []);
   return useQuery({
     queryKey: ["system-memory"],
     queryFn: () => api<MemoryReading>("/api/system/memory"),

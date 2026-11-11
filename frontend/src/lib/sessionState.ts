@@ -59,6 +59,7 @@ import { backgroundHint } from "./backgroundJobs";
 import { agentName } from "./agentNames";
 import { haltedWhy, perchLabel } from "./flights";
 import { heldHint, isHeldOffline } from "./heldOffline";
+import { waitChip, waitHint, waitWhyOf } from "./waitWhy";
 
 // --- Live agent activity, debounced across 2 polls (events push instantly) --
 
@@ -144,9 +145,12 @@ export interface SessionState {
   /** Held offline after a crash (lib/heldOffline): its remedy is Start, and
    * nothing else will bring it back. */
   held?: boolean;
-  /** Waiting for memory (lib/launchGate): it starts by itself once memory
-   * allows; its remedy is Start anyway. */
+  /** Waiting in the launch gate (lib/launchGate): it starts by itself once
+   * the gate allows; its remedies are Start anyway and Stop waiting. */
   waiting?: boolean;
+  /** An automatic start that waited and then failed (`start_failed`): the
+   * row says "Couldn't start" with the error. */
+  startFailed?: boolean;
 }
 
 export interface SessionStateExtras {
@@ -287,16 +291,41 @@ export const PAUSED_FLIGHT_LABEL = "Paused route";
 /** The rail's word for a held worker whose agent starts on its turn. */
 export const HELD_WORKER_LABEL = "Waiting";
 
-/** The rail's word for a session whose start waits for memory. */
+/** The rail's word for a session whose start waits for memory (one of the
+ * launch gate's whys — lib/waitWhy has the words for the others). */
 export const WAITING_FOR_MEMORY_LABEL = "Waiting for memory";
 
-function waitingState(w: NonNullable<Instance["waiting_for_memory"]>): SessionState {
-  const hint =
-    "Waiting for memory" +
-    (w.reason ? " — " + w.reason : "") +
-    (w.position > 1 ? " (" + w.position + " in line)" : "") +
-    ". It starts by itself once there is room; Start anyway starts it now.";
-  return { state: "starting", label: WAITING_FOR_MEMORY_LABEL, tone: "muted", inBell: false, restartable: false, waiting: true, hint };
+function waitingState(w: NonNullable<Instance["waiting_for_memory"]>, now: number): SessionState {
+  const label = waitChip(waitWhyOf(w), Number(w.position) || 1);
+  return { state: "starting", label, tone: "muted", inBell: false, restartable: false, waiting: true, hint: waitHint(w, now) };
+}
+
+/** The rail's word for an automatic start that waited and then failed. */
+export const START_FAILED_LABEL = "Couldn't start";
+
+/** "Couldn't start at 14:02: <error>" and, when the start carried one, the
+ * prompt it would have sent. The row's line and the chip's tooltip. */
+export function startFailedHint(f: NonNullable<Instance["start_failed"]>): string {
+  const err = String(f.error || "").trim() || "it failed to start";
+  const at = Number(f.at) || 0;
+  let hint = START_FAILED_LABEL + (at > 0 ? " at " + fmtClock(at) : "") + ": " + err;
+  const prompt = String(f.prompt_preview || "").trim();
+  if (prompt) hint += "\nIts prompt: " + prompt;
+  return hint + "\nNothing retries it by itself — its ⋯ menu has what you can do.";
+}
+
+function startFailedState(f: NonNullable<Instance["start_failed"]>): SessionState {
+  // Broken, but out of the bell and out of Restart all (restartable false):
+  // the row itself says what failed, and its menu holds the remedies.
+  return {
+    state: "offline",
+    label: START_FAILED_LABEL,
+    tone: "broken",
+    inBell: false,
+    restartable: false,
+    startFailed: true,
+    hint: startFailedHint(f),
+  };
 }
 
 /** The rail's word for a sleeping session. */
@@ -466,15 +495,20 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   // agent is paused while its folder travels; it resumes there by itself.
   if ((inst as Instance & { moving?: boolean }).moving)
     return { state: "starting", label: "Moving…", tone: "muted", inBell: false, restartable: false, hint: "Moving the session's folder — it resumes there when the move is done" };
-  if (inst.waiting_for_memory) return waitingState(inst.waiting_for_memory);
+  if (inst.waiting_for_memory) return waitingState(inst.waiting_for_memory, now);
+  // An automatic start that waited and then failed: never a healthy
+  // "Starting" or a plain "Offline" — it says what failed.
+  if (inst.start_failed) return startFailedState(inst.start_failed);
   if (inst.pending || inst.status === "loading")
     return { state: "starting", label: STATE_LABEL.starting, tone: "muted", inBell: false, restartable: false, hint: "Provisioning workspace" };
-  if (inst.sleeping) return sleepingState(inst.sleeping, now);
   // Held offline after a crash (backend core/held.py): no agent, no memory,
   // and nothing starts it but a person's Start. Out of the bell — after a
   // crash that would be every session at once; the rail's one notice says it.
+  // Ahead of Sleeping: a held session refuses the wake, so "opening it wakes
+  // it" would be wrong — it reads "Offline · Start" with its reason.
   if (isHeldOffline(inst))
     return { state: "offline", label: STATE_LABEL.offline, tone: "broken", inBell: false, restartable: true, held: true, hint: heldHint(inst.held_reason) };
+  if (inst.sleeping) return sleepingState(inst.sleeping, now);
   if (inst.setup && inst.setup.state === "running")
     return {
       state: "starting",

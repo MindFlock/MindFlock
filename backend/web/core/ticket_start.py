@@ -664,11 +664,13 @@ def record_result(story, branch: str | None = None, error: str | None = None) ->
 # Launching a ticket session (the Intake panel's "Begin work", the MCP's
 # spawn_ticket_session, and a team run's ticket task)
 # --------------------------------------------------------------------------- #
-def _gate_turn(title: str, lineage: dict):
+def _gate_turn(title: str, lineage: dict, args: Optional[dict] = None):
     """Ask the launch gate for an agent's ticket start → ``(event, record)``:
     the event is set when it may launch (now, or when the queue gets to it),
     the record is its queue entry (None = it goes now). A full queue is a
-    409 :class:`LaunchError` (its pending row dropped)."""
+    409 :class:`LaunchError` (its pending row dropped). ``args`` (``{"launch":
+    <launch()'s keywords>}``, JSON): what a restart needs to start it again
+    (:func:`_restore_ticket`) — with it the wait survives a restart."""
     import threading
 
     from backend.web.core import launch_gate as _gate
@@ -687,6 +689,7 @@ def _gate_turn(title: str, lineage: dict):
             source="agent",
             parent=str(lineage.get("parent") or ""),
             creates=True,
+            args=args,
         )
     except _gate.QueueFull as err:
         _server()._pending_drop(title)
@@ -701,6 +704,122 @@ def _gate_turn(title: str, lineage: dict):
 
 #: How often a waiting ticket start checks for its turn.
 _TURN_POLL_SECONDS = 1.0
+
+
+def _gate_cancelled(title: str) -> bool:
+    """Whether ``title``'s wait in the launch gate was cancelled (Stop
+    waiting): its failure is the person's choice, not one to keep."""
+    from backend.web.core import launch_gate as _gate
+
+    return (_gate.last_outcome(title) or {}).get("error") == "cancelled"
+
+
+def _ticket_preview(source: str, ticket_id: str, story=None, extra: str = "") -> str:
+    """What a failed ticket start's row keeps of its task: the ticket, its
+    name, and the brief it was started with."""
+    name = str(getattr(story, "name", "") or "") if story is not None else ""
+    head = "ticket %s %s" % (source, ticket_id) + (": %s" % name if name else "")
+    more = extra.strip() if extra else ""
+    return (head + ("\n" + more if more else ""))[:200]
+
+
+#: How long a restored ticket start's launch waits for launch() on the loop.
+_RESTORE_TIMEOUT_S = 600.0
+
+
+def _restore_ticket(rec: dict):
+    """A saved waiting ticket start, after a restart (launch_gate.restore):
+    its placeholder row again, and a launch that runs :func:`launch` once
+    more with the saved keywords, ``admitted`` (the gate let it go: it does
+    not queue again). Every check launch() makes is made again — the ticket
+    is fetched afresh, the title re-claimed, the flight re-armed. None (and
+    a failed row, ``session_create.note_start_failed``) when its name was
+    taken meanwhile or its saved keywords can't be read."""
+    from backend.web.core import session_create as _session_create
+
+    title = str(rec.get("title") or "")
+    kw = (rec.get("args") or {}).get("launch")
+    if not title:
+        return None
+    if not isinstance(kw, dict) or not kw.get("source") or not kw.get("ticket_id"):
+        _session_create.note_start_failed(
+            title,
+            "its saved ticket start could not be read back after a restart",
+            parent=str(rec.get("parent") or ""),
+            kind="ticket",
+        )
+        return None
+    lineage = dict(_NO_LINEAGE, **(kw.get("lineage") or {}))
+    parent = str(lineage.get("parent") or "")
+    preview = _ticket_preview(
+        str(kw["source"]), str(kw["ticket_id"]), None, str(kw.get("extra_prompt") or "")
+    )
+    srv = _server()
+
+    def _failed(err: str) -> str:
+        _session_create.note_start_failed(
+            title,
+            err,
+            parent=parent,
+            kind="ticket",
+            prompt=preview,
+            spawned=bool(lineage.get("spawned")),
+        )
+        return err
+
+    if title in srv.ENGINE.instances:
+        _failed(
+            "another session took the name %s while this ticket start waited for "
+            "memory (across a restart) — it was not started" % title
+        )
+        return None
+    srv._pending_add(
+        title,
+        "tix",
+        branch=str(kw.get("branch") or ""),
+        parent=parent,
+        spawned=bool(lineage.get("spawned")),
+    )
+    keywords = {
+        "title": title,
+        "branch": str(kw.get("branch") or "") or None,
+        "depth": str(kw.get("depth") or ""),
+        "agent": str(kw.get("agent") or ""),
+        "effort": str(kw.get("effort") or ""),
+        "lineage": lineage,
+        "extra_prompt": str(kw.get("extra_prompt") or ""),
+        "override_claim": bool(kw.get("override_claim")),
+        "repo": str(kw.get("repo") or ""),
+        "plan": str(kw.get("plan") or ""),
+        "admitted": True,
+    }
+
+    def _launch() -> Optional[str]:
+        # Its placeholder is launch()'s to make again: left here, launch()
+        # would read it as a start already in flight and refuse (409).
+        srv._pending_drop(title)
+        coro = launch(str(kw["source"]), str(kw["ticket_id"]), **keywords)
+        loop = _session_create._LAUNCH_LOOP.get("loop")
+        try:
+            if isinstance(loop, asyncio.AbstractEventLoop) and loop.is_running():
+                fut = asyncio.run_coroutine_threadsafe(coro, loop)
+                try:
+                    fut.result(timeout=_RESTORE_TIMEOUT_S)
+                except TimeoutError:
+                    fut.cancel()
+                    raise TimeoutError(
+                        "the ticket start did not answer within %d s"
+                        % _RESTORE_TIMEOUT_S
+                    ) from None
+            else:
+                asyncio.run(coro)
+        except LaunchError as err:
+            return _failed(str(err.body.get("error") or err))
+        except Exception as exc:  # noqa: BLE001 — the gate records it too
+            return _failed(str(exc) or exc.__class__.__name__)
+        return None
+
+    return _launch
 
 
 async def _await_turn(title: str, ev) -> None:
@@ -744,6 +863,7 @@ async def launch(
     override_claim: bool = False,
     repo: str = "",
     plan: str = "",
+    admitted: bool = False,
 ) -> dict:
     """Start a coding session for one ticket and return the 202 body.
 
@@ -771,6 +891,11 @@ async def launch(
       server's resolution (``server._intake_plan``: a ``depth`` given here,
       the source's ``plan``, the built-in cut at the source's depth). A flight
       is armed on the title before the session exists, in place of the depth.
+    * ``admitted``: the launch gate already let this start go (a wait that
+      survived a restart, :func:`_restore_ticket`) — it does not ask again.
+      An agent's start that waits is saved with these keywords, and when it
+      waited and then fails its row stays as a failure
+      (``session_create.note_start_failed``).
 
     Raises :class:`LaunchError` (400 a ``repo`` the source doesn't have,
     404 unknown ticket / source, 409 a session
@@ -921,8 +1046,34 @@ async def launch(
 
     # An agent's start is automatic: it asks the launch gate now (atomically)
     # and, when it has to wait, its pending row says "Waiting for memory" and
-    # the launch below waits for its turn. Not saved across a restart.
-    turn = _gate_turn(title, lineage) if lineage.get("spawned") and not run_id else None
+    # the launch below waits for its turn. Saved with what it takes to start
+    # it again, so the wait survives a restart (_restore_ticket).
+    turn = (
+        _gate_turn(
+            title,
+            lineage,
+            {
+                "launch": {
+                    "source": source,
+                    "ticket_id": ticket_id,
+                    "title": title,
+                    "branch": branch,
+                    "depth": depth_override,
+                    "agent": agent_override,
+                    "effort": effort_override,
+                    "lineage": dict(lineage),
+                    "extra_prompt": extra_prompt or "",
+                    "override_claim": bool(override_claim),
+                    "repo": str(repo or ""),
+                    "plan": str(plan or ""),
+                }
+            },
+        )
+        if lineage.get("spawned") and not run_id and not admitted
+        else None
+    )
+    # It waited (now, or before a restart): a failure keeps its row.
+    waited = admitted or (turn is not None and turn[1] is not None)
 
     async def _bg_start() -> None:
         # Same shape as the pipeline's SessionRunner.run, but against THIS
@@ -930,6 +1081,7 @@ async def launch(
         # reload. The engine owns provisioning (inside Instance.Start), so
         # unlike the PR path there is no pre-provision step.
         marked = False
+        kept = False
         try:
             if turn is not None:
                 await _await_turn(title, turn[0])
@@ -1051,17 +1203,34 @@ async def launch(
                 srv.log.ErrorLog.Printf(
                     "forced ticket session %s failed: %v", title, err
                 )
-            # The reason a caller polling the listing can ask for (the row
-            # just vanishes otherwise) — GET /api/create_failures.
-            srv._note_create_failure(title, str(err))
-            srv._events.BUS.emit(
-                "session.create_failed", session=title, data={"error": str(err)}
-            )
+            cancelled = turn is not None and _gate_cancelled(title)
+            if waited and not cancelled:
+                # It waited for memory: the row stays as a failure (with what
+                # was asked), the event says who and why, the parent is told.
+                from backend.web.core import session_create as _session_create
+
+                _session_create.note_start_failed(
+                    title,
+                    str(err),
+                    parent=lineage["parent"],
+                    kind="ticket",
+                    prompt=_ticket_preview(source, ticket_id, story, extra_prompt),
+                    spawned=lineage["spawned"],
+                )
+                kept = True
+            else:
+                # The reason a caller polling the listing can ask for (the row
+                # just vanishes otherwise) — GET /api/create_failures.
+                srv._note_create_failure(title, str(err))
+                srv._events.BUS.emit(
+                    "session.create_failed", session=title, data={"error": str(err)}
+                )
             srv._cancel_intake_flight(
                 title, "the session could not be created: %s" % err
             )
         finally:
-            srv._pending_drop(title)
+            if not kept:
+                srv._pending_drop(title)
 
     srv._register_task(_bg_start())
     body = {"started": True, "title": title}
@@ -1076,6 +1245,8 @@ async def launch(
                 "waiting_for_memory": turn[1],
             }
         )
+        if turn[1].get("why"):
+            body["why"] = turn[1].get("why")
     if lineage["parent"] or lineage["spawned"] or lineage["report_back"]:
         # What an agent-spawned start needs to report about its worker.
         body.update(
@@ -1140,3 +1311,12 @@ def release_reservation(slug: str, by: str = "") -> bool:
     from backend.ticket_ingestion.state import remove_in_flight_story
 
     return remove_in_flight_story(_REPO_ROOT, slug, reserved_by=by or None)
+
+
+def _register_restore() -> None:
+    from backend.web.core import launch_gate as _gate
+
+    _gate.register_kind("ticket", _restore_ticket)
+
+
+_register_restore()

@@ -61,6 +61,33 @@ def to_mindflock_tmux_name(s: str) -> str:
     return "{}{}".format(TmuxPrefix, s)
 
 
+def exact_session_target(name: str) -> str:
+    """``=name``: a ``target-session`` that matches ``name`` EXACTLY.
+
+    A bare ``-t name`` is resolved by tmux as an exact name first, then as a
+    unique PREFIX, then as a pattern — so once ``mindflock_orch`` is gone,
+    ``kill-session -t mindflock_orch`` kills a live ``mindflock_orch-w1``.
+    Every command that targets a MindFlock session by name goes through this
+    (or :func:`exact_pane_target`). Deliberate divergence from the Go
+    ancestor, which used the bare form everywhere but ``has-session``.
+    """
+    return "=" + name
+
+
+def exact_pane_target(name: str) -> str:
+    """``=name:``: the active pane of session ``name``, matched EXACTLY.
+
+    A ``target-pane`` (``send-keys``, ``capture-pane``, ``set-option``,
+    ``display-message``) with no ``:`` is looked up as a pane, then a window,
+    then a session BY PREFIX — and ``=name`` alone (no colon) is not read as a
+    session there at all. ``=name:`` names the session exactly and leaves the
+    window/pane at its current one. A target that already says what it is
+    (``%3``, ``@1``, ``$0``, ``=x``, ``sess:1.0``) is returned unchanged."""
+    if not name or name[0] in "=%@$" or ":" in name:
+        return name
+    return "=" + name + ":"
+
+
 class _StatusMonitor:
     """Tracks pane-content hash to detect changes (Go ``statusMonitor``)."""
 
@@ -227,7 +254,10 @@ class TmuxSession:
             # Cleanup any partially created session if any exists.
             if self.does_session_exist():
                 cleanup_cmd = cmd_pkg.command(
-                    "tmux", "kill-session", "-t", self.sanitized_name
+                    "tmux",
+                    "kill-session",
+                    "-t",
+                    exact_session_target(self.sanitized_name),
                 )
                 cleanup_err = self._cmd_exec.run(cleanup_cmd)
                 if cleanup_err is not None:
@@ -265,7 +295,7 @@ class TmuxSession:
                     "tmux",
                     "set-environment",
                     "-t",
-                    self.sanitized_name,
+                    exact_session_target(self.sanitized_name),
                     str(k),
                     str(v),
                 )
@@ -280,7 +310,12 @@ class TmuxSession:
 
         # Set history limit to enable scrollback (hardcoded 10000).
         history_cmd = cmd_pkg.command(
-            "tmux", "set-option", "-t", self.sanitized_name, "history-limit", "10000"
+            "tmux",
+            "set-option",
+            "-t",
+            exact_pane_target(self.sanitized_name),
+            "history-limit",
+            "10000",
         )
         herr = self._cmd_exec.run(history_cmd)
         if herr is not None and log.InfoLog is not None:
@@ -292,7 +327,12 @@ class TmuxSession:
 
         # Enable mouse scrolling for the session.
         mouse_cmd = cmd_pkg.command(
-            "tmux", "set-option", "-t", self.sanitized_name, "mouse", "on"
+            "tmux",
+            "set-option",
+            "-t",
+            exact_pane_target(self.sanitized_name),
+            "mouse",
+            "on",
         )
         merr = self._cmd_exec.run(mouse_cmd)
         if merr is not None and log.InfoLog is not None:
@@ -341,7 +381,12 @@ class TmuxSession:
     def restore(self) -> Optional[Exception]:
         """Attach to an existing session and reset the monitor (mirrors ``Restore``)."""
         ptmx, err = self._pty_factory.start(
-            cmd_pkg.command("tmux", "attach-session", "-t", self.sanitized_name)
+            cmd_pkg.command(
+                "tmux",
+                "attach-session",
+                "-t",
+                exact_session_target(self.sanitized_name),
+            )
         )
         if err is not None:
             return Exception("error opening PTY: {}".format(err))
@@ -609,7 +654,9 @@ class TmuxSession:
                 errs.append(Exception("error closing PTY: {}".format(e)))
             self.ptmx = None
 
-        c = cmd_pkg.command("tmux", "kill-session", "-t", self.sanitized_name)
+        c = cmd_pkg.command(
+            "tmux", "kill-session", "-t", exact_session_target(self.sanitized_name)
+        )
         kerr = self._cmd_exec.run(c)
         if kerr is not None:
             errs.append(Exception("error killing tmux session: {}".format(kerr)))
@@ -657,7 +704,13 @@ class TmuxSession:
     def capture_pane_content(self) -> Tuple[str, Optional[Exception]]:
         """Capture the pane content (mirrors ``CapturePaneContent``)."""
         c = cmd_pkg.command(
-            "tmux", "capture-pane", "-p", "-e", "-J", "-t", self.sanitized_name
+            "tmux",
+            "capture-pane",
+            "-p",
+            "-e",
+            "-J",
+            "-t",
+            exact_pane_target(self.sanitized_name),
         )
         output, err = self._cmd_exec.output(c)
         if err is not None:
@@ -683,7 +736,7 @@ class TmuxSession:
             "-E",
             end,
             "-t",
-            self.sanitized_name,
+            exact_pane_target(self.sanitized_name),
         )
         output, err = self._cmd_exec.output(c)
         if err is not None:
@@ -763,7 +816,9 @@ def cleanup_sessions(cmd_exec: cmd_pkg.Executor) -> Optional[Exception]:
     for match in matches:
         if log.InfoLog is not None:
             log.InfoLog.Printf("cleaning up session: %s", match)
-        kill = cmd_pkg.command("tmux", "kill-session", "-t", match)
+        kill = cmd_pkg.command(
+            "tmux", "kill-session", "-t", exact_session_target(match)
+        )
         kerr = cmd_exec.run(kill)
         if kerr is not None:
             return Exception("failed to kill tmux session {}: {}".format(match, kerr))
@@ -775,6 +830,8 @@ __all__ = [
     "ProgramAider",
     "TmuxPrefix",
     "to_mindflock_tmux_name",
+    "exact_session_target",
+    "exact_pane_target",
     "TmuxSession",
     "new_tmux_session",
     "NewTmuxSession",

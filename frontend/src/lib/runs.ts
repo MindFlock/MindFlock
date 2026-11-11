@@ -21,6 +21,7 @@
 
 import type { Instance, RunDTO, RunSummary, RunTask } from "../api/types";
 import { escalationText, LANE_HEAD, shipLine } from "./agentMessages";
+import { runWaitLine, type WaitWhy } from "./waitWhy";
 
 export const RUN_DONE_STATES = new Set(["done", "done_with_failures", "cancelled"]);
 
@@ -220,8 +221,10 @@ function laneDoneWord(lane: string): string {
   return { commit: "committed", push: "pushed", pr: "PR opened", merge: "merged" }[lane] || "done";
 }
 
-/** The header's tooltip: the whole state in one sentence per fact. */
-export function groupTitle(g: RunGroup): string {
+/** The header's tooltip: the whole state in one sentence per fact. `why`:
+ * what the launch gate holds starts back for (lib/waitWhy), so a group held
+ * by the agent limit never says "memory"; absent reads as memory. */
+export function groupTitle(g: RunGroup, why: WaitWhy = "memory"): string {
   const bits = [
     g.name + (g.lane ? " — each line goes " + g.lane.replace(/^→\s*/, "to ") : ""),
     shippedBadge(g) + (g.failed ? ", " + g.failed + " failed" : ""),
@@ -238,7 +241,7 @@ export function groupTitle(g: RunGroup): string {
           : "paused — nothing new starts and nothing ships"
     );
   else if (g.waitingUsage) bits.push("waiting for usage to come back");
-  else if (g.waitingMemory) bits.push("waiting for memory — queued lines start once it recovers");
+  else if (g.waitingMemory) bits.push(runWaitLine(why));
   bits.push("Click to fold");
   return bits.join("\n");
 }

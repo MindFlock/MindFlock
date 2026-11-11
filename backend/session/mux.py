@@ -133,6 +133,12 @@ def guard_typing(session: str) -> None:
         _GUARDED[name] = None
 
 
+def _exact(session: str) -> str:
+    """``=name``: the session named exactly ``session`` (tmux reads a bare
+    name as a prefix too, so a dead ``orch`` would attach ``orch-w1``)."""
+    return session if session.startswith(("=", "$")) else "=" + session
+
+
 def _session_of(target: str) -> str:
     """The session a ``-t`` target names: ``=name:`` / ``name:0.1`` → name."""
     t = str(target or "").lstrip("=")
@@ -258,7 +264,9 @@ def attach(
     (``posix_spawn`` on Linux, never a fork of the server)."""
     if not IS_WINDOWS:
         argv = (
-            ["tmux", "attach-session"] + (["-r"] if readonly else []) + ["-t", session]
+            ["tmux", "attach-session"]
+            + (["-r"] if readonly else [])
+            + ["-t", _exact(session)]
         )
         return spawn_pty(
             argv,
@@ -568,7 +576,7 @@ def exec_attach(session: str) -> None:
     CLI's ``mindflock attach``); on Windows, run one in this console and
     exit with its code."""
     if not IS_WINDOWS:
-        os.execvp("tmux", ["tmux", "attach-session", "-t", session])
+        os.execvp("tmux", ["tmux", "attach-session", "-t", _exact(session)])
     from backend.session.winmux import client  # pragma: no cover - Windows
 
     raise SystemExit(client.console_attach(session))  # pragma: no cover

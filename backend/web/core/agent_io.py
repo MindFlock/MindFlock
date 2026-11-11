@@ -34,6 +34,7 @@ import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
+from backend.session.tmux.tmux import exact_pane_target
 from backend.web.core import agent_sessions as _agent_sessions
 from backend.web.core import proc as _proc
 
@@ -128,7 +129,7 @@ def capture_screen(
     """
     flags = ["-p", "-e", "-J"] if colors else ["-p", "-J"]
     out = _proc.run_capped(
-        ["tmux", "capture-pane", *flags, "-t", name],
+        ["tmux", "capture-pane", *flags, "-t", exact_pane_target(name)],
         capture_output=True,
         text=True,
         timeout=_TMUX_TIMEOUT,
@@ -142,7 +143,7 @@ def capture_scrollback(name: str) -> Tuple[Optional[str], Optional[str]]:
     """The whole scrollback of tmux session ``name`` (``-S -``), the same
     capture ``/history`` falls back to when there is no transcript."""
     out = _proc.run_capped(
-        ["tmux", "capture-pane", "-p", "-J", "-t", name, "-S", "-"],
+        ["tmux", "capture-pane", "-p", "-J", "-t", exact_pane_target(name), "-S", "-"],
         capture_output=True,
         text=True,
         timeout=15,
@@ -384,7 +385,7 @@ def dictation_argv(name: str, erase: int, text: str) -> List[str]:
     def cmd(*args: str) -> None:
         if len(argv) > 1:
             argv.append(";")
-        argv.extend(["send-keys", "-t", name, *args])
+        argv.extend(["send-keys", "-t", exact_pane_target(name), *args])
 
     if erase:
         cmd(*(["BSpace"] * erase))
@@ -453,7 +454,7 @@ def send_answer(name: str, text: str, keys: List[str]) -> bool:
             if i:
                 time.sleep(_KEY_GAP_S)
             pressed = _proc.run_capped(
-                ["tmux", "send-keys", "-t", name, key],
+                ["tmux", "send-keys", "-t", exact_pane_target(name), key],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=_TMUX_TIMEOUT,

@@ -111,6 +111,45 @@ _NEW_WAIT_S = 15.0
 _NEW_POLL_S = 1.0
 
 
+def _start_anyway_arg(p: argparse.ArgumentParser) -> None:
+    """``--start-anyway``: a person's start past the server's memory confirm
+    (the app's Start anyway; the request's ``start_anyway: true``)."""
+    p.add_argument(
+        "--start-anyway",
+        action="store_true",
+        dest="start_anyway",
+        help="start the agent even while memory is low (the server otherwise "
+        "refuses with a memory warning)",
+    )
+
+
+def _start_body(args: argparse.Namespace) -> Optional[dict]:
+    """The request body that carries ``--start-anyway`` (None without it, so
+    the call is sent exactly as before)."""
+    return {"start_anyway": True} if getattr(args, "start_anyway", False) else None
+
+
+def _api_error_text(err: "client.ClientError") -> str:
+    """An API error in this CLI's words: the memory confirm's 409 names
+    ``--start-anyway`` instead of the request field."""
+    payload = getattr(err, "payload", None)
+    if isinstance(payload, dict) and payload.get("memory_confirm") is True:
+        msg = str(payload.get("message") or "").strip() or "Memory is low."
+        return "%s Run it again with --start-anyway to start it regardless." % msg
+    return str(getattr(err, "message", "") or err)
+
+
+def _waiting_label(inst: dict) -> str:
+    """The ACTIVITY cell of a session waiting in the launch gate's queue
+    (``waiting_for_memory``): "waiting #2 (cap)", else ""."""
+    w = inst.get("waiting_for_memory")
+    if not isinstance(w, dict):
+        return ""
+    why = str(w.get("why") or "").strip() or "memory"
+    pos = w.get("position")
+    return "waiting%s (%s)" % ((" #%s" % pos) if pos else "", why)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mindflock",
@@ -248,6 +287,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="auth profile the session runs under (see `mindflock accounts`; "
         "'default' = the CLI's own login; unset = the app-wide default)",
     )
+    _start_anyway_arg(new)
 
     ls = sub.add_parser("ls", parents=[server_opts], help="list sessions")
     ls.add_argument(
@@ -260,6 +300,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="attach the terminal to a session's tmux (unambiguous title prefix ok)",
     )
     attach.add_argument("title", metavar="TITLE")
+    _start_anyway_arg(attach)
 
     def _close_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("title", metavar="TITLE", nargs="+")
@@ -332,6 +373,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="resume paused sessions: restart the agent in the same worktree",
     )
     resume.add_argument("title", metavar="TITLE", nargs="+")
+    _start_anyway_arg(resume)
 
     sleep_ = sub.add_parser(
         "sleep",
@@ -355,6 +397,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="wake sleeping sessions: relaunch the agent, resuming its " "conversation",
     )
     wake.add_argument("title", metavar="TITLE", nargs="+")
+    _start_anyway_arg(wake)
 
     rename_ = sub.add_parser(
         "rename",
@@ -1514,6 +1557,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
     if args.provision:
         payload["provisioned"] = True
         payload["workspace_strategy"] = args.strategy
+    payload.update(_start_body(args) or {})
     created = client.post(base, "/api/instances", payload)
     title = str((created or {}).get("title") or title)  # server may re-derive it
     print("created session %s" % title)
@@ -1593,8 +1637,10 @@ def _cmd_ls(args: argparse.Namespace) -> int:
             str(i.get("title", "")),
             str(i.get("repo", "")),
             str(i.get("status", "")),
-            # Asleep reads "offline" on the row; say what it is.
-            "sleeping" if i.get("sleeping") else str(i.get("activity", "")),
+            # Waiting in the launch gate's queue, or asleep, reads "offline"
+            # on the row; say what it is.
+            _waiting_label(i)
+            or ("sleeping" if i.get("sleeping") else str(i.get("activity", ""))),
             str(i.get("stage", "")),
             _fmt_diff(i),
             _fmt_cost(i),
@@ -1645,15 +1691,18 @@ def _cmd_attach(args: argparse.Namespace) -> int:
     if inst.get("sleeping"):
         # Asleep (its agent stopped to free memory): wake it first, so there
         # is a tmux session to land in — the conversation resumes.
-        client.post(
-            base, "/api/instances/%s/wake" % _quote_title(str(inst.get("title", "")))
-        )
+        path = "/api/instances/%s/wake" % _quote_title(str(inst.get("title", "")))
+        body = _start_body(args)
+        if body is None:
+            client.post(base, path)
+        else:
+            client.post(base, path, body)
     # Replace this process with tmux so the user lands in the live session
     # (on Windows: a session-host client in this console).
     if mux.IS_WINDOWS:
         mux.exec_attach(tmux_name)
     else:
-        os.execvp("tmux", ["tmux", "attach-session", "-t", tmux_name])
+        os.execvp("tmux", ["tmux", "attach-session", "-t", "=" + tmux_name])
     return 0  # pragma: no cover — execvp does not return
 
 
@@ -1777,13 +1826,18 @@ def _cmd_pause_resume(args: argparse.Namespace) -> int:
     base = client.discover(args.host, args.port)
     titles = _resolve_titles(client.get(base, "/api/instances") or [], args.title)
     verb = args.command
+    body = _start_body(args)
     rc = 0
     for title in titles:
+        path = "/api/instances/%s/%s" % (_quote_title(title), verb)
         try:
-            client.post(base, "/api/instances/%s/%s" % (_quote_title(title), verb))
+            if body is None:
+                client.post(base, path)
+            else:
+                client.post(base, path, body)
         except client.ApiError as err:
             print(
-                "error: could not %s %r: %s" % (verb, title, err.message),
+                "error: could not %s %r: %s" % (verb, title, _api_error_text(err)),
                 file=sys.stderr,
             )
             rc = 1
@@ -1801,16 +1855,19 @@ def _cmd_sleep_wake(args: argparse.Namespace) -> int:
     base = client.discover(args.host, args.port)
     titles = _resolve_titles(client.get(base, "/api/instances") or [], args.title)
     verb = args.command
+    body = _start_body(args)
     rc = 0
     for title in titles:
+        path = "/api/instances/%s/%s" % (_quote_title(title), verb)
         try:
             res = (
-                client.post(base, "/api/instances/%s/%s" % (_quote_title(title), verb))
-                or {}
-            )
+                client.post(base, path)
+                if body is None
+                else client.post(base, path, body)
+            ) or {}
         except client.ApiError as err:
             print(
-                "error: could not %s %r: %s" % (verb, title, err.message),
+                "error: could not %s %r: %s" % (verb, title, _api_error_text(err)),
                 file=sys.stderr,
             )
             rc = 1
@@ -4075,7 +4132,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(str(err), file=sys.stderr)
             return 1
         except client.ClientError as err:
-            print("error: %s" % err, file=sys.stderr)
+            # (The memory confirm's 409 names --start-anyway, not the field.)
+            print("error: %s" % _api_error_text(err), file=sys.stderr)
             return 1
     # Default (no subcommand) = serve with defaults.
     mode = getattr(args, "mode", None)
