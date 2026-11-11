@@ -89,7 +89,7 @@ describe("the words", () => {
 
   it("a 400 says where to choose the review route", () => {
     expect(P.prReviewErrorText(routeError(400, "No PR review route is configured"))).toBe(
-      "No PR review route is configured. Choose a review route in Settings → Workspace → PR review route."
+      "No PR review route is configured. Choose a review route in Settings → Workspace → PR route."
     );
     expect(P.prReviewErrorText(new ApiError(400, "x", null))).toContain("Choose a review route in " + P.PR_REVIEW_SETTING);
   });
@@ -129,7 +129,7 @@ describe("starting it", () => {
     expect(await P.startPrReview({ session: "sc-1" })).toBeNull();
     const [title, detail, actions] = errorPop.mock.calls[0];
     expect(title).toBe("Couldn't run the PR review on sc-1");
-    expect(detail).toContain("Choose a review route in Settings → Workspace → PR review route");
+    expect(detail).toContain("Choose a review route in Settings → Workspace → PR route");
     expect(actions[0]).toMatchObject({ label: "Choose a route", primary: true });
     expect(P.prReviewSupported()).toBe(true);
   });
@@ -194,13 +194,18 @@ describe("Intake → GitHub PRs", () => {
   });
 });
 
-describe("Settings → Workspace → PR review route", () => {
+describe("Settings → Workspace → PR route", () => {
   it("picks a saved route from the Sky's plans, stored in flights.pr_review_plan", () => {
     const ws = code("components/settings/screens/Workspace.tsx");
     expect(ws).toContain("<PrReviewRoute />");
     expect(ws).toContain("useFlightPlans()");
     expect(ws).toContain('s.saveField("flights", "pr_review_plan", e.target.value)');
     expect(ws).toContain('id="workspace-pr-review-route"');
+    // Blank is the built-in default (named), "off" is no route, and the hint
+    // says automatically picked-up PRs fly it too (backend core/pr_route.py).
+    expect(ws).toContain('label: "Default · " + builtinName + " (built-in)"');
+    expect(ws).toContain("value: PR_ROUTE_OFF");
+    expect(fn("components/settings/screens/Workspace.tsx", "PrReviewRoute")).toContain("picked up <strong>automatically</strong>");
   });
 
   it("the copy stays in the app's words", () => {

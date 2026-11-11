@@ -3869,12 +3869,19 @@ def _intake_plan(
     the built-in — a choice made for THIS start outranks the source's
     standing one; the source's ``plan`` setting, when that plan still exists;
     the built-in cut at the source's ``depth``. ``off``/``agent`` is no flight,
-    which is today's behaviour exactly. Never raises."""
+    which is today's behaviour exactly. A PR with no rung of its own goes on
+    to the flock's PR route and then the built-in default
+    (:func:`core.pr_route.plan_for`: the same answer the pipeline's automatic
+    PR intake gets). Never raises."""
     if plan:
         return plan
     try:
         if depth_override:
             return _flights.plan_for_depth(kind, depth_override)
+        if kind == "pr":
+            from backend.web.core import pr_route as _pr_route
+
+            return _pr_route.plan_for(configured, depth)
         if configured and _flights.get_plan(configured) is not None:
             return configured
         return _flights.plan_for_depth(kind, depth)
@@ -10448,7 +10455,13 @@ async def github_open_prs(fresh: bool = False) -> JSONResponse:
 async def github_force_review(payload: dict) -> JSONResponse:
     """Force-start a review session for one open PR, bypassing auto filters.
     The launch itself is ``core.pr_review.launch`` (``POST /api/flights/start``
-    with a ``pr`` subject runs the same code); ``plan`` picks its flight."""
+    with a ``pr`` subject runs the same code); ``plan`` picks its flight.
+
+    ``"auto": true`` is the ticket pipeline handing over a PR its monitor
+    picked up (``session_runner.SessionRunner.hand_to_server``; optional
+    ``text`` = its review prompt, ``comments`` = their ids): 200 with
+    :func:`core.pr_review.intake_auto`'s body — the PR flies its route on a
+    new session, or on the one already working on it."""
     if not git_available():
         return _no_git_response()
     payload = payload or {}
@@ -10459,6 +10472,18 @@ async def github_force_review(payload: dict) -> JSONResponse:
         number = int(payload.get("number"))
     except (TypeError, ValueError):
         return JSONResponse({"error": "number must be an integer"}, status_code=400)
+    if payload.get("auto") is True:
+        ids = payload.get("comments")
+        try:
+            body = await _pr_review.intake_auto(
+                repo,
+                number,
+                text=str(payload.get("text") or ""),
+                comment_ids=([str(i) for i in ids] if isinstance(ids, list) else None),
+            )
+        except _pr_review.LaunchError as err:
+            return JSONResponse(err.body, status_code=err.status)
+        return JSONResponse(body)
     try:
         agent_override = _start_agent_override(payload)
         depth_override = _start_depth_override(payload)

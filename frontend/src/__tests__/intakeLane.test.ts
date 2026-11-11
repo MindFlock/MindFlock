@@ -94,6 +94,9 @@ describe("the intake lane", () => {
     // agent alone), not the plan's name (that echoed the badge).
     expect(html).toMatch(/class="sky-lane-flyway"[^>]*>Agent only</);
     expect(html).not.toMatch(/class="sky-lane-flyway"[^>]*>Review a PR</);
+    // A PR repo with nothing of its own follows the PR route (backend
+    // core/pr_route.py: unset = the built-in, which automatic PRs fly too).
+    expect(html).toMatch(/class="sky-lane-flyway"[^>]*>PR route</);
     expect(html).not.toContain("<select");
   });
 

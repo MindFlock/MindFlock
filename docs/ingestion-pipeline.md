@@ -592,6 +592,24 @@ picks, which an auto-start never has):
 5. none — a source with no `plan` and a depth of off/agent behaves exactly as
    it did before routes existed.
 
+A **pull request** goes two steps further when its repo card names neither a
+route nor a rung (`core/pr_route.py`, the one answer for every PR start — the
+hand start, the automatic intake below, and Run the PR review):
+
+4. the repo's rung: Commit / Push / Open PR → `builtin:pr@<lane>`; **Agent
+   only** (`depth: "agent"`) → no route for this repo;
+5. the flock's **PR route**, `flights.pr_review_plan` (Settings → Workspace →
+   PR route): a saved route by id or name; `"off"` → no route (the plain
+   review prompt, as before PRs had routes);
+6. the built-in default **`builtin:pr`** ("Pull request": the agent addresses
+   the comments → Commit → Push → Reviews settle → CI checks) — what a user
+   who configured nothing gets. A flock route no longer saved also lands here
+   (logged).
+
+A blank or `"off"` repo `depth` is "not set" (it follows the PR route); the
+Intake card's **Agent only** chip stores `"agent"` on a PR repo so the two
+stay apart.
+
 When a plan resolves, `flights.arm_pending` puts a `running` route on the
 item's **deterministic session title** (the same key autopilot.json uses — the
 pipeline is a separate process and writes the lock-guarded
@@ -746,10 +764,54 @@ A PR is processed **once per head**; to re-run it, delete its entry from
 
 The route a PR session takes is resolved as in
 [Which route a started item takes](#which-route-a-started-item-takes), from
-the repo's `github.repo_settings[repo].plan` and `depth` (`builtin:pr` cut at
-the depth when no plan is set). The forced start's body is
-`core.pr_review.launch`, which `POST /api/flights/start` with a `pr` subject
-also runs.
+the repo's `github.repo_settings[repo].plan` and `depth`, then the flock's
+PR route (`flights.pr_review_plan`), then the built-in `builtin:pr`. The
+forced start's body is `core.pr_review.launch`, which `POST
+/api/flights/start` with a `pr` subject also runs.
+
+### A PR the monitor picks up flies a route
+
+The monitor (a separate process) does not start the PR itself: once a PR
+passes its filters (own author, min age, base branch, not in
+`processed_prs`) and has actionable comments, `SessionRunner.run_pr` hands it
+to this machine's server — `POST /api/github/prs/review` with `{"repo",
+"number", "auto": true, "text": <the consolidated prompt>, "comments": [ids]}`
+on `127.0.0.1:$MINDFLOCK_SERVER_PORT` (the port the server hands the pipeline
+child; `backend/client.py` sends the bearer token, as the pipeline's other
+calls to the server do). The server (`core.pr_review.intake_auto`) flies it
+on the route a hand start would, so hand and auto starts agree:
+
+- **No session for the PR** (none shows it, no `pr-<repo>-<n>`, none on its
+  head branch in that repo, no recently closed one that built the branch to
+  reopen) → `created`: exactly Intake's **Begin review** — the route armed on
+  the title, the review prompt its first Agent stop.
+- **A session, no route** (a ticket session whose route finished or was
+  cancelled, say) → `started`: the review prompt is queued into the session
+  and the route takes off with that queued prompt as its first Agent stop's
+  work (it is not skipped as "work already done", so Commit/Push wait for the
+  agent to address the comments).
+- **A session mid-route** → `inserted`: the route's stops are merged in
+  (`flights.op_merge_plan`, past its leading empty Agent stop; stops the
+  route already has are left out) — never a second route. The review prompt
+  is queued, **unless** a Reviews stop is on now and has seeded: it sends the
+  comments that are new to it itself, so typing them too would double them
+  (`prompt: "reviews"`). A Reviews stop still ahead does not count: when it
+  begins it seeds the comments already on the PR as seen, so those must come
+  in by prompt.
+- **PR routes off**, or the session paused / held → `queued`: the review
+  prompt alone, today's hand-off.
+
+The pipeline then records the PR in `processed_prs` as before, so a PR is
+never started twice; a 409 (its session is being started already) and a
+timeout (the server may have acted) count as handed. A refusal (no longer
+open, GitHub failed) raises, and the usual retry cap applies. **When the
+server is out of reach** (no `MINDFLOCK_SERVER_PORT`, nothing listening, an
+auth gate refusing it) the pipeline logs `the MindFlock server on port … is
+not reachable … — falling back to the plain review prompt (no route)` and
+does what it always did: the session that built the branch takes the prompt
+(`hand_to_builder`), else it starts `pr-<repo>-<n>` itself — which still
+arms the route `core/pr_route.py` resolves (the flights store is a shared
+file; the server's driver flies it once it is back).
 
 GitHub auth resolution is the ONE chain every consumer uses
 (`backend/web/core/github_auth.resolve_token`; the pipeline's

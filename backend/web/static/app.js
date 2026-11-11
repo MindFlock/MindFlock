@@ -24680,7 +24680,48 @@ var LADDER_BASE = {
 	issues: "builtin:ticket",
 	prs: "builtin:pr"
 };
-function sourceReach(kind, src, plans) {
+var PR_ROUTE_DEFAULT = "builtin:pr";
+var PR_ROUTE_OFF = "off";
+function prRouteIsOff(value) {
+	return [
+		"off",
+		"none",
+		"no",
+		"false"
+	].includes(String(value ?? "").trim().toLowerCase());
+}
+function flockPrRoute(setting, plans) {
+	if (prRouteIsOff(setting)) return {
+		planId: "",
+		name: "No route",
+		builtin: false,
+		off: true,
+		steps: ["Agent"]
+	};
+	const ref = String(setting ?? "").trim();
+	const low = ref.toLowerCase();
+	const mine = ref ? (plans || []).find((p) => p.id === ref || String(p.name || "").trim().toLowerCase() === low) : void 0;
+	if (mine) return {
+		planId: mine.id,
+		name: mine.name || mine.id,
+		builtin: false,
+		off: false,
+		steps: stopsSummaryWords(mine.steps)
+	};
+	const ours = (plans || []).find((p) => p.id === PR_ROUTE_DEFAULT);
+	return {
+		planId: PR_ROUTE_DEFAULT,
+		name: ours?.name || "Pull request",
+		builtin: true,
+		off: false,
+		steps: ours ? stopsSummaryWords(ours.steps) : []
+	};
+}
+function followsPrRoute(depth) {
+	const d = String(depth ?? "").trim().toLowerCase();
+	return d === "" || d === "off" || d === "leave";
+}
+function sourceReach(kind, src, plans, flock) {
 	const rung = capSourceDepth(src.depth);
 	const plan = String(src.plan || "").trim();
 	const found = plan && plans ? plans.find((p) => p.id === plan) : void 0;
@@ -24692,6 +24733,15 @@ function sourceReach(kind, src, plans) {
 		missing: "",
 		steps: found ? stopsSummaryWords(found.steps) : [],
 		planId: plan
+	};
+	if (flock && kind === "prs" && followsPrRoute(src.depth)) return {
+		choice: "flock",
+		words: flock.off ? "No route" : flock.builtin ? "PR route" : flock.name,
+		own: false,
+		rung,
+		missing: plan,
+		steps: flock.steps,
+		planId: flock.planId
 	};
 	const ship = rung === "leave" ? [] : LADDER$1.slice(0, LADDER$1.indexOf(rung) + 1);
 	return {
@@ -65004,7 +65054,7 @@ function prReviewErrorText(err) {
 	if (err instanceof ApiError) {
 		const said = err.body?.error;
 		const why = typeof said === "string" && said ? said : "";
-		if (err.status === 400) return (why ? why.replace(/\.?$/, ". ") : "No PR review route is chosen. ") + "Choose a review route in Settings → Workspace → PR review route.";
+		if (err.status === 400) return (why ? why.replace(/\.?$/, ". ") : "PR routes are off. ") + "Choose a review route in Settings → Workspace → PR route.";
 		if (err.status === 409) return why || "The session is paused or held — resume it, then run the review again.";
 		if (err.status === 404) return why || "MindFlock couldn't find that session or PR — it may have just closed.";
 	}
@@ -65059,7 +65109,7 @@ function prReviewMenuItem(inst) {
 		key: "pr-review",
 		label: "Run PR review",
 		note: "your team's review route on its PR",
-		title: "Runs the PR review route chosen in Settings → Workspace on this session's PR — right after its current stop when it is already on a route",
+		title: "Runs the PR route chosen in Settings → Workspace on this session's PR — right after its current stop when it is already on a route",
 		run: () => void startPrReview({ session: title })
 	};
 }
@@ -113462,11 +113512,11 @@ function ticketSourceLabel(source, providers, panelLabel = "") {
 	if (!detail) return prov;
 	return [prov, provider].some((n) => !!n && detail.toLowerCase().startsWith(n.toLowerCase()) && !/[a-z0-9]/i.test(detail.charAt(n.length))) ? detail : prov + " · " + detail;
 }
-function flywayOf(kind, own, plans, depth = "") {
+function flywayOf(kind, own, plans, depth = "", flock = null) {
 	const reach = sourceReach(kind, {
 		plan: own,
 		depth
-	}, plans);
+	}, plans, flock);
 	if (reach.own) return {
 		id: own,
 		name: reach.words,
@@ -113474,6 +113524,12 @@ function flywayOf(kind, own, plans, depth = "") {
 		words: reach.words
 	};
 	const id = builtinPlanFor(kind, plans);
+	if (reach.choice === "flock") return {
+		id: reach.planId || id,
+		name: reach.words,
+		own: false,
+		words: reach.words
+	};
 	return {
 		id,
 		name: plans?.find((p) => p.id === id)?.name || "built-in route",
@@ -113487,6 +113543,7 @@ function sourceBlocks(settings, waiting, rows, opts = {}) {
 	const gh = s.github || {};
 	const status = opts.status || null;
 	const plans = opts.plans || null;
+	const flock = flockPrRoute(s.flights?.pr_review_plan ?? "", plans);
 	const labels = opts.panels?.tickets?.source_labels || {};
 	const blocks = [];
 	const make = (kind, id, label, every, own, stray = false, depth = "") => {
@@ -113501,7 +113558,7 @@ function sourceBlocks(settings, waiting, rows, opts = {}) {
 			auto,
 			every,
 			autoText: auto ? "auto-start on · " + everyWords(every) : "manual",
-			flyway: flywayOf(kind, own, plans, depth),
+			flyway: flywayOf(kind, own, plans, depth, kind === "prs" ? flock : null),
 			waiting: [],
 			started: [],
 			...stray ? { stray: true } : {}
@@ -114124,14 +114181,21 @@ function reachSummary(r, serverSteps) {
 	const line = steps.length === 1 && steps[0] === "Agent" ? "Agent, then nothing more. You take it from there" : steps.length ? steps.join(" → ") : "Your saved route “" + r.words + "”";
 	return r.missing ? "Its saved route “" + r.missing + "” is gone, so: " + line : line;
 }
-function PlanSelect({ kind, target, depth, plan, onChange, className, field }) {
+function prRouteSummary(flock, serverSteps) {
+	if (flock.off) return "PR routes are off: the agent gets the review comments, then you take it from there";
+	const steps = serverSteps && serverSteps.length ? serverSteps : flock.steps;
+	const name = "Your PR route “" + flock.name + "”" + (flock.builtin ? " (the built-in default)" : "");
+	return steps.length ? name + ": " + steps.join(" → ") : name;
+}
+function PlanSelect({ kind, target, depth, plan, onChange, className, field, prRoute }) {
 	const plans = useFlightPlans().data;
 	const flights = useFlights().data;
 	const labelId = (0, import_react.useId)();
+	const flock = kind === "prs" && prRoute !== void 0 ? flockPrRoute(prRoute, plans) : null;
 	const reach = sourceReach(kind, {
 		plan,
 		depth
-	}, plans);
+	}, plans, flock);
 	const saved = sourcePlanOptions(plans, kind);
 	const server = useQuery({
 		queryKey: [
@@ -114147,7 +114211,7 @@ function PlanSelect({ kind, target, depth, plan, onChange, className, field }) {
 	}).data;
 	const serverSteps = server && (server.plan_id || "") === reach.planId ? stopsSummaryWords(server.steps) : null;
 	const pickRung = (l) => onChange({
-		depth: l === "leave" ? "" : l,
+		depth: l === "leave" ? flock ? "agent" : "" : l,
 		plan: ""
 	});
 	const editInSky = async () => {
@@ -114176,6 +114240,19 @@ function PlanSelect({ kind, target, depth, plan, onChange, className, field }) {
 					"aria-labelledby": labelId,
 					[field.attr]: "reach",
 					children: [
+						flock && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							role: "radio",
+							"aria-checked": reach.choice === "flock",
+							className: "fl-pick fl-reach-flock" + (reach.choice === "flock" ? " on" : ""),
+							title: "Follow your PR route (Settings → Workspace): " + flock.name,
+							"data-value": "flock",
+							onClick: () => onChange({
+								depth: "",
+								plan: ""
+							}),
+							children: "PR route"
+						}),
 						SOURCE_RUNGS.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							role: "radio",
@@ -114224,7 +114301,12 @@ function PlanSelect({ kind, target, depth, plan, onChange, className, field }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint fl-reach-summary",
 				"data-reach-summary": true,
-				children: reachSummary(reach, serverSteps)
+				children: flock && reach.choice === "flock" ? prRouteSummary(flock, serverSteps) : reachSummary(reach, serverSteps)
+			}),
+			flock && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				"data-pr-route-hint": true,
+				children: "This is also what this repository's PRs fly when they're picked up automatically."
 			})
 		]
 	});
@@ -116548,6 +116630,7 @@ function RepoFields({ use, repo, liveBranch }) {
 				target: repo,
 				depth: o.depth || "",
 				plan: o.plan || "",
+				prRoute: use === "pr" ? String((s.settings.flights || {}).pr_review_plan ?? "") : void 0,
 				onChange: (patch) => saveFields("depth" in patch ? {
 					depth: patch.depth,
 					[PLAN_FIELD]: ""
@@ -119486,7 +119569,7 @@ function PrReviewAction({ prUrl, reference }) {
 		className: "linklike ik-pr-review",
 		"data-pr-review": prUrl,
 		disabled: busy,
-		title: "Run your team's PR review route (Settings → Workspace → PR review route) on " + reference + " — in its session, after the current stop if it is already on a route",
+		title: "Run your team's PR review route (Settings → Workspace → PR route) on " + reference + " — in its session, after the current stop if it is already on a route",
 		onClick: () => {
 			setBusy(true);
 			reviewOpenPr(prUrl).finally(() => setBusy(false));
@@ -129408,18 +129491,27 @@ function PrReviewRoute() {
 	const s = useSettings();
 	const plans = useFlightPlans().data;
 	const stored = String(s.get("flights", "pr_review_plan") ?? "");
-	const match = (plans || []).find((p) => p.id === stored || p.name === stored);
-	const value = match ? match.id : stored;
-	const options = [{
-		value: "",
-		label: "None"
-	}, ...(plans || []).map((p) => ({
-		value: p.id,
-		label: p.name || p.id
-	}))];
-	if (stored && !match && plans) options.push({
+	const off = prRouteIsOff(stored);
+	const match = off ? void 0 : (plans || []).find((p) => p.id === stored || p.name === stored);
+	const value = off ? PR_ROUTE_OFF : match ? match.id : stored;
+	const route = flockPrRoute(stored, plans);
+	const options = [
+		{
+			value: "",
+			label: "Default · " + ((plans || []).find((p) => p.id === PR_ROUTE_DEFAULT)?.name || "Pull request") + " (built-in)"
+		},
+		...(plans || []).filter((p) => p.id !== PR_ROUTE_DEFAULT).map((p) => ({
+			value: p.id,
+			label: p.name || p.id
+		})),
+		{
+			value: PR_ROUTE_OFF,
+			label: "No route (just the review prompt)"
+		}
+	];
+	if (stored && !off && !match && plans) options.push({
 		value: stored,
-		label: stored + " (no longer saved)"
+		label: stored + " (no longer saved — the default is used)"
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		className: "set-row",
@@ -129427,7 +129519,7 @@ function PrReviewRoute() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-label",
-				children: "PR review route"
+				children: "PR route"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
 				"data-group": "flights",
@@ -129438,14 +129530,25 @@ function PrReviewRoute() {
 				children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 					value: o.value,
 					children: o.label
-				}, o.value || "none"))
+				}, o.value || "default"))
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
-				children: plans === null ? "This server has no saved routes yet." : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					"The saved route ",
+				"data-pr-route-hint": true,
+				children: plans === null ? "This server has no saved routes yet." : route.off ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					"Pull requests fly no route: the agent gets the review comments, then you take it from there. ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Run PR review" }),
-					" runs on an open PR — e.g. CodeRabbit plus your team's rules."
+					" needs a route named each time."
+				] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					"Every pull request flies this route — the ones picked up ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "automatically" }),
+					", a ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Begin review" }),
+					" in Intake, and",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Run PR review" }),
+					" — unless its repository picks its own in Intake.",
+					route.steps.length ? " " + route.steps.join(" → ") + "." : ""
 				] })
 			})
 		]

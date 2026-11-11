@@ -1514,7 +1514,9 @@ working on it. Sends `POST /api/pr-review` (docs/web-api.md, docs/flights.md
   (`require_write`), not the ship scope: the session is not yours yet.
 - `plan` — a saved route's id or name (matched like `start_flight`'s
   `plan_id`); absent = the user's `flights.pr_review_plan` setting (read
-  from `GET /api/settings`). Neither → the server's 400 `no_plan`.
+  from `GET /api/settings`); unset, the server picks the PR's repo's route
+  or the built-in `builtin:pr`. The setting `"off"` → the server's 400
+  `no_plan`.
 - `confirm_merge` — needed when the route has a stop that can't be undone
   (as `start_flight`).
 

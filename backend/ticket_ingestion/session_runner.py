@@ -57,6 +57,10 @@ logger = logging.getLogger(__name__)
 # processing loop forever — on timeout the story/PR is marked failed and the
 # loop moves on.
 _INSTANCE_START_TIMEOUT = 900.0
+# How long the server gets to take over an automatically picked-up PR
+# (SessionRunner.hand_to_server): a GitHub lookup or two, a reopen, a route
+# start — the session itself comes up in the server's background.
+_HAND_OFF_TIMEOUT = 120.0
 
 # While the machine's memory reads low (backend.memory_pressure), a launch
 # waits here instead of adding another agent to a box that is already
@@ -508,6 +512,108 @@ class SessionRunner:
             )
         return title
 
+    async def hand_to_server(
+        self, pr: PullRequest, comments: list[PRComment], prompt: str
+    ) -> str:
+        """Hand an automatically picked-up PR to this machine's MindFlock
+        server (``POST /api/github/prs/review`` with ``"auto": true``,
+        ``core.pr_review.intake_auto``), which flies it on the route a hand
+        start from Intake would — on the session already working on it (route
+        started or merged in, ``prompt`` queued unless a running Reviews stop
+        will send the same comments) or on a new session → the server's
+        ``mode``. ``""`` when the server is out of reach (no
+        ``MINDFLOCK_SERVER_PORT``, nothing listening, auth refused): the
+        caller then does what the pipeline always did, and this logs why.
+
+        Raises ``RuntimeError`` when the server refused the PR (no longer
+        open, GitHub failed): the orchestrator's retry cap applies. A 409
+        (the PR's session is being started already) and a timeout (the
+        server may have acted) count as handed — a PR is never started
+        twice."""
+        port = os.environ.get("MINDFLOCK_SERVER_PORT", "").strip()
+        repo = str(getattr(pr, "repo", "") or "")
+        if not port.isdigit() or not repo:
+            logger.warning(
+                "PR #%s: no MindFlock server to hand it to (%s) — starting it "
+                "here, without the server's route handling",
+                pr.number,
+                "MINDFLOCK_SERVER_PORT unset" if repo else "no repo on the PR",
+            )
+            return ""
+        from backend import client
+
+        payload = {
+            "repo": repo,
+            "number": int(pr.number),
+            "auto": True,
+            "text": prompt,
+            "comments": [str(c.id) for c in comments],
+        }
+
+        def _post():
+            return client.post(
+                client.base_url("127.0.0.1", int(port)),
+                "/api/github/prs/review",
+                payload,
+                timeout=_HAND_OFF_TIMEOUT,
+            )
+
+        try:
+            body = await asyncio.to_thread(_post)
+        except client.RequestTimeout as err:
+            logger.warning(
+                "PR #%s: the MindFlock server did not answer in time (%s) — it "
+                "may have started it, so it is not started again here",
+                pr.number,
+                err,
+            )
+            return "unconfirmed"
+        except client.ApiError as err:
+            if err.status == 409:
+                logger.info(
+                    "PR #%s: its session is already being started (%s)",
+                    pr.number,
+                    err.message,
+                )
+                return "starting"
+            ours = isinstance(err.payload, dict) and "error" in err.payload
+            if err.status in (401, 403) or (err.status in (404, 405) and not ours):
+                # Not the route answering: the auth gate, or a server without it.
+                logger.warning(
+                    "PR #%s: the MindFlock server on port %s refused the hand-off "
+                    "(%s %s) — falling back to the plain review prompt (no route)",
+                    pr.number,
+                    port,
+                    err.status,
+                    err.message,
+                )
+                return ""
+            raise RuntimeError(
+                "the MindFlock server refused PR #%s (%s): %s"
+                % (pr.number, err.status, err.message)
+            ) from None
+        except (client.ClientError, OSError, ValueError) as err:
+            logger.warning(
+                "PR #%s: the MindFlock server on port %s is not reachable (%s) — "
+                "falling back to the plain review prompt (no route)",
+                pr.number,
+                port,
+                err,
+            )
+            return ""
+        body = body if isinstance(body, dict) else {}
+        mode = str(body.get("mode") or "handed")
+        logger.info(
+            "PR #%s: handed to the server — %s on %s (route %s, prompt %s)%s",
+            pr.number,
+            mode,
+            body.get("session") or "?",
+            body.get("plan") or "none",
+            body.get("prompt") or "?",
+            (" — " + str(body["note"])) if body.get("note") else "",
+        )
+        return mode
+
     async def deliver_pr_round(self, pr: PullRequest, prompt: str) -> str:
         """Hand a review round (pr_rounds) to the PR's session: QUEUED into
         ``pr-<slug>`` when it still exists (the server's prompt-queue drain
@@ -537,15 +643,19 @@ class SessionRunner:
         comment. Cursor launch is skipped; the CS web terminal is the surface.
         """
         if not prompt_override:
-            # The session that built this branch takes the review, with its
-            # context (docs/pr-review-rounds.md "The same session"); only
-            # without one does the PR get a session of its own.
-            handed = await self.hand_to_builder(
-                pr,
-                build_consolidated_pr_prompt(
-                    pr, comments, "this session's own workspace"
-                ),
+            same_session = build_consolidated_pr_prompt(
+                pr, comments, "this session's own workspace"
             )
+            # The server flies the PR on its route (docs/ingestion-pipeline.md
+            # "A PR the monitor picks up flies a route"): on the session
+            # already working on it, or a new one, as Intake's Begin review.
+            if await self.hand_to_server(pr, comments, same_session):
+                return pr.head_ref
+            # The server is out of reach: today's behaviour. The session that
+            # built this branch takes the review, with its context
+            # (docs/pr-review-rounds.md "The same session"); only without one
+            # does the PR get a session of its own.
+            handed = await self.hand_to_builder(pr, same_session)
             if handed:
                 return pr.head_ref
         await _wait_for_launch_room("PR #%s" % pr.number)
@@ -715,7 +825,9 @@ class SessionRunner:
         ``github.repo_settings`` / ``issue_repo_settings``) setting when that
         plan exists, else the built-in cut at :meth:`_depth_for` — the same
         chain as the server's ``_intake_plan`` minus a per-start pick, which an
-        auto start never has. Read fresh (see :func:`_fresh_settings`)."""
+        auto start never has. A PR goes on to the flock's PR route and the
+        built-in default (:func:`backend.web.core.pr_route.for_repo`, the
+        server's own answer). Read fresh (see :func:`_fresh_settings`)."""
         try:
             from backend.web.core import autopilot as _autopilot
             from backend.web.core import flights as _flights
@@ -724,9 +836,10 @@ class SessionRunner:
             configured = ""
             depth = None
             if kind == "pr":
-                block = (st.github.repo_settings or {}).get(lookup) or {}
-                configured = str(block.get("plan") or "")
-            elif kind == "issue":
+                from backend.web.core import pr_route as _pr_route
+
+                return _pr_route.for_repo(lookup, settings=st)
+            if kind == "issue":
                 # A monitor issue: its repo's card, plan AND depth — the
                 # lookup is the bare provider name, which must never pick up a
                 # same-provider ticketing source's depth.

@@ -31,7 +31,7 @@ export function PrReviewAction({ prUrl, reference }: { prUrl?: string; reference
       data-pr-review={prUrl}
       disabled={busy}
       title={
-        "Run your team's PR review route (Settings → Workspace → PR review route) on " +
+        "Run your team's PR review route (Settings → Workspace → PR route) on " +
         reference +
         " — in its session, after the current stop if it is already on a route"
       }

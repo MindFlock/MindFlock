@@ -15,7 +15,7 @@
 import type { Instance, MindflockStatus } from "../api/types";
 import type { QueuedItem } from "../components/intake/queue";
 import { SOURCE_OFF_LABEL } from "./autopilot";
-import { builtinPlanFor, sourceReach, waitingAuto, type FlightPlan, type WaitingKind } from "./flights";
+import { builtinPlanFor, flockPrRoute, sourceReach, waitingAuto, type FlightPlan, type FlockPrRoute, type WaitingKind } from "./flights";
 
 /** The pipeline's poll defaults when nothing is set (backend/ticket_ingestion/
  * config.py; the same numbers the Auto-start tab shows): a ticket source every
@@ -77,6 +77,8 @@ export interface SourceBlock {
 /** The narrow settings shape the lane reads (the `/api/settings` document). */
 interface LaneSettings {
   ticketing?: { sources?: Array<Record<string, unknown>> };
+  /** The flock's PR route (lib/flights flockPrRoute). */
+  flights?: { pr_review_plan?: string };
   github?: {
     repos?: string[];
     issue_repos?: string[];
@@ -151,12 +153,14 @@ export function ticketSourceLabel(source: Record<string, unknown>, providers?: S
   return named ? detail : prov + " · " + detail;
 }
 
-function flywayOf(kind: WaitingKind, own: string, plans: SourceBlockOpts["plans"], depth = ""): SourceBlock["flyway"] {
+function flywayOf(kind: WaitingKind, own: string, plans: SourceBlockOpts["plans"], depth = "", flock: FlockPrRoute | null = null): SourceBlock["flyway"] {
   // The server's chain: its own saved stop while it exists, else the built-in
-  // cut at its depth — the same reading Intake's card shows.
-  const reach = sourceReach(kind, { plan: own, depth }, plans);
+  // cut at its depth — the same reading Intake's card shows. A PR repo with
+  // neither follows the flock's PR route (backend core/pr_route.py).
+  const reach = sourceReach(kind, { plan: own, depth }, plans, flock);
   if (reach.own) return { id: own, name: reach.words, own: true, words: reach.words };
   const id = builtinPlanFor(kind, plans);
+  if (reach.choice === "flock") return { id: reach.planId || id, name: reach.words, own: false, words: reach.words };
   return { id, name: plans?.find((p) => p.id === id)?.name || "built-in route", own: false, words: reach.words };
 }
 
@@ -174,6 +178,7 @@ export function sourceBlocks(
   const gh = s.github || {};
   const status = opts.status || null;
   const plans = opts.plans || null;
+  const flock = flockPrRoute(s.flights?.pr_review_plan ?? "", plans);
   const labels = opts.panels?.tickets?.source_labels || {};
   const blocks: SourceBlock[] = [];
 
@@ -189,7 +194,7 @@ export function sourceBlocks(
       auto,
       every,
       autoText: auto ? "auto-start on · " + everyWords(every) : "manual",
-      flyway: flywayOf(kind, own, plans, depth),
+      flyway: flywayOf(kind, own, plans, depth, kind === "prs" ? flock : null),
       waiting: [],
       started: [],
       ...(stray ? { stray: true } : {}),

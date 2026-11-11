@@ -88,10 +88,22 @@ describe("sourceBlocks: one block per source, in pipeline order", () => {
   it("resolves the default flyway: the source's own, else the kind's built-in", () => {
     expect(blocks[0].flyway).toEqual({ id: "p_mine", name: "Mine", own: true, words: "Mine" });
     expect(blocks[1].flyway).toEqual({ id: "builtin:ticket", name: "Ticket to merge", own: false, words: "Agent only" });
-    expect(blocks[2].flyway).toEqual({ id: "builtin:pr", name: "Review a PR", own: false, words: "Agent only" });
+    // A PR repo with no route or rung of its own follows the flock's PR route
+    // (flights.pr_review_plan; unset = the built-in, backend core/pr_route.py).
+    expect(blocks[2].flyway).toEqual({ id: "builtin:pr", name: "PR route", own: false, words: "PR route" });
     expect(blocks[3].flyway).toEqual({ id: "p_mine", name: "Mine", own: true, words: "Mine" });
     // No builtin:issue on this server: an issue is worked like a ticket.
     expect(blocks[4].flyway.id).toBe("builtin:ticket");
+  });
+
+  it("a PR repo follows the flock's PR route: a saved one, off, or its own Agent only", () => {
+    const repo = (flights: Record<string, string>, depth = "") =>
+      sourceBlocks({ flights, github: { repos: ["acme/app"], repo_settings: { "acme/app": { depth } } } }, [], [], { plans: PLANS })[0].flyway;
+    expect(repo({ pr_review_plan: "p_mine" })).toEqual({ id: "p_mine", name: "Mine", own: false, words: "Mine" });
+    expect(repo({ pr_review_plan: "off" })).toMatchObject({ id: "builtin:pr", own: false, words: "No route" });
+    // "Agent only" on the card is its own choice: depth "agent", no route.
+    expect(repo({ pr_review_plan: "p_mine" }, "agent")).toMatchObject({ words: "Agent only" });
+    expect(repo({ pr_review_plan: "p_mine" }, "push")).toMatchObject({ words: "Push" });
   });
 
   it("a flyway the list no longer has: the server goes by the depth, and so do the words", () => {

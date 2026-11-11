@@ -27,7 +27,7 @@ export function prReviewMenuItem(inst: Partial<Instance>): MenuItem | null {
     label: "Run PR review",
     note: "your team's review route on its PR",
     title:
-      "Runs the PR review route chosen in Settings → Workspace on this session's PR — right after its current stop when it is already on a route",
+      "Runs the PR route chosen in Settings → Workspace on this session's PR — right after its current stop when it is already on a route",
     run: () => void startPrReview({ session: title }),
   };
 }

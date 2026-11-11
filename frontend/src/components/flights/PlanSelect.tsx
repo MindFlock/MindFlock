@@ -15,7 +15,14 @@
  * → Push → Open PR"). It is worked out here (lib/flights sourceReach) and
  * replaced by the server's answer (GET /api/flights/intake-default) when that
  * answer is for the same choice. The Sky lane's chip uses the same words
- * (lib/skyIntake stopsWords). */
+ * (lib/skyIntake stopsWords).
+ *
+ * A PR repository card (`prRoute` given: the stored `flights.pr_review_plan`)
+ * has one more chip, first: **PR route** — the card names nothing of its own
+ * and its PRs fly the flock's PR route (Settings → Workspace; our built-in
+ * "Pull request" when none is picked), the route the PRs the pipeline picks
+ * up automatically fly too (backend core/pr_route.py). It stores depth "" and
+ * no plan; "Agent only" then stores depth "agent" (no route for this repo). */
 
 import { useQuery } from "@tanstack/react-query";
 import { useId } from "react";
@@ -23,7 +30,7 @@ import { api } from "../../api/client";
 import { useFlightPlans, useFlights } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { SOURCE_RUNGS, sourceRungLabel, type Lane } from "../../lib/autopilot";
-import { sourcePlanOptions, sourceReach, stopsSummaryWords, type IntakeDefault, type SourceReach, type WaitingKind } from "../../lib/flights";
+import { flockPrRoute, sourcePlanOptions, sourceReach, stopsSummaryWords, type FlockPrRoute, type IntakeDefault, type SourceReach, type WaitingKind } from "../../lib/flights";
 import { toast } from "../../lib/toast";
 import { openDefaultEditor } from "./IntakeLane";
 
@@ -38,6 +45,14 @@ export function reachSummary(r: Pick<SourceReach, "steps" | "missing" | "words">
   return r.missing ? "Its saved route “" + r.missing + "” is gone, so: " + line : line;
 }
 
+/** The summary line when a PR repo follows the flock's PR route. */
+export function prRouteSummary(flock: FlockPrRoute, serverSteps?: string[] | null): string {
+  if (flock.off) return "PR routes are off: the agent gets the review comments, then you take it from there";
+  const steps = serverSteps && serverSteps.length ? serverSteps : flock.steps;
+  const name = "Your PR route “" + flock.name + "”" + (flock.builtin ? " (the built-in default)" : "");
+  return steps.length ? name + ": " + steps.join(" → ") : name;
+}
+
 export function PlanSelect({
   kind,
   target,
@@ -46,6 +61,7 @@ export function PlanSelect({
   onChange,
   className,
   field,
+  prRoute,
 }: {
   kind: WaitingKind;
   /** The source as the server knows it: a ticket source's id, or owner/repo.
@@ -58,11 +74,15 @@ export function PlanSelect({
   className?: string;
   /** The card's field hook (`data-tk-field` / `data-repo-field`). */
   field: { attr: "data-tk-field" | "data-repo-field" };
+  /** PR repo cards: the stored `flights.pr_review_plan` ("" = unset), which
+   * adds the "PR route" chip. Omitted elsewhere. */
+  prRoute?: string;
 }) {
   const plans = useFlightPlans().data;
   const flights = useFlights().data;
   const labelId = useId();
-  const reach = sourceReach(kind, { plan, depth }, plans);
+  const flock = kind === "prs" && prRoute !== undefined ? flockPrRoute(prRoute, plans) : null;
+  const reach = sourceReach(kind, { plan, depth }, plans, flock);
   const saved = sourcePlanOptions(plans, kind);
   // The server's own word on what a new item flies, kept only when it answers
   // for the choice on screen (a pick's save may not have landed yet).
@@ -75,7 +95,9 @@ export function PlanSelect({
   }).data;
   const serverSteps = server && (server.plan_id || "") === reach.planId ? stopsSummaryWords(server.steps) : null;
 
-  const pickRung = (l: Lane) => onChange({ depth: l === "leave" ? "" : l, plan: "" });
+  // With a PR route to follow, "Agent only" must say so itself ("agent"):
+  // a blank depth is "follow the PR route".
+  const pickRung = (l: Lane) => onChange({ depth: l === "leave" ? (flock ? "agent" : "") : l, plan: "" });
   const editInSky = async () => {
     if (!target) return;
     const f = await openDefaultEditor({ kind, target }, flights);
@@ -90,6 +112,19 @@ export function PlanSelect({
       </span>
       <div className="fl-reach-line">
         <div className="fl-chiprow fl-reach-row" role="radiogroup" aria-labelledby={labelId} {...{ [field.attr]: "reach" }}>
+          {flock && (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={reach.choice === "flock"}
+              className={"fl-pick fl-reach-flock" + (reach.choice === "flock" ? " on" : "")}
+              title={"Follow your PR route (Settings → Workspace): " + flock.name}
+              data-value="flock"
+              onClick={() => onChange({ depth: "", plan: "" })}
+            >
+              PR route
+            </button>
+          )}
           {SOURCE_RUNGS.map((l) => (
             <button
               key={l}
@@ -141,8 +176,13 @@ export function PlanSelect({
         )}
       </div>
       <span className="set-hint fl-reach-summary" data-reach-summary>
-        {reachSummary(reach, serverSteps)}
+        {flock && reach.choice === "flock" ? prRouteSummary(flock, serverSteps) : reachSummary(reach, serverSteps)}
       </span>
+      {flock && (
+        <span className="set-hint" data-pr-route-hint>
+          This is also what this repository's PRs fly when they're picked up automatically.
+        </span>
+      )}
     </div>
   );
 }

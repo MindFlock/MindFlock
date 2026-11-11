@@ -11,10 +11,13 @@
  * ticket/PR sessions (the Workspace folder field) — and a typed folder is
  * checked as you type (missing → "will be created", unwritable → warned).
  *
- * PR review route (`flights.pr_review_plan`, 2026-11-11): which saved route
- * "Run PR review" runs on an open PR (lib/prReview.ts) — picked from the same
- * plans list the Sky uses. Stored as the route's id; an older value saved as
- * a name still shows as that route. */
+ * PR route (`flights.pr_review_plan`, 2026-11-11): which saved route a pull
+ * request flies when its repository card names none of its own — the PRs the
+ * pipeline picks up AUTOMATICALLY, a Begin review in Intake, and "Run PR
+ * review" on an open PR (lib/prReview.ts); backend core/pr_route.py. Picked
+ * from the same plans list the Sky uses. Blank = our built-in "Pull request"
+ * route (the default, shown by name); "off" = no route. Stored as the
+ * route's id; an older value saved as a name still shows as that route. */
 
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
@@ -28,6 +31,7 @@ import { PathField } from "../../PathField";
 import { RepoBranches } from "./RepoBranches";
 import { SetInIntake } from "./SetInIntake";
 import { useFlightPlans } from "../../../state/queries";
+import { flockPrRoute, prRouteIsOff, PR_ROUTE_DEFAULT, PR_ROUTE_OFF } from "../../../lib/flights";
 
 /** GET /api/settings/workspace-paths. */
 export interface WorkspacePaths {
@@ -284,25 +288,32 @@ function FailureNotesRow() {
   );
 }
 
-/** Which saved route "Run PR review" runs (a session's ⋯ menu, Intake → GitHub
- * PRs). The plans are GET /api/flights/plans — the Sky's list. The setting
- * may hold a route's id or its name; it is shown as that route either way and
- * saved back as the id. A stored value no route matches any more stays
- * visible (and says so) rather than silently reading as None. */
-function PrReviewRoute() {
+/** Which saved route a PR flies (`flights.pr_review_plan`): every PR the
+ * pipeline picks up automatically, a Begin review in Intake and "Run PR
+ * review" (a session's ⋯ menu, Intake → GitHub PRs), unless its repository
+ * card picks its own. The plans are GET /api/flights/plans — the Sky's list.
+ * Blank is the built-in default, named as such; "off" is no route. The
+ * setting may hold a route's id or its name; it is shown as that route
+ * either way and saved back as the id. A stored value no route matches any
+ * more stays visible (and says so: PRs then fly the default). */
+export function PrReviewRoute() {
   const s = useSettings();
   const plans = useFlightPlans().data;
   const stored = String(s.get("flights", "pr_review_plan") ?? "");
-  const match = (plans || []).find((p) => p.id === stored || p.name === stored);
-  const value = match ? match.id : stored;
+  const off = prRouteIsOff(stored);
+  const match = off ? undefined : (plans || []).find((p) => p.id === stored || p.name === stored);
+  const value = off ? PR_ROUTE_OFF : match ? match.id : stored;
+  const route = flockPrRoute(stored, plans);
+  const builtinName = (plans || []).find((p) => p.id === PR_ROUTE_DEFAULT)?.name || "Pull request";
   const options = [
-    { value: "", label: "None" },
-    ...(plans || []).map((p) => ({ value: p.id, label: p.name || p.id })),
+    { value: "", label: "Default · " + builtinName + " (built-in)" },
+    ...(plans || []).filter((p) => p.id !== PR_ROUTE_DEFAULT).map((p) => ({ value: p.id, label: p.name || p.id })),
+    { value: PR_ROUTE_OFF, label: "No route (just the review prompt)" },
   ];
-  if (stored && !match && plans) options.push({ value: stored, label: stored + " (no longer saved)" });
+  if (stored && !off && !match && plans) options.push({ value: stored, label: stored + " (no longer saved — the default is used)" });
   return (
     <label className="set-row" id="workspace-pr-review-route">
-      <span className="set-label">PR review route</span>
+      <span className="set-label">PR route</span>
       <select
         data-group="flights"
         data-field="pr_review_plan"
@@ -311,15 +322,25 @@ function PrReviewRoute() {
         onChange={(e) => void s.saveField("flights", "pr_review_plan", e.target.value)}
       >
         {options.map((o) => (
-          <option key={o.value || "none"} value={o.value}>
+          <option key={o.value || "default"} value={o.value}>
             {o.label}
           </option>
         ))}
       </select>
-      <span className="set-hint">
-        {plans === null
-          ? "This server has no saved routes yet."
-          : <>The saved route <strong>Run PR review</strong> runs on an open PR — e.g. CodeRabbit plus your team's rules.</>}
+      <span className="set-hint" data-pr-route-hint>
+        {plans === null ? (
+          "This server has no saved routes yet."
+        ) : route.off ? (
+          <>
+            Pull requests fly no route: the agent gets the review comments, then you take it from there. <strong>Run PR review</strong> needs a route
+            named each time.
+          </>
+        ) : (
+          <>
+            Every pull request flies this route — the ones picked up <strong>automatically</strong>, a <strong>Begin review</strong> in Intake, and{" "}
+            <strong>Run PR review</strong> — unless its repository picks its own in Intake.{route.steps.length ? " " + route.steps.join(" → ") + "." : ""}
+          </>
+        )}
       </span>
     </label>
   );

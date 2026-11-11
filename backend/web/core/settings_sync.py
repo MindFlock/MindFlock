@@ -395,7 +395,7 @@ GROUP_LABELS: Dict[str, str] = {
 }
 
 LABELS: Dict[str, str] = {
-    "flights.pr_review_plan": "PR review route",
+    "flights.pr_review_plan": "PR route",
     "coding_cli.default_provider": "Default agent",
     "coding_cli.assistant_provider": "Assistant agent",
     "coding_cli.default_launch_args": "Agent launch flags",

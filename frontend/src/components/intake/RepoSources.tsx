@@ -395,6 +395,7 @@ export function RepoFields({
         target={repo}
         depth={o.depth || ""}
         plan={o.plan || ""}
+        prRoute={use === "pr" ? String(((s.settings.flights || {}) as Json).pr_review_plan ?? "") : undefined}
         onChange={(patch) => saveFields("depth" in patch ? { depth: patch.depth, [PLAN_FIELD]: "" } : { [PLAN_FIELD]: patch.plan })}
       />
       <div className={"ik-grid " + (use === "pr" ? "ik-grid-2" : "ik-grid-1")}>

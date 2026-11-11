@@ -105,6 +105,9 @@ def test_setting_round_trips_and_is_emitted_only_when_set():
 
 def test_plan_defaults_to_the_setting_by_id_or_name(srv):
     plan = review_plan()
+    # Unset: the built-in PR route (core.pr_route.DEFAULT_PLAN); "off": none.
+    assert R.resolve_plan()["id"] == "builtin:pr"
+    S.update_settings(flights={"pr_review_plan": "off"})
     with pytest.raises(F.FlightError) as err:
         R.resolve_plan()
     assert (err.value.error, err.value.status) == ("no_plan", 400)
@@ -418,6 +421,7 @@ def test_errors(srv, monkeypatch):
     assert refused(session_title="p") == ("paused", 409)
     monkeypatch.setattr(_held, "is_held", lambda title: title == "s")
     assert refused(session_title="s") == ("held", 409)
+    S.update_settings(flights={"pr_review_plan": "off"})
     with pytest.raises(F.FlightError) as err:
         run(R.run_pr_review(session_title="s"))
     assert (err.value.error, err.value.status) == ("no_plan", 400)
@@ -453,6 +457,7 @@ def test_route_returns_the_result_and_maps_errors(srv, client, monkeypatch):
         "you",
     ]
     assert F.get(body["flight"])["by"] == "user"
+    S.update_settings(flights={"pr_review_plan": "off"})
     r = client.post("/api/pr-review", json={"session": "s"})
     assert r.status_code == 400 and r.json()["error"] == "no_plan"
     r = client.post("/api/pr-review", json={"session": "ghost", "plan": plan["id"]})

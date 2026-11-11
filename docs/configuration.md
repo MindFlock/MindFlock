@@ -470,7 +470,7 @@ an absent key reads as `""`.
 
 | Key | Values | Notes |
 |---|---|---|
-| `pr_review_plan` | a saved route's id (`p_xxxxxx`) or name | The route **Run the PR review** flies on an open PR's session (`POST /api/pr-review`, MCP `run_pr_review`, docs/flights.md "Run the PR review on an open PR") when the call names none. `""` (the default) = none: the action then answers 400 `no_plan` unless a `plan` is passed. A name is matched case-insensitively; a route deleted later answers 404 `unknown_plan` |
+| `pr_review_plan` | a saved route's id (`p_xxxxxx`) or name, or `"off"` | **The PR route** (Settings → Workspace → PR route): the route every pull request flies when its repo card names none of its own — the PRs the pipeline picks up **automatically**, a **Begin review** in Intake, and **Run the PR review** on an open PR's session (`POST /api/pr-review`, MCP `run_pr_review`) when the call names none (`backend/web/core/pr_route.py`; docs/ingestion-pipeline.md "Which route a started item takes"). `""` (the default) = the built-in **`builtin:pr`** ("Pull request": agent → Commit → Push → Reviews settle → CI checks). `"off"` = no route: PRs start with the plain review prompt, and Run the PR review answers 400 `no_plan` unless a `plan` is passed. A name is matched case-insensitively; a route deleted later falls back to the built-in for PR starts (logged) and answers 404 `unknown_plan` from Run the PR review. Read fresh by the pipeline on every PR (its settings cache is per process) |
 
 ### Auth profiles (`[auth_profiles]`, settings store only)
 

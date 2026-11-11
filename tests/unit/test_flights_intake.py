@@ -445,6 +445,8 @@ def test_the_first_agent_steps_prompt_is_appended(launch, monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_pr_route_responses_are_unchanged(launch, monkeypatch):
     _stub_pr(monkeypatch)
+    # PR routes off (flights.pr_review_plan "off"): a start exactly as before.
+    _settings({"flights": {"pr_review_plan": "off"}})
     r = client.post("/api/github/prs/review", json={"repo": "o/r", "number": 7})
     assert r.status_code == 202
     assert r.content == b'{"started":true,"title":"pr-repo-7"}'
@@ -665,11 +667,16 @@ def test_pipeline_arms_the_source_plan(tmp_path, monkeypatch):
     assert prompt.endswith("\n\nThen say Fix the flux.")
 
 
-def test_pipeline_depth_only_flies_the_cut_and_no_depth_is_todays(
+def test_pipeline_depth_only_flies_the_cut_and_no_route_is_todays(
     tmp_path, monkeypatch
 ):
     runner, armed = _runner(tmp_path, monkeypatch)
-    _settings({"github": {"repo_settings": {"org/repo": {"depth": "commit"}}}})
+    _settings(
+        {
+            "github": {"repo_settings": {"org/repo": {"depth": "commit"}}},
+            "flights": {"pr_review_plan": "off"},
+        }
+    )
     tail = runner._arm(
         "pr-repo-7",
         "pr",

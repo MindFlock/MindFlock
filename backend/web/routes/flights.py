@@ -729,8 +729,10 @@ async def pr_review_run(payload: Optional[dict] = None) -> JSONResponse:
     review on an open PR"): ``{"session"?: title, "pr_url"?: url, "plan"?:
     id or name, "by"?}`` → 200 ``{"mode": "started" | "inserted" |
     "created", "session", "flight", "stops": [{id, kind, title}]}``
-    (:func:`core.pr_review.run_pr_review`). 400 ``no_plan`` (none given,
-    ``flights.pr_review_plan`` unset) / ``needs_target`` / ``bad_pr_url``;
+    (:func:`core.pr_review.run_pr_review`; no ``plan`` = the PR's repo's
+    route, else ``flights.pr_review_plan``, else the built-in ``builtin:pr``).
+    400 ``no_plan`` (none given, ``flights.pr_review_plan`` is ``"off"``) /
+    ``needs_target`` / ``bad_pr_url``;
     404 ``unknown_session`` / ``unknown_plan``; 409 ``paused`` / ``held`` /
     ``too_many_steps``. Creating a session for the PR passes Intake's own
     refusals through (404 no such open PR, 409 already starting, 502)."""

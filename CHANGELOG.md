@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pull requests picked up automatically now follow a route.** Before, a PR
+  the pipeline picked up only got its review comments typed into a session,
+  with nothing to carry it on. Now it follows the same route as a PR you
+  start from Intake. That route is the repository's own if it has one, else
+  the **PR route** in Settings → Workspace. If you never picked one, it is
+  the built-in *Pull request* route: the agent addresses the comments, then
+  commit, push, wait for reviews to settle and check CI. If a session is
+  already working on the PR, the route starts on it, or its stops join the
+  route it is already on. The comments are not sent twice when that route
+  is already watching the PR's reviews. Pick *No route* to keep the old
+  plain prompt. A PR repository's card in Intake has a **PR route** choice
+  that shows which route that is. If MindFlock's server isn't running, the
+  pipeline starts the PR as before and logs why.
+
 - **Any session can direct any other.** An agent can type into another
   session's prompt right away (`send_message` with `delivery: "now"`) and
   start, steer or edit a route on it, without being its parent. So one
@@ -79,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   running keep their own copy.
 - **Run the PR review on any open PR.** "Run PR review" on a session (its
   ⋮ / ⋯ menu) and "Run PR review" on an open PR in Intake → GitHub PRs run
-  the route chosen in Settings → Workspace → *PR review route*
+  the route chosen in Settings → Workspace → *PR route*
   (`flights.pr_review_plan`). A session with no route starts it; a session
   already flying a route gets the review stops spliced in after its current
   stop (before any Push/Reviews/Land ahead; stops it already has are not

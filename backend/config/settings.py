@@ -2156,11 +2156,14 @@ class VoiceSettings:
 class FlightsSettings:
     """Routes (flights, docs/flights.md) the app picks for you.
 
-    ``pr_review_plan``: the saved route (a plan id, or its name) that "Run
-    the PR review" flies on an open PR's session
-    (:func:`backend.web.core.pr_review.run_pr_review`, ``POST
-    /api/pr-review``, MCP ``run_pr_review``). Empty = none configured: the
-    action then needs a route named per call.
+    ``pr_review_plan``: the flock's PR route — the saved route (a plan id,
+    or its name) a pull request flies when its repo names none of its own:
+    every PR the pipeline picks up AUTOMATICALLY, a hand start from Intake →
+    Pull requests, and "Run the PR review" on an open PR's session
+    (:mod:`backend.web.core.pr_route`; :func:`backend.web.core.pr_review.
+    run_pr_review`, ``POST /api/pr-review``, MCP ``run_pr_review``). Empty =
+    the built-in default (``builtin:pr``); ``"off"`` = no route (a PR is
+    started with the plain review prompt).
     """
 
     pr_review_plan: str = ""

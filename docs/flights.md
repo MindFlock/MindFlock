@@ -154,6 +154,17 @@ Which saved route (`plan`), in order:
 5. **no route** — a source with no saved route that goes no further than
    Agent only starts its sessions exactly as it always did.
 
+**Which route a PR flies.** A pull request with no route or rung on its repo
+card goes on to the flock's **PR route** (`flights.pr_review_plan`, Settings
+→ Workspace → PR route; `"off"` = none) and then the built-in **Pull
+request** (`builtin:pr`), so a user who configured nothing still has the PR
+carried on. One resolver, `core/pr_route.py`, answers for Intake's Begin
+review, the pipeline's automatic PR intake (handed to the server: on the
+session already working on the PR the route is started, or merged into the
+one it flies — docs/ingestion-pipeline.md "A PR the monitor picks up flies a
+route") and Run the PR review below. A PR repo card's **Agent only** stores
+`depth: "agent"`; a blank depth follows the PR route.
+
 The route is armed on the session's title **before the session exists** (an
 intake title is deterministic), so the item shows on its route in the Sky and
 in the sidebar's provisioning row from the first second, and survives a server
@@ -8154,8 +8165,11 @@ flies it on an open PR, also on one a session is already working on. Code:
 (docs/configuration.md); tests `tests/unit/test_pr_review_action.py`.
 
 **Which route.** The call's `plan` (a saved route's id, or its name, case
-aside), else the `flights.pr_review_plan` setting; neither → 400 `no_plan`,
-not on the shelf → 404 `unknown_plan`. Nothing in the code names a review
+aside), else the PR's repo's own route (`github.repo_settings[repo].plan`,
+when the call names the PR), else the `flights.pr_review_plan` setting, else
+the built-in `builtin:pr` (`core/pr_route.py`; a repo's Goes as far as rung
+is not used here — a ship ladder is not a review). The setting `"off"` and
+no `plan` → 400 `no_plan`; not on the shelf → 404 `unknown_plan`. Nothing in the code names a review
 bot or a company: the rules live in the route's stops.
 
 **Which session.** `session` names it. With only `pr_url`

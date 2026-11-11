@@ -8,8 +8,10 @@
  *    its current stop;
  *  - a bare PR link finds, or CREATES, the session for the PR's branch first.
  *
- * Which route is "the review route" is Settings → Workspace → PR review route
- * (`flights.pr_review_plan`); the request may name another with `plan`.
+ * Which route is "the review route" is Settings → Workspace → PR route
+ * (`flights.pr_review_plan`, the route every PR flies — also the ones picked
+ * up automatically; unset = the built-in "Pull request" route, "off" = none,
+ * which is the 400 below); the request may name another with `plan`.
  *
  * Called from the session ⋯ menus (components/sidebar/prReviewMenu.ts) and
  * Intake → GitHub PRs (components/intake/PrReviewAction.tsx). An older server
@@ -38,7 +40,7 @@ export interface PrReviewRequest {
 }
 
 /** Where the review route is chosen, in the words the 400 sends people to. */
-export const PR_REVIEW_SETTING = "Settings → Workspace → PR review route";
+export const PR_REVIEW_SETTING = "Settings → Workspace → PR route";
 
 /** The JSON the server takes: only the fields that were given. */
 export function prReviewBody(req: PrReviewRequest): PrReviewRequestBody {
@@ -110,7 +112,7 @@ export function prReviewErrorText(err: unknown): string {
   if (err instanceof ApiError) {
     const said = (err.body as { error?: unknown } | null)?.error;
     const why = typeof said === "string" && said ? said : "";
-    if (err.status === 400) return (why ? why.replace(/\.?$/, ". ") : "No PR review route is chosen. ") + "Choose a review route in " + PR_REVIEW_SETTING + ".";
+    if (err.status === 400) return (why ? why.replace(/\.?$/, ". ") : "PR routes are off. ") + "Choose a review route in " + PR_REVIEW_SETTING + ".";
     if (err.status === 409) return why || "The session is paused or held — resume it, then run the review again.";
     if (err.status === 404) return why || "MindFlock couldn't find that session or PR — it may have just closed.";
   }

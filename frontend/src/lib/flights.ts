@@ -871,19 +871,78 @@ export interface SourceReach {
 /** The built-in a source's ladder is cut from (flights._BUILTIN_FOR_KIND). */
 const LADDER_BASE: Record<WaitingKind, string> = { tickets: "builtin:ticket", issues: "builtin:ticket", prs: "builtin:pr" };
 
+// --- The flock's PR route (`flights.pr_review_plan`, backend core/pr_route.py)
+// The route every pull request flies when its repository card names none of
+// its own: the PRs the pipeline picks up AUTOMATICALLY, a Begin review in
+// Intake, and Run PR review. Unset = our built-in "Pull request" route;
+// "off" = no route (the plain review prompt, as before PRs had routes).
+
+/** The built-in a PR flies when nothing is configured (pr_route.DEFAULT_PLAN). */
+export const PR_ROUTE_DEFAULT = "builtin:pr";
+/** The stored value that turns PR routes off (pr_route.OFF). */
+export const PR_ROUTE_OFF = "off";
+
+/** Whether a stored `flights.pr_review_plan` means "no route" (pr_route.is_off). */
+export function prRouteIsOff(value: unknown): boolean {
+  return ["off", "none", "no", "false"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+/** What the flock's PR route resolves to. */
+export interface FlockPrRoute {
+  /** The plan id a PR flies; "" = no route. */
+  planId: string;
+  /** Its name ("Pull request", "Team review"), or "No route". */
+  name: string;
+  /** The built-in default (nothing picked, or the pick is gone). */
+  builtin: boolean;
+  off: boolean;
+  /** Its stops in words; [] when its steps aren't known here. */
+  steps: string[];
+}
+
+/** `flights.pr_review_plan` as the server resolves it (pr_route.flock_plan):
+ * a saved route by id or name; "off" → none; unset or gone → the built-in. */
+export function flockPrRoute(
+  setting: unknown,
+  plans: ReadonlyArray<Pick<FlightPlan, "id" | "name"> & { steps?: FlightStep[] }> | null | undefined
+): FlockPrRoute {
+  if (prRouteIsOff(setting)) return { planId: "", name: "No route", builtin: false, off: true, steps: ["Agent"] };
+  const ref = String(setting ?? "").trim();
+  const low = ref.toLowerCase();
+  const mine = ref ? (plans || []).find((p) => p.id === ref || String(p.name || "").trim().toLowerCase() === low) : undefined;
+  if (mine) return { planId: mine.id, name: mine.name || mine.id, builtin: false, off: false, steps: stopsSummaryWords(mine.steps) };
+  const ours = (plans || []).find((p) => p.id === PR_ROUTE_DEFAULT);
+  return { planId: PR_ROUTE_DEFAULT, name: ours?.name || "Pull request", builtin: true, off: false, steps: ours ? stopsSummaryWords(ours.steps) : [] };
+}
+
+/** Whether a PR repo card's stored depth leaves the choice to the flock's PR
+ * route: blank or "off" (server._cap_source_depth → ""). "agent" is the card's
+ * own "Agent only". */
+export function followsPrRoute(depth: string | null | undefined): boolean {
+  const d = String(depth ?? "").trim().toLowerCase();
+  return d === "" || d === "off" || d === "leave";
+}
+
 /** Where a source with this `plan` and `depth` sends its items (the server's
  * chain, minus a per-start pick). `plans` undefined/null = not known here:
- * a named plan is then trusted to exist. */
+ * a named plan is then trusted to exist. `flock` (PR repos only): the flock's
+ * PR route, which a card with no plan and no rung of its own follows —
+ * `choice` "flock". Without it a blank depth reads as "Agent only", as for a
+ * ticket source. */
 export function sourceReach(
   kind: WaitingKind,
   src: { plan?: string | null; depth?: string | null },
-  plans: ReadonlyArray<Pick<FlightPlan, "id" | "name"> & { steps?: FlightStep[] }> | null | undefined
+  plans: ReadonlyArray<Pick<FlightPlan, "id" | "name"> & { steps?: FlightStep[] }> | null | undefined,
+  flock?: FlockPrRoute | null
 ): SourceReach {
   const rung = capSourceDepth(src.depth);
   const plan = String(src.plan || "").trim();
   const found = plan && plans ? plans.find((p) => p.id === plan) : undefined;
   if (plan && (found || !plans))
     return { choice: "plan:" + plan, words: found?.name || plan, own: true, rung, missing: "", steps: found ? stopsSummaryWords(found.steps) : [], planId: plan };
+  if (flock && kind === "prs" && followsPrRoute(src.depth))
+    // The built-in reads "PR route" (its name would echo the PR badge).
+    return { choice: "flock", words: flock.off ? "No route" : flock.builtin ? "PR route" : flock.name, own: false, rung, missing: plan, steps: flock.steps, planId: flock.planId };
   const ship = rung === "leave" ? [] : LADDER.slice(0, LADDER.indexOf(rung) + 1);
   return {
     choice: rung,

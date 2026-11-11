@@ -19,6 +19,12 @@ It also backs "Run the PR review" (:func:`run_pr_review`, ``POST
 /api/pr-review``, MCP ``run_pr_review``): the team's saved review route
 (``flights.pr_review_plan``) flown by an open PR's own session — started on
 it, merged into the route it already flies, or on a session made for the PR.
+
+And the pipeline's AUTOMATIC PR intake (:func:`intake_auto`, ``POST
+/api/github/prs/review`` with ``"auto": true``): the monitor hands each PR it
+picks up to the server, which flies it on the route a hand start would
+(:mod:`core.pr_route`) — on a new session, or started / merged on the one
+already working on the PR.
 """
 
 from __future__ import annotations
@@ -39,6 +45,7 @@ __all__ = [
     "LaunchError",
     "configured_plan",
     "find_pr_session",
+    "intake_auto",
     "launch",
     "parse_pr_url",
     "resolve_plan",
@@ -703,8 +710,8 @@ def _same_pr(a: str, b: str) -> bool:
 
 
 def configured_plan() -> str:
-    """``flights.pr_review_plan`` (a plan id or name), ``""`` = none. A local
-    import, as every settings reader in the web layer does."""
+    """``flights.pr_review_plan`` (a plan id or name, or ``"off"``), ``""`` =
+    unset. A local import, as every settings reader in the web layer does."""
     try:
         from backend.config.settings import load_settings
 
@@ -713,30 +720,32 @@ def configured_plan() -> str:
         return ""
 
 
-def resolve_plan(ref: str = "") -> dict:
+def resolve_plan(ref: str = "", repo: str = "") -> dict:
     """The review route: ``ref`` (a saved plan's id, else its name, case
-    aside), else the ``flights.pr_review_plan`` setting. 400 ``no_plan`` when
-    neither names one; 404 ``unknown_plan`` when it is not on the shelf."""
-    F = _flights_mod()
-    ref = str(ref or "").strip() or configured_plan()
+    aside); else ``repo``'s own PR route (``github.repo_settings[repo].plan``,
+    while saved); else the ``flights.pr_review_plan`` setting; unset, the
+    built-in default (:data:`pr_route.DEFAULT_PLAN`) — the chain every PR
+    start uses (:mod:`core.pr_route`), minus a repo's Goes as far as rung (a
+    ship ladder is not a review). 400 ``no_plan`` when the setting is
+    ``"off"`` and no route was named; 404 ``unknown_plan`` when the route
+    named is not on the shelf."""
+    from backend.web.core import pr_route as _pr_route
+
+    ref = str(ref or "").strip()
+    if not ref and repo:
+        own = _pr_route.for_repo_plan(repo)
+        if own:
+            ref = own
     if not ref:
-        raise _err(
-            "no_plan",
-            400,
-            "no PR review route: pick one in Settings (flights.pr_review_plan) "
-            "or pass plan",
-        )
-    plan = F.get_plan(ref)
-    if plan is None:
-        low = ref.lower()
-        plan = next(
-            (
-                p
-                for p in F.list_plans()
-                if str(p.get("name") or "").strip().lower() == low
-            ),
-            None,
-        )
+        ref = configured_plan()
+        if _pr_route.is_off(ref):
+            raise _err(
+                "no_plan",
+                400,
+                "PR routes are off (Settings → PR route): pass plan to run one",
+            )
+        ref = ref or _pr_route.DEFAULT_PLAN
+    plan = _pr_route.find_plan(ref)
     if plan is None or not plan.get("steps"):
         raise _err("unknown_plan", 404, "no saved route %s" % ref)
     return plan
@@ -943,8 +952,10 @@ async def run_pr_review(
     "started" | "inserted" | "created", "session", "flight", "stops":
     [{id, kind, title}]}`` (``POST /api/pr-review``, MCP ``run_pr_review``).
 
-    * ``plan``: a saved route's id or name; ``None``/``""`` = the
-      ``flights.pr_review_plan`` setting (400 ``no_plan`` when neither).
+    * ``plan``: a saved route's id or name; ``None``/``""`` = the PR's repo's
+      own PR route, else the ``flights.pr_review_plan`` setting, else the
+      built-in default (:func:`resolve_plan`; 400 ``no_plan`` when the
+      setting is ``"off"``).
     * ``session_title``: the session to run it on (404 ``unknown_session``;
       409 ``paused`` / ``held``). Without it, ``pr_url`` finds the session
       (:func:`find_pr_session`: the one showing that PR, Intake's own, or
@@ -971,15 +982,16 @@ async def run_pr_review(
     :class:`~backend.web.core.flights.FlightError` (400 / 404 / 409) and,
     on the create path, :class:`LaunchError` (404 / 409 / 502)."""
     F = _flights_mod()
-    route = resolve_plan(plan or "")
     title = str(session_title or "").strip()
     url = str(pr_url or "").strip()
     if not title and not url:
         raise _err("needs_target", 400, "name the session or the PR's URL")
     subject = None
+    slug = ""
     if url:
         slug, number = parse_pr_url(url)
         subject = _pr_subject(slug, number, url)
+    route = resolve_plan(plan or "", repo=slug)
     if title:
         return await _run_on_session(title, route, by, subject)
     found = await find_pr_session(slug, number, url)
@@ -989,3 +1001,283 @@ async def run_pr_review(
     title = str(out.get("title") or "")
     flight = F.for_session(title)
     return _result("created", title, flight, (flight or route)["steps"])
+
+
+# --------------------------------------------------------------------------- #
+# The pipeline's AUTOMATIC PR intake, handed to the server (docs/ingestion-
+# pipeline.md "A PR the monitor picks up flies a route"): the PR flies the
+# route core.pr_route resolves, exactly as a hand start from Intake would.
+# --------------------------------------------------------------------------- #
+def _queue_prompt(title: str, text: str) -> bool:
+    """Queue ``text`` for ``title`` (typed in once its agent is idle), as
+    ``POST /api/sessions/by-branch/hand-off`` does. False when blank."""
+    from backend.web.core import prompt_queue as _pq
+
+    if not str(text or "").strip():
+        return False
+    _pq.enqueue(title, text)
+    _pq.set_flags(title, enabled=True, held=False)
+    return True
+
+
+def _reviews_take_them(flight: dict, comment_ids) -> bool:
+    """Whether a ``reviews`` stop ON NOW will send these comments itself: it
+    has seeded (what was on the PR when it began is "seen") and at least one
+    of ``comment_ids`` is new to it — or, ids unknown, any running seeded
+    reviews stop. A pending reviews stop does not count: it seeds the
+    comments already on the PR as seen when it begins, so they must come in
+    by prompt (docs/flights.md "Reviews")."""
+    ids = [str(i) for i in (comment_ids or [])]
+    for s in flight.get("steps") or []:
+        if s.get("kind") != "reviews":
+            continue
+        ss = (flight.get("step_states") or {}).get(s["id"]) or {}
+        d = ss.get("detail") or {}
+        if ss.get("state") != "running" or not d.get("seeded"):
+            continue
+        seen = set(str(i) for i in d.get("seen") or [])
+        if not ids or any(i not in seen for i in ids):
+            return True
+    return False
+
+
+def _past_the_work(plan: dict) -> dict:
+    """``plan`` without its leading Agent stops that have no prompt (they
+    stand for "the work", which the queued review prompt is) — what is merged
+    into a route already flying. A Loop aimed at a dropped stop goes too."""
+    F = _flights_mod()
+    i = F.start_cursor(plan, "", attach=True)
+    gone = {s["id"] for s in plan["steps"][:i]}
+    steps = [
+        s
+        for s in plan["steps"][i:]
+        if not (
+            s["kind"] == "loop"
+            and str((s.get("config") or {}).get("back_to") or "") in gone
+        )
+    ]
+    return dict(plan, steps=steps)
+
+
+async def _reopen_builder(branch: str) -> str:
+    """Reopen the newest recently-closed session that worked on ``branch``
+    (the ticket's own before a ``pr-…`` one, never a verify checker), as the
+    pipeline's hand-off always has → its title, ``""`` when there is none."""
+    srv = _server()
+    if not branch:
+        return ""
+    try:
+        items = srv._load_recently_closed()
+    except Exception:  # noqa: BLE001
+        return ""
+
+    def _rank(t: str) -> int:
+        return 1 if t.startswith("pr-") else 0
+
+    closed = [
+        e
+        for e in items
+        if str(e.get("branch") or (e.get("data") or {}).get("branch") or "") == branch
+        and not str(e.get("title") or "").startswith("verify-")
+    ]
+    closed.sort(key=lambda e: str(e.get("closed_at") or ""), reverse=True)
+    closed.sort(key=lambda e: _rank(str(e.get("title") or "")))
+    if not closed:
+        return ""
+    resp = await srv._reopen_closed_entry(str(closed[0].get("id") or ""))
+    if resp.status_code >= 300:
+        _logger.warning(
+            "PR on %s: reopening %s failed (%s)",
+            branch,
+            closed[0].get("title"),
+            resp.status_code,
+        )
+        return ""
+    try:
+        import json as _json
+
+        return str(_json.loads(bytes(resp.body).decode("utf-8")).get("title") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+async def _comments_prompt(pr) -> tuple:
+    """``(prompt, comment ids)`` for ``pr``'s actionable review comments, as
+    the pipeline builds it for a session that already has the branch."""
+    from backend.ticket_ingestion.pr_comments import fetch_actionable_comments
+    from backend.ticket_ingestion.pr_runner import build_consolidated_pr_prompt
+
+    cfg = _load_config()
+    comments = await fetch_actionable_comments(pr, cfg.github)
+    if not comments:
+        return "", []
+    return (
+        build_consolidated_pr_prompt(pr, comments, "this session's own workspace"),
+        [str(c.id) for c in comments],
+    )
+
+
+async def _start_after_prompt(title: str, plan_id: str, subject: dict, text: str):
+    """Queue ``text`` and start the route on ``title`` with it as the work in
+    progress: the queue is parked while the flight takes off, so its leading
+    Agent stop is that queued prompt (``flight_driver._session_busy``
+    "queued") and not skipped as work already done."""
+    from backend.web.core import prompt_queue as _pq
+
+    D = _driver_mod()
+    prior = _pq.get_state(title)
+    was_held = bool(prior.get("held"))
+    if text.strip():
+        _pq.set_flags(title, held=True, enabled=False)
+        _pq.enqueue(title, text)
+    try:
+        return await D.start(
+            {"plan_id": plan_id, "title": title, "by": "intake", "subject": subject}
+        )
+    finally:
+        if text.strip():
+            _pq.set_flags(title, held=was_held, enabled=not was_held)
+
+
+async def _intake_on_session(
+    title: str, plan_id: str, subject: dict, text: str, comment_ids
+) -> dict:
+    """The PR's session exists: start the route on it (no route), merge the
+    route's stops into the one it flies, or — PR routes off, or the session
+    can't take a route now — just queue the review prompt (today's
+    hand-off). The prompt is never queued on top of a ``reviews`` stop that
+    will send the same comments (:func:`_reviews_take_them`)."""
+    F = _flights_mod()
+    D = _driver_mod()
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None:
+        raise LaunchError(409, {"error": "session %s went away" % title})
+    plan = F.get_plan(plan_id) if plan_id else None
+    note = "" if plan is not None else "PR routes are off"
+    try:
+        _refuse_stopped(title, inst)
+    except F.FlightError as err:
+        plan, note = None, err.detail
+    flight = F.for_session(title)
+
+    def _out(mode, f, steps, prompt):
+        res = _result(mode, title, f, steps)
+        res.update(plan=str((plan or {}).get("id") or ""), prompt=prompt)
+        if note:
+            res["note"] = note
+        return res
+
+    if flight is None:
+        if plan is None:
+            return _out("queued", None, [], _queued(title, text))
+        try:
+            f = await _start_after_prompt(title, plan["id"], subject, text)
+        except (F.FlightError, F.PlanError) as err:
+            note = getattr(err, "detail", "") or str(err)
+            # The prompt went in with the queue; release it, route or not.
+            return _out("queued", None, [], "queued" if text.strip() else "none")
+        return _out(
+            "started",
+            f,
+            f["steps"][f["cursor"] :],
+            "queued" if text.strip() else "none",
+        )
+    mode, after, added = "queued", flight, []
+    if plan is not None:
+        try:
+            after = await asyncio.to_thread(
+                D._changed,
+                flight["id"],
+                lambda f: F.op_merge_plan(f, _past_the_work(plan), added=added),
+            )
+            mode = "inserted"
+        except F.FlightError as err:
+            note = err.detail
+        after = after or flight
+    if _reviews_take_them(after, comment_ids):
+        return _out(mode, after, added, "reviews")
+    return _out(mode, after, added, _queued(title, text))
+
+
+def _queued(title: str, text: str) -> str:
+    return "queued" if _queue_prompt(title, text) else "none"
+
+
+async def intake_auto(repo: str, number: int, text: str = "", comment_ids=None) -> dict:
+    """The pipeline's automatic PR intake, done by the server (``POST
+    /api/github/prs/review`` with ``"auto": true``) so the PR flies the same
+    route a hand start would (:mod:`core.pr_route`) → ``{"mode", "session",
+    "flight", "stops", "plan", "prompt", "note"?}``:
+
+    * **No session for the PR** (:func:`find_pr_session`, then a recently
+      closed session that built its branch, reopened) → ``created``: exactly
+      Intake's Begin review (:func:`launch`, route armed, the review prompt
+      its first prompt; ``prompt`` ``"first"``).
+    * **A session, no route** → ``started``: the review prompt is queued and
+      the route starts with it as its first Agent stop's work.
+    * **A session mid-route** → ``inserted``: the route's stops merged in
+      (:func:`flights.op_merge_plan`, past its leading empty Agent stops);
+      the prompt queued unless a running ``reviews`` stop will send the same
+      comments (``prompt`` ``"reviews"``).
+    * **PR routes off**, or the session paused / held → ``queued``: the
+      prompt alone, today's hand-off.
+
+    ``text`` is the review prompt the pipeline built (``""`` = built here
+    from the PR's actionable comments); ``comment_ids`` their ids. Raises
+    :class:`LaunchError` (404 no such open PR, 409 already starting, 502)."""
+    srv = _server()
+    try:
+        pr = await find_pr(repo, number)
+    except LookupError as err:
+        raise LaunchError(404, {"error": str(err)}) from None
+    except Exception as err:  # noqa: BLE001
+        raise LaunchError(502, {"error": str(err)}) from None
+    url = str(getattr(pr, "url", "") or "") or (
+        "https://github.com/%s/pull/%d" % (repo, number)
+    )
+    plan_id = srv._intake_plan(
+        "pr",
+        "",
+        "",
+        srv._repo_intake_plan(repo, "prs"),
+        srv._repo_intake_depth(repo, "prs"),
+    )
+    title = await find_pr_session(repo, number, url)
+    if not title:
+        title = await _reopen_builder(str(getattr(pr, "head_ref", "") or ""))
+    if not title:
+        out = await launch(repo, number)
+        flight = _flights_mod().for_session(str(out.get("title") or ""))
+        res = _result(
+            "created",
+            str(out.get("title") or ""),
+            flight,
+            (flight or {}).get("steps") or [],
+        )
+        res.update(plan=str((flight or {}).get("plan_id") or ""), prompt="first")
+        return res
+    if not str(text or "").strip():
+        try:
+            text, comment_ids = await _comments_prompt(pr)
+        except Exception as err:  # noqa: BLE001
+            raise LaunchError(502, {"error": str(err)}) from None
+    out = await _intake_on_session(
+        title,
+        plan_id,
+        _pr_subject(repo, number, url, str(getattr(pr, "title", "") or "")),
+        str(text or ""),
+        comment_ids,
+    )
+    # No record_reviewed here: the pipeline (the only caller) writes the PR
+    # into processed_prs itself once this answers.
+    _logger.info(
+        "PR %s#%s: %s on %s (route %s, prompt %s)",
+        repo,
+        number,
+        out["mode"],
+        title,
+        out.get("plan") or "none",
+        out.get("prompt"),
+    )
+    return out

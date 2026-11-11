@@ -50,6 +50,11 @@ os.environ.setdefault(
 # so a status read in any TestClient test wrote the real hand-over file. Drop
 # it here, at import, like CI never sets it; tests that need it set their own.
 os.environ.pop("MINDFLOCK_REPO_ROOT", None)
+# The port of the server that spawned the ticket pipeline: with it set, a
+# pipeline test's SessionRunner.run_pr would hand its PR to the LIVE server
+# (hand_to_server / hand_to_builder POST to 127.0.0.1:<port>). Tests that
+# need it set their own.
+os.environ.pop("MINDFLOCK_SERVER_PORT", None)
 
 # Every variable that points ``git`` at a repository, index, object store, ref
 # namespace or config OTHER than the one its cwd / ``-C`` names.

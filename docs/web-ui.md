@@ -1563,9 +1563,22 @@ Three places ask for it:
 - **Intake → GitHub PRs**: every open PR row has **Run PR review** in its action
   column (`components/intake/PrReviewAction.tsx`), sending `{"pr_url": <link>}`;
   the server finds the PR's session or opens one for its branch.
-- The route itself is chosen in **Settings → Workspace → PR review route**
+- The route itself is chosen in **Settings → Workspace → PR route**
   (`flights.pr_review_plan`, a saved route's id; the picker lists the Sky's
-  saved routes from `GET /api/flights/plans`). None = the action answers 400.
+  saved routes from `GET /api/flights/plans`). Its first option is the
+  built-in default, by name (*Default · Pull request (built-in)*, stored
+  `""`); its last is *No route (just the review prompt)* (`"off"`, when the
+  action answers 400). The hint says what the route is for: every PR — the
+  ones picked up **automatically**, a Begin review in Intake, and Run PR
+  review — unless its repository picks its own.
+- A PR repository's card in Intake (`components/flights/PlanSelect.tsx` with
+  `prRoute`) has a **PR route** chip before the rungs: on when the card names
+  no route or rung of its own (depth `""`), its summary names the route
+  (*Your PR route “Pull request” (the built-in default): Agent → …*), and a
+  hint says automatically picked-up PRs fly it too. **Agent only** there
+  stores `depth: "agent"` (no route for this repo). The Sky's intake lane
+  chip reads the same (`lib/skyIntake.ts`; *PR route* for the built-in, the
+  route's name for a saved one, *No route* when off).
 
 What it says, from the answer's `mode`:
 

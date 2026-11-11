@@ -25,8 +25,8 @@ const { FlywayCanvas } = await import("../components/flights/FlywayCanvas");
 const { SessionFlight, featuredPlans, SAVED_SHOWN } = await import("../components/flights/SessionFlight");
 const { flightDiagram, flywayDiagram } = await import("../lib/flightDiagram");
 const { SkyView } = await import("../components/flights/SkyView");
-const { PlanSelect, reachSummary } = await import("../components/flights/PlanSelect");
-const { planChoices, sourcePlanOptions, sourceReach } = await import("../lib/flights");
+const { PlanSelect, prRouteSummary, reachSummary } = await import("../components/flights/PlanSelect");
+const { flockPrRoute, planChoices, sourcePlanOptions, sourceReach } = await import("../lib/flights");
 const { putBody } = await import("../components/intake/sourceForm");
 const { fieldPatch } = await import("../components/intake/repoUses");
 
@@ -551,6 +551,37 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
     expect(reachSummary(sourceReach("prs", {}, P))).toBe("Agent, then nothing more. You take it from there");
   });
 
+  it("a PR repo card follows the flock's PR route until it picks its own (backend core/pr_route.py)", () => {
+    const P = [
+      { id: "builtin:pr", name: "Pull request", steps: [{ ...STEPS[0], kind: "agent", title: "Agent" }, { ...STEPS[0], kind: "checks", title: "CI checks" }] },
+      { id: "p_team", name: "Team review", steps: [{ ...STEPS[0], kind: "review", title: "Standards review" }] },
+    ] as FlightPlan[];
+    // Unset: the built-in default, named; a saved route by id or name; off.
+    expect(flockPrRoute("", P)).toMatchObject({ planId: "builtin:pr", name: "Pull request", builtin: true, off: false, steps: ["Agent", "CI checks"] });
+    expect(flockPrRoute("team REVIEW", P)).toMatchObject({ planId: "p_team", builtin: false });
+    expect(flockPrRoute("p_gone", P)).toMatchObject({ planId: "builtin:pr", builtin: true });
+    expect(flockPrRoute("off", P)).toMatchObject({ planId: "", off: true });
+    const flock = flockPrRoute("p_team", P);
+    // Blank (or "off") depth and no plan: the PR route; "agent" is the card's own Agent only.
+    expect(sourceReach("prs", { depth: "" }, P, flock)).toMatchObject({ choice: "flock", words: "Team review", planId: "p_team" });
+    expect(sourceReach("prs", { depth: "agent" }, P, flock)).toMatchObject({ choice: "leave", planId: "" });
+    expect(sourceReach("prs", { depth: "push" }, P, flock)).toMatchObject({ choice: "push", planId: "builtin:pr@push" });
+    expect(sourceReach("prs", { plan: "p_team" }, P, flock)).toMatchObject({ choice: "plan:p_team", own: true });
+    // Tickets never follow it.
+    expect(sourceReach("tickets", { depth: "" }, P, flock).choice).toBe("leave");
+    expect(prRouteSummary(flockPrRoute("", P))).toBe("Your PR route “Pull request” (the built-in default): Agent → CI checks");
+    expect(prRouteSummary(flockPrRoute("off", P))).toContain("PR routes are off");
+    // The card: a "PR route" chip first, on; the hint says auto-ingested PRs fly it.
+    const html = withClient(
+      createElement(PlanSelect, { kind: "prs", target: "acme/api", depth: "", plan: "", prRoute: "", onChange: () => {}, field: { attr: "data-repo-field" } }),
+      (c) => c.setQueryData(["flight-plans"], P)
+    );
+    expect(html).toMatch(/aria-checked="true" class="fl-pick fl-reach-flock on"[^>]*data-value="flock">PR route</);
+    expect(html).toMatch(/aria-checked="false" class="fl-pick" data-value="leave">Agent only</);
+    expect(html).toContain("Your PR route “Pull request” (the built-in default)");
+    expect(html).toContain("picked up automatically");
+  });
+
   it("lists your saved stops, then our built-ins made for that kind of item", () => {
     const P = [
       { ...PLAN, id: "builtin:ticket", name: "Ticket to merge" },
@@ -581,7 +612,9 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
     expect(repos).toContain('saveFields("depth" in patch ? { depth: patch.depth, [PLAN_FIELD]: "" } : { [PLAN_FIELD]: patch.plan })');
     expect(repos).toContain('kind={use === "pr" ? "prs" : "issues"}');
     expect(repos).not.toContain("Fast-track to");
-    expect(code("components/flights/PlanSelect.tsx")).toContain('onChange({ depth: l === "leave" ? "" : l, plan: "" })');
+    // "Agent only" stores "" — or "agent" where "" means "follow the PR route".
+    expect(code("components/flights/PlanSelect.tsx")).toContain('onChange({ depth: l === "leave" ? (flock ? "agent" : "") : l, plan: "" })');
+    expect(repos).toContain('prRoute={use === "pr" ?');
     // Both fields in one patch, depth set and plan gone.
     const both = fieldPatch(fieldPatch({ "acme/api": { plan: "p_mine" } }, "pr", "acme/api", "depth", "push").blocks, "pr", "acme/api", "plan", "");
     expect(both.patch).toEqual({ github: { repo_settings: { "acme/api": { depth: "push" } } } });
