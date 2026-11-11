@@ -100,8 +100,9 @@ class InstanceOptions:
         forking from its orchestrator's commit while ``path`` stays the
         canonical repo root).
       * ``base_branch``        - the branch to record as the session's
-        ``BaseBranch`` (diff/stage base) instead of the inferred one; only
-        honored together with ``base_ref``.
+        ``BaseBranch`` (diff/stage base) instead of the inferred one; honored
+        together with ``base_ref``, and for a provisioned session (a PR review
+        into a branch other than the repo's configured base).
       * ``carry_ref``          - with ``base_ref``: a snapshot commit
         (:func:`backend.session.git.snapshot_changes` of another worktree) whose
         files are laid over the new worktree before the agent starts, so the
@@ -518,6 +519,7 @@ class Instance:
                     self.Title,
                     settings,
                     workspace_path=(self._workspace_path or None),
+                    base_branch=self._base_branch_override,
                 )
             except Exception as err:  # noqa: BLE001
                 raise RuntimeError(
@@ -525,8 +527,9 @@ class Instance:
                 ) from err
             self._git_worktree = git_worktree
             self.Branch = git_worktree.GetBranchName()
-            # K1: the branch this workspace forked from (per-session base).
-            self.BaseBranch = settings.base_branch or ""
+            # K1: the branch this workspace forked from (per-session base) —
+            # the creator's own pick first (a PR review's base_ref).
+            self.BaseBranch = self._base_branch_override or settings.base_branch or ""
         elif self.InPlace:
             # Run directly in the existing repo at self.Path — no worktree,
             # no new branch. Cleanup/Remove are no-ops so the user's repo is
@@ -1429,7 +1432,9 @@ def new_instance(opts: InstanceOptions) -> Instance:
     inst.ProfileModel = getattr(opts, "profile_model", "") or ""
     inst._base_ref = getattr(opts, "base_ref", "") or ""
     inst._base_branch_override = (
-        (getattr(opts, "base_branch", "") or "") if inst._base_ref else ""
+        (getattr(opts, "base_branch", "") or "")
+        if (inst._base_ref or inst.Provisioned)
+        else ""
     )
     inst._carry_ref = (getattr(opts, "carry_ref", "") or "") if inst._base_ref else ""
     inst.Parent = getattr(opts, "parent", "") or ""

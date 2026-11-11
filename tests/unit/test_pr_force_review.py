@@ -223,44 +223,92 @@ async def test_find_pr_unconfigured_raises(monkeypatch):
 # --------------------------------------------------------------------------- #
 # prepare_review (async)
 # --------------------------------------------------------------------------- #
-def _patch_prepare(monkeypatch, comments):
+def _patch_prepare(monkeypatch, comments, fast=True):
+    """Stub the GitHub + git halves of prepare_review. ``fast=False`` makes
+    the base-clone path unavailable, so the PR's own clone is used."""
     from backend.ticket_ingestion import pr_comments, pr_provisioner, pr_runner
+    from backend.web.core import ticket_start
 
     monkeypatch.setattr(
         pr_review, "_load_config", lambda: types.SimpleNamespace(github=_gh())
     )
+    monkeypatch.setattr(pr_review, "review_repo_url", lambda pr, cfg: pr.clone_url)
+    monkeypatch.setattr(ticket_start, "workspace_mode", lambda: "worktree")
     monkeypatch.setattr(
         pr_comments, "fetch_actionable_comments", AsyncMock(return_value=comments)
     )
+    calls = types.SimpleNamespace(clone=[], fast=[])
+
+    def _fast(pr, *, repo_url="", is_live=None):
+        calls.fast.append(repo_url)
+        if not fast:
+            raise pr_provisioner.PRWorktreeUnavailable("held by a live session")
+        return pr_provisioner.PRWorktree(
+            base_repo="/ws/_base_app",
+            branch=pr.head_ref,
+            head_sha=pr.head_sha,
+            base_branch=pr.base_ref,
+        )
 
     class _FakeProv:
         def __init__(self, cfg):
             pass
 
-        async def provision(self, pr, launch_cursor=False):
+        async def provision(self, pr, launch_cursor=False, run_setup=True):
+            calls.clone.append(run_setup)
             return types.SimpleNamespace(directory=Path("/ws/pr-app-7"))
 
+    monkeypatch.setattr(pr_provisioner, "prepare_pr_worktree", _fast)
     monkeypatch.setattr(pr_provisioner, "PRProvisioner", _FakeProv)
     monkeypatch.setattr(
         pr_runner,
         "build_consolidated_pr_prompt",
-        lambda pr, cs, d: "CONSOLIDATED",
+        lambda pr, cs, d: "CONSOLIDATED in `%s`" % d,
     )
+    return calls
 
 
-async def test_prepare_review_with_comments(monkeypatch):
-    _patch_prepare(monkeypatch, comments=["c1", "c2"])
-    directory, prompt, n = await pr_review.prepare_review(_pr())
-    assert directory == Path("/ws/pr-app-7")
-    assert prompt == "CONSOLIDATED"
-    assert n == 2
+async def test_prepare_review_with_comments_uses_the_base_clone(monkeypatch):
+    calls = _patch_prepare(monkeypatch, comments=["c1", "c2"])
+    prepared = await pr_review.prepare_review(_pr())
+    assert prepared.strategy == "worktree"
+    assert prepared.workspace_path == ""  # the engine adds the worktree at Start
+    assert prepared.repo_url == "https://github.com/acme/app.git"
+    assert calls.fast == ["https://github.com/acme/app.git"] and calls.clone == []
+    # The worktree's path is not known yet: the prompt says it in words.
+    assert prepared.prompt == "CONSOLIDATED in " + pr_review._HERE_TEXT
+    assert prepared.n_comments == 2
 
 
 async def test_prepare_review_without_comments_uses_self_review(monkeypatch):
     _patch_prepare(monkeypatch, comments=[])
-    directory, prompt, n = await pr_review.prepare_review(_pr())
-    assert n == 0
-    assert "git diff main...HEAD" in prompt  # the self-review prompt, not comments
+    prepared = await pr_review.prepare_review(_pr())
+    assert prepared.n_comments == 0
+    # the self-review prompt, not comments
+    assert "git diff origin/main...HEAD" in prepared.prompt
+    assert pr_review._HERE not in prepared.prompt
+
+
+async def test_prepare_review_falls_back_to_the_prs_own_clone(monkeypatch):
+    calls = _patch_prepare(monkeypatch, comments=["c1"], fast=False)
+    prepared = await pr_review.prepare_review(_pr(base_ref="develop"))
+    assert prepared.strategy == "clone"
+    assert prepared.workspace_path == "/ws/pr-app-7"
+    assert prepared.base_branch == "develop"
+    assert "live session" in prepared.fallback_reason
+    # Setup commands run once, in the session's own Setup — not here too.
+    assert calls.clone == [False]
+    assert prepared.prompt == "CONSOLIDATED in `/ws/pr-app-7`"
+
+
+async def test_clone_mode_skips_the_base_clone(monkeypatch):
+    from backend.web.core import ticket_start
+
+    calls = _patch_prepare(monkeypatch, comments=[])
+    monkeypatch.setattr(ticket_start, "workspace_mode", lambda: "clone")
+    prepared = await pr_review.prepare_review(_pr())
+    assert prepared.strategy == "clone" and calls.fast == []
+    assert "clone" in prepared.fallback_reason
 
 
 # --------------------------------------------------------------------------- #
@@ -278,7 +326,7 @@ def test_record_reviewed_marks_and_is_idempotent(monkeypatch, tmp_path):
 
 def test_self_review_prompt_targets_the_diff_not_comments():
     prompt = pr_review._self_review_prompt(_pr(), "/tmp/ws/pr-app-7")
-    assert "git diff main...HEAD" in prompt
+    assert "git diff origin/main...HEAD" in prompt
     assert "unstaged" in prompt
     # Same no-commit contract as the comment-driven prompt.
     assert "git push" in prompt

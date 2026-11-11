@@ -46,8 +46,16 @@ def _is_repo_dir(path: str) -> bool:
     A bare ``isdir`` isn't enough: a half-deleted workspace (or a directory the
     user emptied by hand) would offer a Reopen that lands the agent in a
     non-repo, where every git-backed panel in the app then fails.
+
+    ``.git`` is a directory in a clone and a FILE (``gitdir: …``) in a git
+    worktree — a ticket's or a PR review's workspace. Checking for a directory
+    alone hid Reopen on every worktree.
     """
-    return bool(path) and os.path.isdir(os.path.join(path, ".git"))
+    return (
+        bool(path)
+        and os.path.isdir(path)
+        and os.path.exists(os.path.join(path, ".git"))
+    )
 
 
 def _repo_dir(path: str, cache: dict) -> bool:

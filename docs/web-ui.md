@@ -5406,8 +5406,11 @@ place (`backend/web/core/reopen.py`), because the three share their row renderin
 and must not disagree about what a row can do. Resolution is most-informative
 first: a **recently-closed session** for the item, whose stashed data restores the
 branch, program, prompt and provisioning flags rather than approximating them; a
-**provisioned clone directory** (`pr-<slug>`, or a clone-strategy ticket/issue
-workspace — both deterministic paths, so an `isdir` is the whole probe); or a
+**provisioned clone directory** or other known workspace path, where an `isdir`
+is the whole probe: a PR row's `workspace_path` (the worktree holding the PR's
+head branch in its repo's base clone, else the PR's fallback clone
+`pr-<slug>`), or a clone-strategy ticket/issue workspace at its deterministic
+path; or a
 **worktree still holding the item's branch**, found by asking the base clone (one
 `git worktree list` per repo per request, indexed). A directory with no `.git` in
 it does not count: a half-deleted workspace would otherwise offer a Reopen that

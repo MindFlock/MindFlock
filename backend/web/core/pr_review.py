@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -164,14 +166,18 @@ async def list_open_prs() -> dict:
         # becomes a reason instead (and stays force-reviewable).
         prs.extend(await monitor._list_prs(repo, all_bases=True))
 
-    from backend.ticket_ingestion.models import pr_slug
-
     processed = load_processed_prs(_REPO_ROOT)
     now = datetime.now(timezone.utc)
     # The dir PR workspaces are provisioned under. Optional by design: a config
     # that doesn't resolve one costs the rows their reopen probe, which is a
     # missing button — never a missing PR.
     workspace_dir = str(getattr(cfg, "workspace_dir", "") or "")
+    try:
+        workspaces = await asyncio.to_thread(
+            review_workspace_paths, prs, cfg, workspace_dir
+        )
+    except Exception:  # noqa: BLE001 — a probe never costs the listing
+        workspaces = {}
     out = []
     for pr in sorted(prs, key=lambda p: p.created_at, reverse=True):
         reasons = skip_reasons(pr, processed, login, gh, now)
@@ -186,15 +192,10 @@ async def list_open_prs() -> dict:
                 "head_ref": pr.head_ref,
                 "created_at": pr.created_at.isoformat(),
                 "session": session_title(pr),
-                # Where a review of this PR keeps its clone. Derived exactly as
-                # ``PRProvisioner`` derives it (and pure, unlike provisioning
-                # itself), so the reopen probe in server.py can tell whether an
-                # earlier review's workspace is still on this machine.
-                "workspace_path": (
-                    str(Path(workspace_dir) / f"pr-{pr_slug(pr)}")
-                    if workspace_dir
-                    else ""
-                ),
+                # Where an earlier review of this PR left its workspace (see
+                # review_workspace_paths), so the reopen probe in server.py can
+                # tell whether it is still on this machine.
+                "workspace_path": workspaces.get((pr.repo, pr.number), ""),
                 "eligible": not reasons,
                 "reasons": reasons,
             }
@@ -206,6 +207,58 @@ async def list_open_prs() -> dict:
         "login_error": login_error,
         "prs": out,
     }
+
+
+def review_workspace_paths(prs, cfg, workspace_dir: str) -> dict:
+    """``{(repo, number): path}`` — where a review of each PR keeps its work.
+
+    The worktree holding the PR's head branch in its repo's base clone (a
+    review's normal workspace), else the PR's own clone ``pr-<slug>`` (the
+    fallback, derived exactly as ``PRProvisioner`` derives it), else that
+    clone's would-be path, which the probe then finds missing. Read-only: the
+    base clones are only listed (one ``git worktree list`` per repo), never
+    cloned or fetched. Blocking — run it off the event loop.
+    """
+    from backend import gitutil
+    from backend.session.provisioned import (
+        load_provision_settings,
+        resolve_base_repo_dir,
+    )
+    from backend.ticket_ingestion.models import pr_slug
+
+    held: dict = {}  # repo url -> {branch: worktree path}
+
+    def _held_by(repo_url: str) -> dict:
+        if repo_url in held:
+            return held[repo_url]
+        index: dict = {}
+        try:
+            settings = load_provision_settings(repo_url_override=repo_url or None)
+            base = str(resolve_base_repo_dir(settings)) if settings else ""
+            if base and os.path.isdir(os.path.join(base, ".git")):
+                real_base = os.path.realpath(base)
+                for wt in gitutil.worktree_list(base, timeout=15) or ():
+                    ref = str(wt.get("branch") or "")
+                    path = str(wt.get("path") or "")
+                    if (
+                        ref.startswith("refs/heads/")
+                        and path
+                        and os.path.realpath(path) != real_base
+                    ):
+                        index[ref[len("refs/heads/") :]] = path
+        except Exception:  # noqa: BLE001
+            index = {}
+        held[repo_url] = index
+        return index
+
+    out: dict = {}
+    for pr in prs:
+        clone = str(Path(workspace_dir) / f"pr-{pr_slug(pr)}") if workspace_dir else ""
+        path = ""
+        if not (clone and os.path.isdir(os.path.join(clone, ".git"))):
+            path = _held_by(review_repo_url(pr, cfg)).get(pr.head_ref or "", "")
+        out[(pr.repo, pr.number)] = path or clone
+    return out
 
 
 async def find_pr(repo: str, number: int):
@@ -227,24 +280,134 @@ async def find_pr(repo: str, number: int):
     )
 
 
-async def prepare_review(pr) -> tuple[Path, str, int]:
-    """Provision the PR's workspace and build its session prompt.
+@dataclass
+class PreparedReview:
+    """Everything :func:`launch` needs to start a review session on ``pr``.
 
-    Slow (git clone/fetch) — run off the request path. Returns the workspace
-    directory, the prompt, and how many actionable comments it addresses.
+    ``strategy`` is the engine workspace strategy: ``"worktree"`` on the fast
+    path (the PR head is a branch of the repo's shared base clone and the
+    engine adds the worktree at Start), ``"clone"`` on the fallback, where
+    ``workspace_path`` is the per-PR clone the session adopts.
+    """
+
+    prompt: str
+    n_comments: int
+    strategy: str
+    repo_url: str = ""
+    workspace_path: str = ""
+    base_branch: str = ""
+    fallback_reason: str = ""
+
+
+#: Stand-in for the workspace path in prompts built before the worktree exists
+#: (its directory name is only chosen at Start); replaced by plain words.
+_HERE = "<<mindflock-review-workspace>>"
+_HERE_TEXT = "the current directory (this session's worktree of the repo)"
+
+
+def review_repo_url(pr, cfg) -> str:
+    """The URL a review of ``pr`` provisions from — its own repo, spelled with
+    the configured transport (as :class:`PRProvisioner` clones it); ``""`` =
+    the configured repository."""
+    from backend.ticket_ingestion.clone_transport import (
+        apply_transport,
+        resolve_transport,
+    )
+
+    url = str(getattr(pr, "clone_url", "") or "")
+    if not url:
+        return ""
+    try:
+        return apply_transport(url, resolve_transport(cfg))
+    except Exception:  # noqa: BLE001 — an odd transport setting: use it as given
+        return url
+
+
+def _is_live_worktree(path: str) -> bool:
+    """Whether a live session works in ``path`` (the engine's own check)."""
+    from backend.web.core.workspaces import _worktree_in_use_by_other
+
+    return _worktree_in_use_by_other(path, "")
+
+
+async def _provision(pr, cfg, repo_url: str) -> PreparedReview:
+    """The workspace half of :func:`prepare_review` (``prompt`` left empty)."""
+    from backend.ticket_ingestion.pr_provisioner import (
+        PRProvisioner,
+        prepare_pr_worktree,
+    )
+    from backend.web.core.ticket_start import workspace_mode
+
+    reason = ""
+    if workspace_mode() == "clone":
+        reason = 'workspaces are configured mode = "clone"'
+    else:
+        try:
+            wt = await asyncio.to_thread(
+                prepare_pr_worktree, pr, repo_url=repo_url, is_live=_is_live_worktree
+            )
+            return PreparedReview(
+                prompt="",
+                n_comments=0,
+                strategy="worktree",
+                repo_url=repo_url,
+                base_branch=wt.base_branch,
+            )
+        except Exception as err:  # noqa: BLE001 — the clone below is the backstop
+            reason = str(err) or type(err).__name__
+    _logger.info(
+        "PR #%s: using its own clone instead of the base clone (%s)",
+        pr.number,
+        reason,
+    )
+    # Setup commands and cache seeds run in the session's own Setup, once.
+    workspace = await PRProvisioner(cfg).provision(
+        pr, launch_cursor=False, run_setup=False
+    )
+    return PreparedReview(
+        prompt="",
+        n_comments=0,
+        strategy="clone",
+        repo_url=repo_url,
+        workspace_path=str(workspace.directory),
+        base_branch=str(getattr(pr, "base_ref", "") or ""),
+        fallback_reason=reason,
+    )
+
+
+async def prepare_review(pr) -> PreparedReview:
+    """Ready the PR's workspace and build its session prompt.
+
+    The workspace is a branch of the repo's shared base clone, which the
+    session's worktree is added from at Start, the same as a ticket's: one
+    incremental fetch instead of a clone. It falls back to the PR's own clone
+    when the head branch is a live session's, no base clone can be made, or
+    workspaces are configured ``mode = "clone"``. The reviewer comments are
+    fetched at the same time. Run it off the request path.
     """
     from backend.ticket_ingestion.pr_comments import fetch_actionable_comments
-    from backend.ticket_ingestion.pr_provisioner import PRProvisioner
     from backend.ticket_ingestion.pr_runner import build_consolidated_pr_prompt
 
     cfg = _load_config()
-    comments = await fetch_actionable_comments(pr, cfg.github)
-    workspace = await PRProvisioner(cfg).provision(pr, launch_cursor=False)
+    repo_url = review_repo_url(pr, cfg)
+    comments, prepared = await asyncio.gather(
+        fetch_actionable_comments(pr, cfg.github),
+        _provision(pr, cfg, repo_url),
+        return_exceptions=True,
+    )
+    for result in (prepared, comments):
+        if isinstance(result, BaseException):
+            raise result
+    where = prepared.workspace_path or _HERE
     if comments:
-        prompt = build_consolidated_pr_prompt(pr, comments, workspace.directory)
+        prompt = build_consolidated_pr_prompt(pr, comments, where)
     else:
-        prompt = _self_review_prompt(pr, workspace.directory)
-    return workspace.directory, prompt, len(comments)
+        prompt = _self_review_prompt(pr, where)
+    prepared.prompt = prompt.replace("`%s`" % _HERE, _HERE_TEXT).replace(
+        _HERE, _HERE_TEXT
+    )
+    prepared.n_comments = len(comments)
+    return prepared
 
 
 def _self_review_prompt(pr, workspace_dir) -> str:
@@ -265,8 +428,11 @@ def _self_review_prompt(pr, workspace_dir) -> str:
             "This review was started manually and the PR has no unresolved "
             "actionable reviewer comments, so review the change itself:",
             "",
+            # origin/<base>: the workspace always has the PR's base fetched
+            # there, but a local branch of that name only when it is the
+            # repo's own base.
             f"1. Read the full diff of this branch against `{pr.base_ref}` "
-            f"(`git diff {pr.base_ref}...HEAD`).",
+            f"(`git diff origin/{pr.base_ref}...HEAD`).",
             "2. Look for real defects — correctness bugs, missing edge cases, "
             "broken error handling, security issues, missing test coverage.",
             "3. Fix what you find directly in this workspace. Leave the changes "
@@ -394,12 +560,14 @@ async def launch(
     )
 
     async def _bg_review() -> None:
-        # Provision first (slow: clone/fetch of the PR head), then register the
-        # adopted workspace as a live session — same shape as the pipeline's
+        # Ready the workspace first (a fetch of the PR head into the base
+        # clone; the PR's own clone only as a fallback), then register the
+        # session — same shape as the pipeline's
         # SessionRunner.run_pr, but against THIS server's engine so the session
         # shows up in the grid without a reload.
         try:
-            directory, prompt, n_comments = await prepare_review(pr)
+            prepared = await prepare_review(pr)
+            prompt, n_comments = prepared.prompt, prepared.n_comments
             # The route's pick (its own, this repo's card, Intake → Pull
             # requests' Agent CLI), else the same chain without a pick.
             # Resolved first because this start's effort has to be translated
@@ -407,9 +575,20 @@ async def launch(
             program = chosen or review_agent(repo) or srv.ENGINE.default_program()
             prompt += flight_tail
             prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
-            # The review workspace already exists here: decorate against it.
+            # A fallback clone exists already: decorate against it. The fast
+            # path's worktree is only added at Start, so key off the repo's
+            # base clone, as a ticket start does.
             prompt = await asyncio.to_thread(
-                srv._red_zone_prompt, prompt, program, [str(directory)], None
+                lambda p=prompt: srv._red_zone_prompt(
+                    p,
+                    program,
+                    (
+                        [prepared.workspace_path]
+                        if prepared.workspace_path
+                        else srv._repo_url_workdirs(prepared.repo_url)
+                    ),
+                    None,
+                )
             )
             inst = srv.session.NewInstance(
                 srv.session.InstanceOptions(
@@ -417,10 +596,13 @@ async def launch(
                     path=".",
                     program=program,
                     provisioned=True,
-                    workspace_strategy="clone",
+                    workspace_strategy=prepared.strategy,
+                    # Exact: the engine uses an existing branch as named.
                     new_branch=pr.head_ref,
                     prompt=prompt,
-                    workspace_path=str(directory),
+                    provision_repo_url=prepared.repo_url,
+                    workspace_path=prepared.workspace_path,
+                    base_branch=prepared.base_branch,
                     launch_args=srv._start_launch_args(program, effort_override),
                 )
             )

@@ -509,3 +509,25 @@ class TestDocs:
             assert code in row, code
         # ...and `workspace`, the row annotation that puts the button there.
         assert "`workspace`" in text
+
+
+# --------------------------------------------------------------------------- #
+# A git worktree's ``.git`` is a FILE (ticket / PR-review workspaces)
+# --------------------------------------------------------------------------- #
+def test_a_worktree_with_a_git_file_counts_as_a_checkout(tmp_path):
+    from backend.web.core import reopen
+
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: /somewhere/.git/worktrees/wt\n")
+    assert reopen._is_repo_dir(str(wt))
+
+
+def test_an_emptied_workspace_still_does_not(tmp_path):
+    from backend.web.core import reopen
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert not reopen._is_repo_dir(str(empty))
+    assert not reopen._is_repo_dir(str(tmp_path / "gone"))
+    assert not reopen._is_repo_dir("")
