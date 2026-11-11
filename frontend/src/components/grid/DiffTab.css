@@ -63,6 +63,22 @@
   animation: none;
 }
 
+/* Verify (lib/sessionState): the session's own agent checking its work —
+   its own tone, violet, so it never reads as plain Working; Verified is a
+   calm green tint for the ten minutes it lingers. The tokens are optional:
+   the fallbacks hold until styles/tokens.css defines them. */
+.stagechip.tone-verifying {
+  color: var(--tone-verifying-ink, #ffffff);
+  background: var(--tone-verifying, #8b6cf0);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.stagechip.tone-verified {
+  color: var(--tone-working);
+  background: color-mix(in srgb, var(--tone-working) 16%, transparent);
+  animation: none;
+}
+
 .stagechip.s-paused {
   color: var(--tone-muted);
   background: color-mix(in srgb, var(--tone-muted) 16%, transparent);

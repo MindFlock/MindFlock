@@ -94,12 +94,14 @@ class WinPtyTerminal:  # pragma: no cover - exercised on native Windows
 
 
 def _spawn(argv: List[str], cwd: str, env: dict):
-    """``argv`` under a PTY: ptyprocess on POSIX, a ConPTY on Windows."""
+    """``argv`` under a PTY: :func:`backend.session.mux.spawn_pty` on POSIX
+    (``posix_spawn`` on Linux — never a fork of the server), a ConPTY on
+    Windows."""
     if os.name == "nt":  # pragma: no cover - native Windows
         return WinPtyTerminal.spawn(argv, cwd=cwd, env=env, dimensions=(24, 80))
-    import ptyprocess
+    from backend.session import mux
 
-    return ptyprocess.PtyProcess.spawn(argv, cwd=cwd, env=env, dimensions=(24, 80))
+    return mux.spawn_pty(argv, cwd=cwd, env=env, dimensions=(24, 80))
 
 
 class PtyRun:
@@ -181,10 +183,18 @@ class PtyRun:
             pass
 
     def terminate(self) -> None:
-        try:
-            self.proc.terminate(force=True)
-        except Exception:  # noqa: BLE001
-            pass
+        """Kill the command — on a daemon thread, returning at once:
+        ptyprocess's ``terminate`` sleeps 0.1 s per signal it tries, and
+        :func:`kill` / :func:`start` are called from request handlers on the
+        event loop. The drain thread sees the EOF and reaps it."""
+
+        def _kill() -> None:
+            try:
+                self.proc.terminate(force=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_kill, name="pty-run-kill", daemon=True).start()
 
 
 def _call(cb, data) -> None:
@@ -226,8 +236,21 @@ async def bridge(ws, run: PtyRun, allow_input: bool = True) -> None:
     out; bytes/text in; ``{"type": "resize"}`` control frames), with one
     difference: disconnecting only detaches — the run goes on. When the run
     ends the socket stays open, so its last words stay on screen instead of a
-    reconnecting client starting the command over."""
+    reconnecting client starting the command over.
+
+    Input goes to the PTY through a
+    :class:`backend.web.core.terminal_ws.PtyWriter` (in order, on its own
+    thread): a PTY write blocks while the command is not reading — a long
+    paste into a busy installer — and this loop is the server's."""
+    from backend.web.core.terminal_ws import PtyWriter
+
     loop = asyncio.get_running_loop()
+    writer = PtyWriter(run.proc)
+
+    def _write(data: bytes) -> None:
+        if not run.finished:
+            writer.write(data)
+
     out_q: "asyncio.Queue[Optional[bytes]]" = asyncio.Queue()
 
     def _on_output(data: Optional[bytes]) -> None:
@@ -256,7 +279,7 @@ async def bridge(ws, run: PtyRun, allow_input: bool = True) -> None:
             b = msg.get("bytes")
             if b is not None:
                 if allow_input:
-                    run.write(b)
+                    _write(b)
                 continue
             t = msg.get("text")
             if t is None:
@@ -271,12 +294,13 @@ async def bridge(ws, run: PtyRun, allow_input: bool = True) -> None:
                 except (KeyError, TypeError, ValueError):
                     pass
             elif allow_input:
-                run.write(t.encode("utf-8"))
+                _write(t.encode("utf-8"))
     except Exception:  # noqa: BLE001 — WebSocketDisconnect and friends
         pass
     finally:
         run.detach(_on_output)
         sender.cancel()
+        writer.close()  # what is queued still goes; the run goes on
 
 
 async def serve(ws, session: str) -> None:

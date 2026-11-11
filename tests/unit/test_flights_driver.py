@@ -273,9 +273,12 @@ def test_ticket_step_calls_the_provider(srv, row, monkeypatch):
 
 def test_verify_step_asks_for_the_checklist_then_runs_it(srv, row, monkeypatch):
     asked, ran = [], []
-    srv._ensure_test_plan = lambda title, manual=False, environment="", notes="": (
-        asked.append((title, manual, environment, notes))
-    )
+
+    def ensure(title):
+        asked.append(title)
+        return "s", ""
+
+    srv._ensure_verify_plan = ensure
 
     async def fake_run(pid, req, payload):
         ran.append((pid, payload))
@@ -286,7 +289,7 @@ def test_verify_step_asks_for_the_checklist_then_runs_it(srv, row, monkeypatch):
     monkeypatch.setattr(D, "_verify_obs", lambda f, ss, sess: dict(facts))
     f = fly({"kind": "verify", "config": {"who": "both"}})
     run(D.step_flight(f["id"]))
-    assert asked == [("s", True, "branch", "")]
+    assert asked == ["s"]  # the plan is found or made — nothing generated
     facts.update(
         plan="s",
         state="generated",
@@ -302,11 +305,19 @@ def test_verify_step_asks_for_the_checklist_then_runs_it(srv, row, monkeypatch):
     # would send walk "all" (tests/unit/test_verify_walker.py).
     assert ran == [("s", {"environment": "branch", "notes": "", "walk": "agent"})]
     assert F.get(f["id"])["step_states"]["s1"]["detail"]["run_started"] is True
-    facts.update(open_agent=[])
+    # The agent wrote its own steps and left one a person has to check: the
+    # stop parks on them until they confirm.
+    facts.update(
+        open_agent=[],
+        outcome="needs_you",
+        latest_run_at=time.time() + 60,
+        confirm_items=["look"],
+    )
     run(D.step_flight(f["id"]))
     got = F.get(f["id"])
     assert got["state"] == "waiting_you"
     assert got["step_states"]["s1"]["detail"]["items"] == ["look"]
+    assert got["step_states"]["s1"]["detail"]["ask"] == "confirm"
 
 
 def test_reviews_send_builds_the_consolidated_prompt(srv, row, monkeypatch):

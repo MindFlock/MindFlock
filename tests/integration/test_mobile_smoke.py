@@ -382,6 +382,7 @@ def test_mobile_session_actions_sheet(server, chrome):
     # only for a session that is already paused.
     assert flow["labels"] == [
         "Restart",
+        "Verify",  # 0.14.4: Verify / Verify again (canStartVerify)
         "Close",
         "Delete…",
         "Recently closed",

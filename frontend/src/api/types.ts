@@ -312,6 +312,11 @@ export interface Instance {
    * auto-revive (backend/web/core/revive.py). `reason` replaces the Offline
    * chip's stock hint. */
   auto_revive?: { state: "pending" | "gave_up"; reason: string } | null;
+  /** The session's own agent verifying its work (docs/web-ui.md "Verify"):
+   * it writes its own steps, works them in its terminal, and asks a person
+   * only for what a person must do. null when no verify is running or
+   * recent; absent on an older server. */
+  verify?: SessionVerify | null;
   queue: QueueSummary | null;
   tokens: number;
   tokens_in: number;
@@ -1689,6 +1694,44 @@ export interface TestRun {
 }
 
 export type TestRunWalk = "agent" | "all";
+
+/** Where a session's verify stands (`Instance.verify.state`). passed and
+ * failed linger on the row for ten minutes, then the field goes null. */
+export type SessionVerifyState = "verifying" | "needs_you" | "passed" | "failed" | "blocked";
+
+/** A step the agent wrote that only a person can do. */
+export interface SessionVerifyHumanStep {
+  id: string;
+  text: string;
+  expect: string;
+}
+
+/** A step that failed, with the agent's note on what it saw. */
+export interface SessionVerifyFailedStep {
+  id: string;
+  text: string;
+  note: string;
+}
+
+/** `Instance.verify`: the session's own agent checking its work. */
+export interface SessionVerify {
+  state: SessionVerifyState;
+  /** The test plan id — the confirm route's `{plan}`. */
+  plan: string;
+  steps: { total: number; agent_done: number; human: number };
+  human_steps: SessionVerifyHumanStep[];
+  failed_steps: SessionVerifyFailedStep[];
+  /** One line of what happened (why it is blocked, what it found). */
+  detail: string;
+  /** Epoch seconds of the last change. */
+  at: number;
+}
+
+/** `POST /api/instances/{title}/verify` → 202. */
+export interface SessionVerifyStarted {
+  started: boolean;
+  plan: string;
+}
 
 /** `POST /api/test-plans/{id}/run` → 202. `in_session`: the steps were
  * handed to the plan's own session's agent (`session`), `queued` while it

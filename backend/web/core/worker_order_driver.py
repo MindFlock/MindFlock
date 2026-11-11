@@ -6,7 +6,9 @@ fences them, releases held tasks when their turn comes, and sweeps.
   a step that names it, an orchestrator in ``serial`` / capped mode, or a
   fence that overlaps an unfinished sibling's) and, if so, registers it
   ``held``. The route then parks the task in the worker's prompt queue with
-  the queue switched off.
+  the queue switched off, and creates the session WITHOUT its agent
+  (:func:`defer_agent`): worktree, branch, fence and queued task exist, but
+  no agent CLI runs (no tmux, no memory) until its turn.
 * :func:`set_fence` — the ``POST /api/instances/{t}/fence`` route: a
   per-session fence (``red_zones.set_session_fence``, keyed by the worker's
   tmux name, owner ``orch:<parent>``) — "only here" and/or "keep out", for
@@ -15,9 +17,12 @@ fences them, releases held tasks when their turn comes, and sweeps.
 * :func:`tick` — every few seconds from the server's loop: lands pending
   fences, observes each worker (alive? reported?), applies
   :func:`worker_order.plan`, and on ``release`` fast-forwards the worker's
-  fresh branch onto what it runs after (when that is safe), prefixes the
-  task with the fence and the hand-over, and switches its queue on — the
-  ordinary drain types it in once the agent is idle.
+  fresh branch onto what it runs after (when that is safe — its agent has
+  not started, so nothing uses the tree), starts its agent through the
+  launch gate as an automatic start (:func:`start_on_turn`: it waits in the
+  gate's queue while memory is short), prefixes the task with the fence and
+  the hand-over, and switches its queue on — the ordinary drain types it in
+  once the agent is idle.
 """
 
 from __future__ import annotations
@@ -28,10 +33,17 @@ import threading
 import time
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
+from backend.web.core import launch_gate as _launch_gate
 from backend.web.core import worker_order as _order
 
 __all__ = [
     "on_create",
+    "defer_agent",
+    "agent_deferred",
+    "mark_never_ran",
+    "start_agent",
+    "start_on_turn",
+    "TURN_KIND",
     "set_fence",
     "clear_fence",
     "set_order",
@@ -614,6 +626,167 @@ def on_failed_start(title: str, created: Optional[float]) -> None:
         wake()
 
 
+# --------------------------------------------------------------------------- #
+# Lazy start: a held worker's agent starts only when its turn comes
+# --------------------------------------------------------------------------- #
+#: The launch gate's kind for a held worker's agent start (core.launch_gate).
+TURN_KIND = "worker turn"
+#: Set on a deferred worker's tmux session object: the folder its first
+#: launch was deferred in. Gone once its agent is launched.
+_DEFERRED_DIR = "_mf_deferred_dir"
+#: A deferred launch and the never-ran marker, one at a time (the create's
+#: background Start and the order loop's release can meet).
+_LAUNCH_LOCK = threading.Lock()
+
+
+def defer_agent(inst) -> bool:
+    """Make ``inst``'s coming ``Start(True)`` do everything but launch the
+    agent: the worktree, the branch, the launch command and its env are all
+    built, the session is started and saved, but its tmux session's
+    ``start`` only notes the folder. :func:`start_agent` launches it later —
+    the same first launch Start would have run. Once only: a later start
+    (Resume) launches as usual. → whether it was deferred (an engine whose
+    tmux object can't take it starts at once, as before). Before Start."""
+    try:
+        ts = getattr(inst, "_tmux_session", None)
+        if ts is None:
+            from backend.session import tmux as _tmux_pkg
+
+            ts = _tmux_pkg.NewTmuxSession(inst.Title, inst.Program)
+            inst._tmux_session = ts
+
+        def _deferred_start(work_dir: str):
+            ts.__dict__.pop("start", None)
+            setattr(ts, _DEFERRED_DIR, work_dir)
+            return None
+
+        ts.start = _deferred_start
+        return True
+    except Exception:  # noqa: BLE001 — starting at once is the old behaviour
+        return False
+
+
+def agent_deferred(inst) -> bool:
+    """``inst`` was started with its agent's first launch still to come
+    (in this process: a restart forgets it, :func:`start_agent` copes)."""
+    ts = getattr(inst, "_tmux_session", None)
+    return bool(getattr(ts, "__dict__", {}).get(_DEFERRED_DIR))
+
+
+def mark_never_ran(title: str, inst=None) -> None:
+    """Record ``title``'s agent as one that ended cleanly — it never ran.
+    Every path that brings a dead agent back reads that marker: core.revive
+    skips a clean quit (neither the boot hold nor the sweep touch it, so it
+    is never "offline after a crash"), and ``_ensure_agent_session`` starts
+    a clean quit fresh, so a person's early Start opens a new conversation
+    rather than ``--continue`` one it never had. The launch wrapper deletes
+    the marker as the agent starts. ``inst``: only while its launch is
+    still deferred (its turn may have come during the Start)."""
+    with _LAUNCH_LOCK:
+        if inst is not None and not agent_deferred(inst):
+            return
+        try:
+            from backend.web.core import terminal as _terminal
+
+            path = _terminal._exit_marker_path(_tmux_of(title))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("0\n", encoding="utf-8")
+        except Exception:  # noqa: BLE001 — a missing marker reads as a crash
+            pass
+
+
+def _agent_live(srv, title: str) -> bool:
+    return srv._live_session_name(_tmux_of(title)) is not None
+
+
+def _undefer(inst) -> None:
+    ts = getattr(inst, "_tmux_session", None)
+    try:
+        ts.__dict__.pop(_DEFERRED_DIR, None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def start_agent(title: str, inst=None) -> Optional[str]:
+    """Launch ``title``'s agent now → the error, or None (also when it is
+    already up: a person pressed Start early). The deferred first launch
+    when this process still holds it, else the relaunch path (after a
+    restart; :func:`mark_never_ran` makes it a fresh start). Blocking."""
+    srv = _server()
+    if inst is None:
+        inst = srv.ENGINE.instances.get(title)
+        if inst is None:
+            return "the session was closed"
+    if _agent_live(srv, title):
+        _undefer(inst)
+        return None
+    from backend.web.core import held as _held
+    from backend.web.core import queue_driver as _queue_driver
+
+    with _LAUNCH_LOCK:
+        ts = getattr(inst, "_tmux_session", None)
+        own = getattr(ts, "__dict__", {})
+        wdir = own.get(_DEFERRED_DIR)
+        if not wdir and "start" in own:
+            # Its turn came while it is still being created: the Start under
+            # way launches it after all.
+            own.pop("start", None)
+            return None
+        _held.release(title)  # a worker that never ran is not held offline
+        if wdir and os.path.isdir(wdir):
+            err = ts.start(wdir)
+            if err is not None and _agent_live(srv, title):
+                err = None  # launched meanwhile by another path
+            if err is not None:
+                return str(err)
+            _undefer(inst)
+        else:
+            _undefer(inst)
+            _name, err = srv._ensure_agent_session(inst, title)
+            if err is not None:
+                return str(err)
+    _queue_driver.note_launched(title)
+    return None
+
+
+def start_on_turn(srv, title: str, inst, parent: str = "") -> str:
+    """Start ``title``'s agent for its turn, as an automatic start through
+    the launch gate: launched now when the gate says go, else queued there
+    ("Waiting for memory" on its row; the gate launches it). → a note for
+    the record ("" when it started, or was already up)."""
+    if _agent_live(srv, title):
+        _undefer(inst)
+        return ""
+    try:
+        queued = _launch_gate.gate_auto(
+            title,
+            lambda: start_agent(title),
+            kind=TURN_KIND,
+            source="worker order",
+            parent=parent,
+            args={},
+        )
+    except _launch_gate.QueueFull:
+        # The queue drain relaunches it through the gate once its queue is on.
+        return "its agent waits to start (the launch queue is full)"
+    if queued is not None:
+        return "its agent waits for memory to start"
+    err = start_agent(title, inst)
+    return ("its agent did not start: %s" % err)[:200] if err else ""
+
+
+def _restore_turn(rec: dict):
+    """A saved turn start after a restart (core.launch_gate): its launch, or
+    None (dropped) when the session is gone."""
+    title = str(rec.get("title") or "")
+    if not title or title not in _server().ENGINE.instances:
+        return None
+    return lambda: start_agent(title)
+
+
+_launch_gate.register_kind(TURN_KIND, _restore_turn)
+
+
 def _branch_of(inst) -> str:
     try:
         return str(inst.Branch or "")
@@ -661,8 +834,10 @@ def _carry(srv, title: str, inst, rec: dict, w: dict) -> str:
         except Exception:  # noqa: BLE001
             act = ""
         changed = _gm.changed_paths(wt)
+        # "offline": its agent has not started yet (a held worker's starts
+        # after this), so nothing is using the tree.
         if (
-            act in ("idle", "")
+            act in ("idle", "", "offline")
             and changed is not None
             and not changed
             and _gm.rev_parse(wt, psha)
@@ -697,8 +872,10 @@ def _carry(srv, title: str, inst, rec: dict, w: dict) -> str:
     return " ".join(lines)
 
 
-def _release(srv, title: str, rec: dict, w: dict, detail: str) -> str:
-    """Hand a held worker its task. → a short note for the record."""
+def _release(srv, title: str, rec: dict, w: dict, detail: str, parent: str = "") -> str:
+    """Hand a held worker its task: catch its branch up, start its agent
+    (through the launch gate), then switch its queue on. → a short note for
+    the record."""
     inst = srv.ENGINE.instances.get(title)
     if inst is None:
         return ""
@@ -707,6 +884,7 @@ def _release(srv, title: str, rec: dict, w: dict, detail: str) -> str:
     if preds and detail != "started by hand":
         carry = ""
         try:
+            # Before its agent starts: nothing is using the tree yet.
             carry = _carry(srv, title, inst, rec, w)
         except Exception:  # noqa: BLE001 — a hand-over never blocks a release
             carry = ""
@@ -724,6 +902,14 @@ def _release(srv, title: str, rec: dict, w: dict, detail: str) -> str:
     )
     if ftext:
         lines.append(ftext)
+    # Its agent starts now — it was created without one. Before the queue
+    # goes on, so the drain finds it launching (or waiting in the gate's
+    # queue) rather than relaunching it itself.
+    started = ""
+    try:
+        started = start_on_turn(srv, title, inst, parent)
+    except Exception:  # noqa: BLE001 — the queue drain relaunches it anyway
+        started = ""
     try:
         items = srv._prompt_queue.list_queue(title)
         if items and lines and srv._prompt_queue.get_state(title).get("held"):
@@ -744,7 +930,10 @@ def _release(srv, title: str, rec: dict, w: dict, detail: str) -> str:
         )
     except Exception:  # noqa: BLE001
         pass
-    return lines[0][:200] if lines and preds else ""
+    note = lines[0][:200] if lines and preds else ""
+    if started:
+        note = (started + (" — " + note if note else ""))[:200]
+    return note
 
 
 def _pass_sync() -> None:
@@ -819,7 +1008,7 @@ def _pass_sync() -> None:
             if kind == "release" and w is not None and t in claimed:
                 note = ""
                 try:
-                    note = _release(srv, t, rec, w, detail)
+                    note = _release(srv, t, rec, w, detail, parent)
                 except Exception:  # noqa: BLE001
                     note = ""
                 inst = instances.get(t)

@@ -40,7 +40,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - *Phone.* "MindFlock, …" requests reach the assistant on the phone (what
     it cannot do there is captioned, not typed).
 
+## [0.14.7] - 2026-11-10
+
 ### Fixed
+
+- **Voice says a Verify as a sentence, on the desktop too.** The phone's
+  "what needs me" said "X is confirm verified"; it now says "X needs you to
+  confirm it's verified" (and "failed its verify", "is verifying its work",
+  "is verified"). The server's voice router had no Verify handling at all,
+  so on the desktop a session waiting for you to confirm read as idle and
+  was left out of "what needs me"; it now follows the phone.
+- **The 0.14.4 and 0.14.6 notes below read as whole sentences again** (a
+  merge had put a blank line inside every wrapped bullet).
+
+- **MindFlock no longer writes your git index.** Its diff counts (the
+  sidebar's change stat, the Diff tab, the Code Map's change set and commit
+  message drafting) used `git add -N .` so new files would count, every few
+  seconds, in the session's checkout. In a checkout you share with sessions
+  running in place, that marked your new files intent-to-add (` A` instead of
+  `??`) and staged deletions (`D `), and it raced your own git commands for
+  `index.lock`. Those diffs now run against a throwaway copy of the index
+  (`GIT_INDEX_FILE`) and give the same numbers; a polled `git status` takes
+  `--no-optional-locks`. Entries an older version already left behind stay
+  until you clear them (`git rm --cached <path>` for each ` A` file, or
+  `git restore --staged <path>` for each `D ` file).
+
+## [0.14.6] - 2026-11-10
+
+### Fixed
+
+- **Terminals and sessions work again on an install whose Python came from
+  uv** (Debian bookworm, any system without Python 3.12). That CPython's
+  `os.posix_spawn` has no `setsid=`, so since 0.14.4 every web terminal and
+  login terminal there failed to open with `NotImplementedError: posix_spawn:
+  setsid unavailable on this platform`; `mux.spawn_pty` now calls libc's
+  `posix_spawn` with `POSIX_SPAWN_SETSID` itself in that case. With that, the
+  engine's own PTY (`tmux new-session` at create, `attach-session` at
+  restore) moves to `mux.spawn_pty` too, so nothing the server starts forks
+  it. The bare-container quickstart now prints the server logs and a re-run
+  of that spawn when it fails.
+
+- **Developer tooling: running the test suite from a git hook no longer
+  corrupts the repo.** git exports `GIT_DIR` / `GIT_INDEX_FILE` to hooks,
+  and one test module captured them at import. Its tmp-repo `git init` /
+  `git add` then hit the real checkout, leaving `core.bare = true` in
+  `.git/config` and an index holding only a tmp repo's file.
+  `tests/conftest.py` now scrubs every repo-redirecting `GIT_*` variable at
+  import, and a new test runs that module under hook-style variables to keep
+  it fixed.
+
+## [0.14.5] - 2026-11-10
+
+### Fixed
+
+- **The login terminals and the ticket log stream no longer fork the
+  server.** 0.14.4 moved the terminal clients to `posix_spawn`; the provider
+  and `gh` login terminals and the ticket log stream still forked the whole
+  server through ptyprocess (a fork holds the GIL, so a slow one under
+  memory pressure froze every request). They now start through
+  `mux.spawn_pty`, which gained `cwd=`. (The engine's own short-lived PTY at
+  session create/restore still uses ptyprocess for now.) The terminal pump's keystrokes and
+  teardown (up to 0.6 s of ptyprocess sleeps per pane) and the no-tmux login
+  terminal's input and kill are off the event loop too.
+
+## [0.14.4] - 2026-11-10
+
+### Changed
+
+- **A held worker starts its agent only when its turn comes.** An
+  orchestrator's serial chain (`spawn_session` with `after=[…]`, overlapping
+  fences, one or N at a time) used to start every worker's agent CLI at once,
+  each then sitting at an empty prompt (~230 MB) until its turn. Now a held
+  worker's session is made at once — worktree, branch, fence, queued task —
+  but no agent runs (no tmux, no memory) until the order releases it. On
+  release MindFlock fast-forwards its branch, starts its agent through the
+  launch gate as an automatic start (it waits in the gate's queue while
+  memory is short), and the queue types the task in once the agent is idle.
+  Its row still reads *waiting · after …*; nothing revives it or holds it
+  "offline after a crash", since it never ran. A person can still press
+  Start to run it early; its task waits for its turn either way. The create
+  answers `order.agent_deferred: true`.
+
+- **Verify is the session's own agent checking its own work.** Verify no
+  longer has a model write steps after the work is done and hand them to the
+  agent to walk. It sends the session's agent one prompt — "verify the work
+  you just did" — and the agent comes up with its own concrete test steps
+  (real usage, not the unit tests it already ran), writes them to its results
+  file, puts them on its todo list and works through them, recording each
+  pass / fail / blocked with its evidence. A step only a person can do, it
+  tells the person in its reply: what to do and what to look for. The session
+  row carries the result as a pill (`verify`: `verifying`, `needs_you`,
+  `passed`, `failed`, `blocked`; a settled one shows for 10 minutes). When
+  there are steps for a person, the check waits on them: **nothing passes
+  until a person confirms** (`POST /api/test-plans/{id}/confirm`, verified
+  or not). `POST /api/instances/{title}/verify` starts it on any session, no
+  plan needed. A route's Verify stop does the same: it waits while the agent
+  verifies, parks on you while the check needs you, moves on when it passes,
+  and halts naming the failed steps. The written checklist (and its
+  one-shot author) is now only for a checker run after the session is gone.
+
+### Fixed
+
+- **Terminals no longer stay white until you scroll.** Nothing repainted a
+  terminal without new output, so after the window was restored, uncovered,
+  moved to another display or the GPU restarted, a pane could stay blank (white
+  in the light theme). Every visible terminal now repaints when the window
+  comes back (focus, visibility, `pageshow`), and the desktop shell
+  invalidates the page on restore/show/focus/display changes and wake, and
+  logs a GPU process restart ("GPU process gone") to main.log.
+
+- **"That's all" at the end of a sentence no longer stops dictation.**
+  Conversational stop phrases ("that's all", "done talking") stop listening
+  only when said on their own; "make sure that that's all" is typed. Clear
+  ones ("stop listening", "mic off", "pause listening") still end any phrase.
+  The desktop, the phone page and the server read it the same way.
+
+- **Opening a terminal can no longer freeze the server.** A session's terminal
+  websocket spawned its `tmux attach` client (a `fork()` of the whole server)
+  on the event loop; on 2026-11-10 that fork never returned and every request
+  hung until the server was killed. The spawn now runs on a worker thread, two
+  at a time server-wide, and gives up after 15 s: the pane shows *terminal
+  attach timed out* and the socket closes with 1013 (new on the terminal
+  websockets; a client should treat it as transient) while the server keeps
+  answering. Keystrokes to the client and the detach (which slept up to
+  0.4 s per pane on the loop) are off the loop too. And the client no longer
+  forks the server at all: `mux.attach` starts it with `posix_spawn`
+  (`mux.spawn_pty`), which copies no page tables and runs no Python in the
+  child — a fork holds the GIL, so even on a thread it stalled every request.
 
 - **Windows' commit charge no longer holds starts at 85 %.** A WSL VM
   commits its whole `memory=` size, so the charge sits at 75-85 % all day;
@@ -5281,7 +5407,11 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.3...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.7...HEAD
+[0.14.7]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.7
+[0.14.6]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.6
+[0.14.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.5
+[0.14.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.4
 [0.14.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.3
 [0.14.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.2
 [0.14.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.1

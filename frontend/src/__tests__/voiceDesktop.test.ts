@@ -1963,6 +1963,13 @@ describe("control words at any point", () => {
     ["Fix the bug, stop recording.", "Fix the bug"],
     ["that's all", ""],
     ["That is all.", ""],
+    // A conversational one only on its own (a filler before it is dropped).
+    ["Okay, that's all.", ""],
+    ["um, I'm done talking", ""],
+    ["fix it, that's all", null],
+    ["so make sure that that's all.", null],
+    ["fix it done talking", null],
+    ["over and out, that's all", "over and out"],
     ["ok mic off", "ok"],
     ["stop the recording", null],
     ["stop", null],
@@ -1995,9 +2002,9 @@ describe("control words at any point", () => {
     const sent = terms();
     const k = hooks();
     const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
-    await d.words("ship it that is");
+    await d.words("ship it stop");
     expect(sent.t1).toEqual(["ship it"]);
-    await d.words("all");
+    await d.words("listening");
     expect(sent.t1).toEqual(["ship it", " "]);
     expect(k.calls.halt).toBe(1);
   });

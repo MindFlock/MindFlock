@@ -295,6 +295,10 @@ def fake(monkeypatch, tmp_path):
         ),
         _row_run=lambda t: runs.get(t),
         _agent_activity_cached=lambda inst, t: "idle",
+        # These stand-ins run their agents already (no deferred launch): a
+        # release has nothing to start. test_held_workers_lazy_start covers
+        # the agent a held worker starts on its turn.
+        _live_session_name=lambda name: name,
     )
     srv.ENGINE.save = lambda: None
     runs: dict = {}

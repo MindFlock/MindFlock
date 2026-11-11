@@ -201,7 +201,7 @@ export function frameState(s: { flight?: FlightState | null; landed?: boolean; t
   if (f === "halted") return "halted";
   if (s.tone === "broken") return "broken";
   if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou) return "you";
-  if (f === "running" || s.tone === "working") return "working";
+  if (f === "running" || s.tone === "working" || s.tone === "verifying") return "working";
   if (f === "done" || s.landed) return "done";
   if (f === "ready") return "ready";
   return "idle";

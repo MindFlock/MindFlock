@@ -234,7 +234,10 @@ def test_changed_files_match_git_numstat_after_add_n(tmp_path, monkeypatch):
     got = cm.changed_files(object(), str(repo))
     by = {c["path"]: c for c in got}
 
-    # The oracle: git itself, after the same add -N.
+    # The oracle: git itself, after the same add -N. changed_files does its
+    # add -N in a scratch index (never the repo's own), so the oracle runs
+    # its own here — after the call under test, so it cannot help it.
+    _git("add", "-N", ".", cwd=repo)
     out = subprocess.run(
         ["git", "-C", str(repo), "diff", "--numstat", "--no-renames", fork],
         capture_output=True,

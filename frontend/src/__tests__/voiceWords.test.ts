@@ -177,6 +177,20 @@ describe("the matchers, built from custom words", () => {
     expect(V.mayBeCommand("mic down")).toBe(true);
   });
 
+  it("a conversational stop phrase stops only said on its own; the person's own of two words end any phrase", () => {
+    expect(W.stopAlone("that's all")).toBe(true);
+    expect(W.stopAlone("Thats all")).toBe(true);
+    expect(W.stopAlone("I'm done talking")).toBe(true);
+    expect(W.stopAlone("halt")).toBe(true); // one word
+    expect(W.stopAlone("stop listening")).toBe(false);
+    expect(W.stopAlone("we're done")).toBe(false);
+    W.setVoiceWords({ stop: ["that's all", "we're done", "halt"] });
+    expect(V.stopTail("fix it, we're done")).toBe("fix it");
+    expect(V.stopTail("fix it, that's all")).toBeNull();
+    expect(V.stopTail("That's all.")).toBe("");
+    expect(V.stopTail("fix it halt")).toBeNull();
+  });
+
   it("the hush words are whole phrases, with the same leads and tails", () => {
     for (const p of ["pipe down", "Silence!", "okay, pipe down please", "silence now"]) expect(V.isHushPhrase(p), p).toBe(true);
     for (const p of ["be quiet", "silence the alarm", "stop talking"]) expect(V.isHushPhrase(p), p).toBe(false);

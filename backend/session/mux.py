@@ -22,7 +22,7 @@ Rules for callers:
   ``-S <socket>`` / ``-L <name>`` may follow it). The keywords are
   ``subprocess.run``'s.
 * Never spawn ``tmux attach-session`` in a PTY yourself: :func:`attach`
-  returns a :class:`Terminal`.
+  returns a :class:`Terminal` (started by :func:`spawn_pty`).
 * :func:`available` instead of ``shutil.which("tmux")``.
 
 One rule is added on the way through: in a session that MindFlock itself put
@@ -41,9 +41,11 @@ other session's argv goes to tmux exactly as given.
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import subprocess
+import sys
 import threading
 from collections import OrderedDict
 from typing import Any, List, Optional, Protocol, Sequence, Tuple
@@ -59,6 +61,7 @@ __all__ = [
     "leave_copy_mode",
     "popen",
     "run",
+    "spawn_pty",
 ]
 
 IS_WINDOWS = os.name == "nt"
@@ -251,14 +254,13 @@ def attach(
     env: Optional[dict] = None,
 ) -> Terminal:
     """An interactive client on ``session`` (``readonly``: ``attach -r``),
-    sized ``dimensions`` (rows, cols)."""
+    sized ``dimensions`` (rows, cols) — started by :func:`spawn_pty`
+    (``posix_spawn`` on Linux, never a fork of the server)."""
     if not IS_WINDOWS:
-        import ptyprocess
-
         argv = (
             ["tmux", "attach-session"] + (["-r"] if readonly else []) + ["-t", session]
         )
-        return ptyprocess.PtyProcess.spawn(
+        return spawn_pty(
             argv,
             dimensions=dimensions,
             env=env if env is not None else {**os.environ, "TERM": "xterm-256color"},
@@ -268,6 +270,196 @@ def attach(
     return client.attach(
         session, readonly=readonly, dimensions=dimensions
     )  # pragma: no cover
+
+
+#: Linux: a PTY client starts by ``posix_spawn`` (:func:`spawn_pty`). Elsewhere
+#: (macOS: opening a tty does not make it the controlling one) ptyprocess.
+_POSIX_SPAWN_PTY = sys.platform.startswith("linux") and hasattr(os, "posix_spawn")
+#: :func:`spawn_pty`'s ``cwd=``: the shell that changes directory and then
+#: ``exec``\ s the command (``$1`` = the directory, the rest = the argv).
+_SH = "/bin/sh"
+_CD_EXEC = 'cd "$1" && shift && exec "$@"'
+#: ``POSIX_SPAWN_SETSID`` in glibc's (≥ 2.26) and musl's ``<spawn.h>``.
+_LIBC_POSIX_SPAWN_SETSID = 0x80
+
+
+def _spawn_session_leader(path: str, argv: List[str], env: dict, tty: str) -> int:
+    """``posix_spawn`` ``path`` as a session leader whose fd 0 is ``tty``
+    opened by path (so it is the controlling tty), 1 and 2 dups of it.
+
+    CPython compiles ``os.posix_spawn``'s ``setsid=`` in only when ITS build
+    headers define ``POSIX_SPAWN_SETSID``. python-build-standalone — the
+    CPython uv installs when the system has no 3.12 (Debian bookworm ships
+    3.11; ``install.sh`` pins 3.12) — is built against an older glibc, so
+    ``setsid=True`` raises ``NotImplementedError: posix_spawn: setsid
+    unavailable on this platform`` (before anything is spawned) although the
+    libc it runs on has had the flag since 2.26. That is why moving the
+    engine's PTY here failed the bare-container quickstart. There the same
+    call goes to libc's ``posix_spawn`` through ctypes with the flag set:
+    the same ``clone(CLONE_VM | CLONE_VFORK)``, the GIL released, no Python
+    in the child."""
+    try:
+        return os.posix_spawn(
+            path,
+            argv,
+            env,
+            setsid=True,
+            file_actions=[
+                (os.POSIX_SPAWN_OPEN, 0, tty, os.O_RDWR, 0),
+                (os.POSIX_SPAWN_DUP2, 0, 1),
+                (os.POSIX_SPAWN_DUP2, 0, 2),
+            ],
+        )
+    except NotImplementedError:
+        return _libc_spawn_session_leader(path, argv, env, tty)
+
+
+def _libc_spawn_session_leader(path: str, argv: List[str], env: dict, tty: str) -> int:
+    """:func:`_spawn_session_leader` through libc's own ``posix_spawn``
+    (ctypes), for a CPython built without ``setsid=``. A libc that predates
+    ``POSIX_SPAWN_SETSID`` (glibc < 2.26) refuses the flag: ``OSError``."""
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.posix_spawnattr_setflags.argtypes = [ctypes.c_void_p, ctypes.c_short]
+    # The opaque structs (glibc: file actions 80 bytes, attr 336), oversized.
+    actions = ctypes.create_string_buffer(512)
+    attr = ctypes.create_string_buffer(1024)
+
+    def _check(rc: int, what: str) -> None:
+        if rc:
+            raise OSError(rc, "%s: %s" % (what, os.strerror(rc)))
+
+    _check(libc.posix_spawn_file_actions_init(actions), "posix_spawn_file_actions_init")
+    try:
+        _check(libc.posix_spawnattr_init(attr), "posix_spawnattr_init")
+        try:
+            _check(
+                libc.posix_spawnattr_setflags(attr, _LIBC_POSIX_SPAWN_SETSID),
+                "posix_spawnattr_setflags(POSIX_SPAWN_SETSID)",
+            )
+            _check(
+                libc.posix_spawn_file_actions_addopen(
+                    actions, 0, os.fsencode(tty), os.O_RDWR, 0
+                ),
+                "posix_spawn_file_actions_addopen",
+            )
+            for fd in (1, 2):
+                _check(
+                    libc.posix_spawn_file_actions_adddup2(actions, 0, fd),
+                    "posix_spawn_file_actions_adddup2",
+                )
+            c_argv = (ctypes.c_char_p * (len(argv) + 1))(
+                *[os.fsencode(a) for a in argv], None
+            )
+            c_env = (ctypes.c_char_p * (len(env) + 1))(
+                *[os.fsencode(k) + b"=" + os.fsencode(v) for k, v in env.items()],
+                None,
+            )
+            pid = ctypes.c_int()  # pid_t
+            rc = libc.posix_spawn(
+                ctypes.byref(pid), os.fsencode(path), actions, attr, c_argv, c_env
+            )
+            if rc:  # glibc reports a failed exec here, as os.posix_spawn does
+                raise OSError(rc, os.strerror(rc), path)
+            return pid.value
+        finally:
+            libc.posix_spawnattr_destroy(attr)
+    finally:
+        libc.posix_spawn_file_actions_destroy(actions)
+
+
+def spawn_pty(
+    argv: Sequence[str],
+    *,
+    dimensions: Tuple[int, int] = (24, 80),
+    env: Optional[dict] = None,
+    cwd: Optional[str] = None,
+) -> Any:
+    """``ptyprocess.PtyProcess.spawn(argv, dimensions=…, env=…, cwd=…)`` without
+    ``fork()``: the same :class:`ptyprocess.PtyProcess` (same ``fd``,
+    ``setwinsize``, ``terminate``, ``close``), its child started by
+    ``os.posix_spawn``.
+
+    Why: CPython forks while HOLDING the GIL, and a fork copies the page
+    tables of the whole server — in a worker thread it still stalls every
+    thread for as long as it takes (≈13 ms at 600 MB resident; on the
+    2026-11-10 incident, 1.7 GB under WSL memory pressure, it never
+    returned and the server froze). ``posix_spawn`` is ``clone(CLONE_VM |
+    CLONE_VFORK)`` in glibc: nothing is copied and no Python runs in the
+    child. The child becomes a session leader (``setsid``) and opens the PTY
+    slave by path as fd 0 — on Linux that makes it the controlling tty with
+    the child's group in the foreground, exactly what ``forkpty`` sets up,
+    so a resize (``TIOCSWINSZ`` on the master) still SIGWINCHes the client
+    and closing the master still SIGHUPs it. Window size is set before the
+    spawn, so the client starts at ``dimensions``. Fds: the server's are
+    close-on-exec (Python's default), so the client inherits only 0/1/2.
+
+    ``cwd``: ``os.posix_spawn`` has no chdir action (glibc's
+    ``posix_spawn_file_actions_addchdir_np`` is not exposed), and changing
+    the server's own cwd around the spawn would move every thread. So the
+    child is ``/bin/sh -c 'cd "$1" && shift && exec "$@"'`` with the
+    absolute ``cwd`` and the resolved command as arguments — never pasted
+    into the script, so nothing is quoted or interpreted — and ``exec``
+    replaces the shell: same pid, same PTY, the command's own argv. As with
+    ptyprocess, ``argv[0]`` is then the resolved path. The shell's ``cd``
+    sets ``PWD`` to ``cwd`` (ptyprocess left the server's stale one); the
+    rest of ``env`` passes through untouched. A missing ``cwd`` raises
+    ``FileNotFoundError`` here, before anything is spawned.
+
+    A CPython built without ``os.posix_spawn``'s ``setsid=`` (uv's
+    python-build-standalone) gets the same spawn from libc's own
+    ``posix_spawn`` (:func:`_spawn_session_leader`).
+
+    Off Linux this is ``ptyprocess.PtyProcess.spawn`` itself."""
+    import ptyprocess
+
+    argv = list(argv)
+    if not _POSIX_SPAWN_PTY:
+        kwargs = {} if cwd is None else {"cwd": cwd}
+        return ptyprocess.PtyProcess.spawn(
+            argv, dimensions=dimensions, env=env, **kwargs
+        )
+    import fcntl
+    import struct
+    import termios
+
+    path = shutil.which(argv[0])
+    if path is None:  # ptyprocess's error, word for word
+        raise FileNotFoundError(
+            "The command was not found or was not executable: %s." % argv[0]
+        )
+    exe, child_argv = path, argv
+    if cwd is not None:
+        cwd = os.path.abspath(os.fspath(cwd))
+        if not os.path.isdir(cwd):
+            raise FileNotFoundError(
+                errno.ENOENT, "No such working directory for %s" % argv[0], cwd
+            )
+        exe = _SH
+        child_argv = [_SH, "-c", _CD_EXEC, "sh", cwd, path] + argv[1:]
+    master, slave = os.openpty()  # both close-on-exec; slave opened O_NOCTTY
+    try:
+        rows, cols = dimensions
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        pid = _spawn_session_leader(
+            exe,
+            child_argv,
+            dict(os.environ if env is None else env),
+            os.ttyname(slave),
+        )
+    except BaseException:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
+    proc = ptyprocess.PtyProcess(pid, master)
+    proc.argv = argv if cwd is None else [path] + argv[1:]
+    if env is not None:
+        proc.env = env
+    if cwd is not None:
+        proc.launch_dir = cwd
+    return proc
 
 
 def exec_attach(session: str) -> None:

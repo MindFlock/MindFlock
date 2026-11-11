@@ -361,6 +361,58 @@ def test_stuck_is_in_the_bell_after_twenty_idle_minutes_on_dirty_work():
     assert vr.session_state(dict(row, diff_stat=None), NOW)["in_bell"] is False
 
 
+def _verify_rows():
+    def row(title, state, activity="idle", **extra):
+        r = {"title": title, "name": title, "activity": activity, "status": "ready"}
+        r["verify"] = {"state": state, "plan": "p"}
+        r.update(extra)
+        return r
+
+    return [
+        row("conf", "needs_you", asking={"kind": "question", "text": "Did it work?"}),
+        row("fail", "failed"),
+        row("block", "blocked"),
+        row("run", "verifying", "working", activity_since=NOW - 120),
+        row("ok", "passed"),
+    ]
+
+
+def test_a_verify_is_said_as_a_sentence():
+    """mobile.js voiceStateLine: a Verify's pill ("Confirm verified", "Verify
+    failed") is a chip, not a word after "is"; one waiting on you is in the
+    bell, and its prose question reads as the verify, not a Question."""
+    rows = _verify_rows()
+    states = {r["title"]: vr.session_state(r, NOW) for r in rows}
+    assert {t: (s["label"], s["in_bell"]) for t, s in states.items()} == {
+        "conf": ("Confirm verified", True),
+        "fail": ("Verify failed", True),
+        "block": ("Verify blocked", True),
+        "run": ("Verifying", False),
+        "ok": ("Verified", False),
+    }
+    assert ans("who needs me", rows=rows)["say"] == (
+        "conf needs you to confirm it's verified. fail failed its verify. "
+        "block's verify is blocked."
+    )
+    status = {
+        r["title"]: ans("status", session=r["title"], rows=rows)["say"] for r in rows
+    }
+    assert status == {
+        "conf": "conf needs you to confirm it's verified.",
+        "fail": "fail failed its verify.",
+        "block": "block's verify is blocked.",
+        "run": "run is verifying its work for 2 minutes.",
+        "ok": "ok is verified.",
+    }
+    assert ans("list sessions", rows=rows)["say"] == (
+        "Sessions: conf (needs you to confirm it's verified), fail (verify failed), "
+        "block (verify blocked), run (verifying), ok (verified)."
+    )
+    # A usage limit and a gone terminal still say so over a running verify.
+    limited = dict(rows[3], activity="offline")
+    assert vr.session_state(limited, NOW)["label"] == "Offline"
+
+
 def test_status_is_the_current_session():
     assert ans("What's it doing?", session="invoice-parser") == {
         "kind": "status",

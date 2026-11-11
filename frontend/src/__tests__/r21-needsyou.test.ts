@@ -138,6 +138,17 @@ describe("the one Needs-you list", () => {
   });
 });
 
+describe("a session's own verify is one bell row", () => {
+  it("drops the Behaviors row for a plan its session row already shows", () => {
+    const plan = { id: "p1", title: "Login", state: "due", steps: [{ id: "1", text: "Log in" }] } as unknown as TestPlan;
+    const base = needsYouRows({ instances: INSTANCES, waiting: [], flights: FLIGHTS, testPlans: [plan] });
+    expect(base.some((r) => r.kind === "behaviors")).toBe(true);
+    const withVerify = [...INSTANCES, { ...inst("v1"), verify: { state: "failed", plan: "p1" } } as unknown as Instance];
+    const rows = needsYouRows({ instances: withVerify, waiting: [], flights: FLIGHTS, testPlans: [plan] });
+    expect(rows.some((r) => r.kind === "behaviors")).toBe(false);
+  });
+});
+
 describe("every surface reads it", () => {
   it("the bell's list and badge", () => {
     const bell = fn("components/NotificationsBell.tsx", "NotificationsBell");

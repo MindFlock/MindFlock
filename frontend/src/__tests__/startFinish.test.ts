@@ -90,18 +90,17 @@ describe("a fixed agent problem doesn't stay on screen", () => {
   });
 });
 
-describe("Verify keeps an edit or a retry when the server refused", () => {
-  it("editPlanStep and writePlanFor resolve whether they took", () => {
+describe("Verify keeps a retry when the server refused", () => {
+  it("writePlanFor resolves whether it took", () => {
     const va = squash(code("lib/verifyActions.ts"));
-    expect(va).toContain("fields: Partial<TestStep> ): Promise<boolean> {");
     expect(va).toContain("export async function writePlanFor(target: string): Promise<boolean> {");
-    expect(va).toMatch(/errorPop\("Couldn't change that behavior", errMsg\(err\)\); return false;/);
     expect(fn("lib/verifyActions.ts", "writePlanFor")).toMatch(/errorPop\("Couldn't write the behaviors", errMsg\(err\)\);\s*return false;/);
   });
 
-  it("the step editor closes, and the banner clears, only on success", () => {
-    // The Behaviors card's row editor (the Verify dialog's step editor is gone).
-    expect(code("components/behaviors/BehaviorRow.tsx")).toContain("if (await onEdit(step, fields)) setEditing(false);");
+  it("the steps are the agent's own: no step editor on the card's rows (2026-11-10)", () => {
+    const row = code("components/behaviors/BehaviorRow.tsx");
+    expect(row).not.toContain("onEdit");
+    expect(code("lib/verifyActions.ts")).not.toContain("export async function editPlanStep(");
   });
 });
 
