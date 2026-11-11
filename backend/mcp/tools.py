@@ -97,7 +97,7 @@ needs_input: read_output(view="screen"), answer_prompt or ask your user.
 TEAM RUN: start_team_run; wait_for_run/get_run/list_runs; control_run steers. Split lead: propose_run_plan; report_integrated after a conflict.
 
 Routes: describe_flight → start_flight (dry_run first); flight_status, control_flight, edit_flight, save_flight_plan, run_pr_review.
-Also: get_session, check_inbox, wait_for_message, set_parent, verify_session, confirm_verify (person's answer). Steer/ship/close/delete only descendants (ship/route yourself).
+Also: get_session, check_inbox, wait_for_message, set_parent, verify_session, confirm_verify (person's answer). Message-now/route any session; ship/close/delete: descendants.
 Long job: expect_background_job(duration) or MINDFLOCK_EXPECT=6h."""
 
 _FOOTER = """
@@ -260,7 +260,7 @@ _D_SEND = (
     'title, a list of titles (max 20), "parent" or "children". When '
     'replying, set reply_to to the id you received. delivery "inbox" stores it '
     'without typing; the recipient reads it with check_inbox. delivery "now" '
-    "types it immediately even mid-turn; only for your descendants, and never "
+    "types it immediately even mid-turn (any local session), and never "
     "typed into an open dialog. Use this for follow-up instructions to a worker "
     "too. To answer a permission or choice dialog use answer_prompt; workers "
     "report final results with report_result. Long-running ping-pong is cut "
@@ -1467,7 +1467,7 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
                     self._require_self(flock, "messaging another person's session")
                 peers.add(t)
             elif delivery == "now":
-                self.policy.require_managed(flock, t, 'delivery "now"')
+                self.policy.require_steer(flock, t, 'delivery "now"')
         payload: Dict[str, Any] = {
             "text": args["text"],
             "from": flock.self_title or "",

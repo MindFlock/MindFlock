@@ -101,7 +101,7 @@ D_START = (
     "Start a route. steps: [{kind, title?, config?, on_fail?, when?, halt?}] "
     "(from describe_flight, or by hand from its cookbook) and/or plan_id (a "
     "saved route's id or name; its steps come first). title: the session that runs it — "
-    "default yourself; else one of your descendants. On an existing session "
+    "default yourself; else any local session. On an existing session "
     "the work so far counts as the first agent stop (still on its turn: the "
     "stop waits for it to end). Work still ahead? at='s1' (the agent "
     "stop's prompt is queued to that session and sent when its turn ends), or "
@@ -133,7 +133,7 @@ D_STATUS = (
     "latest); neither = your own session's route."
 )
 D_CONTROL = (
-    "Steer a route on you or a descendant (or a grounded one). op: run (a "
+    "Steer a route on any local session (or a grounded one). op: run (a "
     "ready route starts now) | pause | resume (Carry on: a paused route "
     "where it was, a halted one runs its stop again) | cancel (Stop the "
     "route; the session is kept) | skip (a stop) | retry (a failed or halted "
@@ -933,8 +933,9 @@ class FlightTools:
     def _may_fly(
         self, flock: Flock, title: str, what: str, steps=(), confirm: bool = False
     ) -> None:
-        """You or a descendant (``require_ship``'s rule, merge included); a
-        grounded flight (no session) needs only write scope."""
+        """Any local session (steering: ``require_ship`` with ``anyone``); a
+        route with a stop that can't be undone needs you or a descendant, as
+        a merge does. A grounded flight (no session) needs only write scope."""
         if not title:
             self.policy.require_write(flock, what)
             if steps:
@@ -943,7 +944,7 @@ class FlightTools:
         bad = _irreversible(list(steps), self._kinds_by_name()) if steps else []
         try:
             self.policy.require_ship(
-                flock, title, what, merge=bool(bad), confirm_merge=confirm
+                flock, title, what, merge=bool(bad), confirm_merge=confirm, anyone=True
             )
         except ToolError as err:
             if bad and "merg" in str(err):

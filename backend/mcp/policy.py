@@ -11,8 +11,16 @@ Scopes (weakest first): ``readonly`` (read tools + its own inbox) <
 session it is in drops to ``readonly`` (fail closed), and an unparseable scope
 value does too.
 
-"Managed" — what a session may steer (delivery ``now``, answer_prompt,
-kill_session, set_parent):
+"Steering" — typing into another session's prompt now (send_message delivery
+``now``) and giving it a route (start_flight, control_flight, edit_flight) —
+is allowed on ANY local session in every scope but ``readonly``, so one
+session can direct the others without being their parent
+(:meth:`Policy.require_steer`). Never a remote ``device::title`` row, never a
+pending row. A route's stops that cannot be undone (a merge) still need
+``confirm_merge`` and a managed target, and the user's ship lanes still hold.
+
+"Managed" — what a session may answer for, close or re-parent (answer_prompt,
+kill_session, set_parent, fence_session, ship_session):
 
 * scope ``all``: any local session;
 * scope ``children`` with an identity: transitive descendants via the live
@@ -208,6 +216,15 @@ class Policy:
             raise ToolError("you cannot message yourself")
         return row
 
+    def require_steer(self, flock: Flock, title: str, action: str) -> dict:
+        """Typing into ``title`` now, or giving it a route: any local session
+        but the caller's own, in every scope but ``readonly``."""
+        self.require_write(flock, action)
+        row = self.require_local(flock, title)
+        if flock.self_title and title == flock.self_title:
+            raise ToolError("%s is never allowed on your own session" % action)
+        return row
+
     def require_managed(self, flock: Flock, title: str, action: str) -> dict:
         self.require_write(flock, action)
         row = self.require_local(flock, title)
@@ -239,6 +256,7 @@ class Policy:
         merge: bool = False,
         confirm_merge: bool = False,
         depth: str = "",
+        anyone: bool = False,
     ) -> dict:
         """ship_session / set_autopilot: the target must be the caller itself
         or a session it manages (never remote, never pending). ``merge`` —
@@ -257,7 +275,10 @@ class Policy:
         self.require_user_lane(row, title, action, depth)
         me = flock.self_title
         is_self = bool(me) and title == me
-        if not is_self and not self.is_managed(flock, title):
+        # ``anyone`` (a route): any local session may be given one — steering,
+        # like delivery "now" — but a stop that cannot be undone still needs a
+        # managed target below.
+        if not is_self and not self.is_managed(flock, title) and (merge or not anyone):
             if me:
                 raise ToolError(
                     "%s needs %r to be you or one of your descendants (scope %s); "

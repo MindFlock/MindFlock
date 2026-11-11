@@ -545,8 +545,8 @@ external diff tool), so your gitconfig can't break the per-file split. The
 | `delivery` | `auto` | `auto`, `inbox` or `now` (see [Messages](#messages)) |
 
 → `{sent: [{to, id, delivery, detail?}], failed?}`. Every recipient is
-validated before any message is sent. `delivery: "now"` needs every recipient
-to be a session you manage. `to` may be a `<peer>::<title>` row another person
+validated before any message is sent. `delivery: "now"` reaches any local session
+(never your own), in every scope but `readonly`. `to` may be a `<peer>::<title>` row another person
 shares with you: `delivery` must be `auto`, and the entry reads `{to, id,
 delivery: "sent", peer: true, detail}` — see [Across people](#across-people-peer-links).
 A `device::title` row of your own other device is still refused. In Claude
@@ -1255,10 +1255,11 @@ fields, `on_fail` is `halt | agent | skip | you`, and `when` is a condition
 (round 15's grammar): when it is false, the stop is skipped.
 
 **Scope.** A session may start, steer and edit routes on **itself** or on
-one of its descendants. This is `ship_session`'s rule
-(`Policy.require_ship`), and it carries two of that rule's refusals: a session
-in a team run is driven by its run, and a stop that can't be undone needs
-`confirm_merge: true`. A stop can't be undone when it is a `ship` stop at lane
+**any other local session**, so one session can direct the rest without
+being their parent. Two of `ship_session`'s refusals
+(`Policy.require_ship`) still hold: a session in a team run is driven by its
+run, and a stop that can't be undone needs `confirm_merge: true` and a
+target that is the caller's descendant (or scope `all`). A stop can't be undone when it is a `ship` stop at lane
 `merge`, or when its kind's `risk` (from the kinds list) includes
 `irreversible`, as the `land` kind's does. Under `children` scope, a session
 may not run such a stop on **itself**: `start_flight` refuses and suggests
@@ -1505,7 +1506,7 @@ working on it. Sends `POST /api/pr-review` (docs/web-api.md, docs/flights.md
 "Run the PR review on an open PR"):
 
 - `session` — the PR's session; default yourself when no `pr_url` is given.
-  The scope rule above applies (you or a descendant).
+  The scope rule above applies (any local session).
 - `pr_url` — `https://github.com/<owner>/<repo>/pull/<n>`. Alone, the server
   finds the session working on that PR (its row shows the PR, or it is on
   the PR's head branch in that repo) or, when there is none, makes one as
@@ -1579,10 +1580,9 @@ typed into it a minute later.
   below).
 - **`inbox`**: stored only (`held`). The recipient reads it with `check_inbox`.
 - **`now`**: typed immediately, **even mid-turn**. The CLI queues the text in
-  its input box. It is allowed only from an ancestor of the recipient (or from
-  `""`, the CLI or an external client). From anyone else it is downgraded to
-  `auto` with a `detail`, and the MCP refuses it outright for sessions you
-  don't manage. It types only when the recipient's activity is `idle` or
+  its input box. Any local session may send it to any other (never to
+  itself; a `readonly` MCP may not), so one session can direct the rest.
+  It types only when the recipient's activity is `idle` or
   `working`. It never types into a `clarify` dialog (the text would *answer*
   the permission prompt) or a `limit` menu — nor into a dialog on the screen
   whatever the activity reads — and never into an offline agent.
@@ -2000,11 +2000,16 @@ stop. `wait_for_session` is unchanged.
 
 The scope decides what an MCP server may **steer**. It never limits reading.
 
-| Scope | Read tools, `wait_*`, `check_inbox`, `list_tickets` | `send_message` (`auto`/`inbox`), `report_result`, `spawn_session`, `spawn_ticket_session` | Steer (`now`, `answer_prompt`, `kill_session`, `set_parent`, `fence_session`, `set_order`) | Ship (`ship_session`, `set_autopilot`) and run (`start_flight`, `control_flight`, `edit_flight`) |
+| Scope | Read tools, `wait_*`, `check_inbox`, `list_tickets` | `send_message` (`auto`/`inbox`/`now`), `report_result`, `spawn_session`, `spawn_ticket_session`, and routes (`start_flight`, `control_flight`, `edit_flight`) | Manage (`answer_prompt`, `kill_session`, `set_parent`, `fence_session`, `set_order`) | Ship (`ship_session`, `set_autopilot`) |
 |---|---|---|---|---|
 | `readonly` | yes | no | no | no |
-| `children` (default) | yes | yes, to any local session | sessions it **manages** | itself and sessions it manages; `merge` only for sessions it manages |
+| `children` (default) | yes | yes, on any local session; a route stop that can't be undone only on sessions it manages | sessions it **manages** | itself and sessions it manages; `merge` only for sessions it manages |
 | `all` | yes | yes | any local session | any local session, itself included |
+
+Typing into a session now and giving it a route are open to every session on
+purpose: one session can direct all the others. Answering a session's
+dialogs, closing or deleting it, re-parenting it and shipping it stay with
+the sessions that manage it.
 
 What "manages" means under `children`:
 
@@ -2036,8 +2041,8 @@ past a Goes as far as the user set (a Goes as far as an agent set — the row's 
 `agent:<title>` — it may change). `set_autopilot` records `by: "agent:<you>"`
 on the Goes as far as it arms.
 
-**Flights.** `start_flight`, `control_flight` and `edit_flight` follow the
-shipping rule: on the caller itself or a session it manages, never a team-run
+**Flights.** `start_flight`, `control_flight` and `edit_flight` work on the
+caller itself or any other local session, never a team-run
 member, and `confirm_merge: true` for a stop that can't be undone (a `ship`
 stop at lane `merge`, or a kind whose `risk` includes `irreversible`), whose
 target under `children` must be a descendant. A grounded flight (no session)

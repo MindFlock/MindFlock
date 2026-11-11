@@ -305,14 +305,34 @@ class TestStart:
         assert out["name"] == "Nightly"
 
     @pytest.mark.parametrize("target", ["other", "root"])
-    def test_refuses_a_session_that_is_not_you_or_yours(self, target):
+    def test_any_local_session_may_be_given_a_route(self, target):
+        """Steering: one session directs another without being its parent."""
+        box, api, clock = _box()
+        _start_echo(api, [])
+        box.start_flight({"steps": [{"kind": "agent"}], "title": target}, _ctx(clock))
+        assert ("POST", "/api/flights/start") in [(m, p) for m, p, _ in api.calls]
+
+    def test_a_merge_on_a_session_that_is_not_yours_is_still_refused(self):
         box, api, clock = _box()
         _start_echo(api, [])
         with pytest.raises(ToolError, match="you or one of your descendants"):
             box.start_flight(
-                {"steps": [{"kind": "agent"}], "title": target}, _ctx(clock)
+                {
+                    "steps": [{"kind": "ship", "config": {"lane": "merge"}}],
+                    "title": "other",
+                    "confirm_merge": True,
+                },
+                _ctx(clock),
             )
         assert ("POST", "/api/flights/start") not in [(m, p) for m, p, _ in api.calls]
+
+    def test_readonly_may_not_route_anyone(self):
+        box, api, clock = _box(scope="readonly")
+        _start_echo(api, [])
+        with pytest.raises(ToolError, match="readonly"):
+            box.start_flight(
+                {"steps": [{"kind": "agent"}], "title": "other"}, _ctx(clock)
+            )
 
     def test_refuses_a_team_run_member(self):
         box, api, clock = _box(scope="all")
@@ -575,11 +595,12 @@ class TestControl:
         box.control_flight({"title": "w1", "op": "pause"}, _ctx(clock))
         assert hit
 
-    def test_refuses_another_sessions_flight(self):
+    def test_steers_another_sessions_flight(self):
         box, api, clock = _box(flights=[_flight(session="other")])
-        with pytest.raises(ToolError, match="you or one of your descendants"):
-            box.control_flight({"id": "f_1", "op": "cancel"}, _ctx(clock))
-        assert not [c for c in api.calls if c[0] == "POST"]
+        hit = []
+        _ok(api, "POST", "/api/flights/f_1/cancel", hit)
+        box.control_flight({"id": "f_1", "op": "cancel"}, _ctx(clock))
+        assert hit
 
     def test_a_grounded_flight_needs_only_write_scope(self):
         box, api, clock = _box(
@@ -628,10 +649,17 @@ class TestEdit:
         with pytest.raises(ToolError, match="needs add, remove, edit or rename"):
             box.edit_flight({"id": "f_1"}, _ctx(clock))
 
-    def test_refuses_another_sessions_flight(self):
+    def test_adding_a_merge_to_another_sessions_flight_is_refused(self):
         box, _, clock = _box(flights=[_flight(session="other")])
         with pytest.raises(ToolError, match="you or one of your descendants"):
-            box.edit_flight({"id": "f_1", "rename": "x"}, _ctx(clock))
+            box.edit_flight(
+                {
+                    "id": "f_1",
+                    "add": [{"kind": "ship", "config": {"lane": "merge"}}],
+                    "confirm_merge": True,
+                },
+                _ctx(clock),
+            )
 
     def test_adding_a_merge_needs_confirm(self):
         box, api, clock = _box(flights=[_flight(session="w1")])

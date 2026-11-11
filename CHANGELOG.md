@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Any session can direct any other.** An agent can type into another
+  session's prompt right away (`send_message` with `delivery: "now"`) and
+  start, steer or edit a route on it, without being its parent. So one
+  session can run the rest. Answering another session's dialogs, closing or
+  deleting it and merging its PR still need it to be that session's own
+  worker (or the MCP scope **All**). Read-only agents can do none of it.
+
 - **Workers on every prompt now lets the agent decide where each prompt
   goes.** Keep sending ideas to one session. A small follow-up, its agent
   does itself. A big one it splits across workers and merges back. A separate

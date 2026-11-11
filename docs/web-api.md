@@ -2467,8 +2467,7 @@ The full semantics are in [mcp.md](mcp.md#messages).
   - `auto` types it in when the recipient is next stably idle;
   - `inbox` stores it only;
   - `now` types it immediately when the recipient is `idle` or `working`.
-    `now` is allowed only from an ancestor of the recipient (or from `""`);
-    from anyone else it is sent as `auto` with a `detail`. It is never typed
+    Any session may send `now` to any other. It is never typed
     into `clarify`, `limit` or an offline agent, never over an open
     long-poll, never while the recipient's screen shows a dialog (whatever
     its activity reads — see the screen-evidence guard under the delivery

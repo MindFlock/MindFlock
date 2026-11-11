@@ -7934,10 +7934,9 @@ async def post_message(title: str, payload: dict) -> JSONResponse:
         if stat is not None:
             data = dict(data or {})
             data["diff_stat"] = stat
+    # delivery "now" from any local session: one session may direct another
+    # without being its parent (the MCP's "steering" rule, mcp/policy.py).
     detail = ""
-    if delivery == "now" and sender and not _is_descendant(title, sender):
-        delivery = "auto"
-        detail = 'delivery "now" is only for your own descendants — sent as auto'
     try:
         msg = await asyncio.to_thread(
             lambda: _mailbox.post(

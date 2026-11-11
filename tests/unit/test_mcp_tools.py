@@ -411,11 +411,18 @@ class TestSendMessage:
         assert api.mail["w1"][0]["state"] == "held"
         assert "w1" not in box.dispatched
 
-    def test_now_needs_a_descendant(self):
+    def test_now_reaches_any_local_session(self):
+        """Steering: typing into another session now needs no parent link,
+        only a scope that may write."""
         box, api, clock = make_box(_tree())
-        with pytest.raises(ToolError, match="descendants"):
-            box.send_message(
-                {"to": "other", "text": "x", "delivery": "now"}, _ctx(clock)
+        out = box.send_message(
+            {"to": "other", "text": "x", "delivery": "now"}, _ctx(clock)
+        )
+        assert out["sent"][0]["to"] == "other"
+        ro, _, ro_clock = make_box(_tree(), scope="readonly")
+        with pytest.raises(ToolError, match="readonly"):
+            ro.send_message(
+                {"to": "other", "text": "x", "delivery": "now"}, _ctx(ro_clock)
             )
         out = box.send_message(
             {"to": "w1a", "text": "x", "delivery": "now"}, _ctx(clock)
