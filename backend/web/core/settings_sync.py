@@ -120,6 +120,8 @@ NUDGE_DELAY = 1.0
 
 #: Shareable fields per group — the same everywhere once sync is on.
 SYNCED: Dict[str, Tuple[str, ...]] = {
+    # Saved routes sync (store:flight_plans), so the plan id is portable.
+    "flights": ("pr_review_plan",),
     "coding_cli": ("default_provider", "assistant_provider", "default_launch_args"),
     # A source's fields (``depth``, its flight ``plan``…) ride the source: one
     # keyed unit per source, never classified one by one.
@@ -375,6 +377,7 @@ _CANON_MAX = 200
 
 #: Human names for the pin picker ("Keep different on this device").
 GROUP_LABELS: Dict[str, str] = {
+    "flights": "Routes",
     "coding_cli": "Agents",
     "ticketing": "Tickets",
     "repository": "Repository",
@@ -391,6 +394,7 @@ GROUP_LABELS: Dict[str, str] = {
 }
 
 LABELS: Dict[str, str] = {
+    "flights.pr_review_plan": "PR review route",
     "coding_cli.default_provider": "Default agent",
     "coding_cli.assistant_provider": "Assistant agent",
     "coding_cli.default_launch_args": "Agent launch flags",

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Run the PR review on any open PR.** "Run PR review" on a session (its
+  ⋮ / ⋯ menu) and "Run PR review" on an open PR in Intake → GitHub PRs run
+  the route chosen in Settings → Workspace → *PR review route*
+  (`flights.pr_review_plan`). A session with no route starts it; a session
+  already flying a route gets the review stops spliced in after its current
+  stop (before any Push/Reviews/Land ahead; stops it already has are not
+  added twice); a PR with no session gets one on its branch, then the
+  review. The session's own agent does the fixes. Also `POST /api/pr-review`
+  and the MCP tool `run_pr_review`.
+
 ## [0.14.8] - 2026-11-11
 
 
