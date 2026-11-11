@@ -562,6 +562,12 @@ cd frontend && npm test           # 83 files, 1615 tests (2026-10-10)
   Diff tab, Code Map and commit drafting use it). A polled `git status` takes
   `--no-optional-locks`, so it does not refresh their index either.
   `tests/unit/test_intent_to_add.py` checks the index bytes stay identical.
+  Two details keep the copy honest: it is made with `shutil.copy2` (the
+  index's mtime survives, so git's racy-git check still catches a same-size
+  edit made in the same second as the last `git add`), and `add -N` runs
+  with `-c core.splitIndex=false` and no `GIT_TEST_SPLIT_INDEX` (a split
+  index would otherwise get a new `sharedindex.<sha>` in the REAL gitdir on
+  every poll). `tests/unit/test_spawn_review_fixes.py` pins both.
 
 ## Known issues
 

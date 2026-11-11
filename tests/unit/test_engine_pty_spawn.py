@@ -214,11 +214,15 @@ def test_the_libc_path_reports_a_failed_exec_as_oserror(tmp_path):
 
 @needs_posix_spawn
 @pytest.mark.skipif(not _native_setsid(), reason="this CPython has no setsid=")
-def test_a_cpython_with_setsid_never_takes_the_libc_path(monkeypatch):
-    def _libc(*a, **k):
-        raise AssertionError("libc fallback with a native setsid=")
+def test_a_cpython_with_setsid_still_takes_the_libc_path(monkeypatch):
+    """libc's own posix_spawn is the Linux path even with a native
+    ``setsid=``: ``os.posix_spawn`` holds the GIL until the child execs
+    (test_spawn_review_fixes)."""
 
-    monkeypatch.setattr(mux, "_libc_spawn_session_leader", _libc)
+    def _os_spawn(*a, **k):
+        raise AssertionError("os.posix_spawn with libc usable")
+
+    monkeypatch.setattr(os, "posix_spawn", _os_spawn)
     proc = mux.spawn_pty([sys.executable, "-c", "print('ok')"])
     try:
         assert b"ok" in _read_all(proc.fd)
