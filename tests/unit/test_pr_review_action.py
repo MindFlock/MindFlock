@@ -558,8 +558,10 @@ def test_mcp_tool_scope_and_confirm():
     from backend.mcp.protocol import ToolError
 
     box, sent = _mcp_box(plans=[_mcp_plan()])
-    with pytest.raises(ToolError):
-        box.run_pr_review({"session": "other"}, FakeCtx(None))
+    # Any local session may be given the review route (steering), not only
+    # the caller's own workers.
+    box.run_pr_review({"session": "other"}, FakeCtx(None))
+    assert sent and sent[-1]["session"] == "other"
     with pytest.raises(ToolError) as err:
         box.run_pr_review({"session": "w1", "plan": "nope"}, FakeCtx(None))
     assert "no saved route" in str(err.value)
