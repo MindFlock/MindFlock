@@ -196,6 +196,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing new, or else set aside with its changes kept. The PR's own clone is
   now only a fallback: when a live session is on the branch, when no shared
   clone can be made, or when workspaces are set to `mode = "clone"`.
+- **A route's Second opinion reviews the right repository.** On a ticket or PR
+  started from Intake, the reviewer (and any worker a route starts) used to
+  land in a copy of the folder MindFlock runs in, not the PR's repository, and
+  could not see the change. It now works in the session's own checkout,
+  starting from its latest commit.
+- **A Second opinion that can't start no longer halts the route with "the
+  reviewer did not finish".** The route skips names a closed reviewer's
+  leftover folder or branch still holds. If a reviewer still can't start, the
+  route starts one more under a new name. If that fails too, it stops for you
+  with "couldn't start the reviewer: <why>". The agent is not asked to fix it,
+  and no fix round is used.
 - **A Verify whose agent's window closed shows "Verify blocked"** with the
   reason, instead of losing the check or showing the previous result, and no
   longer marks unshipped work as shipped.

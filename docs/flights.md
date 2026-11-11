@@ -1167,10 +1167,20 @@ join only when they all are done. agents can spin up and down."*
 - **The split executor** builds `spawn_session`'s payload server-side
   (`flight_driver._split_base`): `parent` = the session, `spawned`, the
   session's CLI, `repo_path` = its canonical repo with `base_ref` = its HEAD
-  and `base_branch` (a provisioned session's workers are provisioned from the
-  same source instead), `profile_model`, the fence (`fence_only` kept inside
+  and `base_branch` — a provisioned session (Intake's tickets and PRs) too:
+  its workers are plain worktrees of ITS clone (clone strategy) or `_base_`
+  clone (worktree strategy), never provisioned twins (its `Path` is the
+  server's own folder when Intake cloned a URL, so a twin landed in the wrong
+  repository, and a twin forks from the base branch, not the session's
+  change); an unreadable checkout fails the stop rather than guess —
+  `profile_model`, the fence (`fence_only` kept inside
   the session's own fence, as `spawn_session` does), titles `<slug>-w<N>` (the
-  lowest free one: no live or starting title, tmux name or leftover branch),
+  lowest free one: no live or starting title, tmux name or leftover branch —
+  `<prefix><title>` by the row's prefix and by the server's own, a
+  provisioned session's leftover `<workspace_dir>/mindflock-<title>` clone or
+  `mindflock/<title>` branch as `spawn_session`'s `_provisioned_branch_probe`
+  sees them, a title whose create failed in the background in the last ten
+  minutes, a title the create already refused as existing this spawn),
   and the report footer when `report_back` and the MCP is attached to the
   workers' CLI. The workers go through `session_create.create_result`, so the
   spawn limits and the memory guard are the create path's own; the children
@@ -4768,6 +4778,19 @@ opinion has N findings:\n<list>" — `on_fail: agent` types that list to the
 agent, and the retry after its fix spawns a fresh reviewer (a new
 `since`, a new title). Open: after a restart a deleted reviewer that had
 not reported reads as "did not finish" (the memo is per process).
+
+**A reviewer that never started** (`flight_driver._launch_obs` /
+`_launch_verdict`, tests `test_flight_review_reviewer_start.py`) is never
+"did not finish" handed to the agent — it has nothing to fix. Known as: the
+launch gate's failed queued launch, the server's background-create failure
+record (`GET /api/create_failures`, newer than the stop's start), or — no
+record — a reviewer gone without a report whose join entry never left
+`loading` (`started` sticks on the entry once it has). The first time the
+stop spawns ONE fresh reviewer under a new title (`run`, `detail.respawned`
+= "couldn't start the reviewer: <why>", in the note as "asking review-2 for
+a second opinion (<why>)"); if that one cannot start either, the stop fails
+with "couldn't start the reviewer: <why>" under its `on_fail`, `agent`
+turned into `halt` — no fix round spent, nothing typed to the agent.
 
 **(agent) switch pilot**: `agent` gains `program` (≤ 100, "CLI for a fresh
 session (empty = the same)") and `model` (≤ 200); `_run_agent`'s `fresh`
