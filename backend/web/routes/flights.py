@@ -276,6 +276,44 @@ async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
     return JSONResponse({"flight": flight, "absorbed": absorbed}, status_code=202)
 
 
+@router.post("/api/pr-review")
+async def pr_review_run(payload: Optional[dict] = None) -> JSONResponse:
+    """Run the PR review route on an open PR (docs/flights.md "Run the PR
+    review on an open PR"): ``{"session"?: title, "pr_url"?: url, "plan"?:
+    id or name, "by"?}`` → 200 ``{"mode": "started" | "inserted" |
+    "created", "session", "flight", "stops": [{id, kind, title}]}``
+    (:func:`core.pr_review.run_pr_review`). 400 ``no_plan`` (none given,
+    ``flights.pr_review_plan`` unset) / ``needs_target`` / ``bad_pr_url``;
+    404 ``unknown_session`` / ``unknown_plan``; 409 ``paused`` / ``held`` /
+    ``too_many_steps``. Creating a session for the PR passes Intake's own
+    refusals through (404 no such open PR, 409 already starting, 502)."""
+    from backend.web.core import pr_review, ticket_start
+
+    body = payload if isinstance(payload, dict) else {}
+
+    def _s(key: str) -> str:
+        v = body.get(key)
+        return v.strip() if isinstance(v, str) else ""
+
+    by = _s("by") or "user"
+    if not (by == "user" or by.startswith("agent:")):
+        by = "user"
+    try:
+        out = await pr_review.run_pr_review(
+            session_title=_s("session") or None,
+            pr_url=_s("pr_url") or None,
+            plan=_s("plan") or None,
+            by=by,
+        )
+    except _flights.PlanError as err:
+        return _bad_step(err)
+    except _flights.FlightError as err:
+        return _err(err)
+    except ticket_start.LaunchError as err:
+        return JSONResponse(err.body, status_code=err.status)
+    return JSONResponse(out)
+
+
 @router.get("/api/flights/default-place")
 def flights_default_place() -> JSONResponse:
     """The default folder (``{folder}``, ``~`` folded): where a chain runs

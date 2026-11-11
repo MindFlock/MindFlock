@@ -56,6 +56,7 @@ __all__ = [
     "ExtensionsSettings",
     "PrefsSettings",
     "PersonSettings",
+    "FlightsSettings",
     "Settings",
     "settings_path",
     "load_settings",
@@ -2123,6 +2124,30 @@ class VoiceSettings:
 
 
 @dataclass
+class FlightsSettings:
+    """Routes (flights, docs/flights.md) the app picks for you.
+
+    ``pr_review_plan``: the saved route (a plan id, or its name) that "Run
+    the PR review" flies on an open PR's session
+    (:func:`backend.web.core.pr_review.run_pr_review`, ``POST
+    /api/pr-review``, MCP ``run_pr_review``). Empty = none configured: the
+    action then needs a route named per call.
+    """
+
+    pr_review_plan: str = ""
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        if self.pr_review_plan:
+            d["pr_review_plan"] = self.pr_review_plan
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FlightsSettings":
+        return cls(pr_review_plan=str(d.get("pr_review_plan") or "").strip()[:120])
+
+
+@dataclass
 class Settings:
     """The whole user settings document. All groups default to empty.
 
@@ -2150,6 +2175,7 @@ class Settings:
     prefs: PrefsSettings = field(default_factory=PrefsSettings)
     person: PersonSettings = field(default_factory=PersonSettings)
     voice: VoiceSettings = field(default_factory=VoiceSettings)
+    flights: FlightsSettings = field(default_factory=FlightsSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -2182,6 +2208,7 @@ class Settings:
             "prefs": self.prefs,
             "person": self.person,
             "voice": self.voice,
+            "flights": self.flights,
         }
 
     @classmethod
@@ -2226,6 +2253,7 @@ class Settings:
             prefs=PrefsSettings.from_dict(_group(d, "prefs")),
             person=PersonSettings.from_dict(_group(d, "person")),
             voice=VoiceSettings.from_dict(_group(d, "voice")),
+            flights=FlightsSettings.from_dict(_group(d, "flights")),
             schema_version=version,
         )
         _derive_setup_from_store(obj)
