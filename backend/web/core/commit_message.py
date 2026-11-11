@@ -85,12 +85,18 @@ class CommitMessageError(RuntimeError):
     """No message could be generated. The sentence is shown to the user."""
 
 
-def _git_out(worktree: str, *args: str, timeout: float = 30.0) -> str:
+def _git_out(
+    worktree: str,
+    *args: str,
+    timeout: float = 30.0,
+    env: Optional[dict] = None,
+) -> str:
     cp = subprocess.run(
         ["git", "-C", worktree, "--no-pager", *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
+        env=env,
         timeout=timeout,
     )
     if cp.returncode != 0:
@@ -116,20 +122,17 @@ def collect_diff(worktree: str, budget: int = DIFF_BUDGET) -> tuple[str, str]:
     Baseline is HEAD, not the branch's fork point: this describes THIS commit,
     and a session's second commit must not be handed the first one's changes.
 
-    ``add -N .`` first, so a session whose whole contribution is new files is not
-    described as an empty diff — the same intent-to-add trick the Diff tab uses,
-    and harmless before a commit that stages everything anyway.
+    Untracked files count, so a session whose whole contribution is new files
+    is not described as an empty diff: the diffs run against a scratch
+    intent-to-add index (:func:`scratch_index_env_or_none`). Drafting a message must
+    not touch the index — the person may cancel and never commit.
     """
-    subprocess.run(
-        ["git", "-C", worktree, "add", "-N", "."],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        timeout=60,
-    )
+    from backend.session.git.diff import scratch_index_env_or_none
+
     base = diff_base(worktree)
-    stat = _git_out(worktree, "diff", "--stat", base)[:STAT_BUDGET]
-    patch = _git_out(worktree, "diff", base)
+    with scratch_index_env_or_none(worktree) as env:
+        stat = _git_out(worktree, "diff", "--stat", base, env=env)[:STAT_BUDGET]
+        patch = _git_out(worktree, "diff", base, env=env)
     if len(patch) > budget:
         patch = (
             patch[:budget]

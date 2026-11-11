@@ -115,6 +115,351 @@
 .sky-weather-word.is-storm {
   color: var(--tone-attention);
 }
+/* The Behaviors card (docs/behaviors.md §2) — opened in place on the Sky (a
+   tile's slot, a Verify stop, a board row) and in a plain panel. On the
+   zoomed canvas its type grows a little when zoomed out, as a session
+   frame's names do (--bh-s: at most 1.3×; 1 off the canvas, where --sky-z
+   is unset). Text is always var(--text)/var(--muted) on var(--panel); tone
+   colours are carried by edges, borders and glyphs only, so contrast stays
+   what the theme's own text pair gives in both themes. */
+
+.bh-card {
+  --bh-s: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
+  --bh-tone: var(--border);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--bh-s));
+  min-width: 0;
+  max-height: 100%;
+  padding: calc(10px * var(--bh-s)) calc(12px * var(--bh-s));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: calc(12.5px * var(--bh-s));
+  line-height: 1.4;
+  text-align: left;
+  box-shadow: inset 0 3px 0 var(--bh-tone);
+}
+
+.bh-card.is-bad {
+  --bh-tone: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+}
+.bh-card.is-you {
+  --bh-tone: var(--accent);
+}
+.bh-card.is-ok {
+  --bh-tone: var(--green);
+}
+.bh-card.is-busy {
+  --bh-tone: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+/* Compact = a row of the Behaviors board (or the grid's Flight strip): it
+ * reads at its host's size, not the Sky zoom's larger type. */
+.bh-card.is-compact {
+  --bh-s: 1;
+  padding: 8px 10px;
+  gap: 6px;
+}
+
+/* --- head ------------------------------------------------------------------ */
+.bh-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bh-head-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.bh-shield {
+  flex: none;
+  width: calc(14px * var(--bh-s));
+  height: calc(14px * var(--bh-s));
+  color: var(--bh-tone);
+}
+.bh-card.is-quiet .bh-shield {
+  color: var(--muted);
+}
+.bh-title {
+  font-weight: 600;
+  font-size: calc(13.5px * var(--bh-s));
+}
+.bh-status {
+  padding: 0 6px;
+  border: 1px solid var(--bh-tone);
+  border-radius: 999px;
+  font-size: calc(11.5px * var(--bh-s));
+  white-space: nowrap;
+  color: var(--text);
+}
+.bh-card.is-quiet .bh-status {
+  border-color: var(--border);
+  color: var(--muted);
+}
+/* In a narrow home (a Behaviors board row) the count gives way first, so the
+ * ⋯ and × never slide past the card's edge. */
+.bh-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: calc(11.5px * var(--bh-s));
+  white-space: nowrap;
+}
+.bh-head-tools {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.bh-sentence {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.bh-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* --- rows ------------------------------------------------------------------ */
+.bh-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.bh-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 6px 4px 6px 6px;
+  border-radius: 6px;
+  border-left: 3px solid transparent;
+  outline: none;
+}
+.bh-row + .bh-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.bh-row:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.bh-row.is-yours {
+  border-left-color: var(--accent);
+}
+.bh-row.is-fail {
+  border-left-color: var(--red);
+}
+.bh-card.is-compact .bh-row {
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.bh-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: calc(11px * var(--bh-s));
+  white-space: nowrap;
+  color: var(--text);
+}
+.bh-chip > span {
+  font-weight: 700;
+}
+.bh-chip[data-check="pass"] {
+  border-color: var(--green);
+}
+.bh-chip[data-check="pass"] > span {
+  color: var(--green);
+}
+.bh-chip[data-check="fail"] {
+  border-color: var(--red);
+}
+.bh-chip[data-check="fail"] > span {
+  color: var(--red);
+}
+.bh-chip[data-check="yours"] {
+  border-color: var(--accent);
+}
+.bh-chip[data-check="yours"] > span {
+  color: var(--accent);
+}
+.bh-chip[data-check="cant"] {
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
+}
+.bh-chip[data-check="cant"] > span {
+  color: var(--gold);
+}
+.bh-chip[data-check="pending"] {
+  color: var(--muted);
+}
+
+.bh-row-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.bh-text {
+  overflow-wrap: anywhere;
+}
+.bh-expect,
+.bh-evidence,
+.bh-receipt,
+.bh-hint {
+  color: var(--muted);
+  font-size: calc(11.5px * var(--bh-s));
+  overflow-wrap: anywhere;
+}
+.bh-evidence-by {
+  color: var(--text);
+  font-weight: 600;
+}
+.bh-hint {
+  margin: 0;
+}
+
+.bh-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+/* Who does it: a read-only mark (the steps are the agent's own). */
+.bh-who {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: calc(11px * var(--bh-s));
+  white-space: nowrap;
+}
+.bh-who.is-you {
+  border-color: var(--accent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+
+.bh-quiet {
+  font-size: calc(11.5px * var(--bh-s));
+}
+.bh-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.bh-card :is(.fl-input, input, textarea) {
+  font-size: calc(12px * var(--bh-s));
+}
+
+/* A behavior row collapses to one short line (BehaviorRow): its text is a
+   button that opens the row, clamped to two lines while collapsed. */
+.bh-text-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+.bh-text-toggle {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.bh-text-toggle.is-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.bh-text-toggle:hover {
+  color: var(--accent);
+}
+.bh-caret {
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: calc(11px * var(--bh-s));
+  line-height: 1.6;
+}
+.bh-caret:hover {
+  color: var(--text);
+}
+.bh-expand-all {
+  font-size: calc(11px * var(--bh-s));
+  white-space: nowrap;
+  flex: none;
+  padding: 1px 7px;
+}
+
+/* --- Confirm verified (VerifyConfirm) ---------------------------------------
+   The steps only a person can do, then Confirm verified / Not verified… — on
+   the card, the pane's verify row and a Verify stop. Sized in plain px: the
+   pane row has no --bh-s. */
+.vc-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.vc-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vc-step {
+  overflow-wrap: anywhere;
+}
+.vc-step-text {
+  display: block;
+}
+.vc-step-expect {
+  display: block;
+  color: var(--muted);
+  font-size: 0.92em;
+}
+.vc-failed .vc-step::marker {
+  color: var(--tone-broken);
+}
+.vc-acts,
+.vc-note-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.vc-note-row .vc-note {
+  flex: 1 1 180px;
+  min-width: 0;
+}
 /* The voice cheat sheet (VoiceCommands.tsx): under the top bar's mic, the
    same surface as the mic's options (.mic-pop in TopBarMic.css). */
 .voice-cmds {
@@ -2414,6 +2759,65 @@ button.assist-chip:hover {
     display: none;
   }
 }
+/* The pane's verify row (PaneVerifyStrip): the route strip's shape
+   (flights/Flights.css .fl-strip), in the verify tone while the agent checks,
+   the needs-you tint when a person's steps are left, red when it failed. */
+.pv-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--tone-verifying, #8b6cf0) 10%, var(--panel-2));
+  font-size: 12px;
+  min-width: 0;
+}
+
+.pv-strip.is-needs_you {
+  background: color-mix(in srgb, var(--tone-attention) 14%, var(--panel-2));
+  padding-bottom: 8px;
+}
+
+.pv-strip.is-failed,
+.pv-strip.is-blocked {
+  background: color-mix(in srgb, var(--tone-broken) 12%, var(--panel-2));
+}
+
+.pv-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pv-shield {
+  flex: none;
+  color: var(--tone-verifying, #8b6cf0);
+  font-weight: 700;
+}
+
+.pv-strip.is-needs_you .pv-shield {
+  color: var(--text);
+}
+
+.pv-strip.is-failed .pv-shield,
+.pv-strip.is-blocked .pv-shield {
+  color: var(--tone-broken);
+}
+
+.pv-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-open,
+.pv-again {
+  flex: none;
+  font-size: 11.5px;
+}
 /* A box's right-click menu on the flyway canvas (StopMenu.tsx). It lives in
  * the line's stage, so the Sky's zoom scales it: `--sky-z` (set on `.skl`)
  * scales it back, about its top-left corner — the pointer. */
@@ -2491,429 +2895,6 @@ button.assist-chip:hover {
   margin-top: 3px;
   border-top: 1px solid var(--border);
   padding-top: 8px;
-}
-/* The Behaviors card (docs/behaviors.md §2) — opened in place on the Sky (a
-   tile's slot, a Verify stop, a board row) and in a plain panel. On the
-   zoomed canvas its type grows a little when zoomed out, as a session
-   frame's names do (--bh-s: at most 1.3×; 1 off the canvas, where --sky-z
-   is unset). Text is always var(--text)/var(--muted) on var(--panel); tone
-   colours are carried by edges, borders and glyphs only, so contrast stays
-   what the theme's own text pair gives in both themes. */
-
-.bh-card {
-  --bh-s: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
-  --bh-tone: var(--border);
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: calc(8px * var(--bh-s));
-  min-width: 0;
-  max-height: 100%;
-  padding: calc(10px * var(--bh-s)) calc(12px * var(--bh-s));
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: calc(12.5px * var(--bh-s));
-  line-height: 1.4;
-  text-align: left;
-  box-shadow: inset 0 3px 0 var(--bh-tone);
-}
-
-.bh-card.is-bad {
-  --bh-tone: var(--red);
-  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
-}
-.bh-card.is-you {
-  --bh-tone: var(--accent);
-}
-.bh-card.is-ok {
-  --bh-tone: var(--green);
-}
-.bh-card.is-busy {
-  --bh-tone: color-mix(in srgb, var(--accent) 50%, var(--border));
-}
-
-/* Compact = a row of the Behaviors board (or the grid's Flight strip): it
- * reads at its host's size, not the Sky zoom's larger type. */
-.bh-card.is-compact {
-  --bh-s: 1;
-  padding: 8px 10px;
-  gap: 6px;
-}
-
-/* --- head ------------------------------------------------------------------ */
-.bh-head {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.bh-head-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.bh-shield {
-  flex: none;
-  width: calc(14px * var(--bh-s));
-  height: calc(14px * var(--bh-s));
-  color: var(--bh-tone);
-}
-.bh-card.is-quiet .bh-shield {
-  color: var(--muted);
-}
-.bh-title {
-  font-weight: 600;
-  font-size: calc(13.5px * var(--bh-s));
-}
-.bh-status {
-  padding: 0 6px;
-  border: 1px solid var(--bh-tone);
-  border-radius: 999px;
-  font-size: calc(11.5px * var(--bh-s));
-  white-space: nowrap;
-  color: var(--text);
-}
-.bh-card.is-quiet .bh-status {
-  border-color: var(--border);
-  color: var(--muted);
-}
-/* In a narrow home (a Behaviors board row) the count gives way first, so the
- * ⋯ and × never slide past the card's edge. */
-.bh-count {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--muted);
-  font-size: calc(11.5px * var(--bh-s));
-  white-space: nowrap;
-}
-.bh-head-tools {
-  flex: none;
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.bh-sentence {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.bh-head-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-/* --- rows ------------------------------------------------------------------ */
-.bh-rows {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.bh-row {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px;
-  align-items: start;
-  padding: 6px 4px 6px 6px;
-  border-radius: 6px;
-  border-left: 3px solid transparent;
-  outline: none;
-}
-.bh-row + .bh-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-.bh-row:focus-visible {
-  box-shadow: 0 0 0 2px var(--accent);
-}
-.bh-row.is-yours {
-  border-left-color: var(--accent);
-}
-.bh-row.is-fail {
-  border-left-color: var(--red);
-}
-.bh-card.is-compact .bh-row {
-  grid-template-columns: 1fr;
-  gap: 4px;
-}
-
-.bh-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: calc(11px * var(--bh-s));
-  white-space: nowrap;
-  color: var(--text);
-}
-.bh-chip > span {
-  font-weight: 700;
-}
-.bh-chip[data-check="pass"] {
-  border-color: var(--green);
-}
-.bh-chip[data-check="pass"] > span {
-  color: var(--green);
-}
-.bh-chip[data-check="fail"] {
-  border-color: var(--red);
-}
-.bh-chip[data-check="fail"] > span {
-  color: var(--red);
-}
-.bh-chip[data-check="yours"] {
-  border-color: var(--accent);
-}
-.bh-chip[data-check="yours"] > span {
-  color: var(--accent);
-}
-.bh-chip[data-check="cant"] {
-  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
-}
-.bh-chip[data-check="cant"] > span {
-  color: var(--gold);
-}
-.bh-chip[data-check="pending"] {
-  color: var(--muted);
-}
-
-.bh-row-body {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.bh-text {
-  overflow-wrap: anywhere;
-}
-.bh-expect,
-.bh-evidence,
-.bh-receipt,
-.bh-hint {
-  color: var(--muted);
-  font-size: calc(11.5px * var(--bh-s));
-  overflow-wrap: anywhere;
-}
-.bh-evidence-by {
-  color: var(--text);
-  font-weight: 600;
-}
-.bh-hint {
-  margin: 0;
-}
-
-.bh-row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-}
-.bh-answers {
-  display: inline-flex;
-  gap: 4px;
-}
-.bh-answer {
-  padding: 1px 8px;
-  font-size: calc(11.5px * var(--bh-s));
-}
-.bh-answer-pass[data-on] {
-  border-color: var(--green);
-  box-shadow: inset 0 0 0 1px var(--green);
-}
-.bh-answer-fail[data-on] {
-  border-color: var(--red);
-  box-shadow: inset 0 0 0 1px var(--red);
-}
-.bh-answer-blocked[data-on] {
-  border-color: var(--gold);
-  box-shadow: inset 0 0 0 1px var(--gold);
-}
-
-/* Who checks it: a toggle, both lanes labelled. */
-.bh-who {
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: calc(11px * var(--bh-s));
-  cursor: pointer;
-  white-space: nowrap;
-}
-.bh-who.is-you {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-}
-.bh-who:disabled {
-  cursor: default;
-  opacity: 0.75;
-}
-.bh-who:hover:not(:disabled),
-.bh-who:focus-visible {
-  border-color: var(--accent);
-  outline: none;
-}
-
-.bh-quiet {
-  font-size: calc(11.5px * var(--bh-s));
-}
-.bh-confirm {
-  font-size: calc(11.5px * var(--bh-s));
-}
-.bh-danger {
-  border-color: var(--red);
-}
-
-.bh-note-row,
-.bh-edit,
-.bh-addform,
-.bh-rewrite {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-.bh-edit,
-.bh-addform,
-.bh-rewrite {
-  flex-direction: column;
-  align-items: stretch;
-}
-.bh-note-row .bh-note {
-  flex: 1 1 160px;
-  min-width: 0;
-}
-.bh-edit-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-.bh-rewrite {
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.bh-rewrite-title {
-  font-weight: 600;
-}
-.bh-card :is(.fl-input, input, textarea) {
-  font-size: calc(12px * var(--bh-s));
-}
-
-/* --- foot ------------------------------------------------------------------ */
-.bh-foot {
-  display: flex;
-  flex-direction: column;
-}
-.bh-add {
-  align-self: flex-start;
-}
-
-/* A behavior row collapses to one short line (BehaviorRow): its text is a
-   button that opens the row, clamped to two lines while collapsed. */
-.bh-text-line {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-}
-.bh-text-toggle {
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-  background: none;
-  border: 0;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
-.bh-text-toggle.is-clamped {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-}
-.bh-text-toggle:hover {
-  color: var(--accent);
-}
-.bh-caret {
-  flex: none;
-  background: none;
-  border: 0;
-  padding: 0 2px;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: calc(11px * var(--bh-s));
-  line-height: 1.6;
-}
-.bh-caret:hover {
-  color: var(--text);
-}
-.bh-expand-all {
-  font-size: calc(11px * var(--bh-s));
-  white-space: nowrap;
-  flex: none;
-  padding: 1px 7px;
-}
-
-/* Walkthrough: an agent answered a person's behavior (walk "all"), what a
- * behavior relies on ("after #2"), and the picker for it. */
-.bh-walked {
-  align-self: flex-start;
-  padding: 0 6px;
-  border: 1px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: calc(10.5px * var(--bh-s));
-  white-space: nowrap;
-}
-.bh-evidence.is-walked {
-  border-left: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
-  padding-left: 6px;
-}
-.bh-needs,
-.bh-needs-pick {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-}
-.bh-need-chip,
-.bh-need {
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: calc(10.5px * var(--bh-s));
-  white-space: nowrap;
-}
-.bh-need {
-  cursor: pointer;
-}
-.bh-need.is-on {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-  color: var(--text);
-}
-.bh-need:disabled {
-  cursor: default;
-  opacity: 0.75;
 }
 /* The flyway canvas (FlywayCanvas.tsx) and Flights' form controls
  * (controls.tsx) — prefix fl-.
@@ -3186,6 +3167,14 @@ button.assist-chip:hover {
 
 .fl-box-chip.tone-muted {
   color: var(--tone-muted);
+}
+
+.fl-box-chip.tone-verifying {
+  color: var(--tone-verifying, #8b6cf0);
+}
+
+.fl-box-chip.tone-verified {
+  color: var(--fl-ink-working);
 }
 
 .fl-box-dots {
@@ -6073,6 +6062,11 @@ a.fl-waiting-ref:hover {
   background: var(--tone-attention);
   border-color: var(--tone-attention);
   color: var(--tone-attention-ink, #1a1a1a);
+}
+
+.sky-head-chip.tone-verifying {
+  background: color-mix(in srgb, var(--tone-verifying, #8b6cf0) 18%, transparent);
+  color: var(--tone-verifying, #8b6cf0);
 }
 
 .sky-head-chip.tone-broken {
@@ -20947,6 +20941,14 @@ p.set-hint {
   background: var(--tone-broken);
 }
 
+.inst .dot.tone-verifying {
+  background: var(--tone-verifying, #8b6cf0);
+}
+
+.inst .dot.tone-verified {
+  background: var(--tone-working);
+}
+
 /* Starting: a grey pulse — nobody acts yet. */
 .inst .dot.st-starting {
   animation: cs-pulse 1.4s ease-in-out infinite;
@@ -25956,6 +25958,22 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .stagechip.tone-broken {
   color: var(--tone-broken-ink);
   background: var(--tone-broken);
+  animation: none;
+}
+
+/* Verify (lib/sessionState): the session's own agent checking its work —
+   its own tone, violet, so it never reads as plain Working; Verified is a
+   calm green tint for the ten minutes it lingers. The tokens are optional:
+   the fallbacks hold until styles/tokens.css defines them. */
+.stagechip.tone-verifying {
+  color: var(--tone-verifying-ink, #ffffff);
+  background: var(--tone-verifying, #8b6cf0);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.stagechip.tone-verified {
+  color: var(--tone-working);
+  background: color-mix(in srgb, var(--tone-working) 16%, transparent);
   animation: none;
 }
 

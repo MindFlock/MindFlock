@@ -26,6 +26,7 @@ import {
   type DragScreenCtx,
   type TermHandle,
 } from "../../lib/terminals";
+import { isShown, repaintTerm, trackRepaint } from "../../lib/wsTerm";
 import { toast } from "../../lib/toast";
 import { copyPaneHistory } from "../../lib/paneHistory";
 import { dropSideFor, type DropSide } from "./layout";
@@ -46,6 +47,8 @@ import { useMe } from "../../lib/presence";
 import { FastTrackMenu } from "./FastTrackMenu";
 import { PaneMoreMenu } from "./PaneMoreMenu";
 import { SessionMenu } from "../sidebar/SessionMenu";
+import { withVerifyItem } from "../sidebar/verifyMenu";
+import { PaneVerifyStrip } from "./PaneVerifyStrip";
 import { MidName } from "../sidebar/MidName";
 import { hasUncommitted, sessionMenu } from "../../lib/sessionMenu";
 import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
@@ -385,7 +388,10 @@ export function Pane({
         // move) never fires onBoot again — sync the cover off its flag.
         if (handle.booted) setBooted(true);
       }
-      requestAnimationFrame(() => handle.doFit());
+      // Fit AND repaint: an adopted container was detached (a grid move, the
+      // trip to the sky and back), and its rows are not drawn again until
+      // something writes them — the "white until I scroll" pane.
+      requestAnimationFrame(() => repaintTerm(handle.term, () => handle.doFit()));
     },
     [title, missing, loading, paused, held, heldOff]
   );
@@ -413,9 +419,29 @@ export function Pane({
     clearTimeout(fitTimer.current);
     fitTimer.current = setTimeout(() => {
       const t: TermHandle | undefined = peekTerm(title, tab === "shell" ? "shell" : "agent");
-      t?.doFit();
+      // A refit that changes nothing does not redraw, and this also runs
+      // when a tab REVEALS the terminal (the observer below re-arms on a tab
+      // change): repaint it, so a terminal shown again is never left blank.
+      if (t) repaintTerm(t.term, () => t.doFit());
     }, 120);
   }, [title, tab]);
+
+  // The window coming back (focus, restore, un-occlusion, another display, a
+  // GPU restart — lib/wsTerm installRepaintTriggers) repaints the terminal
+  // this pane is showing. Read at repaint time: the tab and the xterm (a
+  // reconnect builds a new one) may both have changed since.
+  useEffect(() => {
+    if (missing || loading) return;
+    const kind = tab === "shell" ? "shell" : tab === "agent" ? "agent" : null;
+    if (!kind) return;
+    return trackRepaint({
+      shown: () => isShown(peekTerm(title, kind)?.container),
+      repaint: () => {
+        const t = peekTerm(title, kind);
+        if (t) repaintTerm(t.term, () => t.doFit());
+      },
+    });
+  }, [title, tab, missing, loading]);
 
   // Debounced refits on pane-body resize (drag/reorder reflows fire many).
   useEffect(() => {
@@ -892,14 +918,18 @@ export function Pane({
   const openHistory = () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
   // SHIP carries Verify's verdict beside Open PR, and asks first on a
   // failed checklist (lib/stage.ts withVerifyVerdict).
+  // Verify (the session's own agent checking its work) sits beside it.
   const menu = () =>
-    withVerifyVerdict(
-      sessionMenu(inst, menuCtx, {
-        visibleTabs,
-        onHistory: shows("history") ? undefined : openHistory,
-        onCopyHistory: termTab ? copyHistory : undefined,
-        onNextStep: shows("next") ? undefined : shownStep ?? undefined,
-      }),
+    withVerifyItem(
+      withVerifyVerdict(
+        sessionMenu(inst, menuCtx, {
+          visibleTabs,
+          onHistory: shows("history") ? undefined : openHistory,
+          onCopyHistory: termTab ? copyHistory : undefined,
+          onNextStep: shows("next") ? undefined : shownStep ?? undefined,
+        }),
+        inst,
+      ),
       inst,
     );
   // The read-outs the header leaves out (the cost chip, the diff-stat), at
@@ -1393,6 +1423,9 @@ export function Pane({
           bird · chain · ●●●○○ · stop (elapsed), with Done / Skip on a Wait
           for me stop; the line itself opens the Chain tab. */}
       {inst.flight && <PaneFlightStrip inst={inst} />}
+      {/* Verify: the agent checking its own work, and — when a person's
+          steps are left — those steps with Confirm verified. */}
+      {inst.verify && <PaneVerifyStrip inst={inst} />}
       {strip && (
         <div
           className={"peer-strip" + (strip.offline ? " off" : "") + (theirs ? " theirs" : " here")}

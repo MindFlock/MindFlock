@@ -1,7 +1,14 @@
-/** Checklist (test-plan) actions behind the Verify dialog — the requests a row,
- * a step, the by-hand writer and the bulk bar send, with the cache patching,
- * refreshes, toasts and error cards that go with each (the Verify twin of
+/** Verify's actions — the requests the pill, the pane's verify row, the
+ * Behaviors card and a Verify stop send, with the cache patching, refreshes,
+ * toasts and error cards that go with each (the Verify twin of
  * lib/sessionActions.ts).
+ *
+ * VERIFY IS THE SESSION'S OWN AGENT (owner request 2026-11-10): "Verify" on a
+ * session (`startSessionVerify`) has its agent write its own actionable steps
+ * and work them in its own terminal, telling the person in its reply whatever
+ * only a person can do. When there are such steps, a person confirms that
+ * verification is complete (`confirmVerified`) — the pill says "Confirm
+ * verified" until they do.
  *
  * The dialog components own their UI state (which button is busy, which box is
  * open); these own what is said to the server and what the app shows about it.
@@ -19,17 +26,8 @@
  * until dismissed; this surface now uses the same corner for the same reason. */
 
 import { api } from "../api/client";
-import type {
-  TestPlan,
-  TestPlanRunStarted,
-  TestPlansResponse,
-  TestRunWalk,
-  TestStep,
-  TestStepActor,
-  TestStepResult,
-} from "../api/types";
-import { isWaitingOnYou, planName } from "../components/dialogs/verify";
-import { behaviorSummary } from "./behaviors";
+import type { SessionVerifyStarted, TestPlan, TestPlanRunStarted, TestPlansResponse, TestRunWalk } from "../api/types";
+import { planName } from "../components/dialogs/verify";
 import { queryClient, refreshInstances, refreshTestPlans } from "../state/queries";
 import { useUi } from "../state/store";
 import { selectSession } from "./sessionActions";
@@ -56,14 +54,11 @@ export function patchPlan(id: string, apply: (plan: TestPlan) => TestPlan) {
   // CANCEL THE POLL THAT IS ALREADY OPEN. `useTestPlans` refetches every 10s and
   // query-core resolves a successful fetch with an unconditional `setData` — it
   // has no idea a manual update landed while it was in flight — so an optimistic
-  // row could be overwritten by a GET that left before the POST. Every other
-  // mutating path here escapes only by accident: they follow the patch with
-  // `refreshTestPlans()`, whose `invalidateQueries` defaults to
-  // `cancelRefetch: true` and silently cancels the stale request. Rewrite
-  // deliberately does not refetch (the plan is mid-generation), so it was the
-  // one that snapped back — to a row offering "Run with an agent" on a plan the
-  // model was still writing. Unawaited on purpose: the cancel is synchronous
-  // where it matters, and nothing here needs its promise.
+  // row could be overwritten by a GET that left before the POST. A follow-up
+  // `refreshTestPlans()` would cancel it too (`cancelRefetch: true`), but not
+  // every caller refetches, so this does it deliberately. Unawaited on
+  // purpose: the cancel is synchronous where it matters, and nothing here
+  // needs its promise.
   void queryClient.cancelQueries({ queryKey: ["test-plans"] });
   queryClient.setQueryData<TestPlansResponse>(["test-plans"], (prev) =>
     prev ? { ...prev, plans: prev.plans.map((p) => (p.id === id ? apply(p) : p)) } : prev
@@ -116,6 +111,60 @@ export function openWalkingSession(title: string) {
   ui.closeDialog();
   selectSession(title, { noKeyboard: true });
   ui.setLastTab(title, "agent");
+}
+
+/** `POST /api/instances/{title}/verify` — the bare request. `notes` is what
+ * the person wants checked (optional); the body is `{}` without it. */
+export function requestSessionVerify(title: string, notes = "") {
+  const n = notes.trim();
+  return api<SessionVerifyStarted>("/api/instances/" + encodeURIComponent(title) + "/verify", {
+    method: "POST",
+    json: n ? { notes: n } : {},
+  });
+}
+
+/** "Verify" on a session: its own agent writes its steps and works them in
+ * its terminal. Opens that terminal (its Agent tab) unless `open` is false —
+ * the person follows it and talks to it there. Resolves whether it started. */
+export async function startSessionVerify(title: string, opts: { notes?: string; open?: boolean } = {}): Promise<boolean> {
+  try {
+    await requestSessionVerify(title, opts.notes || "");
+    toast("Verifying " + title + " — its agent writes its steps and works them in its terminal");
+    await refreshInstances();
+    void refreshTestPlans();
+    if (opts.open !== false) openWalkingSession(title);
+    return true;
+  } catch (err) {
+    errorPop("Couldn't start verifying " + title, errMsg(err));
+    return false;
+  }
+}
+
+/** `POST /api/test-plans/{plan}/confirm` — the bare request. */
+export function requestVerifyConfirm(planId: string, verified: boolean, note = "") {
+  const n = note.trim();
+  return api<{ ok: boolean; plan: string }>(planPath(planId) + "/confirm", {
+    method: "POST",
+    json: n ? { verified, note: n } : { verified },
+  });
+}
+
+/** "Confirm verified" (true) / "Not verified…" (false, with what the person
+ * saw): a person closing a verify that had steps only a person could do.
+ * Resolves whether the server took it — a 409 means it wasn't waiting any
+ * more (someone else answered), said in the card that stays up. */
+export async function confirmVerified(planId: string, verified: boolean, note = ""): Promise<boolean> {
+  try {
+    await requestVerifyConfirm(planId, verified, note);
+    toast(verified ? "Confirmed verified" : "Marked not verified — the agent gets your note");
+    await refreshInstances();
+    void refreshTestPlans();
+    return true;
+  } catch (err) {
+    errorPop(verified ? "Couldn't confirm verified" : "Couldn't mark it not verified", errMsg(err));
+    void refreshInstances();
+    return false;
+  }
 }
 
 /** The bare delete request (the row's Delete and the bulk bar's). Deleting the
@@ -175,57 +224,6 @@ export async function startChecklistRun(
     // have moved for another reason (it 409s when a run is already going), so
     // take the server's word for where it actually is.
     void refreshTestPlans();
-  }
-}
-
-/** Ask for a new checklist, optionally saying what the last one got wrong.
- * True when the server accepted it.
- *
- * NO `confirm()`. This used to open a native OS modal from inside an
- * `aria-modal` dialog — a second window, painted by the browser rather than by
- * this app, whose only choices were OK and Cancel — and it was skipped
- * entirely when nothing had been answered yet, so the one press that could
- * lose work was the one that asked, and the common press asked nothing.
- *
- * Worse, it threw away the highest-signal input in the building. The person
- * pressing Rewrite has just READ the weak checklist and knows exactly what
- * should have been checked instead; the old route took no body at all, so a
- * second press re-ran the identical prompt and hoped for a different answer.
- * The composer replaces both: the warning is a line of text next to the box
- * (and only when there is something to lose — see `rewriteWarning`), and the
- * box is where the correction goes. */
-export async function regeneratePlan(plan: TestPlan, focus = ""): Promise<boolean> {
-  try {
-    await api(planPath(plan.id) + "/regenerate", {
-      method: "POST",
-      json: { focus: focus.trim() },
-    });
-    // 202 means accepted, not finished — the headless one-shot runs in a
-    // background thread for up to three minutes. "generating" is therefore
-    // true from this moment, and showing it immediately is what stops a
-    // second press while nothing visibly changes.
-    //
-    // Deliberately NOT followed by an invalidation: a re-read on this tick
-    // would race the server's own write and could hand back the pre-request
-    // state, flicking the row back to what it was. The truth arrives on its
-    // own — `session.test_plan_ready` bridges straight to a refresh
-    // (state/queries.ts), and the 10s poll is the backstop.
-    // `gen_started` moves with the state, and it has to: the row calls a
-    // `generating` plan stalled once its stamp is old enough, so patching the
-    // state without the clock would put this plan straight back into "writing
-    // stopped part-way" — the row it was just rescued from.
-    patchPlan(plan.id, (p) => ({
-      ...p,
-      state: "generating",
-      error: "",
-      gen_started: Date.now() / 1000,
-    }));
-    toast("Rewriting the behaviors for " + planName(plan) + " — up to three minutes");
-    return true;
-  } catch (err) {
-    errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
-    void refreshTestPlans();
-    return false;
   }
 }
 
@@ -335,96 +333,6 @@ export async function removePlan(
   }
 }
 
-/** Record (or, with result "", take back) an answer to one step. Resolves when
- * the server has taken it; rejects with its message — the step row reports it. */
-export async function recordStepAnswer(
-  plan: TestPlan,
-  step: TestStep,
-  result: TestStepResult,
-  note: string
-): Promise<void> {
-  // "Was this plan asking me for something, and has it stopped?" — asked of
-  // the badge's own predicate rather than of the open-step count, so it also
-  // covers the plan nobody ever ran: `openHumanSteps` requires a run, so a
-  // shipped checklist answered entirely by hand went from asking to answered
-  // with the count at 0 on both sides, and the one plan whose completion was
-  // most entirely the user's doing was the one that got no acknowledgement.
-  const wasAsking = isWaitingOnYou(plan);
-  const answer = await api<{ plan?: TestPlan }>(planPath(plan.id) + "/result", {
-    json: { step_id: step.id, result, note },
-  });
-  const next = answer?.plan;
-  if (next) patchPlan(plan.id, () => next);
-  // THE COMPLETION MOMENT, and the surface had none. You worked down a
-  // checklist, gave the last answer, and nothing said so: the row simply
-  // restyled itself and — a moment later — left for another group, which
-  // reads as the thing you were working on vanishing rather than as finishing
-  // it. The toast is the receipt, and it names where the row went so the
-  // disappearance is an outcome instead of a glitch.
-  if (next && wasAsking && !isWaitingOnYou(next)) {
-    // Named with the status the behaviors now wear (lib/behaviors), the same
-    // word their tile and card show — never a group heading nobody sees now.
-    toast("All yours are answered — " + planName(plan) + ": " + behaviorSummary(next).status);
-  }
-  void refreshTestPlans();
-}
-
-/** Change one step's wording or who answers it. Resolves whether it took:
- * the editor stays open with the typed text when it didn't. */
-export async function editPlanStep(
-  plan: TestPlan,
-  step: TestStep,
-  fields: Partial<TestStep>
-): Promise<boolean> {
-  try {
-    const r = await api<{ plan?: TestPlan }>(
-      planPath(plan.id) +
-        "/steps/" +
-        encodeURIComponent(step.id),
-      { method: "PATCH", json: fields }
-    );
-    if (r?.plan) patchPlan(plan.id, () => r.plan as TestPlan);
-    void refreshTestPlans();
-    return true;
-  } catch (err) {
-    errorPop("Couldn't change that behavior", errMsg(err));
-    return false;
-  }
-}
-
-/** Delete a step a person added (a generated one has no such button — see
- * `test_plans.remove_step`). */
-export async function removePlanStep(plan: TestPlan, step: TestStep): Promise<void> {
-  try {
-    const r = await api<{ plan?: TestPlan }>(
-      planPath(plan.id) + "/steps/" + encodeURIComponent(step.id),
-      { method: "DELETE" }
-    );
-    if (r?.plan) patchPlan(plan.id, () => r.plan as TestPlan);
-    void refreshTestPlans();
-  } catch (err) {
-    errorPop("Couldn't remove that behavior", errMsg(err));
-  }
-}
-
-/** Add a step of your own. Resolves to the server's copy of the plan (or
- * undefined); rejects with its message — the composer keeps its text then. */
-export async function addPlanStep(
-  plan: TestPlan,
-  fields: { text: string; expect: string; actor: TestStepActor; needs?: string[] }
-): Promise<TestPlan | undefined> {
-  const r = await api<{ plan?: TestPlan }>(planPath(plan.id) + "/steps", {
-    method: "POST",
-    json: fields,
-  });
-  return r?.plan;
-}
-
-/** Ask for exactly one checklist, by session title (the by-hand writer).
- *
- * 202 means a model call is now running for up to three minutes. Say so: the
- * plan appears immediately as "writing the plan", and a user who was not told
- * would read that quiet row as the button having failed. */
 /** A repo Verify can write a checklist in by branch (GET /api/test-plans/repos). */
 export interface VerifyRepo {
   name: string;

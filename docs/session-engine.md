@@ -272,6 +272,123 @@ every stored tmux session as a side effect of changing one field.
 - CLI attach (`Attach()`): Ctrl-Q detaches; a resize monitor uses `SIGWINCH` on
   Unix and 250 ms polling on Windows (WSL follows the Unix path).
 
+### Web terminal attach: never on the event loop
+
+Each terminal websocket (the agent pane `/api/instances/{title}/terminal` and
+the shell `/shell`) gets its own `tmux attach-session` client in a PTY
+(`mux.attach`). On 2026-11-10 that spawn ran on the event loop: ptyprocess
+`fork()`ed the 1.7 GB, ~50-thread server under WSL memory pressure, the fork
+never returned, and every request hung until the server was SIGKILLed — an
+app reload reconnects every pane, so it forked once per pane, back to back.
+`web/core/terminal_ws.py` now keeps every blocking step of a client off the
+loop:
+
+- **Attach** (`attach_off_loop`): the spawn runs on a daemon thread, at most
+  2 at once server-wide (a reload's panes queue rather than fork together),
+  within 15 s including the wait for a slot. Past it the socket gets an
+  `error` frame with the reason and closes with **1013** (try again later),
+  and the server keeps answering. The app's panes (`lib/terminals.ts`
+  `closeAction`) treat 1013 like any non-final code and reconnect with backoff
+  capped at 2.5 s, each retry a fresh 15 s attempt. A client that starts after
+  its socket gave up is reaped, never leaked; a spawn that never returns keeps
+  its slot, so at most 2 threads can ever be stuck. Guests' read-only attach
+  (`guest_terminal.spawn_readonly_attach`) takes the same path and cap.
+- **Writes** (`PtyWriter`): keystrokes reach the client in order on one thread
+  per socket — a blocking PTY write to a client that is not reading (a wedged
+  `tmux attach`, a long paste) would hold the loop.
+- **Detach** (`reap`): ptyprocess's `terminate` sleeps 0.1 s per signal and
+  `close` another 0.1 s; both now run on a thread (for the shell socket, whose
+  `pump_pty` terminates the client itself, through the `detaching` wrapper).
+  The fd closes only after the writer is done, so a late write never lands in
+  a reused fd.
+- Reads stay on the loop (`add_reader` → `os.read` of a readable fd), and a
+  resize is one `ioctl`.
+
+A thread alone does not make a slow fork harmless: CPython forks while
+holding the GIL, and the copy of the page tables stalls every thread (≈13 ms
+at 600 MB resident, measured; unbounded under memory pressure).
+So `mux.attach` starts every client with `mux.spawn_pty`: `posix_spawn` (glibc's
+`clone(CLONE_VM|CLONE_VFORK)`: nothing copied, no Python in the child, ~1 ms):
+`openpty`, the window size set on the slave, the child a session leader that
+opens the slave by path as fd 0 — on Linux that makes it the controlling tty
+with the child's group in the foreground, as `forkpty` does, so resizes still
+SIGWINCH the client and closing the master still hangs it up. It returns the
+same `ptyprocess.PtyProcess`. Off Linux it is ptyprocess's spawn. Tests that
+must not start a real client stub `mux.spawn_pty`.
+
+Every PTY the server starts goes through it — nothing forks on Linux: the
+terminal clients (`mux.attach`), the provider and `gh` login terminals
+(`core.pty_run`'s command PTY), the ticket log stream
+(`core.terminal.spawn_tail`) and the engine's own PTY (`session/tmux/pty.py`'s
+`Pty.start`: the short `tmux new-session -d` at create, the `attach-session`
+kept as `ptmx` at restore). `tests/unit/test_no_fork_pty.py` pins each site,
+and runs them for real with `os.fork`/`pty.fork` made to fail.
+
+**A CPython without `setsid=`.** `os.posix_spawn(setsid=True)` exists only if
+the CPython was COMPILED against a libc whose headers define
+`POSIX_SPAWN_SETSID` (glibc ≥ 2.26). python-build-standalone — the CPython uv
+installs when the system has no 3.12, e.g. Debian bookworm (3.11), since
+`install.sh` pins 3.12 — is built against an older glibc, so there it raises
+`NotImplementedError: posix_spawn: setsid unavailable on this platform`
+(before anything is spawned), even though the glibc it runs on has the flag.
+That is why the first move of the engine's PTY here (PR #348) failed the
+bare-container quickstart: every `tmux new-session` raised, and
+`mindflock new` reported "failed to start" (found on PR #350; the
+quickstart's failure diagnostic re-runs this spawn with the installed tool's
+interpreter). On `NotImplementedError` `spawn_pty` calls libc's own
+`posix_spawn` through ctypes with `POSIX_SPAWN_SETSID` (0x80) and the same
+file actions: the same `clone`, the GIL released, no Python in the child. A
+libc older than the flag refuses it with `OSError`.
+`tests/unit/test_engine_pty_spawn.py` stands that interpreter in (an
+`os.posix_spawn` that refuses `setsid=`) and checks the child is still a
+session leader on its PTY, in the foreground, at the given size, and that
+the engine's real tmux create and restore work, without a fork.
+
+`spawn_pty(argv, *, dimensions=(24, 80), env=None, cwd=None)` contract: it
+returns a `ptyprocess.PtyProcess`; a missing command raises
+`FileNotFoundError` with ptyprocess's exact message; the child inherits only
+fds 0/1/2. The `posix_spawn` path is gated on `_POSIX_SPAWN_PTY` (Linux with
+`os.posix_spawn`) — on macOS opening a tty does not make it the controlling
+tty, so it falls back.
+
+`cwd`: Python's `os.posix_spawn` has no chdir file action (glibc's
+`posix_spawn_file_actions_addchdir_np` is not exposed), and `chdir`-ing the
+server around the spawn would move every thread's cwd. So with a `cwd` the
+child is `/bin/sh -c 'cd "$1" && shift && exec "$@"' sh <cwd> <command>
+<args…>`: the directory (made absolute, so `CDPATH` never applies) and the
+argv are positional parameters, never pasted into the script, so nothing is
+quoted, split or expanded; `exec` replaces the shell (same pid, same PTY).
+As with ptyprocess, `argv[0]` is then the resolved command path and
+`launch_dir` is set. Differences from ptyprocess: the shell's `cd` sets `PWD`
+to `cwd` (ptyprocess left the server's stale `PWD`), and a missing `cwd`
+raises `FileNotFoundError` before anything is spawned (ptyprocess's forked
+child raised it inside a copy of the server).
+
+**Limits and recovery.** A spawn that never returns holds its slot for
+good: after two, every attach times out after 15 s until the server
+restarts (nothing frees a wedged slot, and no health signal shows it). Look
+for these WARNINGs on the `mindflock.terminal` logger: *attach timed out
+after 15 s (queued|spawning)*, *a PTY client started after its socket gave
+up; reaped*, *PTY writer still blocked; leaving its fd open* (the writer was
+still blocked 2 s into a detach, so the fd is left open rather than risk a
+write into a reused fd number). Each terminal socket costs up to three
+daemon threads (`pty-attach`, `pty-writer`, `pty-reap`). Not yet routed
+through `attach_off_loop`: the assistant terminal, `core.pty_run`'s tmux
+attach, peer-forwarded terminals (`term_open`) and the ticket log stream
+spawn on the loop, but through `mux.spawn_pty`, so by `posix_spawn` — no
+fork, ~1 ms.
+
+`core.terminal.pump_pty` itself (every websocket terminal: session shell,
+assistant, ticket log, login attach, peer terminals) keeps the same rules:
+input goes through a `PtyWriter`, and its teardown — terminate, let the
+writer finish, then close the PTY — runs on a `pty-detach` thread the pump
+awaits, so the client is gone by the time it returns and no sleeping
+`PtyProcess.__del__` is left for the loop. A `detaching` client (the shell
+socket) is handed to `reap` together with the pump's writer. The no-tmux
+login terminal (`core.pty_run.bridge`) writes through a `PtyWriter` too, and
+`PtyRun.terminate` (`pty_run.kill`/`start`, called from request handlers)
+kills on a `pty-run-kill` thread.
+
 ### Other people's keystrokes
 
 The owner's own browsers attach a writable `tmux attach-session` client per

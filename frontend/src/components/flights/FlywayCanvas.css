@@ -271,6 +271,14 @@
   color: var(--tone-muted);
 }
 
+.fl-box-chip.tone-verifying {
+  color: var(--tone-verifying, #8b6cf0);
+}
+
+.fl-box-chip.tone-verified {
+  color: var(--fl-ink-working);
+}
+
 .fl-box-dots {
   font-size: 11px;
   letter-spacing: 2px;

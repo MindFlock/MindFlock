@@ -604,7 +604,9 @@ typed into your terminal.
 
 → `{title, branch, folder, base_sha, status, ready, report_back, reason?,
 prompt_delivery?, order?, warnings?, hint?}`. `prompt_delivery: "held"` and
-`order: {held, after, why, fence}` mean MindFlock is holding its task.
+`order: {held, after, why, fence, agent_deferred}` mean MindFlock is holding
+its task — and, with `agent_deferred: true`, its agent: it starts when its
+turn comes (see [Order](#order)).
 
 How the worker is created:
 
@@ -1711,13 +1713,23 @@ fence is in place, so it is never unfenced for a moment) or later
 
 ### Order
 
-A worker can be created at once (worktree, fence, agent) with its task
-**held**: it waits, idle, in the worker's own prompt queue with the queue
-switched off and marked held — the task is parked before the worker is
-registered, nothing that queues a message switches it on, and the drain never
-sends a held queue. When its turn comes (and its fence is in place) MindFlock
-lifts the hold and the ordinary drain types the task in. A spawn with no task
-has nothing to hold: it runs at once (its fence still lands). What decides its turn:
+A worker can be created at once (worktree, branch, fence) with its task
+**held**: it waits in the worker's own prompt queue with the queue switched
+off and marked held — the task is parked before the worker is registered,
+nothing that queues a message switches it on, and the drain never sends a held
+queue. **Its agent waits too**: a held worker runs no agent CLI (no tmux, no
+memory) until its turn, so a serial chain of five costs one agent at a time,
+not five idle ones. Its row reads `running` with `activity: "offline"` and
+`order.word: "waiting"`; nothing revives it or holds it "offline after a
+crash", because it never ran. When its turn comes (and its fence is in place)
+MindFlock fast-forwards its branch (below), starts its agent through the
+launch gate as an automatic start — while memory is short it waits in the
+gate's queue, its row saying *Waiting for memory* — and lifts the hold, and
+the ordinary drain types the task in once the agent is idle. The user can
+press **Start** on a held worker to run its agent early (a fresh
+conversation); its task still waits for its turn. A spawn with no task has
+nothing to hold: it starts at once (its fence still lands). What decides its
+turn:
 
 - **`after`** (on `spawn_session`): every named session is done first. A
   name may be a worker you have not spawned yet.
@@ -1745,7 +1757,8 @@ member (its team run fences it to the plan's paths).
 
 **Starting from the work it waited for.** When a held worker in its own
 worktree is released with its branch untouched (no commits, a clean tree, an
-idle agent), MindFlock fast-forwards it to **your current HEAD** — what it
+agent that is idle or not started yet — the fast-forward runs before a held
+worker's agent starts), MindFlock fast-forwards it to **your current HEAD** — what it
 would have forked from had you spawned it now — and moves its base commit
 with it, so its diff and PR stay its own work. A predecessor's branch you
 have **not** merged by then (the release follows its report within seconds)

@@ -16,10 +16,10 @@ import socket
 import threading
 import time
 
-import ptyprocess
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.session import mux
 from backend.web import server
 from backend.web.core import events as events_mod
 from backend.web.core import ownership as own
@@ -435,7 +435,7 @@ def term(app, monkeypatch):
         return procs[-1]
 
     monkeypatch.setattr(server, "_ensure_agent_session", lambda inst, t: ("s", None))
-    monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", spawn)
+    monkeypatch.setattr(mux, "spawn_pty", spawn)
     monkeypatch.setattr(server, "_ATTACH_PROBE_GRACE_S", 0.0)
     return procs
 

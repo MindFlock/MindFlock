@@ -18,11 +18,11 @@ from __future__ import annotations
 import json
 import os
 
-import ptyprocess
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from backend.session import mux
 from backend.session.storage import Status
 from backend.web import server
 from backend.web.core import agent_sessions
@@ -104,9 +104,7 @@ def test_after_resume_the_helper_launches_again(paused, monkeypatch):
 def test_the_terminal_socket_closes_4423_and_launches_nothing(paused, monkeypatch):
     _no_provider(monkeypatch)  # the REAL helper runs: it must not get this far
     spawned = []
-    monkeypatch.setattr(
-        ptyprocess.PtyProcess, "spawn", lambda *a, **k: spawned.append(a)
-    )
+    monkeypatch.setattr(mux, "spawn_pty", lambda *a, **k: spawned.append(a))
     c = TestClient(server.app)
     with c.websocket_connect("/api/instances/p/terminal") as ws:
         frame = json.loads(ws.receive_text())
@@ -152,7 +150,7 @@ def test_the_terminal_attaches_once_resumed(paused, monkeypatch):
         procs.append(_FakeProc())
         return procs[-1]
 
-    monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", spawn)
+    monkeypatch.setattr(mux, "spawn_pty", spawn)
 
     def resume():
         paused.Status = Status.Running
@@ -186,7 +184,7 @@ def test_the_shell_socket_still_attaches_while_paused(paused, monkeypatch):
         procs.append((a, _FakeProc()))
         return procs[-1][1]
 
-    monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", spawn)
+    monkeypatch.setattr(mux, "spawn_pty", spawn)
     c = TestClient(server.app)
     with c.websocket_connect("/api/instances/p/shell") as ws:
         ws.receive_text()  # the driver frame: attached

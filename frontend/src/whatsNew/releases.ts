@@ -37,6 +37,78 @@ export interface WhatsNewRelease {
 
 export const RELEASES: WhatsNewRelease[] = [
   {
+    version: "0.14.7",
+    date: "2026-11-10",
+    big: false,
+    headline: "MindFlock leaves your git staging alone.",
+    features: [
+      {
+        title: "Your staged files stay yours",
+        body:
+          "Showing a session's changes no longer marks new files as added or stages deletions in your repo. What you stage is only what you staged.",
+      },
+      {
+        title: "Verify, said plainly",
+        body:
+          "Voice now says \"needs you to confirm it's verified\" and \"failed its verify\", and the desktop's \"what needs me\" includes sessions waiting on your confirm.",
+      },
+    ],
+  },
+  {
+    version: "0.14.6",
+    date: "2026-11-10",
+    big: false,
+    headline: "Terminals work on every Linux install.",
+    features: [
+      {
+        title: "Terminals on fresh Linux installs",
+        body:
+          "On a Linux machine whose Python was set up by the installer, session terminals and sign-in terminals failed to open since 0.14.4. They open again, and starting a session never copies the whole server anymore.",
+      },
+    ],
+  },
+  {
+    version: "0.14.5",
+    date: "2026-11-10",
+    big: false,
+    headline: "Verify on your phone, and a steadier server.",
+    features: [
+      {
+        title: "Confirm verified from the phone",
+        body:
+          "The phone shows Verifying and Verified like the desktop, lists the steps that need you, and has Confirm verified and Not verified buttons, plus a Verify action in a session's menu.",
+      },
+      {
+        title: "Login terminals can't freeze the server",
+        body:
+          "Sign-in terminals and the ticket log no longer copy the whole server to start, and terminal typing and closing happen off its main thread.",
+      },
+    ],
+  },
+  {
+    version: "0.14.4",
+    date: "2026-11-10",
+    big: false,
+    headline: "Verify is the session's own agent checking its work.",
+    features: [
+      {
+        title: "Verifying, in the session",
+        body:
+          "Verify asks the session's own agent to write real test steps for what it built and work through them while you watch. A Verifying pill shows it is at work, and anything only you can do, it tells you.",
+      },
+      {
+        title: "You confirm when a step is yours",
+        body:
+          "If any step needs a person, Verify waits for you: Confirm verified or Not verified, right on the pane, the bell or the route's stop.",
+      },
+      {
+        title: "No more white panes",
+        body:
+          "Terminals repaint when the window comes back, so a pane no longer stays blank until you scroll. New agents also stop waiting on a memory reading that was never short.",
+      },
+    ],
+  },
+  {
     version: "0.14.3",
     date: "2026-11-10",
     big: false,

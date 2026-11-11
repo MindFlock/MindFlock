@@ -36,12 +36,18 @@ TWO MODEL INTERACTIONS, OPPOSITE POSTURES. That asymmetry is the whole design:
   reports back through a file (``.mindflock_verify.json``) that the due loop
   polls. Asking *what to check* is cheap and safe; *checking* is neither.
 
-  WHEN THE SESSION THAT WROTE THE WORK IS STILL OPEN, the run is handed to IT
-  (``build_run_prompt(..., in_session=True)``; the run record carries
-  ``in_session``): the walk is a prompt typed into that session's own agent —
-  queued while it is mid-turn — so the person sees the steps as that agent's
-  tasks and can talk to it while it walks. No second session, no checkout. A
-  separate checker session is the fallback for a plan whose session is gone.
+  WHEN THE SESSION THAT WROTE THE WORK IS STILL OPEN, Verify is SELF-VERIFY
+  (:func:`build_self_verify_prompt`; the run record carries ``in_session`` and
+  ``self``): ONE prompt typed into that session's own agent — queued while it
+  is mid-turn — "verify the work you just did". No steps are written for it:
+  the agent comes up with its own, writes them into the results file, puts
+  them on its todo list and walks them, and tells the person about any step
+  only a person can do. The run's ``outcome`` (:data:`OUTCOMES`) is the
+  session row's Verify pill; ``needs_you`` waits for a person to confirm
+  (:func:`confirm_verify`). No second session, no checkout. A separate
+  checker session walking the plan's written steps is the fallback for a
+  plan whose session is gone — the only path that still needs the one-shot
+  author below.
 
 WHAT THE MODEL IS NOT ALLOWED TO DECIDE. Every step carries an ``actor``:
 ``"agent"`` for anything a shell or the agent's own tools can settle,
@@ -185,7 +191,15 @@ __all__ = [
     "parse_answer",
     "parse_plan",
     "build_run_prompt",
+    "build_self_verify_prompt",
     "build_fix_prompt",
+    "OUTCOMES",
+    "confirm_verify",
+    "confirm_steps",
+    "adopt_reported_steps",
+    "reported_results",
+    "verify_status",
+    "verify_for_session",
     "failed_steps",
 ]
 
@@ -274,8 +288,8 @@ TIMEOUT_MERGE_BASE = 30.0
 #: git-excluded and can never land in a diff or a ``git add -A``. Named here so
 #: the prompt that asks for it and the poller that reads it cannot drift apart.
 RESULT_FILE = ".mindflock_verify.json"
-#: The first words of a walk handed to the plan's OWN session
-#: (``build_run_prompt(..., in_session=True)``) — how a Verify stop tells the
+#: The first words of a self-verify handed to the plan's OWN session
+#: (:func:`build_self_verify_prompt`) — how a Verify stop tells the
 #: walk still sitting on that session's prompt queue (not started: no clock
 #: runs) from one the agent has picked up.
 WALK_MARK = "MindFlock Verify:"
@@ -301,6 +315,17 @@ STATES = ("generating", "generated", "due", "running", "done", "failed")
 #: looks like; ``blocked`` is an agent saying "a person has to do this one".
 RESULTS = ("pass", "fail", "blocked", "")
 ACTORS = ("agent", "human")
+#: A verify run's outcome — the Verify pill on the session's row (the row's
+#: ``verify`` field, :func:`verify_status`). ``verifying`` while the agent
+#: works; then ``passed`` (every agent step passed, nothing for a person),
+#: ``failed`` (an agent step failed, or a person said it doesn't work),
+#: ``needs_you`` (steps only a person can do — it stays there until a person
+#: confirms, :func:`confirm_verify`) or ``blocked`` (the check stopped before
+#: it could finish: closed, its session gone, or no steps written).
+OUTCOMES = ("verifying", "needs_you", "passed", "failed", "blocked")
+#: How long a settled ``passed`` / ``failed`` / ``blocked`` pill stays on the
+#: row before the row's ``verify`` goes back to null.
+VERIFY_SHOW_S = 600.0
 
 #: --- how much of the change the model gets to read ------------------------
 #:
@@ -1199,11 +1224,36 @@ def _normalize_run(raw, steps: List[dict]) -> dict:
         # Once the plan ships, such a run is history rather than the current
         # answer (:func:`_current_run`), so it cannot close the plan.
         "prelive": bool(raw.get("prelive")),
+        # SELF-VERIFY (:func:`start_run` ``self_authored=True``): the session's
+        # own agent WROTE this run's steps (in its results file) and walked
+        # them — the plan's steps are whatever it reported. ``confirm``: a
+        # person signs the check off even when every agent step passed.
+        # ``outcome`` is the run's verdict in the Verify pill's words
+        # (:data:`OUTCOMES`, "" for a run written before it existed — those
+        # never show a pill), ``outcome_at`` when it settled, ``outcome_note``
+        # the person's note on a confirm or why a check stopped. Each key is
+        # present only when set, so every older run keeps its exact shape.
+        **({"self": True} if raw.get("self") else {}),
+        **({"confirm": True} if raw.get("confirm") else {}),
+        **_outcome_fields(raw),
         # Always recomputed. The stored value is a convenience for the client;
         # recomputing keeps a half-written or hand-edited file honest, and
         # ``record_result`` would otherwise have to remember to refresh it.
         "verdict": _verdict(steps, results),
     }
+
+
+def _outcome_fields(raw: dict) -> dict:
+    """A stored run's ``outcome`` / ``outcome_at`` / ``outcome_note``, only
+    when it has an outcome (see :func:`_normalize_run`)."""
+    outcome = str(raw.get("outcome") or "").strip().lower()
+    if outcome not in OUTCOMES:
+        return {}
+    out = {"outcome": outcome, "outcome_at": _f(raw.get("outcome_at"))}
+    note = _text(raw.get("outcome_note"), 500)
+    if note:
+        out["outcome_note"] = note
+    return out
 
 
 def _normalize(plan_id: str, entry) -> dict:
@@ -1943,8 +1993,23 @@ def start_run(
     checkout: str = "",
     walk: str = WALK_AGENT,
     in_session: bool = False,
+    self_authored: bool = False,
+    confirm: bool = False,
+    tip_sha: str = "",
 ) -> Optional[dict]:
     """A verify session has been created for this plan.
+
+    ``self_authored=True`` is SELF-VERIFY: the session's own agent was told
+    to verify the work it just did — write its own steps into the results
+    file and walk them (:func:`build_self_verify_prompt`). The plan's
+    generated steps are dropped (a person's own, ``manual``, are kept and
+    handed to the agent), nothing a person answered is carried (the steps are
+    new), and the run is stamped ``self`` (plus ``confirm``: a person signs
+    it off even when every agent step passes). ``tip_sha``, when given, is
+    the session's HEAD now — what the tree check holds the walk to.
+
+    Every run opened here starts with ``outcome`` "verifying" — the Verify
+    pill (:func:`verify_status`); :func:`finish_run` settles it.
 
     ``in_session=True``: the run was handed to the plan's OWN session
     (``session_title`` is that session) rather than a checker; stamped on the
@@ -1994,19 +2059,32 @@ def start_run(
         # newest run was a pre-merge check starts clean (``_current_run``).
         carried = {}
         current = _current_run(plan)
-        if current is not None:
+        if current is not None and not self_authored:
             for step_id, entry in (current.get("results") or {}).items():
                 if entry.get("by") == "human" and entry.get("result"):
                     carried[step_id] = dict(entry)
+        if self_authored:
+            # The agent writes this run's steps itself; only a person's own
+            # steps survive (it is told to walk them too).
+            plan["steps"] = [s for s in plan["steps"] if s.get("manual")]
+            if tip_sha:
+                plan["tip_sha"] = str(tip_sha)
+        now = time.time()
         run = {
-            "at": time.time(),
+            "at": now,
             "by": "agent",
             "session": session_title,
             "results": carried,
             "verdict": _verdict(plan["steps"], carried),
             "prelive": prelive,
             "walk": walk,
+            "outcome": "verifying",
+            "outcome_at": now,
         }
+        if self_authored:
+            run["self"] = True
+        if confirm:
+            run["confirm"] = True
         if in_session:
             run["in_session"] = True
         if where:
@@ -2052,6 +2130,10 @@ def cancel_run(plan_id: str) -> Optional[dict]:
             and not runs[-1].get("results")
         ):
             runs.pop()
+        elif runs and runs[-1].get("outcome") == "verifying":
+            # Cancelled, not settled: no pill claims a verdict about it.
+            for key in ("outcome", "outcome_at", "outcome_note"):
+                runs[-1].pop(key, None)
         plan["run_session"] = ""
         # A RECORDED FAILURE IS ABOUT THE ATTEMPT, NOT ABOUT THE PLAN. The row
         # now says the stored sentence out loud (``errorHeadline`` in verify.ts),
@@ -2208,8 +2290,17 @@ def finish_run(
     tested_sha: str = "",
     expected_sha: str = "",
     target: str = "",
+    closed: str = "",
 ) -> Optional[dict]:
     """Fold a finished run's answers in and close the plan out.
+
+    The run's ``outcome`` (the Verify pill) is settled here too, for a run
+    opened with one (:func:`start_run`): see :func:`_outcome`. ``closed`` is
+    the reason a driver closed the run before it finished
+    (``test_plans_driver.close_run``) — then it is ``blocked`` (``failed``
+    when something already failed) with that reason as its note. In a
+    SELF-VERIFY run a person's step the agent left unanswered is simply not
+    recorded: it is the person's, and the outcome waits on them.
 
     ``results`` is the list the verify session wrote into ``RESULT_FILE``:
     ``[{"id": "s1", "result": "pass", "note": ""}]``. It comes from a model, so
@@ -2315,6 +2406,13 @@ def finish_run(
                 # back, on any re-run, because the withdrawal outlives the run.
                 continue
             value = str(entry.get("result") or "").strip().lower()
+            if (
+                not value
+                and run.get("self")
+                and by != "human"
+                and actors.get(step_id) == "human"
+            ):
+                continue  # the person's step: theirs to confirm
             if value not in RESULTS or not value:
                 value = "blocked"
             note = _text(entry.get("note"))
@@ -2352,6 +2450,12 @@ def finish_run(
                     % (short, cell.get("note") or "")
                 ).strip()
         run["verdict"] = _verdict(plan["steps"], run["results"])
+        if run.get("outcome"):
+            run["outcome"], why = _outcome(plan["steps"], run, closed)
+            run["outcome_at"] = now
+            run.pop("outcome_note", None)
+            if why:
+                run["outcome_note"] = _text(why, 500)
         # A CHECK BEFORE MERGE DOES NOT CLOSE THE PLAN. It used to: ``done``
         # here unconditionally, and the liveness loop only re-asks plans in
         # ``generated`` — so checking a branch before merging it cost you the
@@ -2364,6 +2468,339 @@ def finish_run(
         plan["run_session"] = ""
 
     return _mutate(plan_id, apply)
+
+
+def _outcome(steps: List[dict], run: dict, closed: str = "") -> tuple:
+    """A finished run's ``(outcome, note)`` (:data:`OUTCOMES`). Pure.
+
+    Any step answered ``fail`` → ``failed``. A run a driver ``closed`` before
+    it finished → ``blocked`` with that reason; so is one with no steps at all
+    (the agent wrote none — "everything passed" is the one thing an empty
+    check must not say). Any step without a ``pass`` — a person's step, an
+    agent step it could not settle (``blocked``), one never answered — or a
+    run that asks a person to sign off (``confirm``) → ``needs_you``: a person
+    confirms through :func:`confirm_verify`. Otherwise ``passed``."""
+    results = run.get("results") or {}
+    seen = [(results.get(s["id"]) or {}).get("result", "") for s in steps]
+    if any(r == "fail" for r in seen):
+        return "failed", ""
+    if closed:
+        return "blocked", closed
+    if not steps:
+        return "blocked", "the agent wrote no steps to check"
+    if run.get("confirm") or any(r != "pass" for r in seen):
+        return "needs_you", ""
+    return "passed", ""
+
+
+def confirm_steps(plan: dict) -> List[dict]:
+    """The steps a person is asked to check before confirming a ``needs_you``
+    verify: every step of the newest run without a ``pass`` (a person's step,
+    or an agent step it could not settle). Pure."""
+    runs = plan.get("runs") or []
+    results = (runs[-1].get("results") or {}) if runs else {}
+    return [
+        s
+        for s in plan.get("steps") or []
+        if (results.get(s["id"]) or {}).get("result", "") not in ("pass", "fail")
+    ]
+
+
+class NotNeedsYou(ValueError):
+    """:func:`confirm_verify` on a plan whose verify is not waiting on a
+    person (the route's 409)."""
+
+
+def confirm_verify(plan_id: str, verified: bool, note: str = "") -> Optional[dict]:
+    """A PERSON confirms a ``needs_you`` verify → the plan, or ``None`` when
+    it is gone. Raises :class:`NotNeedsYou` when the newest run's outcome is
+    not ``needs_you`` (still verifying, already settled, never started).
+
+    ``verified=True``: every step still waiting (:func:`confirm_steps`) is
+    answered ``pass`` by the person and the outcome is ``passed``.
+    ``verified=False``: they are answered ``fail`` with the person's note (or
+    "a person said it doesn't work") and the outcome is ``failed`` — so the
+    failures read like any other (``failed_steps``, Fix…, the flight's halt).
+    The note lands on the run as ``outcome_note`` either way."""
+    now = time.time()
+    note = _text(note, 500)
+
+    def apply(plan: dict) -> None:
+        run = plan["runs"][-1] if plan["runs"] else None
+        if run is None or run.get("outcome") != "needs_you":
+            raise NotNeedsYou(
+                "this check isn't waiting for a person (%s)"
+                % ((run or {}).get("outcome") or "no check")
+            )
+        value = "pass" if verified else "fail"
+        cell_note = note or ("" if verified else "a person said it doesn't work")
+        for step in confirm_steps(plan):
+            run["results"][step["id"]] = {
+                "result": value,
+                "note": cell_note,
+                "at": now,
+                "by": "human",
+            }
+        run["verdict"] = _verdict(plan["steps"], run["results"])
+        run["outcome"] = "passed" if verified else "failed"
+        run["outcome_at"] = now
+        run.pop("outcome_note", None)
+        if note:
+            run["outcome_note"] = note
+        plan["error"] = ""
+
+    return _mutate(plan_id, apply)
+
+
+def _reported_steps(plan: dict, raw_steps: list) -> List[dict]:
+    """A self-verify report's steps normalized for ``plan`` (pure): each like
+    any other step (an unknown actor or a shell hazard is a person's —
+    :func:`_normalize_step`), the agent's ids kept (its results key off
+    them), a repeated or missing one renumbered, then a person's own
+    (``manual``) steps the report left out."""
+    steps: List[dict] = []
+    seen: set = set()
+    for entry in raw_steps:
+        if len(steps) >= MAX_STEPS:
+            break
+        if not isinstance(entry, dict):
+            continue
+        step = _normalize_step(
+            {k: entry.get(k) for k in ("id", "text", "expect", "actor", "needs")},
+            len(steps),
+        )
+        if step is None:
+            continue
+        sid = str(step["id"])[:40]
+        n = len(steps) + 1
+        while not sid or sid in seen:
+            sid = "s%d" % n
+            n += 1
+        step["id"] = sid
+        seen.add(sid)
+        steps.append(step)
+    for kept in plan.get("steps") or []:
+        if kept.get("manual") and kept["id"] not in seen and len(steps) < MAX_STEPS:
+            steps.append(kept)
+            seen.add(kept["id"])
+    return _prune_needs(steps)
+
+
+def _adopting(plan: Optional[dict]) -> bool:
+    """Whether ``plan``'s newest run is a running self-verify of its own."""
+    if plan is None or plan.get("state") != "running" or not plan.get("runs"):
+        return False
+    run = plan["runs"][-1]
+    return bool(run.get("self")) and run.get("session") in ("", plan["run_session"])
+
+
+def adopt_reported_steps(plan_id: str, raw_steps) -> Optional[dict]:
+    """A SELF-VERIFY agent's own steps (its results file's ``steps``) become
+    the plan's steps → the plan, or ``None`` when nothing changed / the plan
+    is gone / its newest run is not a running self-verify. Answers to steps
+    the report no longer has are dropped. The store is only written when the
+    steps actually changed (the poller asks every few seconds)."""
+    if not isinstance(raw_steps, list):
+        return None
+    current = get(plan_id)
+    if (
+        not _adopting(current)
+        or _reported_steps(current, raw_steps) == current["steps"]
+    ):
+        return None
+    changed = {"v": False}
+
+    def apply(plan: dict) -> None:
+        if not _adopting(plan):
+            return
+        steps = _reported_steps(plan, raw_steps)
+        if steps == plan["steps"]:
+            return
+        run = plan["runs"][-1]
+        ids = {s["id"] for s in steps}
+        plan["steps"] = steps
+        run["results"] = {k: v for k, v in run["results"].items() if k in ids}
+        run["verdict"] = _verdict(steps, run["results"])
+        changed["v"] = True
+
+    plan = _mutate(plan_id, apply)
+    return plan if changed["v"] else None
+
+
+def reported_results(data: dict) -> list:
+    """The answers in a results file: its ``results`` list, else — for a
+    SELF-VERIFY report, whose ``steps`` carry their own ``result`` / ``note``
+    — its ``steps``. ``[]`` for neither."""
+    if not isinstance(data, dict):
+        return []
+    for key in ("results", "steps"):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            return value
+    return []
+
+
+def _first_sentence(text: str, limit: int = 200) -> str:
+    text = " ".join(str(text or "").split())
+    if not text:
+        return ""
+    cut = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
+    return cut[:limit]
+
+
+def _plural(n: int, word: str) -> str:
+    return "%d %s%s" % (n, word, "" if n == 1 else "s")
+
+
+def verify_status(plan: dict, now: Optional[float] = None) -> Optional[dict]:
+    """The session row's ``verify`` (docs/web-api.md) for this plan's newest
+    run, or ``None``: a run without an ``outcome`` (written before the pill
+    existed), or one that settled ``passed`` / ``failed`` / ``blocked`` more
+    than :data:`VERIFY_SHOW_S` ago. Pure.
+
+    ``{"state", "plan", "steps": {"total", "agent_done", "human"},
+    "human_steps": [{"id", "text", "expect"}], "failed_steps": [{"id",
+    "text", "note"}], "detail", "at"}``. A run still marked verifying whose
+    plan is no longer running it (released: its window died, the deadline
+    passed) reads ``blocked`` with the plan's sentence."""
+    now = time.time() if now is None else now
+    runs = plan.get("runs") or []
+    if not runs:
+        return None
+    run = runs[-1]
+    state = str(run.get("outcome") or "")
+    if state not in OUTCOMES:
+        return None
+    at = float(run.get("outcome_at") or run.get("at") or 0.0)
+    detail_override = ""
+    if state == "verifying" and not (
+        plan.get("state") == "running"
+        and str(plan.get("run_session") or "") == str(run.get("session") or "")
+    ):
+        state = "blocked"
+        at = float(run.get("progress_at") or run.get("at") or 0.0)
+        detail_override = _first_sentence(plan.get("error") or "") or (
+            "The check stopped before it finished."
+        )
+    if state in ("passed", "failed", "blocked") and now - at > VERIFY_SHOW_S:
+        return None
+    steps = plan.get("steps") or []
+    results = run.get("results") or {}
+    agent = [s for s in steps if s.get("actor") == "agent"]
+    agent_done = sum(1 for s in agent if (results.get(s["id"]) or {}).get("result"))
+    human_steps = [
+        {
+            "id": s["id"],
+            "text": s.get("text") or "",
+            "expect": s.get("expect")
+            or str((results.get(s["id"]) or {}).get("note") or ""),
+        }
+        for s in confirm_steps(plan)
+    ]
+    failed = [
+        {
+            "id": s["id"],
+            "text": s.get("text") or "",
+            "note": str((results.get(s["id"]) or {}).get("note") or ""),
+        }
+        for s in steps
+        if (results.get(s["id"]) or {}).get("result") == "fail"
+    ]
+    if detail_override:
+        detail = detail_override
+    elif state == "verifying":
+        if not steps:
+            detail = "The agent is working out how to check its work."
+        else:
+            detail = "The agent is checking its work: %d of %s done." % (
+                agent_done,
+                _plural(len(agent), "step"),
+            )
+    elif state == "needs_you":
+        detail = "%s need%s you — check %s, then confirm." % (
+            _plural(len(human_steps), "step"),
+            "s" if len(human_steps) == 1 else "",
+            "it" if len(human_steps) == 1 else "them",
+        )
+        if not human_steps:
+            detail = "Every step passed — confirm it works."
+    elif state == "passed":
+        detail = "All %s passed." % _plural(len(steps), "step")
+    elif state == "failed":
+        if failed:
+            detail = "%s failed: %s." % (
+                _plural(len(failed), "step"),
+                _one_line(failed[0]["text"], 160).rstrip("."),
+            )
+        else:
+            detail = "It failed."
+    else:
+        detail = _first_sentence(run.get("outcome_note") or "") or (
+            "The check stopped before it finished."
+        )
+        if detail and not detail.endswith((".", "!", "?")):
+            detail += "."
+        detail = detail[:1].upper() + detail[1:]
+    return {
+        "state": state,
+        "plan": str(plan.get("id") or ""),
+        "steps": {
+            "total": len(steps),
+            "agent_done": agent_done,
+            "human": sum(1 for s in steps if s.get("actor") == "human"),
+        },
+        "human_steps": human_steps,
+        "failed_steps": failed,
+        "detail": detail,
+        "at": at,
+    }
+
+
+#: ``verify_index``'s memo: the store's ``(mtime_ns, size)`` → the newest-run
+#: facts each session title maps to. The row build asks once per session per
+#: poll; re-reading the store each time would be a file read per row.
+_INDEX_MEMO: dict = {"key": None, "plans": {}}
+_INDEX_LOCK = threading.Lock()
+
+
+def _verify_plans_by_title() -> Dict[str, dict]:
+    """session title → the plan whose newest run has an outcome and belongs
+    to it (the run's session, else the plan's own id), newest run winning."""
+    try:
+        st = os.stat(store_path())
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    with _INDEX_LOCK:
+        if key is not None and _INDEX_MEMO["key"] == key:
+            return _INDEX_MEMO["plans"]
+    out: Dict[str, dict] = {}
+    rank: Dict[str, float] = {}
+    for plan in list_plans() if key is not None else []:
+        runs = plan.get("runs") or []
+        if not runs or not runs[-1].get("outcome"):
+            continue
+        at = float(runs[-1].get("at") or 0.0)
+        titles = [str(runs[-1].get("session") or "")]
+        if not runs[-1].get("in_session"):
+            # A checker's run: the work's own session (the plan's id) too.
+            titles.append(str(plan["id"]))
+        for title in titles:
+            if title and at >= rank.get(title, -1.0):
+                out[title], rank[title] = plan, at
+    with _INDEX_LOCK:
+        _INDEX_MEMO["key"], _INDEX_MEMO["plans"] = key, out
+    return out
+
+
+def verify_for_session(title: str, now: Optional[float] = None) -> Optional[dict]:
+    """The row ``verify`` for session ``title`` (:func:`verify_status`), or
+    ``None``. Never raises."""
+    try:
+        plan = _verify_plans_by_title().get(str(title or ""))
+        return verify_status(plan, now) if plan else None
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
 
 
 def add_step(
@@ -5453,6 +5890,11 @@ def _generate_inner(
         if (p["branch"], p["sha"]) != was:
             outcome["stale"] = True
             return
+        if p["state"] == "running" and p["runs"] and p["runs"][-1].get("self"):
+            # A self-verify started while this was being written: the agent
+            # is writing its own steps now, and these would wipe its run.
+            outcome["stale"] = True
+            return
         # Steps a PERSON wrote survive a regeneration. The generator is being
         # re-asked about the diff; it was never asked about these, and it cannot
         # produce them — so replacing the list wholesale would silently delete
@@ -5756,18 +6198,8 @@ def build_run_prompt(
     notes: str = "",
     walk: str = WALK_AGENT,
     prepared: bool = False,
-    in_session: bool = False,
 ) -> str:
     """The seed prompt for a verify session.
-
-    ``in_session=True`` is the walk handed to the plan's OWN session — the
-    agent that wrote the work — instead of a separate checker: it opens with
-    :data:`WALK_MARK`, never checks anything out (the code under test is that
-    session's own branch, as it stands — or, for an environment, the
-    deployment, with the tree only for reading), asks the agent to put every
-    step on its own todo list as it walks so the person watching sees them,
-    and says the person may talk to it mid-walk. The rules for answering and
-    the answers file are the same as a checker's. ``prepared`` is ignored.
 
     ``walk`` (:data:`WALKS`): ``"all"`` hands the walker the person's steps
     too, with the evidence rule (see :func:`agent_steps`). ``prepared=True``
@@ -6021,10 +6453,6 @@ def build_run_prompt(
                 "giving both shas (the checkout is at the wrong commit), and "
                 "report that."
             )
-    if in_session:
-        opening, step_one = _in_session_opening(
-            plan, sha, env_name, where, live, live_branch, bool(target)
-        )
     summary = str(plan.get("summary") or "").strip()
     parts = [opening]
     if summary:
@@ -6070,20 +6498,6 @@ def build_run_prompt(
             "read the code and run repo tooling against that deployment. If you "
             'cannot reach it, mark those steps "blocked" with a note saying what '
             'you tried — never "fail".',
-        ]
-    elif in_session:
-        parts += [
-            "",
-            "2. NOTHING IS DEPLOYED FOR THIS CHECK: the product under test is "
-            "the code in this worktree. If a step needs the product up and it "
-            "is not already running, start it from here the way this repo "
-            "starts it (the standing instructions below first, then the "
-            "README, then the obvious dev command) and give it up to 90 "
-            "seconds to come up. This session owns the ports in "
-            "$MINDFLOCK_PORT_BASE and $PORT is the first of them — use those "
-            "unless the instructions below name a port, in which case theirs "
-            "wins. Say in your first note which port you used and how you "
-            "started it.",
         ]
     else:
         parts += [
@@ -6187,25 +6601,13 @@ def build_run_prompt(
         needs = [str(n) for n in (step.get("needs") or []) if str(n).strip()]
         if needs:
             parts.append("    Needs: %s" % ", ".join(needs))
-    if in_session:
-        parts += [
-            "",
-            "Record your answers in %s in the root of your worktree — it is "
-            "git-excluded (it never lands in your diff) and it is how MindFlock "
-            "reads them. While you walk, change nothing else for this check: "
-            "no edits, no commits, no push — unless the person tells you to, "
-            "and then say in the affected step's note that the code changed "
-            "during the walk." % RESULT_FILE,
-            "",
-        ]
-    else:
-        parts += [
-            "",
-            "Write your answers to %s in the root of this worktree, and change "
-            "NOTHING else — no edits, no commits, no push, no PR. That file is "
-            "git-excluded and is the only thing you may write." % RESULT_FILE,
-            "",
-        ]
+    parts += [
+        "",
+        "Write your answers to %s in the root of this worktree, and change "
+        "NOTHING else — no edits, no commits, no push, no PR. That file is "
+        "git-excluded and is the only thing you may write." % RESULT_FILE,
+        "",
+    ]
     parts += [
         "KEEP IT CURRENT. Rewrite that file after EVERY step you settle, with "
         '"finished": false and every answer so far — whoever is waiting on '
@@ -6255,80 +6657,168 @@ def build_run_prompt(
         '"pass", "fail" or "blocked" — nothing else. Set "finished" to true only '
         "once every step has an answer.",
     ]
-    if in_session:
-        parts += [
-            "",
-            "When the file says finished, end with a short summary for the "
-            "person: what passed, what failed, and what needs them.",
-        ]
     return "\n".join(parts)
 
 
-def _in_session_opening(
-    plan: dict,
-    sha: str,
-    env_name: str,
-    where: str,
-    live: bool,
-    live_branch: str,
-    deployed: bool = False,
-) -> tuple:
-    """``(opening, step_one)`` of a walk handed to the plan's OWN session.
+#: How many steps a self-verify asks the agent to write, at most.
+SELF_MAX_STEPS = 8
 
-    NO CHECKOUT, EVER: this is the person's working session on its own
-    branch, and detaching its HEAD (what a checker's step one does) would
-    pull the floor out from under the work. The code under test is that
-    branch as it stands — the commit the plan was written about or a
-    descendant of it, named in the first note so the tree check can hold it
-    to that — and for an environment the DEPLOYMENT is under test, the tree
-    only for reading code."""
-    title = str(plan.get("title") or plan.get("id") or "this work").strip()
-    head = (
-        "%s walk the behaviors of %s — check that the work you did in this "
-        "session does what it was supposed to do." % (WALK_MARK, title)
-    )
-    tasks = (
-        "PUT THE STEPS ON YOUR TODO LIST FIRST: one task per step you walk "
-        '(below), named "<step id>: <what to do>" — use your own todo/task '
-        "tool. Mark each one in progress when you start it and done once its "
-        "answer is recorded: that list is how the person watching this session "
-        "follows the walk."
-    )
-    talk = (
-        "The person may talk to you while you walk — this is your own session, "
-        "and they are watching it. Answer them, then carry on with the walk "
-        "where you left off. Report what you find; do not fix anything unless "
-        "they ask you to."
-    )
-    opening = "\n\n".join([head, tasks, talk])
-    if env_name or deployed:
-        step_one = (
-            "1. First: you are in your own worktree on your own branch — do NOT "
-            "check out, switch, pull or stash anything. You use this tree ONLY "
-            "TO READ CODE: the thing you are checking is %s itself (below), "
-            "never this tree. Put `git rev-parse HEAD` in your first note."
-            % (("the %s environment" % env_name) if env_name else "the deployment")
-        )
-        return opening, step_one
-    if where == BRANCH_WHERE or not live or not sha:
-        what = "THIS BRANCH'S OWN CODE, in your worktree as it stands"
+
+def build_self_verify_prompt(
+    plan: dict,
+    repo_notes: str = "",
+    target: str = "",
+    where: str = "",
+    checkout_branch: str = "",
+    notes: str = "",
+    confirm: bool = False,
+) -> str:
+    """SELF-VERIFY: the one prompt a Verify sends the session's OWN agent —
+    "verify the work you just did" — with NO pre-written steps.
+
+    The agent comes up with a few concrete, actionable checks of what it built
+    (real usage — not the unit tests it already ran), writes them to
+    :data:`RESULT_FILE` as ``{id, text, expect, actor}``, puts them on its todo
+    list and works through its own (``actor`` "agent"), recording ``result``
+    pass / fail / blocked with an evidence ``note`` and rewriting the file after
+    every step. A step only a PERSON can do (``actor`` "human", no result) it
+    TELLS the person about in its reply — exactly what to do and what to look
+    for — because a person must then confirm the check (the ``needs_you``
+    outcome, :func:`confirm_verify`). ``finished: true`` when it is done.
+
+    Opens with :data:`WALK_MARK` (how a queued walk is recognised). Never
+    checks anything out: this is the person's own session on its own branch.
+    ``where``/``target``/``checkout_branch`` name a deployment under test (an
+    environment's reach), as for a walk; ``notes`` are this check's own.
+    A person's own steps on the plan (``manual``) are listed, to be kept.
+    ``confirm``: a person signs the check off even if every step passes."""
+    plan = plan or {}
+    pid = str(plan.get("id") or "")
+    target = _text(target, 500)
+    repo_notes = _text(repo_notes, NOTES_BUDGET)
+    notes = _text(notes, NOTES_BUDGET)
+    where = str(where or "").strip().lower()
+    env_name = where if where and where != BRANCH_WHERE else ""
+    if where == BRANCH_WHERE:
+        target = ""
+    parts = [
+        "%s verify the work you just did in this session — check, by actually "
+        "using it, that it does what it was supposed to do." % WALK_MARK,
+        "",
+        "1. Come up with up to %d concrete, actionable test steps for what you "
+        "built: real usage — run the command, call the endpoint, open the page, "
+        "read the output or the log it writes — NOT the unit tests you already "
+        "ran. Each step says what to DO and what you must OBSERVE for a pass. "
+        "Cover the behaviour the work was for, and the edge most likely to be "
+        "broken." % SELF_MAX_STEPS,
+        "2. Write them to %s in the root of your worktree (git-excluded — it "
+        "never lands in your diff; it is how MindFlock reads your check), then "
+        'PUT THEM ON YOUR TODO LIST — one task per step, named "<id>: <what to '
+        'do>" — so the person watching follows along.' % RESULT_FILE,
+        '3. Work through YOUR steps (actor "agent") in order. Actually perform '
+        'each one and record "result": "pass", "fail" or "blocked" with a '
+        '"note" giving your evidence — what you ran and what you saw. Rewrite '
+        'the file after every step. "fail" means the product answered and '
+        "answered wrong; if you cannot reach or start it, that step is "
+        '"blocked" with what you tried, never "fail".',
+        "4. A step ONLY A PERSON can do (a look at a real screen, a device, a "
+        'third-party account you cannot reach) is actor "human" with no '
+        "result. For each one, TELL THE PERSON in your reply exactly what to do "
+        "and what to look for. Keep these to the few that truly need a person: "
+        "if any tool of yours can do or see it, it is yours.",
+        "5. Report what you find. Do not fix anything while you verify, and do "
+        "not commit or push for this check — unless the person tells you to. "
+        "Do NOT check out, switch, pull or stash anything: the code under test "
+        "is this worktree as it stands.",
+        '6. When every step of yours has a result, set "finished": true and '
+        "end your reply with a short summary: what passed, what failed, and "
+        "what the person still has to check.",
+        "7. FINISH WITHIN %d MINUTES, and never end your turn with a background "
+        "job still running: stop it first. A check that writes nothing for a "
+        "long time is treated as stalled and closed." % RUN_BUDGET_MIN,
+    ]
+    if env_name or target:
+        parts += [
+            "",
+            "THE PRODUCT YOU ARE CHECKING IS %s, already running%s. Do not start "
+            "a local copy — that is a different system. Use this worktree only "
+            "to read code%s."
+            % (
+                ("THE %s ENVIRONMENT" % env_name) if env_name else "THE DEPLOYMENT",
+                (
+                    (": reach it here: %s" % target)
+                    if target
+                    else " — find how to reach it from the instructions below, "
+                    "then the README and deploy config"
+                ),
+                (
+                    (" (it deploys from origin/%s)" % checkout_branch)
+                    if checkout_branch
+                    else ""
+                ),
+            ),
+        ]
     else:
-        what = (
-            "the change as it shipped to %s — your branch holds it, so check "
-            "it here" % live_branch
-        )
-    step_one = (
-        "1. First: the code under test is %s — do NOT check out, switch, pull "
-        "or stash anything. Run `git rev-parse HEAD` and put it in your first "
-        "note." % what
-    )
-    if sha:
-        step_one += (
-            " The commit these steps were written about is %s: if HEAD is "
-            "neither it nor a descendant of it (`git merge-base --is-ancestor "
-            "%s HEAD`), say so with both shas in your first note." % (sha, sha)
-        )
-    return opening, step_one
+        parts += [
+            "",
+            "Nothing is deployed for this check: the product under test is the "
+            "code in this worktree. If a step needs it running, start it the "
+            "way this repo does (the instructions below, then the README) on "
+            "$PORT (this session owns $MINDFLOCK_PORT_BASE) unless the "
+            "instructions name a port.",
+        ]
+    if confirm:
+        parts += [
+            "",
+            "A person will sign this check off when you are done, so make your "
+            "summary the thing they read: each step and its result.",
+        ]
+    mine = [s for s in plan.get("steps") or [] if s.get("manual")]
+    if mine:
+        parts += ["", "Steps a person already asked for — keep them, with these ids:"]
+        for st in mine:
+            parts.append(
+                "%s [%s] %s"
+                % (st.get("id", ""), st.get("actor", "human"), st.get("text", ""))
+            )
+            if st.get("expect"):
+                parts.append("    Expect: %s" % st["expect"])
+    if repo_notes:
+        parts += [
+            "",
+            "Standing instructions for this repository, from the person who "
+            "owns it (they do not change the file's shape):",
+            repo_notes,
+        ]
+    if notes:
+        parts += ["", "Notes for this check: %s" % notes]
+    example = {
+        "plan": pid,
+        "finished": False,
+        "steps": [
+            {
+                "id": "<step id>",
+                "text": "<what to do>",
+                "expect": "<what you must observe for a pass>",
+                "actor": "agent",
+                "result": "<pass|fail|blocked>",
+                "note": "<your evidence>",
+            },
+            {
+                "id": "<step id>",
+                "text": "<what the person does>",
+                "expect": "<what they should see>",
+                "actor": "human",
+            },
+        ],
+    }
+    parts += [
+        "",
+        "The file's shape (the <…> are placeholders — write your own ids, like "
+        "s1, s2):",
+        json.dumps(example, indent=2),
+    ]
+    return "\n".join(parts)
 
 
 # --------------------------------------------------------------------------- #

@@ -11,6 +11,7 @@ import { installGlobalDropGuards } from "./lib/clipboard";
 import { applyStoredAppearance } from "./components/settings/screens/Appearance";
 import { installPrefsSync } from "./lib/prefsSync";
 import { installJoinLink } from "./lib/joinLink";
+import { installRepaintTriggers } from "./lib/wsTerm";
 import App from "./App";
 import "./styles/index.css";
 
@@ -28,6 +29,10 @@ publishToast();
 publishWindowName();
 installGlobalDropGuards();
 applyStoredAppearance();
+// Repaint every terminal on screen when the window comes back (focus, restore,
+// un-occlusion, the desktop shell's "mindflock:repaint") — the fix for panes
+// that went blank white until a scroll (lib/wsTerm.ts, docs/web-ui.md).
+installRepaintTriggers(window, document);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

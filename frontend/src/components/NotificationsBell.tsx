@@ -30,7 +30,8 @@ import { openAsk } from "../lib/ask";
 import { AnswerStrip } from "./AnswerStrip";
 import { runNote } from "../lib/runs";
 import { ruleOn, runLookups, useNotifyConfig, useRuns } from "../state/runs";
-import { REASON_LABEL, STATE_LABEL } from "../lib/sessionState";
+import { REASON_LABEL, STATE_LABEL, verifyOf } from "../lib/sessionState";
+import { VerifyConfirm } from "./behaviors/VerifyConfirm";
 import { WaitingRow } from "./outbox/WaitingRow";
 import { useNeedsYou } from "../lib/needsYou";
 import { showGroup } from "../lib/showGroup";
@@ -634,6 +635,24 @@ export function NotificationsBell() {
                   // strip, which stands in for the snippet with the dialog's own
                   // question. Only a family's can redirect to a Thread.
                   const fam = a.p === 0 ? familyOf(it.title) : null;
+                  // A verify waiting on a person: its steps and Confirm
+                  // verified / Not verified… right on the row (VerifyConfirm).
+                  // A row holding buttons is not itself a button; its name
+                  // still opens the session.
+                  const v = verifyOf(byTitle.get(it.title) || {});
+                  if (v?.state === "needs_you")
+                    return (
+                      <div key={it.key + a.reason} className={"attn-item p" + a.p + (flashing ? " flash" : "")} data-attn={it.title} data-needs={it.key}>
+                        <span className="attn-dot" />
+                        <button type="button" className="attn-title linklike" title="Open the session" onClick={() => jump(it.title)}>
+                          {windowName(it.title)}
+                        </button>
+                        <span className="attn-reason">{a.reason}</span>
+                        <div className="attn-verify" style={{ flexBasis: "100%", margin: "2px 0 2px 13px", cursor: "default", fontSize: 12 }}>
+                          <VerifyConfirm verify={v} />
+                        </div>
+                      </div>
+                    );
                   return (
                     <div
                       key={it.key + a.reason}

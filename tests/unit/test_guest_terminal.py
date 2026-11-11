@@ -23,7 +23,7 @@ def _literal(calls):
 # the attach
 # --------------------------------------------------------------------------- #
 def test_the_attach_is_read_only_on_the_exact_session(monkeypatch):
-    import ptyprocess
+    from backend.session import mux
 
     seen = {}
 
@@ -31,7 +31,7 @@ def test_the_attach_is_read_only_on_the_exact_session(monkeypatch):
         seen.update(argv=argv, dimensions=dimensions, term=env["TERM"])
         return "proc"
 
-    monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", spawn)
+    monkeypatch.setattr(mux, "spawn_pty", spawn)
     assert gt.spawn_readonly_attach("mf_api-fix", 30, 100) == "proc"
     assert seen == {
         "argv": ["tmux", "attach-session", "-r", "-t", "=mf_api-fix"],

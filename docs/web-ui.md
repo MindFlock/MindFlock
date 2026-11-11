@@ -376,10 +376,14 @@ a session first*).
   stop path cancels or skips the queue; a per-session cancel never drops a
   confirmation.
 - **Stop at any moment**: **“stop recording”**, “stop listening”, “mic off”
-  or “that's all” at the end of any committed words — mid-phrase too, not only
+  or “pause listening” at the end of any committed words — mid-phrase too, not only
   as the last word of a phrase — stops listening at once; the phrase is never
   typed and what was typed before it stays in the field (*Stopped listening*
-  when nothing was).
+  when nothing was). “That's all” and “done talking” are ordinary English
+  endings, so they stop only **said on their own** — the whole phrase since
+  the last pause, an “okay” / “um” before it allowed, or after “over and
+  out” — once the phrase ends: “…so make sure that that's all.” is typed
+  and listening goes on.
 - **Push to talk.** *Click to talk* (the default): a click starts listening
   (the mic turns red inside a thin, still red ring) and it **stays on** —
   message after message, no idle timeout — until “over and out”, a stop
@@ -1038,6 +1042,27 @@ agent receives an absolute path, so the experience on the CLI side is
 identical. Both directories are transient: each new upload prunes its own
 directory back to the newest few files.
 
+### Terminals repaint when the window comes back
+
+A pane could go blank — white on the light theme, where the terminal
+background *is* white — until the smallest scroll brought it back. The content
+was never lost: a wheel tick makes tmux redraw, xterm rewrites its rows, and
+that rewrite is what got the pane painted again. The terminals use xterm's DOM
+renderer (no WebGL addon, so there is no GL context to lose); what went stale
+was the painted surface after the window was minimized, covered, moved to
+another display, or the GPU process restarted, on a pane with no new output.
+
+Now every terminal on screen is repainted (fit + a full `refresh`) when the
+page regains focus or visibility, on `pageshow`, and on the desktop shell's
+`mindflock:repaint` event (restore / show / move / display change / wake / GPU
+restart — [development.md](development.md#known-issues)); a burst coalesces
+into one pass on the next frame plus one ~300 ms later, and hidden terminals
+are skipped. A pane also repaints when it adopts its terminal (a grid move, the
+trip to the sky and back) and on every refit, including a tab revealing the
+terminal again. The rules live in `lib/wsTerm.ts` (`repaintTerm`,
+`repaintShown`, `installRepaintTriggers`, installed in `main.tsx`); each grid
+pane and each `useWsTerm` terminal registers itself with `trackRepaint`.
+
 ## Workflow stages and the guided next step
 
 Each session shows a stage badge (sidebar + pane) computed from git, plus a
@@ -1094,16 +1119,24 @@ painted red.
 | Idle, stuck | gold | you | yes — 20 min idle on uncommitted work | **Idle 25m** — how long, in the gold the bell's rows wear |
 | Waiting on limit | blue | nobody | no | **Waiting on limit, resumes HH:MM** when the window is known |
 | Offline | red | you | yes | **Offline** — the chip is a **↻ Restart** button |
+| Verifying | violet, pulsing | the agent | no | **Verifying** — its own agent is checking its work; the tooltip says how far (*Checking its work: 3 of 5 steps done*) |
+| Needs you (verify) | gold | you | yes | **Confirm verified** — the agent did its steps and a person's are left; the tooltip lists them. **Verify failed** / **Verify blocked** in red, the tooltip listing what failed or why. The chip opens the session's Agent tab, whose [verify row](#verify) has the buttons |
+| Verified | green tint | nobody | no | **Verified** — for the ten minutes the server keeps a passed verify on the row |
 
 Precedence: a missing folder (**Missing**) and a paused session (**Paused**)
 first, then a provisioning one (**Starting**), then a sleeping one
 (**Sleeping**, grey: its agent was stopped on purpose to free memory, so its
 `offline` reading is not Offline) — none waits on anyone; then a
 failed setup (prompts are held whatever the agent is doing); then the live
-activity (`clarify` → Question, `working`, `limit`, `offline`); then the git
-facts a resting agent leaves behind (a blocked commit, failing checks); then
-idle. So an agent that is *working* on its failed pre-commit is **Working**,
-not in the bell — the bell lists what waits on *you*.
+activity (`clarify` → Question, then **Verifying** in place of `working` or
+idle while a verify runs, `working`, `limit`, `offline`); then a verify that
+waits on you or failed (ahead of a Question in the agent's reply — that reply
+*is* the person's steps); then the git facts a resting agent leaves behind (a
+blocked commit, failing checks); then **Verified**; then idle. A row with no
+`verify` (an older server) reads exactly as it did.
+
+So an agent that is *working* on its failed pre-commit is **Working**, not in
+the bell — the bell lists what waits on *you*.
 
 **Background jobs.** Claude Code calls a session busy while any job the agent
 backgrounded is still alive, even after its turn ended. The server classifies
@@ -1346,9 +1379,10 @@ newest thing you actually asked.
   files, untracked included); until then the header has no lead button and
   the state chip says what the agent is doing. On hover: *Commit this
   session's changes — you check the message first. Next: Push, then Open PR.*
-- **⋯ → Verify checklist…** (any header, when the session has a branch) opens
-  Verify on that branch's checklist — also on the row's ⋮ menu (still
-  *Checklist…* there). In the pane's ⋯ the checklist's verdict rides under
+- **⋯ → Verify** (Ship, just before **Behaviors…**; also on the row's ⋮ menu)
+  has the session's own agent check its work — see [Verify](#verify). It is
+  offered while no verify is running or waiting on you (**Verify again**
+  after one finished). **Behaviors…** opens the branch's behaviors in the Sky. In the pane's ⋯ the checklist's verdict rides under
   **Open PR** / **Merge PR** (*Checklist ✗ Failed*), and on a failed checklist
   they ask first: *Checklist failed — open the PR anyway?* with **Show the
   checklist** and **Open PR anyway** (`withVerifyVerdict`, lib/stage.ts). When a checklist
@@ -2499,7 +2533,11 @@ two lists: **Needs you** on top, then the history feed.
 **Needs you** merges two sources into one list, one row per session: the
 sessions whose [one state](#one-session-state) is "in the bell" — **Question**,
 **Pre-commit failed** (with the hook), **Setup failed**, **Offline**, **Checks
-failing**, and an **Idle** session 20 minutes into uncommitted work — plus a
+failing**, **Confirm verified** / **Verify failed** / **Verify blocked** (a
+Confirm verified row carries the person's steps with **Confirm verified** /
+**Not verified…** right there, its name opening the session; a failed or
+blocked one lists what failed, or why), and an **Idle**
+session 20 minutes into uncommitted work — plus a
 branch ready for its PR, and the `waiting` group of `GET /api/outbox`
 (ask-first approvals, stuck team run lines, budget pauses, a lead's plan or PR),
 and a session whose agent waits on Go for its plan (**Plan ready — review &
@@ -5547,6 +5585,102 @@ covers it). At most one team run toast per 30 seconds.
 
 ## Verify
 
+### Verify is the session's own agent
+
+**Since 2026-11-10 (owner request).** Verify is done by the session that did the
+work: **Verify** (a session's ⋯ / ⋮ menu, or the Behaviors card's one action —
+`POST /api/instances/{title}/verify`, optional `{notes}`) has its agent write
+its own actionable test steps and work them **in its own terminal**; its Agent
+tab opens so you can follow it and talk to it. Whatever only a person can do,
+the agent says in its reply. When there are such steps, **a person must
+confirm that verification is complete.**
+
+The session row carries it as `verify` (`null`, or `{state, plan, steps:
+{total, agent_done, human}, human_steps, failed_steps, detail, at}`), and the
+[one session state](#one-session-state) reads it:
+
+| `verify.state` | The pill | Where you act |
+|---|---|---|
+| `verifying` | **Verifying** (its own violet tone, out of the bell) — *Checking its work: 3 of 5 steps done* | nothing to do; **Open its agent** to follow along |
+| `needs_you` | **Confirm verified** (in the bell, its line listing your steps) | do the listed steps, then **Confirm verified** or **Not verified…** |
+| `failed` | **Verify failed** (red, in the bell) — the tooltip lists what failed | **Verify again**, or ⋯ → **Fix in a new session** |
+| `blocked` | **Verify blocked** (red, in the bell) — why | open the agent, then **Verify again** |
+| `passed` | **Verified**, calm, for ten minutes | — |
+
+**Confirm verified / Not verified…** (`VerifyConfirm`, components/behaviors)
+sit under the person's steps — each step's text and what should happen — on
+the pane's **verify row** (under its head, beside the route strip;
+`grid/PaneVerifyStrip.tsx`), on the bell's row, on the **Behaviors card**, and
+on a **Verify stop** parked on you. The phone (`/m`) has them too — see
+[On the phone](#verify-on-the-phone) below. Both post `POST /api/test-plans/{plan}/confirm` with
+`{verified: true}` or `{verified: false, note}`; **Not verified…** opens an
+inline note (*What did you see? The agent gets this*) — never
+`window.prompt()`, which Electron doesn't have. A 409 means it stopped waiting
+(someone else answered); the error card says so. The bell's **Confirm
+verified** row carries the same steps and buttons.
+
+**The pane's verify row** sits directly under the route's strip
+(`PaneFlightStrip`; under the head when there is no route) and is
+drawn only while the row's `verify` is set — never for `null`, and never for
+`passed` (the pill says that). By state: `verifying` — one line, *Verifying
+— 3 of 5 steps done*, and **Open its agent**; `needs_you` — the same line,
+then the person's steps and **Confirm verified** / **Not verified…**;
+`failed` — what failed, step by step, with **Open its agent** and **Verify
+again**; `blocked` — why, with the same two buttons. Because this row carries
+the confirm, a Verify stop's compact one-line strip in the pane shows only
+**Skip** and a way to the Behaviors card.
+
+<a id="verify-on-the-phone"></a>
+**On the phone (`/m`).** `mobile.js` mirrors the pills, their words and their
+ranking (`sessionState`, `needsYouKind`), in tones of its own in `mobile.css`:
+**Verifying** in the desktop's violet (`--tone-verifying`, a pulsing dot) and
+**Verified** in a calm green (`--tone-verified`, no glow). A verify in
+`needs_you` draws the person's steps (each with *Expect: …*) and **Confirm
+verified** / **Not verified…** in two places: a card for the current session
+under the header (`#verify-card`, under the plan and flight cards), and under
+that session's row in the **Sessions** sheet — the phone's Needs-you list.
+**Not verified…** turns the buttons into an inline note (*What did you see?
+The agent gets this*) with **Not verified** and **Cancel** (Enter sends, Esc
+cancels); never `window.prompt()`. The note and an answer in flight are kept
+per plan, so the 4 s poll redrawing the sheet loses neither, and the card and
+the sheet can't answer twice. Both post the same `POST
+/api/test-plans/{plan}/confirm` body as the desktop (`{verified: true}`, or
+`{verified: false, note}` — no `note` when it is empty). The result is said
+the phone's way, in the status line: *Confirmed verified* / *Marked not
+verified — the agent gets your note*; a refusal is said there and stays under
+the buttons — a 409 as *… it isn't waiting for you any more (someone already
+answered)*. The pill's tooltip says to press Confirm verified (no longer "on
+the desktop"). A session's **⋯** sheet (or a long press on its row) offers
+**Verify** — **Verify again** once a verify has passed, failed or been blocked
+— under the desktop's rule (`canStartVerify`: hidden while one runs or waits on
+you, and for a paused, remote, peer, provisioning or workspace-missing
+session). It posts `POST /api/instances/{title}/verify` with `{}`, closes the
+sheet and opens the session on its **Agent** tab, where its agent works the
+steps; a refusal stays on the sheet in the server's words.
+`tests/unit/test_mobile_verify.py` runs these pieces of `mobile.js` under node.
+
+**Without the session.** With the work session closed, the Behaviors card's
+**Verify** falls back to `POST /api/test-plans/{plan}/run` (the older
+checker described below). **Verify** on the menus is offered only while no
+verify runs or waits on you, and not for a paused, remote, provisioning or
+workspace-missing session (`canStartVerify`, sidebar/verifyMenu.ts). Until the
+server emits `verify` and answers the two routes, those calls fail and every
+pill reads as it did.
+
+**The Behaviors card is small now.** Its head says where the verify stands with
+ONE action — **Verify** (or **Verify again**), **Open its agent** while it
+works, nothing while it waits on you (the confirm is right there). The steps
+are the agent's own and **read-only**: each shows who does it (🤖 agent /
+🙋 you), its result and the agent's evidence, and a failed one offers **Fix**.
+Gone: Rewrite behaviors, + Add a behavior, Edit / Remove, the per-step
+Pass · Fail · Can't check, the "after #n" needs picker and *Let the agent walk
+every behavior*. A Verify stop that halted its route keeps **Retry · Skip ·
+Let the agent fix it**. With the session gone, the card's Verify falls back to
+the older `POST /api/test-plans/{plan}/run`.
+
+The rest of this section describes the older behaviors store and dialog that
+still back it.
+
 **What shipped, and does it work?** Intake is the front of the pipeline; Verify
 is the back of it. The pipeline's last honest checkpoint is "the PR merged", and
 merged is not verified — nobody has opened the thing and looked at it. So work
@@ -7193,7 +7327,7 @@ words (Enter, after the server's dialog checks), one ending in "disregard"
 takes back what was typed and keeps listening, one ending in "scratch that"
 drops just that phrase — said alone it takes back the last
 phrase typed and not yet sent — and Esc takes it all back and stops;
-"stop recording" (or "that's all", "mic off") stops at any point, never typed,
+"stop recording" (or "mic off"; "that's all" said on its own) stops at any point, never typed,
 and leaves the words in the field unsent — as letting go of push to talk does.
 "Submit" is an ordinary word here (only Claude's question prompt's review step
 takes it, through the router). A click keeps listening across messages until
@@ -7502,7 +7636,17 @@ every save), then the server's.
   "enough") and go when it goes; a stop phrase of
   **two words or more** ends any committed words at once, while a one-word one
   ("stop", "halt") counts only said on its own (the router's), so "make it
-  stop" stays a prompt; a stop-talking phrase counts only as the whole
+  stop" stays a prompt; so does a **conversational** one ("that's all", "that
+  is all", "done talking", "I'm done talking" and their heard forms:
+  `STOP_ALONE` in `lib/voiceWords.ts`, the server's `voice_words.STOP_ALONE`
+  and mobile.js `VOICE_STOP_ALONE`, one list): it stops only as the whole
+  phrase once it is over (never on a stream's committed words so far), a
+  filler before it allowed ("okay", "um", "so": `STOP_FILLERS`) and dropped,
+  or after an end phrase ("over and out, that's all" sends, then stops) — at
+  the end of a sentence it is words (the owner's "…so make sure that that's
+  all." stopped listening mid-message before 2026-11-10). The person's own
+  stop phrases of two words or more ("we're done") end any phrase like "stop
+  listening"; a single word of their own only counts said on its own; a stop-talking phrase counts only as the whole
   phrase, with an optional "ok" / "okay" / "hey" / "please" before and
   "please" / "now" after; and the stop and stop-talking phrases wait whole for
   the router like its own commands. The wake word is checked by the server
@@ -7638,10 +7782,17 @@ state table ([One session state](#one-session-state)) copied into
 `mobile.js` `SESSION_STATES`: *Starting*, *Working*, *Question* / *Pre-commit
 failed* / *Checks failing* / *Setup failed*, *Idle*, *Waiting on limit*
 (*, resumes HH:MM*), *Offline*, plus *Paused*, *Missing* and *Sleeping* (with
-a **Wake** action in its sheet) outside the table;
-CSS classes `tone-muted|working|attention|neutral|waiting|broken`. A row's
+a **Wake** action in its sheet) outside the table, and Verify's *Verifying* /
+*Confirm verified* / *Verify failed* / *Verify blocked* / *Verified*;
+CSS classes `tone-muted|working|attention|neutral|waiting|broken`, plus
+`tone-verifying|verified` for Verify's own two. A verify waiting on you puts
+its steps and **Confirm verified** / **Not verified…** on a card under the
+header and under its row in the Sessions sheet ([Verify on the
+phone](#verify-on-the-phone)). A row's
 **⋯** (or a long press on it), or the header's **⋯** for the current session,
 opens its actions: **Restart** (only when offline — `POST /revive`),
+**Verify** / **Verify again** (only while no verify runs or waits on you —
+`POST /verify`),
 **Resume session** (only on a paused session — the phone has no Pause, as the
 desktop's menus don't; the palette, `mindflock pause` and the API still
 pause), **Close**
@@ -8243,7 +8394,10 @@ and hush, the fast control on a streamed guess), longest first, each phrase
 escaped, an apostrophe optional, a comma optional (*over, out* is also
 *over out*), the clear words keeping their tails (*… that / it / all /
 everything*). A stop phrase of two words or more ends any phrase (*fix it,
-that's all*); a one-word one (*stop*) stops only said on its own. A default
+stop listening*); a one-word one (*stop*) and a conversational one (*that's
+all*, *done talking*: `VOICE_STOP_ALONE`, the server's and the desktop's
+list) stop only said on their own — an *okay* / *um* before it allowed, or
+an *over and out* — and never on a streamed phrase before its end. A default
 phrase keeps the spoken variants the router keeps while it is in the list
 (*stop listening* → *stop recording*, *mic off* → *microphone off*, *done
 talking* → *I'm done talking*, *stop talking* → *stop speaking*, *okay
@@ -8645,7 +8799,7 @@ act whatever is in the box, and never land in it:
 
 | Say (at the end) | Does |
 |---|---|
-| *stop recording* · *stop listening* · *stop dictating* · *mic off* · *that's all* · *that is all* · *done talking* · *I'm done talking* | stops listening; the words said before it stay in the box, unsent (*In the box — say "over", or tap Send*), answered by the falling chime alone (no *Stopped.*) — after an *over* (*fix it over and out, that's all*) it sends as *over and out* does. In a dialog too — before *stop* could be read as a *no* |
+| *stop recording* · *stop listening* · *stop dictating* · *mic off* — and, said on their own only, *that's all* · *that is all* · *done talking* · *I'm done talking* | stops listening; the words said before it stay in the box, unsent (*In the box — say "over", or tap Send*), answered by the falling chime alone (no *Stopped.*) — after an *over* (*fix it over and out, that's all*) it sends as *over and out* does. In a dialog too — before *stop* could be read as a *no* |
 | *yes* · *no (thanks)* · *always* · *yes and don't ask again* · *option two* · *the second one* · *answer yes* | **only while the session is asking** — a dialog is up, or its last `Say:` line asked a question: answers it. A bare number counts only as the whole phrase (*add two* is words) |
 
 An answer to a **dialog** is the option the dialog's own words pick (the

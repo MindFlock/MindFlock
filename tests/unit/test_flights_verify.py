@@ -118,9 +118,10 @@ def test_the_driver_taps_it(monkeypatch):
 
 
 def test_a_flights_checklist_and_the_push_watchers_are_one(tmp_path, monkeypatch):
-    """The verify step asks through Verify's manual path; the push watcher's
-    ``session.pushed`` asks again for the same (repo, branch) — one plan, one
-    generation."""
+    """The verify step finds or makes the session's plan (empty: the agent
+    writes its own steps when the check starts); the push watcher's
+    ``session.pushed`` asks again for the same (repo, branch) — one plan, and
+    nothing generated over the self-verify's plan."""
     wt = tmp_path / "wt"
     wt.mkdir()
     inst = SimpleNamespace(
@@ -149,8 +150,8 @@ def test_a_flights_checklist_and_the_push_watchers_are_one(tmp_path, monkeypatch
 
     monkeypatch.setattr(tpd, "threading", SimpleNamespace(Thread=_Now))
     flight = F.take_off(F.get_plan("builtin:verify"), session="sess")
-    # The verify step's ask (flight_driver → server._ensure_test_plan(manual)).
-    D._ensure_checklist(flight)
+    # The verify step's ask (flight_driver → server._ensure_verify_plan).
+    assert D._ensure_checklist(flight) == {"plan": "sess"}
     # …and the push watcher, for the same branch.
     tpd._on_session_pushed({"event": "session.pushed", "session": "sess"})
     tpd._on_session_pushed({"event": "session.pushed", "session": "sess"})
@@ -160,4 +161,5 @@ def test_a_flights_checklist_and_the_push_watchers_are_one(tmp_path, monkeypatch
         if p["branch"] == "feature/x" and p["repo_root"] == str(tmp_path)
     ]
     assert len(plans) == 1
-    assert generated == ["sess"]
+    assert plans[0]["origin"] == "manual" and plans[0]["steps"] == []
+    assert generated == []

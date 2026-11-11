@@ -221,6 +221,7 @@
     updateActions();
     updatePlanCard();
     updateFlightCard();
+    updateVerifyCard();
     voiceOnSelect(title);
     if (view === "diff") loadDiff();
   }
@@ -392,6 +393,11 @@
   // out. Closed, the next render sorts afresh.
   var rowOrder = [];
   function renderRows() {
+    // A Not verified… note being typed under a row keeps its focus across the
+    // redraw (its words are kept in verifyDrafts).
+    var typing = document.activeElement;
+    var typingPlan = typing && typing.classList && typing.classList.contains("vc-note")
+      ? typing.getAttribute("data-plan") : null;
     sessionListEl.innerHTML = "";
     var ranked = instances.slice().sort(function (a, b) {
       return attnRank(a) - attnRank(b);
@@ -432,7 +438,21 @@
       num.setAttribute("aria-hidden", "true");
       main.insertBefore(num, main.firstChild);
       sessionListEl.appendChild(row);
+      // A verify waiting on you: your steps and the two answers, right under
+      // its row — the bell's Confirm verified row, on the phone.
+      var vc = isPeerRow(inst) ? null : verifyConfirmEl(inst);
+      if (vc) {
+        var wrap = document.createElement("div");
+        wrap.className = "approve-card sess-verify";
+        wrap.appendChild(vc);
+        sessionListEl.appendChild(wrap);
+      }
     });
+    if (typingPlan !== null) {
+      sessionListEl.querySelectorAll(".vc-note").forEach(function (el) {
+        if (el.getAttribute("data-plan") === typingPlan) el.focus();
+      });
+    }
   }
 
   // "Erik · shared with you" over a peer's rows.
@@ -981,6 +1001,9 @@
     checks_failing: "Checks failing",
     setup_failed: "Setup failed",
     stuck: "Idle",
+    verify_confirm: "Confirm verified",
+    verify_failed: "Verify failed",
+    verify_blocked: "Verify blocked",
   };
   // Idle this long on uncommitted work and the rail's bell lists it as stuck.
   var STUCK_IDLE_S = 20 * 60;
@@ -999,6 +1022,83 @@
   function needsYou(reason, hint) {
     return st("needs_you", { reason: reason, label: REASON_LABEL[reason], inBell: true, hint: hint });
   }
+  // The row's `verify` — the session's own agent checking its work
+  // (sessionState.ts verifyOf / verifyHint): null on an older server.
+  function verifyOf(inst) {
+    var v = inst && inst.verify;
+    return v && typeof v === "object" && typeof v.state === "string" ? v : null;
+  }
+  function verifyLines(steps, key) {
+    return (steps || []).map(function (s) {
+      var tail = String(s[key] || "").trim();
+      return "• " + String(s.text || "").trim() + (tail ? " — " + tail : "");
+    }).join("\n");
+  }
+  function verifyProgress(v) {
+    var total = Number(v.steps && v.steps.total) || 0, human = Number(v.steps && v.steps.human) || 0;
+    var done = Number(v.steps && v.steps.agent_done) || 0, mine = Math.max(0, total - human);
+    if (!total) return "writing its steps";
+    if (!mine) return "every step needs a person";
+    return Math.min(done, mine) + " of " + mine + (mine === 1 ? " step" : " steps") + " done";
+  }
+  // Waits on a person, failed or blocked: a needs-you state (null otherwise).
+  // Confirm verified / Not verified… are on the session's card and under its
+  // row in the Sessions sheet (verifyConfirmEl).
+  function verifyNeedsYou(v) {
+    if (v.state === "needs_you") {
+      var list = verifyLines(v.human_steps, "expect");
+      var n = (v.human_steps || []).length || Number(v.steps && v.steps.human) || 0;
+      return needsYou("verify_confirm", "The agent checked what it can. Do " + (n === 1 ? "this step" : "these steps") +
+                                        ", then press Confirm verified (or Not verified…):" + (list ? "\n" + list : ""));
+    }
+    if (v.state === "failed") {
+      var failed = verifyLines(v.failed_steps, "note");
+      return st("needs_you", { reason: "verify_failed", label: REASON_LABEL.verify_failed, tone: "broken", inBell: true,
+                               hint: "Verify failed" + (failed ? ":\n" + failed : v.detail ? " — " + v.detail : "") });
+    }
+    if (v.state === "blocked")
+      return st("needs_you", { reason: "verify_blocked", label: REASON_LABEL.verify_blocked, tone: "broken", inBell: true,
+                               hint: "Verify couldn't go on" + (v.detail ? " — " + v.detail : "") });
+    return null;
+  }
+  // Whether "Verify" is offered in a session's ⋯ sheet (sidebar/verifyMenu.ts
+  // canStartVerify): never for a remote, peer, provisioning, paused or
+  // workspace-missing session, and only while no verify runs or waits on you
+  // — the pill says those.
+  function canStartVerify(inst) {
+    if (!inst || !inst.title || inst.workspace_missing || inst.peer_share || inst.device || inst.pending) return false;
+    if (inst.status === "paused") return false;
+    var v = verifyOf(inst);
+    return !v || v.state === "passed" || v.state === "failed" || v.state === "blocked";
+  }
+  // POST /api/test-plans/{plan}/confirm (verifyActions.ts requestVerifyConfirm):
+  // {verified: true}, or {verified: false, note} — the note only when there is
+  // one, and never with a yes.
+  function verifyConfirmBody(verified, note) {
+    var n = verified ? "" : String(note || "").trim();
+    return n ? { verified: false, note: n } : { verified: !!verified };
+  }
+  function postVerifyConfirm(plan, verified, note) {
+    return fetch("/api/test-plans/" + encodeURIComponent(plan) + "/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(verifyConfirmBody(verified, note)),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw apiError((j && (j.error || j.detail)) || "request failed (" + r.status + ")", r.status, j);
+        return j;
+      });
+    });
+  }
+  // What the page says about an answer: the desktop's toast words, and on a
+  // refusal its error card's title — a 409 means it stopped waiting.
+  function verifyConfirmWords(verified, err) {
+    if (!err) return verified ? "Confirmed verified" : "Marked not verified — the agent gets your note";
+    var head = verified ? "Couldn't confirm verified" : "Couldn't mark it not verified";
+    if (err.status === 409) return head + " — it isn't waiting for you any more (someone already answered)";
+    return head + ": " + (err.message || "couldn't reach MindFlock");
+  }
+
   // "Perch: Approve the merge" — once: a stop already titled "Perch: …" (or
   // the old "You: …") is read without it (lib/flights.ts perchLabel).
   function youStepLabel(title) {
@@ -1055,7 +1155,11 @@
     // typed to since) is a Question whatever the activity reads — a prose
     // question sits on an idle agent and is not "waiting for input".
     var asking = inst.asking;
-    if (asking && (asking.kind === "dialog" || asking.kind === "question"))
+    var verify = verifyOf(inst);
+    // A verify waiting on a person: the agent's reply IS the person's steps,
+    // so a question in it reads Confirm verified (sessionState.ts), not Question.
+    var verifyWaits = !!verify && (verify.state === "needs_you" || verify.state === "failed" || verify.state === "blocked");
+    if (asking && (asking.kind === "dialog" || (asking.kind === "question" && !verifyWaits)))
       return needsYou("question", "The agent asked you a question" + (asking.text ? ": " + String(asking.text) : ""));
     if (act === "clarify") return needsYou("question", "The agent asked you a question");
     // A flight perched on you waits for Done, whatever the agent does.
@@ -1072,6 +1176,11 @@
                                hint: "Halted" + (at ? " at " + at : "") + (why ? " — " + why : "") +
                                      " — route “" + (hfl.plan_name || "") + "” waits for Retry or Skip" });
     }
+    // The agent checking its own work: its own pill, mid-turn or between
+    // steps — a usage limit and a dead terminal still say so below.
+    if (verify && verify.state === "verifying" && act !== "limit" && act !== "offline")
+      // The desktop's violet (mobile.css --tone-verifying), out of the bell.
+      return st("working", { label: "Verifying", tone: "verifying", hint: "Checking its work: " + verifyProgress(verify) });
     if (act === "working") return st("working", { hint: "Agent is working" });
     if (act === "limit") {
       var until = Number(inst.queue && inst.queue.limited_until) || 0;
@@ -1084,6 +1193,8 @@
     if (act === "offline")
       return st("offline", { inBell: true, restartable: !inst.device,
                              hint: "The agent's terminal is gone — Restart relaunches it" });
+    var verifyYou = verify && verifyNeedsYou(verify);
+    if (verifyYou) return verifyYou;
     if (inst.stage === "interrupt")
       return needsYou("precommit_failed", inst.failed_step ? "Pre-commit failed at: " + inst.failed_step : "Pre-commit failed");
     if (inst.check && inst.check.state === "failed" && !inst.check.stale)
@@ -1096,6 +1207,8 @@
     if (inst.flight && inst.flight.id && inst.flight.state === "paused")
       return st("idle", { label: "Paused route",
                           hint: "Route “" + (inst.flight.plan_name || "") + "” is paused — resume it from the desktop" });
+    if (verify && verify.state === "passed")
+      return st("idle", { label: "Verified", tone: "verified", hint: "Verified" + (verify.detail ? " — " + verify.detail : "") });
     if (idleFor > STUCK_IDLE_S && dirty)
       return st("idle", { reason: "stuck", inBell: true, hint: "Idle with unfinished work — possibly stuck" });
     return st("idle", { hint: "Agent is idle — waiting for input" });
@@ -1232,7 +1345,8 @@
         var sig = instances.map(function (i) {
           var rz = rzChip(i);
           return attnRank(i) + i.title + "\u0000" + (i.name || "") + "\u0000" + sessionState(i).label +
-            "\u0000" + (rz ? rz.label : "") + "\u0000" + (i.asking ? String(i.asking.ts) + String(i.asking.text || "") : "");
+            "\u0000" + (rz ? rz.label : "") + "\u0000" + (i.asking ? String(i.asking.ts) + String(i.asking.text || "") : "") +
+            "\u0000" + verifyKey(i);
         }).join("|");
         if (sig !== poll._sig) { poll._sig = sig; renderPicker(); }
         // After renderPicker, before the dot: a session created from the "+"
@@ -1247,6 +1361,7 @@
         updateActions();
         updatePlanCard();
         updateFlightCard();
+        updateVerifyCard();
         voiceOnPoll();
         askOnPoll();
       })
@@ -1538,6 +1653,176 @@
         flightKey = "";
         flightEl.querySelectorAll(".flight-act").forEach(function (b) { b.disabled = false; });
       });
+  }
+
+  // --- a verify waiting on you (components/behaviors/VerifyConfirm.tsx) ----
+  // The session's own agent checked what it can (`verify.state ===
+  // "needs_you"`); the steps only a person can do are listed — each with what
+  // should happen — over the desktop's two answers: Confirm verified, and
+  // Not verified…, which opens an inline note the agent gets (never
+  // window.prompt: Electron has none, and the phone keeps the one rule).
+  // Drawn on the current session's card (under the flight card) and under the
+  // session's row in the Sessions sheet; both post
+  // POST /api/test-plans/{plan}/confirm (postVerifyConfirm).
+  //
+  // The open note and what is typed in it are kept per plan, so a poll that
+  // redraws the Sessions sheet (or the card) doesn't lose them; a press in
+  // flight is per plan too, so the card and the sheet can't answer twice.
+  var verifyDrafts = {};   // plan → { open: bool, note: string }
+  var verifyBusy = {};     // plan → "yes" | "no" while its request is out
+  function verifyStepsEl(steps) {
+    var ol = document.createElement("ol");
+    ol.className = "vc-steps";
+    ol.setAttribute("aria-label", "Steps for you");
+    (steps || []).forEach(function (s) {
+      var li = document.createElement("li");
+      li.className = "vc-step";
+      var t = document.createElement("span");
+      t.className = "vc-step-text";
+      t.textContent = String(s.text || "").trim();
+      li.appendChild(t);
+      var expect = String(s.expect || "").trim();
+      if (expect) {
+        var e = document.createElement("span");
+        e.className = "vc-step-expect";
+        e.textContent = "Expect: " + expect;
+        li.appendChild(e);
+      }
+      ol.appendChild(li);
+    });
+    return ol;
+  }
+  // The steps and the two answers for one session's verify, or null when it
+  // isn't waiting on a person.
+  function verifyConfirmEl(inst) {
+    var v = verifyOf(inst);
+    if (!v || v.state !== "needs_you" || !v.plan) return null;
+    var plan = String(v.plan);
+    var draft = verifyDrafts[plan] || (verifyDrafts[plan] = { open: false, note: "" });
+    var box = document.createElement("div");
+    box.className = "vc-confirm";
+    box.setAttribute("role", "group");
+    box.setAttribute("aria-label", "Confirm verified");
+    box.setAttribute("data-plan", plan);
+    if ((v.human_steps || []).length) box.appendChild(verifyStepsEl(v.human_steps));
+    var acts = document.createElement("div");
+    acts.className = "vc-acts";
+    box.appendChild(acts);
+    var msg = document.createElement("div");
+    msg.className = "vc-msg";
+    msg.setAttribute("role", "status");
+    box.appendChild(msg);
+    function button(cls, label, title, run) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "act " + cls;
+      b.textContent = label;
+      if (title) b.title = title;
+      b.disabled = !!verifyBusy[plan];
+      b.addEventListener("click", run);
+      acts.appendChild(b);
+      return b;
+    }
+    function paint() {
+      acts.innerHTML = "";
+      var busy = verifyBusy[plan] || "";
+      if (!draft.open) {
+        button("is-next vc-yes", busy === "yes" ? "…" : "Confirm verified",
+          "You did the steps above and they behaved as expected — verification is complete",
+          function () { send(true); });
+        button("vc-no", "Not verified…", "Something didn't behave — say what, and the agent gets it",
+          function () { draft.open = true; msg.textContent = ""; paint(); focusNote(); });
+        return;
+      }
+      var input = document.createElement("input");
+      input.type = "text";
+      input.className = "vc-note";
+      input.placeholder = "What did you see? The agent gets this";
+      input.setAttribute("aria-label", "What wasn't verified");
+      input.setAttribute("autocomplete", "off");
+      input.setAttribute("data-plan", plan);
+      input.value = draft.note;
+      input.disabled = !!busy;
+      input.addEventListener("input", function () { draft.note = input.value; });
+      input.addEventListener("keydown", function (ev) {
+        ev.stopPropagation();
+        if (ev.key === "Enter") { ev.preventDefault(); send(false); }
+        else if (ev.key === "Escape") { ev.preventDefault(); draft.open = false; paint(); }
+      });
+      acts.appendChild(input);
+      button("is-next vc-send", busy === "no" ? "…" : "Not verified", "", function () { send(false); });
+      button("vc-cancel", "Cancel", "", function () { draft.open = false; paint(); });
+    }
+    function focusNote() {
+      var el = acts.querySelector ? acts.querySelector(".vc-note") : null;
+      if (el && el.focus) el.focus();
+    }
+    function send(verified) {
+      if (verifyBusy[plan]) return;
+      verifyBusy[plan] = verified ? "yes" : "no";
+      msg.textContent = "";
+      paint();
+      postVerifyConfirm(plan, verified, verified ? "" : draft.note)
+        .then(function () {
+          delete verifyDrafts[plan];
+          flashStatus(verifyConfirmWords(verified, null));
+        }, function (err) {
+          // Said where it was pressed (the card or the sheet, which stays up)
+          // and in the status line, as the flight card's Done says it.
+          var words = verifyConfirmWords(verified, err);
+          msg.textContent = words;
+          flashStatus(words);
+        })
+        .then(function () {
+          delete verifyBusy[plan];
+          paint();
+          setTimeout(poll, 600);
+        });
+    }
+    paint();
+    return box;
+  }
+  // The current session's card: under the flight card, built here like it.
+  var verifyEl = document.createElement("div");
+  verifyEl.id = "verify-card";
+  verifyEl.className = "hidden";
+  verifyEl.setAttribute("aria-live", "polite");
+  if (flightEl.parentNode) flightEl.parentNode.insertBefore(verifyEl, flightEl.nextSibling);
+  var verifyCardKey = "";
+  // What the card shows — a new key redraws it; the same key leaves it (and
+  // a note being typed) alone.
+  function verifyKey(inst) {
+    var v = verifyOf(inst);
+    if (!v || v.state !== "needs_you" || !v.plan) return "";
+    return [inst.title, v.plan, v.at || "", (v.human_steps || []).map(function (s) {
+      return String(s.id) + ":" + String(s.text || "") + ":" + String(s.expect || "");
+    }).join(",")].join("|");
+  }
+  function updateVerifyCard() {
+    var inst = currentInst();
+    var key = inst ? verifyKey(inst) : "";
+    if (!key) {
+      verifyCardKey = "";
+      if (!verifyEl.classList.contains("hidden")) {
+        verifyEl.classList.add("hidden");
+        verifyEl.innerHTML = "";
+        fitSoon();
+      }
+      return;
+    }
+    if (key === verifyCardKey) return;
+    verifyCardKey = key;
+    verifyEl.innerHTML = "";
+    var card = document.createElement("div");
+    card.className = "approve-card verify-card";
+    var head = document.createElement("div");
+    head.className = "vc-head";
+    head.textContent = REASON_LABEL.verify_confirm + " — the agent did its steps; do yours, then confirm";
+    card.appendChild(head);
+    card.appendChild(verifyConfirmEl(inst));
+    verifyEl.appendChild(card);
+    verifyEl.classList.remove("hidden");
+    fitSoon();
   }
 
   // Like the Map's: no Go while the agent waits on a question in the terminal.
@@ -2594,6 +2879,12 @@
         if (inst.status === "paused")
           actListEl.appendChild(actRow("Resume session", "starts the agent again in the same worktree",
             function () { sessionCall(title, "resume", "Resuming " + nameOf(title) + "…", "Resume failed"); }));
+        // Verify: its own agent writes the steps to check its work and works
+        // them in its terminal (sidebar/verifyMenu.ts) — offered only while no
+        // verify runs or waits on you.
+        if (canStartVerify(inst))
+          actListEl.appendChild(actRow(verifyOf(inst) ? "Verify again" : "Verify", "its agent checks its own work",
+            function () { startVerify(title); }));
         actListEl.appendChild(actRow("Close", "stops the agent and moves it to Recently closed",
           function () { closeSession(title); }));
         // A peer (sandboxed shared-folder) session is unshared, never deleted —
@@ -2628,6 +2919,28 @@
           sessionCall(title, route, okMsg, failWord, { start_anyway: true });
         })) return;
         actError(failWord + ": " + err.message);
+      });
+  }
+
+  // POST /api/instances/{title}/verify (verifyActions.ts startSessionVerify):
+  // the sheet closes, the session opens on its Agent tab — the terminal where
+  // its agent works the steps and you talk to it — and the status line says
+  // so; a refusal stays on the sheet in the server's words.
+  function startVerify(title) {
+    actBusy = true;
+    actError("");
+    postFor(title, "verify", {})
+      .then(function () {
+        actBusy = false;
+        closeActSheet();
+        if (title !== current) select(title);
+        if (view !== "agent") switchTab("agent");
+        flashStatus("Verifying " + nameOf(title) + " — its agent writes its steps and works them in its terminal");
+        poll();
+      })
+      .catch(function (err) {
+        actBusy = false;
+        actError("Couldn't start verifying " + nameOf(title) + ": " + err.message);
       });
   }
 
@@ -3106,8 +3419,8 @@
   //              with the next phrase (voicePendingTake); the local VOICE_CMD
   //              table answers when the server cannot.
   //              At the END of any phrase (and of every streamed run of
-  //              words) a stop phrase ("stop recording", "that's all") stops
-  //              listening with the box kept, and while the session is asking
+  //              words) a stop phrase ("stop recording"; "that's all" only
+  //              as the whole phrase) stops listening with the box kept, and while the session is asking
   //              (voiceAsks) an answer ("yes", "no thanks", "option two")
   //              answers it — neither ever lands in the box
   //   sending    POST /send (or /answer) in flight
@@ -4860,13 +5173,14 @@
     // unstable tail) to onGuess — typed into the box as a guess, corrected
     // by the next answer — and to the caption (onInterim, the tail greyed).
     // The phrase reaches onFinal whole at its end (streamEnd) — but a stop
-    // phrase acts the moment it settles.
+    // phrase acts the moment it settles ("stop listening"; never "that's
+    // all", which waits for the phrase's end: voiceTail's inFlight).
     function streamWords(g, mine, committed, partial) {
       var h = mine.h;
       if (String(committed || "").trim()) voiceTraceMark(g, "settled");
       g.pend = voiceJoin(g.pend, committed);
       g.partial = String(partial || "").trim();
-      var tail = voiceTail(g.pend, false);
+      var tail = voiceTail(g.pend, false, true);
       if (tail && tail.kind === "stop") {
         var all = g.pend;
         g.pend = g.partial = "";
@@ -5596,6 +5910,17 @@
     if (ss.reason === "checks_failing") return "waiting on failing checks";
     if (ss.reason === "setup_failed") return "stuck on a failed setup";
     return String(ss.label || "").toLowerCase();
+  }
+  // "<name> is <state word>", or a Verify state's own sentence: its pills
+  // ("Confirm verified", "Verify failed") are chips, not words after "is".
+  // The router's _state_clause says the same.
+  function voiceStateLine(name, ss) {
+    if (ss.reason === "verify_confirm") return name + " needs you to confirm it's verified";
+    if (ss.reason === "verify_failed") return name + " failed its verify";
+    if (ss.reason === "verify_blocked") return name + "'s verify is blocked";
+    if (ss.tone === "verifying") return name + " is verifying its work";
+    if (ss.tone === "verified") return name + " is verified";
+    return name + " is " + voiceStateWord(ss);
   }
   function firstSentence(text) {
     var s = stripMarkdown(text);
@@ -7030,8 +7355,9 @@
   }
 
   // --- control phrases: they act at the END of any phrase -------------------
-  // A stop phrase ("stop recording", "that's all", "mic off"…) ends listening
-  // wherever it is said, the words before it kept in the box. While the
+  // A stop phrase ("stop recording", "mic off"…) ends listening wherever it
+  // is said, the words before it kept in the box; a conversational one
+  // ("that's all", "done talking") only said on its own (voiceTail). While the
   // session is asking (voiceAsks: a dialog, or a Say line with a question),
   // an answer ("yes", "no thanks", "always", "option two") at the end of a
   // phrase answers it. Both are matched on the last VOICE_TAIL_MAX words
@@ -7147,12 +7473,21 @@
   // The control phrase a phrase ENDS with: {kind: "stop"} or (answers: the
   // session is asking) {kind: "answer", choice, number?}, plus `text` (the
   // words before it, as said) and `said` (the phrase itself, as said).
-  // The longest match wins: "no thanks" over "thanks".
-  function voiceTail(text, answers) {
+  // The longest match wins: "no thanks" over "thanks". A conversational
+  // stop phrase ("that's all") only as the whole phrase (voiceStopBefore),
+  // and never while `inFlight` (a stream's committed words so far: the
+  // phrase may go on, "that's all I need").
+  function voiceTail(text, answers, inFlight) {
     var words = String(text || "").trim().split(/\s+/).filter(Boolean);
     for (var k = Math.min(VOICE_TAIL_MAX, words.length); k >= 1; k--) {
       var t = voiceNorm(words.slice(words.length - k).join(" "));
       var hit = VOICE_W.stop.test(t) ? { kind: "stop" } : null;
+      if (!hit && !inFlight && VOICE_W.stopAlone.test(t)) {
+        var alone = voiceStopBefore(words.slice(0, words.length - k).join(" "));
+        if (alone !== null) {
+          return { kind: "stop", text: alone.replace(/[\s,;:.!?-]+$/, ""), said: words.slice(words.length - k).join(" ").replace(/[.!?]+$/, "") };
+        }
+      }
       if (!hit && answers) {
         hit = voiceAnswerWords(t, k === words.length);
         if (hit) hit.kind = "answer";
@@ -7175,6 +7510,14 @@
       }
     }
     near = near || voiceSoundTail(text, VOICE_W.stopSaid);
+    // ...and a conversational one heard a letter off, on its own only.
+    for (var a = 0; a < VOICE_W.stopAloneSaid.length && !near && !inFlight; a++) {
+      var m = voiceNorm(VOICE_W.stopAloneSaid[a]).split(" ").length;
+      if (words.length >= m && voiceSoundsLike(words.slice(words.length - m).join(" "), VOICE_W.stopAloneSaid[a])) {
+        var ok = voiceStopBefore(words.slice(0, words.length - m).join(" "));
+        if (ok !== null) near = { before: ok };
+      }
+    }
     if (near) {
       var said = voiceNorm(text).split(" ").slice(voiceNorm(near.before).split(" ").filter(Boolean).length).join(" ");
       return { kind: "stop", text: near.before.replace(/[\s,;:.!?-]+$/, ""), said: said };
@@ -7219,7 +7562,9 @@
   // send ("over": the box goes, listening on), end ("over and out": sent,
   // listening over), clear ("disregard", and "… that / it / all /
   // everything"), stop (a phrase of two words or more ends ANY phrase —
-  // "fix it, that's all"; a one-word one, "stop", only on its own), hush (on
+  // "fix it, stop listening"; a one-word one, "stop", and a conversational
+  // one, "that's all" / "done talking" (VOICE_STOP_ALONE), only on its own),
+  // hush (on
   // its own: the voice stops, the mic listens on) and the wake word (the
   // server hears it; the page only names it). Ours until GET /api/voice says
   // otherwise; the desktop's Settings → Voice changes them (synced), the
@@ -7245,6 +7590,31 @@
     wake: "mindflock",
   };
   var VOICE_WORD_KINDS = ["send", "end", "clear", "stop", "hush", "undo"];
+  // The stop forms that are also ordinary English endings ("…so make sure
+  // that that's all"): they stop only said on their own, a filler before
+  // them allowed (VOICE_STOP_FILLERS) or an end phrase ("over and out,
+  // that's all"). The defaults "that's all" and "done talking", their
+  // variants and heard forms — core.voice_words STOP_ALONE and
+  // lib/voiceWords STOP_ALONE, the same list (test_voice_stop_alone.py).
+  // A one-word stop phrase is whole-only too (voiceStopAlone).
+  var VOICE_STOP_ALONE = [
+    "stop",
+    "that's all", "that is all", "that's al", "that's hall",
+    "done talking", "i'm done talking", "i am done talking", "done talkin", "dun talking", "done torking", "then talking",
+  ];
+  var VOICE_STOP_FILLERS = ["ok", "okay", "um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "oh", "so", "well", "alright"];
+  function voiceStopAlone(p) {
+    var k = voiceNorm(p).replace(/'/g, "");
+    return k.indexOf(" ") < 0 || VOICE_STOP_ALONE.some(function (a) { return a.replace(/'/g, "") === k; });
+  }
+  // The words before a lone stop phrase that leave it alone: fillers only
+  // ("Okay, that's all.") → "" (never typed), an end phrase at their end →
+  // them (voiceStopPhrase sends, then stops); else null: it is dictation.
+  function voiceStopBefore(before) {
+    var ws = voiceNorm(before).replace(/'/g, "").split(" ").filter(Boolean);
+    if (ws.every(function (w) { return VOICE_STOP_FILLERS.indexOf(w) >= 0; })) return "";
+    return voiceDictParse(before).kind === "out" ? before : null;
+  }
   var VOICE_WORD_VARIANTS = {
     "stop listening": ["stop recording", "stop dictating", "stop the mic", "stop the microphone"],
     "mic off": ["microphone off"],
@@ -7413,11 +7783,14 @@
       // — each the owner's phrases and what is heard for them.
       dict: new RegExp("^(.*?)[\\s,.!?]*\\b(?:(" + voiceWordsAlt(w.end.concat(H.end), R, "['’]") + ")|(" + voiceWordsAlt(w.clear.concat(H.clear), R, "['’]") +
         "(?:\\s+(?:" + VOICE_CLEAR_TAILS.join("|") + "))?)|" + voiceWordsAlt(w.send.concat(H.send), R, "['’]") + ")[.!?\\s]*$", "i"),
-      // On normalized words: a stop phrase at the end (two words or more),
-      // the stop command and the hush phrase (the whole phrase).
-      stop: new RegExp("^" + voiceWordsAlt(stop.filter(function (p) { return p.indexOf(" ") > 0; }), " ", "'") + "$"),
+      // On normalized words: a stop phrase at the end (two words or more,
+      // not a conversational one), a conversational one (the whole phrase:
+      // voiceTail), the stop command and the hush phrase (the whole phrase).
+      stop: new RegExp("^" + voiceWordsAlt(stop.filter(function (p) { return p.indexOf(" ") > 0 && !voiceStopAlone(p); }), " ", "'") + "$"),
+      stopAlone: new RegExp("^" + voiceWordsAlt(stop.filter(function (p) { return p.indexOf(" ") > 0 && voiceStopAlone(p); }), " ", "'") + "$"),
       // ...and those phrases as said, for voiceTail's sound-alike stop.
-      stopSaid: stop.filter(function (p) { return p.indexOf(" ") > 0; }),
+      stopSaid: stop.filter(function (p) { return p.indexOf(" ") > 0 && !voiceStopAlone(p); }),
+      stopAloneSaid: stop.filter(function (p) { return p.indexOf(" ") > 0 && voiceStopAlone(p); }),
       stopCmd: new RegExp("^" + voiceWordsAlt(stop.concat(w.stop.indexOf("mic off") >= 0 ? VOICE_WORD_CMD_VARIANTS["mic off"] : []), " ", "'") + "$"),
       hush: new RegExp("^" + voiceWordsAlt(hush, " ", "'") + "$"),
       // voiceUndoParse, on normalized words: an undo phrase at the END.
@@ -8955,7 +9328,7 @@
       if (kind === "halted") return endSentence(name + "'s route is " + haltedWords(i).toLowerCase());
       if (kind === "plan") return endSentence(name + " has a plan waiting for Go");
       if (kind === "ready") return endSentence(name + " is pushed and ready for its PR");
-      return endSentence(name + " is " + voiceStateWord(ss));
+      return endSentence(voiceStateLine(name, ss));
     }).join(" ") : "Nothing needs you.";
     speakLine(line).then(function (ok) { if (ok) voiceIdle(); });
   }
@@ -9035,7 +9408,7 @@
       var since = Number(inst.activity_since) || 0;
       var mins = since ? Math.round((Date.now() / 1000 - since) / 60) : 0;
       var dur = inst.activity === "working" && mins >= 1 ? " for " + mins + " minute" + (mins === 1 ? "" : "s") : "";
-      line = name + " is " + voiceStateWord(ss) + dur + "." +
+      line = voiceStateLine(name, ss) + dur + "." +
              (inst.last_turn ? " " + endSentence(stripMarkdown(inst.last_turn)) : "");
     }
     speakLine(line).then(function (ok) { if (ok) voiceIdle(); });

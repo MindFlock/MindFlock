@@ -567,6 +567,10 @@ def _child_out(srv, instances, parent: str, child: str, now: float):
     reading = memo.get("reported")
     if reading == "working":
         return "working", rep_ts
+    if reading == "offline" and _launch_gate.waiting(child) is not None:
+        # Its agent waits for memory to start (a held worker whose turn
+        # came, a queued relaunch): it still owes its parent the work.
+        return "queued", rep_ts
     if reading in ("clarify", "limit", "offline"):
         return None, rep_ts
     if cq.get("enabled") and cq.get("items"):
@@ -1013,6 +1017,21 @@ def _queue_relaunch(title: str, rec: dict, inst=None) -> Optional[str]:
         rec["rebooted_at"] = time.time()
         rec["armed"] = True
     return err
+
+
+def note_launched(title: str, now: Optional[float] = None) -> None:
+    """``title``'s agent was just launched by another path (a held worker
+    whose turn came — core.worker_order_driver): the same boot grace a
+    relaunch here gets, so the first send waits for the CLI to draw its
+    prompt and an "offline" reading from before the launch relaunches
+    nothing."""
+    rec = _QUEUE_STATE.setdefault(
+        title,
+        {"armed": True, "sent_at": 0.0, "rebooted_at": 0.0, "idle_since": None},
+    )
+    rec["rebooted_at"] = time.time() if now is None else now
+    rec["armed"] = True
+    rec["idle_since"] = None
 
 
 def _restore_relaunch(rec: dict):

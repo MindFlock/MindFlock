@@ -195,16 +195,17 @@ def test_attach_goes_through_mux(monkeypatch):
 
 
 def test_mux_attach_on_posix_is_the_same_tmux_client(monkeypatch):
-    ptyprocess = pytest.importorskip("ptyprocess")
+    """The same tmux client as ever, started by ``mux.spawn_pty``
+    (``posix_spawn`` on Linux: never a fork of the server)."""
     if mux.IS_WINDOWS:
         pytest.skip("POSIX attach")
     seen = {}
 
-    def spawn(argv, dimensions, env):
+    def spawn(argv, *, dimensions, env):
         seen.update(argv=argv, dimensions=dimensions, term=env["TERM"])
         return "proc"
 
-    monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", spawn)
+    monkeypatch.setattr(mux, "spawn_pty", spawn)
     assert terminal.spawn_tmux_attach("mf_x") == "proc"
     assert seen == {
         "argv": ["tmux", "attach-session", "-t", "=mf_x"],
