@@ -1,20 +1,22 @@
-/** The Behaviors card: a session's verify, opened in place on the Sky (the
- * Behaviors tile, a Verify stop, a Behaviors-board row).
+/** The Verify card: a session's verify, opened in place on the Sky (the
+ * Verify tile, a Verify stop, a board row).
  *
  * VERIFY IS THE SESSION'S OWN AGENT (owner request 2026-11-10): "Verify"
  * has it write its own actionable steps and work them in its terminal, and
  * tell the person whatever only a person can do. So the card is small: the
  * status sentence, ONE primary action (Verify, or Open its agent while it
  * works), ⋯ (the rest, in a portal — the card sits on a zoomed canvas), ×;
- * the steps only a person can do with Confirm verified / Not verified… when
- * it waits on you; then the agent's steps, read-only, each with who does it
- * and its result. A Verify stop that HALTED its route keeps Retry · Skip ·
- * Let the agent fix it. */
+ * Confirm verified / Not verified… when it waits on you ("Sign off" when no
+ * step is a person's); then the steps, read-only and listed ONCE, each with
+ * who does it, its result, who answered and the evidence. A failed verify's
+ * primary is "Let its agent fix it" (`onFixInSession`; "Fix in a new
+ * session" stays in ⋯). A Verify stop that HALTED its route keeps Retry ·
+ * Skip · Let the agent fix it. */
 
 import { useRef, useState, type JSX } from "react";
 import { createPortal } from "react-dom";
 import type { TestPlan, TestStep } from "../../api/types";
-import { behaviorSummary, behaviorsCount, planForSession } from "../../lib/behaviors";
+import { behaviorSummary, planForSession, tallyLine } from "../../lib/behaviors";
 import { flightAction, flightPath, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { verifyOf } from "../../lib/sessionState";
 import * as actions from "../../lib/verifyActions";
@@ -24,6 +26,18 @@ import { StopMenu, type SkyMenuItem } from "../flights/StopMenu";
 import { InlineConfirm } from "../InlineConfirm";
 import { BehaviorRow } from "./BehaviorRow";
 import { cardMenuItems, haltedLine, verifyCardView, verifyStopStand, watchSessionOf, type CardMenuItem, type CardMenuKey } from "./cardModel";
+
+/** The card's default "Let its agent fix it": today the existing fix (a new
+ * session with what failed attached). ORCHESTRATOR: once
+ * lib/verifyActions.ts has `fixInSession(planId)`, make this
+ * `actions.fixInSession(plan.id)` — the one place the card's fix is wired
+ * (the head's primary and every failed row's button both call it). */
+export function defaultFixInSession(plan: TestPlan, _stepIds?: string[]): Promise<unknown> {
+  // The server hands EVERY failed step, with its evidence, to the session's
+  // own agent and verifies again after its turn; when that session is gone it
+  // answers without `in_session` and `fixInSession` says a new one was opened.
+  return actions.fixInSession(plan.id, plan.title || plan.id);
+}
 import { FailedSteps, VerifyConfirm } from "./VerifyConfirm";
 import "./BehaviorsCard.css";
 
@@ -36,9 +50,13 @@ export interface BehaviorsCardProps {
   /** Start with every step open (they start collapsed to one line). */
   expanded?: boolean;
   /** Set when the card is a Verify stop's: the route it parks. Lets the card
-   * offer "Skip this stop" — and, when the stop's behaviors failed and HALTED
+   * offer "Skip this stop" — and, when the stop's steps failed and HALTED
    * the route, Retry · Skip · Let the agent fix it. */
   flightStep?: { flightId: string; stepId: string } | null;
+  /** "Let its agent fix it" (the failed head's primary, a failed row's
+   * button): hand what failed to the session's own agent. Default
+   * `defaultFixInSession`. */
+  onFixInSession?(plan: TestPlan, stepIds?: string[]): Promise<unknown>;
 }
 
 /** The ✓-shield the tile wears too. */
@@ -51,12 +69,13 @@ export function ShieldIcon(): JSX.Element {
   );
 }
 
-export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: BehaviorsCardProps): JSX.Element {
+export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded, onFixInSession = defaultFixInSession }: BehaviorsCardProps): JSX.Element {
   const { data: instances } = useInstances();
   const session = (instances || []).find((i) => planForSession([plan], i) === plan) || null;
   const verify = session ? verifyOf(session) : null;
   const s = verifyCardView(plan, behaviorSummary(plan), verify, session?.title || "");
   const steps = plan.steps || [];
+  const tally = tallyLine(plan);
   const running = plan.state === "running";
   const watch = watchSessionOf(plan);
   // The Verify stop this card stands in for, if any: halted on a failure, or
@@ -83,8 +102,8 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
   };
 
   /** Verify: the session's own agent, in its terminal (its Agent tab opens).
-   * With the session gone, the behaviors' own run (`/run`) — an older path
-   * the server still answers. */
+   * With the session gone, the plan's own run (`/run`) — an older path the
+   * server still answers. */
   const verifyNow = () =>
     void withBusy("primary", () => (session ? actions.startSessionVerify(session.title) : actions.startChecklistRun(plan)));
 
@@ -93,6 +112,7 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
     if (!a) return;
     if (a.key === "open" && session) actions.openWalkingSession(session.title);
     else if (a.key === "verify") verifyNow();
+    else if (a.key === "agentfix") void withBusy("primary", () => onFixInSession(plan));
   };
 
   const pick = (key: CardMenuKey) => {
@@ -140,7 +160,7 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
   };
 
   const items: CardMenuItem[] = cardMenuItems(plan, { summary: s, session: session ? { title: session.title, pr_url: session.pr_url, verify } : null });
-  const fixOne = running || busy ? undefined : (step: TestStep) => void withBusy("fix", () => actions.fixPlanFailures(plan, [step.id]));
+  const fixOne = running || busy ? undefined : (step: TestStep) => void withBusy("fix", () => onFixInSession(plan, [step.id]));
 
   return (
     <section
@@ -149,7 +169,7 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
       data-tone={s.tone}
       data-tour="behaviors-card"
       data-no-drag
-      aria-label={"Behaviors — " + s.status}
+      aria-label={"Verify — " + s.status}
       onKeyDown={(e) => {
         if (e.key !== "Escape" || !onClose || menu) return;
         const from = e.target as HTMLElement;
@@ -162,11 +182,15 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
       <header className="bh-head">
         <div className="bh-head-row">
           <ShieldIcon />
-          <span className="bh-title">Behaviors</span>
+          <span className="bh-title">Verify</span>
           <span className="bh-status" data-tone={s.tone}>
             {s.status}
           </span>
-          {steps.length ? <span className="bh-count">{behaviorsCount(steps.length)}</span> : null}
+          {tally ? (
+            <span className="bh-count bh-tally" title="Where its steps stand">
+              {tally}
+            </span>
+          ) : null}
           {steps.length > 1 ? (
             <button
               type="button"
@@ -182,7 +206,7 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
               ref={moreRef}
               type="button"
               className="fl-icon-btn bh-more"
-              aria-label="More for these behaviors"
+              aria-label="More for Verify"
               aria-haspopup="menu"
               aria-expanded={!!menu}
               onClick={(e) => {
@@ -201,15 +225,15 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
         </div>
         <p className="bh-sentence">{stand === "halted" ? haltedLine(s.failed) : s.sentence}</p>
         {stand === "halted" && flightStep ? (
-          // A failed behavior HALTS the route (the owner likes halt; no
-          // recovery ladder): Retry checks again, Skip moves on without them,
+          // A failed step HALTS the route (the owner likes halt; no
+          // recovery ladder): Retry verifies again, Skip moves on without it,
           // "Let the agent fix it" hands the failure to the session's agent
           // and checks again once its turn ends (POST …/op/fix).
           <div className="bh-head-actions bh-halt-actions">
             <button
               type="button"
               className="btn-primary bh-retry"
-              title="Check these behaviors again"
+              title="Verify again"
               disabled={!!busy}
               onClick={() => void withBusy("retry", () => stepRetry(flightStep.flightId, flightStep.stepId))}
             >
@@ -218,7 +242,7 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
             <button
               type="button"
               className="test-btn bh-skip"
-              title="The route moves on without these behaviors"
+              title="The route moves on without this Verify"
               disabled={!!busy}
               onClick={() => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId))}
             >
@@ -227,11 +251,11 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
             <button
               type="button"
               className="test-btn bh-fix-agent"
-              title="Hand what failed to this session's agent; the behaviors are checked again once it is done"
+              title="Hand what failed to this session's agent; it verifies again once the fix is done"
               disabled={!!busy}
               onClick={() =>
                 void withBusy("agentfix", () =>
-                  flightAction("Let the agent fix it", flightPath(flightStep.flightId, "/steps/" + encodeURIComponent(flightStep.stepId) + "/op/fix"), {}, "Handed to the agent — the behaviors are checked again after its fix")
+                  flightAction("Let the agent fix it", flightPath(flightStep.flightId, "/steps/" + encodeURIComponent(flightStep.stepId) + "/op/fix"), {}, "Handed to the agent — it verifies again after its fix")
                 )
               }
             >
@@ -249,7 +273,7 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
               <button
                 type="button"
                 className="test-btn bh-skip"
-                title="The route moves on without this check"
+                title="The route moves on without this Verify"
                 disabled={!!busy}
                 onClick={() => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId))}
               >
@@ -260,13 +284,20 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
         ) : null}
       </header>
 
-      {s.confirm && verify ? <VerifyConfirm verify={verify} /> : null}
+      {s.confirm && verify ? (
+        // The steps are listed once, in the rows below — the confirm is only
+        // the answer. With no person steps it is a sign-off.
+        <div className="bh-confirm">
+          {s.signOff ? <div className="bh-signoff">Sign off</div> : null}
+          <VerifyConfirm verify={verify} hideSteps />
+        </div>
+      ) : null}
       <FailedSteps steps={s.failedSteps} />
 
       {confirmDelete ? (
         <InlineConfirm
-          title="Delete these behaviors?"
-          body={"Their results go too" + (running ? ", and the check running now stops." : ".")}
+          title="Delete these steps?"
+          body={"Their results go too" + (running ? ", and the Verify under way stops." : ".")}
           confirmLabel="Delete"
           cancelLabel="Keep them"
           busy={busy === "delete"}
@@ -295,7 +326,7 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: 
               <StopMenu
                 x={menu.x}
                 y={menu.y}
-                label="Behaviors — what you can do"
+                label="Verify — what you can do"
                 items={items.map((it) => ({ ...it, key: it.key as unknown as SkyMenuItem["key"] }))}
                 onPick={(key) => {
                   setMenu(null);

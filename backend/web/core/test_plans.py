@@ -317,6 +317,28 @@ STATES = ("generating", "generated", "due", "running", "done", "failed")
 #: looks like; ``blocked`` is an agent saying "a person has to do this one".
 RESULTS = ("pass", "fail", "blocked", "")
 ACTORS = ("agent", "human")
+#: What an agent's results file may say for a result, mapped to the one
+#: :data:`RESULTS` word it means. Agents write "passed" and "ok" as often as
+#: "pass"; reading those as "blocked" turned a real pass into a step a person
+#: had to re-check. Anything NOT in here (and not a result word) is still
+#: ``blocked`` — "PASSED (mostly)" must never read as a pass.
+_RESULT_SYNONYMS = {
+    "pass": "pass",
+    "passed": "pass",
+    "ok": "pass",
+    "success": "pass",
+    "fail": "fail",
+    "failed": "fail",
+    "failure": "fail",
+    "error": "fail",
+    "blocked": "blocked",
+    "skipped": "blocked",
+}
+#: The note an agent-step ``pass`` gets when it came with no evidence in a
+#: self-verify — stored as ``blocked``: a pass nobody can check is not a pass.
+NO_EVIDENCE = "no evidence given"
+#: The text a reported step with an answer but no description is kept under.
+NO_DESCRIPTION = "(the agent gave this step no description)"
 #: A verify run's outcome — the Verify pill on the session's row (the row's
 #: ``verify`` field, :func:`verify_status`). ``verifying`` while the agent
 #: works; then ``passed`` (every agent step passed, nothing for a person),
@@ -325,8 +347,10 @@ ACTORS = ("agent", "human")
 #: confirms, :func:`confirm_verify`) or ``blocked`` (the check stopped before
 #: it could finish: closed, its session gone, or no steps written).
 OUTCOMES = ("verifying", "needs_you", "passed", "failed", "blocked")
-#: How long a settled ``passed`` / ``failed`` / ``blocked`` pill stays on the
-#: row before the row's ``verify`` goes back to null.
+#: How long a ``passed`` pill stays on the row before the row's ``verify``
+#: goes back to null. ONLY a pass expires: a ``failed`` or ``blocked`` one is
+#: something a person still has to act on, so it stays until the next verify
+#: starts or a person dismisses it (:func:`dismiss_verify`).
 VERIFY_SHOW_S = 600.0
 
 #: --- how much of the change the model gets to read ------------------------
@@ -1026,7 +1050,48 @@ def _normalize_result(raw) -> dict:
         # "all", and backed it with evidence (see :func:`_walked_answer`).
         # Present only when true, so every older cell keeps its exact shape.
         **({"walked": True} if raw.get("walked") else {}),
+        # What the AGENT had said about this step before a person overrode it
+        # (:func:`confirm_verify`) — kept, not lost, so the person's answer
+        # can be read beside the agent's. Present only when there was one.
+        **(
+            {"agent_note": _text(raw.get("agent_note"))}
+            if _text(raw.get("agent_note"))
+            else {}
+        ),
     }
+
+
+def _coerce_result(value) -> str:
+    """An agent's reported ``result`` → a :data:`RESULTS` word (pure).
+
+    ``""`` for no answer (absent, null, blank). Synonyms map to the word they
+    mean (:data:`_RESULT_SYNONYMS`, case and a trailing full stop ignored);
+    anything else is ``blocked`` — never ``pass``."""
+    if value is None or isinstance(value, bool):
+        return "" if value is None else "blocked"
+    text = str(value).strip().lower().rstrip(".!")
+    if not text:
+        return ""
+    return _RESULT_SYNONYMS.get(text, "blocked")
+
+
+def _agent_cell(
+    run: dict, actor: str, value: str, note: str, now: float, by: str = "agent"
+) -> dict:
+    """The stored cell for an AGENT's answer to one step (pure): a person's
+    step goes through :func:`_agent_human_answer`; in a SELF-VERIFY run an
+    agent-step ``pass`` with no note is ``blocked`` with :data:`NO_EVIDENCE`
+    — the prompt demands evidence, and a claim nobody can check is not a
+    pass. Shared by :func:`record_progress` and :func:`finish_run`."""
+    walked = False
+    if actor == "human":
+        value, note, walked = _agent_human_answer(run.get("walk"), value, note)
+    elif run.get("self") and value == "pass" and not note.strip():
+        value, note = "blocked", NO_EVIDENCE
+    cell = {"result": value, "note": note, "at": now, "by": by}
+    if walked:
+        cell["walked"] = True
+    return cell
 
 
 def _verdict(steps: List[dict], results: dict) -> str:
@@ -1299,6 +1364,16 @@ def _normalize_run(raw, steps: List[dict]) -> dict:
             else {}
         ),
         **_outcome_fields(raw),
+        # Why the agent's results file could not be read on the last try
+        # (:func:`note_file_error`); cleared by the next good read. Present
+        # only when set.
+        **(
+            {"file_error": _text(raw.get("file_error"), 300)}
+            if _text(raw.get("file_error"), 300)
+            else {}
+        ),
+        # A person dismissed this settled run's pill (:func:`dismiss_verify`).
+        **({"dismissed": True} if raw.get("dismissed") else {}),
         # Always recomputed. The stored value is a convenience for the client;
         # recomputing keeps a half-written or hand-edited file honest, and
         # ``record_result`` would otherwise have to remember to refresh it.
@@ -1874,6 +1949,14 @@ def mark_due(plan_id: str, reason: str = "") -> Optional[dict]:
     """
 
     def apply(plan: dict) -> None:
+        # A GIVE-UP ON A RUN IN THE PERSON'S OWN SESSION IS A RELEASE, NOT A
+        # SHIPPING. Stamping ``live_at`` here would make unshipped work read as
+        # shipped, and popping the run made the pill vanish (or show the run
+        # before it, "passed"). :func:`release_run` keeps the run as blocked
+        # with the reason and never touches ``live_at``.
+        if reason and _releasable(plan):
+            _release(plan, reason)
+            return
         # ...but NOT a plan being written right now. The liveness pass reads a
         # snapshot of the store and can call this by id up to its whole
         # wall-clock budget later — by which time the user may have pressed
@@ -1943,6 +2026,60 @@ def mark_due(plan_id: str, reason: str = "") -> Optional[dict]:
     return _mutate(plan_id, apply)
 
 
+def _releasable(plan: dict) -> bool:
+    """Whether the plan's newest run is a SELF-VERIFY or one handed to the
+    plan's own session — the runs :func:`release_run` settles in place."""
+    runs = plan.get("runs") or []
+    run = runs[-1] if runs else {}
+    return bool(run.get("self") or run.get("in_session"))
+
+
+def _release(plan: dict, reason: str) -> None:
+    """:func:`release_run`'s change, in place (see there)."""
+    runs = plan["runs"]
+    run = runs[-1] if runs else None
+    reason = _text(reason, 500)
+    if run is not None and run.get("outcome") == "verifying":
+        # Settled ``blocked`` with the reason, and any steps a self-verify
+        # took away come back (:func:`_release_run`).
+        _release_run(plan, reason)
+        if not reason:
+            run.pop("outcome_note", None)
+        run.pop("dismissed", None)
+        run["verdict"] = _verdict(plan["steps"], run.get("results") or {})
+    elif run is not None:
+        # Settled already: only the steps snapshot, if it is still there.
+        _release_run(plan, reason)
+    plan["run_session"] = ""
+    plan["error"] = ""
+    if plan["state"] == "running":
+        # Exactly :func:`cancel_run`'s landing: the state the plan was in
+        # before the run, read off ``live_at`` — which nothing here moves.
+        if plan["live_at"] and _all_settled(plan):
+            plan["state"] = "done"
+        else:
+            plan["state"] = "due" if plan["live_at"] else "generated"
+
+
+def release_run(plan_id: str, reason: str) -> Optional[dict]:
+    """The agent's window died (or the check was given up on) mid-run: end the
+    run WITHOUT lying about it → the plan, or ``None`` when it is gone.
+
+    For a ``self`` / ``in_session`` run. The run is KEPT, with its outcome
+    ``blocked`` and ``outcome_note`` = ``reason`` (whatever it answered stays
+    answered), so the Verify pill says "Verify blocked" and why instead of
+    vanishing or showing the run before it. The plan's state goes back the way
+    :func:`cancel_run` puts it, and ``live_at`` is never stamped: the run
+    dying is not the work shipping. A run that already settled keeps its
+    outcome; calling this on a plan that is not running only settles a run
+    still marked verifying."""
+
+    def apply(plan: dict) -> None:
+        _release(plan, reason)
+
+    return _mutate(plan_id, apply)
+
+
 def set_focus(plan_id: str, focus: str) -> Optional[dict]:
     """Record what the person said the last draft got wrong.
 
@@ -1996,9 +2133,7 @@ def fail_run(plan_id: str, session_title: str, error: str) -> Optional[dict]:
         if plan["state"] == "running":
             # A self-verify run is settled ``blocked``, not popped, and its
             # steps come back (:func:`_release_run`).
-            kept = _release_run(
-                plan, "The verify session couldn't start. " + str(error or "")
-            )
+            kept = _release_run(plan, "Verify couldn't start. " + str(error or ""))
             # Work that has not shipped goes back to waiting for it, not to
             # ``due`` — a check before merge that could not start must not make
             # the plan claim to be live.
@@ -2006,7 +2141,7 @@ def fail_run(plan_id: str, session_title: str, error: str) -> Optional[dict]:
         # An in-flight run with nothing in it is litter, not history.
         if not kept and plan["runs"] and not (plan["runs"][-1].get("results") or {}):
             plan["runs"].pop()
-        plan["error"] = _text("The verify session couldn't start. " + str(error or ""))
+        plan["error"] = _text("Verify couldn't start. " + str(error or ""))
 
     plan = _mutate(plan_id, apply)
     return None if outcome["stale"] else plan
@@ -2111,8 +2246,8 @@ def start_run(
     to verify the work it just did — write its own steps into the results
     file and walk them (:func:`build_self_verify_prompt`). The plan's
     generated steps are dropped (a person's own, ``manual``, are kept and
-    handed to the agent), nothing a person answered is carried (the steps are
-    new), and the run is stamped ``self`` (plus ``confirm``: a person signs
+    handed to the agent), a person's earlier PASS is carried for any step id
+    the agent keeps (see ``carried``), and the run is stamped ``self`` (plus ``confirm``: a person signs
     it off even when every agent step passes). ``tip_sha``, when given, is
     the session's HEAD now — what the tree check holds the walk to.
 
@@ -2172,12 +2307,23 @@ def start_run(
         # Not across a merge, though: what a person saw on the BRANCH before it
         # shipped is not an answer about what shipped, so a shipped plan whose
         # newest run was a pre-merge check starts clean (``_current_run``).
+        #
+        # A SELF-VERIFY writes new steps, but it is told to keep the ids of
+        # the steps it re-checks (:func:`previous_for_prompt`), so a person's
+        # answer is carried by id and survives exactly when the agent keeps
+        # that step (:func:`adopt_reported_steps` drops the answers to ids it
+        # did not keep). Only a person's PASS: their "fail" is what the agent
+        # is re-checking after a fix, and carrying it would pin the check to
+        # failed — a person's answer is never overwritten by the agent.
         carried = {}
         current = _current_run(plan)
-        if current is not None and not self_authored:
+        if current is not None:
             for step_id, entry in (current.get("results") or {}).items():
-                if entry.get("by") == "human" and entry.get("result"):
-                    carried[step_id] = dict(entry)
+                if entry.get("by") != "human" or not entry.get("result"):
+                    continue
+                if self_authored and entry.get("result") != "pass":
+                    continue
+                carried[step_id] = dict(entry)
         prior = None
         if self_authored:
             # The agent writes this run's steps itself; only a person's own
@@ -2316,7 +2462,13 @@ def record_progress(plan_id: str, results: List[dict]) -> Optional[dict]:
     never overwritten. ``progress_at`` on the run is stamped only when an answer
     actually changed — it is the clock a stall is measured by. The state,
     ``run_session`` and the run's end are left alone: only ``finish_run`` (or
-    a close) ends a run."""
+    a close) ends a run.
+
+    Results are read through :func:`_coerce_result` (``passed`` / ``ok`` →
+    pass, ``failed`` / ``error`` → fail, ``skipped`` → blocked), and in a
+    self-verify an agent-step pass with no note is ``blocked`` with
+    :data:`NO_EVIDENCE`. A good read clears the run's ``file_error``
+    (:func:`note_file_error`)."""
     now = time.time()
 
     def apply(plan: dict) -> None:
@@ -2325,6 +2477,7 @@ def record_progress(plan_id: str, results: List[dict]) -> Optional[dict]:
             return
         if run.get("session") not in ("", plan["run_session"]):
             return
+        run.pop("file_error", None)
         actors = {st["id"]: st["actor"] for st in plan["steps"]}
         changed = False
         for entry in results or []:
@@ -2336,24 +2489,16 @@ def record_progress(plan_id: str, results: List[dict]) -> Optional[dict]:
             mine = run["results"].get(sid) or {}
             if mine.get("by") == "human" and mine.get("result"):
                 continue
-            value = str(entry.get("result") or "").strip().lower()
+            value = _coerce_result(entry.get("result"))
             if not value:
                 continue  # not answered yet: nothing to record
-            if value not in RESULTS:
-                value = "blocked"
-            note = _text(entry.get("note"))
-            walked = False
-            if actors[sid] == "human":
-                value, note, walked = _agent_human_answer(run.get("walk"), value, note)
+            cell = _agent_cell(run, actors[sid], value, _text(entry.get("note")), now)
             if (
-                mine.get("result") == value
-                and mine.get("note", "") == note
-                and bool(mine.get("walked")) == walked
+                mine.get("result") == cell["result"]
+                and mine.get("note", "") == cell["note"]
+                and bool(mine.get("walked")) == bool(cell.get("walked"))
             ):
                 continue
-            cell = {"result": value, "note": note, "at": now, "by": "agent"}
-            if walked:
-                cell["walked"] = True
             run["results"][sid] = cell
             changed = True
         if changed:
@@ -2546,7 +2691,7 @@ def finish_run(
                 # agent's report for that step — the answer would never come
                 # back, on any re-run, because the withdrawal outlives the run.
                 continue
-            value = str(entry.get("result") or "").strip().lower()
+            value = _coerce_result(entry.get("result"))
             if (
                 not value
                 and run.get("self")
@@ -2554,22 +2699,22 @@ def finish_run(
                 and actors.get(step_id) == "human"
             ):
                 continue  # the person's step: theirs to confirm
-            if value not in RESULTS or not value:
-                value = "blocked"
+            value = value or "blocked"
             note = _text(entry.get("note"))
-            walked = False
-            if by != "human" and actors.get(step_id) == "human":
-                # Not a coercion of a bad value but of a bad AUTHOR: whatever
-                # this says, the thing that said it could not see the screen.
-                # "blocked" is the honest record — the step is still waiting on
-                # a person — and it is what keeps the plan out of the dialog's
-                # "done" group until one answers. Unless the run was walked
-                # "all" and the answer carries its evidence (see the docstring).
-                value, note, walked = _agent_human_answer(run.get("walk"), value, note)
-            cell = {"result": value, "note": note, "at": now, "by": by}
-            if walked:
-                cell["walked"] = True
+            if by == "human":
+                cell = {"result": value, "note": note, "at": now, "by": by}
+            else:
+                # For a person's step, not a coercion of a bad value but of a
+                # bad AUTHOR: whatever this says, the thing that said it could
+                # not see the screen. "blocked" is the honest record — the step
+                # is still waiting on a person — and it is what keeps the plan
+                # out of the dialog's "done" group until one answers. Unless the
+                # run was walked "all" and the answer carries its evidence (see
+                # the docstring). In a self-verify, an agent step's pass needs
+                # its evidence too (:func:`_agent_cell`).
+                cell = _agent_cell(run, actors.get(step_id), value, note, now, by)
             run["results"][step_id] = cell
+        run.pop("file_error", None)
         # A PASS ON THE WRONG TREE IS NOT A PASS. After the answers land, not
         # before: the incoming report is what is being judged. Fails and
         # blockeds are kept — a failure found on a near-enough tree is still
@@ -2581,19 +2726,32 @@ def finish_run(
         # looking at the product.
         if run_tree_mismatch(run):
             short = run["tested_sha"][:7]
+            # Where the tree SHOULD have been, in the words of the run: a check
+            # in the session's own worktree (or of "branch") was meant for the
+            # branch's newest commit, not for anything live.
+            meant = (
+                "this branch's newest commit"
+                if (
+                    run.get("in_session")
+                    or run.get("where") == BRANCH_WHERE
+                    or run.get("prelive")
+                )
+                else "the live tree"
+            )
             for cell in run["results"].values():
                 if cell.get("result") != "pass" or cell.get("by") == "human":
                     continue
                 cell["result"] = "blocked"
                 cell.pop("walked", None)
                 cell["note"] = (
-                    "not checked on the live tree — this run was on %s. %s"
-                    % (short, cell.get("note") or "")
+                    "not checked on %s — this run was on %s. %s"
+                    % (meant, short, cell.get("note") or "")
                 ).strip()
         run["verdict"] = _verdict(plan["steps"], run["results"])
         if run.get("outcome"):
             run["outcome"], why = _outcome(plan["steps"], run, closed)
             run["outcome_at"] = now
+            run.pop("dismissed", None)
             run.pop("outcome_note", None)
             if why:
                 run["outcome_note"] = _text(why, 500)
@@ -2652,19 +2810,76 @@ class NotNeedsYou(ValueError):
     person (the route's 409)."""
 
 
-def confirm_verify(plan_id: str, verified: bool, note: str = "") -> Optional[dict]:
+def _person_cell(previous: dict, value: str, note: str, now: float) -> dict:
+    """A PERSON's answer to one step, keeping what the AGENT had said about it
+    (its note) as ``agent_note`` — overriding the agent must not lose it."""
+    cell = {"result": value, "note": note, "at": now, "by": "human"}
+    agent_note = ""
+    if previous.get("by") != "human":
+        agent_note = _text(previous.get("note"))
+    agent_note = agent_note or _text(previous.get("agent_note"))
+    if agent_note:
+        cell["agent_note"] = agent_note
+    return cell
+
+
+def _settle_by_person(plan: dict, run: dict, now: float, signed_off: bool) -> None:
+    """Re-settle a run's ``outcome`` through :func:`_outcome` after a person
+    answered (in place): one fail means failed. ``signed_off``: the person
+    confirmed the check, so its ``confirm`` (sign-off) is satisfied."""
+    judged = dict(run, confirm=False) if signed_off else run
+    outcome, _why = _outcome(plan["steps"], judged)
+    if outcome != run.get("outcome"):
+        run["outcome"] = outcome
+        run["outcome_at"] = now
+        run.pop("dismissed", None)
+
+
+def _confirm_answers(steps) -> Optional[Dict[str, str]]:
+    """:func:`confirm_verify`'s ``steps`` checked → ``{id: "pass"|"fail"}``
+    or ``None``. ``ValueError`` for any other shape."""
+    if steps is None:
+        return None
+    if not isinstance(steps, dict):
+        raise ValueError("steps must map step ids to pass or fail")
+    out: Dict[str, str] = {}
+    for sid, value in steps.items():
+        value = str(value or "").strip().lower()
+        if value not in ("pass", "fail"):
+            raise ValueError("step %s: the answer must be pass or fail" % sid)
+        out[str(sid).strip()] = value
+    return out
+
+
+def confirm_verify(
+    plan_id: str,
+    verified: bool,
+    note: str = "",
+    steps: Optional[Dict[str, str]] = None,
+) -> Optional[dict]:
     """A PERSON confirms a ``needs_you`` verify → the plan, or ``None`` when
     it is gone. Raises :class:`NotNeedsYou` when the newest run's outcome is
-    not ``needs_you`` (still verifying, already settled, never started).
+    not ``needs_you`` (still verifying, already settled, never started), and
+    ``ValueError`` for ``steps`` that are not ``{step id: "pass"|"fail"}`` or
+    name a step the plan does not have.
 
-    ``verified=True``: every step still waiting (:func:`confirm_steps`) is
-    answered ``pass`` by the person and the outcome is ``passed``.
-    ``verified=False``: they are answered ``fail`` with the person's note (or
-    "a person said it doesn't work") and the outcome is ``failed`` — so the
-    failures read like any other (``failed_steps``, Fix…, the flight's halt).
-    The note lands on the run as ``outcome_note`` either way."""
+    ``steps``: per-step answers. Each named step (a step the agent answered
+    too — the person overrides it) is answered as given; every step still
+    waiting (:func:`confirm_steps`) that ``steps`` does not name takes the
+    all-at-once answer below. ``None`` is today's all-at-once meaning:
+
+    ``verified=True``: every step still waiting is answered ``pass`` by the
+    person. ``verified=False``: they are answered ``fail`` with the person's
+    note (or "a person said it doesn't work") — so the failures read like any
+    other (``failed_steps``, Fix…, the flight's halt).
+
+    The agent's own note on a step a person answers is kept as
+    ``agent_note``. The outcome is then recomputed (:func:`_outcome`, the
+    sign-off satisfied): one fail means ``failed``, else ``passed``. The note
+    lands on the run as ``outcome_note``."""
     now = time.time()
     note = _text(note, 500)
+    answers = _confirm_answers(steps)
 
     def apply(plan: dict) -> None:
         run = plan["runs"][-1] if plan["runs"] else None
@@ -2673,17 +2888,25 @@ def confirm_verify(plan_id: str, verified: bool, note: str = "") -> Optional[dic
                 "this check isn't waiting for a person (%s)"
                 % ((run or {}).get("outcome") or "no check")
             )
-        value = "pass" if verified else "fail"
-        cell_note = note or ("" if verified else "a person said it doesn't work")
-        for step in confirm_steps(plan):
-            run["results"][step["id"]] = {
-                "result": value,
-                "note": cell_note,
-                "at": now,
-                "by": "human",
-            }
+        ids = {s["id"] for s in plan["steps"]}
+        unknown = sorted(set(answers or {}) - ids)
+        if unknown:
+            raise ValueError("no such step: %s" % ", ".join(unknown))
+        fail_note = note or "a person said it doesn't work"
+        wanted: Dict[str, str] = {
+            s["id"]: ("pass" if verified else "fail") for s in confirm_steps(plan)
+        }
+        wanted.update(answers or {})
+        for step in plan["steps"]:
+            value = wanted.get(step["id"])
+            if not value:
+                continue
+            previous = run["results"].get(step["id"]) or {}
+            run["results"][step["id"]] = _person_cell(
+                previous, value, note if value == "pass" else fail_note, now
+            )
         run["verdict"] = _verdict(plan["steps"], run["results"])
-        run["outcome"] = "passed" if verified else "failed"
+        _settle_by_person(plan, run, now, signed_off=True)
         run["outcome_at"] = now
         run.pop("outcome_note", None)
         if note:
@@ -2698,33 +2921,105 @@ def _reported_steps(plan: dict, raw_steps: list) -> List[dict]:
     any other step (an unknown actor or a shell hazard is a person's —
     :func:`_normalize_step`), the agent's ids kept (its results key off
     them), a repeated or missing one renumbered, then a person's own
-    (``manual``) steps the report left out."""
-    steps: List[dict] = []
-    seen: set = set()
-    for entry in raw_steps:
-        if len(steps) >= MAX_STEPS:
-            break
-        if not isinstance(entry, dict):
-            continue
-        step = _normalize_step(
-            {k: entry.get(k) for k in ("id", "text", "expect", "actor", "needs")},
-            len(steps),
-        )
-        if step is None:
-            continue
-        sid = str(step["id"])[:40]
-        n = len(steps) + 1
-        while not sid or sid in seen:
-            sid = "s%d" % n
-            n += 1
-        step["id"] = sid
-        seen.add(sid)
-        steps.append(step)
+    (``manual``) steps the report left out.
+
+    Tolerant of how agents actually write the file (:func:`_report_entries`):
+    ``description`` / ``step`` are read as the text, an entry with a result
+    and no text is kept under :data:`NO_DESCRIPTION`, and one with a result
+    and no (or an odd) ``actor`` is the agent's own."""
+    steps: List[dict] = [step for step, _entry in _report_entries(raw_steps)]
+    seen: set = {s["id"] for s in steps}
     for kept in plan.get("steps") or []:
         if kept.get("manual") and kept["id"] not in seen and len(steps) < MAX_STEPS:
             steps.append(kept)
             seen.add(kept["id"])
     return _prune_needs(steps)
+
+
+def _report_text(entry: dict) -> str:
+    """A reported step's instruction: ``text``, else ``description``, else a
+    string ``step`` — the three names agents use for it."""
+    for key in ("text", "description", "step"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _report_entries(raw_steps) -> List[tuple]:
+    """A self-verify report's step entries → ``[(step, entry)]`` (pure): the
+    normalized step with its FINAL id, and the raw entry it came from. The one
+    place ids are assigned, so :func:`_reported_steps` (the plan's steps) and
+    :func:`reported_results` (the answers) can never disagree about which
+    answer belongs to which step — an entry with no id used to be renumbered
+    as a step while its answer, keyed on nothing, was dropped."""
+    out: List[tuple] = []
+    if not isinstance(raw_steps, list):
+        return out
+    seen: set = set()
+    for entry in raw_steps:
+        if len(out) >= MAX_STEPS:
+            break
+        if not isinstance(entry, dict):
+            continue
+        answered = bool(_coerce_result(entry.get("result")))
+        text = _report_text(entry)
+        if not str(text).strip() and answered:
+            text = NO_DESCRIPTION
+        actor = str(entry.get("actor") or "").strip().lower()
+        if actor not in ACTORS and answered:
+            # It answered the step, so it worked it: the agent's own (the
+            # shell-hazard rule in _normalize_step still applies).
+            actor = "agent"
+        raw = {k: entry.get(k) for k in ("id", "expect", "needs")}
+        raw.update(text=text, actor=actor)
+        step = _normalize_step(raw, len(out))
+        if step is None:
+            continue
+        sid = str(step["id"])[:40]
+        n = len(out) + 1
+        while not sid or sid in seen:
+            sid = "s%d" % n
+            n += 1
+        step["id"] = sid
+        seen.add(sid)
+        out.append((step, entry))
+    return out
+
+
+def report_finished(data) -> bool:
+    """Whether a results file says the check is finished: ``"finished"`` is
+    exactly ``true``. A string ("false"), a number or anything else is NOT
+    finished — a truthy "false" used to end a check the agent was still
+    working through."""
+    return isinstance(data, dict) and data.get("finished") is True
+
+
+def note_file_error(plan_id: str, message: str) -> Optional[dict]:
+    """The agent's results file could not be read (bad JSON, wrong shape) →
+    the plan, or ``None`` when it is gone. Stamped on the newest run as
+    ``file_error`` so the Verify pill can say why nothing is moving
+    (:func:`verify_status`); the next good read clears it
+    (:func:`record_progress`, :func:`adopt_reported_steps`,
+    :func:`finish_run`), and so does an empty ``message`` (the driver
+    passes "" once the file parses again). Writes only on change (the poller
+    asks every few seconds)."""
+    text = _text(message, 300)
+
+    def apply(plan: dict) -> None:
+        if not plan["runs"]:
+            return
+        if text:
+            plan["runs"][-1]["file_error"] = text
+        else:
+            plan["runs"][-1].pop("file_error", None)
+
+    current = get(plan_id)
+    if current is None:
+        return None
+    if not current["runs"] or (current["runs"][-1].get("file_error") or "") == text:
+        return current
+    return _mutate(plan_id, apply)
 
 
 def _adopting(plan: Optional[dict]) -> bool:
@@ -2744,9 +3039,9 @@ def adopt_reported_steps(plan_id: str, raw_steps) -> Optional[dict]:
     if not isinstance(raw_steps, list):
         return None
     current = get(plan_id)
-    if (
-        not _adopting(current)
-        or _reported_steps(current, raw_steps) == current["steps"]
+    if not _adopting(current) or (
+        _reported_steps(current, raw_steps) == current["steps"]
+        and not current["runs"][-1].get("file_error")
     ):
         return None
     changed = {"v": False}
@@ -2754,10 +3049,11 @@ def adopt_reported_steps(plan_id: str, raw_steps) -> Optional[dict]:
     def apply(plan: dict) -> None:
         if not _adopting(plan):
             return
+        run = plan["runs"][-1]
+        run.pop("file_error", None)  # a good read
         steps = _reported_steps(plan, raw_steps)
         if steps == plan["steps"]:
             return
-        run = plan["runs"][-1]
         ids = {s["id"] for s in steps}
         plan["steps"] = steps
         # The agent's own steps are the plan's now: nothing to give back.
@@ -2773,13 +3069,16 @@ def adopt_reported_steps(plan_id: str, raw_steps) -> Optional[dict]:
 def reported_results(data: dict) -> list:
     """The answers in a results file: its ``results`` list, else — for a
     SELF-VERIFY report, whose ``steps`` carry their own ``result`` / ``note``
-    — its ``steps``. ``[]`` for neither."""
+    — its ``steps``, each with the id :func:`adopt_reported_steps` gave that
+    step (:func:`_report_entries`). ``[]`` for neither."""
     if not isinstance(data, dict):
         return []
-    for key in ("results", "steps"):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return value
+    value = data.get("results")
+    if isinstance(value, list) and value:
+        return value
+    value = data.get("steps")
+    if isinstance(value, list) and value:
+        return [dict(entry, id=step["id"]) for step, entry in _report_entries(value)]
     return []
 
 
@@ -2795,51 +3094,103 @@ def _plural(n: int, word: str) -> str:
     return "%d %s%s" % (n, word, "" if n == 1 else "s")
 
 
-def verify_status(plan: dict, now: Optional[float] = None) -> Optional[dict]:
+def _shown(plan: dict, run: dict) -> tuple:
+    """The pill state a run shows and the moment it is dated from, before
+    any expiry → ``(state, at, released_sentence)`` (pure). A run still
+    marked verifying whose plan is no longer running it (released: its window
+    died, the deadline passed) reads ``blocked`` with the plan's sentence."""
+    state = str(run.get("outcome") or "")
+    at = float(run.get("outcome_at") or run.get("at") or 0.0)
+    if state == "verifying" and not (
+        plan.get("state") == "running"
+        and str(plan.get("run_session") or "") == str(run.get("session") or "")
+    ):
+        at = float(run.get("progress_at") or run.get("at") or 0.0)
+        sentence = _first_sentence(plan.get("error") or "") or (
+            "The check stopped before it finished."
+        )
+        return "blocked", at, sentence
+    return state, at, ""
+
+
+def _why_not_passed(entry: dict) -> str:
+    """Why the AGENT left a step for a person, in words the person reads, or
+    ``""`` when it did not (no answer, or a person's own)."""
+    if entry.get("result") != "blocked" or entry.get("by") == "human":
+        return ""
+    note = str(entry.get("note") or "").strip()
+    if note.lower().startswith(NEEDS_YOU):
+        rest = note[len(NEEDS_YOU) :].strip()
+        return "the agent needs you to: %s" % rest if rest else "the agent needs you"
+    if note == NO_EVIDENCE:
+        return "the agent said it passed but gave no evidence"
+    return "agent couldn't: %s" % note if note else "agent couldn't do it"
+
+
+def _last_answer_at(run: dict) -> float:
+    """When the run last recorded an answer (epoch seconds), ``0.0`` when it
+    has recorded none. Answers carried in from before the run do not count."""
+    started = float(run.get("at") or 0.0)
+    latest = float(run.get("progress_at") or 0.0)
+    for entry in (run.get("results") or {}).values():
+        entry = entry or {}
+        at = float(entry.get("at") or 0.0)
+        if entry.get("result") and at >= started and at > latest:
+            latest = at
+    return latest
+
+
+def verify_status(
+    plan: dict, now: Optional[float] = None, queued: bool = False
+) -> Optional[dict]:
     """The session row's ``verify`` (docs/web-api.md) for this plan's newest
     run, or ``None``: a run without an ``outcome`` (written before the pill
-    existed), or one that settled ``passed`` / ``failed`` / ``blocked`` more
-    than :data:`VERIFY_SHOW_S` ago. Pure.
+    existed), a ``passed`` one that settled more than :data:`VERIFY_SHOW_S`
+    ago, or a settled one a person dismissed (:func:`dismiss_verify`). A
+    ``failed`` or ``blocked`` pill does NOT expire: it stays until the next
+    verify starts or a person dismisses it. Pure.
 
     ``{"state", "plan", "steps": {"total", "agent_done", "human"},
-    "human_steps": [{"id", "text", "expect"}], "failed_steps": [{"id",
-    "text", "note"}], "detail", "at"}``. A run still marked verifying whose
-    plan is no longer running it (released: its window died, the deadline
-    passed) reads ``blocked`` with the plan's sentence."""
+    "human_steps": [{"id", "text", "expect", "why"?}], "failed_steps": [{"id",
+    "text", "note"}], "detail", "at", "progress_at", "current",
+    "file_error"?}``. ``why`` is on a step the AGENT left for a person (its
+    note: "agent couldn't: …"). ``progress_at`` is when the run last recorded
+    an answer (``0.0`` for none); ``current`` the ``{id, text}`` of the first
+    step it walks with no answer yet (then the first of any step), or
+    ``None``; ``file_error`` why the agent's results file can't be read, only
+    when it can't. A run still marked verifying whose plan is no longer
+    running it (released) reads ``blocked`` with the plan's sentence.
+
+    ``queued``: the caller knows the prompt is still waiting for the agent's
+    turn to end — a verifying pill then says so."""
     now = time.time() if now is None else now
     runs = plan.get("runs") or []
     if not runs:
         return None
     run = runs[-1]
-    state = str(run.get("outcome") or "")
-    if state not in OUTCOMES:
+    if str(run.get("outcome") or "") not in OUTCOMES:
         return None
-    at = float(run.get("outcome_at") or run.get("at") or 0.0)
-    detail_override = ""
-    if state == "verifying" and not (
-        plan.get("state") == "running"
-        and str(plan.get("run_session") or "") == str(run.get("session") or "")
-    ):
-        state = "blocked"
-        at = float(run.get("progress_at") or run.get("at") or 0.0)
-        detail_override = _first_sentence(plan.get("error") or "") or (
-            "The check stopped before it finished."
-        )
-    if state in ("passed", "failed", "blocked") and now - at > VERIFY_SHOW_S:
+    state, at, detail_override = _shown(plan, run)
+    if state in ("passed", "failed", "blocked") and run.get("dismissed"):
+        return None
+    if state == "passed" and now - at > VERIFY_SHOW_S:
         return None
     steps = plan.get("steps") or []
     results = run.get("results") or {}
     agent = [s for s in steps if s.get("actor") == "agent"]
     agent_done = sum(1 for s in agent if (results.get(s["id"]) or {}).get("result"))
-    human_steps = [
-        {
+    human_steps = []
+    for s in confirm_steps(plan):
+        entry = results.get(s["id"]) or {}
+        item = {
             "id": s["id"],
             "text": s.get("text") or "",
-            "expect": s.get("expect")
-            or str((results.get(s["id"]) or {}).get("note") or ""),
+            "expect": s.get("expect") or str(entry.get("note") or ""),
         }
-        for s in confirm_steps(plan)
-    ]
+        why = _why_not_passed(entry)
+        if why:
+            item["why"] = why
+        human_steps.append(item)
     failed = [
         {
             "id": s["id"],
@@ -2849,8 +3200,16 @@ def verify_status(plan: dict, now: Optional[float] = None) -> Optional[dict]:
         for s in steps
         if (results.get(s["id"]) or {}).get("result") == "fail"
     ]
+    file_error = str(run.get("file_error") or "").strip()
     if detail_override:
         detail = detail_override
+    elif state == "verifying" and queued:
+        detail = "Waiting for the agent's turn to end."
+    elif state == "verifying" and file_error:
+        detail = "The agent's results file can't be read: %s" % _one_line(
+            file_error, 160
+        ).rstrip(".")
+        detail += "."
     elif state == "verifying":
         if not steps:
             detail = "The agent is working out how to check its work."
@@ -2884,7 +3243,12 @@ def verify_status(plan: dict, now: Optional[float] = None) -> Optional[dict]:
         if detail and not detail.endswith((".", "!", "?")):
             detail += "."
         detail = detail[:1].upper() + detail[1:]
-    return {
+    walked = agent_steps(plan, walk=run.get("walk") or WALK_AGENT)
+    pending = [s for s in walked if not (results.get(s["id"]) or {}).get("result")]
+    pending = pending or [
+        s for s in steps if not (results.get(s["id"]) or {}).get("result")
+    ]
+    out = {
         "state": state,
         "plan": str(plan.get("id") or ""),
         "steps": {
@@ -2896,7 +3260,35 @@ def verify_status(plan: dict, now: Optional[float] = None) -> Optional[dict]:
         "failed_steps": failed,
         "detail": detail,
         "at": at,
+        "progress_at": _last_answer_at(run),
+        "current": (
+            {"id": pending[0]["id"], "text": pending[0].get("text") or ""}
+            if pending
+            else None
+        ),
     }
+    if file_error:
+        out["file_error"] = file_error
+    return out
+
+
+def dismiss_verify(plan_id: str) -> Optional[dict]:
+    """A person dismisses the Verify pill of a SETTLED check (passed, failed
+    or blocked — a released run included) → the plan, or ``None`` when it is
+    gone. The newest run is marked ``dismissed`` and :func:`verify_status`
+    returns nothing for it; the next verify (a new run) shows again. A check
+    still verifying or waiting on a person (``needs_you``) is not dismissed:
+    the plan comes back unchanged."""
+
+    def apply(plan: dict) -> None:
+        runs = plan["runs"]
+        if not runs or str(runs[-1].get("outcome") or "") not in OUTCOMES:
+            return
+        state, _at, _sentence = _shown(plan, runs[-1])
+        if state in ("passed", "failed", "blocked"):
+            runs[-1]["dismissed"] = True
+
+    return _mutate(plan_id, apply)
 
 
 #: ``verify_index``'s memo: the store's ``(mtime_ns, size, ino, ctime_ns)``
@@ -2940,12 +3332,14 @@ def _verify_plans_by_title() -> Dict[str, dict]:
     return out
 
 
-def verify_for_session(title: str, now: Optional[float] = None) -> Optional[dict]:
+def verify_for_session(
+    title: str, now: Optional[float] = None, queued: bool = False
+) -> Optional[dict]:
     """The row ``verify`` for session ``title`` (:func:`verify_status`), or
     ``None``. Never raises."""
     try:
         plan = _verify_plans_by_title().get(str(title or ""))
-        return verify_status(plan, now) if plan else None
+        return verify_status(plan, now, queued=queued) if plan else None
     except Exception:  # noqa: BLE001 — enrichment only
         return None
 
@@ -3198,7 +3592,7 @@ def edit_step(
     plan = _mutate(plan_id, apply)
     if outcome["running"]:
         raise ValueError(
-            "an agent is checking these behaviors right now — cancel the run first"
+            "Verify is checking these steps right now — cancel the run first"
         )
     if outcome["bad"]:
         raise ValueError(outcome["bad"])
@@ -3257,13 +3651,32 @@ def record_result(
                 }
             )
         run = plan["runs"][-1]
-        run["results"][step_id] = {
-            "result": result,
-            "note": note,
-            "at": now,
-            "by": by,
-        }
+        previous = run["results"].get(step_id) or {}
+        if by == "human":
+            run["results"][step_id] = _person_cell(previous, result, note, now)
+        else:
+            run["results"][step_id] = {
+                "result": result,
+                "note": note,
+                "at": now,
+                "by": by,
+            }
         run["verdict"] = _verdict(plan["steps"], run["results"])
+        # A SELF-VERIFY WAITING ON A PERSON IS SETTLED BY THEIR ANSWERS TOO.
+        # Answering the steps one by one is the same act as confirming them
+        # all at once: a fail makes the check failed at once, and a check that
+        # still asks for a sign-off (``confirm``) stays waiting for it. Only
+        # a settled run that is not in flight — never one still verifying.
+        if (
+            run.get("self")
+            and run.get("outcome") in ("needs_you", "passed", "failed")
+            and plan["state"] != "running"
+        ):
+            # A confirm run only ever reads passed/failed after a person
+            # signed it off, so there the sign-off is already given.
+            _settle_by_person(
+                plan, run, now, signed_off=run.get("outcome") != "needs_you"
+            )
         # NOT WHILE AN AGENT IS STILL WORKING IT. Closing here also blanks
         # ``run_session``, and ``_poll_running_test_plans`` skips any plan whose
         # state is not ``running`` — so a person answering their own steps while
@@ -5085,7 +5498,7 @@ def parse_answer(raw: str) -> tuple:
         # try in real use, e.g. a bare helper function, 2026-11-03) is the
         # agent's judgment, not a broken answer: say that, and what to do.
         raise TestPlanError(
-            "the agent wrote no behaviors: it found nothing in this change a "
+            "the agent wrote no steps: it found nothing in this change a "
             "person could try in real use. Add one yourself, or rewrite with a focus"
         )
     raise TestPlanError("the CLI's <testplan> block held no usable steps")
@@ -5904,9 +6317,7 @@ def _generate_steps(
     # one press away and a plan about somebody else's product is worse than no
     # plan, because it is believed.
     if steps and all(_norm_example(s.get("text")) in _EXAMPLE_TEXTS for s in steps):
-        raise TestPlanError(
-            "the CLI echoed the example instead of writing the behaviors"
-        )
+        raise TestPlanError("the CLI echoed the example instead of writing the steps")
     # NOTHING SURVIVED THE VETTING. ``parse_answer`` already refuses a block with
     # no steps in it, so reaching here means the model DID write steps and every
     # one of them was thrown away — in practice a checklist of placeholders
@@ -6030,7 +6441,7 @@ def _generate_inner(
     except Exception as err:  # noqa: BLE001 — see the docstring: nowhere to raise
         if refresh:
             return _refresh_failed(plan_id, was)
-        return _fail(plan_id, "could not write the behaviors: %s" % err, was)
+        return _fail(plan_id, "could not write the steps: %s" % err, was)
     now = time.time()
     outcome: dict = {"stale": False}
 
@@ -6215,7 +6626,7 @@ def _fail(plan_id: str, reason: str, was: Optional[tuple] = None) -> dict:
         if was is not None and (plan["branch"], plan["sha"]) != was:
             outcome["stale"] = True
             return
-        plan["error"] = _text(reason) or "writing the behaviors failed"
+        plan["error"] = _text(reason) or "writing the steps failed"
         plan["gen_attempts"] = 0
         if not plan["steps"]:
             plan["state"] = "failed"
@@ -6808,6 +7219,50 @@ def build_run_prompt(
     return "\n".join(parts)
 
 
+def previous_for_prompt(plan: dict) -> List[dict]:
+    """What the plan's latest FINISHED check left undone, for the next
+    self-verify prompt (:func:`build_self_verify_prompt` ``previous``) →
+    ``[{"id", "text", "result", "note"}]`` (pure).
+
+    Every step of that run answered ``fail`` or ``blocked``; for a check that
+    stopped before it finished (it reads ``blocked``), also each step it
+    walks that it never answered. ``[]`` with no run, or while the newest run
+    is still in flight."""
+    plan = plan or {}
+    runs = plan.get("runs") or []
+    if not runs:
+        return []
+    run = runs[-1]
+    in_flight = plan.get("state") == "running" and str(
+        plan.get("run_session") or ""
+    ) == str(run.get("session") or "")
+    if in_flight:
+        return []
+    stopped = (
+        str(run.get("outcome") or "") in OUTCOMES and _shown(plan, run)[0] == "blocked"
+    )
+    walked = {s["id"] for s in agent_steps(plan, walk=run.get("walk") or WALK_AGENT)}
+    results = run.get("results") or {}
+    out: List[dict] = []
+    for step in plan.get("steps") or []:
+        entry = results.get(step["id"]) or {}
+        value = entry.get("result") or ""
+        note = str(entry.get("note") or "")
+        if not value and stopped and step["id"] in walked:
+            value, note = "blocked", "not answered before the check stopped"
+        if value not in ("fail", "blocked"):
+            continue
+        out.append(
+            {
+                "id": step["id"],
+                "text": step.get("text") or "",
+                "result": value,
+                "note": note,
+            }
+        )
+    return out[:MAX_STEPS]
+
+
 #: How many steps a self-verify asks the agent to write, at most.
 SELF_MAX_STEPS = 8
 
@@ -6820,19 +7275,32 @@ def build_self_verify_prompt(
     checkout_branch: str = "",
     notes: str = "",
     confirm: bool = False,
+    *,
+    walk: str = WALK_AGENT,
+    previous: Optional[List[dict]] = None,
 ) -> str:
     """SELF-VERIFY: the one prompt a Verify sends the session's OWN agent —
     "verify the work you just did" — with NO pre-written steps.
 
     The agent comes up with a few concrete, actionable checks of what it built
     (real usage — not the unit tests it already ran), writes them to
-    :data:`RESULT_FILE` as ``{id, text, expect, actor}``, puts them on its todo
-    list and works through its own (``actor`` "agent"), recording ``result``
-    pass / fail / blocked with an evidence ``note`` and rewriting the file after
-    every step. A step only a PERSON can do (``actor`` "human", no result) it
-    TELLS the person about in its reply — exactly what to do and what to look
-    for — because a person must then confirm the check (the ``needs_you``
-    outcome, :func:`confirm_verify`). ``finished: true`` when it is done.
+    :data:`RESULT_FILE` as ``{id, text, expect, actor}``, tracks them however
+    it tracks tasks and works through its own (``actor`` "agent"), recording
+    ``result`` pass / fail / blocked with a ``note`` holding evidence a person
+    can check, and rewriting the file after every step. ``finished: true``
+    when it is done.
+
+    ``walk`` "agent" (the default): a step only a PERSON can do (``actor``
+    "human", no result) it TELLS the person about — what to do and what to
+    look for — and a person then confirms the check (``needs_you``,
+    :func:`confirm_verify`). ``walk`` "all" (a Verify stop's "Agent only"):
+    it attempts EVERY step itself with its own tools, answers only with
+    evidence, and hands a step over (``blocked``, ``needs you: …``) only when
+    it truly cannot.
+
+    ``previous`` (:func:`previous_for_prompt`): the last check's failed and
+    blocked steps — listed first, to be re-checked under the same ids, before
+    any new steps.
 
     Opens with :data:`WALK_MARK` (how a queued walk is recognised). Never
     checks anything out: this is the person's own session on its own branch.
@@ -6842,6 +7310,7 @@ def build_self_verify_prompt(
     ``confirm``: a person signs the check off even if every step passes."""
     plan = plan or {}
     pid = str(plan.get("id") or "")
+    walk = _walk(walk)
     target = _text(target, 500)
     repo_notes = _text(repo_notes, NOTES_BUDGET)
     notes = _text(notes, NOTES_BUDGET)
@@ -6849,42 +7318,89 @@ def build_self_verify_prompt(
     env_name = where if where and where != BRANCH_WHERE else ""
     if where == BRANCH_WHERE:
         target = ""
+    evidence = (
+        'a "note" holding EVIDENCE a person can check: the command you ran and '
+        "the output line that shows the result, the URL and what was on it, "
+        "or the log line. A pass without evidence counts as blocked."
+    )
+    if walk == WALK_ALL:
+        work = (
+            "3. Attempt EVERY step yourself, with your own tools — including "
+            "steps a person would normally do (use a browser, an API, a "
+            'screenshot, a log; mark those actor "human"). Record "result": "pass", "fail" or "blocked" '
+            'for each, with %s Rewrite the file after every step. "fail" '
+            "means the product answered and answered wrong; if you cannot "
+            'reach or start it, the step is "blocked" with what you tried, '
+            'never "fail".' % evidence
+        )
+        handover = (
+            "4. Hand a step to the person ONLY when no tool of yours can do or "
+            'see it: record it "blocked" with a note starting "%s" that says '
+            'what to do and what to look for ("%s open /settings; look for '
+            '3 toggles"), and tell the person the same in your reply.'
+            % (NEEDS_YOU, NEEDS_YOU)
+        )
+    else:
+        work = (
+            '3. Work through YOUR steps (actor "agent") in order. Actually '
+            'perform each one, then record "result": "pass", "fail" or '
+            '"blocked" with %s Rewrite the file after every step. "fail" '
+            "means the product answered and answered wrong; if you cannot "
+            'reach or start it, the step is "blocked" with what you tried, '
+            'never "fail".' % evidence
+        )
+        handover = (
+            "4. A step ONLY A PERSON can do (a look at a real screen, a "
+            "device, a third-party account you cannot reach) is actor "
+            '"human" with no result. For each one, TELL THE PERSON in your '
+            'reply what to do and what to look for ("open /settings; you '
+            'should see 3 toggles"). Keep these to the few that truly need a '
+            "person: if any tool of yours can do or see it, it is yours."
+        )
     parts = [
         "%s verify the work you just did in this session — check, by actually "
         "using it, that it does what it was supposed to do." % WALK_MARK,
         "",
-        "1. Come up with up to %d concrete, actionable test steps for what you "
-        "built: real usage — run the command, call the endpoint, open the page, "
-        "read the output or the log it writes — NOT the unit tests you already "
+        "1. Come up with up to %d concrete test steps for what you built: "
+        "real usage — run the command, call the endpoint, open the page, read "
+        "the output or the log it writes — NOT the unit tests you already "
         "ran. Each step says what to DO and what you must OBSERVE for a pass. "
-        "Cover the behaviour the work was for, and the edge most likely to be "
-        "broken." % SELF_MAX_STEPS,
+        "Cover what the work was for, and the edge most likely to be broken."
+        % SELF_MAX_STEPS,
         "2. Write them to %s in the root of your worktree (git-excluded — it "
-        "never lands in your diff; it is how MindFlock reads your check), then "
-        'PUT THEM ON YOUR TODO LIST — one task per step, named "<id>: <what to '
-        'do>" — so the person watching follows along.' % RESULT_FILE,
-        '3. Work through YOUR steps (actor "agent") in order. Actually perform '
-        'each one and record "result": "pass", "fail" or "blocked" with a '
-        '"note" giving your evidence — what you ran and what you saw. Rewrite '
-        'the file after every step. "fail" means the product answered and '
-        "answered wrong; if you cannot reach or start it, that step is "
-        '"blocked" with what you tried, never "fail".',
-        "4. A step ONLY A PERSON can do (a look at a real screen, a device, a "
-        'third-party account you cannot reach) is actor "human" with no '
-        "result. For each one, TELL THE PERSON in your reply exactly what to do "
-        "and what to look for. Keep these to the few that truly need a person: "
-        "if any tool of yours can do or see it, it is yours.",
+        "never lands in your diff; it is how MindFlock reads your check), and "
+        'track them however you track tasks — one per step, named "<id>: '
+        '<what to do>" — so the person watching can follow along.' % RESULT_FILE,
+        work,
+        handover,
         "5. Report what you find. Do not fix anything while you verify, and do "
         "not commit or push for this check — unless the person tells you to. "
         "Do NOT check out, switch, pull or stash anything: the code under test "
         "is this worktree as it stands.",
-        '6. When every step of yours has a result, set "finished": true and '
-        "end your reply with a short summary: what passed, what failed, and "
-        "what the person still has to check.",
+        '6. When every step of yours has a result, set "finished": true (the '
+        "JSON value, not a string) and end your reply with a short summary: "
+        "what passed, what failed, and what the person still has to check.",
         "7. FINISH WITHIN %d MINUTES, and never end your turn with a background "
         "job still running: stop it first. A check that writes nothing for a "
         "long time is treated as stalled and closed." % RUN_BUDGET_MIN,
     ]
+    again = [p for p in previous or [] if isinstance(p, dict) and p.get("id")]
+    if again:
+        lines = [
+            "Your last check left these steps not passing — re-check these "
+            "first and keep their ids, then add any new steps:",
+        ]
+        for p in again[:MAX_STEPS]:
+            line = "%s (%s) %s" % (
+                _one_line(p.get("id"), 40),
+                _one_line(p.get("result") or "blocked", 20),
+                _one_line(p.get("text"), 300),
+            )
+            if str(p.get("note") or "").strip():
+                line += " — last time: %s" % _one_line(p.get("note"), 300)
+            lines.append(line)
+        # Before the numbered list, so "first" reads in order.
+        parts[2:2] = lines + [""]
     if env_name or target:
         parts += [
             "",
@@ -6950,14 +7466,26 @@ def build_self_verify_prompt(
                 "expect": "<what you must observe for a pass>",
                 "actor": "agent",
                 "result": "<pass|fail|blocked>",
-                "note": "<your evidence>",
+                "note": "<your evidence: the command and its output line>",
             },
-            {
-                "id": "<step id>",
-                "text": "<what the person does>",
-                "expect": "<what they should see>",
-                "actor": "human",
-            },
+            (
+                {
+                    "id": "<step id>",
+                    "text": "<what a person would do>",
+                    "expect": "<what they should see>",
+                    "actor": "human",
+                    "result": "<pass|fail|blocked>",
+                    "note": "<your evidence, or needs you: what to do, what to "
+                    "look for>",
+                }
+                if walk == WALK_ALL
+                else {
+                    "id": "<step id>",
+                    "text": "<what the person does>",
+                    "expect": "<what they should see>",
+                    "actor": "human",
+                }
+            ),
         ],
     }
     parts += [
@@ -7024,7 +7552,7 @@ def _where_phrase(plan: dict, run: dict) -> str:
 def results_markdown(plan: dict) -> str:
     """A short Markdown summary of the plan's newest run, for a PR comment.
 
-    A header naming where it was checked, then one line per behavior — ✅ pass,
+    A header naming where it was checked, then one line per step — ✅ pass,
     ❌ fail, ⏸ blocked or ⬜ open — with its actor and the note if there is one.
     Every step is listed, answered or not: a comment that left out the open
     ones would read as "all passed" to anyone skimming the PR.
@@ -7045,7 +7573,7 @@ def results_markdown(plan: dict) -> str:
     lines.append("")
     steps = [s for s in (plan.get("steps") or []) if isinstance(s, dict)]
     if not steps:
-        lines.append("No behaviors written yet.")
+        lines.append("No steps written yet.")
     for step in steps:
         entry = results.get(step.get("id")) or {}
         result = str(entry.get("result") or "")

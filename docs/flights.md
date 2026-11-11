@@ -20,7 +20,8 @@ is a **saved route**; a *flight*, *line* or *chain* is a **route** (running on
 a session, or on the Sky with no session); a *block*, *tile* or *step* is a
 **stop**; a *perch* is a **Wait for me** stop and *perched on you* is **Needs
 you**; *Fly* / *Take off* is **Run**; *Fast-track* (the control) is **Goes as
-far as**; a *checklist* or *test plan* is the session's **behaviors**;
+far as**; a *checklist*, *test plan* or *behaviors* is the session's **Verify
+steps** (its agent's own steps since 2026-11-10);
 *Checks* is the **CI checks** stop; *Land* is the **Finish** stop and the
 *landing strip* is **Finished**.
 
@@ -31,7 +32,8 @@ three sides:
 
 - **Intake** — work *arrives* (tickets, pull requests, issues) and becomes a
   session.
-- **Verify** — a *human or agent checks* the work's behaviors.
+- **Verify** — the session's own agent *checks its work*, and a person confirms
+  what only a person can.
 - **Schedule** — work *starts by itself* on a timer.
 
 Each of them was one step of the same journey, and the journey itself was
@@ -72,7 +74,7 @@ side of the journey. Routes are drawn in the Sky.
 |---|---|---|
 | Intake lists (tickets / PRs / issues ready to start) | **Sky → the intake lane and the drawer's waiting items**: each eligible item is a route that has not started, under its kind's heading with a kind badge, a **Run** button and the saved route as chips | pipeline `state.json`, settings sources |
 | Intake source cards + Auto-start switches | the **Intake** dialog, each source card saying which saved route its items take | settings |
-| Verify (behaviors) | a **Verify** stop on a route: the session's agent verifies its own work; steps only you can do make the route **Need you** until you confirm (the Sky's drawer lists it) | `test_plans.json` |
+| Verify | a **Verify** stop on a route: the session's agent verifies its own work; steps only you can do make the route **Need you** until you confirm (the Sky's drawer lists it) | `test_plans.json` |
 | Schedule (templates) | the **Schedule** dialog; a saved route may carry its own schedule trigger, and Schedule lists those beside the templates | `session_templates.json` |
 | Goes as far as (Agent only · Commit · Push · Open PR · Merge when green) | the **ship** stops of a route; a per-source setting still works and maps to the plain ladder at that rung (the agent, then Commit → … → that rung — nothing else); an armed session's rungs are drawn as stops on its route ([The session diagram](#the-session-diagram)) | `autopilot.json` |
 
@@ -102,8 +104,25 @@ Flights button as tabs of a Flights dialog; round 8 retired it — see
 - **Wait for me** stops the route until you press **Done** (or **Skip**) on
   the stop or in the bell; the route then **Needs you**.
 - **A stop that fails halts the route** (its *If it fails* option, Halt by
-  default): the stop turns red with the reason, and offers **Retry**, **Skip**
-  and **Let the agent fix it**.
+  default): the route is **Halted** — the stop turns red with the reason, and
+  offers **Retry**, **Skip** and **Let the agent fix it**.
+- **Paused** is a person's hold: **Pause** (the stop's menu, the bird) stops
+  the route where it is, and **Carry on** picks it up. A **halt point**
+  (**Add halt point** / **Remove halt point** on a stop) pauses the route when
+  it reaches that stop, before doing it ([Halt points](#halt-points)). A paused
+  route offers Carry on and Skip right on its stop and in the pane strip; one
+  paused at a halt point is in Needs you as "Paused at <stop> — Carry on" (a
+  pause you made yourself is not).
+- **Every stop that waits says why**, in plain words, with an action that
+  works: the stop's own reason ("2 steps for you to check, then confirm"),
+  "Failed: …" on a failure handed to you (Retry, Let the agent fix it, Skip),
+  and the pane's route strip leads with "Halted · <why>", "Needs you · <what>"
+  or "Paused". A stop's dialog shows the reason first, then the remedies (the
+  one that usually works first), then its settings folded under **Its
+  settings**.
+- **Edit the stop the route is on** when it failed, or when the route is
+  paused before it with nothing run yet: Save, then Retry or Carry on runs it
+  with the new settings ([Flow polish](#flow-polish-2026-11-10-as-built)).
 
 ### How a ticket gets its route
 
@@ -185,11 +204,11 @@ row shows (`verify` on `/api/instances`, docs/web-api.md):
 
 | Outcome | The stop |
 |---|---|
-| `verifying` | waits ("the agent is checking the behaviors · 3 of 7 answered"); the stall nudge and the budget close below apply |
-| `needs_you` — there are steps only a person can do (or an agent step it could not settle, or `who: you`) | parks the route on you ("2 steps for you to check, then confirm"; `detail.ask: "confirm"`, `items` = the steps with what to look for). It **never passes silently**: it moves on when a person confirms — `POST /api/test-plans/{id}/confirm`, or **Done** on the stop (= "verified") |
+| `verifying` | waits ("the agent is verifying its work · 3 of 7 answered"); the stall nudge and the budget close below apply |
+| `needs_you` — there are steps only a person can do (or an agent step it could not settle, or `who: you`) | parks the route on you and keeps saying why ("2 steps for you to check, then confirm"; `detail.ask: "confirm"`, `items` = the steps with what to look for, and for a step the agent left, "— the agent couldn't: <why>"). It **never passes silently**: it moves on when a person confirms — `POST /api/test-plans/{id}/confirm`, or **Done** on the stop, which here is **Confirm verified** |
 | `passed` — every agent step passed, nothing for a person | done |
-| `failed` — an agent step failed, or a person confirmed "it doesn't work" | fails with the failing steps ("Failed · 2: login works; logout works") — **halts** the route by default (Retry · Skip · Let the agent fix it) |
-| `blocked` — the check stopped before it finished (closed for a stall or the budget, its window gone, no steps written) | parks on you with the reason: Retry (a new check) or Skip |
+| `failed` — an agent step failed, or a person confirmed "it doesn't work" | fails with each failed step and what the agent saw ("Failed · 2: login works — saw: 500 on /login; logout works", evidence clipped to 160 characters) — **halts** the route by default (Retry · Skip · Let the agent fix it) |
+| `blocked` — the check stopped before it finished (closed for a stall or the budget, its window gone, no steps written) | parks on you with the reason (`ask: "blocked"`): **Retry** (a new check) or **Skip**; Done there also checks again |
 
 Only a check from **this attempt** counts: a Retry (or the agent's fix)
 starts a new one, and a check already running when the stop arrives (started
@@ -198,11 +217,15 @@ from the session's own Verify) is waited on, never restarted.
 The stop carries four plain choices and a checkbox; its face reads them as one
 sentence, **"Verify on *where* · *who* · *ready*"** — e.g. "Verify on sandbox ·
 agent, then you · 15 min after the stop before", "Verify on this branch · agent
-only · right away", "Verify on live · agent, then you · once on release".
+only · right away", "Verify on live · agent, then your sign-off · once on
+release". Its form opens with the same choices read back as one plain sentence
+("Its agent verifies on this branch as soon as the route gets here; you confirm
+the steps only a person can do; …"), which changes as you change them.
 
 - **Where** (`where`) — `branch`: this branch's own code, a fresh checkout of
   the plan's commit, no deployment; or the **name of one of the repo's
-  environments** (`repository.verify_repo_settings["owner/name"].environments`:
+  environments** (the editor picks from the repo's list; a saved name the
+  repo doesn't have shows as "<name> (unknown)" with a warning) (`repository.verify_repo_settings["owner/name"].environments`:
   `{name, reach, branch, deploy_minutes}` each). The repo's older fields
   (live branch, deploy delay, target) are an implicit environment named
   `live`. A name is lowercased and must match `[a-z0-9_-]{1,40}`. A name
@@ -240,13 +263,14 @@ only · right away", "Verify on live · agent, then you · once on release".
   min* checks the sandbox a quarter of an hour after the merge stop finished,
   which is when its deploy has landed. Use `on_branch` when the branch takes
   the commits themselves (a fast-forward or merge-commit release branch).
-- **Who checks** (`who`) — `both` "Agent, then me" (default: the agent
-  checks what it can; steps only you can do park the route on you until you
-  confirm), `agent` "Agent only" (the run has `walk: "all"`: the agent
-  attempts a person's steps too with its own tools, and only what it truly
-  cannot do parks on you), `you` "Only me" (the agent still writes and walks
-  its steps, but the check always waits for your sign-off — the run route's
-  `confirm: true` — even when every step passed).
+- **Who checks** (`who`; the ids stay, the words changed 2026-11-10) —
+  `both` **"Agent, then me"** (default: the agent does its steps; the route
+  waits on you only for the steps a person must do), `agent` **"Agent only"**
+  (the run has `walk: "all"`: the agent attempts every step itself with its
+  own tools and must give evidence for each answer; the route waits only if
+  something ends blocked or failed), `you` **"Agent, then my sign-off"** (the
+  agent verifies, then the route always waits for your confirm — the run
+  route's `confirm: true` — even when every step passed).
 - **Notes** (`notes`) — text for this check only, on top of the repo's
   standing notes; handed to the agent's check.
 - **Post the results to the PR** (`post_to_pr`) — when the stop finishes
@@ -261,6 +285,12 @@ only · right away", "Verify on live · agent, then you · once on release".
 A bad `who`, `where`, `ready` or `ready_minutes` is a 400 `bad_step` when a
 plan is saved; a stored config that is already bad falls back to the
 defaults.
+
+**If it fails** on a Verify stop: Halt (red, with the failed steps: Retry,
+Skip, Let the agent fix it), **Let the agent fix it** (the failed steps and
+their evidence go back to the session's agent, which verifies again — up to
+2 rounds, then the route halts), Skip, or Wait for me (the route waits on you,
+showing the failed steps).
 
 **Migration from `wait_live`.** An old `wait_live` reads as where/ready (true
 → `live` + `on_branch`; false → `branch` + `now`) and is never written back:
@@ -299,7 +329,8 @@ the agent picks it up, not while it waits on the queue. A paused session
 refuses it (409 `reason: "send_failed"` → the stop fails with the sentence).
 The run record carries `in_session: true`, `self: true` and `session` = that
 session; the stop's detail carries `in_session` / `walk_session`, and the pane
-strip offers **Walking here — talk to it** (opens the Agent tab). A nudge goes
+strip says **Its agent is verifying its work — open the session to talk to
+it**. A nudge goes
 to that agent; the stop closing the check (stall, budget) tells it the check
 is over, and nothing that ends a run — that close, Cancel, Delete — **ever
 closes the session**.
@@ -362,13 +393,25 @@ moving, and comes to you when only you can move it:
 
 | What happened | What the stop does |
 |---|---|
-| The memory guard refused the checker's session (the run route answers 409 `reason: "memory"`; only a separate checker — a walk in the session's own agent creates nothing, so it is never refused for memory) | waits — "waiting for memory to start the check (<why>)" — and retries every 30 s; after 30 min it parks on you: free memory then Retry, or Skip |
-| It believes a check started, but no run exists 60 s later | fails: "the check never started" |
-| A check is running | says progress: "the agent is checking the behaviors · 3 of 7 answered · quiet 6 min" (the checker rewrites its results file after every step) |
+| The memory guard refused the checker's session (the run route answers 409 `reason: "memory"`; only a separate checker — a walk in the session's own agent creates nothing, so it is never refused for memory) | waits — "waiting for memory to start the check (<why>)", plus "· waited 3 min" once a minute has passed — and retries every 30 s; **after 5 min** it parks on you (`ask: "memory"`): free memory then Retry, or Skip |
+| It believes a check started, but no run exists 60 s later | fails: "the check never started — Retry to start it again, or Skip"; a run that was released (its window died) and kept its reason parks on you instead (`ask: "blocked"`, Retry / Skip) |
+| The check's record can't be read | parks on you at once: "the check couldn't be read: … — Retry to verify again, or Skip" |
+| The check's record is gone | fails: "the check's record is gone — Retry starts a new one" |
+| A check is running | says progress: "the agent is verifying its work · 3 of 7 answered · quiet 6 min" (the agent rewrites its results file after every step) |
 | No new answer for 8 min and the checker's turn is over | nudges it once: write the file, mark the rest blocked, stop background jobs |
-| Still nothing 15 min after the nudge, or past the 30-minute budget (+5) | closes the check: answered steps keep their answers, the rest become `blocked` ("not checked: …") |
-| The check finished with steps only a person can do, or agent steps it answered `blocked` (`needs_you`) | parks on you: "N steps for you to check, then confirm". **Done = "verified"** (`test_plans.confirm_verify`); "it doesn't work" goes through the confirm route with `verified: false` and fails the stop. **Never** counted as a pass, whatever `who` says ("Agent only" too) |
-| The check was closed, its window died, or it wrote no steps (`blocked`) | parks on you with the reason: Retry or Skip |
+| Still nothing 15 min after the nudge, or past the 30-minute budget (+5) | closes the check: answered steps keep their answers, the rest become `blocked` ("not checked: the agent stopped answering" / "not checked: the check ran out of time (30 min)") |
+| The check finished with steps only a person can do, or agent steps it answered `blocked` (`needs_you`) | parks on you: "N steps for you to check, then confirm". **Done = Confirm verified** (`test_plans.confirm_verify`); "it doesn't work" goes through the confirm route with `verified: false` and fails the stop. **Never** counted as a pass, whatever `who` says ("Agent only" too) |
+| The check was closed, its window died, or it wrote no steps (`blocked`) | parks on you with the reason: Retry or Skip (Done checks again) |
+
+**What Retry and Done do on a parked Verify stop.** Retry is accepted on a
+Verify stop parked with `ask: "blocked"` or `"memory"` (it starts a fresh
+check), and so is Done, which means "I sorted it — check again". On a check
+waiting for your confirm (`ask: "confirm"`) Done is Confirm verified. Done is
+refused anywhere else on a Verify stop waiting on you — 409
+`answer_behaviors` "<stop> isn't verified yet — Retry to verify again, or
+Skip" — because it would pass steps nobody checked. A Verify stop whose
+*failure* was handed to you (`on_fail: you`) takes Done: that answers the
+failure, not the check.
 
 ### The CLI
 
@@ -377,11 +420,15 @@ mindflock flights [--all]                 # routes running: saved route, subject
 mindflock flight plans                    # the saved routes (scheduled ones say when next); `flight flyways` = the same
 mindflock flight start ROUTE [--repo PATH] [--title SESSION]
 mindflock flight done ROUTE [--note …]    # the Wait for me stop that needs you; also skip / cancel (Stop the route)
+mindflock flight retry ROUTE              # run the halted stop again; also resume (Carry on) / pause
+mindflock flight jump ROUTE STOP          # Jump here: STOP is a stop's id, number or title
 ```
 
 For `start`, `ROUTE` is a saved route's id or name (a unique prefix is
-enough); for `done` / `skip` / `cancel` it is a route id (prefix) or its
-session's title. See [cli.md](cli.md).
+enough); for the others it is a route id (prefix) or its session's title.
+Under its table, `mindflock flights` prints each route that waits on you, is
+halted or is paused, with the stop's reason and the commands that work from
+there (`mindflock flight retry f_1a2b3c`, …). See [cli.md](cli.md).
 
 ## Contract: the data model
 
@@ -455,10 +502,10 @@ editor's palette and forms are driven by the server):
 | `you` | you | `text` (what to do), `items` (list of strings, optional checklist), `notify` (bool, default true) | you press **Done** (or **Skip**) in the Sky (its box, or the drawer), the pane strip, or the bell |
 | `wait` | robot | `minutes` (int) or `until` ("HH:MM" local) | the time has passed |
 | `reviews` | robot | `quiet_minutes` (default 10), `max_rounds` (default 5), `include_bots` (default true), `require_reviewer` (default empty), `reviewer_wait_minutes` (default 10) | the PR has had no new unresolved review comments for `quiet_minutes` (with `require_reviewer`: counted from that reviewer's first post, which it waits for); each batch of new comments is sent to the agent (the pipeline's consolidated PR prompt) followed by an automatic push; `max_rounds` reached → fail "comments still open after N rounds — it needs a human review"; the required reviewer silent for `reviewer_wait_minutes` → fail "<reviewer> never reviewed this PR — it needs a human review" (see "Team PR rules as a route") |
-| `checks` | robot | `timeout_minutes` (default 60) | the PR's checks are all passing; a failing check → fail (so `on_fail: agent` hands the failing check names to the agent and re-waits) |
+| `checks` | robot | `timeout_minutes` (default 60) | the PR's checks are all passing; a failing check → fail (so `on_fail: agent` hands the failing check names to the agent and re-waits); checks it can't read for 5 min in a row → fail, "can't read the CI checks: <why> — fix that and Retry, or Skip" (until then it waits saying why) |
 | `command` | robot | `command` (shell, run in the worktree with the session's env), `timeout_minutes` (default 30) | exit 0; non-zero → fail with the tail of the output |
 | `ticket` | robot | `state` (target state name or id, optional), `comment` (text, optional) | the tracker call returned; a flight without a ticket subject skips it |
-| `notify` | robot | `text` | the ntfy/bell notification was sent (never blocks) |
+| `notify` | robot | `text` | the notification went out (never blocks): the stop's receipt says where — "sent to your phone", "shown in the bell — phone notifications are off" or "not sent: <why>" — and the bell lists its text (`flight.notified`) |
 
 A plan's **first** `agent` step of a ticket / PR / issue / schedule flight is
 special: its prompt is the session's *initial* prompt. For ticket, PR and
@@ -476,7 +523,7 @@ issue flights the server-built intake prompt is used and the step's own
   "subject": {"kind": "ticket"|"pr"|"issue"|"schedule"|"manual", "source": "<source id or repo>", "id": "<ticket id / PR number / issue number>", "title": "<headline>", "url": ""},
   "session": "<session title>",   // the flight's session; set before the session exists for intake flights (keyed like autopilot)
   "repo_root": "", "branch": "",
-  "state": "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled",   // paused = held by you (Halt now) or at a halt point (reason "halt point"); Resume carries on. halted = stopped on a failure (retry / skip / resume)
+  "state": "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled",   // paused = held by you (Pause) or at a halt point (reason "halt point"); Carry on (resume) goes on. halted = stopped on a failure (retry / skip / resume)
   "cursor": 0,                    // index into steps of the current step
   "step_states": {"s1": {"state": "pending"|"running"|"waiting_you"|"done"|"skipped"|"failed", "since": 0.0, "note": "", "detail": {}, "rounds": 0}},
   "reason": "",                   // why halted / cancelled (human-readable)
@@ -520,6 +567,9 @@ Rules:
 - `flight.changed` — any state/cursor change, data: `{id, plan_name, session, state, cursor, step: {id, kind, title, state}, reason}`.
 - `flight.needs_you` — a flight parked on a *you* step (or a verify step with open human items), data as above plus `text`, `items`. This also makes a bell row (`outbox.WAITING_ACTIONS` gains `flight_you`) and an ntfy push via a notify rule `flight_needs_you`.
 - `flight.finished` — done, halted or cancelled, data as `flight.changed`.
+- `flight.notified` — a Notify stop's text went out, data as `flight.changed`
+  plus `text`, `title`, `phone` (whether the phone got it) and `why` (why not);
+  the bell lists it as "<title>: <text>".
 
 ### Describe a step / a plan (one-shot model)
 
@@ -538,27 +588,29 @@ No model installed → 409 `no_model`.
 |---|---|---|
 | `GET /api/flights/kinds` | | `{"kinds": [{kind, label, actor: "robot"|"you", summary, fields: [{name, type: "text"|"textarea"|"int"|"bool"|"select", label, options?, option_labels?, default?, placeholder?}], default_title}]}` (`option_labels`: `{option: words}`, e.g. a Verify stop's `who` → "Agent, then me") |
 | `GET /api/flights/plans` | | `{"plans": [Plan]}` (built-ins first) |
-| `POST /api/flights/plans` | Plan (no `id` = create; `id` = replace) | `{"plan": Plan}`; 400 with `{"error", "field"}` on a bad step |
+| `POST /api/flights/plans` | Plan (no `id` = create; `id` = replace) | `{"plan": Plan}`; 400 with `{"error", "detail", "field"}` on a bad step (strict: see [Flow polish](#flow-polish-2026-11-10-as-built)) |
 | `DELETE /api/flights/plans/{id}` | | 204; a built-in is reset to its default instead of removed |
 | `POST /api/flights/plans/{id}/reset` | | `{"plan": Plan}` (built-ins only) |
 | `POST /api/flights/describe` | `{text, want}` | `{"steps": [Step]}` |
 | `GET /api/flights` | `?all=1` to include finished (default: unfinished + last 20 finished) | `{"flights": [Flight]}` |
 | `GET /api/flights/{id}` | | `{"flight": Flight}` |
-| `POST /api/flights/start` | `{"plan_id"?, "title"?: "<existing session to attach to>", "subject"?: {kind, source, id}, "repo_path"?, "prompt"?, "start_at"?: "<step id>", "steps"?: [Step], "absorb_fasttrack"?: bool}` | 202 `{"flight": Flight, "absorbed": [lane]}`. **`steps`** (1..40, validated like a plan's; 400 `bad_step` with `field`) draws the flight here: alone, the flight is `plan_id: "adhoc"`, `plan_name` = the subject's headline or "Flight on <title>", its steps numbered `s1..sN`; with `plan_id`, the plan's steps then the given ones (next free `sN`). An ad-hoc flight needs `title` or `repo_path` (400 `needs_title`). **`absorb_fasttrack`** (default true with `title`): the session's own fast-track run (autopilot record `running` or `halted`, `source != "flight"`) becomes the flight's leading `ship` steps — the rungs after the one the session's stage (`committed`/`pushed`/`pr`) proves, up to the run's lane, in `autopilot.DEPTH_ORDER` order — placed where the flight starts, and the record is disarmed so the ladder carries on under the flight; `absorbed` lists their lanes. A `done` run is left alone; a `halted` one is absorbed (its first step starts `pending`, the halt reason goes into the flight's history). Attaching to an existing session (`title`) starts at `start_at` or the first non-`agent` step — unless the session is still on its turn (working, loading, or its task waiting in its prompt queue) and the route opens with an `agent` step: that step then starts `running` on the work in progress (nothing is sent; history `started` "the session's work in progress") and ends when the turn settles. Without `title` the server creates the session from `plan.session` (+ `repo_path` / `prompt` overrides) through `session_create.create_result` — the same path as the New dialog. A ticket/PR/issue `subject` goes through the Intake start path (`ticket_start.launch` / the PR and issue force-start bodies) with `plan_id`, which arms the flight on the deterministic title before the session exists. |
+| `POST /api/flights/check` | the body of a start | 200 `{ok, steps, start, skipped, in_flight, problems, warnings, start_on, environments?, absorbed?}` — the start's answer without starting: nothing is created or written. `steps` are the stops strictly normalised with the ids the server gives them, `start` the stop it takes off at, `skipped` `[{id, title, reason}]` the stops before it and why, `in_flight` the session's current route, `problems` `[{field, detail, error?, session?}]` every refusal the start would answer plus the driver's pre-check, `environments` the repo's Verify environments. `ok` = no problems: the real start will be accepted |
+| `POST /api/flights/start` | `{"plan_id"?, "title"?: "<existing session to attach to>", "subject"?: {kind, source, id}, "repo_path"?, "prompt"?, "start_at"?: "<step id>", "steps"?: [Step], "absorb_fasttrack"?: bool}` | 202 `{"flight": Flight, "absorbed": [lane]}`. **`steps`** (1..40, validated like a plan's; 400 `bad_step` with `field`) draws the flight here: alone, the flight is `plan_id: "adhoc"`, `plan_name` = the subject's headline or "Flight on <title>", its steps numbered `s1..sN`; with `plan_id`, the plan's steps then the given ones (next free `sN`). An ad-hoc flight needs `title` or `repo_path` (400 `needs_title`). **`absorb_fasttrack`** (default true with `title`): the session's own fast-track run (autopilot record `running` or `halted`, `source != "flight"`) becomes the flight's leading `ship` steps — the rungs after the one the session's stage (`committed`/`pushed`/`pr`) proves, up to the run's lane, in `autopilot.DEPTH_ORDER` order — placed where the flight starts, and the record is disarmed so the ladder carries on under the flight; `absorbed` lists their lanes. A `done` run is left alone; a `halted` one is absorbed (its first step starts `pending`, the halt reason goes into the flight's history). Attaching to an existing session (`title`) starts at `start_at`, else past each **leading Agent stop with no prompt** (the session's own work counts as it; one `skipped` history line each — an Agent stop with a prompt is sent) — unless the session is still on its turn (working, loading, or its task waiting in its prompt queue) and the route opens with an `agent` step: that step then starts `running` on the work in progress (nothing is sent; history `started` "the session's work in progress") and ends when the turn settles. Without `title` the server creates the session from `plan.session` (+ `repo_path` / `prompt` overrides) through `session_create.create_result` — the same path as the New dialog. A ticket/PR/issue `subject` goes through the Intake start path (`ticket_start.launch` / the PR and issue force-start bodies) with `plan_id`, which arms the flight on the deterministic title before the session exists. **Before anything is created** the driver's pre-check (`flight_driver.preflight`) runs: a bad `start_at` or ad-hoc list, a Verify `where` the repo has no environment for (listing the ones it has), a branch a live session already holds ("<s> already has this branch — run the route on that session instead"), a Ship stop on a session sharing its folder or a copy window. Its first problem is the answer — 409 when it names a session, else 400 — `{error, detail, field, session?, problems}`. |
 | `POST /api/flights/{id}/steps` | `{"step": Step, "at"?: int}` | `{"flight"}` — appended, or inserted at index `at`, which must be after the current step (409 `in_progress`); the flight must be `running`/`waiting_you`/`paused` (409 `finished`). The new step takes the next free `sN`. History `added`. |
-| `PATCH /api/flights/{id}/steps/{sid}` | `{title?, config?, on_fail?, halt?}` | `{"flight"}` — only a pending step after the current one (409 `in_progress`); validated like a plan step. `{halt}` alone may also mark / clear the **current** step ([Halt points](#halt-points)). History `edited`. |
+| `PATCH /api/flights/{id}/steps/{sid}` | `{title?, config?, on_fail?, when?, halt?}` | `{"flight"}` — a pending step after the current one, **or the current step** when it failed (halted on it, or its failure handed to you) or the route is paused before it with nothing of it run yet; else 409 `in_progress`. Validated strictly like a plan step (400 `{error, detail, field}`). An edited current step is reset, so the next Retry or Carry on runs it as edited (a failure that was waiting on you becomes a halt). `{halt}` alone may also mark / clear the **current** step ([Halt points](#halt-points)). History `edited`. |
 | `DELETE /api/flights/{id}/steps/{sid}` | | `{"flight"}` — only a pending step after the current one (409 `in_progress`). History `removed`. |
 | `POST /api/flights/{id}/steps/{sid}/move` | `{"at": int}` | `{"flight"}` — a pending step after the current one moved to index `at` of the final list (pop then insert), clamped to the last place; `at` at/before the current step is 409 `in_progress`; 400 `bad_step` (`field: "at"`) when `at` is not an integer. Its `step_states` record moves with it; the same place changes nothing. History `moved`. |
-| `POST /api/flights/{id}/steps/{sid}/done` | `{"note"?}` | `{"flight"}` — only for a `you` step (or a `verify` step waiting on you: it marks the open human checklist items as passed) |
+| `POST /api/flights/{id}/steps/{sid}/done` | `{"note"?}` | `{"flight"}` — a step waiting on you: ticks off a Wait for me stop; on a Verify stop waiting for a confirm it is **Confirm verified**; on a Verify stop parked because the check couldn't finish or memory kept it from starting it runs the stop again; it never passes a Verify stop's open steps (409 `answer_behaviors`); a failure handed to you takes it. 409 `not_waiting` on a stop that does not need you now |
 | `POST /api/flights/{id}/steps/{sid}/skip` | | `{"flight"}` |
-| `POST /api/flights/{id}/steps/{sid}/retry` | | `{"flight"}` — a failed/halted step runs again |
+| `POST /api/flights/{id}/steps/{sid}/retry` | | `{"flight"}` — a failed/halted step runs again; so does a Verify stop parked with `ask` `blocked` or `memory`. 409 `not_failed` otherwise |
 | `POST /api/flights/{id}/jump` | `{"step": "<id>"}` | `{"flight"}` — move the cursor (a human "start at the PR stage" / "go back") |
 | `POST /api/flights/{id}/pause` · `/resume` · `/cancel` | | `{"flight"}` |
 | `DELETE /api/flights/{id}` | | 204 (finished flights only; a running one must be cancelled first) |
 
 The session row (`/api/instances` payload) gains a `flight` field:
-`{"id", "plan_name", "cursor", "total", "state", "step": {id, kind, title, state, actor}, "join", "branch"}`
-or `null` — the pane strip and the rail read only this. `join` is `{waiting,
+`{"id", "plan_name", "cursor", "total", "state", "reason", "step": {id, kind, title, state, actor, note, failed_reason?}, "join", "branch"}`
+or `null` (`step.note` is the stop's own reason — why it waits — and
+`failed_reason` is set when its failure was handed to you) — the pane strip and the rail read only this. `join` is `{waiting,
 total}` while the current step (an `agent` step with `join`, or a `join` step)
 has workers outstanding, else `null`. `branch` is `{parent, step}` on a
 worker's row while its parent is in a flight: the parent's step during which it
@@ -1785,17 +1837,28 @@ fit.
 
 ## Halt points
 
-The owner: "I want to be able to halt steps whenever." Two ways:
+The owner: "I want to be able to halt steps whenever." Two ways, both of
+which **pause** the route (state `paused`) — **Halted** (red) is kept for a
+stop that failed (Retry / Skip / Let the agent fix it):
 
-- **Halt now** stops the flight where it is: the pause route
-  (`POST /api/flights/{id}/pause`), on the current stop's hover toolbar and
-  right-click menu (⏹ Halt now while it runs or waits on you, ▶ Carry on
-  while paused) and in the pane strip's ⋯ (Halt now / Carry on / Cancel).
-- **Halt here** marks a stop not yet done as a **halt point** (`halt: true`
-  on the step): the flight pauses when it *reaches* it, before doing it,
-  like a breakpoint. ⏸ Halt here on the stop's toolbar and menu sets it;
-  Carry on past here clears it. The box wears a pause badge in its corner
-  while it is set.
+- **Pause** stops the route where it is: the pause route
+  (`POST /api/flights/{id}/pause`), on the current stop's menu and the bird
+  (▶ **Carry on** while paused); the toast reads "Route paused — Carry on picks
+  it up again". The pane strip's own ⋯ reads Pause / Carry on / Cancel.
+- **Add halt point** marks a stop not yet done as a **halt point** (`halt:
+  true` on the step): the route pauses when it *reaches* it, before doing it,
+  like a breakpoint (state `paused`, reason `"halt point"`). ⏸ **Add halt
+  point** on the stop's toolbar and menu sets it; **Remove halt point** clears
+  it. The stop dialog's toggle reads "Halt point — the route pauses before
+  this stop until you press Carry on". The box wears a pause badge in its
+  corner while it is set. Removing the stop the route is on also pauses it.
+
+A route paused at a halt point shows **Carry on** (primary) and **Skip** on
+its stop's tile ("Your halt point") and in the pane strip, and is listed in
+Needs you as "Paused at <stop> — Carry on" (a row the UI builds from the
+session row's `flight`, kind `flight_paused` in `lib/needsYou.ts`); a
+route you paused yourself reads "Paused by you", with the same two buttons,
+and stays out of the bell.
 
 The planner: when the cursor lands on a pending step with `halt` (`_advance`
 after a step finishes, or `next_action`'s `hold` verdict for a flight that
@@ -1822,16 +1885,16 @@ stores it with the plan.
 The UI (pure rules in `lib/stopEditing.ts`: `canHalt`, `haltToggle`,
 `flightHold`, `haltMark`; tested in `stopEditing.test.ts`): `FlywayCanvas`
 takes `onToggleHalt?(n)`. With it, every stop not yet flown that can change,
-and the flight's current stop, offers ⏸ Halt here (pressed, `aria-pressed`,
-reading Carry on past here on a halt point) on its toolbar and menu; the
-current stop's own toolbar (⏹ Halt now / ▶ Carry on, then ⏸) shows only on
-such a line, so a line without it asks for no headroom. The current stop's
-right-click menu offers Halt now / Carry on on any live line
-(`controlFlight`). A halt point wears `.fl-halt-point` and a ⏸ badge
+and the flight's current stop, offers ⏸ Add halt point (Remove halt point on a
+halt point, `pressed: true`) on its toolbar and menu; the current stop's own
+toolbar (Pause / ▶ Carry on, then ⏸) shows only on such a line, so a line
+without it asks for no headroom. The current stop's right-click menu offers
+Pause / Carry on on any live line (`controlFlight`). The ⏸ tool looks pressed
+only on a halt point (`HaltTool` reads `pressed`). A halt point wears `.fl-halt-point` and a ⏸ badge
 (`.fl-halt-mark`, top-left, the paused tone; `StopEditing.css`).
 `useSessionLine` wires `onToggleHalt` to `flightsApi.setHalt(flightId,
-stepId, !halt)`. The pane strip says "Paused at a halt point" for one, and
-its ⋯ reads Halt now / Carry on / Cancel.
+stepId, !halt)`. The pane strip leads with "Paused · " for a paused route,
+and its ⋯ reads Pause / Carry on / Cancel (see above).
 
 ## Editing stops on a line
 
@@ -1854,10 +1917,10 @@ through the same `FlywayCanvas` props. The rules are pure, in
 | ← / → (↑ / ↓ on a phone) on a selected stop | Moves it one place | `onMove` |
 | Drag a stop along the line | Moves it there (never before the flight's current stop) | `onMove` |
 | The + between two boxes (shows on hover of the whole line) | The stop palette, to put one in there | `onInsert` |
-| The trailing + | Tack on a stop (palette and "Fly a flyway") | `onOpen` |
-| ⏸ on a stop's toolbar or menu | Halt here / Carry on past here: a halt point ([Halt points](#halt-points)) | `onToggleHalt` |
-| ⏹ / ▶ on the current stop's toolbar or menu | Halt now / Carry on (pause / resume the flight) | — (`controlFlight`) |
-| Drag a stop chip from the shelf onto the line | The gap it would land in lights up ("+ Tack on here"), or the end + reads "Tack on <Kind>"; dropping tacks the stop on there | `onDropStop`, `dragStop` |
+| The trailing + | **Add a stop** (the box's title and its menu item; palette and "Fly a flyway") | `onOpen` |
+| ⏸ on a stop's toolbar or menu | Add halt point / Remove halt point ([Halt points](#halt-points)) | `onToggleHalt` |
+| Pause / ▶ on the current stop's toolbar or menu | Pause / Carry on (pause / resume the route) | — (`controlFlight`) |
+| Drag a stop chip from the shelf onto the line | The gap it would land in lights up ("+ Add here"), or the end + reads "Add <Kind>"; dropping adds the stop there | `onDropStop`, `dragStop` |
 
 Only a stop that can change (`DiagramNode.editable`: in the editor every
 stop; in a live flight the pending stops after the current one) wears the
@@ -1866,14 +1929,15 @@ disabled at the ends and next to a stop that can't change (`canShift`).
 
 **The right-click menu, by box** (`menuItemsFor`):
 
-- a stop that can change: Edit, Earlier, Later, Duplicate, Remove, Halt here
-  / Carry on past here (only the ones the host handles);
+- a stop that can change: Edit, Earlier, Later, Duplicate, Remove, Add halt
+  point / Remove halt point (only the ones the host handles), Jump here on a
+  live route;
 - the flight's current stop: what its own parts offer (Done on a perch,
   Retry when halted, Skip; the same `stepDone` / `stepRetry` / `stepSkip`
-  routes), Halt now / Carry on, Halt here / Carry on past here, and a muted
+  routes), Pause / Carry on, Add halt point / Remove halt point, and a muted
   line: "The flight is here — it can't change now";
 - a stop that has flown (done, skipped, failed): "This stop has flown";
-- the trailing +: Tack on a stop; a session, parent, child or branch box:
+- the trailing +: Add a stop; a session, parent, child or branch box:
   Open; a fast-track rung: a note that it moves as the session ships.
 
 In the Sky the line is zoomed with a transform. The toolbar, the menu and
@@ -7808,6 +7872,126 @@ Push, Open PR in one pass), each with `detail.by = "agent"`, a receipt
 ("already committed · 3 commits", "already pushed", "PR #123") and one
 history event "done by the agent — …"; the face shows the agent glyph and
 "by the agent" under the receipt.
+
+## Flow polish (2026-11-10): as built
+
+A round to make routes and Verify easy to steer and follow. The current
+model is in [Using Flights](#using-flights), [Verify stops](#verify-stops),
+[Halt points](#halt-points) and the HTTP API table; this lists what changed.
+
+**Waits and reasons.**
+
+- A stop waiting on you keeps its own reason (`ss.note`, e.g. "2 steps for you
+  to check, then confirm") in the bell and on the Sky, instead of a bare
+  "needs you". The session row's `flight.step` carries it as `note`, plus
+  `failed_reason` when the stop's failure was handed to you.
+- A stop that hits an unexpected error fails at once — "<stop> hit an error:
+  <one line>" (the traceback goes to the log) — instead of reading "carrying
+  out …" for 10 minutes and running again. Its *If it fails: Let the agent fix
+  it* becomes a halt: a server error is not the agent's to fix.
+- A stop that waits on memory says why and for how long ("· waited 3 min")
+  and parks on you after 5 minutes with Retry / Skip; a Verify check and a
+  reviewer stop wait the same way. A reviewer that never started reads
+  "couldn't start the reviewer: <why>"; Retry, Skip or Jump takes a queued
+  one off the launch queue.
+- A CI checks stop records `detail.unknown_since` while it can't read the
+  checks, waits saying why ("can't read the CI checks yet: <why>"), and fails
+  after 5 minutes of it: "can't read the CI checks: <why> — fix that and
+  Retry, or Skip". The clock resets when the checks read again.
+- A stored "Only when" that can't be read is kept and halts the stop: "this
+  stop's 'Only when' can't be read — edit or remove it".
+- A needs-you ping is keyed by the stop and the time it parked, so a stop that
+  needs you again after Retry, Jump or a Loop rings again.
+- Waits and reasons use one duration style ("1 h 30 min", "3 min"), "running
+  <stop>" replaces "carrying out <stop>", and every failure reason names an
+  action that works.
+- A Notify stop's receipt says where it went: "sent to your phone", "shown in
+  the bell — phone notifications are off", or "not sent: <why>"; the driver
+  emits `flight.notified` and the bell lists it as "<title>: <text>".
+
+**Verify stops.** The three Who words, the evidence in a failure ("— saw:
+…"), blocked / memory parks that take Retry (and Done = check again), a
+check that can't be read (parks blocked) or whose record is gone (fails,
+"Retry starts a new one"), and a released run that parks on you instead of
+"the check never started" are in [Verify stops](#verify-stops). A step the
+agent left for a person lists "— the agent couldn't: <why>" in the confirm
+items.
+
+**Strict options.** A strict save or start (`POST /api/flights/plans`,
+`/start`, `/check`, a step PATCH or add on a route in the air) refuses what
+lenient loading would have changed silently, as 400 `bad_step` with `field`
+and the sentence in `detail`:
+
+- an option the kind doesn't have — "unknown option 'timeout' on a CI checks
+  stop — it has: timeout_minutes" (the older names `minutes`, `wait_live` and
+  `every_minutes` still read);
+- a whole number that isn't one or is out of range — "count on a Split stop
+  must be at most 20 (got 50)";
+- a true/false outside true/false/1/0/yes/no/on/off; a choice not in its list
+  (lists the server fills itself are not checked); a Wait over 14 days;
+- a Call's `expect` other than a status, a class like `2xx` or a range like
+  `200-299` (`2xx` now matches correctly); a Budget limit it can't read
+  (`$2.50` reads); an Ask someone with neither a peer nor a webhook.
+
+Lenient loading (a stored or synced plan) is unchanged. On a route with no
+session yet, a stop's PATCH refuses a bad value too; only an option still to
+be filled in (an empty prompt or command) may wait for take-off.
+
+**Editing the stop the route is on.** `title`, `config`, `on_fail` and `when`
+may change on the current stop when it failed (the route halted on it, or its
+failure was handed to you) or when the route is paused before it with nothing
+of it run yet. The stop is reset (its halt point counts as passed) and a
+failure that was waiting on you becomes a halt, so the next Retry or Carry on
+runs it as edited; history `edited` says so. The stop dialog offers it with
+"Save, then Retry/Carry on runs it with these settings" and stays open after
+Save.
+
+**Starting.**
+
+- `POST /api/flights/check` answers a start's questions without starting it,
+  and `/start` runs the driver's pre-check (`flight_driver.preflight`) before
+  creating anything — both in the HTTP API table above.
+- Attaching to an existing session passes only its **leading Agent stops with
+  no prompt** (one `skipped` history line each: "no prompt to send — the
+  session's own work counts as this stop"); an Agent stop with a prompt is
+  the author's instruction and is sent. A busy session's first Agent stop
+  still runs on the work in progress.
+- An ad-hoc route renumbers its stops `s1..sN`; a Loop's `back_to` and the
+  start's `start_at` that name the author's own ids now follow them to the
+  new ids (`adhoc_plan(id_map=)`).
+
+**The Sky.**
+
+- A route running with no session (a free run) can be followed and un-stuck:
+  its chip reads Halted (with the reason), At your halt point, Paused, Needs
+  you or Running; its stops carry Retry / Skip / Done / Carry on; its stop
+  dialog opens read-only with those remedies; the Needs you view draws it,
+  and pressing it in the drawer flies the camera to it.
+- The Needs you drawer says why each route waits (the stop's note, its
+  failure, or "Paused at your halt point"), shows "Loading…" on its first
+  read and "Can't reach the server — this list may be out of date." on an
+  error; "Nothing needs you." only after a read that worked.
+- A running stop's tile shows what it is doing now (the server's note, up to
+  60 characters); its settings move to the tooltip. A paused route's frame is
+  a calm dashed outline. The tools are **Select (V)** and **Pan (H)**.
+- Saving: a session's route menu has **Save as a route…**; a route with no
+  session asks for the name first (an inline field, checked like a rename);
+  a line that came from a saved route offers **Save to “<name>”** and **Save
+  as a new route…**; a saved route's menu has **Edit its stops**, which puts an
+  editable copy on the Sky (remembered per device, `mf_sky_route_edits`) with
+  a bar reading "Editing “<name>”" and a Save that writes it back and takes
+  the copy off. Every save's toast ends "— routes already running keep their
+  own copy".
+- With no saved routes the shelf says what a route is and offers **Start a
+  route**.
+
+**Stops and their dialog.** Every option has a hint with its default and range
+(number fields are clamped to it); "If it fails" explains the pick; a stop's
+form opens on one sentence of what the route will do there (its halt point,
+"Only when" and "If it fails"); an Agent stop's CLI and Model show only with
+"Start a new session for this stop"; a Wait stop greys How long once a time
+is set. The dialog's layout, remedies and discard confirm are in
+docs/web-ui.md.
 
 ## Team PR rules as a route: review modes and a required reviewer (2026-11-11)
 

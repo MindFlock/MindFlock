@@ -224,7 +224,7 @@ describe("wires", () => {
   });
 
   it("a head with no stops carries the +", () => {
-    const d: Diagram = { nodes: [{ id: "add", kind: "add", row: "main", title: "Tack on a stop", sub: "", state: "pending", icon: "add" }], edges: [], flightId: "", mode: "none", insertFrom: 0 };
+    const d: Diagram = { nodes: [{ id: "add", kind: "add", row: "main", title: "Add a stop", sub: "", state: "pending", icon: "add" }], edges: [], flightId: "", mode: "none", insertFrom: 0 };
     const g = chainGraph(d, { head: sessionHead(), key: "lead", flightId: "" });
     expect(g.nodes).toEqual([]);
     expect(g.plus?.after).toBe(HEAD_ID);

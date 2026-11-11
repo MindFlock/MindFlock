@@ -141,12 +141,12 @@ describe("the toggle on the toolbar", () => {
   };
   const chips = (html: string) => [...html.matchAll(/<button type="button" role="radio" aria-checked="(true|false)" class="fl-pick( on)?"[^>]*data-value="(drag|click)"[^>]*>([^<]*)</g)].map((m) => [m[3], m[1], m[4]]);
 
-  it("✥ Drag · ☝ Click in the mode chips' tier, the remembered one on; .sky carries it as data-tool", () => {
+  it("Select (V) · Pan (H) in the mode chips' tier, the remembered one on; .sky carries it as data-tool", () => {
     const html = render();
     expect(html).toContain('class="fl-chiprow sky-modes sky-tools" role="radiogroup" aria-label="Tool"');
     expect(chips(html)).toEqual([
-      ["drag", "true", "✥ Drag"],
-      ["click", "false", "☝ Click"],
+      ["drag", "true", "Select (V)"],
+      ["click", "false", "Pan (H)"],
     ]);
     expect(html).toContain('<main id="sky-view" class="sky" data-tool="drag"');
     storage.set("mf_sky_tool", "click");

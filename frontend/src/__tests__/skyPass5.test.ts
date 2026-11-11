@@ -25,7 +25,8 @@ describe("a route with no session placed on a view that hides it", () => {
     expect(SKY).toContain("setLayout((l) => patchSkyLine(l, groundedKey(f.id), { x: at.x, y: at.y, pinned: true })); groundedLanded(f); };");
     expect(SKY).toContain('if (how === "switch") setSkyMode("all");');
     expect(SKY).toContain('{ action: { label: "Show all", onClick: () => setSkyMode("all") } }');
-    expect(SKY.match(/groundedLanded\(f\)/g)?.length).toBe(4);
+    // Flow polish: a saved route's "Edit its stops" copy lands the same way (5).
+    expect(SKY.match(/groundedLanded\(f\)/g)?.length).toBe(5);
     // The old per-call toast is gone (it only covered the shelf and the lane).
     expect(SKY).not.toContain('const m = useUi.getState().skyMode; if (m === "one" || m === "perched") toast(');
   });

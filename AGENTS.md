@@ -32,7 +32,7 @@ REST API with a token, then to a browser URL).
 | `electron/` | The desktop app: a thin shell (`main.js`, `preload.js`, `offline.html`) that auto-starts the server and installs the engine on first launch |
 | `backend/ticket_ingestion/` | Ticket/PR ingestion pipeline (Shortcut/Jira/Linear/GitHub Issues/Asana) |
 | `backend/web/core/flights.py`, `flight_driver.py` | Flights: plans (rows of steps) and the driver that flies each session through one; every Intake start, the pipeline and scheduled plans arm them (`docs/flights.md`) |
-| `backend/mcp/` | MindFlock MCP stdio server (stdlib only): 35 agent-to-agent tools over the HTTP API (plus 10 peer-only tools in peer mode), identity, scope policy. Auto-attached per launch by `providers/mcp_attach.py`; mailbox + lineage live in `web/core/`. Also `bridge.py`: the shared-MCP bridge that runs a user's opt-in stdio servers once per machine (`providers/mcp_share.py`) |
+| `backend/mcp/` | MindFlock MCP stdio server (stdlib only): 37 agent-to-agent tools over the HTTP API (plus 10 peer-only tools in peer mode), identity, scope policy. Auto-attached per launch by `providers/mcp_attach.py`; mailbox + lineage live in `web/core/`. Also `bridge.py`: the shared-MCP bridge that runs a user's opt-in stdio servers once per machine (`providers/mcp_share.py`) |
 | `backend/peer/` | Peer links: pair-code invites, the pinned-key TLS handshake, the relay/tunnel carriers, the sandboxed shared folder and its agent API |
 | `docs/` | architecture, session-engine, web-api, web-ui, providers, extensions, configuration, cli, mcp, team-runs, peer-link, accounts, development, ingestion-pipeline, flights |
 

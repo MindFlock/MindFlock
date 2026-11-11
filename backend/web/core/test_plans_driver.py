@@ -302,6 +302,54 @@ def _ensure_verify_plan(title: str) -> Tuple[str, str]:
     return (owner, "") if owner else ("", "couldn't make a plan for this session")
 
 
+def _session_can_self_verify(inst) -> bool:
+    """Whether a session's own agent is there to verify its work: started and
+    not paused (a paused agent refuses the check). Never raises — an
+    unreadable session is treated as closed, which keeps the old behaviour of
+    writing its steps."""
+    try:
+        if not inst.Started():
+            return False
+        return inst.Status != Paused
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _generate_for_closed_test_plans(plans: list) -> None:
+    """Write the steps of a push-made plan once its session has CLOSED.
+
+    A push from an open session records an empty plan and spends no model
+    call (:func:`_ensure_test_plan_blocking`): that session verifies itself.
+    Once it is gone, a later Verify falls back to a separate check that walks
+    WRITTEN steps — so they are written now, from the repo (no worktree), the
+    path every rewrite of a closed session's plan already takes. Only a plan
+    nothing has touched: no steps, no runs, waiting (``generated``/``due``),
+    in a repo that still opts in to automatic plans. Quiet while Verify is
+    paused. A generation that fails parks the plan in ``failed`` with its
+    sentence, so it is tried once."""
+    if not _verify_enabled():
+        return
+    srv = _server()
+    for plan in plans:
+        try:
+            if plan.get("steps") or plan.get("runs"):
+                continue
+            if plan.get("state") not in ("generated", "due"):
+                continue
+            pid = str(plan.get("id") or "")
+            if not pid or pid in srv.ENGINE.instances:
+                continue
+            if _verify_owner_session(plan):
+                continue
+            root = str(plan.get("repo_root") or "")
+            if not root or not os.path.isdir(root) or not _verify_auto_for(root, root):
+                continue
+            program, worktree = _test_plan_session_ctx(pid)
+            _start_test_plan_generation(pid, program, worktree)
+        except Exception:  # noqa: BLE001 — one bad plan can't stop the pass
+            pass
+
+
 def _generation_steer(repo_root: str, environment: str) -> Optional[str]:
     """The generation target a Verify stop's ``environment`` asks for, or
     ``None`` for "the repo's own" (no environment, or one this repo does not
@@ -362,6 +410,23 @@ def _ensure_test_plan_blocking(
             return
         branch = srv._current_branch(wt)
         sha = srv._git_head_sha(wt)
+        if not manual and _session_can_self_verify(inst):
+            # NO MODEL CALL FOR AN OPEN SESSION. Its Verify is the session's
+            # own agent writing its own steps (self-verify), which discards
+            # any written here — so a push only records the plan (empty, so
+            # the due loop still watches it ship) and the steps are written
+            # later, if at all, once the session has closed
+            # (:func:`_generate_for_closed_test_plans`).
+            _test_plans.ensure_plan_for(
+                title,
+                branch,
+                sha,
+                repo_root,
+                _test_plans.resolve_live_branch(repo_root),
+                intent=_test_plan_intent(title),
+                manual=True,
+            )
+            return
         # ``repo_root``, not nothing: the live branch is a PER-REPO fact, and the
         # plan is stamped with whichever branch it is told at creation — it is
         # what the due loop watches and what the run prompt checks out. Asking
@@ -822,7 +887,7 @@ def _test_plan_is_live(plan: dict) -> bool:
         # happened, and let the deploy question stay open.
         _test_plans.set_live_problem(
             plan["id"],
-            "Its pull request merged into %s, not %s. These behaviors are waiting "
+            "Its pull request merged into %s, not %s. Its Verify is waiting "
             "for %s \u2014 change the live branch on this repo's card if %s is "
             "what you ship." % (base, live, live, base),
         )
@@ -932,7 +997,7 @@ def _notify_test_plan_due(plan: dict) -> None:
             # on main" before it parses as "check, on main" — which is why the
             # branch has moved up into the title, where it is a fact about what
             # happened rather than a place to go.
-            message="%d behavior%s to check, %d for you."
+            message="%d step%s to verify, %d for you."
             % (len(steps), "" if len(steps) == 1 else "s", mine),
             # 3 = normal. This is news, not an emergency: nothing is broken and
             # nothing is waiting on the user, unlike the rules that ring at 4.
@@ -975,15 +1040,22 @@ def _read_verify_results(plan: dict) -> Optional[dict]:
         wt = ""
     if not wt:
         return None
+    path = os.path.join(wt, _test_plans.RESULT_FILE)
     try:
-        with open(
-            os.path.join(wt, _test_plans.RESULT_FILE), "r", encoding="utf-8"
-        ) as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return None
+    except OSError as err:
+        _results_file_broken(plan, inst, path, "it can't be opened (%s)" % err)
+        return None
+    except ValueError as err:
+        _results_file_broken(plan, inst, path, "it isn't valid JSON (%s)" % err)
         return None
     if not isinstance(data, dict):
+        _results_file_broken(plan, inst, path, "it isn't a JSON object")
         return None
+    _results_file_ok(plan)
     # IT MUST BE ABOUT THIS PLAN. The prompt asks the agent to echo the plan id
     # and nothing checked it, so a result file left behind by an earlier plan in
     # a reused worktree — or one an agent wrote from an example — could settle a
@@ -993,6 +1065,69 @@ def _read_verify_results(plan: dict) -> Optional[dict]:
     if claimed and claimed != str(plan.get("id") or ""):
         return None
     return data
+
+
+#: plan id → ``(mtime, first seen, told)`` for a results file that would not
+#: parse. In memory: a restart only means the agent may be told once more.
+_RESULTS_FILE_BAD: Dict[str, tuple] = {}
+#: How long one broken copy of the file must stay broken before the agent is
+#: told: a file read mid-write fails to parse too, and is fine a poll later.
+_RESULTS_FILE_GRACE_S = 10.0
+
+
+def _results_file_broken(plan: dict, inst, path: str, why: str) -> None:
+    """A results file that does not parse: once the same copy has stayed
+    broken for :data:`_RESULTS_FILE_GRACE_S`, say so on the plan
+    (``test_plans.note_file_error``, when the store has it) and tell the agent
+    ONCE, through the normal message path, so it rewrites the file instead of
+    the check reading "Verifying" until a timer closes it. Never raises."""
+    pid = str(plan.get("id") or "")
+    message = "The results file %s can't be read: %s." % (_test_plans.RESULT_FILE, why)
+    note = getattr(_test_plans, "note_file_error", None)
+    if note is not None:
+        # Every bad read: the store writes only on change, and the next good
+        # read clears it by itself.
+        try:
+            note(pid, message)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        return
+    now = time.time()
+    seen = _RESULTS_FILE_BAD.get(pid)
+    if seen is None or seen[0] != mtime:
+        _RESULTS_FILE_BAD[pid] = (mtime, now, bool(seen and seen[2]))
+        return
+    if seen[2] or now - seen[1] < _RESULTS_FILE_GRACE_S:
+        return
+    _RESULTS_FILE_BAD[pid] = (mtime, seen[1], True)
+    title = str(plan.get("run_session") or "")
+    text = (
+        "MindFlock: your Verify results file %s can't be read — %s. Rewrite it "
+        "now as one valid JSON object (the format you were given), keeping "
+        "every answer you have already recorded." % (_test_plans.RESULT_FILE, why)
+    )
+    try:
+        _server()._deliver_to_agent(inst, title, text, auto=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _results_file_ok(plan: dict) -> None:
+    """The results file parses again: forget the broken copy (the store
+    clears its own ``file_error`` on the next good read)."""
+    _RESULTS_FILE_BAD.pop(str(plan.get("id") or ""), None)
+
+
+def _report_finished(data) -> bool:
+    """``test_plans.report_finished`` when the store has it: finished only
+    for a JSON ``true``."""
+    fn = getattr(_test_plans, "report_finished", None)
+    if fn is not None:
+        return bool(fn(data))
+    return isinstance(data, dict) and data.get("finished") is True
 
 
 def _free_stale_verify_worktree(repo_root: str, title: str) -> str:
@@ -1354,6 +1489,34 @@ def walk_is_queued(title: str) -> bool:
         return False
     mark = _test_plans.WALK_MARK
     return any(str((i or {}).get("text") or "").startswith(mark) for i in items)
+
+
+def withdraw_walk(title: str) -> bool:
+    """Take a check still WAITING on ``title``'s prompt queue (items opening
+    with :data:`test_plans.WALK_MARK`) back off it → whether one was there.
+
+    A check handed to a session mid-turn waits there until the turn ends; a
+    cancel, a close or a delete in the meantime must not leave it to run
+    anyway. Never raises."""
+    mark = _test_plans.WALK_MARK
+    try:
+        items = _prompt_queue.get_state(title).get("items") or []
+    except Exception:  # noqa: BLE001
+        return False
+    gone = False
+    for item in items:
+        if str((item or {}).get("text") or "").startswith(mark):
+            try:
+                _prompt_queue.remove_item(title, str(item.get("id") or ""))
+                gone = True
+            except Exception:  # noqa: BLE001
+                pass
+    if gone:
+        try:
+            _server()._emit_queue_changed(title)
+        except Exception:  # noqa: BLE001
+            pass
+    return gone
 
 
 def _run_is_in_session(plan: dict) -> bool:
@@ -1797,14 +1960,19 @@ def _announce_test_plan_checked(plan: dict) -> None:
                 continue
             if step.get("actor") == "human" or result == "blocked":
                 needs_you += 1
+        outcome = str(run.get("outcome") or "")
         _events.BUS.emit(
             "session.test_plan_checked",
             session=pid,
-            # "failed" when any step failed, "" otherwise: what the
-            # default-on ``verify_run_failed`` notify rule matches on (a rule
-            # can only look at ``old``/``new``, never inside ``data``).
-            new="failed" if failed else "",
+            # "failed" when any step failed, "needs_you" when a person must
+            # check and confirm, "" otherwise: what the default-on
+            # ``verify_run_failed`` / ``verify_needs_you`` notify rules match
+            # on (a rule can only look at ``old``/``new``, never inside
+            # ``data``).
+            new="failed" if failed else ("needs_you" if outcome == "needs_you" else ""),
             data={
+                # The sentence a push says: what to do now.
+                "detail": _checked_detail(plan, run, failed, outcome),
                 "plan": pid,
                 "title": plan.get("title") or pid,
                 "failed": failed,
@@ -1818,6 +1986,37 @@ def _announce_test_plan_checked(plan: dict) -> None:
         )
     except Exception:  # noqa: BLE001 — an announcement must never stop the pass
         pass
+
+
+def _checked_detail(plan: dict, run: dict, failed: int, outcome: str) -> str:
+    """One sentence for a finished check's notification: what failed, or what
+    the person has to do now. ``""`` for a plain pass."""
+    if failed:
+        first = next(
+            (
+                str(s.get("text") or "")
+                for s in plan.get("steps") or []
+                if ((run.get("results") or {}).get(s.get("id")) or {}).get("result")
+                == "fail"
+            ),
+            "",
+        )
+        word = "1 step" if failed == 1 else "%d steps" % failed
+        return ("%s failed: %s" % (word, first[:160])) if first else "%s failed." % word
+    if outcome != "needs_you":
+        return ""
+    try:
+        mine = _test_plans.confirm_steps(plan)
+    except Exception:  # noqa: BLE001
+        mine = []
+    if not mine:
+        return "Every step passed — press Confirm verified if it works."
+    first = str(mine[0].get("text") or "")[:160]
+    more = " (and %d more)" % (len(mine) - 1) if len(mine) > 1 else ""
+    return "Check: %s%s — then press Confirm verified or Not verified." % (
+        first.rstrip("."),
+        more,
+    )
 
 
 def _verify_run_trees(plan: dict) -> tuple:
@@ -2014,9 +2213,18 @@ def _release_wedged_run(
     checked it yet", so a session that had been started, been billed and died
     read exactly like a button nobody pressed.
     """
+    # `mark_due` picks the release by the kind of run: a self / in-session run
+    # is kept as blocked with the reason and unshipped work stays unshipped
+    # (`test_plans.release_run`); a checker session's run is put back to due
+    # and its empty record dropped, which hands that session to the sweep.
     released = _test_plans.mark_due(pid, reason=reason)
     if released is None:
         return
+    _SELF_NUDGED_AT.pop(pid, None)
+    # A check still waiting on the session's queue must not run later for a
+    # run that is over.
+    if run_session:
+        withdraw_walk(run_session)
     _VERIFY_DEAD_SINCE.pop(run_session, None)
     # `mark_due` cleared `run_session` AND dropped the empty run record, which is
     # what actually hands the session to `_sweep_orphan_verify_sessions`: it
@@ -2036,6 +2244,8 @@ def _release_wedged_run(
             # sentence the plan got said exactly which. It travels with it.
             "hours": hours,
             "reason": reason,
+            # What a push says (the ``verify_run_gave_up`` rule's body).
+            "detail": reason,
         },
     )
 
@@ -2044,16 +2254,34 @@ async def close_run(plan_id: str, reason: str) -> Optional[dict]:
     """End a verify run NOW, keeping what it answered → the plan, or None.
 
     For whoever drives a run and gives up waiting on it (a route's Verify stop
-    after a stall or past :data:`test_plans.RUN_BUDGET_MIN`): every agent step
-    the checker answered keeps its answer, every one it didn't becomes
-    ``blocked`` with ``reason`` as its note, and the run is finished through
-    :func:`test_plans.finish_run` — the same close a checker's own finished
+    after a stall or past :data:`test_plans.RUN_BUDGET_MIN`, or the due loop
+    for an on-demand Verify no route owns): every agent step the agent
+    answered keeps its answer, every one it didn't becomes ``blocked`` with
+    ``reason`` as its note, and the run is finished through
+    :func:`test_plans.finish_run` — the same close an agent's own finished
     file takes, so the state ladder and the "blocked is never a pass" rules
-    are the ordinary ones. Then the results file is eaten and the checker's
-    session ended. Idempotent: a plan that is not running is returned as is."""
+    are the ordinary ones. Then the results file is eaten and a separate
+    checker's session ended (the person's own session stays; see
+    :func:`_close_run_blocking`). Idempotent: a plan that is not running is
+    returned as is."""
+    done, run_session, in_session = await asyncio.to_thread(
+        _close_run_blocking, plan_id, reason
+    )
+    if run_session and not in_session:
+        try:
+            await _end_verify_session(run_session)
+        except Exception:  # noqa: BLE001 — the orphan sweep closes it later
+            pass
+    return done
+
+
+def _close_run_blocking(plan_id: str, reason: str) -> tuple:
+    """:func:`close_run` up to ending a checker's session → ``(plan,
+    run_session, in_session)``; ``run_session`` is ``""`` when nothing was
+    running. Blocking; the due loop's stall close calls it directly."""
     plan = _test_plans.get(plan_id)
     if plan is None or plan["state"] != "running":
-        return plan
+        return plan, "", False
     run_session = str(plan.get("run_session") or "")
     in_session = _run_is_in_session(plan)
     run = plan["runs"][-1] if plan["runs"] else {}
@@ -2071,44 +2299,48 @@ async def close_run(plan_id: str, reason: str) -> Optional[dict]:
             )
         elif not entry.get("result") and st.get("actor") == "agent":
             results.append({"id": st["id"], "result": "blocked", "note": reason})
-    done = await asyncio.to_thread(
-        _test_plans.finish_run,
+    _SELF_NUDGED_AT.pop(plan_id, None)
+    done = _test_plans.finish_run(
         plan_id,
         results,
         target=_test_plans.run_target(plan),
         closed=reason or "the check was closed",
     )
     if run_session:
-        await asyncio.to_thread(_clear_verify_results, run_session)
+        _clear_verify_results(run_session)
         if in_session:
-            # The person's own session stays; its agent is told the walk is
-            # over (queued behind its turn, never typed over it).
-            await asyncio.to_thread(_tell_walk_closed, run_session, reason)
-        else:
-            try:
-                await _end_verify_session(run_session)
-            except Exception:  # noqa: BLE001 — the orphan sweep closes it later
-                pass
-    return done
+            # The person's own session stays. A check still waiting on its
+            # queue is withdrawn; one the agent already picked up is told it
+            # is over (queued behind its turn, never typed over it).
+            _tell_walk_closed(run_session, reason)
+    return done, run_session, in_session
 
 
-def _tell_walk_closed(title: str, reason: str) -> None:
-    """Tell a session walking a check in-session that the check was closed
-    (``close_run``). Best-effort, never raises."""
+def _tell_walk_closed(title: str, reason: str) -> bool:
+    """End a check in session ``title`` (``close_run``, the cancel and delete
+    routes) → whether its agent was told.
+
+    A check still WAITING on the session's prompt queue is withdrawn
+    (:func:`withdraw_walk`) and nothing is said — the agent never saw it.
+    Only a check it already picked up gets the "this check was closed"
+    message. Best-effort, never raises."""
+    if withdraw_walk(title):
+        return False
     srv = _server()
     inst = srv.ENGINE.instances.get(title)
     if inst is None:
-        return
+        return False
     # Not WALK_MARK: that prefix is what reads as "a walk still queued".
     text = (
-        "MindFlock Verify — this check was closed (%s). Stop walking it: what "
+        "MindFlock Verify — this check was closed (%s). Stop checking: what "
         "you already recorded is kept, the rest is marked blocked."
         % str(reason or "closed").strip()
     )
     try:
-        srv._deliver_to_agent(inst, title, text, auto=True)
+        told, _why = srv._deliver_to_agent(inst, title, text, auto=True)
+        return bool(told)
     except Exception:  # noqa: BLE001
-        pass
+        return False
 
 
 def _poll_running_test_plans(plans: list) -> None:
@@ -2140,7 +2372,7 @@ def _poll_running_test_plans(plans: list) -> None:
                 # SELF-VERIFY: the agent writes its own steps into the file,
                 # and they become the plan's before any answer lands on them.
                 _test_plans.adopt_reported_steps(pid, data.get("steps"))
-            if data and not data.get("finished"):
+            if data and not _report_finished(data):
                 # PROGRESS, not an end: the checker rewrites its file after
                 # every step it settles ("finished": false), so whoever waits
                 # on the run sees the answers so far and can tell a slow
@@ -2148,7 +2380,7 @@ def _poll_running_test_plans(plans: list) -> None:
                 partial = _test_plans.reported_results(data)
                 if partial:
                     _test_plans.record_progress(pid, partial)
-            if data and data.get("finished"):
+            if data and _report_finished(data):
                 results = _test_plans.reported_results(data)
                 tested, expected = _verify_run_trees(plan)
                 done = _test_plans.finish_run(
@@ -2165,6 +2397,7 @@ def _poll_running_test_plans(plans: list) -> None:
                 # None for a plan that was deleted while the run was working,
                 # and announcing that one would toast about a checklist that is
                 # no longer there.
+                _SELF_NUDGED_AT.pop(pid, None)
                 if done:
                     # THE ANSWER IS EATEN, not left on disk. This file is the
                     # session's whole return channel and the poller believes the
@@ -2194,10 +2427,10 @@ def _poll_running_test_plans(plans: list) -> None:
                     # SHORT FIRST SENTENCE, deliberately: the collapsed row
                     # lifts sentence one and nothing else (`errorHeadline`), so
                     # a paragraph-long opener is a release nobody can see.
-                    "The verify session's agent window is gone. Nothing was "
-                    "running any more, and nothing it may have found was "
-                    "recorded — run it again.",
+                    _window_gone_reason(plan, run_session),
                 )
+                continue
+            if runs and runs[-1].get("self") and _self_run_stalled(plan):
                 continue
             if started and time.time() - started > _TEST_PLAN_RUN_GIVE_UP_S:
                 # NOT SILENTLY. This is a real session that was started, was
@@ -2211,9 +2444,9 @@ def _poll_running_test_plans(plans: list) -> None:
                 _release_wedged_run(
                     pid,
                     run_session,
-                    "The verify run was given up on after %d hours. %s never "
-                    "wrote its answers, so nothing it may have found was "
-                    "recorded — run it again." % (hours, run_session or "The session"),
+                    "Verify gave up after %d hours. %s never wrote its "
+                    "answers, so nothing it found was recorded — press Verify "
+                    "to check again." % (hours, run_session or "The agent"),
                     hours=hours,
                 )
         except Exception:  # noqa: BLE001 — one bad plan can't stop the pass
@@ -2222,6 +2455,110 @@ def _poll_running_test_plans(plans: list) -> None:
     # so the map cannot outgrow the runs it is watching.
     for key in [k for k in _VERIFY_DEAD_SINCE if k not in live_titles]:
         _VERIFY_DEAD_SINCE.pop(key, None)
+    running = {str(p.get("id") or "") for p in plans if p.get("state") == "running"}
+    for key in [k for k in _SELF_NUDGED_AT if k not in running]:
+        _SELF_NUDGED_AT.pop(key, None)
+
+
+def _window_gone_reason(plan: dict, run_session: str) -> str:
+    """The sentence a run whose agent window died is released with — naming
+    the person's own session when the check ran there."""
+    if _run_is_in_session(plan):
+        return (
+            "The agent in %s stopped before Verify finished. Nothing it found "
+            "was recorded — open %s and press Verify to check again."
+            % (run_session, run_session)
+        )
+    return (
+        "The agent checking this work stopped before Verify finished. Nothing "
+        "it found was recorded — press Verify to check again."
+    )
+
+
+#: plan id → when the due loop nudged its on-demand self-verify
+#: (:func:`_self_run_stalled`). In memory: a restart may nudge once more.
+_SELF_NUDGED_AT: Dict[str, float] = {}
+
+
+def _flight_owns_run(pid: str) -> bool:
+    """Whether a live route's Verify stop is driving plan ``pid``'s run — it
+    has its own nudge and close (``flights._verify_guard``). Unknown → True,
+    so the two never both act."""
+    try:
+        from backend.web.core import flights as _flights
+
+        for f in _flights.list_flights(include_finished=False):
+            step = _flights.step_view(f)
+            if step.get("kind") != "verify":
+                continue
+            ss = (f.get("step_states") or {}).get(step.get("id")) or {}
+            if str((ss.get("detail") or {}).get("plan") or "") == pid:
+                return True
+        return False
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _self_run_stalled(plan: dict, now: Optional[float] = None) -> bool:
+    """The stall timers a route's Verify stop applies, for an ON-DEMAND
+    self-verify no route owns → whether the run was closed.
+
+    The clock starts when the session's agent PICKS THE CHECK UP
+    (``flight_driver._walk_clock``): while it waits on the prompt queue behind
+    the person's own turn, nothing counts. Then: past the run's budget
+    (:data:`test_plans.RUN_BUDGET_MIN`) plus the grace → closed; nothing new
+    answered for ``VERIFY_STALL_NUDGE_S`` while the agent sits idle → one
+    nudge (``VERIFY_NUDGE``); still nothing ``VERIFY_STALL_CLOSE_S`` after it
+    → closed. A close keeps every answer and marks the rest blocked
+    (:func:`_close_run_blocking`), so the pill reads "Verify blocked" with the
+    reason instead of "Verifying" for hours."""
+    from backend.web.core import flight_driver as _fd
+    from backend.web.core import flights as _flights
+
+    pid = str(plan.get("id") or "")
+    title = str(plan.get("run_session") or "")
+    if not pid or not title or _flight_owns_run(pid):
+        return False
+    now = time.time() if now is None else now
+    checker: dict = {}
+    progress = _fd._walk_clock(pid, title, _test_plans.run_progress(plan), checker)
+    if progress.get("queued"):
+        return False
+    started = float(progress.get("started_at") or 0.0) or now
+    quiet = now - (float(progress.get("progress_at") or 0.0) or started)
+    budget = float(getattr(_test_plans, "RUN_BUDGET_MIN", 30)) * 60.0
+    grace = float(getattr(_flights, "VERIFY_BUDGET_GRACE_S", 300.0))
+    if now - started > budget + grace:
+        _close_run_blocking(
+            pid,
+            "not checked: the check ran out of time (%s)"
+            % _flights.duration_word(budget),
+        )
+        return True
+    nudge_s = float(getattr(_flights, "VERIFY_STALL_NUDGE_S", 480.0))
+    close_s = float(getattr(_flights, "VERIFY_STALL_CLOSE_S", 900.0))
+    nudged = float(_SELF_NUDGED_AT.get(pid) or 0.0)
+    if nudged:
+        if now - nudged > close_s and quiet > close_s:
+            _close_run_blocking(pid, "not checked: the agent stopped answering")
+            return True
+        return False
+    if quiet <= nudge_s:
+        return False
+    try:
+        activity = str(
+            _fd._session_obs({"session": title}, now, True).get("activity") or ""
+        )
+    except Exception:  # noqa: BLE001
+        activity = ""
+    if activity not in ("idle", ""):
+        return False
+    _SELF_NUDGED_AT[pid] = now
+    try:
+        _fd._deliver(title, _flights.VERIFY_NUDGE)
+    except Exception:  # noqa: BLE001 — the close comes next anyway
+        pass
+    return False
 
 
 def _liveness_order(plans: list) -> list:
@@ -2480,6 +2817,7 @@ def _test_plans_due_pass(full: bool = True) -> bool:
     if full:
         _recover_stalled_test_plans(plans)
         _retry_no_commit_test_plans(plans)
+        _generate_for_closed_test_plans(plans)
     _poll_running_test_plans(plans)
     if full:
         _check_test_plans_for_liveness(plans)
@@ -2507,43 +2845,63 @@ _VERIFY_ORPHAN_GRACE_S = 15 * 60
 
 
 async def _sweep_orphan_verify_sessions() -> None:
-    """Close verify sessions that no plan remembers any more.
+    """Close checker sessions nothing is waiting on any more.
 
     The symmetric half of ``test_plans.prune``: prune releases a plan whose
-    verify session is gone, and this closes a verify session whose plan is
-    gone. Plans forget their sessions on paths that never reach
-    ``_end_verify_session`` — ``ensure_plan_for`` replaces a plan wholesale
-    when its session moves to a new branch, and the store's MAX_PLANS cap
-    evicts old plans entirely — and the core module cannot end sessions itself
-    (the engine owns them). What that stranded: an agent session, invisible in
-    the rail (the sidebar hides ``verify-*`` on purpose), with no card left in
-    the Verify dialog offering to end it, alive for days.
+    checker session is gone, and this closes a checker session whose run is
+    over or whose plan is gone. Plans forget their sessions on paths that
+    never reach ``_end_verify_session`` — ``ensure_plan_for`` replaces a plan
+    wholesale when its session moves to a new branch, the store's MAX_PLANS
+    cap evicts old plans, a route that drove the check died — and the core
+    module cannot end sessions itself (the engine owns them). What that
+    stranded: ``verify-<plan>-<sha>`` agents, invisible in the rail, alive and
+    holding memory for days after their routes had died.
 
-    A session is kept while ANY plan references it — the in-flight
-    ``run_session`` or any run record's ``session`` (a finished run's session
-    deliberately stays open for the user to read). Closing goes through
-    ``_end_verify_session``: a close, not a delete, so a mistaken sweep is one
-    click from coming back via recently-closed. Candidates are the sessions
-    flagged ``hidden_by == "verify"``, never a title-prefix match.
+    A checker is KEPT while a plan is running it (the in-flight
+    ``run_session``) and for :data:`_VERIFY_ORPHAN_GRACE_S` after the newest
+    run it served ended, so a person can still open it to read; after that,
+    or once its plan is gone, it is closed. Closing goes through
+    ``_end_verify_session``: a close, never a delete, so a mistaken sweep is
+    one click from coming back via recently-closed — and that function never
+    closes a person's own session. Candidates are the sessions flagged
+    ``hidden_by == "verify"``, plus a ``verify-…`` session a plan's run record
+    names as its separate checker; never a bare title-prefix match.
     """
     try:
         plans = _test_plans.list_plans()
     except Exception:  # noqa: BLE001 — an unreadable store must not close anything
         return
-    referenced = set()
+    now = time.time()
+    in_flight = set()
+    #: checker title → when the newest run it served ended (or last moved).
+    ended: Dict[str, float] = {}
     for plan in plans:
         title = str(plan.get("run_session") or "")
-        if title:
-            referenced.add(title)
+        if title and plan.get("state") == "running":
+            in_flight.add(title)
         for run in plan.get("runs") or []:
-            title = str((run or {}).get("session") or "")
-            if title:
-                referenced.add(title)
+            run = run or {}
+            title = str(run.get("session") or "")
+            if not title or run.get("in_session"):
+                continue
+            at = max(
+                float(run.get("outcome_at") or 0.0),
+                float(run.get("progress_at") or 0.0),
+                float(run.get("at") or 0.0),
+            )
+            ended[title] = max(ended.get(title, 0.0), at)
     for title in list(_server().ENGINE.instances.keys()):
         # Verify runs carry the hidden_by flag (set by run_test_plan, or by
-        # the startup backfill for runs created before the flag existed); a
-        # user's own `verify-foo` has no flag and is never swept.
-        if _hidden_sessions.hidden_by(title) != "verify" or title in referenced:
+        # the startup backfill for runs created before the flag existed), or
+        # a run record names them as its separate checker; a user's own
+        # `verify-foo` has neither, so it is never swept.
+        if _hidden_sessions.hidden_by(title) != "verify" and title not in ended:
+            continue
+        if title in in_flight:
+            continue
+        if not _is_checker_session(title):
+            continue
+        if title in ended and now - ended[title] < _VERIFY_ORPHAN_GRACE_S:
             continue
         inst = _server().ENGINE.instances.get(title)
         created = getattr(inst, "CreatedAt", None)
@@ -2559,11 +2917,107 @@ async def _sweep_orphan_verify_sessions() -> None:
         try:
             if await _end_verify_session(title) and log.ErrorLog is not None:
                 log.ErrorLog.Printf(
-                    "verify: closed orphaned session %s (no plan references it)",
+                    "verify: closed checker session %s (its check is over)",
                     title,
                 )
         except Exception:  # noqa: BLE001 — one bad session can't stop the sweep
             pass
+
+
+#: plan id → ``{"session", "at", "busy"}`` for an in-session Fix whose
+#: re-verify is due when the session's agent finishes that turn
+#: (:func:`expect_fix`). In memory: a restart drops it, and the person
+#: presses Verify themselves.
+_FIX_PENDING: Dict[str, dict] = {}
+#: A fix the agent was never seen working on is taken as done this long after
+#: it was handed over (a turn that started and ended between two looks).
+_FIX_QUICK_S = 120.0
+#: Give up waiting for a fix turn to end after this long.
+_FIX_GIVE_UP_S = 2 * 60 * 60.0
+
+
+def expect_fix(plan_id: str, title: str, now: Optional[float] = None) -> None:
+    """Remember that session ``title``'s agent was just handed a Fix for plan
+    ``plan_id``: once that turn ends, Verify runs again
+    (:func:`_reverify_after_fix`) — the on-demand twin of a route's fix round
+    (``flights.op_fix``)."""
+    _FIX_PENDING[str(plan_id)] = {
+        "session": str(title),
+        "at": float(time.time() if now is None else now),
+        "busy": False,
+    }
+
+
+def _fix_turn_over(entry: dict, now: float) -> Optional[bool]:
+    """Whether the fix turn ``entry`` waits on has ended: True (re-verify),
+    False (keep waiting) or None (give up: session gone, or too long)."""
+    title = entry["session"]
+    srv = _server()
+    if title not in srv.ENGINE.instances or now - entry["at"] > _FIX_GIVE_UP_S:
+        return None
+    try:
+        items = _prompt_queue.get_state(title).get("items") or []
+    except Exception:  # noqa: BLE001
+        items = []
+    if any(
+        str((i or {}).get("text") or "").startswith("MindFlock — Verify found")
+        for i in items
+    ):
+        return False  # still waiting behind the person's own turn
+    from backend.web.core import flight_driver as _fd
+
+    try:
+        obs = _fd._session_obs({"session": title}, now, True)
+    except Exception:  # noqa: BLE001
+        return False
+    activity = "idle" if obs.get("sleeping") else str(obs.get("activity") or "")
+    if activity == "working":
+        entry["busy"] = True
+        return False
+    if activity != "idle":
+        return False
+    return bool(entry["busy"]) or now - entry["at"] > _FIX_QUICK_S
+
+
+async def _reverify_after_fix(now: Optional[float] = None) -> None:
+    """Run Verify again for every in-session Fix whose turn has ended, the
+    same way the session's Verify button does (where = the last check's,
+    else its own branch while the work is unshipped). Never raises."""
+    now = time.time() if now is None else now
+    for pid in list(_FIX_PENDING):
+        entry = _FIX_PENDING.get(pid)
+        if entry is None:
+            continue
+        try:
+            over = await asyncio.to_thread(_fix_turn_over, entry, now)
+        except Exception:  # noqa: BLE001
+            over = None
+        if over is False:
+            continue
+        _FIX_PENDING.pop(pid, None)
+        if over is None:
+            continue
+        plan = _test_plans.get(pid)
+        if plan is None or plan.get("state") == "running":
+            continue
+        runs = plan.get("runs") or []
+        where = str((runs[-1] if runs else {}).get("where") or "")
+        if not where and _test_plans._unshipped(plan):
+            where = _test_plans.BRANCH_WHERE
+        body = {"notes": "The agent just fixed what failed — check again."}
+        if where:
+            body["environment"] = where
+        try:
+            resp = await _server().run_test_plan(pid, None, body)
+            if resp.status_code >= 400 and log.ErrorLog is not None:
+                log.ErrorLog.Printf(
+                    "verify: re-check after fix of %s refused: %s",
+                    pid,
+                    bytes(resp.body).decode("utf-8", "replace")[:300],
+                )
+        except Exception as err:  # noqa: BLE001
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("verify: re-check after fix of %s: %v", pid, err)
 
 
 async def _test_plans_due_loop() -> None:
@@ -2589,6 +3043,10 @@ async def _test_plans_due_loop() -> None:
             if full:
                 next_full = time.monotonic() + _TEST_PLAN_DUE_INTERVAL
             running = await asyncio.to_thread(_test_plans_due_pass, full)
+            if _FIX_PENDING:
+                await _reverify_after_fix()
+                # A fix turn's end is watched on the fast cadence.
+                running = running or bool(_FIX_PENDING)
             # On the minute, with the rest of the housekeeping — never on the
             # fast ticks, which exist only to read result files quickly.
             if full:
@@ -2694,8 +3152,8 @@ async def _write_test_plan_for_closed(title: str) -> JSONResponse:
                 "",
                 JSONResponse(
                     {
-                        "error": "%s is gone from this repo — nothing left to write "
-                        "behaviors from" % branch
+                        "error": "%s is gone from this repo — nothing left to "
+                        "write Verify steps from" % branch
                     },
                     status_code=409,
                 ),

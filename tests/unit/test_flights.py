@@ -327,7 +327,9 @@ def test_attach_starts_at_the_first_non_agent_step():
     f = fly(step("agent"), step("ship", lane="commit"), step("notify"), attach=True)
     assert f["cursor"] == 1 and f["state"] == "running"
     assert f["step_states"]["s1"]["state"] == "skipped"
-    assert f["history"][-1]["event"] == "jumped"
+    # One line per stop passed over, saying why (flow-polish round).
+    assert f["history"][-1]["event"] == "skipped"
+    assert "no prompt to send" in f["history"][-1]["note"]
 
 
 def test_attach_to_a_busy_session_runs_its_agent_step_on_that_work():
@@ -428,7 +430,7 @@ def test_session_holds_are_visible_waits():
     for s, note in [
         ({"present": False}, "waiting for s to start"),
         ({"present": False, "pending": True}, "the session is starting"),
-        (sess(status="paused"), "the session is paused"),
+        (sess(status="paused"), "the session is paused — resume it to carry on"),
     ]:
         a = F.next_action(f, {"session": s}, NOW)
         assert a == {"action": "wait", "note": note}
@@ -555,7 +557,7 @@ def test_verify_step_starts_the_check_parks_and_settles():
     assert f["step_states"]["s1"]["state"] == "running"
     running = _vfacts(state="running", outcome="verifying", latest_run_at=NOW)
     a = F.next_action(f, {"session": sess(), "verify": running}, NOW)
-    assert a["note"] == "the agent is checking the behaviors"
+    assert a["note"] == "the agent is verifying its work"
     need = _vcheck("needs_you", confirm_items=["look at it"])
     a = F.next_action(f, {"session": sess(), "verify": need}, NOW)
     assert a["action"] == "you" and a["detail"]["items"] == ["look at it"]
@@ -614,7 +616,8 @@ def test_verify_live_on_branch_agent_only_and_failures():
 def test_verify_kind_reads_as_a_stop_and_halts_by_default():
     spec = F.STEP_KINDS["verify"]
     assert spec["summary"] == (
-        "Checks this work's behaviors; the agent checks what it can, the rest waits for you."
+        "The session's agent verifies its own work and shows its evidence; "
+        "anything only you can check waits for you."
     )
     assert spec["default_on_fail"] == "halt"
     kinds = {k["kind"]: k for k in F.kinds_dto()["kinds"]}
@@ -745,7 +748,7 @@ def test_wait_step_minutes_and_until():
     a = F.next_action(f, {}, NOW)
     assert a["action"] == "run"
     f = F.apply(f, dict(a, detail={"until": NOW + 300}), NOW)
-    assert F.next_action(f, {}, NOW + 100)["note"] == "3m left"
+    assert F.next_action(f, {}, NOW + 100)["note"] == "3 min left"
     assert F.next_action(f, {}, NOW + 300)["action"] == "done"
     until = F.next_until("00:00", NOW)
     assert NOW < until <= NOW + 86400
@@ -1108,6 +1111,8 @@ def test_row_dto_and_event_data():
             "title": "Check it",
             "state": "waiting_you",
             "actor": "you",
+            # Why it waits (flow-polish round): the stop's own note.
+            "note": "Approve",
         },
         "join": None,
         "branch": None,
@@ -1202,7 +1207,7 @@ def test_ship_ignores_a_persons_own_fast_track_run():
         a = F.next_action(f, {"session": sess(), "autopilot": rec}, NOW)
         assert a == {
             "action": "wait",
-            "note": "the session is already shipping by itself (Goes as far as)",
+            "note": "this session's own Fast-track is already shipping it — stop that or wait",
         }
     assert (
         F.next_action(
@@ -1220,7 +1225,8 @@ def test_empty_command_fails_at_start_and_never_indexes():
     )
     f = F.take_off(plan, session="cmd", now=NOW)
     a = F.next_action(f, {"session": sess()}, NOW)
-    assert a["action"] == "fail" and a["reason"] == "no command" and a["then"] == "halt"
+    assert a["action"] == "fail" and a["then"] == "halt"
+    assert a["reason"] == "no command to run — edit this stop"
     # A running one (an older record) never IndexErrors either.
     f = F.apply(f, {"action": "run", "detail": {}}, NOW)
     assert (
@@ -1236,7 +1242,7 @@ def test_a_performing_mark_blocks_a_second_effect_until_stale():
     f["step_states"]["s1"]["detail"]["performing"] = {"token": "t", "at": NOW}
     assert F.next_action(f, {}, NOW + 5) == {
         "action": "wait",
-        "note": "carrying out Notify me",
+        "note": "running Notify me",
     }
     assert F.next_action(f, {}, NOW + F.PERFORM_STALE_S + 1)["action"] == "run"
 
@@ -1768,7 +1774,8 @@ def test_removing_a_flown_stop_shifts_the_cursor():
 
 
 def test_removing_a_halted_stop_pauses_and_halt_points_still_count():
-    f = fly(step("command", command="false"), step("notify", halt=True))
+    # (halt is the stop's own field, not an option of its config)
+    f = fly(step("command", command="false"), dict(step("notify"), halt=True))
     f = F.apply(f, {"action": "fail", "then": "halt", "reason": "exit 1"}, NOW)
     assert f["state"] == "halted"
     F.op_remove_step(f, "s1", now=NOW)

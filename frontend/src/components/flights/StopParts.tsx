@@ -16,11 +16,13 @@ import { queryClient } from "../../state/queries";
 import { groundedFlights } from "../../lib/groundedLines";
 import { windowName } from "../../lib/windowName";
 import { stopSummary } from "../../lib/flightDiagram";
+import { FIELD_RANGE, clampField, fieldHint, onFailHint, stopSentence } from "../../lib/stopEditing";
 import { catalogMatch } from "../../lib/stopCatalog";
 import { describeSteps } from "../../lib/flightsApi";
 import { WHEN_COMBINE, WHEN_GRAMMAR, WHEN_MAX, checkWhen, skippedNote, whenChecker, whenError, type WhenCheck } from "../../lib/whenHelp";
 import { StopIcon } from "./Bird";
-import { VerifyStopFields, isVerifyEditor } from "./VerifyStopFields";
+import { VERIFY_OWN_FIELDS, VerifyStopFields, isVerifyEditor } from "./VerifyStopFields";
+import { verifySentence } from "../../lib/verifyStop";
 import { ChipRow, FlField, NumberField, PromptBox, Seg, TextField, Toggle, DurationField } from "./controls";
 import "./Flights.css";
 import "./StopParts.css";
@@ -290,8 +292,18 @@ export function StopPalette({
 
 // --- The inspector -----------------------------------------------------------------
 
+/** Select choices whose server id is not a word a person would pick,
+ * `kind.field` → id → words (the FIELD_HINT of each says what they do). */
+export const CHOICE_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "join.of": { all: "All workers", spawned: "Its Split's workers" },
+  "join.on_failed": { halt: "Fail this stop", continue: "Go on" },
+  "budget.scope": { flight: "Whole route", here: "Here only" },
+};
+
 /** A select's choices in the words the app already uses for them. */
-function choiceLabel(field: string, value: string, label: string): string {
+function choiceLabel(field: string, value: string, label: string, kind = ""): string {
+  const words = CHOICE_WORDS[kind + "." + field]?.[value];
+  if (words) return words;
   if (field === "lane") {
     const lane = normalizeLane(value);
     return lane ? LANE_LABEL[lane] : label;
@@ -346,60 +358,76 @@ export function boardChoices(d: BoardDynamic): StopChoice[] {
 }
 
 /** One field, drawn with the app's controls. `choices`: a `dynamic`
- * select's options, filled from the line (`stopsBefore`) or the board. */
+ * select's options, filled from the line (`stopsBefore`) or the board.
+ * `kind`: the stop's kind — its `FIELD_HINT` shows under the field and a
+ * number keeps inside its `FIELD_RANGE`. `hint` overrides the kind's hint;
+ * `dim` greys a field the other options make moot (a Wait's How long once a
+ * time is set). */
 export function StopField({
   f,
   value,
   onChange,
   readOnly,
   choices,
+  kind = "",
+  hint: hintIn,
+  dim,
 }: {
   f: StepKindField;
   value: unknown;
   onChange(v: unknown): void;
   readOnly?: boolean;
   choices?: readonly StopChoice[];
+  kind?: string;
+  hint?: ReactNode;
+  dim?: boolean;
 }) {
   const v = value === undefined ? f.default : value;
   const label = cleanLabel(f);
+  const hint: ReactNode = hintIn ?? (kind ? fieldHint(kind, f.name) : "") ?? "";
+  const range = kind ? FIELD_RANGE[kind + "." + f.name] : undefined;
+  const num = (x: number | "") => (kind ? clampField(kind, f.name, x) : x);
   if (f.type === "select" && f.dynamic === "stops_before")
-    return <StopsBeforeField label={label} value={String(v ?? "")} choices={choices || stopsBefore([], { id: "" })} readOnly={readOnly} onChange={onChange} />;
+    return <StopsBeforeField label={label} value={String(v ?? "")} choices={choices || stopsBefore([], { id: "" })} readOnly={readOnly} onChange={onChange} hint={hint || undefined} />;
   const board = f.type === "select" ? boardDynamic(f) : "";
   if (board) return <BoardChoiceField label={label} kind={board} value={String(v ?? "")} choices={choices || boardChoices(board)} readOnly={readOnly} onChange={onChange} />;
   if (f.type === "bool")
     return (
       <div className="fl-fld">
         <Toggle on={!!v} onChange={(x) => !readOnly && onChange(x)} label={f.label} />
+        {hint && <span className="fl-fld-hint">{hint}</span>}
       </div>
     );
   if (f.type === "select")
     return (
-      <FlField label={label}>
+      <FlField label={label} hint={hint || undefined}>
         <Seg
           label={label}
           value={String(v ?? "")}
-          options={fieldOptions(f).map((o) => ({ v: o.value, label: choiceLabel(f.name, o.value, o.label), disabled: readOnly }))}
+          options={fieldOptions(f).map((o) => ({ v: o.value, label: choiceLabel(f.name, o.value, o.label, kind), disabled: readOnly }))}
           onChange={(x) => onChange(x)}
         />
       </FlField>
     );
   if (f.type === "duration")
     return (
-      <FlField label={label}>
-        <DurationField label={label} value={v} onChange={(x) => !readOnly && onChange(x)} />
+      <FlField label={label} hint={hint || undefined}>
+        <span className={"fl-dim-wrap" + (dim ? " fl-dim" : "")} style={dim ? { opacity: 0.45 } : undefined} aria-disabled={dim || undefined}>
+          <DurationField label={label} value={v} onChange={(x) => !readOnly && onChange(num(x))} />
+        </span>
       </FlField>
     );
   if (f.type === "int")
     return (
-      <FlField label={label}>
-        <NumberField label={label} unit={unitOf(f)} value={v} onChange={(x) => !readOnly && onChange(x)} />
+      <FlField label={label} hint={hint || undefined}>
+        <NumberField label={label} unit={unitOf(f)} value={v} min={range ? range[0] : 0} onChange={(x) => !readOnly && onChange(num(x))} />
       </FlField>
     );
   if (f.type === "textarea") {
     const items = f.name === "items";
     const text = Array.isArray(v) ? v.map(String).join("\n") : String(v ?? "");
     return (
-      <FlField label={label} wide hint={items ? "One item per line — each becomes a tick box." : undefined}>
+      <FlField label={label} wide hint={hint || (items ? "One item per line — each becomes a tick box." : undefined)}>
         <PromptBox
           label={label}
           value={text}
@@ -412,7 +440,7 @@ export function StopField({
     );
   }
   return (
-    <FlField label={label}>
+    <FlField label={label} hint={hint || undefined}>
       <TextField label={label} value={String(v ?? "")} placeholder={f.placeholder} onChange={(x) => !readOnly && onChange(x)} />
     </FlField>
   );
@@ -429,12 +457,14 @@ export function StopsBeforeField({
   choices,
   onChange,
   readOnly,
+  hint = "The route goes back to this stop for each new run.",
 }: {
   label: string;
   value: string;
   choices: readonly StopChoice[];
   onChange(v: string): void;
   readOnly?: boolean;
+  hint?: ReactNode;
 }) {
   const runs: Array<{ group: string; items: StopChoice[] }> = [];
   for (const c of choices) {
@@ -446,7 +476,7 @@ export function StopsBeforeField({
   if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: "a stop no longer before this one" }] });
   const pick = (x: string) => !readOnly && onChange(x);
   return (
-    <FlField label={label} wide hint="The route goes back to this stop for each new run.">
+    <FlField label={label} wide hint={hint}>
       <div className="fl-stops-before" data-dynamic="stops_before">
         {runs.map((r, i) => (
           <div key={i} className={"fl-stops-before-run" + (r.group ? " fl-stops-before-group" : "")}>
@@ -554,6 +584,29 @@ export function StopInspector({
   );
 }
 
+/** What the form does with one field given the stop's other options:
+ * `hidden` — an Agent's CLI / Model show only with "Start a new session"
+ * on (they apply to nothing else); `dim` + `hint` — a Wait's How long once a
+ * time is typed (the server ignores the duration then: a time wins). */
+export function fieldState(step: Pick<FlightStep, "kind" | "config">, f: Pick<StepKindField, "name">): { hidden?: boolean; dim?: boolean; hint?: string } {
+  const c = step.config || {};
+  if (step.kind === "agent" && (f.name === "program" || f.name === "model")) return c.fresh ? {} : { hidden: true };
+  if (step.kind === "wait" && f.name === "seconds" && String(c.until ?? "").trim())
+    return { dim: true, hint: "Not used: a time is set below, and a time wins over How long. Clear the time to wait this long instead." };
+  return {};
+}
+
+/** The field names a stop's form draws with an error slot (StopForm):
+ * Title, Only when, If it fails and its kind's own fields that show (a
+ * Verify stop's own editor draws its choices itself — not those) — where a
+ * refusal for one of them goes under that field rather than above the form. */
+export function formFieldNames(step: Pick<FlightStep, "kind" | "config">, def: StepKindDef | undefined): Set<string> {
+  const names = new Set(["title", "when", "on_fail"]);
+  const verify = isVerifyEditor(step.kind, def);
+  for (const f of def?.fields || []) if (!fieldState(step, f).hidden && !(verify && VERIFY_OWN_FIELDS.includes(f.name))) names.add(f.name);
+  return names;
+}
+
 /** A stop's form: its title, its kind's own fields, the condition it flies
  * on, what happens if it fails (the inspector's and the stop dialog's) —
  * the kind's `default_on_fail` pressed when the stop says nothing.
@@ -564,6 +617,7 @@ export function StopForm({
   onChange,
   readOnly,
   lineSteps,
+  errors,
 }: {
   step: FlightStep;
   def: StepKindDef | undefined;
@@ -572,27 +626,51 @@ export function StopForm({
   /** The line's steps in flight order (a session's line, a flyway being
    * drawn): what a `dynamic: "stops_before"` field lists. */
   lineSteps?: readonly FlightStep[] | null;
+  /** A refusal per field name (the server's sentence): drawn in red as that
+   * field's hint, in place of its usual one (`formFieldNames` lists the
+   * names this form draws). */
+  errors?: Record<string, string> | null;
 }) {
+  const errHint = (name: string) =>
+    errors?.[name] ? (
+      <span className="fl-fld-error" role="alert">
+        {errors[name]}
+      </span>
+    ) : undefined;
   const fallback = defaultOnFail(def);
+  const onFail = (step.on_fail || fallback) as OnFail;
   const setField = (name: string, v: unknown) => onChange({ config: { ...step.config, [name]: v } });
-  const field = (f: StepKindField) => (
-    <StopField
-      key={f.name}
-      f={f}
-      value={step.config?.[f.name]}
-      readOnly={readOnly}
-      choices={f.dynamic === "stops_before" ? stopsBefore(lineSteps, step) : undefined}
-      onChange={(v) => setField(f.name, v)}
-    />
-  );
+  const verify = isVerifyEditor(step.kind, def);
+  const field = (f: StepKindField) => {
+    const extra = fieldState(step, f);
+    return extra.hidden ? null : (
+      <StopField
+        key={f.name}
+        f={f}
+        kind={step.kind}
+        value={step.config?.[f.name]}
+        readOnly={readOnly}
+        hint={errHint(f.name) ?? extra.hint}
+        dim={extra.dim}
+        choices={f.dynamic === "stops_before" ? stopsBefore(lineSteps, step) : undefined}
+        onChange={(v) => setField(f.name, v)}
+      />
+    );
+  };
   return (
     <div className="fl-form">
-      <FlField label="Title" wide={false}>
+      {/* What the route will do with this stop, read back as the options
+          change: a Verify stop's whole check (lib/verifyStop.ts), any
+          other's halt point, Only when and If it fails. */}
+      <p className={"fl-form-note fl-stop-sentence fl-fld-wide" + (verify ? " vf-sentence" : " muted")} role="status" aria-label="What the route does here">
+        {verify ? stopSentence(step, fallback, verifySentence(step.config, onFail)) : stopSentence(step, fallback)}
+      </p>
+      <FlField label="Title" wide={false} hint={errHint("title")}>
         <TextField label="Stop title" value={step.title} onChange={(t) => !readOnly && onChange({ title: t })} />
       </FlField>
-      {isVerifyEditor(step.kind, def) ? (
-        // The Verify stop's own editor: where / ready when / who / notes /
-        // post to PR, and its explainer (VerifyStopFields.tsx).
+      {verify ? (
+        // The Verify stop's own editor: its sentence, explainer, where /
+        // ready when / who / notes / post to PR (VerifyStopFields.tsx).
         <VerifyStopFields config={step.config} def={def} readOnly={readOnly} onChange={(config) => onChange({ config })} renderField={(f) => field(f)} />
       ) : (def?.fields || []).map((f) =>
         step.kind === "loop" && f.name === "until" && f.type !== "select" && f.type !== "bool" && f.type !== "int" ? (
@@ -602,27 +680,30 @@ export function StopForm({
             key={f.name}
             label={cleanLabel(f)}
             placeholder={f.placeholder}
-            hint="Empty: only the count stops it. ⓘ lists the conditions."
+            hint={fieldHint("loop", "until") || "Empty: only the count stops it. ⓘ lists the conditions."}
             value={String(step.config?.[f.name] ?? "")}
             readOnly={readOnly}
+            error={errors?.[f.name]}
             onChange={(w) => setField(f.name, w)}
           />
         ) : (
           field(f)
         )
       )}
-      {step.kind === "agent" && (!!step.config?.program || !!step.config?.model) && !step.config?.fresh && (
-        // Switch pilot (docs/flights.md "Round 15"): another CLI or model
-        // only takes the controls in a new session.
-        <p className="fl-form-note muted" role="note">
-          The CLI and model apply only with “Start a new session for this stop”.
-        </p>
-      )}
-      <WhenField value={step.when || ""} readOnly={readOnly} onChange={(w) => onChange({ when: w || undefined })} />
-      <FlField label="If it fails" wide hint={def?.default_on_fail ? "Default for " + kindName(def) + ": " + ON_FAIL_LABEL[fallback] : undefined}>
+      <WhenField value={step.when || ""} readOnly={readOnly} error={errors?.when} onChange={(w) => onChange({ when: w || undefined })} hint="Empty: always runs. When false, the stop is skipped and the route goes on. ⓘ lists the conditions." />
+      <FlField
+        label="If it fails"
+        wide
+        hint={
+          errHint("on_fail") ?? <span className="fl-onfail-hint" data-on-fail={onFail}>
+            {onFailHint(onFail, step.kind)}
+            {(onFail !== fallback || !!def?.default_on_fail) && <span className="muted">{" Default for " + kindName(def, step.kind) + ": " + ON_FAIL_LABEL[fallback] + "."}</span>}
+          </span>
+        }
+      >
         <Seg
           label="If it fails"
-          value={step.on_fail || fallback}
+          value={onFail}
           options={(Object.keys(ON_FAIL_LABEL) as OnFail[]).map((k) => ({
             v: k,
             label: ON_FAIL_LABEL[k],
@@ -648,10 +729,14 @@ export function WhenField({
   label = "Only when",
   placeholder = "e.g. diff touches frontend/** and weekday",
   hint = "Empty: always. ⓘ lists the conditions.",
+  error,
 }: {
   value: string;
   onChange(v: string): void;
   readOnly?: boolean;
+  /** A saved refusal for this field (the server's sentence), shown until
+   * the server's live check has its own. */
+  error?: string;
   /** Round 16: the same editor for a Loop's "until". */
   label?: string;
   placeholder?: string;
@@ -669,7 +754,7 @@ export function WhenField({
       onCanonical: (c) => change.current(c),
     });
   useEffect(() => () => checker.current?.cancel(), []);
-  const err = whenError(value, answer?.text === value ? answer.res : null);
+  const err = whenError(value, answer?.text === value ? answer.res : null) || error || "";
   return (
     <FlField label={label} wide hint={err ? undefined : hint}>
       <span className="fl-when-row">

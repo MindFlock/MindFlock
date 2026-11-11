@@ -36,9 +36,15 @@ _MEASURES = (
 
 
 def _config(raw: dict, strict: bool, where: str) -> dict:
-    usd = F._float(raw.get("max_usd"), 0.0)
-    if strict and usd < 0:
-        raise F.PlanError("max_usd is 0 (none) or more", where + ".max_usd")
+    usd = _money(raw.get("max_usd"))
+    if strict and (usd is None or usd < 0):
+        # Never saved as "no limit" (0) when the person typed a limit.
+        raise F.PlanError(
+            "max_usd on a Budget stop is an amount like 5 or $2.50 — 0 or empty "
+            "for none (got %r)" % F._text(raw.get("max_usd"), 40),
+            where + ".max_usd",
+        )
+    usd = usd or 0.0
     scope = F._text(raw.get("scope"), 8).lower() or "flight"
     if scope not in SCOPES:
         if strict:
@@ -53,6 +59,27 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
         "max_tokens": F._int(raw.get("max_tokens"), 0, 0, 10**12),
         "scope": scope,
     }
+
+
+def _money(value) -> Optional[float]:
+    """A dollar limit: a number, or text like "5", "$2.50", "1,000"; 0 when
+    empty; None when it can't be read."""
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = F._text(value, 40).replace(",", "").replace(" ", "")
+    if text.startswith("$"):
+        text = text[1:]
+    if not text:
+        return 0.0
+    try:
+        out = float(text)
+    except ValueError:
+        return None
+    return out if out == out and out not in (float("inf"), float("-inf")) else None
 
 
 def _title(config: dict) -> str:

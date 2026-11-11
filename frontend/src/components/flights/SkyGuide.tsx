@@ -18,6 +18,7 @@ import { create } from "zustand";
 import { replayTour } from "../onboarding/replayTour";
 import { Modal } from "../Modal";
 import { SKY_LINE, STOP_TEST, VISION_BREATH } from "../../lib/onboarding";
+import { FIX_ROUNDS } from "../../lib/verifyStop";
 import "./SkyGuide.css";
 
 export const SKY_GUIDE_SECTIONS = [
@@ -58,8 +59,8 @@ export const closeSkyGuide = () => useSkyGuide.getState().close();
 
 /** The keyboard table (Tools and the keyboard), exported for the test. */
 export const SKY_GUIDE_KEYS: readonly (readonly [string, string])[] = [
-  ["V", "Drag tool: routes move by their bars, a drag on empty sky selects"],
-  ["H", "Click tool: any drag pans the sky, a click selects"],
+  ["V", "Select tool: routes move by their bars, a drag on empty sky selects"],
+  ["H", "Pan tool: any drag pans the sky, a click selects"],
   ["Space (held)", "Pan with the mouse, in either tool"],
   ["0", "Fit every route, titles still readable"],
   ["1", "Fit the focused route to the window"],
@@ -165,7 +166,7 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
       <Line x={20} y={40} n={5} cls={["", "sg-done", "sg-here"]} />
       <BirdMark x={150} y={46} />
       <path className="sg-arrow sg-dash" d="M146 36 Q120 14 96 36 M98 28 L96 36 L104 36" />
-      <text className="sg-text" x={20} y={100}>click: halt / carry on · drag: jump</text>
+      <text className="sg-text" x={20} y={100}>click: pause / carry on · drag: jump</text>
     </Sketch>
   ),
   halt: (
@@ -174,7 +175,7 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
       <BirdMark x={150} y={40} />
       <rect className="sg-halt" x={236} y={44} width={14} height={14} rx={3} />
       <path className="sg-halt-ink" d="M241 48 V54 M245 48 V54" />
-      <text className="sg-text" x={20} y={96}>⏹ halt now — here · ⏸ halt here — when it arrives</text>
+      <text className="sg-text" x={20} y={96}>⏸ pause — here, now · halt point — when it arrives</text>
     </Sketch>
   ),
   grounded: (
@@ -198,11 +199,11 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   keys: (
-    <Sketch label="The tool toggle: Drag (V) and Click (H)" h={80}>
+    <Sketch label="The tool toggle: Select (V) and Pan (H)" h={80}>
       <rect className="sg-toggle" x={60} y={20} width={200} height={34} rx={17} />
       <rect className="sg-toggle-on" x={63} y={23} width={97} height={28} rx={14} />
-      <text className="sg-text sg-strong" x={84} y={42}>✥ Drag · V</text>
-      <text className="sg-text" x={180} y={42}>☝ Click · H</text>
+      <text className="sg-text sg-strong" x={84} y={42}>Select (V)</text>
+      <text className="sg-text" x={180} y={42}>Pan (H)</text>
       <text className="sg-text" x={98} y={74}>hold Space: pan in either</text>
     </Sketch>
   ),
@@ -293,7 +294,8 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   ),
   stops: (
     <>
-      <p>A <b>stop</b> moves the work, checks the work, or asks you: <b>Agent</b> gives the session's agent a prompt and waits for its turn to settle, <b>Wait for me</b> holds the route until you press Done (it shows under <b>Needs you</b> meanwhile), <b>Ship</b> commits, pushes, opens or merges the PR, <b>Verify</b> checks the session's behaviors, <b>Wait</b> waits some minutes or until a time, <b>Loop</b> sends the route back to an earlier stop, a number of times, every so often. <b>All stops…</b> on the shelf lists the rest, each with what it does.</p>
+      <p>A <b>stop</b> moves the work, checks the work, or asks you: <b>Agent</b> gives the session's agent a prompt and waits for its turn to settle, <b>Wait for me</b> holds the route until you press Done (it shows under <b>Needs you</b> meanwhile), <b>Ship</b> commits, pushes, opens or merges the PR, <b>Verify</b> has the session's own agent check its work — it comes up with its steps, runs them and shows evidence for each, and the route waits on you for what only a person can confirm, <b>Wait</b> waits a while or until a time of day, <b>Loop</b> sends the route back to an earlier stop, a number of times, every so often. <b>All stops…</b> on the shelf lists the rest, each with what it does.</p>
+      <p>Open a stop and its form reads back what the route will do there, in one sentence, as you change it; each option says what it does, its default and its range. <b>If it fails</b> picks what a failure does: <b>Halt</b> stops the route there, red, for you to Retry or Skip; <b>Let the agent fix it</b> hands the failure to the agent and runs the stop again (up to {FIX_ROUNDS} rounds, then it halts); <b>Skip</b> goes on as if the stop was not there; <b>Ask me</b> waits on you, showing the failure.</p>
       <p>A <b>saved route</b> is a named route kept on the shelf — <i>Ticket to merge</i>, say — that you drag on whole. On the sky it arrives as a <b>group</b>: one stop with its stops inside, run one by one, reading <i>2 of 3</i> while it does. Double-click it to see and change each of its stops.</p>
       <p>To change a saved route, drag it onto the sky, edit its stops there, then <b>Save to the shelf</b>. Right-click its chip on the shelf to rename, reset or delete it, or to pick what starts it.</p>
     </>
@@ -301,14 +303,15 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   bird: (
     <>
       <p>The bird stands on the stop the work is at: bobbing while the session works, gold when the route needs you (the bell lists it under <b>Needs you</b>).</p>
-      <p><b>Click</b> the bird to halt the route where it is; click it again on a halted route to carry on.</p>
+      <p><b>Click</b> the bird to pause the route where it is; click it again on a paused route to carry on. On a halted route — a stop failed, red — a click retries the stop.</p>
       <p><b>Drag</b> the bird onto another stop of the same route to jump there — the stops you can land on light up, and dropping it anywhere else puts it back. Jumping back re-arms the halt points after the stop you land on.</p>
     </>
   ),
   halt: (
     <>
-      <p><b>⏹ Halt now</b> (on the current stop, or a click on the bird) halts the route where it is. <b>⏸ Halt here</b> on a stop ahead makes it a halt point: the route halts when it reaches that stop, before doing it, and the stop wears a pause badge. <b>▶ Carry on</b> goes on.</p>
-      <p><b>Remove</b> (🗑, the menu, or <kbd>Delete</kbd>) takes a stop off at once, with <b>Undo</b> in the toast. Removing the stop the route is on stops its work and halts the route right before the next stop; Carry on goes into it.</p>
+      <p><b>⏸ Pause</b> (on the current stop, or a click on the bird) pauses the route where it is. <b>Add halt point</b> on a stop ahead makes it a halt point: the route pauses when it reaches that stop, before doing it, and the stop wears a pause badge; <b>Remove halt point</b> takes it off. <b>▶ Carry on</b> goes on from a pause.</p>
+      <p>A <b>halted</b> route is different: a stop failed and its <b>If it fails</b> said Halt. It turns red and waits for <b>Retry</b>, <b>Skip</b> or <b>Let the agent fix it</b>.</p>
+      <p><b>Remove</b> (🗑, the menu, or <kbd>Delete</kbd>) takes a stop off at once, with <b>Undo</b> in the toast. Removing the stop the route is on stops its work and pauses the route right before the next stop; Carry on goes into it.</p>
     </>
   ),
   grounded: (
@@ -320,13 +323,13 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   ),
   select: (
     <>
-      <p>Drag across empty sky to draw a marquee — everything it touches is selected, routes and stops both (in the Click tool, Shift+drag). <kbd>Ctrl+A</kbd> selects every route; <kbd>Esc</kbd> clears.</p>
+      <p>Drag across empty sky to draw a marquee — everything it touches is selected, routes and stops both (in the Pan tool, Shift+drag). <kbd>Ctrl+A</kbd> selects every route; <kbd>Esc</kbd> clears.</p>
       <p>The selection bar then offers: drag any selected route's bar and they all move; <b>Remove…</b> (it asks first: a session's route closes its session, a route with no session goes); and for stops of one route, <b>Group into a stop</b> and <b>Save to the shelf</b>.</p>
     </>
   ),
   keys: (
     <>
-      <p>The toolbar's toggle picks how a drag behaves. <b>✥ Drag</b> (<kbd>V</kbd>): routes move by their bars and a drag on empty sky selects. <b>☝ Click</b> (<kbd>H</kbd>): nothing moves by dragging — any drag pans, a click focuses a route or selects a stop. Hold <kbd>Space</kbd> to pan in either; the wheel and the middle button pan too.</p>
+      <p>The toolbar's toggle picks how a drag behaves. <b>Select</b> (<kbd>V</kbd>): routes move by their bars and a drag on empty sky selects. <b>Pan</b> (<kbd>H</kbd>): nothing moves by dragging — any drag pans, a click focuses a route or selects a stop. Hold <kbd>Space</kbd> to pan in either; the wheel and the middle button pan too.</p>
       <Keys />
     </>
   ),

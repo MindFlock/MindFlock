@@ -15,9 +15,11 @@ import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { newStep, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { collapseGroups, drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, type DiagramNode } from "../../lib/flightDiagram";
 import { errMsg } from "../../lib/format";
-import { dropGroup, dropStop, moveStop, patchStop, patchStopGroup, savePlan, setHalt, tackOn, tackOnParallel, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
+import { controlFlight, dropGroup, dropStop, moveStop, patchStop, patchStopGroup, saveStop, savePlan, setHalt, stepDone, stepFix, stepRetry, stepSkip, tackOn, tackOnParallel, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
 import { undoPayload } from "../../lib/stopEditing";
-import { groundedDiagram } from "../../lib/groundedLines";
+import { groundedDiagram, isFreeRun, perchWhy } from "../../lib/groundedLines";
+import { atHaltPoint } from "../../lib/flightDiagram";
+import { canFixStep } from "./FlightStrip";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { StopDialog } from "./StopDialog";
 import { StopPalette, type PaletteSaved } from "./StopParts";
@@ -30,6 +32,26 @@ export type StopDrop = { kind: string } | { planId: string };
 /** A drop, whichever shape the canvas hands it in. */
 export function readDrop(drop: StopDrop | string): StopDrop {
   return typeof drop === "string" ? { kind: drop } : drop;
+}
+
+/** What a free run's stop dialog offers (read-only: the run owns it): at the
+ * stop the run is on, Carry on at a halt point, Retry (+ Let the agent fix
+ * it) when it halted, Done at a Wait for me stop, and Skip; nothing for a
+ * stop it has run or one still ahead. `note` says why it can't change and,
+ * at the current stop, why it waits (lib/groundedLines `perchWhy`). */
+export function freeStopRemedies(
+  flight: Pick<Flight, "state" | "reason" | "steps" | "cursor" | "step_states">,
+  n: Pick<DiagramNode, "index" | "state" | "step">
+): { note: string; done: "" | "done" | "carry"; retry: boolean; fix: boolean; skip: boolean } {
+  const here = n.index === flight.cursor && (flight.state === "halted" || flight.state === "waiting_you" || flight.state === "paused" || flight.state === "running");
+  const flown = n.state === "done" || n.state === "skipped" || n.state === "failed";
+  if (!here) return { note: flown ? "This stop has finished — it can't change now." : "It can't change while the route runs.", done: "", retry: false, fix: false, skip: false };
+  const halt = atHaltPoint(flight);
+  const halted = flight.state === "halted" && !halt;
+  const why = perchWhy(flight);
+  const note = ["The route is at this stop — it can't change while it is here.", why].filter(Boolean).join(" ");
+  const done: "" | "done" | "carry" = halt ? "carry" : flight.state === "waiting_you" && n.step?.kind !== "verify" ? "done" : "";
+  return { note, done, retry: halted, fix: canFixStep(flight), skip: halted || halt || flight.state === "waiting_you" };
 }
 
 export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindDef[]; plans: readonly FlightPlan[] }) {
@@ -272,10 +294,10 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
     ) : null;
 
   const close = () => setDialog(dialog?.back && find(dialog.back) ? { id: dialog.back } : null);
-  const act = async (f: () => Promise<unknown>) => {
+  const act = async <T,>(f: () => Promise<T>): Promise<T> => {
     setBusy(true);
     try {
-      await f();
+      return await f();
     } finally {
       setBusy(false);
     }
@@ -321,6 +343,32 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
         }
       />
     );
+  } else if (open && open.kind === "stop" && open.step && isFreeRun(flight) && !open.editable) {
+    // A route running on its own: a stop it has run, or the one it is on,
+    // reads only — with the remedies the stop's tile carries while the run
+    // is there (freeStopRemedies).
+    const step = open.step;
+    const r = freeStopRemedies(flight, open);
+    const run = (fn: () => Promise<unknown>) => void act(async () => {
+      if (await fn()) close();
+    });
+    inspector = (
+      <StopDialog
+        key={open.id}
+        node={open}
+        def={inspectorDef(kindOf.get(step.kind), step)}
+        lineSteps={flight.steps}
+        busy={busy}
+        note={r.note}
+        onClose={close}
+        onDone={r.done ? () => run(() => (r.done === "carry" ? controlFlight(flight.id, "resume") : stepDone(flight.id, step.id))) : undefined}
+        doneLabel={r.done === "carry" ? "Carry on" : undefined}
+        doneTitle={r.done === "carry" ? "Carry on past your halt point — “" + step.title + "” runs, and the route goes on" : undefined}
+        onRetry={r.retry ? () => run(() => stepRetry(flight.id, step.id)) : undefined}
+        onFix={r.fix ? () => run(() => stepFix(flight.id, step.id)) : undefined}
+        onSkip={r.skip ? () => run(() => stepSkip(flight.id, step.id)) : undefined}
+      />
+    );
   } else if (open && open.kind === "stop" && open.step) {
     const step = open.step;
     inspector = (
@@ -332,8 +380,12 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
         busy={busy}
         onClose={close}
         onSave={(patch) =>
+          // saveStop, not patchStop: a refusal comes back to the dialog,
+          // which draws it under the field it names.
           act(async () => {
-            if (await patchStop(flight.id, step.id, patch)) close();
+            const r = await saveStop(flight.id, step.id, patch);
+            if (r.ok) close();
+            return r;
           })
         }
         onDuplicate={() => {

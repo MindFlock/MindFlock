@@ -395,7 +395,9 @@ def test_needs_you_is_announced_once_and_survives_a_restart(srv, row, emitted):
         and ny["data"]["items"] == []
     )
     assert ny["data"]["step"]["kind"] == "you"
-    assert F.get(f["id"])["announced"] == ["s1:0:you"]
+    got = F.get(f["id"])
+    # Keyed on when the stop started (a Retry starts it afresh and rings again).
+    assert got["announced"] == ["s1:%d:you" % int(got["step_states"]["s1"]["since"])]
     D._announce(None, F.get(f["id"]))
     assert [e["event"] for e in emitted].count("flight.needs_you") == 1
 
@@ -501,7 +503,8 @@ def test_start_attach_and_create(srv, monkeypatch):
         }
     )
     f = run(D.start({"plan_id": plan["id"], "title": "s"}))
-    assert f["cursor"] == 1 and f["session"] == "s"
+    # Attached to an idle session: an Agent stop with a prompt is sent.
+    assert f["cursor"] == 0 and f["session"] == "s"
     with pytest.raises(F.FlightError) as err:
         run(D.start({"plan_id": plan["id"], "title": "s"}))
     assert err.value.error == "in_flight"

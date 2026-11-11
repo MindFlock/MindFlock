@@ -366,9 +366,9 @@ def test_the_liveness_pass_does_not_release_a_run_started_meanwhile(monkeypatch)
 
 
 # --------------------------------------------------------------------------- #
-# 6. A released run's pill lingers from the release
+# 6. A released run's pill shows from the release until dismissed
 # --------------------------------------------------------------------------- #
-def test_a_run_given_up_on_shows_blocked_for_ten_minutes_from_the_release(
+def test_a_run_given_up_on_shows_blocked_from_the_release_until_dismissed(
     monkeypatch,
 ):
     clock = [1_000_000.0]
@@ -385,6 +385,10 @@ def test_a_run_given_up_on_shows_blocked_for_ten_minutes_from_the_release(
     v = T.verify_status(plan, now=clock[0] + 5)
     assert v is not None and v["state"] == "blocked"
     assert v["detail"] == "No answer in 2 hours."
+    # Only a pass fades: a blocked Verify stays until it is dismissed.
+    later = T.verify_status(plan, now=clock[0] + T.VERIFY_SHOW_S + 1)
+    assert later is not None and later["state"] == "blocked"
+    plan = T.dismiss_verify("sc-1")
     assert T.verify_status(plan, now=clock[0] + T.VERIFY_SHOW_S + 1) is None
 
 

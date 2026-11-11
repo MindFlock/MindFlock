@@ -23,7 +23,7 @@ fails when a kind lands without an entry here, and every recipe is run through
 * :func:`sentence` — a route read back as one line, for the person to OK.
 
 Words: docs/vocabulary.md (route, stop, saved route, Wait for me, Halt, Needs
-you, behaviors, Goes as far as). The wire names stay (``kind``, ``steps``,
+you, Verify, Goes as far as). The wire names stay (``kind``, ``steps``,
 ``on_fail``).
 """
 
@@ -40,8 +40,12 @@ __all__ = [
     "RULES",
     "ALIASES",
     "stop_line",
+    "options_line",
     "recipe_line",
     "lint",
+    "kind_fields",
+    "unknown_option_text",
+    "LEGACY_OPTIONS",
     "errors",
     "sentence",
     "notation",
@@ -64,7 +68,7 @@ LANE_WORD = {
 FIX_ROUNDS = 2
 
 
-def _s(use, avoid, fields, waits, fixable=False, rare=False) -> dict:
+def _s(use, avoid, fields, waits, fixable=False, rare=False, means="") -> dict:
     return {
         "use": use,
         "avoid": avoid,
@@ -72,6 +76,7 @@ def _s(use, avoid, fields, waits, fixable=False, rare=False) -> dict:
         "waits": waits,
         "fixable": fixable,
         "rare": rare,
+        "means": means,
     }
 
 
@@ -108,17 +113,23 @@ STOPS: Dict[str, dict] = {
         fixable=True,
     ),
     "verify": _s(
-        "check the branch's behaviors in real use before the PR or merge. "
-        "where=branch (this branch's own code, no deploy) or the name of one "
-        "of the repo's environments (a deployed place with its own branch, "
-        "e.g. live, sandbox)",
+        "after the agent's work, before the PR or merge: the session's own "
+        "agent checks its work in real use (it writes its own steps)",
         "unit tests (test); with no agent work before it",
-        "where, ready=now|on_branch|after_prev (on_branch: once the work "
-        "reaches the environment's branch; after_prev: ready_minutes after "
-        "the stop before), who=both|agent|you, notes, post_to_pr=true to "
+        "where=branch or an environment, ready=now|on_branch|after_prev, "
+        "ready_minutes, who=both|agent|you, notes, post_to_pr=true to "
         "comment the results on the PR",
-        "you, on the behaviors that are yours",
+        "the agent's check; then you, for who=both on person steps, who=you always",
         fixable=True,
+        means="where=branch is this branch's own code (no deploy), else one "
+        "of the repo's environments (a deployed place with its own branch, "
+        "e.g. live, sandbox); ready on_branch = once the work reaches the "
+        "environment's branch, after_prev = ready_minutes after the stop "
+        "before; who: both = agent, then you (it parks on you only for the "
+        "steps a person must do); agent = agent only (it attempts every step "
+        "itself and must give evidence; parks only when one ends blocked or "
+        "failed); you = agent, then your sign-off (always waits for your "
+        "confirm)",
     ),
     "you": _s(
         "Wait for me: only a person can look, decide or approve (approve the "
@@ -174,7 +185,7 @@ STOPS: Dict[str, dict] = {
     "test": _s(
         "run the project's tests; on_fail=agent = the agent fixes failures "
         "(%d rounds)" % FIX_ROUNDS,
-        "a one-off script (command); behaviors in real use (verify)",
+        "a one-off script (command); checking the work in real use (verify)",
         "command (empty = found), expect=fail for write-the-failing-test-first",
         "the tests",
         fixable=True,
@@ -433,11 +444,36 @@ RECIPES: List[dict] = [
     },
     {
         "id": "verify_before_pr",
-        "when": "check the behaviors in real use before opening the PR",
+        "when": "the agent checks its own work in real use before the PR",
+        "steps": [
+            _R("agent", "Work the ticket", prompt="{ticket}"),
+            _R(
+                "verify",
+                "Verify",
+                on_fail="agent",
+                who="both",
+                notes="Try the change the way a user would",
+            ),
+            _R("ship", "Open PR", lane="pr"),
+        ],
+    },
+    {
+        "id": "verify_on_env_after_merge",
+        "when": "merge after my OK, then check it once it is live",
         "steps": [
             _R("agent", "Do the work"),
-            _R("verify", "Verify behaviors", on_fail="agent", who="both"),
+            _R("test", "Tests pass", on_fail="agent"),
             _R("ship", "Open PR", lane="pr"),
+            _R("you", "Approve the merge", text="Look over the PR, then press Done"),
+            _R("ship", "Merge when green", lane="merge"),
+            _R(
+                "verify",
+                "Verify on live",
+                who="you",
+                where="live",
+                ready="on_branch",
+                ready_minutes=5,
+            ),
         ],
     },
     {
@@ -527,19 +563,64 @@ REVIEW_MODE_WORD = {
 # --------------------------------------------------------------------------- #
 # Compact lines (the MCP's answer, the one-shot prompt)
 # --------------------------------------------------------------------------- #
-def stop_line(kind: str, label: str = "") -> str:
-    """``kind · use … · not … · fields … [· rare]`` — one terse line."""
+def _value(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)
+
+
+def options_line(k: dict) -> str:
+    """One kind's options as ``GET /api/flights/kinds`` defines them, with
+    each default and, for a choice, its allowed values (and what each means):
+    ``lane=push (commit|push|pr|merge); ask_first=false; message`` — plus
+    ``on_fail=…`` when the kind's default is not halt. ``"none"`` when the
+    kind has no options."""
+    parts: List[str] = []
+    for f in k.get("fields") or []:
+        if not isinstance(f, dict) or not f.get("name"):
+            continue
+        part = str(f["name"])
+        if f.get("default") not in (None, ""):
+            part += "=" + _value(f["default"])
+        opts = [str(o) for o in f.get("options") or []]
+        if opts:
+            words = (
+                f.get("option_labels")
+                if isinstance(f.get("option_labels"), dict)
+                else {}
+            )
+            part += " (%s)" % " | ".join(
+                "%s = %s" % (o, words[o]) if words.get(o) else o for o in opts
+            )
+        elif f.get("dynamic") == "stops_before":
+            part += " (an earlier stop id, or agent)"
+        parts.append(part)
+    if (k.get("default_on_fail") or "halt") != "halt":
+        parts.append("on_fail=%s" % k["default_on_fail"])
+    return "; ".join(parts) or "none"
+
+
+def stop_line(kind: str, label: str = "", options: str = "") -> str:
+    """``kind · use … · not … · fields … [· rare]`` — one terse line.
+    ``options`` (:func:`options_line`, from the server's kinds) replaces the
+    cookbook's typical-config words and comes first, so a line cut short
+    keeps it."""
     s = STOPS.get(kind)
     if s is None:
         return ""
     head = kind if not label or label.lower() == kind else "%s (%s)" % (kind, label)
-    line = "%s · use: %s · not: %s · %s · waits: %s" % (
+    if options:
+        head += " · options: " + options
+    line = "%s · use: %s · not: %s · %s · %s · waits: %s" % (
         head,
         s["use"],
         s["avoid"],
-        s["fields"],
+        "" if options else s["fields"],
+        ("means: " + s["means"]) if s.get("means") else "",
         s["waits"],
     )
+    while " ·  · " in line:
+        line = line.replace(" ·  · ", " · ")
     if s["fixable"]:
         line += " · on_fail=agent ok"
     if s["rare"]:
@@ -621,7 +702,11 @@ def _int(v, default: int) -> int:
 
 
 #: A Verify stop's ``who`` in a sentence (the editor's labels say "me").
-VERIFY_WHO_WORDS = {"both": "agent, then you", "agent": "agent only", "you": "only you"}
+VERIFY_WHO_WORDS = {
+    "both": "agent, then you",
+    "agent": "agent only",
+    "you": "agent, then your sign-off",
+}
 
 
 def verify_sentence(config: dict, env_branch: str = "") -> str:
@@ -763,9 +848,80 @@ def closest_kind(kind: str, known: Iterable[str]) -> str:
     return hit[0] if hit else ""
 
 
-def _issue(level: str, i: int, step: dict, text: str) -> dict:
-    sid = str(step.get("id") or "") or "steps[%d]" % i
-    return {"level": level, "at": i, "stop": sid, "text": text}
+def _issue(
+    level: str, i: int, step: dict, text: str, field: str = "", sid: str = ""
+) -> dict:
+    sid = sid or str(step.get("id") or "") or "steps[%d]" % i
+    out = {"level": level, "at": i, "stop": sid, "text": text}
+    if field:
+        out["field"] = field
+    return out
+
+
+#: Options a kind still reads under an older name (``flights._step_config``
+#: and the Loop plug-in): never "unknown", though no form shows them.
+LEGACY_OPTIONS: Dict[str, tuple] = {
+    "wait": ("minutes",),
+    "verify": ("wait_live",),
+    "loop": ("every_minutes",),
+}
+
+
+def kind_fields(dto: dict) -> Dict[str, List[str]]:
+    """``{kind: [option names]}`` from ``GET /api/flights/kinds`` (the
+    kinds' own definitions — never a hand-kept copy)."""
+    out: Dict[str, List[str]] = {}
+    for k in (dto or {}).get("kinds") or []:
+        if isinstance(k, dict) and k.get("kind"):
+            out[str(k["kind"])] = [
+                str(f["name"])
+                for f in k.get("fields") or []
+                if isinstance(f, dict) and f.get("name")
+            ]
+    return out
+
+
+def _a(label: str) -> str:
+    return ("an " if label[:1].lower() in "aeiou" else "a ") + label
+
+
+def unknown_option_text(option: str, label: str, names: Sequence[str]) -> str:
+    """The server's words for an option a kind does not have: ``unknown
+    option 'timeout' on a CI checks stop — it has: timeout_minutes``."""
+    return "unknown option %r on %s stop — it has: %s" % (
+        option,
+        _a(label),
+        ", ".join(names) or "no options",
+    )
+
+
+def _server_ids(rows: Sequence[dict], renumber: Optional[int]) -> List[str]:
+    """The ids the server gives ``rows``: as written (``renumber`` None — a
+    saved route keeps valid ids), or, from index ``renumber`` on, the next
+    free ``sN`` after the ids before it (a start's or an add's new stops)."""
+    ids = [str(s.get("id") or "") for s in rows]
+    if renumber is None:
+        # A stop with no id (or a taken one) gets s<its place>, as the
+        # normaliser numbers it.
+        taken: set = set()
+        for k, sid in enumerate(ids):
+            if not re.match(r"^[A-Za-z0-9_-]{1,32}$", sid) or sid in taken:
+                n = k + 1
+                while "s%d" % n in taken:
+                    n += 1
+                sid = "s%d" % n
+            taken.add(sid)
+            ids[k] = sid
+        return ids
+    n = 0
+    for sid in ids[:renumber]:
+        m = re.match(r"^s(\d+)$", sid)
+        n = max(n, int(m.group(1)) if m else 0)
+    out = ids[:renumber]
+    for _ in rows[renumber:]:
+        n += 1
+        out.append("s%d" % n)
+    return out
 
 
 def lint(
@@ -773,6 +929,9 @@ def lint(
     known: Optional[Iterable[str]] = None,
     on_session: bool = True,
     has_pr: bool = False,
+    fields: Optional[Dict[str, Sequence[str]]] = None,
+    labels: Optional[Dict[str, str]] = None,
+    renumber: Optional[int] = None,
 ) -> List[dict]:
     """The mistakes in ``steps`` (raw, as an agent writes them, or
     normalised): ``[{level: error|warn, at, stop, text}]``. ``error`` = the
@@ -780,12 +939,23 @@ def lint(
     back to the person. Every ``text`` says what to do instead. ``known``: the
     kinds the server serves (default: the cookbook's). ``on_session``: the
     route runs on an existing session (its work so far counts as the agent).
-    ``has_pr``: the route's subject is a pull request already (a PR route)."""
+    ``has_pr``: the route's subject is a pull request already (a PR route).
+    ``fields`` (``{kind: [option]}``, :func:`kind_fields`): an option a kind
+    does not have is an error, in the server's words (``labels`` names the
+    kind). ``renumber``: the stops from this index on get the server's next
+    ``sN`` (a start's or an add's new stops; their own ids are dropped), so a
+    Loop's ``back_to`` naming one by the author's id is an error."""
     known_set = set(known if known is not None else STOPS)
     out: List[dict] = []
     rows = [s if isinstance(s, dict) else {} for s in steps]
     kinds = [str(s.get("kind") or "").strip().lower() for s in rows]
-    ids = [str(s.get("id") or "") for s in rows]
+    given = [str(s.get("id") or "") for s in rows]
+    ids = _server_ids(rows, renumber)
+    renamed = {
+        g: ids[k]
+        for k, g in enumerate(given)
+        if renumber is not None and k >= renumber and g and g != ids[k]
+    }
     if not rows:
         return [
             {
@@ -812,6 +982,22 @@ def lint(
                 )
             )
             continue
+        names = (fields or {}).get(kind)
+        if names is not None and isinstance(s.get("config"), dict):
+            allowed = set(names) | set(LEGACY_OPTIONS.get(kind, ()))
+            label = (labels or {}).get(kind) or kind
+            for opt in s["config"]:
+                if opt not in allowed:
+                    out.append(
+                        _issue(
+                            "error",
+                            i,
+                            s,
+                            unknown_option_text(str(opt), label, list(names)),
+                            "steps[%d].config.%s" % (i, opt),
+                            ids[i],
+                        )
+                    )
         of = str(s.get("on_fail") or "halt")
         info = STOPS.get(kind) or {}
         if of == "agent" and info and not info.get("fixable") and kind != "you":
@@ -970,7 +1156,20 @@ def lint(
                 )
         elif kind == "loop":
             to = str(c.get("back_to") or "")
-            if to and to != "agent":
+            if to in renamed:
+                out.append(
+                    _issue(
+                        "error",
+                        i,
+                        s,
+                        "back_to %r is your own id for a stop, but the server "
+                        "numbers new stops s1, s2… in order: that stop will be "
+                        "%s — use back_to=%r" % (to, renamed[to], renamed[to]),
+                        "steps[%d].config.back_to" % i,
+                        ids[i],
+                    )
+                )
+            elif to and to != "agent":
                 if to in ids[i:]:
                     out.append(
                         _issue(
@@ -979,30 +1178,30 @@ def lint(
                             s,
                             "a Loop goes back to an EARLIER stop; %s is not before "
                             "it — move the Loop after %s" % (to, to),
+                            "steps[%d].config.back_to" % i,
                         )
                     )
-                elif any(ids) and to not in ids[:i]:
+                elif to not in ids[:i]:
+                    numbered = re.match(r"^s\d+$", to)
                     out.append(
                         _issue(
                             "error",
                             i,
                             s,
-                            "back_to %r is no stop of this route — use the id of "
-                            "an earlier stop (s1…) or 'agent'" % to,
+                            (
+                                (
+                                    "back_to %r — stops are numbered s1, s2… in order; "
+                                    "name one before the Loop (it is %s)" % (to, ids[i])
+                                )
+                                if numbered
+                                else (
+                                    "back_to %r is no stop of this route — use the id "
+                                    "of an earlier stop (s1…) or 'agent'" % to
+                                )
+                            ),
+                            "steps[%d].config.back_to" % i,
                         )
                     )
-                elif not any(ids):
-                    m = re.match(r"^s(\d+)$", to)
-                    if not m or int(m.group(1)) > i:
-                        out.append(
-                            _issue(
-                                "error",
-                                i,
-                                s,
-                                "back_to %r — stops are numbered s1, s2… in order; "
-                                "name one before the Loop (it is s%d)" % (to, i + 1),
-                            )
-                        )
             if i == 0 and to != "agent":
                 out.append(
                     _issue(
@@ -1081,6 +1280,9 @@ def lint(
                     "a judge stop before it" % until,
                 )
             )
+    if renumber is not None:
+        for x in out:
+            x["stop"] = ids[x["at"]]
     return out
 
 

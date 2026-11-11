@@ -285,7 +285,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
         ) : (
           <>
             <span className="sky-selbar-hint" title="Drag the bar of any selected route: they all move together">
-              ✥ Drag a bar to move them
+              Drag a bar to move them (Select, V)
             </span>
             <button type="button" className="test-btn fl-btn" disabled={busy} title="Forget where you put them: back to their places in the rows" onClick={() => p.onTidy(lines)}>
               Tidy these

@@ -333,7 +333,7 @@ against every fresh listing.
 
 ## The tools
 
-The 35 tools. Every result is JSON text. Clients that negotiate protocol
+The 37 tools. Every result is JSON text. Clients that negotiate protocol
 `2025-06-18` or later also get `structuredContent`. Arguments are checked
 against each tool's JSON schema, and a violation comes back as a tool error
 with a fix-it message, not a protocol error. The check is lenient about what
@@ -362,6 +362,8 @@ it.
 | `fence_session` | write, managed only | **no** |
 | `set_order` | write (your own workers); no arguments reads | **no** |
 | `expect_background_job` | write (your own background jobs) | **no** |
+| `verify_session` | write (yourself or a session you manage) | **no** |
+| `confirm_verify` | write (yourself or a session you manage) | **no** |
 | `list_tickets` | read (the Intake ticket list) | yes |
 | `spawn_ticket_session` | write | **no** |
 | `ship_session` | write, pushes code; destructive at `merge` | **no** |
@@ -377,8 +379,8 @@ it.
 | `start_flight` | write, flies stops that may push or merge | **no** |
 | `flight_status` | read | **no** |
 | `control_flight` | write (run, pause, resume, cancel, skip, retry, jump, done) | **no** |
-| `edit_flight` | write (add, remove, rename stops) | **no** |
-| `save_flight_plan` | write (a saved stop on the shelf) | **no** |
+| `edit_flight` | write (add, remove, edit, rename stops) | **no** |
+| `save_flight_plan` | write (a saved route on the shelf) | **no** |
 | `run_pr_review` | write, flies the PR review route (may push; a merge stop needs `confirm_merge`) | **no** |
 
 "Auto-approved" is the `--allowedTools` list for Claude and the
@@ -858,6 +860,33 @@ duration (or prefix the command with MINDFLOCK_EXPECT=6h) so it never shows
 as stuck early."). When the job first passes its duration the server emits
 `session.job_past_expected` ([extensions.md](extensions.md)).
 
+### `verify_session`
+
+`{title?, notes?, environment?}` → `{started, plan, session, queued, title,
+hint}`. Starts **Verify** on a session — the caller itself (default) or one it
+manages: its own agent checks the work it just did (real usage, not unit
+tests), writes its steps and answers, and tells the person about any step
+only they can do. `notes` is what to focus on; `environment` is where to check
+(`"branch"`, or one of the repo's environment names; by default the branch
+while the work is unshipped). It sends `POST /api/instances/{title}/verify`;
+the check is queued behind the agent's current turn (`queued`), never typed
+over it. `get_session(title).verify` shows progress (`verifying` /
+`needs_you` / `passed` / `failed` / `blocked`, with the steps and a `detail`
+sentence).
+
+### `confirm_verify`
+
+`{title?, verified, note?}` → `{ok, title, delivered, verify}`. Answers a
+Verify that needs a person (`get_session(title).verify.state` is
+`needs_you`): `verified: true` confirms it works, `false` says it does not,
+and `note` (what is wrong) is delivered to the session's agent (`delivered`).
+It sends `POST /api/test-plans/{plan}/confirm`; `verify` is the outcome now
+(`passed` or `failed`). Refused when the session has no Verify, or when its
+Verify is not waiting on a person. The tool's description tells the agent to
+relay only what its user actually checked — never to confirm its own work
+unchecked. Same scope as `verify_session`: the caller or a session it
+manages.
+
 ### `list_tickets`
 
 | Argument | Default | Meaning |
@@ -1244,7 +1273,11 @@ agree:
   fields> · waits: … [· on_fail=agent ok] [· RARE] [· [irreversible]]`. RARE
   kinds (screenshot, listen, call, budget, checkpoint, handoff, someone,
   preview) say plainly when *not* to use them. A kind newer than the cookbook
-  gets the server's own line (`kind · label · summary · fields: …`).
+  gets the server's own line (`kind · label · summary · fields: …`). Each
+  kind's line also carries `options:` built from `GET /api/flights/kinds` —
+  each option's default, allowed values and their labels — and a Verify
+  stop's who / where / ready say what each value means ("you = agent, then
+  your sign-off").
 - `recipes`: ten common routes in a terse exact notation an agent can copy —
   `ticket_merge_after_ok — a ticket all the way to merged, but only after my
   OK: agent(prompt="{ticket}") → test!agent → ship(lane="pr") → checks!agent →
@@ -1278,12 +1311,12 @@ absorbed?, note?}`. Sends `POST /api/flights/start`.
   or its name (any case, or a unique prefix); an unknown one is refused with
   the shelf's names.
 - `title`: the session that runs the route. It defaults to the caller.
-- `at`: the server's `start_at`. On an existing session, the server starts at
-  the first non-`agent` stop, because the work so far counts as the agent
-  stop — and the route runs on at once. That is right when the work is
-  **done**. When it is still ahead, pass `at: "s1"` to run the leading agent
-  stop as well: its prompt is queued into the session for when the current
-  turn ends.
+- `at`: the server's `start_at`. On an existing session, the server passes
+  each leading Agent stop **with no prompt**, because the work so far counts
+  as that stop — and the route runs on at once. An Agent stop with a prompt
+  is the author's instruction and is sent (queued into the session for when
+  its current turn ends). Pass `at: "s1"` to run a prompt-less leading agent
+  stop as well.
 - `start_on`: `now` (default) | `prompt` | `run` — the server's round-19
   ready routes: `prompt` takes off with the session's next prompt (and flies
   after that turn), `run` waits for ▶ Run (`control_flight op=run`). The
@@ -1294,13 +1327,22 @@ absorbed?, note?}`. Sends `POST /api/flights/start`.
   other route, a `PATCH /api/flights/{id} {plan_name}` sets it after the start.
 - When the session was shipping by itself (Goes as far as), the server converts that into
   the route's leading ship stops and lists them in `absorbed`.
-- `dry_run: true` starts nothing and sends nothing: `{dry_run, session,
-  sentence, lines, problems?, warnings?, needs_confirm_merge?,
+- `dry_run: true` starts nothing: it asks the server's own check, `POST
+  /api/flights/check` (the very start, strictly, creating nothing), and
+  answers `{dry_run, ok, session, sentence, lines, start?, in_flight?,
+  absorbed?, environments?, problems?, warnings?, needs_confirm_merge?,
   merge_blocked?, first_stop?, next}` — the route read back in one sentence
-  for the agent to say to its user before starting it for real. `first_stop`
-  (a route that opens with an agent stop, on a session, without `at` /
-  `start_on`) says that stop is NOT sent: the session's work so far is it —
-  and `at='s1'` sends it. `merge_blocked` says up
+  for the agent to say to its user before starting it for real. `lines` are
+  the stops as the server will store them (its ids), `▶` marking where it
+  starts and each skipped stop saying why; `in_flight` is the session's
+  current route; each problem says what to change and, for a closed list, the
+  allowed values (stop kinds, a choice's values with their labels, `on_fail`,
+  the repo's Verify environments). `ok` means the real start will be
+  accepted. Against an older server without the check only the cookbook's
+  lint runs, and `checked` says so. `first_stop`
+  (a route that opens with a prompt-less agent stop the server skips, on a
+  session, without `at`) says that stop is NOT sent: the session's work so
+  far is it — and `at='s1'` sends it. `merge_blocked` says up
   front that this session may not run the merge itself (under `children`
   scope a session never merges ITSELF) and that the way is the same steps
   with `grounded: true`: they wait on the user's Sky until the user attaches
@@ -1322,10 +1364,20 @@ Wait for me with no text, a Loop that never ends, `on_fail: agent` on a stop
 the agent can't fix, a Split nothing waits for, a Screenshot of `{preview}`
 with no Preview.
 
+The lint also checks each stop's options against its kind, in the server's
+words ("unknown option 'timeout' on a CI checks stop — it has:
+timeout_minutes"; the older names `minutes`, `wait_live` and `every_minutes`
+still read), and refuses a Loop whose `back_to` names your own stop id
+instead of the `sN` the server will give it (the right `sN` is suggested).
+
 One route per session: a 409 `in_flight` says to use `flight_status`, and to
-cancel or edit the route that is already running. A 400 `bad_step` names
-its `field`, for example `steps[0].kind`, and adds the cookbook's hint for
-it (the `when` grammar for a condition, the closest kind for an unknown one).
+cancel or edit the route that is already running. Every refusal carries the
+server's `field` and `detail`, for example `steps[0].kind`, plus the allowed
+values for a closed list and the cookbook's hint (the `when` grammar for a
+condition, the closest kind for an unknown one). The real start runs the
+server's pre-check first (a mistyped Verify environment, a branch another
+session holds, a Ship stop on a shared folder); its refusal lists every
+problem.
 
 ### `flight_status`
 
@@ -1358,8 +1410,11 @@ shrink, then the stops far ahead fold too.
 - `pause`, `resume`, `cancel` → `POST /api/flights/{id}/<op>`. Cancelling
   keeps the session.
 - `skip`, `retry`, `done` → `POST /api/flights/{id}/steps/{step}/<op>`.
-  `step` defaults to the current stop. `done` is for a Wait for me stop (a `you` stop,
-  or a verify stop waiting on a person) and takes an optional `note`.
+  `step` defaults to the current stop. `done` is for a Wait for me stop and
+  takes an optional `note`; on a Verify stop waiting for a confirm it is
+  Confirm verified, on one parked because its check couldn't finish it checks
+  again, and it never passes a Verify stop's open steps. `retry` also runs a
+  Verify stop parked blocked or on memory again.
 - `jump` → `POST /api/flights/{id}/jump {step}`, which needs `step`.
 - `run` → `POST /api/flights/{id}/run`: a **ready** route (built on its
   session, waiting for ▶ Run or the session's next prompt — round 19) takes
@@ -1371,8 +1426,13 @@ attaches a session.
 
 ### `edit_flight`
 
-`{id, add?: [step], at?, remove?: [step id], rename?, confirm_merge?}` → the
-route, compacted, plus `changed`. The tool applies the changes in this order:
+`{id? | title?, add?: [step], at?, remove?: [step id], edit?: [{step, title?,
+config?, on_fail?, when?, halt?}], rename?, confirm_merge?}` → the route,
+compacted, plus `changed`. `title` names a session to edit its route (default:
+yours). **The whole request is checked before anything is written** — the
+lint plus the server's strict check through `POST /api/flights/check` — and a
+write that still fails says what was applied and what was not. The tool
+applies the changes in this order:
 
 1. `remove` sends `DELETE /api/flights/{id}/steps/{sid}` once per id. A stop
    ahead of the cursor is simply removed. Removing the stop that is running
@@ -1381,18 +1441,27 @@ route, compacted, plus `changed`. The tool applies the changes in this order:
 2. `add` sends `POST /api/flights/{id}/steps {steps, at?}`. The new stops are
    appended, or inserted at index `at`, which must come after the current
    stop.
-3. `rename` sends `PATCH /api/flights/{id} {plan_name}`.
+3. `edit` sends `PATCH /api/flights/{id}/steps/{sid}` once per stop: `config`
+   holds only the options to change and is merged into the stop's own;
+   `when: ""` clears a condition. A stop still ahead can change; so can the
+   current stop when it failed or the route is paused before it with nothing
+   run (the next Retry or Carry on runs it as edited); `halt` alone may also
+   change on the current stop.
+4. `rename` sends `PATCH /api/flights/{id} {plan_name}`.
 
-This is enough to fix a line an agent drew. Moving, grouping and editing a
-stop's config stay on the Sky. Added stops are linted with the route they
+This is enough to fix a line an agent drew. Moving and grouping stay on the
+Sky. Added stops are linted with the route they
 join: a problem the route did not have before (a Join of `spawned` with no
 Split…) is refused as `start_flight` refuses it.
 
 ### `save_flight_plan`
 
-`{name, steps, description?, trigger?, dry_run?}` → `{plan_id, name, steps,
+`{id?, name, steps, description?, trigger?, dry_run?}` → `{plan_id, name, steps,
 sentence, warnings?, trigger?}`. Linted like `start_flight` (a `pr` trigger
 counts as having the PR); `dry_run: true` saves nothing and reads it back.
+`id` (a saved route's id or name) **replaces** that saved route, keeping its
+trigger and description unless new ones are given; without it a new one is
+made.
 Sends `POST /api/flights/plans` (a saved route, which the store calls a plan),
 so a described route stays on the user's shelf. `trigger` is
 `{kind: manual|ticket|pr|issue|schedule, schedule?, paused?}`: a `schedule`

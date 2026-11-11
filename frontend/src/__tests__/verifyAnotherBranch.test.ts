@@ -10,7 +10,7 @@ const toast = vi.fn();
 vi.mock("../api/client", async (orig) => ({ ...((await orig()) as object), api: (...a: unknown[]) => api(...a) }));
 vi.mock("../lib/toast", () => ({ toast: (...a: unknown[]) => toast(...a) }));
 
-const { fetchVerifyRepos, writePlanForBranch } = await import("../lib/verifyActions");
+const { fetchVerifyRepos } = await import("../lib/verifyActions");
 
 describe("Another branch…", () => {
   it("reads the repo list from the server", async () => {
@@ -19,20 +19,4 @@ describe("Another branch…", () => {
     expect(api).toHaveBeenCalledWith("/api/test-plans/repos");
   });
 
-  it("posts the repo's root and the branch, and says where it will appear", async () => {
-    api.mockReset().mockResolvedValue({ plan: "shop@feature/x", existing: false });
-    toast.mockReset();
-    expect(await writePlanForBranch({ name: "shop", root: "/r/shop" }, "feature/x")).toBe(true);
-    expect(api).toHaveBeenCalledWith("/api/test-plans/branch", {
-      json: { repo: "/r/shop", branch: "feature/x" },
-    });
-    expect(toast.mock.calls[0][0]).toContain("they'll appear on the Behaviors board");
-  });
-
-  it("says so when the branch already has one", async () => {
-    api.mockReset().mockResolvedValue({ plan: "sc-7", existing: true });
-    toast.mockReset();
-    await writePlanForBranch({ name: "shop", root: "/r/shop" }, "feature/x");
-    expect(toast.mock.calls[0][0]).toBe("feature/x already has behaviors — they're on the Behaviors board in the Sky");
-  });
 });

@@ -38,10 +38,10 @@ import {
 import { cancelRun, raiseBudget, runAction as act, runPath, suggestedBudget, taskPath } from "../../lib/runsApi";
 import { releaseChoices } from "../../lib/splitRun";
 import { openBehaviors } from "../../lib/behaviorsFocus";
-import { stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { perchedOnYou } from "../../lib/flights";
 import type { RunInfo } from "../../lib/runs";
-import type { FlightWaiting } from "../../lib/needsYou";
+import { FLIGHT_PAUSED, pausedAtLine, type FlightWaiting } from "../../lib/needsYou";
 
 /** Take the user to a session's pane (optionally a tab of it), closing any
  * open dialog and the bell ("mf-close-bell") — the pane is where the thing
@@ -140,6 +140,7 @@ export function WaitingRow({
   if (w.kind === "budget") return <BudgetRow w={w} runInfo={runInfo} />;
   if (w.kind === "flight_you") return <FlightYouRow w={w} row={row} shown={shown} />;
   if (w.kind === "flight_halted") return <FlightHaltedRow w={w} row={row} shown={shown} />;
+  if (w.kind === FLIGHT_PAUSED) return <FlightPausedRow w={w} row={row} shown={shown} />;
   return (
     <div className={"pr-open-item ob-item ob-" + (escalation ? "escalation" : w.kind)} data-outbox-row={w.title}>
       <RowMain title={w.title} text={w.text} shown={shown} row={row} />
@@ -466,15 +467,15 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
           {fl && (
             <>
               {fl.step.kind === "verify" ? (
-                // A Verify stop moves on when its behaviors are answered, not
-                // on Done (the server refuses it): its card opens in the Sky.
+                // A Verify stop moves on when its Verify is confirmed, not on
+                // Done (the server refuses it): the session's Verify opens.
                 <button
                   type="button"
                   className="btn-primary pr-review-btn"
-                  title={"Answer the behaviors of “" + fl.step.title + "” — the route goes on once each one has an answer"}
+                  title={"Open the Verify of “" + fl.step.title + "” — the route goes on once you confirm it"}
                   onClick={() => openBehaviors({ title: w.title })}
                 >
-                  Behaviors
+                  Verify
                 </button>
               ) : (
                 <button
@@ -556,6 +557,68 @@ function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
                 disabled={busy}
                 title={"Skip “" + (at || "this stop") + "” — the route goes on without it"}
                 onClick={() => void run(() => stepSkip(fl.id, fl.step.id))}
+              >
+                Skip
+              </button>
+            </>
+          )}
+          {row && (
+            <button type="button" className="test-btn" onClick={() => openSession(w.title)}>
+              Open ↗
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A route paused at a halt point a person set (docs/vocabulary.md "Halt
+ * point"): a calm chip ("Paused at <stop>"), Carry on — the stop runs — or
+ * Skip — the route goes on without it — right here, with Open ↗ to go look
+ * first. */
+function FlightPausedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
+  const [busy, setBusy] = useState(false);
+  const fl = flightOf(w, row);
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const at = fl?.step?.title || "";
+  const chip = pausedAtLine(at).replace(/ — Carry on$/, "");
+  return (
+    <div className="pr-open-item ob-item ob-flight_paused" data-outbox-row={w.title || w.key}>
+      <RowMain title={w.title || w.text || ""} text={w.title ? w.text : ""} shown={w.title ? shown : (t) => t} row={row} />
+      <div className="pr-open-meta">
+        <span className="pr-open-chip" title={w.reason || undefined}>
+          {chip}
+        </span>
+      </div>
+      <div className="ik-item-start">
+        <div className="ob-acts">
+          {fl && (
+            <>
+              <button
+                type="button"
+                className="btn-primary pr-review-btn"
+                disabled={busy}
+                title={"Carry on — “" + (at || "this stop") + "” runs and the route goes on"}
+                onClick={() => void run(() => controlFlight(fl.id, "resume"))}
+              >
+                Carry on
+              </button>
+              <button
+                type="button"
+                className="test-btn"
+                disabled={busy}
+                title={"Skip “" + (at || "this stop") + "” — the route goes on without it"}
+                // A skip alone leaves a paused route paused at the next stop:
+                // carry on after it, so the route really goes on.
+                onClick={() => void run(async () => (await stepSkip(fl.id, fl.step.id)) && controlFlight(fl.id, "resume"))}
               >
                 Skip
               </button>

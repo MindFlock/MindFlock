@@ -163,7 +163,7 @@ describe("the grounded line", () => {
     expect(html.indexOf("skl-label")).toBeLessThan(html.indexOf("Fix it"));
     expect(html).toContain("Push");
     const src = code("components/flights/GroundedLine.tsx");
-    expect(src).toContain('chainGraph(moves.diagram, { head, key: "flight:" + flight.id, flightId: flight.id })');
+    expect(src).toContain('chainGraph(moves.diagram, { head, key: "flight:" + flight.id, flightId: flight.id, big })');
     // The empty socket on its first tile is a tour hook too.
     expect(src).toContain('useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });');
   });
@@ -188,9 +188,9 @@ describe("the grounded line", () => {
     expect(t).toContain('aria-label="Ticket to merge — When me reaches Start a route"');
   });
 
-  it("its ⋯: Add a stop…, Fly on a session…, Save to the shelf, Remove — Remove at once, undoable (round 14: a grounded line never runs)", () => {
+  it("its ⋯: Add a stop…, Fly on a session…, Save as a route… (flow polish: named inline), Remove — Remove at once, undoable (round 14: a grounded line never runs)", () => {
     const src = code("components/flights/GroundedLine.tsx");
-    for (const l of ['label: "Add a stop…"', 'label: "Run on a session…"', 'label: "Save to the shelf"', 'label: "Remove", danger: true'])
+    for (const l of ['label: "Add a stop…"', 'label: "Run on a session…"', 'label: "Save as a route…"', 'label: "Remove", danger: true'])
       expect(src).toContain(l);
     expect(src).toContain("onSelect: () => void remove() },");
     expect(src).not.toContain("<InlineConfirm");
@@ -207,7 +207,7 @@ describe("the grounded line", () => {
 
   it("edits through the flight routes, as a session's line does — every stop can change", () => {
     const src = code("components/flights/useGroundedLine.tsx");
-    for (const f of ["dropStop(id, step.id)", "moveStop(flight.id, step.id, to)", "tackOn(flight.id, step, where(at))", "tackOnPlan(flight.id, plan.id, where(at))", "setHalt(flight.id, step.id, !step.halt)", "patchStop(flight.id, step.id, patch)", "<StopDialog"])
+    for (const f of ["dropStop(id, step.id)", "moveStop(flight.id, step.id, to)", "tackOn(flight.id, step, where(at))", "tackOnPlan(flight.id, plan.id, where(at))", "setHalt(flight.id, step.id, !step.halt)", "saveStop(flight.id, step.id, patch)", "<StopDialog"])
       expect(src).toContain(f);
     expect(readDrop("ship")).toEqual({ kind: "ship" });
     expect(readDrop({ planId: "p_1" })).toEqual({ planId: "p_1" });
@@ -217,8 +217,8 @@ describe("the grounded line", () => {
 describe("the Sky hosts them", () => {
   const sky = code("components/flights/SkyView.tsx");
 
-  it("after the session lines, keyed flight:<id>, not in This session or Perched on you", () => {
-    expect(sky).toContain("if (mode === \"one\" || mode === \"perched\") return [];");
+  it("after the session lines, keyed flight:<id>, not in This session; in Needs you only the free runs that wait on you (flow polish)", () => {
+    expect(sky).toContain("const grounded = useMemo(() => groundedShown(flights, mode, query, groundedName), [flights, mode, query]);");
     expect(sky.indexOf("...titles.map((t) => {")).toBeLessThan(sky.indexOf("...grounded.map((f) => {"));
     expect(sky).toContain("const id = groundedKey(f.id);");
     expect(sky).toContain("<GroundedLine");

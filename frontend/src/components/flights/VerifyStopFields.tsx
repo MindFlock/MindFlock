@@ -1,23 +1,25 @@
 /** The Verify stop's editor (docs/flights.md "Verify stops"): a three-line
- * explainer, then the stop's four plain choices — Where (this branch's code
- * or one of the repos' environments, "Other…" typed), Ready when (+ its
- * minutes), Who checks (three choices, each with what it means), Notes — and
- * Post the results to the PR. `StopForm` draws it in place of the generic
- * fields when the kind serves `where`; the logic is lib/verifyStop.ts.
+ * explainer of the current design (its agent writes and runs its own steps;
+ * where and when; what makes the route wait on you), then the stop's plain
+ * choices — Where (this branch's code or one of the repos' environments: a
+ * pick from the list, never free text while the list is known), Ready when
+ * (+ its minutes), Who checks (three choices, each with its effect), Notes —
+ * and Post the results to the PR. `StopForm` draws it in place of the
+ * generic fields when the kind serves `where`, with the stop's sentence
+ * (`verifySentence`) above its title; the logic is lib/verifyStop.ts.
  *
- * `VerifyStopBehaviors` shows the stop's checklist, when it has one, each
- * behavior marked agent or you (the Behaviors card's own rules: cardModel's
- * `whoOf` / `rowChip`) — so the person sees which ones will need them. It
- * answers nothing: the card does (the dialog's "Behaviors" button). */
+ * `VerifyStopLive` shows the stop's live Verify, when it has one: its state,
+ * how far the agent got, and Steps to the session's Verify. */
 
-import { useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../../api/client";
-import type { TestPlansResponse } from "../../api/types";
+import type { ReactNode } from "react";
+import type { SessionVerify } from "../../api/types";
+import { openBehaviors } from "../../lib/behaviorsFocus";
 import { optionLabel, type StepKindDef, type StepKindField } from "../../lib/flights";
-import { queryClient, useVerifyEnvironments } from "../../state/queries";
+import { verifyGlyph, verifyProgress, verifyWord } from "../../lib/sessionState";
+import { useVerifyEnvironments } from "../../state/queries";
 import {
   READY_MINUTES_HINT,
+  READY_MINUTES_MAX,
   VERIFY_NOTES_MAX,
   WHERE_BRANCH,
   WHO_CHOICES,
@@ -25,12 +27,12 @@ import {
   readyChoices,
   showsReadyMinutes,
   verifyConfig,
+  verifyWhenWords,
   whereOptions,
   withVerifyChoice,
   type VerifyConfig,
   type VerifyEnvsResponse,
 } from "../../lib/verifyStop";
-import { rowChip, whoOf } from "../behaviors/cardModel";
 import { ChipRow, FlField, NumberField, PromptBox, Seg, TextField, Toggle } from "./controls";
 
 /** The fields this editor draws itself; any other field the kind serves is
@@ -42,18 +44,25 @@ export const VERIFY_OWN_FIELDS: readonly string[] = ["where", "ready", "ready_mi
 export const isVerifyEditor = (kind: string, def: Pick<StepKindDef, "fields"> | undefined): boolean =>
   kind === "verify" && !!def?.fields?.some((f) => f.name === "where");
 
-const OTHER = "\u0000other";
-
-/** The explainer's three lines, in words for `where` and `who`. */
-export function verifySteps(v: Pick<VerifyConfig, "where" | "who">): [string, string, string] {
-  const on = v.where === WHERE_BRANCH ? "this branch's code" : v.where;
-  const second = v.who === "you" ? "you check every one on " + on : v.who === "agent" ? "the agent walks every one on " + on + ", yours too" : "the agent checks its ones on " + on;
-  const third = v.who === "agent" ? "it asks you only for what it can't do — the route goes on" : v.who === "you" ? "they park the route here until you answer" : "yours park the route here (a perch)";
-  return ["behaviors are written from the branch's changes", second, third];
+/** The explainer's three lines: ① what its agent does, ② where it runs and
+ * when it starts, ③ what makes the route wait on you and what lets it go on. */
+export function verifySteps(v: Pick<VerifyConfig, "where" | "who"> & Partial<Pick<VerifyConfig, "ready" | "ready_minutes">>, envs?: VerifyEnvsResponse | null): [string, string, string] {
+  const when = verifyWhenWords({ where: v.where, ready: v.ready || "now", ready_minutes: v.ready_minutes || 0 }, envs);
+  const second =
+    v.where === WHERE_BRANCH
+      ? "It runs on this branch's code — a fresh checkout, nothing deployed — " + when + "."
+      : "It runs against " + v.where + " — the deployed environment of that name in this repo's Verify settings — " + when + ".";
+  const third =
+    v.who === "agent"
+      ? "The route goes on by itself when every step passes; it waits on you only if something ends blocked or failed."
+      : v.who === "you"
+        ? "The route always waits for you to confirm, even when every step passes."
+        : "The route waits on you for the steps only a person can do; when every step passes it goes on.";
+  return ["Its agent comes up with its own steps from what it built, runs them, and shows evidence for each.", second, third];
 }
 
-export function VerifyExplainer({ v }: { v: Pick<VerifyConfig, "where" | "who"> }) {
-  const lines = verifySteps(v);
+export function VerifyExplainer({ v, envs }: { v: Pick<VerifyConfig, "where" | "who"> & Partial<Pick<VerifyConfig, "ready" | "ready_minutes">>; envs?: VerifyEnvsResponse | null }) {
+  const lines = verifySteps(v, envs);
   return (
     <ol className="vf-explain fl-fld-wide" aria-label="What this stop does">
       {lines.map((t, i) => (
@@ -89,10 +98,11 @@ export function VerifyStopFields({
   const label = (name: string, d: string) => fieldOf(name)?.label || d;
   const extra = (def?.fields || []).filter((f) => !VERIFY_OWN_FIELDS.includes(f.name));
   const minutes = showsReadyMinutes(v.ready);
+  const envList = envs.isError ? null : envs.data || null;
   return (
     <>
-      <VerifyExplainer v={v} />
-      <WherePicker label={label("where", "Where")} value={v.where} envs={envs.isError ? null : envs.data || null} failed={envs.isError} readOnly={readOnly} onChange={(where) => set({ where })} />
+      <VerifyExplainer v={v} envs={envList} />
+      <WherePicker label={label("where", "Where")} value={v.where} envs={envList} failed={envs.isError} readOnly={readOnly} onChange={(where) => set({ where })} />
       <FlField label={label("ready", "Ready when")}>
         <Seg
           label={label("ready", "Ready when")}
@@ -102,15 +112,15 @@ export function VerifyStopFields({
         />
       </FlField>
       {minutes && (
-        <FlField label={label("ready_minutes", "Minutes")} hint={v.where === WHERE_BRANCH ? "0 = right after it" : READY_MINUTES_HINT}>
-          <NumberField label={label("ready_minutes", "Minutes")} unit="min" value={v.ready_minutes} onChange={(x) => set({ ready_minutes: x === "" ? 0 : Math.min(1440, x) })} />
+        <FlField label={label("ready_minutes", "Minutes")} hint={(v.where === WHERE_BRANCH ? "0 = right after it" : READY_MINUTES_HINT) + " · 0 to " + READY_MINUTES_MAX + " min (24 h)"}>
+          <NumberField label={label("ready_minutes", "Minutes")} unit="min" value={v.ready_minutes} onChange={(x) => set({ ready_minutes: x === "" ? 0 : Math.min(READY_MINUTES_MAX, x) })} />
         </FlField>
       )}
       <FlField label={label("who", "Who checks")} wide>
         <div className="vf-who" role="radiogroup" aria-label={label("who", "Who checks")}>
           {WHO_CHOICES.map((c) => (
             <button key={c.value} type="button" role="radio" aria-checked={v.who === c.value} className={"vf-who-opt" + (v.who === c.value ? " on" : "")} data-value={c.value} onClick={() => set({ who: c.value })}>
-              <strong>{optionLabel(fieldOf("who"), c.value, c.label)}</strong>
+              <strong>{c.label}</strong>
               <span className="muted">{c.explain}</span>
             </button>
           ))}
@@ -127,14 +137,18 @@ export function VerifyStopFields({
       </FlField>
       <div className="fl-fld">
         <Toggle on={v.post_to_pr} label={label("post_to_pr", "Post the results to the PR")} title="When the stop finishes, its results go on the session's PR as a comment" onChange={(x) => set({ post_to_pr: x })} />
+        <span className="fl-fld-hint">Off: the results stay in MindFlock. On: when the stop finishes they also go on the session's PR as a comment (needs a PR).</span>
       </div>
       {extra.map((f) => renderField(f))}
     </>
   );
 }
 
-/** Where: "This branch's code", each environment name, "Other…" (typed). An
- * older server without the environments list: a plain text field. */
+/** Where: "This branch's code", then each environment the repo's Verify
+ * settings list — a pick, never free text, so an unknown name can't be
+ * chosen. A saved name the list no longer has stays visible, flagged, until
+ * it is changed. Without the list (an older server, a failed fetch): a plain
+ * text field that says the name must match. */
 function WherePicker({
   label,
   value,
@@ -150,69 +164,63 @@ function WherePicker({
   readOnly?: boolean;
   onChange(v: string): void;
 }) {
-  const [typing, setTyping] = useState(false);
   if (failed)
     return (
-      <FlField label={label} wide hint="“branch” = this branch's own code, or an environment's name">
+      <FlField label={label} wide hint={WHERE_TYPED_HINT}>
         <TextField label={label} value={value} placeholder="branch or an environment name" onChange={(x) => !readOnly && onChange(x.trim())} />
       </FlField>
     );
   const opts = whereOptions(envs, value);
-  const shown = typing ? OTHER : value;
-  const hint =
-    value === WHERE_BRANCH
-      ? "A fresh checkout of this branch — nothing deployed."
-      : envTitle(value, envs) || (envs ? "No watched repo has this environment yet — add it on the repo's Verify card (Intake)." : "");
+  const unknown = !!envs && opts.some((o) => o.custom && o.value === value);
+  const hint = whereHint(value, envs, unknown);
   return (
-    <FlField label={label} wide hint={hint ? <span className="vf-where-hint">{hint}</span> : undefined}>
-      <ChipRow
-        label={label}
-        value={shown}
-        options={[...opts.map((o) => ({ value: o.value, label: o.label, title: o.title })), { value: OTHER, label: "Other…", title: "Type an environment's name" }]}
-        onChange={(x) => {
-          if (readOnly) return;
-          if (x === OTHER) return setTyping(true);
-          setTyping(false);
-          onChange(x);
-        }}
-      />
-      {typing && (
-        <TextField label={label + " — another environment"} value={value === WHERE_BRANCH ? "" : value} placeholder="an environment's name" onChange={(x) => !readOnly && onChange(x.trim() || WHERE_BRANCH)} />
-      )}
+    <FlField label={label} wide hint={hint ? <span className={"vf-where-hint" + (unknown ? " vf-where-unknown" : "")}>{hint}</span> : undefined}>
+      <ChipRow label={label} value={value} options={opts.map((o) => ({ value: o.value, label: o.custom ? o.label + " (unknown)" : o.label, title: o.title }))} onChange={(x) => !readOnly && onChange(x)} />
     </FlField>
   );
 }
 
-/** The stop's checklist, when it has one: each behavior with who checks it
- * and where it stands. Read from the Behaviors list the top bar keeps warm. */
-export function VerifyStopBehaviors({ planId }: { planId: string }) {
-  const q = useQuery({ queryKey: ["test-plans"], queryFn: () => api<TestPlansResponse>("/api/test-plans"), enabled: false }, queryClient);
-  const plan = planId ? (q.data?.plans || []).find((p) => p.id === planId) : undefined;
-  if (!plan || !(plan.steps || []).length) return null;
-  const steps = plan.steps;
-  const yours = steps.filter((s) => whoOf(plan, s).you).length;
+/** The free-text Where's hint (no environments list to pick from). */
+export const WHERE_TYPED_HINT = "“branch” = this branch's own code; any other name must match an environment in this repo's Verify settings";
+
+/** What the picked Where means. */
+export function whereHint(value: string, envs: VerifyEnvsResponse | null, unknown: boolean): string {
+  if (value === WHERE_BRANCH) return "A fresh checkout of this branch — nothing deployed. Pick an environment to check a deployed copy instead.";
+  if (unknown) return "“" + value + "” is not an environment of any watched repo — pick one above, or add it on the repo's Verify card (Intake). The stop fails while it is unknown.";
+  const t = envTitle(value, envs);
+  return t ? "The deployed copy: " + t : "";
+}
+
+/** The session's live Verify, when it is this stop's: the plan the stop
+ * recorded (its step detail's `plan`) is the session's, or — nothing
+ * recorded yet — the stop is the one the route is at. Null otherwise (a
+ * Verify stop still ahead, or one whose run was another). */
+export function stopVerifyOf(v: SessionVerify | null | undefined, stopPlan: string, here: boolean): SessionVerify | null {
+  if (!v || typeof v.state !== "string") return null;
+  if (stopPlan) return v.plan === stopPlan ? v : null;
+  return here ? v : null;
+}
+
+/** A Verify stop's live Verify inside its dialog (self-verify has no
+ * pre-written list): the state word, how far its agent got ("3 of 5 steps
+ * done"), and Steps — the session's Verify, its steps and their evidence.
+ * Nothing when the stop has no Verify yet. */
+export function VerifyStopLive({ verify, session }: { verify: SessionVerify | null | undefined; session: string }) {
+  if (!verify) return null;
+  const word = verifyWord(verify.state);
+  if (!word) return null;
   return (
-    <section className="vf-behaviors" aria-label="This stop's behaviors">
-      <span className="fl-fld-label">
-        Behaviors — {steps.length} · {yours ? yours + " yours" : "none yours"}
-      </span>
-      <ul>
-        {steps.map((s) => {
-          const who = whoOf(plan, s);
-          const chip = rowChip(plan, s.id);
-          return (
-            <li key={s.id} className={"vf-behavior" + (who.you ? " vf-yours" : "")} data-check={chip.state}>
-              <span className="vf-behavior-mark" title={chip.label} aria-label={chip.label}>
-                {chip.glyph}
-              </span>
-              <span className="vf-behavior-text">{s.text}</span>
-              <span className="vf-behavior-who" title={who.title}>
-                {who.label}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+    <section className="vf-live" aria-label="This stop's Verify" data-verify={verify.state}>
+      <span className="fl-fld-label">Verify</span>
+      <p className="vf-live-row">
+        <strong className={"vf-live-word is-" + verify.state}>
+          <span aria-hidden="true">{verifyGlyph(verify.state)}</span> {word}
+        </strong>
+        <span className="muted">{verifyProgress(verify)}</span>
+        <button type="button" className="test-btn" title="The steps and their evidence" onClick={() => openBehaviors({ planId: verify.plan, title: session })}>
+          Steps
+        </button>
+      </p>
     </section>
   );
 }

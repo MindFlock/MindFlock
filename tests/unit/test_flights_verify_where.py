@@ -277,7 +277,9 @@ def test_unknown_environment_fails_the_stop():
     f = started(fly(vstep(where="nowhere")))
     a = judge(f, {"env_missing": "nowhere"}, NOW)
     assert a["action"] == "fail"
-    assert a["reason"] == "no environment named nowhere in this repo"
+    assert a["reason"] == (
+        "no environment named nowhere in this repo — edit this stop's Where, or Skip"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -503,7 +505,11 @@ def test_without_post_to_pr_nothing_is_posted(srv, envs, pr, monkeypatch):
         (None, "", "Verify on this branch · agent, then you · right away"),
         ("junk", "", "Verify on this branch · agent, then you · right away"),
         ({"who": "robot"}, "", "Verify on this branch · agent, then you · right away"),
-        ({"who": "you"}, "", "Verify on this branch · only you · right away"),
+        (
+            {"who": "you"},
+            "",
+            "Verify on this branch · agent, then your sign-off · right away",
+        ),
         (
             {"where": "sandbox", "ready": "now", "who": "agent"},
             "",
@@ -570,7 +576,7 @@ def test_step_phrase_says_post_to_pr_and_reads_legacy_configs():
         "Verify on live · agent, then you · once on the live branch"
     )
     assert C.step_phrase(vstep(wait_live=False, who="you")).startswith(
-        "Verify on this branch · only you · right away"
+        "Verify on this branch · agent, then your sign-off · right away"
     )
 
 
@@ -767,13 +773,17 @@ def test_env_missing_beats_the_write_deadline_and_the_failures():
     late = NOW + F.VERIFY_WRITE_DEADLINE_S + 60
     a = judge(f, {"env_missing": "nowhere"}, late)
     assert a["action"] == "fail"
-    assert a["reason"] == "no environment named nowhere in this repo"
+    assert a["reason"] == (
+        "no environment named nowhere in this repo — edit this stop's Where, or Skip"
+    )
     a = judge(
         f,
         facts(env_missing="nowhere", failed=["login works"], failed_at=NOW * 2),
         NOW,
     )
-    assert a["reason"] == "no environment named nowhere in this repo"
+    assert a["reason"] == (
+        "no environment named nowhere in this repo — edit this stop's Where, or Skip"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -804,8 +814,9 @@ def test_kinds_dto_passes_option_labels_through_for_verify_only():
     }
     assert by["who"]["option_labels"] == {
         "both": "Agent, then me",
-        "agent": "Agent only",
-        "you": "Only me",
+        "agent": "Agent only — it attempts every step itself and shows its "
+        "evidence; the route waits on you only if something ends blocked or failed",
+        "you": "Agent, then my sign-off",
     }
     with_labels = [
         (k["kind"], fld["name"])
@@ -859,7 +870,7 @@ def test_verify_env_unreadable_environments_are_unknown_not_missing(monkeypatch)
 
     monkeypatch.setattr(_tp, "environment", boom, raising=False)
     monkeypatch.setattr(D, "_repo_root", lambda title: "/repo")
-    monkeypatch.setattr(D, "_log", lambda fmt, *a: logged.append((fmt, a)))
+    monkeypatch.setattr(D, "_warn", lambda fmt, *a: logged.append((fmt, a)))
     assert D._verify_env({"id": "f1", "session": "s"}, "sandbox") == (None, False)
     assert len(logged) == 1
     fmt, args = logged[0]

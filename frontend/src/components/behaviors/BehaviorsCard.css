@@ -343,3 +343,31 @@
   flex: 1 1 180px;
   min-width: 0;
 }
+
+/* Flow polish: the tally in the head, a blocked step's why, the agent's own
+   note under a person's answer, and the sign-off block. */
+.bh-tally {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.bh-why {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bh-agent-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+.bh-signoff,
+.bh-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}

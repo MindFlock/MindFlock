@@ -460,6 +460,34 @@
   flex: 1 1 180px;
   min-width: 0;
 }
+
+/* Flow polish: the tally in the head, a blocked step's why, the agent's own
+   note under a person's answer, and the sign-off block. */
+.bh-tally {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.bh-why {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bh-agent-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+.bh-signoff,
+.bh-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}
 /* The voice cheat sheet (VoiceCommands.tsx): under the top bar's mic, the
    same surface as the mic's options (.mic-pop in TopBarMic.css). */
 .voice-cmds {
@@ -2776,7 +2804,10 @@ button.assist-chip:hover {
 }
 /* The pane's verify row (PaneVerifyStrip): the route strip's shape
    (flights/Flights.css .fl-strip), in the verify tone while the agent checks,
-   the needs-you tint when a person's steps are left, red when it failed. */
+   the needs-you tint when it waits on a person, red when it failed or is
+   blocked, green for its ten minutes once passed. The first line (.pv-row)
+   keeps ONE height in every state — buttons never wrap, the text ellipsizes —
+   so the terminal under it doesn't jump when the state changes. */
 .pv-strip {
   display: flex;
   flex-direction: column;
@@ -2798,26 +2829,57 @@ button.assist-chip:hover {
   background: color-mix(in srgb, var(--tone-broken) 12%, var(--panel-2));
 }
 
+.pv-strip.is-passed {
+  background: color-mix(in srgb, var(--tone-working) 10%, var(--panel-2));
+}
+
+.pv-strip.is-form {
+  padding: 6px 10px;
+}
+
 .pv-row {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  height: 24px;
 }
 
-.pv-shield {
+.pv-glyph {
   flex: none;
+  width: 1.2em;
+  text-align: center;
   color: var(--tone-verifying, #8b6cf0);
   font-weight: 700;
 }
 
-.pv-strip.is-needs_you .pv-shield {
+.pv-glyph.is-live {
+  animation: pv-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pv-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-glyph.is-live {
+    animation: none;
+  }
+}
+
+.pv-strip.is-needs_you .pv-glyph {
   color: var(--text);
 }
 
-.pv-strip.is-failed .pv-shield,
-.pv-strip.is-blocked .pv-shield {
+.pv-strip.is-failed .pv-glyph,
+.pv-strip.is-blocked .pv-glyph {
   color: var(--tone-broken);
+}
+
+.pv-strip.is-passed .pv-glyph {
+  color: var(--tone-working);
 }
 
 .pv-text {
@@ -2828,10 +2890,88 @@ button.assist-chip:hover {
   white-space: nowrap;
 }
 
-.pv-open,
-.pv-again {
+.pv-btn {
   flex: none;
   font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.pv-btn[aria-busy="true"] {
+  cursor: progress;
+}
+
+.pv-file-error {
+  margin: 0 0 0 calc(1.2em + 8px);
+  color: var(--tone-broken);
+}
+
+/* The start form (VerifyStartForm), in place under the row. */
+.pv-form {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pv-form-notes {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+  resize: vertical;
+  font: inherit;
+}
+
+.pv-form-where {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.pv-form-start,
+.pv-form-cancel {
+  flex: none;
+  font-size: 11.5px;
+}
+
+/* VerifyConfirm's additions (its base styles are BehaviorsCard.css): the
+   sign-off heading, why the agent couldn't do a step, and the ✓ / ✗ per step.
+   Global like every bundled sheet, so the bell and the card get them too. */
+.vc-heading {
+  margin: 0 0 4px;
+}
+
+.vc-step-why {
+  display: block;
+  color: var(--muted);
+  font-size: 0.92em;
+  font-style: italic;
+}
+
+.vc-step-mark {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.vc-step-mark .test-btn {
+  min-width: 26px;
+  padding: 0 6px;
+}
+
+.vc-mark-pass[aria-pressed="true"] {
+  color: var(--tone-working);
+  border-color: var(--tone-working);
+}
+
+.vc-mark-fail[aria-pressed="true"] {
+  color: var(--tone-broken);
+  border-color: var(--tone-broken);
+}
+
+.vc-step.is-fail .vc-step-text {
+  color: var(--tone-broken);
 }
 /* A box's right-click menu on the flyway canvas (StopMenu.tsx). It lives in
  * the line's stage, so the Sky's zoom scales it: `--sky-z` (set on `.skl`)
@@ -8442,54 +8582,41 @@ details.fl-group-waiting > summary {
   outline-offset: 1px;
 }
 
-/* The stop's checklist inside its dialog: who checks each one. */
-.vf-behaviors {
+/* A Verify stop's live Verify inside its dialog (VerifyStopLive): the state
+   word, how far its agent got, Steps. */
+.vf-live {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-top: 4px;
 }
 
-.vf-behaviors ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.vf-live-row {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 180px;
-  overflow-y: auto;
-}
-
-.vf-behavior {
-  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  align-items: baseline;
-  font-size: 12.5px;
-  padding: 2px 0;
+  margin: 0;
+  font-size: 13px;
 }
 
-.vf-behavior-mark {
-  flex: none;
-  width: 1.2em;
-  text-align: center;
-  color: var(--muted);
+.vf-live-word.is-passed {
+  color: var(--tone-working);
 }
 
-.vf-behavior-text {
-  flex: 1;
-  min-width: 0;
+.vf-live-word.is-needs_you {
+  color: var(--tone-attention);
 }
 
-.vf-behavior-who {
-  flex: none;
-  font-size: 12px;
-  color: var(--muted);
+.vf-live-word:is(.is-failed, .is-blocked) {
+  color: var(--tone-broken);
 }
 
-.vf-yours .vf-behavior-who {
-  color: var(--fl-ink-accent, var(--accent));
-  font-weight: 600;
+/* A refusal under its own field (StopForm's `errors`): the field's hint,
+   in red. */
+.fl-fld-hint .fl-fld-error,
+.fl-fld-error {
+  color: var(--red);
 }
 /* A stop's dialog (StopDialog.tsx): the same card as #rename-form
    (smallDialogs.css), wider for a stop's fields. The fields keep the
@@ -8764,6 +8891,71 @@ details.fl-group-waiting > summary {
   display: block;
   margin-bottom: 4px;
   font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* --- A parked stop (halted, waiting on you, paused): why, what it asks,
+   the buttons that move it on; its settings folded under them. --- */
+
+.stop-dialog-asks {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.stop-dialog-remedies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.stop-dialog-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.stop-dialog-settings > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.stop-dialog-settings > summary:hover {
+  color: var(--text);
+}
+
+.stop-dialog-settings > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.stop-dialog-settings[open] > summary {
+  margin-bottom: 4px;
+}
+
+/* A refusal the form can't put under a field, and the route reaching the
+   stop mid-edit: red, in the theme's own ink. */
+.stop-dialog-error,
+.stop-dialog-lost {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--fl-ink-red, var(--red));
+  background: color-mix(in srgb, var(--red) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
+}
+
+.stop-dialog-save-hint,
+.stop-dialog-hint {
+  margin: 0;
+  font-size: 12.5px;
   color: var(--muted);
 }
 /* The picture in one breath (VisionPicture), How MindFlock works, and the
@@ -15227,6 +15419,12 @@ details.fl-group-waiting > summary {
   padding: 0 0 8px;
 }
 
+/* "Save as a route…": the name field, a name's width (not the bar's). */
+.skl-save-route input {
+  width: 16em;
+  max-width: 100%;
+}
+
 /* The line takes the focus (a press on its bar) so Delete lands on it; the
    pointer's focus draws no ring, the keyboard's does. Round 17: only the
    colour, at the lowest weight, so a selected or hovered line pressed on
@@ -15675,6 +15873,11 @@ details.fl-group-waiting > summary {
 }
 .skl-frame[data-frame="working"] > .skl-frame-box {
   border: calc(1.5px / var(--sky-z, 1)) solid color-mix(in srgb, var(--accent) 75%, transparent);
+}
+/* Paused (a person paused it): a calm dashed neutral frame — no red, no
+   amber, no breathing — so it never reads as one still running. */
+.skl-frame[data-frame="paused"] > .skl-frame-box {
+  border: calc(1.5px / var(--sky-z, 1)) dashed color-mix(in srgb, var(--muted) 70%, transparent);
 }
 /* The working cue: a ring that breathes (opacity only: no repaint). */
 .skl-frame[data-frame="working"] > .skl-frame-box::after {

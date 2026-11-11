@@ -228,9 +228,9 @@ def drive(f):
 
 
 def test_notify_receipt(srv, monkeypatch):
-    monkeypatch.setattr(D, "_run_notify", lambda f, s: None)
+    monkeypatch.setattr(D, "_run_notify", lambda f, s: {"delivered": "phone"})
     got = drive(fly(step("notify", text="hi"), now=time.time()))
-    assert got["step_states"]["s1"]["detail"]["receipt"] == "sent"
+    assert got["step_states"]["s1"]["detail"]["receipt"] == "sent to your phone"
 
 
 @pytest.mark.parametrize(

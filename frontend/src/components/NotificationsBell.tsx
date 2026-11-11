@@ -85,9 +85,11 @@ interface Notif {
   approve?: { id: string; via: string; code: string; host: string } | null;
   /** An update.available row: named "Updates", opens this Settings screen. */
   settings?: SettingsScreen;
-  /** A Verify row: the behaviors (plan id) a click opens in the Sky. */
+  /** A Verify row: the plan id whose steps a click opens in the Sky. */
   verify?: string;
-  /** The row's name when it isn't a session's (a checklist's title). */
+  /** A Verify row's title words ("Verify failed", "Verify needs you", …). */
+  verifyTitle?: string;
+  /** The row's name when it isn't a session's (a plan's title). */
   name?: string;
   /** A template.* row with no session: named "Schedule", opens Schedule. */
   template?: boolean;
@@ -124,15 +126,24 @@ export interface NotifRow {
   approve?: { id: string; via: string; code: string; host: string } | null;
   settings?: SettingsScreen;
   verify?: string;
+  verifyTitle?: string;
   name?: string;
   template?: boolean;
 }
 
-/** A Verify event's checklist: its plan id (what the click opens) and the
- * title the row is named by. */
+/** A Verify event's plan: its id (what the click opens — the session's
+ * Verify steps) and the title the row is named by. */
 function planOf(env: EventEnvelope, d: Record<string, unknown>): { verify: string; name: string } {
   const verify = String(d.plan || env.session || "");
   return { verify, name: String(d.title || "") };
+}
+
+/** "Verify needs you" — Verify's words for a person's turn, in the bell. */
+export const VERIFY_NEEDS_YOU = "Verify needs you";
+
+/** A Verify row's title: "Verify failed — <session>" (its body says what). */
+export function verifyNotifTitle(row: Pick<NotifRow, "verifyTitle">, name: string): string {
+  return (row.verifyTitle || "Verify") + " — " + name;
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
@@ -233,38 +244,39 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
       const what = String((d as { what?: string }).what || "guard");
       return { text: "red-zone guard tampered (" + what + ")", cls: "n-warn" };
     }
-    // Verify: the three moments a session's behaviors need you — they came due
-    // (the work shipped), they couldn't be written, or a check found a
-    // failure. Each is gated by its own notify rule, and a click flies the Sky
-    // to those behaviors on the route (openBehaviors, docs/behaviors.md §4).
+    // Verify: the moments a session's Verify needs you — it came due (the
+    // work shipped), its steps couldn't be written, or a step failed. Each is
+    // gated by its own notify rule; the row is titled "Verify failed —
+    // <session>" (or needs you / blocked) and its body says what, and a click
+    // flies the Sky to the session's Verify steps (openBehaviors,
+    // docs/behaviors.md §4) — where the chip and the Ship menu go too.
     case "session.test_plan_due": {
       const p = planOf(env, d);
-      return { text: "ready to check", cls: "n-info", rule: "verify_plan_due", dedupe: "plan-due:" + p.verify, ...p };
+      return { text: "it shipped — verify it now", verifyTitle: VERIFY_NEEDS_YOU, cls: "n-info", rule: "verify_plan_due", dedupe: "plan-due:" + p.verify, ...p };
     }
     case "session.test_plan_failed":
-      return { text: "couldn't write the behaviors", cls: "n-warn", rule: "verify_plan_failed", ...planOf(env, d) };
+      return { text: "its steps couldn't be written", verifyTitle: REASON_LABEL.verify_blocked, cls: "n-warn", rule: "verify_plan_failed", ...planOf(env, d) };
     case "session.test_plan_checked": {
       // Only a run that FOUND a failure is news here (the emitter stamps
       // new = "failed"); a clean run is the opt-in toast's, not the bell's.
       if (env.new !== "failed") return null;
       const n = Number((d as { failed?: number }).failed) || 0;
       return {
-        text: "behaviors failed" + (n ? " — " + n + " behavior" + (n === 1 ? "" : "s") : ""),
+        text: n ? n + (n === 1 ? " step failed" : " steps failed") : "a step failed",
+        verifyTitle: REASON_LABEL.verify_failed,
         cls: "n-warn",
         rule: "verify_run_failed",
         ...planOf(env, d),
       };
     }
-    // A PERSON's Fail turned the behaviors red (the agent's runs arrive as
-    // test_plan_checked above). Same rule, same row: a click flies the Sky to
-    // those behaviors.
+    // A PERSON's Fail turned Verify red (the agent's runs arrive as
+    // test_plan_checked above). Same rule, same row, same click.
     case "session.test_plan_step_failed": {
       const step = Number((d as { step?: number }).step) || 0;
       const text = String((d as { text?: string }).text || "");
       return {
-        text:
-          "behavior failed" +
-          (text ? " — " + (text.length > 60 ? text.slice(0, 59) + "…" : text) : step ? " — behavior " + step : ""),
+        text: text ? (text.length > 60 ? text.slice(0, 59) + "…" : text) : step ? "step " + step + " failed" : "a step failed",
+        verifyTitle: REASON_LABEL.verify_failed,
         cls: "n-warn",
         rule: "verify_run_failed",
         ...planOf(env, d),
@@ -272,6 +284,13 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     }
     // Agent-to-agent traffic (MindFlock MCP): only a worker's REPORT is news
     // (done / blocked / failed, filed under the parent it reported to). Plain
+    // A route's Notify stop: the text its author wrote. The stop's receipt
+    // promises "shown in the bell", so this row is what keeps that true.
+    case "flight.notified": {
+      const text = String((d as { text?: string }).text || "").trim();
+      if (!text) return null;
+      return { text, cls: "n-info", dedupe: "flight-notified:" + String((d as { id?: string }).id || "") + ":" + text };
+    }
     // messages between agents are toasted but stay out of the feed — the bell
     // has no dedupe, and an orchestrator's chatter would bury every row here.
     case "session.message":
@@ -586,7 +605,7 @@ export function NotificationsBell() {
                     );
                   }
                   if (it.behaviors) {
-                    // Behaviors that failed or wait on you: to them, on the route in the Sky.
+                    // A Verify that failed or waits on you: to its steps, on the route in the Sky.
                     const plan = it.behaviors;
                     const failing = isFailing(plan);
                     return (
@@ -599,12 +618,12 @@ export function NotificationsBell() {
                         onKeyDown={rowKey}
                         onClick={() => {
                           setOpen(false);
-                          openBehaviors({ planId: plan.id });
+                          openBehaviors({ planId: plan.id, title: plan.id });
                         }}
                       >
                         <span className="attn-dot" />
-                        <span className="attn-title">Behaviors · {plan.title || plan.id}</span>
-                        <span className="attn-reason">{failing ? "Failed" : "Needs you"}</span>
+                        <span className="attn-title">{plan.title || plan.id}</span>
+                        <span className="attn-reason">{failing ? REASON_LABEL.verify_failed : VERIFY_NEEDS_YOU}</span>
                       </div>
                     );
                   }
@@ -638,16 +657,20 @@ export function NotificationsBell() {
                   // A verify waiting on a person: its steps and Confirm
                   // verified / Not verified… right on the row (VerifyConfirm).
                   // A row holding buttons is not itself a button; its name
-                  // still opens the session.
+                  // opens the session's Verify steps (where the chip goes).
                   const v = verifyOf(byTitle.get(it.title) || {});
+                  const toSteps = (title: string) => {
+                    setOpen(false);
+                    openBehaviors({ planId: v?.plan || title, title });
+                  };
                   if (v?.state === "needs_you")
                     return (
                       <div key={it.key + a.reason} className={"attn-item p" + a.p + (flashing ? " flash" : "")} data-attn={it.title} data-needs={it.key}>
                         <span className="attn-dot" />
-                        <button type="button" className="attn-title linklike" title="Open the session" onClick={() => jump(it.title)}>
+                        <button type="button" className="attn-title linklike" title="See its Verify steps" onClick={() => toSteps(it.title)}>
                           {windowName(it.title)}
                         </button>
-                        <span className="attn-reason">{a.reason}</span>
+                        <span className="attn-reason">{VERIFY_NEEDS_YOU}</span>
                         <div className="attn-verify" style={{ flexBasis: "100%", margin: "2px 0 2px 13px", cursor: "default", fontSize: 12 }}>
                           <VerifyConfirm verify={v} />
                         </div>
@@ -665,7 +688,8 @@ export function NotificationsBell() {
                       role={a.p === 0 ? undefined : "button"}
                       tabIndex={a.p === 0 ? undefined : 0}
                       onKeyDown={a.p === 0 ? undefined : rowKey}
-                      onClick={() => jump(it.title)}
+                      // A failed or blocked verify: to its steps, like the chip.
+                      onClick={() => (v && (v.state === "failed" || v.state === "blocked") ? toSteps(it.title) : jump(it.title))}
                     >
                       <span className="attn-dot" />
                       <span className="attn-title">{windowName(it.title)}</span>
@@ -752,9 +776,9 @@ export function NotificationsBell() {
                         setOpen(false);
                         openSettings(n.settings);
                       } else if (n.verify) {
-                        // The behaviors themselves, on the route in the Sky.
+                        // The session's Verify steps, on the route in the Sky.
                         setOpen(false);
-                        openBehaviors({ planId: n.verify });
+                        openBehaviors({ planId: n.verify, title: n.session || n.verify });
                       } else if (n.template && !n.session) {
                         setOpen(false);
                         useUi.getState().openDialogFor("schedule");
@@ -780,7 +804,7 @@ export function NotificationsBell() {
                         : n.run && !n.session
                         ? runLookups.name(n.run) || "Team run"
                         : n.verify
-                        ? "Behaviors · " + (n.name || windowName(n.session))
+                        ? verifyNotifTitle(n, n.name || windowName(n.session))
                         : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +
                           (n.session ? windowName(n.session) : "—")}
                     </span>

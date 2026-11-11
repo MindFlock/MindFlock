@@ -47,17 +47,18 @@ import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { optimistic, optimisticDelete, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightStartOn, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
-import { LOOP_AGENT, drawnCanvas, findNode, firstStepOf, loopBackTo, loopChoices, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
+import { LOOP_AGENT, atHaltPoint, drawnCanvas, findNode, firstStepOf, loopBackTo, loopChoices, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
 import {
   dropGroup,
   deleteFlight,
   dropStop,
   moveStop,
   patchStop,
+  saveStop,
+  controlFlight,
   patchStopGroup,
   savePlan,
   setHalt,
-  answerBehaviors,
   stepDone,
   stepFix,
   stepRetry,
@@ -81,6 +82,8 @@ import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { canFixStep, currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
 import { StopPalette, type PaletteSaved } from "./StopParts";
 import { StopDialog } from "./StopDialog";
+import { stopVerifyOf } from "./VerifyStopFields";
+import { verifyOf } from "../../lib/sessionState";
 import { useBehaviorsTile } from "./SkyChain";
 
 export interface LineSource {
@@ -217,6 +220,59 @@ export function shelfPlanFor(name: string, steps: readonly FlightStep[], planId:
   const was = planId ? plans.find((p) => p.id === planId) : undefined;
   const fresh = planFromSteps(name, steps, was?.trigger);
   return was ? { ...was, ...fresh, builtin: was.builtin, session: was.session, description: was.description, id: was.id, updated: was.updated } : { ...fresh, id: "", updated: 0 };
+}
+
+/** What a stop's dialog offers on a live route (flow polish), worked out
+ * from the flight alone:
+ *  - `why`: the current stop's state in plain words — the failure's reason,
+ *    what it waits on you for, or why the route is paused.
+ *  - the remedies: Retry (a failure; a Verify check that couldn't finish or
+ *    couldn't start for memory), Carry on (whenever the route is paused —
+ *    any stop's dialog), Done (a perch; "confirm" on a Verify sign-off), and
+ *    `primary` the one that usually works.
+ *  - `editNow`: the current stop's settings can change now — it failed
+ *    ("retry") or the route waits at its halt point with nothing run yet
+ *    ("resume"); the server resets it on Save so that remedy runs them.
+ *  - `asks`: what the stop asks of the person (`detail.items`). */
+export interface HereStop {
+  here: boolean;
+  why: string;
+  asks: string[];
+  editNow: "" | "retry" | "resume";
+  done: "" | "done" | "confirm";
+  retry: boolean;
+  resume: boolean;
+  primary?: "done" | "retry" | "resume";
+}
+
+const cap = (t: string) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+
+export function hereStop(flight: Flight | null | undefined, n: DiagramNode): HereStop {
+  const out: HereStop = { here: false, why: "", asks: [], editNow: "", done: "", retry: false, resume: false };
+  if (!flight || n.kind !== "stop" || !n.step) return out;
+  const haltPoint = atHaltPoint(flight);
+  out.resume = flight.state === "paused" || haltPoint;
+  if (n.index !== flight.cursor || n.editable) return out;
+  out.here = true;
+  const rec = flight.step_states?.[n.step.id];
+  const d = rec?.detail || {};
+  const failedReason = String(d.failed_reason || "");
+  const failed = (n.state === "halted" && !haltPoint) || (n.state === "perched" && !!failedReason);
+  const ask = n.state === "perched" && n.step.kind === "verify" ? String(d.ask || "") : "";
+  const stuck = ask === "blocked" || ask === "memory";
+  out.retry = failed || stuck;
+  if (n.state === "perched" && !stuck) out.done = n.step.kind === "verify" ? (failedReason ? "" : "confirm") : "done";
+  if (failed && (rec?.state === "failed" || !!failedReason)) out.editNow = "retry";
+  else if (haltPoint && (rec?.state || "pending") === "pending") out.editNow = "resume";
+  if (n.state === "perched" && Array.isArray(d.items)) out.asks = (d.items as unknown[]).map(String).filter(Boolean);
+  out.primary = out.retry ? "retry" : out.resume ? "resume" : out.done ? "done" : undefined;
+  const reason = cap(String(n.reason || failedReason || rec?.note || "").trim());
+  if (haltPoint) out.why = "Paused at its halt point — nothing has run yet. Carry on runs it.";
+  else if (flight.state === "paused") out.why = "Paused" + (flight.reason ? ": " + flight.reason : "") + " — Carry on picks it up again.";
+  else if (failed) out.why = reason ? "It failed: " + reason : "It failed — the route waits here.";
+  else if (n.state === "perched") out.why = reason || (n.step.kind === "verify" ? "The check waits for you." : "It waits for you — press Done when you have done it.");
+  else out.why = "It is running — its settings can't change while it runs.";
+  return out;
 }
 
 type LineCanvasProps = Pick<
@@ -698,7 +754,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       }
       const def = kindOf.get(drop.kind);
       if (def) void tackOne(def, at);
-      else toast("This route has no “" + drop.kind + "” stop to tack on");
+      else toast("This route has no “" + drop.kind + "” stop to add");
     },
     renderInBox: parts.renderInBox,
     sizeOf: parts.sizeOf,
@@ -716,26 +772,28 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     paletteAt !== null ? (
       <StopPalette
         kinds={kinds}
-        title={paletteAt >= end ? "Tack on a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”"}
+        title={paletteAt >= end ? "Add a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”"}
         onPick={(k) => void tackOne(k, paletteAt, true)}
         onClose={() => {
           setPaletteAt(null);
           setPaletteHang(null);
         }}
         saved={savedStops(paletteAt >= end ? null : paletteAt)}
-        savedHead="Saved routes — tack one on as a group"
+        savedHead="Saved routes — add one as a group"
       />
     ) : null;
 
   const close = () => setDialog(dialog?.back && find(dialog.back) ? { id: dialog.back } : null);
-  const act = async (f: () => Promise<unknown>) => {
+  const act = async <T,>(f: () => Promise<T>): Promise<T> => {
     setBusy(true);
     try {
-      await f();
+      return await f();
     } finally {
       setBusy(false);
     }
   };
+  /** Retry / Skip / Fix / Done / Carry on: the dialog closes once it went through. */
+  const actClose = (f: () => Promise<boolean>) => void act(async () => (await f()) && close());
 
   let inspector: ReactNode = null;
   if (open && open.kind === "group" && open.group) {
@@ -795,10 +853,14 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     );
   } else if (open && open.kind === "stop") {
     const here = !!flight && open.index === flight.cursor && !open.editable;
-    const editable = !!flight && !!open.editable && !!open.step;
+    const h = hereStop(flight, open);
+    // A stop ahead, or (flow polish) the current one when it failed or the
+    // route waits at its halt point: Save resets it, Retry / Carry on runs it.
+    const ahead = !!flight && !!open.editable && !!open.step;
+    const editable = ahead || (!!h.editNow && !!open.step);
     const flown = open.state === "done" || open.state === "skipped" || open.state === "failed";
     const rec = flight && open.step ? flight.step_states?.[open.step.id] : undefined;
-    const why = editable ? "" : flown ? "This stop has finished — it can't change now." : here ? "The route is at this stop — it can't change while it is here." : "It can't change here.";
+    const why = ahead ? "" : here ? h.why : flown ? "This stop has finished — it can't change now." : "It can't change here.";
     const clears = !flight && landedId ? "Remove clears the finished route." : "";
     const def = open.step ? inspectorDef(kindOf.get(open.step.kind), open.step) : undefined;
     inspector = (
@@ -807,21 +869,27 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         node={open}
         def={def}
         lineSteps={flight?.steps}
-        behaviorsPlanId={open.step?.kind === "verify" ? String(rec?.detail?.plan || "") : undefined}
+        verify={open.step?.kind === "verify" && row ? stopVerifyOf(verifyOf(row), String(rec?.detail?.plan || ""), here) : null}
+        verifySession={title}
         loopAgent
         busy={busy}
-        note={[why, clears, open.reason || rec?.note || ""].filter(Boolean).join(" ")}
+        note={[why, clears, here ? "" : open.reason || rec?.note || ""].filter(Boolean).join(" ")}
+        asks={h.asks}
         onClose={close}
+        saveHint={h.editNow ? "Save, then " + (h.editNow === "retry" ? "Retry" : "Carry on") + " runs it with these settings" : undefined}
         onSave={
           editable
             ? (patch) =>
                 act(async () => {
-                  if (await patchStop(flight!.id, open.step!.id, patch)) close();
+                  const r = await saveStop(flight!.id, open.step!.id, patch);
+                  // A stop ahead is done with; the current one stays open for Retry / Carry on.
+                  if (r.ok && !h.editNow) close();
+                  return r;
                 })
             : undefined
         }
         onDuplicate={
-          editable
+          ahead
             ? () => {
                 const at = open.index! + 1;
                 void tackOn(flight!.id, open.step!, at < end ? at : undefined);
@@ -840,22 +908,14 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
             : undefined
         }
         onToggleHalt={here && open.step && !flown ? () => toggleHalt(open) : undefined}
-        onDone={
-          here && open.state === "perched"
-            ? open.step?.kind === "verify"
-              ? // A Verify stop moves on when its behaviors are answered: its card opens.
-                () => {
-                  close();
-                  answerBehaviors(flight!.id);
-                }
-              : () => void act(() => stepDone(flight!.id, open.step!.id))
-            : undefined
-        }
-        doneLabel={open.step?.kind === "verify" ? "Behaviors" : undefined}
-        doneTitle={open.step?.kind === "verify" ? "Answer its behaviors — the route goes on once each one has an answer" : undefined}
-        onRetry={here && open.state === "halted" ? () => void act(() => stepRetry(flight!.id, open.step!.id)) : undefined}
-        onFix={here && canFixStep(flight) ? () => void act(() => stepFix(flight!.id, open.step!.id)) : undefined}
-        onSkip={here ? () => void act(() => stepSkip(flight!.id, open.step!.id)) : undefined}
+        primary={h.primary}
+        onDone={h.done ? () => actClose(() => stepDone(flight!.id, open.step!.id)) : undefined}
+        doneLabel={h.done === "confirm" ? "Confirm verified" : undefined}
+        doneTitle={h.done === "confirm" ? "You checked it — the route goes on" : undefined}
+        onRetry={h.retry ? () => actClose(() => stepRetry(flight!.id, open.step!.id)) : undefined}
+        onResume={h.resume ? () => actClose(() => controlFlight(flight!.id, "resume")) : undefined}
+        onFix={here && canFixStep(flight) ? () => actClose(() => stepFix(flight!.id, open.step!.id)) : undefined}
+        onSkip={here ? () => actClose(() => stepSkip(flight!.id, open.step!.id)) : undefined}
         extra={
           <>
             {!editable && stopLog(open, flight, rec, row)}

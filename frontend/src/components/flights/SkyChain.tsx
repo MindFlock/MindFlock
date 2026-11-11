@@ -32,6 +32,7 @@ import type { Instance, TestPlan } from "../../api/types";
 import type { BehaviorsMark, BirdPerch, Diagram, DiagramEdge, DiagramNode } from "../../lib/flightDiagram";
 import { atHaltPoint, leftWord, loopIdlePill, loopPill, loopPillTitle, sessionDiagram, withBehaviors } from "../../lib/flightDiagram";
 import { isLive, youItems, type Flight, type StepKindDef } from "../../lib/flights";
+import { verifyOf, verifyWord } from "../../lib/sessionState";
 import { behaviorSummary, nextNeedingYou, planForSession } from "../../lib/behaviors";
 import { findPlan, useBehaviorsFocus, type BehaviorsTarget } from "../../lib/behaviorsFocus";
 import { removePlan } from "../../lib/verifyActions";
@@ -258,11 +259,13 @@ export function tileSub(n: DiagramNode): string {
 /** Round 21: why a stop that stops you stopped — the one line under its
  * name on the tile (its full text in the tile's tooltip). A halted stop:
  * the failure, without the stop's own name in front ("CI checks failed: 2
- * of 14 red" under "CI checks" says "Failed: 2 of 14 red"). A Wait for me
- * stop: what it asks of you (its text). A stop the route paused at because
- * it is a halt point (round 21b): says so, plainly — nothing failed. Else
- * nothing. */
+ * of 14 red" under "CI checks" says "Failed: 2 of 14 red"). A stop whose
+ * failure was handed to you (`on_fail: you`, its `reason`): "Failed: …". A
+ * Wait for me stop: what it asks of you (its text). A stop the route paused
+ * at because it is a halt point (round 21b): says so, plainly — nothing
+ * failed; one a person paused: "Paused by you". Else nothing. */
 export const HALT_POINT_LINE = "Your halt point";
+export const PAUSED_LINE = "Paused by you";
 export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "step">): string {
   if (n.state === "halted") {
     const r = String(n.reason || "").trim();
@@ -273,8 +276,12 @@ export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "ste
     }
     return r;
   }
-  if (n.state === "perched") return String(n.step?.config?.text ?? "").trim();
-  if (n.state === "paused" && n.step?.halt) return HALT_POINT_LINE;
+  if (n.state === "perched") {
+    const r = String(n.reason || "").trim();
+    if (r) return /^failed\b/i.test(r) ? r[0].toUpperCase() + r.slice(1) : "Failed: " + r;
+    return String(n.step?.config?.text ?? "").trim();
+  }
+  if (n.state === "paused") return n.step?.halt ? HALT_POINT_LINE : PAUSED_LINE;
   return "";
 }
 
@@ -286,7 +293,10 @@ export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "ste
  * you is the Behaviors tile (its own card), so it stays a tile; halted, it
  * takes Retry / Let the agent fix it / Skip like any other. A reached halt
  * point (round 21b, `atHaltPoint`: the route paused there, nothing failed)
- * takes the same room for its "Your halt point" line and Carry on · Skip. */
+ * — and any stop a person paused the route at — takes the same room for its
+ * line and Carry on · Skip. A failure handed to you (waiting with
+ * `detail.failed_reason`, Verify stops too) takes a halted stop's room:
+ * Retry · Let the agent fix it · Skip. */
 export const STOP_TILE_W = 156;
 export function stopTileBoxes(
   d: Pick<Diagram, "nodes">,
@@ -294,10 +304,11 @@ export function stopTileBoxes(
 ): Record<string, { w: number; h: number }> {
   const out: Record<string, { w: number; h: number }> = {};
   const haltPoint = !!flight?.steps && atHaltPoint(flight as Pick<Flight, "steps" | "cursor" | "state" | "reason" | "step_states">);
-  if (!flight || (flight.state !== "halted" && flight.state !== "waiting_you" && !haltPoint)) return out;
+  if (!flight || (flight.state !== "halted" && flight.state !== "waiting_you" && flight.state !== "paused" && !haltPoint)) return out;
   for (const n of d.nodes) {
     if (n.kind !== "stop" || n.index !== flight.cursor) continue;
-    if (n.state === "halted" || (n.state === "paused" && haltPoint)) out[n.id] = { w: STOP_TILE_W, h: NODE_H + 40 };
+    const handed = n.state === "perched" && !!(n.step && flight.step_states?.[n.step.id]?.detail?.failed_reason);
+    if (n.state === "halted" || n.state === "paused" || handed) out[n.id] = { w: STOP_TILE_W, h: NODE_H + 40 };
     else if (n.state === "perched" && !n.behaviors && n.step?.kind !== "verify") out[n.id] = { w: STOP_TILE_W, h: NODE_H + 24 + 21 * youItems(n.step).length };
   }
   return out;
@@ -311,10 +322,10 @@ export function tileLabel(n: DiagramNode, head = false): string {
   return n.title + (word ? " — " + word : "") + (n.by === "agent" ? " by the agent" : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
 }
 
-/** What a screen reader says for the Behaviors tile (or the Verify stop
+/** What a screen reader says for the derived Verify tile (or the Verify stop
  * standing in for it). */
 export function behaviorsLabel(n: Pick<DiagramNode, "kind" | "title">, bh: BehaviorsMark): string {
-  return (n.kind === "behaviors" ? "Behaviors" : n.title + ", the behaviors") + " — " + bh.status + (bh.short !== bh.status ? ", " + bh.short : "");
+  return (n.kind === "behaviors" ? "Verify" : n.title) + " — " + bh.status + (bh.short !== bh.status ? ", " + bh.short : "");
 }
 
 interface Drag {
@@ -518,7 +529,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         data-diagram-node={dn.id}
         aria-label={said}
         aria-current={isSel(n) ? "true" : undefined}
-        title={isHead ? undefined : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : why ? dn.title + " — " + why : sub ? dn.title + " — " + sub : dn.title}
+        title={isHead ? undefined : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : why ? dn.title + " — " + why : sub || dn.summary ? dn.title + " — " + [sub, dn.summary !== sub ? dn.summary : ""].filter(Boolean).join(" · ") : dn.title}
         style={{
           transform: `translate(${n.x}px, ${n.y}px)`,
           width: n.w,
@@ -874,9 +885,17 @@ export function behaviorsCardBox(plan: Pick<TestPlan, "steps"> | null | undefine
   return { w: BH_CARD_W, h: Math.max(BH_CARD_MIN_H, Math.min(BH_CARD_MAX_H, BH_CARD_CHROME_H + rows * BH_ROW_H)) };
 }
 
-/** A session's behaviors as its tile draws them, or null (no behaviors). */
-export function behaviorsMarkOf(plan: TestPlan | null | undefined): BehaviorsMark | null {
+/** The tile's tone of each verify state (the session row's `verify`). */
+const VERIFY_TONE: Record<string, BehaviorsMark["tone"]> = { verifying: "busy", needs_you: "you", failed: "bad", blocked: "bad", passed: "ok" };
+
+/** A session's verify as its tile draws them, or null (none). The session
+ * row's `verify` (its own agent checking its work) wins when present — the
+ * tile then says what the row's pill says (Verifying / Confirm verified /
+ * Verify failed / Verify blocked / Verified); else the plan's summary. */
+export function behaviorsMarkOf(plan: TestPlan | null | undefined, verify?: { state?: string; plan?: string } | null): BehaviorsMark | null {
   if (!plan) return null;
+  const word = verify ? verifyWord(String(verify.state || "")) : "";
+  if (word && (!verify?.plan || verify.plan === plan.id)) return { planId: plan.id, short: word, status: word, tone: VERIFY_TONE[String(verify!.state)] || "quiet" };
   const s = behaviorSummary(plan);
   return { planId: plan.id, short: s.short, status: s.status, tone: s.tone };
 }
@@ -932,7 +951,9 @@ export function useBehaviorsTile(
 ): BehaviorsTile {
   const plans = useTestPlans().data?.plans;
   const plan = useMemo(() => (row ? planForSession(plans || [], row) : null), [plans, row]);
-  const mark = useMemo(() => behaviorsMarkOf(plan), [plan]);
+  // The row's verify (an older server sends none): what its pill says.
+  const verify = row ? verifyOf(row as Partial<Instance>) : null;
+  const mark = useMemo(() => behaviorsMarkOf(plan, verify), [plan, verify]);
   const [mode, setMode] = useState<null | "card" | "ask">(null);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
   const [busy, setBusy] = useState(false);

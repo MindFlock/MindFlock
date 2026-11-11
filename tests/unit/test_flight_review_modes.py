@@ -249,16 +249,18 @@ def test_the_reviews_fields():
     assert names["require_reviewer"]["type"] == "text"
     assert names["require_reviewer"]["default"] == ""
     assert names["reviewer_wait_minutes"]["default"] == 10
-    c = F.normalize_step(
-        {
-            "kind": "reviews",
-            "config": {
-                "require_reviewer": " CodeRabbit ",
-                "reviewer_wait_minutes": "0",
-            },
-        }
-    )["config"]
+    raw = {
+        "kind": "reviews",
+        "config": {
+            "require_reviewer": " CodeRabbit ",
+            "reviewer_wait_minutes": "0",
+        },
+    }
+    # A stored plan is read leniently (clamped); a save or start refuses.
+    c = F.normalize_step(raw, strict=False)["config"]
     assert c["require_reviewer"] == "CodeRabbit" and c["reviewer_wait_minutes"] == 1
+    with pytest.raises(F.PlanError, match="reviewer_wait_minutes"):
+        F.normalize_step(raw)
 
 
 def watching(session="s", **config):

@@ -14,9 +14,12 @@
 
 export type VerifyWhere = string; // "branch" or an environment's name
 export type VerifyReady = "now" | "on_branch" | "after_prev";
-/** "agent" (Agent only) starts the stop's run with walk "all": the agent walks
- * every behavior, a person's too, and only what it truly can't do comes back
- * to you. "both" walks the agent's ones, then you; "you" is every one yours. */
+/** In every choice the session's own agent verifies its work (it writes its
+ * own steps and runs them, with evidence). "both" (Agent, then me): the
+ * route waits on you for the steps only a person can do. "agent" (Agent
+ * only): the agent attempts every step itself; the route waits on you only
+ * if something ends blocked or failed. "you" (Agent, then my sign-off): the
+ * route always waits for your confirm. */
 export type VerifyWho = "both" | "agent" | "you";
 
 export interface VerifyConfig {
@@ -114,15 +117,81 @@ export function showsReadyMinutes(ready: string): boolean {
 
 export const READY_MINUTES_HINT = "0 = the environment's deploy time";
 
-/** Who checks, in the stop editor's words, with its one-line explanation. */
+/** Who checks, in the stop editor's words, with its one-line effect. The
+ * labels are the UI's own (an older server still calls "you" "Only me"). */
 export const WHO_CHOICES: ReadonlyArray<{ value: VerifyWho; label: string; explain: string }> = [
-  { value: "both", label: "Agent, then me", explain: "The agent checks what it can; the ones only a person can check park the route here for you." },
-  { value: "agent", label: "Agent only", explain: "The agent walks every behavior, yours too — it asks you only for what it can't do." },
-  { value: "you", label: "Only me", explain: "Every check waits for you." },
+  { value: "both", label: "Agent, then me", explain: "The agent does its steps; the route waits on you for the ones only a person can do." },
+  { value: "agent", label: "Agent only", explain: "The agent attempts every step itself and shows its evidence; the route waits on you only if something ends blocked or failed." },
+  { value: "you", label: "Agent, then my sign-off", explain: "The agent verifies, then the route always waits for you to confirm." },
 ];
 
 /** Who checks, as the face says it. */
-export const VERIFY_FACE_WHO: Readonly<Record<VerifyWho, string>> = { both: "agent, then you", agent: "agent only", you: "you" };
+export const VERIFY_FACE_WHO: Readonly<Record<VerifyWho, string>> = { both: "agent, then you", agent: "agent only", you: "agent, then your sign-off" };
+
+/** How many times a failure goes back to the agent (`on_fail: "agent"`)
+ * before the route halts instead — the server's `MAX_FIX_ROUNDS`. */
+export const FIX_ROUNDS = 2;
+
+/** A stop's `on_fail`, as the Verify sentence reads it. */
+export type VerifyOnFail = "halt" | "agent" | "skip" | "you";
+
+/** When the check starts, in words: "as soon as the route gets here" ·
+ * "once the work reaches release" (+ "and 15 min more" / "and sandbox's
+ * deploy time") · "15 min after the stop before". */
+export function verifyWhenWords(v: Pick<VerifyConfig, "where" | "ready" | "ready_minutes">, envs: VerifyEnvsResponse | null | undefined = known): string {
+  const onBranch = v.where === WHERE_BRANCH;
+  const mins = Math.max(0, v.ready_minutes || 0);
+  if (v.ready === "on_branch" && !onBranch) {
+    const b = envBranch(v.where, envs);
+    return "once the work reaches " + (b ? b : v.where + "'s branch") + (mins > 0 ? " and " + durationWords(mins) + " more" : " and " + v.where + "'s deploy time has passed");
+  }
+  if (v.ready === "after_prev") {
+    if (mins > 0) return durationWords(mins) + " after the stop before";
+    return onBranch ? "as soon as the route gets here" : v.where + "'s deploy time after the stop before";
+  }
+  return "as soon as the route gets here";
+}
+
+/** "3 min", "1 h 30 min", "2 h". */
+export function durationWords(minutes: number): string {
+  const m = Math.max(0, Math.trunc(minutes));
+  if (m < 60) return m + " min";
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return h + " h" + (r ? " " + r + " min" : "");
+}
+
+/** What a Verify failure does under each "If it fails" choice. */
+export const VERIFY_ON_FAIL: Readonly<Record<VerifyOnFail, string>> = {
+  halt: "the route halts here, red, with the failed steps — you Retry, Skip or Let the agent fix it",
+  agent: "the failed steps and their evidence go back to the session's agent, then it verifies again (up to " + FIX_ROUNDS + " rounds, then the route halts)",
+  skip: "the route goes on as if this stop was not there",
+  you: "the route waits on you, amber, showing the failed steps",
+};
+
+/** The Verify stop's options read back as one plain sentence — the top of
+ * its form: "Its agent verifies on this branch as soon as the route gets
+ * here; you confirm the steps only a person can do; a failure goes back to
+ * the agent, up to 2 rounds." */
+export function verifySentence(c: Record<string, unknown> | null | undefined, onFail: string = "halt", envs: VerifyEnvsResponse | null | undefined = known): string {
+  const v = verifyConfig(c);
+  const where = v.where === WHERE_BRANCH ? "this branch" : v.where;
+  const who =
+    v.who === "agent"
+      ? "it does every step itself, a person's too, and goes on without you when they pass"
+      : v.who === "you"
+        ? "then the route waits for your sign-off, even when every step passes"
+        : "you confirm the steps only a person can do";
+  const fail =
+    onFail === "agent"
+      ? "a failure goes back to the agent, up to " + FIX_ROUNDS + " rounds"
+      : onFail === "skip"
+        ? "a failure is ignored and the route goes on"
+        : onFail === "you"
+          ? "a failure waits on you"
+          : "a failure halts the route";
+  return "Its agent verifies on " + where + " " + verifyWhenWords(v, envs) + "; " + who + "; " + fail + (v.post_to_pr ? "; the results go on the PR" : "") + ".";
+}
 
 // --- Environments known to the UI --------------------------------------------------
 

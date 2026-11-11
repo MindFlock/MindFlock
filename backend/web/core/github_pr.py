@@ -479,12 +479,24 @@ async def pr_checks(wt: str, branch: str) -> str:
     is nothing to wait for", which is exactly the class of mistake that merges
     unverified work.
     """
+    verdict, _why = await pr_checks_why(wt, branch)
+    return verdict
+
+
+async def pr_checks_why(wt: str, branch: str) -> tuple[str, str]:
+    """:func:`pr_checks`'s verdict and, when it is ``"unknown"``, why in plain
+    words — "no GitHub token is set up", "this repo has no GitHub remote",
+    GitHub's own error — so a waiting Checks stop can say what is wrong
+    instead of "could not read the checks yet" forever. ``why`` is "" for
+    every other verdict."""
+    if not branch:
+        return "unknown", "the session is not on a branch"
     ref = repo_ref(wt)
-    if ref is None or not branch:
-        return "unknown"
+    if ref is None:
+        return "unknown", "this repo has no GitHub remote"
     token = await api_token()
     if not token:
-        return "unknown"
+        return "unknown", "no GitHub token is set up"
 
     failed = pending = reported = False
 
@@ -512,7 +524,7 @@ async def pr_checks(wt: str, branch: str) -> str:
             ):
                 failed = True
     elif status not in (200, 404):
-        return "unknown"
+        return "unknown", "GitHub answered: %s" % _api_message(status, data)
 
     status, data = await _request(
         "GET", "/repos/{}/commits/{}/status".format(ref.slug, branch), token=token
@@ -527,13 +539,13 @@ async def pr_checks(wt: str, branch: str) -> str:
             elif combined == "pending":
                 pending = True
     elif status not in (200, 404):
-        return "unknown"
+        return "unknown", "GitHub answered: %s" % _api_message(status, data)
 
     if failed:
-        return "failed"
+        return "failed", ""
     if pending:
-        return "pending"
-    return "ok" if reported else "none"
+        return "pending", ""
+    return ("ok" if reported else "none"), ""
 
 
 async def pr_merge_state(wt: str, branch: str) -> Optional[dict]:

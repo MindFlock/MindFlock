@@ -1,15 +1,14 @@
-/** The Behaviors board's ⋯ settings (components/behaviors/BehaviorsSettings.tsx,
- * docs/behaviors.md §3): the ONE "Write behaviors on every push" switch
- * (`repository.verify_enabled`), Watched repositories, "Check another
- * branch…" (POST /api/test-plans/branch) and "Start empty behaviors for a
- * session…" (POST /api/instances/{title}/test-plan {empty}). */
+/** The Verify board's ⋯ settings (components/behaviors/BehaviorsSettings.tsx,
+ * docs/behaviors.md §3): the ONE "Write Verify steps on every push" switch
+ * (`repository.verify_enabled`), Watched repositories and "Check another
+ * branch…" (POST /api/test-plans/branch). No "start empty": an empty plan has
+ * had no way to gain steps since the redesign. */
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Instance, Json, TestPlan } from "../api/types";
-import type { ChecklistTarget } from "../components/dialogs/verify";
 
 const api = vi.fn();
 const toast = vi.fn();
@@ -29,7 +28,7 @@ vi.mock("../state/queries", async (orig) => ({
   useGithubConnected: () => ({ data: true }),
 }));
 
-const { BehaviorsSettings, emptyTargets, targetLabel, writesOnPush } = await import("../components/behaviors/BehaviorsSettings");
+const { BehaviorsSettings, writesOnPush } = await import("../components/behaviors/BehaviorsSettings");
 const { askBehaviorsForBranch, startEmptyBehaviors } = await import("../lib/verifyActions");
 
 const render = () => renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(BehaviorsSettings, {})));
@@ -46,7 +45,7 @@ beforeEach(() => {
 describe("BehaviorsSettings renders", () => {
   it("the one switch, on by default", () => {
     const html = render();
-    expect(html).toContain("Write behaviors on every push");
+    expect(html).toContain("Write Verify steps on every push");
     expect(html).toMatch(/id="bh-push" aria-checked="true"[^>]*checked=""/);
     expect(html.match(/role="switch"/g)).toHaveLength(1);
   });
@@ -60,7 +59,7 @@ describe("BehaviorsSettings renders", () => {
   });
 
   it("Watched repositories: the list when there is one, and the way to add one", () => {
-    expect(render()).toContain("None yet — behaviors are written for your sessions&#x27; branches.");
+    expect(render()).toContain("None yet — steps are written for your sessions&#x27; branches.");
     settings = { repository: { verify_repos: ["acme/shop"], verify_repo_settings: { "acme/shop": { live_branch: "staging" } } } };
     const html = render();
     expect(html).toContain("Watched repositories");
@@ -69,33 +68,20 @@ describe("BehaviorsSettings renders", () => {
     expect(html).toContain(">Watch a GitHub repository for every push</button>");
   });
 
-  it("Check another branch… and Start empty behaviors for a session…", () => {
+  it("Check another branch… — and no way to start an empty plan", () => {
     const html = render();
     expect(html).toContain("Check another branch…</summary>");
-    expect(html).toContain("Start empty behaviors for a session…</summary>");
+    expect(html).not.toContain("Start empty");
+    expect(html).not.toContain("bh-branch-empty");
+    expect(html).not.toContain("bh-empty-pick");
     expect(html).toContain('placeholder="branch, e.g. feature/login"');
-    // Nothing typed yet: both branch buttons wait.
+    // Nothing typed yet: the branch button waits.
     expect(html).toMatch(/<button[^>]*id="bh-branch-ask"[^>]*disabled=""/);
-    expect(html).toMatch(/<button[^>]*id="bh-branch-empty"[^>]*disabled=""/);
   });
 
-  it("never says checklist, test plan or step", () => {
+  it("never says checklist, test plan or behaviors", () => {
     settings = { repository: { verify_repos: ["acme/shop"] } };
-    expect(visible(render())).not.toMatch(/checklist|test plan|\bsteps?\b/i);
-  });
-});
-
-describe("the session picker", () => {
-  const t = (title: string, over: Partial<ChecklistTarget> = {}): ChecklistTarget => ({ title, branch: "feature/" + title, closed: false, reason: "", planId: "", ...over });
-
-  it("offers sessions with no behaviors yet (a branch with no commits too)", () => {
-    const list = [t("a"), t("b", { planId: "b", reason: "has behaviors" }), t("c", { reason: "no commits yet", noCommits: true }), t("d", { reason: "on main — nothing to compare" })];
-    expect(emptyTargets(list).map((x) => x.title)).toEqual(["a", "c"]);
-  });
-
-  it("labels a closed one", () => {
-    expect(targetLabel(t("a", { closed: true }))).toBe("feature/a — a (closed)");
-    expect(targetLabel(t("main", { branch: "main" }))).toBe("main");
+    expect(visible(render())).not.toMatch(/checklist|test plan|\bbehaviou?rs?\b/i);
   });
 });
 

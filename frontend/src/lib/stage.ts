@@ -28,8 +28,9 @@ import {
 import { autopilotChipTitle, mergeBlockerLabel } from "./autopilot";
 import { useUi } from "../state/store";
 import { openBehaviors } from "./behaviorsFocus";
-import { deriveSessionState, PAUSED_FLIGHT_LABEL, SLEEPING_LABEL, type SessionState } from "./sessionState";
-import type { TestPlan, TestPlansResponse } from "../api/types";
+import { deriveSessionState, PAUSED_FLIGHT_LABEL, REASON_LABEL, SLEEPING_LABEL, verifyOf, type SessionState } from "./sessionState";
+import type { SessionVerify, TestPlan, TestPlansResponse } from "../api/types";
+import { verifyWords } from "./behaviors";
 import type { SessionMenuModel } from "./sessionMenu";
 import { planForSession, planVerdict } from "../components/dialogs/verify";
 
@@ -671,22 +672,27 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
 
 
 // --- Verify's verdict where you merge (round 5, M6) --------------------------
-// The SHIP menu offered Open PR with no word about the branch's checklist, so a
+// The SHIP menu offered Open PR with no word about the branch's Verify, so a
 // FAILED branch was one click from a PR with nothing in the way. The verdict
-// rides on the Open PR item as its note, a failed checklist asks first, and the
-// menu's Verify item says the feature's name.
+// rides on the Open PR item as its note, a failed Verify asks first, and the
+// menu has ONE Verify entry (it shows the steps once a verify exists).
 
-/** "Behaviors ✗ Failed" — the verdict as a menu note, or "" with no behaviors. */
-export function verdictNote(plan: TestPlan | null | undefined): string {
+/** "Verify ✗ Verify failed" — the verdict as a menu note, or "" with nothing
+ * verified. Reads the session row's `verify` first, the plan after. */
+export function verdictNote(plan: TestPlan | null | undefined, verify: SessionVerify | null = null): string {
+  if (verify) {
+    const w = verifyWords(verify);
+    return "Verify " + w.glyph + " " + w.label;
+  }
   if (!plan) return "";
   const v = planVerdict(plan);
-  return "Behaviors " + v.glyph + " " + v.short;
+  return "Verify " + v.glyph + " " + v.short;
 }
 
-/** The question Open PR asks first when a behavior failed, or "". */
-export function prVerdictConfirm(plan: TestPlan | null | undefined): string {
-  if (!plan || planVerdict(plan).key !== "failed") return "";
-  return "A behavior failed — open the PR anyway?";
+/** The question Open PR asks first when Verify failed, or "". */
+export function prVerdictConfirm(plan: TestPlan | null | undefined, verify: SessionVerify | null = null): string {
+  const failed = verify ? verify.state === "failed" : !!plan && planVerdict(plan).key === "failed";
+  return failed ? REASON_LABEL.verify_failed + " — open the PR anyway?" : "";
 }
 
 /** The checklist covering a session, from the list the top bar keeps warm —
@@ -702,15 +708,22 @@ export function cachedPlanFor(inst: Partial<Instance>): TestPlan | null {
 }
 
 /** The session menu with the verdict beside Open PR (and Merge PR), a confirm
- * when a behavior failed, and "Behaviors" as the item's name: it flies the
- * Sky to the session's behaviors on its route (docs/behaviors.md §4). */
+ * when Verify failed, and ONE Verify entry: once a verify exists (a plan, or
+ * the row's `verify`) the Ship group's steps item becomes "Verify" and shows
+ * the steps on the session's route in the Sky (docs/behaviors.md §4) — the
+ * same place the chip, the pill and a bell event go. With nothing verified
+ * yet the steps item is dropped: the Verify that STARTS one
+ * (components/sidebar/verifyMenu `withVerifyItem`) is the entry. */
 export function withVerifyVerdict(
   menu: SessionMenuModel,
   inst: Partial<Instance>,
   plan: TestPlan | null | undefined = cachedPlanFor(inst),
 ): SessionMenuModel {
-  const note = verdictNote(plan);
-  const confirm = prVerdictConfirm(plan);
+  const verify = verifyOf(inst);
+  const note = verdictNote(plan, verify);
+  const confirm = prVerdictConfirm(plan, verify);
+  const show = () => openBehaviors({ planId: verify?.plan || plan?.id, title: inst.title, branch: plan?.branch || inst.branch || "" });
+  const exists = !!plan || !!verify;
   return {
     ...menu,
     groups: menu.groups.map((g) =>
@@ -718,16 +731,22 @@ export function withVerifyVerdict(
         ? g
         : {
             ...g,
-            items: g.items.map((item) => {
+            items: g.items.flatMap((item) => {
               if (item.key === "checklist")
-                return {
-                  ...item,
-                  label: "Behaviors",
-                  title: "What this work should do in real use — on its route in the Sky",
-                  run: () => openBehaviors({ planId: plan?.id, title: inst.title, branch: plan?.branch || inst.branch || "" }),
-                };
+                return exists
+                  ? [
+                      {
+                        ...item,
+                        key: "verify",
+                        label: "Verify",
+                        note: note.replace(/^Verify /, ""),
+                        title: "See the steps its agent checked, and where they stand — on its route in the Sky",
+                        run: show,
+                      },
+                    ]
+                  : [];
               if ((item.key === "pr" || item.key === "merge") && !item.disabled && note)
-                return {
+                return [{
                   ...item,
                   note: item.note ? item.note + " · " + note : note,
                   // A question card, not the menu's own `confirm` strip: that
@@ -736,12 +755,9 @@ export function withVerifyVerdict(
                     ? () =>
                         confirmPop(
                           confirm,
-                          "A behavior on this branch failed — see which, or go ahead.",
+                          "A step on this branch failed — see which, or go ahead.",
                           [
-                            {
-                              label: "Show the behaviors",
-                              run: () => openBehaviors({ planId: plan?.id, title: inst.title, branch: plan?.branch || inst.branch || "" }),
-                            },
+                            { label: "Show the steps", run: show },
                             {
                               label: item.label.replace(/…$/, "") + " anyway",
                               primary: true,
@@ -750,8 +766,8 @@ export function withVerifyVerdict(
                           ],
                         )
                     : item.run,
-                };
-              return item;
+                }];
+              return [item];
             }),
           },
     ),

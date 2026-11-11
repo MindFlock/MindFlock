@@ -57,7 +57,11 @@ describe("frameState: the state → frame mapping (pure)", () => {
     [{ flight: "ready" as const }, "ready"],
     [{ flight: "ready" as const, tone: "working" as const }, "working"],
     [{ flight: "ready" as const, tone: "attention" as const }, "you"],
-    [{ flight: "paused" as const }, "idle"],
+    // Flow polish: a paused route is calm and dashed, never "idle" (nor red / amber)…
+    [{ flight: "paused" as const }, "paused"],
+    // …unless it paused at a halt point: then it waits on you.
+    [{ flight: "paused" as const, haltPoint: true }, "you"],
+    [{ flight: "halted" as const, haltPoint: true }, "you"],
     [{ flight: "grounded" as const }, "idle"],
     [{ flight: null }, "idle"],
   ])("%j → %s", (input, want) => {
@@ -119,7 +123,7 @@ describe("the rendered frame", () => {
     const bar = html.slice(html.indexOf('class="skl-bar skl-label skl-frame-bar"'), html.indexOf('class="skl-menu"'));
     expect(bar).toContain('class="sky-ready-run"');
     // The toggle still says how it starts.
-    expect(bar).toContain("starts on next prompt");
+    expect(bar).toContain("runs on your next prompt");
     // The agent tile carries its chip, not the Run.
     const tile = html.slice(html.indexOf("sky-head-session"));
     expect(tile).not.toContain("sky-ready");

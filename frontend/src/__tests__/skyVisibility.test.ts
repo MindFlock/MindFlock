@@ -359,6 +359,8 @@ describe("a line in the sky", () => {
       "Fold finished stops",
       "Pin here",
       "Add a stop…",
+      // Flow polish: its stops as a saved route, named inline (a route on the line).
+      ...(html.includes("Save as a route…") ? ["Save as a route…"] : []),
       "Close session",
     ]);
     const cls = Object.fromEntries(labels);

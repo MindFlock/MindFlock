@@ -76,11 +76,15 @@ import { deriveSessionState, type SessionState, type SessionTone } from "../../l
 import { HELD_CHIP } from "../../lib/heldOffline";
 import { startSession } from "../../lib/revive";
 import { firstLine } from "../../lib/format";
-import { birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { atHaltPoint, birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { NODE_W, TILE, chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { ageOf, ageWord, fmtDuration, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
 import type { FlightPlan, FlightRow, FlightState, StepKindDef } from "../../lib/flights";
 import { InlineConfirm } from "../InlineConfirm";
+import { planToSave, savedWords } from "../../lib/groundedLines";
+import { savePlan } from "../../lib/flightsApi";
+import { errMsg } from "../../lib/format";
+import { SaveRouteAsk } from "./StopShelf";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
 import type { BoxSizeName } from "./FlywayCanvas";
@@ -194,13 +198,20 @@ export async function closeLine(title: string): Promise<void> {
  * parked on you, the session's Needs-you state (a question, failing checks,
  * idle on unfinished work) or a behavior waiting on you → `you`; the route
  * running or the agent working → `working`; the route finished (still drawn,
- * or `landed`) → `done`; built and waiting for ▶ Run → `ready`; else `idle`. */
-export type FrameState = "you" | "halted" | "broken" | "working" | "done" | "ready" | "idle";
-export function frameState(s: { flight?: FlightState | null; landed?: boolean; tone?: SessionTone | null; behaviorsYou?: boolean }): FrameState {
+ * or `landed`) → `done`; built and waiting for ▶ Run → `ready`; else `idle`.
+ *
+ * A PAUSED route (a person paused it) is `paused`: a calm dashed frame — no
+ * red, no amber, no breathing — so it never reads as one still running.
+ * Paused at a halt point (`haltPoint`: it waits on the person to Carry on)
+ * is `you`. A halt point reached on an old server (state `halted`, nothing
+ * failed) is `you` too, never red. */
+export type FrameState = "you" | "halted" | "broken" | "working" | "paused" | "done" | "ready" | "idle";
+export function frameState(s: { flight?: FlightState | null; landed?: boolean; tone?: SessionTone | null; behaviorsYou?: boolean; haltPoint?: boolean }): FrameState {
   const f = s.flight || null;
-  if (f === "halted") return "halted";
+  if (f === "halted" && !s.haltPoint) return "halted";
   if (s.tone === "broken") return "broken";
-  if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou) return "you";
+  if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou || ((f === "paused" || f === "halted") && s.haltPoint)) return "you";
+  if (f === "paused") return "paused";
   if (f === "running" || s.tone === "working" || s.tone === "verifying") return "working";
   if (f === "done" || s.landed) return "done";
   if (f === "ready") return "ready";
@@ -460,7 +471,13 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const ss = deriveSessionState(row || {});
   // Round 21: the frame's state (its border), from the route and the session.
   const frame = row
-    ? frameState({ flight: line.flight?.state || (row.flight as FlightRow | null | undefined)?.state, landed: !!line.landedId, tone: ss.tone, behaviorsYou: line.behaviors.mark?.tone === "you" })
+    ? frameState({
+        flight: line.flight?.state || (row.flight as FlightRow | null | undefined)?.state,
+        landed: !!line.landedId,
+        tone: ss.tone,
+        behaviorsYou: line.behaviors.mark?.tone === "you",
+        haltPoint: atHaltPoint(line.flight),
+      })
     : "idle";
   const rowOf = (t: string | undefined) => (t ? p.rows.find((r) => r.title === t) : undefined);
 
@@ -613,6 +630,22 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   };
 
   const promote = usePromoteStops(line.flight);
+  // "Save as a route…": the name asked inline (null: not asking).
+  const [savingAs, setSavingAs] = useState<string | null>(null);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const routeSteps = line.flight?.steps || [];
+  const saveRoute = async (asked: string) => {
+    setSaveBusy(true);
+    try {
+      const saved = await savePlan(planToSave(asked, routeSteps, p.plans, { fresh: true }));
+      setSavingAs(null);
+      toast(savedWords(saved?.name || asked, false));
+    } catch (err) {
+      toast("Saving the route failed: " + errMsg(err), { error: true });
+    } finally {
+      setSaveBusy(false);
+    }
+  };
   // The ⋯, in groups (a group's first item draws the rule above it): the
   // session · how the line looks · what flies on it · closing it.
   const items: MenuItem[] = [
@@ -639,6 +672,10 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     // A ticket's line: its stops for every NEW item from its source (this one
     // keeps flying as it is) — the only way a line changes a source's default.
     ...(promote ? [{ key: "promote", label: promote.label, title: promote.title, className: "skl-mi-promote", onSelect: () => void promote.run() }] : []),
+    // Its stops as a saved route on the shelf (this route keeps flying as it is).
+    ...(routeSteps.length
+      ? [{ key: "save-route", label: "Save as a route…", title: "Keep this route's stops on the shelf as a saved route — you name it", onSelect: () => setSavingAs(line.flight?.plan_name && line.flight.plan_name !== "Stops" ? line.flight.plan_name : name) }]
+      : []),
     { key: "close", label: "Close session", danger: true, className: "skl-mi-group", title: "Stops the agent and moves it to Recently closed", onSelect: () => askClose(p.title) },
   ];
   // Round 20: the agent tile's right-click menu — the agent's own items, then
@@ -734,7 +771,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         className="skl-bar skl-label skl-frame-bar"
         data-tour="sky-line-bar"
         style={frameX || frameY ? { marginLeft: frameX, transform: frameY ? `translateY(${frameY}px)` : undefined } : undefined}
-        title={(p.draggable === false ? "Click to focus this session (drag mode moves it: V)" : "Drag to move this session") + " · double-click to rename"}
+        title={(p.draggable === false ? "Click to focus this session (Select (V) moves it)" : "Drag to move this session") + " · double-click to rename"}
         onPointerDown={onBarDown}
         onDoubleClick={(e) => {
           if ((e.target as Element).closest("button, summary, a, input, [data-no-drag]")) return;
@@ -808,6 +845,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       </div>
       {line.cancel.node}
       {line.removeAsk}
+      {savingAs !== null && <SaveRouteAsk initial={savingAs} plans={p.plans} busy={saveBusy} onSave={(n) => void saveRoute(n)} onCancel={() => setSavingAs(null)} />}
       {closing && (
         <div className="skl-close-confirm" data-no-drag>
           <InlineConfirm

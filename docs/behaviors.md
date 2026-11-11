@@ -36,8 +36,43 @@ What that changed (the rest of this contract is amended where it says so):
   behavior", Rewrite behaviors, the "after #n" needs picker and "Let the agent
   walk every behavior" are gone.
 - **Words.** On screen these are the agent's **steps** (the owner's word); a
-  person's part is to **confirm verified**. "Behaviors" stays the name of the
-  tile, the card and the board.
+  person's part is to **confirm verified**. (Flow polish, below: the card is
+  now titled "Verify" too.)
+
+## 2026-11-10 (flow polish): one set of words, one place to go
+
+- **Words.** Verify's states read **Verifying · Not verified · Needs you ·
+  Verify failed · Verify blocked · Verified** (· Verified live) on every
+  surface — the pill, the card, the verdict chip, the Ship menu, the bell
+  (`lib/behaviors.ts` `verifyStateLabel`). The needs-you action is **Confirm
+  verified**; progress reads "n of m steps done"; the card is titled
+  **Verify**, with a tally in its head ("4 passed · 1 failed · 1 needs you").
+  "Behaviors" is no longer a word a person reads, apart from the leftovers
+  listed at the end of this section.
+- **Starting.** Verify on the session's ⋯ menu (or Verify again on its pane
+  row) opens a form in the pane: what it should prove (optional) and, when the
+  repo has environments, where. Unshipped work is checked on its own branch.
+- **The pane's verify row** says which step it is on ("Step 4 of 5: …", "·
+  quiet 3 min"), or that it waits for the agent's turn, with **Steps** and
+  **Stop verifying**; a failed row offers **Let its agent fix it** (the
+  session's own agent fixes the failed steps, then verifies again) and
+  **Verify again**; failed and blocked rows have **Dismiss** — they stay
+  until dismissed or verified again, and only a pass fades after ten minutes.
+- **Confirming** can mark each step ✓ / ✗ (a ✗ needs a note); a sign-off with
+  no steps for you reads **Sign off**; a step the agent left for you says why
+  ("the agent couldn't: …"). Not verified… is delivered to the session's agent.
+- **The card's** failed primary is **Let its agent fix it** (**Fix in a new
+  session** is under its ⋯). Each step shows its result, who answered it, the
+  full evidence and a blocked step's *Why:*. A self-run whose agent wrote no
+  steps reads "Verify blocked — its agent wrote no steps" with **Verify
+  again**, and an empty plan no longer counts as waiting on you.
+- **Agents** start and answer it with the MCP tools `verify_session` and
+  `confirm_verify` (docs/mcp.md).
+- **Leftovers in the code** (not yet renamed): the rail's session menu still
+  has a "Behaviors…" item (`lib/sessionMenu.ts`), the bell's Wait-for-me row
+  on a Verify stop still has a "Behaviors" button
+  (`components/outbox/WaitingRow.tsx`), and Alt+V's shortcut help reads
+  "Behaviors — the next that needs you" (`lib/keymap.ts`).
 
 ## What was wrong
 
@@ -131,8 +166,10 @@ The board's ⋯ holds what the dialog's header held:
   the sidebar Verify bar goes),
 - **Watched repositories** (per-repo live branch, prompt, deploy delay, target;
   "Watch a GitHub repository for every push"),
-- **Check another branch…** (repo + branch → POST /api/test-plans/branch),
-- **Start empty behaviors for a session…**.
+- **Check another branch…** (repo + branch → POST /api/test-plans/branch).
+
+(*Start empty behaviors for a session…* and the *Start empty* entry points
+were removed in the flow-polish round, 2026-11-10.)
 
 ## 4. Ways in (one destination: the Sky)
 
@@ -148,7 +185,8 @@ Every former Verify entry calls it:
 | `#verify`, `#verify/<branch>`, `#flights/checklists[/<b>]` | redirect to `#behaviors[/<plan id>]` → openBehaviors |
 | session menu "Verify checklist…" | "Behaviors" |
 | verdict chip on a sidebar row / pane head | click → openBehaviors({ title }) |
-| bell rows for verify events | openBehaviors({ planId }) |
+| bell rows for verify events | openBehaviors({ planId, title }); titled "Verify failed — <session>", "Verify needs you — <session>" or "Verify blocked — <session>" (2026-11-10) |
+| the session menu's Ship group | ONE **Verify** item (`withVerifyVerdict`, key `verify`) that shows the steps once a verify exists; none before (2026-11-10) |
 | Sky drawer "Needs you" checklist rows | fly to the tile (openBehaviors) |
 | sidebar Verify bar | gone |
 | read-only "Verifying" watch pane | stays; its back button → openBehaviors |
@@ -161,7 +199,9 @@ too; openBehaviors from the grid switches to the Sky.
 
 - Parked on you: when the session's `verify` waits on a person, the stop shows
   their steps with **Confirm verified** / **Not verified…** (2026-11-10 — it
-  moves on when they confirm; "I did it — check again" is not offered then);
+  moves on when they confirm; "I did it — check again" is not offered then;
+  a check that couldn't finish or couldn't start for memory offers **Retry**
+  and **Skip**, and Done there checks again);
   otherwise its card is the BehaviorsCard. The blanket "Done" (`_verify_done`
   → "Done on the chain") is removed — the server refuses Done on it (409
   `answer_behaviors`): the stop moves on when the verify is confirmed, or the

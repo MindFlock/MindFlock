@@ -105,6 +105,8 @@ TOOL_NAMES = (
     "control_flight",
     "edit_flight",
     "save_flight_plan",
+    "verify_session",
+    "confirm_verify",
     "run_pr_review",
 )
 

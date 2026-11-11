@@ -99,7 +99,7 @@ describe("the guide's sections", () => {
 
   it("says the things a newcomer needs, in the house words", () => {
     const words = SKY_GUIDE_SECTIONS.map((s) => render(s.id)).join(" ");
-    for (const w of ["same sessions as the grid", "saved route", "<b>Wait for me</b>", "<b>Needs you</b>", "<b>group</b>", "Halt now", "Halt here", "halts the route right before the next stop", "out port here to run it", "Start a route", "in port", "out port", "Group into a stop", "Save to the shelf", "<b>Run</b>", "synced", "this browser", "behaviors"])
+    for (const w of ["same sessions as the grid", "saved route", "<b>Wait for me</b>", "<b>Needs you</b>", "<b>group</b>", "Pause", "Add halt point", "Remove halt point", "pauses the route right before the next stop", "<b>halted</b>", "out port here to run it", "Start a route", "in port", "out port", "Group into a stop", "Save to the shelf", "<b>Run</b>", "synced", "this browser", "Verify"])
       expect(words, w).toContain(w);
     // the vocabulary pass (docs/vocabulary.md): no retired word is taught
     // (the sketches' <line> elements are markup, not copy; "in flight" is the

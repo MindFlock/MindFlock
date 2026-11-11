@@ -89,7 +89,8 @@ def test_the_prompt_has_no_steps_and_asks_the_agent_to_write_and_walk_its_own():
     # It writes its own, to the results file, and walks them.
     assert T.RESULT_FILE in p
     assert "Come up with" in p and "NOT the unit tests" in p
-    assert "TODO LIST" in p
+    assert "track them however you track tasks" in p
+    assert "TODO LIST" not in p
     assert '"actor": "agent"' in p and '"actor": "human"' in p
     assert '"result": "pass", "fail" or "blocked"' in p
     # A person's step: it TELLS the person what to do and what to look for.
@@ -358,6 +359,8 @@ CONTRACT_KEYS = {
     "failed_steps",
     "detail",
     "at",
+    "progress_at",
+    "current",
 }
 
 
@@ -377,7 +380,8 @@ def test_the_row_carries_verify_in_the_contracts_shape(monkeypatch, tmp_path):
     row = server._session_snapshot_cheap(inst, {})
     v = row["verify"]
     assert snapshot_mod._row_verify("sc-1") == v
-    assert set(v) == CONTRACT_KEYS
+    # Additive fields (``queued``, the store's progress fields) may follow.
+    assert CONTRACT_KEYS <= set(v) and v.get("queued") is False
     assert v["state"] == "needs_you" and v["plan"] == "sc-1"
     assert v["steps"] == {"total": 2, "agent_done": 1, "human": 1}
     assert v["human_steps"] == [

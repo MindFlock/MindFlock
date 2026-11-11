@@ -77,6 +77,7 @@ def test_plans_crud():
     assert bad.status_code == 400
     assert bad.json() == {
         "error": "a ship step goes to commit, push, pr or merge",
+        "detail": "a ship step goes to commit, push, pr or merge",
         "field": "steps[0].config.lane",
     }
     assert (

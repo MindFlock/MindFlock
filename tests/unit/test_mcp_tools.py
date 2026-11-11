@@ -61,6 +61,8 @@ class TestRegistry:
             "fence_session",
             "set_order",
             "expect_background_job",
+            "verify_session",
+            "confirm_verify",
             "list_tickets",
             "spawn_ticket_session",
             "ship_session",
@@ -80,7 +82,7 @@ class TestRegistry:
             "save_flight_plan",
             "run_pr_review",
         ]
-        assert len(tools) == 35
+        assert len(tools) == 37
         by = {t.name: t for t in tools}
         for name in (
             "whoami",

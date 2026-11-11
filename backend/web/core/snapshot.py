@@ -581,11 +581,36 @@ def _row_verify(title: str):
     or None when no verify is open or recent (a settled one shows for 10
     minutes). ``test_plans.verify_for_session``, never raising into the row.
     Set by the server's snapshot builders (beside ``flight``), and None on a
-    pending row."""
+    pending row.
+
+    ``queued`` (true while the check still waits on the session's prompt
+    queue behind the agent's current turn) is passed to
+    ``test_plans.verify_status`` when it takes it, and set on the row either
+    way, so the pill can say "Verify waits for the agent's turn to end"
+    instead of "Verifying"."""
     try:
         from backend.web.core import test_plans
 
-        return test_plans.verify_for_session(title)
+        plans = getattr(test_plans, "_verify_plans_by_title", None)
+        if plans is None:
+            return test_plans.verify_for_session(title)
+        plan = plans().get(str(title or ""))
+        if not plan:
+            return None
+        runs = plan.get("runs") or []
+        run = runs[-1] if runs else {}
+        queued = False
+        if run.get("outcome") == "verifying" and run.get("in_session"):
+            from backend.web.core import test_plans_driver
+
+            queued = test_plans_driver.walk_is_queued(str(run.get("session") or ""))
+        try:
+            out = test_plans.verify_status(plan, queued=queued)
+        except TypeError:  # a store without ``queued``
+            out = test_plans.verify_status(plan)
+        if out is not None:
+            out.setdefault("queued", queued)
+        return out
     except Exception:  # noqa: BLE001 — enrichment only
         return None
 
