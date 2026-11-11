@@ -119,7 +119,7 @@ const SERVER_FIELDS: Record<string, string[]> = {
   ship: ["lane", "ask_first", "message"],
   you: ["text", "items", "notify"],
   wait: ["seconds", "until"],
-  reviews: ["quiet_minutes", "max_rounds", "include_bots"],
+  reviews: ["quiet_minutes", "max_rounds", "include_bots", "reply_declined", "each_round"],
   checks: ["timeout_minutes"],
   command: ["command", "timeout_minutes"],
   ticket: ["state", "comment"],
@@ -220,6 +220,18 @@ describe("the stop form explains itself", () => {
     expect(timed).toContain("opacity:0.45");
     expect(timed).toContain("Not used: a time is set below, and a time wins over How long.");
     expect(fieldState(step("wait", { until: " " }), { name: "seconds" })).toEqual({});
+  });
+
+  it("a Reviews stop's “Also, every round” is a text box that shows what is typed, with its hint", () => {
+    const REVIEWS = KIND("reviews", [
+      { name: "reply_declined", type: "bool", label: "Reply on the PR to comments it declines", default: false },
+      { name: "each_round", type: "textarea", label: "Also, every round", default: "", placeholder: "e.g. re-run your code review" },
+    ]);
+    const html = form(step("reviews", { each_round: "Re-run the security review." }), REVIEWS);
+    expect(html).toContain("Also, every round");
+    expect(html).toMatch(/<textarea[^>]*>Re-run the security review\.<\/textarea>/);
+    expect(html).toContain("Added to every round&#x27;s prompt, after the comments");
+    expect(html).toContain("Reply on the PR to comments it declines");
   });
 
   it("a number field shows its range and default", () => {

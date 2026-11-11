@@ -148,10 +148,21 @@ def build_consolidated_pr_prompt(
     pr: PullRequest,
     comments: list[PRComment],
     workspace_dir,
+    *,
+    each_round: str = "",
+    reply_declined: bool = False,
 ) -> str:
     """Build ONE prompt that addresses every actionable PR comment in a single
     pass — so a PR is handled by a single session/window (like every other
     MindFlock session) rather than one tab per comment.
+
+    A route's Reviews stop adds two things (docs/flights.md "Reviews:
+    instructions for every round"); both off, the prompt is the pipeline's,
+    byte for byte:
+    ``each_round`` — the route's own instructions for every round, under
+    "## Also, every round" before "## When done"; ``reply_declined`` — a
+    comment the agent declines also gets a reply on the PR giving the
+    reason, not only a line in its summary.
     """
     lines: list[str] = []
     lines.append(f"# PR #{pr.number}: {pr.title}")
@@ -186,6 +197,12 @@ def build_consolidated_pr_prompt(
         lines.append("")
         lines.append(_strip_media(comment.body) or "_(empty)_")
         lines.append("")
+    extra = (each_round or "").strip()
+    if extra:
+        lines.append("## Also, every round")
+        lines.append("")
+        lines.append(extra)
+        lines.append("")
     lines.append("## When done")
     lines.append("1. Make all the needed code changes in this workspace.")
     lines.append(
@@ -193,10 +210,21 @@ def build_consolidated_pr_prompt(
         "`git add`, `git commit`, or `git push`. The human reviews them in their "
         "editor and decides what to commit."
     )
-    lines.append(
-        "3. Finish with a concise per-comment summary: what you changed, or why "
-        "you skipped it."
-    )
+    if reply_declined:
+        lines.append(
+            "3. For each comment you decline (no change made), reply to it on "
+            "the PR — in its review thread for an inline comment — giving the "
+            "reason, so the reviewer sees it there."
+        )
+        lines.append(
+            "4. Finish with a concise per-comment summary: what you changed, or "
+            "why you skipped it."
+        )
+    else:
+        lines.append(
+            "3. Finish with a concise per-comment summary: what you changed, or "
+            "why you skipped it."
+        )
     return "\n".join(lines)
 
 

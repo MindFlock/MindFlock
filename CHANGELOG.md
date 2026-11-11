@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Your own instructions for every review round.** A route's Reviews settle
+  stop has a new **Also, every round** box: whatever you type there goes to
+  the agent with each batch of review comments, for example "re-run your
+  code review before the push" or "reply on the PR to comments you decline".
+  A **Reply on the PR to comments it declines** switch asks the agent to
+  answer each comment it won't act on, on the PR, with the reason. Both are
+  off by default, and the round's prompt is unchanged until you set them.
 - **Verify asks what it should prove, right in the pane.** Verify on a
   session's ⋯ menu (or **Verify again** on its pane row) opens a small form in
   the pane: *What should it prove? (optional)* and, when the repo has Verify

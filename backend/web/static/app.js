@@ -35770,6 +35770,8 @@ var FIELD_HINT = {
 	"reviews.quiet_minutes": "Done once no new review comment has come for this long. 1 to 1440 min, default 10.",
 	"reviews.max_rounds": "Each round sends the new comments to the agent and pushes; more comments after this many rounds fail the stop. 1 to 50, default 5.",
 	"reviews.include_bots": "Off: comments from bot reviewers are left out. Default on.",
+	"reviews.reply_declined": "On: a comment the agent decides not to act on also gets a reply on the PR giving the reason, not only a line in its summary. Default off.",
+	"reviews.each_round": "Added to every round's prompt, after the comments — e.g. re-run your code review before the push, reply on the PR to comments you decline. Empty: nothing added.",
 	"checks.timeout_minutes": "The stop fails if CI hasn't finished by then; a failing check fails it at once. 1 to 1440 min, default 60.",
 	"command.command": "Runs in the session's folder; a non-zero exit fails the stop.",
 	"command.timeout_minutes": "Still running then: it is stopped and the stop fails. 1 to 1440 min, default 30.",
