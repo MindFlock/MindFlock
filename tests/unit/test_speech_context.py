@@ -456,6 +456,45 @@ class TestEnglishTwin:
         stt.final_model_name("en", fetch=True)
         assert fetches.names == ["small.en", "small.en"]
 
+    def test_a_slow_fetch_is_never_started_twice(self, monkeypatch, tmp_path, fetches):
+        # A download still running past the retry window (a slow link, or a
+        # hung one) is not joined by a second of the same model.
+        import threading
+
+        _on_disk(tmp_path, "small")
+        _set_voice(monkeypatch)
+        gate = threading.Event()
+        threads: list = []
+
+        def spawn(target, name):
+            t = threading.Thread(target=target, name=name, daemon=True)
+            threads.append(t)
+            t.start()
+
+        monkeypatch.setattr(speech, "_spawn", spawn)
+        real = speech.fetch_whisper_model
+
+        def slow(name):
+            gate.wait(5)
+            return real(name)
+
+        monkeypatch.setattr(speech, "fetch_whisper_model", slow)
+        stt = speech.LocalSTT()
+        try:
+            stt.final_model_name("en", fetch=True)
+            speech._FETCH["small.en"] -= speech.FETCH_RETRY_SECONDS
+            stt.final_model_name("en", fetch=True)
+            assert len(threads) == 1
+        finally:
+            gate.set()
+            for t in threads:
+                t.join(5)
+        assert fetches.names == ["small.en"]
+        # Done (here: fetched), the window again decides.
+        speech._FETCH["small.en"] -= speech.FETCH_RETRY_SECONDS
+        stt.final_model_name("en", fetch=True)
+        assert len(threads) == 2
+
     def test_a_fresh_machine_goes_straight_to_the_twin(self, monkeypatch, fetches):
         _set_voice(monkeypatch)  # nothing on disk: it downloads on first use
         assert speech.LocalSTT().final_model_name("en", fetch=True) == "small.en"
