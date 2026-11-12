@@ -16,7 +16,7 @@ import { newStep, type Flight, type FlightPlan, type FlightStep, type StepKindDe
 import { collapseGroups, drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, type DiagramNode } from "../../lib/flightDiagram";
 import { errMsg } from "../../lib/format";
 import { controlFlight, dropGroup, dropStop, moveStop, patchStop, patchStopGroup, saveStop, savePlan, setHalt, stepDone, stepFix, stepRetry, stepSkip, tackOn, tackOnParallel, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
-import { undoPayload } from "../../lib/stopEditing";
+import { undoAt } from "../../lib/skySelect";
 import { groundedDiagram, isFreeRun, perchWhy } from "../../lib/groundedLines";
 import { atHaltPoint } from "../../lib/flightDiagram";
 import { canFixStep } from "./FlightStrip";
@@ -141,8 +141,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
         ariaLabel: "Undo: put “" + step.title + "” back",
         onClick: () => {
           const now = latest.current?.id === id ? latest.current : null;
-          const back = undoPayload(step, index, now);
-          void tackOn(id, back.step, back.at);
+          void tackOn(id, step, undoAt(index, now));
         },
       },
     });

@@ -13,7 +13,12 @@
  * - A stop picked from the palette opens in its dialog once the SERVER's
  *   flight has it: it opened on the screen's guess (a temporary `s_tmp…`
  *   id), which the refetch then dropped — the dialog closed under the
- *   person, and a quick Save sent a PATCH for an id the server never had. */
+ *   person, and a quick Save sent a PATCH for an id the server never had.
+ * - Undo of a removed stop puts it back where it was whenever the server
+ *   takes that place (`_first_open`, docs/flights.md "Undo"): on a grounded
+ *   or ready route any place (the first stop included), on a paused route
+ *   the cursor itself (the flying stop removed: it flies first on Resume).
+ *   Those all went to the END of the route. */
 import { describe, expect, it, vi } from "vitest";
 import type { Flight, FlightStep } from "../lib/flights";
 
@@ -23,6 +28,8 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 const { canFixStep, skipCarriesOn } = await import("../components/flights/FlightStrip");
 const { freeStopRemedies } = await import("../components/flights/useGroundedLine");
 const { withFixItem } = await import("../components/flights/useChainMenu");
+const { putBackAt } = await import("../components/flights/SkySelection");
+const { undoAt, undoFirstOpen } = await import("../lib/skySelect");
 const { stopToOpen, withSteps } = await import("../lib/flightOptimism");
 
 const step = (id: string, over: Partial<FlightStep> = {}): FlightStep => ({ id, kind: "agent", title: id, config: {}, on_fail: "halt", ...over });
@@ -89,5 +96,40 @@ describe("a stop just tacked on opens once the server's flight has it", () => {
     const server = flight({ state: "paused", cursor: 1, steps: [step("s1"), step("s7"), step("s2"), step("s3")] });
     expect(stopToOpen(nodes(server), 1)?.id).toBe("stop:s7");
     expect(stopToOpen(nodes(server), 9)).toBeNull();
+  });
+});
+
+describe("Undo puts a removed stop back where it was, wherever the server takes it", () => {
+  it("the first place the server takes: 0 on the ground, the cursor on a paused route whose stop has not started, else after it", () => {
+    expect(undoFirstOpen(flight({ state: "grounded", cursor: 0 }))).toBe(0);
+    expect(undoFirstOpen(flight({ state: "ready", cursor: 0 }))).toBe(0);
+    expect(undoFirstOpen(flight({ state: "paused", cursor: 2, step_states: { s1: rec("done"), s2: rec("done"), s3: rec("pending") } }))).toBe(2);
+    expect(undoFirstOpen(flight({ state: "paused", cursor: 1, step_states: { s2: rec("pending", { detail: { performing: true } }) } }))).toBe(2);
+    expect(undoFirstOpen(flight({ state: "paused", cursor: 1, step_states: { s2: rec("running") } }))).toBe(2);
+    expect(undoFirstOpen(flight({ state: "running", cursor: 1 }))).toBe(2);
+    // The current stop in a parallel group: after the whole group.
+    const par = { id: "p1" } as FlightStep["parallel"];
+    expect(undoFirstOpen(flight({ state: "running", cursor: 0, steps: [step("s1", { parallel: par }), step("s2", { parallel: par }), step("s3")] }))).toBe(2);
+  });
+
+  it("the flying stop removed (the route paused before the next): back at the cursor, not the end", () => {
+    // [A,B,C,D] at C (2); C removed → [A,B,D], paused, cursor 2 on D.
+    const now = flight({ state: "paused", cursor: 2, steps: [step("a"), step("b"), step("d")], step_states: { a: rec("done"), b: rec("done"), d: rec("pending") } });
+    expect(undoAt(2, now)).toBe(2);
+    expect(putBackAt([{ index: 2, steps: [step("c")] }], { cursor: now.cursor, length: now.steps.length, first: undoFirstOpen(now) })).toEqual([2]);
+  });
+
+  it("the first stop of a route not yet flying: back first", () => {
+    const ready = flight({ state: "ready", cursor: 0, steps: [step("b"), step("c")] });
+    expect(undoAt(0, ready)).toBe(0);
+    expect(putBackAt([{ index: 0, steps: [step("a")] }], { cursor: 0, length: 2, first: undoFirstOpen(ready) })).toEqual([0]);
+  });
+
+  it("a place the route has flown past, or no route: the end", () => {
+    const running = flight({ state: "running", cursor: 2 });
+    expect(undoAt(1, running)).toBeUndefined();
+    expect(undoAt(2, running)).toBeUndefined();
+    expect(undoAt(3, running)).toBeUndefined();
+    expect(undoAt(1, null)).toBeUndefined();
   });
 });

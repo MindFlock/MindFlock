@@ -73,10 +73,10 @@ import {
   setIntakeDefault,
   ungroupStops,
 } from "../../lib/flightsApi";
-import { groupHaltStep, undoPayload, type StopDrop } from "../../lib/stopEditing";
+import { groupHaltStep, type StopDrop } from "../../lib/stopEditing";
 import { startSavedRoute } from "../../lib/routeStart";
 import { pushUndo, takeUndo, undoAction } from "../../lib/skyUndo";
-import { removalNeedsAsk } from "../../lib/skySelect";
+import { removalNeedsAsk, undoAt } from "../../lib/skySelect";
 import { InlineConfirm } from "../InlineConfirm";
 import { errMsg } from "../../lib/format";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
@@ -515,8 +515,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       label: "Remove “" + step.title + "”",
       undo: () => {
         const now = latest.current?.id === id ? latest.current : null;
-        const back = undoPayload(step, index, now);
-        return tackOn(id, back.step, back.at);
+        return tackOn(id, step, undoAt(index, now));
       },
     });
     toast(removedToast(step.title, wasHere, next), {
@@ -546,8 +545,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       label: "Remove “" + g.name + "”",
       undo: () => {
         const now = latest.current?.id === id ? latest.current : null;
-        const back = undoPayload(g.steps[0], first, now);
-        return tackOnSteps(id, g.steps, back.at, g.name);
+        return tackOnSteps(id, g.steps, undoAt(first, now), g.name);
       },
     });
     toast(removedToast(g.name, wasHere, next), {
