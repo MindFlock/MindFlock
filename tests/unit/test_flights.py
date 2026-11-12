@@ -766,12 +766,14 @@ def test_reviews_step_rounds():
         == "waiting for the pull request"
     )
     assert F.next_action(f, {"session": sess()}, NOW + 2000)["action"] == "fail"
-    # The comments already there when the step began are seeded, not sent.
+    # The comments already open when the step began are its first round: no
+    # earlier stop handed them to the agent.
     a = F.next_action(f, dict(o, reviews={"ids": ["1"]}), NOW + 1)
-    assert a["action"] == "wait" and a["detail"] == {"seen": ["1"], "seeded": True}
+    assert a["action"] == "wait" and a["detail"] == {"seen": [], "seeded": True}
     f = F.apply(f, a, NOW + 1)
     a = F.next_action(f, dict(o, reviews={"ids": ["1", "2"]}), NOW + 60)
-    assert a["action"] == "run" and a["phase"] == "send" and a["comments"] == ["2"]
+    assert a["action"] == "run" and a["phase"] == "send"
+    assert a["comments"] == ["1", "2"]
     f = F.apply(
         f,
         dict(

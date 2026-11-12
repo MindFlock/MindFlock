@@ -148,12 +148,13 @@ STOPS: Dict[str, dict] = {
         "the clock",
     ),
     "reviews": _s(
-        "after Open PR: send review comments (CodeRabbit, people) to the agent "
-        "and push, until the PR goes quiet",
+        "after Open PR: send review comments (CodeRabbit, people; those "
+        "already open first) to the agent and push, until the PR goes quiet",
         "before a PR exists",
         "quiet_minutes=10, max_rounds=5, include_bots=true; "
         "require_reviewer=coderabbit (+ reviewer_wait_minutes=10) waits for "
-        "that reviewer's first review and fails if it never comes; "
+        "that reviewer to review the PR's latest commit (again after each "
+        "push) and fails if it never does; "
         "each_round='…' adds the route's own instructions to every round "
         "(re-run a review before the push, merge the base on conflict); "
         "reply_declined=true has the agent answer declined comments on the PR",

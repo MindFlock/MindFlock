@@ -28,6 +28,7 @@ import copy
 import datetime as _dt
 import hashlib
 import os
+import re
 import subprocess
 import threading
 import time
@@ -632,11 +633,75 @@ def _is_reviewer(author: str, who: str) -> bool:
     return bool(who) and who in str(author or "").lower()
 
 
-async def _reviewer_posted(pr, who: str) -> bool:
-    """Has ``who`` posted on ``pr`` at all: a review in any state (an
-    approval, a comment-only review, "changes requested" — every inline
-    comment belongs to one) or a conversation comment (where a bot such as
-    CodeRabbit posts its summary)? Raises when GitHub can't be asked."""
+#: A required reviewer's post that is NOT a review of the head: it skipped
+#: (CodeRabbit's "Review skipped", "Reviews paused", "Rate limit exceeded")
+#: — the first group, quoted in the stop's reason — or only acknowledged /
+#: announced one ("Actions performed", "Review triggered", "Currently
+#: processing new changes").
+_SKIPPED_RE = re.compile(
+    r"\b(review(?:s)? skipped|reviews? paused|rate limit exceeded)\b", re.I
+)
+_NOT_A_REVIEW_RE = re.compile(
+    r"\b(actions performed|review triggered|currently processing|"
+    r"review in progress)\b",
+    re.I,
+)
+#: Pages of reviews / conversation comments read per PR (100 each).
+_REVIEWER_PAGES = 10
+
+
+def _gh_time(value) -> float:
+    """A GitHub timestamp (``2026-11-12T10:00:00Z``) as epoch seconds; 0.0
+    when missing or unreadable."""
+    try:
+        return _dt.datetime.fromisoformat(
+            str(value or "").replace("Z", "+00:00")
+        ).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _skip_line(body: str) -> str:
+    """What a skip notice says, in one short line: the line naming the skip
+    (markdown marks dropped), plus the next line when that one is only the
+    heading ("Review skipped" → "Review skipped: Auto reviews are
+    disabled…")."""
+    lines = [
+        re.sub(r"^[\s>#*_`-]*(\[![a-z]+\])?[\s>#*_`-]*", "", ln, flags=re.I).strip(
+            " *_`"
+        )
+        for ln in str(body or "").splitlines()
+    ]
+    lines = [ln for ln in lines if ln and not ln.startswith("<!--")]
+    for k, ln in enumerate(lines):
+        m = _SKIPPED_RE.search(ln)
+        if m is None:
+            continue
+        out = ln
+        if ln.strip(" .:!").lower() == m.group(1).lower() and k + 1 < len(lines):
+            out = "%s: %s" % (ln.rstrip(" .:"), lines[k + 1])
+        return _one_line(out)[:160]
+    return ""
+
+
+async def _reviewer_on_head(pr, who: str, known: str, known_since: float, now: float):
+    """What ``who`` has done about ``pr``'s CURRENT head (GitHub's, not the
+    worktree's): ``{"head", "since", "reviewed", "any", "skipped"}``.
+
+    ``since`` is when this stop first saw that head (``known_since`` when it
+    is ``known``, else ``now``). ``reviewed``, on any of three signals: a
+    review by ``who`` (any state but PENDING) whose ``commit_id`` is the
+    head; a conversation comment by ``who`` posted at or after ``since`` (a
+    bot that answers only in the conversation); or a conversation comment by
+    ``who``, created or EDITED at any time, whose body names the head's FULL
+    sha (CodeRabbit with nothing to flag posts no review: it edits its one
+    summary comment to "… between <older sha> and <head sha>" / "No
+    actionable comments were generated"). Skip notices and acknowledgements
+    / "currently processing" notices never count, sha or not; an edit that
+    does not name the head never counts.
+    ``any``: ``who`` has posted on the PR at all. ``skipped``: its newest
+    skip notice, in one line ("" when none). Raises when GitHub can't be
+    asked."""
     import aiohttp
 
     from backend.ticket_ingestion.github_auth import resolve_token
@@ -650,77 +715,143 @@ async def _reviewer_posted(pr, who: str) -> bool:
     if token:
         headers["Authorization"] = "Bearer %s" % token
     api = "https://api.github.com/repos/%s" % pr.repo
-    urls = (
-        "%s/pulls/%d/reviews" % (api, pr.number),
-        "%s/issues/%d/comments" % (api, pr.number),
-    )
     timeout = aiohttp.ClientTimeout(total=30)
+
+    async def _get(http, url, params=None):
+        async with http.get(url, params=params or {}, headers=headers) as resp:
+            if resp.status != 200:
+                raise RuntimeError("%s returned %d" % (url, resp.status))
+            nxt = ((getattr(resp, "links", None) or {}).get("next") or {}).get("url")
+            return await resp.json(), str(nxt or "")
+
+    async def _rows(http, url):
+        out: list = []
+        params: Optional[dict] = {"per_page": "100"}
+        for _ in range(_REVIEWER_PAGES):
+            data, nxt = await _get(http, url, params)
+            if isinstance(data, list):
+                out.extend(r for r in data if isinstance(r, dict))
+            if not nxt:
+                break
+            url, params = nxt, None
+        return out
+
     async with aiohttp.ClientSession(timeout=timeout) as http:
-        for url in urls:
-            async with http.get(
-                url, params={"per_page": "100"}, headers=headers
-            ) as resp:
-                if resp.status != 200:
-                    raise RuntimeError("%s returned %d" % (url, resp.status))
-                data = await resp.json()
-            for row in data if isinstance(data, list) else []:
-                user = (row.get("user") or {}) if isinstance(row, dict) else {}
-                if _is_reviewer(str(user.get("login") or ""), who):
-                    return True
-    return False
+        pull, _ = await _get(http, "%s/pulls/%d" % (api, pr.number))
+        head = str(((pull or {}).get("head") or {}).get("sha") or "")
+        if not head:
+            raise RuntimeError("GitHub gave no head commit for PR #%d" % pr.number)
+        reviews = await _rows(http, "%s/pulls/%d/reviews" % (api, pr.number))
+        comments = await _rows(http, "%s/issues/%d/comments" % (api, pr.number))
+    since = known_since if head == known and known_since else now
+    out = {"head": head, "since": since, "reviewed": False, "any": False}
+    skipped, skipped_at = "", -1.0
+
+    def _theirs(row) -> bool:
+        return _is_reviewer(str((row.get("user") or {}).get("login") or ""), who)
+
+    for r in reviews:
+        if not _theirs(r):
+            continue
+        out["any"] = True
+        body = str(r.get("body") or "")
+        if _SKIPPED_RE.search(body):
+            at = _gh_time(r.get("submitted_at"))
+            if at >= skipped_at:
+                skipped, skipped_at = _skip_line(body), at
+            continue
+        if str(r.get("state") or "").upper() == "PENDING":
+            continue
+        if str(r.get("commit_id") or "") == head:
+            out["reviewed"] = True
+    for c in comments:
+        if not _theirs(c):
+            continue
+        out["any"] = True
+        body = str(c.get("body") or "")
+        if _SKIPPED_RE.search(body):
+            at = _gh_time(c.get("updated_at") or c.get("created_at"))
+            if at >= skipped_at:
+                skipped, skipped_at = _skip_line(body), at
+            continue
+        if _NOT_A_REVIEW_RE.search(body):
+            continue
+        if _gh_time(c.get("created_at")) >= since or head in body:
+            out["reviewed"] = True
+    out["skipped"] = "" if out["reviewed"] else skipped
+    return out
 
 
 async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict:
-    """``{"ids"}`` of the PR's actionable comments (None = could not ask),
-    fetched at most once a minute per flight. With ``require_reviewer`` (and
-    until the stop has seen it post), also ``reviewer``: whether it has
-    posted on the PR (None = could not ask)."""
+    """``{"ids", "created"}`` of the PR's actionable comments (``ids`` None =
+    could not ask, with ``why``; ``created``: id -> epoch seconds, 0.0 when
+    unknown), fetched at most once a minute per flight — and afresh once the
+    stop's quiet clock restarts (its own push: the head moved). With
+    ``require_reviewer``, also ``reviewer``: :func:`_reviewer_on_head`'s
+    answer for the PR's current head (None = could not ask)."""
     from backend.ticket_ingestion import pr_comments as _prc
     from backend.web.core import github_pr as _gh
 
     who = str(step["config"].get("require_reviewer") or "")
     d = ((flight.get("step_states") or {}).get(step["id"]) or {}).get("detail") or {}
-    ask = bool(who) and not d.get("reviewer_seen")
     cache = _REVIEWS.get(flight["id"])
-    if cache and now - cache["at"] < _REVIEWS_EVERY_S:
-        out = {"ids": cache["ids"]}
-        if ask:
-            out["reviewer"] = cache.get("reviewer")
-        return out
+    fresh = _flights._float(d.get("quiet_since"))
+    if cache and now - cache["at"] < _REVIEWS_EVERY_S and cache["at"] >= fresh:
+        return _reviews_out(cache, bool(who))
     ids = None
+    why = ""
+    created: Dict[str, float] = {}
     comments: Dict[str, object] = {}
     pr = None
-    posted: Optional[bool] = None
+    rv: Optional[dict] = None
     try:
         pr, _slug = await _pr_of(sess, flight)
-        if pr is not None:
+        if pr is None:
+            why = "found no pull request for branch %s on GitHub" % (
+                sess.get("branch") or "?"
+            )
+        else:
             got = await _prc.fetch_actionable_comments(pr, _gh._github_config())
             for c in got:
-                if ask and _is_reviewer(c.author, who):
-                    posted = True
                 if not step["config"].get("include_bots", True) and _is_bot(c.author):
                     continue
                 comments[str(c.id)] = c
+                created[str(c.id)] = _gh_time(getattr(c, "created_at", None))
             ids = list(comments)
     except Exception as err:  # noqa: BLE001 — "could not ask" is not "no comments"
         _warn("flight %s: review comments unavailable: %v", flight["id"], err)
         ids = None
-    if ask and pr is not None and posted is None:
+        why = "couldn't ask GitHub: %s" % _error_line(err)
+    if who and pr is not None:
         try:
-            posted = await _reviewer_posted(pr, who)
+            rv = await _reviewer_on_head(
+                pr,
+                who,
+                str(d.get("head") or ""),
+                _flights._float(d.get("head_since")),
+                now,
+            )
         except Exception as err:  # noqa: BLE001 — unknown, not "never posted"
             _log("flight %s: %s's reviews unavailable: %v", flight["id"], who, err)
-            posted = None
+            rv = None
     _REVIEWS[flight["id"]] = {
         "at": now,
         "ids": ids,
+        "why": why,
+        "created": created,
         "comments": comments,
         "pr": pr,
-        "reviewer": posted,
+        "reviewer": rv,
     }
-    out = {"ids": ids}
+    return _reviews_out(_REVIEWS[flight["id"]], bool(who))
+
+
+def _reviews_out(cache: dict, ask: bool) -> dict:
+    out = {"ids": cache["ids"], "created": dict(cache.get("created") or {})}
+    if cache["ids"] is None:
+        out["why"] = cache.get("why") or ""
     if ask:
-        out["reviewer"] = posted
+        out["reviewer"] = cache.get("reviewer")
     return out
 
 
@@ -1492,6 +1623,9 @@ async def _create_session(payload: dict) -> str:
 
 async def _run_agent(flight: dict, step: dict, action: dict, now: float) -> dict:
     text = _flights.fill_prompt(step["config"].get("prompt") or "", flight)
+    # What the route did so far, from its record: a review that passed ran
+    # in another session, and the agent only knows what it is told.
+    text = _flights.with_route_so_far(text, flight, step)
     if step["config"].get("fresh") and not action.get("retry"):
         plan = _flights.get_plan(flight["plan_id"]) or {}
         repo = flight["repo_root"] or (plan.get("session") or {}).get("repo_path") or ""
@@ -1928,8 +2062,11 @@ async def _send_reviews(flight: dict, step: dict, action: dict, now: float) -> d
         each_round=str(cfg.get("each_round") or ""),
         reply_declined=bool(cfg.get("reply_declined")),
     )
-    await asyncio.to_thread(_deliver, flight["session"], text)
     d = flight["step_states"][step["id"]]["detail"]
+    if not int(d.get("review_rounds") or 0):
+        # The stop's first round also says what the route did so far.
+        text = _flights.with_route_so_far(text, flight, step)
+    await asyncio.to_thread(_deliver, flight["session"], text)
     return dict(
         action,
         detail={

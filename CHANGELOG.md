@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Reviews stop sends the comments that were already open.** Started on a
+  PR that already had review comments, the stop used to treat them as dealt
+  with. It ended "no rounds, quiet" with them still open, and the verdict
+  then found them. Now they go to the agent as the stop's first round. The
+  exception is a session whose first prompt was built from them by Intake:
+  the stop doesn't send those again.
+- **A required reviewer must review the latest commit.** "Waits for
+  CodeRabbit" used to be satisfied by a review CodeRabbit posted days
+  earlier, so a short quiet window could end the stop before CodeRabbit had
+  looked at the commit the route just pushed. Now the reviewer has to review
+  the PR's current commit within its wait time, and again after every push
+  the stop makes, before the quiet window can end the stop. "Review skipped"
+  and rate-limit notices don't count as a review, and when the stop fails
+  for a person it says what the reviewer posted instead.
+- **A Reviews stop that can't read the PR's comments no longer passes as
+  quiet.** When no pull request could be found for the branch, or GitHub
+  couldn't be asked, the stop used to wait out its quiet window and finish
+  as if nobody had commented. Now it says why it can't read them, and after
+  5 minutes it fails so you can fix that and retry.
+- **A review stop's reviewer that sends an empty report is not a pass.** It
+  is treated like a reviewer that sent no report: its last reply is read,
+  and if that holds no verdict another reviewer is asked. If none answers,
+  the route stops for you.
+- **The agent is told what the route already did.** A review that passes
+  runs in its own reviewer session, so the route's agent never saw it. When
+  a later stop asked the agent to record which reviews were done, the PR
+  description said the security review had not been conducted. Now each
+  Agent stop's prompt, and a Reviews stop's first round, ends with a short
+  "Route so far" list of the earlier stops and how each one ended, for
+  example "Claude security review: done, no findings".
+
 ## [0.14.10] - 2026-11-12
 
 ### Added
