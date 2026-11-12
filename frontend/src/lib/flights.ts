@@ -400,14 +400,6 @@ export function stepActor(step: Pick<FlightStep, "kind">, kinds?: readonly StepK
   return step.kind === "you" ? "you" : "robot";
 }
 
-/** Flights that wait on a person: parked on a *you* step (or a verify step's
- * human items), or halted until someone retries, skips or cancels. A paused
- * flight waits on nobody — whoever paused it resumes it — so it stays under
- * *In flight* and out of the badge. */
-export function needsYouFlights(flights: readonly Flight[]): Flight[] {
-  return flights.filter((f) => f.state === "waiting_you" || f.state === "halted");
-}
-
 /** How long the current step has been current — "4m", "2h" (the app's one
  * relative-time formatter, bare) — or "" when unknown. */
 export function currentElapsed(f: Flight, now = Date.now()): string {
@@ -545,24 +537,6 @@ export function youText(f: Flight): string {
   const cur = f.steps[f.cursor];
   const text = String(cur?.config?.text ?? "").trim();
   return text || (cur ? f.step_states?.[cur.id]?.note || "" : "") || f.reason || "";
-}
-
-// --- The badge ---------------------------------------------------------------
-
-export interface PerchBadge {
-  /** The number on the top bar's Sky toggle (0 = no badge). */
-  count: number;
-  /** One of them halted: the badge turns red. */
-  failing: boolean;
-}
-
-/** The Sky toggle's badge: flights perched on you (or halted until someone
- * retries, skips or cancels). A flight parked on a VERIFY step counts too:
- * its behaviors wait on you on the session's frame in the Sky
- * (docs/behaviors.md §5) — there is no Verify badge any more. */
-export function perchBadge(flights: readonly Flight[]): PerchBadge {
-  const perched = needsYouFlights(flights);
-  return { count: perched.length, failing: perched.some((f) => f.state === "halted") };
 }
 
 // --- Waiting to fly ----------------------------------------------------------
