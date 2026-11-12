@@ -117,8 +117,8 @@ STOPS: Dict[str, dict] = {
         "agent checks its work in real use (it writes its own steps)",
         "unit tests (test); with no agent work before it",
         "where=branch or an environment, ready=now|on_branch|after_prev, "
-        "ready_minutes, who=both|agent|you, notes, post_to_pr=true to "
-        "comment the results on the PR",
+        "ready_minutes, who=both|agent|you, ask=here|end, notes, "
+        "post_to_pr=true to comment the results on the PR",
         "the agent's check; then you, for who=both on person steps, who=you always",
         fixable=True,
         means="where=branch is this branch's own code (no deploy), else one "
@@ -129,7 +129,10 @@ STOPS: Dict[str, dict] = {
         "steps a person must do); agent = agent only (it attempts every step "
         "itself and must give evidence; parks only when one ends blocked or "
         "failed); you = agent, then your sign-off (always waits for your "
-        "confirm)",
+        "confirm); ask: here = the route waits at this stop when the check "
+        "needs you, end = it carries on and asks you once before the route "
+        "finishes (with the next Wait-for-me stop it reaches, else a stop added at the "
+        "end; a check you say doesn't work sends the route back here)",
     ),
     "you": _s(
         "Wait for me: only a person can look, decide or approve (approve the "
@@ -196,9 +199,12 @@ STOPS: Dict[str, dict] = {
     "review": _s(
         "a second agent reviews the diff before the PR — mode=bugs, security "
         "or standards (the team's rules in focus); findings go to the agent "
-        "to fix or rebut with on_fail=agent",
+        "to fix or rebut with on_fail=agent, and each later round only "
+        "checks the fixes",
         "answering PR review comments (reviews)",
-        "mode=bugs|security|standards, focus (the rules), block=true",
+        "mode=bugs|security|standards, focus (the rules), block=true, "
+        "rounds=3 (fix rounds, 1-10), unresolved=ask|continue (findings "
+        "left after the last round: ask the person, or carry on)",
         "the reviewer",
         fixable=True,
     ),
@@ -781,6 +787,8 @@ def step_phrase(step: dict, labels: Optional[Dict[str, str]] = None) -> str:
         p = REVIEW_MODE_WORD.get(str(c.get("mode") or "bugs"), "Second opinion")
     elif kind == "verify":
         p = verify_sentence(c)
+        if c.get("ask") == "end":
+            p += " (asks you at the end)"
         if c.get("post_to_pr"):
             p += " (posts the results to the PR)"
     elif kind == "split":

@@ -16,8 +16,9 @@ import { heldQueuedText, heldWasQueued, isHeldRefusal } from "../../lib/heldOffl
 import { windowName } from "../../lib/windowName";
 import { loopable, type ChainGraph } from "../../lib/skyGraph";
 import { menuItemsFor } from "../../lib/stopEditing";
-import { controlFlight, joinParallel, leaveParallel, answerBehaviors, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
-import { isParallelSafe, type FlightStep, type StepKindDef } from "../../lib/flights";
+import { controlFlight, flyAgain, joinParallel, leaveParallel, answerBehaviors, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { isParallelSafe, type Flight, type FlightStep, type StepKindDef } from "../../lib/flights";
+import { canFlyAgain } from "../../lib/routeStart";
 import { StopMenu, type SkyMenuItem } from "./StopMenu";
 
 export interface ChainMenuHandlers {
@@ -102,12 +103,23 @@ export function withFixItem(items: readonly SkyMenuItem[], n: Pick<DiagramNode, 
   return out;
 }
 
+/** The menu's "Fly again from here" line. */
+export const AGAIN_HERE_KEY = "again-here";
+
+/** A stop of a route that ended (done, cancelled, halted — `ended`) leads its
+ * menu with "Fly again from here": a new run of the route from that stop. */
+export function withAgainItem(items: readonly SkyMenuItem[], n: Pick<DiagramNode, "step" | "title">, ended: Flight | null | undefined): SkyMenuItem[] {
+  if (!ended || !canFlyAgain(ended) || !n.step || !ended.steps.some((s) => s.id === n.step!.id)) return [...items];
+  return [{ key: AGAIN_HERE_KEY as SkyMenuItem["key"], label: "Fly again from here", title: "Fly “" + ended.plan_name + "” again from “" + n.title + "”" }, ...items];
+}
+
 export function useChainMenu(
   h: ChainMenuHandlers,
   flightId: string,
   /** Round 20: the flight's stops and the kinds, for "Run in parallel with
-   * the next stop" / "Run on its own". */
-  ctx?: { steps?: readonly FlightStep[] | null; kinds?: readonly StepKindDef[] | null }
+   * the next stop" / "Run on its own". `ended`: the route that finished on
+   * this line, for "Fly again from here". */
+  ctx?: { steps?: readonly FlightStep[] | null; kinds?: readonly StepKindDef[] | null; ended?: Flight | null }
 ): { onMenu(n: DiagramNode, at: { clientX: number; clientY: number }): void; menu: ReactNode } {
   const [open, setOpen] = useState<{ n: DiagramNode; x: number; y: number; sub?: "loop" } | null>(null);
   const onMenu = (n: DiagramNode, at: { clientX: number; clientY: number }) => setOpen({ n, x: at.clientX, y: at.clientY });
@@ -141,7 +153,7 @@ export function useChainMenu(
   // Round 21: "Loop back to…" — the agent and every earlier stop, the
   // same Loop a wire dropped there draws.
   const choices = h.onLoopFrom && (n.kind === "stop" || n.kind === "group") ? (h.loopChoicesOf ? h.loopChoicesOf(n) : stepLoopChoices(n, steps)) : [];
-  const shown = open.sub === "loop" ? loopMenuItems(choices) : withLoopItem(items, choices);
+  const shown = open.sub === "loop" ? loopMenuItems(choices) : withAgainItem(withLoopItem(items, choices), n, ctx?.ended);
   if (!shown.length) return { onMenu, menu: null };
   const step = n.step?.id || "";
   const pick = (key: string) => {
@@ -158,6 +170,7 @@ export function useChainMenu(
     else if (key === "open" || key === "tackon") h.onOpen?.(n);
     else if (key === "solo") void leaveParallel(flightId, step);
     else if (key === "parallel" && next) void joinParallel(flightId, step, next.id);
+    else if (key === AGAIN_HERE_KEY && ctx?.ended) void flyAgain(ctx.ended.id, step);
     else {
       const c = choices.find((x) => x.key === key);
       if (c) h.onLoopFrom?.(c.from, c.to);

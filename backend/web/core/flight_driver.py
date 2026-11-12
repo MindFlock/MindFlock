@@ -1039,6 +1039,8 @@ async def observe(flight: dict, now: float) -> dict:
         obs["facts"] = await when_facts(flight, step, sess, now)
     if ss["state"] not in ("running", "waiting_you"):
         return obs
+    if ss["state"] == "waiting_you" and _flights._owed_here(flight, step["id"]):
+        obs["owed"] = await asyncio.to_thread(_owed_obs, flight, step["id"])
     if kind == "ship" or (kind == "reviews" and ss["detail"].get("phase") == "push"):
         obs["autopilot"] = await asyncio.to_thread(_autopilot.get, flight["session"])
     if kind == "verify":
@@ -1081,6 +1083,38 @@ async def observe(flight: dict, now: float) -> dict:
         except Exception as err:  # noqa: BLE001 — unknown, the judge waits
             _warn("flight %s: %s unobservable: %v", flight["id"], kind, err)
     return obs
+
+
+def _plan_outcome(pid: str) -> Optional[dict]:
+    """``{outcome, run_at}`` of a verify plan's newest run (blocking), or
+    None when the plan is gone or unreadable."""
+    from backend.web.core import test_plans as _tp
+
+    try:
+        plan = _tp.get(pid) if pid else None
+    except Exception as err:  # noqa: BLE001 — unknown: the perch waits
+        _warn("owed check %s unreadable: %v", pid, err)
+        return None
+    if plan is None:
+        return None
+    run = plan["runs"][-1] if plan.get("runs") else {}
+    return {
+        "outcome": str(run.get("outcome") or ""),
+        "run_at": float(run.get("at") or 0.0),
+    }
+
+
+def _owed_obs(flight: dict, sid: str) -> dict:
+    """What the plans of the checks owed at perch ``sid`` say now: plan id ->
+    ``{outcome, run_at}`` (a plan that can't be read is left out)."""
+    out: dict = {}
+    for e in _flights._owed_here(flight, sid):
+        pid = str(e.get("plan") or "")
+        if pid and pid not in out:
+            facts = _plan_outcome(pid)
+            if facts is not None:
+                out[pid] = facts
+    return out
 
 
 #: Kinds whose stop waits on a worker it spawned (``spawn_worker``, the
@@ -1126,10 +1160,11 @@ GONE_BEFORE_START = "it was gone before it started"
 
 
 def _never_started(step: dict, obs: dict, action: dict) -> bool:
-    """Whether the stop's judge failed it over a worker that is gone without
-    ever having started (its join entry never left ``loading``) and left no
-    report: a create that died in the background, nothing it did."""
-    if action.get("action") != "fail":
+    """Whether the stop's judge failed it (or re-asked: a review) over a
+    worker that is gone without ever having started (its join entry never
+    left ``loading``) and left no report: a create that died in the
+    background, nothing it did."""
+    if action.get("action") not in ("fail", "run"):
         return False
     o = obs.get(step["kind"])
     entry = (o.get("entry") if isinstance(o, dict) else None) or {}
@@ -1146,11 +1181,13 @@ def _launch_verdict(flight: dict, obs: dict, action: dict, now: float) -> dict:
     launch gate holds it, a wait saying why and for how long — a park on the
     person past :data:`MEMORY_PARK_S`. A launch or background create that
     failed (or a worker gone before it ever started) is never "did not
-    finish" handed to the agent: the stop spawns ONE fresh worker (a new
-    title: ``_free_worker_title`` skips one whose create just failed), and
-    if that one cannot start either it halts for the person with "couldn't
-    start the reviewer: <why>" — no fix round spent, nothing typed to the
-    agent. Any other stop, or a worker that started, keeps ``action``."""
+    finish" handed to the agent: the stop spawns a fresh worker (a new
+    title: ``_free_worker_title`` skips one whose create just failed) — one
+    of the review's re-asks (``review.MAX_REASKS`` per visit, shared with a
+    reviewer that gave no verdict) — and once they are spent it halts for
+    the person with "couldn't start the reviewer: <why>" — no fix round
+    spent, nothing typed to the agent. Any other stop, or a worker that
+    started, keeps ``action``."""
     step = _flights._current(flight)
     if step is None or step["kind"] not in _LAUNCHED_WORKER:
         return action
@@ -1164,13 +1201,16 @@ def _launch_verdict(flight: dict, obs: dict, action: dict, now: float) -> dict:
         launch = {"failed": GONE_BEFORE_START}
     what = _LAUNCHED_WORKER[step["kind"]]
     if launch.get("failed"):
+        from backend.web.core.flight_kinds import review as _review
+
         why = "couldn't start %s: %s" % (what, launch["failed"])
-        if not ss["detail"].get("respawned"):
-            # Once, automatically: a stale title or a passing hiccup.
+        n = _review.reasks_of(ss["detail"])
+        if n < _review.MAX_REASKS:
+            # Automatically: a stale title or a passing hiccup.
             return {
                 "action": "run",
                 "note": why + " — starting another",
-                "detail": {"respawned": why},
+                "detail": {"respawned": why, "reasks": n + 1},
             }
         # The stop's own on_fail (skip still skips), with the real reason —
         # no "(after N fix rounds)": the agent's rounds are not why.
@@ -3261,6 +3301,12 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
         start_at = id_map.get(start_at, start_at)
     if title and title not in srv.ENGINE.instances:
         raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
+    # "resume": where the earlier flight of this route stopped, else the
+    # normal start (an explicit stop id is left as it is).
+    start_at, resume = await asyncio.to_thread(
+        resume_start_at, plan, start_at, session=title, subject=subject
+    )
+    carry_note = _flights.carry_on_note(resume) if resume else ""
     # Everything that can refuse is checked BEFORE a session is created: a
     # bad step id used to leave an orphan session with no flight, a
     # mistyped Verify environment flew to the PR before it halted.
@@ -3299,7 +3345,8 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
     replaced: list = []
     if title:
         busy = ""
-        if not ready and not start_at and rec is None:
+        sent = bool(resume and resume.get("in_progress") and not ready)
+        if (not ready and not start_at and rec is None) or sent:
             busy = await asyncio.to_thread(_session_busy, title)
         flight = await asyncio.to_thread(
             lambda: _flights.take_off(
@@ -3313,6 +3360,8 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
                 replaced=replaced,
                 start_on=start_on,
                 busy=busy,
+                note=carry_note,
+                sent=sent,
             )
         )
     else:
@@ -3342,6 +3391,7 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
                 seeded=first_agent and bool(prompt),
                 replaced=replaced,
                 start_on=start_on,
+                note=carry_note,
             )
         )
         if first_agent and not prompt:
@@ -3437,6 +3487,516 @@ def _take_over(flight: dict, rec: dict, lead: List[dict]) -> dict:
     return after or flight
 
 
+# --------------------------------------------------------------------------- #
+# Carrying on: resume a route where it stopped, fly one again, and an Intake
+# restart that finds its branch already checked out
+# --------------------------------------------------------------------------- #
+def _branch_of(title: str) -> str:
+    inst = _server().ENGINE.instances.get(title) if title else None
+    return str(getattr(inst, "Branch", "") or "") if inst is not None else ""
+
+
+def resume_for(
+    plan: dict,
+    *,
+    session: str = "",
+    repo_root: str = "",
+    branch: str = "",
+    subject: Optional[dict] = None,
+    exclude=(),
+) -> Optional[dict]:
+    """:func:`flights.resume_point` of ``plan`` against the earlier flights on
+    ``session`` (its repo and branch read off the live session when not
+    given), on ``branch`` of ``repo_root``, or of the same ticket / PR /
+    issue ``subject`` (blocking). Never raises: unreadable = None."""
+    try:
+        if session:
+            repo_root = repo_root or _repo_root(session)
+            branch = branch or _branch_of(session)
+        cands = _flights.resume_candidates(
+            _flights.list_flights(include_finished=True),
+            session=session,
+            repo_root=repo_root,
+            branch=branch,
+            subject=subject,
+            exclude=exclude,
+        )
+        return _flights.resume_point(plan, cands)
+    except Exception as err:  # noqa: BLE001 — a lookup never blocks a start
+        _warn("flights resume lookup failed: %v", err)
+        return None
+
+
+def resume_start_at(
+    plan: dict, start_at: str, *, session: str = "", subject: Optional[dict] = None
+) -> Tuple[str, Optional[dict]]:
+    """A start's ``start_at`` with :data:`flights.RESUME` resolved
+    (blocking): the resume point's stop id, or "" (the normal start) when
+    there is none → ``(start_at, resume)``. Anything else is left alone.
+
+    Only a start ON a session (``session``) carries on: a start that creates
+    its session gets a fresh branch with none of the earlier work, so
+    "resume" is the normal start there (an Intake subject start carries on
+    through :func:`carry_on_intake` when it finds that work)."""
+    if str(start_at or "").strip() != _flights.RESUME:
+        return start_at, None
+    if any(s.get("id") == _flights.RESUME for s in plan.get("steps") or []):
+        return start_at, None
+    if not session:
+        return "", None
+    point = resume_for(plan, session=session, subject=subject)
+    return (point["stop"] if point else ""), point
+
+
+#: How ``again`` found the session it flies on (the route's ``how``).
+AGAIN_HOW = ("same", "chosen", "branch", "reopened")
+
+
+def _entry_repo(e: dict) -> str:
+    """The repository a Recently-closed entry's work belongs to: its
+    worktree's repo, else its folder (an in-place session's repo is its
+    folder)."""
+    data = e.get("data") if isinstance(e.get("data"), dict) else {}
+    wt = data.get("worktree") if isinstance(data.get("worktree"), dict) else {}
+    return str(wt.get("repo_path") or e.get("folder") or data.get("path") or "")
+
+
+def _closed_entry_for(f: dict) -> Optional[dict]:
+    """The newest Recently-closed entry that holds ``f``'s work: its own
+    chain's snapshot; else, in ``f``'s repository (never another repo that
+    happens to share a name), its session's title or its branch (not a
+    shared one — :data:`flights.SHARED_BRANCHES`). A route with no
+    repository is matched by its snapshot only."""
+    try:
+        items = _server()._load_recently_closed()
+    except Exception:  # noqa: BLE001
+        return None
+    repo = str(f.get("repo_root") or "")
+    branch = str(f.get("branch") or "")
+    for e in items if isinstance(items, list) else []:
+        if not isinstance(e, dict) or not e.get("id"):
+            continue
+        snap = e.get("flight") if isinstance(e.get("flight"), dict) else {}
+        if snap.get("id") == f.get("id"):
+            return e
+        if not repo or not _flights.same_folder(_entry_repo(e), repo):
+            continue
+        if (f.get("session") and e.get("title") == f.get("session")) or (
+            branch
+            and branch not in _flights.SHARED_BRANCHES
+            and e.get("branch") == branch
+        ):
+            return e
+    return None
+
+
+async def _reopen_entry(entry_id: str) -> str:
+    """Reopen a Recently-closed entry (the Recently closed dialog's own path)
+    → the reopened session's title, "" when it could not be reopened."""
+    import json as _json
+
+    try:
+        resp = await _server()._reopen_closed_entry(str(entry_id))
+        body = _json.loads(resp.body)
+    except Exception as err:  # noqa: BLE001
+        _warn("reopen %s for a route failed: %v", entry_id, err)
+        return ""
+    if getattr(resp, "status_code", 500) >= 300 or not isinstance(body, dict):
+        _warn("reopen %s for a route refused: %v", entry_id, body)
+        return ""
+    return str(body.get("title") or "")
+
+
+def _branch_exists(repo: str, branch: str) -> bool:
+    return bool(repo and branch) and _ref_ok(repo, "refs/heads/%s" % branch)
+
+
+def _gone_refusal(f: dict) -> _flights.FlightError:
+    title = f.get("session") or "its session"
+    branch = str(f.get("branch") or "")
+    repo = str(f.get("repo_root") or "")
+    if branch and _branch_exists(repo, branch):
+        detail = (
+            "%s is gone, but its branch %s is still in %s — start a session on "
+            "that branch, then fly it again on that session" % (title, branch, repo)
+        )
+    else:
+        detail = (
+            "%s is gone and nothing on this machine holds its work — fly it "
+            "again on another session" % title
+        )
+    return _flights.FlightError("session_gone", 409, detail)
+
+
+async def again(flight_id: str, body: Optional[dict] = None) -> dict:
+    """``POST /api/flights/{id}/again``: fly an ended route (cancelled, done,
+    halted) again — its own stops, a new flight, starting at ``at`` (a stop
+    id; absent / "resume" = the first stop it had not finished, the first
+    stop when it got past them all) — on ``title`` when given, else its own
+    session; that gone, the live session that holds its branch, else the
+    Recently-closed session that kept its work, reopened (which may bring
+    the very route back as it was). → ``{"flight", "from", "session",
+    "how"}`` (``how`` in :data:`AGAIN_HOW`; ``restored`` when the reopen
+    brought this route itself back). Raises :class:`flights.FlightError`
+    (404 ``not_found`` / ``unknown_session``, 409 ``in_flight`` /
+    ``not_flown`` / ``session_gone``, 400 ``unknown_step``) and
+    :class:`PreflightError`."""
+    body = body or {}
+    srv = _server()
+    old = _flights.get(flight_id)
+    if old is None:
+        raise _flights.FlightError("not_found", 404, "no such route")
+    plan, start_at, sent = _flights.again_plan(old, str(body.get("at") or ""))
+    title = str(body.get("title") or "").strip()
+    how = "chosen"
+    if title:
+        if title not in srv.ENGINE.instances:
+            raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
+    else:
+        title, how = str(old.get("session") or ""), "same"
+        if not title or title not in srv.ENGINE.instances:
+            title, how = "", ""
+            repo = str(old.get("repo_root") or "")
+            branch = str(old.get("branch") or "")
+            holder = ""
+            if repo and branch and branch not in _flights.SHARED_BRANCHES:
+                # Only in its own repository: another repo's session on a
+                # branch of the same name holds none of this work.
+                holder = await asyncio.to_thread(branch_holder, repo, branch)
+            if holder:
+                title, how = holder, "branch"
+            else:
+                entry = await asyncio.to_thread(_closed_entry_for, old)
+                if entry is not None:
+                    title = await _reopen_entry(entry["id"])
+                    how = "reopened" if title else ""
+            if not title:
+                raise await asyncio.to_thread(_gone_refusal, old)
+            back = _flights.get(old["id"])
+            if (
+                how == "reopened"
+                and back is not None
+                and back["session"] == title
+                and back["state"] in _flights.UNFINISHED
+            ):
+                # The reopen brought this very route back where it was.
+                wake()
+                return {
+                    "flight": back,
+                    "from": old["id"],
+                    "session": title,
+                    "how": "restored",
+                }
+    _refuse(
+        await asyncio.to_thread(
+            lambda: _preflight_safe(
+                plan, repo="", session=title, attach=True, start_at=start_at
+            )
+        )
+    )
+    stop = next((s for s in plan["steps"] if s["id"] == start_at), plan["steps"][0])
+    note = "flown again from route %s, at %s" % (old["id"], stop["title"])
+    if how == "branch":
+        note += " (on %s, which holds its branch)" % title
+    elif how == "reopened":
+        note += " (on %s, reopened)" % title
+    replaced: list = []
+    by = str(body.get("by") or "user")
+    # An Agent stop whose prompt went out already is never sent again: the
+    # session's work in progress is it, or (idle) the work it did.
+    busy = await asyncio.to_thread(_session_busy, title) if sent else ""
+    flight = await asyncio.to_thread(
+        lambda: _flights.take_off(
+            plan,
+            session=title,
+            subject=old.get("subject"),
+            by=by,
+            attach=True,
+            start_at=start_at,
+            repo_root=_repo_root(title) or str(old.get("repo_root") or ""),
+            branch=_branch_of(title) or str(old.get("branch") or ""),
+            replaced=replaced,
+            note=note,
+            busy=busy,
+            sent=sent,
+        )
+    )
+    for gone in replaced:
+        await asyncio.to_thread(_announce, None, gone)
+    _emit("flight.changed", flight)
+    wake()
+    return {"flight": flight, "from": old["id"], "session": title, "how": how}
+
+
+def _holder_of(folder: str) -> str:
+    """The session working in ``folder`` (blocking): a live one of this
+    server, else one another server on this machine saved in state.json (it
+    is adopted here within seconds), else ""."""
+    srv = _server()
+    real = os.path.realpath(folder)
+    for t, inst in list(srv.ENGINE.instances.items()):
+        try:
+            wp = inst.GetWorktreePath() or ""
+        except Exception:  # noqa: BLE001
+            wp = ""
+        if wp and os.path.realpath(wp) == real:
+            return str(t)
+    return _disk_holder(real)
+
+
+def _disk_holder(real: str) -> str:
+    """The session state.json says works in the folder ``real`` (another
+    server on this machine saved it; this one adopts it within seconds), ""
+    when none or unreadable (blocking)."""
+    try:
+        import json as _json
+
+        from backend.config import config as _config
+
+        raw = _config.LoadState().GetInstances()
+        if isinstance(raw, (bytes, bytearray)):
+            raw = bytes(raw).decode("utf-8")
+        for x in _json.loads(raw) if raw else []:
+            wt = (x.get("worktree") or {}) if isinstance(x, dict) else {}
+            wp = str(wt.get("worktree_path") or "")
+            if wp and os.path.realpath(wp) == real and x.get("title"):
+                return str(x["title"])
+    except Exception:  # noqa: BLE001 — unreadable: only this server's view
+        pass
+    return ""
+
+
+def _closed_holding(folder: str) -> Optional[dict]:
+    """The newest Recently-closed entry whose kept folder is ``folder``."""
+    try:
+        items = _server()._load_recently_closed()
+    except Exception:  # noqa: BLE001
+        return None
+    real = os.path.realpath(folder)
+    for e in items if isinstance(items, list) else []:
+        if not isinstance(e, dict) or not e.get("id"):
+            continue
+        data = e.get("data") if isinstance(e.get("data"), dict) else {}
+        wp = str(
+            (data.get("worktree") or {}).get("worktree_path") or e.get("folder") or ""
+        )
+        if wp and os.path.realpath(wp) == real:
+            return e
+    return None
+
+
+async def _open_in_place(title: str, folder: str) -> str:
+    """A session on a folder no session or closed entry accounts for (the
+    run whose session a restart lost): in place, so ending it leaves the
+    work exactly where it is — what Intake's Reopen does for such a folder.
+    → its title, "" when it could not start."""
+    srv = _server()
+    name = title if title not in srv.ENGINE.instances else srv._unique_title(title)
+    program = srv.ENGINE.default_program()
+    try:
+        inst = srv.session.NewInstance(
+            srv.session.InstanceOptions(
+                title=name, path=folder, program=program, in_place=True
+            )
+        )
+        inst.ExtraEnv = srv._ports.env_for(name)
+        inst.SetStatus(srv.Loading)
+    except Exception as err:  # noqa: BLE001
+        _warn("open %s in place failed: %v", folder, err)
+        return ""
+    with srv.ENGINE.lock:
+        if name in srv.ENGINE.instances:
+            return ""
+        srv.ENGINE.instances[name] = inst
+    srv._seed_event_snapshot(name)
+    srv._events.BUS.emit(
+        "session.created",
+        session=name,
+        new="loading",
+        data={"program": program, "reopened": folder},
+    )
+    try:
+        await asyncio.to_thread(inst.Start, True)
+        srv.ENGINE.save()
+    except Exception as err:  # noqa: BLE001
+        _warn("open %s in place failed: %v", folder, err)
+        srv._drop_failed_start(name, inst)
+        return ""
+    return name
+
+
+class CarryOnRefused(RuntimeError):
+    """An Intake restart whose branch is held where no session here can take
+    it over: one plain sentence naming what to close."""
+
+
+async def carry_on_intake(title: str, repo_url: str, branch: str) -> str:
+    """An Intake start of ``title`` (a route armed on it) whose ``branch`` is
+    already checked out — the leftover nothing could reclaim — carries on in
+    the work that is there instead of dying at its first stop:
+
+    * a live session (this server's, or one another server on this machine
+      saved) works in that worktree → the route moves onto it;
+    * a closed session kept it → that session is reopened (Recently closed)
+      and the route moves onto it;
+    * no session accounts for it → a session is opened in place on it.
+
+    The route starts at its resume point (:func:`flights.resume_point` of the
+    earlier flights on that session / branch / ticket), else where an attach
+    starts (:func:`flights.start_cursor`: past leading Agent stops with no
+    prompt — the work already there is them). A session opened in place on a
+    folder with uncommitted changes no earlier run accounts for never flies
+    on into a Ship stop by itself: the route is paused, saying why. Nothing
+    is ever deleted.
+    → the session that carries it; "" when the branch is free (or no route
+    is armed on ``title``): create the session as usual. Raises
+    :class:`CarryOnRefused` when none of those could take it."""
+    if not branch:
+        return ""
+    try:
+        armed = await asyncio.to_thread(_flights.for_session, title)
+    except Exception as err:  # noqa: BLE001 — no store, no route to carry
+        _warn("carry on %s: routes unreadable: %v", title, err)
+        return ""
+    if armed is None:
+        return ""
+    from backend.web.core import worktree_reclaim as _reclaim
+
+    held = await asyncio.to_thread(_reclaim.worktree_for_launch, repo_url, branch)
+    if not held:
+        return ""
+    holder = await asyncio.to_thread(_holder_of, held)
+    how = "already had this branch"
+    entry = None
+    if not holder:
+        entry = await asyncio.to_thread(_closed_holding, held)
+        if entry is not None:
+            holder = await _reopen_entry(entry["id"])
+            how = "reopened: it had kept this branch's work"
+    opened = ""
+    if not holder:
+        holder = await _open_in_place(title, held)
+        how = "opened on the folder that holds this branch"
+        opened = held if holder else ""
+    if not holder:
+        who = (entry or {}).get("title") or held
+        raise CarryOnRefused(
+            "branch %s is already checked out at %s and no session here could "
+            "take it over — close %s, then Run it again" % (branch, held, who)
+        )
+    await asyncio.to_thread(_move_armed, armed["id"], holder, branch, how, opened)
+    return holder
+
+
+#: The stops that put work out of the session (what an unexplained leftover
+#: must not be flown into unseen).
+_SHIP_KINDS = frozenset({"ship", "land"})
+
+
+def _uncommitted(folder: str) -> bool:
+    """Whether ``folder`` holds uncommitted changes (blocking). Can't tell
+    (git failed) = yes: the caller then waits for a person."""
+    try:
+        cp = subprocess.run(
+            ["git", "-C", folder, "--no-pager", "status", "--porcelain"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return cp.returncode != 0 or bool(cp.stdout.strip())
+
+
+#: Why a carried-on route waits before shipping a leftover folder's changes.
+LEFTOVER_PAUSE = (
+    "%s was opened on %s, which has uncommitted changes no earlier run "
+    "accounts for — look at them, then Carry on"
+)
+
+
+def _move_armed(
+    fid: str, holder: str, branch: str, how: str, opened: str = ""
+) -> Optional[dict]:
+    """Move the armed intake flight ``fid`` onto ``holder`` at its resume
+    point (blocking). A holder already on a route keeps it: the armed one is
+    cancelled saying so (a halted one there is replaced, as a start does).
+    ``opened``: the folder a session was just opened in place on — with
+    uncommitted changes and no resume point, the route is paused before it
+    can reach a Ship stop (:data:`LEFTOVER_PAUSE`)."""
+    armed = _flights.get(fid)
+    if armed is None or armed["state"] in _flights.FINAL:
+        return None
+    other = _flights.for_session(holder) if holder != armed["session"] else None
+    if other is not None and other["id"] != fid:
+        if other["state"] in _flights.HOLDING:
+            reason = (
+                "%s already holds this branch and is on its route (%s) — that "
+                "route carries on there"
+                % (holder, other.get("plan_name") or other["id"])
+            )
+            after = _flights.mutate(fid, lambda x: _flights.op_cancel(x, reason))
+            _announce(armed, after)
+            return after
+        if other["state"] == "halted":
+            gone = _flights.mutate(
+                other["id"], lambda x: _flights.op_cancel(x, "replaced by a new route")
+            )
+            _announce(other, gone)
+    root = _repo_root(holder) or armed.get("repo_root") or ""
+    plan = {"id": armed["plan_id"], "steps": armed["steps"]}
+    point = resume_for(
+        plan,
+        session=holder,
+        repo_root=root,
+        branch=branch,
+        subject=armed.get("subject"),
+        exclude=(fid,),
+    )
+    steps = armed["steps"]
+    working = False
+    if point is not None:
+        cursor = int(point["index"])
+        note = "%s — %s %s" % (_flights.carry_on_note(point), holder, how)
+        if point.get("in_progress"):
+            # Its prompt went out already: never typed again. The session's
+            # work in progress is that stop, or (idle) the work it did.
+            working = bool(_session_busy(holder))
+            if not working:
+                cursor += 1
+                note += "; its prompt went out already — the work counts as it"
+    else:
+        cursor = _flights.start_cursor({"steps": steps}, "", attach=True)
+        note = "carried on in %s (%s)" % (holder, how)
+        if cursor:
+            note += ": the work already on its branch counts as its Agent stop"
+    park = ""
+    if (
+        opened
+        and point is None
+        and any(s["kind"] in _SHIP_KINDS for s in steps[cursor:])
+        and _uncommitted(opened)
+    ):
+        park = LEFTOVER_PAUSE % (holder, opened)
+
+    def fn(x: dict) -> None:
+        _flights.op_carry_on(x, holder, cursor, note, working=working)
+        if root:
+            x["repo_root"] = root
+        x["branch"] = branch or x.get("branch") or ""
+        if park and x["state"] in _flights.ACTIVE:
+            x["state"] = "paused"
+            x["reason"] = park
+            cur = _flights._current(x)
+            _flights._hist(x, time.time(), cur["id"] if cur else "", "paused", park)
+
+    after = _flights.mutate(fid, fn)
+    _announce(armed, after)
+    wake()
+    return after
+
+
 _OPS = {
     "done": _flights.op_done,
     "skip": _flights.op_skip,
@@ -3506,6 +4066,77 @@ def _confirm_perch(flight: dict, sid: str) -> str:
     ):
         return str(d.get("plan") or "")
     return ""
+
+
+def _owed_perch_of(flight: dict, sid: str) -> List[dict]:
+    """The owed checks ``sid`` asks for, when it is the current stop waiting
+    on the person (a Wait-for-me stop carrying a Verify stop's checks that
+    were left for the end), else ``[]``."""
+    ss = flight["step_states"].get(sid) or {}
+    if ss.get("state") != "waiting_you":
+        return []
+    lo, hi = _flights.current_group(flight)
+    if not any(s["id"] == sid for s in flight["steps"][lo:hi]):
+        return []
+    return _flights._owed_here(flight, sid)
+
+
+def _confirm_owed(flight: dict, sid: str, note: str = "") -> None:
+    """Done on a perch asking for owed checks: record the person's
+    confirmation on each one's verify plan exactly as ``POST
+    /api/test-plans/{id}/confirm`` with ``verified: true`` does
+    (``test_plans.confirm_verify``, and its ``session.test_plan_checked``
+    announcement). A plan whose check a person already said doesn't work
+    refuses the Done (409 ``owed_failed``): the route goes back to that
+    Verify stop instead. A plan no longer waiting on a person (confirmed from
+    the session's own Verify, a newer check) is simply settled."""
+    from backend.web.core import test_plans as _tp
+
+    owed = _owed_perch_of(flight, sid)
+    for e in owed:
+        facts = _plan_outcome(str(e.get("plan") or "")) or {}
+        if (
+            facts.get("outcome") == "failed"
+            and abs(float(facts.get("run_at") or 0.0) - float(e.get("run_at") or 0.0))
+            < 1.0
+        ):
+            wake()
+            raise _flights.FlightError(
+                "owed_failed",
+                409,
+                "%s: a person said it doesn't work — the route goes back to it"
+                % (e.get("title") or "Verify"),
+            )
+    done: set = set()
+    for e in owed:
+        pid = str(e.get("plan") or "")
+        if not pid or pid in done:
+            continue
+        done.add(pid)
+        try:
+            plan = _tp.confirm_verify(pid, True, note)
+        except _tp.NotNeedsYou:
+            continue  # settled already: nothing left to confirm
+        if plan is None:
+            continue
+        try:
+            _events.BUS.emit(
+                "session.test_plan_checked",
+                session=pid,
+                new="",
+                data={
+                    "plan": pid,
+                    "title": plan.get("title") or pid,
+                    "confirmed": True,
+                    "verified": True,
+                    "outcome": (plan["runs"][-1] if plan["runs"] else {}).get(
+                        "outcome", ""
+                    ),
+                    "detail": "",
+                },
+            )
+        except Exception:  # noqa: BLE001 — an announcement never fails a confirm
+            pass
 
 
 def _no_blanket_done(flight: dict, sid: str) -> None:
@@ -3587,6 +4218,8 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
             raise _flights.FlightError("not_needs_you", 409, str(err))
         wake()
         return _flights.get(flight_id) or before
+    if op == "done" and _owed_perch_of(before, step):
+        _confirm_owed(before, step, note)
     perch = _needs_you_perch(before, step)
     if op == "done" and perch:
         # "I sorted it": the stop runs again — Verify checks again, memory
@@ -4081,13 +4714,22 @@ def list_dto(all_: bool = False) -> List[dict]:
         )[:20]
         flights = live + landed
     notes = lane_notes()
-    return [_flights.with_returns(f, notes) for f in flights]
+    return [_with_owed(_flights.with_returns(f, notes)) for f in flights]
 
 
 def flight_dto(flight: dict) -> dict:
     """One flight as the API sends it: plus ``returns`` (which stops can go
-    back to the agent, and why — ``flights.returns_of``)."""
-    return _flights.with_returns(flight, lane_notes())
+    back to the agent, and why — ``flights.returns_of``) and, while it owes
+    the person checks left for the end, ``owed_note``."""
+    return _with_owed(_flights.with_returns(flight, lane_notes()))
+
+
+def _with_owed(dto: dict) -> dict:
+    """``owed_note`` ("2 checks owed to you at the end") on a dto whose
+    flight owes the person checks and is still in the air."""
+    if dto.get("owed") and dto.get("state") not in _flights.FINAL:
+        dto["owed_note"] = _flights.owed_line(dto)
+    return dto
 
 
 def lane_notes() -> bool:

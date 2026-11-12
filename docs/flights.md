@@ -210,6 +210,10 @@ row shows (`verify` on `/api/instances`, docs/web-api.md):
 | `failed` — an agent step failed, or a person confirmed "it doesn't work" | fails with each failed step and what the agent saw ("Failed · 2: login works — saw: 500 on /login; logout works", evidence clipped to 160 characters) — **halts** the route by default (Retry · Skip · Let the agent fix it) |
 | `blocked` — the check stopped before it finished (closed for a stall or the budget, its window gone, no steps written) | parks on you with the reason (`ask: "blocked"`): **Retry** (a new check) or **Skip**; Done there also checks again |
 
+With `ask: "end"` ("Round 21") a `needs_you` outcome does not park the
+route: the stop finishes, the checks are owed, and the route asks for them
+once, at its end.
+
 Only a check from **this attempt** counts: a Retry (or the agent's fix)
 starts a new one, and a check already running when the stop arrives (started
 from the session's own Verify) is waited on, never restarted.
@@ -418,7 +422,8 @@ failure, not the check.
 ```
 mindflock flights [--all]                 # routes running: saved route, subject, session, state, stop
 mindflock flight plans                    # the saved routes (scheduled ones say when next); `flight flyways` = the same
-mindflock flight start ROUTE [--repo PATH] [--title SESSION]
+mindflock flight start ROUTE [--repo PATH] [--title SESSION] [--at STOP|resume]
+mindflock flight again ROUTE [--at STOP] [--title SESSION]   # an ended route, from where it stopped
 mindflock flight done ROUTE [--note …]    # the Wait for me stop that needs you; also skip / cancel (Stop the route)
 mindflock flight retry ROUTE              # run the halted stop again; also resume (Carry on) / pause
 mindflock flight jump ROUTE STOP          # Jump here: STOP is a stop's id, number or title
@@ -603,6 +608,7 @@ No model installed → 409 `no_model`.
 | `POST /api/flights/{id}/steps/{sid}/done` | `{"note"?}` | `{"flight"}` — a step waiting on you: ticks off a Wait for me stop; on a Verify stop waiting for a confirm it is **Confirm verified**; on a Verify stop parked because the check couldn't finish or memory kept it from starting it runs the stop again; it never passes a Verify stop's open steps (409 `answer_behaviors`); a failure handed to you takes it. 409 `not_waiting` on a stop that does not need you now |
 | `POST /api/flights/{id}/steps/{sid}/skip` | | `{"flight"}` |
 | `POST /api/flights/{id}/steps/{sid}/retry` | | `{"flight"}` — a failed/halted step runs again; so does a Verify stop parked with `ask` `blocked` or `memory`. 409 `not_failed` otherwise |
+| `POST /api/flights/{id}/again` | `{"at"?: "<step id>" \| "resume", "title"?: "<session>"}` | 202 `{"flight", "from", "session", "how"}`: an ended route flies again from the stop it had reached ("Round 21") |
 | `POST /api/flights/{id}/jump` | `{"step": "<id>"}` | `{"flight"}` — move the cursor (a human "start at the PR stage" / "go back") |
 | `POST /api/flights/{id}/pause` · `/resume` · `/cancel` | | `{"flight"}` |
 | `DELETE /api/flights/{id}` | | 204 (finished flights only; a running one must be cancelled first) |
@@ -1218,6 +1224,147 @@ join only when they all are done. agents can spin up and down."*
 - `flight_driver.start` records whatever `subject` it is given (the 501
   `not_wired` branch is gone); routing a ticket/PR/issue subject through the
   Intake start paths is the route's job.
+
+## Round 21: routes on rails (2026-11-12)
+
+Where the owner's own routes needed a person and should not have: review
+stops that never settled, routes that could not be picked up after a
+disruption, and a Verify stop that parked the route before the unattended
+work behind it had begun.
+
+### A review stop converges
+
+- **Round 1 is a full review; every later round is a follow-up.** When a
+  review is asked for, the stop records the session's HEAD
+  (`detail.reviewed_sha`) and the round (`detail.round`). Findings are kept
+  verbatim in `detail.followup` (`{findings, sha, round}`); that record
+  survives the hand-off to the agent, a person's Retry and "Let the agent fix
+  it". The next reviewer gets `followup_brief()`: the earlier findings, and
+  three jobs: (a) check each one is fixed, or answered by a rebuttal in
+  `git log <sha>..HEAD`; (b) report only bugs that `git diff <sha>..HEAD`
+  introduced; (c) raise nothing new in code an earlier round already read
+  unless it is severe (data loss, a security hole, a crash on a common path).
+  All three modes. A sha that is missing or no longer an ancestor of HEAD (a
+  rebase) falls back to a full review, and says so. A new flight, or a jump
+  back to the stop, starts fresh.
+- **A reviewer with no verdict is not the agent's failure.** Did not finish,
+  gone, ended without a report or a readable reply, could not start (a
+  refused create, a stale worktree): the stop asks another reviewer, up to
+  `MAX_REASKS` (2) per visit, the launch respawn included. Nothing is typed to
+  the agent and no fix round is spent. After that it halts with the plain
+  reason, never "(after N fix rounds)".
+- **No report is never a silent pass.** A reviewer that ended without
+  `report_result` is judged from its last reply (`parse_reply`: "No findings"
+  or the last numbered list). Anything else counts as did not finish.
+- **Rounds are the stop's own setting.** `config.rounds` (1..10, default 3:
+  how many times findings go back to the agent; other kinds keep
+  `MAX_FIX_ROUNDS` = 2) and `config.unresolved`: `"ask"` (default) or
+  `"continue"`. With `on_fail: agent` and findings still open after the last
+  round: `continue` finishes the stop done ("2 findings left open",
+  `detail.findings` kept); `ask` parks on the person (`waiting_you`,
+  `detail.ask: "unresolved"`, "2 findings still open after 3 rounds"), where
+  **Done** carries on with them on record and **Retry** gives the agent
+  another set of rounds, as a follow-up.
+- Every brief asks only for findings that should block the merge, most
+  serious first.
+
+### A Verify stop can ask once, at the end
+
+`config.ask`: `"here"` (default: the stop parks on needs-you, as before) or
+`"end"`. In end mode a check that needs a person finishes the stop **done**
+("2 checks for you, asked at the end"; `detail.owes`), and the person's
+steps, with the ones the agent could not settle, go onto the flight:
+
+```
+flight.owed       [{step, title, plan, items: [str], since, run_at, perch}]
+flight.owed_perch  the id of the stop the route added to ask, or ""
+flight.owed_note   "2 checks owed to you at the end" (dto only, while flying)
+```
+
+The agent's own failures still fail the stop right there. The route flies
+on, and asks **once**: at the next Wait-for-me (`you`) stop it reaches, whose
+ask then carries the owed checks too (`detail.ask: "owed"`, `detail.owed` =
+one group per Verify stop); else **before the first stop that cannot be
+undone** (`flights.cannot_undo`: a Ship stop that merges, a kind whose
+`risk` lists `irreversible`, such as Land), on a "Your checks" stop the
+route adds in front of it ("Before this route merges: 2 checks for you");
+else on a "Your checks" stop it adds at the end ("Before this route
+finishes: 2 checks for you"). So "at the end" is the last safe moment: the
+route never merges, lands or finishes with a check owed.
+`flight.owed_added` lists the stops the route added this way.
+
+| On the perch | What happens |
+|---|---|
+| **Done** | every owed plan is confirmed (`test_plans.confirm_verify`, the same event as the confirm route) and the route moves on; 409 `owed_failed` when one was already reported failed |
+| "It doesn't work" (`POST /api/test-plans/{plan}/confirm {verified: false}`) | the route goes back to that Verify stop, which fails through its `on_fail`; the stops after it run again; a stop that cannot be undone and already ran is never reset, and the stops the route added are taken off again |
+| confirmed elsewhere (the session's Verify pill) | those entries drop; an added perch with nothing left finishes itself |
+| **Skip** | the entries drop, the plans stay `needs_you`, the route finishes |
+
+Cancelling the route or deleting the session leaves the plans `needs_you`.
+`mindflock flights` shows "· 2 checks owed to you at the end" in the STOP
+column and `flight_status` has `owed`.
+
+### A route carries on where it stopped
+
+- **The resume point** (`flights.resume_point`): for a route about to start,
+  the newest earlier flight on the same session, the same branch of the same
+  repository (never `main` / `master`) or the same ticket / PR / issue that
+  did not finish (cancelled, halted, running, waiting, paused), and the first
+  stop it had not finished. Stops match by id for the same saved route, else
+  by kind and title in order, and then only when every stop before the point
+  was flown (done or skipped) by the earlier flight: carrying on never skips
+  a stop the earlier run did not fly. A flight cancelled because its session
+  was deleted keeps its stop states, so it counts. Shared branches
+  (`flights.SHARED_BRANCHES`: main, master, staging, develop, dev, trunk)
+  never match by branch. A "Your checks" stop the earlier route added is not
+  one of its stops (`own_steps`); a route that stopped there carries on at
+  the Verify stop that still owed, which asks again. An Agent stop whose
+  prompt had gone out (`in_progress`) is not sent again: the route rides the
+  work in progress, or passes the stop when the session is idle.
+- **`POST /api/flights/check`** answers `resume`: `{stop, index, title,
+  from_flight, session, state, reason, at, in_progress}` or null. It is null
+  for a start that makes its own session: a new session always starts at the
+  first stop (a ticket / PR / issue start gets the warning
+  `carries_on_if_found` when the carry-on below would apply).
+- **`start_at: "resume"`** on a start (MCP `start_flight at="resume"`, CLI
+  `mindflock flight start ROUTE --at resume`) starts there, or normally when
+  there is no resume point. A stop id still starts at that stop. History:
+  "carried on where route f_ab12cd stopped (its session was deleted), at
+  Push".
+- **Fly again**: `POST /api/flights/{id}/again {at?, title?}` → 202 `{flight,
+  from, session, how}` starts a new flight with an ended route's stops, at the
+  stop it had reached (`at` names another; a route that finished starts at
+  stop 1). The session: `title` when given (`how: "chosen"`), its own
+  (`same`), the live session that holds its branch (`branch`), or its
+  Recently-closed session reopened (`reopened`; `restored` when the reopen
+  brought the route itself back, and `flight` is then the old one). A branch
+  or closed session only counts inside the route's own repository. Refusals:
+  409 `not_flown`, `in_flight`, `session_gone` (the sentence says what to do),
+  400 `unknown_step`, and a start's own pre-check. CLI `mindflock flight again
+  ROUTE [--at STOP] [--title SESSION]`; MCP `control_flight op="again"`.
+- **An Intake start adopts work that is already there.** A ticket whose
+  branch is already checked out no longer dies with "the session could not be
+  created". `flight_driver.carry_on_intake` moves the armed route onto the
+  live session that works in that worktree, or reopens the closed session
+  that kept it (or opens a session in place on the folder), at the resume
+  point, else past the leading Agent stops ("carried on in sc-42 (already had
+  this branch)"). A session opened in place on a folder with uncommitted
+  changes no earlier run accounts for, with a Ship or Land stop ahead, starts
+  **paused** and says why; Carry on flies it. A holder that is already on a
+  route keeps it. Nothing is
+  deleted to make room; when nothing can take the folder over, the refusal
+  names the session to close.
+- **A server restart** changes nothing for a route in flight: a running
+  stop, a route waiting on a person and one in the middle of a fix round
+  carry on from the stored record, with no prompt sent twice
+  (`tests/unit/test_flights_resume.py`).
+
+### In the UI
+
+See docs/web-ui.md: a waiting review stop offers **Give it another round**
+and **Carry on**; owed checks show on the route while it flies and are
+settled on one perch; starting a route on a session offers **Start at…**
+and carries on at the resume point; an ended route offers **Fly again**.
 
 ## Where it lives
 

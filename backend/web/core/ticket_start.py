@@ -1101,6 +1101,26 @@ async def launch(
                 getattr(story, "repo_url", "") or "",
                 branch,
             )
+            # Still held (a live session works there, or the leftover has
+            # work in it): a start with a route carries on in that work —
+            # on the live session, the closed one reopened, or a session
+            # opened on the folder — at the route's resume point, instead
+            # of dying at its first stop. Without a route: as before.
+            from backend.web.core import flight_driver as _flight_driver
+
+            carrier = await _flight_driver.carry_on_intake(
+                title, getattr(story, "repo_url", "") or "", branch
+            )
+            if carrier:
+                record_started(story)
+                record_result(story, branch=branch)
+                if srv.log.InfoLog is not None:
+                    srv.log.InfoLog.Printf(
+                        "ticket %s: its branch is %s's — the route carries on there",
+                        title,
+                        carrier,
+                    )
+                return
             # In-flight ledger marker BEFORE the slow launch, so a running
             # pipeline's scans treat the ticket as taken (orchestrator guard).
             record_started(story)

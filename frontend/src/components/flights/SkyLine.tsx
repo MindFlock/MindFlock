@@ -76,7 +76,7 @@ import { deriveSessionState, type SessionState, type SessionTone } from "../../l
 import { HELD_CHIP } from "../../lib/heldOffline";
 import { startSession } from "../../lib/revive";
 import { firstLine } from "../../lib/format";
-import { atHaltPoint, birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { atHaltPoint, birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, whereBesideChip, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { NODE_W, TILE, chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { ageOf, ageWord, fmtDuration, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
 import type { FlightPlan, FlightRow, FlightState, StepKindDef } from "../../lib/flights";
@@ -94,6 +94,8 @@ import { SkyChain, agentTitle, hangFromAgent, subFrameBoxes, subFramesOf } from 
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
 import { nodeIndexes, usePromoteStops, useSessionLine, type LineSource } from "./useSessionLine";
+import { OwedNote } from "./PerchAsks";
+import { owedGroups, owedNoteOf } from "../../lib/stopAsks";
 import "./SkyLine.css";
 import "./SkyVisibility.css";
 
@@ -524,7 +526,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   useTourHooks(wrapRef, { ".sky-head": "sky-session-box", ".sky-node:not(.sky-head):not(.sky-subframe)": "sky-stop" });
   const gc = line.graphCanvas;
   // Round 18: a tile's right-click menu; a Loop's pill dragged onto a stop re-aims it.
-  const chainMenu = useChainMenu(gc, line.flight?.id || line.landedId, { steps: line.flight?.steps, kinds });
+  const chainMenu = useChainMenu(gc, line.flight?.id || line.landedId, { steps: line.flight?.steps, kinds, ended: line.landed });
   const agentMenu = useAgentMenu();
   const onPillDown = pillAimer(graph, gc.onLoopTo);
 
@@ -821,11 +823,13 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             Needs you
           </span>
         )}
-        {where && (
+        {whereBesideChip(where, ss) && (
+          // The chip already says "Needs you: Review": no "needs you at Review" too.
           <span className="skl-where" title={where}>
-            {where}
+            {whereBesideChip(where, ss)}
           </span>
         )}
+        {line.flight && <OwedNote note={owedNoteOf(line.flight)} groups={owedGroups(line.flight.owed)} place="above" />}
         {still && (
           <span className="skl-age" title={"Nothing has happened on this session for " + still.replace(/ still$/, "")}>
             {still}

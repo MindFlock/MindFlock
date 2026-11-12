@@ -1,0 +1,86 @@
+/* The route-start menu (RouteStartMenu.tsx): the stop menu's look, fixed on
+ * the page beside what opened it (no Sky zoom here), wide enough that a
+ * sentence reads in two lines and a stop sits on one. */
+
+.fl-routestart {
+  position: absolute;
+  width: min(340px, calc(100vw - 16px));
+  min-width: 0;
+  max-width: none;
+  box-sizing: border-box;
+  transform: none;
+}
+
+.fl-routestart-note {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.fl-routestart-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The default (Enter takes it): an accent bar at the row's left edge, the
+ * same in every view. The fill stays hover's and focus's, so only one row
+ * ever looks pointed at. */
+.fl-routestart-item.is-default {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.fl-routestart-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+/* A stop on one row: the title gives way (…), the number, "· Kind" and
+ * "— where it stopped" never wrap off on their own. */
+.fl-routestart-stop {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+  white-space: nowrap;
+}
+
+.fl-routestart-num,
+.fl-routestart-kind,
+.fl-routestart-mark {
+  flex: none;
+}
+
+.fl-routestart-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fl-routestart-kind,
+.fl-routestart-mark {
+  color: var(--muted);
+}
+
+/* "Start at…" beside a route's own start button, and Fly again's second
+ * choice: a quiet link that stays on the button's line. */
+.fl-start-at {
+  margin-left: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fl-again-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* A finished / cancelled card: the state sentence on its own line, then
+ * Fly again under it. */
+.fl-strip-again {
+  margin-top: 6px;
+}

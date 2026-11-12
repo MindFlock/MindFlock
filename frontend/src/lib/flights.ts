@@ -13,6 +13,7 @@ import { relTime } from "./format";
 import { capSourceDepth, sourceRungLabel, type Lane } from "./autopilot";
 // Type only: lib/behaviorsFocus reads the store, which reads this module.
 import type { BehaviorsTarget } from "./behaviorsFocus";
+import type { OwedEntry, OwedGroup } from "./stopAsks";
 
 // --- The contract's shapes ---------------------------------------------------
 
@@ -205,6 +206,16 @@ export interface Flight {
    * server's `returns_of` (docs/vision/fixwire.md): each draws a return wire
    * with its case on it. Only on flights the API sends. */
   returns?: Record<string, FlightReturn>;
+  /** Checks Verify stops with "Carry on, ask me at the end" left for the
+   * person (lib/stopAsks), only while something is owed. */
+  owed?: OwedEntry[];
+  /** The stop the route added at its end to ask for them ("" = none). */
+  owed_perch?: string;
+  /** Every "Your checks" stop the route added itself (not one of its own
+   * stops: Fly again leaves them out). */
+  owed_added?: string[];
+  /** "2 checks owed to you at the end", while the route is in the air. */
+  owed_note?: string;
 }
 
 /** Where a stop's failure goes back to and why (the server's `returns_of`):
@@ -285,6 +296,10 @@ export interface FlightRow {
   total: number;
   state: FlightState;
   step: { id: string; kind: string; title: string; state: StepState; actor: StepActor };
+  /** Checks owed to the person at the end, grouped by Verify stop, and
+   * their line — only while something is owed (lib/stopAsks). */
+  owed?: OwedGroup[];
+  owed_note?: string;
 }
 
 // --- Reading a flight --------------------------------------------------------
@@ -439,7 +454,7 @@ const short = (s: string, n = 48) => {
 /** What a route parked on you waits for, in a few words: a failure handed
  * to you ("Failed: …"), else what its stop asks (its text, or the server's
  * note); "" when that only repeats the stop's name. */
-function waitsFor(f: Flight | FlightRow, title: string): string {
+function waitsFor(f: Flight | FlightRow, title: string, max = 48): string {
   let what = "";
   if ("steps" in f) {
     const cur = f.steps[f.cursor];
@@ -447,8 +462,45 @@ function waitsFor(f: Flight | FlightRow, title: string): string {
     const failed = String(ss?.detail?.failed_reason ?? "").trim();
     what = failed ? "Failed: " + failed : youText(f);
   } else what = String((f as { reason?: unknown }).reason ?? "");
-  what = short(haltedWhy(title, what));
+  what = max > 0 ? short(haltedWhy(title, what), max) : haltedWhy(title, what).replace(/\s+/g, " ").trim();
   return what.toLowerCase() === title.trim().toLowerCase() ? "" : what;
+}
+
+/** The pane strip's line in parts, so a narrow pane cuts the right things:
+ * `plan` (shrinks first, down to nothing), `dots` (never cut mid-way: the
+ * strip drops them whole), `state` ("Needs you" / "Halted" — never cut),
+ * `what` — why it is parked, in full (it shrinks next; the tooltip has it
+ * whole) — and `stop` ("Approve the merge (5m)" — never cut). A route not
+ * parked: everything in `plan`, the other parts "". `whole` is the line
+ * joined. `stripLabel` is the same line in one string, `what` shortened. */
+export interface StripParts {
+  plan: string;
+  dots: string;
+  state: string;
+  what: string;
+  stop: string;
+  whole: string;
+}
+export function stripParts(f: Flight | FlightRow, now = Date.now()): StripParts {
+  const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
+  const parked = f.state === "halted" || f.state === "waiting_you";
+  if (!parked) {
+    const line = stripLabel(f, now);
+    return { plan: line, dots: "", state: "", what: "", stop: "", whole: line };
+  }
+  const elapsed = "steps" in f ? currentElapsed(f, now) : "";
+  const what =
+    f.state === "halted"
+      ? haltedWhy(title, String((f as { reason?: unknown }).reason ?? "")).replace(/\s+/g, " ").trim()
+      : waitsFor(f, title, 0);
+  const out = {
+    plan: f.plan_name || "",
+    dots: stripDots(f),
+    state: f.state === "halted" ? "Halted" : "Needs you",
+    what,
+    stop: title + (elapsed ? " (" + elapsed + ")" : ""),
+  };
+  return { ...out, whole: [out.plan, out.dots, out.state, out.what, out.stop].filter((x) => x.trim()).join(" · ") };
 }
 
 /** The pane strip's line: `Ticket to merge · ●●●○○○ · Reviews settle (4m)`
@@ -472,10 +524,12 @@ export function stripLabel(f: Flight | FlightRow, now = Date.now()): string {
   return [f.plan_name, stripDots(f), tail].filter((x) => x.trim()).join(" · ");
 }
 
-/** The row's flight is parked on a *you* step: what the rail, the bell and the
- * pane strip's Done / Skip key off. */
+/** The row's flight is parked on you — a Wait for me stop, or any other
+ * stop waiting on the person (a Review out of fix rounds, a Verify sign-off,
+ * a failure handed to you): what the rail, the Route tab's badge, the bell
+ * and the pane strip key off. Whatever the stop's kind or actor. */
 export function rowWaitsOnYou(row: FlightRow | null | undefined): boolean {
-  return !!row && row.state === "waiting_you" && row.step?.actor === "you";
+  return !!row && row.state === "waiting_you";
 }
 
 /** The checklist items of a perch (`config.items`): a list, or the editor's

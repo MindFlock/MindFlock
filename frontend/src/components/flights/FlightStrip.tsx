@@ -31,6 +31,7 @@ import {
   rowWaitsOnYou,
   stepActor,
   stripLabel,
+  stripParts,
   youItems,
   youText,
   type Flight,
@@ -39,7 +40,11 @@ import {
 } from "../../lib/flights";
 import { HALT_POINT_REASON, atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
-import { controlFlight, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { canFlyAgain, flyAgainLabel, flyAgainPrimary, flyAgainTitle, pickAgainStop } from "../../lib/routeStart";
+import "./RouteStartMenu.css";
+import { ASK_TILE_W, OWED_OPEN, OWED_OPEN_TITLE, askOffers, askRoom, askSentence, findingsOf, flightAsk, owedGroups, owedItemsText, owedNoteOf } from "../../lib/stopAsks";
+import { OwedChecks, OwedNote, ReviewFindings } from "./PerchAsks";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
 import "./Flights.css";
@@ -278,11 +283,43 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
       setBusy(false);
     }
   };
+  // A Review out of fix rounds with findings still open, the perch asking
+  // for the checks owed at the end: their own words (lib/stopAsks).
+  const ask = flightAsk(flight);
+  const rec = flight.step_states?.[step.id];
+  const offers = askOffers(ask) || [];
+  const owed = ask === "owed" ? owedGroups(rec?.detail?.owed) : [];
+  if (ask === "unresolved") {
+    const findings = findingsOf(rec?.detail);
+    return (
+      <div className={"fl-you fl-you-unresolved" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : "")} onClick={stop} data-no-drag>
+        {!compact && !inTile && <p className="fl-you-text">{askSentence(rec, "Findings are still open after the last round")}</p>}
+        {!compact && <ReviewFindings findings={findings} />}
+        <div className="fl-you-acts">
+          {offers.map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              className={(o.primary ? "btn-primary" : "test-btn") + " fl-btn fl-" + (o.key === "retry" ? "retry" : "carry")}
+              disabled={busy}
+              title={o.title + (compact && findings ? "\n\n" + findings : "")}
+              onClick={() => void run(() => (o.key === "retry" ? stepRetry(flight.id, step.id) : stepDone(flight.id, step.id)))}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  const doneOffer = offers.find((o) => o.key === "done");
   const key = (i: number) => flight.id + ":" + step.id + ":" + i;
   const allTicked = items.every((_, i) => ticked[key(i)]);
   const halted = flight.state === "halted" || paused || handed;
   const fix = !paused && canFixStep(flight);
-  const text = handed ? (/^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason) : youText(flight);
+  // The owed perch's sentence is the server's note ("Before this route
+  // finishes: 3 checks for you"), which its own text alone would leave out.
+  const text = handed ? (/^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason) : ask === "owed" ? askSentence(rec, youText(flight)) : youText(flight);
   return (
     <div className={"fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : "")} onClick={stop} data-no-drag>
       {!compact && !inTile && text && (!halted || handed) && <p className="fl-you-text">{text}</p>}
@@ -302,6 +339,7 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
           ))}
         </ul>
       )}
+      {!halted && !compact && <OwedChecks groups={owed} session={flight.session} />}
       <div className="fl-you-acts">
         {paused ? (
           <button
@@ -328,10 +366,10 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
             type="button"
             className="btn-primary fl-btn fl-done"
             disabled={busy || !allTicked}
-            title={allTicked ? "Mark “" + step.title + "” done — the route goes on" : "Tick every item first"}
+            title={allTicked ? (doneOffer ? doneOffer.title + (compact && owed.length ? "\n\n" + owedItemsText(owed) : "") : "Mark “" + step.title + "” done — the route goes on") : "Tick every item first"}
             onClick={() => void run(() => stepDone(flight.id, step.id))}
           >
-            Done
+            {doneOffer ? doneOffer.label : "Done"}
           </button>
         )}
         {fix && (
@@ -343,6 +381,13 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
             onClick={() => void run(() => stepFix(flight.id, step.id))}
           >
             Let the agent fix it
+          </button>
+        )}
+        {compact && owed.length > 0 && flight.session && (
+          // The one-line strip has no room for each check's "This one didn't
+          // work": this opens the Route tab, where the stop lists them.
+          <button type="button" className="test-btn fl-btn fl-owed-open" title={OWED_OPEN_TITLE} onClick={() => openFlightTab(flight.session)}>
+            {OWED_OPEN}
           </button>
         )}
         <button
@@ -375,6 +420,7 @@ export function FlightMenu({
   openSession?: boolean;
 }) {
   const live = isLive(flight);
+  const rows = useInstances().data;
   const items: MenuItem[] = [];
   if (openSession && flight.session)
     items.push({ key: "open", label: "Open session", onSelect: () => openFlightSession(flight.session) });
@@ -386,9 +432,58 @@ export function FlightMenu({
     );
     items.push({ key: "cancel", label: "Stop the route", danger: true, title: "End this route — its session is kept", onSelect: onCancelAsk });
   }
+  items.push(...flyAgainItems(flight, sessionGone(flight, rows)));
   return (
     <span onClick={stop} className="fl-menu" data-no-drag>
       <OverflowMenu label="Route actions" items={items} />
+    </span>
+  );
+}
+
+/** An ended route's (done, cancelled, halted) Fly again in a ⋯: from where
+ * it stopped, and from another stop (the route's stops, at the press). */
+export function flyAgainItems(flight: Flight, gone = false): MenuItem[] {
+  if (!canFlyAgain(flight)) return [];
+  return [
+    { key: "again", label: flyAgainLabel(flight), title: flyAgainTitle(flight, gone), onSelect: () => void flyAgain(flight.id) },
+    { key: "again-pick", label: "Fly again from another stop…", title: "Pick the stop it flies again from", onSelect: () => pickAgainStop(flight) },
+  ];
+}
+
+/** Whether the flight's session is gone (not among the rows; unknown while
+ * they load = not gone). */
+export function sessionGone(flight: Pick<Flight, "session">, rows: readonly Pick<Instance, "title">[] | null | undefined): boolean {
+  return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
+}
+
+/** Fly again on an ended route, in a row: "Fly again from <stop>" (where it
+ * stopped — the primary button on a cancelled or halted route) and "From
+ * another stop…" (the beginning, or any stop). */
+export function FlyAgain({ flight }: { flight: Flight }) {
+  const [busy, setBusy] = useState(false);
+  const gone = sessionGone(flight, useInstances().data);
+  if (!canFlyAgain(flight)) return null;
+  return (
+    <span className="fl-again-row" onClick={stop} data-no-drag>
+      <button
+        type="button"
+        className={(flyAgainPrimary(flight) ? "btn-primary" : "test-btn") + " fl-btn fl-fly-again"}
+        disabled={busy}
+        title={flyAgainTitle(flight, gone)}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await flyAgain(flight.id);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {flyAgainLabel(flight)}
+      </button>
+      <button type="button" className="linklike fl-start-at" disabled={busy} title="The beginning, or any of its stops" onClick={(e) => pickAgainStop(flight, e.currentTarget)}>
+        From another stop…
+      </button>
     </span>
   );
 }
@@ -480,7 +575,8 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
     if (verifyHere) return { w: Math.max(base.w, 320), h: base.h + 220 };
     const items = n.state === "perched" ? youItems(cur).length : 0;
     const text = n.state === "perched" && (youText(flight!) || n.reason) ? 24 : 0;
-    return { w: Math.max(base.w, 250), h: base.h + text + items * 23 + 38 };
+    const rec = n.step ? flight!.step_states?.[n.step.id] : undefined;
+    return { w: Math.max(base.w, n.ask ? ASK_TILE_W : 250), h: base.h + text + items * 23 + 38 + askRoom(n.ask, rec?.detail) };
   };
   return { renderInBox, sizeOf };
 }
@@ -562,12 +658,18 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
                 </span>
               )}
               {flight.state === "halted" && flight.reason && <span className="fl-now-reason">{flight.reason}</span>}
+              <OwedNote note={owedNoteOf(flight)} groups={owedGroups(flight.owed)} />
             </>
           ) : null}
           <span className="fl-progress muted">
             {prog.done}/{prog.total}
           </span>
         </div>
+        {(flight.state === "done" || flight.state === "cancelled") && canFlyAgain(flight) && (
+          <div className="fl-strip-again">
+            <FlyAgain flight={flight} />
+          </div>
+        )}
       </div>
       <FlywayCanvas
         diagram={diagram}
@@ -600,6 +702,10 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
   const cancel = useCancelAsk(full);
   if (!row || !live) return null;
   const line = full ? stripLabel(full, now) : stripLabel(row);
+  // The stop's name and "Needs you" always show; the plan name, then the
+  // sentence, take the cut; the dots go whole. The tooltip has it all.
+  const parts = stripParts(full || row, now);
+  const whole = parts.whole;
   const waiting = row.state === "waiting_you" || row.state === "halted";
   // Parked (on you, halted) or paused: its one-click way on, right here.
   const parked = waiting || row.state === "paused";
@@ -610,12 +716,29 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
         <button
           type="button"
           className="fl-strip-line"
-          title={"Open the Route tab — " + line + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : "")}
+          title={"Open the Route tab — " + whole + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : "")}
           onClick={() => openFlightTab(inst.title)}
         >
           <Bird size={13} />
-          <span className="fl-strip-text">{line}</span>
+          {parts.state ? (
+            <span className="fl-strip-text fl-strip-parts" aria-label={whole}>
+              {parts.plan && <span className="fl-strip-plan">{parts.plan}</span>}
+              {parts.dots && (
+                // Its own line-high box that wraps: dots that don't fit drop
+                // to the hidden second line, whole — never "●●●●…".
+                <span className="fl-strip-dots">
+                  <span className="fl-strip-dots-in">{parts.dots}</span>
+                </span>
+              )}
+              <span className="fl-strip-state">{parts.state}</span>
+              {parts.what && <span className="fl-strip-what">{parts.what}</span>}
+              <span className="fl-strip-stop">{parts.stop}</span>
+            </span>
+          ) : (
+            <span className="fl-strip-text">{line}</span>
+          )}
         </button>
+        <OwedNote note={owedNoteOf(full || row)} groups={owedGroups((full || row).owed)} align="end" />
         {full && parked && <YouStepActions flight={full} compact />}
         {walking && (
           <VerifyWalkHint

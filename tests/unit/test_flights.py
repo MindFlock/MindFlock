@@ -212,6 +212,7 @@ def test_builtins_are_seeded_first_and_shaped_as_documented():
         "ready": "on_branch",
         "ready_minutes": 0,
         "who": "both",
+        "ask": "here",
         "notes": "",
         "post_to_pr": False,
     }

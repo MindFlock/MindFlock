@@ -57,7 +57,7 @@
 import type { Instance, SessionVerify } from "../api/types";
 import { backgroundHint } from "./backgroundJobs";
 import { agentName } from "./agentNames";
-import { haltedWhy, perchLabel } from "./flights";
+import { haltedWhy, perchLabel, perchedOnYou } from "./flights";
 import { heldHint, isHeldOffline } from "./heldOffline";
 import { waitChip, waitHint, waitWhyOf } from "./waitWhy";
 
@@ -526,17 +526,29 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   const act = extras?.activity ?? effectiveActivity(inst);
   if (act === "clarify")
     return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
-  // A flight perched on you (a `you` stop): it waits for Done, whatever the
-  // agent is doing — so ahead of Working.
+  // A flight parked on you: it waits for you, whatever the agent is doing —
+  // so ahead of Working. A Wait for me stop ("Wait for me: <stop>", Done);
+  // any other stop waiting on the person — a Review out of fix rounds, a
+  // failure handed to you — "Needs you: <stop>". A Verify stop whose verify
+  // already says it (Confirm verified, failed, blocked) keeps that chip.
   const fl = inst.flight;
-  if (fl && fl.state === "waiting_you" && fl.step?.actor === "you")
+  const verifyEarly = verifyOf(inst);
+  const verifySpeaks = fl?.step?.kind === "verify" && !!verifyEarly && !!verifyNeedsYou(verifyEarly);
+  if (fl && fl.state === "waiting_you" && fl.step && (fl.step.actor === "you" || !verifySpeaks)) {
+    const perch = fl.step.actor === "you";
+    const label = perch ? flightYouLabel(fl.step.title) : perchedOnYou(fl.step.title);
+    const why = String((fl.step as { note?: unknown }).note ?? "").trim();
     return {
       ...needsYou(
         "flight_you",
-        flightYouLabel(fl.step.title) + " — route “" + fl.plan_name + "” needs you; press Done on its strip, the Sky or the bell"
+        label +
+          " — route “" + fl.plan_name + "” needs you" +
+          (!perch && why ? ": " + why : "") +
+          (perch ? "; press Done on its strip, the Sky or the bell" : "; answer it on its strip, the Sky or the bell")
       ),
-      label: flightYouLabel(fl.step.title),
+      label,
     };
+  }
   // A route halted at a stop until you Retry or Skip it: the rank of a Wait
   // for me stop (it waits on you whatever the agent does), in red — behind a
   // question in plain words too, so the session keeps its answer row.
@@ -658,7 +670,7 @@ export function needsYouAction(
     case "question":
       return { act: "bell", aria: "Question — answer it in the bell" };
     case "flight_you":
-      return { act: "bell", aria: ss.label + " — press Done in the bell" };
+      return { act: "bell", aria: ss.label + (/^wait for me\b/i.test(ss.label) ? " — press Done in the bell" : " — answer it in the bell") };
     case "flight_halted":
       return { act: "bell", aria: "Halted — Retry or Skip in the bell" };
     case "precommit_failed":

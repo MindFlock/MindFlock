@@ -334,6 +334,11 @@ def _start_plan(body: dict) -> Tuple[dict, str, str, str]:
         plan = _flights.adhoc_plan(
             body.get("steps"), plan, "Route on %s" % title if title else ""
         )
+    # "resume" → where the earlier flight of this route stopped, else the
+    # normal start (what flight_driver.start resolves it to).
+    start_at, _resume = _driver.resume_start_at(
+        plan, start_at, session=title, subject=_driver._subject_of(body.get("subject"))
+    )
     return plan, title, start_at, start_on
 
 
@@ -386,7 +391,11 @@ def _preflight(
     return out
 
 
-def _skip_reason(step: dict, start_at: str) -> str:
+def _skip_reason(step: dict, start_at: str, resume: Optional[dict] = None) -> str:
+    if resume and start_at == resume.get("stop"):
+        return "route %s got past it (it carries on from there)" % resume.get(
+            "from_flight"
+        )
     if start_at:
         return "before the stop it starts at (%s)" % start_at
     if step.get("kind") == "agent":
@@ -516,6 +525,23 @@ def check_start(body: dict) -> dict:
         else:
             out["steps"] = plan["steps"]
             out["start"] = _stop_ref(plan["steps"], 0)
+            # A ticket / PR / issue start makes its session: it carries on
+            # only when it finds the earlier work (its branch still checked
+            # out here — flight_driver.carry_on_intake), so no resume is
+            # promised; a warning says where it WOULD carry on.
+            out["resume"] = None
+            maybe = _driver.resume_for(plan, subject=_driver._subject_of(subject))
+            if maybe:
+                out["warnings"].append(
+                    _problem(
+                        "start_at",
+                        "if its branch is still checked out on this machine, the "
+                        "route carries on there at %s (route %s stopped there); "
+                        "otherwise a new session starts at the first stop"
+                        % (maybe["title"], maybe["from_flight"]),
+                        "carries_on_if_found",
+                    )
+                )
         out["ok"] = not problems
         return out
     if body.get("grounded"):
@@ -535,6 +561,20 @@ def check_start(body: dict) -> dict:
     out["start_on"] = start_on
     ready = start_on != "now"
     live = bool(title) and title in srv.ENGINE.instances
+    # Only a start ON a session carries on (flight_driver.resume_start_at):
+    # one that creates its session gets a fresh branch, so no resume there.
+    out["resume"] = (
+        _driver.resume_for(
+            plan, session=title, subject=_driver._subject_of(body.get("subject"))
+        )
+        if live
+        else None
+    )
+    resumed = (
+        out["resume"]
+        if str(body.get("start_at") or "").strip() == _flights.RESUME
+        else None
+    )
     if title and not live:
         problems.append(
             _problem("title", "no session %s" % title, "unknown_session", title)
@@ -585,7 +625,7 @@ def check_start(body: dict) -> dict:
                 )
     out["start"] = _stop_ref(steps, cursor)
     out["skipped"] = [
-        dict(_stop_ref(steps, i), reason=_skip_reason(steps[i], start_at))
+        dict(_stop_ref(steps, i), reason=_skip_reason(steps[i], start_at, resumed))
         for i in range(min(cursor, len(steps)))
     ]
     if steps and cursor >= len(steps):
@@ -1100,6 +1140,37 @@ def flights_jump(flight_id: str, payload: Optional[dict] = None) -> JSONResponse
     if not step:
         return JSONResponse({"error": "step required"}, status_code=400)
     return _op(flight_id, "jump", step)
+
+
+@router.post("/api/flights/{flight_id}/again")
+async def flights_again(flight_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Fly an ended route again → 202 ``{"flight", "from", "session",
+    "how"}`` (``flight_driver.again``): body ``{at?, title?}`` — ``at`` a
+    stop id of the route (absent / ``"resume"`` = the first stop it had not
+    finished), ``title`` the session to fly it on (default its own; gone →
+    the one holding its branch, or its closed session reopened). 404
+    ``not_found`` / ``unknown_session``; 409 ``in_flight`` (still going, or
+    that session is on a route), ``not_flown``, ``session_gone``; 400
+    ``unknown_step``; the pre-check's refusals as a start's."""
+    body = payload or {}
+    try:
+        out = await _driver.again(flight_id, body)
+    except _flights.PlanError as err:
+        if isinstance(err, _driver.PreflightError):
+            return JSONResponse(
+                {
+                    "error": err.code or "preflight",
+                    "detail": err.message,
+                    "field": err.field,
+                    "problems": err.problems,
+                    **({"session": err.session} if err.session else {}),
+                },
+                status_code=409 if err.session else 400,
+            )
+        return _bad_step(err)
+    except _flights.FlightError as err:
+        return _err(err, {"unknown_step": "at"})
+    return JSONResponse(out, status_code=202)
 
 
 @router.post("/api/flights/{flight_id}/pause")

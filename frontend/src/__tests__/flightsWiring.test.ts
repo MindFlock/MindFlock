@@ -41,9 +41,11 @@ describe("a flight perched on you is Needs you", () => {
     expect(ss).toMatchObject({ state: "needs_you", reason: "flight_you", label: "Wait for me: Approve the merge", inBell: true });
     expect(notifyRuleFor(ss)).toBe("flight_needs_you");
     expect(flightYouLabel("")).toBe("Wait for me");
-    // A robot step running, or a flight that is merely in the air, is not.
+    // A flight that is merely in the air is not.
     expect(deriveSessionState(row({ ...fl, state: "running" }), { activity: "idle" }).reason).toBeUndefined();
-    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, actor: "robot" } }), { activity: "idle" }).reason).toBeUndefined();
+    // Any other stop waiting on the person (a Review out of fix rounds): it
+    // needs you too, in its own words — not "Wait for me", not "Idle".
+    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, actor: "robot" } }), { activity: "idle" })).toMatchObject({ state: "needs_you", reason: "flight_you", label: "Needs you: Approve the merge" });
     // A stop already titled "Perch: …" (or the old "You: …") is not prefixed again.
     expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "Perch: approve" } }), { activity: "idle" }).label).toBe("Wait for me: approve");
     expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "You: approve" } }), { activity: "idle" }).label).toBe("Wait for me: approve");

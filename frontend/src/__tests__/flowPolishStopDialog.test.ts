@@ -292,7 +292,8 @@ describe("the session line's wiring", () => {
   });
 
   it("a Verify stop's Done is Confirm verified; no Behaviors detour", () => {
-    expect(src).toContain('doneLabel={h.done === "confirm" ? "Confirm verified" : undefined}');
+    // An ask's own words first (lib/stopAsks: "Carry on", "Done — they all work"), then a Verify sign-off's.
+    expect(src).toContain('doneLabel={h.words.done?.[0] || (h.done === "confirm" ? "Confirm verified" : undefined)}');
     expect(src).not.toContain("answerBehaviors");
     expect(src).not.toContain('"Behaviors"');
   });

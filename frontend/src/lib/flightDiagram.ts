@@ -52,6 +52,7 @@ import { deriveSessionState } from "./sessionState";
 import { windowName } from "./windowName";
 import { riskOf, type RiskTag } from "./stopRisk";
 import { stopSentence } from "./stopEditing";
+import { stopAskOf, type StopAsk } from "./stopAsks";
 import {
   defaultOnFail,
   isLive,
@@ -176,6 +177,13 @@ export interface DiagramNode {
   /** A flown stop's receipt (`detail.receipt`, ≤ 80 chars: "312 passed",
    * "PR #291"), under the title at mid and near. */
   receipt?: string;
+  /** A stop parked on you with more than a Done to give (lib/stopAsks): a
+   * Review out of fix rounds with findings still open ("unresolved"), the
+   * perch asking for the checks owed at the end ("owed"). */
+  ask?: StopAsk;
+  /** Its sentence (the server's note: "2 findings still open after 3
+   * rounds"), the tile's line under its name. */
+  askNote?: string;
   /** A stop the flight is at that waits for a moment (a Wait's timer
    * `detail.until`, a paced Loop's `detail.next_at`): epoch seconds, for the
    * tile's live "12:34 left". */
@@ -887,6 +895,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : handed,
       ...looksOf(s, kinds),
       ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
+      ...(state === "perched" && stopAskOf(s, rec) ? { ask: stopAskOf(s, rec), askNote: String(rec?.note || "").trim() } : {}),
       ...(loop ? { loop } : {}),
       ...(ret ? { ret } : {}),
       ...(state === "done" && rec?.detail?.by === "agent" ? { by: "agent" as const } : {}),
@@ -1539,10 +1548,20 @@ export function lineWhere(d: Diagram): string {
   }
   if (!b) return "";
   const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
-  const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
+  // A stop with an ask (lib/stopAsks) says it on its own tile, its line
+  // under its name and its buttons: the bar says only where it is.
+  const tail = n.ask ? "" : n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
   // "needs you at" already says whose stop it is: no "Wait for me:" after it.
   const title = b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title;
   return head + title + (tail ? " · " + tail : "");
+}
+
+/** The frame bar's where-line beside its session chip: "" when the chip
+ * already says the route waits on you at that stop ("Needs you: Review" /
+ * "Wait for me: Your checks" next to "needs you at Review"), else `where`. */
+export function whereBesideChip(where: string, chip: { reason?: string; label?: string } | null | undefined): string {
+  if (!where || chip?.reason !== "flight_you") return where;
+  return /^needs you at /i.test(where) ? "" : where;
 }
 
 /** How many stops a line's `flown` pill folds (0: none). The canvas speaks
