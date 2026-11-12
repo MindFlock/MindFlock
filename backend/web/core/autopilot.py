@@ -49,7 +49,8 @@ import os
 import re
 import threading
 import time
-from typing import Dict, List, Optional, Tuple
+from contextlib import contextmanager
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from backend.fsutil import atomic_write_json, read_json
 from backend.config.config import GetConfigDir
@@ -218,6 +219,52 @@ def _load() -> dict:
 
 def _save(data: dict) -> None:
     atomic_write_json(autopilot_path(), data, prefix=".ap.")
+
+
+#: How long a writer waits for another process's write before going on
+#: without the inter-process lock (callers run on the event loop too).
+_FLOCK_WAIT_S = 5.0
+
+
+@contextmanager
+def _writing() -> Iterator[None]:
+    """One read-modify-write of the store: :data:`_LOCK`, then an exclusive
+    advisory lock on ``<store>.lock`` (``flights._store_write``'s scheme).
+
+    The store is shared by every process on one config dir — two servers on
+    one home, and the ticket pipeline, which arms from its own process. With
+    the in-process lock alone, one process's whole-file rewrite (the lease
+    refresh, every pass, for every armed session) dropped what another had
+    just written. The kernel releases the lock if its holder dies; a holder
+    wedged past :data:`_FLOCK_WAIT_S` is not waited for, and a lock file that
+    can't be opened leaves the write under :data:`_LOCK` alone."""
+    from backend import compat
+
+    with _LOCK:
+        fd: Optional[int] = None
+        try:
+            path = autopilot_path()
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError:
+            fd = None
+        if fd is not None:
+            deadline = time.monotonic() + _FLOCK_WAIT_S
+            while True:
+                try:
+                    compat.flock(fd, compat.LOCK_EX | compat.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        os.close(fd)
+                        fd = None
+                        break
+                    time.sleep(0.01)
+        try:
+            yield
+        finally:
+            if fd is not None:
+                os.close(fd)  # closing the fd releases the flock
 
 
 def _blank() -> dict:
@@ -1094,7 +1141,7 @@ def claim(title: str, owner: str, now: Optional[float] = None):
     if not title or not owner:
         return None, False
     ts = float(now if now is not None else time.time())
-    with _LOCK:
+    with _writing():
         data = _load()
         if title not in data:
             return None, False
@@ -1210,7 +1257,7 @@ def arm(
             "updated": ts,
         }
     )
-    with _LOCK:
+    with _writing():
         data = _load()
         data[title] = rec
         _save(data)
@@ -1221,7 +1268,7 @@ def update(title: str, **fields) -> Optional[dict]:
     """Merge ``fields`` into a record (read-modify-write under the lock)."""
     if not title:
         return None
-    with _LOCK:
+    with _writing():
         data = _load()
         if title not in data:
             return None
@@ -1307,7 +1354,7 @@ def disarm(title: str) -> bool:
     """Forget a run entirely. Returns whether there was one."""
     if not title:
         return False
-    with _LOCK:
+    with _writing():
         data = _load()
         if title not in data:
             return False
@@ -1340,7 +1387,7 @@ def prune(live_titles, now: Optional[float] = None) -> int:
     """
     live = set(live_titles or [])
     ts = float(now if now is not None else time.time())
-    with _LOCK:
+    with _writing():
         data = _load()
         dead = []
         for t, raw in data.items():
