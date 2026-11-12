@@ -234,8 +234,10 @@ export function VerifyWalkHint({ session, here, onOpen }: { session: string; her
  * you (`on_fail: you` — waiting on you with `detail.failed_reason`). Any
  * kind: the agent gets the failure, then the stop runs again. A halt point
  * (paused, nothing failed) has nothing to fix. */
-export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "step_states"> | null | undefined): boolean {
-  if (!flight || (flight.state !== "halted" && flight.state !== "waiting_you")) return false;
+export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "step_states" | "session"> | null | undefined): boolean {
+  // No session (a free run): no agent to hand it to — the server refuses
+  // it (409 `no_session`).
+  if (!flight || !flight.session || (flight.state !== "halted" && flight.state !== "waiting_you")) return false;
   const step = flight.steps[flight.cursor];
   const ss = step ? flight.step_states?.[step.id] : undefined;
   if (!ss) return false;
@@ -253,6 +255,20 @@ export function nextIsHaltPoint(flight: Pick<Flight, "steps" | "cursor" | "step_
     return !!s.halt && !ss?.detail?.halt_hit;
   }
   return false;
+}
+
+/** Whether Skip on this route should also Carry on: the server keeps a
+ * paused route paused after a skip (`_advance_keeping_pause`), so Skip
+ * carries on too, as it says — unless the next stop is a halt point itself
+ * (it halts there) or there is no stop left (the skip finished the route;
+ * Carry on would be refused). */
+export function skipCarriesOn(flight: Pick<Flight, "state" | "steps" | "cursor" | "step_states">): boolean {
+  if (flight.state !== "paused") return false;
+  const ahead = flight.steps.slice(flight.cursor + 1).some((s) => {
+    const st = flight.step_states?.[s.id]?.state;
+    return st !== "done" && st !== "skipped";
+  });
+  return ahead && !nextIsHaltPoint(flight);
 }
 
 /** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
@@ -395,10 +411,8 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
           className="test-btn fl-btn fl-skip"
           disabled={busy}
           title={"Skip “" + step.title + "” — the route goes on without it"}
-          // The server keeps a paused route paused after a skip
-          // (`_advance_keeping_pause`): Skip carries on too, as it says —
-          // unless the next stop is a halt point itself (it halts there).
-          onClick={() => void run(async () => (await stepSkip(flight.id, step.id)) && flight.state === "paused" && !nextIsHaltPoint(flight) && controlFlight(flight.id, "resume"))}
+          // Skip carries on a paused route too, where there is somewhere to go (`skipCarriesOn`).
+          onClick={() => void run(async () => (await stepSkip(flight.id, step.id)) && skipCarriesOn(flight) && controlFlight(flight.id, "resume"))}
         >
           Skip
         </button>

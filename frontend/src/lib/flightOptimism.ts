@@ -50,14 +50,16 @@ let tmp = 0;
 const PENDING: StepRunState = { state: "pending", since: 0, note: "", detail: {}, rounds: 0 };
 
 /** The flight with `steps` inserted before index `at` (undefined = the end),
- * each under a temporary id until the server's flight replaces it. */
+ * each under a temporary id until the server's flight replaces it. One put
+ * in AT the cursor (a paused route's Undo, a ready route's first place)
+ * becomes the current stop — the server keeps the cursor there. */
 export function withSteps(steps: readonly FlightStep[], at?: number): Edit {
   return (f) => {
     const fresh = steps.map((s) => ({ ...s, id: "s_tmp" + ++tmp }));
     const i = at === undefined ? f.steps.length : Math.max(0, Math.min(at, f.steps.length));
     const states = { ...f.step_states };
     for (const s of fresh) states[s.id] = { ...PENDING, since: Date.now() / 1000 };
-    return { ...f, steps: [...f.steps.slice(0, i), ...fresh, ...f.steps.slice(i)], step_states: states, cursor: i <= f.cursor && f.state !== "grounded" ? f.cursor + fresh.length : f.cursor };
+    return { ...f, steps: [...f.steps.slice(0, i), ...fresh, ...f.steps.slice(i)], step_states: states, cursor: i < f.cursor && f.state !== "grounded" ? f.cursor + fresh.length : f.cursor };
   };
 }
 

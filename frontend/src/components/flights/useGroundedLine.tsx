@@ -41,7 +41,7 @@ export function readDrop(drop: StopDrop | string): StopDrop {
  * stop it has run or one still ahead. `note` says why it can't change and,
  * at the current stop, why it waits (lib/groundedLines `perchWhy`). */
 export function freeStopRemedies(
-  flight: Pick<Flight, "state" | "reason" | "steps" | "cursor" | "step_states">,
+  flight: Pick<Flight, "state" | "reason" | "steps" | "cursor" | "step_states" | "session">,
   n: Pick<DiagramNode, "index" | "state" | "step">
 ): { note: string; done: "" | "done" | "carry"; retry: boolean; fix: boolean; skip: boolean; ask?: StopAsk } {
   const here = n.index === flight.cursor && (flight.state === "halted" || flight.state === "waiting_you" || flight.state === "paused" || flight.state === "running");

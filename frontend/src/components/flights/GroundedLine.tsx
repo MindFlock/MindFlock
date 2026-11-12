@@ -449,7 +449,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });
   const gc = line.graphCanvas;
   // Round 18: a tile's right-click menu; a Loop's pill dragged onto a stop re-aims it.
-  const chainMenu = useChainMenu(gc, flight.id, { steps: flight.steps, kinds: p.kinds });
+  const chainMenu = useChainMenu(gc, flight.id, { steps: flight.steps, kinds: p.kinds, noSession: !flight.session });
   const onPillDown = pillAimer(graph, gc.onLoopTo);
   const shift = useRef(false);
   // No ▶ on a default-stops editor (it never runs), nor on a chain another starts.
