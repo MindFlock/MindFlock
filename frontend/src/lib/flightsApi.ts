@@ -9,7 +9,12 @@
  *  - Let the agent fix it  POST /api/flights/{id}/steps/{sid}/op/fix (a halted stop)
  *  - Jump to…              POST /api/flights/{id}/jump {step}
  *  - Pause / Resume / Cancel  POST /api/flights/{id}/pause · /resume · /cancel
- *  - Take off              POST /api/flights/start {plan_id, repo_path?}
+ *  - Take off              POST /api/flights/start {plan_id, repo_path?, start_at?}
+ *                          (`start_at` a stop id, or "resume": where an earlier
+ *                          run of this route stopped)
+ *  - Check a start         POST /api/flights/check (a start's body; nothing starts)
+ *                          — `checkStart`, with the `resume` point
+ *  - Fly again             POST /api/flights/{id}/again {at?, title?} (an ended route)
  *  - Fly (waiting to fly)  the Intake start routes, with `plan`
  *  - Flyways               GET/POST /api/flights/plans · DELETE /{id} · POST /{id}/reset
  *  - Describe a stop       POST /api/flights/describe {text, want}
@@ -35,6 +40,7 @@ import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { selectSession } from "./sessionActions";
 import { toast } from "./toast";
+import { windowName } from "./windowName";
 import type { Flight, FlightPlan, FlightStartOn, FlightStep, IntakeDefault, IntakeSourceRef, StepKindDef } from "./flights";
 
 const enc = encodeURIComponent;
@@ -236,7 +242,7 @@ export async function takeOffResult(body: StartBody): Promise<SaveResult & { fli
     const flight = d?.flight || null;
     void refreshFlights();
     if (flight?.session) {
-      toast("Started: " + flight.plan_name);
+      toast(startedText(flight));
       void openWhenReady(flight.session);
     }
     return { ...SAVED, flight };
@@ -257,6 +263,122 @@ export async function takeOff(body: StartBody): Promise<Flight | null> {
 /** Fly a saved flyway on an existing session (a line on the Sky). */
 export function startFlightOn(title: string, planId: string, startOn?: FlightStartOn): Promise<Flight | null> {
   return takeOff({ plan_id: planId, title, ...(startOn ? { start_on: startOn } : {}) });
+}
+
+/** The toast after a start: "Started: <route>", and where when it starts
+ * past its first stop ("Started: Ship it at Push"). */
+export function startedText(flight: Pick<Flight, "plan_name" | "cursor" | "steps">): string {
+  const at = flight.cursor > 0 ? flight.steps[flight.cursor]?.title : "";
+  return "Started: " + flight.plan_name + (at ? " at " + at : "");
+}
+
+/** A start's body that starts at `startAt` (a stop id or "resume"): it flies
+ * now — a route built to wait for ▶ Run always starts at its first stop, so
+ * `start_on` goes. "" = the body as it is (the normal start). */
+export function startBodyAt<B extends { start_on?: FlightStartOn; start_at?: string }>(body: B, startAt: string): B {
+  if (!startAt) return body;
+  const out: B = { ...body, start_at: startAt };
+  delete out.start_on;
+  return out;
+}
+
+/** Fly a saved route on an existing session, starting at stop `startAt`
+ * ("" = the normal start, built to wait for ▶ Run when `startOn` says so). */
+export function startFlightAt(title: string, planId: string, startAt: string, startOn?: FlightStartOn): Promise<Flight | null> {
+  return takeOff(startBodyAt({ plan_id: planId, title, ...(startOn ? { start_on: startOn } : {}) } as StartBody, startAt));
+}
+
+// --- Checking a start, flying an ended route again ---------------------------------
+
+/** Where an earlier, unfinished run of this route (on this session, branch
+ * or ticket) stopped: the stop of THIS route it carries on at. */
+export interface ResumePoint {
+  stop: string;
+  index: number;
+  title: string;
+  from_flight: string;
+  session: string;
+  state: "cancelled" | "halted" | "running" | "waiting_you" | "paused";
+  reason: string;
+  /** When it ended or last moved (epoch seconds). */
+  at: number;
+}
+
+/** One thing a check found: `{field, detail, error?, session?}`. */
+export interface StartProblem {
+  field: string;
+  detail: string;
+  error?: string;
+  session?: string;
+}
+
+/** `POST /api/flights/check`'s answer: the start as it would go. */
+export interface StartCheck {
+  ok: boolean;
+  steps: FlightStep[];
+  start: { id: string; index: number; title: string; kind?: string } | null;
+  skipped: Array<{ id: string; index: number; title: string; reason: string }>;
+  problems: StartProblem[];
+  warnings: StartProblem[];
+  in_flight?: { id: string; name: string; state: string } | null;
+  /** null = no earlier unfinished run of this route here. */
+  resume?: ResumePoint | null;
+}
+
+/** Ask the server how a start would go (nothing starts). null when it can't
+ * say (an older server, the network) — the caller starts as it always did. */
+export async function checkStart(body: StartBody): Promise<StartCheck | null> {
+  try {
+    const d = await api<StartCheck>("/api/flights/check", { json: body });
+    return d && typeof d === "object" ? d : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `POST /api/flights/{id}/again`'s answer. */
+export interface AgainResult {
+  flight: Flight;
+  from: string;
+  session: string;
+  how: "same" | "chosen" | "branch" | "reopened" | "restored";
+}
+
+/** The body of a Fly again: `at` a stop id ("" = where it stopped — the
+ * first stop for a route that finished), `title` another session. */
+export function againBody(at = "", title = ""): { at?: string; title?: string } {
+  return { ...(at ? { at } : {}), ...(title ? { title } : {}) };
+}
+
+/** The toast after Fly again, by how the server found its session. `stop` is
+ * where the new run starts, `session` its session's shown name. */
+export function againText(how: AgainResult["how"], stop: string, session: string): string {
+  const from = stop ? " from " + stop : "";
+  if (how === "branch") return "Flying again on " + session + ", which holds its branch";
+  if (how === "reopened") return "Reopened " + session + " and flying again" + from;
+  if (how === "restored") return "Reopened " + session + ": its route carried on as it was";
+  if (how === "chosen") return "Flying again on " + session + from;
+  return "Flying again" + from;
+}
+
+/** Fly an ended route again (`at` / `title` as `againBody`): on success the
+ * toast says how and its session opens; a refusal opens the error card with
+ * the server's sentence. Resolves to the answer, null on a refusal. */
+export async function flyAgain(flightId: string, at = "", title = ""): Promise<AgainResult | null> {
+  try {
+    const d = await api<AgainResult>(flightPath(flightId, "/again"), { json: againBody(at, title) });
+    const f = d?.flight;
+    const stop = f ? f.steps[f.cursor]?.title || "" : "";
+    toast(againText(d.how, stop, windowName(d.session)));
+    if (d.session) void openWhenReady(d.session);
+    return d;
+  } catch (err) {
+    errorPop("Flying it again failed", refusalOf(err).detail);
+    return null;
+  } finally {
+    void refreshFlights();
+    void refreshInstances();
+  }
 }
 
 /** What a waiting item's Fly posts: the Intake start routes with their bodies

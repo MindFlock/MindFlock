@@ -1,0 +1,43 @@
+/* The route-start menu (RouteStartMenu.tsx): the stop menu's look, fixed on
+ * the page at the click (no Sky zoom here), a little wider for a sentence. */
+
+.fl-routestart {
+  position: absolute;
+  max-width: 320px;
+  transform: none;
+}
+
+.fl-routestart-note {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.fl-routestart-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fl-routestart-item.is-default {
+  font-weight: 600;
+}
+
+.fl-routestart-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+/* "Start at…" beside a route's own start button, and Fly again's second
+ * choice: a quiet link. */
+.fl-start-at {
+  margin-left: 8px;
+  font-size: 12px;
+}
+
+.fl-again-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}

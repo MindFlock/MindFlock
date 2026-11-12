@@ -153,6 +153,7 @@ import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
 import { STOP_MIME, isShown, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type IntakeSourceRef, type StepKindDef } from "../../lib/flights";
+import { startSavedRoute } from "../../lib/routeStart";
 import { attachGrounded, DEFAULT_SESSION, deleteFlight, renameFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
 import { NODE_H, PITCH_X, type WireEnd, type WireIntent } from "../../lib/skyGraph";
 import type { CatalogDrop } from "../../lib/stopCatalog";
@@ -1386,10 +1387,12 @@ export function SkyView() {
    * takes it as one more stop (one group) at the end; one without starts
    * flying it. Never the focused line by itself: a palette click places
    * (`placeGrounded`). */
-  const onFly = (plan: FlightPlan, title: string) => {
+  const onFly = (plan: FlightPlan, title: string, at?: { x: number; y: number }) => {
     const live = liveFlightOf(title);
     if (live) void tackOnPlan(live.id, plan.id);
-    else void startFlightOn(title, plan.id, NEW_ROUTE_STARTS_ON);
+    // An earlier run of it here stopped part way: a menu at the drop says
+    // where it carries on (lib/routeStart); else it starts as always.
+    else void startSavedRoute(plan, title, { at, normal: () => startFlightOn(title, plan.id, NEW_ROUTE_STARTS_ON) });
   };
   /** A grounded flight takes off on `title` (its ⋯ Fly on a session…). */
   const onAttach = (f: Flight, title: string) => {
@@ -1466,7 +1469,7 @@ export function SkyView() {
     const gid = groundedIdOf(t);
     if ("plan" in d) {
       if (gid) void tackOnPlan(gid, d.plan.id);
-      else onFly(d.plan, t);
+      else onFly(d.plan, t, { x: e.clientX, y: e.clientY });
     } else if (gid) {
       const def = kinds.find((k) => k.kind === d.kind);
       const f = flights?.find((x) => x.id === gid);
