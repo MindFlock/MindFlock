@@ -3,7 +3,8 @@
  *
  *  - a saved route that an earlier run on this session / branch / ticket left
  *    part way: "Carries on at Push — where it stopped 2h ago (…)", then
- *    Carry on at Push (focused: Enter takes the default), Start from the
+ *    Carry on at Push (the default: an accent bar, focused once the menu is
+ *    placed, so Enter takes it), Start from the
  *    beginning, Start at another stop…;
  *  - "Start at…": the route's own stops, numbered, each with its kind's icon;
  *  - "Fly again from another stop…": an ended route's stops.
@@ -102,6 +103,11 @@ export function routeMenuLines(open: RouteStartOpen, kinds?: readonly StepKindDe
   ];
 }
 
+/** Focus the menu's default row (`.is-default`), else its first one. */
+export function focusDefault(menu: Pick<HTMLElement, "querySelector"> | null): void {
+  (menu?.querySelector<HTMLButtonElement>("button[role=menuitem].is-default") || menu?.querySelector<HTMLButtonElement>("button[role=menuitem]"))?.focus();
+}
+
 export function RouteStartMenu() {
   const open = useRouteStartMenu((s) => s.open);
   const set = useRouteStartMenu((s) => s.set);
@@ -127,10 +133,16 @@ export function RouteStartMenu() {
     if (!open || !el) return setPos(null);
     setPos(placeMenu(open.anchor, { w: el.offsetWidth, h: el.offsetHeight }, { w: window.innerWidth, h: window.innerHeight }));
   }, [open, view]);
+  // The default row takes the focus (Enter picks it) only once the menu is
+  // PLACED: while it is measured it is visibility: hidden, and a hidden
+  // button can't take focus. `placed` is in the deps for that reason.
+  const placed = !!pos;
+  useEffect(() => {
+    if (!open || !placed) return;
+    focusDefault(ref.current);
+  }, [open, view, placed]);
   useEffect(() => {
     if (!open) return;
-    const all = ref.current?.querySelectorAll<HTMLButtonElement>("button[role=menuitem]");
-    (ref.current?.querySelector<HTMLButtonElement>("button.is-default") || all?.[0])?.focus();
     const onDown = (e: Event) => {
       if (ref.current && !ref.current.contains(e.target as Node)) set(null);
     };

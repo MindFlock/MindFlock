@@ -169,11 +169,14 @@ export const useRouteStartMenu = create<{ open: RouteStartOpen | null; set(o: Ro
  * came from a ⋯ menu): kept by RouteStartMenu's host. */
 export const lastPress = { x: 0, y: 0 };
 
-/** What the menu opens beside: the element's box when given, else `at` (a
- * drop's point), else the last press. */
+/** What the menu opens beside: the opener's row when it sits in one (a
+ * button with its "Start at…" / "From another stop…" link — the menu must
+ * cover neither), else the element itself; else `at` (a drop's point), else
+ * the last press. */
 export function anchorOf(el?: Element | null, at?: { x: number; y: number } | null): Rect {
-  if (el && typeof el.getBoundingClientRect === "function") {
-    const r = el.getBoundingClientRect();
+  const box = el && typeof el.getBoundingClientRect === "function" ? (el.closest?.(".fl-again-row") || el) : null;
+  if (box) {
+    const r = box.getBoundingClientRect();
     return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
   }
   const x = at ? at.x : lastPress.x;
@@ -181,21 +184,25 @@ export function anchorOf(el?: Element | null, at?: { x: number; y: number } | nu
   return { left: x, top: y, right: x, bottom: y };
 }
 
-/** Where a menu of `size` goes for `anchor` in a `view`port: BESIDE it — to
- * its right, else its left — top-aligned and pulled up to stay on screen, so
- * it never covers the control that opened it or what lies under that; with
- * no room on either side, below it (above when there is no room below).
- * Always inside the viewport, 8px from its edges. */
+/** Where a menu of `size` goes for `anchor` in a `view`port, never over the
+ * anchor: to its RIGHT when the whole menu fits there (top-aligned, pulled
+ * up to stay on screen), else BELOW it, else ABOVE it; when neither fits,
+ * on the side with more room, kept on screen. Always 8px inside the
+ * viewport. (Not to its left: that is where the opener's own controls sit —
+ * the button beside a link.) */
 export function placeMenu(anchor: Rect, size: { w: number; h: number }, view: { w: number; h: number }): { x: number; y: number } {
   const M = 8;
   const GAP = 6;
   const clampY = (y: number) => Math.max(M, Math.min(y, view.h - M - size.h));
   const clampX = (x: number) => Math.max(M, Math.min(x, view.w - M - size.w));
   if (anchor.right + GAP + size.w <= view.w - M) return { x: anchor.right + GAP, y: clampY(anchor.top) };
-  if (anchor.left - GAP - size.w >= M) return { x: anchor.left - GAP - size.w, y: clampY(anchor.top) };
   const below = anchor.bottom + GAP;
-  const y = below + size.h <= view.h - M ? below : anchor.top - GAP - size.h;
-  return { x: clampX(anchor.left), y: clampY(y) };
+  const above = anchor.top - GAP - size.h;
+  if (below + size.h <= view.h - M) return { x: clampX(anchor.left), y: below };
+  if (above >= M) return { x: clampX(anchor.left), y: above };
+  const roomBelow = view.h - M - below;
+  const roomAbove = anchor.top - GAP - M;
+  return { x: clampX(anchor.left), y: clampY(roomBelow >= roomAbove ? below : above) };
 }
 
 // --- Starting a saved route on a session ----------------------------------------------------
