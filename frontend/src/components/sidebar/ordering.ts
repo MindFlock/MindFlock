@@ -4,6 +4,10 @@
 import type { Instance } from "../../api/types";
 import { attentionPriority, attentionReason, deriveSessionState, effectiveActivity, verifyOf } from "../../lib/sessionState";
 import { laneOf } from "../../lib/agentMessages";
+import { isVerifySession } from "../dialogs/verifySession";
+
+/** The states of a session's own verify (lib/sessionState `verifyNeedsYou`). */
+const VERIFY_REASONS: ReadonlySet<string> = new Set(["verify_confirm", "verify_failed", "verify_blocked"]);
 
 /** Arrange `keys` by the saved drag order: known keys in saved order first,
  * then keys the order has never seen, in the order given. The one ordering
@@ -391,6 +395,11 @@ export function attentionItems(instances: Instance[]): AttentionItem[] {
   for (const inst of instances || []) {
     if (inst.workspace_missing || inst.status === "paused") continue;
     const ss = deriveSessionState(inst);
+    // A verify checker is off the rail, the Sky and the calm count, and its
+    // agent never pops the ask pop-up: only its verify waits on you. Its
+    // agent's own states (offline, idle on files the walk left, a dialog)
+    // were "needs you" about a window nowhere to be seen.
+    if (isVerifySession(inst) && !VERIFY_REASONS.has(String(ss.reason || ""))) continue;
     if (ss.inBell) {
       const step = ss.reason === "precommit_failed" ? (inst.failed_step || "").trim() : "";
       items.push({
