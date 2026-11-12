@@ -141,6 +141,43 @@ def reclaim_for_branch(
     return held_at
 
 
+def base_repo_for(repo_url: str) -> str:
+    """The base clone a provisioned ticket/issue launch of ``repo_url`` adds
+    its worktree from, resolved exactly the way the engine does
+    (:func:`load_provision_settings` + :func:`resolve_base_repo_dir`); ""
+    when it can't be resolved or is not a clone yet. Never raises."""
+    try:
+        from backend.session.provisioned import (
+            load_provision_settings,
+            resolve_base_repo_dir,
+        )
+
+        settings = load_provision_settings(repo_url_override=repo_url or "")
+        base = str(resolve_base_repo_dir(settings))
+    except Exception:  # noqa: BLE001 — unresolvable base repo: nothing to do
+        return ""
+    if not base or not os.path.isdir(os.path.join(base, ".git")):
+        return ""
+    return base
+
+
+def worktree_for_launch(repo_url: str, branch: str) -> str:
+    """The worktree that has ``branch`` checked out in ``repo_url``'s base
+    clone — what a new provisioned session on it would collide with — or ""
+    (none, or it can't be told). Read-only; never raises."""
+    if not branch:
+        return ""
+    base = base_repo_for(repo_url)
+    if not base:
+        return ""
+    from backend.session.provisioned import worktree_holding_branch
+
+    try:
+        return worktree_holding_branch(base, branch) or ""
+    except Exception:  # noqa: BLE001 — a probe must not break a launch
+        return ""
+
+
 def reclaim_for_launch(repo_url: str, branch: str) -> str:
     """Pre-flight a provisioned ticket/issue launch: free ``branch`` if a
     leftover worktree is holding it and nothing would be lost.
@@ -155,17 +192,8 @@ def reclaim_for_launch(repo_url: str, branch: str) -> str:
     """
     if not branch:
         return ""
-    try:
-        from backend.session.provisioned import (
-            load_provision_settings,
-            resolve_base_repo_dir,
-        )
-
-        settings = load_provision_settings(repo_url_override=repo_url or "")
-        base = str(resolve_base_repo_dir(settings))
-    except Exception:  # noqa: BLE001 — unresolvable base repo: nothing to do
-        return ""
-    if not base or not os.path.isdir(os.path.join(base, ".git")):
+    base = base_repo_for(repo_url)
+    if not base:
         return ""
 
     def _is_owned(path: str) -> bool:

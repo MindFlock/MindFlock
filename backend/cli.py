@@ -34,6 +34,7 @@ Installed via ``[project.scripts]``::
     mindflock flight start ROUTE [--repo PATH] [--title SESSION]  # run one (id or name)
     mindflock flight done ROUTE   # tick off the stop it waits on you at (skip / cancel too)
     mindflock flight retry ROUTE  # run a halted stop again (resume = carry on, pause, jump ROUTE STOP)
+    mindflock flight again ROUTE [--at STOP]  # fly an ended route again, from where it stopped
 
     mindflock peer status         # peer links: pair-code with another MindFlock user
     mindflock peer invite         # …make a one-time invite link + code (you listen)
@@ -569,7 +570,7 @@ def _build_parser() -> argparse.ArgumentParser:
     flight = sub.add_parser(
         "flight",
         parents=[server_opts],
-        help="run a saved route, or steer one: done / skip / retry / resume / pause / jump / cancel",
+        help="run a saved route, or steer one: done / skip / retry / resume / pause / jump / cancel / again",
         description=(
             "A route is the row of stops one session's work goes through; a "
             "saved route is one kept to reuse, and a Wait for me stop waits "
@@ -606,6 +607,34 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="SESSION",
         help="run it on an existing session instead (unambiguous prefix ok)",
+    )
+    fl_start.add_argument(
+        "--at",
+        default=None,
+        metavar="STOP",
+        help="start at this stop (its id, number or title), or 'resume': where "
+        "the last run of this route on that session stopped",
+    )
+    fl_again = fl_sub.add_parser(
+        "again",
+        parents=[server_opts_nested],
+        help="fly an ended (stopped, halted or landed) route again, from the "
+        "stop it had reached",
+    )
+    fl_again.add_argument(
+        "flight", metavar="ROUTE", help="route id (prefix ok) or its session"
+    )
+    fl_again.add_argument(
+        "--at",
+        default=None,
+        metavar="STOP",
+        help="start at this stop instead (its id, number or title)",
+    )
+    fl_again.add_argument(
+        "--title",
+        default=None,
+        metavar="SESSION",
+        help="fly it on this session instead of its own",
     )
     for verb, text in (
         ("done", "tick off the Wait for me stop the route waits on you at"),
@@ -2321,6 +2350,11 @@ def _cmd_flight(args: argparse.Namespace) -> int:
             repo = os.getcwd()
         if repo:
             body["repo_path"] = os.path.abspath(os.path.expanduser(repo))
+        at = str(getattr(args, "at", None) or "").strip()
+        if at:
+            body["start_at"] = (
+                at if at == "resume" else str(_flight_stop(plan, at).get("id"))
+            )
         made = _flight_api(lambda: client.post(base, "/api/flights/start", body))
         f = (made or {}).get("flight") or {}
         step = _flight_step(f)
@@ -2335,6 +2369,8 @@ def _cmd_flight(args: argparse.Namespace) -> int:
         )
         return 0
     flights = (client.get(base, "/api/flights?all=1") or {}).get("flights") or []
+    if cmd == "again":
+        return _flight_again(base, args, [x for x in flights if isinstance(x, dict)])
     f = _resolve_flight([x for x in flights if isinstance(x, dict)], args.flight)
     fid = str(f.get("id") or "")
     if cmd == "cancel":
@@ -2404,6 +2440,46 @@ def _cmd_flight(args: argparse.Namespace) -> int:
             {"done": "done:", "retry": "running again:"}.get(cmd, "skipped"),
             step.get("title") or step.get("kind"),
             fid,
+            nxt.get("title") or "the end",
+        )
+    )
+    return 0
+
+
+def _flight_again(base: str, args: argparse.Namespace, flights: List[dict]) -> int:
+    """``mindflock flight again ROUTE [--at STOP] [--title SESSION]`` — POST
+    /api/flights/{id}/again. ROUTE may name its session: the newest route
+    that ran on it (it has ended, so it is not "unfinished")."""
+    want = str(args.flight or "").strip()
+    on_session = sorted(
+        (f for f in flights if f.get("session") == want),
+        key=lambda f: -float(f.get("started") or 0),
+    )
+    f = on_session[0] if on_session else _resolve_flight(flights, want)
+    fid = str(f.get("id") or "")
+    body: dict = {}
+    if args.at:
+        body["at"] = str(_flight_stop(f, args.at).get("id"))
+    if args.title:
+        inst = _resolve_title(client.get(base, "/api/instances") or [], args.title)
+        body["title"] = str(inst.get("title", ""))
+    out = _flight_api(
+        lambda: client.post(base, "/api/flights/%s/again" % _quote_title(fid), body)
+    )
+    g = (out or {}).get("flight") or {}
+    nxt = _flight_step(g)
+    how = {
+        "branch": " (the session that holds its branch)",
+        "reopened": " (reopened)",
+        "restored": " (reopened: the route came back as it was)",
+    }.get(str((out or {}).get("how") or ""), "")
+    print(
+        "%s flies %s again — %s%s, at %s"
+        % (
+            g.get("id") or "a route",
+            fid,
+            (out or {}).get("session") or g.get("session") or "?",
+            how,
             nxt.get("title") or "the end",
         )
     )
