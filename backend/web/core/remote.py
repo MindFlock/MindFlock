@@ -679,7 +679,9 @@ def _apply_probe(dev: dict, hit: Optional[Tuple[str, dict]], now: float) -> None
     """Fold one :func:`_probe_peer` answer into ``dev`` (a miss only clears
     ``reachable`` — the rest is kept for the stale grace period)."""
     if not hit:
-        dev["reachable"] = False
+        # Its session list is no longer known: a device that comes back must
+        # not show its pre-sleep rows as current until it is asked again.
+        dev.update(reachable=False, instances_ok=False)
         return
     base, hello = hit
     dev["probe"] = "ok"

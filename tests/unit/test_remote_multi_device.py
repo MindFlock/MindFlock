@@ -482,3 +482,23 @@ def test_fetch_instances_error_answer_drops_the_stale_rows(
     assert dev["instances_ok"] is False
     assert dev["error"]
     assert remote.merged_instances() == []
+
+
+def test_a_device_that_stopped_answering_does_not_come_back_with_its_old_rows():
+    # The sweep marks a device unreachable before the instances poll saw it
+    # fail (the poll skips devices that are not connected), so its pre-sleep
+    # list kept instances_ok. When the device answered hello again, those
+    # rows were back at once as if current, until the next poll replaced them.
+    remote._DEVICES["otherbox"] = dev = _fake_device(
+        instances=[{"title": "old", "status": "asking"}], instances_ok=True
+    )
+    assert [r["title"] for r in remote.merged_instances()] == ["otherbox::old"]
+    remote._apply_probe(dev, None, 100.0)  # asleep: the hello went unanswered
+    assert remote.merged_instances() == []
+    remote._apply_probe(
+        dev,
+        ("http://100.1.2.3:8765", {"app": "mindflock", "remote_control": True}),
+        200.0,
+    )
+    assert dev["reachable"] is True
+    assert remote.merged_instances() == []  # until a fresh list arrives
