@@ -503,3 +503,128 @@ def test_the_cli_table_and_the_mcp_summary_say_what_is_owed(monkeypatch, capsys)
     assert (
         "2/2 Write it up · 2 checks owed to you at the end" in capsys.readouterr().out
     )
+
+
+# --------------------------------------------------------------------------- #
+# "At the end" = at the last SAFE moment: before a stop that can't be undone
+# --------------------------------------------------------------------------- #
+def _ship(sid, lane, title):
+    return {"id": sid, "kind": "ship", "title": title, "config": {"lane": lane}}
+
+
+def _merge_route():
+    """Verify (ask end) → Review → Open PR → Merge, the Verify's checks owed
+    and the route standing on the Merge stop, not started."""
+    f = _fly(
+        _verify(),
+        _agent("s2"),
+        _ship("s3", "pr", "Open PR"),
+        _ship("s4", "merge", "Merge"),
+    )
+    _a, f = _step(f, facts=_needs_you_facts())
+    f = F.apply(f, {"action": "done", "note": "reviewed"}, NOW + 200)
+    f = F.apply(f, {"action": "done", "note": "PR open"}, NOW + 210)
+    assert f["steps"][f["cursor"]]["id"] == "s4"
+    assert f["step_states"]["s4"]["state"] == "pending"
+    return f
+
+
+def _started(f, sid):
+    return [h for h in f["history"] if h["step"] == sid and h["event"] == "started"]
+
+
+def test_cannot_undo_is_the_confirm_merge_rule():
+    assert F.cannot_undo(_ship("x", "merge", "Merge"))
+    assert not F.cannot_undo(_ship("x", "pr", "Open PR"))
+    assert not F.cannot_undo(_verify())
+    assert not F.cannot_undo(None)
+    if "land" in F.STEP_KINDS:  # the Land kind says risk: irreversible
+        assert F.cannot_undo({"kind": "land", "title": "Land", "config": {}})
+
+
+def test_owed_checks_are_asked_before_a_merge_then_it_runs_once():
+    f = _merge_route()
+    a, f = _step(f, at=NOW + 220)
+    assert a["action"] == "owed" and a["insert"] is True
+    assert a["note"] == "asking for the checks owed to you before Merge"
+    # A perch in front of the Merge; the Merge has not started.
+    assert [s["id"] for s in f["steps"]] == ["s1", "s2", "s3", "s5", "s4"]
+    assert f["owed_perch"] == "s5" and f["owed_added"] == ["s5"]
+    assert f["cursor"] == 3 and f["steps"][3]["title"] == "Your checks"
+    assert not _started(f, "s4")
+    assert any(
+        h["event"] == "added"
+        and h["note"] == "asks for the checks owed to you before Merge"
+        for h in f["history"]
+    )
+    a, f = _step(f, at=NOW + 221)
+    assert a["action"] == "you"
+    assert a["note"] == "Before this route merges: 2 checks for you"
+    assert f["state"] == "waiting_you"
+    assert f["step_states"]["s5"]["detail"]["ask"] == "owed"
+    assert F.you_text(f)[0] == "Before this route merges: 2 checks for you"
+    # Done confirms them; the Merge then runs — once — and the route lands
+    # with no second perch.
+    f = F.op_done(f, "s5", now=NOW + 300)
+    assert f["owed"] == [] and f["steps"][f["cursor"]]["id"] == "s4"
+    a, f = _step(f, at=NOW + 301)
+    assert a["action"] == "run"
+    assert f["step_states"]["s4"]["state"] == "running"
+    f = F.apply(f, {"action": "done", "note": "merged"}, NOW + 400)
+    assert f["state"] == "done"
+    assert len(_started(f, "s4")) == 1
+    assert [s["id"] for s in f["steps"]] == ["s1", "s2", "s3", "s5", "s4"]
+
+
+def test_it_doesnt_work_before_the_merge_goes_back_and_never_merges():
+    f = _merge_route()
+    _a, f = _step(f, at=NOW + 220)
+    _a, f = _step(f, at=NOW + 221)
+    a, f = _step(
+        f, at=NOW + 300, owed={"sc-1": {"outcome": "failed", "run_at": NOW + 2}}
+    )
+    assert a["action"] == "owed" and a["back"] == "s1"
+    assert f["cursor"] == 0 and f["state"] == "running"
+    # The added perch is gone; the Merge never ran and waits its turn.
+    assert [s["id"] for s in f["steps"]] == ["s1", "s2", "s3", "s4"]
+    assert f["owed_added"] == [] and f["owed_perch"] == ""
+    assert f["step_states"]["s4"]["state"] == "pending"
+    assert not _started(f, "s4")
+    failed = _facts(latest_run_at=NOW + 2, outcome="failed", failed=["Look"])
+    b, f = _step(f, facts=failed, at=NOW + 301)
+    assert b["action"] == "fail" and f["state"] == "halted"
+    assert not _started(f, "s4")
+
+
+def test_going_back_never_resets_a_stop_that_cant_be_undone_and_ran():
+    """Defensive: even if a check is owed past a merge that already happened
+    (an older flight, a hand edit), going back never runs the merge again."""
+    f = _fly(_verify(), _ship("s2", "merge", "Merge"), _agent("s3"))
+    _a, f = _step(f, facts=_needs_you_facts())
+    f["step_states"]["s2"].update(state="done", note="merged")
+    f["step_states"]["s3"].update(state="done")
+    F._land_back(f, "s1", NOW + 500, "Test locally: a person said it doesn't work")
+    assert f["cursor"] == 0
+    assert f["step_states"]["s2"]["state"] == "done"  # kept: never merged twice
+    assert f["step_states"]["s3"]["state"] == "pending"  # undoable: runs again
+
+
+def test_a_you_stop_before_the_merge_takes_them_first():
+    """Whichever comes first: a Wait-for-me stop ahead of the merge asks."""
+    f = _fly(_verify(), _you("s2"), _ship("s3", "merge", "Merge"))
+    _a, f = _step(f, facts=_needs_you_facts())
+    a, f = _step(f, at=NOW + 201)
+    assert a["action"] == "you" and f["steps"][f["cursor"]]["id"] == "s2"
+    f = F.op_done(f, "s2", now=NOW + 300)
+    a, f = _step(f, at=NOW + 301)
+    assert a["action"] == "run"  # nothing owed: the merge runs, no perch
+    assert len(f["steps"]) == 3
+
+
+def test_the_added_perches_survive_a_restart():
+    f = _merge_route()
+    _a, f = _step(f, at=NOW + 220)
+    _store_put(f)
+    again = F.get(f["id"])
+    assert again["owed_added"] == ["s5"] and again["owed_perch"] == "s5"
+    assert [s["id"] for s in again["steps"]] == ["s1", "s2", "s3", "s5", "s4"]
