@@ -1533,7 +1533,16 @@ def _mutate(plan_id: str, apply: Callable[[dict], None]) -> Optional[dict]:
         if raw is None:
             return None
         plan = _normalize(plan_id, raw)
+        before = json.dumps(plan, sort_keys=True)
         apply(plan)
+        # A NO-OP IS NOT A WRITE. The due loop calls several mutators every
+        # pass whose answer is almost always "nothing changed" (the live
+        # problem, the retarget, a progress read every few seconds), and
+        # rewriting the whole file each time also invalidated the row index
+        # memo (`_verify_plans_by_title`), so the next poll re-read and
+        # re-normalised the whole store for nothing.
+        if json.dumps(plan, sort_keys=True) == before:
+            return plan
         plans[plan_id] = plan
         _save(_doc(plans))
         return plan
@@ -1981,8 +1990,16 @@ def mark_due(plan_id: str, reason: str = "") -> Optional[dict]:
         if plan["state"] == "running" and not reason:
             return
         was_running = plan["state"] == "running"
+        # A CHECKER'S CHECK BEFORE MERGE THAT DIED IS NOT A SHIPPING EITHER —
+        # the same rule as the person's own session above and as a deleted
+        # one (:func:`_after_run_state`). Asked of the run before the record
+        # handling below can pop it.
+        newest = plan["runs"][-1] if plan["runs"] else {}
+        before_merge = bool(
+            reason and was_running and newest.get("prelive") and not plan["live_at"]
+        )
         plan["run_session"] = ""
-        if not plan["live_at"]:
+        if not plan["live_at"] and not before_merge:
             plan["live_at"] = time.time()
         # The give-up path arrives here too (the due loop releases a run that has
         # not written its results in two hours), and by then the person may have
@@ -2021,6 +2038,10 @@ def mark_due(plan_id: str, reason: str = "") -> Optional[dict]:
         # answered every step by hand — which is exactly what somebody does
         # while waiting on a wedged agent. Putting that plan back into ``due``
         # would nag about a checklist that is finished.)
+        if before_merge:
+            # Back to waiting for the merge; the liveness pass asks again.
+            plan["state"] = "generated"
+            return
         plan["state"] = "done" if _all_settled(plan) else "due"
 
     return _mutate(plan_id, apply)
