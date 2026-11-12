@@ -1210,12 +1210,18 @@ def flights_rename(flight_id: str, payload: dict) -> JSONResponse:
     body = payload or {}
     if "start_on" not in body:
         return _op(flight_id, "rename", "", str(body.get("plan_name") or ""))
-    if "plan_name" in body:
-        renamed = _op(flight_id, "rename", "", str(body.get("plan_name") or ""))
-        if renamed.status_code != 200:
-            return renamed
     try:
-        flight = _driver.set_start_on(flight_id, body.get("start_on"))
+        if "plan_name" in body:
+            # One write: a refusal of either half changes nothing.
+            name = str(body.get("plan_name") or "")
+
+            def both(f: dict) -> None:
+                _flights.op_rename(f, name)
+                _flights.op_start_on(f, body.get("start_on"))
+
+            flight = _driver._changed(flight_id, both)
+        else:
+            flight = _driver.set_start_on(flight_id, body.get("start_on"))
     except _flights.PlanError as err:
         return _bad_step(err)
     except _flights.FlightError as err:
