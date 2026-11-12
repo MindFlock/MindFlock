@@ -40,7 +40,7 @@ import {
 } from "../../lib/flights";
 import { HALT_POINT_REASON, atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
-import { controlFlight, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, flightAction, flightPath, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { canFlyAgain, flyAgainLabel, flyAgainPrimary, flyAgainTitle, pickAgainStop } from "../../lib/routeStart";
 import "./RouteStartMenu.css";
 import { ASK_TILE_W, OWED_OPEN, OWED_OPEN_TITLE, askOffers, askRoom, askSentence, findingsOf, flightAsk, owedGroups, owedItemsText, owedNoteOf } from "../../lib/stopAsks";
@@ -280,7 +280,20 @@ export function skipCarriesOn(flight: Pick<Flight, "state" | "steps" | "cursor" 
  * person paused it. A Verify stop parked on you answers its verify instead
  * (`VerifyStopActions`). `inTile` (a stop on the Sky): its text is the
  * tile's own line under its name, not a paragraph here. */
-export function YouStepActions({ flight, compact = false, inTile = false }: { flight: Flight; compact?: boolean; inTile?: boolean }) {
+export function YouStepActions({
+  flight,
+  compact = false,
+  inTile = false,
+  gone = false,
+}: {
+  flight: Flight;
+  compact?: boolean;
+  inTile?: boolean;
+  /** Its session is closed (not among the rows): no agent to hand a fix
+   * to, and Stop the route is the way to end it (it is drawn nowhere else
+   * with a ⋯). */
+  gone?: boolean;
+}) {
   const step = flight.steps[flight.cursor];
   const items = youItems(step);
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
@@ -332,7 +345,7 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
   const key = (i: number) => flight.id + ":" + step.id + ":" + i;
   const allTicked = items.every((_, i) => ticked[key(i)]);
   const halted = flight.state === "halted" || paused || handed;
-  const fix = !paused && canFixStep(flight);
+  const fix = !paused && !gone && canFixStep(flight);
   // The owed perch's sentence is the server's note ("Before this route
   // finishes: 3 checks for you"), which its own text alone would leave out.
   const text = handed ? (/^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason) : ask === "owed" ? askSentence(rec, youText(flight)) : youText(flight);
@@ -416,6 +429,17 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
         >
           Skip
         </button>
+        {gone && (
+          <button
+            type="button"
+            className="test-btn fl-btn"
+            disabled={busy}
+            title="Its session is closed — end this route"
+            onClick={() => void run(() => flightAction("Stop the route", flightPath(flight.id, "/cancel"), {}, "Route stopped"))}
+          >
+            Stop the route
+          </button>
+        )}
       </div>
     </div>
   );
