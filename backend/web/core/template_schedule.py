@@ -69,7 +69,8 @@ import os
 import re
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from contextlib import contextmanager
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 from backend.config.config import GetConfigDir
 from backend.fsutil import atomic_write_json, read_json
@@ -374,15 +375,58 @@ def _save_runs(runs: Dict[str, dict], path: Optional[str] = None) -> None:
     atomic_write_json(path or runs_path(), {"runs": runs}, prefix=".tplrun.")
 
 
-def save_runs(runs: Dict[str, dict], path: Optional[str] = None) -> None:
+#: How long a writer waits for another process's hold on a run record before
+#: going on without the inter-process lock.
+_FLOCK_WAIT_S = 5.0
+
+
+@contextmanager
+def _writing(path: Optional[str] = None) -> Iterator[None]:
+    """One read-modify-write of the run record at ``path``: :data:`_LOCK`,
+    then an exclusive advisory lock on ``<record>.lock``. Every server on one
+    home shares the record and, on one device, every one of them ticks: with
+    the in-process lock alone two of them read the same slot as due and both
+    fired it. The kernel releases the lock if its holder dies; a holder
+    wedged past :data:`_FLOCK_WAIT_S` is not waited for, and a lock file
+    that can't be opened leaves the write under :data:`_LOCK` alone."""
+    from backend import compat
+
     with _LOCK:
+        fd: Optional[int] = None
+        try:
+            target = path or runs_path()
+            os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+            fd = os.open(target + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError:
+            fd = None
+        if fd is not None:
+            deadline = time.monotonic() + _FLOCK_WAIT_S
+            while True:
+                try:
+                    compat.flock(fd, compat.LOCK_EX | compat.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        os.close(fd)
+                        fd = None
+                        break
+                    time.sleep(0.01)
+        try:
+            yield
+        finally:
+            if fd is not None:
+                os.close(fd)  # closing the fd releases the flock
+
+
+def save_runs(runs: Dict[str, dict], path: Optional[str] = None) -> None:
+    with _writing(path):
         _save_runs(runs, path)
 
 
 def record_run(key: str, entry: dict, *, path: Optional[str] = None, **fields) -> None:
     """Merge ``fields`` into one template's run record AND put ``entry`` at
     the head of its history (newest first, :data:`HISTORY_MAX` kept)."""
-    with _LOCK:
+    with _writing(path):
         data = read_json(path or runs_path(), {}, expect=dict)
         runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
         rec = dict(runs.get(key) or {})
@@ -397,6 +441,24 @@ def record_run(key: str, entry: dict, *, path: Optional[str] = None, **fields) -
 
 def _key(name: str) -> str:
     return str(name or "").strip().lower()
+
+
+def claim_slots(
+    now: float, rows: List[dict], here: bool, path: Optional[str] = None
+) -> Tuple[List[Tuple[dict, str]], Dict[str, dict]]:
+    """:func:`plan_tick` over the run record at ``path`` (None = the
+    templates'), persisted BEFORE anything starts — the slot is spent even
+    if the start crashes the process. One read-modify-write under
+    :func:`_writing`: a slot is spent by exactly one process.
+    → ``(to_fire, runs')``."""
+    with _writing(path):
+        data = read_json(path or runs_path(), {}, expect=dict)
+        got = data.get("runs")
+        runs = dict(got) if isinstance(got, dict) else {}
+        to_fire, new_runs = plan_tick(now, rows, runs, here)
+        if new_runs != runs:
+            _save_runs(new_runs, path)
+    return to_fire, new_runs
 
 
 # --------------------------------------------------------------------------- #
@@ -772,12 +834,9 @@ async def tick(now: Optional[float] = None, here: Optional[bool] = None) -> List
         here = await asyncio.to_thread(automation_here)
     tpls = await asyncio.to_thread(templates.list_templates)
     async with _fire_lock():
-        runs = await asyncio.to_thread(load_runs)
-        to_fire, new_runs = plan_tick(now, tpls, runs, here)
-        if new_runs != runs:
-            # Persisted BEFORE anything starts: the slot is spent even if the
-            # create below crashes the process.
-            await asyncio.to_thread(save_runs, new_runs)
+        # Persisted BEFORE anything starts: the slot is spent even if the
+        # create below crashes the process.
+        to_fire, new_runs = await asyncio.to_thread(claim_slots, now, tpls, here)
         fired = []
         for tpl, _slot in to_fire:
             key = _key(tpl.get("name"))
@@ -1050,12 +1109,9 @@ async def tick_flights(
         return []
     path = await asyncio.to_thread(flight_runs_path)
     async with _fire_lock():
-        runs = await asyncio.to_thread(load_runs, path)
-        to_fire, new_runs = plan_tick(now, rows, runs, here)
-        if new_runs != runs:
-            # Persisted BEFORE anything starts: the slot is spent even if the
-            # take-off below crashes the process.
-            await asyncio.to_thread(save_runs, new_runs, path)
+        # Persisted BEFORE anything starts: the slot is spent even if the
+        # take-off below crashes the process.
+        to_fire, new_runs = await asyncio.to_thread(claim_slots, now, rows, here, path)
         fired = []
         for row, _slot in to_fire:
             key = _key(row["name"])
