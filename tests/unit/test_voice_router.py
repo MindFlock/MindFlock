@@ -2387,11 +2387,32 @@ def test_route_ignores_a_pending_that_is_not_an_object(env):
         ("what is a worktree in MindFlock", "what is a worktree in mindflock"),
         ("how do I open a PR in MindFlock", "how do i open a pr in mindflock"),
         ("ok, what's a session", "what's a session"),
-        # "help:" first: still help ("MindFlock, …" is the assistant's now).
-        ("help: what is a team run", "what is a team run"),
     ],
 )
 def test_help_questions_about_mindflock(text, question):
+    """Not said to MindFlock, a question about it is only a guess: help with
+    no session to type it into, a prompt (``near`` help) while one is open."""
+    assert vr.command(text) == {"kind": "help", "text": question, "unaddressed": True}
+    assert ans(text) == {"kind": "help", "text": question}
+    assert ans(text, session="docs") == {
+        "kind": "prompt",
+        "near": {
+            "kind": "help",
+            "why": "unaddressed",
+            "suggest": "MindFlock, " + question,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "text, question",
+    [
+        # "help:" first: still help ("MindFlock, …" is the assistant's now).
+        ("help: what is a team run", "what is a team run"),
+        ("help: how do I fence a session?", "how do i fence a session"),
+    ],
+)
+def test_addressed_help_is_help_with_a_session_open(text, question):
     want = {"kind": "help", "text": question}
     assert vr.command(text) == want
     assert ans(text, session="docs") == want
@@ -2454,9 +2475,19 @@ def test_help_never_takes_another_commands_phrase(text, kind):
 
 
 def test_route_help_carries_the_question(env):
-    assert route("how does the fence work?", "docs") == {
+    # No session to type into: the guess is answered.
+    assert route("how does the fence work?", "") == {
         "kind": "help",
         "text": "how does the fence work",
+    }
+    # A session open: typed, the caption says how to ask MindFlock.
+    assert route("how does the fence work?", "docs") == {
+        "kind": "prompt",
+        "near": {
+            "kind": "help",
+            "why": "unaddressed",
+            "suggest": "MindFlock, how does the fence work",
+        },
     }
     # Said while Claude's question tool is up, help is still help.
     env.dialogs["docs"] = _ask("multi")

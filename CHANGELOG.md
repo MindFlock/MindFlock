@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Voice no longer mistakes what you dictate for a question to MindFlock.**
+  With a session open, a question like “where do the tickets get picked up”
+  or “why doesn't auto ingest PR do the review flight” is typed into that
+  session, even when it mentions sessions, PRs, settings or other MindFlock
+  features. To ask MindFlock, say its name first (“MindFlock, …”) or
+  “help: …”, and the caption tells you so when a question was typed. A
+  sentence that starts with the name, like “MindFlock should restart the
+  server when…”, is typed too. It goes to the assistant only when you say it
+  TO MindFlock, with a pause after the name or a request after it
+  (“MindFlock, what needs me”, “hey MindFlock open settings”). With no
+  session open, questions are still answered from the docs.
+
 ## [0.14.11] - 2026-11-12
 
 ### Fixed

@@ -3153,8 +3153,11 @@ export interface RouteReply {
 }
 
 /** A prompt that nearly was a command: `kind` (switch, status, read,
- * question, interrupt, answer), `why` (no_session, no_dialog, no_focus),
- * the name said (`arg`) and the session it sounds like (`suggest`). */
+ * question, interrupt, answer, help), `why` (no_session, no_dialog,
+ * no_focus, unaddressed), the name said (`arg`) and the session it sounds
+ * like (`suggest`) — for help (`unaddressed`: a question about MindFlock
+ * said while a session is open, typed into it), the question said to
+ * MindFlock ("MindFlock, <the question>"). */
 export interface RouteNear {
   kind?: string;
   why?: string;
@@ -3175,6 +3178,9 @@ export function routeMissLine(r: Pick<RouteReply, "kind" | "near" | "failed" | "
   const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
   if (n.why === "no_dialog") return "Typed — nothing is being asked";
   if (n.why === "no_focus") return "Typed — no session is focused";
+  // A question about MindFlock not said to it: words for the session; the
+  // caption (never spoken: no echoes) says how to ask MindFlock instead.
+  if (n.why === "unaddressed") return "Typed — say “" + wakeName() + ", …” to ask " + wakeName() + " instead";
   if (n.why === "no_session") {
     const arg = str(n.arg);
     const suggest = str(n.suggest);

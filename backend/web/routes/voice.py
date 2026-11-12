@@ -73,9 +73,11 @@ condensation:
   whisper is the better command ear, so when both are commands whisper's
   wins; a switch by name Moonshine heard takes the name from whisper's
   words when that switches (``voice_router.heard_text``). A ``prompt`` may
-  carry ``near`` — ``{kind, why: "no_session" | "no_dialog" | "no_focus",
-  arg?, suggest?}``, the command it nearly was — for the client's caption
-  (the words are typed as ever). A ``pending`` pick may carry ``then``
+  carry ``near`` — ``{kind, why: "no_session" | "no_dialog" | "no_focus" |
+  "unaddressed", arg?, suggest?}``, the command it nearly was — for the
+  client's caption (the words are typed as ever); ``unaddressed`` is a
+  question about MindFlock said while ``session`` is open (``suggest``:
+  "MindFlock, <the question>"), which is help only with no session. A ``pending`` pick may carry ``then``
   (``interrupt`` / ``answer`` / ``question`` / ``read`` / ``status``): the
   pick is carried out on the session picked — Escape pressed, the dialog
   answered — instead of a switch to it.
@@ -623,7 +625,10 @@ async def voice_route(request: Request) -> JSONResponse:
         again = _voice_actions.last_scroll(client, title or session)
         cmd = dict(again, kind="scroll") if again else None
     if session and (
-        cmd is None or cmd["kind"] in _SELECT_FIRST or cmd.get("mode") == "strict"
+        cmd is None
+        or cmd["kind"] in _SELECT_FIRST
+        or cmd.get("mode") == "strict"
+        or cmd.get("unaddressed")  # a help guess: words, while a session is open
     ):
         picked, sel_rows = await _select_answer(text, session, request)
         if picked is not None:

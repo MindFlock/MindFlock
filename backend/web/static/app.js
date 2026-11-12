@@ -55009,6 +55009,7 @@ function routeMissLine(r) {
 	const str = (v) => typeof v === "string" ? v.trim() : "";
 	if (n.why === "no_dialog") return "Typed — nothing is being asked";
 	if (n.why === "no_focus") return "Typed — no session is focused";
+	if (n.why === "unaddressed") return "Typed — say “" + wakeName() + ", …” to ask " + wakeName() + " instead";
 	if (n.why === "no_session") {
 		const arg = str(n.arg);
 		const suggest = str(n.suggest);
