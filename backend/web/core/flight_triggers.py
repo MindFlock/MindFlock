@@ -99,6 +99,18 @@ def save_state(state: Dict[str, dict]) -> None:
         atomic_write_json(state_path(), state, prefix=".ftr.")
 
 
+def _update_state(rows: Dict[str, dict], drop=()) -> None:
+    """Write ``rows`` (replacing those plans' rows) and remove ``drop`` on
+    the state file AS IT IS NOW, under the lock: a tick holds its copy for
+    as long as its fetches take, and a hook fired meanwhile keeps its row."""
+    with _LOCK:
+        state = load_state()
+        state.update(rows)
+        for pid in drop:
+            state.pop(pid, None)
+        atomic_write_json(state_path(), state, prefix=".ftr.")
+
+
 # --------------------------------------------------------------------------- #
 # Git
 # --------------------------------------------------------------------------- #
@@ -411,7 +423,7 @@ async def tick(
         return []
     state = await asyncio.to_thread(load_state)
     fired: List[str] = []
-    dirty = False
+    changed_rows: Dict[str, dict] = {}
     for plan in rows:
         pid = str(plan.get("id") or "")
         row = dict(state.get(pid) or {})
@@ -423,8 +435,7 @@ async def tick(
             row["error"] = str(err) or type(err).__name__
             changed, did = True, False
         if changed:
-            state[pid] = row
-            dirty = True
+            changed_rows[pid] = row
         if did:
             fired.append(pid)
     # Rows of plans that no longer watch anything are dropped.
@@ -434,12 +445,9 @@ async def tick(
         for p in (plans if plans is not None else _all_plans())
         if ((p.get("trigger") or {}).get("kind") == "hook")
     }
-    for pid in list(state):
-        if pid not in keep and pid not in hooks:
-            state.pop(pid, None)
-            dirty = True
-    if dirty:
-        await asyncio.to_thread(save_state, state)
+    drop = [pid for pid in state if pid not in keep and pid not in hooks]
+    if changed_rows or drop:
+        await asyncio.to_thread(_update_state, changed_rows, drop)
     return fired
 
 
@@ -547,8 +555,7 @@ async def hook_fire(
     if status < 400:
         row["fired_at"] = now
         row["last_status"] = status
-        state[pid] = row
-        await asyncio.to_thread(save_state, state)
+        await asyncio.to_thread(_update_state, {pid: row})
     return status, out
 
 
