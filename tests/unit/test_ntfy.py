@@ -1295,3 +1295,42 @@ def test_session_finished_pushes_by_default(pushes):
         }
     )
     assert len(pushes) == 1 and pushes[0]["title"] == "s1 has finished"
+
+
+# --------------------------------------------------------------------------- #
+# Two servers on one config dir                                                #
+# --------------------------------------------------------------------------- #
+async def test_two_servers_push_one_event_once(monkeypatch, tmp_path):
+    """The service and a dev server share ~/.mindflock — the same settings, so
+    the same ntfy topic — and each runs the notify rules over the same
+    sessions: "alpha needs your input" reached the phone twice. Each server's
+    copy taps through to its own URL (the click line), so that is not part of
+    what makes two pushes the same one. The same server pushing the same words
+    again is its own rules' business, and still goes."""
+    seen: list = []
+
+    async def _publish(cfg, **kw):
+        seen.append(kw)
+        return True, ""
+
+    monkeypatch.setattr(ntfy, "publish", _publish)
+    monkeypatch.setattr(
+        ntfy, "_recent_path", lambda: str(tmp_path / "ntfy_recent.json"), raising=False
+    )
+    ntfy.set_loop(asyncio.get_running_loop())
+    cfg = ntfy.NtfyConfig(enabled=True, topic="t")
+
+    def push(pid, port):
+        monkeypatch.setattr(ntfy.os, "getpid", lambda: pid)
+        click = "http://box:%d/m?s=alpha" % port
+        ntfy.publish_soon(
+            cfg, title="alpha needs your input", message="Allow?\n" + click, click=click
+        )
+
+    push(111, 8765)
+    assert await _settle(lambda: len(seen) == 1)
+    push(222, 9000)  # the other server, same event
+    await asyncio.sleep(0.05)
+    assert len(seen) == 1
+    push(111, 8765)  # this server again: not the other server's push
+    assert await _settle(lambda: len(seen) == 2)
