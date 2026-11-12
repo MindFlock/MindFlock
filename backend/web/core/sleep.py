@@ -904,6 +904,7 @@ def ensure_awake(
         return False, PAUSED_REFUSED
     if srv is None:
         srv = _server()
+    gated = False
     if auto:
         from backend.web.core import launch_gate as _gate
 
@@ -922,10 +923,15 @@ def ensure_awake(
             return False, str(err)
         if queued is not None:
             return False, _gate.WAITING_FOR_MEMORY
+        gated = True
     _WAKE_WHY[title] = why
     _name, err = srv._ensure_agent_session(inst, title)
     if err is not None:
         _WAKE_WHY.pop(title, None)
+        if gated:
+            # The gate noted it as starting: take that back, or it reads as
+            # an agent warming up (and holds the stagger) for nothing.
+            _gate.unnote_start(title)
         _info("wake %s: not started (%s)", title, err)
         return False, err
     # _ensure_agent_session ended the sleep (woke()); a relaunch that found
