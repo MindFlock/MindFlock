@@ -23,7 +23,10 @@
  * ("Run these stops") — the first `SAVED_SHOWN` (`featuredPlans`: yours,
  * newest first, then the built-ins), the rest behind "More…" so a pane isn't
  * a gallery — and "Describe stops…" to make some from a sentence
- * and fly it right away. The line's editing (the +, the palette, the
+ * and fly it right away. A card's Run starts as always unless an earlier
+ * run of that route here stopped part way — then a menu says where it
+ * carries on (lib/routeStart); its "Start at…" picks the stop. A route that
+ * finished offers Fly again in the head. The line's editing (the +, the palette, the
  * dialog) is useSessionLine's, shared with the Sky's lines; "Open in the
  * Sky" shows this session's line there (`#sky/<title>`). */
 
@@ -39,7 +42,7 @@ import { savePlan, takeOff } from "../../lib/flightsApi";
 import { FlightChain } from "./FlightChain";
 import "./SkyChain.css";
 import "./Sky.css";
-import { FlightMenu } from "./FlightStrip";
+import { FlightMenu, FlyAgain } from "./FlightStrip";
 import { DescribeField } from "./StopParts";
 import { useSessionLine } from "./useSessionLine";
 import { Bird } from "./Bird";
@@ -59,7 +62,7 @@ export function featuredPlans(plans: readonly FlightPlan[], all: boolean): { sho
 }
 
 /** One saved stop as a card: its name, its stops as tiny boxes, "Run these stops". */
-function FlywayCard({ plan, kinds, onFly, busy }: { plan: FlightPlan; kinds: readonly StepKindDef[]; onFly(): void; busy: boolean }) {
+function FlywayCard({ plan, kinds, onFly, onStartAt, busy }: { plan: FlightPlan; kinds: readonly StepKindDef[]; onFly(el: Element): void; onStartAt(el: Element): void; busy: boolean }) {
   const d = flywayDiagram(plan.steps, kinds);
   return (
     <div className="fl-flyway-card">
@@ -77,9 +80,16 @@ function FlywayCard({ plan, kinds, onFly, busy }: { plan: FlightPlan; kinds: rea
             </li>
           ))}
       </ol>
-      <button type="button" className="btn-primary fl-btn" disabled={busy} onClick={onFly}>
-        Run these stops
-      </button>
+      <div className="fl-again-row">
+        <button type="button" className="btn-primary fl-btn" disabled={busy} onClick={(e) => onFly(e.currentTarget)}>
+          Run these stops
+        </button>
+        {plan.steps.length > 1 && (
+          <button type="button" className="linklike fl-start-at" disabled={busy} title="Pick the stop it starts at" onClick={(e) => onStartAt(e.currentTarget)}>
+            Start at…
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -100,6 +110,8 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
   if (!row) return <p className="fl-note muted">This session isn't listed right now.</p>;
 
   const prog = flight ? flightProgress(flight) : null;
+  // A route that finished stays drawn on the line: it can fly again.
+  const landed = line.landed;
   const saved = featuredPlans(ordered, allSaved);
   const working = busy || line.busy;
 
@@ -115,6 +127,12 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
               {flight.state === "paused" ? " · paused" : flight.state === "halted" ? " · halted" : flight.state === "waiting_you" ? " · needs you" : ""}
             </span>
             <FlightMenu flight={flight} onCancelAsk={cancel.ask} openSession={false} />
+          </>
+        ) : landed ? (
+          <>
+            <strong>{landed.plan_name}</strong>
+            <span className="muted">finished</span>
+            <FlyAgain flight={landed} />
           </>
         ) : diagram.mode === "ladder" ? (
           <>
@@ -148,7 +166,14 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
             <>
               <div className="fl-flyway-grid">
                 {saved.shown.map((p) => (
-                  <FlywayCard key={p.id} plan={p} kinds={kinds} busy={working} onFly={() => void line.flyFlyway(p)} />
+                  <FlywayCard
+                    key={p.id}
+                    plan={p}
+                    kinds={kinds}
+                    busy={working}
+                    onFly={(el) => void line.flyFlyway(p, { el })}
+                    onStartAt={(el) => void line.flyFlyway(p, { el, choose: true })}
+                  />
                 ))}
               </div>
               {(saved.more > 0 || allSaved) && (

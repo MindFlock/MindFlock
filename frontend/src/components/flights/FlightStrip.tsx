@@ -39,7 +39,9 @@ import {
 } from "../../lib/flights";
 import { HALT_POINT_REASON, atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
-import { controlFlight, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { canFlyAgain, flyAgainLabel, flyAgainPrimary, pickAgainStop } from "../../lib/routeStart";
+import "./RouteStartMenu.css";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
 import "./Flights.css";
@@ -386,9 +388,51 @@ export function FlightMenu({
     );
     items.push({ key: "cancel", label: "Stop the route", danger: true, title: "End this route — its session is kept", onSelect: onCancelAsk });
   }
+  items.push(...flyAgainItems(flight));
   return (
     <span onClick={stop} className="fl-menu" data-no-drag>
       <OverflowMenu label="Route actions" items={items} />
+    </span>
+  );
+}
+
+/** An ended route's (done, cancelled, halted) Fly again in a ⋯: from where
+ * it stopped, and from another stop (the route's stops, at the press). */
+export function flyAgainItems(flight: Flight): MenuItem[] {
+  if (!canFlyAgain(flight)) return [];
+  return [
+    { key: "again", label: flyAgainLabel(flight), title: "Fly this route again on its session — a new run of its stops", onSelect: () => void flyAgain(flight.id) },
+    { key: "again-pick", label: "Fly again from another stop…", title: "Pick the stop it flies again from", onSelect: () => pickAgainStop(flight) },
+  ];
+}
+
+/** Fly again on an ended route, in a row: "Fly again from <stop>" (where it
+ * stopped — the primary button on a cancelled or halted route) and "From
+ * another stop…" (the beginning, or any stop). */
+export function FlyAgain({ flight }: { flight: Flight }) {
+  const [busy, setBusy] = useState(false);
+  if (!canFlyAgain(flight)) return null;
+  return (
+    <span className="fl-again-row" onClick={stop} data-no-drag>
+      <button
+        type="button"
+        className={(flyAgainPrimary(flight) ? "btn-primary" : "test-btn") + " fl-btn fl-fly-again"}
+        disabled={busy}
+        title="Fly this route again on its session — a new run of its stops"
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await flyAgain(flight.id);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {flyAgainLabel(flight)}
+      </button>
+      <button type="button" className="linklike fl-start-at" disabled={busy} title="The beginning, or any of its stops" onClick={(e) => pickAgainStop(flight, e.currentTarget)}>
+        From another stop…
+      </button>
     </span>
   );
 }
@@ -548,9 +592,15 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
         </div>
         <div className="fl-strip-now">
           {flight.state === "done" ? (
-            <span className="fl-landed">Finished</span>
+            <>
+              <span className="fl-landed">Finished</span>
+              <FlyAgain flight={flight} />
+            </>
           ) : flight.state === "cancelled" ? (
-            <span className="muted">Cancelled{flight.reason ? " — " + flight.reason : ""}</span>
+            <>
+              <span className="muted">Cancelled{flight.reason ? " — " + flight.reason : ""}</span>
+              <FlyAgain flight={flight} />
+            </>
           ) : step ? (
             <>
               <span className={"fl-now-dot" + (you ? " fl-now-you" : "") + (flight.state === "halted" ? " fl-now-halted" : "")} aria-hidden="true" />

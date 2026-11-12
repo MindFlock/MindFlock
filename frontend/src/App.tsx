@@ -59,6 +59,7 @@ import { installSurfaceHash } from "./lib/surfaceHash";
 import { installVerifyRedirect } from "./lib/behaviorsFocus";
 import { installViewFlip } from "./lib/viewMode";
 import { SkyView } from "./components/flights/SkyView";
+import { RouteStartMenu } from "./components/flights/RouteStartMenu";
 
 /** At or under this window width the main screen goes single-column. */
 const NARROW_PX = 760;
@@ -365,6 +366,9 @@ export default function App() {
       {/* The one floating folder picker every path field's Browse… opens
           (portalled to body, above the dialogs, under the toast). */}
       <FolderPickerWindow />
+      {/* Where a route starts: carry on where it stopped, start at a stop,
+          fly an ended route again (lib/routeStart) — a menu at the click. */}
+      <RouteStartMenu />
 
       {/* Break reminder + the idle flock (Settings → General; both off-screen
           until their timers fire) */}

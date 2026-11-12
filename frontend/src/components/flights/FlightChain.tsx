@@ -55,7 +55,7 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   const big = useMemo(() => ({ ...subFrameBoxes(moves.diagram.nodes, subFrames), ...behaviors.big(moves.diagram) }), [moves.diagram, subFrames, behaviors.big]);
   const graph = useMemo(() => chainGraph(hangFromAgent(moves.diagram), { head, key: title, flightId, big }), [moves.diagram, head, title, flightId, big]);
   const gc = line.graphCanvas;
-  const chainMenu = useChainMenu(gc, flightId || line.landedId, { steps: line.flight?.steps, kinds });
+  const chainMenu = useChainMenu(gc, flightId || line.landedId, { steps: line.flight?.steps, kinds, ended: line.landed });
   const agentMenu = useAgentMenu();
   const onPillDown = pillAimer(graph, gc.onLoopTo);
   const rootRef = useRef<HTMLDivElement | null>(null);

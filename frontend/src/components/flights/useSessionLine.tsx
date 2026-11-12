@@ -74,6 +74,7 @@ import {
   ungroupStops,
 } from "../../lib/flightsApi";
 import { groupHaltStep, undoPayload, type StopDrop } from "../../lib/stopEditing";
+import { startSavedRoute } from "../../lib/routeStart";
 import { pushUndo, takeUndo, undoAction } from "../../lib/skyUndo";
 import { removalNeedsAsk } from "../../lib/skySelect";
 import { InlineConfirm } from "../InlineConfirm";
@@ -480,7 +481,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         const fid = flight.id;
         const go = () => tackOnPlan(fid, plan.id, where);
         if (await (steps?.length ? optimistic(fid, withSteps(steps, where), go) : go())) toast("Tacked on “" + plan.name + "”" + (plan.steps ? " — " + plan.steps.length + (plan.steps.length === 1 ? " stop" : " stops") : ""));
-      } else await takeOff({ plan_id: plan.id, title, start_on: NEW_ROUTE_STARTS_ON });
+      } else await startOnLine(plan);
     } finally {
       setBusy(false);
     }
@@ -607,13 +608,23 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     }
   };
 
-  const flyFlyway = async (plan: FlightPlan) => {
+  /** A saved route started on this line with no route on it: where an
+   * earlier run of it here stopped part way, a menu says where it carries on
+   * (lib/routeStart); else it is built to wait for ▶ Run, as always.
+   * `choose`: the route's stops to pick the one it starts at ("Start at…"). */
+  const startOnLine = (plan: Pick<FlightPlan, "id" | "name"> & { steps?: FlightStep[] }, how: { choose?: boolean; el?: Element | null } = {}) =>
+    startSavedRoute({ ...plan, steps: plan.steps || plans.find((p) => p.id === plan.id)?.steps || [] }, title, {
+      ...how,
+      normal: () => takeOff({ plan_id: plan.id, title, start_on: NEW_ROUTE_STARTS_ON }),
+    });
+
+  const flyFlyway = async (plan: FlightPlan, how: { choose?: boolean; el?: Element | null } = {}) => {
     setBusy(true);
     setPaletteAt(null);
     try {
       if (flight) {
         if (await tackOnPlan(flight.id, plan.id)) toast("Tacked on “" + plan.name + "” — " + plan.steps.length + " stops");
-      } else await takeOff({ plan_id: plan.id, title, start_on: NEW_ROUTE_STARTS_ON });
+      } else await startOnLine(plan, how);
     } finally {
       setBusy(false);
     }
@@ -940,6 +951,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     flight,
     /** A landed flight drawn on the line (read-only), "" when none. */
     landedId,
+    /** That landed flight itself (it can fly again), null when none. */
+    landed: landedId ? flights?.find((f) => f.id === landedId) || null : null,
     /** The line as the canvas counts it (drawn places). */
     diagram: shown.diagram,
     busy,
