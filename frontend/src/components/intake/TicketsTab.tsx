@@ -35,6 +35,7 @@ import { toast } from "../../lib/toast";
 import { errorPop } from "../../lib/errorPop";
 import { useUi } from "../../state/store";
 import { startTogetherText } from "../../lib/runStart";
+import { canPick, startablePicks } from "./picks";
 import {
   AddFlowShell,
   ArmButton,
@@ -1600,6 +1601,9 @@ function AssignedTickets({
   // Is there anyone else's work in here at all? Only a source set to ingest
   // anyone's tickets can produce that, and without one the Mine/Everyone
   // control would filter a list that is already entirely yours.
+  // Picks as the list offers them now: one started meanwhile (its own Start,
+  // Override, Reopen) or held elsewhere no longer counts (./picks).
+  const pickedNow = startablePicks(picked, tickets, pickKey);
   const hasOthers = (tickets || []).some((t) => t.mine === false);
   const rows = mineOnly ? (tickets || []).filter((t) => t.mine !== false) : tickets || [];
 
@@ -1878,10 +1882,14 @@ function AssignedTickets({
                         onStarted={relistTickets}
                         eligibleLabel={eligibleLabel}
                         autoOn={autoOn}
-                        pick={{
-                          checked: picked.has(pickKey(t)),
-                          onChange: (on) => setPick(t, on),
-                        }}
+                        pick={
+                          canPick(t)
+                            ? {
+                                checked: picked.has(pickKey(t)),
+                                onChange: (on) => setPick(t, on),
+                              }
+                            : undefined
+                        }
                       />
                     ))}
                   </WorkGroup>
@@ -1971,21 +1979,21 @@ function AssignedTickets({
             </WorkGroup>
           );
         })}
-      {picked.size > 0 && (
+      {pickedNow.length > 0 && (
         // Sticky to the bottom of the dialog's scroll, so it stays in reach
         // while more rows are ticked further down. Opens New in list mode with
         // the tickets already in its box — the lane, PR grouping and pace are
         // chosen there, in the one place a batch is described.
         <div className="ik-pickbar" role="region" aria-label="Picked tickets">
           <span>
-            {picked.size} ticket{picked.size === 1 ? "" : "s"} ·{" "}
+            {pickedNow.length} ticket{pickedNow.length === 1 ? "" : "s"} ·{" "}
           </span>
           <button
             type="button"
             id="tk-start-together"
             className="ik-pick-go"
             onClick={() => {
-              const text = startTogetherText([...picked.values()]);
+              const text = startTogetherText(pickedNow);
               setPicked(new Map());
               useUi.getState().openNewWith(text);
             }}

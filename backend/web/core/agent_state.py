@@ -2616,7 +2616,7 @@ def _session_stage(inst) -> dict:
     owner's "put this window back to idle" pin, which only the UI's guided
     ladder honours — see :mod:`backend.web.core.stage_reset`.
     """
-    res = {"stage": "agent", "pr_url": None, "stage_reset": False}
+    res = {"stage": "agent", "pr_url": None, "stage_reset": False, "pr_merged": False}
     try:
         srv = _server()
         if not inst.Started():
@@ -2716,6 +2716,19 @@ def _session_stage(inst) -> dict:
             res["stage"] = "pr"
         else:
             res["stage"] = "pushed"
+            # A SQUASH merge leaves the branch's commits beyond the base for
+            # good, so the stage reads "pushed" (next: Make PR) about work
+            # whose PR already merged — and the session sat under Needs you
+            # as "pushed — ready for PR" until it was closed. The stage stays
+            # what git says (Make PR must come back the moment there are new
+            # commits); ``pr_merged`` says that right now there are none: the
+            # branch is exactly the commit its merged PR was at.
+            res["pr_merged"] = bool(
+                info
+                and str(info.get("state") or "").upper() == "MERGED"
+                and info.get("head")
+                and info.get("head") == local_head
+            )
         # The one place a pin can hold: a clean tree with commits beyond the base,
         # i.e. exactly the window where git says the branch is finished. `dirty` is
         # False by construction here (the branch above returned), and `local_head`

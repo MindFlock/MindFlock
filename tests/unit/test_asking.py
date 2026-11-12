@@ -834,3 +834,93 @@ def test_with_the_switch_off_a_reply_ending_with_a_question_asks_nothing(
         asking.current("t", inst, "idle")["text"]
         == "Should I also add them to the ticket?"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Two servers on one config dir                                                #
+# --------------------------------------------------------------------------- #
+class _Process:
+    """One server's in-memory asking state, swapped in and out of the module
+    so a test can play two processes over the same asking.json (the service
+    on :8765 and a dev server on :9000 share ~/.mindflock)."""
+
+    _NAMES = ("_STATE", "_INPUT_AT", "_DISMISSED_STORED", "_DIALOG_MEMO")
+
+    def __init__(self):
+        self.saved = {n: {} for n in self._NAMES}
+        self.saved["_STORE_LOADED"] = False
+        self.saved["_STORE_SIG"] = None
+
+    def __enter__(self):
+        self.outer = {n: dict(getattr(asking, n)) for n in self._NAMES}
+        self.outer["_STORE_LOADED"] = asking._STORE_LOADED
+        self.outer["_STORE_SIG"] = getattr(asking, "_STORE_SIG", None)
+        for n in self._NAMES:
+            d = getattr(asking, n)
+            d.clear()
+            d.update(self.saved[n])
+        asking._STORE_LOADED = self.saved["_STORE_LOADED"]
+        asking._STORE_SIG = self.saved["_STORE_SIG"]
+        return self
+
+    def __exit__(self, *exc):
+        for n in self._NAMES:
+            self.saved[n] = dict(getattr(asking, n))
+            d = getattr(asking, n)
+            d.clear()
+            d.update(self.outer[n])
+        self.saved["_STORE_LOADED"] = asking._STORE_LOADED
+        self.saved["_STORE_SIG"] = getattr(asking, "_STORE_SIG", None)
+        asking._STORE_LOADED = self.outer["_STORE_LOADED"]
+        asking._STORE_SIG = self.outer["_STORE_SIG"]
+
+
+def test_a_dismissal_on_one_server_holds_on_the_other(monkeypatch, tmp_path):
+    """Dismissed on the phone (one server), the question must not stay in the
+    desktop's Needs you (the other server), nor come back after a restart
+    because the other server's next save rewrote the file from its own view."""
+    monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path))
+    _restart()
+    t_inst, u_inst = _Inst("t"), _Inst("u")
+    _reply("t", "Should I push?", time.time() - 30)
+    _reply("u", "Merge it?", time.time() - 20)
+    a, b = _Process(), _Process()
+    with b:
+        assert asking.current("t", t_inst, "idle") is not None
+        assert asking.current("u", u_inst, "idle") is not None
+    with a:
+        assert asking.current("t", t_inst, "idle") is not None
+        assert asking.dismiss("t") is True
+    with b:
+        # The other server sees it go.
+        assert asking.current("t", t_inst, "idle") is None
+        # …and its own save keeps it.
+        asking.note_input("u")
+    _restart()
+    assert asking.current("t", t_inst, "idle") is None
+
+
+def test_a_forgotten_session_is_not_written_back_by_the_other_server(
+    monkeypatch, tmp_path
+):
+    """A session deleted through one server: the other server's next save
+    must not resurrect its entries (a namesake would inherit them)."""
+    monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path))
+    _restart()
+    t_inst, u_inst = _Inst("t"), _Inst("u")
+    _reply("t", "Should I push?", time.time() - 30)
+    _reply("u", "Merge it?", time.time() - 20)
+    a, b = _Process(), _Process()
+    with a:
+        asking.current("t", t_inst, "idle")
+        asking.dismiss("t")
+    with b:
+        asking.current("t", t_inst, "idle")
+        asking.current("u", u_inst, "idle")
+    with a:
+        asking.forget("t")
+    with b:
+        asking.note_input("u")
+    data = json.loads((tmp_path / "asking.json").read_text())
+    assert "t" not in data["dismissed"]
+    assert "u" in data["input_at"]

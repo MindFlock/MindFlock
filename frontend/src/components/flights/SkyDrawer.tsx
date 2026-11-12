@@ -30,7 +30,7 @@ import { useNeedsYou, type NeedsYouRow } from "../../lib/needsYou";
 import { openAsk } from "../../lib/ask";
 import { AnswerStrip } from "../AnswerStrip";
 import { WaitingRow as OutboxWaitingRow } from "../outbox/WaitingRow";
-import { FlightCard, YouStepActions, flightHeadline } from "./FlightStrip";
+import { FlightCard, YouStepActions, flightHeadline, sessionGone } from "./FlightStrip";
 import { useWaiting, type Waiting } from "./useWaiting";
 import {
   WAITING_KIND_BADGE,
@@ -183,18 +183,27 @@ export function perchLine(flight: Flight, kinds?: readonly StepKindDef[] | null)
  * sky to its line — a session's, or the route itself when it runs on its
  * own), where it stopped and why, and the perch block — the checklist with
  * Done / Skip, Retry / Skip when it halted, Carry on at a halt point. */
-function PerchRow({ flight, kinds, onFocus, onFocusFlight }: { flight: Flight; kinds?: readonly StepKindDef[] | null; onFocus(title: string): void; onFocusFlight?(id: string): void }) {
+export function PerchRow({ flight, kinds, onFocus, onFocusFlight }: { flight: Flight; kinds?: readonly StepKindDef[] | null; onFocus(title: string): void; onFocusFlight?(id: string): void }) {
   const halted = flight.state === "halted";
+  // Its session closed under it: nothing to fly to, no agent to fix it —
+  // Stop the route ends it (YouStepActions `gone`).
+  const gone = sessionGone(flight, useInstances().data);
   // The subject's headline, else the session's shown name (never its raw title).
   const head = flight.subject?.title || flight.subject?.id || !flight.session ? flightHeadline(flight) : windowName(flight.session);
   const go = () => (flight.session ? onFocus(flight.session) : onFocusFlight?.(flight.id));
   return (
     <div className={"sky-perch" + (halted ? " is-halted" : "")} data-flight={flight.id}>
-      <button type="button" className="sky-perch-name" title={flight.session ? "Show " + windowName(flight.session) + "'s route" : "Show this route on the Sky"} onClick={go}>
-        {head}
-      </button>
+      {gone ? (
+        <span className="sky-perch-name" title={windowName(flight.session) + " is closed"}>
+          {head}
+        </span>
+      ) : (
+        <button type="button" className="sky-perch-name" title={flight.session ? "Show " + windowName(flight.session) + "'s route" : "Show this route on the Sky"} onClick={go}>
+          {head}
+        </button>
+      )}
       <div className="sky-perch-step muted">{perchLine(flight, kinds)}</div>
-      <YouStepActions flight={flight} />
+      <YouStepActions flight={flight} gone={gone} />
     </div>
   );
 }

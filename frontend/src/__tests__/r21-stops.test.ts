@@ -154,7 +154,7 @@ describe("Let the agent fix it — wherever the server's fix op takes it", () =>
 
   it("the Needs you card and the Details footer ask the same rule", () => {
     expect(code("components/flights/useSessionLine.tsx")).toContain("onFix={here && canFixStep(flight) ?");
-    expect(code("components/flights/SkyDrawer.tsx")).toContain("<YouStepActions flight={flight} />");
+    expect(code("components/flights/SkyDrawer.tsx")).toContain("<YouStepActions flight={flight} gone={gone} />");
   });
 
   it("the right-click menu of any halted stop has it right after Retry (once)", () => {

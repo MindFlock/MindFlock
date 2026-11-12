@@ -2759,7 +2759,16 @@ def _mark_intent(
             raise _Stale()
         i = f["cursor"] if at is None else at
         cur = f["steps"][i] if 0 <= i < len(f["steps"]) else None
-        if cur is None or f["step_states"][cur["id"]]["detail"].get("performing"):
+        if cur is None:
+            raise _Stale()
+        mark = f["step_states"][cur["id"]]["detail"].get("performing")
+        if (
+            isinstance(mark, dict)
+            and now - float(mark.get("at") or 0.0) < _flights.PERFORM_STALE_S
+        ):
+            # Under way (here or on another server). A mark older than
+            # PERFORM_STALE_S is a server that died mid-effect: the judge
+            # already asked for the effect again, so it is taken over.
             raise _Stale()
         if action["action"] == "run" and not action.get("phase"):
             _flights.apply_at(f, i, dict(action, detail={}), now)
@@ -2833,8 +2842,28 @@ async def _step_member(
     of the parallel group at it) → ``(after, action)``; None when stale or
     nothing changed."""
     view = _flights.member_view(f, i)
-    obs = await observe(view, now)
-    action = _launch_verdict(view, obs, _flights.next_action(view, obs, now), now)
+    try:
+        obs = await observe(view, now)
+        action = _launch_verdict(view, obs, _flights.next_action(view, obs, now), now)
+    except asyncio.CancelledError:
+        raise
+    except Exception as err:  # noqa: BLE001 — said on the stop, never only logged
+        # Escaping to step_flight only logged it, every pass, while the stop
+        # kept its old note. Said on the stop instead (written once: the same
+        # error again changes nothing); the next good pass replaces it.
+        _log(
+            "flight %s: couldn't judge its stop: %v\n%s",
+            fid,
+            err,
+            traceback.format_exc(),
+        )
+        note = "couldn't work out this stop: %s — it keeps trying" % _error_line(err)
+        wait = {"action": "wait", "note": note}
+        after = await asyncio.to_thread(_apply_if_unchanged, fid, f, wait, now, i)
+        if after is None or _same(f, after):
+            return None
+        await asyncio.to_thread(_announce, f, after)
+        return after, wait
     sess = obs.get("session") or {}
     if not f["repo_root"] and sess.get("present"):
         root = await asyncio.to_thread(_repo_root, f["session"])
@@ -2952,6 +2981,30 @@ async def _post_verify_results(
         return None
 
 
+#: How often the lease's own holder refreshes it. :func:`flights.claim`
+#: rewrites the whole store (every finished flight it keeps), so it is not
+#: done for every flight on every pass — a quarter of the stale window
+#: leaves a pass ~30 s of slack before another server may take over (the
+#: passes are sequential: one slow flight delays every later refresh).
+_LEASE_REFRESH_S = _flights.LEASE_STALE_S / 4.0
+
+
+def _lease(fid: str, boot: str, now: float) -> Optional[dict]:
+    """The flight to drive this pass, or None while another live server
+    holds its lease (blocking). Decided from the cached read when that is
+    enough — this server's lease still fresh, or another's — and only
+    otherwise by :func:`flights.claim` (take over, or refresh)."""
+    f = _flights.get(fid)
+    if f is None:
+        return None
+    age = now - float(f.get("owner_at") or 0.0)
+    if f.get("owner") == boot and 0.0 <= age < _LEASE_REFRESH_S:
+        return f
+    if f.get("owner") and f.get("owner") != boot and age <= _flights.LEASE_STALE_S:
+        return None
+    return _flights.claim(fid, boot, now)[0]
+
+
 async def step_flight(fid: str) -> None:
     """One decision pass over one flight. Never raises.
 
@@ -2964,9 +3017,7 @@ async def step_flight(fid: str) -> None:
     srv = _server()
     try:
         now = time.time()
-        f, _took = await asyncio.to_thread(
-            _flights.claim, fid, srv._SERVER_BOOT_ID, now
-        )
+        f = await asyncio.to_thread(_lease, fid, srv._SERVER_BOOT_ID, now)
         if f is None:
             return
         for _ in range(_CHAIN):

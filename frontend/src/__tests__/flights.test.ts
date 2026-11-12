@@ -14,10 +14,8 @@ import {
   flightProgress,
   isLive,
   moveStep,
-  needsYouFlights,
   newStep,
   legacyFlightsRoute,
-  perchBadge,
   planDirty,
   rowWaitsOnYou,
   scheduleOfWhen,
@@ -140,32 +138,6 @@ describe("a flight's progress", () => {
 describe("what waits on you", () => {
   const parked = flight({ id: "f_2", state: "waiting_you", cursor: 4 });
   const halted = flight({ id: "f_3", state: "halted", reason: "Checks failed" });
-  const onVerify = flight({
-    id: "f_4",
-    state: "waiting_you",
-    cursor: 0,
-    steps: [step("v1", "verify", "Verify")],
-  });
-
-  it("is the flights parked on a you step or halted", () => {
-    expect(needsYouFlights([flight(), parked, halted]).map((f) => f.id)).toEqual(["f_2", "f_3"]);
-  });
-
-  it("the Sky toggle's badge counts the flights perched on you (or halted)", () => {
-    expect(perchBadge([flight(), parked, halted])).toEqual({ count: 2, failing: true });
-    expect(perchBadge([flight(), parked])).toEqual({ count: 1, failing: false });
-  });
-
-  it("counts a flight parked on a verify step: its behaviors wait on you in the Sky (docs/behaviors.md §5)", () => {
-    expect(perchBadge([onVerify]).count).toBe(1);
-    expect(perchBadge([flight(), parked, onVerify])).toEqual({ count: 2, failing: false });
-  });
-
-  it("says nothing at all on zero", () => {
-    expect(perchBadge([])).toEqual({ count: 0, failing: false });
-    expect(perchBadge([flight()])).toEqual({ count: 0, failing: false });
-  });
-
   it("a you step's items and text", () => {
     expect(youItems(STEPS[4])).toEqual(["Read the diff", "Checks green"]);
     expect(youItems(STEPS[0])).toEqual([]);
@@ -177,10 +149,8 @@ describe("what waits on you", () => {
 describe("a paused flight", () => {
   const paused = flight({ id: "f_9", state: "paused" });
 
-  it("is in the air but waits on nobody: In flight, not Needs you, not the badge", () => {
+  it("is in the air: In flight", () => {
     expect(isLive(paused)).toBe(true);
-    expect(needsYouFlights([paused])).toEqual([]);
-    expect(perchBadge([paused])).toEqual({ count: 0, failing: false });
   });
 
   it("still owns the ship ladder, as running and waiting_you do; halted, done and cancelled give it back", () => {

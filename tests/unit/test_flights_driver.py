@@ -798,8 +798,9 @@ def test_an_unchanged_wait_writes_nothing(srv, row, monkeypatch):
     )
     run(D.step_flight(f["id"]))
     run(D.step_flight(f["id"]))
-    # Only the lease refresh writes (claim); the step's wait does not.
-    assert len(saves) == 2
+    # Nothing: the step's wait does not, and the lease (claim) is refreshed
+    # only every flight_driver._LEASE_REFRESH_S.
+    assert len(saves) == 0
 
 
 def test_ticket_state_must_exist(srv, row, monkeypatch):

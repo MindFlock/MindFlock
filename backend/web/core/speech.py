@@ -1252,6 +1252,7 @@ def whisper_on_disk(name: str) -> bool:
 FETCH_RETRY_SECONDS = 600.0
 _FETCH_LOCK = threading.Lock()
 _FETCH: Dict[str, float] = {}  # name → monotonic time its fetch started
+_FETCHING: set = set()  # names whose fetch is running now
 
 
 def english_default_model(fetch: bool = False) -> str:
@@ -1273,13 +1274,17 @@ def english_default_model(fetch: bool = False) -> str:
 
 def _fetch_in_background(name: str) -> None:
     """Download ``name`` on a thread, once at a time, and not again within
-    :data:`FETCH_RETRY_SECONDS` of the last try (a failure is logged)."""
+    :data:`FETCH_RETRY_SECONDS` of the last try (a failure is logged) —
+    nor while the last one still runs (a slow link, a hung download)."""
     now = time.monotonic()
     with _FETCH_LOCK:
+        if name in _FETCHING:
+            return
         started = _FETCH.get(name)
         if started is not None and now - started < FETCH_RETRY_SECONDS:
             return
         _FETCH[name] = now
+        _FETCHING.add(name)
 
     def run() -> None:
         try:
@@ -1289,8 +1294,16 @@ def _fetch_in_background(name: str) -> None:
             _logger.warning(
                 "voice: could not download faster-whisper %s: %s", name, err
             )
+        finally:
+            with _FETCH_LOCK:
+                _FETCHING.discard(name)
 
-    _spawn(run, "whisper-fetch")
+    try:
+        _spawn(run, "whisper-fetch")
+    except BaseException:
+        with _FETCH_LOCK:
+            _FETCHING.discard(name)
+        raise
 
 
 def stream_whisper_model(raw: str = "", lang: str = "") -> str:
@@ -2551,14 +2564,18 @@ class TtsChain:
 
     def _reply(self, listener: str) -> _Reply:
         """``listener``'s reply (under the lock), made on first use; the
-        idle ones are forgotten past :data:`MAX_LISTENERS`."""
+        idle ones are forgotten past :data:`MAX_LISTENERS` — a sticky one
+        too once it has gone quiet (what :meth:`pick` unsticks: a page gone
+        during an outage never picks again)."""
         r = self._replies.get(listener)
         if r is None:
             if len(self._replies) >= MAX_LISTENERS:
+                now = _now()
                 for k in [
                     k
                     for k, v in self._replies.items()
-                    if not v.inflight and not v.sticky
+                    if not v.inflight
+                    and (not v.sticky or now >= v.quiet_at + REPLY_GAP_SECONDS)
                 ]:
                     del self._replies[k]
             r = self._replies[listener] = _Reply()

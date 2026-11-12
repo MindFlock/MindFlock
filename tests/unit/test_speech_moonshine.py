@@ -792,3 +792,40 @@ class TestRegistry:
         for _ in range(ss.CLIENT_STREAMS):
             sm.open_stream("", None, client="page", engine_=eng)
         assert ss.get_stream(first) is None
+
+    @pytest.mark.parametrize("how", ["sweep", "delete", "replaced"])
+    def test_a_dropped_stream_lets_its_engine_stream_go(self, how, monkeypatch):
+        # A stream the registry forgets without its finish (the page locked,
+        # the tab closed, a reload replaced it) frees Moonshine's engine
+        # stream at once — not whenever the cycle collector next gets to it
+        # (an early pass ties the stream into a cycle with its lane job).
+        import gc
+
+        t = FakeTranscriber([[(1, "Fix the log in bog.", False)]])
+        eng = sm.MoonshineEngine(t, threads=1)
+        acc = Accurate("Fix the login bug.")
+        gc.disable()
+        try:
+            sid = sm.open_stream("", acc, client="page", engine_=eng)
+            st = ss.get_stream(sid)
+            st.feed(loud(1.0))
+            st.feed(quiet(0.6))  # the quiet tail starts the early pass
+            assert st._early is not None
+            st._early.thread.join(2)
+            del st
+            if how == "sweep":
+                later = ss._now() + ss.EXPIRE_SECONDS + 1
+                monkeypatch.setattr(ss, "_now", lambda: later)
+                assert ss.sweep() == [sid]
+            elif how == "delete":  # DELETE /api/voice/stream/{sid}
+                from backend.web.routes import speech as routes
+
+                assert routes.voice_stream_abandon(sid).status_code == 204
+                assert ss.get_stream(sid) is None
+            else:
+                for _ in range(ss.CLIENT_STREAMS):
+                    sm.open_stream("", None, client="page", engine_=eng)
+                assert ss.get_stream(sid) is None
+            assert t.lives[0].closed
+        finally:
+            gc.enable()

@@ -509,9 +509,9 @@ def _install_moonshine(heal: bool = False) -> None:
     """``start(what="moonshine")``: the package, recorded, then the model
     (``heal`` is never set: a heal is :func:`_install`'s, for every
     recorded package)."""
-    from backend.web.core import speech_moonshine as _moonshine
-
     try:
+        from backend.web.core import speech_moonshine as _moonshine
+
         _run_step(STEP_PACKAGES, install_argv(MOONSHINE_PACKAGES))
         _record(MOONSHINE_PACKAGES)
         _speech.invalidate()

@@ -406,11 +406,16 @@ async def find_pr(wt: str, branch: str) -> Optional[dict]:
     base = ""
     if isinstance(item.get("base"), dict):
         base = str(item["base"].get("ref") or "")
+    head = ""
+    if isinstance(item.get("head"), dict):
+        head = str(item["head"].get("sha") or "")
     return {
         "url": item.get("html_url"),
         "state": state,
         "number": item.get("number"),
         "base": base,
+        # gh's ``headRefOid``: the commit the PR was at (see _gh_pr_info).
+        "head": head,
     }
 
 

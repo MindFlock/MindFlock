@@ -13,5 +13,12 @@ export default defineConfig({
     // into "". The structural tests read stylesheets as text (`?raw` only — a
     // component's plain `import "./Foo.css"` stays unprocessed).
     css: { include: [/\.css\?raw$/] },
+    // Many tests start with `await import("../components/…")`, which compiles
+    // that component's whole module graph inside the test's own clock. On a
+    // busy machine (the Python suite running beside it, a loaded CI runner)
+    // that alone passed vitest's 5 s default: r5wSetup timed out importing
+    // the sidebar, and passed in 3 s on its own. A test that really hangs
+    // still fails, later.
+    testTimeout: 20_000,
   },
 });

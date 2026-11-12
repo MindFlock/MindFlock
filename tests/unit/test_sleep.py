@@ -846,6 +846,27 @@ def test_wake_route(woken):
     assert c.post("/api/instances/nope/wake").status_code == 404
 
 
+def test_an_automatic_wake_that_fails_takes_its_gate_admission_back(woken, monkeypatch):
+    """A mailbox delivery wakes a sleeper through the launch gate. The gate
+    let it go (noted as warming; the stagger runs from it) and the relaunch
+    failed: the admission is taken back, so no phantom agent reads as
+    warming for 90 s and holds the next automatic start. The session stays
+    asleep, its message pending for the next pass."""
+    from backend.web.core import launch_gate as gate
+
+    monkeypatch.setattr(
+        woken.server,
+        "_ensure_agent_session",
+        lambda i, t: woken.launched.append(t) or ("", "workspace missing"),
+    )
+    woke, err = sleep.ensure_awake(
+        woken.inst, "zz", "a message arrived", woken.server, auto=True
+    )
+    assert (woke, err) == (False, "workspace missing")
+    assert woken.launched == ["zz"] and sleep.is_sleeping("zz")
+    assert gate._ADMITTED == {} and gate._LAST_AUTO["at"] == 0.0
+
+
 def test_sleep_route_refuses_with_the_veto(woken, monkeypatch):
     sleep.drop("zz")
     monkeypatch.setattr(

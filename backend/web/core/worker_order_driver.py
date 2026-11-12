@@ -1000,6 +1000,10 @@ def start_on_turn(srv, title: str, inst, parent: str = "") -> str:
     if queued is not None:
         return "its agent waits for memory to start"
     err = start_agent(title, inst)
+    if err:
+        # The gate noted it as starting: take that back, or it reads as an
+        # agent warming up (and holds the stagger) for nothing.
+        _launch_gate.unnote_start(title)
     if err and start_refusal(title, inst):
         raise _NotYet(err)  # paused (or held) since the check above
     return ("its agent did not start: %s" % err)[:200] if err else ""

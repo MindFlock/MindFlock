@@ -111,6 +111,13 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     markers, scroll-speed, etc.) at ``tmp_path`` so both land in auto-cleaned space.
     """
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    # A suite run from INSIDE a MindFlock session inherits the server's own
+    # ``UVICORN_PORT`` / ``PORT`` (``run.py`` exports them so the MCP attach
+    # finds its server), and every test that reads "this server's port"
+    # without setting it then answers with that server's port instead of the
+    # default: two tests failed on :9000 and nowhere else. CI has neither set.
+    monkeypatch.delenv("UVICORN_PORT", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
     monkeypatch.setenv("MINDFLOCK_ASSISTANT_DIR", str(tmp_path / "assistant"))
     # Point Claude pre-trust seeding (providers.claude.pre_trust_workdir, F2)
     # at a per-test file so no test can ever read or write the user's real

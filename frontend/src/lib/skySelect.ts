@@ -16,7 +16,7 @@
  *
  * A group box stands for its sub-steps (`stepIndexesOf`). */
 
-import type { FlightStep } from "./flights";
+import type { Flight, FlightStep } from "./flights";
 import type { Pos, Rect } from "./skyLayout";
 
 /** A line as the marquee sees it: its rect and its heads — the title bar —
@@ -368,4 +368,27 @@ export function removalNeedsAsk(t: RemovalTarget): boolean {
     case "selection":
       return t.items.some(removalNeedsAsk);
   }
+}
+
+/** The first index the server takes a stop put back at (`_first_open` and
+ * the Undo rule of `POST /steps`, docs/flights.md "Undo"): any on a route
+ * not flying yet (grounded, ready); the cursor itself on a paused route
+ * whose current stop has not started (a removed flying stop flies first on
+ * Resume); else the one after the current stop (its parallel group). */
+export function undoFirstOpen(f: Pick<Flight, "state" | "cursor" | "steps" | "step_states">): number {
+  if (f.state === "grounded" || f.state === "ready") return 0;
+  const cur = f.steps[f.cursor];
+  const ss = cur ? f.step_states?.[cur.id] : undefined;
+  if (f.state === "paused" && (!cur || ((ss?.state ?? "pending") === "pending" && !ss?.detail?.performing))) return f.cursor;
+  let end = f.cursor + 1;
+  const par = cur?.parallel?.id;
+  while (par && f.steps[end]?.parallel?.id === par) end++;
+  return end;
+}
+
+/** Where Undo puts a stop removed from `index` back: there while the server
+ * takes that place on the route as it is `now` (`undoFirstOpen`) and it is
+ * inside the line, else the end (undefined). */
+export function undoAt(index: number, now: Pick<Flight, "state" | "cursor" | "steps" | "step_states"> | null): number | undefined {
+  return now && index >= undoFirstOpen(now) && index < now.steps.length ? index : undefined;
 }

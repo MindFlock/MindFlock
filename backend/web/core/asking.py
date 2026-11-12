@@ -254,6 +254,11 @@ _DIALOG_MEMO: Dict[str, tuple] = {}
 #: applied to a title's record the first time it is observed.
 _DISMISSED_STORED: Dict[str, list] = {}
 _STORE_LOADED = False
+#: The store file's signature (title_store._signature) when this process last
+#: read it. Two servers share one config dir (the service and a dev server):
+#: a question dismissed or answered through one must leave the other's Needs
+#: you too, so a changed file is read again — one stat per look, no read.
+_STORE_SIG = None
 
 
 def _store_path() -> Optional[Path]:
@@ -270,62 +275,114 @@ def _store_path() -> Optional[Path]:
         return None
 
 
-def _load_store() -> None:
-    """Read the store once per process (under ``_LOCK``)."""
-    global _STORE_LOADED
-    if _STORE_LOADED:
-        return
-    _STORE_LOADED = True
-    path = _store_path()
-    if path is None:
-        return
+def _read_doc(path: Path) -> tuple:
+    """``(dismissed, input_at)`` as the file holds them (empty when missing,
+    unreadable or corrupt)."""
     try:
         from backend.fsutil import read_json
 
         data = read_json(path, default=None)
     except Exception:  # noqa: BLE001 — an unreadable store is an empty one
         data = None
-    if not isinstance(data, dict):
+    dismissed: Dict[str, list] = {}
+    input_at: Dict[str, float] = {}
+    if isinstance(data, dict):
+        raw = data.get("dismissed")
+        if isinstance(raw, dict):
+            for title, key in raw.items():
+                if isinstance(title, str) and isinstance(key, list) and len(key) == 2:
+                    dismissed[title] = key
+        raw = data.get("input_at")
+        if isinstance(raw, dict):
+            for title, at in raw.items():
+                if isinstance(title, str) and isinstance(at, (int, float)):
+                    input_at[title] = float(at)
+    return dismissed, input_at
+
+
+def _adopt(dismissed: Dict[str, list], input_at: Dict[str, float], skip=()) -> None:
+    """Fold what the file says into this process's state (under ``_LOCK``):
+    a dismissal of the reply a title is on now applies at once, any other
+    waits for that reply (:func:`_observe`); the later input wins."""
+    for title, key in dismissed.items():
+        if title in skip:
+            continue
+        st = _STATE.get(title)
+        if st and st.get("key") is not None and tuple(st["key"]) == tuple(key):
+            st["dismissed"] = st["key"]
+        else:
+            _DISMISSED_STORED[title] = key
+    for title, at in input_at.items():
+        if title not in skip and at > _INPUT_AT.get(title, 0.0):
+            _INPUT_AT[title] = at
+
+
+def _load_store() -> None:
+    """Read the store — once per process, and again whenever another process
+    changed it since (under ``_LOCK``)."""
+    global _STORE_LOADED, _STORE_SIG
+    path = _store_path()
+    if path is None:
+        _STORE_LOADED = True
         return
-    raw = data.get("dismissed")
-    if isinstance(raw, dict):
-        for title, key in raw.items():
-            if isinstance(title, str) and isinstance(key, list) and len(key) == 2:
-                _DISMISSED_STORED[title] = key
-    raw = data.get("input_at")
-    if isinstance(raw, dict):
-        for title, at in raw.items():
-            if isinstance(title, str) and isinstance(at, (int, float)):
-                _INPUT_AT.setdefault(title, float(at))
+    from backend.web.core import title_store
+
+    sig = title_store._signature(str(path))
+    if _STORE_LOADED and sig == _STORE_SIG:
+        return
+    _STORE_LOADED = True
+    _STORE_SIG = sig
+    _adopt(*_read_doc(path))
 
 
-def _save_store() -> None:
-    """Write what suppresses a question (called under ``_LOCK``). Best
-    effort: a failed write costs one repeated chip after a restart."""
+def _save_store(titles=(), gone=()) -> None:
+    """Write what suppresses a question for ``titles`` and drop ``gone``
+    (called under ``_LOCK``). Read-merge-write under the store's inter-process
+    lock: another server on this config dir keeps every entry this one did
+    not touch — rewriting the whole file from this process's view erased a
+    dismissal made through the other one, and wrote back a session it had
+    forgotten. Best effort: a failed write costs one repeated chip after a
+    restart."""
+    global _STORE_SIG
     path = _store_path()
     if path is None:
         return
-    dismissed: Dict[str, list] = dict(_DISMISSED_STORED)
-    for title, st in _STATE.items():
-        key = st.get("dismissed")
-        if key:
-            dismissed[title] = list(key)
-    input_at = {t: at for t, at in _INPUT_AT.items() if at}
-    if len(input_at) > STORE_MAX:
-        keep = sorted(input_at, key=input_at.get)[-STORE_MAX:]
-        input_at = {t: input_at[t] for t in keep}
-    if len(dismissed) > STORE_MAX:
-        dismissed = dict(list(dismissed.items())[-STORE_MAX:])
     try:
         from backend.fsutil import atomic_write_json
+        from backend.web.core import title_store
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(
-            path,
-            {"version": 1, "dismissed": dismissed, "input_at": input_at},
-            ensure_ascii=True,
-            mode=0o600,
-        )
+        with title_store.file_lock(str(path)):
+            dismissed, input_at = _read_doc(path)
+            before = (dict(dismissed), dict(input_at))
+            # What the other server wrote since this one last looked.
+            _adopt(dismissed, input_at, skip=set(titles) | set(gone))
+            for title in gone:
+                dismissed.pop(title, None)
+                input_at.pop(title, None)
+            for title in titles:
+                key = (_STATE.get(title) or {}).get(
+                    "dismissed"
+                ) or _DISMISSED_STORED.get(title)
+                if key:
+                    dismissed[title] = list(key)
+                at = _INPUT_AT.get(title, 0.0)
+                if at > input_at.get(title, 0.0):
+                    input_at[title] = at
+            if (dismissed, input_at) == before and path.exists():
+                return
+            if len(input_at) > STORE_MAX:
+                keep = sorted(input_at, key=input_at.get)[-STORE_MAX:]
+                input_at = {t: input_at[t] for t in keep}
+            if len(dismissed) > STORE_MAX:
+                dismissed = dict(list(dismissed.items())[-STORE_MAX:])
+            atomic_write_json(
+                path,
+                {"version": 1, "dismissed": dismissed, "input_at": input_at},
+                ensure_ascii=True,
+                mode=0o600,
+            )
+            _STORE_SIG = title_store._signature(str(path))
     except Exception:  # noqa: BLE001
         pass
 
@@ -356,20 +413,19 @@ def note_input(title: str) -> None:
     with _LOCK:
         _load_store()
         if _STATE.get(title, {}).get("text"):
-            _save_store()
+            _save_store([title])
 
 
 def forget(title: str) -> None:
     """Drop ``title``'s state (session removal)."""
     with _LOCK:
         _load_store()
-        had = title in _STATE or title in _DISMISSED_STORED or title in _INPUT_AT
         _STATE.pop(title, None)
         _DIALOG_MEMO.pop(title, None)
         _DISMISSED_STORED.pop(title, None)
         _INPUT_AT.pop(title, None)
-        if had:
-            _save_store()
+        # Even with nothing here: the other server may have written it.
+        _save_store(gone=[title])
 
 
 def _session_name(title: str) -> str:
@@ -556,7 +612,7 @@ def dismiss(title: str) -> bool:
         had = bool(st.get("text")) and st.get("dismissed") != st.get("key")
         st["dismissed"] = st.get("key")
         if had:
-            _save_store()
+            _save_store([title])
         return had
 
 

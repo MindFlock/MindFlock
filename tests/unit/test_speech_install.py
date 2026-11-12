@@ -557,6 +557,21 @@ class TestMoonshine:
         st = self._run()
         assert st["state"] == "failed" and "offline" in st["error"]
 
+    def test_a_lane_that_will_not_import_fails_the_install(self, spawn, monkeypatch):
+        # The Moonshine lane is imported for its model name: when that raises,
+        # the install must end "failed", not stay "running" (every later
+        # install a 409 until a restart).
+        import sys
+
+        import backend.web.core as core
+
+        monkeypatch.setitem(sys.modules, "backend.web.core.speech_moonshine", None)
+        monkeypatch.delattr(core, "speech_moonshine", raising=False)
+        st = self._run()
+        assert st["state"] == "failed" and "speech_moonshine" in st["error"]
+        assert si.start(what=si.KOKORO) is True
+        si.wait(5)
+
     def test_one_install_at_a_time(self, spawn):
         spawn.gate = threading.Event()
         assert si.start() is True

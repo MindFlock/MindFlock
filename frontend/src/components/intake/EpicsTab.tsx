@@ -87,7 +87,9 @@ function EpicItem({ e, busy, onStart }: { e: EpicRow; busy: boolean; onStart(e: 
 
 export function EpicsTab({ gotoTab }: TabProps) {
   const q = useEpicsQuery();
-  const [busy, setBusy] = useState("");
+  // The epics starting now, by source:id — several may be in flight at once.
+  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
+  const epicKey = (e: EpicRow) => e.source + ":" + e.id;
   const openSources = useToggleSet(SOURCES_CLOSED_LS_KEY, true);
   const openStates = useToggleSet(STATES_CLOSED_LS_KEY, true);
   const groups = groupEpics(q.data);
@@ -96,7 +98,8 @@ export function EpicsTab({ gotoTab }: TabProps) {
   const note = panelNote({ error, fetching: q.isFetching, loaded });
 
   const start = async (e: EpicRow) => {
-    setBusy(e.title);
+    const k = epicKey(e);
+    setBusy((b) => new Set(b).add(k));
     try {
       const r = await api<{ title?: string; stories?: number }>("/api/epics/start", { json: { source: e.source, id: e.id } });
       toast("Started " + (r.title || e.title) + " — its lead will run " + (r.stories ?? "your") + " stor" + (r.stories === 1 ? "y" : "ies"));
@@ -104,7 +107,11 @@ export function EpicsTab({ gotoTab }: TabProps) {
     } catch (err) {
       errorPop("Couldn't start the epic", err instanceof ApiError ? err.message : String(err));
     } finally {
-      setBusy("");
+      setBusy((b) => {
+        const next = new Set(b);
+        next.delete(k);
+        return next;
+      });
     }
   };
 
@@ -171,7 +178,7 @@ export function EpicsTab({ gotoTab }: TabProps) {
                   onToggle={() => openStates.toggle(key)}
                 >
                   {s.rows.map((e) => (
-                    <EpicItem key={e.source + ":" + e.id} e={e} busy={busy === e.title} onStart={(x) => void start(x)} />
+                    <EpicItem key={e.source + ":" + e.id} e={e} busy={busy.has(epicKey(e))} onStart={(x) => void start(x)} />
                   ))}
                 </WorkGroup>
               );

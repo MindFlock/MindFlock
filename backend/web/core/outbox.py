@@ -174,7 +174,11 @@ def build(
             continue
         key = _key(r)
         rec = autopilot.get(title)
-        if str(r.get("activity") or "") == "clarify":
+        # A verify checker (``hidden_by``) is kept off the rail and never
+        # pops the ask pop-up: its agent asking is not a person's to answer
+        # (only its verify is, which the session row says).
+        hidden = bool(r.get("hidden_by"))
+        if str(r.get("activity") or "") == "clarify" and not hidden:
             waiting.append(
                 {
                     "key": key,
@@ -192,6 +196,7 @@ def build(
         asking = r.get("asking") if isinstance(r.get("asking"), dict) else {}
         if (
             asking.get("kind") == "question"
+            and not hidden
             and asking.get("text")
             and str(r.get("activity") or "") == "idle"
         ):
@@ -379,7 +384,15 @@ def build(
         ask = _run_ask(run, now) if wanted("", run) else None
         if ask is not None:
             waiting.append(ask)
-        if run["paused"] and run["pause_reason"] == "budget" and wanted("", run):
+        # Not once the run has finished: a member still working when the cap
+        # was reached can ship afterwards, the run finishes, and nothing
+        # un-pauses it — Raise budget / Stop would ask about a run that is done.
+        if (
+            run["paused"]
+            and run["pause_reason"] == "budget"
+            and run["state"] not in _runs.RUN_FINISHED
+            and wanted("", run)
+        ):
             waiting.append(
                 {
                     "key": "run::%s" % run["id"],
