@@ -37,7 +37,8 @@ vi.mock("../lib/errorPop", () => ({ errorPop: (...a: unknown[]) => errorPop(...a
 
 const RS = await import("../lib/routeStart");
 const API = await import("../lib/flightsApi");
-const { routeMenuLines } = await import("../components/flights/RouteStartMenu");
+const { routeMenuLines, focusDefault } = await import("../components/flights/RouteStartMenu");
+const { code, css } = await import("./sourceText");
 const { withAgainItem, AGAIN_HERE_KEY } = await import("../components/flights/useChainMenu");
 const { flyAgainItems, sessionGone } = await import("../components/flights/FlightStrip");
 const { queryClient } = await import("../state/queries");
@@ -217,24 +218,77 @@ describe("what Fly again says it will do", () => {
 });
 
 describe("where the menu opens", () => {
-  const view = { w: 1000, h: 800 };
-  const size = { w: 340, h: 200 };
-  it("beside what opened it, to its right, top-aligned — never over it", () => {
-    expect(RS.placeMenu({ left: 100, top: 300, right: 220, bottom: 330 }, size, view)).toEqual({ x: 226, y: 300 });
+  const overlaps = (m: { x: number; y: number }, size: { w: number; h: number }, r: { left: number; top: number; right: number; bottom: number }) =>
+    m.x < r.right && m.x + size.w > r.left && m.y < r.bottom && m.y + size.h > r.top;
+
+  it("Route tab card (1350×780): right of the Run + Start at… row, top-aligned, covering neither", () => {
+    const view = { w: 1350, h: 780 };
+    const size = { w: 340, h: 316 };
+    const row = { left: 202, top: 240, right: 680, bottom: 283 };
+    const at = RS.placeMenu(row, size, view);
+    expect(at).toEqual({ x: 686, y: 240 });
+    expect(overlaps(at, size, row)).toBe(false);
   });
-  it("to its left when the right has no room (a drawer at the edge)", () => {
-    expect(RS.placeMenu({ left: 700, top: 300, right: 900, bottom: 330 }, size, view)).toEqual({ x: 354, y: 300 });
+
+  it("Finished card in the 304px drawer at the right edge: below the Fly again row, never over it", () => {
+    const view = { w: 1350, h: 780 };
+    const size = { w: 340, h: 260 };
+    const row = { left: 1062, top: 470, right: 1334, bottom: 505 };
+    const at = RS.placeMenu(row, size, view);
+    expect(at).toEqual({ x: 1002, y: 511 });
+    expect(overlaps(at, size, row)).toBe(false);
   });
-  it("pulled up to stay on screen near the bottom", () => {
-    expect(RS.placeMenu({ left: 100, top: 700, right: 220, bottom: 730 }, size, view)).toEqual({ x: 226, y: 592 });
+
+  it("above the row when there is no room below", () => {
+    const view = { w: 1350, h: 780 };
+    const size = { w: 340, h: 260 };
+    const row = { left: 1062, top: 640, right: 1334, bottom: 675 };
+    expect(RS.placeMenu(row, size, view)).toEqual({ x: 1002, y: 374 });
   });
-  it("below it when neither side has room, above when below has none", () => {
-    const narrow = { w: 400, h: 800 };
-    expect(RS.placeMenu({ left: 20, top: 100, right: 380, bottom: 130 }, size, narrow)).toEqual({ x: 20, y: 136 });
-    expect(RS.placeMenu({ left: 20, top: 700, right: 380, bottom: 730 }, size, narrow)).toEqual({ x: 20, y: 494 });
+
+  it("pulled up to stay on screen beside a row near the bottom", () => {
+    expect(RS.placeMenu({ left: 100, top: 700, right: 220, bottom: 730 }, { w: 340, h: 200 }, { w: 1000, h: 800 })).toEqual({ x: 226, y: 592 });
   });
-  it("a point (a drop, a ⋯ item) opens just beside it", () => {
-    expect(RS.anchorOf(null, { x: 50, y: 60 })).toEqual({ left: 50, top: 60, right: 50, bottom: 60 });
+
+  it("anchors to the opener's whole row (button + link), else the element, else a point", () => {
+    const rect = (l: number, t: number, r: number, b: number) => ({ left: l, top: t, right: r, bottom: b });
+    const row = { getBoundingClientRect: () => rect(10, 20, 300, 50) };
+    const link = { getBoundingClientRect: () => rect(200, 25, 300, 45), closest: (sel: string) => (sel === ".fl-again-row" ? row : null) };
+    expect(RS.anchorOf(link as unknown as Element)).toEqual(rect(10, 20, 300, 50));
+    const lone = { getBoundingClientRect: () => rect(1, 2, 3, 4), closest: () => null };
+    expect(RS.anchorOf(lone as unknown as Element)).toEqual(rect(1, 2, 3, 4));
+    expect(RS.anchorOf(null, { x: 50, y: 60 })).toEqual(rect(50, 60, 50, 60));
+  });
+});
+
+describe("the default row takes the focus once the menu is visible", () => {
+  it("focusDefault focuses the .is-default row, else the first", () => {
+    const def = { focus: vi.fn() };
+    const first = { focus: vi.fn() };
+    focusDefault({ querySelector: (sel: string) => (sel.includes(".is-default") ? def : first) } as unknown as HTMLElement);
+    expect(def.focus).toHaveBeenCalled();
+    expect(first.focus).not.toHaveBeenCalled();
+    focusDefault({ querySelector: (sel: string) => (sel.includes(".is-default") ? null : first) } as unknown as HTMLElement);
+    expect(first.focus).toHaveBeenCalled();
+  });
+
+  it("focuses only after placement (a hidden button can't take focus): its effect waits on `placed`", () => {
+    const src = code("components/flights/RouteStartMenu.tsx");
+    const effect = src.match(/useEffect\(\(\) => \{\s*if \(!open \|\| !placed\) return;\s*focusDefault\(ref\.current\);\s*\}, \[([^\]]*)\]\)/);
+    expect(effect, "the focus effect is gated on the menu being placed").not.toBeNull();
+    expect(effect![1].split(",").map((x) => x.trim())).toEqual(["open", "view", "placed"]);
+    expect(src).toMatch(/const placed = !!pos;/);
+    // The measuring (layout) effect never focuses.
+    const layout = src.slice(src.indexOf("useLayoutEffect(() =>"), src.indexOf("const placed"));
+    expect(layout).not.toMatch(/focus/);
+  });
+
+  it("the default is an accent bar, not the hover fill", () => {
+    const rules = css("components/flights/RouteStartMenu.css");
+    const def = rules.slice(rules.indexOf(".fl-routestart-item.is-default"));
+    const body = def.slice(0, def.indexOf("}"));
+    expect(body).toMatch(/box-shadow:\s*inset 3px 0 0 var\(--accent\)/);
+    expect(body).not.toMatch(/background/);
   });
 });
 

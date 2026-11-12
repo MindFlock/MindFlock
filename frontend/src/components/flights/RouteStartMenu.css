@@ -23,9 +23,11 @@
   min-width: 0;
 }
 
-/* The default (Enter takes it): one filled row, the same in every view. */
+/* The default (Enter takes it): an accent bar at the row's left edge, the
+ * same in every view. The fill stays hover's and focus's, so only one row
+ * ever looks pointed at. */
 .fl-routestart-item.is-default {
-  background: var(--panel-2);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .fl-routestart-icon {
