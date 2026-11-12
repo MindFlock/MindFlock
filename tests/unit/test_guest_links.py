@@ -921,3 +921,41 @@ def test_event_filter_follows_a_narrowed_or_revoked_link(monkeypatch):
     guests.revoke(rec["id"])
     assert not guests.event_allowed({"session": "alpha"}, g)
     assert not guests.event_allowed({"session": ""}, g)
+
+
+class _PasteInst:
+    def __init__(self, folder):
+        self.Path = str(folder)
+
+    def Started(self):
+        return True
+
+    def GetWorktreePath(self):
+        return self.Path
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="server.py paste_image takes ?session= without checking the guest's "
+    "reach (fix outside the guest-link fence: refuse a title not in "
+    "guests.reach(scope_guest(request)))",
+)
+def test_a_guest_cannot_paste_into_a_session_off_its_link(link, tmp_path, monkeypatch):
+    # /api/paste-image is a GLOBAL guest POST (a pasted image for the guest's
+    # own pane), so the gate never sees its ?session= — and the handler writes
+    # into THAT session's worktree. A guest must not be able to drop files
+    # into (or learn the path of) a session that is not on their link.
+    _, tok = link
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
+    monkeypatch.setattr(server, "_exclude_artifacts", lambda folder: None)
+    other = tmp_path / "gamma-worktree"
+    other.mkdir()
+    monkeypatch.setitem(server.ENGINE.instances, "gamma", _PasteInst(other))
+    c = _guest_client(tok)
+    r = c.post(
+        "/api/paste-image?session=gamma",
+        content=b"\x89PNG not really",
+        headers={"Content-Type": "image/png"},
+    )
+    written = [p for p in other.rglob("*") if p.is_file()]
+    assert r.status_code == 403 and not written
