@@ -260,51 +260,68 @@ def verdict(f, review, now):
     return D._launch_verdict(f, obs, F.next_action(f, obs, now), now)
 
 
-def test_a_reviewer_whose_create_failed_respawns_once_then_halts(monkeypatch):
+def test_a_reviewer_whose_create_failed_is_asked_again_then_halts(monkeypatch):
     failures = {"review-1": {"error": "a workspace already exists", "ts": NOW + 1}}
     f = started(monkeypatch, failures)
     sid = f["steps"][0]["id"]
-    # Unfixed, the judge would hand this to the agent as "did not finish".
+    # Even the judge alone never hands it to the agent: it asks again.
     raw = F.next_action(f, {"session": sess(), "review": gone()}, NOW + 5)
-    assert raw["reason"] == "the reviewer did not finish" and raw["then"] == "agent"
+    assert raw["action"] == "run" and raw["detail"]["reasks"] == 1
 
     a = verdict(f, gone(), NOW + 5)
     why = "couldn't start the reviewer: a workspace already exists"
     assert a == {
         "action": "run",
         "note": why + " — starting another",
-        "detail": {"respawned": why},
+        "detail": {"respawned": why, "reasks": 1},
     }
-    F.apply(f, a, NOW + 5)
-    # review._run keeps the mark (and says why) when it spawns the new one.
+    # review._run keeps the count (and says why) when it spawns the new one.
     seen: list = []
+    titles = iter(["review-2", "review-3"])
 
     async def spawn(flight, step, prompt, **kw):
         seen.append(kw)
-        return "review-2"
+        return next(titles)
 
     monkeypatch.setattr(D, "spawn_worker", spawn)
     out = asyncio.run(R._run(f, f["steps"][0], a, NOW + 5))
     assert out["detail"] == {
         "respawned": why,
+        "reasks": 1,
         "children": ["review-2"],
         "base": "main",
+        "reviewed_sha": "",
+        "round": 1,
     }
     assert out["note"] == "asking review-2 for a second opinion (%s)" % why
     F.apply(f, out, NOW + 5)
     ss = f["step_states"][sid]
     assert ss["state"] == "running" and ss["rounds"] == 0
 
-    # review-2 can't start either: halt for the person, the real reason.
+    # review-2 can't start either: the second (last) re-ask.
     failures["review-2"] = {"error": "disk full", "ts": NOW + 6}
     entry = R._entry({"title": "review-2", "present": False}, None, None, NOW, NOW)
     b = verdict(f, {"entry": entry, "text": "", "report": False}, NOW + 10)
-    assert b["action"] == "fail" and b["then"] == "halt"
-    assert b["reason"] == "couldn't start the reviewer: disk full"
-    F.apply(f, b, NOW + 10)
+    assert b["action"] == "run" and b["detail"]["reasks"] == 2
+    out = asyncio.run(R._run(f, f["steps"][0], b, NOW + 10))
+    F.apply(f, out, NOW + 10)
+
+    # review-3 neither: halt for the person, the real reason.
+    failures["review-3"] = {"error": "disk full", "ts": NOW + 11}
+    entry = R._entry({"title": "review-3", "present": False}, None, None, NOW, NOW)
+    c = verdict(f, {"entry": entry, "text": "", "report": False}, NOW + 15)
+    assert c["action"] == "fail" and c["then"] == "halt"
+    assert c["reason"] == "couldn't start the reviewer: disk full"
+    F.apply(f, c, NOW + 15)
     assert f["state"] == "halted"
     assert f["step_states"][sid]["rounds"] == 0  # no fix round spent
     assert "fix" not in f["step_states"][sid]["detail"]
+
+
+def test_an_older_single_respawn_counts_as_one_reask():
+    assert R.reasks_of({"respawned": "x"}) == 1
+    assert R.reasks_of({"respawned": "x", "reasks": 2}) == 2
+    assert R.reasks_of({}) == 0
 
 
 def test_a_failure_older_than_the_stop_is_not_this_reviewers(monkeypatch):
@@ -326,7 +343,8 @@ def test_a_reviewer_gone_before_it_started_without_a_record(monkeypatch):
     a = verdict(f, gone(loading), NOW + 5)
     assert a["action"] == "run"
     assert a["detail"] == {
-        "respawned": "couldn't start the reviewer: " + D.GONE_BEFORE_START
+        "respawned": "couldn't start the reviewer: " + D.GONE_BEFORE_START,
+        "reasks": 1,
     }
 
 
@@ -343,5 +361,6 @@ def test_a_reviewer_that_started_and_vanished_still_did_not_finish(monkeypatch):
     left = gone(running)
     assert left["entry"]["started"] is True  # sticks once it is gone
     a = verdict(f, left, NOW + 5)
-    assert a["action"] == "fail" and a["reason"] == "the reviewer did not finish"
-    assert a["then"] == "agent"
+    # It did not finish — still not the agent's: another reviewer is asked.
+    assert a["action"] == "run"
+    assert a["note"] == "the reviewer did not finish — asking another reviewer"

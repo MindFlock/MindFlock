@@ -479,15 +479,17 @@ def test_a_reviewer_that_never_launched_is_named(srv, monkeypatch):
     f = _review(srv)
     launch = D._launch_obs(f["step_states"]["s1"])
     obs = {"launch": launch, "session": {"present": True}}
-    # The first time: one fresh reviewer, automatically.
-    out = D._launch_verdict(f, obs, {"action": "wait"}, NOW)
-    assert out["action"] == "run"
-    assert out["detail"] == {"respawned": "couldn't start the reviewer: no such repo"}
+    # The first two times: a fresh reviewer, automatically.
+    why = "couldn't start the reviewer: no such repo"
+    for n in (1, 2):
+        out = D._launch_verdict(f, obs, {"action": "wait"}, NOW)
+        assert out["action"] == "run"
+        assert out["detail"] == {"respawned": why, "reasks": n}
+        f["step_states"]["s1"]["detail"].update(out["detail"])
     # That one couldn't start either: the stop fails with the real reason.
-    f["step_states"]["s1"]["detail"]["respawned"] = out["detail"]["respawned"]
     out = D._launch_verdict(f, obs, {"action": "wait"}, NOW)
     assert out["action"] == "fail"
-    assert out["reason"] == "couldn't start the reviewer: no such repo"
+    assert out["reason"] == why
 
 
 def test_a_started_reviewer_is_left_to_its_judge(srv, monkeypatch):

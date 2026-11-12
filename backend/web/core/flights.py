@@ -147,8 +147,15 @@ RUN_INTERVAL_S = 5.0
 #: Consecutive idle before an agent step counts as settled — autopilot's rule.
 IDLE_SETTLE_S = 30.0
 #: How many times one step hands its failure to the agent (``on_fail: agent``)
-#: before the flight halts instead.
+#: before the flight halts instead (a review stop sets its own:
+#: :func:`fix_round_limit`).
 MAX_FIX_ROUNDS = 2
+#: What a stop's detail keeps through a hand-off to the agent (a review's
+#: earlier findings, which its next round follows up, and its re-asks) …
+FIX_CARRY = ("followup", "reasks")
+#: … and through a person's Retry or hand-off (a follow-up too; re-asks
+#: start over).
+RETRY_CARRY = ("followup",)
 #: An intake flight is armed BEFORE its session exists (autopilot's
 #: ``ARM_GRACE_S`` idea): it is never pruned for a missing session this young.
 ARM_GRACE_S = 1800.0
@@ -3001,6 +3008,10 @@ def you_text(flight: dict) -> Tuple[str, List[str]]:
             "Check %d step%s" % (len(items), "" if len(items) == 1 else "s"),
             items,
         )
+    if cur["kind"] == "review" and d.get("ask") == "unresolved":
+        # "2 findings still open after 3 rounds": the stop's own sentence.
+        note = str(flight["step_states"][cur["id"]].get("note") or "")
+        return ("%s: %s" % (cur["title"], note) if note else cur["title"]), []
     return cur["title"], []
 
 
@@ -4184,14 +4195,32 @@ def judge_for(kind: str) -> Callable:
     return plug.judge
 
 
+def fix_round_limit(step: dict) -> int:
+    """How many times ``step`` hands its failure to the agent: a review
+    stop's own ``rounds``, every other stop :data:`MAX_FIX_ROUNDS`."""
+    if step.get("kind") == "review":
+        from backend.web.core.flight_kinds import review as _review
+
+        return _review.rounds_of(step.get("config") or {})
+    return MAX_FIX_ROUNDS
+
+
+def _carry(detail: dict, keys) -> dict:
+    return {k: detail[k] for k in keys if k in detail}
+
+
 def _resolve_fail(flight: dict, step: dict, ss: dict, action: dict, sess: dict) -> dict:
-    """Attach ``then`` (what ``on_fail`` means right now) to a fail action."""
+    """Attach ``then`` (what ``on_fail`` means right now) to a fail action.
+    ``no_fix`` (a review whose reviewer gave no verdict): nothing the agent
+    can fix — ``agent`` halts for the person, with the plain reason."""
     then = step["on_fail"]
     reason = action.get("reason") or "failed"
     if then == "agent":
         if not flight["session"] or not sess.get("present"):
             then = "halt"
-        elif ss["rounds"] >= MAX_FIX_ROUNDS:
+        elif action.get("no_fix"):
+            then = "halt"
+        elif ss["rounds"] >= fix_round_limit(step):
             then = "halt"
             reason = "%s (after %d fix rounds)" % (reason, ss["rounds"])
     action = dict(action, then=then, reason=reason)
@@ -4629,7 +4658,9 @@ def apply(flight: dict, action: dict, now: float) -> dict:
             ss["state"] = "running"
             ss["since"] = now
             ss["note"] = "the agent is fixing: " + reason
-            ss["detail"] = {"phase": "fix", "reason": reason}
+            ss["detail"] = dict(
+                _carry(ss["detail"], FIX_CARRY), phase="fix", reason=reason
+            )
             _hist(flight, now, sid, "failed", reason + " — handed to the agent")
             flight["state"] = "running"
             action = dict(
@@ -4638,7 +4669,7 @@ def apply(flight: dict, action: dict, now: float) -> dict:
                     "active": True,
                     "round": ss["rounds"],
                     "rounds": ss["rounds"],
-                    "of": MAX_FIX_ROUNDS,
+                    "of": fix_round_limit(step),
                     "reason": short_reason(reason),
                     "since": now,
                     "to": fix_target(flight, step),
@@ -4784,13 +4815,23 @@ def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
             and flight["steps"][i]["kind"] == "verify"
             and ss["detail"].get("ask") in ("blocked", "memory")
         )
+        # A review stop out of rounds with findings still open: Retry gives
+        # the agent another set of rounds (a follow-up review first).
+        or (
+            ss["state"] == "waiting_you"
+            and flight["steps"][i]["kind"] == "review"
+            and ss["detail"].get("ask") == "unresolved"
+        )
     )
     lo, hi = current_group(flight)
     if not lo <= i < hi or not retryable:
         raise FlightError(
             "not_failed", 409, "%s has nothing to retry" % flight["steps"][i]["title"]
         )
+    keep = _carry(ss["detail"], RETRY_CARRY)
     flight["step_states"][sid] = dict(_blank_step_state(), since=ts)
+    # A review's next round follows up its last findings, not a fresh pass.
+    flight["step_states"][sid]["detail"].update(keep)
     _let_through(flight)
     if hi - lo > 1 and flight["steps"][i].get("halt"):
         flight["step_states"][sid]["detail"]["halt_hit"] = True  # a go, as Resume
@@ -4826,7 +4867,8 @@ def op_fix(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     ss["state"] = "running"
     ss["since"] = ts
     ss["note"] = "the agent is fixing: " + reason
-    ss["detail"] = {"phase": "fix", "reason": reason}
+    # A person's hand-off: a follow-up next, with the re-asks starting over.
+    ss["detail"] = dict(_carry(ss["detail"], RETRY_CARRY), phase="fix", reason=reason)
     _hist(flight, ts, sid, "resumed", "handed to the agent: " + reason)
     flight["state"] = "running"
     flight["reason"] = ""
@@ -5117,7 +5159,10 @@ def returns_of(flight: dict, lane_notes: bool = True) -> Dict[str, dict]:
                 "of": _int((s.get("config") or {}).get("max_rounds"), 5, 1, 50),
             }
         if ret is None and s.get("on_fail") == "agent":
-            ret = {"case": ON_FAIL_CASE.get(kind, "if it fails"), "of": MAX_FIX_ROUNDS}
+            ret = {
+                "case": ON_FAIL_CASE.get(kind, "if it fails"),
+                "of": fix_round_limit(s),
+            }
         if ret is not None:
             ret.setdefault("kinds", [])
             ret["to"] = fix_target(flight, s)

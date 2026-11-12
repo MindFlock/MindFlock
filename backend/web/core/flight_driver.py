@@ -1126,10 +1126,11 @@ GONE_BEFORE_START = "it was gone before it started"
 
 
 def _never_started(step: dict, obs: dict, action: dict) -> bool:
-    """Whether the stop's judge failed it over a worker that is gone without
-    ever having started (its join entry never left ``loading``) and left no
-    report: a create that died in the background, nothing it did."""
-    if action.get("action") != "fail":
+    """Whether the stop's judge failed it (or re-asked: a review) over a
+    worker that is gone without ever having started (its join entry never
+    left ``loading``) and left no report: a create that died in the
+    background, nothing it did."""
+    if action.get("action") not in ("fail", "run"):
         return False
     o = obs.get(step["kind"])
     entry = (o.get("entry") if isinstance(o, dict) else None) or {}
@@ -1146,11 +1147,13 @@ def _launch_verdict(flight: dict, obs: dict, action: dict, now: float) -> dict:
     launch gate holds it, a wait saying why and for how long — a park on the
     person past :data:`MEMORY_PARK_S`. A launch or background create that
     failed (or a worker gone before it ever started) is never "did not
-    finish" handed to the agent: the stop spawns ONE fresh worker (a new
-    title: ``_free_worker_title`` skips one whose create just failed), and
-    if that one cannot start either it halts for the person with "couldn't
-    start the reviewer: <why>" — no fix round spent, nothing typed to the
-    agent. Any other stop, or a worker that started, keeps ``action``."""
+    finish" handed to the agent: the stop spawns a fresh worker (a new
+    title: ``_free_worker_title`` skips one whose create just failed) — one
+    of the review's re-asks (``review.MAX_REASKS`` per visit, shared with a
+    reviewer that gave no verdict) — and once they are spent it halts for
+    the person with "couldn't start the reviewer: <why>" — no fix round
+    spent, nothing typed to the agent. Any other stop, or a worker that
+    started, keeps ``action``."""
     step = _flights._current(flight)
     if step is None or step["kind"] not in _LAUNCHED_WORKER:
         return action
@@ -1164,13 +1167,16 @@ def _launch_verdict(flight: dict, obs: dict, action: dict, now: float) -> dict:
         launch = {"failed": GONE_BEFORE_START}
     what = _LAUNCHED_WORKER[step["kind"]]
     if launch.get("failed"):
+        from backend.web.core.flight_kinds import review as _review
+
         why = "couldn't start %s: %s" % (what, launch["failed"])
-        if not ss["detail"].get("respawned"):
-            # Once, automatically: a stale title or a passing hiccup.
+        n = _review.reasks_of(ss["detail"])
+        if n < _review.MAX_REASKS:
+            # Automatically: a stale title or a passing hiccup.
             return {
                 "action": "run",
                 "note": why + " — starting another",
-                "detail": {"respawned": why},
+                "detail": {"respawned": why, "reasks": n + 1},
             }
         # The stop's own on_fail (skip still skips), with the real reason —
         # no "(after N fix rounds)": the agent's rounds are not why.

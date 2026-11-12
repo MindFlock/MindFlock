@@ -223,7 +223,7 @@ def test_findings_to_the_agent_must_be_fixed_or_rebutted(mode, noun):
     assert "api.py:40 — no unit test" in note
     assert "must be FIXED, or answered with a written rebuttal" in note
     assert "for the PR's description" in note and "commit message" in note
-    assert note.rstrip().endswith("the route asks for a fresh review.")
+    assert note.rstrip().endswith("the route asks the reviewer to check your fixes.")
     # The manual "send it to the agent" path carries only the stored reason.
     reason = f["step_states"][f["steps"][0]["id"]]["detail"]["reason"]
     assert "written rebuttal" in D._fix_note(f["steps"][0], {"reason": reason})

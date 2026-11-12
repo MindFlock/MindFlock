@@ -824,9 +824,11 @@ def test_kinds_dto_passes_option_labels_through_for_verify_only():
         for fld in k["fields"]
         if "option_labels" in fld
     ]
-    # Review's mode (bugs / security / standards) carries labels too.
+    # Review's mode (bugs / security / standards) and what it does with
+    # findings left after its last round carry labels too.
     assert sorted(with_labels) == [
         ("review", "mode"),
+        ("review", "unresolved"),
         ("verify", "ready"),
         ("verify", "who"),
     ]
