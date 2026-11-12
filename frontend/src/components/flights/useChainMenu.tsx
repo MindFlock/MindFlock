@@ -94,8 +94,10 @@ const HERE: ReadonlySet<string> = new Set(["current", "perched", "halted", "paus
  * (lib/stopEditing offers it on a Verify stop only). A stop is drawn halted
  * only when it failed — a halt point pauses, it doesn't halt — which is what
  * the server's fix op takes (FlightStrip `canFixStep`). */
-export function withFixItem(items: readonly SkyMenuItem[], n: Pick<DiagramNode, "state" | "title">): SkyMenuItem[] {
+export function withFixItem(items: readonly SkyMenuItem[], n: Pick<DiagramNode, "state" | "title">, fixable = true): SkyMenuItem[] {
   const out = [...items];
+  // `fixable` false: the route has no session whose agent could fix it.
+  if (!fixable) return out.filter((i) => i.key !== "fix");
   if (n.state !== "halted" || out.some((i) => i.key === "fix")) return out;
   const at = out.findIndex((i) => i.key === "retry");
   if (at < 0) return out;
@@ -119,7 +121,7 @@ export function useChainMenu(
   /** Round 20: the flight's stops and the kinds, for "Run in parallel with
    * the next stop" / "Run on its own". `ended`: the route that finished on
    * this line, for "Fly again from here". */
-  ctx?: { steps?: readonly FlightStep[] | null; kinds?: readonly StepKindDef[] | null; ended?: Flight | null }
+  ctx?: { steps?: readonly FlightStep[] | null; kinds?: readonly StepKindDef[] | null; ended?: Flight | null; noSession?: boolean }
 ): { onMenu(n: DiagramNode, at: { clientX: number; clientY: number }): void; menu: ReactNode } {
   const [open, setOpen] = useState<{ n: DiagramNode; x: number; y: number; sub?: "loop" } | null>(null);
   const onMenu = (n: DiagramNode, at: { clientX: number; clientY: number }) => setOpen({ n, x: at.clientX, y: at.clientY });
@@ -132,7 +134,8 @@ export function useChainMenu(
       live,
       here: live && HERE.has(n.state),
     }) as SkyMenuItem[],
-    n
+    n,
+    !ctx?.noSession
   );
   // Round 20: side by side with the next stop, or out of its group again —
   // only for a stop still ahead whose kind may run in parallel.

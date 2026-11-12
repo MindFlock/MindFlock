@@ -9,14 +9,20 @@ import type { Flight, FlightStep, StepRunState } from "./flights";
 
 type Edit = (f: Flight) => Flight;
 
-/** Apply `edit` to flight `id` in the cache now; returns the rollback. */
+/** Apply `edit` to flight `id` in the cache now; returns the rollback. The
+ * rollback puts back only this flight, and only while the cache still holds
+ * our guess: a poll that landed meanwhile (other flights moved on, or this
+ * one's server copy replaced the guess) and another press's edit are kept. */
 export function patchFlightCache(id: string, edit: Edit): () => void {
   const key = ["flights"];
   void queryClient.cancelQueries({ queryKey: key });
   const before = queryClient.getQueryData<Flight[] | null>(key);
-  if (!before) return () => {};
+  const orig = before?.find((f) => f.id === id);
+  if (!before || !orig) return () => {};
   queryClient.setQueryData<Flight[] | null>(key, before.map((f) => (f.id === id ? edit(f) : f)));
-  return () => queryClient.setQueryData(key, before);
+  // What the cache holds now (structural sharing may store a copy of ours).
+  const guess = queryClient.getQueryData<Flight[] | null>(key)?.find((f) => f.id === id);
+  return () => queryClient.setQueryData<Flight[] | null>(key, (now) => (now ? now.map((f) => (f === guess ? orig : f)) : now));
 }
 
 /** Run `request` with `edit` shown first; a refusal (false / a throw) rolls back. */
@@ -40,34 +46,57 @@ export function withoutSteps(ids: ReadonlySet<string>): Edit {
   };
 }
 
+const GUESS_ID = "s_tmp";
+
+/** The stop at `index` to open once the server's flight has it: a stop the
+ * screen only guessed (`withSteps`' temporary id) is not opened — the
+ * refetch drops it, and the server never had its id. */
+export function stopToOpen<N extends { index?: number; step?: { id: string } }>(stops: readonly N[], index: number): N | null {
+  return stops.find((s) => s.index === index && s.step && !s.step.id.startsWith(GUESS_ID)) || null;
+}
+
 let tmp = 0;
 const PENDING: StepRunState = { state: "pending", since: 0, note: "", detail: {}, rounds: 0 };
 
 /** The flight with `steps` inserted before index `at` (undefined = the end),
- * each under a temporary id until the server's flight replaces it. */
+ * each under a temporary id until the server's flight replaces it. One put
+ * in AT the cursor (a paused route's Undo, a ready route's first place)
+ * becomes the current stop — the server keeps the cursor there. */
 export function withSteps(steps: readonly FlightStep[], at?: number): Edit {
   return (f) => {
-    const fresh = steps.map((s) => ({ ...s, id: "s_tmp" + ++tmp }));
+    const fresh = steps.map((s) => ({ ...s, id: GUESS_ID + ++tmp }));
     const i = at === undefined ? f.steps.length : Math.max(0, Math.min(at, f.steps.length));
     const states = { ...f.step_states };
     for (const s of fresh) states[s.id] = { ...PENDING, since: Date.now() / 1000 };
-    return { ...f, steps: [...f.steps.slice(0, i), ...fresh, ...f.steps.slice(i)], step_states: states, cursor: i <= f.cursor && f.state !== "grounded" ? f.cursor + fresh.length : f.cursor };
+    return { ...f, steps: [...f.steps.slice(0, i), ...fresh, ...f.steps.slice(i)], step_states: states, cursor: i < f.cursor && f.state !== "grounded" ? f.cursor + fresh.length : f.cursor };
   };
 }
 
 /** Flight `id` gone from the cache at once while `request` deletes it; a
- * refusal puts it back. */
+ * refusal puts it back — where it was, among what the cache holds by then
+ * (another delete meanwhile stays done), unless a poll already brought it. */
 export async function optimisticDelete(id: string, request: () => Promise<boolean>): Promise<boolean> {
   const key = ["flights"];
   void queryClient.cancelQueries({ queryKey: key });
   const before = queryClient.getQueryData<Flight[] | null>(key);
-  if (before) queryClient.setQueryData<Flight[] | null>(key, before.filter((f) => f.id !== id));
+  const at = before ? before.findIndex((f) => f.id === id) : -1;
+  if (before && at >= 0) queryClient.setQueryData<Flight[] | null>(key, before.filter((f) => f.id !== id));
+  const putBack = () => {
+    if (!before || at < 0) return;
+    const orig = before[at];
+    const after = new Set(before.slice(at + 1).map((f) => f.id));
+    queryClient.setQueryData<Flight[] | null>(key, (now) => {
+      if (!now || now.some((f) => f.id === id)) return now;
+      const i = now.findIndex((f) => after.has(f.id));
+      return i < 0 ? [...now, orig] : [...now.slice(0, i), orig, ...now.slice(i)];
+    });
+  };
   try {
     const ok = await request();
-    if (!ok && before) queryClient.setQueryData(key, before);
+    if (!ok) putBack();
     return ok;
   } catch (err) {
-    if (before) queryClient.setQueryData(key, before);
+    putBack();
     throw err;
   }
 }

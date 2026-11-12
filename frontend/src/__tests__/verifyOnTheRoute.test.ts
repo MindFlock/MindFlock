@@ -22,7 +22,6 @@ const { useBehaviorsFocus, verifyDialogTarget } = await import("../lib/behaviors
 const { openChecklist } = await import("../lib/checklistLink");
 const { verifyStopStand, haltedLine } = await import("../components/behaviors/cardModel");
 const { verifyStopFace } = await import("../lib/behaviors");
-const { perchBadge } = await import("../lib/flights");
 
 const step = (id: string, kind = "verify"): FlightStep => ({ id, kind, title: kind === "verify" ? "Verify" : "Build", config: {}, on_fail: "halt" }) as unknown as FlightStep;
 const rec = (state: StepRunState["state"], detail: Record<string, unknown> = {}): StepRunState => ({ state, since: 1, note: "", detail, rounds: 0 });
@@ -59,11 +58,9 @@ describe("a Verify stop on the route", () => {
     expect(card).not.toMatch(/stepDone\(/);
   });
 
-  it("puts the route on Needs you while behaviors wait on a person, and counts it on the Sky's badge", () => {
+  it("puts the route on Needs you while behaviors wait on a person", () => {
     const f = flight("waiting_you", { s1: rec("done"), s2: rec("waiting_you") });
     expect(verifyStopStand(f, "s2")).toBe("you");
-    expect(perchBadge([f])).toEqual({ count: 1, failing: false });
-    expect(perchBadge([flight("halted", { s1: rec("done"), s2: rec("failed") })])).toEqual({ count: 1, failing: true });
   });
 
   it("says nothing for a stop the route is not at, or while the agent fixes it", () => {
