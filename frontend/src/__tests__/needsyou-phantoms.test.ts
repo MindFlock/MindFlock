@@ -104,3 +104,24 @@ describe("a route whose session is gone is one row", () => {
     expect(rows.map((r) => r.title)).toEqual(["gone"]);
   });
 });
+
+// A squash merge leaves the branch's commits beyond the base for good, so the
+// stage stays "pushed" and the session sat here as "pushed — ready for PR"
+// about a PR that had already merged, until it was closed. The server's
+// `pr_merged` says the branch is exactly the commit its merged PR was at.
+describe("a session whose PR was squash-merged is not ready for a PR", () => {
+  const pushed = (extra: Record<string, unknown> = {}) => inst("sc-7", { stage: "pushed", branch: "feature/sc-7", ...extra });
+
+  it("pushed with no PR is ready for one", () => {
+    const rows = needsYouRows({ instances: [pushed()], waiting: [], flights: [], testPlans: [] });
+    expect(rows.map((r) => [r.title, r.kind])).toEqual([["sc-7", "ready"]]);
+  });
+
+  it("pushed because its PR merged by squash is not", () => {
+    expect(titles([pushed({ pr_merged: true, pr_url: "https://github.com/o/r/pull/7" })])).toEqual([]);
+  });
+
+  it("commits after the merge make it ready again (the server drops the flag)", () => {
+    expect(titles([pushed({ pr_merged: false, pr_url: "https://github.com/o/r/pull/7" })])).toEqual(["sc-7"]);
+  });
+});

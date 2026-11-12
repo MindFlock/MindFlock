@@ -415,7 +415,9 @@ export function attentionItems(instances: Instance[]): AttentionItem[] {
     } else if (ss.state === "idle" && inst.stage === "pushed") {
       // A session whose lane STOPS at push is finished there, by your own
       // choice — "ready for PR" would nag about a PR you said you didn't want.
-      if (laneOf(inst)?.target !== "push")
+      // Nor one whose PR already merged by squash: the commits stay beyond
+      // the base for good, and "ready for PR" sat on it until it was closed.
+      if (laneOf(inst)?.target !== "push" && !inst.pr_merged)
         items.push({ p: 3, title: inst.title, reason: "pushed — ready for PR" });
     }
   }

@@ -2006,6 +2006,7 @@ _SNAPSHOT_PROBE_KEYS = (
     "stage",
     "stage_reset",
     "pr_url",
+    "pr_merged",
     "failed_step",
     "failed_hook",
     "merge_state",
@@ -2051,6 +2052,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     )
     d["stage_reset"] = False
     d["pr_url"] = None
+    d["pr_merged"] = False
     d["merge_state"] = None
     d["memory"] = _memory_watch.row(i.Title)  # a dict read, fresh on both paths
     d["queue"] = _queue_summary(i.Title, queues)
@@ -8326,7 +8328,7 @@ def _pr_info(wt: str, branch: str, force: bool = False):
 
 
 def _gh_pr_info(wt: str, branch: str):
-    """The ``gh`` rung of :func:`_pr_info` — ``{url, state, base}`` or None.
+    """The ``gh`` rung of :func:`_pr_info` — ``{url, state, base, head}`` or None.
 
     ``baseRefName`` is asked for because Verify's squash-merge fallback needs it:
     "the PR merged" is only evidence that work SHIPPED if it merged into the
@@ -8343,7 +8345,7 @@ def _gh_pr_info(wt: str, branch: str):
             "--state",
             "all",
             "--json",
-            "url,state,baseRefName",
+            "url,state,baseRefName,headRefOid",
             "--limit",
             "1",
         ],
@@ -8364,6 +8366,10 @@ def _gh_pr_info(wt: str, branch: str):
         "url": arr[0].get("url"),
         "state": arr[0].get("state"),
         "base": arr[0].get("baseRefName") or "",
+        # The commit the PR was at (when it merged, for a merged one): the
+        # stage machine's only way to tell "this branch's work IS that PR"
+        # from "there are commits since" after a squash merge.
+        "head": arr[0].get("headRefOid") or "",
     }
 
 
