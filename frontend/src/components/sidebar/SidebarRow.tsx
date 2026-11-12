@@ -83,6 +83,7 @@ import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
 import { openSettings } from "../../lib/openSettings";
 import { VerdictChip } from "../dialogs/VerdictChip";
 import { JointVerdictChip } from "../settings/screens/peer/JointCheck";
+import { owedGroups, owedNoteOf, owedTip } from "../../lib/stopAsks";
 
 /** After an inline rename ends, a click this soon is the same gesture (the
  * click that blurred the input) and must not also act on the row. */
@@ -684,6 +685,8 @@ export const SidebarRow = memo(function SidebarRow({
                   label.kind && !alias ? `session: ${displayTitle(inst)}` : "",
                   inst.branch ? `branch: ${inst.branch}` : "",
                   wline ? wline.title : lineage ? lineage.title : "",
+                  // Checks a Verify stop left for the end, while the route flies.
+                  owedNoteOf(inst.flight) ? "Route: " + owedNoteOf(inst.flight) + "\n" + owedTip(owedGroups(inst.flight?.owed)) : "",
                   !picking && !pending ? "Double-click to rename (F2)" : "",
                   picking ? "" : "Ctrl+click or Shift+click to select several",
                 ]

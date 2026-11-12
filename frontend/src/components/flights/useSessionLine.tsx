@@ -86,6 +86,8 @@ import { StopDialog } from "./StopDialog";
 import { stopVerifyOf } from "./VerifyStopFields";
 import { verifyOf } from "../../lib/sessionState";
 import { useBehaviorsTile } from "./SkyChain";
+import { askOffers, findingsOf, owedGroups, stopAskOf, type OwedGroup, type StopAsk } from "../../lib/stopAsks";
+import { OwedChecks, ReviewFindings } from "./PerchAsks";
 
 export interface LineSource {
   rows: readonly Instance[];
@@ -234,7 +236,11 @@ export function shelfPlanFor(name: string, steps: readonly FlightStep[], planId:
  *  - `editNow`: the current stop's settings can change now — it failed
  *    ("retry") or the route waits at its halt point with nothing run yet
  *    ("resume"); the server resets it on Save so that remedy runs them.
- *  - `asks`: what the stop asks of the person (`detail.items`). */
+ *  - `asks`: what the stop asks of the person (`detail.items`).
+ *  - `ask` (lib/stopAsks): a Review out of fix rounds with findings still
+ *    open ("unresolved": Give it another round primary, Carry on, and
+ *    `findings`), the perch asking for the checks owed at the end ("owed":
+ *    Done — they all work, and `owed` by stop); `words` their buttons. */
 export interface HereStop {
   here: boolean;
   why: string;
@@ -244,12 +250,16 @@ export interface HereStop {
   retry: boolean;
   resume: boolean;
   primary?: "done" | "retry" | "resume";
+  ask: StopAsk;
+  findings: string;
+  owed: OwedGroup[];
+  words: { retry?: [string, string]; done?: [string, string] };
 }
 
 const cap = (t: string) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
 
 export function hereStop(flight: Flight | null | undefined, n: DiagramNode): HereStop {
-  const out: HereStop = { here: false, why: "", asks: [], editNow: "", done: "", retry: false, resume: false };
+  const out: HereStop = { here: false, why: "", asks: [], editNow: "", done: "", retry: false, resume: false, ask: "", findings: "", owed: [], words: {} };
   if (!flight || n.kind !== "stop" || !n.step) return out;
   const haltPoint = atHaltPoint(flight);
   out.resume = flight.state === "paused" || haltPoint;
@@ -261,7 +271,11 @@ export function hereStop(flight: Flight | null | undefined, n: DiagramNode): Her
   const failed = (n.state === "halted" && !haltPoint) || (n.state === "perched" && !!failedReason);
   const ask = n.state === "perched" && n.step.kind === "verify" ? String(d.ask || "") : "";
   const stuck = ask === "blocked" || ask === "memory";
-  out.retry = failed || stuck;
+  out.ask = n.state === "perched" ? stopAskOf(n.step, rec) : "";
+  out.retry = failed || stuck || out.ask === "unresolved";
+  if (out.ask === "unresolved") out.findings = findingsOf(d);
+  if (out.ask === "owed") out.owed = owedGroups(d.owed);
+  for (const o of askOffers(out.ask) || []) out.words[o.key] = [o.label, o.title];
   if (n.state === "perched" && !stuck) out.done = n.step.kind === "verify" ? (failedReason ? "" : "confirm") : "done";
   if (failed && (rec?.state === "failed" || !!failedReason)) out.editNow = "retry";
   else if (haltPoint && (rec?.state || "pending") === "pending") out.editNow = "resume";
@@ -886,6 +900,14 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         busy={busy}
         note={[why, clears, here ? "" : open.reason || rec?.note || ""].filter(Boolean).join(" ")}
         asks={h.asks}
+        askBody={
+          h.findings || h.owed.length ? (
+            <>
+              <ReviewFindings findings={h.findings} />
+              <OwedChecks groups={h.owed} session={flight?.session || title} />
+            </>
+          ) : undefined
+        }
         onClose={close}
         saveHint={h.editNow ? "Save, then " + (h.editNow === "retry" ? "Retry" : "Carry on") + " runs it with these settings" : undefined}
         onSave={
@@ -921,8 +943,10 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         onToggleHalt={here && open.step && !flown ? () => toggleHalt(open) : undefined}
         primary={h.primary}
         onDone={h.done ? () => actClose(() => stepDone(flight!.id, open.step!.id)) : undefined}
-        doneLabel={h.done === "confirm" ? "Confirm verified" : undefined}
-        doneTitle={h.done === "confirm" ? "You checked it — the route goes on" : undefined}
+        doneLabel={h.words.done?.[0] || (h.done === "confirm" ? "Confirm verified" : undefined)}
+        doneTitle={h.words.done?.[1] || (h.done === "confirm" ? "You checked it — the route goes on" : undefined)}
+        retryLabel={h.words.retry?.[0]}
+        retryTitle={h.words.retry?.[1]}
         onRetry={h.retry ? () => actClose(() => stepRetry(flight!.id, open.step!.id)) : undefined}
         onResume={h.resume ? () => actClose(() => controlFlight(flight!.id, "resume")) : undefined}
         onFix={here && canFixStep(flight) ? () => actClose(() => stepFix(flight!.id, open.step!.id)) : undefined}

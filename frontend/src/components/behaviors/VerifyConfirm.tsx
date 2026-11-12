@@ -133,6 +133,78 @@ export function confirmSteps(steps: readonly SessionVerifyHumanStep[], marks: St
   return out;
 }
 
+/** The one line a person writes when a check didn't behave — "What did you
+ * see?", then the send button and Cancel (Enter sends, Escape cancels). The
+ * Verify confirm's "Not verified…" opens it; so does an owed check's "This
+ * one didn't work" (flights/PerchAsks) — one look for both. */
+export function NotVerifiedNote({
+  note,
+  onNote,
+  busy,
+  sending,
+  required = false,
+  autoFocus = false,
+  placeholder,
+  sendLabel = "Not verified",
+  sendTitle = "Send what you saw to the session's agent",
+  onSend,
+  onCancel,
+}: {
+  note: string;
+  onNote(v: string): void;
+  busy: boolean;
+  sending?: boolean;
+  /** The note is needed before it sends (a ✗ mark; an owed check). */
+  required?: boolean;
+  autoFocus?: boolean;
+  placeholder?: string;
+  sendLabel?: string;
+  sendTitle?: string;
+  onSend(): void;
+  onCancel(): void;
+}): JSX.Element {
+  const missing = required && !note.trim();
+  return (
+    <div className="vc-note-row">
+      <input
+        type="text"
+        className="fl-input vc-note"
+        placeholder={placeholder ?? (required ? "What did you see? (needed for a ✗)" : "What did you see?")}
+        aria-label="What wasn't verified"
+        aria-required={required || undefined}
+        autoComplete="off"
+        autoFocus={autoFocus}
+        value={note}
+        disabled={busy}
+        onChange={(e) => onNote(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            e.preventDefault();
+            if (!missing) onSend();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="btn-primary vc-send"
+        disabled={busy || missing}
+        aria-busy={sending || undefined}
+        title={missing ? "Say what you saw first" : sendTitle}
+        onClick={onSend}
+      >
+        {sendLabel}
+      </button>
+      <button type="button" className="test-btn" disabled={busy} onClick={onCancel}>
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 export interface VerifyConfirmProps {
   verify: Pick<SessionVerify, "plan" | "human_steps"> & Partial<Pick<SessionVerify, "detail">>;
   /** The session, for "Sent to <session>'s agent" (the plan id otherwise). */
@@ -184,43 +256,16 @@ export function VerifyConfirm({ verify, session, hideSteps }: VerifyConfirmProps
         />
       )}
       {noteOpen ? (
-        <div className="vc-note-row">
-          <input
-            type="text"
-            className="fl-input vc-note"
-            placeholder={view.anyFail ? "What did you see? (needed for a ✗)" : "What did you see?"}
-            aria-label="What wasn't verified"
-            aria-required={view.anyFail || undefined}
-            autoComplete="off"
-            autoFocus={asking}
-            value={note}
-            disabled={!!busy}
-            onChange={(e) => setNote(e.target.value)}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void send(false);
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                closeNote();
-              }
-            }}
-          />
-          <button
-            type="button"
-            className="btn-primary vc-send"
-            disabled={!!busy || noteMissing}
-            aria-busy={busy === "no" || undefined}
-            title={noteMissing ? "Say what you saw first" : "Send what you saw to the session's agent"}
-            onClick={() => void send(false)}
-          >
-            Not verified
-          </button>
-          <button type="button" className="test-btn" disabled={!!busy} onClick={closeNote}>
-            Cancel
-          </button>
-        </div>
+        <NotVerifiedNote
+          note={note}
+          onNote={setNote}
+          busy={!!busy}
+          sending={busy === "no"}
+          required={view.anyFail}
+          autoFocus={asking}
+          onSend={() => void send(false)}
+          onCancel={closeNote}
+        />
       ) : (
         <div className="vc-acts">
           <button

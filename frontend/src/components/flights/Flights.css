@@ -829,3 +829,89 @@ a.fl-waiting-ref:hover {
 .fl-walk-hint {
   white-space: nowrap;
 }
+
+/* A parked stop that asks more than a Done (flights/PerchAsks): a Review's
+   open findings — preformatted, scrolling past a capped height — and the
+   checks owed to you at the end, grouped by the Verify stop that left them
+   (the Verify confirm's own step list and note row). */
+.fl-findings {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+}
+.fl-owed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+  text-align: left;
+}
+.fl-owed-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.fl-owed-head {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.fl-owed-failed {
+  align-self: flex-start;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* "2 checks owed to you at the end": quiet, beside a route still flying —
+   muted, never the amber of a stop waiting on you. A press lists them. */
+.fl-owed-note-wrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+.fl-owed-note {
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.fl-owed-note:hover {
+  text-decoration: underline;
+}
+.fl-owed-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 20;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+  max-width: min(360px, 90vw);
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  text-align: left;
+}
+.fl-owed-list-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fl-owed-list-item::before {
+  content: "• ";
+  color: var(--muted);
+}

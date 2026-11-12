@@ -52,6 +52,7 @@ import { deriveSessionState } from "./sessionState";
 import { windowName } from "./windowName";
 import { riskOf, type RiskTag } from "./stopRisk";
 import { stopSentence } from "./stopEditing";
+import { stopAskOf, type StopAsk } from "./stopAsks";
 import {
   defaultOnFail,
   isLive,
@@ -176,6 +177,13 @@ export interface DiagramNode {
   /** A flown stop's receipt (`detail.receipt`, ≤ 80 chars: "312 passed",
    * "PR #291"), under the title at mid and near. */
   receipt?: string;
+  /** A stop parked on you with more than a Done to give (lib/stopAsks): a
+   * Review out of fix rounds with findings still open ("unresolved"), the
+   * perch asking for the checks owed at the end ("owed"). */
+  ask?: StopAsk;
+  /** Its sentence (the server's note: "2 findings still open after 3
+   * rounds"), the tile's line under its name. */
+  askNote?: string;
   /** A stop the flight is at that waits for a moment (a Wait's timer
    * `detail.until`, a paced Loop's `detail.next_at`): epoch seconds, for the
    * tile's live "12:34 left". */
@@ -887,6 +895,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : handed,
       ...looksOf(s, kinds),
       ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
+      ...(state === "perched" && stopAskOf(s, rec) ? { ask: stopAskOf(s, rec), askNote: String(rec?.note || "").trim() } : {}),
       ...(loop ? { loop } : {}),
       ...(ret ? { ret } : {}),
       ...(state === "done" && rec?.detail?.by === "agent" ? { by: "agent" as const } : {}),

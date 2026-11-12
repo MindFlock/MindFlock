@@ -42,6 +42,8 @@ import { windowName } from "../../lib/windowName";
 import { controlFlight, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { canFlyAgain, flyAgainLabel, flyAgainPrimary, pickAgainStop } from "../../lib/routeStart";
 import "./RouteStartMenu.css";
+import { ASK_TILE_W, askOffers, askRoom, askSentence, findingsOf, flightAsk, owedGroups, owedNoteOf, owedTip } from "../../lib/stopAsks";
+import { OwedChecks, OwedNote, ReviewFindings } from "./PerchAsks";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
 import "./Flights.css";
@@ -280,11 +282,43 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
       setBusy(false);
     }
   };
+  // A Review out of fix rounds with findings still open, the perch asking
+  // for the checks owed at the end: their own words (lib/stopAsks).
+  const ask = flightAsk(flight);
+  const rec = flight.step_states?.[step.id];
+  const offers = askOffers(ask) || [];
+  const owed = ask === "owed" ? owedGroups(rec?.detail?.owed) : [];
+  if (ask === "unresolved") {
+    const findings = findingsOf(rec?.detail);
+    return (
+      <div className={"fl-you fl-you-unresolved" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : "")} onClick={stop} data-no-drag>
+        {!compact && !inTile && <p className="fl-you-text">{askSentence(rec, "Findings are still open after the last round")}</p>}
+        {!compact && <ReviewFindings findings={findings} />}
+        <div className="fl-you-acts">
+          {offers.map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              className={(o.primary ? "btn-primary" : "test-btn") + " fl-btn fl-" + (o.key === "retry" ? "retry" : "carry")}
+              disabled={busy}
+              title={o.title + (compact && findings ? "\n\n" + findings : "")}
+              onClick={() => void run(() => (o.key === "retry" ? stepRetry(flight.id, step.id) : stepDone(flight.id, step.id)))}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  const doneOffer = offers.find((o) => o.key === "done");
   const key = (i: number) => flight.id + ":" + step.id + ":" + i;
   const allTicked = items.every((_, i) => ticked[key(i)]);
   const halted = flight.state === "halted" || paused || handed;
   const fix = !paused && canFixStep(flight);
-  const text = handed ? (/^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason) : youText(flight);
+  // The owed perch's sentence is the server's note ("Before this route
+  // finishes: 3 checks for you"), which its own text alone would leave out.
+  const text = handed ? (/^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason) : ask === "owed" ? askSentence(rec, youText(flight)) : youText(flight);
   return (
     <div className={"fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : "")} onClick={stop} data-no-drag>
       {!compact && !inTile && text && (!halted || handed) && <p className="fl-you-text">{text}</p>}
@@ -304,6 +338,7 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
           ))}
         </ul>
       )}
+      {!halted && !compact && <OwedChecks groups={owed} session={flight.session} />}
       <div className="fl-you-acts">
         {paused ? (
           <button
@@ -330,10 +365,10 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
             type="button"
             className="btn-primary fl-btn fl-done"
             disabled={busy || !allTicked}
-            title={allTicked ? "Mark “" + step.title + "” done — the route goes on" : "Tick every item first"}
+            title={allTicked ? (doneOffer ? doneOffer.title + (compact && owed.length ? "\n\n" + owedTip(owed) : "") : "Mark “" + step.title + "” done — the route goes on") : "Tick every item first"}
             onClick={() => void run(() => stepDone(flight.id, step.id))}
           >
-            Done
+            {doneOffer ? doneOffer.label : "Done"}
           </button>
         )}
         {fix && (
@@ -524,7 +559,8 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
     if (verifyHere) return { w: Math.max(base.w, 320), h: base.h + 220 };
     const items = n.state === "perched" ? youItems(cur).length : 0;
     const text = n.state === "perched" && (youText(flight!) || n.reason) ? 24 : 0;
-    return { w: Math.max(base.w, 250), h: base.h + text + items * 23 + 38 };
+    const rec = n.step ? flight!.step_states?.[n.step.id] : undefined;
+    return { w: Math.max(base.w, n.ask ? ASK_TILE_W : 250), h: base.h + text + items * 23 + 38 + askRoom(n.ask, rec?.detail) };
   };
   return { renderInBox, sizeOf };
 }
@@ -612,6 +648,7 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
                 </span>
               )}
               {flight.state === "halted" && flight.reason && <span className="fl-now-reason">{flight.reason}</span>}
+              <OwedNote note={owedNoteOf(flight)} groups={owedGroups(flight.owed)} />
             </>
           ) : null}
           <span className="fl-progress muted">
@@ -666,6 +703,7 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
           <Bird size={13} />
           <span className="fl-strip-text">{line}</span>
         </button>
+        <OwedNote note={owedNoteOf(full || row)} groups={owedGroups((full || row).owed)} />
         {full && parked && <YouStepActions flight={full} compact />}
         {walking && (
           <VerifyWalkHint

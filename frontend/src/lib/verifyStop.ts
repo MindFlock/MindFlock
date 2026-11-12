@@ -176,12 +176,19 @@ export const VERIFY_ON_FAIL: Readonly<Record<VerifyOnFail, string>> = {
 export function verifySentence(c: Record<string, unknown> | null | undefined, onFail: string = "halt", envs: VerifyEnvsResponse | null | undefined = known): string {
   const v = verifyConfig(c);
   const where = v.where === WHERE_BRANCH ? "this branch" : v.where;
+  // "Carry on, ask me at the end" (`ask` "end"): the route keeps going and
+  // asks once, before it finishes (lib/stopAsks).
+  const atEnd = String(c?.ask ?? "") === "end";
   const who =
     v.who === "agent"
       ? "it does every step itself, a person's too, and goes on without you when they pass"
       : v.who === "you"
-        ? "then the route waits for your sign-off, even when every step passes"
-        : "you confirm the steps only a person can do";
+        ? atEnd
+          ? "the route carries on and asks for your sign-off at the end"
+          : "then the route waits for your sign-off, even when every step passes"
+        : atEnd
+          ? "the route carries on and asks you for the steps only a person can do at the end"
+          : "you confirm the steps only a person can do";
   const fail =
     onFail === "agent"
       ? "a failure goes back to the agent, up to " + FIX_ROUNDS + " rounds"

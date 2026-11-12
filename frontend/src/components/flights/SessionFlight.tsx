@@ -46,6 +46,8 @@ import { FlightMenu, FlyAgain } from "./FlightStrip";
 import { DescribeField } from "./StopParts";
 import { useSessionLine } from "./useSessionLine";
 import { Bird } from "./Bird";
+import { OwedNote } from "./PerchAsks";
+import { owedGroups, owedNoteOf } from "../../lib/stopAsks";
 import "./Flights.css";
 
 /** How many saved stops the tab shows as cards before "More…". */
@@ -126,6 +128,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
               {prog!.done}/{prog!.total} stops
               {flight.state === "paused" ? " · paused" : flight.state === "halted" ? " · halted" : flight.state === "waiting_you" ? " · needs you" : ""}
             </span>
+            <OwedNote note={owedNoteOf(flight)} groups={owedGroups(flight.owed)} />
             <FlightMenu flight={flight} onCancelAsk={cancel.ask} openSession={false} />
           </>
         ) : landed ? (

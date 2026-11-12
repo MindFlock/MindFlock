@@ -133,11 +133,14 @@ const SERVER_FIELDS: Record<string, string[]> = {
   land: ["delete_branch", "remote_branch", "close"],
   listen: ["match", "timeout_minutes"],
   preview: ["command", "timeout_minutes", "stop_command"],
-  review: ["program", "model", "focus", "block", "keep"],
+  review: ["program", "model", "focus", "block", "rounds", "unresolved", "keep"],
   screenshot: ["urls", "widths", "timeout_minutes", "comment_pr"],
   someone: ["who", "text", "items", "webhook"],
   sync: ["with", "how", "fetch"],
   test: ["command", "expect", "rerun_failures", "timeout_minutes"],
+  // Verify's own editor draws its other fields; "When it needs you" is the
+  // generic field under Who checks.
+  verify: ["ask"],
 };
 
 describe("FIELD_HINT: every option of every stop kind", () => {
