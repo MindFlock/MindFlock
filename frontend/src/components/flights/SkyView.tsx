@@ -2723,13 +2723,13 @@ export function SkyView() {
         setLayout((l) => patchSkyLine(l, guess, { x: newAt.x, y: newAt.y, pinned: true }));
         setNewAt({ ...newAt, flying: guess });
       }}
-      onFailed={() => {
-        const guess = newAt.flying;
+      // The guess comes from the block itself: `newAt` here is the one from
+      // the render Fly was pressed in, before `flying` was set.
+      onFailed={(guess) => {
         if (guess) setLayout((l) => tidySkyLayout(l, guess));
         setNewAt((cur) => (cur ? { ...cur, flying: undefined } : cur));
       }}
-      onCreated={(title) => {
-        const guess = newAt.flying;
+      onCreated={(title, guess) => {
         setLayout((l) => patchSkyLine(l, title, { x: newAt.x, y: newAt.y, pinned: true }));
         if (guess && guess !== title) setLayout((l) => tidySkyLayout(l, guess));
         // Its line shows where the block sat; it is not focused for you.

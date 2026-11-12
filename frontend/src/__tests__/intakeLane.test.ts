@@ -259,7 +259,7 @@ describe("the new-session block", () => {
     expect(src).toContain("newSessionSubmit(ctx).buildBody(");
     expect(src).toContain('api<Instance>("/api/instances", { json: body })');
     expect(src).toContain("await startFlightOn(title, plan)");
-    expect(src).toContain("onCreated(title);");
+    expect(src).toContain("onCreated(title, guess);");
     expect(src).not.toMatch(/\balert\(|\bconfirm\(|window\.prompt/);
   });
 });
