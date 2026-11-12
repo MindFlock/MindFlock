@@ -4393,15 +4393,6 @@ export class HandsFree {
   }
 }
 
-/** The options' Diagnostics line for what waits on the focused session. */
-export function pendingDiagnostics(name: string, dialog: Dialog | null, dialogUp: boolean, question: string): string {
-  if (!name) return "Pending: no session focused";
-  if (dialog) return "Pending: " + name + " shows a dialog — " + (plain(dialog.question) || "unparsed");
-  if (dialogUp) return "Pending: " + name + " shows a dialog";
-  if (question) return "Pending: " + name + " asked — " + plain(question);
-  return "Pending: nothing on " + name;
-}
-
 // --- speaking ------------------------------------------------------------------- //
 
 /** One engine: speak() resolves when the text has been said (or given up on).
