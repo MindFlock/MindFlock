@@ -2551,14 +2551,18 @@ class TtsChain:
 
     def _reply(self, listener: str) -> _Reply:
         """``listener``'s reply (under the lock), made on first use; the
-        idle ones are forgotten past :data:`MAX_LISTENERS`."""
+        idle ones are forgotten past :data:`MAX_LISTENERS` — a sticky one
+        too once it has gone quiet (what :meth:`pick` unsticks: a page gone
+        during an outage never picks again)."""
         r = self._replies.get(listener)
         if r is None:
             if len(self._replies) >= MAX_LISTENERS:
+                now = _now()
                 for k in [
                     k
                     for k, v in self._replies.items()
-                    if not v.inflight and not v.sticky
+                    if not v.inflight
+                    and (not v.sticky or now >= v.quiet_at + REPLY_GAP_SECONDS)
                 ]:
                     del self._replies[k]
             r = self._replies[listener] = _Reply()
