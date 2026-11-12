@@ -55,7 +55,13 @@ is words for the current session. A false command is worse than a missed one
 phrase. A prompt that nearly was a command — a plain switch, status, read,
 question or interrupt naming no session, an answer with nothing asking —
 says so in ``near`` (:func:`_near`: ``{"kind", "why", "arg"?, "suggest"?}``)
-for the client to caption; the words are still typed. Fillers said before a
+for the client to caption; the words are still typed. So does a question
+about MindFlock not said to it while a session is open to type it into
+(``near`` help, ``why`` ``unaddressed``, :func:`_help_or_prompt`): the
+owner's prompts to an agent working ON MindFlock name its sessions, PRs and
+settings all day. MindFlock is asked only when addressed — "MindFlock, …",
+"help: …" — and its name first is an address only with a pause or a
+request after it (:func:`_addressed`), never as a sentence's subject. Fillers said before a
 navigation or read command ("um", "so", "now", "okay so") are dropped
 (:data:`_FILLER_RE`), never before an answer, a send or a new session. A
 name that matches nothing but sounds like exactly one session's
@@ -1174,6 +1180,27 @@ _HELP_NOT = re.compile(
 # to the agent), "my flock open settings" (no pause) or "MindFlock's …"
 # (about it, not to it) never address it.
 _ASSIST_FLOCK_RE = re.compile(r"^(?:ask )?flock(?! mode\b) (?P<rest>.+)$")
+# The name is often the SUBJECT of a dictated sentence ("MindFlock should
+# restart the server when …", "MindFlock keeps dropping the mic"): the
+# name first is no address on its own. Addressed is the name with the pause
+# the recogniser writes after a name said to it ("MindFlock, …"), or before
+# a request: voice_words.wake_asks' leads (open, show, what, where, how …),
+# a command of the router's own ("MindFlock yes", "mindflock cancel"), or
+# one of these — a question word, an inverted question ("can we", "is
+# there") or an imperative the assistant carries out. mobile.js
+# ``VOICE_ADDRESS_RE`` is the same rule.
+_ADDRESS_RE = re.compile(
+    r"^(?:(?:please|um|uh|so|now|ok|okay) ){0,2}"
+    r"(?:(?:can|could|would|will) you (?:please )?)?"
+    r"(?:why|when|hows|whos"
+    r"|(?:can|could|should|do|does|would|will) (?:i|we|you)"
+    r"|(?:is|are) there|is it"
+    r"|close|hide|toggle|enable|disable|mute|unmute|set|change|send|tell|type"
+    r"|approve|deny|pause|resume|ship|merge|delete|remove|kill|explain"
+    r"|describe|find|search|give me|remind me)\b"
+)
+#: A pause mark the recogniser writes after a name said to it ("MindFlock,").
+_PAUSE_AFTER_RE = re.compile(r"[,.:;!?—–-]$")
 #: An addressed phrase whose rest is one of these commands is that command
 #: (the client's own words and the pane actions the assistant can't do):
 #: "MindFlock, stop listening" stops the mic.
@@ -1186,16 +1213,22 @@ def _assistant_command(w: "_Words", words: Optional[dict]) -> Optional[dict]:
     """``{"kind": "assistant", "text"}`` — the request as said, the name
     dropped — for a phrase addressed to MindFlock (``core.voice_words.wake_at``,
     or "flock …"), or the deterministic command its rest is when that is one
-    of :data:`_ASSIST_DIRECT`; None when not addressed."""
+    of :data:`_ASSIST_DIRECT`; None when not addressed — the name said with
+    no pause and no request after it (:func:`_addressed`) is the subject of
+    a dictated sentence ("MindFlock should restart the server")."""
     at = _voice_words.wake_at(" ".join(w.toks), words)
     if at is not None:
         # The first word from the token after the wake word on.
         start = next((i for i, o in enumerate(w.owner) if o >= at), len(w.words))
+        paused = at >= 1 and _PAUSE_AFTER_RE.search(w.toks[at - 1]) is not None
     else:
         m = _ASSIST_FLOCK_RE.match(w.text)
         if m is None:
             return None
         start = w.at(m.start("rest"))
+        paused = start >= 1 and (
+            _PAUSE_AFTER_RE.search(w.toks[w.owner[start - 1]]) is not None
+        )
     rest = w.original(start)
     if at is not None:
         # A misheard word can carry the request's first word off with it
@@ -1209,25 +1242,55 @@ def _assistant_command(w: "_Words", words: Optional[dict]) -> Optional[dict]:
     got = command(rest, words)
     if got is not None and got["kind"] in _ASSIST_DIRECT:
         return got
+    if not (paused or got is not None or _addressed(rest)):
+        return None  # the name as the sentence's subject: words for the agent
     return {"kind": "assistant", "text": rest}
+
+
+def _addressed(rest: str) -> bool:
+    """Whether ``rest`` — the words after a leading wake word said with no
+    pause — is a request to MindFlock (:data:`_ADDRESS_RE`)."""
+    if _voice_words.wake_asks(rest):
+        return True
+    return _ADDRESS_RE.match(norm(rest).replace("'", "")) is not None
 
 
 def _help_command(text: str) -> Optional[dict]:
     """A question about MindFlock itself → ``{"kind": "help", "text"}`` (the
     question, a "mindflock," / "help:" lead dropped), or None. Help when the
-    phrase is question-shaped (:data:`_HELP_Q_RE`) AND either MindFlock was
-    addressed first ("mindflock, …", "help: …") or it names MindFlock or one
-    of its features (:data:`_HELP_FEATURES`) and says nothing of the agent's
-    work, the session's state or "you" (:data:`_HELP_NOT`). A missed
-    question still reaches the agent; when unsure it is a prompt."""
+    phrase is question-shaped (:data:`_HELP_Q_RE`) and MindFlock was
+    addressed first ("mindflock, …", "help: …"). A question that only names
+    MindFlock or one of its features (:data:`_HELP_FEATURES`) and says
+    nothing of the agent's work, the session's state or "you"
+    (:data:`_HELP_NOT`) is a GUESS — ``"unaddressed": True`` — that
+    :func:`answer` keeps only when there is no session to type it into:
+    the owner's prompts to an agent working on MindFlock ask about its
+    sessions, PRs and settings all day. A missed question still reaches the
+    agent; when unsure it is a prompt."""
     m = _HELP_PREFIX_RE.match(text)
     if m and _HELP_Q_RE.match(m.group("q")):
         return {"kind": "help", "text": m.group("q")}
     if not _HELP_Q_RE.match(text) or _HELP_NOT.search(text):
         return None
     if _HELP_NAMED_RE.search(text) or _HELP_FEATURES.search(text):
-        return {"kind": "help", "text": text}
+        return {"kind": "help", "text": text, "unaddressed": True}
     return None
+
+
+#: How a help guess typed as a prompt says it may be asked instead
+#: (``near.suggest``: "MindFlock, <the question>").
+HELP_SUGGEST = "MindFlock, %s"
+
+
+def _help_or_prompt(cmd: dict, session: str, rows) -> dict:
+    """A ``help`` command → the help answer, or — an unaddressed guess
+    (:func:`_help_command`) said while a session is open to type it into —
+    a ``prompt`` with ``near`` ``{"kind": "help", "why": "unaddressed",
+    "suggest": "MindFlock, <the question>"}``: typed as said, the client's
+    caption saying how to ask MindFlock instead (never spoken)."""
+    if cmd.get("unaddressed") and _row(rows, session) is not None:
+        return _near("help", "", "unaddressed", suggest=HELP_SUGGEST % cmd["text"])
+    return {"kind": "help", "text": cmd["text"]}
 
 
 def command(text, words: Optional[dict] = None) -> Optional[dict]:
@@ -1825,21 +1888,23 @@ def _near_row(arg: str, rows) -> Optional[dict]:
     return scored[0][1]
 
 
-def _near(kind: str, arg: str, why: str, rows=(), suggest: Optional[dict] = None):
+def _near(kind: str, arg: str, why: str, rows=(), suggest=None):
     """A ``prompt`` that says what command it nearly was (the client
     captions it; the words are typed): ``{"kind": "prompt", "near":
     {"kind", "why", "arg"?, "suggest"?}}`` — ``why`` ``no_session`` (no
     session called ``arg``; ``suggest``: the one whose name it sounds like),
     ``no_dialog`` (an answer with nothing asking), ``no_focus`` (no session
-    open). "More" with nothing to repeat stays a bare prompt: "more", "again"
-    are as likely words for the agent."""
+    open), ``unaddressed`` (kind ``help``: a question about MindFlock not
+    said to it; ``suggest``: the same question said to it, a string). "More"
+    with nothing to repeat stays a bare prompt: "more", "again" are as
+    likely words for the agent."""
     near = {"kind": kind, "why": why}
     if arg:
         near["arg"] = arg
     if suggest is None and why == "no_session" and arg:
         suggest = _near_row(arg, rows)
     if suggest is not None:
-        near["suggest"] = _name(suggest)
+        near["suggest"] = suggest if isinstance(suggest, str) else _name(suggest)
     return {"kind": "prompt", "near": near}
 
 
@@ -2280,7 +2345,7 @@ def answer(
     if kind in ("answer", "question"):
         return _answer_or_question(cmd, session, rows, title)
     if kind == "help":
-        return {"kind": "help", "text": cmd["text"]}
+        return _help_or_prompt(cmd, session, rows)
     if kind == "assistant":
         return {"kind": "assistant", "text": cmd["text"]}
     if kind == "list":

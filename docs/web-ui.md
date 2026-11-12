@@ -531,7 +531,11 @@ a session first*).
   session, where, commands, cancel, repeat, stop, hush); otherwise the words
   are typed and the strip says so (*Typed — the voice router didn't answer
   in time*). A near miss is typed with its reason (*Typed — no session
-  called docks (did you mean docs?)*). These lines are captions, never
+  called docks (did you mean docs?)*). A question about MindFlock said to
+  the focused session (“where do the tickets get picked up”) is typed into
+  it — the agent may well be working on MindFlock — captioned *Typed — say
+  “MindFlock, …” to ask MindFlock instead*; with no session open it is
+  answered from the docs as before. These lines are captions, never
   spoken.
 - **Routing.** A dictation's first phrase is first offered to the voice
   router: “switch to the login fix”, “take me to the sitecheck session”,
@@ -557,7 +561,13 @@ a session first*).
   (“open settings”, “open intake”, “open schedule”…); a phrase the router
   calls a prompt after all is typed as words. An ordinary-word form (“my
   flock”, “mind block”) counts only with the pause the recogniser writes
-  after a name said to it: “my flock open settings” is dictation. Opening
+  after a name said to it: “my flock open settings” is dictation. The name
+  itself counts only when said TO MindFlock — a pause after it, or a
+  request after it (“MindFlock what needs me”, “hey mindflock open
+  settings”, “MindFlock, …”); the name as a sentence's subject (“MindFlock
+  should restart the server when…”) is typed. The phone page
+  (`voiceWakeAddressed`) applies the same rule before handing a phrase to
+  the assistant. Opening
   something by voice says so — *Opening Settings.*, *Opening Voice
   settings.* (`lib/voiceAssistant` `openingLine`) — when spoken replies or
   spoken confirmations are on (`announcesActions`), through the

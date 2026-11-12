@@ -154,6 +154,15 @@ describe("a typed miss says why — a caption, never a spoken line", () => {
     ],
     [{ kind: "prompt", near: { kind: "answer", why: "no_dialog" } }, "Typed — nothing is being asked"],
     [{ kind: "prompt", near: { kind: "status", why: "no_focus" } }, "Typed — no session is focused"],
+    // A question about MindFlock said while a session is open: typed, the
+    // caption says how to ask MindFlock — the question itself never echoed.
+    [
+      {
+        kind: "prompt",
+        near: { kind: "help", why: "unaddressed", suggest: "MindFlock, where do the tickets get picked up" },
+      },
+      "Typed — say “MindFlock, …” to ask MindFlock instead",
+    ],
     [{ kind: "prompt", failed: "error" }, "Typed — couldn't reach the voice router"],
     [{ kind: "prompt", unknown: "teleport" }, "Typed — this page doesn't know “teleport” yet (reload it)"],
     [{ kind: "prompt" }, ""],

@@ -7518,13 +7518,17 @@
     var rest = voiceWakeRestOf(text);
     if (rest !== null) {
       if (!rest.trim()) { L.addressed = "first"; return { mode: "first", text: "", alone: true }; }
-      return { mode: "rest", text: rest };
+      // "MindFlock should restart the server …": the name as the sentence's
+      // subject is dictation, not said to it (voiceWakeAddressed).
+      if (voiceWakeAddressed(text, rest)) return { mode: "rest", text: rest };
     }
     if (A === "answer" && voiceAssistWaiting()) return { mode: "answer", text: text };
     if (A === "first") return { mode: "first", text: text };
     return null;
   }
-  var VOICE_NEAR_ASSIST = ["switch", "status", "read", "question"];
+  // A wake-started listen's first phrase that nearly was one of these is the
+  // assistant's: a help guess (a question about MindFlock) included.
+  var VOICE_NEAR_ASSIST = ["switch", "status", "read", "question", "help"];
   function voiceAddressedRouted(res, p, mode) {
     if (res && res.kind !== "prompt") return voiceRouted(res, p);   // a command (or the assistant)
     if (!res) {
@@ -8295,6 +8299,33 @@
   var VOICE_WAKE_ASK_FILLERS = ["please", "um", "uh", "so", "now", "ok", "okay"];
   var VOICE_WAKE_ASK_YOU = ["can", "could", "would", "will"];
   var VOICE_WAKE_PAUSE = /[,.:;!?—–-]$/;
+  // After a wake word said with no pause, the rest of what makes it a request
+  // TO MindFlock (beside VOICE_WAKE_ASKS and the page's own commands): a
+  // question word, an inverted question, an imperative the assistant does —
+  // "MindFlock should restart the server" is about it, typed
+  // (core.voice_router _ADDRESS_RE: the same rule).
+  var VOICE_ADDRESS_RE = new RegExp("^(?:(?:please|um|uh|so|now|ok|okay) ){0,2}" +
+    "(?:(?:can|could|would|will) you (?:please )?)?" +
+    "(?:why|when|hows|whos" +
+    "|(?:can|could|should|do|does|would|will) (?:i|we|you)" +
+    "|(?:is|are) there|is it" +
+    "|close|hide|toggle|enable|disable|mute|unmute|set|change|send|tell|type" +
+    "|approve|deny|pause|resume|ship|merge|delete|remove|kill|explain" +
+    "|describe|find|search|give me|remind me)\\b");
+  // Is a phrase that starts with the wake word (`rest`: the words after it,
+  // voiceWakeRestOf) said TO MindFlock? The wake word alone, or with the pause
+  // the recogniser writes after a name said to it ("MindFlock, …"), or before
+  // a request (voiceWakeAsks, VOICE_ADDRESS_RE, a command of the page's).
+  function voiceWakeAddressed(text, rest) {
+    rest = String(rest || "").trim();
+    if (!rest) return true;
+    var toks = String(text || "").trim().split(/\s+/).filter(Boolean);
+    var wake = toks[toks.length - rest.split(/\s+/).length - 1] || "";
+    if (VOICE_WAKE_PAUSE.test(wake)) return true;
+    if (voiceWakeAsks(rest)) return true;
+    if (VOICE_ADDRESS_RE.test(voiceNorm(rest).replace(/'/g, ""))) return true;
+    return voiceCommand(rest) !== null;
+  }
   // A token's matcher words: lower case, apostrophes dropped, the rest a break.
   function voiceWakeWords(t) {
     return String(t || "").toLowerCase().replace(/['’]/g, "").split(/[^a-z0-9]+/).filter(Boolean);
@@ -9018,6 +9049,9 @@
     }
     if (why === "no_dialog") return "Typed — nothing is being asked";
     if (why === "no_focus") return "Typed — no session is open";
+    // A question about MindFlock said to the session (not to MindFlock): typed,
+    // captioned with how to ask MindFlock — never spoken (no echoes).
+    if (why === "unaddressed") return "Typed — say “" + voiceWakeName() + ", …” to ask " + voiceWakeName() + " instead";
     return "";
   }
   // Why the router did not answer (voiceRoute's null) → the strip line for
