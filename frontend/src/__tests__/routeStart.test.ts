@@ -39,7 +39,7 @@ const RS = await import("../lib/routeStart");
 const API = await import("../lib/flightsApi");
 const { routeMenuLines } = await import("../components/flights/RouteStartMenu");
 const { withAgainItem, AGAIN_HERE_KEY } = await import("../components/flights/useChainMenu");
-const { flyAgainItems } = await import("../components/flights/FlightStrip");
+const { flyAgainItems, sessionGone } = await import("../components/flights/FlightStrip");
 const { queryClient } = await import("../state/queries");
 
 const KINDS = [
@@ -165,6 +165,79 @@ describe("Fly again on an ended route", () => {
   });
 });
 
+describe("a route's own stops (not the checks perches it added itself)", () => {
+  const perch = step("p9", "you", "Your checks");
+  const mid = step("p5", "you", "Your checks");
+
+  it("leaves out owed_perch and owed_added from the stops and the labels", () => {
+    const f = flight({ steps: [...STEPS.slice(0, 3), mid, STEPS[3], perch], owed_perch: "p9", owed_added: ["p5"] });
+    expect(RS.ownSteps(f).map((s) => s.id)).toEqual(["s1", "s2", "s3", "s4"]);
+    RS.pickAgainStop(f);
+    const lines = routeMenuLines(RS.useRouteStartMenu.getState().open!, KINDS);
+    expect(lines.some((l) => l.label.includes("Your checks"))).toBe(false);
+  });
+
+  it("standing on its end perch = past every own stop: Fly again starts over", () => {
+    const states = Object.fromEntries(STEPS.map((s) => [s.id, { state: "done" }]));
+    const f = flight({ state: "cancelled", steps: [...STEPS, perch], cursor: 4, owed_perch: "p9", step_states: { ...states, p9: { state: "perched" } } as unknown as Flight["step_states"] });
+    expect(RS.carryIndex(f)).toBe(4);
+    expect(RS.flyAgainLabel(f)).toBe("Fly again");
+  });
+
+  it("standing on a perch it added mid-route = the next own stop", () => {
+    const f = flight({
+      steps: [...STEPS.slice(0, 3), mid, STEPS[3]],
+      cursor: 3,
+      owed_added: ["p5"],
+      step_states: { s1: { state: "done" }, s2: { state: "done" }, s3: { state: "done" }, p5: { state: "perched" }, s4: { state: "pending" } } as unknown as Flight["step_states"],
+    });
+    expect(RS.flyAgainLabel(f)).toBe("Fly again from CI green");
+  });
+
+  it("never past a Verify stop whose check it still owed: the earliest of those", () => {
+    const f = flight({ cursor: 3, step_states: { s1: { state: "done" }, s2: { state: "done" }, s3: { state: "done" }, s4: { state: "pending" } } as unknown as Flight["step_states"], owed: [{ step: "s2", title: "Commit", plan: "", items: ["a"] }] });
+    expect(RS.carryIndex(f)).toBe(1);
+    expect(RS.flyAgainLabel(f)).toBe("Fly again from Commit");
+  });
+
+  it("a route whose only stops are its own perches can't fly again", () => {
+    expect(RS.canFlyAgain(flight({ steps: [perch], owed_perch: "p9" }))).toBe(false);
+  });
+});
+
+describe("what Fly again says it will do", () => {
+  it("its session alive: a new run there; gone: the branch's session or a reopen", () => {
+    expect(RS.flyAgainTitle(flight(), false)).toBe("Fly this route again on sc-42 from “Push” — a new run of its stops");
+    expect(RS.flyAgainTitle(flight(), true)).toBe("sc-42 is gone: it flies again from “Push” on the session that holds its branch, or reopens sc-42 from Recently closed");
+    expect(sessionGone(flight(), [{ title: "sc-42" }])).toBe(false);
+    expect(sessionGone(flight(), [{ title: "other" }])).toBe(true);
+    expect(sessionGone(flight(), undefined)).toBe(false);
+    expect(flyAgainItems(flight(), true)[0].title).toContain("is gone");
+  });
+});
+
+describe("where the menu opens", () => {
+  const view = { w: 1000, h: 800 };
+  const size = { w: 340, h: 200 };
+  it("beside what opened it, to its right, top-aligned — never over it", () => {
+    expect(RS.placeMenu({ left: 100, top: 300, right: 220, bottom: 330 }, size, view)).toEqual({ x: 226, y: 300 });
+  });
+  it("to its left when the right has no room (a drawer at the edge)", () => {
+    expect(RS.placeMenu({ left: 700, top: 300, right: 900, bottom: 330 }, size, view)).toEqual({ x: 354, y: 300 });
+  });
+  it("pulled up to stay on screen near the bottom", () => {
+    expect(RS.placeMenu({ left: 100, top: 700, right: 220, bottom: 730 }, size, view)).toEqual({ x: 226, y: 592 });
+  });
+  it("below it when neither side has room, above when below has none", () => {
+    const narrow = { w: 400, h: 800 };
+    expect(RS.placeMenu({ left: 20, top: 100, right: 380, bottom: 130 }, size, narrow)).toEqual({ x: 20, y: 136 });
+    expect(RS.placeMenu({ left: 20, top: 700, right: 380, bottom: 730 }, size, narrow)).toEqual({ x: 20, y: 494 });
+  });
+  it("a point (a drop, a ⋯ item) opens just beside it", () => {
+    expect(RS.anchorOf(null, { x: 50, y: 60 })).toEqual({ left: 50, top: 60, right: 50, bottom: 60 });
+  });
+});
+
 describe("what it posts", () => {
   it("the check posts the start's body; null when the server can't say", async () => {
     answers.set("/api/flights/check", { ok: true, steps: STEPS, resume: RESUME });
@@ -225,7 +298,7 @@ describe("starting a saved route on a session", () => {
     await RS.startSavedRoute(PLAN, "sc-42", { normal, at: { x: 40, y: 50 } });
     expect(normal).not.toHaveBeenCalled();
     const open = RS.useRouteStartMenu.getState().open!;
-    expect(open).toMatchObject({ mode: "start", view: "resume", x: 40, y: 50 });
+    expect(open).toMatchObject({ mode: "start", view: "resume", anchor: { left: 40, top: 50, right: 40, bottom: 50 } });
     const lines = routeMenuLines(open, KINDS, 1000 + 3600);
     expect(lines.map((l) => l.label)).toEqual([
       "Carries on at Push — where it stopped 1h ago (its session was deleted)",
@@ -234,6 +307,10 @@ describe("starting a saved route on a session", () => {
       "Start at another stop…",
     ]);
     expect(lines.find((l) => l.primary)?.key).toBe("resume");
+    expect(lines[1].title).not.toContain("nothing is sent again");
+    const started = open as Extract<typeof open, { mode: "start" }>;
+    RS.useRouteStartMenu.getState().set({ ...started, check: { ...started.check!, resume: { ...RESUME, in_progress: true } } });
+    expect(routeMenuLines(RS.useRouteStartMenu.getState().open!, KINDS)[1].title).toContain("nothing is sent again");
     lines.find((l) => l.key === "resume")!.run!();
     await Promise.resolve();
     expect(calls.at(-1)).toEqual(["/api/flights/start", { plan_id: "p1", title: "sc-42", start_at: "s3" }]);
@@ -251,6 +328,8 @@ describe("starting a saved route on a session", () => {
     const lines = routeMenuLines(open, KINDS);
     expect(lines.map((l) => l.label)).toEqual(["Start “Ship it” at…", "1. Build it · Agent", "2. Commit · Ship", "3. Push · Ship — where it stopped", "4. CI green · Wait for CI"]);
     expect(lines.find((l) => l.primary)?.key).toBe("stop:s3");
+    // Each stop is drawn as parts on one row: number, title, kind, mark.
+    expect(lines[3].stop).toMatchObject({ choice: { n: 3, title: "Push", label: "Ship" }, mark: "where it stopped" });
     lines[1].run!();
     expect(normal).toHaveBeenCalledTimes(1);
     lines[2].run!();

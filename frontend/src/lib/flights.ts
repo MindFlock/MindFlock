@@ -211,6 +211,9 @@ export interface Flight {
   owed?: OwedEntry[];
   /** The stop the route added at its end to ask for them ("" = none). */
   owed_perch?: string;
+  /** Every "Your checks" stop the route added itself (not one of its own
+   * stops: Fly again leaves them out). */
+  owed_added?: string[];
   /** "2 checks owed to you at the end", while the route is in the air. */
   owed_note?: string;
 }

@@ -13,11 +13,11 @@
  * the person last pressed (`lastPress`), so a menu opened from a ⋯ item
  * appears by it. */
 
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { flyAgain } from "../../lib/flightsApi";
 import type { StepKindDef } from "../../lib/flights";
-import { choiceLine, lastPress, reachedIndex, resumeSentence, stopChoices, useRouteStartMenu, type RouteStartOpen } from "../../lib/routeStart";
+import { carryIndex, choiceLine, lastPress, ownSteps, placeMenu, resumeSentence, stopChoices, useRouteStartMenu, type RouteStartOpen, type StopChoice } from "../../lib/routeStart";
 import { useFlightKinds } from "../../state/queries";
 import { StopIcon } from "./Bird";
 import "./StopMenu.css";
@@ -29,37 +29,56 @@ import "./RouteStartMenu.css";
  * menu's own; any other pick calls `run`. */
 export interface RouteMenuLine {
   key: string;
+  /** The whole line as words (its accessible name). */
   label: string;
   title?: string;
   note?: boolean;
   kind?: string;
+  /** A stop's line, drawn on one row: its number, title (cut with …), "·
+   * Kind" and the mark ("where it stopped") — never wrapped apart. */
+  stop?: { choice: StopChoice; mark: string };
   primary?: boolean;
   run?(): void;
 }
+
+const stopLine = (c: StopChoice, mark: string) => choiceLine(c) + (mark ? " — " + mark : "");
 
 /** What the menu lists for `open` (pure but for the `run` callbacks). */
 export function routeMenuLines(open: RouteStartOpen, kinds?: readonly StepKindDef[] | null, now?: number): RouteMenuLine[] {
   if (open.mode === "again") {
     const f = open.flight;
-    const k = reachedIndex(f);
-    const at = k < f.steps.length ? k : 0;
+    const own = ownSteps(f);
+    const k = carryIndex(f);
+    const at = k < own.length ? k : 0;
     return [
       { key: "note", label: "Fly “" + f.plan_name + "” again from…", note: true },
-      ...stopChoices(f.steps, kinds).map((c, i) => ({
-        key: "stop:" + c.id,
-        label: choiceLine(c) + (i === 0 ? " — the beginning" : "") + (i === k ? " — where it stopped" : ""),
-        title: i === k ? "Fly it again from where it stopped" : "Fly it again from “" + c.title + "”",
-        kind: c.kind,
-        primary: i === at,
-        run: () => void flyAgain(f.id, i === k ? "" : c.id),
-      })),
+      ...stopChoices(own, kinds).map((c, i) => {
+        const mark = i === k ? "where it stopped" : i === 0 ? "the beginning" : "";
+        return {
+          key: "stop:" + c.id,
+          label: stopLine(c, mark),
+          stop: { choice: c, mark },
+          title: i === k ? "Fly it again from where it stopped" : "Fly it again from “" + c.title + "”",
+          kind: c.kind,
+          primary: i === at,
+          run: () => void flyAgain(f.id, i === k ? "" : c.id),
+        };
+      }),
     ];
   }
   const resume = open.check?.resume || null;
   if (open.view === "resume" && resume) {
     return [
       { key: "note", label: resumeSentence(resume, now), note: true },
-      { key: "resume", label: "Carry on at " + resume.title, title: "Start “" + open.plan.name + "” at “" + resume.title + "” — the stops before it are skipped", primary: true, run: () => open.go(resume.stop) },
+      {
+        key: "resume",
+        label: "Carry on at " + resume.title,
+        title:
+          "Start “" + open.plan.name + "” at “" + resume.title + "” — the stops before it are skipped" +
+          (resume.in_progress ? "; its agent's work was already under way, so nothing is sent again" : ""),
+        primary: true,
+        run: () => open.go(resume.stop),
+      },
       { key: "fresh", label: "Start from the beginning", title: "Start “" + open.plan.name + "” at its first stop", run: () => open.go("") },
       { key: "pick", label: "Start at another stop…", title: "Pick the stop it starts at" },
     ];
@@ -67,14 +86,18 @@ export function routeMenuLines(open: RouteStartOpen, kinds?: readonly StepKindDe
   const want = resume?.stop || open.plan.steps[0]?.id;
   return [
     { key: "note", label: "Start “" + open.plan.name + "” at…", note: true },
-    ...stopChoices(open.plan.steps, kinds).map((c, i) => ({
-      key: "stop:" + c.id,
-      label: choiceLine(c) + (resume && c.id === resume.stop ? " — where it stopped" : ""),
-      title: i === 0 ? "Start at its first stop" : "Start at “" + c.title + "” — the stops before it are skipped",
-      kind: c.kind,
-      primary: c.id === want,
-      run: () => open.go(c.id),
-    })),
+    ...stopChoices(open.plan.steps, kinds).map((c, i) => {
+      const mark = resume && c.id === resume.stop ? "where it stopped" : "";
+      return {
+        key: "stop:" + c.id,
+        label: stopLine(c, mark),
+        stop: { choice: c, mark },
+        title: i === 0 ? "Start at its first stop" : "Start at “" + c.title + "” — the stops before it are skipped",
+        kind: c.kind,
+        primary: c.id === want,
+        run: () => open.go(c.id),
+      };
+    }),
     ...(open.back ? [{ key: "back", label: "← Back", title: "Back to where it carries on" }] : []),
   ];
 }
@@ -84,6 +107,9 @@ export function RouteStartMenu() {
   const set = useRouteStartMenu((s) => s.set);
   const kinds = useFlightKinds(!!open).data;
   const ref = useRef<HTMLDivElement>(null);
+  // Where it sits: measured once drawn (hidden until then), beside what
+  // opened it (lib/routeStart `placeMenu`).
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
 
   // Where the person last pressed: a menu opened from a ⋯ item opens there.
   useEffect(() => {
@@ -96,6 +122,11 @@ export function RouteStartMenu() {
   }, []);
 
   const view = open ? (open.mode === "start" ? open.view : "again") : "";
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!open || !el) return setPos(null);
+    setPos(placeMenu(open.anchor, { w: el.offsetWidth, h: el.offsetHeight }, { w: window.innerWidth, h: window.innerHeight }));
+  }, [open, view]);
   useEffect(() => {
     if (!open) return;
     const all = ref.current?.querySelectorAll<HTMLButtonElement>("button[role=menuitem]");
@@ -152,7 +183,7 @@ export function RouteStartMenu() {
         className="fl-stopmenu fl-routestart"
         role="menu"
         aria-label={label}
-        style={{ left: open.x, top: open.y }}
+        style={pos ? { left: pos.x, top: pos.y } : { left: 0, top: 0, visibility: "hidden" }}
         data-no-drag
         onKeyDown={onKey}
         onPointerDown={(e) => e.stopPropagation()}
@@ -178,7 +209,16 @@ export function RouteStartMenu() {
                   <StopIcon kind={l.kind === "you" ? "perch" : l.kind} size={13} />
                 </span>
               )}
-              <span>{l.label}</span>
+              {l.stop ? (
+                <span className="fl-routestart-stop" aria-label={l.label}>
+                  <span className="fl-routestart-num">{l.stop.choice.n}.</span>
+                  <span className="fl-routestart-title">{l.stop.choice.title}</span>
+                  {l.stop.choice.label && l.stop.choice.label !== l.stop.choice.title && <span className="fl-routestart-kind">· {l.stop.choice.label}</span>}
+                  {l.stop.mark && <span className="fl-routestart-mark">— {l.stop.mark}</span>}
+                </span>
+              ) : (
+                <span>{l.label}</span>
+              )}
             </button>
           )
         )}
