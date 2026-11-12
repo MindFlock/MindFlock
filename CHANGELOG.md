@@ -11,9 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A route picks up where it left off.** Start a saved route on a session
   that an earlier run of it already worked on, and it carries on at the stop
-  that run had reached, and says so: "Carries on at Push — where it stopped 2
-  hours ago (its session was deleted)". **Start at…** on the route's menu
-  starts it at any stop you pick, or from the beginning. A route that was
+  that run had reached, and says so: "Carries on at Push — where it stopped 2h
+  ago (its session was deleted)", with **Start from the beginning** and
+  **Start at another stop…** beside it. **Start at…** on a saved route starts
+  it at any stop you pick. Carrying on never skips a stop the earlier run did
+  not fly, and never sends a prompt the agent already got. A route that was
   cancelled, halted or finished has **Fly again**, which starts it from the
   stop it stopped at, on its own session, on the session that holds its
   branch, or on its closed session, reopened. `POST /api/flights/check`
@@ -27,9 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only you can do are kept on the route ("2 checks owed to you at the end")
   while the reviews, the pushes and everything else behind the stop get done.
   The route then asks for all of them in one place: at its next Wait for me
-  stop, or at a **Your checks** stop it adds before it finishes. Done confirms
-  them. Say one didn't work and the route goes back to that Verify stop. It
-  never finishes with a check still owed.
+  stop, or at a **Your checks** stop it adds before the first stop that can't
+  be undone (a merge, a landing), or before it finishes. Done confirms them.
+  Say one didn't work and the route goes back to that Verify stop. It never
+  merges or finishes with a check still owed.
 - **A review stop has its own number of fix rounds**, and a say in what
   happens after the last one. **Fix rounds** (default 3) is how many times
   findings go back to the agent. **Findings still open after the last round**

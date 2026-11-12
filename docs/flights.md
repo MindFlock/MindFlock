@@ -1284,14 +1284,19 @@ flight.owed_note   "2 checks owed to you at the end" (dto only, while flying)
 The agent's own failures still fail the stop right there. The route flies
 on, and asks **once**: at the next Wait-for-me (`you`) stop it reaches, whose
 ask then carries the owed checks too (`detail.ask: "owed"`, `detail.owed` =
-one group per Verify stop), or, when the route has none ahead, at a "Your
-checks" stop it adds at the end ("Before this route finishes: 2 checks for
-you"). It never finishes with a check owed.
+one group per Verify stop); else **before the first stop that cannot be
+undone** (`flights.cannot_undo`: a Ship stop that merges, a kind whose
+`risk` lists `irreversible`, such as Land), on a "Your checks" stop the
+route adds in front of it ("Before this route merges: 2 checks for you");
+else on a "Your checks" stop it adds at the end ("Before this route
+finishes: 2 checks for you"). So "at the end" is the last safe moment: the
+route never merges, lands or finishes with a check owed.
+`flight.owed_added` lists the stops the route added this way.
 
 | On the perch | What happens |
 |---|---|
 | **Done** | every owed plan is confirmed (`test_plans.confirm_verify`, the same event as the confirm route) and the route moves on; 409 `owed_failed` when one was already reported failed |
-| "It doesn't work" (`POST /api/test-plans/{plan}/confirm {verified: false}`) | the route goes back to that Verify stop, which fails through its `on_fail`; the stops after it run again |
+| "It doesn't work" (`POST /api/test-plans/{plan}/confirm {verified: false}`) | the route goes back to that Verify stop, which fails through its `on_fail`; the stops after it run again; a stop that cannot be undone and already ran is never reset, and the stops the route added are taken off again |
 | confirmed elsewhere (the session's Verify pill) | those entries drop; an added perch with nothing left finishes itself |
 | **Skip** | the entries drop, the plans stay `needs_you`, the route finishes |
 
@@ -1306,10 +1311,21 @@ column and `flight_status` has `owed`.
   repository (never `main` / `master`) or the same ticket / PR / issue that
   did not finish (cancelled, halted, running, waiting, paused), and the first
   stop it had not finished. Stops match by id for the same saved route, else
-  by kind and title in order. A flight cancelled because its session was
-  deleted keeps its stop states, so it counts.
+  by kind and title in order, and then only when every stop before the point
+  was flown (done or skipped) by the earlier flight: carrying on never skips
+  a stop the earlier run did not fly. A flight cancelled because its session
+  was deleted keeps its stop states, so it counts. Shared branches
+  (`flights.SHARED_BRANCHES`: main, master, staging, develop, dev, trunk)
+  never match by branch. A "Your checks" stop the earlier route added is not
+  one of its stops (`own_steps`); a route that stopped there carries on at
+  the Verify stop that still owed, which asks again. An Agent stop whose
+  prompt had gone out (`in_progress`) is not sent again: the route rides the
+  work in progress, or passes the stop when the session is idle.
 - **`POST /api/flights/check`** answers `resume`: `{stop, index, title,
-  from_flight, session, state, reason, at}` or null.
+  from_flight, session, state, reason, at, in_progress}` or null. It is null
+  for a start that makes its own session: a new session always starts at the
+  first stop (a ticket / PR / issue start gets the warning
+  `carries_on_if_found` when the carry-on below would apply).
 - **`start_at: "resume"`** on a start (MCP `start_flight at="resume"`, CLI
   `mindflock flight start ROUTE --at resume`) starts there, or normally when
   there is no resume point. A stop id still starts at that stop. History:
@@ -1321,7 +1337,8 @@ column and `flight_status` has `owed`.
   stop 1). The session: `title` when given (`how: "chosen"`), its own
   (`same`), the live session that holds its branch (`branch`), or its
   Recently-closed session reopened (`reopened`; `restored` when the reopen
-  brought the route itself back, and `flight` is then the old one). Refusals:
+  brought the route itself back, and `flight` is then the old one). A branch
+  or closed session only counts inside the route's own repository. Refusals:
   409 `not_flown`, `in_flight`, `session_gone` (the sentence says what to do),
   400 `unknown_step`, and a start's own pre-check. CLI `mindflock flight again
   ROUTE [--at STOP] [--title SESSION]`; MCP `control_flight op="again"`.
@@ -1331,7 +1348,10 @@ column and `flight_status` has `owed`.
   live session that works in that worktree, or reopens the closed session
   that kept it (or opens a session in place on the folder), at the resume
   point, else past the leading Agent stops ("carried on in sc-42 (already had
-  this branch)"). A holder that is already on a route keeps it. Nothing is
+  this branch)"). A session opened in place on a folder with uncommitted
+  changes no earlier run accounts for, with a Ship or Land stop ahead, starts
+  **paused** and says why; Carry on flies it. A holder that is already on a
+  route keeps it. Nothing is
   deleted to make room; when nothing can take the folder over, the refusal
   names the session to close.
 - **A server restart** changes nothing for a route in flight: a running
