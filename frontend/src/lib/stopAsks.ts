@@ -117,12 +117,20 @@ export function owedNoteOf(f: (Pick<Flight, "state"> & { owed?: unknown; owed_no
  * stop's title, then when they are asked for. */
 export function owedTip(groups: readonly OwedGroup[]): string {
   if (!groups.length) return "";
+  return owedItemsText(groups) + "\n" + OWED_FLYING;
+}
+
+/** The route still flies: what the quiet line's tooltip ends with. */
+export const OWED_FLYING = "The route carries on; it asks you once, before it finishes.";
+
+/** The owed items grouped by their Verify stop's title, one per line — the
+ * list alone, for the perch's own buttons (whose words say what they do). */
+export function owedItemsText(groups: readonly OwedGroup[]): string {
   const lines: string[] = [];
   for (const g of groups) {
     lines.push(g.title + ":");
     for (const i of g.items.length ? g.items : ["Confirm it works"]) lines.push("  • " + i);
   }
-  lines.push("The route carries on; it asks you once, before it finishes.");
   return lines.join("\n");
 }
 
@@ -132,9 +140,12 @@ export const UNRESOLVED_RETRY_TITLE = "The agent gets another set of fix rounds 
 export const UNRESOLVED_DONE = "Carry on";
 export const UNRESOLVED_DONE_TITLE = "The route goes on — the open findings stay on record";
 export const OWED_DONE = "Done — they all work";
-export const OWED_DONE_TITLE = "You checked every one — they are confirmed and the route goes on";
+export const OWED_DONE_TITLE = "Confirms every check listed here as working — the route moves on";
 export const OWED_FAILED = "This one didn't work";
 export const OWED_FAILED_TITLE = "Say what you saw — the route goes back to this Verify stop";
+/** The pane strip's way to the list (each check's "This one didn't work"). */
+export const OWED_OPEN = "One didn't work…";
+export const OWED_OPEN_TITLE = "Open the Route tab — the stop lists each check with “This one didn't work”";
 
 /** The answers a parked stop offers, in order, the first primary. `retry` is
  * the step retry, `done` the step done; Skip stays the caller's (every

@@ -303,6 +303,17 @@
   padding: 2px 10px;
 }
 
+/* A tile with an ask (a Review out of rounds, the checks owed at the end):
+   its sentence wraps instead of being cut. */
+.sky-node:has(.fl-you-unresolved) > .sky-node-reason,
+.sky-node:has(.fl-owed) > .sky-node-reason {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.sky-node .fl-you-tile .fl-owed {
+  align-self: stretch;
+}
+
 .sky-node .fl-you-tile .fl-fix {
   order: 3;
   flex-basis: 100%;

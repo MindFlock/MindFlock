@@ -53,6 +53,11 @@ const SD = await import("../components/flights/StopDialog");
 const { WaitingRow } = await import("../components/outbox/WaitingRow");
 const { needsYouRows } = await import("../lib/needsYou");
 const { verifySentence } = await import("../lib/verifyStop");
+const { deriveSessionState, needsYouAction } = await import("../lib/sessionState");
+const { rowWaitsOnYou, stripParts } = await import("../lib/flights");
+const { lineWhere, flightDiagram } = await import("../lib/flightDiagram");
+const { parkedStopId } = await import("../components/flights/FlightChain");
+const { cssRule, src } = await import("./sourceText");
 
 const step = (id: string, kind: string, title: string, config: Record<string, unknown> = {}): FlightStep => ({ id, kind, title, config, on_fail: "agent" }) as FlightStep;
 const rec = (state: string, note = "", detail: Record<string, unknown> = {}): StepRunState => ({ state, since: 0, note, detail, rounds: 3 }) as unknown as StepRunState;
@@ -312,5 +317,82 @@ describe("checks owed while the route still flies", () => {
     expect(verifySentence({ ask: "end" }, "halt")).toContain("the route carries on and asks you for the steps only a person can do at the end");
     expect(verifySentence({ ask: "end", who: "you" }, "halt")).toContain("asks for your sign-off at the end");
     expect(verifySentence({ ask: "here" }, "halt")).toContain("you confirm the steps only a person can do");
+  });
+});
+
+describe("follow-up: what the screenshot pass found", () => {
+  const reviewRow = { id: "f_r", plan_name: "Ticket to merge", cursor: 1, total: 3, state: "waiting_you", step: { id: "s2", kind: "review", title: "Second opinion", state: "waiting_you", actor: "robot", note: "2 findings still open after 3 rounds" } } as unknown as FlightRow;
+
+  it("1. a stop waiting on you flags the session whatever its kind or actor: the rail, the Route tab's badge", () => {
+    expect(rowWaitsOnYou(reviewRow)).toBe(true);
+    expect(rowWaitsOnYou({ ...reviewRow, state: "running" })).toBe(false);
+    const ss = deriveSessionState({ title: "lead", status: "running", activity: "idle", flight: reviewRow } as unknown as Instance);
+    expect(ss).toMatchObject({ state: "needs_you", reason: "flight_you", label: "Needs you: Second opinion", inBell: true });
+    expect(ss.hint).toContain("2 findings still open after 3 rounds");
+    expect(needsYouAction(ss)?.aria).toBe("Needs you: Second opinion — answer it in the bell");
+    // A Wait for me stop keeps its words.
+    const perch = deriveSessionState({ title: "lead", status: "running", activity: "idle", flight: { ...reviewRow, step: { ...reviewRow.step, kind: "you", title: "Approve", actor: "you" } } } as unknown as Instance);
+    expect(perch.label).toBe("Wait for me: Approve");
+    expect(needsYouAction(perch)?.aria).toBe("Wait for me: Approve — press Done in the bell");
+  });
+
+  it("2. the owed note is muted over button.linklike's accent (a more specific rule)", () => {
+    const css = src("components/flights/Flights.css");
+    expect(cssRule(css, "button.linklike.fl-owed-note")).toContain("color: var(--muted)");
+    expect(cssRule(css, ".fl-owed-note")).toBe("");
+  });
+
+  it("3. the opened list sits above (the Sky's bar) or opens leftward (the pane strip's right edge), over its neighbours", () => {
+    const sky = renderToStaticMarkup(createElement(OwedNote, { note: "x", groups: A.owedGroups(OWED), place: "above" }));
+    expect(sky).toContain('class="fl-owed-note-wrap fl-owed-above fl-owed-start"');
+    const strip = renderToStaticMarkup(createElement(OwedNote, { note: "x", groups: A.owedGroups(OWED), align: "end" }));
+    expect(strip).toContain('class="fl-owed-note-wrap fl-owed-below fl-owed-end"');
+    const css = src("components/flights/Flights.css");
+    expect(cssRule(css, ".fl-owed-end .fl-owed-list")).toContain("right: 0");
+    expect(cssRule(css, ".fl-owed-above .fl-owed-list")).toContain("bottom: 100%");
+    expect(cssRule(css, ".fl-owed-list")).toContain("z-index: 60");
+    expect(src("components/flights/SkyLine.tsx")).toContain('place="above"');
+  });
+
+  it("4. a parked stop comes into view in the Route tab; its ask wraps instead of clipping", () => {
+    const f = unresolved();
+    expect(parkedStopId(f, flightDiagram(f))).toBe("stop:s2:waiting_you:1".replace("stop:s2", nodeAt(f).id));
+    expect(parkedStopId(unresolved({ state: "running" }), flightDiagram(f))).toBe("");
+    const flights = src("components/flights/Flights.css");
+    expect(cssRule(flights, ".fl-findings")).toContain("white-space: pre;");
+    expect(cssRule(flights, ".fl-you-acts > .fl-btn")).toContain("white-space: nowrap");
+    const sky = src("components/flights/SkyChain.css");
+    expect(cssRule(sky, ".sky-node:has(.fl-you-unresolved) > .sky-node-reason")).toContain("white-space: normal");
+  });
+
+  it("5. the pane strip keeps the stop's name: the sentence takes the cut, whole in the tooltip", () => {
+    expect(stripParts(unresolved(), 0)).toMatchObject({ lead: "Ticket to merge · ●●○ · Needs you", what: "2 findings still open after 3 rounds", stop: expect.stringMatching(/^Second opinion/) });
+    const long = "Before this route merges: 2 checks for you — open the page and check the banner, then run the Slack command";
+    const p = stripParts(owedPerch({ step_states: { ...owedPerch().step_states, s4: rec("waiting_you", long, { ask: "owed", owed: OWED }) }, steps: [...owedPerch().steps.slice(0, 3), step("s4", "you", "Your checks")] }), 0);
+    expect(p.what).toBe(long);
+    expect(p.stop).toMatch(/^Your checks/);
+    expect(stripParts({ ...unresolved(), state: "running" } as Flight, 0)).toMatchObject({ what: "", stop: "" });
+  });
+
+  it("6. This one didn't work is a secondary button of its own; the pane strip reaches the list", () => {
+    const html = withClient(createElement(YouStepActions, { flight: owedPerch() }));
+    expect(html).toMatch(/<button type="button" class="test-btn fl-btn fl-owed-failed"/);
+    const compact = withClient(createElement(YouStepActions, { flight: owedPerch(), compact: true }));
+    expect(buttons(compact)).toEqual(["Done — they all work", "One didn&#x27;t work…", "Skip"]);
+  });
+
+  it("7. the perch's Done says what Done does — not the in-flight sentence", () => {
+    const compact = withClient(createElement(YouStepActions, { flight: owedPerch(), compact: true }));
+    const done = compact.match(/<button[^>]*title="([^"]*)"[^>]*>Done — they all work/)![1];
+    expect(done).toContain("Confirms every check listed here as working — the route moves on");
+    expect(done).toContain("Verify on staging:");
+    expect(done).not.toContain("asks you once");
+  });
+
+  it("8. the frame bar says where the stop is, once: no repeat of the ask the tile already says", () => {
+    expect(lineWhere(flightDiagram(owedPerch()))).toBe("needs you at Your checks");
+    expect(lineWhere(flightDiagram(unresolved()))).toBe("needs you at Second opinion");
+    const css = src("components/flights/Flights.css");
+    expect(cssRule(css, ".fl-chain-frame-bar > .fl-chain-frame-where")).toContain("max-width: none");
   });
 });

@@ -31,6 +31,7 @@ import {
   rowWaitsOnYou,
   stepActor,
   stripLabel,
+  stripParts,
   youItems,
   youText,
   type Flight,
@@ -42,7 +43,7 @@ import { windowName } from "../../lib/windowName";
 import { controlFlight, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { canFlyAgain, flyAgainLabel, flyAgainPrimary, flyAgainTitle, pickAgainStop } from "../../lib/routeStart";
 import "./RouteStartMenu.css";
-import { ASK_TILE_W, askOffers, askRoom, askSentence, findingsOf, flightAsk, owedGroups, owedNoteOf, owedTip } from "../../lib/stopAsks";
+import { ASK_TILE_W, OWED_OPEN, OWED_OPEN_TITLE, askOffers, askRoom, askSentence, findingsOf, flightAsk, owedGroups, owedItemsText, owedNoteOf } from "../../lib/stopAsks";
 import { OwedChecks, OwedNote, ReviewFindings } from "./PerchAsks";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
@@ -365,7 +366,7 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
             type="button"
             className="btn-primary fl-btn fl-done"
             disabled={busy || !allTicked}
-            title={allTicked ? (doneOffer ? doneOffer.title + (compact && owed.length ? "\n\n" + owedTip(owed) : "") : "Mark “" + step.title + "” done — the route goes on") : "Tick every item first"}
+            title={allTicked ? (doneOffer ? doneOffer.title + (compact && owed.length ? "\n\n" + owedItemsText(owed) : "") : "Mark “" + step.title + "” done — the route goes on") : "Tick every item first"}
             onClick={() => void run(() => stepDone(flight.id, step.id))}
           >
             {doneOffer ? doneOffer.label : "Done"}
@@ -380,6 +381,13 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
             onClick={() => void run(() => stepFix(flight.id, step.id))}
           >
             Let the agent fix it
+          </button>
+        )}
+        {compact && owed.length > 0 && flight.session && (
+          // The one-line strip has no room for each check's "This one didn't
+          // work": this opens the Route tab, where the stop lists them.
+          <button type="button" className="test-btn fl-btn fl-owed-open" title={OWED_OPEN_TITLE} onClick={() => openFlightTab(flight.session)}>
+            {OWED_OPEN}
           </button>
         )}
         <button
@@ -694,6 +702,10 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
   const cancel = useCancelAsk(full);
   if (!row || !live) return null;
   const line = full ? stripLabel(full, now) : stripLabel(row);
+  // The stop's name always shows; the sentence before it takes the cut, and
+  // the tooltip has it whole.
+  const parts = stripParts(full || row, now);
+  const whole = [parts.lead, parts.what, parts.stop].filter(Boolean).join(" · ");
   const waiting = row.state === "waiting_you" || row.state === "halted";
   // Parked (on you, halted) or paused: its one-click way on, right here.
   const parked = waiting || row.state === "paused";
@@ -704,13 +716,21 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
         <button
           type="button"
           className="fl-strip-line"
-          title={"Open the Route tab — " + line + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : "")}
+          title={"Open the Route tab — " + whole + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : "")}
           onClick={() => openFlightTab(inst.title)}
         >
           <Bird size={13} />
-          <span className="fl-strip-text">{line}</span>
+          {parts.what || parts.stop ? (
+            <span className="fl-strip-text fl-strip-parts" aria-label={whole}>
+              <span className="fl-strip-lead">{parts.lead}</span>
+              {parts.what && <span className="fl-strip-what">{parts.what}</span>}
+              {parts.stop && <span className="fl-strip-stop">{parts.stop}</span>}
+            </span>
+          ) : (
+            <span className="fl-strip-text">{line}</span>
+          )}
         </button>
-        <OwedNote note={owedNoteOf(full || row)} groups={owedGroups((full || row).owed)} />
+        <OwedNote note={owedNoteOf(full || row)} groups={owedGroups((full || row).owed)} align="end" />
         {full && parked && <YouStepActions flight={full} compact />}
         {walking && (
           <VerifyWalkHint

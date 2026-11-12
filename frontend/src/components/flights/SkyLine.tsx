@@ -828,7 +828,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             {where}
           </span>
         )}
-        {line.flight && <OwedNote note={owedNoteOf(line.flight)} groups={owedGroups(line.flight.owed)} />}
+        {line.flight && <OwedNote note={owedNoteOf(line.flight)} groups={owedGroups(line.flight.owed)} place="above" />}
         {still && (
           <span className="skl-age" title={"Nothing has happened on this session for " + still.replace(/ still$/, "")}>
             {still}

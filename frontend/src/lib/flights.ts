@@ -454,7 +454,7 @@ const short = (s: string, n = 48) => {
 /** What a route parked on you waits for, in a few words: a failure handed
  * to you ("Failed: …"), else what its stop asks (its text, or the server's
  * note); "" when that only repeats the stop's name. */
-function waitsFor(f: Flight | FlightRow, title: string): string {
+function waitsFor(f: Flight | FlightRow, title: string, max = 48): string {
   let what = "";
   if ("steps" in f) {
     const cur = f.steps[f.cursor];
@@ -462,8 +462,33 @@ function waitsFor(f: Flight | FlightRow, title: string): string {
     const failed = String(ss?.detail?.failed_reason ?? "").trim();
     what = failed ? "Failed: " + failed : youText(f);
   } else what = String((f as { reason?: unknown }).reason ?? "");
-  what = short(haltedWhy(title, what));
+  what = max > 0 ? short(haltedWhy(title, what), max) : haltedWhy(title, what).replace(/\s+/g, " ").trim();
   return what.toLowerCase() === title.trim().toLowerCase() ? "" : what;
+}
+
+/** The pane strip's line in three parts, so a narrow pane cuts the sentence
+ * and never the stop: `lead` ("Ticket to merge · ●●●○ · Needs you"), `what`
+ * — why it is parked, in full (the strip truncates it; its tooltip has it
+ * whole) — and `stop` ("Approve the merge (5m)"). A route not parked:
+ * everything in `lead`. `stripLabel` is the same line in one string, with
+ * `what` shortened. */
+export interface StripParts {
+  lead: string;
+  what: string;
+  stop: string;
+}
+export function stripParts(f: Flight | FlightRow, now = Date.now()): StripParts {
+  const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
+  const parked = f.state === "halted" || f.state === "waiting_you";
+  if (!parked) return { lead: stripLabel(f, now), what: "", stop: "" };
+  const elapsed = "steps" in f ? currentElapsed(f, now) : "";
+  let what = "";
+  if (f.state === "halted") what = haltedWhy(title, String((f as { reason?: unknown }).reason ?? "")).replace(/\s+/g, " ").trim();
+  else {
+    what = waitsFor(f, title, 0);
+  }
+  const head = [f.plan_name, stripDots(f), f.state === "halted" ? "Halted" : "Needs you"].filter((x) => x.trim()).join(" · ");
+  return { lead: head, what, stop: title + (elapsed ? " (" + elapsed + ")" : "") };
 }
 
 /** The pane strip's line: `Ticket to merge · ●●●○○○ · Reviews settle (4m)`
@@ -487,10 +512,12 @@ export function stripLabel(f: Flight | FlightRow, now = Date.now()): string {
   return [f.plan_name, stripDots(f), tail].filter((x) => x.trim()).join(" · ");
 }
 
-/** The row's flight is parked on a *you* step: what the rail, the bell and the
- * pane strip's Done / Skip key off. */
+/** The row's flight is parked on you — a Wait for me stop, or any other
+ * stop waiting on the person (a Review out of fix rounds, a Verify sign-off,
+ * a failure handed to you): what the rail, the Route tab's badge, the bell
+ * and the pane strip key off. Whatever the stop's kind or actor. */
 export function rowWaitsOnYou(row: FlightRow | null | undefined): boolean {
-  return !!row && row.state === "waiting_you" && row.step?.actor === "you";
+  return !!row && row.state === "waiting_you";
 }
 
 /** The checklist items of a perch (`config.items`): a list, or the editor's

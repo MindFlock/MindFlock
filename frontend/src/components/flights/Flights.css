@@ -800,6 +800,11 @@ a.fl-waiting-ref:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Where the route is: the bar's free width, cut only when there is none. */
+.fl-chain-frame-bar > .fl-chain-frame-where {
+  flex: 1 1 auto;
+  max-width: none;
+}
 .fl-chain-frame-branch {
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 11px;
@@ -831,11 +836,13 @@ a.fl-waiting-ref:hover {
 }
 
 /* A parked stop that asks more than a Done (flights/PerchAsks): a Review's
-   open findings — preformatted, scrolling past a capped height — and the
-   checks owed to you at the end, grouped by the Verify stop that left them
-   (the Verify confirm's own step list and note row). */
+   open findings — preformatted, scrolling inside their own box past a capped
+   height (and sideways for a long line) — and the checks owed to you at the
+   end, grouped by the Verify stop that left them (the Verify confirm's own
+   step list and note row). */
 .fl-findings {
   margin: 0;
+  max-width: 100%;
   max-height: 160px;
   overflow: auto;
   padding: 6px 8px;
@@ -843,68 +850,107 @@ a.fl-waiting-ref:hover {
   background: var(--bg);
   border: 1px solid var(--border);
   font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
   text-align: left;
 }
 .fl-owed {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   font-size: 12.5px;
   text-align: left;
 }
 .fl-owed-group {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  align-items: flex-start;
+  gap: 4px;
+}
+.fl-owed-group > .vc-steps {
+  align-self: stretch;
 }
 .fl-owed-head {
   margin: 0;
   font-size: 12px;
   font-weight: 600;
 }
-.fl-owed-failed {
-  align-self: flex-start;
-  font-size: 11.5px;
-  color: var(--muted);
+/* "This one didn't work": a secondary button of its own, apart from the
+   last item, lined up with the group's heading. */
+.fl-owed-group > .fl-owed-failed {
+  margin-top: 4px;
+}
+.fl-owed-group > .vc-note-row {
+  align-self: stretch;
+  margin-top: 4px;
+}
+/* Buttons keep their words: the row wraps before a label is cut. */
+.fl-you-acts > .fl-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 /* "2 checks owed to you at the end": quiet, beside a route still flying —
-   muted, never the amber of a stop waiting on you. A press lists them. */
+   muted, never the accent of a link or the amber of a stop waiting on you.
+   A press lists them, above or below, from its start or its end, over its
+   neighbours and inside its container. */
 .fl-owed-note-wrap {
   position: relative;
   display: inline-flex;
   min-width: 0;
+  flex: 0 1 auto;
 }
-.fl-owed-note {
+.fl-owed-note-wrap.is-open {
+  z-index: 60;
+}
+button.linklike.fl-owed-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--muted);
   font-size: 11.5px;
   white-space: nowrap;
   text-decoration: none;
 }
-.fl-owed-note:hover {
+button.linklike.fl-owed-note:hover,
+button.linklike.fl-owed-note[aria-expanded="true"] {
+  color: var(--text);
   text-decoration: underline;
 }
 .fl-owed-list {
   position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 20;
-  margin-top: 4px;
+  z-index: 60;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  width: max-content;
   min-width: 220px;
-  max-width: min(360px, 90vw);
+  max-width: min(360px, calc(100vw - 32px));
   max-height: 240px;
   overflow: auto;
   padding: 8px 10px;
   border-radius: 8px;
   background: var(--panel);
   border: 1px solid var(--border);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 35%);
+  color: var(--text);
   font-size: 12px;
+  font-weight: 400;
   text-align: left;
+  white-space: normal;
+}
+.fl-owed-below .fl-owed-list {
+  top: 100%;
+  margin-top: 4px;
+}
+.fl-owed-above .fl-owed-list {
+  bottom: 100%;
+  margin-bottom: 6px;
+}
+.fl-owed-start .fl-owed-list {
+  left: 0;
+}
+.fl-owed-end .fl-owed-list {
+  right: 0;
 }
 .fl-owed-list-group {
   display: flex;
@@ -914,4 +960,31 @@ a.fl-waiting-ref:hover {
 .fl-owed-list-item::before {
   content: "• ";
   color: var(--muted);
+}
+
+/* The pane strip's line in parts: the sentence takes the cut, the stop's
+   name never does (lib/flights stripParts). */
+.fl-strip-parts {
+  display: inline-flex;
+  min-width: 0;
+}
+.fl-strip-parts > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fl-strip-parts > span + span::before {
+  content: " · ";
+  white-space: pre;
+}
+.fl-strip-lead {
+  flex: 0 1 auto;
+}
+.fl-strip-what {
+  flex: 0 1000 auto;
+}
+.fl-strip-stop {
+  flex: 0 0 auto;
+  max-width: 60%;
 }
