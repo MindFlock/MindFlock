@@ -986,3 +986,18 @@ class TestListeners:
         chain.c.mark_down(chain.host, "refused")
         for who in ("phone", "desktop", "new page"):
             assert chain.c.pick(chain.host, who)[0] is chain.piper
+
+    def test_a_gone_page_on_the_fallback_is_forgotten(self, chain):
+        # Every page that heard a line while the host was down got a sticky
+        # reply. A page that went away never picks again, so its reply stays
+        # sticky: once quiet it must still be forgotten past MAX_LISTENERS,
+        # or every page load during an outage is kept for good.
+        chain.c.mark_down(chain.host, "refused")
+        gone = ["page %d" % i for i in range(speech.MAX_LISTENERS)]
+        for who in gone:
+            assert chain.c.pick(chain.host, who)[0] is chain.piper
+        chain.now[0] += speech.HOST_DOWN_SECONDS + speech.REPLY_GAP_SECONDS + 1
+        for i in range(speech.MAX_LISTENERS):
+            chain.c.pick(chain.host, "later %d" % i)
+        assert len(chain.c._replies) <= speech.MAX_LISTENERS
+        assert not set(gone) & set(chain.c._replies)

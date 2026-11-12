@@ -279,9 +279,6 @@ class _Shaper:
 
 
 # --- helpers ------------------------------------------------------------------ #
-_WORDISH = "[A-Za-z0-9]"
-
-
 def _bounded(key: str) -> str:
     """``key`` (escaped) as a whole word: not glued to a letter or digit on
     either side. Group 1 is the character before (kept by the caller), so no
