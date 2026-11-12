@@ -423,11 +423,17 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
         "L.routing || (s.pending && s.pending()) || (s.active() && Date.now() < L.overBy)"
         in soon
     )
-    # Once the words are in: stop and keep them — no path to a send.
+    # Once the words are in: stop and keep them — the gesture's end never
+    # sends; only the Send button tapped while they were on their way does
+    # (voiceTakesSend → sendTapped: test_mobile_voice_stability.py).
     flush = _fn(js, "voiceListenFlush")
     assert "voiceListenKept();" in flush
-    for fn in ("voiceListenOver", "voiceListenFlushSoon", "voiceListenFlush"):
+    assert (
+        "if (send && vbox().value.trim()) { voiceSend(vbox().value); return; }" in flush
+    )
+    for fn in ("voiceListenOver", "voiceListenFlushSoon"):
         assert "voiceSend" not in _fn(js, fn), fn
+        assert "sendTapped = true" not in _fn(js, fn), fn
     assert '(voiceListen_.held ? "Release to keep it" : "Tap to keep it")' in _fn(
         js, "voiceSetState"
     )

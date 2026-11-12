@@ -5318,18 +5318,21 @@
     function upload(blob, mime, mine, lead, spokeAt) {
       var h = mine.h;
       uploading = true;
-      aborter = window.AbortController ? new AbortController() : null;
+      // This upload's own controller: its timer never aborts a later
+      // upload's (a stop drops this one and the next phrase's starts).
+      var a = aborter = window.AbortController ? new AbortController() : null;
       var t0 = Date.now();
-      var timer = aborter ? setTimeout(function () { try { aborter.abort(); } catch (e) {} }, VOICE_UPLOAD_TIMEOUT_MS) : null;
+      var timer = a ? setTimeout(function () { try { a.abort(); } catch (e) {} }, VOICE_UPLOAD_TIMEOUT_MS) : null;
       function settle() { token = null; uploading = false; aborter = null; clearTimeout(timer); }
       fetch("/api/voice/transcribe?lang=" + encodeURIComponent(lang()), {
         method: "POST",
         headers: { "Content-Type": mime },
         body: blob,
-        signal: aborter ? aborter.signal : undefined,
+        signal: a ? a.signal : undefined,
       }).then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j || {} }; });
       }).then(function (x) {
+        clearTimeout(timer);
         if (token !== mine) return;
         settle();
         if (x.r.ok) {
@@ -5347,6 +5350,7 @@
             : "Couldn't transcribe: " + why);
         }
       }).catch(function (err) {
+        clearTimeout(timer);
         if (token !== mine) return;
         settle();
         var why = err && err.name === "AbortError" ? "the server took too long" : String((err && err.message) || err);
@@ -6320,6 +6324,7 @@
     dialogTries: 0,
     dialogBusy: false,
     wake: null,
+    wakeAsked: false,            // a screen wake lock is being granted (voiceWakeLock)
     events: null,
     eventsState: "off",
     eventsSeq: 0,
@@ -6588,6 +6593,7 @@
     voiceListen_.cont = false;
     voiceListen_.stopAfter = false;
     voiceListen_.overAfter = false;
+    voiceListen_.sendTapped = false;
     voiceIdle(vbox().value.trim() ? "Kept, not sent — Send sends it, or tap the mic to go on" : undefined);
   }
   // A stop phrase or the push-to-talk gesture: listening stops, the words
@@ -6597,6 +6603,7 @@
     voiceListen_.cont = false;
     voiceListen_.stopAfter = false;
     voiceListen_.overAfter = false;
+    voiceListen_.sendTapped = false;
     voiceIdle(vbox().value.trim() ? voiceKept() : undefined);
   }
   // Push to talk ends a prompt, the words kept: the second tap (toggle),
@@ -6627,12 +6634,15 @@
     }
     voiceListenFlush();
   }
-  // The words are in: stop, keep them. Never a send.
+  // The words are in: stop, keep them. Never a send — unless Send was
+  // tapped while they were on their way (voiceTakesSend): then they go.
   function voiceListenFlush() {
-    var L = voiceListen_;
+    var L = voiceListen_, send = L.sendTapped;
     L.overAfter = false;
+    L.sendTapped = false;
     clearTimeout(L.timer);
     voice.stt.stop();
+    if (send && vbox().value.trim()) { voiceSend(vbox().value); return; }
     voiceListenKept();
   }
   function voiceIdle(caption) {
@@ -7120,12 +7130,13 @@
   // sheet's mic): no window, "over" sends and listens on, "over and out"
   // ends it (voiceListenUntil);
   // overAfter/overBy: push to talk ended it, listening stops once the words
-  // are in; routing/routeQ/gen: a phrase is with /api/voice/route, the
+  // are in (sendTapped: Send was tapped meanwhile — then they are sent);
+  // routing/routeQ/gen: a phrase is with /api/voice/route, the
   // phrases heard meanwhile wait their turn, and an answer for an older
   // listen is dropped.
   var voiceListen_ = { netErrs: 0, mode: "", until: 0, restarts: 0, timer: null, reprompted: false,
                        heard: false, startedAt: 0, rapid: 0, stopAfter: false, held: false,
-                       overAfter: false, overBy: 0, routing: false, routeQ: [], draining: false, gen: 0,
+                       overAfter: false, sendTapped: false, overBy: 0, routing: false, routeQ: [], draining: false, gen: 0,
                        muteUntil: 0, woke: null, cont: false, restartTok: 0, early: null, lastFinalAt: 0, listenAt: 0,
                        addressed: "" };
   voice.listen = voiceListen_;   // tests age the window with it
@@ -7147,6 +7158,7 @@
     L.stopAfter = false;
     L.held = !!held;
     L.overAfter = false;
+    L.sendTapped = false;
     L.routing = false;
     L.routeQ = [];
     L.draining = false;
@@ -9211,6 +9223,17 @@
     if (voice.state === "off" || !composeEl.value.trim()) return false;
     voice.box = null;   // the compose box's Send
     if (voice.state === "sending") return true;   // one tap, one prompt
+    // A phrase still on its way (its live guess in the box — the fast
+    // recognizer's words — a clip with the server, a phrase with the
+    // router): its accurate words go in first, then the box is sent —
+    // push to talk's end (voiceListenOver), sending (sendTapped).
+    var L = voiceListen_, s = voice.stt;
+    if (voiceIsListening() && L.mode !== "dialog" &&
+        (voice.guess.typed || L.routing || (s.pending && s.pending()))) {
+      L.sendTapped = true;
+      if (!L.overAfter) voiceListenOver();
+      return true;
+    }
     voiceSend(composeEl.value);
     return true;
   }
@@ -9267,8 +9290,7 @@
             return;
           }
           if (r.ok) {
-            box.value = "";
-            if (box === composeEl) autosizeCompose();
+            // (Its words left the box above; what was typed since stays.)
             if (box !== composeEl) { voice.box = null; askSentByVoice(title); }
             voice.dictated = false;
             voice.expectSay = say;     // its reply is read out only if it was asked for
@@ -10496,13 +10518,17 @@
     [A.phoneStt, A.serverStt].forEach(function (a) { if (a && a.release) a.release(ms); });
   }
   function voiceWakeLock() {
-    if (!navigator.wakeLock || voice.wake || document.hidden) return;
+    if (!navigator.wakeLock || voice.wake || voice.wakeAsked || document.hidden) return;
+    voice.wakeAsked = true;   // one request at a time: never two locks held
     try {
       navigator.wakeLock.request("screen").then(function (lock) {
+        voice.wakeAsked = false;
+        // Voice went off (or the page hid) while it was being granted.
+        if (voice.state === "off" || document.hidden) { try { lock.release(); } catch (e) {} return; }
         voice.wake = lock;
         lock.addEventListener("release", function () { if (voice.wake === lock) voice.wake = null; });
-      }).catch(function () {});
-    } catch (e) {}
+      }).catch(function () { voice.wakeAsked = false; });
+    } catch (e) { voice.wakeAsked = false; }
   }
   function voiceWakeRelease() {
     var l = voice.wake;
@@ -10963,6 +10989,7 @@
     if (voiceIsListening()) { vbox().value = ""; vboxSized(); voice.dictated = false; }
     voiceListen_.until = 0;
     voiceListen_.overAfter = false;
+    voiceListen_.sendTapped = false;
     voiceListen_.gen++;   // a route answer on its way is for nobody now
     voiceIdle();
   }
@@ -12492,6 +12519,7 @@
     if (voiceIsListening()) {
       voiceListen_.until = 0;
       voiceListen_.overAfter = false;
+      voiceListen_.sendTapped = false;
       voiceListen_.gen++;
       voiceIdle();
     }
