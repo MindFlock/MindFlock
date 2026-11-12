@@ -663,6 +663,13 @@ feature's internal word, *flight*.)
   `--repo`, else the saved route's own folder, else the current directory.
   Prints the route id, its session and the stop it starts at. `POST
   /api/flights/start`.
+  `--at STOP` starts at that stop (its id, number or title); `--at resume`
+  starts where an earlier, unfinished run of the route on that session or
+  branch stopped.
+* `flight again ROUTE [--at STOP] [--title SESSION]` — fly an ended route
+  (cancelled, halted or finished) again from the stop it had reached, on its
+  own session, the session that holds its branch, or its closed session
+  reopened. `ROUTE` may be the session's title: its newest route.
 * `flight done ROUTE [--note TEXT]` / `flight skip ROUTE` — tick off (or
   skip) the stop the route is at, the Sky's **Done** / **Skip**: a Wait for me
   stop; on a Verify stop waiting for your confirm, Done is **Confirm

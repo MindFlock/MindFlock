@@ -378,7 +378,7 @@ it.
 | `describe_flight` | read (runs the server's one-shot model; starts nothing) | **no** |
 | `start_flight` | write, flies stops that may push or merge | **no** |
 | `flight_status` | read | **no** |
-| `control_flight` | write (run, pause, resume, cancel, skip, retry, jump, done) | **no** |
+| `control_flight` | write (run, pause, resume, cancel, skip, retry, jump, done, again) | **no** |
 | `edit_flight` | write (add, remove, edit, rename stops) | **no** |
 | `save_flight_plan` | write (a saved route on the shelf) | **no** |
 | `run_pr_review` | write, flies the PR review route (may push; a merge stop needs `confirm_merge`) | **no** |
@@ -1430,6 +1430,13 @@ cursor fold into a count (`s1–s29: 29 done`), then titles, notes and history
 shrink, then the stops far ahead fold too.
 
 ### `control_flight`
+
+`op: "again"` flies an ended route again from the stop it had reached
+(`step` names another stop; `title` may be the session, meaning its newest
+route; `confirm_merge` is needed when a stop ahead cannot be undone).
+`start_flight` takes `at: "resume"`: start where an earlier, unfinished run
+of the route stopped. `flight_status` shows `owed` while a Verify stop that
+asks at the end has checks waiting for the person.
 
 `{id? | title?, op, step?, note?}` → the route, compacted as in
 `flight_status`. Each op maps to one route:

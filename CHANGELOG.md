@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A route picks up where it left off.** Start a saved route on a session
+  that an earlier run of it already worked on, and it carries on at the stop
+  that run had reached, and says so: "Carries on at Push — where it stopped 2
+  hours ago (its session was deleted)". **Start at…** on the route's menu
+  starts it at any stop you pick, or from the beginning. A route that was
+  cancelled, halted or finished has **Fly again**, which starts it from the
+  stop it stopped at, on its own session, on the session that holds its
+  branch, or on its closed session, reopened. `POST /api/flights/check`
+  answers `resume`, a start takes `start_at: "resume"`, and there is `POST
+  /api/flights/{id}/again`, `mindflock flight again ROUTE [--at STOP]`,
+  `mindflock flight start ROUTE --at STOP|resume` and `control_flight` with
+  `op: "again"` for agents.
+- **A Verify stop can keep the route moving and ask you once, at the end.**
+  Its new **When it needs you** setting is *Wait here* (as before, and still
+  the default) or *Carry on, ask me at the end*. With the second, the checks
+  only you can do are kept on the route ("2 checks owed to you at the end")
+  while the reviews, the pushes and everything else behind the stop get done.
+  The route then asks for all of them in one place: at its next Wait for me
+  stop, or at a **Your checks** stop it adds before it finishes. Done confirms
+  them. Say one didn't work and the route goes back to that Verify stop. It
+  never finishes with a check still owed.
+- **A review stop has its own number of fix rounds**, and a say in what
+  happens after the last one. **Fix rounds** (default 3) is how many times
+  findings go back to the agent. **Findings still open after the last round**
+  is *Ask me* (the route waits on you with **Give it another round** and
+  **Carry on**) or *Carry on (keep them on record)*.
+
+### Changed
+
+- **A review stop settles instead of going around forever.** The first
+  review reads the whole change. Every round after it is a follow-up: the
+  reviewer gets the earlier findings, checks that each one was fixed or
+  answered, and reads only what the fixes changed. It raises something new in
+  code an earlier round already read only when it is severe. Before, every
+  round was a fresh review of everything, so each fix gave the next reviewer
+  new code to object to; one route took 17 rounds and six Retry presses.
+  Reviewers are also asked only for findings that should block the merge.
+- **Out of fix rounds, a review stop asks you; it no longer halts.** The stop
+  waits on you with the findings that are still open, in place of a failed
+  stop that needed Retry.
+
+### Fixed
+
+- **Starting a ticket again no longer dies on "branch … is already checked
+  out".** When the ticket's branch is already in a worktree, the route moves
+  onto the session working there, or reopens the closed session that kept it,
+  and carries on from where the work stands. Nothing is deleted to make room.
+  If no session can take the folder over, the message names the one to close.
+- **A reviewer that crashed is no longer the agent's problem.** A reviewer
+  that did not finish, could not start, or ended without a verdict is replaced
+  by another one, twice if needed. The agent is not asked to "fix" it and the
+  stop's fix rounds are not spent on it.
+- **A review that ended without a report no longer passes silently.** The
+  route reads the reviewer's last reply for its verdict, and asks another
+  reviewer when there is none.
+
 ## [0.14.9] - 2026-11-11
 
 ### Added
