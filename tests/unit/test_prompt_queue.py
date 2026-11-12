@@ -859,6 +859,31 @@ def test_drain_reboots_offline_session(drain, monkeypatch):
     assert rebooted == ["d1"]
 
 
+def test_drain_offline_relaunch_that_fails_takes_its_admission_back(drain, monkeypatch):
+    """The launch gate let the relaunch go (it is noted as a warming agent
+    and the stagger runs from it); the relaunch then failed. Its admission is
+    taken back, as every other gated start does — no phantom agent warming
+    for 90 s, no stagger holding the next automatic start — and the failed
+    relaunch is not retried every 5 s pass either."""
+    from backend.web.core import launch_gate as gate
+
+    server, sent = drain
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: "offline")
+    tried = []
+    monkeypatch.setattr(
+        server,
+        "_ensure_agent_session",
+        lambda i, t: (tried.append(t) or ("", "workspace missing")),
+    )
+    pq.enqueue("d1", "task")
+    server._drain_one_queue("d1")
+    assert tried == ["d1"] and sent == []
+    assert gate._ADMITTED == {} and gate._LAST_AUTO["at"] == 0.0
+    assert gate.assess()["warming"] == 0
+    server._drain_one_queue("d1")  # the reboot cooldown holds failures too
+    assert tried == ["d1"]
+
+
 def test_drain_disabled_queue_is_noop(drain, monkeypatch):
     server, sent = drain
     monkeypatch.setattr(server, "_agent_activity", lambda i, t: "idle")
