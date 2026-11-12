@@ -943,9 +943,21 @@ async def _fetch_instances(dev: dict) -> None:
                     error="remote control is off on that device",
                 )
                 return
-            data = await resp.json(content_type=None)
+            data = await resp.json(content_type=None) if resp.status == 200 else None
             if isinstance(data, list):
                 dev.update(instances=data, instances_ok=True, error="")
+            else:
+                # An error page / unexpected body: the last good list is no
+                # longer this device's state — never serve it as current.
+                dev.update(
+                    instances=[],
+                    instances_ok=False,
+                    error=(
+                        "answered HTTP %d" % resp.status
+                        if resp.status != 200
+                        else "answered something other than its session list"
+                    ),
+                )
     except Exception as err:  # noqa: BLE001
         dev.update(instances_ok=False, error=plain_error(err))
 

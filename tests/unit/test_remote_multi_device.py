@@ -461,3 +461,24 @@ def test_forget_device_clears_token_and_sessions():
     # A reload from disk confirms the token is gone for good.
     remote._TOKENS = None
     assert remote.token_for("otherbox") == ""
+
+
+@pytest.mark.parametrize(
+    "status,payload",
+    [(500, {"error": "boom"}), (502, {"error": "bad gateway"}), (200, {"oops": 1})],
+)
+def test_fetch_instances_error_answer_drops_the_stale_rows(
+    monkeypatch, status, payload
+):
+    # A device that keeps answering, but with an error instead of its session
+    # list, must not keep serving its LAST good list as if current: those
+    # mirrored rows (an "asking", a "ready for PR") would sit in the sidebar
+    # and the bell forever, with nothing on that device behind them.
+    _install_session(monkeypatch, lambda m, u, **kw: _FakeResp(status, payload))
+    remote._DEVICES["otherbox"] = dev = _fake_device(
+        instances=[{"title": "old", "status": "asking"}], instances_ok=True
+    )
+    _run(remote._fetch_instances(dev))
+    assert dev["instances_ok"] is False
+    assert dev["error"]
+    assert remote.merged_instances() == []
