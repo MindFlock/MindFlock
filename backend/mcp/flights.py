@@ -62,7 +62,7 @@ __all__ = [
 ]
 
 #: control_flight's ops: the flight-wide ones and the per-step ones.
-FLIGHT_OPS = ("pause", "resume", "cancel", "run")
+FLIGHT_OPS = ("pause", "resume", "cancel", "run", "again")
 STEP_OPS = ("skip", "retry", "jump", "done")
 CONTROL_OPS = FLIGHT_OPS + STEP_OPS
 #: Flights still in the air (or on the board): docs/flights.md "Flight".
@@ -139,10 +139,14 @@ D_CONTROL = (
     "route; the session is kept) | skip (a stop) | retry (a failed or halted "
     "stop) | jump (Jump here: move the cursor to step) | done (a Wait for me "
     "stop, with an optional note; on a Verify stop waiting for a confirm it "
-    "is Confirm verified — it never passes a Verify stop's open steps). "
+    "is Confirm verified — it never passes a Verify stop's open steps) | "
+    "again (fly an ENDED route — stopped, halted or landed — again as a new "
+    "route on its session, from the stop it had reached; step = start there "
+    "instead; its session gone → the one holding its branch, or its closed "
+    "session reopened; a stop that can't be undone needs confirm_merge). "
     "skip/retry/done default to the current stop; jump needs step. id, or "
-    "title for that session's live route. Never press done on a stop your "
-    "user should judge unless they said so."
+    "title for that session's live route (else its latest). Never press done "
+    "on a stop your user should judge unless they said so."
 )
 D_EDIT = (
     "Fix a route's stops (the Sky does the rest): add [steps] (inserted at "
@@ -249,7 +253,11 @@ S_START = _obj(
         "title": dict(_TITLE, description="session that runs it (default: you)"),
         "grounded": {"type": "boolean", "default": False},
         "name": {"type": "string", "maxLength": 80},
-        "at": dict(_STEP_ID, description="stop id to start at"),
+        "at": dict(
+            _STEP_ID,
+            description="stop id to start at, or 'resume': where this route's "
+            "last run on that session stopped (else the normal start)",
+        ),
         "confirm_merge": {"type": "boolean", "default": False},
         "dry_run": {"type": "boolean", "default": False, "description": D_DRY_RUN},
         "start_on": {
@@ -268,6 +276,7 @@ S_CONTROL = _obj(
         "op": {"type": "string", "enum": list(CONTROL_OPS)},
         "step": _STEP_ID,
         "note": {"type": "string", "maxLength": 2000},
+        "confirm_merge": {"type": "boolean", "default": False},
     },
     ("op",),
 )
@@ -1214,6 +1223,20 @@ class FlightTools:
                 out["start"] = '%s "%s"' % (start.get("id"), start.get("title"))
             if chk.get("in_flight"):
                 out["in_flight"] = chk["in_flight"]
+            res = chk.get("resume") if isinstance(chk.get("resume"), dict) else None
+            if res:
+                why = res.get("reason") or res.get("state") or ""
+                out["resume"] = '%s "%s" — route %s stopped there%s; %s' % (
+                    res.get("stop"),
+                    res.get("title"),
+                    res.get("from_flight"),
+                    " (%s)" % why if why else "",
+                    (
+                        "starting there"
+                        if args.get("at") == "resume"
+                        else "at='resume' carries on from there"
+                    ),
+                )
             if chk.get("absorbed"):
                 out["absorbed"] = chk["absorbed"]
             if envs is not None and any(s.get("kind") == "verify" for s in flown):
@@ -1281,8 +1304,10 @@ class FlightTools:
             raise ToolError("control_flight: op is one of %s" % ", ".join(CONTROL_OPS))
         what = "control_flight(%s)" % op
         f = self._resolve_flight(flock, args, what)
-        self._may_fly(flock, str(f.get("session") or ""), what)
         fid = str(f.get("id") or "")
+        if op == "again":
+            return self._again(flock, args, f, what)
+        self._may_fly(flock, str(f.get("session") or ""), what)
         if op in FLIGHT_OPS:
             path, payload = self._flight_path(fid, "/" + op), {}
         else:
@@ -1308,6 +1333,35 @@ class FlightTools:
         resp = self._fl_api("POST", path, payload, what)
         nf = resp.get("flight")
         return compact_flight(nf if isinstance(nf, dict) else f, self.clock())
+
+    def _again(self, flock: Flock, args: dict, f: dict, what: str) -> dict:
+        """control_flight(op=again): ``POST /api/flights/{id}/again`` — the
+        route flown again as a new route (``step`` = the stop to start at).
+        Steering a session's route: its session when it is still here (a
+        gone one: write scope), and confirm_merge for a stop that can't be
+        undone, as start_flight asks."""
+        steps = [s for s in f.get("steps") or [] if isinstance(s, dict)]
+        title = str(f.get("session") or "")
+        if title not in flock.local:
+            title = ""
+        self._may_fly(flock, title, what, steps, bool(args.get("confirm_merge")))
+        payload: Dict[str, Any] = {"by": self._by(flock)}
+        step = str(args.get("step") or "").strip()
+        if step:
+            payload["at"] = step
+        resp = self._fl_api(
+            "POST",
+            self._flight_path(str(f.get("id") or ""), "/again"),
+            payload,
+            what,
+            timeout=START_TIMEOUT_S,
+        )
+        nf = resp.get("flight")
+        out = compact_flight(nf if isinstance(nf, dict) else f, self.clock())
+        out["again_of"] = resp.get("from") or f.get("id")
+        if resp.get("how"):
+            out["how"] = resp["how"]
+        return out
 
     # -- edit_flight ------------------------------------------------------------ #
     def edit_flight(self, args: dict, ctx: ToolContext) -> dict:

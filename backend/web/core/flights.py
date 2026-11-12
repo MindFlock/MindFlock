@@ -2474,8 +2474,12 @@ def take_off(
     replaced: Optional[list] = None,
     start_on: str = "now",
     busy: str = "",
+    note: str = "",
 ) -> dict:
     """Create a ``running`` flight of ``plan`` bound to ``session``.
+
+    ``note``: the history line of a start that does not begin at the first
+    stop, in place of "started at <stop>" (a carry-on says where from).
 
     * ``start_on`` ``"prompt"`` / ``"run"`` (docs/flights.md "Round 19"): the
       flight is stored ``ready`` instead — cursor 0, nothing skipped, nothing
@@ -2556,9 +2560,12 @@ def take_off(
             ts,
             steps[cursor - 1]["id"],
             "jumped",
-            "started at %s"
+            note
+            or "started at %s"
             % (steps[cursor]["title"] if cursor < len(steps) else "the end"),
         )
+    elif note and not cursor:
+        _hist(flight, ts, steps[0]["id"], "noted", note)
     first_agent = _first_agent_index(flight["steps"])
     if in_progress:
         ss = flight["step_states"][steps[0]["id"]]
@@ -2606,6 +2613,262 @@ def arm_pending(
         replaced=replaced,
         branch=str(branch or ""),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Carrying on: where an earlier flight of the same route stopped
+# --------------------------------------------------------------------------- #
+#: ``start_at`` that means "where the earlier flight of this route stopped, or
+#: the normal start when there is none" (:func:`resume_point`).
+RESUME = "resume"
+#: The states of an earlier flight a new one may carry on from: it did not
+#: finish (``done`` did; ``grounded`` / ``ready`` never flew).
+CARRY_ON_FROM = frozenset({"cancelled", "halted", "running", "waiting_you", "paused"})
+#: The states a flight may be flown again from (:func:`again_plan`).
+AGAIN_FROM = frozenset({"cancelled", "done", "halted"})
+#: Branches too common to say two flights worked on the same thing.
+_SHARED_BRANCHES = frozenset({"main", "master"})
+_PASSED_STATES = ("done", "skipped")
+
+
+def reached(flight: dict) -> int:
+    """The index of the first stop ``flight`` had not finished: from its
+    cursor on, the first that is neither done nor skipped (``len(steps)``
+    when it got past every one). Pure."""
+    steps = flight.get("steps") or []
+    states = flight.get("step_states") or {}
+    k = min(max(int(flight.get("cursor") or 0), 0), len(steps))
+    while (
+        k < len(steps)
+        and (states.get(steps[k].get("id")) or {}).get("state") in _PASSED_STATES
+    ):
+        k += 1
+    return k
+
+
+def _stop_key(step: dict) -> tuple:
+    return (step.get("kind"), str(step.get("title") or "").strip().lower())
+
+
+def _same_stop(
+    steps: List[dict], old: List[dict], k: int, by_id: bool
+) -> Optional[int]:
+    """The index in ``steps`` of ``old[k]``: by id (and kind) when ``by_id``,
+    else (or when the id is gone) the same occurrence of its kind + title."""
+    target = old[k]
+    if by_id:
+        for i, s in enumerate(steps):
+            if s.get("id") == target.get("id") and s.get("kind") == target.get("kind"):
+                return i
+    key = _stop_key(target)
+    nth = sum(1 for s in old[:k] if _stop_key(s) == key)
+    for i, s in enumerate(steps):
+        if _stop_key(s) == key:
+            if nth == 0:
+                return i
+            nth -= 1
+    return None
+
+
+def _ended_at(flight: dict) -> float:
+    return float(
+        flight.get("finished") or flight.get("updated") or flight.get("started") or 0
+    )
+
+
+def resume_point(plan: dict, previous: Sequence[dict]) -> Optional[dict]:
+    """Where a new flight of ``plan`` carries on from the earlier flights
+    ``previous`` (those on the same session, branch or subject —
+    :func:`resume_candidates`), newest first: the first that did not finish
+    (:data:`CARRY_ON_FROM`) and whose first unfinished stop (:func:`reached`)
+    is a stop of ``plan`` — matched by id when it flew the same saved plan,
+    else by kind + title in order. ``None`` = the normal start: nothing
+    matches, the newest flight of this very plan landed (``done``), or the
+    point is the first stop anyway. Pure.
+
+    → ``{stop, index, title, from_flight, session, state, reason, at}``
+    (``state`` / ``reason`` the earlier flight's, ``at`` when it ended or
+    last moved)."""
+    steps = list(plan.get("steps") or [])
+    pid = str(plan.get("id") or "")
+    if not steps:
+        return None
+    for f in sorted(previous, key=lambda x: -float(x.get("started") or 0.0)):
+        if f.get("free") or f.get("edits_default"):
+            continue
+        same = bool(pid) and pid != ADHOC_PLAN_ID and f.get("plan_id") == pid
+        state = f.get("state")
+        if state == "done" and same:
+            return None
+        if state not in CARRY_ON_FROM:
+            continue
+        old = [s for s in f.get("steps") or [] if isinstance(s, dict)]
+        k = reached(f)
+        if k >= len(old):
+            if same:
+                return None
+            continue
+        i = _same_stop(steps, old, k, same)
+        if i is None:
+            continue
+        if i == 0:
+            return None
+        return {
+            "stop": steps[i]["id"],
+            "index": i,
+            "title": steps[i].get("title") or steps[i]["id"],
+            "from_flight": f.get("id") or "",
+            "session": f.get("session") or "",
+            "state": state,
+            "reason": f.get("reason") or "",
+            "at": _ended_at(f),
+        }
+    return None
+
+
+def _same_subject(a: Optional[dict], b: Optional[dict]) -> bool:
+    a, b = a or {}, b or {}
+    return (
+        a.get("kind") in ("ticket", "pr", "issue")
+        and a.get("kind") == b.get("kind")
+        and bool(a.get("id"))
+        and str(a.get("id")) == str(b.get("id"))
+        and str(a.get("source") or "") == str(b.get("source") or "")
+    )
+
+
+def _same_folder(a: str, b: str) -> bool:
+    return bool(a) and bool(b) and os.path.normpath(a) == os.path.normpath(b)
+
+
+def resume_candidates(
+    flights: Sequence[dict],
+    *,
+    session: str = "",
+    repo_root: str = "",
+    branch: str = "",
+    subject: Optional[dict] = None,
+    exclude: Sequence[str] = (),
+) -> List[dict]:
+    """The flights a start may carry on from (:func:`resume_point`): those on
+    ``session``, on ``branch`` of ``repo_root`` (never ``main`` / ``master``:
+    unrelated work shares those), or of the same ticket / PR / issue
+    ``subject`` — but none in ``exclude`` (ids). Pure."""
+    out = []
+    skip = set(exclude or ())
+    for f in flights:
+        if f.get("id") in skip:
+            continue
+        on_session = bool(session) and f.get("session") == session
+        on_branch = (
+            bool(branch)
+            and branch not in _SHARED_BRANCHES
+            and f.get("branch") == branch
+            and _same_folder(repo_root, f.get("repo_root") or "")
+        )
+        if on_session or on_branch or _same_subject(subject, f.get("subject")):
+            out.append(f)
+    return out
+
+
+def resume_at(
+    plan: dict, start_at: str, previous: Sequence[dict]
+) -> Tuple[str, Optional[dict]]:
+    """``start_at`` for a start: an explicit stop id stays as it is (a stop
+    whose id IS ``"resume"`` too); :data:`RESUME` becomes the
+    :func:`resume_point` stop's id, or "" (the normal start) when there is
+    none → ``(start_at, resume)``. Pure."""
+    at = str(start_at or "").strip()
+    if at != RESUME or any(s.get("id") == RESUME for s in plan.get("steps") or []):
+        return at, None
+    point = resume_point(plan, previous)
+    return (point["stop"] if point else ""), point
+
+
+def carry_on_note(point: dict) -> str:
+    """The history line of a flight that carries on from ``point``."""
+    why = point.get("reason") or point.get("state") or ""
+    return "carried on where route %s stopped%s, at %s" % (
+        point.get("from_flight") or "?",
+        " (%s)" % why if why else "",
+        point.get("title") or point.get("stop"),
+    )
+
+
+def again_plan(flight: dict, at: str = "") -> Tuple[dict, str]:
+    """``(plan, start_at)`` to fly ``flight`` again: its own stops (as they
+    were when it ended, nothing of their state), starting at ``at`` — a stop
+    id of it; "" or :data:`RESUME` = the first stop it had not finished, or
+    the first stop when it got past them all. Raises :class:`FlightError`
+    (``not_flown`` 409 for a chain that never flew, ``in_flight`` 409 for one
+    still going, ``unknown_step`` 400). Pure."""
+    if flight.get("edits_default") or flight.get("state") in (GROUNDED, READY):
+        raise FlightError(
+            "not_flown", 409, "this route has not flown yet — Run it instead"
+        )
+    if flight.get("state") not in AGAIN_FROM:
+        raise FlightError(
+            "in_flight",
+            409,
+            "this route is still going (%s) — Carry on or Retry it instead"
+            % flight.get("state"),
+        )
+    steps = [
+        {k: copy.deepcopy(v) for k, v in s.items()}
+        for s in flight.get("steps") or []
+        if isinstance(s, dict)
+    ]
+    if not steps:
+        raise FlightError("bad_plan", 400, "the route has no stops")
+    plan = {
+        "id": flight.get("plan_id") or ADHOC_PLAN_ID,
+        "name": flight.get("plan_name") or "",
+        "session": _blank_session(),
+        "steps": steps,
+    }
+    want = str(at or "").strip()
+    if want and want != RESUME:
+        if want not in [s["id"] for s in steps]:
+            raise FlightError("unknown_step", 400, "no stop %s on this route" % want)
+        return plan, want
+    k = reached(flight)
+    return plan, steps[k if k < len(steps) else 0]["id"]
+
+
+def op_carry_on(
+    flight: dict, session: str, cursor: int, note: str, now: Optional[float] = None
+) -> dict:
+    """Move an armed intake flight (nothing of it has run but the seeded
+    first prompt, which never went out) onto ``session`` — the session that
+    already holds its branch — starting at ``cursor``: every stop state is
+    reset, those before ``cursor`` are recorded skipped, and the history
+    says why (``note``)."""
+    ts = float(now if now is not None else time.time())
+    _not_final(flight)
+    steps = flight["steps"]
+    cursor = max(0, min(int(cursor), len(steps)))
+    flight["session"] = session
+    flight["gone_since"] = 0.0
+    flight["cursor"] = cursor
+    for i, s in enumerate(steps):
+        st = _blank_step_state()
+        if i < cursor:
+            st["state"] = "skipped"
+            st["since"] = ts
+        flight["step_states"][s["id"]] = st
+    flight["state"] = "running"
+    flight["reason"] = ""
+    flight["updated"] = ts
+    _hist(
+        flight,
+        ts,
+        steps[cursor - 1]["id"] if cursor else (steps[0]["id"] if steps else ""),
+        "jumped" if cursor else "noted",
+        note,
+    )
+    if cursor >= len(steps):
+        _finish(flight, "done", "", ts)
+    return flight
 
 
 #: The ``plan_id`` of a flight drawn at take-off rather than from a saved plan.
