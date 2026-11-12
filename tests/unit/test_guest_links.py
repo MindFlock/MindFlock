@@ -36,6 +36,7 @@ def _isolated_store(tmp_path, monkeypatch):
         "_ERROR": "",
         "_REASON": "",
         "_WANTED": False,
+        "_WATCH": None,
     }.items():
         monkeypatch.setattr(guest_tunnel, k, v)
     yield

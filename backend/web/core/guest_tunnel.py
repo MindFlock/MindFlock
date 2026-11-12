@@ -53,6 +53,10 @@ _REASON: str = ""
 #: offers the cloudflared install even before the first link exists).
 _WANTED = False
 
+#: How often a running tunnel re-checks the access gate (:func:`_watch_gate`).
+GATE_CHECK_S = 1.0
+_WATCH: Optional[asyncio.Task] = None
+
 #: Why a start failed, in the peer tunnel's words (``FAILURE_TEXT``) or ours.
 _NO_BINARY = "cloudflared is not installed on this computer"
 
@@ -168,10 +172,40 @@ async def _start() -> None:
         _REASON = reason
         log.warning("guest links: tunnel start failed (%s)", reason)
         return
+    if not _auth.auth_enabled():
+        # The gate went off while Cloudflare issued the name: never front it.
+        await _TUNNEL.stop()
+        return
     _HOST = host
     _ERROR = _REASON = ""
     _auth.allow_fronted_host(host)
     log.info("guest links: public link up at https://%s/", host)
+    global _WATCH
+    _WATCH = asyncio.get_running_loop().create_task(
+        _watch_gate(host), name="guest-tunnel-gate"
+    )
+
+
+async def _watch_gate(host: str) -> None:
+    """Take the public link down the moment the access gate goes off.
+
+    The tunnel fronts the WHOLE server and its name is on every guest URL;
+    links can only be made with the gate on, but the owner may turn it off
+    afterwards (Settings → Security), and nothing else would stop the
+    tunnel — anyone holding a guest URL would then reach this machine with
+    no token at all."""
+    while _HOST == host:
+        await asyncio.sleep(GATE_CHECK_S)
+        if _HOST != host:
+            return
+        try:
+            gate_on = _auth.auth_enabled()
+        except Exception:  # noqa: BLE001 — undecidable counts as off
+            gate_on = False
+        if not gate_on:
+            log.warning("guest links: access gate turned off — public link stopped")
+            await stop()
+            return
 
 
 def ensure() -> dict:
@@ -180,6 +214,8 @@ def ensure() -> dict:
     server loop (a route, the lifespan)."""
     global _TASK, _ERROR, _REASON
     want()
+    if not _auth.auth_enabled():
+        return status()  # never a tunnel to a gate-off server (_watch_gate)
     if not _HOST and (_TASK is None or _TASK.done()):
         if not _binary():
             _ERROR, _REASON = _NO_BINARY, "not_installed"
@@ -195,7 +231,10 @@ def ensure() -> dict:
 
 async def stop() -> None:
     """Stop the tunnel (the last link was revoked, or shutdown)."""
-    global _TUNNEL, _TASK, _HOST, _ERROR, _REASON, _WANTED
+    global _TUNNEL, _TASK, _HOST, _ERROR, _REASON, _WANTED, _WATCH
+    watch, _WATCH = _WATCH, None
+    if watch is not None and watch is not asyncio.current_task():
+        watch.cancel()
     task, _TASK = _TASK, None
     if task is not None and not task.done():
         task.cancel()
