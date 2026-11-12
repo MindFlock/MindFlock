@@ -165,6 +165,7 @@ def test_same_plan_carries_on_at_the_first_unfinished_stop_by_id():
         "state": "cancelled",
         "reason": "its session was deleted",
         "at": old["finished"],
+        "in_progress": False,
     }
 
 
@@ -197,14 +198,61 @@ def test_another_route_matches_by_kind_and_title_in_order():
     team = plan(
         [
             {"kind": "agent", "title": "Work it"},
+            {"kind": "ship", "title": "commit", "config": {"lane": "commit"}},
+            {"kind": "ship", "title": "Push", "config": {"lane": "push"}},
+            {"kind": "you", "title": "Approve", "config": {"text": "ok?"}},
+        ],
+        "Team",
+    )
+    got = F.resume_point(team, [old])
+    assert got["stop"] == "s3" and got["index"] == 2 and got["title"] == "Push"
+
+
+def test_another_route_never_skips_a_stop_the_old_one_did_not_fly():
+    """Review fix 3: Lint (and an unreviewed PR) must not be skipped because
+    an older route of other stops got further."""
+    ladder = plan(
+        [
+            {"kind": "agent", "title": "Work it"},
+            {"kind": "ship", "title": "Commit", "config": {"lane": "commit"}},
+            {"kind": "ship", "title": "Push", "config": {"lane": "push"}},
+        ],
+        "Fast-track",
+    )
+    old = stopped_at(ladder, 2)
+    team = plan(
+        [
+            {"kind": "agent", "title": "Work it"},
             {"kind": "command", "title": "Lint", "config": {"command": "true"}},
             {"kind": "ship", "title": "commit", "config": {"lane": "commit"}},
             {"kind": "ship", "title": "Push", "config": {"lane": "push"}},
         ],
         "Team",
     )
-    got = F.resume_point(team, [old])
-    assert got["stop"] == "s4" and got["index"] == 3 and got["title"] == "Push"
+    assert F.resume_point(team, [old]) is None
+    adhoc = F.take_off(
+        F.adhoc_plan(
+            [
+                {"kind": "agent", "title": "Work it"},
+                {"kind": "ship", "title": "Open PR", "config": {"lane": "pr"}},
+            ]
+        ),
+        session="s",
+    )
+    F.mutate(adhoc["id"], lambda x: x["step_states"]["s1"].update(state="done"))
+    halted = F.mutate(
+        adhoc["id"], lambda x: x.update(cursor=1, state="halted", reason="no PR")
+    )
+    review = plan(
+        [
+            {"kind": "agent", "title": "Work it"},
+            {"kind": "you", "title": "Review", "config": {"text": "look"}},
+            {"kind": "verify"},
+            {"kind": "ship", "title": "Open PR", "config": {"lane": "pr"}},
+        ],
+        "Reviewed",
+    )
+    assert F.resume_point(review, [halted]) is None
 
 
 def test_halted_and_still_current_flights_are_sources_too():
@@ -270,7 +318,7 @@ def test_again_plan_refuses_a_route_still_going_or_never_flown():
 def test_again_plan_starts_where_it_stopped_or_where_asked():
     p = plan()
     old = stopped_at(p, 2)
-    again, at = F.again_plan(old)
+    again, at, _sent = F.again_plan(old)
     assert at == "s3" and [s["id"] for s in again["steps"]] == ["s1", "s2", "s3", "s4"]
     assert again["id"] == p["id"] and again["name"] == "Ticket"
     assert F.again_plan(old, "s1")[1] == "s1"
@@ -388,7 +436,12 @@ def test_again_with_its_session_closed_reopens_it(srv, row):
         plan(), 1, session="sc-1", repo_root="/base", branch="feature/sc-1/x"
     )
     srv._load_recently_closed = lambda: [
-        {"id": "rc1", "title": "sc-1", "branch": "feature/sc-1/x"}
+        {
+            "id": "rc1",
+            "title": "sc-1",
+            "branch": "feature/sc-1/x",
+            "data": {"worktree": {"repo_path": "/base"}},
+        }
     ]
     out = run(D.again(old["id"]))
     assert srv.reopened == ["rc1"]
@@ -707,3 +760,241 @@ def test_again_whose_reopen_brings_the_route_itself_back(srv, row):
     assert out["how"] == "restored" and out["flight"]["id"] == old["id"]
     assert out["flight"]["state"] == "running" and out["flight"]["cursor"] == 1
     assert len(F.list_flights()) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Review round: one test per fix
+# --------------------------------------------------------------------------- #
+def test_fix1_resume_without_a_session_is_the_normal_start(srv, row, monkeypatch):
+    """A start that CREATES its session gets a fresh branch: "resume" must
+    not start it halfway down the route with no first prompt."""
+    import backend.web.core.session_create as sc
+
+    made = []
+
+    async def fake_create(payload, **kw):
+        made.append(payload)
+        srv.ENGINE.instances["new-1"] = FakeInst()
+        return 202, {"title": "new-1"}
+
+    monkeypatch.setattr(sc, "create_result", fake_create)
+    p = plan([dict(ROUTE[0], config={"prompt": "do the ticket"})] + ROUTE[1:])
+    stopped_at(p, 2, session="old", subject=TIX)
+    f = run(
+        D.start(
+            {
+                "plan_id": p["id"],
+                "repo_path": "/repo",
+                "start_at": "resume",
+                "subject": TIX,
+            }
+        )
+    )
+    assert made[0]["prompt"] == "do the ticket"
+    assert f["session"] == "new-1" and f["cursor"] == 0
+    assert f["step_states"]["s1"]["state"] == "running"
+    assert D.resume_start_at(p, "resume", session="", subject=TIX) == ("", None)
+
+
+def _owing(p, cursor_on_perch=True):
+    """A flight of ``p`` (Agent, Verify ask:end, Notify) whose Verify stop
+    owed the person a check, cancelled on its added "Your checks" perch (or,
+    with ``cursor_on_perch`` False, on the Notify stop before it)."""
+    f = F.take_off(p, session="s")
+
+    def fn(x):
+        x["steps"].append(
+            {
+                "id": "s4",
+                "kind": "you",
+                "title": F.OWED_PERCH_TITLE,
+                "config": {"text": "Before this route finishes: 1 check for you"},
+                "on_fail": "halt",
+            }
+        )
+        x["step_states"]["s4"] = F._blank_step_state()
+        x["owed_perch"] = "s4"
+        x["owed"] = [{"step": "s2", "title": "Verify", "items": ["login works"]}]
+        upto = 3 if cursor_on_perch else 2
+        for s in x["steps"][:upto]:
+            x["step_states"][s["id"]]["state"] = "done"
+        x["cursor"] = upto
+        x["step_states"][x["steps"][upto]["id"]]["state"] = (
+            "waiting_you" if cursor_on_perch else "running"
+        )
+        F.op_cancel(x, "cancelled by you")
+
+    return F.mutate(f["id"], fn)
+
+
+OWE_ROUTE = [
+    {"kind": "agent", "title": "Work it"},
+    {"kind": "verify", "title": "Verify", "config": {"ask": "end"}},
+    {"kind": "notify", "title": "Ping", "config": {"text": "hi"}},
+]
+
+
+def test_fix2_the_owed_perch_never_leaks_into_again_or_resume():
+    p = plan(OWE_ROUTE, "Owes")
+    old = _owing(p)
+    assert old["owed_perch"] == "s4" and old["owed"][0]["step"] == "s2"
+    again, at, sent = F.again_plan(old)
+    # Its own stops only, and the Verify stop that still owed runs again.
+    assert [s["id"] for s in again["steps"]] == ["s1", "s2", "s3"]
+    assert at == "s2" and sent is False
+    assert F.resume_point(p, [old])["stop"] == "s2"
+    # Cancelled before the perch, the owed Verify stop is still the point.
+    mid = _owing(p, cursor_on_perch=False)
+    assert F.again_plan(mid)[1] == "s2"
+    # A landed flight that once added the perch: flying again never parks on
+    # a phantom question — it is not among the stops.
+    landed = F.mutate(
+        old["id"],
+        lambda x: x.update(state="done", owed=[], cursor=4)
+        or [x["step_states"][k].update(state="done") for k in x["step_states"]],
+    )
+    again, at, _ = F.again_plan(landed)
+    assert [s["title"] for s in again["steps"]] == ["Work it", "Verify", "Ping"]
+    assert at == "s1"
+
+
+def test_fix4_again_never_reopens_or_flies_on_another_repo(srv, row, monkeypatch):
+    monkeypatch.setattr(D, "_ref_ok", lambda folder, ref: False)
+    old = stopped_at(plan(), 1, session="sc-1", repo_root="/base", branch="feature/x")
+    srv._load_recently_closed = lambda: [
+        {
+            "id": "rcX",
+            "title": "sc-1",
+            "branch": "feature/x",
+            "data": {"worktree": {"repo_path": "/other-repo"}},
+        }
+    ]
+    srv.ENGINE.instances["elsewhere"] = FakeInst(
+        "/other-repo", "feature/x", "/other-repo"
+    )
+    with pytest.raises(F.FlightError) as e:
+        run(D.again(old["id"]))
+    assert e.value.error == "session_gone" and srv.reopened == []
+    # No repository on record: a branch of that name anywhere is no match.
+    bare = stopped_at(plan(), 1, session="gone2", repo_root="", branch="feature/x")
+    with pytest.raises(F.FlightError):
+        run(D.again(bare["id"]))
+    # staging / develop / dev / trunk are everybody's, like main.
+    srv.ENGINE.instances["stg"] = FakeInst("/repo", "staging", "/repo")
+    shared = stopped_at(plan(), 1, session="gone3", repo_root="/repo", branch="staging")
+    with pytest.raises(F.FlightError):
+        run(D.again(shared["id"]))
+    assert {"staging", "develop", "dev", "trunk"} <= F.SHARED_BRANCHES
+    assert (
+        F.resume_candidates(
+            [{"id": "a", "branch": "develop", "repo_root": "/r"}],
+            repo_root="/r",
+            branch="develop",
+        )
+        == []
+    )
+
+
+def _sent_then_cancelled(p, session="s"):
+    """A flight whose Agent stop s1 (with a prompt) was running — its prompt
+    sent — when it was cancelled."""
+    f = F.take_off(p, session=session)
+
+    def fn(x):
+        x["step_states"]["s1"].update(state="running", detail={"seeded": True})
+        F.op_cancel(x, "cancelled by you")
+
+    return F.mutate(f["id"], fn)
+
+
+PROMPTED = [
+    {"kind": "agent", "title": "Work it", "config": {"prompt": "do it"}},
+    {"kind": "notify", "title": "Ping", "config": {"text": "hi"}},
+]
+
+
+def test_fix5_again_never_types_a_sent_prompt_twice(srv, row, monkeypatch):
+    sent = []
+    monkeypatch.setattr(D, "_deliver", lambda title, text: sent.append(text))
+    monkeypatch.setattr(D, "_run_notify", lambda f, s: {"note": "sent"})
+    p = plan(PROMPTED, "Prompted")
+    # Idle: the work it did is the stop; the route goes on after it.
+    monkeypatch.setattr(D, "_session_busy", lambda title: "")
+    old = _sent_then_cancelled(p)
+    assert F.again_plan(old)[1:] == ("s1", True)
+    f = run(D.again(old["id"]))["flight"]
+    assert f["cursor"] == 1 and f["step_states"]["s1"]["state"] == "skipped"
+    assert "its prompt went out already" in f["history"][-1]["note"]
+    run(D.step_flight(f["id"]))
+    assert sent == []
+    # Busy: it is that work in progress — running, nothing sent.
+    monkeypatch.setattr(D, "_session_busy", lambda title: "working")
+    old2 = _sent_then_cancelled(p)
+    g = run(D.again(old2["id"]))["flight"]
+    assert g["cursor"] == 0 and g["step_states"]["s1"]["state"] == "running"
+    assert g["step_states"]["s1"]["detail"]["seeded"] is True
+    row["activity"] = "working"
+    run(D.step_flight(g["id"]))
+    assert sent == []
+
+
+def test_fix5_resume_never_types_a_sent_prompt_twice(srv, row, monkeypatch):
+    sent = []
+    monkeypatch.setattr(D, "_deliver", lambda title, text: sent.append(text))
+    monkeypatch.setattr(D, "_session_busy", lambda title: "")
+    p = plan(
+        [{"kind": "notify", "title": "Hello", "config": {"text": "x"}}] + PROMPTED,
+        "Lead",
+    )
+    f = F.take_off(p, session="s")
+
+    def fn(x):
+        x["step_states"]["s1"]["state"] = "done"
+        x["cursor"] = 1
+        x["step_states"]["s2"].update(state="running", detail={"sent_at": 1.0})
+        F.op_cancel(x, F.SESSION_REMOVED)
+
+    old = F.mutate(f["id"], fn)
+    assert F.resume_point(p, [old])["in_progress"] is True
+    g = run(D.start({"plan_id": p["id"], "title": "s", "start_at": "resume"}))
+    assert g["cursor"] == 2 and g["step_states"]["s2"]["state"] == "skipped"
+    assert sent == []
+
+
+def test_fix6_carry_on_without_a_point_starts_where_an_attach_does(srv, held, row):
+    srv.ENGINE.instances["pr-1"] = FakeInst("/wt/sc-1", BRANCH, "/base")
+    p = plan(PROMPTED + [{"kind": "ship", "title": "Push", "config": {"lane": "push"}}])
+    armed = F.arm_pending("sc-1", p["id"], TIX, branch=BRANCH)
+    assert run(D.carry_on_intake("sc-1", "git@x:r", BRANCH)) == "pr-1"
+    # The author's Agent stop has a prompt: it is sent, not skipped.
+    f = F.get(armed["id"])
+    assert f["cursor"] == 0 and f["step_states"]["s1"]["state"] == "pending"
+
+
+def test_fix6_a_leftover_folder_with_changes_is_never_shipped_unseen(
+    srv, held, row, monkeypatch
+):
+    async def fake_open(title, folder):
+        srv.ENGINE.instances[title] = FakeInst(folder, BRANCH, "/base")
+        return title
+
+    monkeypatch.setattr(D, "_open_in_place", fake_open)
+    monkeypatch.setattr(D, "_uncommitted", lambda folder: True)
+    armed = F.arm_pending("sc-1", plan()["id"], TIX, branch=BRANCH)
+    assert run(D.carry_on_intake("sc-1", "git@x:r", BRANCH)) == "sc-1"
+    f = F.get(armed["id"])
+    assert f["state"] == "paused" and f["cursor"] == 1
+    assert f["reason"] == (
+        "sc-1 was opened on /wt/sc-1, which has uncommitted changes no earlier "
+        "run accounts for — look at them, then Carry on"
+    )
+    # Carry on is the person's go.
+    after = F.mutate(armed["id"], F.op_resume)
+    assert after["state"] == "running" and after["reason"] == ""
+    # A clean leftover flies on.
+    monkeypatch.setattr(D, "_uncommitted", lambda folder: False)
+    F.mutate(armed["id"], lambda x: F.op_cancel(x, "x"))
+    srv.ENGINE.instances.pop("sc-1")
+    armed2 = F.arm_pending("sc-1", plan()["id"], TIX, branch=BRANCH)
+    run(D.carry_on_intake("sc-1", "git@x:r", BRANCH))
+    assert F.get(armed2["id"])["state"] == "running"

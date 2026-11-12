@@ -84,6 +84,7 @@ def test_check_answers_resume_and_start_at_resume_starts_there(api):
         "state": "cancelled",
         "reason": "its session was deleted",
         "at": old["finished"],
+        "in_progress": False,
     }
     # Without start_at it still starts the normal way.
     assert out["start"]["id"] == "s2"
@@ -273,4 +274,27 @@ def test_mcp_start_flight_dry_run_reads_the_resume_back():
     assert out["resume"] == (
         's2 "Approve" — route f_9 stopped there (its session was deleted); '
         "starting there"
+    )
+
+
+def test_check_promises_no_resume_to_a_start_that_makes_its_session(api):
+    """Review fix 1: no title = a new session on a fresh branch — the start
+    will not carry on, so the check does not say it will."""
+    tix = {"kind": "ticket", "source": "sc", "id": "7"}
+    p, old = _stopped()
+    F.mutate(old["id"], lambda x: x.update(subject=dict(tix)))
+    out = api.post(
+        "/api/flights/check",
+        json={"plan_id": p["id"], "repo_path": "/repo", "start_at": "resume"},
+    ).json()
+    assert out["resume"] is None and out["start"]["id"] == "s1"
+    out = api.post(
+        "/api/flights/check", json={"plan_id": p["id"], "subject": tix}
+    ).json()
+    assert out["resume"] is None
+    (warn,) = [w for w in out["warnings"] if w.get("error") == "carries_on_if_found"]
+    assert warn["detail"] == (
+        "if its branch is still checked out on this machine, the route carries on "
+        "there at Breathe (route %s stopped there); otherwise a new session starts "
+        "at the first stop" % old["id"]
     )

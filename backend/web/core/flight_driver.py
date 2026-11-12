@@ -3345,7 +3345,8 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
     replaced: list = []
     if title:
         busy = ""
-        if not ready and not start_at and rec is None:
+        sent = bool(resume and resume.get("in_progress") and not ready)
+        if (not ready and not start_at and rec is None) or sent:
             busy = await asyncio.to_thread(_session_busy, title)
         flight = await asyncio.to_thread(
             lambda: _flights.take_off(
@@ -3360,6 +3361,7 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
                 start_on=start_on,
                 busy=busy,
                 note=carry_note,
+                sent=sent,
             )
         )
     else:
@@ -3530,11 +3532,18 @@ def resume_start_at(
 ) -> Tuple[str, Optional[dict]]:
     """A start's ``start_at`` with :data:`flights.RESUME` resolved
     (blocking): the resume point's stop id, or "" (the normal start) when
-    there is none → ``(start_at, resume)``. Anything else is left alone."""
+    there is none → ``(start_at, resume)``. Anything else is left alone.
+
+    Only a start ON a session (``session``) carries on: a start that creates
+    its session gets a fresh branch with none of the earlier work, so
+    "resume" is the normal start there (an Intake subject start carries on
+    through :func:`carry_on_intake` when it finds that work)."""
     if str(start_at or "").strip() != _flights.RESUME:
         return start_at, None
     if any(s.get("id") == _flights.RESUME for s in plan.get("steps") or []):
         return start_at, None
+    if not session:
+        return "", None
     point = resume_for(plan, session=session, subject=subject)
     return (point["stop"] if point else ""), point
 
@@ -3543,26 +3552,39 @@ def resume_start_at(
 AGAIN_HOW = ("same", "chosen", "branch", "reopened")
 
 
+def _entry_repo(e: dict) -> str:
+    """The repository a Recently-closed entry's work belongs to: its
+    worktree's repo, else its folder (an in-place session's repo is its
+    folder)."""
+    data = e.get("data") if isinstance(e.get("data"), dict) else {}
+    wt = data.get("worktree") if isinstance(data.get("worktree"), dict) else {}
+    return str(wt.get("repo_path") or e.get("folder") or data.get("path") or "")
+
+
 def _closed_entry_for(f: dict) -> Optional[dict]:
     """The newest Recently-closed entry that holds ``f``'s work: its own
-    chain's snapshot, its session's title, or (not main/master) its branch."""
+    chain's snapshot; else, in ``f``'s repository (never another repo that
+    happens to share a name), its session's title or its branch (not a
+    shared one — :data:`flights.SHARED_BRANCHES`). A route with no
+    repository is matched by its snapshot only."""
     try:
         items = _server()._load_recently_closed()
     except Exception:  # noqa: BLE001
         return None
+    repo = str(f.get("repo_root") or "")
     branch = str(f.get("branch") or "")
     for e in items if isinstance(items, list) else []:
         if not isinstance(e, dict) or not e.get("id"):
             continue
         snap = e.get("flight") if isinstance(e.get("flight"), dict) else {}
-        if (
-            snap.get("id") == f.get("id")
-            or (f.get("session") and e.get("title") == f.get("session"))
-            or (
-                branch
-                and branch not in _flights._SHARED_BRANCHES
-                and e.get("branch") == branch
-            )
+        if snap.get("id") == f.get("id"):
+            return e
+        if not repo or not _flights.same_folder(_entry_repo(e), repo):
+            continue
+        if (f.get("session") and e.get("title") == f.get("session")) or (
+            branch
+            and branch not in _flights.SHARED_BRANCHES
+            and e.get("branch") == branch
         ):
             return e
     return None
@@ -3624,7 +3646,7 @@ async def again(flight_id: str, body: Optional[dict] = None) -> dict:
     old = _flights.get(flight_id)
     if old is None:
         raise _flights.FlightError("not_found", 404, "no such route")
-    plan, start_at = _flights.again_plan(old, str(body.get("at") or ""))
+    plan, start_at, sent = _flights.again_plan(old, str(body.get("at") or ""))
     title = str(body.get("title") or "").strip()
     how = "chosen"
     if title:
@@ -3634,12 +3656,14 @@ async def again(flight_id: str, body: Optional[dict] = None) -> dict:
         title, how = str(old.get("session") or ""), "same"
         if not title or title not in srv.ENGINE.instances:
             title, how = "", ""
-            holder = await asyncio.to_thread(
-                branch_holder,
-                str(old.get("repo_root") or ""),
-                str(old.get("branch") or ""),
-            )
-            if holder and old.get("branch") not in _flights._SHARED_BRANCHES:
+            repo = str(old.get("repo_root") or "")
+            branch = str(old.get("branch") or "")
+            holder = ""
+            if repo and branch and branch not in _flights.SHARED_BRANCHES:
+                # Only in its own repository: another repo's session on a
+                # branch of the same name holds none of this work.
+                holder = await asyncio.to_thread(branch_holder, repo, branch)
+            if holder:
                 title, how = holder, "branch"
             else:
                 entry = await asyncio.to_thread(_closed_entry_for, old)
@@ -3678,6 +3702,9 @@ async def again(flight_id: str, body: Optional[dict] = None) -> dict:
         note += " (on %s, reopened)" % title
     replaced: list = []
     by = str(body.get("by") or "user")
+    # An Agent stop whose prompt went out already is never sent again: the
+    # session's work in progress is it, or (idle) the work it did.
+    busy = await asyncio.to_thread(_session_busy, title) if sent else ""
     flight = await asyncio.to_thread(
         lambda: _flights.take_off(
             plan,
@@ -3690,6 +3717,8 @@ async def again(flight_id: str, body: Optional[dict] = None) -> dict:
             branch=_branch_of(title) or str(old.get("branch") or ""),
             replaced=replaced,
             note=note,
+            busy=busy,
+            sent=sent,
         )
     )
     for gone in replaced:
@@ -3813,8 +3842,12 @@ async def carry_on_intake(title: str, repo_url: str, branch: str) -> str:
     * no session accounts for it → a session is opened in place on it.
 
     The route starts at its resume point (:func:`flights.resume_point` of the
-    earlier flights on that session / branch / ticket), else past its leading
-    Agent stops (the work already there is them). Nothing is ever deleted.
+    earlier flights on that session / branch / ticket), else where an attach
+    starts (:func:`flights.start_cursor`: past leading Agent stops with no
+    prompt — the work already there is them). A session opened in place on a
+    folder with uncommitted changes no earlier run accounts for never flies
+    on into a Ship stop by itself: the route is paused, saying why. Nothing
+    is ever deleted.
     → the session that carries it; "" when the branch is free (or no route
     is armed on ``title``): create the session as usual. Raises
     :class:`CarryOnRefused` when none of those could take it."""
@@ -3840,23 +3873,58 @@ async def carry_on_intake(title: str, repo_url: str, branch: str) -> str:
         if entry is not None:
             holder = await _reopen_entry(entry["id"])
             how = "reopened: it had kept this branch's work"
+    opened = ""
     if not holder:
         holder = await _open_in_place(title, held)
         how = "opened on the folder that holds this branch"
+        opened = held if holder else ""
     if not holder:
         who = (entry or {}).get("title") or held
         raise CarryOnRefused(
             "branch %s is already checked out at %s and no session here could "
             "take it over — close %s, then Run it again" % (branch, held, who)
         )
-    await asyncio.to_thread(_move_armed, armed["id"], holder, branch, how)
+    await asyncio.to_thread(_move_armed, armed["id"], holder, branch, how, opened)
     return holder
 
 
-def _move_armed(fid: str, holder: str, branch: str, how: str) -> Optional[dict]:
+#: The stops that put work out of the session (what an unexplained leftover
+#: must not be flown into unseen).
+_SHIP_KINDS = frozenset({"ship", "land"})
+
+
+def _uncommitted(folder: str) -> bool:
+    """Whether ``folder`` holds uncommitted changes (blocking). Can't tell
+    (git failed) = yes: the caller then waits for a person."""
+    try:
+        cp = subprocess.run(
+            ["git", "-C", folder, "--no-pager", "status", "--porcelain"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return cp.returncode != 0 or bool(cp.stdout.strip())
+
+
+#: Why a carried-on route waits before shipping a leftover folder's changes.
+LEFTOVER_PAUSE = (
+    "%s was opened on %s, which has uncommitted changes no earlier run "
+    "accounts for — look at them, then Carry on"
+)
+
+
+def _move_armed(
+    fid: str, holder: str, branch: str, how: str, opened: str = ""
+) -> Optional[dict]:
     """Move the armed intake flight ``fid`` onto ``holder`` at its resume
     point (blocking). A holder already on a route keeps it: the armed one is
-    cancelled saying so (a halted one there is replaced, as a start does)."""
+    cancelled saying so (a halted one there is replaced, as a start does).
+    ``opened``: the folder a session was just opened in place on — with
+    uncommitted changes and no resume point, the route is paused before it
+    can reach a Ship stop (:data:`LEFTOVER_PAUSE`)."""
     armed = _flights.get(fid)
     if armed is None or armed["state"] in _flights.FINAL:
         return None
@@ -3886,23 +3954,42 @@ def _move_armed(fid: str, holder: str, branch: str, how: str) -> Optional[dict]:
         subject=armed.get("subject"),
         exclude=(fid,),
     )
+    steps = armed["steps"]
+    working = False
     if point is not None:
         cursor = int(point["index"])
         note = "%s — %s %s" % (_flights.carry_on_note(point), holder, how)
+        if point.get("in_progress"):
+            # Its prompt went out already: never typed again. The session's
+            # work in progress is that stop, or (idle) the work it did.
+            working = bool(_session_busy(holder))
+            if not working:
+                cursor += 1
+                note += "; its prompt went out already — the work counts as it"
     else:
-        steps = armed["steps"]
-        cursor = next(
-            (i for i, s in enumerate(steps) if s["kind"] != "agent"), len(steps)
-        )
+        cursor = _flights.start_cursor({"steps": steps}, "", attach=True)
         note = "carried on in %s (%s)" % (holder, how)
         if cursor:
             note += ": the work already on its branch counts as its Agent stop"
+    park = ""
+    if (
+        opened
+        and point is None
+        and any(s["kind"] in _SHIP_KINDS for s in steps[cursor:])
+        and _uncommitted(opened)
+    ):
+        park = LEFTOVER_PAUSE % (holder, opened)
 
     def fn(x: dict) -> None:
-        _flights.op_carry_on(x, holder, cursor, note)
+        _flights.op_carry_on(x, holder, cursor, note, working=working)
         if root:
             x["repo_root"] = root
         x["branch"] = branch or x.get("branch") or ""
+        if park and x["state"] in _flights.ACTIVE:
+            x["state"] = "paused"
+            x["reason"] = park
+            cur = _flights._current(x)
+            _flights._hist(x, time.time(), cur["id"] if cur else "", "paused", park)
 
     after = _flights.mutate(fid, fn)
     _announce(armed, after)
