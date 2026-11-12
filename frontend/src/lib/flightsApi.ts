@@ -34,7 +34,7 @@
 
 import { ApiError, api } from "../api/client";
 import type { Instance } from "../api/types";
-import { queryClient, refreshInstances } from "../state/queries";
+import { queryClient, refreshInstances, refreshPanel, type PanelKey } from "../state/queries";
 import { type BehaviorsTarget, openBehaviors } from "./behaviorsFocus";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
@@ -406,6 +406,10 @@ export function flyRequest(
   return { path: "/api/github/issues/start", body: { repo: t.repo, number: t.number, ...picks } };
 }
 
+/** The Intake panel a waiting item is listed from (the waiting list reads
+ * them): re-swept after a start so the item leaves it at once. */
+export const WAITING_PANEL: Record<WaitingTarget["kind"], PanelKey> = { tickets: "tickets", prs: "github-prs", issues: "github-issues" };
+
 /** Fly a waiting item and open its session as soon as its row exists.
  * Resolves to the session title; a refusal throws the server's sentence (the
  * row that pressed Fly shows it). */
@@ -420,6 +424,7 @@ export async function flyWaiting(
     const r = await api<{ title?: string }>(req.path, { json: req.body });
     const title = r?.title || fallbackTitle;
     void refreshFlights();
+    void refreshPanel(WAITING_PANEL[t.kind]);
     if (title) void openWhenReady(title);
     return title;
   } finally {
