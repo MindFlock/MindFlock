@@ -19,7 +19,9 @@
  *  - broken      pre-commit / setup failed, offline, stuck
  *  - checks      checks failing
  *  - behaviors   a verify that failed or waits on you, unless the session's
- *                own row (its `verify`) or its route already says so
+ *                own row (its `verify`) or its route already says so — and
+ *                not a check made BEFORE the merge whose session is gone
+ *                (`behaviorsStillAsk`): nobody is left to carry it on
  *  - ready       pushed — ready for PR
  * One row per session (its most pressing reason); a row about no session (a
  * group's budget, a route with no session, behaviors) keeps its own key. */
@@ -30,7 +32,7 @@ import { queryClient, useFlights, useInstances, useTestPlans } from "../state/qu
 import { useOutbox } from "../state/runs";
 import { attentionItems } from "../components/sidebar/ordering";
 import { needsAttention, withPlanReady, type NeedsRow } from "../components/outbox/outbox";
-import { isFailing, isWaitingOnYou } from "../components/dialogs/verify";
+import { isFailing, isWaitingOnYou, latestRun, planShipped } from "../components/dialogs/verify";
 import { selectSession } from "./sessionActions";
 import { windowName } from "./windowName";
 import { toast } from "./toast";
@@ -188,6 +190,22 @@ export function withFlightRows(
   return out;
 }
 
+/** Is a verify that failed or waits on you still asking anyone?
+ *
+ * Once the work has shipped it is: behaviors are meant to outlive their
+ * session, and the check after the merge is the person's to make. Before
+ * that, a check belongs to the session it was made for — the one whose work
+ * it covers, or the one that walked it. With both closed the "needs you:" its
+ * agent left can't be answered into anything (no agent to carry on, no route
+ * parked on it), and it sat in the list for good: "3 need you" with every
+ * session closed. Such a plan stays on the Behaviors board, where it can be
+ * checked again or deleted; it is just not something waiting on you. */
+export function behaviorsStillAsk(plan: TestPlan, instances: readonly Instance[]): boolean {
+  if (planShipped(plan)) return true;
+  const walker = latestRun(plan)?.session || "";
+  return instances.some((i) => (!!walker && i.title === walker) || planForSession([plan], i)?.id === plan.id);
+}
+
 function kindOf(r: NeedsRow, byTitle: Map<string, Instance>): NeedsYouKind {
   if (r.plan) return "plan";
   if (r.waiting) {
@@ -240,6 +258,7 @@ export function needsYouRows(src: NeedsYouSources): NeedsYouRow[] {
   for (const p of src.testPlans || []) {
     if (spoken.has(p.id)) continue;
     if (!isFailing(p) && !isWaitingOnYou(p)) continue;
+    if (!behaviorsStillAsk(p, instances)) continue;
     rows.push({ key: "behaviors:" + p.id, title: "", rank: 3, kind: "behaviors", behaviors: p });
   }
   // Stable: within a kind, the order the parts came in.
