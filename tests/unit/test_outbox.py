@@ -320,3 +320,19 @@ def test_a_commit_approval_counts_what_will_be_committed():
     out = _build([_row("x", activity="idle", diff_stat=ds)], ap={"x": rec})
     p = out["groups"]["waiting"][0]["preview"]
     assert (p["files"], p["add"], p["del"]) == (1, 1, 0)
+
+
+def test_a_budget_pause_leaves_no_row_once_its_run_has_finished():
+    # The cap was reached while a member was still working; the run paused
+    # (no new starts) and the member then shipped. Every task terminal, the
+    # planner finishes the run — but nothing un-pauses it, and "Q4 payments
+    # hit $20.00 — Raise budget / Stop" used to sit in the bell for a run that
+    # was already done, for as long as the run record is kept.
+    run = _run({"id": "t1", "title": "m", "state": "working"}, budget_usd=20)
+    tr.apply(run, {"op": "pause", "reason": "budget"}, NOW - 600)
+    tr.apply(run, tr._to(run["tasks"][0], "shipped", finished_at=NOW - 300), NOW - 300)
+    for act in tr.plan_actions(run, {"tasks": {}, "cost": 21.0}, NOW - 200):
+        tr.apply(run, act, NOW - 200)
+    assert run["state"] in tr.RUN_FINISHED
+    kinds = [w["kind"] for w in _build([], runs=[run])["groups"]["waiting"]]
+    assert "budget" not in kinds
