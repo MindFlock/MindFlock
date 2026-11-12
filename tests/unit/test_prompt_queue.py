@@ -552,6 +552,15 @@ def drain(qfile, tmp_path, monkeypatch):
     monkeypatch.setattr(
         server, "_pane_meta", lambda n: ("claude", 1.0, "4242", "80x24")
     )
+    # No live usage meter. A Claude session's drain asks it before every send
+    # (_refresh_limit_state → claude_usage_api): left real, it fetched the
+    # owner's own plan usage, and whenever their 5-hour window read spent the
+    # Claude drain tests here and in test_typing_guard held the send and
+    # failed — the "wall-clock" flake of full runs. Limit tests stub it.
+    from backend.providers import claude_usage_api
+
+    monkeypatch.setattr(claude_usage_api, "_fetch_raw", lambda: (None, None, None))
+    monkeypatch.setattr(claude_usage_api, "_SHARED", None)
     yield server, sent
     server.ENGINE.instances.pop("d1", None)
     server._QUEUE_STATE.pop("d1", None)
