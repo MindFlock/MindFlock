@@ -14,7 +14,7 @@
  * Open terminal, Send a prompt…, Stop), sub-sessions small frames under it. */
 import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { birdPerch, lineWhere, type DiagramNode } from "../../lib/flightDiagram";
+import { birdPerch, lineWhere, whereBesideChip, type DiagramNode } from "../../lib/flightDiagram";
 import { deriveSessionState } from "../../lib/sessionState";
 import { chainColor, chainGraph, wireIntent, HEAD_ID, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { windowName } from "../../lib/windowName";
@@ -38,6 +38,8 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
   const where = row ? lineWhere(line.diagram) : "";
+  // The chip already says "Needs you: Review": no "needs you at Review" too.
+  const shownWhere = whereBesideChip(where, ss);
   // While ready, ReadyHead says so; the sub never repeats it.
   const agent = agentTitle(row?.provider || row?.program, row?.program);
   const headSub = agentDoing(row);
@@ -153,6 +155,7 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
     <div ref={rootRef} className={"fl-chain-view sky-own-scroll" + (behaviors.frameClass ? " " + behaviors.frameClass : "")} aria-label={label}>
       <div className="fl-chain-frame" style={{ ["--sky-chain-color" as string]: head.color }}>
         <div className="fl-chain-frame-bar">
+          <div className="fl-chain-frame-bar-in">
           <span className="fl-chain-frame-name">{windowName(title)}</span>
           {row?.branch && (
             <span className="fl-chain-frame-branch" title={"Branch " + row.branch}>
@@ -169,11 +172,12 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
               Needs you
             </span>
           )}
-          {where && (
-            <span className="fl-chain-frame-where" title={where}>
-              {where}
+          {shownWhere && (
+            <span className="fl-chain-frame-where" title={shownWhere}>
+              {shownWhere}
             </span>
           )}
+          </div>
         </div>
         <div className="fl-chain-frame-body" style={shift}>
           <SkyChain

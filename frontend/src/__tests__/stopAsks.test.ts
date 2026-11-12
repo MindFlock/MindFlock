@@ -46,7 +46,7 @@ const { flightStops } = await import("../lib/flightDiagram");
 const { menuItemsFor } = await import("../lib/stopEditing");
 const { hereStop } = await import("../components/flights/useSessionLine");
 const { freeStopRemedies } = await import("../components/flights/useGroundedLine");
-const { YouStepActions, liveBoxParts } = await import("../components/flights/FlightStrip");
+const { YouStepActions, liveBoxParts, PaneFlightStrip } = await import("../components/flights/FlightStrip");
 const { stopWhy, stopTileBoxes } = await import("../components/flights/SkyChain");
 const { OwedNote } = await import("../components/flights/PerchAsks");
 const SD = await import("../components/flights/StopDialog");
@@ -55,7 +55,7 @@ const { needsYouRows } = await import("../lib/needsYou");
 const { verifySentence } = await import("../lib/verifyStop");
 const { deriveSessionState, needsYouAction } = await import("../lib/sessionState");
 const { rowWaitsOnYou, stripParts } = await import("../lib/flights");
-const { lineWhere, flightDiagram } = await import("../lib/flightDiagram");
+const { lineWhere, flightDiagram, whereBesideChip } = await import("../lib/flightDiagram");
 const { parkedStopId } = await import("../components/flights/FlightChain");
 const { cssRule, src } = await import("./sourceText");
 
@@ -365,13 +365,24 @@ describe("follow-up: what the screenshot pass found", () => {
     expect(cssRule(sky, ".sky-node:has(.fl-you-unresolved) > .sky-node-reason")).toContain("white-space: normal");
   });
 
-  it("5. the pane strip keeps the stop's name: the sentence takes the cut, whole in the tooltip", () => {
-    expect(stripParts(unresolved(), 0)).toMatchObject({ lead: "Ticket to merge · ●●○ · Needs you", what: "2 findings still open after 3 rounds", stop: expect.stringMatching(/^Second opinion/) });
+  it("5. the pane strip keeps \"Needs you\" and the stop's name; the plan name, then the sentence, take the cut; the dots go whole", () => {
+    const p = stripParts(unresolved(), 0);
+    expect(p).toMatchObject({ plan: "Ticket to merge", dots: "●●○", state: "Needs you", what: "2 findings still open after 3 rounds", stop: expect.stringMatching(/^Second opinion/) });
+    expect(p.whole).toMatch(/^Ticket to merge · ●●○ · Needs you · 2 findings still open after 3 rounds · Second opinion/);
     const long = "Before this route merges: 2 checks for you — open the page and check the banner, then run the Slack command";
-    const p = stripParts(owedPerch({ step_states: { ...owedPerch().step_states, s4: rec("waiting_you", long, { ask: "owed", owed: OWED }) }, steps: [...owedPerch().steps.slice(0, 3), step("s4", "you", "Your checks")] }), 0);
-    expect(p.what).toBe(long);
-    expect(p.stop).toMatch(/^Your checks/);
-    expect(stripParts({ ...unresolved(), state: "running" } as Flight, 0)).toMatchObject({ what: "", stop: "" });
+    const o = stripParts(owedPerch({ step_states: { ...owedPerch().step_states, s4: rec("waiting_you", long, { ask: "owed", owed: OWED }) }, steps: [...owedPerch().steps.slice(0, 3), step("s4", "you", "Your checks")] }), 0);
+    expect(o.what).toBe(long);
+    expect(o.stop).toMatch(/^Your checks/);
+    expect(stripParts({ ...unresolved(), state: "running" } as Flight, 0)).toMatchObject({ dots: "", state: "", what: "", stop: "" });
+    const css = src("components/flights/Flights.css");
+    for (const sel of [".fl-strip-state", ".fl-strip-stop"]) expect(cssRule(css, sel), sel).toContain("flex: 0 0 auto");
+    expect(cssRule(css, ".fl-strip-plan")).toContain("flex: 0 10000 auto");
+    expect(cssRule(css, ".fl-strip-what")).toContain("flex: 0 100 auto");
+    // The dots' box wraps a line high: what doesn't fit drops whole.
+    expect(cssRule(css, ".fl-strip-dots")).toMatch(/flex-wrap: wrap;[\s\S]*height: 1lh;[\s\S]*overflow: hidden/);
+    expect(cssRule(css, ".fl-strip-dots-in")).toContain("white-space: nowrap");
+    const html = withClient(createElement(PaneFlightStrip, { inst: { title: "lead", flight: { id: "f_r", plan_name: "Ticket to merge", cursor: 1, total: 3, state: "waiting_you", step: { id: "s2", kind: "review", title: "Second opinion", state: "waiting_you", actor: "robot" } } as unknown as FlightRow } }), (c) => c.setQueryData(["flights"], [unresolved()]));
+    expect(html).toMatch(/<span class="fl-strip-plan">Ticket to merge<\/span><span class="fl-strip-dots"><span class="fl-strip-dots-in">●●○<\/span><\/span><span class="fl-strip-state">Needs you<\/span><span class="fl-strip-what">2 findings still open after 3 rounds<\/span><span class="fl-strip-stop">Second opinion/);
   });
 
   it("6. This one didn't work is a secondary button of its own; the pane strip reaches the list", () => {
@@ -389,10 +400,27 @@ describe("follow-up: what the screenshot pass found", () => {
     expect(done).not.toContain("asks you once");
   });
 
-  it("8. the frame bar says where the stop is, once: no repeat of the ask the tile already says", () => {
+  it("8. the frame bar says where the stop is, once: no repeat of the ask the tile already says, nor of the chip", () => {
     expect(lineWhere(flightDiagram(owedPerch()))).toBe("needs you at Your checks");
     expect(lineWhere(flightDiagram(unresolved()))).toBe("needs you at Second opinion");
+    // Beside a chip that already says it ("Needs you: Second opinion"): nothing.
+    expect(whereBesideChip("needs you at Second opinion", { reason: "flight_you" })).toBe("");
+    expect(whereBesideChip("at Push · pushing", { reason: "flight_you" })).toBe("at Push · pushing");
+    expect(whereBesideChip("needs you at Review", { reason: "verify_confirm" })).toBe("needs you at Review");
+    expect(src("components/flights/FlightChain.tsx")).toContain("whereBesideChip(where, ss)");
+    expect(src("components/flights/SkyLine.tsx")).toContain("whereBesideChip(where, ss)");
     const css = src("components/flights/Flights.css");
-    expect(cssRule(css, ".fl-chain-frame-bar > .fl-chain-frame-where")).toContain("max-width: none");
+    expect(cssRule(css, ".fl-chain-frame-bar-in > .fl-chain-frame-where")).toContain("max-width: none");
+  });
+
+  it("round 2, 3. the frame bar's words stay at the view's left edge while the chain scrolls to a parked stop", () => {
+    const css = src("components/flights/Flights.css");
+    expect(cssRule(css, ".fl-chain-frame-bar-in")).toMatch(/position: sticky;[\s\S]*left: 0/);
+    expect(src("components/flights/FlightChain.tsx")).toContain('<div className="fl-chain-frame-bar-in">');
+  });
+
+  it("round 2, 4. nothing added here styles the start / Fly again menus (rails-ui-start's)", () => {
+    const mine = [src("components/flights/Flights.css"), src("components/flights/SkyChain.css")].join("\n");
+    for (const cls of ["fl-routestart", "fl-stopmenu", "fl-again-row", "fl-start-at", "fl-fly-again"]) expect(mine.includes(cls), cls).toBe(false);
   });
 });

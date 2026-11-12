@@ -702,10 +702,10 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
   const cancel = useCancelAsk(full);
   if (!row || !live) return null;
   const line = full ? stripLabel(full, now) : stripLabel(row);
-  // The stop's name always shows; the sentence before it takes the cut, and
-  // the tooltip has it whole.
+  // The stop's name and "Needs you" always show; the plan name, then the
+  // sentence, take the cut; the dots go whole. The tooltip has it all.
   const parts = stripParts(full || row, now);
-  const whole = [parts.lead, parts.what, parts.stop].filter(Boolean).join(" · ");
+  const whole = parts.whole;
   const waiting = row.state === "waiting_you" || row.state === "halted";
   // Parked (on you, halted) or paused: its one-click way on, right here.
   const parked = waiting || row.state === "paused";
@@ -720,11 +720,19 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
           onClick={() => openFlightTab(inst.title)}
         >
           <Bird size={13} />
-          {parts.what || parts.stop ? (
+          {parts.state ? (
             <span className="fl-strip-text fl-strip-parts" aria-label={whole}>
-              <span className="fl-strip-lead">{parts.lead}</span>
+              {parts.plan && <span className="fl-strip-plan">{parts.plan}</span>}
+              {parts.dots && (
+                // Its own line-high box that wraps: dots that don't fit drop
+                // to the hidden second line, whole — never "●●●●…".
+                <span className="fl-strip-dots">
+                  <span className="fl-strip-dots-in">{parts.dots}</span>
+                </span>
+              )}
+              <span className="fl-strip-state">{parts.state}</span>
               {parts.what && <span className="fl-strip-what">{parts.what}</span>}
-              {parts.stop && <span className="fl-strip-stop">{parts.stop}</span>}
+              <span className="fl-strip-stop">{parts.stop}</span>
             </span>
           ) : (
             <span className="fl-strip-text">{line}</span>
