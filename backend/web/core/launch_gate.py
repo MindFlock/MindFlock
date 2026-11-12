@@ -78,8 +78,13 @@ Two kinds of caller:
   **Two servers, one file.** Both servers (say :8765 and :9000) save to the
   same ``launch_queue.json``. Each saved item names its owner (pid, a
   per-boot id, the process start time). A save rewrites only its own items
-  and keeps every other one; a boot adopts only items whose owner is gone
-  (and untagged ones from an older version).
+  and keeps every other one. Items whose owner is gone (no such pid, or the
+  pid now names another process; and untagged ones from an older version)
+  are adopted at boot and, by a running server, every
+  :data:`ORPHAN_POLL_SECONDS` (:func:`adopt_orphans`): a dev server that
+  stops and never comes back loses no queued start. The claim is one
+  read-modify-write under the file lock, so two servers never both take
+  one.
 * **A person** (``kind="person"``): New session, Duplicate, Start, Start all,
   Resume, Wake. A person is never queued or capped, and is asked only on the
   level NOW (since 0.14.3): the projection of agents still warming and the
@@ -130,6 +135,7 @@ __all__ = [
     "room",
     "register_kind",
     "restore",
+    "adopt_orphans",
     "waiting",
     "items",
     "cancel",
@@ -1597,9 +1603,23 @@ _SAVE_STATE: Dict[str, int] = {"written": 0}
 #: ``execv`` that keeps the pid, so the pid alone can't tell this server
 #: from the one before it. ``owner`` caches :func:`_owner`.
 _BOOT: Dict[str, object] = {"id": os.urandom(6).hex(), "owner": None}
-#: Saved items of other owners this process adopted (or dropped) at boot
+#: Saved items of other owners this process adopted (or dropped)
 #: (:func:`_rec_key`), so its saves stop carrying the old copies.
 _HANDLED: set = set()
+#: Orphans this process has claimed (:func:`_claim_orphans`) and not yet
+#: turned back into launches: every save carries them as this process's
+#: own, so a claim is never lost between the claim and the queue.
+_CLAIMED: List[dict] = []
+#: How often a running server looks for orphans (:func:`adopt_orphans`):
+#: items whose server stopped and did not come back as the same process.
+ORPHAN_POLL_SECONDS = 15.0
+_WATCHER: Dict[str, object] = {"thread": None}
+#: Called with ``(saved record, sentence)`` for an orphan this process
+#: claimed but cannot carry out (no factory for its kind here, or its
+#: factory raised), so the failure shows where a person looks (a create's
+#: row). Set by core.session_create. A factory that answers None has made
+#: its own failure visible.
+on_orphan_failed: Optional[Callable[[dict, str], None]] = None
 
 
 def register_kind(kind: str, factory: Callable[[dict], Optional[Launch]]) -> None:
@@ -1641,8 +1661,16 @@ def _saved(it: dict) -> dict:
 
 def _proc_start(pid: int) -> Optional[int]:
     """When ``pid`` started (clock ticks since boot, ``/proc/<pid>/stat``
-    field 22), None where unreadable. Tells a live owner from a process
-    that reused its pid."""
+    field 22; without ``/proc`` — native Windows, macOS — psutil's creation
+    time in 1/100 s), None where unreadable. Tells a live owner from a
+    process that reused its pid."""
+    if not os.path.isdir("/proc"):
+        try:
+            import psutil
+
+            return int(psutil.Process(int(pid)).create_time() * 100)
+        except Exception:  # noqa: BLE001 — unknown: the pid alone decides
+            return None
     try:
         with open("/proc/%d/stat" % int(pid), "rb") as f:
             raw = f.read().decode("ascii", "replace")
@@ -1773,6 +1801,7 @@ def _save() -> None:
     with _LOCK:
         gen = next(_SAVE_GEN)
         mine = [_saved(it) for it in _INFLIGHT + _QUEUE if it.get("args") is not None]
+        mine += [dict(rec) for rec in _CLAIMED]
         handled = set(_HANDLED)
     owner = _owner()
     for rec in mine:
@@ -1816,55 +1845,141 @@ def _clean(doc: dict) -> Dict:
     return {"items": out}
 
 
-def restore() -> int:
-    """Boot: adopt every saved item whose owner is gone (an earlier boot of
-    this server, a stopped second server, or untagged from an older
-    version) and put it back in the queue through its kind's factory (an
-    unknown kind, or a factory answering None, drops it). Items a running
-    server owns stay where they are, its own. Ones that were starting when
-    their server stopped come first, then the rest in their old order. All
-    come back with ``why: "restart"`` until the drainer judges them again;
-    they are automatic starts, so they wait for the gate like any other.
-    The queue cap does not apply: a restore never drops what was saved.
-    Turns saving on. → how many came back. Never raises."""
-    global PERSIST
-    PERSIST = True
+def _claim_orphans() -> List[dict]:
+    """Claim every saved item whose owner is gone (:func:`_owner_alive`: no
+    such pid, or a pid now held by another process, told apart by its start
+    time or this process's boot id — never the pid alone) → the claimed
+    records, oldest-starting first. One read-modify-write under the queue's
+    file lock: the claimed items are rewritten with this process as their
+    owner before the lock is let go, so a second server looking next sees a
+    live owner and leaves them be; items a live server owns are never
+    touched. They wait in :data:`_CLAIMED` (saved as this process's) until
+    :func:`_adopt` turns them into launches. Never raises."""
+    if not PERSIST:
+        return []
     try:
         from backend.web.core import title_store
 
-        doc = title_store.load(queue_path, _clean)
-    except Exception:  # noqa: BLE001
-        doc = {}
-    adopt = [r for r in doc.get("items") or [] if not _owner_alive(r.get("owner"))]
-    adopt.sort(key=lambda r: not r.get("inflight"))  # stable: old order kept
-    back = 0
-    for rec in adopt:
-        with _LOCK:
-            _HANDLED.add(_rec_key(rec))
-            have = any(it["title"] == rec["title"] for it in _QUEUE + _INFLIGHT)
-        if have:
-            continue  # queued again since this boot: the newer launch stands
-        factory = _FACTORIES.get(rec["kind"])
+        with _SAVE_LOCK:
+            path = queue_path()
+            with _file_lock(path):
+                on_disk = title_store.load(lambda: path, _clean).get("items") or []
+                with _LOCK:
+                    handled = set(_HANDLED)
+                gone = [
+                    i
+                    for i, rec in enumerate(on_disk)
+                    if not _is_mine(rec)
+                    and _rec_key(rec) not in handled
+                    and not _owner_alive(rec.get("owner"))
+                ]
+                if not gone:
+                    return []
+                owner = _owner()
+                claimed = []
+                out = list(on_disk)
+                for i in gone:
+                    rec = {k: v for k, v in on_disk[i].items() if k != "owner"}
+                    claimed.append(rec)
+                    out[i] = dict(rec, owner=owner)
+                with _LOCK:
+                    for i in gone:
+                        _HANDLED.add(_rec_key(on_disk[i]))
+                    _CLAIMED.extend(claimed)
+                    # A save that took its picture before this claim would
+                    # write the file without the claimed items: skipped
+                    # (the adoption's own save follows).
+                    gen = next(_SAVE_GEN)
+                title_store.persist(
+                    lambda: path, {"v": 1, "items": out}, "the launch queue"
+                )
+                _SAVE_STATE["written"] = gen
+    except Exception:  # noqa: BLE001 — nothing claimed: the next pass tries again
+        return []
+    claimed.sort(key=lambda r: not r.get("inflight"))  # stable: old order kept
+    return claimed
+
+
+def _orphan_failed(rec: dict, sentence: str) -> None:
+    """A claimed orphan this process cannot carry out: its outcome, a log
+    line and :data:`on_orphan_failed` (a create's failed row)."""
+    _record(rec["title"], False, sentence)
+    _log("%s could not start: %s", rec["title"], sentence)
+    cb = on_orphan_failed
+    if cb is not None:
         try:
-            launch = factory(dict(rec)) if factory else None
-        except Exception:  # noqa: BLE001 — one bad record never stops the boot
-            launch = None
-        if launch is None:
-            _log(
-                "%s: dropped from the launch queue at boot (%s)",
-                rec["title"],
-                rec["kind"],
+            cb(dict(rec), sentence)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _adopt(claimed: List[dict], *, boot: bool) -> int:
+    """Turn claimed orphans into queued launches through their kinds'
+    factories (:func:`register_kind`) → how many joined the queue. Each
+    leaves :data:`_CLAIMED` as it joins the queue (one step under
+    ``_LOCK``, so every save has it in one place or the other) or ends:
+    already queued here (the newer launch stands), dropped by its factory
+    (which made that visible), or failed (:func:`_orphan_failed`: no
+    factory for its kind in this process, or the factory raised)."""
+    back = 0
+    for rec in claimed:
+        title = rec["title"]
+
+        def _unclaim() -> None:
+            with _LOCK:
+                for i, x in enumerate(_CLAIMED):
+                    if x is rec:
+                        _CLAIMED.pop(i)
+                        break
+
+        with _LOCK:
+            have = any(it["title"] == title for it in _QUEUE + _INFLIGHT)
+        if have:
+            _unclaim()
+            continue  # queued again here meanwhile: the newer launch stands
+        factory = _FACTORIES.get(rec["kind"])
+        err = ""
+        launch = None
+        if factory is None:
+            err = (
+                "it waited for memory on a server that stopped, and this "
+                "server cannot start a %s launch" % rec["kind"]
             )
+        else:
+            try:
+                launch = factory(dict(rec))
+            except Exception as exc:  # noqa: BLE001 — one bad record never stops it
+                err = (
+                    "it waited for memory on a server that stopped, and could "
+                    "not be taken over: %s" % (str(exc) or exc.__class__.__name__)
+                )
+        if launch is None:
+            _unclaim()
+            if err:
+                _orphan_failed(rec, err)
+            else:
+                _log(
+                    "%s: dropped from the launch queue %s (%s)",
+                    title,
+                    "at boot" if boot else "after its server stopped",
+                    rec["kind"],
+                )
             continue
         before = str(rec.get("reason") or "")
-        reason = "back after a server restart" + (
+        head = (
+            "back after a server restart"
+            if boot
+            else "taken over by this server after the one it waited on stopped"
+        )
+        reason = head + (
             "; it was starting when the server stopped"
             if rec.get("inflight")
             else ("; before it: %s" % before if before else "")
         )
         with _LOCK:
+            _unclaim()
             _put(
-                rec["title"],
+                title,
                 launch,
                 kind=rec["kind"],
                 source=str(rec.get("source") or ""),
@@ -1876,11 +1991,74 @@ def restore() -> int:
                 since=float(rec.get("since") or time.time()),
                 force=True,
             )
+        if not boot:
+            _log("%s: taken over from a server that stopped", title)
         back += 1
+    return back
+
+
+def adopt_orphans() -> int:
+    """A running server's pass (every :data:`ORPHAN_POLL_SECONDS`): adopt
+    the saved items whose server stopped and did not come back as the same
+    process (:func:`_claim_orphans`), so a start queued on a server that is
+    gone still starts, or fails with a reason, here — not only after that
+    server's next boot. → how many joined the queue. Never raises."""
+    claimed = _claim_orphans()
+    if not claimed:
+        return 0
+    back = _adopt(claimed, boot=False)
     _save()
     if back:
         _ensure_drainer()
         _changed()
+    return back
+
+
+def _watch_loop() -> None:
+    while True:
+        time.sleep(ORPHAN_POLL_SECONDS)
+        try:
+            adopt_orphans()
+        except Exception:  # noqa: BLE001 — the watch outlives one bad pass
+            pass
+
+
+def _ensure_watcher() -> None:
+    if not AUTO_DRAIN or os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    with _LOCK:
+        th = _WATCHER.get("thread")
+        if th is not None and th.is_alive():  # type: ignore[union-attr]
+            return
+        th = threading.Thread(
+            target=_watch_loop, name="launch-gate-orphans", daemon=True
+        )
+        _WATCHER["thread"] = th
+    th.start()
+
+
+def restore() -> int:
+    """Boot: adopt every saved item whose owner is gone (an earlier boot of
+    this server, a stopped second server, or untagged from an older
+    version) and put it back in the queue through its kind's factory (a
+    factory answering None drops it; an unknown kind, or a factory that
+    raises, fails it with a reason: :func:`_adopt`). Items a running
+    server owns stay where they are, its own. Ones that were starting when
+    their server stopped come first, then the rest in their old order. All
+    come back with ``why: "restart"`` until the drainer judges them again;
+    they are automatic starts, so they wait for the gate like any other.
+    The queue cap does not apply: a restore never drops what was saved.
+    Turns saving on, and the watch that adopts what a server stopping
+    later leaves behind (:func:`adopt_orphans`). → how many came back.
+    Never raises."""
+    global PERSIST
+    PERSIST = True
+    back = _adopt(_claim_orphans(), boot=True)
+    _save()
+    if back:
+        _ensure_drainer()
+        _changed()
+    _ensure_watcher()
     return back
 
 
@@ -1977,6 +2155,7 @@ def _reset_for_tests() -> None:
         _ADMITTED.clear()
         _UNDO.clear()
         _HANDLED.clear()
+        _CLAIMED.clear()
         _LAST_AUTO["at"] = 0.0
     # A new boot: what this process saved before now reads as an earlier
     # server's (the same pid after an execv restart).

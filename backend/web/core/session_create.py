@@ -1494,6 +1494,28 @@ for _kind in QUEUED_CREATE_KINDS:
     _launch_gate.register_kind(_kind, _restore_create)
 
 
+def _orphan_failed(rec: dict, sentence: str) -> None:
+    """A queued create taken over from a server that stopped, which this
+    server cannot carry out (launch_gate.on_orphan_failed): its row stays
+    as a failed start, its parent is told. A relaunch of a session that
+    exists has its row already; only a create needs one."""
+    if not rec.get("creates"):
+        return
+    args = rec.get("args") or {}
+    payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+    note_start_failed(
+        str(rec.get("title") or ""),
+        sentence,
+        parent=str(rec.get("parent") or payload.get("parent") or ""),
+        kind=str(rec.get("kind") or "spawn"),
+        prompt=str(payload.get("prompt") or ""),
+        spawned=bool(payload.get("spawned")) if payload else None,
+    )
+
+
+_launch_gate.on_orphan_failed = _orphan_failed
+
+
 #: One per event loop: a gated create's check → name → queue is one step, so
 #: two of them can't both pass the "already waiting" check (the second would
 #: replace the first's queued launch) or both pick one free name.
