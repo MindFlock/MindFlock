@@ -549,6 +549,11 @@ export function SkyView() {
   const [takeoff, setTakeoff] = useState<FlightPlan | null>(null);
   // The grounded line last pressed (a session line's focus is useUi.focused).
   const [groundFocus, setGroundFocus] = useState("");
+  // A session focused from anywhere (the rail, the bell, a shortcut) takes
+  // the focus from it: one line is focused, not two.
+  useEffect(() => {
+    if (focused) setGroundFocus("");
+  }, [focused]);
   // A grounded flight's ⋯ Fly on a session…: which line.
   const [attachPick, setAttachPick] = useState<Flight | null>(null);
   // A Session chip dragged over a grounded line: that line's key.
@@ -2418,16 +2423,22 @@ export function SkyView() {
     if (!line) return "sky";
     return { line, node: el.closest("[data-node]")?.getAttribute("data-node") || "" };
   };
-  /** The box the focused line has selected (its canvas's own selection). */
+  /** The box the focused line has selected (its canvas's own selection):
+   * the grounded line last pressed, else the focused session's — a grounded
+   * key left behind (its line deleted, or a session focused since from the
+   * rail or the bell) must not hide the session's selected box, or Delete
+   * falls through to the keymap and closes the session instead. */
   const selectedBox = (): { line: string; node: string } | null => {
-    const id = groundFocus || focusLine;
-    if (!id) return null;
-    let slot: Element | null = null;
-    vpRef.current?.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => {
-      if (el.getAttribute("data-slot") === id) slot = el;
-    });
-    const box = [...((slot as Element | null)?.querySelectorAll(".sky-node.is-selected[data-node], .fl-box.selected[data-node]") || [])].find((b) => !b.closest(".skl-card"));
-    return box ? { line: id, node: box.getAttribute("data-node") || "" } : null;
+    for (const id of [groundFocus, focusLine]) {
+      if (!id) continue;
+      let slot: Element | null = null;
+      vpRef.current?.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => {
+        if (el.getAttribute("data-slot") === id) slot = el;
+      });
+      const box = [...((slot as Element | null)?.querySelectorAll(".sky-node.is-selected[data-node], .fl-box.selected[data-node]") || [])].find((b) => !b.closest(".skl-card"));
+      if (box) return { line: id, node: box.getAttribute("data-node") || "" };
+    }
+    return null;
   };
   const removeKeys = useRef<(e: KeyboardEvent) => void>(() => {});
   removeKeys.current = (e: KeyboardEvent) => {
