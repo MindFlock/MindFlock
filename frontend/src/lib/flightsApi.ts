@@ -302,6 +302,9 @@ export interface ResumePoint {
   reason: string;
   /** When it ended or last moved (epoch seconds). */
   at: number;
+  /** The stop is an Agent stop whose prompt already went out: carrying on
+   * waits for that turn, nothing is sent again. */
+  in_progress?: boolean;
 }
 
 /** One thing a check found: `{field, detail, error?, session?}`. */

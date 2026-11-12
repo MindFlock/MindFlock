@@ -79,25 +79,61 @@ export function reachedIndex(f: Pick<Flight, "steps" | "cursor" | "step_states">
   return k;
 }
 
+type AgainFields = Pick<Flight, "steps" | "cursor" | "step_states"> & Partial<Pick<Flight, "owed" | "owed_perch" | "owed_added">>;
+
+/** The flight's own stops: without the "Your checks" perches the route added
+ * itself for owed checks (`owed_perch`, `owed_added`) — what the person drew,
+ * what Fly again flies (the server's `flights.own_steps`). */
+export function ownSteps(f: Pick<Flight, "steps"> & Partial<Pick<Flight, "owed_perch" | "owed_added">>): FlightStep[] {
+  const added = new Set([...(f.owed_added || []), ...(f.owed_perch ? [f.owed_perch] : [])]);
+  return (f.steps || []).filter((s) => !added.has(s.id));
+}
+
+/** Where the flight carries on, as an index into `ownSteps`: the first of its
+ * own stops it had not finished (standing on a perch the route added = the
+ * next own stop after it) — but never past a Verify stop whose check it
+ * still owed the person: the earliest of those. `ownSteps(f).length` = it
+ * got past them all (the server's `flights.carry_index`). */
+export function carryIndex(f: AgainFields): number {
+  const own = ownSteps(f);
+  const k = reachedIndex(f);
+  const ids = new Set(own.map((s) => s.id));
+  const next = f.steps.slice(k).find((s) => ids.has(s.id));
+  const kOwn = next ? own.indexOf(next) : own.length;
+  const owed = new Set((f.owed || []).map((e) => e.step));
+  const first = own.slice(0, kOwn).findIndex((s) => owed.has(s.id));
+  return first >= 0 ? first : kOwn;
+}
+
 /** The ended routes that can fly again: done, cancelled or halted, flown on
- * a session (not a free chain, not a source's default stops), with stops. */
-export function canFlyAgain(f: Pick<Flight, "state" | "steps"> & Partial<Pick<Flight, "free" | "edits_default">> | null | undefined): boolean {
-  if (!f || f.free || f.edits_default || !f.steps?.length) return false;
+ * a session (not a free chain, not a source's default stops), with stops of
+ * its own. */
+export function canFlyAgain(f: (Pick<Flight, "state" | "steps"> & Partial<Pick<Flight, "free" | "edits_default" | "owed_perch" | "owed_added">>) | null | undefined): boolean {
+  if (!f || f.free || f.edits_default || !ownSteps(f).length) return false;
   return f.state === "done" || f.state === "cancelled" || f.state === "halted";
 }
 
 /** The stop a Fly again with no `at` starts at: where it stopped, or null for
  * a route that got past every stop (it starts at its first). */
-export function againStop(f: Pick<Flight, "steps" | "cursor" | "step_states">): FlightStep | null {
-  const k = reachedIndex(f);
-  return k < f.steps.length ? f.steps[k] : null;
+export function againStop(f: AgainFields): FlightStep | null {
+  return ownSteps(f)[carryIndex(f)] || null;
 }
 
 /** Fly again's label: "Fly again from <stop>" where it stopped, "Fly again"
  * for a route that finished (it starts over). */
-export function flyAgainLabel(f: Pick<Flight, "steps" | "cursor" | "step_states">): string {
+export function flyAgainLabel(f: AgainFields): string {
   const s = againStop(f);
   return s ? "Fly again from " + s.title : "Fly again";
+}
+
+/** Fly again's tooltip: what will happen. Its session alive: a new run of
+ * its stops there. Gone (`gone`): the server flies it on the session that
+ * holds its branch, or reopens its closed session. */
+export function flyAgainTitle(f: AgainFields & Pick<Flight, "session">, gone: boolean): string {
+  const s = againStop(f);
+  const from = s ? " from “" + s.title + "”" : " from its first stop";
+  if (!gone) return "Fly this route again on " + f.session + from + " — a new run of its stops";
+  return f.session + " is gone: it flies again" + from + " on the session that holds its branch, or reopens " + f.session + " from Recently closed";
 }
 
 /** Fly again is the route's primary action when it stopped part way —
@@ -113,31 +149,53 @@ export function flyAgainPrimary(f: Pick<Flight, "state">): boolean {
  *    line and its three choices, "pick" = the route's stops;
  *  - `again`: an ended flight's stops, to fly it again from one. */
 export type RouteStartOpen =
-  | { mode: "start"; view: "resume" | "pick"; plan: Pick<FlightPlan, "id" | "name" | "steps">; title: string; check: StartCheck | null; x: number; y: number; back: boolean; go(startAt: string): void }
-  | { mode: "again"; flight: Flight; x: number; y: number };
+  | { mode: "start"; view: "resume" | "pick"; plan: Pick<FlightPlan, "id" | "name" | "steps">; title: string; check: StartCheck | null; anchor: Rect; back: boolean; go(startAt: string): void }
+  | { mode: "again"; flight: Flight; anchor: Rect };
+
+/** What the menu opens beside: the control that opened it, or a point. */
+export interface Rect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
 
 export const useRouteStartMenu = create<{ open: RouteStartOpen | null; set(o: RouteStartOpen | null): void }>((set) => ({
   open: null,
   set: (o) => set({ open: o }),
 }));
 
-/** Where the person last pressed (the menu opens there when the action came
- * from a ⋯ menu or a keyboard): kept by RouteStartMenu's host. */
+/** Where the person last pressed (the menu opens beside it when the action
+ * came from a ⋯ menu): kept by RouteStartMenu's host. */
 export const lastPress = { x: 0, y: 0 };
 
-/** A point for the menu: the element's bottom-left when given, else `at`
- * (a drop's point), else the last press — kept on screen. */
-export function menuPoint(el?: Element | null, at?: { x: number; y: number } | null): { x: number; y: number } {
-  let x = at ? at.x : lastPress.x;
-  let y = at ? at.y : lastPress.y;
+/** What the menu opens beside: the element's box when given, else `at` (a
+ * drop's point), else the last press. */
+export function anchorOf(el?: Element | null, at?: { x: number; y: number } | null): Rect {
   if (el && typeof el.getBoundingClientRect === "function") {
     const r = el.getBoundingClientRect();
-    x = r.left;
-    y = r.bottom + 2;
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
   }
-  const w = typeof window === "undefined" ? 1e4 : window.innerWidth;
-  const h = typeof window === "undefined" ? 1e4 : window.innerHeight;
-  return { x: Math.max(8, Math.min(x, w - 280)), y: Math.max(8, Math.min(y, h - 240)) };
+  const x = at ? at.x : lastPress.x;
+  const y = at ? at.y : lastPress.y;
+  return { left: x, top: y, right: x, bottom: y };
+}
+
+/** Where a menu of `size` goes for `anchor` in a `view`port: BESIDE it — to
+ * its right, else its left — top-aligned and pulled up to stay on screen, so
+ * it never covers the control that opened it or what lies under that; with
+ * no room on either side, below it (above when there is no room below).
+ * Always inside the viewport, 8px from its edges. */
+export function placeMenu(anchor: Rect, size: { w: number; h: number }, view: { w: number; h: number }): { x: number; y: number } {
+  const M = 8;
+  const GAP = 6;
+  const clampY = (y: number) => Math.max(M, Math.min(y, view.h - M - size.h));
+  const clampX = (x: number) => Math.max(M, Math.min(x, view.w - M - size.w));
+  if (anchor.right + GAP + size.w <= view.w - M) return { x: anchor.right + GAP, y: clampY(anchor.top) };
+  if (anchor.left - GAP - size.w >= M) return { x: anchor.left - GAP - size.w, y: clampY(anchor.top) };
+  const below = anchor.bottom + GAP;
+  const y = below + size.h <= view.h - M ? below : anchor.top - GAP - size.h;
+  return { x: clampX(anchor.left), y: clampY(y) };
 }
 
 // --- Starting a saved route on a session ----------------------------------------------------
@@ -158,7 +216,7 @@ export async function startSavedRoute(
     await opts.normal();
     return;
   }
-  const at = menuPoint(opts.el, opts.at);
+  const anchor = anchorOf(opts.el, opts.at);
   // The saved route's own stops (their ids are what `start_at` names); the
   // check's list may lead with a fast-track's rungs the start takes over.
   const steps = plan.steps?.length ? plan.steps : check?.steps || [];
@@ -169,8 +227,7 @@ export async function startSavedRoute(
     plan: { ...plan, steps },
     title,
     check,
-    x: at.x,
-    y: at.y,
+    anchor,
     go: (startAt) => {
       if (!startAt || startAt === steps[0]?.id) void opts.normal();
       else void startFlightAt(title, plan.id, startAt);
@@ -181,6 +238,5 @@ export async function startSavedRoute(
 /** "Fly again from another stop…": the ended flight's stops at `el` (or the
  * last press). */
 export function pickAgainStop(flight: Flight, el?: Element | null): void {
-  const at = menuPoint(el);
-  useRouteStartMenu.getState().set({ mode: "again", flight, x: at.x, y: at.y });
+  useRouteStartMenu.getState().set({ mode: "again", flight, anchor: anchorOf(el) });
 }

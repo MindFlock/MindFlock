@@ -40,7 +40,7 @@ import {
 import { HALT_POINT_REASON, atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
 import { controlFlight, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
-import { canFlyAgain, flyAgainLabel, flyAgainPrimary, pickAgainStop } from "../../lib/routeStart";
+import { canFlyAgain, flyAgainLabel, flyAgainPrimary, flyAgainTitle, pickAgainStop } from "../../lib/routeStart";
 import "./RouteStartMenu.css";
 import { ASK_TILE_W, askOffers, askRoom, askSentence, findingsOf, flightAsk, owedGroups, owedNoteOf, owedTip } from "../../lib/stopAsks";
 import { OwedChecks, OwedNote, ReviewFindings } from "./PerchAsks";
@@ -412,6 +412,7 @@ export function FlightMenu({
   openSession?: boolean;
 }) {
   const live = isLive(flight);
+  const rows = useInstances().data;
   const items: MenuItem[] = [];
   if (openSession && flight.session)
     items.push({ key: "open", label: "Open session", onSelect: () => openFlightSession(flight.session) });
@@ -423,7 +424,7 @@ export function FlightMenu({
     );
     items.push({ key: "cancel", label: "Stop the route", danger: true, title: "End this route — its session is kept", onSelect: onCancelAsk });
   }
-  items.push(...flyAgainItems(flight));
+  items.push(...flyAgainItems(flight, sessionGone(flight, rows)));
   return (
     <span onClick={stop} className="fl-menu" data-no-drag>
       <OverflowMenu label="Route actions" items={items} />
@@ -433,12 +434,18 @@ export function FlightMenu({
 
 /** An ended route's (done, cancelled, halted) Fly again in a ⋯: from where
  * it stopped, and from another stop (the route's stops, at the press). */
-export function flyAgainItems(flight: Flight): MenuItem[] {
+export function flyAgainItems(flight: Flight, gone = false): MenuItem[] {
   if (!canFlyAgain(flight)) return [];
   return [
-    { key: "again", label: flyAgainLabel(flight), title: "Fly this route again on its session — a new run of its stops", onSelect: () => void flyAgain(flight.id) },
+    { key: "again", label: flyAgainLabel(flight), title: flyAgainTitle(flight, gone), onSelect: () => void flyAgain(flight.id) },
     { key: "again-pick", label: "Fly again from another stop…", title: "Pick the stop it flies again from", onSelect: () => pickAgainStop(flight) },
   ];
+}
+
+/** Whether the flight's session is gone (not among the rows; unknown while
+ * they load = not gone). */
+export function sessionGone(flight: Pick<Flight, "session">, rows: readonly Pick<Instance, "title">[] | null | undefined): boolean {
+  return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
 }
 
 /** Fly again on an ended route, in a row: "Fly again from <stop>" (where it
@@ -446,6 +453,7 @@ export function flyAgainItems(flight: Flight): MenuItem[] {
  * another stop…" (the beginning, or any stop). */
 export function FlyAgain({ flight }: { flight: Flight }) {
   const [busy, setBusy] = useState(false);
+  const gone = sessionGone(flight, useInstances().data);
   if (!canFlyAgain(flight)) return null;
   return (
     <span className="fl-again-row" onClick={stop} data-no-drag>
@@ -453,7 +461,7 @@ export function FlyAgain({ flight }: { flight: Flight }) {
         type="button"
         className={(flyAgainPrimary(flight) ? "btn-primary" : "test-btn") + " fl-btn fl-fly-again"}
         disabled={busy}
-        title="Fly this route again on its session — a new run of its stops"
+        title={flyAgainTitle(flight, gone)}
         onClick={async () => {
           setBusy(true);
           try {
@@ -628,15 +636,9 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
         </div>
         <div className="fl-strip-now">
           {flight.state === "done" ? (
-            <>
-              <span className="fl-landed">Finished</span>
-              <FlyAgain flight={flight} />
-            </>
+            <span className="fl-landed">Finished</span>
           ) : flight.state === "cancelled" ? (
-            <>
-              <span className="muted">Cancelled{flight.reason ? " — " + flight.reason : ""}</span>
-              <FlyAgain flight={flight} />
-            </>
+            <span className="muted">Cancelled{flight.reason ? " — " + flight.reason : ""}</span>
           ) : step ? (
             <>
               <span className={"fl-now-dot" + (you ? " fl-now-you" : "") + (flight.state === "halted" ? " fl-now-halted" : "")} aria-hidden="true" />
@@ -655,6 +657,11 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
             {prog.done}/{prog.total}
           </span>
         </div>
+        {(flight.state === "done" || flight.state === "cancelled") && canFlyAgain(flight) && (
+          <div className="fl-strip-again">
+            <FlyAgain flight={flight} />
+          </div>
+        )}
       </div>
       <FlywayCanvas
         diagram={diagram}
