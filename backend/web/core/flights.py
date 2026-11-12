@@ -5198,6 +5198,11 @@ def apply(flight: dict, action: dict, now: float) -> dict:
             ss["note"] = note
         else:
             hit = {"halt_hit": True} if ss["detail"].get("halt_hit") else {}
+            # What the stop's next ask builds on (a review's earlier
+            # findings, its re-asks this visit) survives the fresh detail:
+            # the driver's intent mark applies this run with an empty one
+            # before the kind's run reads it.
+            hit.update(_carry(ss["detail"], FIX_CARRY))
             ss["state"] = "running"
             ss["since"] = now
             ss["detail"] = dict(hit, **upd)
