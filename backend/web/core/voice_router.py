@@ -104,7 +104,6 @@ __all__ = [
     "fresh_reply",
     "heard_text",
     "is_select",
-    "list_say",
     "match_repo",
     "match_session",
     "norm",
@@ -2217,11 +2216,6 @@ def status_say(session: str, rows, now: Optional[float] = None) -> str:
     if not session:
         return _needs(rows, now)["say"]
     return _status(session, rows, now)["say"]
-
-
-def list_say(rows, now: Optional[float] = None) -> str:
-    """What "list sessions" says."""
-    return _list(rows, time.time() if now is None else now)["say"]
 
 
 def _read(cmd: dict, session: str, rows, now: float, title: str) -> dict:
