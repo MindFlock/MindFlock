@@ -998,3 +998,33 @@ def test_fix6_a_leftover_folder_with_changes_is_never_shipped_unseen(
     armed2 = F.arm_pending("sc-1", plan()["id"], TIX, branch=BRANCH)
     run(D.carry_on_intake("sc-1", "git@x:r", BRANCH))
     assert F.get(armed2["id"])["state"] == "running"
+
+
+def test_a_perch_added_in_front_of_a_merge_is_not_one_of_the_routes_own_stops():
+    from backend.web.core import flights as F
+
+    steps = [
+        {"id": "s1", "kind": "verify", "title": "Test locally"},
+        {"id": "s2", "kind": "ship", "title": "Open PR"},
+        {"id": "s4", "kind": "you", "title": "Your checks"},
+        {"id": "s3", "kind": "ship", "title": "Merge"},
+    ]
+    flight = {
+        "steps": steps,
+        "cursor": 2,
+        "step_states": {
+            "s1": {"state": "done"},
+            "s2": {"state": "done"},
+            "s4": {"state": "waiting_you"},
+            "s3": {"state": "pending"},
+        },
+        "owed_perch": "",
+        "owed_added": ["s4"],
+        "owed": [],
+    }
+    assert [s["id"] for s in F.own_steps(flight)] == ["s1", "s2", "s3"]
+    # Standing on the added stop with nothing owed: the merge is next.
+    assert F.carry_index(flight) == 2
+    # Still owing the check: back to the Verify stop, which asks again.
+    owing = dict(flight, owed=[{"step": "s1", "items": ["look"]}])
+    assert F.carry_index(owing) == 0

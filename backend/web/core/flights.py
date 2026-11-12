@@ -2768,13 +2768,17 @@ def reached(flight: dict) -> int:
 
 
 def own_steps(flight: dict) -> List[dict]:
-    """``flight``'s stops without the route's own end perch (the "Your
-    checks" stop :func:`_owed_perch` added): what the person drew."""
-    perch = str(flight.get("owed_perch") or "")
+    """``flight``'s stops without the "Your checks" stops the route added
+    itself for owed checks (``owed_perch``, and every id in ``owed_added``: one
+    in front of a stop that cannot be undone, one at the end): what the
+    person drew."""
+    added = {str(flight.get("owed_perch") or "")}
+    added.update(str(a) for a in flight.get("owed_added") or [])
+    added.discard("")
     return [
         s
         for s in flight.get("steps") or []
-        if isinstance(s, dict) and (not perch or s.get("id") != perch)
+        if isinstance(s, dict) and s.get("id") not in added
     ]
 
 
@@ -2789,7 +2793,12 @@ def carry_index(flight: dict) -> int:
     k = reached(flight)
     here = steps[k].get("id") if k < len(steps) else None
     ids = [s.get("id") for s in own]
-    k_own = ids.index(here) if here in ids else len(own)
+    if here in ids:
+        k_own = ids.index(here)
+    else:
+        # On a stop the route added: the next of its own stops (none = the end).
+        after = [x.get("id") for x in steps[k + 1 :] if isinstance(x, dict)]
+        k_own = next((ids.index(x) for x in after if x in ids), len(own))
     owed = {e.get("step") for e in flight.get("owed") or [] if isinstance(e, dict)}
     for i, s in enumerate(own[:k_own]):
         if s.get("id") in owed:
