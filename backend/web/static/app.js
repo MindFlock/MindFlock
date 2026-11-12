@@ -53732,6 +53732,10 @@ function micPill(s) {
 }
 var STARTING_VOICE_LINE = "Starting voice…";
 var STARTING_MIC_LINE = "Starting the mic…";
+var FOLLOW_WAIT_MS = 2500;
+function followLine(name) {
+	return "Now typing into " + name;
+}
 var READYING_PILL = "Getting ready…";
 var READYING_LINE = "Getting ready — wait for the red mic";
 var READY_EARLY_LINE = "Recognition was still getting ready — try again in a moment";
@@ -54423,6 +54427,8 @@ var LiveDictation = class {
 	unsent = "";
 	unwatch = null;
 	sending = false;
+	moving = false;
+	moveTimer;
 	note = "";
 	waitLine = "";
 	noteUntil = 0;
@@ -54532,6 +54538,10 @@ var LiveDictation = class {
 		return this.stream(w, "");
 	}
 	flush(w, final, spokeAt) {
+		const done = this.flushNow(w, final, spokeAt);
+		return this.moving ? this.move() : done;
+	}
+	flushNow(w, final, spokeAt) {
 		if (w.trim() || final?.trim()) this.heardAnything = true;
 		const spoke = this.endPhraseAt(spokeAt);
 		const early = this.early;
@@ -54675,6 +54685,38 @@ var LiveDictation = class {
 		const kept = this.dict.typed.trim() && this.target?.kind === "session";
 		this.end(kept ? line + " — the words so far stay in the field" : line, true, "stopped");
 	}
+	follow() {
+		if (this.done) return;
+		if (!this.dict.inPhrase && !this.dict.partial) {
+			this.move();
+			return;
+		}
+		if (this.moving) return;
+		this.moving = true;
+		this.hooks.endPhrase?.();
+		clearTimeout(this.moveTimer);
+		this.moveTimer = setTimeout(() => {
+			if (this.moving) this.move();
+		}, FOLLOW_WAIT_MS);
+	}
+	move() {
+		this.moving = false;
+		clearTimeout(this.moveTimer);
+		this.chain = this.chain.then(() => {
+			if (this.done) return;
+			const was = this.target;
+			this.next(null);
+			const now = this.target;
+			if (now && now !== was && now.kind === "session" && now.title !== was?.title) {
+				voiceTrace("follow", {
+					from: was?.title || "",
+					to: now.title
+				});
+				this.hooks.caption(followLine(now.name), true);
+			} else this.show();
+		}).catch(() => {});
+		return this.chain;
+	}
 	wait(line) {
 		if (this.done) return;
 		this.waitLine = line;
@@ -54735,6 +54777,8 @@ var LiveDictation = class {
 		this.sendNow = null;
 		clearTimeout(this.swallowing);
 		clearTimeout(this.noteTimer);
+		clearTimeout(this.moveTimer);
+		this.moving = false;
 		clearInterval(this.early?.timer);
 		this.early = null;
 		this.dict.listening = false;
@@ -59132,6 +59176,7 @@ function TopBarMic() {
 	const [starting, setStarting] = (0, import_react.useState)(false);
 	const [warming, setWarming] = (0, import_react.useState)(false);
 	const [readying, setReadying] = (0, import_react.useState)(false);
+	const followsFocus = (0, import_react.useRef)(false);
 	const readyFor = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		startingListeners.add(setStarting);
@@ -59358,6 +59403,7 @@ function TopBarMic() {
 			clock$1.mark(prev.focused);
 			clock$1.mark(s.focused);
 			refreshQuestion(s.focused || "");
+			if (s.focused && followsFocus.current) live.current?.follow();
 		});
 		return () => {
 			clearTimeout(retry);
@@ -59420,6 +59466,7 @@ function TopBarMic() {
 		haltedAt.current = Date.now();
 		keyLatched.current = false;
 		live.current = null;
+		followsFocus.current = false;
 		if (readyFor.current) {
 			readyFor.current = null;
 			setReadying(false);
@@ -59576,6 +59623,7 @@ function TopBarMic() {
 		});
 		live.current = d;
 		rec.current = r;
+		followsFocus.current = !into && !opts.assistant;
 		setListening(true);
 		if (opts.assistant) {
 			idleMs.current = ASSISTANT_IDLE_MS;

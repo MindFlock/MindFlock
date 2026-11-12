@@ -519,6 +519,9 @@ export function TopBarMic() {
   /** Recognition is getting ready for the listen under way: the mic is not
    * red and the pill says so — red means "talk now". */
   const [readying, setReadying] = useState(false);
+  /** The listen under way types into the FOCUSED session (not a text box,
+   * not the assistant's): looking at another session moves the words there. */
+  const followsFocus = useRef(false);
   /** The dictation that waits for the server's "ready" (null: none does). */
   const readyFor = useRef<LiveDictation | null>(null);
   useEffect(() => {
@@ -827,6 +830,8 @@ export function TopBarMic() {
       clock.mark(prev.focused);
       clock.mark(s.focused);
       refreshQuestion(s.focused || "");
+      // Listening into "the focused session": the words follow the focus.
+      if (s.focused && followsFocus.current) live.current?.follow();
     });
     return () => {
       clearTimeout(retry);
@@ -912,6 +917,7 @@ export function TopBarMic() {
     haltedAt.current = Date.now();
     keyLatched.current = false;
     live.current = null;
+    followsFocus.current = false;
     if (readyFor.current) {
       readyFor.current = null;
       setReadying(false);
@@ -1124,6 +1130,7 @@ export function TopBarMic() {
     );
     live.current = d;
     rec.current = r;
+    followsFocus.current = !into && !opts.assistant;
     setListening(true);
     if (opts.assistant) {
       idleMs.current = ASSISTANT_IDLE_MS;
