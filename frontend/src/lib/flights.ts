@@ -466,29 +466,41 @@ function waitsFor(f: Flight | FlightRow, title: string, max = 48): string {
   return what.toLowerCase() === title.trim().toLowerCase() ? "" : what;
 }
 
-/** The pane strip's line in three parts, so a narrow pane cuts the sentence
- * and never the stop: `lead` ("Ticket to merge · ●●●○ · Needs you"), `what`
- * — why it is parked, in full (the strip truncates it; its tooltip has it
- * whole) — and `stop` ("Approve the merge (5m)"). A route not parked:
- * everything in `lead`. `stripLabel` is the same line in one string, with
- * `what` shortened. */
+/** The pane strip's line in parts, so a narrow pane cuts the right things:
+ * `plan` (shrinks first, down to nothing), `dots` (never cut mid-way: the
+ * strip drops them whole), `state` ("Needs you" / "Halted" — never cut),
+ * `what` — why it is parked, in full (it shrinks next; the tooltip has it
+ * whole) — and `stop` ("Approve the merge (5m)" — never cut). A route not
+ * parked: everything in `plan`, the other parts "". `whole` is the line
+ * joined. `stripLabel` is the same line in one string, `what` shortened. */
 export interface StripParts {
-  lead: string;
+  plan: string;
+  dots: string;
+  state: string;
   what: string;
   stop: string;
+  whole: string;
 }
 export function stripParts(f: Flight | FlightRow, now = Date.now()): StripParts {
   const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
   const parked = f.state === "halted" || f.state === "waiting_you";
-  if (!parked) return { lead: stripLabel(f, now), what: "", stop: "" };
-  const elapsed = "steps" in f ? currentElapsed(f, now) : "";
-  let what = "";
-  if (f.state === "halted") what = haltedWhy(title, String((f as { reason?: unknown }).reason ?? "")).replace(/\s+/g, " ").trim();
-  else {
-    what = waitsFor(f, title, 0);
+  if (!parked) {
+    const line = stripLabel(f, now);
+    return { plan: line, dots: "", state: "", what: "", stop: "", whole: line };
   }
-  const head = [f.plan_name, stripDots(f), f.state === "halted" ? "Halted" : "Needs you"].filter((x) => x.trim()).join(" · ");
-  return { lead: head, what, stop: title + (elapsed ? " (" + elapsed + ")" : "") };
+  const elapsed = "steps" in f ? currentElapsed(f, now) : "";
+  const what =
+    f.state === "halted"
+      ? haltedWhy(title, String((f as { reason?: unknown }).reason ?? "")).replace(/\s+/g, " ").trim()
+      : waitsFor(f, title, 0);
+  const out = {
+    plan: f.plan_name || "",
+    dots: stripDots(f),
+    state: f.state === "halted" ? "Halted" : "Needs you",
+    what,
+    stop: title + (elapsed ? " (" + elapsed + ")" : ""),
+  };
+  return { ...out, whole: [out.plan, out.dots, out.state, out.what, out.stop].filter((x) => x.trim()).join(" · ") };
 }
 
 /** The pane strip's line: `Ticket to merge · ●●●○○○ · Reviews settle (4m)`

@@ -249,7 +249,7 @@ describe("the pane strip", () => {
     });
     // In parts: the sentence takes the cut in a narrow pane, the stop's name never does.
     expect(html).toContain('class="fl-strip-text fl-strip-parts" aria-label="Ticket to merge · ●●●○ · Needs you · Look at the PR first · Approve the merge (5m)"');
-    expect(html).toContain('<span class="fl-strip-lead">Ticket to merge · ●●●○ · Needs you</span><span class="fl-strip-what">Look at the PR first</span><span class="fl-strip-stop">Approve the merge (5m)</span>');
+    expect(html).toContain('<span class="fl-strip-plan">Ticket to merge</span><span class="fl-strip-dots"><span class="fl-strip-dots-in">●●●○</span></span><span class="fl-strip-state">Needs you</span><span class="fl-strip-what">Look at the PR first</span><span class="fl-strip-stop">Approve the merge (5m)</span>');
     expect(html).toMatch(/<button type="button" class="fl-strip-line" title="Open the Route tab — [^"]*"><svg class="fl-bird"/);
     expect(html).toContain('class="fl-strip fl-state-waiting_you fl-needs"');
     expect(html).toContain(">Done</button>");

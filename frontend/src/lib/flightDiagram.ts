@@ -1556,6 +1556,14 @@ export function lineWhere(d: Diagram): string {
   return head + title + (tail ? " · " + tail : "");
 }
 
+/** The frame bar's where-line beside its session chip: "" when the chip
+ * already says the route waits on you at that stop ("Needs you: Review" /
+ * "Wait for me: Your checks" next to "needs you at Review"), else `where`. */
+export function whereBesideChip(where: string, chip: { reason?: string; label?: string } | null | undefined): string {
+  if (!where || chip?.reason !== "flight_you") return where;
+  return /^needs you at /i.test(where) ? "" : where;
+}
+
 /** How many stops a line's `flown` pill folds (0: none). The canvas speaks
  * of a stop by its place among the line's DRAWN stops; the flight by its
  * index — the pill's count is the difference. */

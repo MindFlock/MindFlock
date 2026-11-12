@@ -76,7 +76,7 @@ import { deriveSessionState, type SessionState, type SessionTone } from "../../l
 import { HELD_CHIP } from "../../lib/heldOffline";
 import { startSession } from "../../lib/revive";
 import { firstLine } from "../../lib/format";
-import { atHaltPoint, birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { atHaltPoint, birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, whereBesideChip, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { NODE_W, TILE, chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { ageOf, ageWord, fmtDuration, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
 import type { FlightPlan, FlightRow, FlightState, StepKindDef } from "../../lib/flights";
@@ -823,9 +823,10 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             Needs you
           </span>
         )}
-        {where && (
+        {whereBesideChip(where, ss) && (
+          // The chip already says "Needs you: Review": no "needs you at Review" too.
           <span className="skl-where" title={where}>
-            {where}
+            {whereBesideChip(where, ss)}
           </span>
         )}
         {line.flight && <OwedNote note={owedNoteOf(line.flight)} groups={owedGroups(line.flight.owed)} place="above" />}
