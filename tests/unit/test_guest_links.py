@@ -902,3 +902,21 @@ def test_a_failed_tunnel_is_not_restarted_by_every_look(
     starts.clear()
     assert owner.post("/api/guests/tunnel", json={}).status_code == 200
     assert starts == [True]
+
+
+def test_event_filter_follows_a_narrowed_or_revoked_link(monkeypatch):
+    # The events socket captures the guest at connect time; the owner then
+    # narrows the link (or revokes it). The socket guard keeps /api/events
+    # open after a narrowing (the path is still allowed), so the filter
+    # itself must read the link as it stands NOW: a session taken off the
+    # link must stop streaming its events to the guest at once.
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
+    rec = guests.create("x", ["alpha", "beta"])
+    g = guests.guest_for(rec["token"])  # what the middleware hands the socket
+    assert guests.event_allowed({"session": "beta"}, g)
+    guests.update(rec["id"], sessions=["alpha"])
+    assert not guests.event_allowed({"session": "beta"}, g)
+    assert guests.event_allowed({"session": "alpha"}, g)
+    guests.revoke(rec["id"])
+    assert not guests.event_allowed({"session": "alpha"}, g)
+    assert not guests.event_allowed({"session": ""}, g)
