@@ -87,7 +87,7 @@ function OwedGroupRow({ group, session }: { group: OwedGroup; session?: string }
           }}
         />
       ) : (
-        <button type="button" className="linklike fl-owed-failed" disabled={!group.plan} title={OWED_FAILED_TITLE} onClick={() => setAsking(true)}>
+        <button type="button" className="test-btn fl-btn fl-owed-failed" disabled={!group.plan} title={OWED_FAILED_TITLE} onClick={() => setAsking(true)}>
           {OWED_FAILED}
         </button>
       )}
@@ -96,12 +96,25 @@ function OwedGroupRow({ group, session }: { group: OwedGroup; session?: string }
 }
 
 /** "2 checks owed to you at the end": hover lists them by stop; a press
- * opens the same list under it. `note` "" draws nothing. */
-export function OwedNote({ note, groups }: { note: string; groups: readonly OwedGroup[] }): JSX.Element | null {
+ * opens the same list beside it — `place` above (the Sky's frame bar: away
+ * from the stops under it) or below, `align` from its start or its end (the
+ * pane strip's note sits at the right edge: it opens leftward). `note` ""
+ * draws nothing. */
+export function OwedNote({
+  note,
+  groups,
+  place = "below",
+  align = "start",
+}: {
+  note: string;
+  groups: readonly OwedGroup[];
+  place?: "above" | "below";
+  align?: "start" | "end";
+}): JSX.Element | null {
   const [open, setOpen] = useState(false);
   if (!note) return null;
   return (
-    <span className="fl-owed-note-wrap" onClick={stop} onMouseDown={stop} data-no-drag>
+    <span className={"fl-owed-note-wrap fl-owed-" + place + " fl-owed-" + align + (open ? " is-open" : "")} onClick={stop} onMouseDown={stop} data-no-drag>
       <button type="button" className="linklike fl-owed-note" aria-expanded={open} title={owedTip(groups)} onClick={() => setOpen((v) => !v)}>
         {note}
       </button>

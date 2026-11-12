@@ -12,7 +12,7 @@
  * agent the chain's first tile (its name, what it is doing, its chip, the
  * bird; a click or Open terminal goes to the pane's Agent tab; right-click:
  * Open terminal, Send a prompt…, Stop), sub-sessions small frames under it. */
-import { useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { birdPerch, lineWhere, type DiagramNode } from "../../lib/flightDiagram";
 import { deriveSessionState } from "../../lib/sessionState";
@@ -26,6 +26,7 @@ import { useFlights, useInstances } from "../../state/queries";
 import { selectSession } from "../../lib/sessionActions";
 import { useUi } from "../../state/store";
 import { useNodeMoves } from "./useSkyWiring";
+import { currentNodeId } from "./FlightStrip";
 import type { useSessionLine } from "./useSessionLine";
 
 type Line = ReturnType<typeof useSessionLine>;
@@ -59,6 +60,15 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   const agentMenu = useAgentMenu();
   const onPillDown = pillAimer(graph, gc.onLoopTo);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // A stop waiting on you (or halted) comes into view — in a narrow pane the
+  // chain scrolls to it when it starts waiting, so its ask is never off to
+  // the side (parkedStopId: lib/flightDiagram's node id, "" when none).
+  const parkedId = parkedStopId(line.flight, moves.diagram);
+  useEffect(() => {
+    if (!parkedId) return;
+    const raf = requestAnimationFrame(() => scrollIntoChain(rootRef.current, parkedId));
+    return () => cancelAnimationFrame(raf);
+  }, [parkedId]);
   const [band, setBand] = useState<{ x1: number; y1: number; x2: number; y2: number; over: boolean } | null>(null);
 
   // A wire dragged out of a tile's port, within this chain.
@@ -209,4 +219,32 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
         )}
     </div>
   );
+}
+
+/** The node id of the stop a flight waits at on the person (or is halted
+ * at), as `stateKey` too: "<id>:<state>" changes when it starts waiting
+ * again; "" when it isn't parked. */
+export function parkedStopId(flight: Parameters<typeof currentNodeId>[1], d: Parameters<typeof currentNodeId>[0]): string {
+  if (!flight || (flight.state !== "waiting_you" && flight.state !== "halted")) return "";
+  const id = currentNodeId(d, flight);
+  return id ? id + ":" + flight.state + ":" + flight.cursor : "";
+}
+
+/** Scroll the chain view (its own scroller) just enough to show the tile of
+ * `key` (parkedStopId's), with a margin — never the page or the pane. */
+export function scrollIntoChain(root: HTMLElement | null, key: string): void {
+  if (!root || !key) return;
+  const id = key.split(":").slice(0, -2).join(":");
+  const tile = Array.from(root.querySelectorAll<HTMLElement>("[data-diagram-node]")).find((el) => el.getAttribute("data-diagram-node") === id);
+  if (!tile) return;
+  const v = root.getBoundingClientRect();
+  const r = tile.getBoundingClientRect();
+  const pad = 16;
+  let dx = 0;
+  let dy = 0;
+  if (r.right + pad > v.right) dx = r.right + pad - v.right;
+  if (r.left - dx - pad < v.left) dx = r.left - pad - v.left;
+  if (r.bottom + pad > v.bottom) dy = r.bottom + pad - v.bottom;
+  if (r.top - dy - pad < v.top) dy = r.top - pad - v.top;
+  if (dx || dy) root.scrollBy({ left: dx, top: dy, behavior: "smooth" });
 }

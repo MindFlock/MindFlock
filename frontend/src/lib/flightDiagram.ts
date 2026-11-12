@@ -1548,7 +1548,9 @@ export function lineWhere(d: Diagram): string {
   }
   if (!b) return "";
   const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
-  const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
+  // A stop with an ask (lib/stopAsks) says it on its own tile, its line
+  // under its name and its buttons: the bar says only where it is.
+  const tail = n.ask ? "" : n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
   // "needs you at" already says whose stop it is: no "Wait for me:" after it.
   const title = b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title;
   return head + title + (tail ? " · " + tail : "");
