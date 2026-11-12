@@ -1039,6 +1039,8 @@ async def observe(flight: dict, now: float) -> dict:
         obs["facts"] = await when_facts(flight, step, sess, now)
     if ss["state"] not in ("running", "waiting_you"):
         return obs
+    if ss["state"] == "waiting_you" and _flights._owed_here(flight, step["id"]):
+        obs["owed"] = await asyncio.to_thread(_owed_obs, flight, step["id"])
     if kind == "ship" or (kind == "reviews" and ss["detail"].get("phase") == "push"):
         obs["autopilot"] = await asyncio.to_thread(_autopilot.get, flight["session"])
     if kind == "verify":
@@ -1081,6 +1083,38 @@ async def observe(flight: dict, now: float) -> dict:
         except Exception as err:  # noqa: BLE001 — unknown, the judge waits
             _warn("flight %s: %s unobservable: %v", flight["id"], kind, err)
     return obs
+
+
+def _plan_outcome(pid: str) -> Optional[dict]:
+    """``{outcome, run_at}`` of a verify plan's newest run (blocking), or
+    None when the plan is gone or unreadable."""
+    from backend.web.core import test_plans as _tp
+
+    try:
+        plan = _tp.get(pid) if pid else None
+    except Exception as err:  # noqa: BLE001 — unknown: the perch waits
+        _warn("owed check %s unreadable: %v", pid, err)
+        return None
+    if plan is None:
+        return None
+    run = plan["runs"][-1] if plan.get("runs") else {}
+    return {
+        "outcome": str(run.get("outcome") or ""),
+        "run_at": float(run.get("at") or 0.0),
+    }
+
+
+def _owed_obs(flight: dict, sid: str) -> dict:
+    """What the plans of the checks owed at perch ``sid`` say now: plan id ->
+    ``{outcome, run_at}`` (a plan that can't be read is left out)."""
+    out: dict = {}
+    for e in _flights._owed_here(flight, sid):
+        pid = str(e.get("plan") or "")
+        if pid and pid not in out:
+            facts = _plan_outcome(pid)
+            if facts is not None:
+                out[pid] = facts
+    return out
 
 
 #: Kinds whose stop waits on a worker it spawned (``spawn_worker``, the
@@ -3514,6 +3548,77 @@ def _confirm_perch(flight: dict, sid: str) -> str:
     return ""
 
 
+def _owed_perch_of(flight: dict, sid: str) -> List[dict]:
+    """The owed checks ``sid`` asks for, when it is the current stop waiting
+    on the person (a Wait-for-me stop carrying a Verify stop's checks that
+    were left for the end), else ``[]``."""
+    ss = flight["step_states"].get(sid) or {}
+    if ss.get("state") != "waiting_you":
+        return []
+    lo, hi = _flights.current_group(flight)
+    if not any(s["id"] == sid for s in flight["steps"][lo:hi]):
+        return []
+    return _flights._owed_here(flight, sid)
+
+
+def _confirm_owed(flight: dict, sid: str, note: str = "") -> None:
+    """Done on a perch asking for owed checks: record the person's
+    confirmation on each one's verify plan exactly as ``POST
+    /api/test-plans/{id}/confirm`` with ``verified: true`` does
+    (``test_plans.confirm_verify``, and its ``session.test_plan_checked``
+    announcement). A plan whose check a person already said doesn't work
+    refuses the Done (409 ``owed_failed``): the route goes back to that
+    Verify stop instead. A plan no longer waiting on a person (confirmed from
+    the session's own Verify, a newer check) is simply settled."""
+    from backend.web.core import test_plans as _tp
+
+    owed = _owed_perch_of(flight, sid)
+    for e in owed:
+        facts = _plan_outcome(str(e.get("plan") or "")) or {}
+        if (
+            facts.get("outcome") == "failed"
+            and abs(float(facts.get("run_at") or 0.0) - float(e.get("run_at") or 0.0))
+            < 1.0
+        ):
+            wake()
+            raise _flights.FlightError(
+                "owed_failed",
+                409,
+                "%s: a person said it doesn't work — the route goes back to it"
+                % (e.get("title") or "Verify"),
+            )
+    done: set = set()
+    for e in owed:
+        pid = str(e.get("plan") or "")
+        if not pid or pid in done:
+            continue
+        done.add(pid)
+        try:
+            plan = _tp.confirm_verify(pid, True, note)
+        except _tp.NotNeedsYou:
+            continue  # settled already: nothing left to confirm
+        if plan is None:
+            continue
+        try:
+            _events.BUS.emit(
+                "session.test_plan_checked",
+                session=pid,
+                new="",
+                data={
+                    "plan": pid,
+                    "title": plan.get("title") or pid,
+                    "confirmed": True,
+                    "verified": True,
+                    "outcome": (plan["runs"][-1] if plan["runs"] else {}).get(
+                        "outcome", ""
+                    ),
+                    "detail": "",
+                },
+            )
+        except Exception:  # noqa: BLE001 — an announcement never fails a confirm
+            pass
+
+
 def _no_blanket_done(flight: dict, sid: str) -> None:
     """There is no blanket Done on a Verify stop waiting on you: Done is
     "Confirm verified" on a check waiting for your confirm, "check again" on
@@ -3593,6 +3698,8 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
             raise _flights.FlightError("not_needs_you", 409, str(err))
         wake()
         return _flights.get(flight_id) or before
+    if op == "done" and _owed_perch_of(before, step):
+        _confirm_owed(before, step, note)
     perch = _needs_you_perch(before, step)
     if op == "done" and perch:
         # "I sorted it": the stop runs again — Verify checks again, memory
@@ -4087,13 +4194,22 @@ def list_dto(all_: bool = False) -> List[dict]:
         )[:20]
         flights = live + landed
     notes = lane_notes()
-    return [_flights.with_returns(f, notes) for f in flights]
+    return [_with_owed(_flights.with_returns(f, notes)) for f in flights]
 
 
 def flight_dto(flight: dict) -> dict:
     """One flight as the API sends it: plus ``returns`` (which stops can go
-    back to the agent, and why — ``flights.returns_of``)."""
-    return _flights.with_returns(flight, lane_notes())
+    back to the agent, and why — ``flights.returns_of``) and, while it owes
+    the person checks left for the end, ``owed_note``."""
+    return _with_owed(_flights.with_returns(flight, lane_notes()))
+
+
+def _with_owed(dto: dict) -> dict:
+    """``owed_note`` ("2 checks owed to you at the end") on a dto whose
+    flight owes the person checks and is still in the air."""
+    if dto.get("owed") and dto.get("state") not in _flights.FINAL:
+        dto["owed_note"] = _flights.owed_line(dto)
+    return dto
 
 
 def lane_notes() -> bool:
