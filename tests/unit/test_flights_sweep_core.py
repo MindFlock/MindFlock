@@ -227,3 +227,48 @@ def test_letting_the_agent_fix_one_of_two_failed_members_keeps_it_halted():
     assert f["state"] == "halted" and "b broke" in f["reason"]
     f = F.op_retry(f, b, now=NOW + 11)
     assert f["state"] == "running"
+
+
+def test_an_infinite_number_option_is_a_400_not_a_500():
+    """JSON's 1e400 (or Infinity) parses to inf, and int(inf) raises
+    OverflowError — which nothing caught: a plan save, a start or an intake
+    default with such an option was a 500. Strictly it is the usual "must be
+    a whole number"; leniently (a stored file) the option's default."""
+    from fastapi.testclient import TestClient
+
+    from backend.web import server
+
+    with pytest.raises(F.PlanError) as err:
+        F.normalize_step({"kind": "wait", "config": {"seconds": float("inf")}}, 0)
+    assert err.value.field == "steps[0].config.seconds"
+    lenient = F.normalize_step(
+        {"kind": "wait", "config": {"seconds": float("inf")}}, 0, strict=False
+    )
+    assert lenient is not None
+    r = TestClient(server.app).post(
+        "/api/flights/plans",
+        content=b'{"name": "x", "steps": [{"kind": "wait", "config": {"seconds": 1e400}}]}',
+        headers={"content-type": "application/json"},
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["field"] == "steps[0].config.seconds"
+
+
+def test_infinity_elsewhere_is_refused_or_read_as_its_default():
+    """The other places an int(inf) escaped: a Verify stop's ready_minutes, a
+    new stop's ``at``, and the cookbook's lint of an agent's raw steps
+    (start_flight / save_flight_plan read-back)."""
+    from backend.web.core import flight_cookbook as C
+
+    inf = float("inf")
+    with pytest.raises(F.PlanError) as err:
+        F.normalize_step(
+            {"kind": "verify", "config": {"ready": "after_prev", "ready_minutes": inf}},
+            0,
+        )
+    assert err.value.field.endswith("ready_minutes")
+    f = _fly(_verify(), _agent("s2"))
+    with pytest.raises(F.FlightError) as ferr:
+        F.op_add_step(f, {"kind": "notify", "config": {}}, at=inf, now=NOW)
+    assert ferr.value.error == "bad_at"
+    C.lint([{"kind": "loop", "config": {"times": inf}}])  # never raises

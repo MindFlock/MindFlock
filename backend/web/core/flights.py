@@ -870,7 +870,7 @@ def _text(value, limit: int = MAX_TEXT) -> str:
 def _int(value, default: int, lo: int, hi: int) -> int:
     try:
         n = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: inf
         return default
     return max(lo, min(hi, n))
 
@@ -934,7 +934,7 @@ def _verify_config(c: dict, strict: bool, at: str) -> dict:
     if strict and raw_min not in (None, ""):
         try:
             ok = 0 <= int(raw_min) <= 1440
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             ok = False
         if not ok:
             raise PlanError("ready_minutes is 0 to 1440", at + ".ready_minutes")
@@ -1011,7 +1011,7 @@ def _check_options(kind: str, raw: dict, config: dict, where: str) -> None:
             if ok:
                 try:
                     n = int(value)  # 15.7 reads as 15, as it always has
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     ok = False
             if not ok:
                 raise PlanError(
@@ -1121,7 +1121,7 @@ def _step_config_body(kind: str, raw: dict, strict: bool, where: str) -> dict:
         if strict and c.get("seconds") not in (None, ""):
             try:
                 ok = 0 <= int(c["seconds"]) <= 60 * 60 * 24 * 14
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 ok = False
             if not ok:
                 raise PlanError(
@@ -6610,7 +6610,7 @@ def _insert_index(flight: dict, at, n: int = 1) -> int:
         if isinstance(at, bool):
             raise TypeError(at)
         i = int(at)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise FlightError("bad_at", 400, "at is a step index")
     if i < 0 or i > len(steps):
         raise FlightError("bad_at", 400, "at is 0..%d" % len(steps))
