@@ -78,8 +78,14 @@ def test_the_kind_is_registered():
         "model",
         "focus",
         "block",
+        "rounds",
+        "unresolved",
         "keep",
     ]
+    names = {f["name"]: f for f in k["fields"]}
+    assert names["rounds"]["type"] == "int" and names["rounds"]["default"] == 3
+    assert names["unresolved"]["options"] == ["ask", "continue"]
+    assert names["unresolved"]["default"] == "ask"
     assert "review" in F.SESSION_KINDS and "review" not in F.AGENT_KINDS
 
 
@@ -92,6 +98,8 @@ def test_config_defaults_and_title():
         "focus": "",
         "block": True,
         "keep": False,
+        "rounds": 3,
+        "unresolved": "ask",
     }
     assert s["title"] == "Second opinion"
     s = F.normalize_step(
@@ -127,7 +135,14 @@ def test_run_spawns_the_reviewer_with_the_brief(monkeypatch):
         ),
     )
     out = asyncio.run(R._run(f, f["steps"][0], {"action": "run", "note": ""}, NOW))
-    assert out["detail"] == {"children": ["review-1"], "base": "develop"}
+    # No worktree to read a HEAD from: no sha recorded (a later round would
+    # fall back to a full review).
+    assert out["detail"] == {
+        "children": ["review-1"],
+        "base": "develop",
+        "reviewed_sha": "",
+        "round": 1,
+    }
     sid, prompt, kw = calls[0]
     assert sid == f["steps"][0]["id"]
     assert kw == {
@@ -140,6 +155,7 @@ def test_run_spawns_the_reviewer_with_the_brief(monkeypatch):
     assert "Change NO files" in prompt
     assert "`No findings`" in prompt and "1. path/to/file.py:123 —" in prompt
     assert "at most 10" in prompt
+    assert "should block the merge, most serious first" in prompt
     assert prompt.rstrip().endswith("Also: the retry loop")
 
 
@@ -154,17 +170,49 @@ def test_the_base_falls_back_to_origin_head(monkeypatch):
     assert "Also:" not in R.brief("s", "main")
 
 
-def test_a_refused_spawn_fails_the_stop(monkeypatch):
-    f = fly()
+def test_a_refused_spawn_asks_again_then_halts(monkeypatch):
+    f = fly(on_fail="agent")
+    calls: list = []
 
     async def _spawn(*_a, **_k):
+        calls.append(1)
         raise D._StepFailed("too many children")
 
     monkeypatch.setattr(D, "spawn_worker", _spawn)
     monkeypatch.setattr(R, "_base_of", lambda flight: "main")
+    monkeypatch.setattr(R, "_head_of", lambda flight, since="": ("", False))
     a = F.next_action(f, {"session": sess()}, NOW)
     out = asyncio.run(D._perform(f, a, NOW))
-    assert out["action"] == "fail" and out["reason"] == "too many children"
+    # One ask and two re-asks, then the person — never the agent.
+    assert len(calls) == 1 + R.MAX_REASKS
+    assert out["action"] == "fail" and out["then"] == "halt"
+    assert out["reason"] == "couldn't start the reviewer: too many children"
+    F.apply(f, out, NOW)
+    ss = f["step_states"][f["steps"][0]["id"]]
+    assert f["state"] == "halted" and ss["rounds"] == 0
+
+
+def test_a_spawn_that_fails_once_starts_the_next(monkeypatch):
+    f = fly(on_fail="agent")
+    tries: list = []
+
+    async def _spawn(*_a, **_k):
+        tries.append(1)
+        if len(tries) == 1:
+            raise D._StepFailed(
+                "a workspace for branch mindflock/review-1 already exists at "
+                "/w/mindflock-review-1 (a closed session keeps it)"
+            )
+        return "review-2"
+
+    monkeypatch.setattr(D, "spawn_worker", _spawn)
+    monkeypatch.setattr(R, "_base_of", lambda flight: "main")
+    monkeypatch.setattr(R, "_head_of", lambda flight, since="": ("abc", False))
+    a = F.next_action(f, {"session": sess()}, NOW)
+    out = asyncio.run(D._perform(f, a, NOW))
+    assert out["action"] == "run" and out["detail"]["children"] == ["review-2"]
+    assert out["detail"]["reasks"] == 1
+    assert out["note"].startswith("asking review-2 for a second opinion (couldn't")
 
 
 # --------------------------------------------------------------------------- #
@@ -255,24 +303,79 @@ def test_findings_without_block_are_done():
     assert d["receipt"] == "3 findings" and d["findings"] == text
 
 
-def test_a_reviewer_that_did_not_finish_fails():
-    f = started()
+def _respawn(f, a, now, title):
+    """Apply a re-ask ``a`` the way the driver does: ``_run`` spawned
+    ``title``, carrying the action's detail."""
+    F.apply(f, dict(a, detail=dict(a["detail"], children=[title])), now)
+
+
+def test_a_reviewer_that_did_not_finish_is_asked_again_then_halts():
+    f = started(on_fail="agent")
+    sid = f["steps"][0]["id"]
     a = F.next_action(
         f, {"session": sess(), "review": finished("broke", "failed")}, NOW + 10
     )
-    assert a["action"] == "fail" and a["reason"] == "the reviewer did not finish"
-    gone = {"entry": {"title": "review-1", "state": "gone"}, "text": ""}
-    a = F.next_action(f, {"session": sess(), "review": gone}, NOW + 10)
-    assert a["action"] == "fail" and a["reason"] == "the reviewer did not finish"
+    # Never handed to the agent: another reviewer is asked.
+    assert a["action"] == "run"
+    assert a["note"] == "the reviewer did not finish — asking another reviewer"
+    assert a["detail"] == {"reasks": 1, "respawned": "the reviewer did not finish"}
+    _respawn(f, a, NOW + 10, "review-2")
+    gone = {"entry": {"title": "review-2", "state": "gone"}, "text": ""}
+    a = F.next_action(f, {"session": sess(), "review": gone}, NOW + 20)
+    assert a["action"] == "run" and a["detail"]["reasks"] == 2
+    _respawn(f, a, NOW + 20, "review-3")
+    gone = {"entry": {"title": "review-3", "state": "gone"}, "text": ""}
+    a = go(f, {"session": sess(), "review": gone}, NOW + 30)
+    # Out of re-asks: the person, with the plain reason, no rounds spent.
+    assert a["action"] == "fail" and a["then"] == "halt"
+    assert a["reason"] == "the reviewer did not finish"
+    assert f["state"] == "halted" and f["reason"] == "the reviewer did not finish"
+    assert f["step_states"][sid]["rounds"] == 0
+    assert not any("handed to the agent" in h["note"] for h in f["history"])
 
 
-def test_a_reviewer_without_a_report_is_done_with_no_report():
+def test_an_observe_failure_is_asked_again_not_the_agents():
+    f = started(on_fail="agent")
+    a = F.next_action(f, {"session": sess(), "review": {"failed": "boom"}}, NOW + 9)
+    assert a["action"] == "run" and a["detail"]["reasks"] == 1
+
+
+def test_a_reviewer_without_a_report_or_reply_did_not_finish():
     f = started(block=True)
     o = {"entry": {"title": "review-1", "state": "done"}, "text": "", "report": False}
+    a = F.next_action(f, {"session": sess(), "review": o}, NOW + 10)
+    assert a["action"] == "run"
+    assert a["note"] == (
+        "the reviewer did not finish: review-1 ended without a report — "
+        "asking another reviewer"
+    )
+    o = dict(o, reply="I looked at the diff and it seems mostly fine overall.")
+    a = F.next_action(f, {"session": sess(), "review": o}, NOW + 10)
+    assert a["action"] == "run"
+
+
+def test_a_reviewer_without_a_report_is_judged_by_its_last_reply():
+    f = started(on_fail="agent")
+    o = {
+        "entry": {"title": "review-1", "state": "done"},
+        "text": "",
+        "report": False,
+        "reply": "I read the diff.\nNo findings.",
+    }
     a = go(f, {"session": sess(), "review": o}, NOW + 10)
-    assert a["action"] == "done" and "without a report" in a["note"]
-    d = f["step_states"][f["steps"][0]["id"]]["detail"]
-    assert d["receipt"] == "no report"
+    assert a["action"] == "done"
+    assert a["note"] == "no findings (read from review-1's last reply)"
+    f = started(on_fail="agent", session="t")
+    o = dict(
+        o,
+        reply="Steps:\n1. ran git diff\n\nFindings:\n1. a.py:3 — off by one\n"
+        "   (the loop stops early)\n2. b.py:9 — None deref\nThat is all.",
+    )
+    a = go(f, {"session": sess(), "review": o}, NOW + 10)
+    assert a["action"] == "fail" and a["then"] == "agent"
+    assert a["reason"].startswith("the second opinion has 2 findings:")
+    assert "1. ran git diff" not in a["reason"]
+    assert "(the loop stops early)" in a["reason"]
 
 
 # --------------------------------------------------------------------------- #

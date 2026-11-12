@@ -196,9 +196,12 @@ STOPS: Dict[str, dict] = {
     "review": _s(
         "a second agent reviews the diff before the PR — mode=bugs, security "
         "or standards (the team's rules in focus); findings go to the agent "
-        "to fix or rebut with on_fail=agent",
+        "to fix or rebut with on_fail=agent, and each later round only "
+        "checks the fixes",
         "answering PR review comments (reviews)",
-        "mode=bugs|security|standards, focus (the rules), block=true",
+        "mode=bugs|security|standards, focus (the rules), block=true, "
+        "rounds=3 (fix rounds, 1-10), unresolved=ask|continue (findings "
+        "left after the last round: ask the person, or carry on)",
         "the reviewer",
         fixable=True,
     ),
