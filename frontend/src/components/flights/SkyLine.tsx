@@ -94,6 +94,8 @@ import { SkyChain, agentTitle, hangFromAgent, subFrameBoxes, subFramesOf } from 
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
 import { nodeIndexes, usePromoteStops, useSessionLine, type LineSource } from "./useSessionLine";
+import { OwedNote } from "./PerchAsks";
+import { owedGroups, owedNoteOf } from "../../lib/stopAsks";
 import "./SkyLine.css";
 import "./SkyVisibility.css";
 
@@ -826,6 +828,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             {where}
           </span>
         )}
+        {line.flight && <OwedNote note={owedNoteOf(line.flight)} groups={owedGroups(line.flight.owed)} />}
         {still && (
           <span className="skl-age" title={"Nothing has happened on this session for " + still.replace(/ still$/, "")}>
             {still}

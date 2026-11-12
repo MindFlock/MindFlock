@@ -46,6 +46,7 @@ import { windowName } from "../../lib/windowName";
 import { HEAD_ID, NODE_H, NODE_W, TILE, chainColor, inPortOf, isBranchRow, moveNode, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
 import type { Pos } from "../../lib/skyLayout";
 import { haltMark } from "../../lib/stopEditing";
+import { ASK_TILE_W, askRoom } from "../../lib/stopAsks";
 import { riskTitle } from "../../lib/stopRisk";
 import { BirdMarker } from "./Bird";
 import { TileIcon, nodeFamily } from "./StopIcons";
@@ -266,7 +267,7 @@ export function tileSub(n: DiagramNode): string {
  * failed; one a person paused: "Paused by you". Else nothing. */
 export const HALT_POINT_LINE = "Your halt point";
 export const PAUSED_LINE = "Paused by you";
-export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "step">): string {
+export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "step"> & Partial<Pick<DiagramNode, "ask" | "askNote">>): string {
   if (n.state === "halted") {
     const r = String(n.reason || "").trim();
     const t = String(n.title || "").trim();
@@ -279,6 +280,9 @@ export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "ste
   if (n.state === "perched") {
     const r = String(n.reason || "").trim();
     if (r) return /^failed\b/i.test(r) ? r[0].toUpperCase() + r.slice(1) : "Failed: " + r;
+    // A Review out of fix rounds, the perch asking for owed checks: the
+    // server's sentence ("2 findings still open after 3 rounds").
+    if (n.ask && n.askNote) return n.askNote[0].toUpperCase() + n.askNote.slice(1);
     return String(n.step?.config?.text ?? "").trim();
   }
   if (n.state === "paused") return n.step?.halt ? HALT_POINT_LINE : PAUSED_LINE;
@@ -309,7 +313,11 @@ export function stopTileBoxes(
     if (n.kind !== "stop" || n.index !== flight.cursor) continue;
     const handed = n.state === "perched" && !!(n.step && flight.step_states?.[n.step.id]?.detail?.failed_reason);
     if (n.state === "halted" || n.state === "paused" || handed) out[n.id] = { w: STOP_TILE_W, h: NODE_H + 40 };
-    else if (n.state === "perched" && !n.behaviors && n.step?.kind !== "verify") out[n.id] = { w: STOP_TILE_W, h: NODE_H + 24 + 21 * youItems(n.step).length };
+    else if (n.state === "perched" && !n.behaviors && n.step?.kind !== "verify")
+      out[n.id] = {
+        w: n.ask ? ASK_TILE_W : STOP_TILE_W,
+        h: NODE_H + 24 + 21 * youItems(n.step).length + askRoom(n.ask, n.step ? flight.step_states?.[n.step.id]?.detail : undefined),
+      };
   }
   return out;
 }

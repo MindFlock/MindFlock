@@ -13,7 +13,7 @@
 import { useState } from "react";
 import type { Instance, OutboxWaiting } from "../../api/types";
 import { instApi } from "../../api/client";
-import { refreshInstances } from "../../state/queries";
+import { refreshInstances, useFlights } from "../../state/queries";
 import { refreshRuns } from "../../state/runs";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
@@ -40,6 +40,8 @@ import { releaseChoices } from "../../lib/splitRun";
 import { openBehaviors } from "../../lib/behaviorsFocus";
 import { controlFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { perchedOnYou } from "../../lib/flights";
+import { askOffers, findingsOf, flightAsk, owedGroups } from "../../lib/stopAsks";
+import { OwedChecks, ReviewFindings } from "../flights/PerchAsks";
 import type { RunInfo } from "../../lib/runs";
 import { FLIGHT_PAUSED, pausedAtLine, type FlightWaiting } from "../../lib/needsYou";
 
@@ -446,6 +448,14 @@ function flightOf(w: OutboxWaiting, row?: Instance): { id: string; step: { id: s
 function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
   const [busy, setBusy] = useState(false);
   const fl = flightOf(w, row);
+  // A Review out of fix rounds, the perch asking for the checks owed at the
+  // end (lib/stopAsks): the full flight says which, and their words lead.
+  const full = useFlights().data?.find((f) => f.id === fl?.id);
+  const ask = full && full.steps[full.cursor]?.id === fl?.step.id ? flightAsk(full) : "";
+  const offers = askOffers(ask);
+  const rec = full && fl ? full.step_states?.[fl.step.id] : undefined;
+  const owed = ask === "owed" ? owedGroups(rec?.detail?.owed) : [];
+  const findings = ask === "unresolved" ? findingsOf(rec?.detail) : "";
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -464,7 +474,33 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
       </div>
       <div className="ik-item-start">
         <div className="ob-acts">
-          {fl && (
+          {fl && offers ? (
+            <>
+              {offers.map((o) => (
+                <button
+                  key={o.key}
+                  type="button"
+                  className={o.primary ? "btn-primary pr-review-btn" : "test-btn"}
+                  disabled={busy}
+                  title={o.title}
+                  onClick={() => void run(() => (o.key === "retry" ? stepRetry(fl.id, fl.step.id) : stepDone(fl.id, fl.step.id)))}
+                >
+                  {o.label}
+                </button>
+              ))}
+              {ask === "owed" && (
+                <button
+                  type="button"
+                  className="test-btn"
+                  disabled={busy}
+                  title={"Skip “" + fl.step.title + "” — the checks stay unconfirmed and the route goes on"}
+                  onClick={() => void run(() => stepSkip(fl.id, fl.step.id))}
+                >
+                  Skip
+                </button>
+              )}
+            </>
+          ) : fl && (
             <>
               {fl.step.kind === "verify" ? (
                 // A Verify stop moves on when its Verify is confirmed, not on
@@ -506,6 +542,12 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
           )}
         </div>
       </div>
+      {(findings || owed.length > 0) && (
+        <div className="ik-item-drawer">
+          <ReviewFindings findings={findings} />
+          <OwedChecks groups={owed} session={w.title || full?.session} />
+        </div>
+      )}
     </div>
   );
 }

@@ -28,6 +28,7 @@ import type { BirdTone, Diagram, DiagramNode, Placed } from "./flightDiagram";
 import { STOP_MIME, type Flight, type FlightStep, type OnFail } from "./flights";
 import { FLYWAY_MIME } from "./skyLayout";
 import { FIX_ROUNDS, VERIFY_ON_FAIL } from "./verifyStop";
+import { askOffers } from "./stopAsks";
 
 // --- Gaps on the line -------------------------------------------------------------
 
@@ -306,7 +307,11 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
     // A Verify stop moves on when its check is confirmed, not on Done —
     // its Verify card opens instead (the key the hosts already handle).
     const verify = n.step?.kind === "verify";
-    if (n.state === "perched")
+    // A Review out of fix rounds, the perch asking for the checks owed at
+    // the end: their own words, the one that usually works first.
+    const offers = n.state === "perched" ? askOffers(n.ask || "") : null;
+    if (offers) for (const o of offers) items.push({ key: o.key, label: o.label, title: o.title });
+    else if (n.state === "perched")
       items.push(
         verify
           ? { key: "behaviors", label: "Open Verify", title: "Check the steps only you can do, then Confirm verified or Not verified… — the route goes on once you answer" }
@@ -456,6 +461,9 @@ export const FIELD_HINT: Readonly<Record<string, string>> = {
   "review.focus": "Added to what the reviewer is asked to look at.",
   "review.block": "On: any finding fails the stop (then “If it fails” decides). Off: findings are only recorded. Default on.",
   "review.keep": "Off: the reviewer session is closed when it has answered.",
+  "review.rounds": "How many times the findings go back to the agent to fix or rebut (with “If it fails” on the agent). 1 to 10, default 3.",
+  "review.unresolved": "Ask me: the route waits on you with the open findings — Give it another round, or Carry on. Carry on: the stop finishes with them on record.",
+  "verify.ask": "Carry on, ask me at the end: the route keeps going and asks you for every check once, before it finishes.",
   "screenshot.urls": "{preview} = the Preview stop's URL; lines that aren't http(s) are skipped.",
   "screenshot.widths": "Comma-separated, each 200 to 4000 px. Default 1280, 390.",
   "screenshot.timeout_minutes": "1 to 1440 min, default 10.",
@@ -480,6 +488,7 @@ export const FIELD_RANGE: Readonly<Record<string, readonly [number, number]>> = 
   "wait.seconds": [1, 60 * 60 * 24 * 14],
   "reviews.quiet_minutes": [1, 1440],
   "reviews.max_rounds": [1, 50],
+  "review.rounds": [1, 10],
   "checks.timeout_minutes": [1, 1440],
   "command.timeout_minutes": [1, 1440],
   "loop.times": [0, 1000],

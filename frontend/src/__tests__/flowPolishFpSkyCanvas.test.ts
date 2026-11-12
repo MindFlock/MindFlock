@@ -139,7 +139,8 @@ describe("1. a route running on its own", () => {
     expect(freeStopRemedies(later, { index: 0, state: "done", step: later.steps[0] })).toMatchObject({ done: "", retry: false, skip: false, note: "This stop has finished — it can't change now." });
     const src = code("components/flights/useGroundedLine.tsx");
     expect(src).toContain("isFreeRun(flight) && !open.editable");
-    expect(src).toContain('doneLabel={r.done === "carry" ? "Carry on" : undefined}');
+    // A halt point's Done is Carry on; a Review out of rounds / the owed perch word theirs (lib/stopAsks).
+    expect(src).toContain('doneLabel={r.done === "carry" ? "Carry on" : askOffers(r.ask || "")?.find((o) => o.key === "done")?.label}');
   });
 
   it("the drawer flies the camera to a route with no session (never just un-focuses)", () => {

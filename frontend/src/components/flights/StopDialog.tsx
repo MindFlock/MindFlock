@@ -108,6 +108,13 @@ export interface StopDialogProps {
   doneLabel?: string;
   doneTitle?: string;
   onRetry?(): void;
+  /** Retry's own words (a Review out of fix rounds: "Give it another
+   * round"). */
+  retryLabel?: string;
+  retryTitle?: string;
+  /** Drawn under `asks` while the stop is parked: a Review's open findings,
+   * the checks owed to you at the end (flights/PerchAsks). */
+  askBody?: ReactNode;
   /** Carry on: the route is paused (a person's pause or a halt point). */
   onResume?(): void;
   /** The remedy that usually works, drawn first as the primary button:
@@ -170,10 +177,10 @@ export interface Remedy {
   primary: boolean;
 }
 const REMEDY_ORDER: readonly RemedyKey[] = ["retry", "resume", "done", "fix", "skip"];
-export function remedies(p: Pick<StopDialogProps, "onDone" | "onRetry" | "onResume" | "onFix" | "onSkip" | "primary" | "doneLabel" | "doneTitle">): Remedy[] {
+export function remedies(p: Pick<StopDialogProps, "onDone" | "onRetry" | "onResume" | "onFix" | "onSkip" | "primary" | "doneLabel" | "doneTitle" | "retryLabel" | "retryTitle">): Remedy[] {
   const has: Record<RemedyKey, boolean> = { done: !!p.onDone, retry: !!p.onRetry, resume: !!p.onResume, fix: !!p.onFix, skip: !!p.onSkip };
   const words: Record<RemedyKey, [string, string]> = {
-    retry: ["Retry", "Run this stop again"],
+    retry: [p.retryLabel || "Retry", p.retryTitle || "Run this stop again"],
     resume: ["Carry on", "The route goes on from here"],
     done: [p.doneLabel || "Done", p.doneTitle || "You've done it — the route goes on"],
     fix: ["Let the agent fix it", "The agent gets the failure, then the stop runs again"],
@@ -411,6 +418,7 @@ function StepDialog(p: StopDialogProps) {
             ))}
           </ul>
         )}
+        {parked && p.askBody}
         {parked && <div className="stop-dialog-remedies fl-chiprow">{remedyButtons}</div>}
         {lost && (
           <p className="fl-note stop-dialog-lost" role="alert">

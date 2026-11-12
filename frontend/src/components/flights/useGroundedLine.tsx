@@ -20,6 +20,7 @@ import { undoPayload } from "../../lib/stopEditing";
 import { groundedDiagram, isFreeRun, perchWhy } from "../../lib/groundedLines";
 import { atHaltPoint } from "../../lib/flightDiagram";
 import { canFixStep } from "./FlightStrip";
+import { askOffers, flightAsk, type StopAsk } from "../../lib/stopAsks";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { StopDialog } from "./StopDialog";
 import { StopPalette, type PaletteSaved } from "./StopParts";
@@ -42,7 +43,7 @@ export function readDrop(drop: StopDrop | string): StopDrop {
 export function freeStopRemedies(
   flight: Pick<Flight, "state" | "reason" | "steps" | "cursor" | "step_states">,
   n: Pick<DiagramNode, "index" | "state" | "step">
-): { note: string; done: "" | "done" | "carry"; retry: boolean; fix: boolean; skip: boolean } {
+): { note: string; done: "" | "done" | "carry"; retry: boolean; fix: boolean; skip: boolean; ask?: StopAsk } {
   const here = n.index === flight.cursor && (flight.state === "halted" || flight.state === "waiting_you" || flight.state === "paused" || flight.state === "running");
   const flown = n.state === "done" || n.state === "skipped" || n.state === "failed";
   if (!here) return { note: flown ? "This stop has finished — it can't change now." : "It can't change while the route runs.", done: "", retry: false, fix: false, skip: false };
@@ -51,7 +52,10 @@ export function freeStopRemedies(
   const why = perchWhy(flight);
   const note = ["The route is at this stop — it can't change while it is here.", why].filter(Boolean).join(" ");
   const done: "" | "done" | "carry" = halt ? "carry" : flight.state === "waiting_you" && n.step?.kind !== "verify" ? "done" : "";
-  return { note, done, retry: halted, fix: canFixStep(flight), skip: halted || halt || flight.state === "waiting_you" };
+  // A Review out of fix rounds, the perch asking for owed checks
+  // (lib/stopAsks): their own words, Retry for more rounds.
+  const ask = flightAsk(flight);
+  return { note, done, retry: halted || ask === "unresolved", fix: canFixStep(flight), skip: halted || halt || flight.state === "waiting_you", ...(ask ? { ask } : {}) };
 }
 
 export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindDef[]; plans: readonly FlightPlan[] }) {
@@ -362,8 +366,11 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
         note={r.note}
         onClose={close}
         onDone={r.done ? () => run(() => (r.done === "carry" ? controlFlight(flight.id, "resume") : stepDone(flight.id, step.id))) : undefined}
-        doneLabel={r.done === "carry" ? "Carry on" : undefined}
-        doneTitle={r.done === "carry" ? "Carry on past your halt point — “" + step.title + "” runs, and the route goes on" : undefined}
+        doneLabel={r.done === "carry" ? "Carry on" : askOffers(r.ask || "")?.find((o) => o.key === "done")?.label}
+        doneTitle={r.done === "carry" ? "Carry on past your halt point — “" + step.title + "” runs, and the route goes on" : askOffers(r.ask || "")?.find((o) => o.key === "done")?.title}
+        retryLabel={askOffers(r.ask || "")?.find((o) => o.key === "retry")?.label}
+        retryTitle={askOffers(r.ask || "")?.find((o) => o.key === "retry")?.title}
+        primary={askOffers(r.ask || "")?.[0]?.key}
         onRetry={r.retry ? () => run(() => stepRetry(flight.id, step.id)) : undefined}
         onFix={r.fix ? () => run(() => stepFix(flight.id, step.id)) : undefined}
         onSkip={r.skip ? () => run(() => stepSkip(flight.id, step.id)) : undefined}

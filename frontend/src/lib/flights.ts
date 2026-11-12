@@ -13,6 +13,7 @@ import { relTime } from "./format";
 import { capSourceDepth, sourceRungLabel, type Lane } from "./autopilot";
 // Type only: lib/behaviorsFocus reads the store, which reads this module.
 import type { BehaviorsTarget } from "./behaviorsFocus";
+import type { OwedEntry, OwedGroup } from "./stopAsks";
 
 // --- The contract's shapes ---------------------------------------------------
 
@@ -205,6 +206,13 @@ export interface Flight {
    * server's `returns_of` (docs/vision/fixwire.md): each draws a return wire
    * with its case on it. Only on flights the API sends. */
   returns?: Record<string, FlightReturn>;
+  /** Checks Verify stops with "Carry on, ask me at the end" left for the
+   * person (lib/stopAsks), only while something is owed. */
+  owed?: OwedEntry[];
+  /** The stop the route added at its end to ask for them ("" = none). */
+  owed_perch?: string;
+  /** "2 checks owed to you at the end", while the route is in the air. */
+  owed_note?: string;
 }
 
 /** Where a stop's failure goes back to and why (the server's `returns_of`):
@@ -285,6 +293,10 @@ export interface FlightRow {
   total: number;
   state: FlightState;
   step: { id: string; kind: string; title: string; state: StepState; actor: StepActor };
+  /** Checks owed to the person at the end, grouped by Verify stop, and
+   * their line — only while something is owed (lib/stopAsks). */
+  owed?: OwedGroup[];
+  owed_note?: string;
 }
 
 // --- Reading a flight --------------------------------------------------------

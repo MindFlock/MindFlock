@@ -96,7 +96,10 @@ export function VerifyStopFields({
   const set = (patch: Partial<VerifyConfig>) => !readOnly && onChange(withVerifyChoice(config, patch));
   const fieldOf = (name: string) => def?.fields.find((f) => f.name === name);
   const label = (name: string, d: string) => fieldOf(name)?.label || d;
-  const extra = (def?.fields || []).filter((f) => !VERIFY_OWN_FIELDS.includes(f.name));
+  // "When it needs you" (`ask`: Wait here / Carry on, ask me at the end)
+  // sits under Who checks — the server's field, drawn the generic way.
+  const askField = fieldOf("ask");
+  const extra = (def?.fields || []).filter((f) => !VERIFY_OWN_FIELDS.includes(f.name) && f !== askField);
   const minutes = showsReadyMinutes(v.ready);
   const envList = envs.isError ? null : envs.data || null;
   return (
@@ -126,6 +129,7 @@ export function VerifyStopFields({
           ))}
         </div>
       </FlField>
+      {askField && renderField(askField)}
       <FlField label={label("notes", "Notes for this check")} wide hint="For this stop only — on top of the repo's standing notes.">
         <PromptBox
           label={label("notes", "Notes for this check")}
