@@ -281,6 +281,25 @@ def test_a_pick_does_what_the_question_was_for():
     assert again["pending"]["then"] == {"kind": "read"}
 
 
+def test_a_pick_by_number_counts_what_was_read_out():
+    # "Which one: login-fix or login-page?" — then login-fix closes. "The
+    # first one" is still login-fix (gone), never login-page, which moved up
+    # into first place: a "no" for login-fix must not press it in login-page.
+    rows = [r for r in ROWS if r["title"] != "login-fix"]
+    then = {"kind": "answer", "choice": "no", "words": "no"}
+    pend = {"kind": "pick", "candidates": LOGINS, "then": then}
+    got = vr.pick("the first one", pend, rows, NOW)
+    assert got.get("title") != "login-page", got
+    assert got == {"kind": "no-session", "say": "login-fix is not listed."}
+    # The second (and last) one read out is still there.
+    for text in ("the second one", "the last one"):
+        got = vr.pick(text, pend, rows, NOW)
+        assert (got["kind"], got["title"]) == ("answer", "login-page"), text
+    # login-page gone: the last one read out is gone, not login-fix.
+    rows = [r for r in ROWS if r["title"] != "login-page"]
+    assert vr.pick("the last one", pend, rows, NOW)["kind"] == "no-session"
+
+
 def test_a_pick_without_then_still_switches():
     pend = {"kind": "pick", "candidates": LOGINS}
     got = vr.pick("the first one", pend, ROWS, NOW)

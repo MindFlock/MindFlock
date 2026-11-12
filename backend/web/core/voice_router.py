@@ -2003,11 +2003,10 @@ def pick(text, pending, rows, now: Optional[float] = None) -> Optional[dict]:
     one asking"; or a name fragment of one candidate ("copy two", "bot
     seven"), leads like "I mean" or "go to" dropped."""
     now = time.time() if now is None else now
-    titles = [
-        str(c.get("title") or "")
-        for c in (pending or {}).get("candidates") or ()
-        if isinstance(c, dict)
+    read_out = [
+        c for c in (pending or {}).get("candidates") or () if isinstance(c, dict)
     ]
+    titles = [str(c.get("title") or "") for c in read_out]
     cands = [r for r in (_row(rows, t) for t in titles) if r is not None]
     if not cands:
         return None
@@ -2025,9 +2024,15 @@ def pick(text, pending, rows, now: Optional[float] = None) -> Optional[dict]:
         return None
     m = _PICK_NUM_RE.match(t)
     if m:
-        n = len(cands) if m.group(3) else _count(m.group(1) or m.group(2))
-        if n and 1 <= n <= len(cands):
-            return picked(cands[n - 1])
+        # Counted in the order read out: one closed since is not skipped
+        # over, or "the first one" would be the one read out second.
+        n = len(titles) if m.group(3) else _count(m.group(1) or m.group(2))
+        if n and 1 <= n <= len(titles):
+            row = _row(rows, titles[n - 1])
+            if row is None:
+                gone = str(read_out[n - 1].get("name") or titles[n - 1])
+                return {"kind": "no-session", "say": "%s is not listed." % gone}
+            return picked(row)
         return again(cands, "There are %d. " % len(cands))
     m = _PICK_STATE_RE.match(t)
     if m:
