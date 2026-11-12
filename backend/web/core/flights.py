@@ -2490,6 +2490,64 @@ def fill_prompt(text: str, flight: dict) -> str:
     )
 
 
+#: "Route so far" (:func:`route_so_far`): one stop's line, and all of them,
+#: at most this long (the newest stops are kept).
+ROUTE_LINE_CHARS = 200
+ROUTE_SO_FAR_CHARS = 2000
+_ROUTE_STATES = ("done", "skipped", "failed")
+
+
+def route_so_far(flight: dict, step: dict) -> str:
+    """What the stops before ``step`` came to, as recorded on ``flight`` —
+    the appendix of an Agent stop's prompt and of a Reviews stop's first
+    round, so the agent states what the route did (a review that passed with
+    no findings ran in ANOTHER session; the agent never saw it) from the
+    record, not from memory. One line per earlier stop that is done, skipped
+    or failed: ``- <title>: <state>, <receipt or note>``. "" when there is
+    none."""
+    lines = []
+    for s in flight["steps"][: _step_index(flight, step["id"])]:
+        ss = flight["step_states"].get(s["id"]) or {}
+        state = str(ss.get("state") or "")
+        if state not in _ROUTE_STATES:
+            continue
+        d = ss.get("detail") if isinstance(ss.get("detail"), dict) else {}
+        word = "failed, moved on" if state == "failed" and d.get("moved_on") else state
+        what = str(d.get("receipt") or "").strip() or short_reason(ss.get("note"))
+        what = re.sub(r"\s+", " ", what).strip()
+        line = "- %s: %s" % (
+            re.sub(r"\s+", " ", str(s.get("title") or s["kind"])),
+            word,
+        )
+        if what and what != state:
+            line += ", " + what
+        if len(line) > ROUTE_LINE_CHARS:
+            line = line[: ROUTE_LINE_CHARS - 1].rstrip() + "…"
+        lines.append(line)
+    if not lines:
+        return ""
+    head = "Route so far (the stops before this one, as MindFlock recorded them):"
+    kept: List[str] = []
+    size = len(head)
+    for line in reversed(lines):
+        if size + len(line) + 1 > ROUTE_SO_FAR_CHARS:
+            break
+        kept.insert(0, line)
+        size += len(line) + 1
+    if len(kept) < len(lines):
+        kept.insert(0, "- … %s before these" % plural(len(lines) - len(kept), "stop"))
+    return "\n".join([head] + kept)
+
+
+def with_route_so_far(text: str, flight: dict, step: dict) -> str:
+    """``text`` (a prompt for the session's agent) with :func:`route_so_far`
+    appended after a blank line; unchanged when there is nothing to tell."""
+    tail = route_so_far(flight, step)
+    if not tail or not str(text or "").strip():
+        return text
+    return str(text).rstrip() + "\n\n" + tail
+
+
 def preview_url(flight: dict) -> str:
     """The URL of the latest done ``preview`` stop of ``flight``, "" when
     none has flown."""
@@ -2556,6 +2614,7 @@ def take_off(
     busy: str = "",
     note: str = "",
     sent: bool = False,
+    intake: bool = False,
 ) -> dict:
     """Create a ``running`` flight of ``plan`` bound to ``session``.
 
@@ -2586,6 +2645,11 @@ def take_off(
     * ``seeded`` (the session was created — or is being created by intake —
       with the plan's first agent step as its INITIAL prompt): that step is
       already running, so the driver never sends it a second time.
+      ``intake`` (:func:`arm_pending`) on a PR (subject ``kind`` ``pr``):
+      that prompt was built by intake from the PR's comments open right
+      then — recorded as the step's
+      ``detail.pr_comments_at``, so a later Reviews stop counts those as
+      handed to the agent already (:func:`_handed_at`).
     * otherwise the cursor is at 0, pending.
 
     Steps before the cursor are recorded ``skipped`` (history ``jumped``).
@@ -2700,6 +2764,8 @@ def take_off(
         ss["state"] = "running"
         ss["since"] = ts
         ss["detail"] = {"seeded": True}
+        if intake and flight["subject"].get("kind") == "pr":
+            ss["detail"]["pr_comments_at"] = ts
         _hist(flight, ts, steps[cursor]["id"], "started", "the session's first prompt")
     if cursor >= len(steps):
         _finish(flight, "done", "", ts)
@@ -2732,6 +2798,7 @@ def arm_pending(
         seeded=True,
         replaced=replaced,
         branch=str(branch or ""),
+        intake=True,
     )
 
 
@@ -4525,20 +4592,27 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
     r = obs.get("reviews") or {}
     ids = r.get("ids")
     who = str(cfg.get("require_reviewer") or "")
+    if not isinstance(ids, list):
+        # The comments could not be read: never "quiet" — a stop that ends
+        # on a PR it could not read has reviewed nothing.
+        return _reviews_unreadable(d, r, now)
+    if d.get("unknown_since"):
+        return _wait("watching for review comments", unknown_since=None)
     first: dict = {}
-    if isinstance(ids, list) and not d.get("seeded"):
-        # What was already on the PR when this step began was the previous
-        # step's business (a PR flight's first prompt carries it): only what
-        # arrives from here on is "new".
-        first.update(seen=[str(i) for i in ids], seeded=True)
+    if not d.get("seeded"):
+        # What is already open on the PR is this stop's first round — unless
+        # an earlier stop of this flight handed it to the agent already
+        # (intake built the session's first prompt from the comments open
+        # then). Those, and only those, start out seen.
+        first.update(seen=_handed_comments(flight, step, ids, r), seeded=True)
     if who and not d.get("pr_since"):
         # The required reviewer's clock starts once there is a PR to review
         # and this stop is watching it, whichever came later.
         first["pr_since"] = now
     if first:
-        return _wait("watching for new review comments", **first)
+        return _wait("watching for review comments", **first)
     seen = set(str(i) for i in d.get("seen") or [])
-    new = [str(i) for i in ids if str(i) not in seen] if isinstance(ids, list) else []
+    new = [str(i) for i in ids if str(i) not in seen]
     if new:
         if int(d.get("review_rounds") or 0) >= cfg["max_rounds"]:
             return {
@@ -4553,7 +4627,7 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
             % (len(new), "" if len(new) == 1 else "s"),
             "comments": new,
         }
-    if who and not d.get("reviewer_seen"):
+    if who:
         held = _required_reviewer(cfg, d, r.get("reviewer"), now)
         if held is not None:
             return held
@@ -4573,35 +4647,111 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
     )
 
 
-def _required_reviewer(cfg: dict, d: dict, posted, now: float) -> Optional[dict]:
-    """A reviews stop's ``require_reviewer`` gate (until it has seen that
-    reviewer post): it has posted → note it, and the quiet clock restarts
-    from here (``quiet_minutes`` is the wait after its first review, never a
-    settle on a PR nobody has looked at yet); not yet → wait, failing once
-    ``reviewer_wait_minutes`` have passed since ``pr_since``. ``posted`` is
-    True / False / None (GitHub could not be asked)."""
+#: A Reviews stop whose PR comments can't be read this long in a row fails
+#: (saying why) instead of settling as "quiet" on a PR it never read.
+REVIEWS_UNKNOWN_FAIL_S = 5 * 60.0
+
+
+def _reviews_unreadable(d: dict, r: dict, now: float) -> dict:
+    why = str(r.get("why") or "").strip() or "no answer about this PR's comments"
+    since = _float(d.get("unknown_since")) or now
+    if now - since >= REVIEWS_UNKNOWN_FAIL_S:
+        return {
+            "action": "fail",
+            "reason": "can't read the PR's review comments: %s — fix that and "
+            "Retry, or Skip" % why,
+        }
+    return _wait("can't read the review comments yet: %s" % why, unknown_since=since)
+
+
+def _handed_at(flight: dict, step: dict) -> Optional[float]:
+    """When an earlier stop of ``flight`` handed the PR's open comments to the
+    agent: the newest ``pr_comments_at`` of an Agent stop before ``step``
+    (intake's seeded first prompt, :func:`take_off` ``intake``), else None —
+    no stop did, or it can't be told (a re-run wiped the record)."""
+    at = None
+    for s in flight["steps"][: _step_index(flight, step["id"])]:
+        if s["kind"] != "agent":
+            continue
+        got = _float((flight["step_states"][s["id"]]["detail"]).get("pr_comments_at"))
+        if got and (at is None or got > at):
+            at = got
+    return at
+
+
+def _handed_comments(flight: dict, step: dict, ids: list, r: dict) -> List[str]:
+    """Of the comments open when a Reviews stop begins (``ids``), those an
+    earlier stop already handed to the agent: created (``r["created"]``, epoch
+    seconds) no later than :func:`_handed_at`. A comment whose time is unknown
+    was not handed — sending it again is the safe side."""
+    at = _handed_at(flight, step)
+    if at is None:
+        return []
+    created = r.get("created") if isinstance(r.get("created"), dict) else {}
+    out = []
+    for i in ids:
+        t = _float(created.get(str(i)))
+        if t and t <= at:
+            out.append(str(i))
+    return out
+
+
+def _required_reviewer(cfg: dict, d: dict, rv, now: float) -> Optional[dict]:
+    """A reviews stop's ``require_reviewer`` gate: None (open) once that
+    reviewer has reviewed the PR's CURRENT head (``detail.reviewer_head`` ==
+    ``detail.head``); else a wait, failing once ``reviewer_wait_minutes``
+    have passed since this stop first saw that head (``head_since``, else
+    ``pr_since``). Every new head — the first one seen, each push of the
+    stop's own fixes — closes the gate again. Its review restarts the quiet
+    clock: ``quiet_minutes`` is the wait after its review of this head,
+    never a settle on a commit it has not looked at yet.
+
+    ``rv`` is the driver's :func:`flight_driver._reviewer_on_head` answer
+    ``{"head", "since", "reviewed", "any", "skipped"}``, or None (GitHub
+    could not be asked)."""
     who = cfg["require_reviewer"]
-    if posted is True:
+    rv = rv if isinstance(rv, dict) else None
+    head = str((rv or {}).get("head") or "")
+    known = str(d.get("head") or "")
+    if known and d.get("reviewer_head") == known and head in ("", known):
+        return None
+    short = (head or known)[:7]
+    upd: dict = {}
+    if head and head != known:
+        upd = {"head": head, "head_since": _float(rv.get("since")) or now}
+        if not rv.get("reviewed"):
+            return _wait("waiting for %s to review %s" % (who, short), **upd)
+    if rv is not None and rv.get("reviewed") and head:
         return _wait(
-            "%s reviewed — watching for new review comments" % who,
-            reviewer_seen=True,
+            "%s reviewed %s — watching for new review comments" % (who, short),
+            reviewer_head=head,
             quiet_since=now,
+            **upd,
         )
     limit = cfg["reviewer_wait_minutes"]
-    since = float(d.get("pr_since") or now)
+    since = _float(d.get("head_since")) or _float(d.get("pr_since")) or now
+    skipped = str((rv or {}).get("skipped") or "")
+    instead = ' — it posted "%s" instead' % skipped if skipped else ""
     if now - since < limit * 60.0:
         return _wait(
-            "waiting for %s to review (%s of %d min)" % (who, _mins(now - since), limit)
+            "waiting for %s to review%s%s (%s of %d min)"
+            % (who, " " + short if short else "", instead, _mins(now - since), limit)
         )
-    if posted is None:
+    if rv is None:
         return {
             "action": "fail",
             "reason": "could not tell whether %s reviewed this PR — it needs a "
             "human review" % who,
         }
+    what = (
+        "this PR's latest commit (%s)" % short
+        if rv.get("any") and short and not skipped
+        else "this PR"
+    )
     return {
         "action": "fail",
-        "reason": "%s never reviewed this PR — it needs a human review" % who,
+        "reason": "%s never reviewed %s%s — it needs a human review"
+        % (who, what, instead),
     }
 
 

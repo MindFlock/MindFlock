@@ -1064,7 +1064,8 @@ had to choose. Field and route names are unchanged.
 - **`agent` step with an empty prompt** sends nothing and is done when the
   current turn settles (no work evidence needed). `fresh: true` creates a new
   session (plan `session` defaults, the flight's repo) and moves the flight to
-  it.
+  it. A prompt that is not empty ends with "Route so far": what the stops
+  before it came to (see "Reviews: no review left undone").
 - **`ticket` step** whose source is not configured on this machine is
   skipped (not failed); a provider error fails it. `state` is what a person
   types — the state's exact id, or its name / unqualified label (any case) —
@@ -1075,13 +1076,16 @@ had to choose. Field and route names are unchanged.
 - **`command` step** runs `/bin/sh -c` in the session's folder with the
   server's environment plus `MINDFLOCK_FLIGHT` and `MINDFLOCK_SESSION_TITLE`;
   a server restart mid-command runs it again.
-- **`reviews` step**: comments already on the PR when the step starts are
-  treated as seen; each batch of new ones goes to the agent as the pipeline's
-  consolidated prompt (which leaves the changes uncommitted), then a `push`
-  lane is armed. `include_bots: false` drops `*[bot]` and CodeRabbit authors.
-  `require_reviewer` holds the stop until that reviewer has posted (see
-  "Team PR rules as a route"). `each_round` and `reply_declined` add to
-  every round's prompt (see "Reviews: instructions for every round").
+- **`reviews` step**: comments already open on the PR when the step starts
+  are its first round, unless an earlier stop of the flight handed them to
+  the agent (see "Reviews: no review left undone"); each batch goes to the
+  agent as the pipeline's consolidated prompt (which leaves the changes
+  uncommitted), then a `push` lane is armed. A PR whose comments can't be
+  read is never "quiet". `include_bots: false` drops `*[bot]` and CodeRabbit
+  authors. `require_reviewer` holds the stop until that reviewer has
+  reviewed the PR's current head (see "Team PR rules as a route").
+  `each_round` and `reply_declined` add to every round's prompt (see
+  "Reviews: instructions for every round").
 - **`checks` step**: `none` (nothing reports) counts as passed only after 2
   minutes; the failing names come from the check-runs API.
 - **`verify` step** finds or makes the session's plan
@@ -1254,8 +1258,11 @@ work behind it had begun.
   the agent and no fix round is spent. After that it halts with the plain
   reason, never "(after N fix rounds)".
 - **No report is never a silent pass.** A reviewer that ended without
-  `report_result` is judged from its last reply (`parse_reply`: "No findings"
-  or the last numbered list). Anything else counts as did not finish.
+  `report_result`, or with an empty one, is judged from its last reply
+  (`parse_reply`: "No findings" or the last numbered list). Anything else
+  counts as did not finish: another reviewer is asked, then the stop halts
+  ("the reviewer did not finish: review-2 ended without a report"), and
+  `on_fail: agent` halts too (`no_fix`).
 - **Rounds are the stop's own setting.** `config.rounds` (1..10, default 3:
   how many times findings go back to the agent; other kinds keep
   `MAX_FIX_ROUNDS` = 2) and `config.unresolved`: `"ask"` (default) or
@@ -8215,28 +8222,57 @@ author's login (`coderabbit` matches `coderabbitai` and
 `coderabbitai[bot]`). `reviewer_wait_minutes` (int 1..1440, default 10) is
 how long it gets.
 
-- **Has it posted?** `_reviews_obs` adds `reviewer` (True / False / None =
-  GitHub could not be asked) while the stop has not yet seen it post: True
-  when an actionable comment is its own, else `_reviewer_posted` reads
-  `GET /repos/{repo}/pulls/{n}/reviews` (a review in any state — every
-  inline comment belongs to one) and `GET /repos/{repo}/issues/{n}/comments`
-  (where a bot posts its summary). The actionable-comment fetch alone cannot
-  answer: it drops resolved / outdated threads, and a clean review has none.
-  Once `detail.reviewer_seen`, it stops asking.
-- **The clock** starts at `detail.pr_since`: the first watch tick with a PR
-  (the later of "the PR opened" and "the stop started"), stored with the
-  seeding.
-- **Waiting**: until it has posted, the stop never settles as quiet (a short
-  `quiet_minutes` such as 5 still waits for the first review), noting
-  "waiting for <reviewer> to review (3m of 10 min)". New comments from anyone
-  still go to the agent meanwhile.
-- **It posted** → `reviewer_seen`, and `quiet_since` restarts there: the PR
-  then settles after `quiet_minutes` more without new comments, so
-  "`quiet_minutes: 5`" reads "wait 5 minutes after the bot's review".
+- **Has it reviewed the current head?** (2026-11-12: it used to be "has it
+  ever posted", so a review of an old commit opened the gate at once.)
+  `_reviews_obs` adds `reviewer`, `_reviewer_on_head`'s answer `{head,
+  since, reviewed, any, skipped}` (None = GitHub could not be asked), on
+  every fetch: `head` is GitHub's head of the PR (`GET pulls/{n}`), not the
+  worktree's. `reviewed` is True on any of three signals:
+  - a review by it (`GET pulls/{n}/reviews`, any state but PENDING) whose
+    `commit_id` is the head. CodeRabbit posts one when it has comments to
+    make, NOT when it has nothing to flag;
+  - a conversation comment by it (`GET issues/{n}/comments`) CREATED at or
+    after `since`, when this stop first saw that head: a bot that answers
+    only there;
+  - a conversation comment by it, created or EDITED at any time, whose body
+    names the head's FULL sha. This is CodeRabbit's clean review: no review
+    object, only its one summary comment edited to "Reviewing files that
+    changed from the base of the PR and between <older sha> and <head sha>"
+    (plus a `final_review_risk_coverage` marker with the head) and "No
+    actionable comments were generated in the recent review." Seen on a real
+    PR on 2026-11-12. The check is generic, not CodeRabbit's markers.
+
+  Not counted, whatever sha they name: acknowledgements and in-progress
+  notices ("Actions performed", "Review triggered", "Currently processing",
+  "Review in progress"; CodeRabbit's processing notice names the commit it
+  is about to read) and skip notices ("Review skipped", "Reviews paused",
+  "Rate limit exceeded"). An edited comment that does not name the head
+  does not count either: it may be about an older commit. The newest skip
+  notice is `skipped`, in one line. Both lists are paged (up to 10 × 100).
+- **The clock** is per head: `detail.head` / `detail.head_since`, set when
+  the stop first sees a head (`pr_since`, the first watch tick with a PR, is
+  the fallback while GitHub can't be asked).
+- **Waiting**: until it has reviewed the head, the stop never settles as
+  quiet (a short `quiet_minutes` such as 5 still waits), noting "waiting for
+  <reviewer> to review abc1234 (3m of 10 min)" (plus ` — it posted "Review
+  skipped: …" instead`). New comments from anyone still go to the agent
+  meanwhile.
+- **It reviewed the head** → `detail.reviewer_head`, and `quiet_since`
+  restarts there: the PR then settles after `quiet_minutes` more without new
+  comments, so "`quiet_minutes: 5`" reads "wait 5 minutes after the bot's
+  review of this commit".
+- **Every push moves the head.** After the stop's own send → push → watch,
+  the head is new and the gate is closed again: the reviewer must review the
+  new head, within `reviewer_wait_minutes` of the stop seeing it, before the
+  quiet clock can finish the stop. The push restarts `quiet_since`, and that
+  makes `_reviews_obs` fetch afresh instead of answering from its
+  one-minute cache.
 - **It never came** within `reviewer_wait_minutes` → fail "<reviewer> never
-  reviewed this PR — it needs a human review" ("could not tell whether
-  <reviewer> reviewed this PR — …" when GitHub could not be asked); the
-  stop's `on_fail` decides what then (`you` asks you).
+  reviewed this PR — it needs a human review", "… never reviewed this PR's
+  latest commit (abc1234) — …" when it reviewed only older ones, "… never
+  reviewed this PR — it posted "Review skipped: …" instead — …" after a skip
+  ("could not tell whether <reviewer> reviewed this PR — …" when GitHub could
+  not be asked); the stop's `on_fail` decides what then (`you` asks you).
 - **Rounds exhausted**: new comments past `max_rounds` fail "comments still
   open after N rounds — it needs a human review" (with or without a
   required reviewer; it read "still getting review comments after N rounds").
@@ -8249,7 +8285,9 @@ not hide the bot from the required-reviewer check.
 Two optional fields on the `reviews` stop add to the prompt each round
 sends the agent (`_send_reviews` passes them to
 `pr_runner.build_consolidated_pr_prompt`). With both at their defaults the
-prompt is the pipeline's, byte for byte.
+prompt is the pipeline's, byte for byte, except that the stop's first round
+ends with "Route so far" when earlier stops finished (see "Reviews: no
+review left undone").
 
 - **`each_round`** — "Also, every round" (textarea, ≤ 8000 characters,
   trimmed, default empty): the route's own instructions, sent with every
@@ -8353,3 +8391,112 @@ A route that is over → 409 `finished`; past 40 stops → 409
 `POST /api/pr-review` (docs/web-api.md, the frontend's action on a PR row and
 on a session with a PR) and the MCP tool `run_pr_review` (docs/mcp.md), so an
 orchestrator agent can run a review on a PR its worker opened.
+
+## Reviews: no review left undone (2026-11-12)
+
+Three ways a route reached its verdict with the reviews not done, all seen on
+real routes on an existing open PR (verify → review standards → review
+security → merge the base → ship push → Proof of Code Review → reviews with
+`require_reviewer: coderabbit` → verdict).
+
+### Comments already open are the stop's first round
+
+A `reviews` stop's first look used to mark every actionable comment on the
+PR as seen. The theory was that an earlier stop had handed them to the agent
+("a PR flight's first prompt carries it"). On a route started on an existing
+PR, no earlier stop does. The stop ended `{"seen": [3 ids], "seeded": true,
+"receipt": "no rounds, quiet"}` with three CodeRabbit comments still open,
+and the verdict found them.
+
+Now the first look seeds `seen` with only the comments an earlier stop
+really handed over, and the rest go to the agent as round 1:
+
+- **Intake's first prompt** (`arm_pending` → `take_off(intake=True)`) on a
+  PR (subject `kind: "pr"`, from Intake or `POST /api/pr-review` created) is
+  built from the comments open right then. The seeded leading Agent stop
+  records `detail.pr_comments_at` (the arm time). `_handed_at` is the newest
+  such mark on an Agent stop before the Reviews stop. `_handed_comments`
+  counts a comment as handed when `_reviews_obs`' `created[id]` (its
+  `createdAt`) is no later than that mark.
+- **Everything else is sent.** That covers a comment newer than the mark,
+  one whose time is unknown, a ticket intake (its prompt is the ticket's), a
+  typed first prompt, a route started or inserted on a PR (`started` /
+  `inserted` modes: the plan's own Agent prompt carries no comments), and a
+  re-run Agent stop (its detail, and the mark, are fresh). When the stop
+  can't tell, it sends.
+- Resolved and outdated threads never count (`fetch_actionable_comments`).
+- **Known gap:** intake fetches the comments a little before it arms the
+  route (`prepare_review` gathers them with the workspace provisioning). A
+  comment created in that gap counts as handed. Recording the exact comment
+  ids at intake would close it; that needs `pr_review.prepare_review` /
+  `session_runner.run_pr` to pass them to `arm_pending`.
+
+### Comments that can't be read are never "quiet"
+
+Some stored Reviews details had no `seen` / `seeded` at all
+(`{"phase": "watch", "receipt": "no rounds, quiet"}`). Nothing overwrote
+them: the run sets `{"phase": "watch"}`, and every later write is an
+update. The comments were simply never read. `_reviews_obs` answers
+`ids: None` when `_pr_of` finds no PR for the branch (`github_pr.find_pr`:
+no API token, or a head outside the repo's owner) or the fetch fails. The
+judge skipped the seeding, found nothing new, and let the quiet clock finish
+the stop.
+
+Now `ids: None` waits ("can't read the review comments yet: <why>",
+`detail.unknown_since`). `why` says "found no pull request for branch X on
+GitHub" or "couldn't ask GitHub: …". After `REVIEWS_UNKNOWN_FAIL_S` (5 min)
+of it the stop fails "can't read the PR's review comments: <why> — fix that
+and Retry, or Skip", handled by `on_fail`. The first readable tick clears
+the spell.
+
+### A required reviewer must review the head
+
+See "`reviews`: a required reviewer" above: the gate opens on a review of
+the PR's current head, per head, and closes again after each of the stop's
+own pushes. A skip notice is not a review, and the failure says what the
+reviewer posted instead.
+
+### A reviewer without a report
+
+The `review` stop's "finished without a report" pass was fixed in v0.14.10
+("A review stop converges"). One gap is closed here: an empty report (no
+text) is judged like no report. Its last reply is read, and failing that
+another reviewer is asked, then the stop halts.
+
+### The agent is told what the route did
+
+A `review` stop runs in a separate reviewer session. When it reports "No
+findings", nothing is typed to the route's own session. A later Agent stop
+that asks the agent to record what was reviewed ("tick 'Conducted security
+review' only when true") then honestly left it unticked. On four PRs the
+security review stop had passed with no findings, and the PR description
+said no security review was conducted.
+
+`flights.route_so_far(flight, step)` builds a factual appendix from the
+flight's own step states. It has one line for each stop BEFORE `step`
+whose state is done, skipped or failed: `- <title>: <state>,
+<detail.receipt, else the note's first line>`. A failure that moved on
+reads "failed, moved on". For example:
+
+```text
+Route so far (the stops before this one, as MindFlock recorded them):
+- Verify: done, 3 of 3
+- Claude security review: done, no findings
+- Push: done, pushed
+```
+
+Each line is capped at `ROUTE_LINE_CHARS` (200) and the whole appendix at
+`ROUTE_SO_FAR_CHARS` (2000). When there are too many stops, the newest are
+kept, after a line "- … N stops before these". `with_route_so_far` appends
+it after a blank line:
+
+- to every Agent stop's prompt (`_run_agent`, the `fresh` session's
+  first prompt too) that is not empty: an empty prompt still means "let the
+  turn settle";
+- to a Reviews stop's FIRST round (`_send_reviews` while
+  `review_rounds` is 0); later rounds are only the comments.
+
+Nothing is added when no earlier stop has finished: a route's first stop,
+and intake's seeded first prompt, read as before. There is no setting: the
+Agent stop has no per-stop prompt options to hang one on, and the appendix
+is the route's own record, never instructions.

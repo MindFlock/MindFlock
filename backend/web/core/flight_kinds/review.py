@@ -618,9 +618,14 @@ async def _observe(flight: dict, step: dict, ss: dict, sess: dict, now: float):
     out = {"entry": entry, "text": _clean_text(msg), "report": msg is not None}
     if entry["state"] not in ("done", "failed"):
         return out
-    if msg is None and entry["state"] == "done" and facts.get("present"):
-        # No report is never a silent pass: its last reply is read (before
-        # the close takes its worktree) and judged in the report's place.
+    if (
+        (msg is None or not out["text"])
+        and entry["state"] == "done"
+        and facts.get("present")
+    ):
+        # No report (or an empty one) is never a silent pass: its last reply
+        # is read (before the close takes its worktree) and judged in the
+        # report's place.
         out["reply"] = _clean_reply(await asyncio.to_thread(_last_reply, title))
     if not step["config"].get("keep") and facts.get("present"):
         out["closed"] = await asyncio.to_thread(_close, flight["session"], title)
@@ -722,7 +727,7 @@ def _judge(flight, step, ss, obs, now) -> dict:
             ss, "the reviewer did not finish", dict(closed, reviewer=entry)
         )
     read = ""
-    if o.get("report"):
+    if o.get("report") and str(o.get("text") or "").strip():
         n, text = parse_findings(o.get("text") or "")
     else:
         got = parse_reply(o.get("reply") or "")

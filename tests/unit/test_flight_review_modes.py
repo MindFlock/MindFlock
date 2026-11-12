@@ -263,6 +263,21 @@ def test_the_reviews_fields():
         F.normalize_step(raw)
 
 
+H1 = "a" * 40  # the PR's head when the stop begins
+H2 = "b" * 40  # the head after the stop's own push
+
+
+def rv(head=H1, reviewed=False, any_=False, skipped="", since=NOW):
+    """The driver's ``_reviewer_on_head`` answer."""
+    return {
+        "head": head,
+        "since": since,
+        "reviewed": reviewed,
+        "any": any_,
+        "skipped": skipped,
+    }
+
+
 def watching(session="s", **config):
     """A reviews stop watching an open PR with nothing on it, from NOW."""
     f = fly({"kind": "reviews", "config": config}, session=session)
@@ -270,7 +285,7 @@ def watching(session="s", **config):
     F.apply(f, a, NOW)
     o = {
         "session": sess(pr_url="https://pr/1"),
-        "reviews": {"ids": [], "reviewer": False},
+        "reviews": {"ids": [], "reviewer": rv()},
     }
     a = go(f, o, NOW)
     assert a["action"] == "wait"
@@ -281,9 +296,16 @@ def detail(f):
     return f["step_states"][f["steps"][0]["id"]]["detail"]
 
 
+def with_rv(o, **kw):
+    return dict(o, reviews={"ids": [], "reviewer": rv(**kw)})
+
+
 def test_a_short_quiet_still_waits_for_the_required_reviewer():
     f, o = watching(require_reviewer="coderabbit", quiet_minutes=5)
     assert detail(f)["pr_since"] == NOW and detail(f)["seeded"] is True
+    a = go(f, o, NOW + 1)
+    assert a["note"] == "waiting for coderabbit to review aaaaaaa"
+    assert detail(f)["head"] == H1 and detail(f)["head_since"] == NOW
     # Past quiet_minutes on an empty PR: still waiting for the reviewer.
     a = go(f, o, NOW + 6 * 60)
     assert a["action"] == "wait" and a["note"].startswith("waiting for coderabbit")
@@ -308,37 +330,118 @@ def test_the_required_reviewer_never_coming_fails_the_stop():
     )
 
 
-def test_settles_once_the_reviewer_posted_and_the_pr_went_quiet():
+def test_a_review_of_an_older_commit_does_not_open_the_gate():
+    """Bug B: on a PR the reviewer reviewed days ago, the 5-minute quiet ran
+    out before it had looked at the commit the route just pushed."""
     f, o = watching(require_reviewer="coderabbit", quiet_minutes=5)
-    posted = dict(o, reviews={"ids": [], "reviewer": True})
-    a = go(f, posted, NOW + 3 * 60)
-    assert a["action"] == "wait" and a["note"].startswith("coderabbit reviewed")
-    assert detail(f)["reviewer_seen"] is True
+    old = with_rv(o, any_=True)  # it posted, but never on this head
+    go(f, old, NOW + 1)
+    for t in (5 * 60, 6 * 60, 9 * 60):
+        a = go(f, old, NOW + t)
+        assert a["action"] == "wait" and a["note"].startswith(
+            "waiting for coderabbit to review aaaaaaa"
+        )
+    a = F.next_action(f, old, NOW + 10 * 60)
+    assert a["action"] == "fail"
+    assert a["reason"] == (
+        "coderabbit never reviewed this PR's latest commit (aaaaaaa) — it needs "
+        "a human review"
+    )
+
+
+def test_settles_once_the_reviewer_reviewed_the_head_and_the_pr_went_quiet():
+    f, o = watching(require_reviewer="coderabbit", quiet_minutes=5)
+    go(f, o, NOW + 1)
+    a = go(f, with_rv(o, reviewed=True, any_=True), NOW + 3 * 60)
+    assert a["action"] == "wait" and a["note"].startswith("coderabbit reviewed aaaaaaa")
+    assert detail(f)["reviewer_head"] == H1
     assert detail(f)["quiet_since"] == NOW + 3 * 60
-    # The quiet clock starts at its review, not at the stop's start.
-    after = dict(o, reviews={"ids": []})  # the driver stops asking once seen
-    a = go(f, after, NOW + 6 * 60)
-    assert a["action"] == "wait" and a["note"].startswith("quiet for")
-    a = F.next_action(f, after, NOW + 8 * 60)
+    # The quiet clock starts at its review, not at the stop's start; a tick
+    # GitHub could not answer keeps the gate open.
+    for after in (with_rv(o, reviewed=True), dict(o, reviews={"ids": []})):
+        a = F.next_action(f, after, NOW + 6 * 60)
+        assert a["action"] == "wait" and a["note"].startswith("quiet for")
+    a = F.next_action(f, with_rv(o, reviewed=True), NOW + 8 * 60)
     assert a["action"] == "done" and a["note"] == "no new review comments for 5 min"
+
+
+def test_a_head_reviewed_before_the_stop_began_opens_the_gate_at_once():
+    f, o = watching(require_reviewer="coderabbit", quiet_minutes=5)
+    a = go(f, with_rv(o, reviewed=True, any_=True), NOW + 1)
+    assert a["note"].startswith("coderabbit reviewed aaaaaaa")
+    assert detail(f)["head"] == H1 and detail(f)["reviewer_head"] == H1
+    assert F.next_action(f, with_rv(o, reviewed=True), NOW + 302)["action"] == "done"
+
+
+def test_the_stops_own_push_waits_for_a_review_of_the_new_head():
+    f, o = watching(require_reviewer="coderabbit", quiet_minutes=5)
+    go(f, with_rv(o, reviewed=True, any_=True), NOW + 1)
+    # A round was sent, fixed and pushed: back to watching from NOW + 600.
+    F.apply(
+        f,
+        {"action": "wait", "note": "", "detail": {"phase": "watch"}},
+        NOW + 600,
+    )
+    F.apply(
+        f, {"action": "wait", "note": "", "detail": {"quiet_since": NOW + 600}}, NOW
+    )
+    pushed = with_rv(o, head=H2, any_=True, since=NOW + 610)
+    a = go(f, pushed, NOW + 610)
+    assert a["note"] == "waiting for coderabbit to review bbbbbbb"
+    assert detail(f)["head"] == H2 and detail(f)["head_since"] == NOW + 610
+    # The quiet window alone never finishes it now.
+    a = go(f, pushed, NOW + 600 + 6 * 60)
+    assert a["action"] == "wait" and a["note"].startswith(
+        "waiting for coderabbit to review bbbbbbb"
+    )
+    a = go(f, with_rv(o, head=H2, reviewed=True, any_=True), NOW + 600 + 7 * 60)
+    assert a["note"].startswith("coderabbit reviewed bbbbbbb")
+    assert detail(f)["quiet_since"] == NOW + 600 + 7 * 60
+    reviewed = with_rv(o, head=H2, reviewed=True)
+    assert F.next_action(f, reviewed, NOW + 600 + 11 * 60)["action"] == "wait"
+    assert F.next_action(f, reviewed, NOW + 600 + 12 * 60)["action"] == "done"
+    # Out of time on the new head: the old head's review does not count.
+    g, o2 = watching("t", require_reviewer="coderabbit", reviewer_wait_minutes=10)
+    go(g, with_rv(o2, reviewed=True, any_=True), NOW + 1)
+    go(g, with_rv(o2, head=H2, any_=True, since=NOW + 60), NOW + 60)
+    a = F.next_action(g, with_rv(o2, head=H2, any_=True), NOW + 60 + 10 * 60)
+    assert a["action"] == "fail" and "latest commit (bbbbbbb)" in a["reason"]
+
+
+def test_a_skipped_review_is_not_a_review_and_says_what_it_posted():
+    f, o = watching(require_reviewer="coderabbit", reviewer_wait_minutes=10)
+    skip = "Review skipped: Auto reviews are disabled on this repository."
+    skipped = with_rv(o, any_=True, skipped=skip)
+    go(f, skipped, NOW + 1)
+    a = go(f, skipped, NOW + 60)
+    assert a["action"] == "wait"
+    assert 'it posted "Review skipped: Auto reviews are disabled' in a["note"]
+    a = F.next_action(f, skipped, NOW + 10 * 60)
+    assert a["action"] == "fail"
+    assert a["reason"] == (
+        'coderabbit never reviewed this PR — it posted "%s" instead — it needs a '
+        "human review" % skip
+    )
 
 
 def test_the_reviewers_comments_go_to_the_agent_first():
     f, o = watching(require_reviewer="coderabbit", quiet_minutes=5)
-    a = F.next_action(f, dict(o, reviews={"ids": ["7"], "reviewer": True}), NOW + 60)
+    obs = dict(o, reviews={"ids": ["7"], "reviewer": rv(reviewed=True)})
+    a = F.next_action(f, obs, NOW + 60)
     assert a["action"] == "run" and a["phase"] == "send" and a["comments"] == ["7"]
 
 
 def test_rounds_exhausted_needs_a_human():
     f, o = watching(require_reviewer="coderabbit", max_rounds=2)
     F.apply(f, {"action": "wait", "note": "", "detail": {"review_rounds": 2}}, NOW)
-    a = F.next_action(f, dict(o, reviews={"ids": ["8"], "reviewer": True}), NOW + 60)
+    obs = dict(o, reviews={"ids": ["8"], "reviewer": rv(reviewed=True)})
+    a = F.next_action(f, obs, NOW + 60)
     assert a["action"] == "fail"
     assert a["reason"] == "comments still open after 2 rounds — it needs a human review"
 
 
 # --------------------------------------------------------------------------- #
-# reviews: the driver asks GitHub whether the reviewer posted
+# reviews: the driver asks GitHub whether the reviewer reviewed the head
 # --------------------------------------------------------------------------- #
 def _pr():
     return PullRequest(
@@ -346,31 +449,36 @@ def _pr():
     )
 
 
-def _comment(i, author):
-    return PRComment(id=i, kind="review", author=author, body="b", url="u")
+def _comment(i, author, created=None):
+    return PRComment(
+        id=i, kind="review", author=author, body="b", url="u", created_at=created
+    )
 
 
 @pytest.fixture
 def github(monkeypatch):
     """Fake PR lookups: ``state["comments"]`` is the actionable list,
-    ``state["posted"]`` what ``_reviewer_posted`` answers (and counts)."""
-    state = {"comments": [], "posted": False, "asked": 0}
+    ``state["reviewer"]`` what ``_reviewer_on_head`` answers (its calls in
+    ``state["calls"]``), ``state["pr"]`` False = no PR found."""
+    state = {"comments": [], "reviewer": rv(), "calls": [], "pr": True}
 
     async def _pr_of(sess, flight):
-        return _pr(), "o/r"
+        return (_pr(), "o/r") if state["pr"] else (None, "")
 
     async def _fetch(pr, cfg):
+        if isinstance(state["comments"], Exception):
+            raise state["comments"]
         return list(state["comments"])
 
-    async def _posted(pr, who):
-        state["asked"] += 1
-        if isinstance(state["posted"], Exception):
-            raise state["posted"]
-        return state["posted"]
+    async def _on_head(pr, who, known, known_since, now):
+        state["calls"].append((who, known, known_since, now))
+        if isinstance(state["reviewer"], Exception):
+            raise state["reviewer"]
+        return state["reviewer"]
 
     monkeypatch.setattr(D, "_pr_of", _pr_of)
     monkeypatch.setattr(_prc, "fetch_actionable_comments", _fetch)
-    monkeypatch.setattr(D, "_reviewer_posted", _posted)
+    monkeypatch.setattr(D, "_reviewer_on_head", _on_head)
     return state
 
 
@@ -378,32 +486,62 @@ def _obs(f, now=NOW):
     return asyncio.run(D._reviews_obs(f, f["steps"][0], sess(pr_url="u"), now))
 
 
-def test_the_driver_reports_whether_the_reviewer_posted(github):
+def test_the_driver_reports_the_reviewer_on_the_head(github):
     f = fly({"kind": "reviews", "config": {"require_reviewer": "CodeRabbit"}})
-    assert _obs(f) == {"ids": [], "reviewer": False} and github["asked"] == 1
+    assert _obs(f) == {"ids": [], "created": {}, "reviewer": rv()}
+    assert github["calls"] == [("CodeRabbit", "", 0.0, NOW)]
     # Within the minute: the cache answers.
-    github["posted"] = True
-    assert _obs(f, NOW + 30) == {"ids": [], "reviewer": False}
-    assert _obs(f, NOW + 61) == {"ids": [], "reviewer": True}
-    # An inline comment of its own answers without a second request.
-    github["comments"] = [_comment(5, "coderabbitai[bot]")]
-    asked = github["asked"]
-    assert _obs(f, NOW + 200) == {"ids": ["5"], "reviewer": True}
-    assert github["asked"] == asked
+    github["reviewer"] = rv(reviewed=True)
+    assert _obs(f, NOW + 30)["reviewer"] == rv()
+    assert _obs(f, NOW + 61)["reviewer"] == rv(reviewed=True)
+    # The head it knows (and since when) goes along; it keeps asking once
+    # reviewed — a push moves the head.
+    d = f["step_states"][f["steps"][0]["id"]]["detail"]
+    d.update(head=H1, head_since=NOW + 5, reviewer_head=H1)
+    _obs(f, NOW + 200)
+    assert github["calls"][-1] == ("CodeRabbit", H1, NOW + 5, NOW + 200)
+    # The quiet clock restarted (the stop's own push): asked afresh at once.
+    n = len(github["calls"])
+    d["quiet_since"] = NOW + 210
+    _obs(f, NOW + 211)
+    assert len(github["calls"]) == n + 1
 
 
-def test_the_driver_stops_asking_once_seen_and_never_asks_unrequired(github):
-    f = fly({"kind": "reviews", "config": {"require_reviewer": "coderabbit"}})
-    f["step_states"][f["steps"][0]["id"]]["detail"]["reviewer_seen"] = True
-    assert _obs(f) == {"ids": []} and github["asked"] == 0
+def test_the_driver_never_asks_an_unrequired_reviewer(github):
     g = fly({"kind": "reviews", "config": {}}, session="t")
-    assert _obs(g) == {"ids": []} and github["asked"] == 0
+    assert _obs(g) == {"ids": [], "created": {}} and github["calls"] == []
 
 
 def test_a_failed_ask_is_unknown_not_never(github):
-    github["posted"] = RuntimeError("502")
+    github["reviewer"] = RuntimeError("502")
     f = fly({"kind": "reviews", "config": {"require_reviewer": "coderabbit"}})
-    assert _obs(f) == {"ids": [], "reviewer": None}
+    assert _obs(f) == {"ids": [], "created": {}, "reviewer": None}
+
+
+def test_the_driver_says_why_the_comments_could_not_be_read(github):
+    github["pr"] = False
+    f = fly({"kind": "reviews", "config": {}})
+    out = asyncio.run(
+        D._reviews_obs(f, f["steps"][0], sess(pr_url="u", branch="feat"), NOW)
+    )
+    assert out["ids"] is None
+    assert out["why"] == "found no pull request for branch feat on GitHub"
+    github["pr"], github["comments"] = True, RuntimeError("GraphQL 502")
+    g = fly({"kind": "reviews", "config": {}}, session="t")
+    out = _obs(g)
+    assert out["ids"] is None and out["why"] == "couldn't ask GitHub: GraphQL 502"
+
+
+def test_the_driver_reports_when_each_comment_was_created(github):
+    github["comments"] = [
+        _comment(5, "coderabbitai[bot]", "2027-01-15T08:00:00Z"),
+        _comment(6, "alice"),
+    ]
+    f = fly({"kind": "reviews", "config": {}})
+    out = _obs(f)
+    assert out["ids"] == ["5", "6"]
+    want = dt.datetime(2027, 1, 15, 8, tzinfo=dt.timezone.utc).timestamp()
+    assert out["created"] == {"5": want, "6": 0.0}
 
 
 def test_reviewer_matching_is_a_case_insensitive_substring():
@@ -414,8 +552,8 @@ def test_reviewer_matching_is_a_case_insensitive_substring():
 
 
 class _Resp:
-    def __init__(self, data, status=200):
-        self.status, self._data = status, data
+    def __init__(self, data, status=200, links=None):
+        self.status, self._data, self.links = status, data, links or {}
 
     async def json(self):
         return self._data
@@ -442,19 +580,164 @@ class _Http:
         return False
 
 
+def _iso(t):
+    return dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+CR = {"login": "coderabbitai[bot]"}
+OLD = "c" * 40
+
+
+def summary(head):
+    """CodeRabbit's summary comment after a review with nothing to flag, as
+    seen on a real PR (no review object for that commit, only this edit)."""
+    return (
+        '<!-- final_review_risk_coverage:{"sourceCommitId":"%s",'
+        '"coveredCommitId":"%s","kind":"reviewed"} -->\n'
+        "<details>\n<summary>📥 Commits</summary>\n\n"
+        "Reviewing files that changed from the base of the PR and between "
+        "%s and %s.\n\n</details>\n\n"
+        "No actionable comments were generated in the recent review. 🎉\n"
+        % (head, head, "d" * 40, head)
+    )
+
+
+def processing(head):
+    """Its in-progress notice, which names the commit it is about to read."""
+    return (
+        "> [!NOTE]\n> Currently processing new changes in this PR. This may "
+        "take a few minutes, please wait...\n>\n> Reviewing files that "
+        "changed from the base of the PR and between %s and %s.\n" % (OLD, head)
+    )
+
+
+SKIP_BODY = (
+    "<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n"
+    "> [!IMPORTANT]\n> ## Review skipped\n>\n"
+    "> Auto reviews are disabled on this repository.\n"
+)
+
+
 @pytest.mark.parametrize(
     "reviews,comments,want",
     [
-        ([{"user": {"login": "coderabbitai[bot]"}, "state": "COMMENTED"}], [], True),
+        # A review of the head (inline comments or none) is a review of it.
+        ([{"user": CR, "state": "COMMENTED", "commit_id": H1}], [], (True, True, "")),
+        # Its review of an older commit: it posted, but not on this head.
         (
-            [{"user": {"login": "alice"}}],
-            [{"user": {"login": "coderabbitai[bot]"}}],
-            True,
+            [{"user": CR, "state": "COMMENTED", "commit_id": "c" * 40}],
+            [],
+            (False, True, ""),
         ),
-        ([{"user": {"login": "alice"}}], [{"user": None}], False),
+        # A pending (unsubmitted) review never counts.
+        ([{"user": CR, "state": "PENDING", "commit_id": H1}], [], (False, True, "")),
+        # A conversation comment after the stop saw the head: a review.
+        (
+            [],
+            [
+                {
+                    "user": CR,
+                    "body": "No actionable comments",
+                    "created_at": _iso(NOW + 60),
+                }
+            ],
+            (True, True, ""),
+        ),
+        # … but not one from before it (about an older head), nor an edit.
+        (
+            [],
+            [
+                {
+                    "user": CR,
+                    "body": "Summary",
+                    "created_at": _iso(NOW - 60),
+                    "updated_at": _iso(NOW + 60),
+                }
+            ],
+            (False, True, ""),
+        ),
+        # An acknowledgement is not a review.
+        (
+            [],
+            [
+                {
+                    "user": CR,
+                    "body": "✅ Actions performed\n\nReview triggered.",
+                    "created_at": _iso(NOW + 60),
+                }
+            ],
+            (False, True, ""),
+        ),
+        # A summary comment EDITED to name the head (CodeRabbit with nothing
+        # to flag posts no review object): a review of the head.
+        (
+            [],
+            [
+                {
+                    "user": CR,
+                    "body": summary(H1),
+                    "created_at": _iso(NOW - 86400),
+                    "updated_at": _iso(NOW + 60),
+                }
+            ],
+            (True, True, ""),
+        ),
+        # … not when it names only an older commit.
+        (
+            [],
+            [
+                {
+                    "user": CR,
+                    "body": summary(OLD),
+                    "created_at": _iso(NOW - 86400),
+                    "updated_at": _iso(NOW + 60),
+                }
+            ],
+            (False, True, ""),
+        ),
+        # … and never a "processing" notice, even one naming the head.
+        (
+            [],
+            [
+                {
+                    "user": CR,
+                    "body": processing(H1),
+                    "created_at": _iso(NOW - 86400),
+                    "updated_at": _iso(NOW + 60),
+                }
+            ],
+            (False, True, ""),
+        ),
+        # A skip notice is not a review; it is what it posted instead.
+        (
+            [],
+            [{"user": CR, "body": SKIP_BODY, "created_at": _iso(NOW + 60)}],
+            (
+                False,
+                True,
+                "Review skipped: Auto reviews are disabled on this repository.",
+            ),
+        ),
+        (
+            [],
+            [
+                {
+                    "user": CR,
+                    "body": "> [!WARNING]\n> ## Rate limit exceeded\n> wait 5 minutes",
+                    "created_at": _iso(NOW + 60),
+                }
+            ],
+            (False, True, "Rate limit exceeded: wait 5 minutes"),
+        ),
+        # Someone else's review is not the required reviewer's.
+        (
+            [{"user": {"login": "alice"}, "state": "APPROVED", "commit_id": H1}],
+            [{"user": None}],
+            (False, False, ""),
+        ),
     ],
 )
-def test_reviewer_posted_reads_reviews_and_conversation_comments(
+def test_reviewer_on_head_reads_the_head_reviews_and_conversation(
     monkeypatch, reviews, comments, want
 ):
     import aiohttp
@@ -462,14 +745,53 @@ def test_reviewer_posted_reads_reviews_and_conversation_comments(
     from backend.ticket_ingestion import github_auth
 
     seen: list = []
-    pages = {"reviews": (reviews,), "comments": (comments,)}
+    pages = {
+        "1": ({"head": {"sha": H1}},),
+        "reviews": (reviews,),
+        "comments": (comments,),
+    }
     monkeypatch.setattr(aiohttp, "ClientSession", lambda **kw: _Http(pages, seen))
 
     async def _token(cfg=None):
         return "t"
 
     monkeypatch.setattr(github_auth, "resolve_token", _token)
-    assert asyncio.run(D._reviewer_posted(_pr(), "coderabbit")) is want
-    assert seen[0] == "https://api.github.com/repos/o/r/pulls/1/reviews"
-    if not want:
-        assert seen[1] == "https://api.github.com/repos/o/r/issues/1/comments"
+    out = asyncio.run(D._reviewer_on_head(_pr(), "coderabbit", "", 0.0, NOW))
+    assert (out["reviewed"], out["any"], out["skipped"]) == want
+    assert out["head"] == H1 and out["since"] == NOW
+    assert seen == [
+        "https://api.github.com/repos/o/r/pulls/1",
+        "https://api.github.com/repos/o/r/pulls/1/reviews",
+        "https://api.github.com/repos/o/r/issues/1/comments",
+    ]
+
+
+def test_reviewer_on_head_keeps_the_known_heads_clock_and_pages(monkeypatch):
+    import aiohttp
+
+    from backend.ticket_ingestion import github_auth
+
+    seen: list = []
+    nxt = {"next": {"url": "https://api.github.com/x/reviews2"}}
+    pages = {
+        "1": ({"head": {"sha": H1}},),
+        "reviews": ([{"user": CR, "commit_id": "c" * 40}], 200, nxt),
+        "reviews2": ([{"user": CR, "state": "COMMENTED", "commit_id": H1}],),
+        "comments": ([],),
+    }
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda **kw: _Http(pages, seen))
+
+    async def _token(cfg=None):
+        return ""
+
+    monkeypatch.setattr(github_auth, "resolve_token", _token)
+    out = asyncio.run(D._reviewer_on_head(_pr(), "coderabbit", H1, NOW - 99, NOW))
+    assert out["since"] == NOW - 99 and out["reviewed"] is True
+    assert "https://api.github.com/x/reviews2" in seen
+    # A new head: its clock starts now.
+    out = asyncio.run(D._reviewer_on_head(_pr(), "coderabbit", H2, NOW - 99, NOW))
+    assert out["since"] == NOW
+    # GitHub refusing is an error ("could not tell"), never "not reviewed".
+    pages["1"] = ({}, 502)
+    with pytest.raises(RuntimeError):
+        asyncio.run(D._reviewer_on_head(_pr(), "coderabbit", H1, NOW, NOW))
