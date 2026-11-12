@@ -98,6 +98,7 @@ def test_defaults():
         "ready": "now",
         "ready_minutes": 0,
         "who": "both",
+        "ask": "here",
         "notes": "",
         "post_to_pr": False,
     }
@@ -154,6 +155,7 @@ def test_kind_fields_in_contract_order():
         "ready",
         "ready_minutes",
         "who",
+        "ask",
         "notes",
         "post_to_pr",
     ]
@@ -648,6 +650,7 @@ def test_legacy_wait_live_matrix(config, where, ready):
             "ready",
             "ready_minutes",
             "who",
+            "ask",
             "notes",
             "post_to_pr",
         }
@@ -687,6 +690,7 @@ def test_a_stored_legacy_flight_reads_in_the_new_shape():
         "ready": "on_branch",
         "ready_minutes": 0,
         "who": "agent",
+        "ask": "here",
         "notes": "",
         "post_to_pr": False,
     }
@@ -827,6 +831,7 @@ def test_kinds_dto_passes_option_labels_through_for_verify_only():
     # Review's mode (bugs / security / standards) carries labels too.
     assert sorted(with_labels) == [
         ("review", "mode"),
+        ("verify", "ask"),
         ("verify", "ready"),
         ("verify", "who"),
     ]

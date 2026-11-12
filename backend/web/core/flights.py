@@ -287,6 +287,13 @@ VERIFY_READY = ("now", "on_branch", "after_prev")
 #: ``where`` names: "branch" (this branch's own code) or an environment's name.
 VERIFY_WHERE_BRANCH = "branch"
 _VERIFY_WHERE_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
+#: What a Verify stop does when its check needs a person (``ask``): "here" —
+#: the route waits at the stop (as always); "end" — the stop is done, the
+#: person's checks are OWED on the flight (``flight.owed``) and asked for
+#: once, before the route finishes (docs/flights.md "Verify stops").
+VERIFY_ASK = ("here", "end")
+#: The title of the perch a route adds at its end for the checks it owes.
+OWED_PERCH_TITLE = "Your checks"
 #: A join waits for every live child of the session, or only the workers the
 #: nearest split before it spawned.
 JOIN_OF = ("all", "spawned")
@@ -489,6 +496,17 @@ STEP_KINDS: Dict[str, dict] = {
                     "shows its evidence; the route waits on you only if "
                     "something ends blocked or failed",
                     "you": "Agent, then my sign-off",
+                },
+            ),
+            _f(
+                "ask",
+                "select",
+                "When it needs you",
+                default="here",
+                options=VERIFY_ASK,
+                option_labels={
+                    "here": "Wait here",
+                    "end": "Carry on, ask me at the end",
                 },
             ),
             _f("notes", "textarea", "Notes for this check", default=""),
@@ -913,11 +931,17 @@ def _verify_config(c: dict, strict: bool, at: str) -> dict:
             ok = False
         if not ok:
             raise PlanError("ready_minutes is 0 to 1440", at + ".ready_minutes")
+    ask = _text(c.get("ask"), 8).lower() or "here"
+    if ask not in VERIFY_ASK:
+        if strict:
+            raise PlanError("ask is here or end", at + ".ask")
+        ask = "here"
     return {
         "where": where,
         "ready": ready,
         "ready_minutes": minutes,
         "who": who,
+        "ask": ask,
         "notes": _text(c.get("notes"), 2000),
         "post_to_pr": _bool(c.get("post_to_pr"), False),
     }
@@ -2262,10 +2286,52 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
             "reason": _text(last.get("reason"), 1000),
             "at": _float(last.get("at")),
         }
+    owed = _normalize_owed(raw.get("owed"))
+    if owed:
+        # Checks a Verify stop (``ask`` "end") left for the person, asked for
+        # once before the route finishes (:func:`_owed_perch`).
+        out["owed"] = owed
+    perch = _text(raw.get("owed_perch"), 32)
+    if perch and any(s["id"] == perch for s in steps):
+        out["owed_perch"] = perch
     if out["cursor"] < len(steps):
         # At a parallel group the cursor stands on its first member.
         out["cursor"] = group_span(steps, out["cursor"])[0]
     return out
+
+
+#: At most this many owed entries on one flight (one per Verify stop).
+MAX_OWED = 40
+
+
+def _normalize_owed(raw) -> List[dict]:
+    """A flight's ``owed`` list: ``[{step, title, plan, items, since, run_at,
+    perch}]`` — per Verify stop with ``ask`` "end" whose check needed a
+    person: its stop id and title, the verify plan, what the person is asked
+    to check, when it was owed, the run it was owed for, and the stop asking
+    for it now (``""``: none yet). Unknown keys and entries without a stop id
+    are dropped."""
+    out: List[dict] = []
+    seen: set = set()
+    for e in raw if isinstance(raw, list) else []:
+        if not isinstance(e, dict):
+            continue
+        sid = _text(e.get("step"), 32)
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        out.append(
+            {
+                "step": sid,
+                "title": _text(e.get("title"), 120),
+                "plan": _text(e.get("plan"), 500),
+                "items": _items(e.get("items")),
+                "since": _float(e.get("since")),
+                "run_at": _float(e.get("run_at")),
+                "perch": _text(e.get("perch"), 32),
+            }
+        )
+    return out[:MAX_OWED]
 
 
 def _normalize_triggered_by(raw) -> Optional[dict]:
@@ -2959,6 +3025,13 @@ def row_dto(
         "step": _row_step(f, step) if step else None,
         "join": join_dto(f),
         "branch": branch,
+        **(
+            # Checks a Verify stop left for the end (``ask`` "end"), while
+            # the route still flies: the list, and its line.
+            {"owed": owed_groups(f["owed"]), "owed_note": owed_line(f)}
+            if f.get("owed")
+            else {}
+        ),
     }
 
 
@@ -2984,6 +3057,18 @@ def you_text(flight: dict) -> Tuple[str, List[str]]:
     d = flight["step_states"][cur["id"]]["detail"]
     if d.get("failed_reason"):
         return "%s failed: %s" % (cur["title"], d["failed_reason"]), []
+    if cur["kind"] == "you" and d.get("owed"):
+        # A perch asking for the checks Verify stops left for the end: its
+        # sentence, its own items, then each owed check under its stop.
+        note = str(flight["step_states"][cur["id"]].get("note") or "")
+        items = list(cur["config"].get("items") or [])
+        for g in d["owed"] if isinstance(d["owed"], list) else []:
+            if isinstance(g, dict):
+                items += [
+                    "%s: %s" % (g.get("title") or "Verify", i)
+                    for i in g.get("items") or []
+                ]
+        return note or cur["config"].get("text") or cur["title"], items
     if cur["kind"] in ("you", "someone"):
         # A perch, yours or someone else's (docs/flights.md "Round 15"):
         # the bell says what was asked, not the stop's name.
@@ -3709,6 +3794,21 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
         items = [str(i) for i in v.get("confirm_items") or []][:40]
         if not items:
             items = ["Every step passed — confirm it works"]
+        if step["config"].get("ask") == "end":
+            # "Carry on, ask me at the end": the stop is done, the person's
+            # checks are owed on the flight and asked for once, before the
+            # route finishes (:func:`_owe`, :func:`_owed_perch`). The plan
+            # stays needs_you until they confirm — never a pass.
+            return _receipt(
+                {
+                    "action": "done",
+                    "note": "%s for you, asked at the end"
+                    % plural(len(items), "check"),
+                    "detail": dict(up, owes=len(items)),
+                    "owe": {"plan": v["plan"], "items": items, "run_at": latest},
+                },
+                _verify_receipt(v),
+            )
         return {
             "action": "you",
             "note": (
@@ -4264,6 +4364,249 @@ def _when_verdict(step: dict, obs: dict) -> Optional[dict]:
     return {"action": "skip_when", "note": "skipped: %s — %s" % (when, why)}
 
 
+# --------------------------------------------------------------------------- #
+# Checks owed to the person (a Verify stop with ``ask`` "end")
+# --------------------------------------------------------------------------- #
+def owed_count(flight: dict) -> int:
+    """How many checks the route owes the person (every owed item)."""
+    return sum(len(e.get("items") or []) or 1 for e in flight.get("owed") or [])
+
+
+def owed_line(flight: dict) -> str:
+    """``"2 checks owed to you at the end"`` while a route owes any, else
+    ``""`` — what a status line says next to a route still flying."""
+    n = owed_count(flight)
+    return "%s owed to you at the end" % plural(n, "check") if n else ""
+
+
+def _owed_ask(n: int) -> str:
+    return "Before this route finishes: %s for you" % plural(n, "check")
+
+
+def owed_groups(entries: Sequence[dict]) -> List[dict]:
+    """Owed entries as a perch shows them: ``[{step, title, plan, items}]``,
+    one per Verify stop (= grouped by the stop's title)."""
+    return [
+        {
+            "step": e["step"],
+            "title": e.get("title") or "Verify",
+            "plan": e.get("plan") or "",
+            "items": list(e.get("items") or []),
+        }
+        for e in entries
+    ]
+
+
+def _set_owed(flight: dict, entries: List[dict]) -> None:
+    """Store ``entries`` as the flight's ``owed`` (``[]`` once it owes
+    nothing; a stored flight drops the empty key). Set, never popped: a
+    parallel member's verdict lands on a copy merged back by update."""
+    flight["owed"] = list(entries)
+
+
+def _owe(flight: dict, step: dict, owe: dict, now: float) -> None:
+    """A Verify stop (``ask`` "end") finished with checks for the person:
+    record them on the flight — replacing what an earlier attempt of the
+    same stop owed."""
+    entries = [e for e in flight.get("owed") or [] if e.get("step") != step["id"]]
+    entries.append(
+        {
+            "step": step["id"],
+            "title": step.get("title") or "Verify",
+            "plan": str(owe.get("plan") or ""),
+            "items": [str(i) for i in owe.get("items") or []][:40]
+            or ["Confirm it works"],
+            "since": now,
+            "run_at": _float(owe.get("run_at")),
+            "perch": "",
+        }
+    )
+    _set_owed(flight, entries[-MAX_OWED:])
+
+
+def _owed_open(flight: dict, sid: str) -> List[dict]:
+    """The owed entries stop ``sid`` may ask for: asked nowhere yet, asked at
+    ``sid``, or asked at a stop no longer waiting on the person (skipped by a
+    jump, reset)."""
+    out = []
+    for e in flight.get("owed") or []:
+        at = e.get("perch") or ""
+        if at and at != sid:
+            other = flight["step_states"].get(at)
+            if other is not None and other["state"] == "waiting_you":
+                continue
+        out.append(e)
+    return out
+
+
+def _owed_here(flight: dict, sid: str) -> List[dict]:
+    """The owed entries stop ``sid`` is asking for."""
+    return [e for e in flight.get("owed") or [] if e.get("perch") == sid]
+
+
+def _perch_note(flight: dict, step: dict, entries: Sequence[dict]) -> str:
+    """A perch's sentence: the route's own end perch says only what is owed;
+    a person's own Wait-for-me stop says its own ask, then what is owed."""
+    own = str(step["config"].get("text") or step["title"])
+    if not entries:
+        return own
+    ask = _owed_ask(sum(len(e.get("items") or []) or 1 for e in entries))
+    if step["id"] == flight.get("owed_perch"):
+        return ask
+    return "%s · %s" % (own, ask[:1].lower() + ask[1:])
+
+
+def _owed_perch(flight: dict, now: float) -> bool:
+    """At the route's end with checks still owed: never finish — add (or
+    reuse) one Wait-for-me stop at the end that asks for them all, and stand
+    the cursor on it (it parks on the next pass). False when nothing is
+    owed."""
+    steps = flight["steps"]
+    owed = flight.get("owed") or []
+    if not owed or not steps or flight["state"] in FINAL:
+        return False
+    text = _owed_ask(owed_count(flight))
+    sid = str(flight.get("owed_perch") or "")
+    if sid and steps[-1]["id"] == sid:
+        step = steps[-1]  # back at the end after a jump: the same perch
+        step["config"]["text"] = text
+    else:
+        step = normalize_step(
+            {
+                "kind": "you",
+                "title": OWED_PERCH_TITLE,
+                "config": {"text": text, "notify": True},
+            },
+            len(steps),
+            strict=False,
+            taken={s["id"] for s in steps},
+        )
+        _renumber_after(steps, [step], used=[h["step"] for h in flight["history"]])
+        steps.append(step)
+        flight["owed_perch"] = step["id"]
+        _hist(flight, now, step["id"], "added", "asks for the checks owed to you")
+    flight["step_states"][step["id"]] = _blank_step_state()
+    flight["cursor"] = len(steps) - 1
+    flight["state"] = "running"
+    return True
+
+
+def _drop_owed_perch(flight: dict) -> None:
+    """Take the route's own end perch off (a check went back to its stop; a
+    free chain's run is over)."""
+    sid = str(flight.get("owed_perch") or "")
+    if sid:
+        flight["owed_perch"] = ""
+    k = next((n for n, s in enumerate(flight["steps"]) if s["id"] == sid), -1)
+    if k < 0 or len(flight["steps"]) < 2:
+        return
+    del flight["steps"][k]
+    flight["step_states"].pop(sid, None)
+    if flight["cursor"] > k:
+        flight["cursor"] -= 1
+    flight["cursor"] = min(flight["cursor"], len(flight["steps"]))
+
+
+def _judge_owed(flight: dict, step: dict, obs: dict) -> Optional[dict]:
+    """A perch asking for owed checks, against what their plans say now
+    (``obs["owed"]``: plan id -> ``{outcome, run_at}``): a check a person
+    said doesn't work (the confirm route with ``verified: false``) sends the
+    route back to its Verify stop's failure handling; one confirmed already
+    (the session's own Verify) is settled. None: nothing changed."""
+    facts = obs.get("owed")
+    mine = _owed_here(flight, step["id"])
+    if not mine or not isinstance(facts, dict):
+        return None
+    settled = []
+    for e in mine:
+        f = facts.get(e.get("plan"))
+        if not isinstance(f, dict):
+            continue
+        run_at = _float(f.get("run_at"))
+        same = abs(run_at - _float(e.get("run_at"))) < 1.0
+        outcome = str(f.get("outcome") or "")
+        if outcome == "failed" and same:
+            return {
+                "action": "owed",
+                "back": e["step"],
+                "note": "%s: a person said it doesn't work"
+                % (e.get("title") or "Verify"),
+            }
+        if outcome == "passed" and (same or run_at > _float(e.get("run_at"))):
+            settled.append(e["step"])
+    if not settled:
+        return None
+    return {"action": "owed", "settled": settled, "note": "confirmed already"}
+
+
+def _land_back(flight: dict, vsid: str, now: float, note: str) -> None:
+    """A person said an owed check doesn't work: the route goes back to that
+    Verify stop, which reads its (now failed) check again and fails through
+    its own ``on_fail``; every stop after it runs again, as a jump back. Its
+    owed entry goes (the failure is the stop's now); the others wait for the
+    end again."""
+    steps = flight["steps"]
+    i = next((k for k, s in enumerate(steps) if s["id"] == vsid), -1)
+    rest = [dict(e, perch="") for e in flight.get("owed") or [] if e["step"] != vsid]
+    if i < 0:
+        # Its stop was removed: halt at the perch, saying so.
+        cur = _current(flight)
+        _set_owed(flight, rest)
+        flight["state"] = "halted"
+        flight["reason"] = note
+        if cur is not None:
+            ss = flight["step_states"][cur["id"]]
+            ss["state"] = "failed"
+            ss["note"] = note
+            _hist(flight, now, cur["id"], "halted", note)
+        return
+    _set_owed(flight, rest)
+    _drop_owed_perch(flight)
+    steps = flight["steps"]
+    for s in steps[i + 1 :]:
+        flight["step_states"][s["id"]] = _blank_step_state()
+    vss = flight["step_states"][vsid]
+    vss["state"] = "running"
+    vss["note"] = note
+    for k in ("owes", "receipt"):
+        vss["detail"].pop(k, None)
+    flight["cursor"] = group_span(steps, i)[0]
+    flight["state"] = "running"
+    flight["reason"] = ""
+    _group_state(flight)
+    _hist(flight, now, vsid, "jumped", "back to %s — %s" % (steps[i]["title"], note))
+
+
+def _apply_owed(flight: dict, step: dict, action: dict, now: float) -> None:
+    """:func:`apply` for an ``owed`` verdict (:func:`_judge_owed`)."""
+    back = str(action.get("back") or "")
+    if back:
+        _land_back(flight, back, now, str(action.get("note") or ""))
+        return
+    sid = step["id"]
+    ss = flight["step_states"][sid]
+    gone = set(action.get("settled") or [])
+    titles = [
+        e.get("title") or "Verify" for e in _owed_here(flight, sid) if e["step"] in gone
+    ]
+    _set_owed(flight, [e for e in flight.get("owed") or [] if e["step"] not in gone])
+    _hist(flight, now, sid, "noted", "confirmed already: %s" % ", ".join(titles))
+    left = _owed_here(flight, sid)
+    if left:
+        ss["detail"]["owed"] = owed_groups(left)
+        ss["note"] = _perch_note(flight, step, left)
+        return
+    for k in ("owed", "ask"):
+        ss["detail"].pop(k, None)
+    if sid == flight.get("owed_perch"):
+        ss["state"] = "done"
+        ss["note"] = "your checks were confirmed"
+        _hist(flight, now, sid, "done", ss["note"])
+        _advance(flight, now)
+    else:
+        ss["note"] = _perch_note(flight, step, [])
+
+
 def next_action(flight: dict, obs: dict, now: float) -> dict:
     """What the driver should do for ``flight`` now — one of ``wait | run |
     done | fail | you | advance | finish | hold`` plus a ``note`` (the visible wait
@@ -4324,10 +4667,23 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
             return {"action": "advance", "note": "no ticket on this route"}
         if step["kind"] == "you":
             text = step["config"].get("text") or step["title"]
+            detail = {"items": list(step["config"].get("items") or [])}
+            owed = _owed_open(flight, step["id"])
+            if step["id"] == flight.get("owed_perch") and not owed:
+                return {"action": "advance", "note": "nothing owed to you"}
+            if owed:
+                # The checks a Verify stop left for the end ride on this
+                # perch: one ask, and its Done settles them too.
+                return {
+                    "action": "you",
+                    "note": _perch_note(flight, step, owed),
+                    "detail": dict(detail, ask="owed", owed=owed_groups(owed)),
+                    "owed_for": [e["step"] for e in owed],
+                }
             return {
                 "action": "you",
                 "note": text,
-                "detail": {"items": list(step["config"].get("items") or [])},
+                "detail": detail,
             }
         if hold is not None:
             return hold
@@ -4365,6 +4721,10 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
                     if out["action"] == "fail"
                     else out
                 )
+        if step["kind"] == "you":
+            owed = _judge_owed(flight, step, obs)
+            if owed is not None:
+                return owed
         # Keep the stop's own reason ("2 steps for you to check, then
         # confirm"): a bare "needs you" would overwrite it on the next pass.
         return _wait(str(ss.get("note") or "") or "needs you")
@@ -4425,6 +4785,9 @@ def _finish(flight: dict, state: str, reason: str, now: float) -> None:
         # A free chain is a chain on the board, not a run: when a run ends
         # (landed or stopped) the chain goes back on the ground, its stops
         # still showing how the run went, ready to run again.
+        _drop_owed_perch(flight)  # the run's own end perch is not the chain's
+        if flight.get("owed"):
+            flight["owed"] = []
         flight["last_run"] = {"state": state, "reason": reason, "at": now}
         flight["state"] = GROUNDED
         flight["reason"] = ""
@@ -4454,6 +4817,8 @@ def _advance(flight: dict, now: float) -> None:
             continue
         break
     if flight["cursor"] >= len(steps):
+        if _owed_perch(flight, now):
+            return  # checks are owed: one perch asks for them first
         _finish(flight, "done", "", now)
     else:
         flight["state"] = "running"
@@ -4516,7 +4881,7 @@ def apply(flight: dict, action: dict, now: float) -> dict:
         _advance(flight, now)
         return flight
     if kind == "finish" or step is None:
-        if flight["state"] not in FINAL:
+        if flight["state"] not in FINAL and not _owed_perch(flight, now):
             _finish(flight, "done", "", now)
         return flight
     sid = step["id"]
@@ -4563,7 +4928,11 @@ def apply(flight: dict, action: dict, now: float) -> dict:
         ss["detail"].update(upd)
         ss["detail"].pop("idle_since", None)
         _hist(flight, now, sid, "done", note)
+        if isinstance(action.get("owe"), dict):
+            _owe(flight, step, action["owe"], now)
         _advance(flight, now)
+    elif kind == "owed":
+        _apply_owed(flight, step, action, now)
     elif kind == "loop":
         # A Loop stop's repeat (docs/flights.md "Round 16"): its kind's run
         # names the stop to go back to (or the session's agent, which it
@@ -4610,6 +4979,9 @@ def apply(flight: dict, action: dict, now: float) -> dict:
         ss["note"] = note
         ss["detail"].update(upd)
         flight["state"] = "waiting_you"
+        for e in flight.get("owed") or []:
+            if e["step"] in (action.get("owed_for") or ()):
+                e["perch"] = sid  # these checks are asked for here
         _hist(flight, now, sid, "you", note)
     elif kind == "fail":
         reason = str(action.get("reason") or "failed")
@@ -4722,6 +5094,22 @@ def op_done(
     ss["note"] = str(note or "")[:1000]
     ss["detail"].pop("failed_reason", None)
     _hist(flight, ts, sid, "done", note or "you pressed Done")
+    settled = _owed_here(flight, sid)
+    if settled:
+        # The checks owed to the person, confirmed with this Done (the driver
+        # recorded each on its plan first: flight_driver.operate).
+        _set_owed(flight, [e for e in flight.get("owed") or [] if e not in settled])
+        _hist(
+            flight,
+            ts,
+            sid,
+            "noted",
+            "you confirmed %s: %s"
+            % (
+                plural(sum(len(e["items"]) or 1 for e in settled), "check"),
+                ", ".join(e.get("title") or "Verify" for e in settled),
+            ),
+        )
     flight["reason"] = ""
     flight["updated"] = ts
     _advance_keeping_pause(flight, ts)
@@ -4749,6 +5137,19 @@ def op_skip(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     ss["state"] = "skipped"
     ss["note"] = "skipped by you"
     _hist(flight, ts, sid, "skipped", "skipped by you")
+    dropped = _owed_here(flight, sid) if ss["detail"].get("ask") == "owed" else []
+    if dropped:
+        # Skipping the perch that asks for owed checks drops them from the
+        # route; their checks stay unconfirmed (needs you) on their plans.
+        _set_owed(flight, [e for e in flight.get("owed") or [] if e not in dropped])
+        _hist(
+            flight,
+            ts,
+            sid,
+            "noted",
+            "skipped %s owed to you — left unconfirmed"
+            % plural(sum(len(e["items"]) or 1 for e in dropped), "check"),
+        )
     flight["updated"] = ts
     lo, hi = current_group(flight)
     # Skipping one member of a group halted on ANOTHER's failure leaves it halted.
