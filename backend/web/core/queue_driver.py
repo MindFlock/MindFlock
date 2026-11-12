@@ -901,7 +901,10 @@ def _drain_one_queue(title: str) -> None:
         # Agent tmux is gone though the session is live — reboot (resume) it,
         # rate-limited, and send on a later idle tick.
         rec["idle_since"] = None
-        if now - rec.get("rebooted_at", 0.0) < _QUEUE_REBOOT_COOLDOWN:
+        # A relaunch that FAILED is rate-limited too (``reboot_tried_at``),
+        # not retried every pass.
+        last = max(rec.get("rebooted_at", 0.0), rec.get("reboot_tried_at", 0.0))
+        if now - last < _QUEUE_REBOOT_COOLDOWN:
             return
         if _launch_gate.waiting(title) is not None:
             return  # already waiting for memory (core.launch_gate)
@@ -910,6 +913,7 @@ def _drain_one_queue(title: str) -> None:
         # the gate's queue, and the queue relaunches it. A held session
         # (core.held) is refused by _ensure_agent_session anyway, so it never
         # takes a queue place.
+        gated = False
         if not _held.is_held(title):
             try:
                 queued = _launch_gate.gate_auto(
@@ -926,7 +930,12 @@ def _drain_one_queue(title: str) -> None:
             _clear_gate_full(title)
             if queued is not None:
                 return
-        _queue_relaunch(title, rec, inst)
+            gated = True
+        rec["reboot_tried_at"] = now
+        if _queue_relaunch(title, rec, inst) is not None and gated:
+            # The gate noted it as starting: take that back, or it reads as
+            # an agent warming up (and holds the stagger) for nothing.
+            _launch_gate.unnote_start(title)
         return
     # activity == "idle": the CLI's idle signal (Claude `agents --json` / Stop hook,
     # Codex Stop hook) flips the instant a turn ends and _agent_activity trusts it at
