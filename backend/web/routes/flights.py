@@ -525,11 +525,23 @@ def check_start(body: dict) -> dict:
         else:
             out["steps"] = plan["steps"]
             out["start"] = _stop_ref(plan["steps"], 0)
-            # Where it carries on when the start finds the earlier work (its
-            # branch still checked out here); a fresh session starts at 0.
-            out["resume"] = _driver.resume_for(
-                plan, subject=_driver._subject_of(subject)
-            )
+            # A ticket / PR / issue start makes its session: it carries on
+            # only when it finds the earlier work (its branch still checked
+            # out here — flight_driver.carry_on_intake), so no resume is
+            # promised; a warning says where it WOULD carry on.
+            out["resume"] = None
+            maybe = _driver.resume_for(plan, subject=_driver._subject_of(subject))
+            if maybe:
+                out["warnings"].append(
+                    _problem(
+                        "start_at",
+                        "if its branch is still checked out on this machine, the "
+                        "route carries on there at %s (route %s stopped there); "
+                        "otherwise a new session starts at the first stop"
+                        % (maybe["title"], maybe["from_flight"]),
+                        "carries_on_if_found",
+                    )
+                )
         out["ok"] = not problems
         return out
     if body.get("grounded"):
@@ -549,10 +561,14 @@ def check_start(body: dict) -> dict:
     out["start_on"] = start_on
     ready = start_on != "now"
     live = bool(title) and title in srv.ENGINE.instances
-    out["resume"] = _driver.resume_for(
-        plan,
-        session=title if live else "",
-        subject=_driver._subject_of(body.get("subject")),
+    # Only a start ON a session carries on (flight_driver.resume_start_at):
+    # one that creates its session gets a fresh branch, so no resume there.
+    out["resume"] = (
+        _driver.resume_for(
+            plan, session=title, subject=_driver._subject_of(body.get("subject"))
+        )
+        if live
+        else None
     )
     resumed = (
         out["resume"]
