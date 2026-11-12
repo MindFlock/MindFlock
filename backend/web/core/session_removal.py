@@ -225,6 +225,19 @@ def _disarm_removed_session(title: str) -> None:
 _SESSION_REMOVED_HOOKS.append(_disarm_removed_session)
 
 
+def _forget_budget_raise(title: str) -> None:
+    """A removed session's raised budget (and its "exceeded" notice) go with
+    it: a namesake starts at the default cap. The queue drain's sweep of
+    overrides for gone sessions returns early whenever no session has a
+    queued prompt, so it was not a cleanup to count on."""
+    srv = _server()
+    srv._forget_budget(title)
+    srv._BUDGET_FIRED.pop(title, None)
+
+
+_SESSION_REMOVED_HOOKS.append(_forget_budget_raise)
+
+
 def _cancel_removed_flight(title: str) -> None:
     """Cancel the flight a removed session was on (core.flight_driver says
     ``flight.finished``). Deleting the session ends its flight; a flight never
