@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dictation follows you to another session.** Start talking into one
+  session, then click (or otherwise switch to) another, and the words used
+  to keep going into the first one. Now the next words go to the session you
+  are looking at, and the caption says "Now typing into <name>". What was
+  already typed stays in the first session's field, unsent. A phrase you
+  were in the middle of is ended and finishes where it began, so nothing is
+  split across two sessions. Listening into a text box, or to the assistant,
+  does not move.
+
 ## [0.14.13] - 2026-11-12
 
 ### Fixed

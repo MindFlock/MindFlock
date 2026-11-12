@@ -1177,6 +1177,14 @@ export const STARTING_VOICE_LINE = "Starting voice…";
  * waits a few seconds for it. */
 export const STARTING_MIC_LINE = "Starting the mic…";
 
+/** How long {@link LiveDictation.follow} waits for a phrase under way to end
+ * before the words move to the newly focused session anyway. */
+export const FOLLOW_WAIT_MS = 2500;
+/** The caption when the words follow the person to another session. */
+export function followLine(name: string): string {
+  return "Now typing into " + name;
+}
+
 /** The pill while the server's recognition gets ready ({@link makeSttReady})
  * after a press or the wake word: the mic is not red yet — red means "talk". */
 export const READYING_PILL = "Getting ready…";
@@ -2273,6 +2281,9 @@ export class LiveDictation {
    * meanwhile starts the next message ({@link streamContext}: none). */
   private sending = false;
   /** A note on the last phrase ({@link RouteVerdict}): the caption until then (ms). */
+  /** {@link follow} waits for the phrase under way to end. */
+  private moving = false;
+  private moveTimer: ReturnType<typeof setTimeout> | undefined;
   private note = "";
   /** The caption while recognition gets ready ({@link wait}); "": none. */
   private waitLine = "";
@@ -2440,6 +2451,13 @@ export class LiveDictation {
   /** Streaming: a phrase's end and its last words (`final`: the accurate
    * re-transcription, when it differs — see {@link Dictation.flush}). */
   flush(w: string, final?: string, spokeAt?: number): Promise<void> {
+    const done = this.flushNow(w, final, spokeAt);
+    // Focus moved while this phrase was under way: it ended where it began,
+    // and the next words go to the session looked at now.
+    return this.moving ? this.move() : done;
+  }
+
+  private flushNow(w: string, final?: string, spokeAt?: number): Promise<void> {
     if (w.trim() || final?.trim()) this.heardAnything = true;
     const spoke = this.endPhraseAt(spokeAt);
     const early = this.early;
@@ -2647,6 +2665,47 @@ export class LiveDictation {
     this.end(kept ? line + " — the words so far stay in the field" : line, true, "stopped");
   }
 
+  /** The person looked at another session while this listens: the words go
+   * with them. What is already typed stays in the session it was typed
+   * into, unsent; a phrase under way is ended and finishes there (its
+   * final corrects words in THAT field); everything after goes to where
+   * the next message goes now ({@link LiveHooks.retarget}: the focused
+   * session). A recognizer that cannot end a phrase on request moves at
+   * the phrase's own end, or after {@link FOLLOW_WAIT_MS}. */
+  follow(): void {
+    if (this.done) return;
+    if (!this.dict.inPhrase && !this.dict.partial) {
+      void this.move();
+      return;
+    }
+    if (this.moving) return;
+    this.moving = true;
+    this.hooks.endPhrase?.();
+    clearTimeout(this.moveTimer);
+    this.moveTimer = setTimeout(() => {
+      if (this.moving) void this.move();
+    }, FOLLOW_WAIT_MS);
+  }
+
+  private move(): Promise<void> {
+    this.moving = false;
+    clearTimeout(this.moveTimer);
+    this.chain = this.chain
+      .then(() => {
+        if (this.done) return;
+        const was = this.target;
+        this.next(null);
+        const now = this.target;
+        // Moved (a spoken "switch to …" already did, and said so): say where.
+        if (now && now !== was && now.kind === "session" && now.title !== was?.title) {
+          voiceTrace("follow", { from: was?.title || "", to: now.title });
+          this.hooks.caption(followLine(now.name), true);
+        } else this.show();
+      })
+      .catch(() => {});
+    return this.chain;
+  }
+
   /** Recognition is getting ready: `line` is the caption until
    * {@link waited} — nothing heard or guessed replaces it. */
   wait(line: string): void {
@@ -2719,6 +2778,8 @@ export class LiveDictation {
     this.sendNow = null;
     clearTimeout(this.swallowing);
     clearTimeout(this.noteTimer);
+    clearTimeout(this.moveTimer);
+    this.moving = false;
     clearInterval(this.early?.timer);
     this.early = null;
     this.dict.listening = false;

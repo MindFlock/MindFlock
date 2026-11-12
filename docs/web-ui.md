@@ -7682,6 +7682,19 @@ appears on its own while the app listens or speaks. Errors and notices (*Click
 a session first*, *Sent to Login fix.*) are the mic's tooltip; the ask pop-up
 keeps its own words.
 
+**The words follow the focus.** A listen that types into "the focused
+session" (not one into a text box, not the assistant's) moves when the focus
+does — a click on another pane, a keyboard switch: the top bar's focus
+subscription calls `LiveDictation.follow()`. What is already typed stays in
+the first session's field, unsent; a phrase under way is ended
+(`endPhrase`) and finishes there, its final correcting that field; from
+then on the words go to where the next message goes (`retarget`: the
+focused session), and the caption says *Now typing into <name>*. A
+recognizer that cannot end a phrase on request moves at the phrase's own
+end, or after `FOLLOW_WAIT_MS` (2.5 s). A spoken "switch to …" already
+moved the target, so it adds no caption. One `voice trace: {"event":
+"follow", from, to}` line per move.
+
 **Red means talk.** When speech is recognised by the server's local models, a
 press, a hold or the wake word first asks the server to make recognition
 answerable (`POST /api/voice/ready`, `lib/voiceDesktop.ts` `makeSttReady`:
