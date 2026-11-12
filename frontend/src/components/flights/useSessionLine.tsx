@@ -45,7 +45,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
-import { optimistic, optimisticDelete, withSteps, withoutSteps } from "../../lib/flightOptimism";
+import { optimistic, optimisticDelete, stopToOpen, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightStartOn, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
 import { LOOP_AGENT, atHaltPoint, drawnCanvas, findNode, firstStepOf, loopBackTo, loopChoices, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
 import {
@@ -438,7 +438,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   // flight has it.
   useEffect(() => {
     if (selectIndex === null) return;
-    const n = stops.find((s) => s.index === selectIndex && s.step);
+    const n = stopToOpen(stops, selectIndex);
     if (!n) return;
     setSelected(n.id);
     setDialog({ id: n.id });

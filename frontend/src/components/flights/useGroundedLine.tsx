@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "../../lib/toast";
-import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
+import { optimistic, stopToOpen, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { newStep, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { collapseGroups, drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, type DiagramNode } from "../../lib/flightDiagram";
 import { errMsg } from "../../lib/format";
@@ -86,7 +86,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   // A stop just tacked on opens in its dialog once the flight has it.
   useEffect(() => {
     if (selectIndex === null) return;
-    const n = stops.find((s) => s.index === selectIndex && s.step);
+    const n = stopToOpen(stops, selectIndex);
     if (!n) return;
     setSelected(n.id);
     setDialog({ id: n.id });

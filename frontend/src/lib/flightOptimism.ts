@@ -46,6 +46,15 @@ export function withoutSteps(ids: ReadonlySet<string>): Edit {
   };
 }
 
+const GUESS_ID = "s_tmp";
+
+/** The stop at `index` to open once the server's flight has it: a stop the
+ * screen only guessed (`withSteps`' temporary id) is not opened — the
+ * refetch drops it, and the server never had its id. */
+export function stopToOpen<N extends { index?: number; step?: { id: string } }>(stops: readonly N[], index: number): N | null {
+  return stops.find((s) => s.index === index && s.step && !s.step.id.startsWith(GUESS_ID)) || null;
+}
+
 let tmp = 0;
 const PENDING: StepRunState = { state: "pending", since: 0, note: "", detail: {}, rounds: 0 };
 
@@ -55,7 +64,7 @@ const PENDING: StepRunState = { state: "pending", since: 0, note: "", detail: {}
  * becomes the current stop — the server keeps the cursor there. */
 export function withSteps(steps: readonly FlightStep[], at?: number): Edit {
   return (f) => {
-    const fresh = steps.map((s) => ({ ...s, id: "s_tmp" + ++tmp }));
+    const fresh = steps.map((s) => ({ ...s, id: GUESS_ID + ++tmp }));
     const i = at === undefined ? f.steps.length : Math.max(0, Math.min(at, f.steps.length));
     const states = { ...f.step_states };
     for (const s of fresh) states[s.id] = { ...PENDING, since: Date.now() / 1000 };

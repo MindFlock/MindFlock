@@ -9,7 +9,11 @@
  * - A stop put in AT the current one (a paused route's Undo, a ready
  *   route's first place) becomes the current stop: the server never moves
  *   the cursor for it, so the screen's guess must not either (it drew the
- *   new stop as already flown). */
+ *   new stop as already flown).
+ * - A stop picked from the palette opens in its dialog once the SERVER's
+ *   flight has it: it opened on the screen's guess (a temporary `s_tmp…`
+ *   id), which the refetch then dropped — the dialog closed under the
+ *   person, and a quick Save sent a PATCH for an id the server never had. */
 import { describe, expect, it, vi } from "vitest";
 import type { Flight, FlightStep } from "../lib/flights";
 
@@ -19,7 +23,7 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 const { canFixStep, skipCarriesOn } = await import("../components/flights/FlightStrip");
 const { freeStopRemedies } = await import("../components/flights/useGroundedLine");
 const { withFixItem } = await import("../components/flights/useChainMenu");
-const { withSteps } = await import("../lib/flightOptimism");
+const { stopToOpen, withSteps } = await import("../lib/flightOptimism");
 
 const step = (id: string, over: Partial<FlightStep> = {}): FlightStep => ({ id, kind: "agent", title: id, config: {}, on_fail: "halt", ...over });
 const rec = (state: string, over: Record<string, unknown> = {}) => ({ state, since: 0, note: "", detail: {}, rounds: 0, ...over }) as Flight["step_states"][string];
@@ -74,5 +78,16 @@ describe("the screen's guess keeps the cursor where the server keeps it", () => 
   });
   it("put in before it: the cursor follows its stop", () => {
     expect(withSteps([step("n")], 0)(flight({ state: "paused", cursor: 2 })).cursor).toBe(3);
+  });
+});
+
+describe("a stop just tacked on opens once the server's flight has it", () => {
+  it("the guess at that place is passed over; the real stop opens", () => {
+    const guess = withSteps([step("n")], 1)(flight({ state: "paused", cursor: 1 }));
+    const nodes = (f: Flight) => f.steps.map((st, index) => ({ id: "stop:" + st.id, index, step: st }));
+    expect(stopToOpen(nodes(guess), 1)).toBeNull();
+    const server = flight({ state: "paused", cursor: 1, steps: [step("s1"), step("s7"), step("s2"), step("s3")] });
+    expect(stopToOpen(nodes(server), 1)?.id).toBe("stop:s7");
+    expect(stopToOpen(nodes(server), 9)).toBeNull();
   });
 });
