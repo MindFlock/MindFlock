@@ -99,6 +99,7 @@ __all__ = [
     "fetch_model",
     "join_wake",
     "keyterms",
+    "prime",
     "model_path",
     "open_stream",
     "supports",
@@ -302,6 +303,31 @@ def engine() -> MoonshineEngine:
 # --------------------------------------------------------------------------- #
 # Text helpers
 # --------------------------------------------------------------------------- #
+#: :func:`prime`'s audio: half a second of a quiet tone — loud enough that
+#: the pass runs (silence runs none), short enough to cost a few ms warm.
+PRIME_SECONDS = 0.5
+
+
+def prime() -> int:
+    """One real pass through the loaded model (loading it first), on a
+    stream of its own that is closed again: brings a paged-out model back
+    before a phrase waits for it (``speech.make_ready``) → the pass's ms.
+    Raises ``speech.SpeechError`` when the model cannot load or fails."""
+    import math
+    from array import array
+
+    n = int(_stream.RATE * PRIME_SECONDS)
+    tone = array(
+        "f", (0.2 * math.sin(2 * math.pi * 220.0 * i / _stream.RATE) for i in range(n))
+    )
+    stream = MoonshineStream()
+    try:
+        stream.feed(tone)
+        return int(stream.last_ms)
+    finally:
+        stream.close()
+
+
 def keyterms(hints: str) -> List[str]:
     """The comma-separated hint string (``speech.recognition_hints``) as
     Moonshine keyterms: one per phrase, trimmed, no empties or repeats

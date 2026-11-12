@@ -23793,6 +23793,15 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   opacity: var(--mic-step, 0.45);
 }
 
+/* Getting ready (the server's recognition is not answering yet,
+   lib/voiceDesktop makeSttReady): NOT red — red means "talk now". A faint
+   dashed grey ring, still, until the server says ready. */
+.mic-ring.readying::after {
+  border-color: var(--muted);
+  border-style: dashed;
+  opacity: 0.6;
+}
+
 /* Standby (the wake word, lib/wakeWord) and speaking: a small still dot in
    the corner — grey while the mic waits for "MindFlock", the accent while a
    line is read. No ring, no animation. */

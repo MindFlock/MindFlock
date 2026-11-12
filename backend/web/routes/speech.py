@@ -811,7 +811,9 @@ def voice_trace(payload: Optional[dict] = None) -> JSONResponse:
 def voice_listen(request: Request, payload: Optional[dict] = None) -> JSONResponse:
     """A page's listening mode — the wake-word standby — is on or off:
     ``{"on": bool, "client": optional page id}`` → ``{"listening": bool,
-    "lease_s": n, "stt_loaded": bool}``. ``on`` renews this page's lease for
+    "lease_s": n, "stt_loaded": bool, "stt_hot": bool}`` (``stt_hot``: the
+    next phrase is answered at once, ``core.speech.stt_hot``; a renewal
+    also keeps it so, ``core.speech.keep_hot``). ``on`` renews this page's lease for
     ``lease_s`` seconds (``core.speech.LISTEN_LEASE_SECONDS``; the page
     renews it while standby lasts) and starts loading local recognition in
     the background (a no-op when it is loaded); while any page's lease is
@@ -824,13 +826,43 @@ def voice_listen(request: Request, payload: Optional[dict] = None) -> JSONRespon
     now = _speech.listen(client, on)
     if on:
         _speech.warm_in_background("stt")
+        _speech.keep_hot()
     return JSONResponse(
         {
             "listening": now,
             "lease_s": int(_speech.LISTEN_LEASE_SECONDS),
             "stt_loaded": _speech.stt_loaded(),
+            "stt_hot": _speech.stt_hot(),
         }
     )
+
+
+@router.post("/api/voice/ready")
+async def voice_ready() -> JSONResponse:
+    """Make recognition answerable NOW and say so: what a mic waits for
+    before it shows "talk" → ``{"ready": true, "hot": bool, "ms": n}``
+    (``hot``: it already was and nothing ran; ``ms``: how long this call
+    took). For ``local`` recognition that is its models loaded and one short
+    real pass through each (``core.speech.make_ready``) — seconds after a
+    restart or a while idle, tens of seconds on a machine short of memory,
+    nothing when a phrase was recognised in the last
+    ``core.speech.HOT_SECONDS``; any other backend is ready at once. **503**
+    ``{"ready": false, "error"}`` when no recognition is ready on the server
+    or its models cannot load or run."""
+    backend, detail = await asyncio.to_thread(_speech.select, "stt")
+    if backend is None:
+        return JSONResponse(
+            {
+                "ready": False,
+                "error": detail or "no recognition is ready on the server",
+            },
+            status_code=503,
+        )
+    try:
+        got = await asyncio.to_thread(_speech.make_ready)
+    except Exception as err:  # noqa: BLE001 — every failure is the backend's
+        return JSONResponse({"ready": False, "error": str(err)}, status_code=503)
+    return JSONResponse(got)
 
 
 @router.post("/api/voice/transcribe")
@@ -858,6 +890,7 @@ async def voice_transcribe(
         )
     except Exception as err:  # noqa: BLE001 — every failure is the backend's
         return _failed(err)
+    _speech.note_hot()
     return JSONResponse(
         {
             "text": text,
@@ -1180,6 +1213,8 @@ async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
         (committed, partial), turn = await _stt(_feed, stream, samples)
     except Exception as err:  # noqa: BLE001 — every failure is the backend's
         return _failed(err)
+    if stream.last_ms:  # a pass ran (a quiet chunk runs none)
+        _speech.note_hot()
     body = {
         "committed": committed,
         "partial": partial,
@@ -1214,6 +1249,8 @@ async def voice_stream_end(sid: str) -> JSONResponse:
         body = await _stt(stream.finish)
     except Exception as err:  # noqa: BLE001
         return _failed(err)
+    if body.get("final") or body.get("committed"):  # words: a pass answered
+        _speech.note_hot()
     return JSONResponse(body)
 
 

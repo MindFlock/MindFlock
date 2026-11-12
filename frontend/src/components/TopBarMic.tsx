@@ -121,6 +121,12 @@ import {
   voiceInUse,
   speaksOnServer,
   LISTEN_LEASE,
+  READYING_LINE,
+  READY_EARLY_LINE,
+  READY_QUICK_MS,
+  makeSttReady,
+  notReadyLine,
+  readyWanted,
   loadVoicePrefs,
   noRecognizerLine,
   recognizerErrorLine,
@@ -510,6 +516,11 @@ export function TopBarMic() {
   const [speaking, setSpeaking] = useState(queue.busy);
   const [starting, setStarting] = useState(false);
   const [warming, setWarming] = useState(false);
+  /** Recognition is getting ready for the listen under way: the mic is not
+   * red and the pill says so — red means "talk now". */
+  const [readying, setReadying] = useState(false);
+  /** The dictation that waits for the server's "ready" (null: none does). */
+  const readyFor = useRef<LiveDictation | null>(null);
   useEffect(() => {
     startingListeners.add(setStarting);
     loadingListeners.add(setWarming);
@@ -838,7 +849,38 @@ export function TopBarMic() {
   const idleMs = useRef(DICT_IDLE_MS);
   const armIdle = () => {
     clearTimeout(idleTimer.current);
-    if (idles.current) idleTimer.current = setTimeout(() => void live.current?.expire(), idleMs.current);
+    if (idles.current)
+      idleTimer.current = setTimeout(() => {
+        // Not ready yet is not silence: the wait starts over.
+        if (readyFor.current) return armIdle();
+        void live.current?.expire();
+      }, idleMs.current);
+  };
+  /** A listen on the server's local recognition waits for it to be ready
+   * (lib/voiceDesktop makeSttReady): asked at once; an answer within
+   * READY_QUICK_MS shows nothing, a slower one holds the mic off red with
+   * "Getting ready…" until it comes. A failure ends the listen with why. */
+  const awaitReady = (d: LiveDictation) => {
+    readyFor.current = d;
+    const slow = setTimeout(() => {
+      if (readyFor.current !== d || live.current !== d) return;
+      setReadying(true);
+      d.wait(READYING_LINE);
+    }, READY_QUICK_MS);
+    void makeSttReady().then((res) => {
+      clearTimeout(slow);
+      if (readyFor.current !== d) return;
+      readyFor.current = null;
+      setReadying(false);
+      voiceTrace("ready", { ok: res.ok, hot: res.hot, ms: res.ms, ...(res.error ? { error: res.error } : {}) });
+      if (live.current !== d) return;
+      if (!res.ok) {
+        d.fail(notReadyLine(res.error));
+        return;
+      }
+      d.waited();
+      armIdle();
+    });
   };
 
   /** The recognizer down, nothing reported; the queue may talk again. */
@@ -870,6 +912,10 @@ export function TopBarMic() {
     haltedAt.current = Date.now();
     keyLatched.current = false;
     live.current = null;
+    if (readyFor.current) {
+      readyFor.current = null;
+      setReadying(false);
+    }
     rec.current?.stop();
     rec.current = null;
     untap?.();
@@ -1095,6 +1141,7 @@ export function TopBarMic() {
     publishMicState({ listening: true, title: into || opts.assistant ? "" : opts.title || useUi.getState().focused || "" });
     d.show();
     armIdle();
+    if (r === serverRec && readyWanted(c)) awaitReady(d);
     // From the room's quiet as the pre-roll heard it (lib/voiceMic).
     meterStart(serverRec.mic.quietFloor());
     const ok = r.start(
@@ -1238,9 +1285,13 @@ export function TopBarMic() {
       });
       if (!d) return resolve("stopped");
       handsLive.current = d;
-      timer = setTimeout(() => {
-        if (live.current === d && !d.heardAnything) d.drop();
-      }, ms);
+      const giveUp = () => {
+        if (live.current !== d || d.heardAnything) return;
+        // Still getting ready: nothing could have been heard yet.
+        if (readyFor.current === d) timer = setTimeout(giveUp, ms);
+        else d.drop();
+      };
+      timer = setTimeout(giveUp, ms);
     });
 
   /** The toggle's second click / the hold's release: stop — once the
@@ -1251,6 +1302,11 @@ export function TopBarMic() {
     const r = rec.current;
     const d = live.current;
     if (!r || !d || deciding.current) return;
+    // Let go before recognition was ready: nothing was heard — say so.
+    if (readyFor.current === d) {
+      d.fail(READY_EARLY_LINE);
+      return;
+    }
     // Continuous, click to talk, a line being said: the press cuts the line
     // (barge-in) and listening goes on; the next press stops.
     if (gated.current && queue.busy && prefsRef.current.ptt !== "hold") {
@@ -1781,7 +1837,7 @@ export function TopBarMic() {
   const paused = listening && sounding;
   // The last line (an error, "Sent to…") is there on hover — never a box.
   const title = paused ? MIC_PAUSED_LINE : caption && !listening ? base + "\n" + caption : base;
-  const pill = micPill({ listening, speaking, quiet, starting, warming });
+  const pill = micPill({ listening, speaking, quiet, starting, warming, readying });
 
   // Under the mic, all of it inside the window (8 px from every edge; it
   // scrolls inside when the window is short).
@@ -1803,7 +1859,8 @@ export function TopBarMic() {
           className={[
             "tb-item",
             "mic-ring",
-            listening && "listening",
+            listening && !readying && "listening",
+            listening && readying && "readying",
             assistantOn && "assistant",
             paused && "muted",
             wake.on && !listening && "standby",

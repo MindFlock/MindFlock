@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The mic no longer turns red before recognition can answer.** On a busy
+  machine the speech models could be "loaded" but swapped out, so the mic
+  went red, you spoke, and nothing was typed while the first words waited 10
+  to 40 seconds. Now a press, a hold or the wake word first asks the server
+  to prove recognition answers (a short real pass through each model). If
+  that takes more than a quarter of a second the mic shows a grey dashed
+  ring and **Getting ready…** with the caption "Getting ready — wait for the
+  red mic", and turns red only when the server says ready. Letting go early
+  says "Recognition was still getting ready — try again in a moment", and a
+  failure says why instead of ending silently. While the wake-word standby
+  is on, the server repeats the pass about once a minute so the models stay
+  answerable. This is the desktop mic; the phone page is unchanged.
+
 ## [0.14.12] - 2026-11-12
 
 ### Fixed

@@ -7673,13 +7673,32 @@ step changes): no pulse, no growing halo, no size change. The caption says
 still accent dot on the mic, standby a small grey one.
 
 **The pill.** The only voice words on the top bar are a small pill under the
-mic (`micPill`, `#mic-pill`, an `aria-live` status): *Listening…* while the
+mic (`micPill`, `#mic-pill`, an `aria-live` status): *Getting ready…* while
+the server's recognition is not answering yet (below), *Listening…* while the
 mic is open, *Speaking…* while a line is read, *Quiet.* for a second after
 "stop talking", and nothing otherwise. It never shows what you said, what is
 being typed or what is being read — those are in the terminal — and no box
 appears on its own while the app listens or speaks. Errors and notices (*Click
 a session first*, *Sent to Login fix.*) are the mic's tooltip; the ask pop-up
 keeps its own words.
+
+**Red means talk.** When speech is recognised by the server's local models, a
+press, a hold or the wake word first asks the server to make recognition
+answerable (`POST /api/voice/ready`, `lib/voiceDesktop.ts` `makeSttReady`:
+the models loaded and a short real pass through each). An answer within a
+quarter of a second (`READY_QUICK_MS`) shows nothing and the mic goes red at
+once. A slower one — after a restart, a while idle, or on a machine short of
+memory, where loaded models are swapped out — holds the mic **off red**: a
+faint dashed grey ring (`.mic-ring.readying`), the pill *Getting ready…* and
+the caption *Getting ready — wait for the red mic*, until the server says
+ready; then the ring turns red and the caption is the listen's own. The wait
+is never counted as silence (the idle stop and a hands-free answer's time-out
+start over). Letting go of a held mic, or clicking to stop, during the wait
+ends with *Recognition was still getting ready — try again in a moment*; a
+server that cannot get ready ends the listen with *Recognition is not ready:
+<why>*. The recorder runs from the press as before, so the wait changes what
+the mic shows, not what it records. Each wait is one `voice trace: {"event":
+"ready", ok, hot, ms}` line in the server log.
 
 **Commands for reading and moving around** (the router's newer answers,
 `lib/voiceDesktop.ts` `runVoiceCommand`; none of them is ever spoken back —

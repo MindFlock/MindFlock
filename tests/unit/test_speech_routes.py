@@ -1257,6 +1257,7 @@ class TestListen:
             "listening": True,
             "lease_s": int(speech.LISTEN_LEASE_SECONDS),
             "stt_loaded": False,
+            "stt_hot": speech.stt_hot(),
         }
         assert warms == ["stt"]
         assert speech.listening() is True
