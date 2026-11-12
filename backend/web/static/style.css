@@ -1290,8 +1290,19 @@ a.fl-waiting-ref:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The bar's words stay at the view's left edge while the chain scrolls
+   sideways (to a parked stop): the session's name is always readable. */
+.fl-chain-frame-bar-in {
+  position: sticky;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
 /* Where the route is: the bar's free width, cut only when there is none. */
-.fl-chain-frame-bar > .fl-chain-frame-where {
+.fl-chain-frame-bar-in > .fl-chain-frame-where {
   flex: 1 1 auto;
   max-width: none;
 }
@@ -1452,32 +1463,59 @@ button.linklike.fl-owed-note[aria-expanded="true"] {
   color: var(--muted);
 }
 
-/* The pane strip's line in parts: the sentence takes the cut, the stop's
-   name never does (lib/flights stripParts). */
+/* The pane strip's line in parts (lib/flights stripParts): "Needs you" and
+   the stop's name never shrink; the plan name shrinks first, down to
+   nothing, then the sentence; the dots are never cut mid-way — their box
+   wraps, so dots that don't fit drop whole to its hidden second line. */
 .fl-strip-parts {
   display: inline-flex;
+  align-items: center;
   min-width: 0;
 }
 .fl-strip-parts > span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.fl-strip-parts > span + span::before {
+.fl-strip-plan {
+  flex: 0 10000 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fl-strip-plan::after,
+.fl-strip-dots-in::after {
   content: " · ";
   white-space: pre;
 }
-.fl-strip-lead {
+.fl-strip-dots {
   flex: 0 1 auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  height: 1lh;
+  overflow: hidden;
 }
-.fl-strip-what {
-  flex: 0 1000 auto;
+.fl-strip-dots::before {
+  content: "";
+  width: 0;
+  height: 1lh;
 }
+.fl-strip-dots-in {
+  white-space: nowrap;
+}
+.fl-strip-state,
 .fl-strip-stop {
   flex: 0 0 auto;
-  max-width: 60%;
 }
+.fl-strip-what {
+  flex: 0 100 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fl-strip-what::before,
+.fl-strip-stop::before {
+  content: " · ";
+  white-space: pre;
+}
+
 /* The voice cheat sheet (VoiceCommands.tsx): under the top bar's mic, the
    same surface as the mic's options (.mic-pop in TopBarMic.css). */
 .voice-cmds {
@@ -4066,9 +4104,11 @@ button.assist-chip:hover {
   min-width: 0;
 }
 
-/* The default (Enter takes it): one filled row, the same in every view. */
+/* The default (Enter takes it): an accent bar at the row's left edge, the
+ * same in every view. The fill stays hover's and focus's, so only one row
+ * ever looks pointed at. */
 .fl-routestart-item.is-default {
-  background: var(--panel-2);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .fl-routestart-icon {

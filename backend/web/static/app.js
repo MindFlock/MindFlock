@@ -24420,23 +24420,35 @@ function waitsFor(f, title, max = 48) {
 }
 function stripParts(f, now = Date.now()) {
 	const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
-	if (!(f.state === "halted" || f.state === "waiting_you")) return {
-		lead: stripLabel(f, now),
-		what: "",
-		stop: ""
-	};
+	if (!(f.state === "halted" || f.state === "waiting_you")) {
+		const line = stripLabel(f, now);
+		return {
+			plan: line,
+			dots: "",
+			state: "",
+			what: "",
+			stop: "",
+			whole: line
+		};
+	}
 	const elapsed = "steps" in f ? currentElapsed(f, now) : "";
-	let what = "";
-	if (f.state === "halted") what = haltedWhy(title, String(f.reason ?? "")).replace(/\s+/g, " ").trim();
-	else what = waitsFor(f, title, 0);
-	return {
-		lead: [
-			f.plan_name,
-			stripDots(f),
-			f.state === "halted" ? "Halted" : "Needs you"
-		].filter((x) => x.trim()).join(" · "),
+	const what = f.state === "halted" ? haltedWhy(title, String(f.reason ?? "")).replace(/\s+/g, " ").trim() : waitsFor(f, title, 0);
+	const out = {
+		plan: f.plan_name || "",
+		dots: stripDots(f),
+		state: f.state === "halted" ? "Halted" : "Needs you",
 		what,
 		stop: title + (elapsed ? " (" + elapsed + ")" : "")
+	};
+	return {
+		...out,
+		whole: [
+			out.plan,
+			out.dots,
+			out.state,
+			out.what,
+			out.stop
+		].filter((x) => x.trim()).join(" · ")
 	};
 }
 function stripLabel(f, now = Date.now()) {
@@ -37112,6 +37124,10 @@ function lineWhere(d) {
 	const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
 	const tail = n.ask ? "" : n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
 	return head + (b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title) + (tail ? " · " + tail : "");
+}
+function whereBesideChip(where, chip) {
+	if (!where || chip?.reason !== "flight_you") return where;
+	return /^needs you at /i.test(where) ? "" : where;
 }
 function flownCount(d) {
 	return d.nodes.find((n) => n.kind === "flown")?.count || 0;
@@ -95205,8 +95221,9 @@ var lastPress = {
 	y: 0
 };
 function anchorOf(el, at) {
-	if (el && typeof el.getBoundingClientRect === "function") {
-		const r = el.getBoundingClientRect();
+	const box = el && typeof el.getBoundingClientRect === "function" ? el.closest?.(".fl-again-row") || el : null;
+	if (box) {
+		const r = box.getBoundingClientRect();
 		return {
 			left: r.left,
 			top: r.top,
@@ -95232,15 +95249,21 @@ function placeMenu(anchor, size, view) {
 		x: anchor.right + GAP,
 		y: clampY(anchor.top)
 	};
-	if (anchor.left - GAP - size.w >= M) return {
-		x: anchor.left - GAP - size.w,
-		y: clampY(anchor.top)
-	};
 	const below = anchor.bottom + GAP;
-	const y = below + size.h <= view.h - M ? below : anchor.top - GAP - size.h;
+	const above = anchor.top - GAP - size.h;
+	if (below + size.h <= view.h - M) return {
+		x: clampX(anchor.left),
+		y: below
+	};
+	if (above >= M) return {
+		x: clampX(anchor.left),
+		y: above
+	};
+	const roomBelow = view.h - M - below;
+	const roomAbove = anchor.top - GAP - M;
 	return {
 		x: clampX(anchor.left),
-		y: clampY(y)
+		y: clampY(roomBelow >= roomAbove ? below : above)
 	};
 }
 async function startSavedRoute(plan, title, opts) {
@@ -97273,11 +97296,7 @@ function PaneFlightStrip({ inst }) {
 	if (!row || !live) return null;
 	const line = full ? stripLabel(full, now) : stripLabel(row);
 	const parts = stripParts(full || row, now);
-	const whole = [
-		parts.lead,
-		parts.what,
-		parts.stop
-	].filter(Boolean).join(" · ");
+	const whole = parts.whole;
 	const waiting = row.state === "waiting_you" || row.state === "halted";
 	const parked = waiting || row.state === "paused";
 	const walking = verifyWalkSession(full);
@@ -97293,19 +97312,30 @@ function PaneFlightStrip({ inst }) {
 					className: "fl-strip-line",
 					title: "Open the Route tab — " + whole + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : ""),
 					onClick: () => openFlightTab(inst.title),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 13 }), parts.what || parts.stop ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 13 }), parts.state ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "fl-strip-text fl-strip-parts",
 						"aria-label": whole,
 						children: [
+							parts.plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-strip-plan",
+								children: parts.plan
+							}),
+							parts.dots && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-strip-dots",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "fl-strip-dots-in",
+									children: parts.dots
+								})
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "fl-strip-lead",
-								children: parts.lead
+								className: "fl-strip-state",
+								children: parts.state
 							}),
 							parts.what && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "fl-strip-what",
 								children: parts.what
 							}),
-							parts.stop && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "fl-strip-stop",
 								children: parts.stop
 							})
@@ -100487,7 +100517,7 @@ function FlightChain({ title, line, kinds, label }) {
 	const flightId = line.flight?.id || "";
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-	const where = row ? lineWhere(line.diagram) : "";
+	const shownWhere = whereBesideChip(row ? lineWhere(line.diagram) : "", ss);
 	const agent = agentTitle(row?.provider || row?.program, row?.program);
 	const headSub = agentDoing(row);
 	const head = (0, import_react.useMemo)(() => ({
@@ -100654,34 +100684,37 @@ function FlightChain({ title, line, kinds, label }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fl-chain-frame",
 				style: { ["--sky-chain-color"]: head.color },
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "fl-chain-frame-bar",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-chain-frame-name",
-							children: windowName(title)
-						}),
-						row?.branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-chain-frame-branch",
-							title: "Branch " + row.branch,
-							children: row.branch
-						}),
-						row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-box-chip fl-chain-frame-chip tone-" + ss.tone,
-							title: ss.hint,
-							children: ss.label
-						}),
-						behaviors.mark?.tone === "you" && ss.tone !== "attention" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-box-chip fl-chain-frame-chip tone-attention skl-bh-needs",
-							title: "A behavior waits on you — open the Behaviors stop to answer it",
-							children: "Needs you"
-						}),
-						where && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-chain-frame-where",
-							title: where,
-							children: where
-						})
-					]
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "fl-chain-frame-bar-in",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-chain-frame-name",
+								children: windowName(title)
+							}),
+							row?.branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-chain-frame-branch",
+								title: "Branch " + row.branch,
+								children: row.branch
+							}),
+							row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-box-chip fl-chain-frame-chip tone-" + ss.tone,
+								title: ss.hint,
+								children: ss.label
+							}),
+							behaviors.mark?.tone === "you" && ss.tone !== "attention" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-box-chip fl-chain-frame-chip tone-attention skl-bh-needs",
+								title: "A behavior waits on you — open the Behaviors stop to answer it",
+								children: "Needs you"
+							}),
+							shownWhere && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-chain-frame-where",
+								title: shownWhere,
+								children: shownWhere
+							})
+						]
+					})
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "fl-chain-frame-body",
 					style: shift,
@@ -148000,10 +148033,10 @@ function SkyLine(p) {
 						title: "A behavior waits on you — open the Behaviors stop to answer it",
 						children: "Needs you"
 					}),
-					where && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					whereBesideChip(where, ss) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-where",
 						title: where,
-						children: where
+						children: whereBesideChip(where, ss)
 					}),
 					line.flight && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OwedNote, {
 						note: owedNoteOf(line.flight),
@@ -153703,6 +153736,9 @@ function routeMenuLines(open, kinds, now) {
 		}] : []
 	];
 }
+function focusDefault(menu) {
+	(menu?.querySelector("button[role=menuitem].is-default") || menu?.querySelector("button[role=menuitem]"))?.focus();
+}
 function RouteStartMenu() {
 	const open = useRouteStartMenu((s) => s.open);
 	const set = useRouteStartMenu((s) => s.set);
@@ -153729,10 +153765,17 @@ function RouteStartMenu() {
 			h: window.innerHeight
 		}));
 	}, [open, view]);
+	const placed = !!pos;
+	(0, import_react.useEffect)(() => {
+		if (!open || !placed) return;
+		focusDefault(ref.current);
+	}, [
+		open,
+		view,
+		placed
+	]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
-		const all = ref.current?.querySelectorAll("button[role=menuitem]");
-		(ref.current?.querySelector("button.is-default") || all?.[0])?.focus();
 		const onDown = (e) => {
 			if (ref.current && !ref.current.contains(e.target)) set(null);
 		};
