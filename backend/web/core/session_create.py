@@ -204,6 +204,13 @@ async def create(
             await asyncio.to_thread(_launch_gate.unnote_start, admitted)
         except Exception:  # noqa: BLE001 — the refusal stands either way
             pass
+    elif admitted:
+        # A blank-titled create was admitted under a placeholder key; it now
+        # has a name (create() noted the start under it too). Move the
+        # admission over, or the one agent counts as two warming.
+        made = str(_json_result(resp)[1].get("title") or "")
+        if made and made != admitted:
+            _launch_gate.rename(admitted, made)
     return resp
 
 

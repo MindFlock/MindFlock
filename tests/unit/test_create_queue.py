@@ -465,3 +465,22 @@ def test_a_waiting_ticket_start_saves_what_rebuilds_it(env, monkeypatch):
     monkeypatch.setattr(gate, "gate_auto", fake_gate_auto)
     ticket_start._gate_turn("sc-9", {"parent": "orch"}, {"launch": {"source": "sc"}})
     assert seen["args"] == {"launch": {"source": "sc"}} and seen["kind"] == "ticket"
+
+
+# --------------------------------------------------------------------------- #
+# F. a create the gate lets through counts once
+# --------------------------------------------------------------------------- #
+def test_an_untitled_spawn_let_through_counts_as_one_warming_agent(env, monkeypatch):
+    """A blank-titled spawn is admitted under a placeholder key (no name
+    yet); create() then notes the start under the name it picks. The
+    placeholder used to stay too, so for WARMUP_SECONDS the one agent read
+    as two warming (twice its growth "to come", one more live against the
+    cap), holding back the automatic starts behind it."""
+    _stub_create(monkeypatch, git_enabled=True)
+    monkeypatch.setattr(gate, "decide", lambda *a, **k: dict(_GO))
+    status, body = _gated(_spawn(prompt="Fix the login bug"))
+    assert status == 202 and body["title"] == "fix-login-bug"
+    assert set(gate._ADMITTED) == {gate._tmux_name("fix-login-bug")}
+    assert gate.assess()["warming"] == 1
+    # The stagger still runs from this start.
+    assert gate._LAST_AUTO["at"] > 0
