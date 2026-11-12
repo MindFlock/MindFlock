@@ -2194,6 +2194,8 @@ def _cmd_flights(args: argparse.Namespace) -> int:
             )
             if state == "waiting_you":
                 where += " (needs you)"
+        if f.get("owed_note"):
+            where += (" · " if where else "") + str(f["owed_note"])
         state = str(f.get("state") or "")
         if f.get("reason") and state not in ("running", "waiting_you"):
             state += ": " + str(f["reason"])

@@ -626,6 +626,9 @@ def compact_flight(f: dict, now: float, budget: int = STATUS_BUDGET) -> dict:
         head["by"] = f["by"]
     if f.get("state") == "ready":
         head["start_on"] = f.get("start_on") or "prompt"
+    if f.get("owed_note"):
+        # A Verify stop that asks at the end: the route flies on meanwhile.
+        head["owed"] = str(f["owed_note"])
     history = [h for h in f.get("history") or [] if isinstance(h, dict)]
     keep = HISTORY_LINES
 

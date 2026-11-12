@@ -473,3 +473,33 @@ def test_cancelling_with_checks_owed_leaves_the_plan_waiting_on_you():
     D.operate(f["id"], "cancel")
     assert F.get(f["id"])["state"] == "cancelled"
     assert T.get("sc-1")["runs"][-1]["outcome"] == "needs_you"
+
+
+def test_the_cli_table_and_the_mcp_summary_say_what_is_owed(monkeypatch, capsys):
+    import argparse
+
+    from backend import cli, client
+    from backend.mcp import flights as mcp_flights
+
+    flight = {
+        "id": "f_1",
+        "plan_name": "PR review",
+        "session": "s",
+        "state": "running",
+        "cursor": 1,
+        "steps": [
+            {"id": "s1", "kind": "verify", "title": "Test locally"},
+            {"id": "s2", "kind": "agent", "title": "Write it up"},
+        ],
+        "step_states": {"s1": {"state": "done"}, "s2": {"state": "running"}},
+        "owed_note": "2 checks owed to you at the end",
+    }
+    assert mcp_flights.compact_flight(flight, 0.0)["owed"] == flight["owed_note"]
+    assert "owed" not in mcp_flights.compact_flight(dict(flight, owed_note=""), 0.0)
+
+    monkeypatch.setattr(client, "discover", lambda host, port: "http://x")
+    monkeypatch.setattr(client, "get", lambda base, path: {"flights": [flight]})
+    cli._cmd_flights(argparse.Namespace(host="", port=0, all=False, as_json=False))
+    assert (
+        "2/2 Write it up · 2 checks owed to you at the end" in capsys.readouterr().out
+    )
