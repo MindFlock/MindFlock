@@ -167,3 +167,36 @@ def test_another_live_servers_lease_is_skipped_without_a_write(srv, row, monkeyp
     run(D.step_flight(f["id"]))
     got = F.get(f["id"])
     assert sent == [1] and got["owner"] == "boot-1" and got["boot"] == "boot-1"
+
+
+def test_an_error_judging_a_stop_is_said_on_the_flight(srv, row, monkeypatch):
+    """An exception while observing or judging one flight was only logged
+    (every pass, for ever): the route sat on its old note with nothing for a
+    person to read. It now says so on the stop — and the other flights of
+    the pass are still driven."""
+    sent = []
+    monkeypatch.setattr(D, "_run_notify", lambda f, s: sent.append(f["id"]))
+    bad = fly({"kind": "notify", "config": {"text": "x"}})
+    good = fly({"kind": "notify", "config": {"text": "y"}}, session="t")
+    srv.ENGINE.instances["t"] = FakeInst()
+    real = F.next_action
+
+    def judge(view, obs, now):
+        if view["id"] == bad["id"]:
+            raise RuntimeError("the judge broke")
+        return real(view, obs, now)
+
+    monkeypatch.setattr(F, "next_action", judge)
+    run(D.run_pass())
+    got = F.get(bad["id"])
+    assert got["state"] == "running"
+    assert "the judge broke" in got["step_states"]["s1"]["note"]
+    assert sent == [good["id"]] and F.get(good["id"])["state"] == "done"
+    # Said once: the same error on the next pass writes nothing new.
+    saves = []
+    real_save = F._save_flights_locked
+    monkeypatch.setattr(
+        F, "_save_flights_locked", lambda fl: saves.append(1) or real_save(fl)
+    )
+    run(D.step_flight(bad["id"]))
+    assert saves == []

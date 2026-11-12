@@ -2842,8 +2842,28 @@ async def _step_member(
     of the parallel group at it) → ``(after, action)``; None when stale or
     nothing changed."""
     view = _flights.member_view(f, i)
-    obs = await observe(view, now)
-    action = _launch_verdict(view, obs, _flights.next_action(view, obs, now), now)
+    try:
+        obs = await observe(view, now)
+        action = _launch_verdict(view, obs, _flights.next_action(view, obs, now), now)
+    except asyncio.CancelledError:
+        raise
+    except Exception as err:  # noqa: BLE001 — said on the stop, never only logged
+        # Escaping to step_flight only logged it, every pass, while the stop
+        # kept its old note. Said on the stop instead (written once: the same
+        # error again changes nothing); the next good pass replaces it.
+        _log(
+            "flight %s: couldn't judge its stop: %v\n%s",
+            fid,
+            err,
+            traceback.format_exc(),
+        )
+        note = "couldn't work out this stop: %s — it keeps trying" % _error_line(err)
+        wait = {"action": "wait", "note": note}
+        after = await asyncio.to_thread(_apply_if_unchanged, fid, f, wait, now, i)
+        if after is None or _same(f, after):
+            return None
+        await asyncio.to_thread(_announce, f, after)
+        return after, wait
     sess = obs.get("session") or {}
     if not f["repo_root"] and sess.get("present"):
         root = await asyncio.to_thread(_repo_root, f["session"])
