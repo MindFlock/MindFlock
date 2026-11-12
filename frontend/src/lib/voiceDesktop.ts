@@ -1156,8 +1156,11 @@ export function micPill(s: {
   quiet: boolean;
   starting?: boolean;
   warming?: boolean;
+  /** Recognition is getting ready ({@link makeSttReady}): not yet "talk". */
+  readying?: boolean;
 }): string {
   if (s.quiet) return HUSH_LINE;
+  if (s.listening && s.readying) return READYING_PILL;
   if (s.listening) return s.warming ? STARTING_MIC_LINE : "Listening…";
   if (s.speaking && s.starting) return STARTING_VOICE_LINE;
   return s.speaking ? "Speaking…" : "";
@@ -1173,6 +1176,54 @@ export const STARTING_VOICE_LINE = "Starting voice…";
  * only while someone listens (the standby), so a press after a while idle
  * waits a few seconds for it. */
 export const STARTING_MIC_LINE = "Starting the mic…";
+
+/** The pill while the server's recognition gets ready ({@link makeSttReady})
+ * after a press or the wake word: the mic is not red yet — red means "talk". */
+export const READYING_PILL = "Getting ready…";
+/** The caption meanwhile. */
+export const READYING_LINE = "Getting ready — wait for the red mic";
+/** The mic was let go (or stopped) before recognition was ready. */
+export const READY_EARLY_LINE = "Recognition was still getting ready — try again in a moment";
+/** A readiness answer this quick shows nothing: the mic goes red at once
+ * (a hot server answers in a few ms). */
+export const READY_QUICK_MS = 250;
+
+/** Whether a listen waits for {@link makeSttReady}: speech is recognised on
+ * the server by its local models — the only recognizer that can be in
+ * memory yet not answering (paged out, or loading). Pure. */
+export function readyWanted(cfg: VoiceCfg): boolean {
+  return cfg.stt === "server" && (cfg.server_ready || {}).stt_backend === "local";
+}
+
+export interface SttReady {
+  ok: boolean;
+  /** It already was: nothing ran. */
+  hot: boolean;
+  ms: number;
+  error: string;
+}
+
+/** Ask the server to make recognition answerable now (POST /api/voice/ready:
+ * its models loaded and a real pass run through each) and wait for it. An
+ * older server has no such call (404/405): ready, as before. Never throws. */
+export async function makeSttReady(): Promise<SttReady> {
+  const started = Date.now();
+  try {
+    const r = await apiRaw("/api/voice/ready", { method: "POST" });
+    if (r.status === 404 || r.status === 405) return { ok: true, hot: true, ms: Date.now() - started, error: "" };
+    const j = (await r.json().catch(() => ({}))) as { ready?: unknown; hot?: unknown; error?: unknown };
+    if (r.ok && j.ready === true) return { ok: true, hot: j.hot === true, ms: Date.now() - started, error: "" };
+    return { ok: false, hot: false, ms: Date.now() - started, error: typeof j.error === "string" ? j.error : "HTTP " + r.status };
+  } catch (err) {
+    return { ok: false, hot: false, ms: Date.now() - started, error: err instanceof Error ? err.message : "the server did not answer" };
+  }
+}
+
+/** The line when recognition did not get ready: why, when the server said. */
+export function notReadyLine(error: string): string {
+  const why = error.trim().replace(/\s+/g, " ").slice(0, 160);
+  return "Recognition is not ready" + (why ? ": " + why : "");
+}
 
 /** How often a page renews its listening lease (POST /api/voice/listen) while
  * the standby is on: well inside the server's 180 s lease. */
@@ -2223,6 +2274,8 @@ export class LiveDictation {
   private sending = false;
   /** A note on the last phrase ({@link RouteVerdict}): the caption until then (ms). */
   private note = "";
+  /** The caption while recognition gets ready ({@link wait}); "": none. */
+  private waitLine = "";
   private noteUntil = 0;
   private noteTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -2594,6 +2647,21 @@ export class LiveDictation {
     this.end(kept ? line + " — the words so far stay in the field" : line, true, "stopped");
   }
 
+  /** Recognition is getting ready: `line` is the caption until
+   * {@link waited} — nothing heard or guessed replaces it. */
+  wait(line: string): void {
+    if (this.done) return;
+    this.waitLine = line;
+    this.show();
+  }
+
+  /** Recognition is ready: the caption is the listen's own again. */
+  waited(): void {
+    if (!this.waitLine) return;
+    this.waitLine = "";
+    this.show();
+  }
+
   /** Listening ran out with nothing said: stop, a miss — quietly
    * (hands-free), or with `line` (a wake that heard nothing:
    * {@link WAKE_MISS_LINE}). */
@@ -2605,6 +2673,10 @@ export class LiveDictation {
    * before a word, whether the mic hears you and what to say. */
   show(): void {
     if (this.done) return;
+    if (this.waitLine) {
+      this.hooks.caption(this.waitLine, true);
+      return;
+    }
     const noteLeft = this.noteUntil - Date.now();
     if (this.note && noteLeft > 0) {
       this.hooks.caption(this.note, true);

@@ -53725,12 +53725,56 @@ var WAKE_MISS_LINE = "Didn't catch anything";
 var MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
 function micPill(s) {
 	if (s.quiet) return HUSH_LINE;
+	if (s.listening && s.readying) return READYING_PILL;
 	if (s.listening) return s.warming ? STARTING_MIC_LINE : "Listening…";
 	if (s.speaking && s.starting) return STARTING_VOICE_LINE;
 	return s.speaking ? "Speaking…" : "";
 }
 var STARTING_VOICE_LINE = "Starting voice…";
 var STARTING_MIC_LINE = "Starting the mic…";
+var READYING_PILL = "Getting ready…";
+var READYING_LINE = "Getting ready — wait for the red mic";
+var READY_EARLY_LINE = "Recognition was still getting ready — try again in a moment";
+var READY_QUICK_MS = 250;
+function readyWanted(cfg) {
+	return cfg.stt === "server" && (cfg.server_ready || {}).stt_backend === "local";
+}
+async function makeSttReady() {
+	const started = Date.now();
+	try {
+		const r = await apiRaw("/api/voice/ready", { method: "POST" });
+		if (r.status === 404 || r.status === 405) return {
+			ok: true,
+			hot: true,
+			ms: Date.now() - started,
+			error: ""
+		};
+		const j = await r.json().catch(() => ({}));
+		if (r.ok && j.ready === true) return {
+			ok: true,
+			hot: j.hot === true,
+			ms: Date.now() - started,
+			error: ""
+		};
+		return {
+			ok: false,
+			hot: false,
+			ms: Date.now() - started,
+			error: typeof j.error === "string" ? j.error : "HTTP " + r.status
+		};
+	} catch (err) {
+		return {
+			ok: false,
+			hot: false,
+			ms: Date.now() - started,
+			error: err instanceof Error ? err.message : "the server did not answer"
+		};
+	}
+}
+function notReadyLine(error) {
+	const why = error.trim().replace(/\s+/g, " ").slice(0, 160);
+	return "Recognition is not ready" + (why ? ": " + why : "");
+}
 var LISTEN_RENEW_MS = 6e4;
 function listenLeaser(post = postListen) {
 	let on = false;
@@ -54380,6 +54424,7 @@ var LiveDictation = class {
 	unwatch = null;
 	sending = false;
 	note = "";
+	waitLine = "";
 	noteUntil = 0;
 	noteTimer;
 	constructor(target, hooks, opts = {}) {
@@ -54630,11 +54675,25 @@ var LiveDictation = class {
 		const kept = this.dict.typed.trim() && this.target?.kind === "session";
 		this.end(kept ? line + " — the words so far stay in the field" : line, true, "stopped");
 	}
+	wait(line) {
+		if (this.done) return;
+		this.waitLine = line;
+		this.show();
+	}
+	waited() {
+		if (!this.waitLine) return;
+		this.waitLine = "";
+		this.show();
+	}
 	drop(line = "") {
 		this.end(line, false, "missed");
 	}
 	show() {
 		if (this.done) return;
+		if (this.waitLine) {
+			this.hooks.caption(this.waitLine, true);
+			return;
+		}
 		const noteLeft = this.noteUntil - Date.now();
 		if (this.note && noteLeft > 0) {
 			this.hooks.caption(this.note, true);
@@ -59072,6 +59131,8 @@ function TopBarMic() {
 	const [speaking, setSpeaking] = (0, import_react.useState)(queue.busy);
 	const [starting, setStarting] = (0, import_react.useState)(false);
 	const [warming, setWarming] = (0, import_react.useState)(false);
+	const [readying, setReadying] = (0, import_react.useState)(false);
+	const readyFor = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		startingListeners.add(setStarting);
 		loadingListeners.add(setWarming);
@@ -59309,7 +59370,37 @@ function TopBarMic() {
 	const idleMs = (0, import_react.useRef)(DICT_IDLE_MS);
 	const armIdle = () => {
 		clearTimeout(idleTimer.current);
-		if (idles.current) idleTimer.current = setTimeout(() => void live.current?.expire(), idleMs.current);
+		if (idles.current) idleTimer.current = setTimeout(() => {
+			if (readyFor.current) return armIdle();
+			live.current?.expire();
+		}, idleMs.current);
+	};
+	const awaitReady = (d) => {
+		readyFor.current = d;
+		const slow = setTimeout(() => {
+			if (readyFor.current !== d || live.current !== d) return;
+			setReadying(true);
+			d.wait(READYING_LINE);
+		}, READY_QUICK_MS);
+		makeSttReady().then((res) => {
+			clearTimeout(slow);
+			if (readyFor.current !== d) return;
+			readyFor.current = null;
+			setReadying(false);
+			voiceTrace("ready", {
+				ok: res.ok,
+				hot: res.hot,
+				ms: res.ms,
+				...res.error ? { error: res.error } : {}
+			});
+			if (live.current !== d) return;
+			if (!res.ok) {
+				d.fail(notReadyLine(res.error));
+				return;
+			}
+			d.waited();
+			armIdle();
+		});
 	};
 	const chimed = (0, import_react.useRef)(false);
 	const gated = (0, import_react.useRef)(false);
@@ -59329,6 +59420,10 @@ function TopBarMic() {
 		haltedAt.current = Date.now();
 		keyLatched.current = false;
 		live.current = null;
+		if (readyFor.current) {
+			readyFor.current = null;
+			setReadying(false);
+		}
 		rec.current?.stop();
 		rec.current = null;
 		untap?.();
@@ -59365,7 +59460,8 @@ function TopBarMic() {
 				hint: opts.hint || ask.hint()
 			};
 		}
-		const engine = recEngine(cfgNow);
+		const c = cfgNow;
+		const engine = recEngine(c);
 		if (engine === "none") {
 			say(noRecognizerLine());
 			refreshCfg();
@@ -59498,6 +59594,7 @@ function TopBarMic() {
 		});
 		d.show();
 		armIdle();
+		if (r === serverRec && readyWanted(c)) awaitReady(d);
 		meterStart(serverRec.mic.quietFloor());
 		const ok = r.start({
 			onInterim: (t) => {
@@ -59602,14 +59699,21 @@ function TopBarMic() {
 		});
 		if (!d) return resolve("stopped");
 		handsLive.current = d;
-		timer = setTimeout(() => {
-			if (live.current === d && !d.heardAnything) d.drop();
-		}, ms);
+		const giveUp = () => {
+			if (live.current !== d || d.heardAnything) return;
+			if (readyFor.current === d) timer = setTimeout(giveUp, ms);
+			else d.drop();
+		};
+		timer = setTimeout(giveUp, ms);
 	});
 	const finish = () => {
 		const r = rec.current;
 		const d = live.current;
 		if (!r || !d || deciding.current) return;
+		if (readyFor.current === d) {
+			d.fail(READY_EARLY_LINE);
+			return;
+		}
 		if (gated.current && queue.busy && prefsRef.current.ptt !== "hold") {
 			queue.skip();
 			return;
@@ -60069,7 +60173,8 @@ function TopBarMic() {
 		speaking,
 		quiet,
 		starting,
-		warming
+		warming,
+		readying
 	});
 	const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : void 0;
 	const popW = Math.min(POP_W, window.innerWidth - 32);
@@ -60091,7 +60196,8 @@ function TopBarMic() {
 				className: [
 					"tb-item",
 					"mic-ring",
-					listening && "listening",
+					listening && !readying && "listening",
+					listening && readying && "readying",
 					assistantOn && "assistant",
 					paused && "muted",
 					wake.on && !listening && "standby",

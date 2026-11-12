@@ -334,7 +334,7 @@ describe("the bar shows a state pill, never a transcript", () => {
     expect(bar).toMatch(/aria-live="polite">\s*\{pill\}\s*<\/span>/);
     // Neither the words heard nor the line said ever reach the bar.
     expect(bar).not.toMatch(/\{caption\}|\{unsure\}|liveTail/);
-    expect(MIC).toContain("const pill = micPill({ listening, speaking, quiet, starting, warming });");
+    expect(MIC).toContain("const pill = micPill({ listening, speaking, quiet, starting, warming, readying });");
     // One portal: the options. Nothing else floats over the page.
     expect(MIC.split("createPortal(").length - 1).toBe(1);
     expect(src("components/TopBarMic.css")).not.toContain("#mic-caption");

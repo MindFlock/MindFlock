@@ -118,14 +118,18 @@ __all__ = [
     "SpeechError",
     "BACKENDS",
     "HINT_CHARS",
+    "HOT_SECONDS",
     "IDLE_SECONDS",
     "backends",
     "choose",
     "describe",
     "get",
     "ids",
+    "keep_hot",
     "listen",
     "listening",
+    "make_ready",
+    "note_hot",
     "loaded",
     "mime_of",
     "recognition_hints",
@@ -133,6 +137,7 @@ __all__ = [
     "session_titles",
     "shed_for_memory",
     "speech_form",
+    "stt_hot",
     "stt_loaded",
     "sweep_idle",
     "unload_all",
@@ -451,6 +456,100 @@ def listening() -> bool:
             if until <= now:
                 _LISTENING.pop(key, None)
         return bool(_LISTENING)
+
+
+#: A real recognition pass (or :func:`make_ready`'s) this recently means the
+#: next phrase is answered at once: "in memory" (:func:`stt_loaded`) is not
+#: that — under memory pressure a cached model is paged out, and its first
+#: pass after a quiet minute took 10 to 40 s while it still read as loaded.
+HOT_SECONDS = 90.0
+#: A listening page's lease renewal runs :func:`make_ready` again once the
+#: last pass is this old (:func:`keep_hot`): standby stays answerable.
+KEEP_HOT_SECONDS = 45.0
+_HOT_AT = [0.0]  # time.monotonic() of the last real pass; 0: none yet
+_READY_LOCK = threading.Lock()
+
+
+def note_hot() -> None:
+    """A real recognition pass just returned (a stream's chunk that ran
+    one, a phrase's end, a clip, :func:`make_ready`)."""
+    _HOT_AT[0] = time.monotonic()
+
+
+def stt_hot() -> bool:
+    """Whether recognition answers the next phrase at once: any backend but
+    ``local`` always (nothing here to wait for); ``local`` when its models
+    are in memory AND a real pass returned within :data:`HOT_SECONDS`."""
+    try:
+        if _configured("stt") != "local":
+            return True
+    except Exception:  # noqa: BLE001 — unreadable settings: not hot
+        return False
+    at = _HOT_AT[0]
+    return at > 0 and time.monotonic() - at < HOT_SECONDS and stt_loaded()
+
+
+def make_ready() -> dict:
+    """Make ``local`` recognition answerable NOW, blocking until it is: the
+    models loaded and one short real pass run through each
+    (:meth:`LocalSTT.make_ready`) — what a mic waits for before it says
+    "talk" → ``{"ready": True, "hot": bool, "ms": n}`` (``hot``: it already
+    was, nothing ran; ``ms``: how long this call took). One at a time: a
+    second caller waits for the first and then finds it hot. Any other
+    backend is ready at once. Raises :class:`SpeechError` when the models
+    cannot load or a pass fails."""
+    started = time.monotonic()
+
+    def done(hot: bool) -> dict:
+        return {
+            "ready": True,
+            "hot": hot,
+            "ms": int((time.monotonic() - started) * 1000),
+        }
+
+    if stt_hot():
+        return done(True)
+    with _READY_LOCK:
+        if stt_hot():  # another caller's pass, while this one waited
+            return done(False)
+        backend = get("stt", "local")
+        try:
+            backend.make_ready()  # type: ignore[attr-defined]
+        except SpeechError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            raise SpeechError("recognition did not get ready: %s" % err) from err
+        note_hot()
+    return done(False)
+
+
+def keep_hot() -> Optional[threading.Thread]:
+    """While a page listens (its lease renewal calls this): run
+    :func:`make_ready` on a daemon thread when ``local`` recognition is in
+    memory but its last real pass is over :data:`KEEP_HOT_SECONDS` old, so
+    the phrase after the wake word does not wait for pages to come back.
+    Nothing when it is not loaded (the warm-up loads it), another backend
+    is configured, or a pass is already running. The thread, or None."""
+    try:
+        if _configured("stt") != "local" or not stt_loaded():
+            return None
+    except Exception:  # noqa: BLE001 — never break the caller
+        return None
+    at = _HOT_AT[0]
+    if at > 0 and time.monotonic() - at < KEEP_HOT_SECONDS:
+        return None
+    if _READY_LOCK.locked():
+        return None
+
+    def go() -> None:
+        try:
+            make_ready()
+        except Exception as err:  # noqa: BLE001 — best effort
+            _logger.debug("voice keep-hot: %s", err)
+
+    t = threading.Thread(target=go, name="mindflock-voice-keep-hot", daemon=True)
+    t.start()
+    return t
 
 
 def stt_loaded() -> bool:
@@ -1946,10 +2045,34 @@ class LocalSTT(Backend):
                 self._prime(model, key)
         return "loaded" if fresh else "already"
 
+    def make_ready(self) -> None:
+        """Load every model (:meth:`load_keys`) and run one short real pass
+        through EACH — also the ones already in memory: a cached model's
+        pages may be swapped out, and only a pass brings them back. Raises
+        :class:`SpeechError` when a whisper model cannot load or its pass
+        fails; Moonshine failing is logged (its streams fall back to
+        whisper, as in :meth:`warm`)."""
+        try:
+            self._model_name(fetch=True)
+        except Exception:  # noqa: BLE001 — unreadable settings: ready what we can
+            pass
+        for key in self.load_keys():
+            if key == _moonshine_key():
+                from backend.web.core import speech_moonshine as _moon
+
+                try:
+                    _moon.prime()
+                except Exception as err:  # noqa: BLE001
+                    _logger.warning("voice: Moonshine is not ready: %s", err)
+                continue
+            self._prime(self._model(key.split(":", 1)[1]), key, strict=True)
+
     @staticmethod
-    def _prime(model, key: str = "") -> None:
+    def _prime(model, key: str = "", strict: bool = False) -> None:
         """One short silent pass, on the model's lane (``key``) as a
-        ``clip`` job, so it never shares the cores with a live pass."""
+        ``clip`` job, so it never shares the cores with a live pass.
+        ``strict``: a failing pass raises :class:`SpeechError`
+        (:meth:`make_ready`) instead of passing quietly (a warm-up)."""
         from backend.web.core import speech_stream as _stream
 
         np = _import("numpy")
@@ -1966,8 +2089,9 @@ class LocalSTT(Backend):
 
         try:
             _stream.lane(key or "?").run(run, _stream.CLIP)
-        except Exception:  # noqa: BLE001 — a warm-up may fail quietly
-            pass
+        except Exception as err:  # noqa: BLE001 — a warm-up may fail quietly
+            if strict:
+                raise SpeechError("faster-whisper failed: %s" % err) from err
 
 
 class LocalTTS(Backend):
@@ -3322,7 +3446,8 @@ def describe(probe: bool = True) -> dict:
                           "tts_backend": id|"", "tts_detail": str,
                           "stt_stream": bool, "tts_engine": str,
                           "tts_fallback": bool, "tts_down": str,
-                          "tts_cold": bool, "stt_loaded": bool},
+                          "tts_cold": bool, "stt_loaded": bool,
+                          "stt_hot": bool},
          "system": {"available": bool,
                     "platform": "windows"|"wsl"|"mac"|"none",
                     "detail": str, "voices": [names],
@@ -3393,6 +3518,7 @@ def describe(probe: bool = True) -> dict:
     # Whether a first phrase waits for local recognition to load (it is
     # loaded only while someone listens, or after a recent phrase).
     ready["stt_loaded"] = stt_loaded()
+    ready["stt_hot"] = stt_hot()
     return {
         "backends": {k: ids(k) for k in ("stt", "tts")},
         "server_ready": ready,

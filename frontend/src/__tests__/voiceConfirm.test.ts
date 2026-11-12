@@ -484,7 +484,7 @@ describe("the wiring and the copy", () => {
   it("a click (or the wake word) listens with no idle timeout; Hold to talk and a hands-free answer keep it", () => {
     expect(MIC).toMatch(/const continuous = opts\.continuous !== false;/);
     expect(MIC).toMatch(/idles\.current = opts\.idle \?\? \(!continuous \|\| prefsRef\.current\.ptt === "hold"\);/);
-    expect(MIC).toMatch(/if \(idles\.current\) idleTimer\.current = setTimeout/);
+    expect(MIC).toMatch(/if \(idles\.current\)\s+idleTimer\.current = setTimeout/);
     expect(MIC).toMatch(/title,\s*hint,\s*continuous: false,/); // listenFor
     expect(MIC).toMatch(/\{ hint: WAKE_HINT, idle: false \}/);
     expect(MIC).toMatch(/\{ hint: opts\.hint, continuous \}/);
