@@ -5720,6 +5720,43 @@ obey the `run_needs_you` / `run_finished` switches in Settings → Notifications
 and a prompt is never announced twice (the session's own "Needs you" row
 covers it). At most one team run toast per 30 seconds.
 
+## Routes on rails: asks, owed checks, Start at, Fly again
+
+The backend is docs/flights.md "Round 21".
+
+- **A stop that asks** (`lib/stopAsks.ts`, one helper every surface reads; the
+  parts are `components/flights/PerchAsks.tsx`).
+  - A review stop out of fix rounds (`detail.ask: "unresolved"`) shows the
+    server's sentence ("2 findings still open after 3 rounds"), the findings
+    in a scrolling box, **Give it another round** (primary: the step's retry)
+    and **Carry on** (the step's done). On the stop's box, the Sky tile, the
+    pane strip, the stop dialog, the stop menu and the bell's row.
+  - A Wait for me stop that carries owed checks (`detail.ask: "owed"`) lists
+    them under each Verify stop's title, with **Done — they all work**, Skip,
+    and per group **This one didn't work**, which takes a one-line note and
+    posts the plan's confirm with `verified: false`.
+- **Owed checks while the route flies.** A muted link with the server's
+  `owed_note` ("2 checks owed to you at the end") on the pane strip, the Route
+  tab's head, the Board card, the Sky line's head bar and the sidebar name's
+  tooltip. Hover or press lists the items. It is not a needs-you state, and it
+  goes away once the route waits on you or has finished.
+- **Start at, and carrying on** (`lib/routeStart.ts`,
+  `components/flights/RouteStartMenu.tsx`). Starting a saved route on a
+  session asks `POST /api/flights/check` first. No resume point: it starts as
+  before, in one click. With one, a small menu opens at the click: "Carries
+  on at Push — where it stopped 2h ago (its session was deleted)", **Carry on
+  at Push** (focused), **Start from the beginning**, **Start at another
+  stop…**. **Start at…** beside "Run these stops" lists the route's stops
+  ("3. Push · Ship"); a later stop flies now.
+- **Fly again** on an ended route: "Fly again from Push" and "Fly again from
+  another stop…" on a finished, cancelled or halted route's ⋯ menu, on the
+  Finished list's cards and on the Route tab's head; right-click a stop of a
+  finished route for "Fly again from here". The toast says which session took
+  it ("Reopened sc-42 and flying again from Push").
+- **The stop editor** gets the new fields from `/api/flights/kinds`: a review
+  stop's **Fix rounds** and **Findings still open after the last round**, a
+  Verify stop's **When it needs you**.
+
 ## Verify
 
 ### Verify is the session's own agent
