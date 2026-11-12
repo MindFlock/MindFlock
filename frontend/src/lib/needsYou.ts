@@ -156,8 +156,14 @@ export function withFlightRows(
   instances: readonly Instance[],
   flights?: readonly Flight[] | null
 ): FlightWaiting[] {
-  const out: FlightWaiting[] = withFlightYou(waiting, instances);
   const live = new Set(instances.map((i) => i.title));
+  const known = new Set((flights || []).map((f) => f.id));
+  // The server's row for a route whose session is no longer listed still
+  // names that session: when the full flight is here, its own row (keyed by
+  // the flight, below) stands in — one route, one row, no dead name on it.
+  const out: FlightWaiting[] = withFlightYou(waiting, instances).filter(
+    (w) => !(w.kind === "flight_you" && w.title && !live.has(w.title) && known.has((w as FlightWaiting).flight?.id || ""))
+  );
   const hasFlight = new Set(out.filter((w) => w.kind === "flight_you" || w.kind === "flight_halted").map((w) => w.title));
   const keys = new Set(out.map((w) => w.key));
   const full = new Map((flights || []).map((f) => [f.id, f]));

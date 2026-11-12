@@ -45,3 +45,62 @@ describe("a verify checker's own agent is not something waiting on you", () => {
     expect(titles([inst("verify-foo", { hidden_by: "", activity: "offline" })])).toEqual(["verify-foo"]);
   });
 });
+
+// A route waiting on you whose session is no longer listed (closed by a door
+// that did not cancel it yet — flights.prune gives it 30 minutes): the
+// server's own flight_you row still names the session, and the full flights
+// made a second row for the same route, keyed by the flight. One route, one
+// row — the one with no dead session's name on it.
+describe("a route whose session is gone is one row", () => {
+  const f = {
+    id: "f_gone",
+    plan_id: "adhoc",
+    plan_name: "Ticket to PR",
+    steps: [{ id: "s1", kind: "you", title: "Wait for me: Try it", config: {} }],
+    subject: {},
+    session: "gone",
+    repo_root: "/r",
+    branch: "b",
+    state: "waiting_you",
+    cursor: 0,
+    step_states: {},
+    reason: "",
+    history: [],
+    started: NOW - 600,
+    updated: NOW - 60,
+    finished: 0,
+    by: "user",
+  };
+  const server = {
+    key: "flight::f_gone::s1",
+    title: "gone",
+    run: null,
+    kind: "flight_you",
+    reason: "Try it",
+    since: NOW - 60,
+    preview: null,
+    actions: ["done", "skip", "open"],
+    flight: { id: "f_gone", plan_name: "Ticket to PR", step: "s1", step_title: "Wait for me: Try it", kind: "you" },
+  };
+
+  it("not two", () => {
+    const rows = needsYouRows({
+      instances: [inst("other")],
+      waiting: [server] as never,
+      flights: [f] as never,
+      testPlans: [],
+    }).filter((r) => r.kind === "wait_for_me");
+    expect(rows.length).toBe(1);
+    expect(rows[0].title).toBe("");
+  });
+
+  it("a live session keeps its own row", () => {
+    const rows = needsYouRows({
+      instances: [inst("gone")],
+      waiting: [server] as never,
+      flights: [f] as never,
+      testPlans: [],
+    }).filter((r) => r.kind === "wait_for_me");
+    expect(rows.map((r) => r.title)).toEqual(["gone"]);
+  });
+});
