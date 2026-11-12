@@ -382,6 +382,14 @@ def _forget_session_state(title: str) -> None:
     _held.drop(title)
     # …nor described by the dead session's last task.
     _task_headlines.drop(title)
+    # …nor still waiting in the launch gate (a relaunch, wake or revive
+    # queued for it would sit there "waiting" until it drained and failed).
+    from backend.web.core import launch_gate as _launch_gate
+
+    try:
+        _launch_gate.cancel(title)
+    except Exception:  # noqa: BLE001 — bookkeeping, never the removal
+        pass
     # Keyed by TMUX SESSION NAME, not by title (see agent_state._maybe_record_
     # thread), so it needs the translation the others do not.
     srv._THREAD_RECORD_AT.pop(tmux.to_mindflock_tmux_name(title), None)

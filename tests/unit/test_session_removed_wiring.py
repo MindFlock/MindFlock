@@ -66,3 +66,23 @@ def test_removal_hook_drops_the_budget_raise(monkeypatch, tmp_path):
 
     assert "gone-agent" not in server._budget_overrides()
     assert "gone-agent" not in budget_core._BUDGET_FIRED
+
+
+def test_ending_a_session_cancels_its_queued_launch():
+    """A relaunch, wake or revive waiting in the launch gate for a session that
+    is then deleted or closed must leave the queue with it: a stale "waiting"
+    entry otherwise sat there until it drained and failed. end_session runs
+    ``_forget_session_state`` on both doors (close keeps the worktree, delete
+    wipes it), so that is where it goes."""
+    from backend.web.core import launch_gate
+
+    launch_gate._reset_for_tests()
+    try:
+        for title in ("deleted-one", "closed-one"):
+            launch_gate.enqueue(title, lambda: None, kind="relaunch", why="memory")
+            assert launch_gate.waiting(title) is not None
+            server._forget_session_state(title)
+            assert launch_gate.waiting(title) is None
+        assert launch_gate.items() == []
+    finally:
+        launch_gate._reset_for_tests()
