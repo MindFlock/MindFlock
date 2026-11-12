@@ -104,3 +104,37 @@ def test_the_row_index_memo_survives_an_unchanged_pass(store, monkeypatch):
     tp.retarget_live_branch("sc-1", "main")
     assert tp.verify_for_session("sc-1") is not None
     assert calls["n"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# A checker's check BEFORE MERGE that dies is not the work shipping
+# --------------------------------------------------------------------------- #
+# The due loop releases a checker run whose window died, or that passed the
+# two-hour give-up, through `mark_due(pid, reason)`. For the person's own
+# session that is `_release` (never stamps `live_at`), and a deleted session
+# goes through `_after_run_state` ("a check before merge goes back to waiting
+# for the merge — never to due"). A separate checker's run took neither: it
+# stamped `live_at` and landed in `due`, so unmerged work read as shipped, sat
+# in Needs you as "shipped — check it", and the liveness pass (which only asks
+# `generated` plans) never looked at it again.
+
+
+def test_a_dead_checker_before_merge_goes_back_to_waiting(store):
+    tp.upsert(_plan("sc-1"))
+    started = tp.start_run("sc-1", "verify-sc-1-aaaaaaa")
+    assert started["runs"][-1]["prelive"] is True
+    released = tp.mark_due("sc-1", reason="Verify gave up after 2 hours.")
+    assert released["live_at"] == 0.0
+    assert released["state"] == "generated"
+    assert released["run_session"] == ""
+    # ...and the person can still read why.
+    assert released["error"] == "Verify gave up after 2 hours."
+
+
+def test_a_dead_checker_after_merge_still_comes_due(store):
+    """The other arm is unchanged: shipped work goes back to `due`."""
+    tp.upsert(_plan("sc-1", state="due", live_at=500.0))
+    tp.start_run("sc-1", "verify-sc-1-aaaaaaa")
+    released = tp.mark_due("sc-1", reason="Verify gave up after 2 hours.")
+    assert released["live_at"] == 500.0
+    assert released["state"] == "due"
