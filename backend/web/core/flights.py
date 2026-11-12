@@ -5858,7 +5858,9 @@ def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     retryable = (
         ss["state"] in ("failed", "running")
         or ss["detail"].get("failed_reason")
-        or flight["state"] == "halted"
+        # Halted: its stop runs again — never a group member already through
+        # (a done one would run a second time while the failed one sat).
+        or (flight["state"] == "halted" and not _passed(ss))
         # A Verify stop parked because the check couldn't finish (blocked,
         # unreadable) or memory refused to start it: its own sentence says
         # "press Retry" — the stop runs again from a fresh check.
@@ -6346,7 +6348,9 @@ def op_resume(flight: dict, now: Optional[float] = None) -> dict:
     _airborne(flight)
     cur = _current(flight)
     if cur is None:
-        _finish(flight, "done", "", ts)
+        # At the end: it lands — or first asks for the checks still owed.
+        flight["reason"] = ""
+        _advance(flight, ts)
         return flight
     ss = flight["step_states"][cur["id"]]
     lo, hi = current_group(flight)

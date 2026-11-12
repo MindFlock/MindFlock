@@ -1316,10 +1316,7 @@ class FlightTools:
         else:
             step = str(args.get("step") or "").strip()
             if not step and op != "jump":
-                steps = f.get("steps") or []
-                cur = int(f.get("cursor") or 0)
-                if 0 <= cur < len(steps) and isinstance(steps[cur], dict):
-                    step = str(steps[cur].get("id") or "")
+                step = self._default_stop(f, op)
             if not step:
                 raise ToolError(
                     "%s needs step (a stop id from flight_status)%s"
@@ -1336,6 +1333,35 @@ class FlightTools:
         resp = self._fl_api("POST", path, payload, what)
         nf = resp.get("flight")
         return compact_flight(nf if isinstance(nf, dict) else f, self.clock())
+
+    @staticmethod
+    def _default_stop(f: dict, op: str) -> str:
+        """The stop a step op means when none is named: the current one. At
+        a parallel group (the cursor on its first member) it is the member
+        the op is for — retry a failed one, done one waiting on you, skip
+        either — else the group's first; "" past the end."""
+        steps = [s if isinstance(s, dict) else {} for s in f.get("steps") or []]
+        try:
+            cur = int(f.get("cursor") or 0)
+        except (TypeError, ValueError):
+            cur = 0
+        if not 0 <= cur < len(steps):
+            return ""
+        pid = str((steps[cur].get("parallel") or {}).get("id") or "")
+        hi = cur + 1
+        while pid and hi < len(steps):
+            if str((steps[hi].get("parallel") or {}).get("id") or "") != pid:
+                break
+            hi += 1
+        want = {"retry": ("failed",), "done": ("waiting_you",)}.get(
+            op, ("failed", "waiting_you")
+        )
+        states = f.get("step_states") if isinstance(f.get("step_states"), dict) else {}
+        for s in steps[cur:hi]:
+            st = states.get(s.get("id")) if isinstance(states, dict) else None
+            if isinstance(st, dict) and st.get("state") in want:
+                return str(s.get("id") or "")
+        return str(steps[cur].get("id") or "")
 
     def _again(self, flock: Flock, args: dict, f: dict, what: str) -> dict:
         """control_flight(op=again): ``POST /api/flights/{id}/again`` — the

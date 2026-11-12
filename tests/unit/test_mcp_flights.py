@@ -570,6 +570,27 @@ class TestControl:
         box.control_flight({"id": "f_1", "op": op}, _ctx(clock))
         assert hit == [("/api/flights/f_1/steps/s2/" + op, {})]
 
+    @pytest.mark.parametrize(
+        "op,want", [("retry", "s3"), ("skip", "s3"), ("done", "s2")]
+    )
+    def test_step_ops_at_a_parallel_group_pick_the_member_it_is_for(self, op, want):
+        """The cursor stands on a group's FIRST member: Retry with no step
+        used to name that one (done) — the server now refuses it, and before
+        it ran the done stop again. The member the op is for is named."""
+        par = {"parallel": {"id": "p_g"}}
+        f = _flight(cursor=1, n=3, state="halted")
+        f["steps"][1].update(par)
+        f["steps"][2].update(par)
+        f["step_states"]["s2"]["state"] = "done"
+        f["step_states"]["s3"]["state"] = "failed"
+        if op == "done":
+            f["step_states"]["s2"]["state"] = "waiting_you"
+        box, api, clock = _box(flights=[f])
+        hit = []
+        _ok(api, "POST", "/api/flights/f_1/steps/%s/%s" % (want, op), hit)
+        box.control_flight({"id": "f_1", "op": op}, _ctx(clock))
+        assert hit == [("/api/flights/f_1/steps/%s/%s" % (want, op), {})]
+
     def test_done_on_a_named_perch_with_a_note(self):
         box, api, clock = _box(flights=[_flight()])
         hit = []
