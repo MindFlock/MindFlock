@@ -465,6 +465,7 @@ NOT_SESSION_KEYED = {
     "install.json": "install record",
     "pricing.json": "model prices",
     "recently_closed.json": "a closed session keeps the name it closed under",
+    "ntfy_recent.json": "recent phone pushes, keyed by a hash of their words",
     "remote_devices.json": "devices",
     "fleet.json": "devices",
     "fleet_update.json": "devices",

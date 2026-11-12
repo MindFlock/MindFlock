@@ -225,6 +225,19 @@ def _disarm_removed_session(title: str) -> None:
 _SESSION_REMOVED_HOOKS.append(_disarm_removed_session)
 
 
+def _forget_budget_raise(title: str) -> None:
+    """A removed session's raised budget (and its "exceeded" notice) go with
+    it: a namesake starts at the default cap. The queue drain's sweep of
+    overrides for gone sessions returns early whenever no session has a
+    queued prompt, so it was not a cleanup to count on."""
+    srv = _server()
+    srv._forget_budget(title)
+    srv._BUDGET_FIRED.pop(title, None)
+
+
+_SESSION_REMOVED_HOOKS.append(_forget_budget_raise)
+
+
 def _cancel_removed_flight(title: str) -> None:
     """Cancel the flight a removed session was on (core.flight_driver says
     ``flight.finished``). Deleting the session ends its flight; a flight never
@@ -369,6 +382,14 @@ def _forget_session_state(title: str) -> None:
     _held.drop(title)
     # …nor described by the dead session's last task.
     _task_headlines.drop(title)
+    # …nor still waiting in the launch gate (a relaunch, wake or revive
+    # queued for it would sit there "waiting" until it drained and failed).
+    from backend.web.core import launch_gate as _launch_gate
+
+    try:
+        _launch_gate.cancel(title)
+    except Exception:  # noqa: BLE001 — bookkeeping, never the removal
+        pass
     # Keyed by TMUX SESSION NAME, not by title (see agent_state._maybe_record_
     # thread), so it needs the translation the others do not.
     srv._THREAD_RECORD_AT.pop(tmux.to_mindflock_tmux_name(title), None)
