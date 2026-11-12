@@ -1,7 +1,7 @@
 {
   "name": "mindflock-frontend",
   "private": true,
-  "version": "0.14.10",
+  "version": "0.14.11",
   "license": "Apache-2.0",
   "type": "module",
   "description": "MindFlock web UI \u2014 React + TypeScript source; builds into backend/web/static/",
