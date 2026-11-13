@@ -148,3 +148,72 @@ def test_asking_wait_for_me_halted_in_the_desktops_order():
         ["ready", "ready"],
     ]
     assert out["halted"] == "Halted at CI checks"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_a_verify_checker_needs_you_only_for_its_verify():
+    """A checker (``hidden_by: "verify"``) is off the rail, the Sky and the
+    ask pop-up: only its verify waits on you (confirm / failed / blocked) —
+    never its own agent's states (offline, stuck, a dialog, a question),
+    which were "needs you" about a window nowhere to be seen. The desktop's
+    rule: components/sidebar/ordering.ts ``attentionItems`` with
+    dialogs/verifySession.ts ``isVerifySession`` (``hidden_by`` decides; a
+    row without it falls back to the ``verify-`` title)."""
+    js = JS.read_text()
+    src = js[js.index("  var SESSION_STATES = {") : js.index("  function poll() {")]
+    ask = {"kind": "question", "text": "Which port?", "ts": 1}
+    rows = [
+        {"title": "verify-p1", "hidden_by": "verify", "activity": "offline"},
+        {
+            "title": "verify-p2",
+            "hidden_by": "verify",
+            "activity": "idle",
+            "asking": ask,
+        },
+        {
+            "title": "verify-p3",
+            "hidden_by": "verify",
+            "activity": "idle",
+            "verify": {"state": "failed"},
+        },
+        {"title": "verify-p4", "activity": "offline"},
+        {"title": "verify-mine", "hidden_by": "", "activity": "offline"},
+        {"title": "work", "activity": "offline"},
+    ]
+    script = (
+        "var localStorage = { getItem: function () { return null; }, setItem: function () {} };\n"
+        + src
+        + "\nvar instances = "
+        + json.dumps(rows)
+        + ";\nvar said = [];\n"
+        "function nameOf(t) { return t; }\n"
+        "function endSentence(s) { return s + '.'; }\n"
+        "function voiceStateLine(n) { return n; }\n"
+        "function speakLine(l) { said.push(l); return Promise.resolve(false); }\n"
+        "function voiceIdle() {}\n"
+        + js[
+            js.index("  function voiceNeedsMe(") : js.index(
+                "\n  }\n", js.index("  function voiceNeedsMe(")
+            )
+            + 5
+        ]
+        + "voiceNeedsMe();\n"
+        "console.log(JSON.stringify({ kinds: instances.map(function (i) { return [i.title, needsYouKind(i)]; }),"
+        " said: said[0] }));\n"
+    )
+    res = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out["kinds"] == [
+        ["verify-p1", ""],
+        ["verify-p2", ""],
+        ["verify-p3", "broken"],
+        ["verify-p4", ""],
+        ["verify-mine", "broken"],
+        ["work", "broken"],
+    ]
+    # "What needs me" reads the same list: the checker's verify, never its agent.
+    assert "verify-p3" in out["said"]
+    assert "verify-p1" not in out["said"] and "verify-p2" not in out["said"]
