@@ -93,7 +93,7 @@ export function withFlightYou(
   const listed = new Set(out.filter((w) => w.kind === "flight_you").map((w) => w.title));
   for (const inst of instances) {
     const fl = inst.flight;
-    if (!rowWaitsOnYou(fl) || listed.has(inst.title)) continue;
+    if (!rowWaitsOnYou(fl) || listed.has(inst.title) || elsewhere(inst)) continue;
     out.push({
       key: "flight:" + fl!.id,
       title: inst.title,
@@ -104,6 +104,15 @@ export function withFlightYou(
     });
   }
   return out;
+}
+
+/** A row of the owner's other device (`<device>::<title>`) or a session a
+ * peer shares: its route lives on that server, so Done / Skip / Retry /
+ * Carry on posting its id here would 404. Such a session is in the list the
+ * way its other rows are — by its own state (the row's chip: waiting on you,
+ * halted) — with no route buttons. */
+function elsewhere(inst: Pick<Instance, "title" | "device">): boolean {
+  return !!inst.device || String(inst.title || "").includes("::");
 }
 
 /** The waiting kind of a route paused at a halt point: in the bell under
@@ -175,7 +184,7 @@ export function withFlightRows(
   };
   for (const inst of instances) {
     const fl = inst.flight;
-    if (!fl || !fl.id) continue;
+    if (!fl || !fl.id || elsewhere(inst)) continue;
     const f = full.get(fl.id);
     if (fl.state === "waiting_you") add(flightRow("flight_you", inst.title, { ...fl, reason: f?.reason }));
     else if (fl.state === "halted") add(flightRow("flight_halted", inst.title, { ...fl, reason: f?.reason }));
@@ -223,7 +232,11 @@ function kindOf(r: NeedsRow, byTitle: Map<string, Instance>): NeedsYouKind {
   if (p === 0) return "asking";
   if (p === 2) return "checks";
   if (p >= 3) return "ready";
-  return rowWaitsOnYou(byTitle.get(r.title)?.flight) ? "wait_for_me" : "broken";
+  const fl = byTitle.get(r.title)?.flight;
+  // A route of another device's session has no route row here: its own row
+  // still says halted (red), not just "broken".
+  if (fl && fl.state === "halted") return "halted";
+  return rowWaitsOnYou(fl) ? "wait_for_me" : "broken";
 }
 
 const ORDER = new Map<string, number>(NEEDS_YOU_KINDS.map((k, i) => [k, i]));
