@@ -82,7 +82,12 @@ describe("the bell's row for a route paused at a halt point", () => {
     };
     const [w] = withFlightRows([], [], [flight] as never);
     expect(w.kind).toBe("flight_paused");
-    const html = renderToStaticMarkup(createElement(WaitingRow, { w, shown: (t: string) => t } as never));
+    // The row reads the full flight (Skip carries on only where the Sky's does).
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const html = renderToStaticMarkup(
+      createElement(QueryClientProvider, { client }, createElement(WaitingRow, { w, shown: (t: string) => t } as never))
+    );
     expect(html).toContain("ob-flight_paused");
     expect(html).toContain('<span class="pr-open-chip" title="Paused at Push — Carry on">Paused at Push</span>');
     expect(html).toMatch(/<button[^>]*>Carry on<\/button>/);
