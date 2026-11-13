@@ -910,6 +910,7 @@ def _script(
     down_probes: int = HEALTH_DOWN_PROBES,
     relaunch: str = "",
     method: str = "",
+    swap: Optional[List[str]] = None,
 ) -> str:
     """The installer, as a shell script.
 
@@ -935,6 +936,13 @@ def _script(
     (old) to down, so a restart held until near the limit still gets the
     whole window to come back; and a rollback needs ``down_probes``
     consecutive failed looks after that, never a single miss.
+
+    ``swap`` (native Windows, :func:`windows_swap_prefix`) is an argv the
+    install and rollback lines are run THROUGH: :mod:`engine_swap`, which
+    builds the new engine beside the running one and moves the live venv
+    aside instead of letting uv delete files this server, the session host
+    and the sessions' MCP servers still map — the in-place rebuild that left a
+    half-deleted engine on Windows.
     """
     # ``method`` picks the installer (uv tool / pipx — :func:`install_command`,
     # the same line ``mindflock update`` runs); the default is this install's.
@@ -943,6 +951,9 @@ def _script(
         method = "uv-tool"
     install_argv = install_command(method, commit) or []
     prev_argv = install_command(method, prev_commit) if prev_commit else None
+    if swap:
+        install_argv = list(swap) + install_argv
+        prev_argv = list(swap) + prev_argv if prev_argv else None
     keep = json.dumps(
         {
             "commit": commit,
@@ -1095,6 +1106,7 @@ def start_update(ref: str) -> dict:
     script_path = _state_dir() / "update.sh"
     try:
         script_path.parent.mkdir(parents=True, exist_ok=True)
+        swap = windows_swap_prefix() if compat.IS_WINDOWS else None
         script_path.write_text(
             _script(
                 ref,
@@ -1104,6 +1116,7 @@ def start_update(ref: str) -> dict:
                 started_at=started_at,
                 health_url=_health_url(),
                 relaunch=_relaunch_command(),
+                swap=swap,
             ),
             encoding="utf-8",
         )
@@ -1150,6 +1163,33 @@ def start_update(ref: str) -> dict:
         if read_state().get("state") == "started":
             write_state(**fields, pid=pid)
     return {"ok": True, "ref": ref, "commit": commit}
+
+
+def windows_swap_prefix(state_dir: Optional[Path] = None) -> List[str]:
+    """The argv prefix that runs an install through :mod:`engine_swap` OUTSIDE
+    this venv: the module copied into the state dir and run by the base
+    interpreter (``sys._base_executable`` — uv's managed python, not the venv's
+    launcher) in isolated mode, so nothing it runs is loaded from the venv it
+    moves aside. Paths use ``/``: the script is Git Bash's."""
+    from backend.web.core import engine_swap
+
+    dest = (state_dir or _state_dir()) / "engine_swap.py"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(engine_swap.__file__, dest)
+    python = getattr(sys, "_base_executable", "") or sys.executable
+    method = install_kind()
+    return [
+        python.replace("\\", "/"),
+        "-I",
+        str(dest).replace("\\", "/"),
+        "--venv",
+        sys.prefix,
+        "--exe",
+        engine_swap.find_exe(),
+        "--method",
+        method if method in ("uv-tool", "pipx") else "uv-tool",
+        "--",
+    ]
 
 
 def _health_url() -> str:

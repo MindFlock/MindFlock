@@ -29,6 +29,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for launch spacing or memory now re-checks, before arming anything, that no
   session of that title exists and that the ticket is still in its ingest
   state and unclaimed; otherwise it backs off (`Not launching …`).
+- **Native Windows: an engine update no longer destroys the engine.** The
+  0.14.15 auto-update ran `uv tool install --force` while the server, the
+  session host and the sessions' MCP servers ran from the engine's venv;
+  Windows refused to delete their files, uv stopped halfway, and the engine
+  was left without its `Lib` folder (`mindflock --version`: "No module named
+  'backend'", `uv tool list`: "Failed find package"), while the old server
+  kept serving until its next import 500'd. Every Windows update path
+  (the desktop app, `install.ps1`, `mindflock update`, Settings' in-app
+  update) now builds the new engine beside the running one, moves the live
+  venv aside (Windows allows renaming what runs) and installs from the warm
+  cache, checking the result and putting the old engine back on any failure.
+  Running sessions keep running through it. See docs/windows.md, "Updating
+  the engine on Windows".
+- **Native Windows: `mindflock.exe` is no longer held open by every
+  MindFlock process.** `importlib.metadata` kept a zip handle on the shim
+  (`sys.path[0]` under uv's trampoline) for the life of the process, so a
+  running server blocked replacing it.
+- **Desktop app (native Windows): a broken engine is detected and repaired.**
+  After a failed engine update the app checks the engine itself; a broken
+  one is never left serving — the server stops, the install runs again, and
+  if that doesn't fix it the window shows "MindFlock's engine needs a
+  repair" with a one-click reinstall. The automatic update waits on Windows
+  while any session is working (no two-hour cap there).
 
 ## [0.14.15] - 2026-11-12
 

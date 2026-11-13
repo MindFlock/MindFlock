@@ -100,13 +100,18 @@ function runState (run, install) {
 //      pipeline and team runs are driven by the server, so wait for a quiet
 //      moment — up to `workingCapMs` of waiting while away, then go anyway
 //      (an overnight loop would otherwise block every update forever).
+//      Not on native Windows (`holdWhileWorking`): there the engine swap
+//      moves the live venv aside under the running sessions (install.ps1,
+//      docs/windows.md), and for those seconds a hook or MCP server an agent
+//      starts finds no engine — so a working turn holds the update off with
+//      no cap, and sessions it can't count (`working` null) hold it too.
 //
 // `s` fields: source, enabled, running (bools); appCurrent, appState
 // ('off'|'idle'|'downloading'|'ready'|'error'), appVersion (the downloaded /
 // downloading one), release (latest release seen), engineCurrent,
 // engineLatest, skipped, tried (versions), idleSec, locked, hiddenSec,
 // working (count, or null = unknown), waitedMs (how long `working` has held
-// an otherwise-ready update), idleNeedSec, workingCapMs.
+// an otherwise-ready update), idleNeedSec, workingCapMs, holdWhileWorking.
 // Returns { go, kind: 'app'|'engine'|'', version, wait, why }.
 const AUTO_IDLE_SEC = 10 * 60
 const AUTO_WORKING_CAP_MS = 2 * 60 * 60 * 1000
@@ -150,7 +155,11 @@ function autoUpdateVerdict (s) {
     (kind === 'engine' && (st.hiddenSec || 0) >= need)
   if (!away) return no('the person is active', at)
 
-  const cap = st.workingCapMs == null ? AUTO_WORKING_CAP_MS : st.workingCapMs
+  if (st.holdWhileWorking && st.working == null) {
+    return no("couldn't tell whether a session is working", Object.assign({ wait: true }, at))
+  }
+  const cap = st.holdWhileWorking ? Infinity
+    : st.workingCapMs == null ? AUTO_WORKING_CAP_MS : st.workingCapMs
   const working = st.working == null ? 0 : st.working
   if (working > 0 && (st.waitedMs || 0) < cap) {
     return no(working + ' session' + (working === 1 ? ' is' : 's are') + ' working', Object.assign({ wait: true }, at))

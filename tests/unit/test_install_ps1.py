@@ -141,3 +141,41 @@ def test_windows_powershell_parses_it():
         timeout=120,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_the_engine_is_swapped_never_rebuilt_in_place():
+    # 2026-11-13: install.ps1's in-place `uv tool install --force` under the
+    # running server left a half-deleted engine. The uv line now only runs
+    # inside Install-EngineSwapped (stage beside, move aside, put back).
+    from backend.web.core import engine_swap
+
+    uv_line = "& uv tool install --force --python $InstallPython @Withs $Spec"
+    assert _PS1.count(uv_line) == 1
+    call = "$code = Install-EngineSwapped { " + uv_line + " }"
+    assert call in _PS1
+    body = _PS1[_PS1.index("function Install-EngineSwapped") :]
+    body = body[: body.index("\n}\n")]
+    order = [
+        "$env:UV_TOOL_DIR = Join-Path $Next 'tools'",  # 1. stage
+        "Test-Engine (Join-Path $Next 'tools\\mindflock')",
+        "MINDFLOCK_INSTALL_STOP_SERVER",
+        "Move-Retrying $Exe $OldExe",  # 2. the shim first …
+        "[IO.Directory]::Move($Venv, $Old)",  # … then the venv
+        "$why = Test-Engine $Venv $ChkExe",  # 3. install + check
+        "[IO.Directory]::Move($Old, $Venv)",  # 4. put back
+    ]
+    at = [body.index(x) for x in order]
+    assert at == sorted(at), order
+    # Never an in-place fallback when `uv tool dir` can't answer.
+    assert "& $Install | Out-Host; return" not in body
+    # Moved-aside copies live BESIDE the tools dir (uv errors inside it).
+    assert '"$ToolDir-mindflock-old-$Stamp"' in body
+    assert '"$ToolDir-mindflock-next"' in body
+    # The same import check as the Python twin.
+    assert "$EngineCheck = '%s'" % engine_swap.IMPORT_CHECK in _PS1
+    assert engine_swap.STAGE_SUFFIX == "-mindflock-next"
+    assert engine_swap.OLD_SUFFIX == "-mindflock-old-"
+    # A server stopped for holding the shim starts again (unless the caller
+    # — the desktop app — restarts it itself).
+    assert "$script:Restart = Stop-EngineServer $Exe" in body
+    assert "Start-Process -WindowStyle Hidden -FilePath $Shim -ArgumentList $a" in _PS1
