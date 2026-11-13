@@ -11,6 +11,7 @@
  * answers. */
 
 import { laneDefault, type Lane } from "./laneActions";
+import { pathLeaf } from "./serverPaths";
 
 // --- Reading the box ------------------------------------------------------------
 
@@ -451,7 +452,7 @@ export const BROWSE_VALUE = "\u0000browse";
 export function runRepoOptions(
   repoPath: string,
   suggestions: ReadonlyArray<{ path: string; name?: string }>,
-  leaf: (p: string) => string = (p) => p.replace(/\/+$/, "").split("/").pop() || p
+  leaf: (p: string) => string = (p) => pathLeaf(p) || p
 ): Array<{ value: string; label: string }> {
   const out: Array<{ value: string; label: string }> = [];
   if (!suggestions.some((s) => s.path === repoPath)) out.push({ value: repoPath, label: leaf(repoPath) || repoPath || "—" });

@@ -1086,4 +1086,5 @@ class TestStaleBuild:
             assert meta["owner"] == "server" and "version" in meta and "commit" in meta
             assert pipeline_main.OWNER_ENV == ti.PIPELINE_OWNER_ENV
         finally:
-            pipeline_main._LOCK_HANDLE.close()
+            for fh in pipeline_main._LOCK_HANDLE:
+                fh.close()

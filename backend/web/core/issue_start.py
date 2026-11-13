@@ -26,7 +26,7 @@ from pathlib import Path
 
 from backend.providers import effort as _provider_effort
 from backend.web.core import pipeline_root
-from backend.web.core.ticket_start import LaunchError
+from backend.web.core.ticket_start import LaunchError, launched_elsewhere
 
 __all__ = ["LaunchError", "launch"]
 
@@ -299,6 +299,7 @@ async def launch(
         workspace_strategy=workspace_mode(),
     )
     repo_depth = srv._repo_intake_depth(repo, "issues")
+    armed: list = []
     flight_tail = srv._arm_intake(
         title,
         depth or repo_depth,
@@ -316,11 +317,13 @@ async def launch(
             "url": str(getattr(issue, "url", "") or ""),
         },
         branch=branch_for(issue),
+        armed=armed,
     )
 
     async def _bg_start() -> None:
         # The engine owns provisioning (inside Instance.Start), like the
         # ticket path.
+        inst = None
         try:
             story, prompt, branch = await prepare_start(issue)
             # Same leftover-worktree reclaim as the ticket path.
@@ -385,6 +388,8 @@ async def launch(
             if srv.log.InfoLog is not None:
                 srv.log.InfoLog.Printf("forced issue session %s live", title)
         except Exception as err:  # noqa: BLE001
+            if launched_elsewhere(srv, title, inst, err):
+                return
             if srv.log.ErrorLog is not None:
                 srv.log.ErrorLog.Printf(
                     "forced issue session %s failed: %v", title, err
@@ -393,7 +398,9 @@ async def launch(
                 "session.create_failed", session=title, data={"error": str(err)}
             )
             srv._cancel_intake_flight(
-                title, "the session could not be created: %s" % err
+                title,
+                "the session could not be created: %s" % err,
+                armed[0] if armed else "",
             )
         finally:
             srv._pending_drop(title)

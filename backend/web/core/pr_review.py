@@ -33,7 +33,7 @@ from pathlib import Path
 
 from backend.providers import effort as _provider_effort
 from backend.web.core import pipeline_root
-from backend.web.core.ticket_start import LaunchError
+from backend.web.core.ticket_start import LaunchError, launched_elsewhere
 
 __all__ = [
     "LaunchError",
@@ -540,6 +540,7 @@ async def launch(
     # Re-registered with the branch now that it's known (add() keeps `since`).
     srv._pending_add(title, "pr", branch=pr.head_ref, repo=repo)
     repo_depth = srv._repo_intake_depth(repo, "prs")
+    armed: list = []
     flight_tail = srv._arm_intake(
         title,
         depth or repo_depth,
@@ -557,6 +558,7 @@ async def launch(
             "url": str(getattr(pr, "url", "") or ""),
         },
         branch=str(getattr(pr, "head_ref", "") or ""),
+        armed=armed,
     )
 
     async def _bg_review() -> None:
@@ -565,6 +567,7 @@ async def launch(
         # session — same shape as the pipeline's
         # SessionRunner.run_pr, but against THIS server's engine so the session
         # shows up in the grid without a reload.
+        inst = None
         try:
             prepared = await prepare_review(pr)
             prompt, n_comments = prepared.prompt, prepared.n_comments
@@ -632,13 +635,17 @@ async def launch(
                     "forced PR review %s live (%d comments)", title, n_comments
                 )
         except Exception as err:  # noqa: BLE001
+            if launched_elsewhere(srv, title, inst, err):
+                return
             if srv.log.ErrorLog is not None:
                 srv.log.ErrorLog.Printf("forced PR review %s failed: %v", title, err)
             srv._events.BUS.emit(
                 "session.create_failed", session=title, data={"error": str(err)}
             )
             srv._cancel_intake_flight(
-                title, "the session could not be created: %s" % err
+                title,
+                "the session could not be created: %s" % err,
+                armed[0] if armed else "",
             )
         finally:
             srv._pending_drop(title)

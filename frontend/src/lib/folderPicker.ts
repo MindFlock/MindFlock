@@ -14,6 +14,7 @@
  * the synced prefs: a laptop's corner is not a phone's. */
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
+import { splitPath } from "./serverPaths";
 
 export interface FolderPickerRequest {
   /** Set by openFolderPicker. */
@@ -113,14 +114,10 @@ export function useFolderPickerWhile(open: boolean, req: () => Omit<FolderPicker
 // ---- where the browse starts ------------------------------------------------
 
 /** The folder above `p`, as text: "/a/b" → "/a", "/a" → "/", "~/x" → "~",
- * "./x" → ".", "x" → "". "" once there is nothing above. */
+ * "./x" → ".", "x" → "", "C:\\a\\b" → "C:\\a", "C:\\a" → "C:\\".
+ * "" once there is nothing above. */
 export function parentPath(p: string): string {
-  const t = p.length > 1 ? p.replace(/[\\/]+$/, "") : p;
-  if (t === "/" || t === "~" || t === "." || t === "") return "";
-  const i = Math.max(t.lastIndexOf("/"), t.lastIndexOf("\\"));
-  if (i < 0) return "";
-  if (i === 0) return "/";
-  return t.slice(0, i);
+  return splitPath(p).parent;
 }
 
 /** The folders to try, in order, when the picker opens on `value`: the value

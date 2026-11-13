@@ -137,6 +137,20 @@
       <p class="hint">A one-time setup. MindFlock opens by itself and carries on from there.</p>
     </section>
 
+    <!-- Native Windows: the engine is installed but no longer runs (a
+         half-deleted venv — an update that failed while MindFlock ran). One
+         button reinstalls it; install.ps1 swaps it in beside running sessions. -->
+    <section id="s-engine-broken" hidden>
+      <h1>MindFlock’s engine needs a repair</h1>
+      <p>The engine on this computer no longer starts — most likely an update
+         that couldn’t finish. Reinstalling it fixes this; your settings, history
+         and sessions are kept.</p>
+      <p class="detail" id="broken-detail"></p>
+      <button class="action" id="do-repair">Repair the engine (about 3 min)</button>
+      <p class="hint">Sessions that are still running keep running while it reinstalls.<br>
+         Press <code>Ctrl+Shift+L</code> for the app’s log folder.</p>
+    </section>
+
     <!-- macOS without Homebrew. tmux comes from Homebrew, so offer to install it
          first; Skip carries on with the engine alone (tmux can come later). -->
     <section id="s-needs-homebrew" hidden>
@@ -167,7 +181,7 @@
 <script>
 (function () {
   var sections = ['checking', 'starting', 'failed-to-start', 'wsl-down', 'wsl-setup',
-    'wsl-missing', 'not-installed', 'needs-homebrew', 'installing']
+    'wsl-missing', 'not-installed', 'engine-broken', 'needs-homebrew', 'installing']
   var startingSince = 0
 
   function setAll(selector, text) {
@@ -193,6 +207,10 @@
     if (diag && diag.distro) setAll('.distro', diag.distro)
     var start = (diag && diag.start) || {}
     if (start.logPath) setAll('.logpath', start.logPath)
+    if (state === 'engine-broken') {
+      document.getElementById('broken-detail').textContent =
+        (diag && diag.detail) ? 'What it says: ' + diag.detail : ''
+    }
     if (state === 'wsl-down') {
       document.getElementById('wsl-detail').textContent = (diag && diag.detail) || ''
     }
@@ -280,6 +298,7 @@
   }
   wire('do-install', function () { return window.mfdiag.install() })
   wire('do-retry', function () { return window.mfdiag.install() })
+  wire('do-repair', function () { return window.mfdiag.install() })
   wire('brew-install', function () { return window.mfdiag.action('brew-install') })
   wire('brew-skip', function () { return window.mfdiag.action('brew-skip') })
 
@@ -335,7 +354,10 @@
         // while it runs the probe still reports not-installed, and replacing
         // the transcript with "press Install" would be both wrong and a way
         // to start a second install on top of the first.
-        if (inst.state === 'running' || inst.state === 'failed') return showInstall(inst)
+        // Except a broken engine: its repair screen says what happened in
+        // words and carries the same reinstall button.
+        var broken = !!diag && diag.state === 'engine-broken'
+        if (inst.state === 'running' || (inst.state === 'failed' && !broken)) return showInstall(inst)
         var state = diag && sections.indexOf(diag.state) >= 0 ? diag.state : 'checking'
         // Freshly installed but the probe hasn't caught up yet — don't blink
         // back to the install prompt for one poll.

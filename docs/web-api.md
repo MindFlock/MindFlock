@@ -6,6 +6,13 @@ served with `Cache-Control: no-cache`.
 
 Conventions: JSON bodies in, JSON out. Errors use standard status codes with
 `{"detail": ...}` or `{"error": ...}`. `{title}` is the session title.
+A route that raises answers **500** `{"detail": <sentence>, "error":
+<sentence>, "exception": "<ExceptionType>"}` and writes its traceback to
+`mindflock.log` (`backend/web/core/unhandled.py`). The sentence is
+`MindFlock hit an error: <ExceptionType>: <message> (the full error is in the
+MindFlock log)`, or — for an ImportError of MindFlock's own code, an install
+damaged under the running server — `MindFlock's engine install is damaged
+(…). Quit MindFlock, reinstall the engine …`.
 
 ## Instances
 
@@ -3644,12 +3651,13 @@ rather than blocking the server.
 
 **Ticket Ingestion** (addon id `mindflock`, prefix `/api/mindflock`) — controls the
 pipeline as a managed subprocess (`python -m backend.ticket_ingestion` from the
-repo root, own process group, singleton via `.mindflock-pipeline.lock`; also detects
-and can stop an externally-started pipeline):
+repo root, own process group, one per MindFlock home via
+`~/.mindflock/pipeline.lock` — plus the legacy per-root `.mindflock-pipeline.lock`;
+also detects and can stop an externally-started pipeline):
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/mindflock/status` | `{running, pid, since, log, available, …}` — also `pr_enabled` / `issues_enabled` (switched on AND run on this device), `automation_here` (this device runs PR review and issue handling: always on a lone device; in a group, the member the synced `github.automation_device` names, else the lowest-keyed live member) and `automation_device` (where it doesn't: that member's host, `""` when this device runs them — and also `""`, with `automation_here` false, while this device can't yet tell which member it is, i.e. before Tailscale is up). Intake shows *runs on <device>* from these. `running` / `pid` / `since` also cover a pipeline this server started before it re-exec'd itself (bind-fallback re-exec, self-update): the controller re-adopts it, and `since` is the lock file's mtime. `last_error` is the current problem or `null`: `{kind, message, at, source}` with `kind` one of `auth` (a tracker or GitHub refused the token — `source` names the ticket source id, the provider, or `GitHub owner/repo`), `config` (a source the pipeline skipped over a missing/invalid field — `source` + `field`, e.g. `sc` / `member_id`), `network` (a connectivity failure; `net_error` is its boolean twin) or `crash` (the child died). While running it is the skipped source first, else the newest auth/network line in the log tail from the last 180 s (a standing failure re-logs every poll and holds; it clears on its own after recovery). `config_errors` lists every skipped source (`[{source, field, message}]`). Once the child this server started has exited, `exit_reason` says why (`configuration error`, `crashed`, `exited with code N`, `killed by signal N`, `exited (another pipeline holds the lock)`) and `last_error` carries the pipeline's own exit record: a `config` error adds `fields` (the paths it listed, e.g. `ticketing.member_id`). Both are `null` while it runs and reset by the next start. `env_override` is `{provider, hides_ui_sources: true}` while `MINDFLOCK_TICKET_PROVIDER` pins the pipeline to an env-built source (every source saved in Intake is ignored), else `null` |
+| GET | `/api/mindflock/status` | `{running, pid, since, log, available, …}` — also `pr_enabled` / `issues_enabled` (switched on AND run on this device), `automation_here` (this device runs PR review and issue handling: always on a lone device; in a group, the member the synced `github.automation_device` names, else the lowest-keyed live member) and `automation_device` (where it doesn't: that member's host, `""` when this device runs them — and also `""`, with `automation_here` false, while this device can't yet tell which member it is, i.e. before Tailscale is up). Intake shows *runs on <device>* from these. `running` / `pid` / `since` also cover a pipeline this server started before it re-exec'd itself (bind-fallback re-exec, self-update): the controller re-adopts it, and `since` is the lock file's mtime. `last_error` is the current problem or `null`: `{kind, message, at, source}` with `kind` one of `auth` (a tracker or GitHub refused the token — `source` names the ticket source id, the provider, or `GitHub owner/repo`), `config` (a source the pipeline skipped over a missing/invalid field — `source` + `field`, e.g. `sc` / `member_id`), `network` (a connectivity failure; `net_error` is its boolean twin) or `crash` (the child died). While running it is the skipped source first, else the newest auth/network line in the log tail from the last 180 s (a standing failure re-logs every poll and holds; it clears on its own after recovery). `config_errors` lists every skipped source (`[{source, field, message}]`). Once the child this server started has exited, `exit_reason` says why (`configuration error`, `crashed`, `exited with code N`, `killed by signal N`, `exited (another pipeline holds the lock)`) and `last_error` carries the pipeline's own exit record: a `config` error adds `fields` (the paths it listed, e.g. `ticketing.member_id`). Both are `null` while it runs and reset by the next start. `other_server` is `{pid, port}` when the running pipeline was started by ANOTHER live server sharing this MindFlock home (one pipeline runs per home: this server's own child exited 0, and is not restarted while that one runs), else `null`. `env_override` is `{provider, hides_ui_sources: true}` while `MINDFLOCK_TICKET_PROVIDER` pins the pipeline to an env-built source (every source saved in Intake is ignored), else `null` |
 | POST | `/api/mindflock/start` | starts it (400 if no `config.toml`) |
 | POST | `/api/mindflock/stop` | stops it (SIGTERM → SIGKILL of the process group) |
 | WS | `/api/mindflock/logs` | read-only `tail -F` of `logs/ticket-ingestion.log` |

@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The New session dialog says so when the Folder is your whole home
+  folder.** The agent works on everything in the folder it is given; a line
+  under the field suggests picking (or creating) a project folder inside it.
+
+### Fixed
+
+- **Two servers no longer run two ticket pipelines.** The pipeline's
+  singleton lock was per directory, so two servers sharing one `~/.mindflock`
+  from different directories each ran a pipeline: both launched the same
+  ticket, and the losing launch cancelled the live session's route. The lock
+  now lives in the MindFlock home (`pipeline.lock`, `$MINDFLOCK_HOME` moves
+  it); the old per-directory lock is still taken, so an older pipeline keeps
+  excluding a new one. The second server reads the other pipeline as running
+  (`/api/mindflock/status` → `other_server: {pid, port}`) and never restarts
+  it as its own stale child.
+- **A failed launch only cancels the route it armed.** The pipeline and the
+  Intake starts (tickets, issues, PR review) cancelled whatever route sat on
+  the session title when their create failed — including one another launch
+  armed for a session that was already live. Now only the attempt's own route
+  is cancelled, and a create that failed because the session went live
+  meanwhile is "launched elsewhere": logged, nothing cancelled, the ticket
+  recorded `skipped`, not `failed`.
+- **A launch that waited re-checks before it goes.** An automatic launch held
+  for launch spacing or memory now re-checks, before arming anything, that no
+  session of that title exists and that the ticket is still in its ingest
+  state and unclaimed; otherwise it backs off (`Not launching …`).
+- **Native Windows: an engine update no longer destroys the engine.** The
+  0.14.15 auto-update ran `uv tool install --force` while the server, the
+  session host and the sessions' MCP servers ran from the engine's venv;
+  Windows refused to delete their files, uv stopped halfway, and the engine
+  was left without its `Lib` folder (`mindflock --version`: "No module named
+  'backend'", `uv tool list`: "Failed find package"), while the old server
+  kept serving until its next import 500'd. Every Windows update path
+  (the desktop app, `install.ps1`, `mindflock update`, Settings' in-app
+  update) now builds the new engine beside the running one, moves the live
+  venv aside (Windows allows renaming what runs) and installs from the warm
+  cache, checking the result and putting the old engine back on any failure.
+  Running sessions keep running through it. See docs/windows.md, "Updating
+  the engine on Windows".
+- **Native Windows: `mindflock.exe` is no longer held open by every
+  MindFlock process.** `importlib.metadata` kept a zip handle on the shim
+  (`sys.path[0]` under uv's trampoline) for the life of the process, so a
+  running server blocked replacing it.
+- **Desktop app (native Windows): a broken engine is detected and repaired.**
+  After a failed engine update the app checks the engine itself; a broken
+  one is never left serving — the server stops, the install runs again, and
+  if that doesn't fix it the window shows "MindFlock's engine needs a
+  repair" with a one-click reinstall. The automatic update waits on Windows
+  while any session is working (no two-hour cap there).
+
+- **Windows: "Create this folder" in the New session dialog works.** It cut
+  the path at `/` only, so `C:\Users\you\snake-game` went to the server as
+  parent `/` and the whole path as the folder's name, refused with "folder
+  name must not contain a path" — the folder could never be made from the
+  dialog. Every path split in the New dialog now cuts at `/` or `\` and keeps
+  a drive root (`C:\x` → `C:\` + `x`): the folder picker's walk up to the
+  drive, the agent field's `C:\…\claude.exe`, the folder names on the run
+  list and the route builder, `~\…` Tab completion, and "already editing this
+  folder" (which also ignores case on a Windows server).
+- **No "untitled" row flashes on New session.** With the Name left empty,
+  the row shown while the create is answered was called "untitled" until
+  the real one (named from the task, e.g. `make-me-snake`) replaced it — and
+  a failed create left an "untitled" row that came and went. It is now named
+  as the server will name it, the name the dialog previews, and becomes the
+  real row in place when the create answers (renamed there if the server
+  numbered it `-2`). With nothing to name it from, no row is added: a
+  "Creating…" note shows until the session appears. The flight builder's
+  create does the same, from a `C:\…` folder as well.
+- **A server error says what went wrong.** A route that raised answered a
+  bare "Internal Server Error": the dialog could only say "MindFlock hit an
+  error (details in the log)", and the log said only `-> 500` (the
+  traceback went to the server's stderr). The answer now names the
+  exception, and its traceback is in `mindflock.log` (Settings → System
+  logs). When MindFlock's own code can't be imported — its install was
+  damaged under the running server, as a failed engine update on Windows
+  did — New session and the rest say "MindFlock's engine install is
+  damaged" and how to reinstall it.
+- **Closing the agent sign-in window never fails.** Its teardown of the
+  login terminal answered 500 when the install was damaged (a lazy import
+  outside any guard); anything it trips over is now logged instead. The
+  memory gate's look at running agents no longer fails a New session when
+  the session host can't be asked.
+
 ## [0.14.15] - 2026-11-12
 
 A stability release: no new features. Three weeks of fast feature rounds

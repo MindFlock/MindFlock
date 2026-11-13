@@ -23,7 +23,7 @@ import re
 import subprocess
 from typing import Optional, Tuple
 
-from backend import providers
+from backend import log, providers
 from backend.session import mux
 from backend.session.tmux.tmux import exact_pane_target
 from backend.web.core import proc as _proc
@@ -219,10 +219,42 @@ def kill_login_session(name: str, profile_id: str = "") -> None:
 
 
 def kill_session(session: str) -> None:
-    """Tear down a terminal :func:`ensure_command_session` made (best-effort)."""
-    from backend.web.core import pty_run
+    """Tear down a terminal :func:`ensure_command_session` made (best-effort).
 
-    pty_run.kill(session)
+    Never raises: the sign-in window calls this as it closes, and whatever a
+    teardown trips over is not the person's problem. A friend's Windows
+    install answered 500 here five times in a row, with nothing in the log:
+    a failed engine update had deleted the tool venv's ``Lib`` under the
+    running server, so the lazy ``pty_run`` import below raised ImportError.
+    That import is inside the guarded step for that reason. A failure is
+    logged instead."""
+
+    def _pty_kill() -> None:
+        from backend.web.core import pty_run
+
+        pty_run.kill(session)
+
+    for what, step in (
+        ("pty", _pty_kill),
+        ("kill-session", lambda: _kill_mux_session(session)),
+    ):
+        try:
+            step()
+        except Exception as err:  # noqa: BLE001 — best-effort, see above
+            try:
+                if log.WarningLog is not None:
+                    log.WarningLog.Printf(
+                        "closing terminal %s (%s) failed: %s: %s",
+                        session,
+                        what,
+                        type(err).__name__,
+                        err,
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _kill_mux_session(session: str) -> None:
     if not _have_tmux():
         return
     try:

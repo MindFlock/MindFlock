@@ -812,6 +812,48 @@ def test_kill_login_session_swallows_timeout(monkeypatch):
     provider_login.kill_login_session("codex")
 
 
+def test_kill_login_session_never_raises(monkeypatch):
+    """The sign-in window's close: a teardown that trips over anything (the
+    native-Windows session host's client raising, a PTY already gone) is
+    logged, not a 500 — login-close answered 500 five times in a row on a
+    friend's Windows install."""
+    from backend.web.core import pty_run
+
+    def _boom(*a, **k):
+        raise RuntimeError("the MindFlock session host is not answering")
+
+    monkeypatch.setattr(provider_login, "_have_tmux", lambda: True)
+    monkeypatch.setattr(provider_login.mux, "run", _boom)
+    monkeypatch.setattr(pty_run, "kill", _boom)
+    provider_login.kill_login_session("claude")  # must not raise
+    provider_login.kill_session("mindflock_gh_login")  # nor Setup's GitHub one
+
+
+def test_kill_login_session_survives_a_half_deleted_install(monkeypatch):
+    """The friend's five login-close 500s: a failed engine update had deleted
+    the tool venv's Lib under the running server, so the teardown's lazy
+    ``pty_run`` import raised ImportError — outside any guard."""
+    import sys
+
+    import backend.web.core as core_pkg
+
+    monkeypatch.delattr(core_pkg, "pty_run", raising=False)
+    monkeypatch.setitem(sys.modules, "backend.web.core.pty_run", None)
+    monkeypatch.setattr(provider_login, "_have_tmux", lambda: False)
+    provider_login.kill_login_session("claude")  # must not raise
+
+
+def test_login_close_route_answers_ok_when_the_teardown_fails(monkeypatch, client):
+    monkeypatch.setattr(provider_login, "_have_tmux", lambda: True)
+
+    def _boom(*a, **k):
+        raise RuntimeError("host gone")
+
+    monkeypatch.setattr(provider_login.mux, "run", _boom)
+    r = client.post("/api/providers/claude/login-close")
+    assert r.status_code == 200 and r.json()["ok"] is True
+
+
 # --------------------------------------------------------------------------- #
 # No tmux: the login runs under a plain PTY, and the route still refuses
 # anyone who isn't at this device.
