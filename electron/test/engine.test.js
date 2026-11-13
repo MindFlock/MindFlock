@@ -63,6 +63,26 @@ test('the native engine is found in the uv tool dirs, then by where', () => {
   assert.equal(eng.findNativeEngine({ env: {}, home: HOME, exists: at() }), '')
 })
 
+test("where never picks the desktop app's own MindFlock.exe", () => {
+  // The friend's install: no engine yet, `where` run from the app's folder.
+  const SELF = 'C:\\Users\\me\\AppData\\Local\\Programs\\MindFlock\\MindFlock.exe'
+  const only = (out) => () => out
+  assert.equal(eng.findNativeEngine({ env: {}, home: HOME, exists: () => false, self: SELF,
+    where: only(SELF + '\r\n') }), '')
+  // Case differs (where prints the file's real name; execPath may not match).
+  assert.equal(eng.findNativeEngine({ env: {}, home: HOME, exists: () => false, self: SELF,
+    where: only(SELF.toLowerCase() + '\r\n') }), '')
+  // Anything in the app's folder, then the real engine after it.
+  assert.equal(eng.findNativeEngine({ env: {}, home: HOME, exists: () => false, self: SELF,
+    where: only(SELF.replace('MindFlock.exe', 'mindflock.cmd') + '\r\nC:\\x\\mindflock.exe\r\n') }),
+  'C:\\x\\mindflock.exe')
+  // Another copy of the desktop app on PATH: an Electron folder (app.asar).
+  const OTHER = 'D:\\Apps\\MindFlock\\MindFlock.exe'
+  const asar = (p) => p === 'D:\\Apps\\MindFlock\\resources\\app.asar'
+  assert.equal(eng.findNativeEngine({ env: {}, home: HOME, exists: asar, self: SELF,
+    where: only(OTHER + '\r\n') }), '')
+})
+
 test('serve: the installed CLI from home, or a checkout on the URL port', () => {
   assert.deepEqual(eng.nativeServeCommand({ exe: EXE, port: 8765, home: HOME }),
     { file: EXE, args: ['serve'], cwd: HOME })

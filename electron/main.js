@@ -272,8 +272,11 @@ function findNativeEngine() {
     env: process.env,
     home: os.homedir(),
     exists: (p) => fs.existsSync(p),
+    // From home, not the app's install folder (where's first stop is the
+    // current folder, and the app's own MindFlock.exe matches too).
     where: () => spawnSync('where', ['mindflock'],
-      { windowsHide: true, encoding: 'utf8', timeout: 3000 }).stdout,
+      { windowsHide: true, encoding: 'utf8', timeout: 3000, cwd: os.homedir() }).stdout,
+    self: process.execPath,
   })
 }
 const ENGINE = (() => {
