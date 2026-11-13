@@ -1058,6 +1058,11 @@ def _normalize_result(raw) -> dict:
             if _text(raw.get("agent_note"))
             else {}
         ),
+        # Written by a PROGRESS read (:func:`record_progress`, the agent's
+        # file with ``"finished": false``) and not confirmed by a finished
+        # report since (:func:`finish_run` clears it). See
+        # :func:`_provisional`. Present only when true.
+        **({"progress": True} if raw.get("progress") else {}),
     }
 
 
@@ -1169,13 +1174,48 @@ def _current_run(plan: dict) -> Optional[dict]:
     where users are?" — which nobody has answered yet. So for a shipped plan a
     pre-merge run is history, not the current answer, and the plan comes back
     to be checked again instead of closing on the branch's result.
+
+    THE SAME RULE AS verify.ts's ``latestRun``, line for line, because the UI
+    and this store must not disagree about which run is current (pinned by
+    frontend/src/__tests__/fixtures/verify_shared.json): a PHANTOM run
+    (:func:`_phantom_run`) is skipped, a pre-merge run of a shipped plan is
+    skipped, and the newest of the rest by ``at`` wins (ties to the later).
     """
-    if not plan["runs"]:
-        return None
-    run = plan["runs"][-1]
-    if plan["live_at"] and run.get("prelive"):
-        return None
-    return run
+    shipped = bool(plan["live_at"])
+    best: Optional[dict] = None
+    for run in plan["runs"]:
+        if _phantom_run(run) or (shipped and run.get("prelive")):
+            continue
+        if best is None or _f(run.get("at")) >= _f(best.get("at")):
+            best = run
+    return best
+
+
+def _phantom_run(run: dict) -> bool:
+    """A run nobody made: no session behind it and no answer in it — a
+    person answered a step and clicked the answer off again (verify.ts's
+    ``isPhantomRun``). A run WITH a session is never one: that is an agent
+    at work whose answers have not landed yet."""
+    if str(run.get("session") or ""):
+        return False
+    return not any((c or {}).get("result") for c in (run.get("results") or {}).values())
+
+
+def _provisional(plan: dict, run: Optional[dict], entry: dict) -> bool:
+    """Whether an AGENT's ``blocked`` cell was only ever PROGRESS in a run
+    that ended without a report — then it is "not checked", not a handover
+    to a person. Stamped ``progress`` by :func:`record_progress`, cleared by
+    a finished report (:func:`finish_run`); while the run is still in flight
+    the cell is the agent's live word and counts. verify.ts's
+    ``isProvisional`` is the same rule."""
+    if not entry.get("progress") or entry.get("result") != "blocked":
+        return False
+    if entry.get("by") == "human":
+        return False
+    in_flight = plan.get("state") == "running" and str(
+        (run or {}).get("session") or ""
+    ) == str(plan.get("run_session") or "")
+    return not in_flight
 
 
 def is_settled(plan: dict) -> bool:
@@ -1187,16 +1227,25 @@ def is_settled(plan: dict) -> bool:
 def open_human_steps(plan: dict) -> list:
     """The steps of the plan's current run a PERSON still owes an answer: a
     human step with no settled answer, or an agent step the agent marked
-    ``blocked`` (its handover — see :func:`_settled`). With no current run,
-    every human step is open."""
+    ``blocked`` (its handover — see :func:`_settled`) and not merely as
+    progress of a run that ended without a report (:func:`_provisional`).
+
+    With no current run, NONE: a plan nobody has checked yet is waiting on
+    the agent (or on its merge), not on a person — verify.ts's
+    ``openHumanSteps``, which the UI has always shown, requires a run too
+    (pinned by frontend/src/__tests__/fixtures/verify_shared.json)."""
     run = _current_run(plan)
-    results = (run or {}).get("results") or {}
+    if run is None:
+        return []
+    results = run.get("results") or {}
     out = []
     for step in plan["steps"]:
         entry = results.get(step["id"]) or {}
         if _settled(entry):
             continue
-        if step.get("actor") == "human" or entry.get("result") == "blocked":
+        if step.get("actor") == "human" or (
+            entry.get("result") == "blocked" and not _provisional(plan, run, entry)
+        ):
             out.append(step)
     return out
 
@@ -2520,6 +2569,8 @@ def record_progress(plan_id: str, results: List[dict]) -> Optional[dict]:
                 and bool(mine.get("walked")) == bool(cell.get("walked"))
             ):
                 continue
+            # Provisional until a finished report confirms it (:func:`_provisional`).
+            cell["progress"] = True
             run["results"][sid] = cell
             changed = True
         if changed:
@@ -2735,6 +2786,12 @@ def finish_run(
                 # its evidence too (:func:`_agent_cell`).
                 cell = _agent_cell(run, actors.get(step_id), value, note, now, by)
             run["results"][step_id] = cell
+        if not closed:
+            # A FINISHED REPORT is the agent's word on the whole run: nothing
+            # in it is provisional any more (:func:`_provisional`). A driver's
+            # close is not a report, so what was only ever progress stays so.
+            for kept in run["results"].values():
+                kept.pop("progress", None)
         run.pop("file_error", None)
         # A PASS ON THE WRONG TREE IS NOT A PASS. After the answers land, not
         # before: the incoming report is what is being judged. Fails and
@@ -3657,6 +3714,11 @@ def record_result(
             outcome["missing_step"] = True
             return
         if _current_run(plan) is None:
+            # A PHANTOM left on top (an answer clicked off again) is dropped
+            # first: it recorded nothing, and reopening a fresh run beside it
+            # each time would pile them up.
+            while plan["runs"] and _phantom_run(plan["runs"][-1]):
+                plan["runs"].pop()
             # A human can work a plan without ever launching a verify session;
             # that is still a run, it just has no session behind it. Also the
             # first answer after a merge on a plan checked BEFORE it: that one

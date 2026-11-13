@@ -2289,6 +2289,11 @@ def _close_run_blocking(plan_id: str, reason: str) -> tuple:
     results = []
     for st in plan["steps"]:
         entry = have.get(st["id"]) or {}
+        if entry.get("progress") and entry.get("result") == "blocked":
+            # Only ever progress ("in progress: …"): left as it is, so the
+            # closed run reads it as not checked (`test_plans._provisional`)
+            # rather than as a handover the person now owes.
+            continue
         if entry.get("result") and entry.get("by") != "human":
             results.append(
                 {
