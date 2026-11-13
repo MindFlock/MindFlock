@@ -48,6 +48,12 @@ import { OwedChecks, OwedNote, ReviewFindings } from "./PerchAsks";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
 import "./Flights.css";
+import { nextIsHaltPoint, sessionGone, skipCarriesOn } from "../../lib/flights";
+
+// Pure rules the bell's rows share (outbox/WaitingRow): they live in
+// lib/flights so that importing them does not pull this component's
+// stylesheets in ahead of everything the bell loads first.
+export { nextIsHaltPoint, sessionGone, skipCarriesOn };
 
 const stop = (e: MouseEvent) => e.stopPropagation();
 
@@ -243,32 +249,6 @@ export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "
   if (!ss) return false;
   if (ss.state === "failed") return !ss.detail?.moved_on;
   return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
-}
-
-/** Whether the stop the route moves to after its current one (passing the
- * ones already done or skipped) is a halt point not yet let through. */
-export function nextIsHaltPoint(flight: Pick<Flight, "steps" | "cursor" | "step_states">): boolean {
-  for (let k = flight.cursor + 1; k < flight.steps.length; k++) {
-    const s = flight.steps[k];
-    const ss = flight.step_states?.[s.id];
-    if (ss && (ss.state === "done" || ss.state === "skipped")) continue;
-    return !!s.halt && !ss?.detail?.halt_hit;
-  }
-  return false;
-}
-
-/** Whether Skip on this route should also Carry on: the server keeps a
- * paused route paused after a skip (`_advance_keeping_pause`), so Skip
- * carries on too, as it says — unless the next stop is a halt point itself
- * (it halts there) or there is no stop left (the skip finished the route;
- * Carry on would be refused). */
-export function skipCarriesOn(flight: Pick<Flight, "state" | "steps" | "cursor" | "step_states">): boolean {
-  if (flight.state !== "paused") return false;
-  const ahead = flight.steps.slice(flight.cursor + 1).some((s) => {
-    const st = flight.step_states?.[s.id]?.state;
-    return st !== "done" && st !== "skipped";
-  });
-  return ahead && !nextIsHaltPoint(flight);
 }
 
 /** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
@@ -486,12 +466,6 @@ export function flyAgainItems(flight: Flight, gone = false): MenuItem[] {
     { key: "again", label: flyAgainLabel(flight), title: flyAgainTitle(flight, gone), onSelect: () => void flyAgain(flight.id) },
     { key: "again-pick", label: "Fly again from another stop…", title: "Pick the stop it flies again from", onSelect: () => pickAgainStop(flight) },
   ];
-}
-
-/** Whether the flight's session is gone (not among the rows; unknown while
- * they load = not gone). */
-export function sessionGone(flight: Pick<Flight, "session">, rows: readonly Pick<Instance, "title">[] | null | undefined): boolean {
-  return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
 }
 
 /** Fly again on an ended route, in a row: "Fly again from <stop>" (where it

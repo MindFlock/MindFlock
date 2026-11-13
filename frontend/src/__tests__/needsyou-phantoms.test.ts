@@ -125,3 +125,19 @@ describe("a session whose PR was squash-merged is not ready for a PR", () => {
     expect(titles([pushed({ pr_merged: false, pr_url: "https://github.com/o/r/pull/7" })])).toEqual(["sc-7"]);
   });
 });
+
+// The bell loads before the Sky. When its row imported two pure rules from
+// flights/FlightStrip.tsx, that component's stylesheets (Flights.css,
+// FlywayCanvas.css, StopMenu.css: ~1,900 lines) moved ahead of ~3,500 lines
+// they used to follow in the built style.css, which can flip any tie between
+// equally specific rules. Shared rules live in lib/; the bell imports no Sky
+// component but the one it always has (PerchAsks, with its own small sheet).
+describe("the bell's rows pull no Sky stylesheet in", () => {
+  it("outbox/WaitingRow.tsx imports no Sky component but PerchAsks", async () => {
+    const { SOURCES } = await import("./sourceText");
+    const src = SOURCES["components/outbox/WaitingRow.tsx"];
+    expect(src).toBeTruthy();
+    const fromSky = [...src.matchAll(/from "\.\.\/flights\/([A-Za-z]+)"/g)].map((m) => m[1]);
+    expect(fromSky).toEqual(["PerchAsks"]);
+  });
+});

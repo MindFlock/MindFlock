@@ -39,8 +39,7 @@ import { cancelRun, raiseBudget, runAction as act, runPath, suggestedBudget, tas
 import { releaseChoices } from "../../lib/splitRun";
 import { openBehaviors } from "../../lib/behaviorsFocus";
 import { controlFlight, flightAction, flightPath, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
-import { perchedOnYou, type Flight } from "../../lib/flights";
-import { sessionGone, skipCarriesOn } from "../flights/FlightStrip";
+import { perchedOnYou, sessionGone, skipCarriesOn, type Flight } from "../../lib/flights";
 import { askOffers, findingsOf, flightAsk, owedGroups } from "../../lib/stopAsks";
 import { OwedChecks, ReviewFindings } from "../flights/PerchAsks";
 import type { RunInfo } from "../../lib/runs";

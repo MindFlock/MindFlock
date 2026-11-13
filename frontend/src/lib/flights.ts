@@ -9,6 +9,7 @@
  * shapes) and the helpers are pure, so the Board, the pane strip, the rail and
  * the top-bar badge read one rule each and are pinned by tests without a DOM. */
 
+import type { Instance } from "../api/types";
 import { relTime } from "./format";
 import { capSourceDepth, sourceRungLabel, type Lane } from "./autopilot";
 // Type only: lib/behaviorsFocus reads the store, which reads this module.
@@ -971,4 +972,38 @@ export interface IntakeDefault extends IntakeSourceRef {
   name: string;
   own: boolean;
   steps: FlightStep[];
+}
+
+// --- Rules the Sky's strip and the bell's rows share -------------------------
+
+/** Whether the stop the route moves to after its current one (passing the
+ * ones already done or skipped) is a halt point not yet let through. */
+export function nextIsHaltPoint(flight: Pick<Flight, "steps" | "cursor" | "step_states">): boolean {
+  for (let k = flight.cursor + 1; k < flight.steps.length; k++) {
+    const s = flight.steps[k];
+    const ss = flight.step_states?.[s.id];
+    if (ss && (ss.state === "done" || ss.state === "skipped")) continue;
+    return !!s.halt && !ss?.detail?.halt_hit;
+  }
+  return false;
+}
+
+/** Whether Skip on this route should also Carry on: the server keeps a
+ * paused route paused after a skip (`_advance_keeping_pause`), so Skip
+ * carries on too, as it says — unless the next stop is a halt point itself
+ * (it halts there) or there is no stop left (the skip finished the route;
+ * Carry on would be refused). */
+export function skipCarriesOn(flight: Pick<Flight, "state" | "steps" | "cursor" | "step_states">): boolean {
+  if (flight.state !== "paused") return false;
+  const ahead = flight.steps.slice(flight.cursor + 1).some((s) => {
+    const st = flight.step_states?.[s.id]?.state;
+    return st !== "done" && st !== "skipped";
+  });
+  return ahead && !nextIsHaltPoint(flight);
+}
+
+/** Whether the flight's session is gone (not among the rows; unknown while
+ * they load = not gone). */
+export function sessionGone(flight: Pick<Flight, "session">, rows: readonly Pick<Instance, "title">[] | null | undefined): boolean {
+  return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
 }

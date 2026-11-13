@@ -251,7 +251,9 @@ describe("a new session's box appears at once", () => {
     expect(block.indexOf("onPending?.(guess);")).toBeGreaterThan(block.indexOf("const guess = addPendingSession("));
     expect(block.indexOf("onPending?.(guess);")).toBeLessThan(block.indexOf('await api<Instance>("/api/instances"'));
     expect(block).toContain("failPendingSession(guess);");
-    expect(block).toContain("onFailed?.();");
+    // The block hands back its own guessed title: the sky reads it from the
+    // call, not from a closure that was stale by the time the server answered.
+    expect(block).toContain("onFailed?.(guess);");
   });
 
   it("the sky pins the pending row's line where the block sat, hides the block, and carries the spot to the real title", () => {
