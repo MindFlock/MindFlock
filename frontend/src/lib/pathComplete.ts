@@ -29,7 +29,7 @@ import { isWindowsFullPath, serverIsWindows } from "./serverPaths";
 /** The separator a completed folder name gets: "\\" after a Windows path
  * typed with backslashes, else "/". */
 function sepOf(prefix: string): string {
-  return isWindowsFullPath(prefix) && prefix.endsWith("\\") ? "\\" : "/";
+  return (isWindowsFullPath(prefix) || prefix.startsWith("~")) && prefix.endsWith("\\") ? "\\" : "/";
 }
 
 export interface CompletionSplit {
@@ -59,9 +59,12 @@ export function splitForCompletion(text: string): CompletionSplit {
     return { dir: head === "/" ? "/" : head.slice(0, -1), partial, prefix: head };
   }
   if (text.startsWith("~")) {
+    // A native-Windows server writes `~\Documents` too: cut at either.
+    const c = serverIsWindows() ? Math.max(cut, text.lastIndexOf("\\")) : cut;
     // "~Mi" has no slash yet: read as "~/Mi" (no ~user lookups here).
-    if (cut < 0) return { dir: "~", partial: text.slice(1), prefix: "~/" };
-    return { dir: head.slice(0, -1), partial, prefix: head };
+    if (c < 0) return { dir: "~", partial: text.slice(1), prefix: "~/" };
+    const h = text.slice(0, c + 1);
+    return { dir: h.slice(0, -1), partial: text.slice(c + 1), prefix: h };
   }
   // Relative: read from home, written back as ~/….
   const rel = head.replace(/\/+$/, "");

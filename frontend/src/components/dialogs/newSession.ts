@@ -5,7 +5,7 @@
 
 import type { PlanAnswer } from "../../api/types";
 import { agentName } from "../../lib/agentNames";
-import { isWindowsFullPath, serverIsWindows } from "../../lib/serverPaths";
+import { isWindowsFullPath, pathLeaf, serverIsWindows } from "../../lib/serverPaths";
 
 /** The two things New makes. Session is the landing tab and stays that way:
  * it is the hot path (name → Enter), and a tab strip that makes the common
@@ -199,10 +199,11 @@ export function foldChipRow(
  * outright. Hiding a later child never moves an earlier one in a no-wrap row,
  * so this settles in a single pass; a ResizeObserver redoes it when the dialog
  * is resized.
-/** Last path segment, for naming the folder the confirm row would use. Keeps
- * both separators so a Windows path doesn't come back as the whole string. */
+/** Last path segment, for naming the folder the confirm row would use. Both
+ * separators (lib/serverPaths.pathLeaf), so a Windows path doesn't come back
+ * as the whole string. */
 export function leafName(path: string): string {
-  return path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || path;
+  return pathLeaf(path) || path;
 }
 
 /** The Folder field's whole state, gathered into one value because both ways it
@@ -840,11 +841,30 @@ export function sanitizeBranch(s: string): string {
     .replace(/^[-/]+|[-/]+$/g, "");
 }
 
-/** "/a/b/" and "/a/b" are one folder; "~" is left as typed. */
+/** "/a/b/" and "/a/b" are one folder ("C:\\a\\" and "C:\\a" too, and on a
+ * native-Windows server `c:\\A` is `C:\\a`); "~" is left as typed. */
 function samePath(a: string, b: string): boolean {
-  const n = (p: string) => (p || "").trim().replace(/\/+$/, "");
+  const n = (p: string) => {
+    const t = (p || "").trim().replace(/[\\/]+$/, "");
+    return serverIsWindows() ? t.toLowerCase() : t;
+  };
   return !!n(a) && n(a) === n(b);
 }
+
+/** Whether the Folder field names the home folder itself ("~", or the
+ * server's home spelled out; a trailing separator and — on a native-Windows
+ * server — case don't matter). A whole home folder is rarely the project:
+ * the agent works on everything in it, and when it is a git repo a separate
+ * worktree is cut from all of it. */
+export function isHomeFolder(folder: string, home: string): boolean {
+  const f = (folder || "").trim();
+  if (f === "~" || f === "~/" || f === "~\\") return true;
+  return !!(home || "").trim() && samePath(f, home);
+}
+
+/** The line under the Folder field when it is the home folder itself. */
+export const HOME_FOLDER_WARNING =
+  "This is your whole home folder — the agent works on everything in it. Pick (or create) a project folder inside it instead.";
 
 /** The sessions already editing `paths` (the folder as typed, and as the
  * server resolved it) DIRECTLY — the ones a second in-place session would

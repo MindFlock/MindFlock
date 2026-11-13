@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The New session dialog says so when the Folder is your whole home
+  folder.** The agent works on everything in the folder it is given; a line
+  under the field suggests picking (or creating) a project folder inside it.
+
+### Fixed
+
+- **Windows: "Create this folder" in the New session dialog works.** It cut
+  the path at `/` only, so `C:\Users\you\snake-game` went to the server as
+  parent `/` and the whole path as the folder's name, refused with "folder
+  name must not contain a path" — the folder could never be made from the
+  dialog. Every path split in the New dialog now cuts at `/` or `\` and keeps
+  a drive root (`C:\x` → `C:\` + `x`): the folder picker's walk up to the
+  drive, the agent field's `C:\…\claude.exe`, the folder names on the run
+  list and the route builder, `~\…` Tab completion, and "already editing this
+  folder" (which also ignores case on a Windows server).
+- **A server error says what went wrong.** A route that raised answered a
+  bare "Internal Server Error": the dialog could only say "MindFlock hit an
+  error (details in the log)", and the log said only `-> 500` (the
+  traceback went to the server's stderr). The answer now names the
+  exception, and its traceback is in `mindflock.log` (Settings → System
+  logs). When MindFlock's own code can't be imported — its install was
+  damaged under the running server, as a failed engine update on Windows
+  did — New session and the rest say "MindFlock's engine install is
+  damaged" and how to reinstall it.
+- **Closing the agent sign-in window never fails.** Its teardown of the
+  login terminal answered 500 when the install was damaged (a lazy import
+  outside any guard); anything it trips over is now logged instead. The
+  memory gate's look at running agents no longer fails a New session when
+  the session host can't be asked.
+
 ## [0.14.15] - 2026-11-12
 
 A stability release: no new features. Three weeks of fast feature rounds

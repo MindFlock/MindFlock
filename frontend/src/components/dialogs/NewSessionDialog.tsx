@@ -17,7 +17,7 @@
  * its Base branch picker, and per-session launch flags behind progressive
  * disclosure. */
 
-import { noteServerHome } from "../../lib/serverPaths";
+import { noteServerHome, pathLeaf, splitPath } from "../../lib/serverPaths";
 import {
   useCallback,
   useEffect,
@@ -860,7 +860,9 @@ export function NewSessionDialog() {
   const canonAgent = useCallback(
     (raw: string): string => {
       const tok = (raw.trim().split(/\s+/)[0] || "").toLowerCase();
-      const base = tok.split("/").pop() || tok;
+      // `C:\…\claude.exe` too: either separator, and Windows' .exe/.cmd/
+      // .bat/.com dropped as the backend's provider matching drops them.
+      const base = pathLeaf(tok).replace(/\.(exe|cmd|bat|com)$/, "") || tok;
       const m = providers.find(
         (p) =>
           p.name.toLowerCase() === base ||
@@ -1238,11 +1240,12 @@ export function NewSessionDialog() {
       ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists."
       : "";
   const createFolder = async () => {
-    const full = ((folderCheck?.asked === folderPath && folderCheck?.resolved) || folderPath).replace(/\/+$/, "");
-    const cut = full.lastIndexOf("/");
-    const parent = cut > 0 ? full.slice(0, cut) : "/";
-    const name = full.slice(cut + 1);
-    if (!name || mkBusy) return;
+    const full = (folderCheck?.asked === folderPath && folderCheck?.resolved) || folderPath;
+    // Cut where the SERVER's OS cuts: `C:\Users\me\app` → `C:\Users\me` +
+    // `app` (a "/"-only cut sent the whole path as the name, and /api/mkdir
+    // refused it — "Create this folder" never worked on native Windows).
+    const { parent, name } = splitPath(full.trim());
+    if (!parent || !name || mkBusy) return;
     setMkBusy(true);
     setMkError("");
     try {
