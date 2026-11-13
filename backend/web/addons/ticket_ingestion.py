@@ -94,6 +94,35 @@ def _may_restart_found_pipeline() -> bool:
 #: Marks the pipeline child as the server's (``backend.ticket_ingestion.__main__``
 #: records it in the lock file as ``owner``; same literal there).
 PIPELINE_OWNER_ENV = "MINDFLOCK_PIPELINE_OWNER"
+#: The starting server's PID, recorded in the lock as ``server_pid`` (same
+#: literal in ``backend.ticket_ingestion.__main__``): one pipeline runs per
+#: MindFlock home, and a second server sharing that home must tell "my
+#: child" from "the other server's".
+PIPELINE_SERVER_PID_ENV = "MINDFLOCK_PIPELINE_SERVER_PID"
+
+
+def _pid_alive(pid) -> bool:
+    try:
+        pid = int(pid or 0)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    try:
+        import psutil
+
+        return bool(psutil.pid_exists(pid))
+    except Exception:  # noqa: BLE001 — psutil missing: ask the kernel
+        pass
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 #: Seconds between re-checks of which device runs PR review / issue handling:
@@ -410,7 +439,18 @@ class TicketIngestionController:
             self._started_at = None
 
     def _lock_path(self) -> Path:
-        return self._repo_root / ".mindflock-pipeline.lock"
+        """The pipeline lock: in the MindFlock home, one pipeline per home
+        (:mod:`backend.ticket_ingestion.singleton`)."""
+        from backend.ticket_ingestion import singleton
+
+        return singleton.lock_path(self._repo_root)
+
+    def _legacy_lock_path(self) -> Path:
+        """The per-root lock an older-build pipeline took (in this server's
+        repo root, where it would have started it)."""
+        from backend.ticket_ingestion import singleton
+
+        return singleton.legacy_lock_path(self._repo_root)
 
     def _external_lock_pid(self) -> Optional[int]:
         """PID of a pipeline holding the singleton lock, or None if not held.
@@ -419,48 +459,44 @@ class TicketIngestionController:
         owner died is detectable because we can re-acquire it). Returns the PID
         recorded in the file for display / stop, or ``-1`` if held but the PID
         couldn't be read. This sees pipelines started by *anyone* (e.g. a
-        standalone run, or an orphan surviving a backend.web restart) — not just our
-        own child.
+        standalone run, another server sharing this MindFlock home, or an
+        orphan surviving a backend.web restart) — not just our own child.
         """
         return self._lock_holder()[0]
 
     def _lock_holder(self) -> "tuple[Optional[int], Optional[dict]]":
         """``(pid, meta)`` of the pipeline holding the lock — see
         :meth:`_external_lock_pid` for the PID; ``meta`` is the build it
-        recorded on line 2 (``{version, commit, owner}``), None for a lock
-        written by a pipeline from before it recorded one."""
-        p = self._lock_path()
-        if not p.exists():
-            return None, None
+        recorded on line 2 (``{version, commit, owner, server_pid,
+        server_port, root}``), None for a lock written by a pipeline from
+        before it recorded one. The MindFlock-home lock first, then the
+        legacy per-root one (a pipeline from before the lock moved)."""
+        from backend.ticket_ingestion import singleton
+
+        home = self._lock_path()
+        pid, meta = singleton.probe(home)
+        if pid is not None:
+            return pid, meta
+        legacy = self._legacy_lock_path()
+        if legacy != home:
+            return singleton.probe(legacy)
+        return None, None
+
+    def _other_server(self, meta: Optional[dict]) -> Optional[dict]:
+        """``{pid, port}`` of the OTHER live server whose child holds the
+        lock (two servers sharing one MindFlock home run one pipeline between
+        them), else None — ours, a standalone run, an orphan whose server is
+        gone, or a lock too old to say."""
+        if not meta or meta.get("owner") != "server":
+            return None
+        spid = meta.get("server_pid")
         try:
-            fh = open(p, "a+")
-        except OSError:
-            return None, None
-        try:
-            try:
-                compat.flock(fh.fileno(), compat.LOCK_EX | compat.LOCK_NB)
-            except OSError:
-                try:
-                    fh.seek(0)
-                    lines = (fh.read() or "").splitlines()
-                except OSError:
-                    return -1, None
-                try:
-                    pid = int((lines[0] if lines else "").strip() or 0) or -1
-                except ValueError:
-                    pid = -1
-                meta = None
-                if len(lines) > 1:
-                    try:
-                        meta = json.loads(lines[1])
-                    except ValueError:
-                        meta = None
-                return pid, meta if isinstance(meta, dict) else None
-            else:
-                compat.flock(fh.fileno(), compat.LOCK_UN)  # nobody holds it -> stale
-                return None, None
-        finally:
-            fh.close()
+            spid = int(spid or 0)
+        except (TypeError, ValueError):
+            return None
+        if spid <= 0 or spid == os.getpid() or not _pid_alive(spid):
+            return None
+        return {"pid": spid, "port": meta.get("server_port") or None}
 
     def stale_build(self) -> bool:
         """Whether the running pipeline is one this server started on an
@@ -478,6 +514,12 @@ class TicketIngestionController:
         if meta is None:
             return True  # an older pipeline: necessarily an older build
         if meta.get("owner") != "server":
+            return False
+        if self._other_server(meta) is not None:
+            # Another live server sharing this MindFlock home started it: its
+            # build is that server's business. Restarting it here would kill
+            # its child, and two servers on different builds would trade the
+            # pipeline back and forth.
             return False
         try:
             from backend.web.core import self_update as _su
@@ -527,6 +569,7 @@ class TicketIngestionController:
         # This child is the server's: restarted after an engine update when
         # its recorded build is older (see stale_build).
         env[PIPELINE_OWNER_ENV] = "server"
+        env[PIPELINE_SERVER_PID_ENV] = str(os.getpid())
         extra = [self._server_package_root(), str(self._repo_root / "src")]
         if env.get("PYTHONPATH"):
             extra.append(env["PYTHONPATH"])
@@ -766,6 +809,8 @@ class TicketIngestionController:
             reason = "configuration error" if kind == "config" else "crashed"
             return reason, err
         if rc == 0:
+            # Lost the singleton lock: another pipeline (maybe another
+            # server's, sharing this MindFlock home) is the one running.
             return "exited (another pipeline holds the lock)", None
         if rc is not None and rc < 0:
             reason = "killed by signal %d" % -rc
@@ -776,13 +821,27 @@ class TicketIngestionController:
             err = {"kind": "crash", "message": reason, "at": at, "source": ""}
         return reason, err
 
-    def _activity(self) -> dict:
+    def _holder_root(self, meta: Optional[dict] = None) -> Path:
+        """Where the running pipeline keeps its ledger and activity beacon:
+        the ``root`` its lock records (another server sharing this MindFlock
+        home may have started it in a different repo root), else ours."""
+        if meta is None:
+            meta = self._lock_holder()[1]
+        root = str((meta or {}).get("root") or "")
+        if root and os.path.isdir(root):
+            return Path(root)
+        return self._repo_root
+
+    def _activity(self, meta: Optional[dict] = None) -> dict:
         """Parsed activity beacon written by the pipeline (its orchestrator
         mirrors in-flight ticket/PR counts to ``.mindflock-pipeline-activity.json``
-        next to the singleton lock). ``{}`` when absent or unreadable."""
+        in its own root — :meth:`_holder_root`). ``{}`` when absent or
+        unreadable."""
         try:
             raw = json.loads(
-                (self._repo_root / ".mindflock-pipeline-activity.json").read_text()
+                (
+                    self._holder_root(meta) / ".mindflock-pipeline-activity.json"
+                ).read_text()
             )
         except (OSError, ValueError):
             return {}
@@ -798,9 +857,14 @@ class TicketIngestionController:
             pid = ext
         else:
             pid = None
+        meta = self._lock_holder()[1] if running else None
+        # Two servers sharing one MindFlock home run ONE pipeline between
+        # them: the other one's child is that server's, running fine — not
+        # an error here, and not ours to restart.
+        other_server = None if own else self._other_server(meta)
         # Activity only counts while running AND when the beacon was written by
         # the pipeline that is running now (a dead run's file must not stick).
-        act = self._activity() if running else {}
+        act = self._activity(meta) if running else {}
         if act and pid and act.get("pid") not in (None, pid):
             act = {}
         # Work this server is bringing in itself (forced starts + sessions still
@@ -809,7 +873,6 @@ class TicketIngestionController:
             local = _pending.provisioning_kinds()
         except Exception:  # noqa: BLE001 — status must never fail on this
             local = set()
-        meta = self._lock_holder()[1] if running else None
         # Why the child is gone, when it is ours and it is — plus the live
         # error classes: a skipped source (config, from the beacon), a tracker
         # or GitHub refusing the token (auth) or a connectivity failure
@@ -863,6 +926,10 @@ class TicketIngestionController:
             # "exited with code N", "killed by signal N", "exited (another
             # pipeline holds the lock)"); null while it runs / not ours.
             "exit_reason": exit_reason,
+            # {pid, port} of the OTHER server (sharing this MindFlock home)
+            # whose pipeline is the one running — Intake reads "runs from the
+            # server on :port" — else null (ours, standalone, or stopped).
+            "other_server": other_server,
             # Every source the running pipeline skipped: [{source, field,
             # message}] (the beacon's list; [] when none or not running).
             "config_errors": config_errors,

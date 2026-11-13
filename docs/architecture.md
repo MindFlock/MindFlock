@@ -511,8 +511,9 @@ after a short break, which is when the wait feels worst.
 
 ### Ingestion pipeline (`backend/ticket_ingestion`)
 
-`python -m backend.ticket_ingestion`, configured by `./config.toml`, singleton
-per directory via `.mindflock-pipeline.lock`. Despite the historical package
+`python -m backend.ticket_ingestion`, configured by `./config.toml`, one per
+MindFlock home via `~/.mindflock/pipeline.lock` (plus the old per-directory
+`.mindflock-pipeline.lock`). Despite the historical package
 name it is multi-provider: tickets can come from **Jira, Linear, Shortcut,
 GitHub Issues, or Asana** (`ticket_ingestion/providers/`). Two loops:
 
@@ -663,7 +664,8 @@ independent cadences, so each side has to tolerate the other being older. See
 | `~/.mindflock/voice/` | web (`core/speech.py`) | the local speech backend's downloaded models (`whisper/`, `piper/`), only when a server backend is `local` |
 | `./config.toml` | pipeline + provisioning | all configuration (gitignored — holds tokens) |
 | `./state.json` | pipeline | `last_run_timestamp`, `processed_stories`, `processed_prs` |
-| `./.mindflock-pipeline.lock` | pipeline | singleton flock, holds winner PID |
+| `~/.mindflock/pipeline.lock` | pipeline | singleton flock (one pipeline per MindFlock home), holds winner PID + build/server meta |
+| `./.mindflock-pipeline.lock` | pipeline | legacy per-directory flock, still taken beside the home one |
 | `./workspaces/` | pipeline/engine | story/PR workspaces, `_base_*`, `_testmon_refresher` |
 | `./logs/` | pipeline/web | `pipeline.log` (pipeline logger), `ticket-ingestion.log` (subprocess stdout) |
 | `{tempdir}/mindflock.log` | engine `log` | low-level engine log |

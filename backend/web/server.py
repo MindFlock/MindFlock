@@ -3892,11 +3892,17 @@ def _intake_plan(
 
 
 def _arm_intake_flight(
-    title: str, plan_id: str, subject: dict, by: str = "user", branch: str = ""
+    title: str,
+    plan_id: str,
+    subject: dict,
+    by: str = "user",
+    branch: str = "",
+    armed: Optional[list] = None,
 ) -> Optional[dict]:
     """:func:`flights.arm_pending` for an intake title, or None when it could
     not be armed (logged). A flight left on the title by an earlier start whose
-    session never appeared is cancelled first: no session, nothing to keep."""
+    session never appeared is cancelled first: no session, nothing to keep.
+    ``armed`` (out) gets the new flight's id (see :func:`_arm_intake`)."""
     who = by if str(by).startswith("agent:") else "intake"
     for attempt in (1, 2):
         try:
@@ -3919,6 +3925,8 @@ def _arm_intake_flight(
             if log.ErrorLog is not None:
                 log.ErrorLog.Printf("flight for %s not armed: %v", title, err)
         else:
+            if armed is not None:
+                armed.append(flight["id"])
             try:
                 # On the Board from second one (flight.changed is a refetch).
                 _flight_driver._announce(None, flight)
@@ -3940,6 +3948,7 @@ def _arm_intake(
     plan: str = "",
     subject: Optional[dict] = None,
     branch: str = "",
+    armed: Optional[list] = None,
 ) -> str:
     """What an intake start arms before its session exists: the flight of
     ``plan`` (resolved by :func:`_intake_plan`) when there is one, else the
@@ -3950,9 +3959,15 @@ def _arm_intake(
     ``branch`` is the branch the start cuts (the plan's ``{branch}``).
 
     Returns the text to append to the intake prompt: the plan's first agent
-    step's own ``prompt`` (placeholders filled), ``""`` without one."""
+    step's own ``prompt`` (placeholders filled), ``""`` without one.
+
+    ``armed`` (out): gets the id of the flight this start armed, so its
+    failure path cancels that flight and no other
+    (:func:`_cancel_intake_flight`)."""
     flight = (
-        _arm_intake_flight(title, plan, subject or {}, by, branch) if plan else None
+        _arm_intake_flight(title, plan, subject or {}, by, branch, armed=armed)
+        if plan
+        else None
     )
     if flight is None or not any(s["kind"] == "ship" for s in flight["steps"]):
         _arm_intake_autopilot(title, depth, source, item, message=message, by=by)
@@ -3970,16 +3985,25 @@ def _arm_intake(
     return "\n\n" + text.strip() if text.strip() else ""
 
 
-def _cancel_intake_flight(title: str, reason: str) -> None:
+def _cancel_intake_flight(
+    title: str, reason: str, flight_id: Optional[str] = None
+) -> None:
     """Cancel the flight armed for ``title`` whose session could not be
     created (``session.create_failed``) — and say so — and drop the autopilot
     record armed for it: neither may outlive the start that armed it. A title
-    that has a live session (this launch lost a race to another) keeps both."""
+    that has a live session (this launch lost a race to another) keeps both.
+
+    ``flight_id``: the flight THIS start armed (``_arm_intake(armed=…)``;
+    ``""`` = none). Any other flight on the title belongs to another start —
+    the ticket pipeline's, say, whose session is still coming up — and is
+    left alone, autopilot record included. ``None``: by title, as before."""
     try:
         if title in ENGINE.instances:
             return
-        _autopilot.disarm(title)
         before = _flights.for_session(title)
+        if flight_id is not None and before is not None and before["id"] != flight_id:
+            return
+        _autopilot.disarm(title)
         if before is None:
             return
         after = _flights.mutate(

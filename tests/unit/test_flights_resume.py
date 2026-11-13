@@ -608,7 +608,7 @@ def test_the_ticket_start_carries_on_instead_of_creating(srv, held, row, monkeyp
         _source_intake_plan=lambda s: "",
         _intake_prompt_tail=lambda lineage, title, program: ("", False, ""),
         _worktree_reclaim=SimpleNamespace(reclaim_for_launch=lambda url, b: ""),
-        _cancel_intake_flight=lambda t, why: calls.append(("cancel", why)),
+        _cancel_intake_flight=lambda t, why, *a: calls.append(("cancel", why)),
         _register_task=lambda coro: tasks.append(coro),
         log=SimpleNamespace(InfoLog=None, ErrorLog=None),
         session=SimpleNamespace(

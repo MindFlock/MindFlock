@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two servers no longer run two ticket pipelines.** The pipeline's
+  singleton lock was per directory, so two servers sharing one `~/.mindflock`
+  from different directories each ran a pipeline: both launched the same
+  ticket, and the losing launch cancelled the live session's route. The lock
+  now lives in the MindFlock home (`pipeline.lock`, `$MINDFLOCK_HOME` moves
+  it); the old per-directory lock is still taken, so an older pipeline keeps
+  excluding a new one. The second server reads the other pipeline as running
+  (`/api/mindflock/status` → `other_server: {pid, port}`) and never restarts
+  it as its own stale child.
+- **A failed launch only cancels the route it armed.** The pipeline and the
+  Intake starts (tickets, issues, PR review) cancelled whatever route sat on
+  the session title when their create failed — including one another launch
+  armed for a session that was already live. Now only the attempt's own route
+  is cancelled, and a create that failed because the session went live
+  meanwhile is "launched elsewhere": logged, nothing cancelled, the ticket
+  recorded `skipped`, not `failed`.
+- **A launch that waited re-checks before it goes.** An automatic launch held
+  for launch spacing or memory now re-checks, before arming anything, that no
+  session of that title exists and that the ticket is still in its ingest
+  state and unclaimed; otherwise it backs off (`Not launching …`).
+
 ## [0.14.15] - 2026-11-12
 
 A stability release: no new features. Three weeks of fast feature rounds
