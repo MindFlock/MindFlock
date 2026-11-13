@@ -1050,15 +1050,26 @@ per agent with what this machine's sessions really take:
 room = floor((available − reserve − penalties − to_come) / session_mb)
 ```
 
-- **`session_mb`** — the 75th percentile of the steady size the memory
-  sampler measures per session (a session's whole tree: CLI, MCP servers,
-  what it runs; the sampler is `core.memory_watch`, read through the
-  `launch_gate.set_sizes_source` seam, else the rows' `memory.mb`). Sessions
-  still warming and ones reading under 50 MB (asleep, closing) are not
-  samples. Fewer than 3 samples: 700 MB. Never under 200 MB.
-- **`peak_mb`** — the 75th percentile of the sessions' peaks, never under
-  `session_mb` nor over 2.5× it (a peak from an 8-worker test run is not what
-  a CLI starting grows to). Warming agents count at it.
+- **`session_mb`** — what one more session's **agent** costs: the 75th
+  percentile of the steady `agent_mb + mcp_mb` the memory sampler measures
+  per session (the agent CLI and the MCP servers it started; the sampler is
+  `core.memory_watch`, read through the `launch_gate.set_agent_sizes_source`
+  seam, else the rows' `memory.agent_mb + mcp_mb`). Not `other_mb`, what
+  else runs in the session's panes (a test run, a build, a dev server):
+  that memory is already out of `available` and the pressure readings, and
+  counting it again as the cost of every future session double-counted it
+  (2026-11-12: one session's test run moved `session_mb` 637 → 1,780 →
+  1,220 → 709 MB and `room` 17 → 5 → 7 → 9 in three minutes, nothing
+  opened or closed).
+  So a worker that runs heavy work needs that memory on top of `session_mb`;
+  it is held for only once it is running. Sessions still warming and ones
+  whose agent reads under 50 MB (asleep, exited, closing) are not samples;
+  sleeping, closed and other devices' sessions never are. Fewer than 3
+  samples: 700 MB. Never under 200 MB.
+- **`peak_mb`** — the 75th percentile of the agents' peaks (`agent_mb +
+  mcp_mb`, highest since the panes were relaunched), never under
+  `session_mb` nor over 2.5× it. Warming agents count at it (all of it while
+  not measured yet); fewer than 3 peaks: 700 MB.
 - **`reserve`** — the low floor: `max(2 GB, general.memory_low_pct of RAM)`
   (8 % by default: 2 GB on 20 GB, 2.1 GB on 26 GB). The room is what fits
   *above* it.
@@ -1073,14 +1084,25 @@ room = floor((available − reserve − penalties − to_come) / session_mb)
 The room is 0 while the level reads low or critical, and never past the
 live cap. On 20 GB with 15.6 GB available, no swap-in, no stall, nothing
 warming and no measurements yet: (15.6 − 2.0) GB / 0.7 GB → room 19 (the live
-cap, 16 by default, then bounds it). Measured at 1 GB per session it is 13.
+cap, 16 by default, then bounds it). Measured at 1 GB per agent it is 13.
+
+What still stops a machine whose sessions really are running heavy work in
+their terminals: that work is out of `available` (the room shrinks by
+exactly what it takes), and the level — PSI stalls, swap-in, OOM kills, the
+available floor and, inside WSL, Windows' commit charge and headroom —
+holds every automatic start and asks a person, whatever the room by
+arithmetic. The live cap (one agent per 1.2 GB of RAM) bounds automatic
+starts whatever either says.
 
 What the room changes: an agent's `spawn_session` past it queues (`queued:
 waiting for memory`, the reason saying what one more needs: *one more
 session needs ~1.0 GB; only 0.4 GB is free above the reserve*); a team
 run's pass starts at most `room` new lines; the MCP `whoami`,
 `spawn_session` and `start_team_run` results carry `capacity: {room,
-session_mb, hint}` so an orchestrator plans its worker count from it. A
+session_mb, hint}` so an orchestrator plans its worker count from it
+(*room for 2 more sessions now (~950 MB per agent, plus what it runs); more
+will queue*: a worker that will run a big test suite or build needs that on
+top). A
 person's own start asks only while the level reads low or critical, and the
 dialog (`launch_gate.person_refusal`, the 409's `message`) leads with the
 signals behind the level — *Memory is critical: processes stalled on memory
