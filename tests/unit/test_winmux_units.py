@@ -293,3 +293,26 @@ def test_a_long_unterminated_string_is_not_rescanned_quadratically():
     took = _time.monotonic() - started
     assert "after" in t.render(0)
     assert took < 3.0, took
+
+
+def test_history_cells_are_shared_not_one_object_each():
+    # Every cell scrolled into history was its own pyte Char (a 9-field
+    # namedtuple): ~10k lines x 120 columns held ~100 MiB in the one host
+    # process, and MindFlock sets history-limit 100000 per session. Identical
+    # cells share one object once they are history.
+    import tracemalloc
+
+    t = Term(120, 30, history=10000)
+    body = ("x" * 60 + " lorem ipsum dolor sit amet " * 3)[:118]
+    tracemalloc.start()
+    try:
+        for i in range(5000):
+            t.feed("\x1b[32m%05d\x1b[0m %s\r\n" % (i, body))
+        used, _ = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(t.screen.history) > 9000
+    assert used < 50 * 2**20, used / 2**20
+    # ...and the text and colours read back exactly as before.
+    assert t.render(0).startswith("00000 xxxx")
+    assert "\x1b[32m00000" in t.render(0, codes=True)

@@ -157,6 +157,12 @@ def _normalize_sgr(params: str) -> str:
     return ";".join(out)
 
 
+#: The shared cells of history lines (:meth:`_Screen._push_history`), capped
+#: so a stream of distinct colours can't grow it without bound.
+_CHARS: Dict = {}
+_CHARS_MAX = 1 << 16
+
+
 class _Screen(pyte.Screen):
     """pyte's screen plus history, wrap flags and the alternate screen.
 
@@ -191,6 +197,13 @@ class _Screen(pyte.Screen):
         if self.history.maxlen == 0:
             return
         line.width = self.columns
+        # One shared Char per distinct cell (they are immutable): a Char of
+        # its own per cell held ~85 bytes each, ~1 GB for a long session at
+        # MindFlock's history-limit of 100000.
+        if len(_CHARS) > _CHARS_MAX:
+            _CHARS.clear()
+        for k, c in line.items():
+            line[k] = _CHARS.setdefault(c, c)
         self.history.append(line)
 
     def index(self) -> None:
