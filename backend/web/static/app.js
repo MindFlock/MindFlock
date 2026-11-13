@@ -24148,6 +24148,31 @@ function serverIsWindows() {
 function isWindowsFullPath(text) {
 	return /^[A-Za-z]:[\\/]/.test(text) || /^\\\\[^\\]/.test(text);
 }
+function splitPath(path) {
+	const t = path.length > 1 ? path.replace(/[\\/]+$/, "") || path.slice(0, 1) : path;
+	const i = Math.max(t.lastIndexOf("/"), t.lastIndexOf("\\"));
+	if (i < 0) return {
+		parent: "",
+		name: t
+	};
+	const head = t.slice(0, i);
+	const name = t.slice(i + 1);
+	if (i === 0) return {
+		parent: name ? t[0] : "",
+		name
+	};
+	if (/^[A-Za-z]:$/.test(head)) return {
+		parent: head + t[i],
+		name
+	};
+	return {
+		parent: head,
+		name
+	};
+}
+function pathLeaf(path) {
+	return splitPath(path).name;
+}
 function fullPathHint() {
 	return windowsServer ? "a full path like C:\\Users\\you\\project" : "a full path starting with / or ~";
 }
@@ -106688,12 +106713,7 @@ function useFolderPickerWhile(open, req) {
 	}, [open]);
 }
 function parentPath(p) {
-	const t = p.length > 1 ? p.replace(/[\\/]+$/, "") : p;
-	if (t === "/" || t === "~" || t === "." || t === "") return "";
-	const i = Math.max(t.lastIndexOf("/"), t.lastIndexOf("\\"));
-	if (i < 0) return "";
-	if (i === 0) return "/";
-	return t.slice(0, i);
+	return splitPath(p).parent;
 }
 function seedChain(value) {
 	const out = [];
@@ -106781,7 +106801,7 @@ function savePickerRect(r) {
 //#endregion
 //#region src/lib/pathComplete.ts
 function sepOf(prefix) {
-	return isWindowsFullPath(prefix) && prefix.endsWith("\\") ? "\\" : "/";
+	return (isWindowsFullPath(prefix) || prefix.startsWith("~")) && prefix.endsWith("\\") ? "\\" : "/";
 }
 function splitForCompletion(text) {
 	if (text === "~") return {
@@ -106807,15 +106827,17 @@ function splitForCompletion(text) {
 		prefix: head
 	};
 	if (text.startsWith("~")) {
-		if (cut < 0) return {
+		const c = serverIsWindows() ? Math.max(cut, text.lastIndexOf("\\")) : cut;
+		if (c < 0) return {
 			dir: "~",
 			partial: text.slice(1),
 			prefix: "~/"
 		};
+		const h = text.slice(0, c + 1);
 		return {
-			dir: head.slice(0, -1),
-			partial,
-			prefix: head
+			dir: h.slice(0, -1),
+			partial: text.slice(c + 1),
+			prefix: h
 		};
 	}
 	const rel = head.replace(/\/+$/, "");
@@ -107258,7 +107280,7 @@ function foldChipRow(kids, rowRight, moreWidth) {
 	return hidden;
 }
 function leafName(path) {
-	return path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || path;
+	return pathLeaf(path) || path;
 }
 var FOLDER_INIT = {
 	path: "",
@@ -107474,13 +107496,25 @@ function titleFromPrompt(prompt) {
 function titleFromFolder(folder) {
 	return (((folder || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "").toLowerCase().match(/[a-z0-9]+/g) || []).join("-").slice(0, TITLE_FROM_PROMPT_MAX).replace(/^-+|-+$/g, "");
 }
+function pendingTitleFor(body) {
+	return String(body.title || "").trim() || titleFromPrompt(String(body.prompt || "")) || titleFromFolder(String(body.repo_path || "")) || "untitled";
+}
 function sanitizeBranch(s) {
 	return s.toLowerCase().replace(/ /g, "-").replace(/[^a-z0-9\-_/.]/g, "").replace(/-+/g, "-").replace(/^[-/]+|[-/]+$/g, "");
 }
 function samePath(a, b) {
-	const n = (p) => (p || "").trim().replace(/\/+$/, "");
+	const n = (p) => {
+		const t = (p || "").trim().replace(/[\\/]+$/, "");
+		return serverIsWindows() ? t.toLowerCase() : t;
+	};
 	return !!n(a) && n(a) === n(b);
 }
+function isHomeFolder(folder, home) {
+	const f = (folder || "").trim();
+	if (f === "~" || f === "~/" || f === "~\\") return true;
+	return !!(home || "").trim() && samePath(f, home);
+}
+var HOME_FOLDER_WARNING = "This is your whole home folder — the agent works on everything in it. Pick (or create) a project folder inside it instead.";
 function sessionsInFolder(rows, paths) {
 	return rows.filter((r) => r.in_place && paths.some((p) => samePath(r.path, p))).map((r) => r.title);
 }
@@ -108126,6 +108160,12 @@ function FolderAids({ scope = "new", searchHits, selIndex, searchListRef, setSea
 			]
 		}),
 		newFolderRow,
+		isHomeFolder(folderPath, homePath) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "nf-git-nudge",
+			id: scope + "-home-folder",
+			role: "status",
+			children: HOME_FOLDER_WARNING
+		}),
 		plainFolder && !gitAsked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "nf-git-nudge",
 			children: initRepo ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -111714,7 +111754,7 @@ function summarySentence(o) {
 	};
 }
 var BROWSE_VALUE = "\0browse";
-function runRepoOptions(repoPath, suggestions, leaf = (p) => p.replace(/\/+$/, "").split("/").pop() || p) {
+function runRepoOptions(repoPath, suggestions, leaf = (p) => pathLeaf(p) || p) {
 	const out = [];
 	if (!suggestions.some((s) => s.path === repoPath)) out.push({
 		value: repoPath,
@@ -111887,7 +111927,7 @@ function useRunDraft(o) {
 		listMode,
 		items
 	]);
-	const repoLabel = repoPath.replace(/\/+$/, "").split("/").pop() || "";
+	const repoLabel = pathLeaf(repoPath);
 	const rows = (0, import_react.useMemo)(() => listMode ? itemRows(items, fresh?.data ?? null, repoLabel, prettySource) : [], [
 		listMode,
 		items,
@@ -112325,7 +112365,7 @@ function newSessionSubmit(ctx) {
 		const { lane, askFirst } = laneAtPress.current;
 		setError("Creating…");
 		const target = deviceRef.current;
-		const guess = addPendingSession(body.title || "untitled", target);
+		const guess = addPendingSession(pendingTitleFor(body), target);
 		closeDialog();
 		try {
 			const made = await withMemoryConfirm("a new agent", (anyway) => deviceApi(target)("/api/instances", { json: anyway ? {
@@ -113505,7 +113545,7 @@ function NewSessionDialog() {
 	}, []);
 	const canonAgent = (0, import_react.useCallback)((raw) => {
 		const tok = (raw.trim().split(/\s+/)[0] || "").toLowerCase();
-		const base = tok.split("/").pop() || tok;
+		const base = pathLeaf(tok).replace(/\.(exe|cmd|bat|com)$/, "") || tok;
 		const m = providers.find((p) => p.name.toLowerCase() === base || (p.aliases || []).some((a) => String(a).toLowerCase() === base) || String(p.command || "").toLowerCase() === base);
 		return m ? m.name : base;
 	}, [providers]);
@@ -113728,11 +113768,9 @@ function NewSessionDialog() {
 	const askFolder = newFolderAsk && !newFolderOk ? newFolderAsk : folderMissing ? missingLabel : "";
 	const startBlocked = askFolder && !runMode ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists." : "";
 	const createFolder = async () => {
-		const full = (folderCheck?.asked === folderPath && folderCheck?.resolved || folderPath).replace(/\/+$/, "");
-		const cut = full.lastIndexOf("/");
-		const parent = cut > 0 ? full.slice(0, cut) : "/";
-		const name = full.slice(cut + 1);
-		if (!name || mkBusy) return;
+		const full = folderCheck?.asked === folderPath && folderCheck?.resolved || folderPath;
+		const { parent, name } = splitPath(full.trim());
+		if (!parent || !name || mkBusy) return;
 		setMkBusy(true);
 		setMkError("");
 		try {
@@ -146189,7 +146227,7 @@ function repoChoices(suggestions, max = REPO_CHIPS) {
 		seen.add(s.path);
 		out.push({
 			value: s.path,
-			label: s.name || s.path.split("/").filter(Boolean).pop() || s.path,
+			label: s.name || pathLeaf(s.path) || s.path,
 			title: s.path
 		});
 		if (out.length >= max) break;
@@ -146428,7 +146466,11 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 			title: named,
 			parent
 		});
-		const guess = addPendingSession(named || titleFromPrompt(prompt) || folder.split("/").filter(Boolean).pop() || "untitled", device);
+		const guess = addPendingSession(pendingTitleFor({
+			title: named,
+			prompt,
+			repo_path: folder
+		}), device);
 		onPending?.(guess);
 		let title = "";
 		try {

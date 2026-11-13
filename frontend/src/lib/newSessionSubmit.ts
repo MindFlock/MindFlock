@@ -21,6 +21,7 @@ import { clampSplit } from "./runStart";
 import {
   baseBranchFields,
   isNameQuery,
+  pendingTitleFor,
   submitHoldReason,
   type PlanFolderAction,
 } from "../components/dialogs/newSession";
@@ -233,7 +234,8 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
     // Where it was aimed at the press — the picker can move once the dialog
     // has closed and reopened while this POST is still in flight.
     const target = deviceRef.current;
-    const guess = addPendingSession((body.title as string) || "untitled", target);
+    // Named as the server will name it (the dialog's preview), not "untitled".
+    const guess = addPendingSession(pendingTitleFor(body), target);
     closeDialog();
     try {
       // On another device the create is answered there, and the session joins

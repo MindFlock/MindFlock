@@ -6,6 +6,13 @@ served with `Cache-Control: no-cache`.
 
 Conventions: JSON bodies in, JSON out. Errors use standard status codes with
 `{"detail": ...}` or `{"error": ...}`. `{title}` is the session title.
+A route that raises answers **500** `{"detail": <sentence>, "error":
+<sentence>, "exception": "<ExceptionType>"}` and writes its traceback to
+`mindflock.log` (`backend/web/core/unhandled.py`). The sentence is
+`MindFlock hit an error: <ExceptionType>: <message> (the full error is in the
+MindFlock log)`, or — for an ImportError of MindFlock's own code, an install
+damaged under the running server — `MindFlock's engine install is damaged
+(…). Quit MindFlock, reinstall the engine …`.
 
 ## Instances
 

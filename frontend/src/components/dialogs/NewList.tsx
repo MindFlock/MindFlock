@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { errMsg } from "../../lib/format";
+import { pathLeaf } from "../../lib/serverPaths";
 import { LANE_LABEL, SERVER_NO_TOGETHER, type Lane } from "../../lib/laneActions";
 import { FastTrackChoice, Seg } from "./FastTrackChoice";
 import {
@@ -197,7 +198,7 @@ export function useRunDraft(o: {
     else setNameRaw((cur) => cur || fallbackName(items));
   }, [fresh?.data?.name_suggestion, listMode, items]);
 
-  const repoLabel = repoPath.replace(/\/+$/, "").split("/").pop() || "";
+  const repoLabel = pathLeaf(repoPath);
   const rows = useMemo(
     () => (listMode ? itemRows(items, fresh?.data ?? null, repoLabel, prettySource) : []),
     [listMode, items, fresh, repoLabel]

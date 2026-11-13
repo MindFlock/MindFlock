@@ -192,6 +192,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import aliases as _aliases
 from backend.web.core import rename as _rename
+from backend.web.core import unhandled as _unhandled
 from backend.web.core import (
     rename_stores as _rename_stores,
 )  # noqa: F401 — registers the stores
@@ -1117,6 +1118,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MindFlock", lifespan=lifespan)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_error(request, exc):
+    """A route that raised: its traceback goes to ``mindflock.log`` and the
+    answer is JSON naming the exception, so the client shows a reason instead
+    of "MindFlock hit an error" over a log line that only says ``-> 500``
+    (core.unhandled, imported at startup: an exception handler that imported
+    lazily would fail the same way a half-deleted install fails a route)."""
+    return _unhandled.answer(request, exc)
 
 
 @app.middleware("http")

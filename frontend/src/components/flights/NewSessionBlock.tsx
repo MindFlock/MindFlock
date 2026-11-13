@@ -36,7 +36,7 @@
  * which pins that row's line where the block sat and hides the block; a
  * refusal brings the block back with the error (`onFailed`). */
 
-import { fullPathHint } from "../../lib/serverPaths";
+import { fullPathHint, pathLeaf } from "../../lib/serverPaths";
 import { withMemoryConfirm } from "../../lib/memoryConfirm";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
@@ -62,7 +62,7 @@ import {
   type ParentChoice,
 } from "../../lib/newBlock";
 import { errMsg } from "../../lib/format";
-import { isNameQuery, titleFromPrompt, type RepoSuggestion } from "../dialogs/newSession";
+import { isNameQuery, pendingTitleFor, type RepoSuggestion } from "../dialogs/newSession";
 import { PathField } from "../PathField";
 import { templateFiller } from "../dialogs/newSession/TemplatesStrip";
 import { useBaseBranches } from "../dialogs/newSession/WorkspaceFold";
@@ -115,7 +115,7 @@ export function repoChoices(suggestions: readonly RepoSuggestion[], max = REPO_C
   for (const s of [...suggestions].sort((a, b) => rank(a) - rank(b))) {
     if (!s.path || seen.has(s.path)) continue;
     seen.add(s.path);
-    out.push({ value: s.path, label: s.name || s.path.split("/").filter(Boolean).pop() || s.path, title: s.path });
+    out.push({ value: s.path, label: s.name || pathLeaf(s.path) || s.path, title: s.path });
     if (out.length >= max) break;
   }
   return out;
@@ -384,7 +384,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
     setError("");
     const named = parent ? workerTitle(parent.title, (rows || []).map((r) => r.title)) : "";
     const body = blockBody({ repo, prompt, program, launchArgs, options: { ...options, device }, title: named, parent });
-    const guess = addPendingSession(named || titleFromPrompt(prompt) || folder.split("/").filter(Boolean).pop() || "untitled", device);
+    const guess = addPendingSession(pendingTitleFor({ title: named, prompt, repo_path: folder }), device);
     onPending?.(guess);
     let title = "";
     try {
