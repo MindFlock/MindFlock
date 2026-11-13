@@ -7316,6 +7316,29 @@ def _last_ones(flight: dict, n: int, ts: float) -> bool:
     return True
 
 
+def _keep_loops(flight: dict, after: Sequence[dict]) -> None:
+    """Refuse (409 ``loop_target``, naming the Loop) an edit whose result
+    ``after`` (the steps it would leave) breaks a Loop that works now: the
+    stop it repeats from removed, or moved to / past it. Such a Loop can only
+    fail when it runs ("nothing to repeat"), and Undo re-adds a removed stop
+    under a new id, so the edit says so instead. A Loop removed with it, or
+    one already broken, is no reason to refuse."""
+    titles = {s["id"]: s.get("title") or s["id"] for s in flight["steps"]}
+    for loop in after:
+        want = str((loop.get("config") or {}).get("back_to") or "")
+        if loop.get("kind") != "loop" or not want or want == LOOP_AGENT:
+            continue
+        if loop_target(flight, loop) is None:
+            continue  # already broken: not this edit's doing
+        if loop_target({"steps": list(after)}, loop) is None:
+            raise FlightError(
+                "loop_target",
+                409,
+                "%s repeats from %s — point it at another stop, or remove it "
+                "too" % (loop.get("title") or "A Loop", titles.get(want, want)),
+            )
+
+
 def op_remove_step(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     """Take a step out of a flight not yet over — any step (docs/flights.md
     "Removing the stop that is flying", :func:`_remove_at`). Taking the last
@@ -7326,6 +7349,7 @@ def op_remove_step(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     i = _step_index(flight, sid)
     if _last_ones(flight, 1, ts):
         return flight
+    _keep_loops(flight, flight["steps"][:i] + flight["steps"][i + 1 :])
     _remove_at(flight, i, ts)
     return flight
 
@@ -7333,18 +7357,27 @@ def op_remove_step(flight: dict, sid: str, now: Optional[float] = None) -> dict:
 def op_remove_group(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     """``DELETE …/steps/{sid}?group=1``: every step of ``sid``'s group (just
     ``sid`` when it has none), by :func:`op_remove_step`'s rules, last first
-    so the cursor lands right before what followed the group."""
+    so the cursor lands right before what followed the group. The group is
+    the box the person pointed at: the run of CONSECUTIVE steps sharing the
+    id around ``sid`` — another run of the same id is a box of its own."""
     ts = float(now if now is not None else time.time())
     _not_final(flight)
     i = _step_index(flight, sid)
-    gid = (flight["steps"][i].get("group") or {}).get("id")
-    idx = [
-        k
-        for k, s in enumerate(flight["steps"])
-        if k == i or (gid and (s.get("group") or {}).get("id") == gid)
-    ]
+    steps = flight["steps"]
+    gid = (steps[i].get("group") or {}).get("id")
+
+    def _same(k: int) -> bool:
+        return bool(gid) and (steps[k].get("group") or {}).get("id") == gid
+
+    lo, hi = i, i + 1
+    while lo > 0 and _same(lo - 1):
+        lo -= 1
+    while hi < len(steps) and _same(hi):
+        hi += 1
+    idx = list(range(lo, hi))
     if _last_ones(flight, len(idx), ts):
         return flight
+    _keep_loops(flight, steps[:lo] + steps[hi:])
     for k in reversed(idx):
         _remove_at(flight, k, ts)
     return flight
@@ -7369,6 +7402,8 @@ def op_move_step(flight: dict, sid: str, at, now: Optional[float] = None) -> dic
     j = min(at, len(steps) - 1)
     if j == i:
         return flight
+    moved = steps[:i] + steps[i + 1 :]
+    _keep_loops(flight, moved[:j] + [steps[i]] + moved[j:])
     step = steps.pop(i)
     pid = _inside_group(steps, j)
     if pid and parallel_id(step) != pid:
@@ -7590,6 +7625,9 @@ def op_split_off(flight: dict, sid: str, pos=None, now: Optional[float] = None) 
         raise FlightError(
             "whole_chain", 409, "that is the whole route — move the route instead"
         )
+    # A Loop leaving without the stop it repeats from would name a stop its
+    # new line does not have.
+    _keep_loops(flight, moved)
     was = [s["id"] for s in moved]
     new = copy.deepcopy(moved)
     _renumber_after([], new)

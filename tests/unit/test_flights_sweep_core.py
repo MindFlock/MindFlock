@@ -272,3 +272,107 @@ def test_infinity_elsewhere_is_refused_or_read_as_its_default():
         F.op_add_step(f, {"kind": "notify", "config": {}}, at=inf, now=NOW)
     assert ferr.value.error == "bad_at"
     C.lint([{"kind": "loop", "config": {"times": inf}}])  # never raises
+
+
+def test_removing_a_group_box_removes_only_that_run():
+    """Consecutive steps sharing a group id are ONE box; a second run of the
+    same id elsewhere (Duplicate or Undo inside a group never sends `group`,
+    so a stop lands between) is a separate box (docs/flights.md "Groups").
+    ``?group=1`` removed every step with the id anywhere on the route — a box
+    the person never selected went with it."""
+    g = {"id": "g_aaaaaa", "name": "Twice"}
+    f = F.ground(
+        raw_steps=[
+            {"kind": "notify", "title": "A", "config": {}, "group": dict(g)},
+            {"kind": "notify", "title": "B", "config": {}, "group": dict(g)},
+            {"kind": "notify", "title": "Between", "config": {}},
+            {"kind": "notify", "title": "D", "config": {}, "group": dict(g)},
+        ],
+        now=NOW,
+    )
+    assert f["steps"][3]["group"]["id"] == "g_aaaaaa"
+    a = f["steps"][0]["id"]
+    f = F.mutate(f["id"], lambda x: F.op_remove_group(x, a, now=NOW + 1))
+    assert [s["title"] for s in f["steps"]] == ["Between", "D"]
+    # From the lone run's side: only it goes.
+    d = f["steps"][1]["id"]
+    f = F.mutate(f["id"], lambda x: F.op_remove_group(x, d, now=NOW + 2))
+    assert [s["title"] for s in f["steps"]] == ["Between"]
+
+
+def _looped_line():
+    """A grounded line: Build, Test, Loop back to Test (twice), Tell."""
+    f = F.ground(
+        raw_steps=[
+            {"kind": "notify", "title": "Build", "config": {}},
+            {"kind": "notify", "title": "Test", "config": {}},
+            {"kind": "loop", "title": "Again", "config": {"times": 2}},
+            {"kind": "notify", "title": "Tell", "config": {}},
+        ],
+        now=NOW,
+    )
+    test_id = f["steps"][1]["id"]
+    loop_id = f["steps"][2]["id"]
+    f = F.mutate(
+        f["id"],
+        lambda x: x["steps"][2]["config"].update(back_to=test_id),
+    )
+    assert F.loop_target(f, f["steps"][2]) == 1
+    return f, test_id, loop_id
+
+
+def test_removing_the_stop_a_loop_repeats_from_is_refused_naming_the_loop():
+    """Removing the Loop's back_to stop left a Loop that could only fail when
+    it ran ("nothing to repeat"), and Undo re-added the stop under a new id,
+    so it stayed broken. The edit is refused, saying which Loop."""
+    f, test_id, loop_id = _looped_line()
+    with pytest.raises(F.FlightError) as err:
+        F.op_remove_step(f, test_id, now=NOW + 1)
+    assert err.value.status == 409 and err.value.error == "loop_target"
+    assert "Again" in err.value.detail and "Test" in err.value.detail
+    assert [s["title"] for s in f["steps"]] == ["Build", "Test", "Again", "Tell"]
+    # The Loop and its stop together may go; so may stops it does not name.
+    F.op_remove_step(f, f["steps"][3]["id"], now=NOW + 2)
+    F.op_remove_step(f, loop_id, now=NOW + 3)
+    F.op_remove_step(f, test_id, now=NOW + 4)
+    assert [s["title"] for s in f["steps"]] == ["Build"]
+
+
+def test_moving_a_loops_stop_after_it_is_refused():
+    f, test_id, loop_id = _looped_line()
+    with pytest.raises(F.FlightError) as err:
+        F.op_move_step(f, test_id, 3, now=NOW + 1)
+    assert err.value.error == "loop_target" and "Again" in err.value.detail
+    with pytest.raises(F.FlightError):
+        F.op_move_step(f, loop_id, 0, now=NOW + 1)
+    # Moving it while it stays before the Loop is fine.
+    F.op_move_step(f, test_id, 0, now=NOW + 2)
+    assert F.loop_target(f, f["steps"][2]) == 0
+
+
+def test_removing_a_group_holding_a_loops_stop_is_refused_unless_the_loop_goes_too():
+    g = {"id": "g_bbbbbb", "name": "Pair"}
+    f = F.ground(
+        raw_steps=[
+            {"kind": "notify", "title": "A", "config": {}, "group": dict(g)},
+            {"kind": "notify", "title": "B", "config": {}, "group": dict(g)},
+            {"kind": "loop", "title": "Again", "config": {"times": 2}},
+        ],
+        now=NOW,
+    )
+    a = f["steps"][0]["id"]
+    f = F.mutate(f["id"], lambda x: x["steps"][2]["config"].update(back_to=a))
+    with pytest.raises(F.FlightError) as err:
+        F.op_remove_group(f, a, now=NOW + 1)
+    assert err.value.error == "loop_target"
+
+
+def test_splitting_a_loop_off_from_the_stop_it_repeats_is_refused():
+    """Split off carries a Loop into a new line while the stop it repeats
+    from stays behind: the new line's Loop named a stop it does not have."""
+    f, test_id, loop_id = _looped_line()
+    with pytest.raises(F.FlightError) as err:
+        F.op_split_off(f, loop_id, now=NOW + 1)
+    assert err.value.error == "loop_target" and "Again" in err.value.detail
+    # Splitting off from the stop it repeats keeps them together: fine.
+    F.op_split_off(f, test_id, now=NOW + 2)
