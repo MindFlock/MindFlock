@@ -28,8 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the row shown while the create is answered was called "untitled" until
   the real one (named from the task, e.g. `make-me-snake`) replaced it — and
   a failed create left an "untitled" row that came and went. It is now named
-  as the server will name it, the name the dialog previews (the flight
-  builder's create too, from a `C:\…` folder as well).
+  as the server will name it, the name the dialog previews, and becomes the
+  real row in place when the create answers (renamed there if the server
+  numbered it `-2`). With nothing to name it from, no row is added: a
+  "Creating…" note shows until the session appears. The flight builder's
+  create does the same, from a `C:\…` folder as well.
 - **A server error says what went wrong.** A route that raised answered a
   bare "Internal Server Error": the dialog could only say "MindFlock hit an
   error (details in the log)", and the log said only `-> 500` (the

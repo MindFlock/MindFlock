@@ -13,7 +13,13 @@ import { refreshInstances } from "../state/queries";
 import { deviceApi, deviceTitle } from "./devices";
 import { rememberNewSessionChoice, useUi } from "../state/store";
 import { toast } from "./toast";
-import { addPendingSession, clearStaleAlias, failPendingSession, selectSession } from "./sessionActions";
+import {
+  clearStaleAlias,
+  failPendingSession,
+  landPendingSession,
+  selectSession,
+  startPendingCreate,
+} from "./sessionActions";
 import { tokenize } from "../components/dialogs/FlagChips";
 import type { RunDraft } from "../components/dialogs/NewList";
 import { LANE_LABEL, setLaneWhenReady, type Lane } from "./laneActions";
@@ -234,8 +240,10 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
     // Where it was aimed at the press — the picker can move once the dialog
     // has closed and reopened while this POST is still in flight.
     const target = deviceRef.current;
-    // Named as the server will name it (the dialog's preview), not "untitled".
-    const guess = addPendingSession(pendingTitleFor(body), target);
+    // Named as the server will name it (the dialog's preview) — or no row at
+    // all, and a "Creating…" toast, when there is nothing to name it from:
+    // a row called "untitled" never shows during a create.
+    const guess = startPendingCreate(pendingTitleFor(body), target);
     closeDialog();
     try {
       // On another device the create is answered there, and the session joins
@@ -248,6 +256,10 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
         deviceApi(target)<Instance>("/api/instances", { json: anyway ? { ...body, start_anyway: true } : body })
       );
       const inst = { ...made, title: deviceTitle(target, made.title) };
+      // The pending row BECOMES the answer, in place — renamed when the
+      // server numbered it ("-2") — before the refresh, so there is never a
+      // moment with no row, or with two.
+      if (guess) landPendingSession(guess, inst);
       // The create came back 200, so the plan's folder is on disk now — and the
       // question about making it goes with it. A reopen deliberately KEEPS the
       // plan (see planFolderReducer), so without this the next opening would
@@ -271,7 +283,7 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
       // Arming waits for the worktree; it never holds the dialog.
       if (lane !== "leave") void setLaneWhenReady(inst.title, lane, askFirst);
     } catch (err) {
-      failPendingSession(guess);
+      if (guess) failPendingSession(guess);
       failCreate((err as Error).message);
       const ui = useUi.getState();
       // Armed only when there is a reopen to arm it for. Someone who reopened
