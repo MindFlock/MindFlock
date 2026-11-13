@@ -179,3 +179,15 @@ def test_the_engine_is_swapped_never_rebuilt_in_place():
     # — the desktop app — restarts it itself).
     assert "$script:Restart = Stop-EngineServer $Exe" in body
     assert "Start-Process -WindowStyle Hidden -FilePath $Shim -ArgumentList $a" in _PS1
+
+
+def test_install_json_records_the_bare_method_names():
+    """install.json's ``method`` is read back by the updaters (self_update /
+    cli_update) and by the next install.ps1 run: it must be exactly
+    ``uv-tool`` or ``pipx``. A stray ``'uv-tool\\'`` (a PowerShell literal
+    ending in a backslash) shipped once on a branch and broke the CI
+    install check."""
+    import re
+
+    assigned = re.findall(r"^\s*\$InstallMethod = '([^']*)'", _PS1, re.M)
+    assert assigned and set(assigned) <= {"uv-tool", "pipx"}, assigned

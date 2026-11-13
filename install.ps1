@@ -480,7 +480,7 @@ function Install-EngineSwapped([scriptblock]$Install) {
 
 # --force makes re-runs an in-place upgrade (idempotent). An engine first
 # installed with pipx stays a pipx install, as in install.sh.
-$InstallMethod = 'uv-tool\'
+$InstallMethod = 'uv-tool'
 $RecordPath = Join-Path $MfHome 'install.json'
 $PrevMethod = ''
 if (Test-Path -LiteralPath $RecordPath) {
