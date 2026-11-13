@@ -274,3 +274,22 @@ def test_repaint_reproduces_the_screen():
     assert other.capture(codes=True) == t.capture(codes=True)
     assert (other.screen.cursor.x, other.screen.cursor.y) == (1, 1)
     assert other.bracketed_paste and other.app_cursor
+
+
+def test_a_long_unterminated_string_is_not_rescanned_quadratically():
+    # An OSC 52 clipboard copy (or any long OSC/DCS) arrives over many reads;
+    # the terminator search re-walked the whole pending string in Python on
+    # every read, under the host lock: ~1 MiB in 4 KiB reads took ~11 s and
+    # froze every pane meanwhile. It must stay well under a second's work.
+    import time as _time
+
+    t = Term(80, 24)
+    chunk = "A" * 4096
+    started = _time.monotonic()
+    t.feed("\x1b]52;c;")
+    for _ in range(240):  # just under the 1 MiB pending cap
+        t.feed(chunk)
+    t.feed("\x07after")
+    took = _time.monotonic() - started
+    assert "after" in t.render(0)
+    assert took < 3.0, took

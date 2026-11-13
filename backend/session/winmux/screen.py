@@ -489,21 +489,17 @@ class Term:
     def _find_st(s: str, start: int, bel: bool) -> Tuple[int, int]:
         """Index and length of the string terminator (``ESC \\``, or BEL for
         OSC) at or after ``start``; ``(-1, 0)`` when it has not arrived."""
-        k = start
-        n = len(s)
-        while k < n:
-            ch = s[k]
-            if ch == "\x07" and bel:
-                return k, 1
-            if ch == "\x9c":
-                return k, 1
-            if ch == "\x1b":
-                if k + 1 >= n:
-                    return -1, 0
-                if s[k + 1] == "\\":
-                    return k, 2
-            k += 1
-        return -1, 0
+        # str.find, not a per-character Python loop: a long string (an OSC 52
+        # copy) arrives over many reads and is searched again on each one,
+        # under the host lock.
+        best = (-1, 0)
+        for term, tlen in (("\x07", 1), ("\x9c", 1), ("\x1b\\", 2)):
+            if term == "\x07" and not bel:
+                continue
+            k = s.find(term, start)
+            if k >= 0 and (best[0] < 0 or k < best[0]):
+                best = (k, tlen)
+        return best
 
     def _csi(self, seq, params, inter, fin, client, scr, reply, flush) -> None:
         prefix = params[:1] if params[:1] in ("<", "=", ">", "?") else ""
