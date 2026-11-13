@@ -2065,7 +2065,7 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
                 queued["capacity"] = cap
                 if cap.get("short_mb") and queued["why"] in (None, "memory", "warming"):
                     queued["hint"] += (
-                        " One more session needs ~%s MB; %s MB more would have "
+                        " One more agent needs ~%s MB; %s MB more would have "
                         "to be free." % (cap.get("session_mb"), cap["short_mb"])
                     )
             if not footer:

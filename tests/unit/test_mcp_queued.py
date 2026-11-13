@@ -308,7 +308,7 @@ def test_only_a_memory_queue_adds_the_memory_hint(why, blames_memory):
     out = box.spawn_session({"prompt": "p"}, _ctx(clock))
     assert out["hint"].startswith(waiting.QUEUED_HINT)
     assert ("400 MB more would have to be free" in out["hint"]) is blames_memory
-    assert ("One more session needs ~950 MB" in out["hint"]) is blames_memory
+    assert ("One more agent needs ~950 MB" in out["hint"]) is blames_memory
     assert out["capacity"]["short_mb"] == 400  # the numbers stay either way
 
 
