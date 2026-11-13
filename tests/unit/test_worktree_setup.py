@@ -185,7 +185,10 @@ def test_setup_runner_body_crash_marks_failed(tmp_path, monkeypatch):
     assert _wait(lambda: (ws.setup_status(str(wt)) or {}).get("state") == "failed")
     st = ws.setup_status(str(wt))
     assert st["state"] == "failed" and st["rc"] == 1
-    assert not ws.is_running(str(wt), "setup")
+    # The status flips to "failed" a moment before the runner thread drops
+    # its running mark: asked in the same instant, a loaded machine (macOS CI,
+    # 2026-11-13) still read it as running.
+    assert _wait(lambda: not ws.is_running(str(wt), "setup"))
     assert "runner crashed" in ws.log_tail(str(wt), ws.SETUP_LOG)
 
 
@@ -227,7 +230,7 @@ def test_check_runner_body_crash_marks_failed(tmp_path, monkeypatch):
     assert ws.start_check("t", str(wt), "true")
     assert _wait(lambda: (ws.check_status(str(wt)) or {}).get("state") == "failed")
     assert ws.check_status(str(wt))["rc"] == 1
-    assert not ws.is_running(str(wt), "check")
+    assert _wait(lambda: not ws.is_running(str(wt), "check"))
     assert "runner crashed" in ws.log_tail(str(wt), ws.CHECK_LOG)
 
 
