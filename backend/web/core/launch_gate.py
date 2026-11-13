@@ -17,14 +17,24 @@ The gate answers **go / wait / refuse** from three things:
   last :data:`WARMUP_SECONDS`, read from tmux's own ``session_created``, so a
   launch from ANY path counts: the ticket pipeline (another process), a
   flight, a schedule, a terminal attach. Launches this process admitted that
-  have no tmux session yet are counted too. Each one is assumed to still take
-  :func:`warmup_bytes` (``MINDFLOCK_AGENT_WARMUP_MB``, default 700). The gate
-  works out what memory would read once they have grown.
-* **What a session really costs** (:func:`learned_cost`): the 75th
-  percentile of the steady per-session size the memory sampler measures
-  (``core.memory_watch``, through :func:`set_sizes_source`'s seam), and of
-  the peak sizes for agents still warming. With fewer than
-  :data:`MIN_SAMPLES` readings the cost is :func:`warmup_bytes`. The
+  have no tmux session yet are counted too. Each one is assumed to still grow
+  to the learned agent peak (below) from the size it reads now, all of it
+  when unmeasured; with fewer than :data:`MIN_SAMPLES` peaks that peak is
+  :func:`warmup_bytes` (``MINDFLOCK_AGENT_WARMUP_MB``, default 700), never
+  under the steady cost. The gate works out what memory would read once
+  they have grown.
+* **What one more session costs** (:func:`learned_cost`): the 75th
+  percentile of the steady size of each session's AGENT the memory sampler
+  measures (the agent CLI plus the MCP servers it started, ``agent_mb +
+  mcp_mb`` in ``core.memory_watch``, through :func:`set_agent_sizes_source`'s
+  seam), and of those agents' peaks for agents still warming. Not what else
+  runs in a session's panes (``other_mb``: a test run, a build, a dev
+  server): that memory is already gone from what the machine reads as
+  available, and counting it again as the cost of every FUTURE session
+  moved the estimate 637 → 1,780 → 709 MB in three minutes on 2026-11-12
+  while one session ran its tests, holding back sessions there was room
+  for. With fewer than :data:`MIN_SAMPLES` readings the cost is
+  :func:`warmup_bytes`. The
   admission **budget** (:func:`budget`) is ``room = (available - reserve -
   penalties - growth still to come of the warming agents) / session cost``:
   the reserve is the low line (``max(2 GB, general.memory_low_pct`` of RAM,
@@ -148,6 +158,8 @@ __all__ = [
     "capacity",
     "set_sizes_source",
     "session_sizes",
+    "set_agent_sizes_source",
+    "agent_sizes",
 ]
 
 #: The ``error`` a relaunch path answers when its launch was queued here
@@ -295,15 +307,17 @@ def live_cap(total_bytes: float) -> int:
 # --------------------------------------------------------------------------- #
 #: Readings needed before the measured cost replaces :func:`warmup_bytes`.
 MIN_SAMPLES = 3
-#: A reading under this (MB) is a session with nothing running in it (asleep,
-#: just closed), not a sample of what one costs.
+#: An agent reading under this (MB) is a session whose agent is not running
+#: (asleep, exited, just closed), not a sample of what one costs.
 SAMPLE_FLOOR_MB = 50
-#: The learned cost never reads under this (MB): a dozen idle shells must not
-#: make room look unlimited.
+#: The learned cost never reads under this (MB): a few small readings (a
+#: light CLI, an agent mid-restart) must not make room look unlimited.
 COST_FLOOR_MB = 200
 #: A warming agent's learned peak is capped at this multiple of the steady
-#: cost: the sampler's ``peak_mb`` is a session's whole-life peak, and one
-#: that once ran an 8-worker test suite says nothing about a CLI starting.
+#: cost: an agent's peak is its whole-incarnation peak, and one that once
+#: held a huge conversation says little about a CLI starting. (Before
+#: 2026-11-12 the peaks were whole sessions, test runs included, and this
+#: cap was routinely the binding figure.)
 PEAK_CAP_RATIO = 2.5
 #: The reserve never reads under this, whatever ``general.memory_low_pct``.
 RESERVE_FLOOR_BYTES = 2 * _GiB
@@ -322,7 +336,9 @@ PSI_PENALTY_FROM = 5.0
 PSI_PENALTY_DIVISOR = 200.0
 PSI_PENALTY_MAX = 0.15
 
-#: ``() -> ({title: mb}, {title: peak_mb})``: per-session memory readings.
+#: ``() -> ({title: mb}, {title: peak_mb})``: per-session memory readings
+#: (whole sessions for :func:`session_sizes`, agents for
+#: :func:`agent_sizes`).
 SizesSource = Callable[[], Tuple[Dict[str, int], Dict[str, int]]]
 
 
@@ -364,21 +380,9 @@ def _default_sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
                 return mb, peak
     except Exception:  # noqa: BLE001 — no sampler (yet): the rows, or nothing
         pass
-    try:
-        from backend.web.core import events as _events
-
-        rows = _events.sessions_snapshot()
-    except Exception:  # noqa: BLE001
-        return {}, {}
     mb: Dict[str, int] = {}
     peak: Dict[str, int] = {}
-    for r in rows or ():
-        if not isinstance(r, dict) or r.get("device") or r.get("sleeping"):
-            continue
-        m = r.get("memory")
-        title = r.get("title")
-        if not isinstance(m, dict) or not isinstance(title, str):
-            continue
+    for title, m in _row_memory():
         got = _int_map({"mb": m.get("mb"), "peak_mb": m.get("peak_mb")})
         if "mb" in got:
             mb[title] = got["mb"]
@@ -387,8 +391,60 @@ def _default_sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
     return mb, peak
 
 
+def _row_memory() -> List[Tuple[str, dict]]:
+    """``[(title, row["memory"])]`` of this server's published rows that are
+    neither asleep nor another device's. Never raises."""
+    try:
+        from backend.web.core import events as _events
+
+        rows = _events.sessions_snapshot()
+    except Exception:  # noqa: BLE001
+        return []
+    out: List[Tuple[str, dict]] = []
+    for r in rows or ():
+        if not isinstance(r, dict) or r.get("device") or r.get("sleeping"):
+            continue
+        m = r.get("memory")
+        title = r.get("title")
+        if isinstance(m, dict) and isinstance(title, str):
+            out.append((title, m))
+    return out
+
+
+def _default_agent_sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
+    """Each session's AGENT: ``core.memory_watch.session_agent_mb()`` /
+    ``session_agent_peak_mb()`` (agent CLI + its MCP servers, never what
+    else runs in the panes), else the rows' ``memory.agent_mb + mcp_mb``
+    (no peak there: a warming agent then counts at :func:`warmup_bytes`),
+    else nothing. Only in the server process. Never raises."""
+    import sys
+
+    if "backend.web.server" not in sys.modules:
+        return {}, {}
+    try:
+        from backend.web.core import memory_watch as _mw  # type: ignore[attr-defined]
+
+        fn_mb = getattr(_mw, "session_agent_mb", None)
+        fn_peak = getattr(_mw, "session_agent_peak_mb", None)
+        if callable(fn_mb):
+            mb = _int_map(fn_mb())
+            peak = _int_map(fn_peak()) if callable(fn_peak) else {}
+            if mb or peak:
+                return mb, peak
+    except Exception:  # noqa: BLE001 — no sampler (yet): the rows, or nothing
+        pass
+    mb: Dict[str, int] = {}
+    for title, m in _row_memory():
+        got = _int_map({"agent_mb": m.get("agent_mb"), "mcp_mb": m.get("mcp_mb")})
+        if got.get("agent_mb"):
+            mb[title] = got["agent_mb"] + got.get("mcp_mb", 0)
+    return mb, {}
+
+
 _SIZES: SizesSource = _default_sizes
 _SIZES_CACHE: Dict[str, object] = {"at": -1e18, "val": ({}, {})}
+_AGENT_SIZES: SizesSource = _default_agent_sizes
+_AGENT_SIZES_CACHE: Dict[str, object] = {"at": -1e18, "val": ({}, {})}
 
 
 def set_sizes_source(fn: Optional[SizesSource]) -> None:
@@ -399,23 +455,49 @@ def set_sizes_source(fn: Optional[SizesSource]) -> None:
     _SIZES_CACHE.update({"at": -1e18, "val": ({}, {})})
 
 
-def _sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
+def set_agent_sizes_source(fn: Optional[SizesSource]) -> None:
+    """Replace where per-session AGENT readings come from (the launch cost;
+    None restores the sampler). Tests feed it."""
+    global _AGENT_SIZES
+    _AGENT_SIZES = fn or _default_agent_sizes
+    _AGENT_SIZES_CACHE.update({"at": -1e18, "val": ({}, {})})
+
+
+def _cached(
+    fn: SizesSource, cache: Dict[str, object]
+) -> Tuple[Dict[str, int], Dict[str, int]]:
     now = time.monotonic()
-    if now - float(_SIZES_CACHE["at"]) < _PROBE_SECONDS:  # type: ignore[arg-type]
-        return _SIZES_CACHE["val"]  # type: ignore[return-value]
+    if now - float(cache["at"]) < _PROBE_SECONDS:  # type: ignore[arg-type]
+        return cache["val"]  # type: ignore[return-value]
     try:
-        mb, peak = _SIZES()
+        mb, peak = fn()
         val = (_int_map(mb), _int_map(peak))
     except Exception:  # noqa: BLE001 — a reading never fails a launch
         val = ({}, {})
-    _SIZES_CACHE.update({"at": now, "val": val})
+    cache.update({"at": now, "val": val})
     return val
+
+
+def _sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
+    return _cached(_SIZES, _SIZES_CACHE)
+
+
+def _agent_sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
+    return _cached(_AGENT_SIZES, _AGENT_SIZES_CACHE)
 
 
 def session_sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
     """``({title: mb}, {title: peak_mb})`` from the sizes source (cached
-    :data:`_PROBE_SECONDS`). Never raises."""
+    :data:`_PROBE_SECONDS`). Whole sessions: what putting one to sleep
+    frees (the memory shield). Never raises."""
     return _sizes()
+
+
+def agent_sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
+    """``({title: agent mb}, {title: agent peak mb})``: each session's agent
+    CLI and MCP servers, the launch cost (cached :data:`_PROBE_SECONDS`).
+    Never raises."""
+    return _agent_sizes()
 
 
 def _p75(values: List[int]) -> float:
@@ -600,7 +682,7 @@ def budget(
         free_mb=_mb(free),
         short_mb=max(0, _mb(session_b - max(0.0, free))),
     )
-    each = "each ~%s (%s)" % (
+    each = "each agent ~%s (%s)" % (
         _gb(session_b),
         (
             "measured over %d sessions" % out["samples"]
@@ -625,7 +707,7 @@ def budget(
         out["why"] = memory_pressure.describe(snap) or "memory is %s" % lvl
     elif room == 0:
         out["why"] = (
-            "one more session needs ~%s; only %s is free above the reserve (%s)"
+            "one more agent needs ~%s; only %s is free above the reserve (%s)"
             % (_gb(session_b), _gb(max(0.0, free)), sums)
         )
     else:
@@ -671,7 +753,10 @@ def capacity_hint(b: dict) -> str:
     if room is None:
         return "memory is not measured here: spawns are not held back for it"
     if room > 0:
-        return "room for %d more session%s now (~%d MB each); more will queue" % (
+        return (
+            "room for %d more session%s now (~%d MB per agent, plus what it "
+            "runs); more will queue"
+        ) % (
             room,
             "" if room == 1 else "s",
             int(b.get("session_mb") or 0),
@@ -682,8 +767,8 @@ def capacity_hint(b: dict) -> str:
         )
     if b.get("short_mb"):
         return (
-            "no room for another session now: one needs ~%d MB, %d MB more than "
-            "is free above the reserve; a spawn will queue until memory allows"
+            "no room for another session now: its agent needs ~%d MB, %d MB more "
+            "than is free above the reserve; a spawn will queue until memory allows"
             % (int(b.get("session_mb") or 0), int(b.get("short_mb") or 0))
         )
     return "no room for another session now (%s); a spawn will queue" % (
@@ -844,7 +929,9 @@ def assess(*, fresh: bool = False, now: Optional[float] = None) -> dict:
     warming_names |= set(admitted)
     live = None if agents is None else len(names | set(admitted))
     total = float(snap.get("total") or 0)
-    mb, peak = _sizes()
+    # The cost of one MORE session is its agent's: what else runs in the
+    # sessions' panes is already out of ``available`` (2026-11-12).
+    mb, peak = _agent_sizes()
     by_tmux = {_tmux_name(t): t for t in set(mb) | set(peak)}
     warming_titles = {by_tmux[n] for n in warming_names if n in by_tmux}
     cost = learned_cost(mb, peak, warming_titles, _mb(warmup_bytes()))
@@ -2163,3 +2250,4 @@ def _reset_for_tests() -> None:
     _SAVE_STATE["written"] = 0
     _PROBE_CACHE.update({"at": -1e18, "val": None})
     set_sizes_source(lambda: ({}, {}))
+    set_agent_sizes_source(lambda: ({}, {}))

@@ -438,9 +438,12 @@ person, you_drive, flock, fence?, note?, capacity?}`. `capacity` is `{room,
 session_mb, short_mb?, hint}` from `GET /api/memory/capacity` (the launch
 gate's budget, [session-engine.md](session-engine.md#memory-admission-by-measured-cost)):
 how many more sessions this machine has memory for now, at what one has been
-measured to cost. Plan a worker count from it rather than spawning blindly:
-past `room`, spawns queue (`hint` says so, e.g. *room for 2 more sessions now
-(~950 MB each); more will queue*). `room` is `null` where memory is not
+measured to cost. `session_mb` is one session's agent (the CLI and its MCP
+servers), not what the agent goes on to run in its terminal: workers that
+will run heavy test suites or builds need that memory on top. Plan a worker
+count from it rather than spawning blindly: past `room`, spawns queue
+(`hint` says so, e.g. *room for 2 more sessions now (~950 MB per agent, plus
+what it runs); more will queue*). `room` is `null` where memory is not
 measured; `capacity` is absent from a server that predates it. `flock` is true when the person
 has Flock mode on for your session: they want you to decide per prompt
 whether to do it here, split it across MindFlock workers, or start it as a
@@ -716,7 +719,7 @@ How the worker is created:
   so a server restart keeps the worker waiting. The gate also queues a spawn
   when the level reads ok but one more session would not fit above the
   machine's reserve at its measured cost; the `reason` then says what it
-  needs (*one more session needs ~1.0 GB; only 0.4 GB is free above the
+  needs (*one more agent needs ~1.0 GB; only 0.4 GB is free above the
   reserve*).
 - **`capacity`** (both results, when the server has `GET
   /api/memory/capacity`): `{room, session_mb, short_mb?, hint}` after this

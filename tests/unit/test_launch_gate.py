@@ -305,7 +305,7 @@ def test_budget_is_capped_by_windows_headroom_and_says_so():
     assert b["available_mb"] == 10240  # the guest's own number still reported
     assert b["why"] == (
         "room for 3 more sessions: Windows has 5.5 GB available over its own "
-        "reserve of 2.0 GB, each ~1.0 GB (measured over 3 sessions)"
+        "reserve of 2.0 GB, each agent ~1.0 GB (measured over 3 sessions)"
     )
 
 
@@ -328,7 +328,7 @@ def test_windows_with_no_headroom_leaves_no_room_while_still_ok():
     host_free = 2.5 * GiB - 2 * GiB - 1 * GiB
     assert b["free_mb"] == round(host_free / 1024**2)
     assert b["short_mb"] == 1024  # all of one session: nothing is free
-    assert b["why"].startswith("one more session needs ~1.0 GB; only 0.0 GB")
+    assert b["why"].startswith("one more agent needs ~1.0 GB; only 0.0 GB")
     assert "Windows has 2.5 GB available over its own reserve" in b["why"]
 
 

@@ -200,14 +200,15 @@ def test_the_cap_bounds_the_room():
 def test_one_more_short_says_how_much_it_needs():
     b = gate.budget(_snap(available=3 * GiB + 400 * MiB), _cost(), reserve=3 * GiB)
     assert b["room"] == 0 and b["short_mb"] == 600
-    assert b["why"].startswith("one more session needs ~1.0 GB; only 0.4 GB is free")
+    assert b["why"].startswith("one more agent needs ~1.0 GB; only 0.4 GB is free")
     hint = gate.capacity_hint(b)
-    assert "one needs ~1000 MB, 600 MB more" in hint and "queue" in hint
+    assert "its agent needs ~1000 MB, 600 MB more" in hint and "queue" in hint
 
 
 def test_capacity_hints():
     assert gate.capacity_hint({"room": 2, "session_mb": 900}) == (
-        "room for 2 more sessions now (~900 MB each); more will queue"
+        "room for 2 more sessions now (~900 MB per agent, plus what it runs); "
+        "more will queue"
     )
     assert "not measured" in gate.capacity_hint({"room": None})
     low = gate.capacity_hint({"room": 0, "level": "low", "why": "memory is low: x"})
@@ -218,7 +219,10 @@ def test_capacity_hints():
 # the gate on the budget
 # --------------------------------------------------------------------------- #
 def _sized(mb, peak=None):
+    """Sessions whose whole tree IS their agent (nothing else in the panes):
+    both seams read the same."""
     gate.set_sizes_source(lambda: (dict(mb), dict(peak or {})))
+    gate.set_agent_sizes_source(lambda: (dict(mb), dict(peak or {})))
 
 
 def test_the_gate_uses_the_measured_cost(monkeypatch):
@@ -253,9 +257,9 @@ def test_an_automatic_start_waits_when_one_more_would_not_fit(monkeypatch):
     _sized({"a": 1000, "b": 1000, "c": 1000})
     v = gate.decide("auto")
     assert v["decision"] == "wait" and v["why"] == "memory"
-    assert v["reason"].startswith("one more session needs ~1.0 GB")
+    assert v["reason"].startswith("one more agent needs ~1.0 GB")
     rec = gate.gate_auto("w1", lambda: None, kind="spawn")
-    assert rec is not None and rec["reason"].startswith("one more session needs")
+    assert rec is not None and rec["reason"].startswith("one more agent needs")
     # A person is NOT asked over the room estimate alone (the level reads
     # ok): it paces automatic starts only (owner, 2026-11-10).
     p = gate.decide("person")
