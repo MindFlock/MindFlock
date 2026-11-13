@@ -9,7 +9,6 @@
  *                   (`STOP_MIME`) lands in — the nearest to the pointer, else
  *                   the end of the line;
  *  - `canShift`     whether ⇤ / ⇥ (and ← / →) can move a stop one place;
- *  - `undoPayload`  what Undo tacks back after a stop was removed;
  *  - `menuItemsFor` a box's right-click menu, by its kind and state;
  *  - `haltToggle` / `haltMark`  a halt point's toggle and the badge a box
  *                   wears while it is one (docs/flights.md "Halt points");
@@ -25,7 +24,7 @@
  *                   words (the form's hints and its read-back sentence). */
 
 import type { BirdTone, Diagram, DiagramNode, Placed } from "./flightDiagram";
-import { STOP_MIME, type Flight, type FlightStep, type OnFail } from "./flights";
+import { STOP_MIME, type FlightStep, type OnFail } from "./flights";
 import { FLYWAY_MIME } from "./skyLayout";
 import { FIX_ROUNDS, VERIFY_ON_FAIL } from "./verifyStop";
 import { askOffers } from "./stopAsks";
@@ -120,16 +119,6 @@ export function stopDropOf(dt: Pick<DataTransfer, "getData"> | null | undefined)
 export function canShift(stops: readonly DiagramNode[], i: number, dir: -1 | 1, insertFrom: number): boolean {
   const to = i + dir;
   return !!stops[i]?.editable && stops[i].kind !== "group" && to >= insertFrom && to >= 0 && to < stops.length && !!stops[to].editable;
-}
-
-// --- Undo ---------------------------------------------------------------------------
-
-/** What Undo tacks back on after `step` (at `index`) was removed: the same
- * stop, at its old index while that is still ahead of the flight (after its
- * current stop, and not past the end), else at the end (`at` left out). */
-export function undoPayload(step: FlightStep, index: number, flight: Pick<Flight, "cursor" | "steps"> | null): { step: FlightStep; at?: number } {
-  const ahead = !!flight && index > flight.cursor && index < flight.steps.length;
-  return ahead ? { step, at: index } : { step };
 }
 
 // --- The right-click menu --------------------------------------------------------------

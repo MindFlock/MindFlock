@@ -170,15 +170,6 @@ export type DiffMode = "split" | "unified";
  * (matches the header badge), "head" = uncommitted only. */
 export type DiffBase = "fork" | "head";
 
-export function getDiffMode(): DiffMode {
-  let m = "split";
-  try {
-    m = localStorage.getItem("cs_diffmode") || "split";
-  } catch {
-    /* storage unavailable */
-  }
-  return m === "unified" || m === "split" ? m : "split";
-}
 
 export function setDiffMode(m: DiffMode): void {
   try {

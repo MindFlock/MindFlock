@@ -39,6 +39,7 @@ List all sessions. Each item:
   "pr_url": "…",              // when a PR exists
   "failed_step": "…",         // when stage == "interrupt" (pre-commit ✗)
   "stage_reset": false,       // ↺ "back to idle" pin — show the ladder from the start
+  "pr_merged": false,         // stage is "pushed" only because the branch's PR was squash-merged: nothing is ready for a PR
   "activity": "working|clarify|idle|offline",
   "activity_since": 1756200000.0,  // epoch the reported activity last changed; 0 = no live reading
   "background": [              // jobs the agent backgrounded and left running past its turn. Null on the
@@ -130,6 +131,14 @@ base (a configured default like `staging`, or one chosen in the dialog the
 server never sees), so a base-scoped lookup would miss the real PR and wedge the
 chip on `pushed`. The base still keys the "is there work to push" (`beyond`)
 test; only the PR lookup drops the base filter.
+`pr_merged` covers the one case where that git-derived `stage` misleads: after a
+**squash merge** the branch's own commits stay beyond the base for good, so
+`stage` keeps reading `pushed` (next: Open PR) about work whose PR already
+merged. The PR lookup carries the PR's head commit (`gh` `headRefOid`, REST
+`head.sha`), and `pr_merged` is true while the branch is exactly that commit of
+a `MERGED` PR. `stage` is unchanged (Open PR is back with the next commit); the
+Needs-you lists (`attentionItems`, the phone's `needsYouKind`) leave such a
+session out of "pushed — ready for PR".
 `stage_reset` is the **↺ "back to idle"** pin
 (`POST /api/instances/{title}/reset-stage`, below), published *alongside*
 `stage` and never instead of it. The row's `stage` stays exactly what git says,
