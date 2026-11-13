@@ -751,6 +751,9 @@ class Term:
         ``[offset/history]`` position indicator at the top right."""
         scr = self.screen
         hsize = len(scr.history)
+        # The history may have shrunk under copy mode (clear-history, ESC[3J,
+        # a lower history-limit): never index lines that are gone.
+        offset = max(0, min(int(offset), hsize))
         top = hsize - offset
         out = ["\x1b[0m\x1b[?25l\x1b[H\x1b[2J"]
         for y in range(scr.lines):
