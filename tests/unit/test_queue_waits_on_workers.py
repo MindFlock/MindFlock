@@ -563,6 +563,39 @@ def test_drain_keeps_queues_of_another_servers_new_sessions(fl, monkeypatch):
     assert "elsewhere" not in pq.all_titles() and ports.get("elsewhere") is None
 
 
+def test_a_gone_sessions_port_block_is_released_with_no_queue_anywhere(fl, monkeypatch):
+    """The port sweep rides the drain pass, which used to return early when
+    no session had a queued prompt — most passes. A block whose session left
+    without passing through a delete route (a failed Start, a workspace
+    removed from Settings) was then never released. It is now, queue or
+    not, and a pass with nothing changed reads no port file."""
+    from backend.web.core import engine as eng
+    from backend.web.core import ports
+
+    monkeypatch.setattr(qd, "_drain_one_queue", lambda t: None)
+    monkeypatch.setattr(qd, "_watch_limited_sessions", lambda: None)
+    monkeypatch.setattr(qd, "_drain_mailboxes", lambda: None)
+    disk = {"elsewhere"}
+    monkeypatch.setattr(eng, "disk_view", lambda: eng.DiskView(frozenset(disk), {}))
+    ports.allocate("ghost")
+    ports.allocate("elsewhere")
+    assert pq.all_titles() == []
+    qd._drain_prompt_queues()
+    assert ports.get("ghost") is None
+    assert ports.get("elsewhere") is not None  # another server's, still live
+    # Gone elsewhere too: released on a later pass, still with no queue.
+    disk.clear()
+    qd._drain_prompt_queues()
+    assert ports.get("elsewhere") is None
+    # Nothing changed since: the pass does not read the port file.
+    loads = []
+    real = ports._load
+    monkeypatch.setattr(ports, "_load", lambda: loads.append(1) or real())
+    qd._drain_prompt_queues()
+    qd._drain_prompt_queues()
+    assert loads == []
+
+
 def test_drain_keeps_the_queue_of_a_worker_still_being_created(fl, monkeypatch):
     """A session reaches state.json only once it has started (minutes for a
     provisioned workspace); a held worker's queue must survive that window
