@@ -3162,7 +3162,17 @@ sessions' envelopes only), a few read-only boot calls (`/api/config` carries
 `/api/person`, `/api/voice[/help]`, `/api/mindflock/status`) and the speech
 POSTs (`/api/voice/transcribe`, `/api/voice/speak`, `/api/paste-image`).
 Everything else → `403 {"error": "not part of your invite"}` (websocket close
-4403). The routes below are the owner's: a guest gets the same 403, a relayed
+4403). Four of the allowed calls are narrowed to the reach inside their
+handlers, because the path alone does not say which session they touch:
+`/api/paste-image` needs a `?session=` the link reaches (the same 403
+otherwise, and with none: it would write into the owner's config dir);
+`POST …/messages` refuses a `from` naming a session off the link (403);
+`GET …/thread` lists only the members on the link and what passed between
+them (a shared sub-session's parent is usually not on it: `parent` is null);
+and `/api/devices` answers with `devices: []`. `WS /api/events` is filtered by
+the link as it stands now, so narrowing or revoking a link takes effect on a
+stream that is already open, and the public tunnel stops within a second of
+the access gate being turned off. The routes below are the owner's: a guest gets the same 403, a relayed
 device 403, a change needs `may_configure`.
 
 | Method | Path | Behavior |

@@ -2243,9 +2243,16 @@ def remote_hello(request: Request) -> JSONResponse:
 
 
 @app.get("/api/devices")
-def list_devices() -> JSONResponse:
-    """Discovered MindFlock devices on the tailnet (for the sidebar groups)."""
-    return JSONResponse(_remote.devices_json())
+def list_devices(request: Request = None) -> JSONResponse:  # type: ignore[assignment]
+    """Discovered MindFlock devices on the tailnet (for the sidebar groups).
+
+    A guest link gets the shape with no devices in it: the page needs the
+    answer to draw its rail, and the owner's other machines (host names,
+    tailnet addresses, versions, session counts) are none of a guest's."""
+    body = _remote.devices_json()
+    if _guests.scope_guest(request) is not None:
+        body = dict(body, devices=[], remote_control=False)
+    return JSONResponse(body)
 
 
 @app.post("/api/devices/{device}/connect")
@@ -4322,6 +4329,14 @@ async def paste_image(request: Request) -> JSONResponse:
     }.get(ctype, ".png" if ctype.startswith("image/") else ".bin")
     orig = _safe_upload_name(request.query_params.get("name") or "")
     title = request.query_params.get("session") or ""
+    # A guest link pastes into the panes it was given and nowhere else. This
+    # is a GLOBAL guest POST (guests.GLOBAL_POST_OK), so the gate never sees
+    # ``?session=``: without this a guest could write a file into any
+    # session's worktree — or, with no session, into the owner's config dir —
+    # and read that folder's path in the answer.
+    guest = _guests.scope_guest(request)
+    if guest is not None and title not in _guests.reach(guest):
+        return JSONResponse({"error": "not part of your invite"}, status_code=403)
     inst = ENGINE.instances.get(title) if title else None
 
     def _store() -> str:
@@ -7863,7 +7878,9 @@ def _query_bool(raw, default: bool) -> bool:
 
 
 @app.post("/api/instances/{title}/messages")
-async def post_message(title: str, payload: dict) -> JSONResponse:
+async def post_message(
+    title: str, payload: dict, request: Request = None  # type: ignore[assignment]
+) -> JSONResponse:
     """Leave a message for ``title``'s agent.
 
     Body ``{"text", "from"?, "reply_to"?, "delivery"?: auto|inbox|now,
@@ -7903,6 +7920,11 @@ async def post_message(title: str, payload: dict) -> JSONResponse:
         return bad('"from" may not start with "peer:"')
     if sender == title:
         return bad("a session cannot message itself")
+    guest = _guests.scope_guest(request)
+    if guest is not None and sender and sender not in _guests.reach(guest):
+        # A guest speaks for the sessions on its link only: naming another
+        # would put words in the mouth of one of the owner's other agents.
+        return JSONResponse({"error": "not part of your invite"}, status_code=403)
     if sender and sender not in ENGINE.instances:
         return bad("unknown sender session: %s" % sender)
     reply_to = payload.get("reply_to") or None
@@ -14278,9 +14300,30 @@ async def instance_order_set(
     return JSONResponse(body, status_code=code)
 
 
+def _guest_thread(body: dict, guest: dict) -> dict:
+    """A family thread as a guest link may see it: the members on the link,
+    and what passed between those. A shared sub-session's PARENT is often not
+    on the link — its status, branch, last report and the messages the two
+    exchanged are the owner's."""
+    ok = set(_guests.reach(guest))
+    out = dict(body)
+    if out.get("parent") not in ok:
+        out["parent"] = None
+    out["members"] = [m for m in body.get("members") or [] if m.get("title") in ok]
+    out["items"] = [
+        it
+        for it in body.get("items") or []
+        if all(not who or who in ok for who in (it.get("from"), it.get("to")))
+    ]
+    return out
+
+
 @app.get("/api/instances/{title}/thread")
 async def instance_thread(
-    title: str, limit: Optional[str] = None, before: Optional[str] = None
+    title: str,
+    limit: Optional[str] = None,
+    before: Optional[str] = None,
+    request: Request = None,  # type: ignore[assignment]
 ) -> JSONResponse:
     """The session's family thread — read-only, never marks mail read.
 
@@ -14309,6 +14352,9 @@ async def instance_thread(
     if terr is not None:
         status = 404 if terr.startswith("instance not found") else 400
         return JSONResponse({"error": terr}, status_code=status)
+    guest = _guests.scope_guest(request)
+    if guest is not None:
+        body = _guest_thread(body, guest)
     return JSONResponse(body)
 
 

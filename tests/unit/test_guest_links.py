@@ -10,6 +10,8 @@ the owner's ``/api/guests`` routes (gate-off 409, a guest can't reach them).
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -934,12 +936,6 @@ class _PasteInst:
         return self.Path
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="server.py paste_image takes ?session= without checking the guest's "
-    "reach (fix outside the guest-link fence: refuse a title not in "
-    "guests.reach(scope_guest(request)))",
-)
 def test_a_guest_cannot_paste_into_a_session_off_its_link(link, tmp_path, monkeypatch):
     # /api/paste-image is a GLOBAL guest POST (a pasted image for the guest's
     # own pane), so the gate never sees its ?session= — and the handler writes
@@ -959,3 +955,81 @@ def test_a_guest_cannot_paste_into_a_session_off_its_link(link, tmp_path, monkey
     )
     written = [p for p in other.rglob("*") if p.is_file()]
     assert r.status_code == 403 and not written
+
+
+def test_a_guest_pastes_into_a_session_on_its_link_and_nowhere_else(
+    link, tmp_path, monkeypatch
+):
+    _, tok = link
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
+    monkeypatch.setattr(server, "_exclude_artifacts", lambda folder: None)
+    mine = tmp_path / "alpha-worktree"
+    mine.mkdir()
+    monkeypatch.setitem(server.ENGINE.instances, "alpha", _PasteInst(mine))
+    c = _guest_client(tok)
+    png = {"Content-Type": "image/png"}
+    r = c.post("/api/paste-image?session=alpha", content=b"\x89PNG", headers=png)
+    assert r.status_code == 200, r.text
+    assert [p for p in mine.rglob("*") if p.is_file()]
+    # No session named: that would land under the owner's config dir.
+    r = c.post("/api/paste-image", content=b"\x89PNG", headers=png)
+    assert r.status_code == 403
+
+
+def test_a_guest_cannot_speak_as_a_session_off_its_link(link, monkeypatch):
+    _, tok = link
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
+    for t in ("alpha", "beta", "gamma"):
+        monkeypatch.setitem(server.ENGINE.instances, t, _PasteInst("/nowhere"))
+    c = _guest_client(tok)
+    r = c.post("/api/instances/alpha/messages", json={"text": "hi", "from": "gamma"})
+    assert r.status_code == 403, r.text
+    # The same call with no sender, or one on the link, is not refused here.
+    for sender in ("", "beta"):
+        r = c.post("/api/instances/alpha/messages", json={"text": "hi", "from": sender})
+        assert r.status_code != 403, (sender, r.text)
+
+
+def test_a_guest_thread_shows_only_the_links_family(link):
+    rec, _ = link
+    body = {
+        "title": "alpha",
+        "parent": "owner-main",
+        "members": [
+            {"title": "alpha", "role": "self"},
+            {"title": "owner-main", "role": "parent", "branch": "secret/plan"},
+        ],
+        "items": [
+            {"type": "spawn", "from": "owner-main", "to": "alpha", "text": "seed"},
+            {"type": "message", "from": "alpha", "to": "owner-main", "text": "done"},
+            {"type": "message", "from": "alpha", "to": "beta", "text": "fyi"},
+            {"type": "message", "from": "", "to": "alpha", "text": "from the cli"},
+        ],
+        "more": False,
+    }
+    seen = server._guest_thread(body, {"sessions": ["alpha", "beta"]})
+    assert seen["parent"] is None
+    assert [m["title"] for m in seen["members"]] == ["alpha"]
+    assert [i["text"] for i in seen["items"]] == ["fyi", "from the cli"]
+    assert "secret/plan" not in json.dumps(seen)
+
+
+def test_a_guest_sees_no_other_devices(link, monkeypatch):
+    _, tok = link
+    monkeypatch.setattr(
+        server._remote,
+        "devices_json",
+        lambda: {
+            "self": {"device": "laptop", "host": "Laptop", "os": "linux"},
+            "remote_control": True,
+            "devices": [{"device": "mini", "host": "Mac mini", "ip": "100.1.2.3"}],
+        },
+    )
+    body = _guest_client(tok).get("/api/devices").json()
+    assert body["devices"] == [] and body["remote_control"] is False
+    assert "100.1.2.3" not in json.dumps(body)
+    # The owner still sees them.
+    assert (
+        server.list_devices(None).body
+        and b"100.1.2.3" in server.list_devices(None).body
+    )
