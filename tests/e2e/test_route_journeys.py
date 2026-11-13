@@ -100,6 +100,15 @@ def _badge(page):
     return page.locator("#notif-badge")
 
 
+def _is_retry(entry: dict) -> bool:
+    """A history line a Retry press wrote (``op_retry``: resumed / retry)."""
+    return entry.get("event") == "resumed" and entry.get("note") == "retry"
+
+
+def _retries(flight: dict) -> int:
+    return sum(1 for h in flight.get("history") or [] if _is_retry(h))
+
+
 # --------------------------------------------------------------------------- #
 # a route waits for me, I press Done, it lands
 # --------------------------------------------------------------------------- #
@@ -212,24 +221,33 @@ def test_a_failed_stop_halts_the_route_and_skip_carries_on(mf_server, page, open
     expect(row.get_by_role("button", name="Retry")).to_be_visible()
     expect(row.get_by_role("button", name="Skip")).to_be_visible()
 
+    retries_before = _retries(halted)
     row.get_by_role("button", name="Retry").click()
     # It runs again and fails again: halted at the same stop, never "running"
-    # for good, and still one row.
+    # for good, and still one row. Read from the route's own history, not by
+    # catching it "running": `exit 3` is over well inside one poll, and a
+    # test that had to see the state in between failed whenever it missed it
+    # (CI, 2026-11-13: "saw running: False" on a route that had done exactly
+    # the right thing).
     deadline = time.time() + ROUTE_TIMEOUT_S
-    seen_running = False
     f: dict = {}
     while time.time() < deadline:
         f = _flight(mf_server, fid)
-        if f.get("state") == "running":
-            seen_running = True
-        if seen_running and f.get("state") == "halted":
+        hist = f.get("history") or []
+        last_retry = max((i for i, h in enumerate(hist) if _is_retry(h)), default=-1)
+        if (
+            _retries(f) == retries_before + 1
+            and f.get("state") == "halted"
+            and last_retry < len(hist) - 1  # it failed again AFTER the retry
+        ):
             break
         time.sleep(0.2)
     else:
         raise AssertionError(
-            "Retry did not run the stop again and halt (saw running: %s): %r"
-            % (seen_running, {k: f.get(k) for k in ("state", "reason", "cursor")})
+            "Retry did not run the stop again and halt: %r"
+            % {k: f.get(k) for k in ("state", "reason", "cursor", "history")}
         )
+    assert int(f.get("cursor") or 0) == 0
     expect(badge).to_have_text("1", timeout=15_000)
 
     expect(row.get_by_role("button", name="Skip")).to_be_visible(timeout=15_000)
