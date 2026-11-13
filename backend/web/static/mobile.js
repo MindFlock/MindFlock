@@ -1264,7 +1264,9 @@
     if (ss.inBell) return ss.reason === "checks_failing" ? "checks" : "broken";
     // A lane that STOPS at push is finished there (sidebar/ordering.ts).
     var lane = inst.lane && inst.lane.target ? inst.lane.target : inst.autopilot && inst.autopilot.depth;
-    if (inst.stage === "pushed" && lane !== "push") return "ready";
+    // Not one whose PR already merged by squash (`pr_merged`: the branch is
+    // exactly the commit that PR merged) — ordering.ts attentionItems.
+    if (inst.stage === "pushed" && lane !== "push" && !inst.pr_merged) return "ready";
     return "";
   }
   // A verify checker (`hidden_by: "verify"`; a row without the flag goes by

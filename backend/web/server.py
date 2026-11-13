@@ -12871,7 +12871,13 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
     note = str(payload.get("note", "") or "")
     before = _test_plans.get(plan_id) or {}
     was_failing = bool(_test_plans.failed_steps(before))
-    was_open = bool(before) and bool(_test_plans.open_human_steps(before))
+    # A plan with no current run asks nothing yet (open_human_steps is [] for
+    # it, as the UI shows) — but this very answer opens one, and when it is
+    # also the last thing owed, the flight parked on the plan must hear it.
+    was_open = bool(before) and (
+        bool(_test_plans.open_human_steps(before))
+        or _test_plans._current_run(before) is None
+    )
     try:
         plan = _test_plans.record_result(plan_id, step_id, result, note, by="human")
     except ValueError as err:

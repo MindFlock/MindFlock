@@ -217,3 +217,34 @@ def test_a_verify_checker_needs_you_only_for_its_verify():
     # "What needs me" reads the same list: the checker's verify, never its agent.
     assert "verify-p3" in out["said"]
     assert "verify-p1" not in out["said"] and "verify-p2" not in out["said"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_a_squash_merged_pr_is_not_ready_for_a_pr():
+    """``pr_merged`` on the row (the branch is exactly the commit its merged
+    PR was at): the stage still reads "pushed", and nothing is ready for a PR
+    — the desktop's rule (sidebar/ordering.ts ``attentionItems``)."""
+    js = JS.read_text()
+    src = js[js.index("  var SESSION_STATES = {") : js.index("  function poll() {")]
+    rows = [
+        {"title": "ready", "activity": "idle", "stage": "pushed"},
+        {"title": "merged", "activity": "idle", "stage": "pushed", "pr_merged": True},
+        {"title": "again", "activity": "idle", "stage": "pushed", "pr_merged": False},
+    ]
+    script = (
+        "var localStorage = { getItem: function () { return null; }, setItem: function () {} };\n"
+        + src
+        + "\nvar rows = "
+        + json.dumps(rows)
+        + ";\n"
+        "console.log(JSON.stringify(rows.map(function (i) { return [i.title, needsYouKind(i)]; })));\n"
+    )
+    out = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=60
+    )
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == [
+        ["ready", "ready"],
+        ["merged", ""],
+        ["again", "ready"],
+    ]
