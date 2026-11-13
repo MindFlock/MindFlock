@@ -145,6 +145,33 @@ function nativeServerEnv (env, home) {
   return out
 }
 
+// Is the native engine whole? A failed update on Windows once left the tool
+// venv half-deleted (2026-11-13: no Lib, `mindflock.exe --version` ->
+// "ModuleNotFoundError: No module named 'backend'") while the old server kept
+// serving from memory. `mindflock --version` is the cheap probe: it starts the
+// engine's own python from its venv and imports backend. A developer
+// checkout's venv python imports the package instead. null: nothing to probe.
+function engineHealthCommand ({ exe, repo }) {
+  if (repo) {
+    return {
+      file: path.win32.join(repo, '.venv', 'Scripts', 'python.exe'),
+      args: ['-c', 'import backend.cli'],
+      cwd: repo,
+    }
+  }
+  return exe ? { file: exe, args: ['--version'] } : null
+}
+
+// The probe's verdict: '' when the engine answered, else one line saying
+// why not (its last output line — the ImportError — or the exit code). A
+// probe that timed out or couldn't be spawned says nothing (`code` null):
+// "broken" sends the person to a reinstall, so it must be a real answer.
+function engineHealthVerdict (code, output) {
+  if (code === 0 || code == null) return ''
+  const last = String(output || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop()
+  return last || ('it exited with code ' + code)
+}
+
 // taskkill's arguments for a whole process tree, forcibly.
 function taskkillArgs (pid) {
   return ['/T', '/F', '/PID', String(pid)]
@@ -188,6 +215,8 @@ module.exports = {
   decideEngine,
   nativeServeCommand,
   nativeTokenCommand,
+  engineHealthCommand,
+  engineHealthVerdict,
   nativeServerEnv,
   taskkillArgs,
   killServerScript,

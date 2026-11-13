@@ -97,7 +97,8 @@ test('every update button runs updateEverything; no second installer call site',
   assert.match(mainJs, /ipcMain\.handle\('engine:install-state', \(\) => engineRunState\(\)\)/)
   // startInstall is reached from the run (and the first-run offline page) only.
   const sites = mainJs.match(/startInstall\(/g) || []
-  assert.deepEqual(sites.length, 3, 'definition + first-run + updateEverything')
+  assert.deepEqual(sites.length, 4, 'definition + first-run + installEngineForUpdate (install, repair)')
+  assert.match(fn('async function updateEverything'), /await installEngineForUpdate\(plan\.ref\)/)
   assert.ok(!/engineNotice \? engineNotice\.ref : INSTALL_REF/.test(mainJs))
   // The engine toast no longer restarts the server itself.
   const toast = mainJs.slice(mainJs.indexOf('function showEngine(info)'), mainJs.indexOf('// Cover the case where'))
@@ -106,7 +107,7 @@ test('every update button runs updateEverything; no second installer call site',
 
 test('an engine-only update stops the server, waits for the port, then starts and reports', () => {
   const run = fn('async function updateEverything')
-  const engine = run.indexOf('startInstall(plan.ref)')
+  const engine = run.indexOf('installEngineForUpdate(plan.ref)')
   const stop = run.indexOf('await stopEngineServer()')
   const swap = run.indexOf('autoUpdater.quitAndInstall(true, true)')
   assert.ok(engine < stop && stop < swap)
@@ -139,4 +140,46 @@ test('the skew guard never downgrades and never stays silent', () => {
 test('update.js ships with the app', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'))
   assert.ok(pkg.build.files.includes('update.js'))
+})
+
+// ---------------------------------------------------------------------------
+// Native Windows: a failed engine update never leaves a broken engine serving
+// (2026-11-13: install.ps1's in-place `uv tool install --force` under the
+// running server left the venv without Lib; the server 500'd on its next
+// import and the UI only said "MindFlock hit an error").
+
+test('native Windows: install.ps1 is asked to stop the server for the swap', () => {
+  const start = fn('function startInstall')
+  assert.match(start, /if \(WIN_NATIVE\) envAdds\.MINDFLOCK_INSTALL_STOP_SERVER = '1'/)
+  // …and an update run restarts it itself (no second start racing it).
+  assert.match(fn('function installFinish'), /if \(code === 0 && updateRun\.state !== 'running'\) startServerIfNeeded\(\)/)
+})
+
+test('a failed engine update is checked against the engine, then repaired or handed to the offline page', () => {
+  const f = fn('async function installEngineForUpdate')
+  const probe = f.indexOf('await probeNativeEngine(60000)')
+  const intact = f.indexOf('if (!why) {')
+  const stop = f.indexOf('await stopEngineServer()')
+  const again = f.indexOf('startInstall(ref)', stop)
+  const reprobe = f.indexOf('await probeNativeEngine(60000)', again)
+  const broken = f.indexOf("setDiag('engine-broken', why)")
+  const offline = f.indexOf('showOffline(true)')
+  assert.ok(f.indexOf('if (!WIN_NATIVE)') < probe, 'WSL / Linux / macOS keep their message')
+  assert.ok(probe < intact && intact < stop && stop < again && again < reprobe && reprobe < broken && broken < offline)
+  // Intact engine (install.ps1 put it back): the stopped server comes back.
+  assert.match(f.slice(intact, stop), /if \(await portFree\(PORT\)\) await restartServer\(\)/)
+  assert.match(f, /Your engine was left as it was and is running again/)
+  assert.match(f, /Use “Repair the engine” on the page MindFlock is showing/)
+})
+
+test('the offline page learns a broken native engine from a real probe', () => {
+  const diag = fn('function refreshDiag')
+  assert.match(diag, /probeNativeEngine\(20000\)\.then/)
+  assert.match(diag, /done\(why \? 'engine-broken' : 'starting', why\)/)
+  assert.ok(diag.indexOf("if (install.state === 'running') return done('starting')") > 0,
+    'an install in flight (venv moved aside) is not "broken"')
+  const probe = fn('function probeNativeEngine')
+  assert.match(probe, /eng\.engineHealthCommand\(\{ exe: findNativeEngine\(\), repo: WIN_REPO \}\)/)
+  assert.match(probe, /eng\.engineHealthVerdict\(code, out\)/)
+  assert.match(probe, /windowsHide: true/)
 })

@@ -579,16 +579,60 @@ function setDiag(state, detail) {
   console.log('[mindflock] diag:', state, detail || '')
 }
 
+// Native Windows: does the engine on disk still run? '' when it does (or the
+// probe couldn't tell), else why not — see eng.engineHealthCommand. Never
+// rejects. `engineBroken` keeps the last answer for the offline page.
+let engineBroken = ''
+function probeNativeEngine(timeoutMs) {
+  return new Promise((resolve) => {
+    const spec = eng.engineHealthCommand({ exe: findNativeEngine(), repo: WIN_REPO })
+    if (!spec) return resolve('mindflock.exe is missing')
+    let out = ''
+    let settled = false
+    let timer = null
+    const finish = (code) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(eng.engineHealthVerdict(code, out))
+    }
+    let child
+    try {
+      child = spawn(spec.file, spec.args, {
+        cwd: spec.cwd || os.homedir(),
+        env: eng.nativeServerEnv(process.env, os.homedir()),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+    } catch (e) { return finish(null) }
+    const take = (d) => { out = (out + d).slice(-4000) }
+    child.stdout.on('data', take)
+    child.stderr.on('data', take)
+    child.on('error', () => finish(null))
+    child.on('exit', (code) => finish(code))
+    timer = setTimeout(() => { try { child.kill() } catch (e) {} finish(null) }, timeoutMs || 30000)
+  })
+}
+
 function refreshDiag() {
   if (diagInFlight || Date.now() - diagAt < DIAG_STALE_MS) return
   diagInFlight = true
   const done = (state, detail) => { diagInFlight = false; setDiag(state, detail) }
   if (WIN_NATIVE) {
-    // No WSL to probe: the engine is there or it isn't.
+    // No WSL to probe: the engine is there or it isn't — and when it is,
+    // whether it still runs (a half-deleted venv answers `--version` with
+    // "No module named 'backend'"; the offline page then offers the repair
+    // instead of a server log full of ImportErrors).
     const there = WIN_REPO
       ? fs.existsSync(path.join(WIN_REPO, '.venv', 'Scripts', 'python.exe'))
       : !!findNativeEngine()
-    return done(there ? 'starting' : 'not-installed')
+    if (!there) return done('not-installed')
+    if (install.state === 'running') return done('starting')
+    probeNativeEngine(20000).then((why) => {
+      engineBroken = why
+      done(why ? 'engine-broken' : 'starting', why)
+    })
+    return
   }
   const win32 = WIN_WSL
   try {
@@ -859,7 +903,10 @@ function installFinish(code) {
   // reports the OLD version, which is what the toast already told the user).
   engineNotice = null
   if (code === 0 && install.firstRun) firstRunDeps = true
-  if (code === 0) startServerIfNeeded()
+  if (code === 0) engineBroken = ''
+  // An update run (updateEverything) restarts the server itself once the
+  // engine is in place; starting one here would be a second start racing it.
+  if (code === 0 && updateRun.state !== 'running') startServerIfNeeded()
 }
 
 // macOS ships /usr/bin/git as a stub that does nothing but pop Apple's Command
@@ -1028,11 +1075,16 @@ function startInstall(ref, opts) {
   //   MINDFLOCK_INSTALL_NO_RESTART  this app restarts the server itself after
   //     an engine update (restartServer); install.sh restarting it first
   //     would be a second restart racing that one.
+  //   MINDFLOCK_INSTALL_STOP_SERVER  native Windows: install.ps1 stops the
+  //     running server between building the new engine (beside the old one)
+  //     and swapping it in, so nothing serves while the venv moves; this app
+  //     starts it again (docs/windows.md, "Updating the engine on Windows").
   const envAdds = {
     MINDFLOCK_INSTALL_REF: ref,
     MINDFLOCK_NONINTERACTIVE: '1',
     MINDFLOCK_INSTALL_NO_RESTART: '1',
   }
+  if (WIN_NATIVE) envAdds.MINDFLOCK_INSTALL_STOP_SERVER = '1'
 
   if (!WIN_WSL) {
     install.env = envAdds
@@ -1800,13 +1852,9 @@ async function updateEverything(opts) {
     let engineUpdated = false
     if (plan.needed) {
       updateRun.message = 'Updating the engine to ' + target + '…'
-      startInstall(plan.ref)
-      while (install.state === 'running') await sleep(1000)
-      if (install.state !== 'done') {
-        updateRun = {
-          state: 'failed', step: 'engine',
-          message: 'The engine update failed (exit ' + install.code + ') — MindFlock’s engine may be partially updated. Retry to finish it.',
-        }
+      const res = await installEngineForUpdate(plan.ref)
+      if (!res.ok) {
+        updateRun = { state: 'failed', step: 'engine', message: res.message }
         return updateRun
       }
       engineUpdated = true
@@ -1882,6 +1930,66 @@ async function updateEverything(opts) {
   } catch (e) {
     updateRun = { state: 'failed', step: updateRun.step, message: 'Update failed: ' + (e && e.message) }
     return updateRun
+  }
+}
+
+// The engine install of an update run, and how it ended: { ok } or
+// { ok: false, message }. On native Windows a failure is checked against the
+// engine itself. install.ps1 builds the new engine beside the old one and
+// puts the old one back if the swap fails, so normally the engine is intact
+// and only the server (stopped for the swap) needs starting again. But an
+// engine that no longer runs — an older installer, a crash mid-swap, the
+// 2026-11-13 in-place rebuild — must never be left serving from memory until
+// its next import fails: the server is stopped, the install runs once more
+// with it down, and if that doesn't bring the engine back the offline page
+// says so and offers the repair (engine-broken).
+async function installEngineForUpdate(ref) {
+  startInstall(ref)
+  while (install.state === 'running') await sleep(1000)
+  if (install.state === 'done') return { ok: true }
+  const code = install.code
+  if (!WIN_NATIVE) {
+    return {
+      ok: false,
+      message: 'The engine update failed (exit ' + code + ') — MindFlock’s engine may be partially updated. Retry to finish it.',
+    }
+  }
+  let why = await probeNativeEngine(60000)
+  if (!why) {
+    // Stopped for the swap (MINDFLOCK_INSTALL_STOP_SERVER) — or still up,
+    // when the build failed before it: then there is nothing to restart.
+    if (await portFree(PORT)) await restartServer()
+    return {
+      ok: false,
+      message: 'The engine update failed (exit ' + code + '). Your engine was left as it was and is running again — retry later.',
+    }
+  }
+  console.log('[mindflock] the engine no longer runs after a failed update (' + why
+    + ') — stopping the server and installing again')
+  await stopEngineServer()
+  updateRun.message = 'The engine update failed and left the engine broken — repairing it…'
+  startInstall(ref)
+  while (install.state === 'running') await sleep(1000)
+  why = await probeNativeEngine(60000)
+  if (!why && install.state === 'done') {
+    console.log('[mindflock] engine repaired on the second install')
+    return { ok: true }
+  }
+  if (!why) {
+    await restartServer()
+    return {
+      ok: false,
+      message: 'The engine update failed (exit ' + install.code + '). Your engine runs again on its previous version — retry later.',
+    }
+  }
+  engineBroken = why
+  setDiag('engine-broken', why)
+  console.log('[mindflock] the engine is still broken after a repair attempt:', why)
+  if (win && !win.isDestroyed()) showOffline(true)
+  return {
+    ok: false,
+    message: 'The engine update failed and MindFlock’s engine no longer runs (' + why
+      + '). Use “Repair the engine” on the page MindFlock is showing.',
   }
 }
 
@@ -1991,6 +2099,9 @@ async function autoUpdateTick() {
       hiddenSec: autoHiddenSince ? (now - autoHiddenSince) / 1000 : 0,
       working: 0,
       waitedMs: autoWaitSince ? now - autoWaitSince : 0,
+      // Native Windows: a working turn holds the engine swap off for good
+      // (upd.autoUpdateVerdict, rule 7).
+      holdWhileWorking: WIN_NATIVE,
     }, systemIdle())
     let v = upd.autoUpdateVerdict(st)
     // Everything else says go: only now pay for the sessions read.
