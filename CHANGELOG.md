@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **With Verify switched off, a check you asked for is still followed
+  through.** The switch used to stop the watcher that notices merges, while
+  a route's Verify stop went on creating checklists; those then waited for
+  a merge nobody was looking for, for good. The switch now pauses only what
+  MindFlock starts by itself (checklists written because a watched
+  repository was pushed to). A checklist a route's Verify stop or a person
+  asked for is watched until its work ships, and then comes due.
+
+### Added
+
+- **Squash merges are recognised.** A squash makes a new commit, so "are
+  this branch's commits on the live branch" never said yes, and work that
+  reached the live branch through another pull request (a scratch branch,
+  sometimes bundling two tickets) was missed by the pull-request check
+  too. Verify now also asks whether the branch's changes are already
+  present on the live branch. It answers no whenever it is unsure (a later
+  commit rewrote the same lines, only part landed, an empty branch), so
+  unmerged work is never called live.
+- **"It's merged into <live branch>"** in a checklist's ⋯ menu while it
+  waits for its merge, for what the check above misses
+  (`POST /api/test-plans/{id}/shipped`). A route's Finish stop marks its
+  branch's checklist merged the same way.
+
 ## [0.14.15] - 2026-11-12
 
 A stability release: no new features. Three weeks of fast feature rounds
