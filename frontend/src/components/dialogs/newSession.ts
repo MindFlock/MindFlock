@@ -832,19 +832,21 @@ export function titleFromFolder(folder: string): string {
 }
 
 /** The title a create body will get on the server, for its optimistic row:
- * the Name as typed, else named from the task, else from the folder, else
- * "untitled" — the server's own ladder (session_create: title_from_prompt,
- * title_from_place) and the one the dialog's name preview shows. The server
- * may number it ("-2"); the pending row is matched by this base, so it keeps
- * its name when the real row lands. Guessing "untitled" for every blank Name
+ * the Name as typed, else named from the task, else from the folder — the
+ * server's own ladder (session_create: title_from_prompt, title_from_place)
+ * and the one the dialog's name preview shows. "" when there is nothing to
+ * name it from: the server then picks "untitled", and the owner's rule is
+ * that a row called "untitled" never shows during a create, so the caller
+ * adds no row at all (sessionActions.startPendingCreate). The server may
+ * number it ("-2"); the pending row is matched by this base and renamed in
+ * place when the create answers. Guessing "untitled" for every blank Name
  * flashed an "untitled" row that the real one then replaced — and, on a
  * failed create, an "untitled" row that came and went. */
 export function pendingTitleFor(body: { title?: unknown; prompt?: unknown; repo_path?: unknown }): string {
   return (
     String(body.title || "").trim() ||
     titleFromPrompt(String(body.prompt || "")) ||
-    titleFromFolder(String(body.repo_path || "")) ||
-    "untitled"
+    titleFromFolder(String(body.repo_path || ""))
   );
 }
 

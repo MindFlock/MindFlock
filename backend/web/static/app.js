@@ -33225,6 +33225,14 @@ function addPendingSession(bare, device = "", keepAlias = false) {
 	queryClient.setQueryData(["instances"], (prev) => [...prev || [], pending]);
 	return title;
 }
+function startPendingCreate(name, device = "") {
+	const n = (name || "").trim();
+	if (!n) {
+		toast("Creating…");
+		return "";
+	}
+	return addPendingSession(n, device);
+}
 function landPendingSession(guess, inst) {
 	if (!inst?.title) return;
 	if (guess.includes("::") && !inst.title.includes("::")) return;
@@ -107497,7 +107505,7 @@ function titleFromFolder(folder) {
 	return (((folder || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "").toLowerCase().match(/[a-z0-9]+/g) || []).join("-").slice(0, TITLE_FROM_PROMPT_MAX).replace(/^-+|-+$/g, "");
 }
 function pendingTitleFor(body) {
-	return String(body.title || "").trim() || titleFromPrompt(String(body.prompt || "")) || titleFromFolder(String(body.repo_path || "")) || "untitled";
+	return String(body.title || "").trim() || titleFromPrompt(String(body.prompt || "")) || titleFromFolder(String(body.repo_path || ""));
 }
 function sanitizeBranch(s) {
 	return s.toLowerCase().replace(/ /g, "-").replace(/[^a-z0-9\-_/.]/g, "").replace(/-+/g, "-").replace(/^[-/]+|[-/]+$/g, "");
@@ -112365,7 +112373,7 @@ function newSessionSubmit(ctx) {
 		const { lane, askFirst } = laneAtPress.current;
 		setError("Creating…");
 		const target = deviceRef.current;
-		const guess = addPendingSession(pendingTitleFor(body), target);
+		const guess = startPendingCreate(pendingTitleFor(body), target);
 		closeDialog();
 		try {
 			const made = await withMemoryConfirm("a new agent", (anyway) => deviceApi(target)("/api/instances", { json: anyway ? {
@@ -112376,6 +112384,7 @@ function newSessionSubmit(ctx) {
 				...made,
 				title: deviceTitle(target, made.title)
 			};
+			if (guess) landPendingSession(guess, inst);
 			planFolderDo({ t: "created" });
 			if (!target) rememberNewSessionChoice(String(body.repo_path || ""), {
 				template: activeTemplate,
@@ -112388,7 +112397,7 @@ function newSessionSubmit(ctx) {
 			else selectSession(inst.title);
 			if (lane !== "leave") setLaneWhenReady(inst.title, lane, askFirst);
 		} catch (err) {
-			failPendingSession(guess);
+			if (guess) failPendingSession(guess);
 			failCreate(err.message);
 			const ui = useUi.getState();
 			if (ui.openDialog !== "new-session") {
@@ -146466,12 +146475,12 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 			title: named,
 			parent
 		});
-		const guess = addPendingSession(pendingTitleFor({
+		const guess = startPendingCreate(pendingTitleFor({
 			title: named,
 			prompt,
 			repo_path: folder
 		}), device);
-		onPending?.(guess);
+		if (guess) onPending?.(guess);
 		let title = "";
 		try {
 			title = await postInstance(body, device);
@@ -146480,10 +146489,11 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 				program: String(body.program || ""),
 				profile_id: String(body.profile_id || "")
 			});
+			if (guess) landPendingSession(guess, { title });
 			clearStaleAlias(title);
 			await refreshInstances();
 		} catch (err) {
-			failPendingSession(guess);
+			if (guess) failPendingSession(guess);
 			setError(errMsg(err));
 			setBusy(false);
 			onFailed?.(guess);

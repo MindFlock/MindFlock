@@ -32,7 +32,7 @@
  * alert(). Escape cancels.
  *
  * Fast: the moment Fly is pressed the optimistic `pending_create` row is in
- * the sessions (`addPendingSession`) and `onPending(guess)` tells the sky,
+ * the sessions (`startPendingCreate`) and `onPending(guess)` tells the sky,
  * which pins that row's line where the block sat and hides the block; a
  * refusal brings the block back with the error (`onFailed`). */
 
@@ -43,7 +43,7 @@ import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
 import { refreshInstances, useAgentChoices, useAuthProfiles, useDevices, useInstances, useSettingsDoc } from "../../state/queries";
 import { rememberNewSessionChoice } from "../../state/store";
-import { addPendingSession, clearStaleAlias, failPendingSession } from "../../lib/sessionActions";
+import { clearStaleAlias, failPendingSession, landPendingSession, startPendingCreate } from "../../lib/sessionActions";
 import { newSessionSubmit, type NewSessionSubmitCtx } from "../../lib/newSessionSubmit";
 import { attachGrounded, startFlightOn } from "../../lib/flightsApi";
 import { windowName } from "../../lib/windowName";
@@ -384,8 +384,9 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
     setError("");
     const named = parent ? workerTitle(parent.title, (rows || []).map((r) => r.title)) : "";
     const body = blockBody({ repo, prompt, program, launchArgs, options: { ...options, device }, title: named, parent });
-    const guess = addPendingSession(pendingTitleFor({ title: named, prompt, repo_path: folder }), device);
-    onPending?.(guess);
+    // No "untitled" row: nothing to name it from → no row (a toast instead).
+    const guess = startPendingCreate(pendingTitleFor({ title: named, prompt, repo_path: folder }), device);
+    if (guess) onPending?.(guess);
     let title = "";
     try {
       title = await postInstance(body, device);
@@ -395,10 +396,12 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
           program: String(body.program || ""),
           profile_id: String(body.profile_id || ""),
         });
+      // The pending row becomes the session in place (renamed if numbered).
+      if (guess) landPendingSession(guess, { title } as Instance);
       clearStaleAlias(title);
       await refreshInstances();
     } catch (err) {
-      failPendingSession(guess);
+      if (guess) failPendingSession(guess);
       setError(errMsg(err));
       setBusy(false);
       onFailed?.(guess);
