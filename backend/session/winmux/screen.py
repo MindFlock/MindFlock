@@ -592,9 +592,6 @@ class Term:
         client.append(seq)
 
     # -- reading -----------------------------------------------------------------
-    def total_lines(self) -> int:
-        return len(self.screen.history) + self.screen.lines
-
     def line(self, i: int):
         """Line ``i`` of history+screen (0 = the oldest history line)."""
         h = self.screen.history
