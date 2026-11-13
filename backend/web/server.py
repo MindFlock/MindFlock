@@ -564,6 +564,7 @@ from backend.web.core.test_plans_driver import (
     _recover_stalled_test_plans,
     _release_wedged_run,
     _start_test_plan_generation,
+    _ship_test_plan,
     _sweep_orphan_verify_sessions,
     _test_plan_intent,
     _test_plan_is_live,
@@ -13019,6 +13020,38 @@ def mark_test_plan_deployed(plan_id: str) -> JSONResponse:
             "live_branch": updated["live_branch"],
         },
     )
+    return JSONResponse({"ok": True, "plan": updated})
+
+
+@app.post("/api/test-plans/{plan_id:path}/shipped")
+def mark_test_plan_shipped(plan_id: str) -> JSONResponse:
+    """ "It's merged." A person says this work has reached the live branch.
+
+    For the merges the due loop cannot see: a squash through another branch's
+    pull request (a scratch branch, two tickets bundled) leaves no ancestry and
+    no merged PR on this branch, and the content check misses whatever the
+    live branch has since rewritten. Goes through exactly what the loop does
+    when it sees a merge itself (:func:`_ship_test_plan`): the deploy wait, then
+    ``due``, the event and the phone push.
+
+    Refuses anything not still waiting for its merge (409), like ``/deployed``:
+    a merged plan is already past this, and a due or finished one would be
+    reopened or re-announced by a button the UI never offers there.
+    """
+    plan = _test_plans.get(plan_id)
+    if plan is None:
+        return JSONResponse(
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
+        )
+    if plan["state"] != "generated" or plan["merged_at"]:
+        return JSONResponse(
+            {"error": "these behaviors are not waiting for a merge"}, status_code=409
+        )
+    updated = _ship_test_plan(plan_id)
+    if updated is None:
+        return JSONResponse(
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
+        )
     return JSONResponse({"ok": True, "plan": updated})
 
 

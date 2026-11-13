@@ -94736,6 +94736,10 @@ function cardMenuItems(plan, ctx) {
 		label: "Verify again",
 		title: VERIFY_TITLE
 	});
+	if (plan.state === "generated" && !plan.merged_at && !plan.live_at) items.push({
+		key: "merged",
+		...mergedItem(plan)
+	});
 	if (plan.state === "generated" && plan.merged_at && !plan.live_at) items.push({
 		key: "deployed",
 		label: "It's deployed — check now",
@@ -94786,6 +94790,13 @@ function cardMenuItems(plan, ctx) {
 		danger: true
 	});
 	return items;
+}
+function mergedItem(plan) {
+	const live = plan.live_branch || "the live branch";
+	return {
+		label: "It's merged into " + live,
+		title: "Mark these changes as on " + live + " — for a merge MindFlock can't see, like a squash through another branch's PR"
+	};
 }
 var VERIFY_TITLE = "The session's own agent writes the steps to check its work and works them in its terminal — it tells you anything only a person can do";
 var CHIP_WORDS = {
@@ -95052,6 +95063,23 @@ function BehaviorRow({ plan, step, index, onFix, allOpen }) {
 	});
 }
 //#endregion
+//#region src/components/behaviors/markMerged.ts
+function mergedToast(plan, after) {
+	if (after && after.state === "due") return planName(plan) + " is ready to check";
+	return planName(plan) + " is merged — it's ready to check once it deploys";
+}
+async function markPlanMerged(plan) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/shipped", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		await refreshTestPlans();
+		toast(mergedToast(plan, r?.plan));
+	} catch (err) {
+		errorPop("Couldn't mark " + planName(plan) + " merged", errMsg(err));
+		refreshTestPlans();
+	}
+}
+//#endregion
 //#region src/components/behaviors/BehaviorsCard.tsx
 function defaultFixInSession(plan, _stepIds) {
 	return fixInSession(plan.id, plan.title || plan.id);
@@ -95121,6 +95149,9 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded, onFixInSe
 		switch (key) {
 			case "verify":
 				verifyNow();
+				break;
+			case "merged":
+				withBusy("merged", () => markPlanMerged(plan));
 				break;
 			case "deployed":
 				withBusy("deployed", () => markPlanDeployed(plan));

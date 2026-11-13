@@ -5991,6 +5991,29 @@ and every "why is nothing showing up?" is a question about which one hasn't:
    survive, so the wait deliberately errs long. When a deploy lands sooner than
    usual, **⋯ → It's deployed — check it now** skips the rest of it.
 
+   **A squash merge is seen by its content.** A squash makes a new commit, so
+   the checklist's sha never becomes an ancestor of anything, and when the work
+   reached the live branch through a *different* pull request (a scratch branch,
+   sometimes bundling two tickets) the branch's own PR never says "merged"
+   either. So when both say no, the pass asks a third question about once every
+   15 minutes per checklist: are this branch's changes already on the live
+   branch? Its diff (from where it left the live branch to its newest pushed
+   commit) must
+   reverse-apply cleanly to `origin/<live branch>`, tested against a throwaway
+   index so nothing in the repository is touched. Other work landing alongside
+   or after it does not get in the way; a later commit that rewrote the same
+   lines does, and then the checklist simply keeps waiting — the check is built
+   to miss rather than ever call unmerged work shipped (an empty branch, a diff
+   whose lines also still fit the old file, a sha the clone no longer has: all
+   "not yet").
+
+   **And you can say so.** While a checklist waits for its merge, **⋯ → It's
+   merged into `<live branch>`** marks it merged (`POST
+   /api/test-plans/{id}/shipped`), and a route's **Finish** stop does the same
+   for its branch's checklist when the branch it confirmed is the one the
+   checklist waits for. Both go the way a merge the pass saw goes: the deploy
+   wait, then **Needs you**, the badge and the phone push.
+
 **When the wait cannot end, the row says so.** Two things used to make a
 checklist wait for ever in silence, and both looked identical to "not merged
 yet":
@@ -6089,7 +6112,10 @@ second line reads *Watching 1 repository — its next pushed branch appears here
 The master switch, **Write a checklist on every push**
 (`repository.verify_enabled`), shows only once a repository is watched, and
 pauses the **automatic** half only: no checklist
-written on a push, and nothing new moved into the list. Repositories, checklists
+written on a push, and a checklist a push wrote is not watched or brought due.
+A checklist somebody **asked for** — a route's Verify stop, the Verify button,
+one you started or ran — is still watched until its work ships, whatever the
+switch says. Repositories, checklists
 and every recorded answer are kept, and asking for one, running one and
 answering a step all keep working — exactly as a forced PR review still runs with
 automated review switched off.

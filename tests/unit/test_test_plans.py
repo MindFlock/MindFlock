@@ -2873,8 +2873,9 @@ def test_the_landing_pass_asks_each_plan_at_most_once_a_window(
 def test_the_landing_pass_is_quiet_while_verify_is_paused(
     store, repo_settings, monkeypatch
 ):
-    """ "Off" has to mean the feature is quiet, not merely that no new plans get
-    written — the same rule the liveness pass follows."""
+    """ "Off" means MindFlock stops chasing what it started by itself — the same
+    rule the liveness pass follows. A PUSH-MADE plan is not asked about (an
+    asked-for one is: tests/unit/test_verify_follow_through.py)."""
     from backend.web import server
 
     asked = []
@@ -2884,7 +2885,7 @@ def test_the_landing_pass_is_quiet_while_verify_is_paused(
         tp_driver, "_test_plan_merged_into", lambda plan: asked.append(plan["id"]) or {}
     )
     server._TEST_PLAN_LANDED_CHECKED.clear()
-    tp.upsert(_plan("sc-1"))
+    tp.upsert(_plan("sc-1", trigger="push"))
     server._check_test_plan_landings(tp.list_plans())
     assert asked == []
 
@@ -3125,8 +3126,8 @@ def test_the_pass_gives_up_on_a_generation_that_stalled_twice(store, monkeypatch
 
 
 def test_a_paused_verify_does_not_fire_model_calls_on_a_timer(store, monkeypatch):
-    """Off means quiet. The stalled plan keeps its state and the next enabled
-    pass recovers it."""
+    """Off means quiet for what MindFlock started by itself: a stalled PUSH-MADE
+    plan keeps its state and the next enabled pass recovers it."""
     from backend.web import server
 
     started: list = []
@@ -3135,7 +3136,9 @@ def test_a_paused_verify_does_not_fire_model_calls_on_a_timer(store, monkeypatch
         tp_driver, "_start_test_plan_generation", lambda *a: started.append(a)
     )
     old = time.time() - (tp.GENERATE_STALE_S + 1)
-    tp.upsert(_plan("sc-1", state="generating", steps=[], gen_started=old))
+    tp.upsert(
+        _plan("sc-1", state="generating", steps=[], gen_started=old, trigger="push")
+    )
     server._recover_stalled_test_plans(tp.list_plans())
     assert started == [] and tp.get("sc-1")["state"] == "generating"
 
@@ -4159,16 +4162,19 @@ def test_the_switch_defaults_on_so_an_older_settings_file_is_unchanged(
 
 
 def test_the_switch_pauses_the_liveness_loop_too(repo_settings, monkeypatch):
-    """Off has to mean QUIET, not merely "no new plans".
+    """Off has to mean QUIET about what MindFlock started by itself, not merely
+    "no new plans".
 
-    A paused Verify that still fetched every minute and kept moving plans into
-    ``due`` would carry on lighting the top-bar badge with exactly the work the
-    user just said they did not want chased. Nothing is lost: the plan keeps its
-    state and the next enabled pass picks it up.
+    A paused Verify that still fetched every minute for PUSH-MADE plans and
+    kept moving them into ``due`` would carry on lighting the top-bar badge
+    with exactly the work the user just said they did not want chased. Nothing
+    is lost: the plan keeps its state and the next enabled pass picks it up. (A
+    plan somebody asked for is still followed —
+    tests/unit/test_verify_follow_through.py.)
     """
     from backend.web import server
 
-    tp.upsert(_plan("sc-1", state="generated", live_at=0.0))
+    tp.upsert(_plan("sc-1", state="generated", live_at=0.0, trigger="push"))
     repo_settings(verify_enabled=False)
     asked = []
     monkeypatch.setattr(server, "git_available", lambda: True)

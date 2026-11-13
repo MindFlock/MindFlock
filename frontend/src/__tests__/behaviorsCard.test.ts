@@ -218,6 +218,39 @@ describe("the ⋯ menu", () => {
     expect(labels(p, false)).toContain("It's deployed — check now");
   });
 
+  it("waiting for its merge: It's merged into <live branch> — and only then", () => {
+    const waiting = plan({ state: "generated", live_at: 0, merged_at: 0, live_branch: "sandbox", steps: [step("a")] });
+    const item = cardMenuItems(waiting, { summary: behaviorSummary(waiting) }).find((i) => i.key === "merged");
+    expect(item?.label).toBe("It's merged into sandbox");
+    expect(item?.title).toContain("squash");
+    // Merged already (waiting on the deploy), due, finished, being checked: not offered.
+    for (const over of [
+      { state: "generated" as const, merged_at: 10, live_at: 0 },
+      { state: "due" as const, merged_at: 10, live_at: 20 },
+      { state: "done" as const, merged_at: 10, live_at: 20 },
+      { state: "running" as const, run_session: "verify-p1" },
+      { state: "generating" as const },
+    ]) {
+      const p = plan({ ...over, steps: [step("a")] });
+      expect(cardMenuItems(p, { summary: behaviorSummary(p) }).map((i) => i.key)).not.toContain("merged");
+    }
+  });
+
+  it("It's merged posts to /shipped and says what happens next", async () => {
+    const { markPlanMerged } = await import("../components/behaviors/markMerged");
+    const waiting = plan({ id: "repo@feat/x", state: "generated", live_at: 0, merged_at: 0, steps: [step("a")] });
+    api.mockReset();
+    toast.mockReset();
+    api.mockResolvedValueOnce({ ok: true, plan: { ...waiting, merged_at: 5 } });
+    await markPlanMerged(waiting);
+    expect(api.mock.calls[0][0]).toBe("/api/test-plans/repo%40feat%2Fx/shipped");
+    expect(api.mock.calls[0][1]).toMatchObject({ method: "POST" });
+    expect(toast.mock.calls.at(-1)?.[0]).toContain("ready to check once it deploys");
+    api.mockResolvedValueOnce({ ok: true, plan: { ...waiting, state: "due", merged_at: 5, live_at: 6 } });
+    await markPlanMerged(waiting);
+    expect(toast.mock.calls.at(-1)?.[0]).toMatch(/is ready to check$/);
+  });
+
   it("no work session open: no Open the work session / View diff", () => {
     expect(labels(FAILED, false)).not.toContain("Open the work session");
     expect(labels(FAILED, false)).not.toContain("View diff");

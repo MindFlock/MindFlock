@@ -5050,7 +5050,13 @@ once. The last stop leaves the cursor. Returns `{flight, sha}`.
   `git merge-base --is-ancestor refs/heads/<branch> origin/<default>` passes
   after a fetch, or when `github_pr.find_pr_sync` reports a MERGED PR into
   that default branch (this covers a squash merge). Otherwise the stop fails
-  with "not merged into <default>". `run` also refuses when the land step is
+  with "not merged into <default>". On a merge it marks the Verify checklist
+  for the branch shipped (`land._ship_checklist` →
+  `test_plans_driver._ship_test_plan`, the path the Verify due loop takes when
+  it sees a merge itself: deploy wait, then due and the notification) — only
+  a checklist still waiting for its merge whose live branch IS that default
+  branch, so a repo that ships from another branch never gets a false
+  "shipped"; the checklist's id is in `detail.checklist`. `run` also refuses when the land step is
   not the flight's last step. Strict `normalize_steps` raises "a Land stop is
   the last stop"; lenient mode keeps the steps as stored. A `land` step found
   running after a restart runs again; the check is idempotent.

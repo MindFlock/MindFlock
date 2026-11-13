@@ -119,6 +119,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from typing import Callable, Dict, List, Optional
@@ -154,6 +155,10 @@ __all__ = [
     "refresh_for_push",
     "resolve_deploy_delay",
     "mark_merged",
+    "mark_asked",
+    "is_asked_for",
+    "TRIGGERS",
+    "probe_content_shipped",
     "retarget_live_branch",
     "deploy_ready",
     "generate",
@@ -313,6 +318,9 @@ NEEDS_YOU = "needs you:"
 #: thread can step off, so it is the only one that needs a watchdog — see
 #: :func:`is_stalled` and :func:`give_up_generating`.
 STATES = ("generating", "generated", "due", "running", "done", "failed")
+
+#: Who wanted a checklist (the plan's ``trigger``): see :func:`is_asked_for`.
+TRIGGERS = ("push", "asked")
 #: Per-step outcomes. ``""`` is "not answered yet" and is what an unrun step
 #: looks like; ``blocked`` is an agent saying "a person has to do this one".
 RESULTS = ("pass", "fail", "blocked", "")
@@ -686,6 +694,17 @@ def _blank(plan_id: str) -> dict:
         # person's to write. "" for a generated checklist. It is what tells a
         # stepless plan a person chose apart from one whose writing failed.
         "origin": "",
+        # WHO WANTED THIS CHECKLIST (:data:`TRIGGERS`), which is what the Verify
+        # master switch reads. "push": written by itself because a watched
+        # repository was pushed to — the one thing the switch pauses. "asked":
+        # a route's Verify stop or a person (the Verify button, an empty
+        # checklist, a branch checklist) asked for it, and it is followed
+        # through until its work ships whatever the switch says. "" is a plan
+        # written before this field existed and counts as asked: see
+        # :func:`is_asked_for`. Not ``origin``, which answers a different
+        # question (was it created empty on purpose) and is "manual" for a
+        # push-made empty plan too.
+        "trigger": "",
         # When the work was first seen MERGED — distinct from ``live_at``, which
         # is when it became the reader's problem. Merged is a git fact and is
         # true the instant a PR lands; deployed is what a checklist actually
@@ -1475,6 +1494,8 @@ def _normalize(plan_id: str, entry) -> dict:
     except (TypeError, ValueError):
         plan["refreshes"] = 0
     plan["origin"] = "manual" if entry.get("origin") == "manual" else ""
+    trigger = str(entry.get("trigger") or "")
+    plan["trigger"] = trigger if trigger in TRIGGERS else ""
     plan["merged_at"] = _f(entry.get("merged_at"))
     plan["live_at"] = _f(entry.get("live_at"))
     plan["merged_into"] = str(entry.get("merged_into") or "")
@@ -1709,12 +1730,20 @@ def ensure_plan_for(
     live_branch: str,
     intent: str = "",
     manual: bool = False,
+    trigger: str = "asked",
 ) -> Optional[dict]:
     """Create the ``generating`` plan for a session that just landed on origin.
 
     ``manual=True`` creates it EMPTY instead: state ``generated`` with no
     steps and ``origin: "manual"``, for a person to fill with Add a step —
     the caller starts no generation. Same idempotence as below.
+
+    ``trigger`` is recorded on the plan (see ``_blank``): ``"asked"`` — the
+    default, because every caller but one is a request — or ``"push"`` from the
+    push trigger, the only caller writing a plan on its own initiative. Asking
+    for a plan that already exists makes that plan an asked-for one even when
+    a push wrote it: the answer is still "it's already there", and from now on
+    it is followed through like any other request.
 
     **This is the idempotent entry point, and its idempotence is the single
     most important behaviour in the module.** It is called from the push
@@ -1748,14 +1777,24 @@ def ensure_plan_for(
         data = _load()
         plans = _plans_of(data)
         existing = plans.get(plan_id)
+        covering = ""
         if isinstance(existing, dict):
             if str(existing.get("branch") or "").strip() == branch:
-                return None
+                covering = plan_id
         # ...and the same no-op when ANOTHER window is already covering this
         # branch in this repo. A checklist describes a branch's diff, not a
         # window, so the second session on one branch must not buy a second
         # model call — see :func:`_branch_owner`.
-        if _branch_owner(plans, repo_root, branch, skip=plan_id):
+        covering = covering or _branch_owner(plans, repo_root, branch, skip=plan_id)
+        if covering:
+            held = plans.get(covering)
+            if (
+                trigger == "asked"
+                and isinstance(held, dict)
+                and held.get("trigger") == "push"
+            ):
+                held["trigger"] = "asked"
+                _save(_doc(plans))
             return None
         plan = _blank(plan_id)
         plan["repo_root"] = str(repo_root or "")
@@ -1768,6 +1807,7 @@ def ensure_plan_for(
         # never refreshed: a later push changes what SHIPPED, not what was asked
         # for.
         plan["intent"] = _text(intent, TICKET_CTX_BUDGET)
+        plan["trigger"] = trigger if trigger in TRIGGERS else "asked"
         plan["state"] = "generating"
         if manual:
             # Empty by choice: nothing is being written, so no generation
@@ -2362,6 +2402,10 @@ def start_run(
         plan["state"] = "running"
         plan["run_session"] = session_title
         plan["error"] = ""
+        # Only a request starts a run (a route's Verify stop, a person), so a
+        # checklist that has been run is one somebody asked for: followed
+        # through while Verify is switched off (:func:`is_asked_for`).
+        plan["trigger"] = "asked"
         # WHAT A PERSON ANSWERED COMES WITH IT. The surface reads the newest run
         # and only the newest, so opening an empty one hides every answer already
         # recorded — and the agent cannot put a human one back, because it is
@@ -4531,6 +4575,46 @@ def mark_merged(plan_id: str) -> Optional[dict]:
     return _mutate(plan_id, apply)
 
 
+def is_asked_for(plan: dict) -> bool:
+    """Whether somebody asked for this checklist, so it is followed through
+    until its work ships even while the Verify master switch is off.
+
+    The switch pauses what MindFlock does on its own initiative and nothing
+    else, and the only checklist written on its own initiative is one a push
+    to a watched repository wrote (``trigger: "push"``). Everything else was
+    asked for: a route's Verify stop, the Verify button, an empty or branch
+    checklist. A push-made plan that has ever been RUN was asked for too —
+    runs are only ever started by a request (a route stop, a person), never by
+    the due loop — and :func:`start_run` re-stamps it, so the answer survives
+    a run record being dropped later.
+
+    A plan written before ``trigger`` existed ("") counts as asked. What is
+    stored for those cannot tell the two apart — ``origin`` is "manual" for a
+    route stop's self-verify plan, a person's empty checklist AND a push-made
+    empty plan alike, and "" for any generated one — so the rule is chosen by
+    which mistake is affordable: treating a legacy automatic plan as asked
+    costs it one budgeted fetch per pass until it ships; treating an asked-for
+    plan as automatic leaves it waiting for ever, which is the bug this ends.
+    """
+    return plan.get("trigger") != "push" or bool(plan.get("runs"))
+
+
+def mark_asked(plan_id: str) -> Optional[dict]:
+    """Record that somebody asked for this checklist (``trigger: "asked"``) —
+    a route's land stop or a person saying its work is out. A no-op write for
+    a plan that already is one."""
+    current = get(plan_id)
+    if current is None:
+        return None
+    if current["trigger"] == "asked":
+        return current
+
+    def apply(plan: dict) -> None:
+        plan["trigger"] = "asked"
+
+    return _mutate(plan_id, apply)
+
+
 def set_merged_into(
     plan_id: str, branch: str, at: float, branches: Optional[List[str]] = None
 ) -> Optional[dict]:
@@ -4698,6 +4782,129 @@ def is_live(repo_root: str, sha: str, live_branch: str) -> bool:
     plumbing lives — this module must not import the server.
     """
     return probe_live(repo_root, sha, live_branch) == "live"
+
+
+#: The whole of one content check (:func:`probe_content_shipped`): every git
+#: call it makes shares this budget, so a huge diff or a slow disk costs one
+#: plan this long and no more.
+TIMEOUT_CONTENT = 20.0
+
+#: A branch diff bigger than this is not content-checked (the answer is "no",
+#: i.e. keep waiting): applying it twice against a fresh index would cost more
+#: than the question is worth, and such a branch still has the explicit
+#: "it's merged" signal.
+MAX_CONTENT_DIFF_BYTES = 8_000_000
+
+
+def probe_content_shipped(
+    repo_root: str, sha: str, live_branch: str, timeout: float = TIMEOUT_CONTENT
+) -> bool:
+    """Whether this branch's CHANGES are already on ``origin/<live_branch>``,
+    when its commits are not. Blocking; local only (it reads the remote-tracking
+    ref the liveness probe has just fetched).
+
+    WHY. Ancestry cannot see a squash merge — the merge is a new commit — and
+    the PR fallback cannot see work that reached the live branch through a
+    DIFFERENT pull request (a scratch branch, sometimes bundling two tickets).
+    So this asks the question both stand in for: is what this branch changed
+    present on the live branch?
+
+    HOW. The branch's diff — merge-base(sha, origin/<live>) to ``sha`` — must
+    reverse-apply cleanly to origin/<live>'s tree: every line the branch wrote
+    is there, in place. It is checked against a throwaway index
+    (``GIT_INDEX_FILE`` in a temp dir, loaded by ``read-tree``), so nothing in
+    the repository, its index or its worktrees is touched, and it works in the
+    bare base clone these plans live in. It tolerates other changes on the live
+    branch and a squash that bundled other work, because neither disturbs the
+    lines this branch wrote.
+
+    NEVER A FALSE "SHIPPED" — a miss only leaves the plan waiting, which the
+    explicit signal covers, while a false yes tells a person unmerged work is
+    live. So every doubt answers no:
+
+    * an EMPTY diff (nothing to find, so nothing shipped);
+    * the forward patch ALSO applying — the branch's preimage is still there,
+      so the reverse match is ambiguous (a hunk that only deletes lines
+      reverse-applies wherever its context lines sit together, including in
+      the unmerged file) and the forward test is what tells the cases apart;
+    * a later commit on the live branch that touched the same lines (the
+      reverse apply fails: a miss);
+    * a sha this clone no longer has, a missing live ref, any git failure, a
+      diff over :data:`MAX_CONTENT_DIFF_BYTES`, the time budget running out.
+    """
+    if not repo_root or not sha or not live_branch:
+        return False
+    deadline = time.monotonic() + max(1.0, float(timeout))
+
+    def left() -> float:
+        return max(0.5, deadline - time.monotonic())
+
+    live = "refs/remotes/origin/%s" % live_branch
+    base = _git_out(repo_root, ["merge-base", sha, live], left())
+    base = (base or "").strip()
+    if not base or time.monotonic() >= deadline:
+        return False
+    cp = gitutil.git(
+        [
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            base,
+            sha,
+        ],
+        repo_root,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=False,
+        timeout=left(),
+    )
+    patch = cp.stdout or b""
+    if cp.returncode != 0 or not patch.strip():
+        return False
+    if len(patch) > MAX_CONTENT_DIFF_BYTES or time.monotonic() >= deadline:
+        return False
+    try:
+        with tempfile.TemporaryDirectory(prefix="mf-shipped-") as tmp:
+            env = {"GIT_INDEX_FILE": os.path.join(tmp, "index")}
+            loaded = gitutil.git(
+                ["read-tree", live],
+                repo_root,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=left(),
+            )
+            if loaded.returncode != 0:
+                return False
+
+            def applies(*flags: str) -> Optional[bool]:
+                """Whether the patch applies; ``None`` when git gave no
+                answer (out of time, not runnable)."""
+                if time.monotonic() >= deadline:
+                    return None
+                res = gitutil.git(
+                    ["apply", "--cached", "--check", *flags],
+                    repo_root,
+                    env=env,
+                    input=patch,
+                    stderr=subprocess.DEVNULL,
+                    text=False,
+                    timeout=left(),
+                )
+                if res.timed_out or res.not_run:
+                    return None
+                return res.returncode == 0
+
+            if applies("-R") is not True:
+                return False
+            # Reverse fits; the forward patch must NOT (see the docstring) —
+            # and "git could not say" is not "it does not".
+            return applies() is False
+    except Exception:  # noqa: BLE001 — a temp dir that cannot be made is a no
+        return False
 
 
 # --------------------------------------------------------------------------- #
