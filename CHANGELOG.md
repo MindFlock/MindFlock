@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drive, the agent field's `C:\…\claude.exe`, the folder names on the run
   list and the route builder, `~\…` Tab completion, and "already editing this
   folder" (which also ignores case on a Windows server).
+- **No "untitled" row flashes on New session.** With the Name left empty,
+  the row shown while the create is answered was called "untitled" until
+  the real one (named from the task, e.g. `make-me-snake`) replaced it — and
+  a failed create left an "untitled" row that came and went. It is now named
+  as the server will name it, the name the dialog previews (the flight
+  builder's create too, from a `C:\…` folder as well).
 - **A server error says what went wrong.** A route that raised answered a
   bare "Internal Server Error": the dialog could only say "MindFlock hit an
   error (details in the log)", and the log said only `-> 500` (the

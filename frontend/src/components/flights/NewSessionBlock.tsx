@@ -62,7 +62,7 @@ import {
   type ParentChoice,
 } from "../../lib/newBlock";
 import { errMsg } from "../../lib/format";
-import { isNameQuery, titleFromPrompt, type RepoSuggestion } from "../dialogs/newSession";
+import { isNameQuery, pendingTitleFor, type RepoSuggestion } from "../dialogs/newSession";
 import { PathField } from "../PathField";
 import { templateFiller } from "../dialogs/newSession/TemplatesStrip";
 import { useBaseBranches } from "../dialogs/newSession/WorkspaceFold";
@@ -384,7 +384,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
     setError("");
     const named = parent ? workerTitle(parent.title, (rows || []).map((r) => r.title)) : "";
     const body = blockBody({ repo, prompt, program, launchArgs, options: { ...options, device }, title: named, parent });
-    const guess = addPendingSession(named || titleFromPrompt(prompt) || pathLeaf(folder) || "untitled", device);
+    const guess = addPendingSession(pendingTitleFor({ title: named, prompt, repo_path: folder }), device);
     onPending?.(guess);
     let title = "";
     try {

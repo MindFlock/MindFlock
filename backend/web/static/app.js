@@ -107496,6 +107496,9 @@ function titleFromPrompt(prompt) {
 function titleFromFolder(folder) {
 	return (((folder || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "").toLowerCase().match(/[a-z0-9]+/g) || []).join("-").slice(0, TITLE_FROM_PROMPT_MAX).replace(/^-+|-+$/g, "");
 }
+function pendingTitleFor(body) {
+	return String(body.title || "").trim() || titleFromPrompt(String(body.prompt || "")) || titleFromFolder(String(body.repo_path || "")) || "untitled";
+}
 function sanitizeBranch(s) {
 	return s.toLowerCase().replace(/ /g, "-").replace(/[^a-z0-9\-_/.]/g, "").replace(/-+/g, "-").replace(/^[-/]+|[-/]+$/g, "");
 }
@@ -112362,7 +112365,7 @@ function newSessionSubmit(ctx) {
 		const { lane, askFirst } = laneAtPress.current;
 		setError("Creating…");
 		const target = deviceRef.current;
-		const guess = addPendingSession(body.title || "untitled", target);
+		const guess = addPendingSession(pendingTitleFor(body), target);
 		closeDialog();
 		try {
 			const made = await withMemoryConfirm("a new agent", (anyway) => deviceApi(target)("/api/instances", { json: anyway ? {
@@ -146463,7 +146466,11 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 			title: named,
 			parent
 		});
-		const guess = addPendingSession(named || titleFromPrompt(prompt) || pathLeaf(folder) || "untitled", device);
+		const guess = addPendingSession(pendingTitleFor({
+			title: named,
+			prompt,
+			repo_path: folder
+		}), device);
 		onPending?.(guess);
 		let title = "";
 		try {

@@ -831,6 +831,23 @@ export function titleFromFolder(folder: string): string {
   return words.join("-").slice(0, TITLE_FROM_PROMPT_MAX).replace(/^-+|-+$/g, "");
 }
 
+/** The title a create body will get on the server, for its optimistic row:
+ * the Name as typed, else named from the task, else from the folder, else
+ * "untitled" — the server's own ladder (session_create: title_from_prompt,
+ * title_from_place) and the one the dialog's name preview shows. The server
+ * may number it ("-2"); the pending row is matched by this base, so it keeps
+ * its name when the real row lands. Guessing "untitled" for every blank Name
+ * flashed an "untitled" row that the real one then replaced — and, on a
+ * failed create, an "untitled" row that came and went. */
+export function pendingTitleFor(body: { title?: unknown; prompt?: unknown; repo_path?: unknown }): string {
+  return (
+    String(body.title || "").trim() ||
+    titleFromPrompt(String(body.prompt || "")) ||
+    titleFromFolder(String(body.repo_path || "")) ||
+    "untitled"
+  );
+}
+
 /** git-branch-safe, as the engine's sanitize_branch_name builds it. */
 export function sanitizeBranch(s: string): string {
   return s
