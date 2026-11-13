@@ -76,7 +76,6 @@ __all__ = [
     "would_cycle",
     "view",
     "row_order",
-    "forget_parent",
     "fence_text",
 ]
 
@@ -364,7 +363,13 @@ def forget_worker(rec: dict, title: str) -> Optional[dict]:
     workers = rec.get("workers") or {}
     gone = workers.pop(title, None)
     gone = gone if isinstance(gone, dict) else None
-    inherit = [p for p in ((gone or {}).get("after") or []) if p != title]
+    planned = rec.get("planned")
+    if gone is not None:
+        inherit = [p for p in (gone.get("after") or []) if p != title]
+    else:
+        # A step never spawned: what it was declared to run after.
+        declared = planned.get(title) if isinstance(planned, dict) else None
+        inherit = [p for p in (declared or []) if p != title]
     gone_why = dict((gone or {}).get("why") or {})
     for t, w in workers.items():
         if not isinstance(w, dict) or title not in (w.get("after") or []):
@@ -383,7 +388,6 @@ def forget_worker(rec: dict, title: str) -> Optional[dict]:
                     why.setdefault(q, gone_why.get(q) or reason or "asked")
         w["after"] = new
         w["why"] = {p: why.get(p) or "asked" for p in new}
-    planned = rec.get("planned")
     if isinstance(planned, dict):
         mine = [p for p in (planned.pop(title, None) or []) if p != title]
         for t, pre in list(planned.items()):
@@ -396,6 +400,22 @@ def forget_worker(rec: dict, title: str) -> Optional[dict]:
                         out.append(q)
             planned[t] = out
     return gone
+
+
+def forget_failed(rec: dict, title: str, error: str) -> List[str]:
+    """``title`` — a step its workers wait on, never registered — can no
+    longer start (its queued create failed). :func:`forget_worker`'s rule,
+    with each waiter keeping why in ``lost`` (``{title: error}``) so its
+    release can say it. → the waiters that named it."""
+    waiters = []
+    for t, w in (rec.get("workers") or {}).items():
+        if isinstance(w, dict) and title in (w.get("after") or []):
+            lost = dict(w.get("lost") or {})
+            lost[title] = str(error or "it could not start")
+            w["lost"] = lost
+            waiters.append(t)
+    forget_worker(rec, title)
+    return waiters
 
 
 def set_policy(
@@ -796,10 +816,6 @@ def row_order(
         "after": list(w.get("after") or []),
         "fence": w.get("fence") or None,
     }
-
-
-def forget_parent(data: dict, parent: str) -> None:
-    (data.get("parents") or {}).pop(parent, None)
 
 
 def fence_text(fence: Optional[Mapping], by: str = "") -> str:

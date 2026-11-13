@@ -1173,3 +1173,51 @@ def test_order_route_reads_and_sets(monkeypatch, tmp_path):
     assert r.json()["order"]["cap"] == 2
     bad = client.post("/api/instances/orch/order", json={"steps": [["a"], ["a"]]})
     assert bad.status_code == 400 and bad.json()["problems"]
+
+
+def test_a_held_worker_stops_waiting_on_a_queued_create_that_failed(fake, monkeypatch):
+    """Stability sweep: w2 was spawned ``after`` w0 while w0's create still
+    waited in the launch gate (a step not spawned yet). w0's create then
+    FAILED before on_create ever registered it — the launch gate records it
+    as a failed start row (core.pending, session_create.note_start_failed;
+    an abandoned queued start of a stopped server ends the same way). w2
+    waited for ever, shown "after w0 (not started yet)". Now the rule
+    on_failed_start applies to a registered held worker applies: w0 is
+    forgotten, w2 runs after what w0 ran after (nothing here), and its task
+    says why."""
+    from backend.web.core import pending
+
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    monkeypatch.setattr(pending, "_PENDING", {})
+    pending.add("w0", "spawn", parent="orch")  # queued in the launch gate
+    o2, err = _spawn(fake, "w2", "orch", repo, {"after": ["w0"]})
+    assert err is None and o2["held"] and o2["after"] == ["w0"]
+    drv.tick()
+    rec = wo.load()["parents"]["orch"]
+    assert rec["workers"]["w2"]["state"] == "held"  # w0 is still on its way
+    pending.fail("w0", "not enough memory to start it", parent="orch")
+    drv.tick()
+    rec = wo.load()["parents"]["orch"]
+    w2 = rec["workers"]["w2"]
+    assert w2["state"] == "running" and w2["after"] == []
+    assert prompt_queue.get_state("w2")["enabled"] is True
+    task = prompt_queue.list_queue("w2")[0]["text"]
+    assert "w0" in task and "not enough memory to start it" in task
+    assert "w0" in (w2.get("note") or "")
+
+
+def test_forgetting_a_planned_step_keeps_its_successors_behind_its_own(fake):
+    """forget_worker on a declared step that was never spawned (``planned``):
+    a worker that ran after it now runs after what IT was declared to run
+    after — not straight away, overtaking that step's own predecessor."""
+    rec = {
+        "workers": {
+            "x": {"seq": 1, "state": "running", "after": [], "why": {}},
+            "b": {"seq": 2, "state": "held", "after": ["a"], "why": {"a": "asked"}},
+        },
+        "planned": {"a": ["x"]},
+    }
+    wo.forget_worker(rec, "a")
+    assert rec["workers"]["b"]["after"] == ["x"]
+    assert "a" not in rec["planned"]
