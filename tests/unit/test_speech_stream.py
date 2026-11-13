@@ -657,9 +657,28 @@ def _spoken(fast, accurate, chunks=2, secs=1.0):
 class TestFinal:
     """The second tier: the accurate pass over the whole phrase at the end."""
 
-    def test_finish_returns_the_accurate_text(self):
-        acc = Accurate(" run the tests ")
+    def test_finish_returns_the_accurate_text(self, monkeypatch):
+        # The pass's own time and the wait for it are timed from different
+        # starts (the lane's start, the submit). On the real clock a busy
+        # machine's thread start-up put a millisecond or two between them
+        # (final_wait_ms 2, final_ms 0); on a clock only the pass moves, it
+        # cannot — test_speech_routes' twin of this test, the same way.
+        clock = [100.0]
+
+        class _Clock:
+            monotonic = staticmethod(lambda: clock[0])
+
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+        class _Timed(Accurate):
+            def __call__(self, audio):
+                clock[0] += 0.25
+                return super().__call__(audio)
+
+        acc = _Timed(" run the tests ")
         st = _spoken("run the tick", acc)
+        monkeypatch.setattr(ss, "time", _Clock())
         out = st.finish()
         assert out["committed"] == "" and out["partial"] == ""
         assert out["final"] == "run the tests"
@@ -676,7 +695,7 @@ class TestFinal:
         }
         # No quiet chunk came: the pass ran at the finish and was waited for whole.
         assert out["final_early"] is False
-        assert out["final_wait_ms"] == out["final_ms"]
+        assert out["final_wait_ms"] == out["final_ms"] == 250
         # The whole phrase, not the pruned window.
         assert acc.calls == [2 * RATE]
         assert st.final_ms == out["final_ms"] and st.phrase_seconds == 0

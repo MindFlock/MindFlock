@@ -11,12 +11,12 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "../../lib/toast";
-import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
+import { optimistic, stopToOpen, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { newStep, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { collapseGroups, drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, type DiagramNode } from "../../lib/flightDiagram";
 import { errMsg } from "../../lib/format";
 import { controlFlight, dropGroup, dropStop, moveStop, patchStop, patchStopGroup, saveStop, savePlan, setHalt, stepDone, stepFix, stepRetry, stepSkip, tackOn, tackOnParallel, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
-import { undoPayload } from "../../lib/stopEditing";
+import { undoAt } from "../../lib/skySelect";
 import { groundedDiagram, isFreeRun, perchWhy } from "../../lib/groundedLines";
 import { atHaltPoint } from "../../lib/flightDiagram";
 import { canFixStep } from "./FlightStrip";
@@ -41,7 +41,7 @@ export function readDrop(drop: StopDrop | string): StopDrop {
  * stop it has run or one still ahead. `note` says why it can't change and,
  * at the current stop, why it waits (lib/groundedLines `perchWhy`). */
 export function freeStopRemedies(
-  flight: Pick<Flight, "state" | "reason" | "steps" | "cursor" | "step_states">,
+  flight: Pick<Flight, "state" | "reason" | "steps" | "cursor" | "step_states" | "session">,
   n: Pick<DiagramNode, "index" | "state" | "step">
 ): { note: string; done: "" | "done" | "carry"; retry: boolean; fix: boolean; skip: boolean; ask?: StopAsk } {
   const here = n.index === flight.cursor && (flight.state === "halted" || flight.state === "waiting_you" || flight.state === "paused" || flight.state === "running");
@@ -86,7 +86,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   // A stop just tacked on opens in its dialog once the flight has it.
   useEffect(() => {
     if (selectIndex === null) return;
-    const n = stops.find((s) => s.index === selectIndex && s.step);
+    const n = stopToOpen(stops, selectIndex);
     if (!n) return;
     setSelected(n.id);
     setDialog({ id: n.id });
@@ -141,8 +141,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
         ariaLabel: "Undo: put “" + step.title + "” back",
         onClick: () => {
           const now = latest.current?.id === id ? latest.current : null;
-          const back = undoPayload(step, index, now);
-          void tackOn(id, back.step, back.at);
+          void tackOn(id, step, undoAt(index, now));
         },
       },
     });

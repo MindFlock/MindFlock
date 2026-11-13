@@ -24766,6 +24766,25 @@ function normalizeFlightRows(rows) {
 		};
 	});
 }
+function nextIsHaltPoint(flight) {
+	for (let k = flight.cursor + 1; k < flight.steps.length; k++) {
+		const s = flight.steps[k];
+		const ss = flight.step_states?.[s.id];
+		if (ss && (ss.state === "done" || ss.state === "skipped")) continue;
+		return !!s.halt && !ss?.detail?.halt_hit;
+	}
+	return false;
+}
+function skipCarriesOn(flight) {
+	if (flight.state !== "paused") return false;
+	return flight.steps.slice(flight.cursor + 1).some((s) => {
+		const st = flight.step_states?.[s.id]?.state;
+		return st !== "done" && st !== "skipped";
+	}) && !nextIsHaltPoint(flight);
+}
+function sessionGone(flight, rows) {
+	return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
+}
 //#endregion
 //#region src/api/client.ts
 var ApiError = class extends Error {
@@ -26407,6 +26426,11 @@ function shipLine(row, opts = {}) {
 }
 //#endregion
 //#region src/components/sidebar/ordering.ts
+var VERIFY_REASONS = /* @__PURE__ */ new Set([
+	"verify_confirm",
+	"verify_failed",
+	"verify_blocked"
+]);
 function orderedKeys(keys, order) {
 	const present = new Set(keys);
 	const out = [];
@@ -26605,6 +26629,7 @@ function attentionItems(instances) {
 	for (const inst of instances || []) {
 		if (inst.workspace_missing || inst.status === "paused") continue;
 		const ss = deriveSessionState(inst);
+		if (isVerifySession(inst) && !VERIFY_REASONS.has(String(ss.reason || ""))) continue;
 		if (ss.inBell) {
 			const step = ss.reason === "precommit_failed" ? (inst.failed_step || "").trim() : "";
 			items.push({
@@ -26615,7 +26640,7 @@ function attentionItems(instances) {
 				question: ss.reason === "question" ? askedQuestion(inst) : void 0
 			});
 		} else if (ss.state === "idle" && inst.stage === "pushed") {
-			if (laneOf(inst)?.target !== "push") items.push({
+			if (laneOf(inst)?.target !== "push" && !inst.pr_merged) items.push({
 				p: 3,
 				title: inst.title,
 				reason: "pushed — ready for PR"
@@ -31921,8 +31946,15 @@ function answeredByYou(entry) {
 function handedBack(entry) {
 	return entry?.result === "blocked" && entry?.by !== "human";
 }
+function isProvisional(plan, run, entry) {
+	if (!entry?.progress || !handedBack(entry)) return false;
+	return !(plan.state === "running" && (run?.session || "") === (plan.run_session || ""));
+}
 function stepIsYours(plan, step) {
-	return step.actor === "human" || handedBack(stepResult(plan, step.id));
+	if (step.actor === "human") return true;
+	const run = latestRun(plan);
+	const entry = run?.results?.[step.id] ?? null;
+	return handedBack(entry) && !isProvisional(plan, run, entry);
 }
 function isPhantomRun(run) {
 	if (run.session) return false;
@@ -35626,12 +35658,6 @@ function canShift(stops, i, dir, insertFrom) {
 	const to = i + dir;
 	return !!stops[i]?.editable && stops[i].kind !== "group" && to >= insertFrom && to >= 0 && to < stops.length && !!stops[to].editable;
 }
-function undoPayload(step, index, flight) {
-	return !!flight && index > flight.cursor && index < flight.steps.length ? {
-		step,
-		at: index
-	} : { step };
-}
 var flownState = (s) => s === "done" || s === "skipped" || s === "failed";
 function groupHaltStep(n) {
 	if (n.kind !== "group") return null;
@@ -37848,7 +37874,7 @@ function withFlightYou(waiting, instances) {
 	const listed = new Set(out.filter((w) => w.kind === "flight_you").map((w) => w.title));
 	for (const inst of instances) {
 		const fl = inst.flight;
-		if (!rowWaitsOnYou(fl) || listed.has(inst.title)) continue;
+		if (!rowWaitsOnYou(fl) || listed.has(inst.title) || elsewhere(inst)) continue;
 		out.push({
 			key: "flight:" + fl.id,
 			title: inst.title,
@@ -37863,6 +37889,9 @@ function withFlightYou(waiting, instances) {
 		});
 	}
 	return out;
+}
+function elsewhere(inst) {
+	return !!inst.device || String(inst.title || "").includes("::");
 }
 var FLIGHT_PAUSED = "flight_paused";
 function pausedAtLine(stepTitle) {
@@ -37909,8 +37938,9 @@ function flightRow(kind, title, f) {
 	};
 }
 function withFlightRows(waiting, instances, flights) {
-	const out = withFlightYou(waiting, instances);
 	const live = new Set(instances.map((i) => i.title));
+	const known = new Set((flights || []).map((f) => f.id));
+	const out = withFlightYou(waiting, instances).filter((w) => !(w.kind === "flight_you" && w.title && !live.has(w.title) && known.has(w.flight?.id || "")));
 	const hasFlight = new Set(out.filter((w) => w.kind === "flight_you" || w.kind === "flight_halted").map((w) => w.title));
 	const keys = new Set(out.map((w) => w.key));
 	const full = new Map((flights || []).map((f) => [f.id, f]));
@@ -37922,7 +37952,7 @@ function withFlightRows(waiting, instances, flights) {
 	};
 	for (const inst of instances) {
 		const fl = inst.flight;
-		if (!fl || !fl.id) continue;
+		if (!fl || !fl.id || elsewhere(inst)) continue;
 		const f = full.get(fl.id);
 		if (fl.state === "waiting_you") add(flightRow("flight_you", inst.title, {
 			...fl,
@@ -37956,6 +37986,11 @@ function withFlightRows(waiting, instances, flights) {
 	}
 	return out;
 }
+function behaviorsStillAsk(plan, instances) {
+	if (planShipped(plan)) return true;
+	const walker = latestRun(plan)?.session || "";
+	return instances.some((i) => !!walker && i.title === walker || planForSession([plan], i)?.id === plan.id);
+}
 function kindOf$1(r, byTitle) {
 	if (r.plan) return "plan";
 	if (r.waiting) {
@@ -37967,7 +38002,9 @@ function kindOf$1(r, byTitle) {
 	if (p === 0) return "asking";
 	if (p === 2) return "checks";
 	if (p >= 3) return "ready";
-	return rowWaitsOnYou(byTitle.get(r.title)?.flight) ? "wait_for_me" : "broken";
+	const fl = byTitle.get(r.title)?.flight;
+	if (fl && fl.state === "halted") return "halted";
+	return rowWaitsOnYou(fl) ? "wait_for_me" : "broken";
 }
 var ORDER = new Map(NEEDS_YOU_KINDS.map((k, i) => [k, i]));
 function needsYouRows(src) {
@@ -38000,6 +38037,7 @@ function needsYouRows(src) {
 	for (const p of src.testPlans || []) {
 		if (spoken.has(p.id)) continue;
 		if (!isFailing(p) && !isWaitingOnYou(p)) continue;
+		if (!behaviorsStillAsk(p, instances)) continue;
 		rows.push({
 			key: "behaviors:" + p.id,
 			title: "",
@@ -43265,11 +43303,17 @@ function flyRequest(t, plan, extra = {}) {
 		}
 	};
 }
+var WAITING_PANEL = {
+	tickets: "tickets",
+	prs: "github-prs",
+	issues: "github-issues"
+};
 async function flyWaiting(t, plan, extra = {}, fallbackTitle = "") {
 	const req = flyRequest(t, plan, extra);
 	try {
 		const title = (await api(req.path, { json: req.body }))?.title || fallbackTitle;
 		refreshFlights();
+		refreshPanel(WAITING_PANEL[t.kind]);
 		if (title) openWhenReady(title);
 		return title;
 	} finally {
@@ -43712,11 +43756,15 @@ function openSession(title, tab) {
 	useUi.getState().closeDialog();
 	document.dispatchEvent(new CustomEvent("mf-close-bell"));
 }
-function RowMain({ title, text, shown, row }) {
+function RowMain({ title, text, shown, row, closed = false }) {
 	const about = text || row?.last_prompt || "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pr-open-main",
-		children: [row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		children: [closed ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pr-open-ref ob-ref",
+			title: shown(title) + " is closed",
+			children: shown(title)
+		}) : row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			className: "pr-open-ref ob-ref",
 			title: "Open " + title,
@@ -44051,27 +44099,67 @@ function ApprovePreview({ w, row }) {
 		})
 	});
 }
-function flightOf(w, row) {
+function flightOf(w, row, full) {
 	const own = w.flight;
 	const fl = row?.flight;
 	if (fl && fl.id && (!own || own.id === fl.id)) return {
 		id: fl.id,
 		step: fl.step
 	};
-	if (own && own.id && own.step_id) return {
-		id: own.id,
-		step: {
-			id: own.step_id,
-			kind: "",
-			title: own.step_title
-		}
-	};
+	if (own && own.id && own.step_id) {
+		const at = full && full.id === own.id ? full.steps.find((x) => x.id === own.step_id) : void 0;
+		return {
+			id: own.id,
+			step: {
+				id: own.step_id,
+				kind: at?.kind || "",
+				title: own.step_title
+			}
+		};
+	}
 	return null;
+}
+function useRoute(w, row) {
+	const flights = useFlights().data;
+	const instances = useInstances().data;
+	const id = w.flight?.id || row?.flight?.id || "";
+	const full = id ? flights?.find((f) => f.id === id) : void 0;
+	return {
+		full,
+		gone: !row && !!full && sessionGone(full, instances),
+		fl: flightOf(w, row, full)
+	};
+}
+async function skipPausedStop(fl, full) {
+	return await stepSkip(fl.id, fl.step.id) && !!full && skipCarriesOn(full) && controlFlight(fl.id, "resume");
+}
+function StopRouteButton({ id, busy, run }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn",
+		disabled: busy,
+		title: "Its session is closed — end this route",
+		onClick: () => void run(() => flightAction("Stop the route", flightPath(id, "/cancel"), {}, "Route stopped")),
+		children: "Stop the route"
+	});
+}
+function RouteMain({ w, row, shown, full, gone }) {
+	if (gone && full) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
+		title: full.session,
+		text: w.text || full.plan_name,
+		shown,
+		closed: true
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
+		title: w.title || w.text || "",
+		text: w.title ? w.text : "",
+		shown: w.title ? shown : (t) => t,
+		row
+	});
 }
 function FlightYouRow({ w, row, shown }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
-	const fl = flightOf(w, row);
-	const full = useFlights().data?.find((f) => f.id === fl?.id);
+	const { full, gone, fl } = useRoute(w, row);
 	const ask = full && full.steps[full.cursor]?.id === fl?.step.id ? flightAsk(full) : "";
 	const offers = askOffers(ask);
 	const rec = full && fl ? full.step_states?.[fl.step.id] : void 0;
@@ -44089,11 +44177,12 @@ function FlightYouRow({ w, row, shown }) {
 		className: "pr-open-item ob-item ob-flight_you",
 		"data-outbox-row": w.title,
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
-				title: w.title || w.text || "",
-				text: w.title ? w.text : "",
-				shown: w.title ? shown : (t) => t,
-				row
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RouteMain, {
+				w,
+				row,
+				shown,
+				full,
+				gone
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pr-open-meta",
@@ -44107,46 +44196,54 @@ function FlightYouRow({ w, row, shown }) {
 				className: "ik-item-start",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "ob-acts",
-					children: [fl && offers ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [offers.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: o.primary ? "btn-primary pr-review-btn" : "test-btn",
-						disabled: busy,
-						title: o.title,
-						onClick: () => void run(() => o.key === "retry" ? stepRetry(fl.id, fl.step.id) : stepDone(fl.id, fl.step.id)),
-						children: o.label
-					}, o.key)), ask === "owed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						title: "Skip “" + fl.step.title + "” — the checks stay unconfirmed and the route goes on",
-						onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
-						children: "Skip"
-					})] }) : fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [fl.step.kind === "verify" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary pr-review-btn",
-						title: "Open the Verify of “" + fl.step.title + "” — the route goes on once you confirm it",
-						onClick: () => openBehaviors({ title: w.title }),
-						children: "Verify"
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary pr-review-btn",
-						disabled: busy,
-						title: "Mark “" + fl.step.title + "” done — the route goes on",
-						onClick: () => void run(() => stepDone(fl.id, fl.step.id)),
-						children: "Done"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						title: "Skip “" + fl.step.title + "” — the route goes on without it",
-						onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
-						children: "Skip"
-					})] }), row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						onClick: () => openSession(w.title),
-						children: "Open ↗"
-					})]
+					children: [
+						fl && offers ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [offers.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: o.primary ? "btn-primary pr-review-btn" : "test-btn",
+							disabled: busy,
+							title: o.title,
+							onClick: () => void run(() => o.key === "retry" ? stepRetry(fl.id, fl.step.id) : stepDone(fl.id, fl.step.id)),
+							children: o.label
+						}, o.key)), ask === "owed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: busy,
+							title: "Skip “" + fl.step.title + "” — the checks stay unconfirmed and the route goes on",
+							onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
+							children: "Skip"
+						})] }) : fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [fl.step.kind === "verify" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary pr-review-btn",
+							title: "Open the Verify of “" + fl.step.title + "” — the route goes on once you confirm it",
+							onClick: () => openBehaviors({ title: w.title }),
+							children: "Verify"
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary pr-review-btn",
+							disabled: busy,
+							title: "Mark “" + fl.step.title + "” done — the route goes on",
+							onClick: () => void run(() => stepDone(fl.id, fl.step.id)),
+							children: "Done"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: busy,
+							title: "Skip “" + fl.step.title + "” — the route goes on without it",
+							onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
+							children: "Skip"
+						})] }),
+						fl && gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopRouteButton, {
+							id: fl.id,
+							busy,
+							run
+						}),
+						row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: () => openSession(w.title),
+							children: "Open ↗"
+						})
+					]
 				})
 			}),
 			(findings || owed.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -44161,7 +44258,7 @@ function FlightYouRow({ w, row, shown }) {
 }
 function FlightHaltedRow({ w, row, shown }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
-	const fl = flightOf(w, row);
+	const { full, gone, fl } = useRoute(w, row);
 	const run = async (fn) => {
 		setBusy(true);
 		try {
@@ -44177,11 +44274,12 @@ function FlightHaltedRow({ w, row, shown }) {
 		className: "pr-open-item ob-item ob-flight_halted",
 		"data-outbox-row": w.title || w.key,
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
-				title: w.title || w.text || "",
-				text: w.title ? w.text : "",
-				shown: w.title ? shown : (t) => t,
-				row
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RouteMain, {
+				w,
+				row,
+				shown,
+				full,
+				gone
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pr-open-meta",
@@ -44199,26 +44297,34 @@ function FlightHaltedRow({ w, row, shown }) {
 				className: "ik-item-start",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "ob-acts",
-					children: [fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary pr-review-btn",
-						disabled: busy,
-						title: "Run “" + (at || "this stop") + "” again",
-						onClick: () => void run(() => stepRetry(fl.id, fl.step.id)),
-						children: "Retry"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						title: "Skip “" + (at || "this stop") + "” — the route goes on without it",
-						onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
-						children: "Skip"
-					})] }), row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						onClick: () => openSession(w.title),
-						children: "Open ↗"
-					})]
+					children: [
+						fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary pr-review-btn",
+							disabled: busy,
+							title: "Run “" + (at || "this stop") + "” again",
+							onClick: () => void run(() => stepRetry(fl.id, fl.step.id)),
+							children: "Retry"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: busy,
+							title: "Skip “" + (at || "this stop") + "” — the route goes on without it",
+							onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
+							children: "Skip"
+						})] }),
+						fl && gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopRouteButton, {
+							id: fl.id,
+							busy,
+							run
+						}),
+						row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: () => openSession(w.title),
+							children: "Open ↗"
+						})
+					]
 				})
 			})
 		]
@@ -44226,7 +44332,7 @@ function FlightHaltedRow({ w, row, shown }) {
 }
 function FlightPausedRow({ w, row, shown }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
-	const fl = flightOf(w, row);
+	const { full, gone, fl } = useRoute(w, row);
 	const run = async (fn) => {
 		setBusy(true);
 		try {
@@ -44241,11 +44347,12 @@ function FlightPausedRow({ w, row, shown }) {
 		className: "pr-open-item ob-item ob-flight_paused",
 		"data-outbox-row": w.title || w.key,
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
-				title: w.title || w.text || "",
-				text: w.title ? w.text : "",
-				shown: w.title ? shown : (t) => t,
-				row
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RouteMain, {
+				w,
+				row,
+				shown,
+				full,
+				gone
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pr-open-meta",
@@ -44259,26 +44366,34 @@ function FlightPausedRow({ w, row, shown }) {
 				className: "ik-item-start",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "ob-acts",
-					children: [fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary pr-review-btn",
-						disabled: busy,
-						title: "Carry on — “" + (at || "this stop") + "” runs and the route goes on",
-						onClick: () => void run(() => controlFlight(fl.id, "resume")),
-						children: "Carry on"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						title: "Skip “" + (at || "this stop") + "” — the route goes on without it",
-						onClick: () => void run(async () => await stepSkip(fl.id, fl.step.id) && controlFlight(fl.id, "resume")),
-						children: "Skip"
-					})] }), row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						onClick: () => openSession(w.title),
-						children: "Open ↗"
-					})]
+					children: [
+						fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary pr-review-btn",
+							disabled: busy,
+							title: "Carry on — “" + (at || "this stop") + "” runs and the route goes on",
+							onClick: () => void run(() => controlFlight(fl.id, "resume")),
+							children: "Carry on"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: busy,
+							title: "Skip “" + (at || "this stop") + "” — the route goes on without it",
+							onClick: () => void run(() => skipPausedStop(fl, full)),
+							children: "Skip"
+						})] }),
+						fl && gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopRouteButton, {
+							id: fl.id,
+							busy,
+							run
+						}),
+						row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: () => openSession(w.title),
+							children: "Open ↗"
+						})
+					]
 				})
 			})
 		]
@@ -96965,23 +97080,14 @@ function VerifyWalkHint({ session, here, onOpen }) {
 	});
 }
 function canFixStep(flight) {
-	if (!flight || flight.state !== "halted" && flight.state !== "waiting_you") return false;
+	if (!flight || !flight.session || flight.state !== "halted" && flight.state !== "waiting_you") return false;
 	const step = flight.steps[flight.cursor];
 	const ss = step ? flight.step_states?.[step.id] : void 0;
 	if (!ss) return false;
 	if (ss.state === "failed") return !ss.detail?.moved_on;
 	return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
 }
-function nextIsHaltPoint(flight) {
-	for (let k = flight.cursor + 1; k < flight.steps.length; k++) {
-		const s = flight.steps[k];
-		const ss = flight.step_states?.[s.id];
-		if (ss && (ss.state === "done" || ss.state === "skipped")) continue;
-		return !!s.halt && !ss?.detail?.halt_hit;
-	}
-	return false;
-}
-function YouStepActions({ flight, compact = false, inTile = false }) {
+function YouStepActions({ flight, compact = false, inTile = false, gone = false }) {
 	const step = flight.steps[flight.cursor];
 	const items = youItems(step);
 	const [ticked, setTicked] = (0, import_react.useState)({});
@@ -97037,7 +97143,7 @@ function YouStepActions({ flight, compact = false, inTile = false }) {
 	const key = (i) => flight.id + ":" + step.id + ":" + i;
 	const allTicked = items.every((_, i) => ticked[key(i)]);
 	const halted = flight.state === "halted" || paused || handed;
-	const fix = !paused && canFixStep(flight);
+	const fix = !paused && !gone && canFixStep(flight);
 	const text = handed ? /^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason : ask === "owed" ? askSentence(rec, youText(flight)) : youText(flight);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : ""),
@@ -97111,8 +97217,16 @@ function YouStepActions({ flight, compact = false, inTile = false }) {
 						className: "test-btn fl-btn fl-skip",
 						disabled: busy,
 						title: "Skip “" + step.title + "” — the route goes on without it",
-						onClick: () => void run(async () => await stepSkip(flight.id, step.id) && flight.state === "paused" && !nextIsHaltPoint(flight) && controlFlight(flight.id, "resume")),
+						onClick: () => void run(async () => await stepSkip(flight.id, step.id) && skipCarriesOn(flight) && controlFlight(flight.id, "resume")),
 						children: "Skip"
+					}),
+					gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn fl-btn",
+						disabled: busy,
+						title: "Its session is closed — end this route",
+						onClick: () => void run(() => flightAction("Stop the route", flightPath(flight.id, "/cancel"), {}, "Route stopped")),
+						children: "Stop the route"
 					})
 				]
 			})
@@ -97172,9 +97286,6 @@ function flyAgainItems(flight, gone = false) {
 		title: "Pick the stop it flies again from",
 		onSelect: () => pickAgainStop(flight)
 	}];
-}
-function sessionGone(flight, rows) {
-	return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
 }
 function FlyAgain({ flight }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
@@ -99470,8 +99581,9 @@ var HERE = /* @__PURE__ */ new Set([
 	"halted",
 	"paused"
 ]);
-function withFixItem(items, n) {
+function withFixItem(items, n, fixable = true) {
 	const out = [...items];
+	if (!fixable) return out.filter((i) => i.key !== "fix");
 	if (n.state !== "halted" || out.some((i) => i.key === "fix")) return out;
 	const at = out.findIndex((i) => i.key === "retry");
 	if (at < 0) return out;
@@ -99514,7 +99626,7 @@ function useChainMenu(h, flightId, ctx) {
 		},
 		live,
 		here: live && HERE.has(n.state)
-	}), n);
+	}), n, !ctx?.noSession);
 	const st = n.step;
 	const steps = ctx?.steps || [];
 	const at = st ? steps.findIndex((x) => x.id === st.id) : -1;
@@ -102457,9 +102569,11 @@ function patchFlightCache(id, edit) {
 	const key = ["flights"];
 	queryClient.cancelQueries({ queryKey: key });
 	const before = queryClient.getQueryData(key);
-	if (!before) return () => {};
+	const orig = before?.find((f) => f.id === id);
+	if (!before || !orig) return () => {};
 	queryClient.setQueryData(key, before.map((f) => f.id === id ? edit(f) : f));
-	return () => queryClient.setQueryData(key, before);
+	const guess = queryClient.getQueryData(key)?.find((f) => f.id === id);
+	return () => queryClient.setQueryData(key, (now) => now ? now.map((f) => f === guess ? orig : f) : now);
 }
 async function optimistic(id, edit, request) {
 	const rollback = patchFlightCache(id, edit);
@@ -102482,6 +102596,10 @@ function withoutSteps(ids) {
 		};
 	};
 }
+var GUESS_ID = "s_tmp";
+function stopToOpen(stops, index) {
+	return stops.find((s) => s.index === index && s.step && !s.step.id.startsWith(GUESS_ID)) || null;
+}
 var tmp = 0;
 var PENDING = {
 	state: "pending",
@@ -102494,7 +102612,7 @@ function withSteps(steps, at) {
 	return (f) => {
 		const fresh = steps.map((s) => ({
 			...s,
-			id: "s_tmp" + ++tmp
+			id: GUESS_ID + ++tmp
 		}));
 		const i = at === void 0 ? f.steps.length : Math.max(0, Math.min(at, f.steps.length));
 		const states = { ...f.step_states };
@@ -102510,7 +102628,7 @@ function withSteps(steps, at) {
 				...f.steps.slice(i)
 			],
 			step_states: states,
-			cursor: i <= f.cursor && f.state !== "grounded" ? f.cursor + fresh.length : f.cursor
+			cursor: i < f.cursor && f.state !== "grounded" ? f.cursor + fresh.length : f.cursor
 		};
 	};
 }
@@ -102518,13 +102636,28 @@ async function optimisticDelete(id, request) {
 	const key = ["flights"];
 	queryClient.cancelQueries({ queryKey: key });
 	const before = queryClient.getQueryData(key);
-	if (before) queryClient.setQueryData(key, before.filter((f) => f.id !== id));
+	const at = before ? before.findIndex((f) => f.id === id) : -1;
+	if (before && at >= 0) queryClient.setQueryData(key, before.filter((f) => f.id !== id));
+	const putBack = () => {
+		if (!before || at < 0) return;
+		const orig = before[at];
+		const after = new Set(before.slice(at + 1).map((f) => f.id));
+		queryClient.setQueryData(key, (now) => {
+			if (!now || now.some((f) => f.id === id)) return now;
+			const i = now.findIndex((f) => after.has(f.id));
+			return i < 0 ? [...now, orig] : [
+				...now.slice(0, i),
+				orig,
+				...now.slice(i)
+			];
+		});
+	};
 	try {
 		const ok = await request();
-		if (!ok && before) queryClient.setQueryData(key, before);
+		if (!ok) putBack();
 		return ok;
 	} catch (err) {
-		if (before) queryClient.setQueryData(key, before);
+		putBack();
 		throw err;
 	}
 }
@@ -102819,6 +102952,19 @@ function removalNeedsAsk(t) {
 		case "grounded": return false;
 		case "selection": return t.items.some(removalNeedsAsk);
 	}
+}
+function undoFirstOpen(f) {
+	if (f.state === "grounded" || f.state === "ready") return 0;
+	const cur = f.steps[f.cursor];
+	const ss = cur ? f.step_states?.[cur.id] : void 0;
+	if (f.state === "paused" && (!cur || (ss?.state ?? "pending") === "pending" && !ss?.detail?.performing)) return f.cursor;
+	let end = f.cursor + 1;
+	const par = cur?.parallel?.id;
+	while (par && f.steps[end]?.parallel?.id === par) end++;
+	return end;
+}
+function undoAt(index, now) {
+	return now && index >= undoFirstOpen(now) && index < now.steps.length ? index : void 0;
 }
 //#endregion
 //#region src/components/flights/StopDialog.tsx
@@ -103669,7 +103815,7 @@ function useSessionLine(title, src, opts) {
 	const open = dialog ? find(dialog.id) : null;
 	(0, import_react.useEffect)(() => {
 		if (selectIndex === null) return;
-		const n = stops.find((s) => s.index === selectIndex && s.step);
+		const n = stopToOpen(stops, selectIndex);
 		if (!n) return;
 		setSelected(n.id);
 		setDialog({ id: n.id });
@@ -103730,8 +103876,8 @@ function useSessionLine(title, src, opts) {
 		const entry = pushUndo({
 			label: "Remove “" + step.title + "”",
 			undo: () => {
-				const back = undoPayload(step, index, latest.current?.id === id ? latest.current : null);
-				return tackOn(id, back.step, back.at);
+				const now = latest.current?.id === id ? latest.current : null;
+				return tackOn(id, step, undoAt(index, now));
 			}
 		});
 		toast(removedToast(step.title, wasHere, next), { action: {
@@ -103755,8 +103901,7 @@ function useSessionLine(title, src, opts) {
 			label: "Remove “" + g.name + "”",
 			undo: () => {
 				const now = latest.current?.id === id ? latest.current : null;
-				const back = undoPayload(g.steps[0], first, now);
-				return tackOnSteps(id, g.steps, back.at, g.name);
+				return tackOnSteps(id, g.steps, undoAt(first, now), g.name);
 			}
 		});
 		toast(removedToast(g.name, wasHere, next), { action: {
@@ -114663,6 +114808,7 @@ async function flyLaneItem(w, block) {
 	try {
 		const r = await api(req.path, { json: req.body });
 		refreshFlights();
+		refreshPanel(WAITING_PANEL[t.kind]);
 		return r?.title || (t.kind === "tickets" ? w.item.reference : "");
 	} finally {
 		refreshInstances();
@@ -115146,6 +115292,21 @@ function PlanSelect({ kind, target, depth, plan, onChange, className, field }) {
 			})
 		]
 	});
+}
+//#endregion
+//#region src/components/intake/picks.ts
+function canPick(t) {
+	return !t.has_session && !t.elsewhere;
+}
+function startablePicks(picked, listed, key) {
+	if (!listed) return [...picked.values()];
+	const now = new Map(listed.map((t) => [key(t), t]));
+	const out = [];
+	for (const k of picked.keys()) {
+		const t = now.get(k);
+		if (t && canPick(t)) out.push(t);
+	}
+	return out;
 }
 //#endregion
 //#region src/lib/failureText.ts
@@ -119260,6 +119421,7 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 	const openWorkflows = useToggleSet(WORKFLOWS_CLOSED_LS_KEY, true);
 	const visible = visibleBuckets(buckets, doneBuckets, shown);
 	const hidden = buckets.filter((b) => !visible.includes(b));
+	const pickedNow = startablePicks(picked, tickets, pickKey);
 	const hasOthers = (tickets || []).some((t) => t.mine === false);
 	const rows = mineOnly ? (tickets || []).filter((t) => t.mine !== false) : tickets || [];
 	const bySource = /* @__PURE__ */ new Map();
@@ -119475,10 +119637,10 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 							onStarted: relistTickets,
 							eligibleLabel,
 							autoOn,
-							pick: {
+							pick: canPick(t) ? {
 								checked: picked.has(pickKey(t)),
 								onChange: (on) => setPick(t, on)
-							}
+							} : void 0
 						}, t.source + ":" + t.id))
 					}, key);
 				});
@@ -119531,15 +119693,15 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 					children: buckets
 				}, src);
 			}),
-			picked.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			pickedNow.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ik-pickbar",
 				role: "region",
 				"aria-label": "Picked tickets",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-						picked.size,
+						pickedNow.length,
 						" ticket",
-						picked.size === 1 ? "" : "s",
+						pickedNow.length === 1 ? "" : "s",
 						" ·",
 						" "
 					] }),
@@ -119548,7 +119710,7 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 						id: "tk-start-together",
 						className: "ik-pick-go",
 						onClick: () => {
-							const text = startTogetherText([...picked.values()]);
+							const text = startTogetherText(pickedNow);
 							setPicked(/* @__PURE__ */ new Map());
 							useUi.getState().openNewWith(text);
 						},
@@ -120282,7 +120444,8 @@ function EpicItem({ e, busy, onStart }) {
 }
 function EpicsTab({ gotoTab }) {
 	const q = useEpicsQuery();
-	const [busy, setBusy] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
+	const epicKey = (e) => e.source + ":" + e.id;
 	const openSources = useToggleSet(SOURCES_CLOSED_LS_KEY, true);
 	const openStates = useToggleSet(STATES_CLOSED_LS_KEY, true);
 	const groups = groupEpics(q.data);
@@ -120294,7 +120457,8 @@ function EpicsTab({ gotoTab }) {
 		loaded
 	});
 	const start = async (e) => {
-		setBusy(e.title);
+		const k = epicKey(e);
+		setBusy((b) => new Set(b).add(k));
 		try {
 			const r = await api("/api/epics/start", { json: {
 				source: e.source,
@@ -120305,7 +120469,11 @@ function EpicsTab({ gotoTab }) {
 		} catch (err) {
 			errorPop("Couldn't start the epic", err instanceof ApiError ? err.message : String(err));
 		} finally {
-			setBusy("");
+			setBusy((b) => {
+				const next = new Set(b);
+				next.delete(k);
+				return next;
+			});
 		}
 	};
 	const toTickets = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -120377,7 +120545,7 @@ function EpicsTab({ gotoTab }) {
 								onToggle: () => openStates.toggle(key),
 								children: s.rows.map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EpicItem, {
 									e,
-									busy: busy === e.title,
+									busy: busy.has(epicKey(e)),
 									onStart: (x) => void start(x)
 								}, e.source + ":" + e.id))
 							}, key);
@@ -138052,6 +138220,7 @@ function AskMicRow({ title }) {
 				talk("down");
 			},
 			onPointerUp: () => talk("up"),
+			onPointerCancel: () => talk("up"),
 			onClick: (e) => {
 				if (e.detail === 0) talk("down");
 			},
@@ -146275,18 +146444,18 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 			failPendingSession(guess);
 			setError(errMsg(err));
 			setBusy(false);
-			onFailed?.();
+			onFailed?.(guess);
 			return;
 		}
 		if (!(attach ? await attachGrounded(attach.id, { title }) : plan ? await startFlightOn(title, plan) : true)) {
 			setMade(title);
 			setError("“" + windowName(title) + "” started, but " + (attach ? "“" + attach.name + "”" : "the stops") + " didn't start — the error card says why.");
 			setBusy(false);
-			onFailed?.();
+			onFailed?.(guess);
 			return;
 		}
 		setBusy(false);
-		onCreated(title);
+		onCreated(title, guess);
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: cardRef,
@@ -146652,13 +146821,18 @@ function perchLine(flight, kinds) {
 }
 function PerchRow({ flight, kinds, onFocus, onFocusFlight }) {
 	const halted = flight.state === "halted";
+	const gone = sessionGone(flight, useInstances().data);
 	const head = flight.subject?.title || flight.subject?.id || !flight.session ? flightHeadline(flight) : windowName(flight.session);
 	const go = () => flight.session ? onFocus(flight.session) : onFocusFlight?.(flight.id);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-perch" + (halted ? " is-halted" : ""),
 		"data-flight": flight.id,
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			gone ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-perch-name",
+				title: windowName(flight.session) + " is closed",
+				children: head
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "sky-perch-name",
 				title: flight.session ? "Show " + windowName(flight.session) + "'s route" : "Show this route on the Sky",
@@ -146669,7 +146843,10 @@ function PerchRow({ flight, kinds, onFocus, onFocusFlight }) {
 				className: "sky-perch-step muted",
 				children: perchLine(flight, kinds)
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, { flight })
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, {
+				flight,
+				gone
+			})
 		]
 	});
 }
@@ -148330,8 +148507,9 @@ function takenStops(nodes, steps) {
 function putBackAt(taken, flight) {
 	let len = flight.length;
 	let atEnd = false;
+	const first = flight.first ?? flight.cursor + 1;
 	return taken.map((t) => {
-		atEnd ||= !(t.index > flight.cursor && t.index < len);
+		atEnd ||= !(t.index >= first && t.index < len);
 		len += t.steps.length;
 		return atEnd ? void 0 : t.index;
 	});
@@ -148443,7 +148621,8 @@ function SkySelectionBar(p) {
 				}
 				const ats = putBackAt(out, {
 					cursor: now.cursor,
-					length: now.steps.length
+					length: now.steps.length,
+					first: undoFirstOpen(now)
 				});
 				for (let i = 0; i < out.length; i++) {
 					const t = out[i];
@@ -148681,7 +148860,7 @@ function useGroundedLine(flight, src) {
 	latest.current = flight;
 	(0, import_react.useEffect)(() => {
 		if (selectIndex === null) return;
-		const n = stops.find((s) => s.index === selectIndex && s.step);
+		const n = stopToOpen(stops, selectIndex);
 		if (!n) return;
 		setSelected(n.id);
 		setDialog({ id: n.id });
@@ -148733,8 +148912,8 @@ function useGroundedLine(flight, src) {
 			label: "Undo",
 			ariaLabel: "Undo: put “" + step.title + "” back",
 			onClick: () => {
-				const back = undoPayload(step, index, latest.current?.id === id ? latest.current : null);
-				tackOn(id, back.step, back.at);
+				const now = latest.current?.id === id ? latest.current : null;
+				tackOn(id, step, undoAt(index, now));
 			}
 		} });
 		return true;
@@ -149310,7 +149489,8 @@ function GroundedLine(p) {
 	const gc = line.graphCanvas;
 	const chainMenu = useChainMenu(gc, flight.id, {
 		steps: flight.steps,
-		kinds: p.kinds
+		kinds: p.kinds,
+		noSession: !flight.session
 	});
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const shift = (0, import_react.useRef)(false);
@@ -150980,6 +151160,9 @@ function SkyView() {
 	const shelfAsk = useUi((s) => s.skyShelf);
 	const [takeoff, setTakeoff] = (0, import_react.useState)(null);
 	const [groundFocus, setGroundFocus] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		if (focused) setGroundFocus("");
+	}, [focused]);
 	const [attachPick, setAttachPick] = (0, import_react.useState)(null);
 	const [sessionOver, setSessionOver] = (0, import_react.useState)("");
 	useAutoTour("sky", true);
@@ -153019,17 +153202,19 @@ function SkyView() {
 		};
 	};
 	const selectedBox = () => {
-		const id = groundFocus || focusLine;
-		if (!id) return null;
-		let slot = null;
-		vpRef.current?.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => {
-			if (el.getAttribute("data-slot") === id) slot = el;
-		});
-		const box = [...slot?.querySelectorAll(".sky-node.is-selected[data-node], .fl-box.selected[data-node]") || []].find((b) => !b.closest(".skl-card"));
-		return box ? {
-			line: id,
-			node: box.getAttribute("data-node") || ""
-		} : null;
+		for (const id of [groundFocus, focusLine]) {
+			if (!id) continue;
+			let slot = null;
+			vpRef.current?.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => {
+				if (el.getAttribute("data-slot") === id) slot = el;
+			});
+			const box = [...slot?.querySelectorAll(".sky-node.is-selected[data-node], .fl-box.selected[data-node]") || []].find((b) => !b.closest(".skl-card"));
+			if (box) return {
+				line: id,
+				node: box.getAttribute("data-node") || ""
+			};
+		}
+		return null;
 	};
 	const removeKeys = (0, import_react.useRef)(() => {});
 	removeKeys.current = (e) => {
@@ -153341,16 +153526,14 @@ function SkyView() {
 				flying: guess
 			});
 		},
-		onFailed: () => {
-			const guess = newAt.flying;
+		onFailed: (guess) => {
 			if (guess) setLayout((l) => tidySkyLayout(l, guess));
 			setNewAt((cur) => cur ? {
 				...cur,
 				flying: void 0
 			} : cur);
 		},
-		onCreated: (title) => {
-			const guess = newAt.flying;
+		onCreated: (title, guess) => {
 			setLayout((l) => patchSkyLine(l, title, {
 				x: newAt.x,
 				y: newAt.y,

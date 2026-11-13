@@ -1010,6 +1010,9 @@ function AskMicRow({ title }: { title: string }) {
           talk("down");
         }}
         onPointerUp={() => talk("up")}
+        // A pointer the browser takes back (a touch become a scroll) ends
+        // the hold too, as on the top-bar mic: no release ever comes.
+        onPointerCancel={() => talk("up")}
         onClick={(e) => {
           // Keyboard activation (Enter / Space) has no pointer events.
           if (e.detail === 0) talk("down");

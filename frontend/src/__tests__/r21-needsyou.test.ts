@@ -149,6 +149,66 @@ describe("a session's own verify is one bell row", () => {
   });
 });
 
+// The owner's "3 need you with every session closed": a check made BEFORE
+// the merge left "blocked — needs you: run aws sso login", then its session
+// was closed. Nobody is left to carry it on, and it sat in the list for days.
+describe("a verify nobody is left to ask about", () => {
+  const blocked = (id: string, walker: string, extra: Record<string, unknown> = {}) =>
+    ({
+      id,
+      title: id,
+      repo_root: "/home/u/repo",
+      branch: "feature/" + id,
+      state: "generated",
+      live_at: 0,
+      merged_at: 0,
+      steps: [{ id: "s1", text: "Open the page" }],
+      runs: [
+        {
+          at: NOW - 86400,
+          by: "agent",
+          session: walker,
+          prelive: true,
+          verdict: "partial",
+          results: { s1: { result: "blocked", note: "needs you: run aws sso login", at: NOW - 86400, by: "agent" } },
+        },
+      ],
+      ...extra,
+    }) as unknown as TestPlan;
+  const count = (instances: Instance[], plan: TestPlan) =>
+    needsYouRows({ instances, waiting: [], flights: [], testPlans: [plan] }).filter((r) => r.kind === "behaviors").length;
+
+  it("is not a row once its session and its walker are both closed", () => {
+    expect(count([inst("other")], blocked("sc-1", "sc-1"))).toBe(0);
+    expect(count([inst("other")], blocked("sc-2", "verify-sc-2-abc1234"))).toBe(0);
+    expect(count([], blocked("sc-1", "sc-1"))).toBe(0);
+  });
+
+  it("is a row while the session it covers is open (by title, or repo + branch)", () => {
+    expect(count([inst("sc-1")], blocked("sc-1", "verify-sc-1-abc1234"))).toBe(1);
+    const twin = inst("sc-1-copy", { branch: "feature/sc-1", repo: "repo" } as Partial<Instance>);
+    expect(count([twin], blocked("sc-1", "verify-sc-1-abc1234"))).toBe(1);
+  });
+
+  it("is a row while the session that walked it is open", () => {
+    expect(count([inst("pr-repo-12")], blocked("some-plan", "pr-repo-12"))).toBe(1);
+  });
+
+  it("is a row with no session at all once the work has shipped", () => {
+    expect(count([], blocked("sc-1", "sc-1", { state: "due", live_at: NOW - 60 }))).toBe(1);
+  });
+
+  it("a failed check goes the same way", () => {
+    const failed = (extra: Record<string, unknown> = {}) =>
+      blocked("sc-9", "sc-9", {
+        runs: [{ at: NOW - 60, by: "agent", session: "sc-9", prelive: true, verdict: "fail", results: { s1: { result: "fail", note: "500", at: NOW - 60, by: "agent" } } }],
+        ...extra,
+      });
+    expect(count([], failed())).toBe(0);
+    expect(count([inst("sc-9")], failed())).toBe(1);
+  });
+});
+
 describe("every surface reads it", () => {
   it("the bell's list and badge", () => {
     const bell = fn("components/NotificationsBell.tsx", "NotificationsBell");

@@ -83,14 +83,17 @@ export interface NewSessionBlockProps {
   /** The bar was dragged: the block's new top-left (plane px). Without it the
    * block stays put (the phone's list). */
   onMove?(at: { x: number; y: number }): void;
-  onCreated(title: string): void;
+  /** Made: its title, and the guess `onPending` was told (none when the
+   * session was already made by an earlier press). */
+  onCreated(title: string, guess?: string): void;
   onCancel(): void;
   /** Made for a grounded line's stops: they take off on the new session. */
   attach?: { id: string; name: string };
   /** Fly pressed: the optimistic row's (guessed) title is in the sessions. */
   onPending?(guess: string): void;
-  /** The create was refused: the block shows again, with why. */
-  onFailed?(): void;
+  /** The create was refused: the block shows again, with why. `guess` is
+   * the one `onPending` was told. */
+  onFailed?(guess: string): void;
   /** Drawn but not shown (its session's line already is). */
   hidden?: boolean;
 }
@@ -398,7 +401,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
       failPendingSession(guess);
       setError(errMsg(err));
       setBusy(false);
-      onFailed?.();
+      onFailed?.(guess);
       return;
     }
     // The stops it flies: a grounded line's, or a saved stop picked here.
@@ -407,11 +410,11 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
       setMade(title);
       setError("“" + windowName(title) + "” started, but " + (attach ? "“" + attach.name + "”" : "the stops") + " didn't start — the error card says why.");
       setBusy(false);
-      onFailed?.();
+      onFailed?.(guess);
       return;
     }
     setBusy(false);
-    onCreated(title);
+    onCreated(title, guess);
   };
 
   return (

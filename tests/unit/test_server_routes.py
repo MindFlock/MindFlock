@@ -1150,6 +1150,7 @@ def test_find_pr_folds_a_merged_pr_into_ghs_vocabulary(monkeypatch):
                         "merged_at": "2026-07-30T00:00:00Z",
                         "number": 4,
                         "base": {"ref": "staging"},
+                        "head": {"ref": "feat/x", "sha": "c0ffee"},
                     }
                 ],
             )
@@ -1164,6 +1165,10 @@ def test_find_pr_folds_a_merged_pr_into_ghs_vocabulary(monkeypatch):
         # "the PR merged" is only evidence that work SHIPPED if it merged into the
         # branch the checklist is waiting for.
         "base": "staging",
+        # The commit the PR was at (gh's headRefOid): after a squash merge it
+        # is how the stage probe tells "this branch IS that PR" from "there
+        # are commits since" (agent_state pr_merged).
+        "head": "c0ffee",
     }
 
 
@@ -1182,6 +1187,7 @@ def test_find_pr_tolerates_a_payload_with_no_base(monkeypatch):
     )
     got = asyncio.run(github_pr.find_pr("/ws", "feat/x"))
     assert got["base"] == "" and got["state"] == "OPEN"
+    assert got["head"] == ""  # no head either: pr_merged is then never guessed
 
 
 def test_create_pr_without_commits_reports_no_commits(monkeypatch):

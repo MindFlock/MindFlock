@@ -13,7 +13,7 @@
 import { useState } from "react";
 import type { Instance, OutboxWaiting } from "../../api/types";
 import { instApi } from "../../api/client";
-import { refreshInstances, useFlights } from "../../state/queries";
+import { refreshInstances, useFlights, useInstances } from "../../state/queries";
 import { refreshRuns } from "../../state/runs";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
@@ -38,8 +38,8 @@ import {
 import { cancelRun, raiseBudget, runAction as act, runPath, suggestedBudget, taskPath } from "../../lib/runsApi";
 import { releaseChoices } from "../../lib/splitRun";
 import { openBehaviors } from "../../lib/behaviorsFocus";
-import { controlFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
-import { perchedOnYou } from "../../lib/flights";
+import { controlFlight, flightAction, flightPath, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { perchedOnYou, sessionGone, skipCarriesOn, type Flight } from "../../lib/flights";
 import { askOffers, findingsOf, flightAsk, owedGroups } from "../../lib/stopAsks";
 import { OwedChecks, ReviewFindings } from "../flights/PerchAsks";
 import type { RunInfo } from "../../lib/runs";
@@ -57,11 +57,28 @@ export function openSession(title: string, tab?: string) {
 
 /** The left half every row shares: the session (mono, accent — click opens
  * it) and what it is about. */
-export function RowMain({ title, text, shown, row }: { title: string; text?: string; shown: (t: string) => string; row?: Instance }) {
+export function RowMain({
+  title,
+  text,
+  shown,
+  row,
+  closed = false,
+}: {
+  title: string;
+  text?: string;
+  shown: (t: string) => string;
+  row?: Instance;
+  /** The session is closed: its name, said so, and no link to it. */
+  closed?: boolean;
+}) {
   const about = text || row?.last_prompt || "";
   return (
     <div className="pr-open-main">
-      {row ? (
+      {closed ? (
+        <span className="pr-open-ref ob-ref" title={shown(title) + " is closed"}>
+          {shown(title)}
+        </span>
+      ) : row ? (
         <button type="button" className="pr-open-ref ob-ref" title={"Open " + title} onClick={() => openSession(title)}>
           {shown(title)}
         </button>
@@ -437,20 +454,72 @@ function ApprovePreview({ w, row }: { w: OutboxWaiting; row?: Instance }) {
  * look first. */
 /** The route and its current stop behind a flight row: the row's own (a
  * route with no session has no session row), else the session row's. */
-function flightOf(w: OutboxWaiting, row?: Instance): { id: string; step: { id: string; kind: string; title: string } } | null {
+function flightOf(
+  w: OutboxWaiting,
+  row?: Instance,
+  full?: Flight
+): { id: string; step: { id: string; kind: string; title: string } } | null {
   const own = (w as FlightWaiting).flight;
   const fl = row?.flight;
   if (fl && fl.id && (!own || own.id === fl.id)) return { id: fl.id, step: fl.step };
-  if (own && own.id && own.step_id) return { id: own.id, step: { id: own.step_id, kind: "", title: own.step_title } };
+  if (own && own.id && own.step_id) {
+    // No session row: the stop's kind from the full flight — a Verify stop
+    // must not offer the Done the server refuses.
+    const at = full && full.id === own.id ? full.steps.find((x) => x.id === own.step_id) : undefined;
+    return { id: own.id, step: { id: own.step_id, kind: at?.kind || "", title: own.step_title } };
+  }
   return null;
+}
+
+/** The route behind a flight row as the full flight (when the flights are
+ * read), and whether its session is closed (FlightStrip `sessionGone`: not
+ * among the rows; unknown while they load = not closed). */
+function useRoute(w: OutboxWaiting, row?: Instance) {
+  const flights = useFlights().data;
+  const instances = useInstances().data;
+  const id = (w as FlightWaiting).flight?.id || row?.flight?.id || "";
+  const full = id ? flights?.find((f) => f.id === id) : undefined;
+  const gone = !row && !!full && sessionGone(full, instances);
+  return { full, gone, fl: flightOf(w, row, full) };
+}
+
+/** Skip on a route paused at a halt point: the server keeps it paused after
+ * a skip, so Skip carries on too — where the Sky's strip does
+ * (FlightStrip `skipCarriesOn`): not into a second halt point, and not past
+ * the last stop ("Carry on failed — already finished"). Unknown route: no
+ * Carry on. */
+export async function skipPausedStop(fl: { id: string; step: { id: string } }, full?: Flight): Promise<unknown> {
+  return (await stepSkip(fl.id, fl.step.id)) && !!full && skipCarriesOn(full) && controlFlight(fl.id, "resume");
+}
+
+/** Its session is closed: Stop the route ends it (the Sky's words,
+ * FlightStrip `YouStepActions gone`). */
+function StopRouteButton({ id, busy, run }: { id: string; busy: boolean; run: (fn: () => Promise<unknown>) => Promise<void> }) {
+  return (
+    <button
+      type="button"
+      className="test-btn"
+      disabled={busy}
+      title="Its session is closed — end this route"
+      onClick={() => void run(() => flightAction("Stop the route", flightPath(id, "/cancel"), {}, "Route stopped"))}
+    >
+      Stop the route
+    </button>
+  );
+}
+
+/** The left half of a route's row: its session — or, with the session
+ * closed, that session's name said as closed — and the route. */
+function RouteMain({ w, row, shown, full, gone }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string; full?: Flight; gone: boolean }) {
+  if (gone && full) return <RowMain title={full.session} text={w.text || full.plan_name} shown={shown} closed />;
+  return <RowMain title={w.title || w.text || ""} text={w.title ? w.text : ""} shown={w.title ? shown : (t) => t} row={row} />;
 }
 
 function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
   const [busy, setBusy] = useState(false);
-  const fl = flightOf(w, row);
   // A Review out of fix rounds, the perch asking for the checks owed at the
   // end (lib/stopAsks): the full flight says which, and their words lead.
-  const full = useFlights().data?.find((f) => f.id === fl?.id);
+  const { full, gone, fl } = useRoute(w, row);
   const ask = full && full.steps[full.cursor]?.id === fl?.step.id ? flightAsk(full) : "";
   const offers = askOffers(ask);
   const rec = full && fl ? full.step_states?.[fl.step.id] : undefined;
@@ -466,7 +535,7 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
   };
   return (
     <div className="pr-open-item ob-item ob-flight_you" data-outbox-row={w.title}>
-      <RowMain title={w.title || w.text || ""} text={w.title ? w.text : ""} shown={w.title ? shown : (t) => t} row={row} />
+      <RouteMain w={w} row={row} shown={shown} full={full} gone={gone} />
       <div className="pr-open-meta">
         <span className="pr-open-chip warn" title={w.reason || undefined}>
           {perchedOnYou(fl?.step?.title || "")}
@@ -535,6 +604,7 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
               </button>
             </>
           )}
+          {fl && gone && <StopRouteButton id={fl.id} busy={busy} run={run} />}
           {row && (
             <button type="button" className="test-btn" onClick={() => openSession(w.title)}>
               Open ↗
@@ -557,7 +627,7 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
  * panel offer — with Open ↗ to go look first. */
 function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
   const [busy, setBusy] = useState(false);
-  const fl = flightOf(w, row);
+  const { full, gone, fl } = useRoute(w, row);
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -573,7 +643,7 @@ function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
   const why = haltedWhy(at, w.reason);
   return (
     <div className="pr-open-item ob-item ob-flight_halted" data-outbox-row={w.title || w.key}>
-      <RowMain title={w.title || w.text || ""} text={w.title ? w.text : ""} shown={w.title ? shown : (t) => t} row={row} />
+      <RouteMain w={w} row={row} shown={shown} full={full} gone={gone} />
       <div className="pr-open-meta">
         <span className="pr-open-chip bad" title={w.reason || undefined}>
           {chip}
@@ -604,6 +674,7 @@ function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
               </button>
             </>
           )}
+          {fl && gone && <StopRouteButton id={fl.id} busy={busy} run={run} />}
           {row && (
             <button type="button" className="test-btn" onClick={() => openSession(w.title)}>
               Open ↗
@@ -621,7 +692,7 @@ function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
  * first. */
 function FlightPausedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
   const [busy, setBusy] = useState(false);
-  const fl = flightOf(w, row);
+  const { full, gone, fl } = useRoute(w, row);
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -634,7 +705,7 @@ function FlightPausedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
   const chip = pausedAtLine(at).replace(/ — Carry on$/, "");
   return (
     <div className="pr-open-item ob-item ob-flight_paused" data-outbox-row={w.title || w.key}>
-      <RowMain title={w.title || w.text || ""} text={w.title ? w.text : ""} shown={w.title ? shown : (t) => t} row={row} />
+      <RouteMain w={w} row={row} shown={shown} full={full} gone={gone} />
       <div className="pr-open-meta">
         <span className="pr-open-chip" title={w.reason || undefined}>
           {chip}
@@ -659,13 +730,14 @@ function FlightPausedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
                 disabled={busy}
                 title={"Skip “" + (at || "this stop") + "” — the route goes on without it"}
                 // A skip alone leaves a paused route paused at the next stop:
-                // carry on after it, so the route really goes on.
-                onClick={() => void run(async () => (await stepSkip(fl.id, fl.step.id)) && controlFlight(fl.id, "resume"))}
+                // carry on after it where the Sky does (`skipPausedStop`).
+                onClick={() => void run(() => skipPausedStop(fl, full))}
               >
                 Skip
               </button>
             </>
           )}
+          {fl && gone && <StopRouteButton id={fl.id} busy={busy} run={run} />}
           {row && (
             <button type="button" className="test-btn" onClick={() => openSession(w.title)}>
               Open ↗

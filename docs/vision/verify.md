@@ -87,7 +87,7 @@ peer joint check, StopMenu, WatchedRepositories). Backend routes
   old `_verify_done` that passed every open behavior "Done on the chain" is
   gone. (Done on a Verify FAILURE handed to you — `on_fail: you` — still works.)
 - **Needs you:** a route parked on a Verify stop is `waiting_you`, which
-  `needsYouFlights` / `perchBadge` already count on the Sky's badge (pinned in
+  `needsYouRows` / `needsYouBadge` already count on the Sky's badge (pinned in
   `verifyOnTheRoute.test.ts`).
 - **One thing on a route:** `withBehaviors` (lib/flightDiagram) puts the
   behaviors mark on the route's Verify stop when it has one and adds no

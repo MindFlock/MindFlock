@@ -54,7 +54,7 @@ function setUi(patch: Record<string, unknown>) {
 }
 
 /** A flight perched on a `you` stop (`halted` = it failed and waits for a
- * retry or a skip): what perchBadge counts. */
+ * retry or a skip). */
 const perched = (id: string, state: "waiting_you" | "halted" = "waiting_you") =>
   ({
     id,

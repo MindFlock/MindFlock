@@ -248,3 +248,32 @@ def test_prose_questions_never_pop_up():
     # Announced (buzz / notification) whatever its kind.
     assert "askAnnounce(e);" in refresh
     assert "askOpenFor(e.title" in a
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_a_verify_checkers_question_never_asks_you():
+    """A verify checker (any ``hidden_by``) is nowhere on screen: its agent's
+    dialog or question opens no sheet and sends no notification — lib/ask.ts
+    ``askingOf`` (``inst.hidden_by`` → null), as on the desktop."""
+    a = _ask_section()
+    script = (
+        "var ask = { hints: {}, lastPollAt: 0 }, ASK_HINT_MS = 60000;\n"
+        + _fn(a, "askHas")
+        + "\n  }\n"
+        + _fn(a, "askEntryOf")
+        + "\n  }\n"
+        + """
+var q = { kind: "question", text: "Which port?", ts: 5 };
+var d = { kind: "dialog", text: "Allow?", ts: 6, dialog_id: "x" };
+console.log(JSON.stringify([
+  askEntryOf({ title: "verify-p1", hidden_by: "verify", activity: "idle", asking: q }),
+  askEntryOf({ title: "verify-p2", hidden_by: "verify", activity: "clarify", asking: d }),
+  !!askEntryOf({ title: "work", activity: "idle", asking: q }),
+]));
+"""
+    )
+    res = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert res.returncode == 0, res.stderr
+    assert json.loads(res.stdout) == [None, None, True]

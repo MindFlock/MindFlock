@@ -22,7 +22,7 @@ import { deleteFlight, dropGroup, dropStop, groupStops, savePlan, startGrounded,
 import { groundedIdOf, isGroundedKey } from "../../lib/groundedLines";
 import { closeSession } from "../../lib/sessionActions";
 import { INTAKE_KEY, type Pos } from "../../lib/skyLayout";
-import { consecutive, removalNeedsAsk, selectedIndexes, sessionRuns, stepIndexesOf, stopSelection, stopsRun, type SkySelection } from "../../lib/skySelect";
+import { consecutive, removalNeedsAsk, selectedIndexes, sessionRuns, stepIndexesOf, stopSelection, stopsRun, undoFirstOpen, type SkySelection } from "../../lib/skySelect";
 import { pushUndo, undoAction } from "../../lib/skyUndo";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
@@ -58,15 +58,17 @@ export function takenStops(nodes: Iterable<string>, steps: readonly FlightStep[]
 }
 
 /** Where Undo tacks each taken item back (in `takenStops` order): its old
- * index while that is still ahead of the flight's `cursor` and inside the
- * line as it grows back (`length` + what went back already), else the end
- * (undefined) — and once one goes to the end, so do the rest, so they keep
- * their order and none lands inside another. */
-export function putBackAt(taken: readonly Pick<TakenStops, "index" | "steps">[], flight: { cursor: number; length: number }): Array<number | undefined> {
+ * index while the server takes it — from `first` (lib/skySelect
+ * `undoFirstOpen`; the one after the `cursor` when not given) — and it is
+ * inside the line as it grows back (`length` + what went back already),
+ * else the end (undefined) — and once one goes to the end, so do the rest,
+ * so they keep their order and none lands inside another. */
+export function putBackAt(taken: readonly Pick<TakenStops, "index" | "steps">[], flight: { cursor: number; length: number; first?: number }): Array<number | undefined> {
   let len = flight.length;
   let atEnd = false;
+  const first = flight.first ?? flight.cursor + 1;
   return taken.map((t) => {
-    atEnd ||= !(t.index > flight.cursor && t.index < len);
+    atEnd ||= !(t.index >= first && t.index < len);
     len += t.steps.length;
     return atEnd ? undefined : t.index;
   });
@@ -210,7 +212,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
             if (title) return tackOnNew(title, steps);
             return p.restoreGrounded ? p.restoreGrounded(steps, flight.plan_name || "", p.posOf?.(one.line)) : startGrounded({ steps });
           }
-          const ats = putBackAt(out, { cursor: now.cursor, length: now.steps.length });
+          const ats = putBackAt(out, { cursor: now.cursor, length: now.steps.length, first: undoFirstOpen(now) });
           for (let i = 0; i < out.length; i++) {
             const t = out[i];
             if (t.group) await tackOnSteps(fid, t.steps, ats[i], t.group);

@@ -304,6 +304,10 @@ export interface Instance {
    * moves — see backend/web/core/stage_reset.py. */
   stage_reset?: boolean;
   pr_url: string | null;
+  /** `stage` is "pushed" only because the branch's PR was squash-merged:
+   * the branch is exactly the commit that PR merged, nothing since. Nothing
+   * is ready for a PR (absent on an older server). */
+  pr_merged?: boolean;
   /** Present only at the "pr" stage; null = could not find out. */
   merge_state?: MergeState | null;
   failed_step?: string | null;

@@ -2006,6 +2006,7 @@ _SNAPSHOT_PROBE_KEYS = (
     "stage",
     "stage_reset",
     "pr_url",
+    "pr_merged",
     "failed_step",
     "failed_hook",
     "merge_state",
@@ -2051,6 +2052,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     )
     d["stage_reset"] = False
     d["pr_url"] = None
+    d["pr_merged"] = False
     d["merge_state"] = None
     d["memory"] = _memory_watch.row(i.Title)  # a dict read, fresh on both paths
     d["queue"] = _queue_summary(i.Title, queues)
@@ -2241,9 +2243,16 @@ def remote_hello(request: Request) -> JSONResponse:
 
 
 @app.get("/api/devices")
-def list_devices() -> JSONResponse:
-    """Discovered MindFlock devices on the tailnet (for the sidebar groups)."""
-    return JSONResponse(_remote.devices_json())
+def list_devices(request: Request = None) -> JSONResponse:  # type: ignore[assignment]
+    """Discovered MindFlock devices on the tailnet (for the sidebar groups).
+
+    A guest link gets the shape with no devices in it: the page needs the
+    answer to draw its rail, and the owner's other machines (host names,
+    tailnet addresses, versions, session counts) are none of a guest's."""
+    body = _remote.devices_json()
+    if _guests.scope_guest(request) is not None:
+        body = dict(body, devices=[], remote_control=False)
+    return JSONResponse(body)
 
 
 @app.post("/api/devices/{device}/connect")
@@ -4320,6 +4329,14 @@ async def paste_image(request: Request) -> JSONResponse:
     }.get(ctype, ".png" if ctype.startswith("image/") else ".bin")
     orig = _safe_upload_name(request.query_params.get("name") or "")
     title = request.query_params.get("session") or ""
+    # A guest link pastes into the panes it was given and nowhere else. This
+    # is a GLOBAL guest POST (guests.GLOBAL_POST_OK), so the gate never sees
+    # ``?session=``: without this a guest could write a file into any
+    # session's worktree — or, with no session, into the owner's config dir —
+    # and read that folder's path in the answer.
+    guest = _guests.scope_guest(request)
+    if guest is not None and title not in _guests.reach(guest):
+        return JSONResponse({"error": "not part of your invite"}, status_code=403)
     inst = ENGINE.instances.get(title) if title else None
 
     def _store() -> str:
@@ -7861,7 +7878,9 @@ def _query_bool(raw, default: bool) -> bool:
 
 
 @app.post("/api/instances/{title}/messages")
-async def post_message(title: str, payload: dict) -> JSONResponse:
+async def post_message(
+    title: str, payload: dict, request: Request = None  # type: ignore[assignment]
+) -> JSONResponse:
     """Leave a message for ``title``'s agent.
 
     Body ``{"text", "from"?, "reply_to"?, "delivery"?: auto|inbox|now,
@@ -7901,6 +7920,11 @@ async def post_message(title: str, payload: dict) -> JSONResponse:
         return bad('"from" may not start with "peer:"')
     if sender == title:
         return bad("a session cannot message itself")
+    guest = _guests.scope_guest(request)
+    if guest is not None and sender and sender not in _guests.reach(guest):
+        # A guest speaks for the sessions on its link only: naming another
+        # would put words in the mouth of one of the owner's other agents.
+        return JSONResponse({"error": "not part of your invite"}, status_code=403)
     if sender and sender not in ENGINE.instances:
         return bad("unknown sender session: %s" % sender)
     reply_to = payload.get("reply_to") or None
@@ -8326,7 +8350,7 @@ def _pr_info(wt: str, branch: str, force: bool = False):
 
 
 def _gh_pr_info(wt: str, branch: str):
-    """The ``gh`` rung of :func:`_pr_info` — ``{url, state, base}`` or None.
+    """The ``gh`` rung of :func:`_pr_info` — ``{url, state, base, head}`` or None.
 
     ``baseRefName`` is asked for because Verify's squash-merge fallback needs it:
     "the PR merged" is only evidence that work SHIPPED if it merged into the
@@ -8343,7 +8367,7 @@ def _gh_pr_info(wt: str, branch: str):
             "--state",
             "all",
             "--json",
-            "url,state,baseRefName",
+            "url,state,baseRefName,headRefOid",
             "--limit",
             "1",
         ],
@@ -8364,6 +8388,10 @@ def _gh_pr_info(wt: str, branch: str):
         "url": arr[0].get("url"),
         "state": arr[0].get("state"),
         "base": arr[0].get("baseRefName") or "",
+        # The commit the PR was at (when it merged, for a merged one): the
+        # stage machine's only way to tell "this branch's work IS that PR"
+        # from "there are commits since" after a squash merge.
+        "head": arr[0].get("headRefOid") or "",
     }
 
 
@@ -12865,7 +12893,13 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
     note = str(payload.get("note", "") or "")
     before = _test_plans.get(plan_id) or {}
     was_failing = bool(_test_plans.failed_steps(before))
-    was_open = bool(before) and bool(_test_plans.open_human_steps(before))
+    # A plan with no current run asks nothing yet (open_human_steps is [] for
+    # it, as the UI shows) — but this very answer opens one, and when it is
+    # also the last thing owed, the flight parked on the plan must hear it.
+    was_open = bool(before) and (
+        bool(_test_plans.open_human_steps(before))
+        or _test_plans._current_run(before) is None
+    )
     try:
         plan = _test_plans.record_result(plan_id, step_id, result, note, by="human")
     except ValueError as err:
@@ -14266,9 +14300,30 @@ async def instance_order_set(
     return JSONResponse(body, status_code=code)
 
 
+def _guest_thread(body: dict, guest: dict) -> dict:
+    """A family thread as a guest link may see it: the members on the link,
+    and what passed between those. A shared sub-session's PARENT is often not
+    on the link — its status, branch, last report and the messages the two
+    exchanged are the owner's."""
+    ok = set(_guests.reach(guest))
+    out = dict(body)
+    if out.get("parent") not in ok:
+        out["parent"] = None
+    out["members"] = [m for m in body.get("members") or [] if m.get("title") in ok]
+    out["items"] = [
+        it
+        for it in body.get("items") or []
+        if all(not who or who in ok for who in (it.get("from"), it.get("to")))
+    ]
+    return out
+
+
 @app.get("/api/instances/{title}/thread")
 async def instance_thread(
-    title: str, limit: Optional[str] = None, before: Optional[str] = None
+    title: str,
+    limit: Optional[str] = None,
+    before: Optional[str] = None,
+    request: Request = None,  # type: ignore[assignment]
 ) -> JSONResponse:
     """The session's family thread — read-only, never marks mail read.
 
@@ -14297,6 +14352,9 @@ async def instance_thread(
     if terr is not None:
         status = 404 if terr.startswith("instance not found") else 400
         return JSONResponse({"error": terr}, status_code=status)
+    guest = _guests.scope_guest(request)
+    if guest is not None:
+        body = _guest_thread(body, guest)
     return JSONResponse(body)
 
 

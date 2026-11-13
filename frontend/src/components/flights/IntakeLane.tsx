@@ -35,12 +35,12 @@
 import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
-import { refreshInstances, useFlights, useMindflockStatus, usePanelQuery, useSettingsDoc, useTicketingCatalog } from "../../state/queries";
+import { refreshInstances, refreshPanel, useFlights, useMindflockStatus, usePanelQuery, useSettingsDoc, useTicketingCatalog } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
 import { windowName } from "../../lib/windowName";
 import { WAITING_KIND_BADGE, type Flight, type FlightPlan, type IntakeDefault, type IntakeSourceRef } from "../../lib/flights";
-import { flyRequest, getIntakeDefault, refreshFlights, startGrounded, type WaitingTarget } from "../../lib/flightsApi";
+import { WAITING_PANEL, flyRequest, getIntakeDefault, refreshFlights, startGrounded, type WaitingTarget } from "../../lib/flightsApi";
 import { defaultEditorName, editorFor } from "../../lib/groundedLines";
 import { laneCount, nameParts, shownWaiting, sourceBlocks, stopsTip, stopsWords, type LanePanels, type LaneWaiting, type SourceBlock } from "../../lib/skyIntake";
 import { useWaiting } from "./useWaiting";
@@ -106,6 +106,7 @@ export async function flyLaneItem(w: LaneWaiting, block: Pick<SourceBlock, "flyw
   try {
     const r = await api<{ title?: string }>(req.path, { json: req.body });
     void refreshFlights();
+    void refreshPanel(WAITING_PANEL[t.kind]);
     return r?.title || (t.kind === "tickets" ? w.item.reference : "");
   } finally {
     void refreshInstances();

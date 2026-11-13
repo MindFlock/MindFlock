@@ -36,6 +36,7 @@ Privacy notes, deliberate:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import secrets
@@ -425,7 +426,12 @@ def publish_soon(
     must never block: it hands the coroutine to the server loop (or, with no
     loop at all — a bare sync context such as a unit test — a throwaway thread
     with its own), exactly like ``EventBus._dispatch_hooks``.
+
+    A push another server on this config dir just sent is not sent again
+    (:func:`_claim`).
     """
+    if not _claim(cfg, title, message, click):
+        return
     dispatch(
         publish(
             cfg,
@@ -437,6 +443,69 @@ def publish_soon(
             actions=actions,
         )
     )
+
+
+#: Two servers on one config dir (the service and a dev server) read the same
+#: settings, so the same topic, and each runs the notify rules over the same
+#: sessions: every event reached the phone twice. A push claims its words in a
+#: small shared file first, and one another process claimed this recently is
+#: dropped. Only ANOTHER process's claim counts — a server repeating itself
+#: answers to its own rules' dedupe, as before.
+_SHARED_DEDUPE_S = 60.0
+
+
+def _recent_path() -> Optional[str]:
+    """``<config dir>/ntfy_recent.json``, or None when there is no config dir
+    to use (the pytest guard refused the real one)."""
+    try:
+        from backend.config.config import GetConfigDir
+
+        return os.path.join(GetConfigDir(), "ntfy_recent.json")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _claim(cfg: NtfyConfig, title: str, message: str, click: Optional[str]) -> bool:
+    """Whether this push is still this process's to send (see
+    :data:`_SHARED_DEDUPE_S`). Each server taps through to its own URL — the
+    ``click`` and the click line the notify addon appends to the message — so
+    neither is part of what makes two pushes the same one. Never raises; any
+    trouble with the file reads as "send it"."""
+    path = _recent_path()
+    if not path:
+        return True
+    body = str(message or "")
+    if click and body.endswith("\n" + click):
+        body = body[: -len(click) - 1]
+    key = hashlib.sha1(
+        "\x00".join((cfg.server, cfg.topic, str(title or ""), body)).encode(
+            "utf-8", "replace"
+        )
+    ).hexdigest()
+    try:
+        from backend.fsutil import atomic_write_json, read_json
+        from backend.web.core import title_store
+
+        now = time.time()
+        pid = os.getpid()
+        with title_store.file_lock(path):
+            seen = {}
+            for k, v in (read_json(path, None, expect=dict) or {}).items():
+                if (
+                    isinstance(v, list)
+                    and len(v) == 2
+                    and isinstance(v[0], (int, float))
+                    and now - float(v[0]) < _SHARED_DEDUPE_S
+                ):
+                    seen[k] = v
+            other = seen.get(key)
+            if other is not None and other[1] != pid:
+                return False
+            seen[key] = [now, pid]
+            atomic_write_json(path, seen, indent=None, mode=0o600)
+    except Exception:  # noqa: BLE001 — a push is never lost to bookkeeping
+        return True
+    return True
 
 
 def dispatch(coro) -> None:

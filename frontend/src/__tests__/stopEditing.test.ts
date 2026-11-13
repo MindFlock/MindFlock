@@ -22,7 +22,7 @@ const { StopMenu } = await import("../components/flights/StopMenu");
 const { flightDiagram, flywayDiagram, layoutDiagram } = await import("../lib/flightDiagram");
 const { STOP_MIME, toggleHalt } = await import("../lib/flights");
 const { moveStop, setHalt } = await import("../lib/flightsApi");
-const { canShift, dropGapFor, haltMark, insertGaps, isStopDrag, menuItemsFor, undoPayload } = await import("../lib/stopEditing");
+const { canShift, dropGapFor, haltMark, insertGaps, isStopDrag, menuItemsFor } = await import("../lib/stopEditing");
 
 (globalThis as Record<string, unknown>).document ??= {
   hidden: false,
@@ -147,20 +147,6 @@ describe("moving a stop one place", () => {
   });
 });
 
-describe("Undo after a remove", () => {
-  const s = STEPS[2];
-
-  it("back at its old index while that is still ahead of the flight", () => {
-    // s3 (index 2) removed from a flight at stop 1: three stops left.
-    expect(undoPayload(s, 2, { cursor: 1, steps: STEPS.slice(0, 2).concat(STEPS[3]) })).toEqual({ step: s, at: 2 });
-  });
-
-  it("at the end once the flight has reached it, or it would be the last", () => {
-    expect(undoPayload(s, 2, { cursor: 2, steps: STEPS.slice(0, 3) })).toEqual({ step: s });
-    expect(undoPayload(s, 3, { cursor: 1, steps: STEPS.slice(0, 3) })).toEqual({ step: s });
-    expect(undoPayload(s, 2, null)).toEqual({ step: s });
-  });
-});
 
 describe("a box's right-click menu", () => {
   const all: StopMenuCtx = { can: { edit: true, move: true, duplicate: true, remove: true, open: true }, earlier: false, later: true, live: true };

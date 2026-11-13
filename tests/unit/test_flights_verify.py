@@ -100,6 +100,22 @@ def test_settling_the_last_human_item_is_said_once(_isolated):
     assert len(_settled(seen)) == 1
 
 
+def test_the_first_answer_can_be_the_last_one_owed(_isolated):
+    # Nobody has checked the plan yet (no run), so nothing is "open" before
+    # this answer — but the answer opens the run AND settles it. The flight
+    # parked on the plan still has to hear it.
+    seen = _isolated
+    plan = _checklist()
+    plan["steps"] = [s for s in plan["steps"] if s["id"] == "s2"]
+    tp.upsert(plan)
+    f = _waiting_flight()
+    _answer("s2")
+    (kw,) = _settled(seen)
+    assert kw["data"]["flight"] == f["id"]
+    _answer("s2", "fail")
+    assert len(_settled(seen)) == 1
+
+
 def test_nothing_is_said_when_no_flight_waits_on_it(_isolated):
     seen = _isolated
     _checklist()

@@ -1249,7 +1249,9 @@
   function needsYouKind(inst) {
     if (!inst || inst.workspace_missing || inst.status === "paused") return "";
     var ss = sessionState(inst);
-    if (ss.reason === "question") return "asking";
+    // A verify checker: only its verify waits on you (checkerQuiet).
+    var quiet = checkerQuiet(inst, ss);
+    if (ss.reason === "question" && !quiet) return "asking";
     var fl = rowFlight(inst);
     if (fl && fl.state === "waiting_you") return "wait_for_me";
     // A route paused at its halt point waits on the person's Carry on
@@ -1258,11 +1260,28 @@
     if (atHaltPoint(inst)) return "wait_for_me";
     if (fl && fl.state === "halted") return "halted";
     if (planPending(inst)) return "plan";
+    if (quiet) return "";
     if (ss.inBell) return ss.reason === "checks_failing" ? "checks" : "broken";
     // A lane that STOPS at push is finished there (sidebar/ordering.ts).
     var lane = inst.lane && inst.lane.target ? inst.lane.target : inst.autopilot && inst.autopilot.depth;
-    if (inst.stage === "pushed" && lane !== "push") return "ready";
+    // Not one whose PR already merged by squash (`pr_merged`: the branch is
+    // exactly the commit that PR merged) — ordering.ts attentionItems.
+    if (inst.stage === "pushed" && lane !== "push" && !inst.pr_merged) return "ready";
     return "";
+  }
+  // A verify checker (`hidden_by: "verify"`; a row without the flag goes by
+  // its "verify-" title — dialogs/verifySession.ts isVerifySession) is off
+  // the rail and the ask pop-up: only its verify waits on you. Its agent's
+  // own states (offline, stuck, a dialog, a question) were "needs you"
+  // about a window nowhere to be seen (sidebar/ordering.ts attentionItems).
+  var VERIFY_REASONS = { verify_confirm: true, verify_failed: true, verify_blocked: true };
+  function isVerifyChecker(inst) {
+    var by = inst && inst.hidden_by;
+    if (by !== undefined && by !== null) return by === "verify";
+    return String((inst && inst.title) || "").indexOf("verify-") === 0;
+  }
+  function checkerQuiet(inst, ss) {
+    return isVerifyChecker(inst) && !VERIFY_REASONS[String(ss.reason || "")];
   }
   // A route paused at a halt point a person set (flightDiagram.ts
   // HALT_POINT_REASON) — not one paused by hand.
@@ -5318,18 +5337,21 @@
     function upload(blob, mime, mine, lead, spokeAt) {
       var h = mine.h;
       uploading = true;
-      aborter = window.AbortController ? new AbortController() : null;
+      // This upload's own controller: its timer never aborts a later
+      // upload's (a stop drops this one and the next phrase's starts).
+      var a = aborter = window.AbortController ? new AbortController() : null;
       var t0 = Date.now();
-      var timer = aborter ? setTimeout(function () { try { aborter.abort(); } catch (e) {} }, VOICE_UPLOAD_TIMEOUT_MS) : null;
+      var timer = a ? setTimeout(function () { try { a.abort(); } catch (e) {} }, VOICE_UPLOAD_TIMEOUT_MS) : null;
       function settle() { token = null; uploading = false; aborter = null; clearTimeout(timer); }
       fetch("/api/voice/transcribe?lang=" + encodeURIComponent(lang()), {
         method: "POST",
         headers: { "Content-Type": mime },
         body: blob,
-        signal: aborter ? aborter.signal : undefined,
+        signal: a ? a.signal : undefined,
       }).then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j || {} }; });
       }).then(function (x) {
+        clearTimeout(timer);
         if (token !== mine) return;
         settle();
         if (x.r.ok) {
@@ -5347,6 +5369,7 @@
             : "Couldn't transcribe: " + why);
         }
       }).catch(function (err) {
+        clearTimeout(timer);
         if (token !== mine) return;
         settle();
         var why = err && err.name === "AbortError" ? "the server took too long" : String((err && err.message) || err);
@@ -6320,6 +6343,7 @@
     dialogTries: 0,
     dialogBusy: false,
     wake: null,
+    wakeAsked: false,            // a screen wake lock is being granted (voiceWakeLock)
     events: null,
     eventsState: "off",
     eventsSeq: 0,
@@ -6588,6 +6612,7 @@
     voiceListen_.cont = false;
     voiceListen_.stopAfter = false;
     voiceListen_.overAfter = false;
+    voiceListen_.sendTapped = false;
     voiceIdle(vbox().value.trim() ? "Kept, not sent — Send sends it, or tap the mic to go on" : undefined);
   }
   // A stop phrase or the push-to-talk gesture: listening stops, the words
@@ -6597,6 +6622,7 @@
     voiceListen_.cont = false;
     voiceListen_.stopAfter = false;
     voiceListen_.overAfter = false;
+    voiceListen_.sendTapped = false;
     voiceIdle(vbox().value.trim() ? voiceKept() : undefined);
   }
   // Push to talk ends a prompt, the words kept: the second tap (toggle),
@@ -6627,12 +6653,15 @@
     }
     voiceListenFlush();
   }
-  // The words are in: stop, keep them. Never a send.
+  // The words are in: stop, keep them. Never a send — unless Send was
+  // tapped while they were on their way (voiceTakesSend): then they go.
   function voiceListenFlush() {
-    var L = voiceListen_;
+    var L = voiceListen_, send = L.sendTapped;
     L.overAfter = false;
+    L.sendTapped = false;
     clearTimeout(L.timer);
     voice.stt.stop();
+    if (send && vbox().value.trim()) { voiceSend(vbox().value); return; }
     voiceListenKept();
   }
   function voiceIdle(caption) {
@@ -7120,12 +7149,13 @@
   // sheet's mic): no window, "over" sends and listens on, "over and out"
   // ends it (voiceListenUntil);
   // overAfter/overBy: push to talk ended it, listening stops once the words
-  // are in; routing/routeQ/gen: a phrase is with /api/voice/route, the
+  // are in (sendTapped: Send was tapped meanwhile — then they are sent);
+  // routing/routeQ/gen: a phrase is with /api/voice/route, the
   // phrases heard meanwhile wait their turn, and an answer for an older
   // listen is dropped.
   var voiceListen_ = { netErrs: 0, mode: "", until: 0, restarts: 0, timer: null, reprompted: false,
                        heard: false, startedAt: 0, rapid: 0, stopAfter: false, held: false,
-                       overAfter: false, overBy: 0, routing: false, routeQ: [], draining: false, gen: 0,
+                       overAfter: false, sendTapped: false, overBy: 0, routing: false, routeQ: [], draining: false, gen: 0,
                        muteUntil: 0, woke: null, cont: false, restartTok: 0, early: null, lastFinalAt: 0, listenAt: 0,
                        addressed: "" };
   voice.listen = voiceListen_;   // tests age the window with it
@@ -7147,6 +7177,7 @@
     L.stopAfter = false;
     L.held = !!held;
     L.overAfter = false;
+    L.sendTapped = false;
     L.routing = false;
     L.routeQ = [];
     L.draining = false;
@@ -9211,6 +9242,17 @@
     if (voice.state === "off" || !composeEl.value.trim()) return false;
     voice.box = null;   // the compose box's Send
     if (voice.state === "sending") return true;   // one tap, one prompt
+    // A phrase still on its way (its live guess in the box — the fast
+    // recognizer's words — a clip with the server, a phrase with the
+    // router): its accurate words go in first, then the box is sent —
+    // push to talk's end (voiceListenOver), sending (sendTapped).
+    var L = voiceListen_, s = voice.stt;
+    if (voiceIsListening() && L.mode !== "dialog" &&
+        (voice.guess.typed || L.routing || (s.pending && s.pending()))) {
+      L.sendTapped = true;
+      if (!L.overAfter) voiceListenOver();
+      return true;
+    }
     voiceSend(composeEl.value);
     return true;
   }
@@ -9267,8 +9309,7 @@
             return;
           }
           if (r.ok) {
-            box.value = "";
-            if (box === composeEl) autosizeCompose();
+            // (Its words left the box above; what was typed since stays.)
             if (box !== composeEl) { voice.box = null; askSentByVoice(title); }
             voice.dictated = false;
             voice.expectSay = say;     // its reply is read out only if it was asked for
@@ -10226,7 +10267,9 @@
     // The one Needs-you list (needsYouKind), in its order.
     // (Every sessionState(i).inBell row has a kind; the kind adds halted
     // routes, a plan waiting for Go and a branch ready for its PR.)
-    var rows = instances.filter(function (i) { return !!needsYouKind(i) || sessionState(i).inBell; })
+    var rows = instances.filter(function (i) {
+      return !!needsYouKind(i) || (sessionState(i).inBell && !checkerQuiet(i, sessionState(i)));
+    })
       .sort(function (a, b) { return attnRank(a) - attnRank(b); }).slice(0, 3);
     var line = rows.length ? rows.map(function (i) {
       var ss = sessionState(i), name = nameOf(i.title), kind = needsYouKind(i);
@@ -10496,13 +10539,17 @@
     [A.phoneStt, A.serverStt].forEach(function (a) { if (a && a.release) a.release(ms); });
   }
   function voiceWakeLock() {
-    if (!navigator.wakeLock || voice.wake || document.hidden) return;
+    if (!navigator.wakeLock || voice.wake || voice.wakeAsked || document.hidden) return;
+    voice.wakeAsked = true;   // one request at a time: never two locks held
     try {
       navigator.wakeLock.request("screen").then(function (lock) {
+        voice.wakeAsked = false;
+        // Voice went off (or the page hid) while it was being granted.
+        if (voice.state === "off" || document.hidden) { try { lock.release(); } catch (e) {} return; }
         voice.wake = lock;
         lock.addEventListener("release", function () { if (voice.wake === lock) voice.wake = null; });
-      }).catch(function () {});
-    } catch (e) {}
+      }).catch(function () { voice.wakeAsked = false; });
+    } catch (e) { voice.wakeAsked = false; }
   }
   function voiceWakeRelease() {
     var l = voice.wake;
@@ -10963,6 +11010,7 @@
     if (voiceIsListening()) { vbox().value = ""; vboxSized(); voice.dictated = false; }
     voiceListen_.until = 0;
     voiceListen_.overAfter = false;
+    voiceListen_.sendTapped = false;
     voiceListen_.gen++;   // a route answer on its way is for nobody now
     voiceIdle();
   }
@@ -11564,6 +11612,9 @@
   // carries the field (even null); a session.question event stands in for
   // it until the next poll; an older server's clarify is a dialog.
   function askEntryOf(inst) {
+    // A verify checker (any hidden_by) is nowhere on screen: its agent asks
+    // nobody (lib/ask.ts askingOf).
+    if (inst.hidden_by) return null;
     var t = inst.title, a = inst.asking, h = ask.hints[t];
     if (a && (a.kind === "dialog" || a.kind === "question")) {
       var ts = Number(a.ts) || 0;
@@ -12492,6 +12543,7 @@
     if (voiceIsListening()) {
       voiceListen_.until = 0;
       voiceListen_.overAfter = false;
+      voiceListen_.sendTapped = false;
       voiceListen_.gen++;
       voiceIdle();
     }

@@ -45,7 +45,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
-import { optimistic, optimisticDelete, withSteps, withoutSteps } from "../../lib/flightOptimism";
+import { optimistic, optimisticDelete, stopToOpen, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightStartOn, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
 import { LOOP_AGENT, atHaltPoint, drawnCanvas, findNode, firstStepOf, loopBackTo, loopChoices, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
 import {
@@ -73,10 +73,10 @@ import {
   setIntakeDefault,
   ungroupStops,
 } from "../../lib/flightsApi";
-import { groupHaltStep, undoPayload, type StopDrop } from "../../lib/stopEditing";
+import { groupHaltStep, type StopDrop } from "../../lib/stopEditing";
 import { startSavedRoute } from "../../lib/routeStart";
 import { pushUndo, takeUndo, undoAction } from "../../lib/skyUndo";
-import { removalNeedsAsk } from "../../lib/skySelect";
+import { removalNeedsAsk, undoAt } from "../../lib/skySelect";
 import { InlineConfirm } from "../InlineConfirm";
 import { errMsg } from "../../lib/format";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
@@ -438,7 +438,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   // flight has it.
   useEffect(() => {
     if (selectIndex === null) return;
-    const n = stops.find((s) => s.index === selectIndex && s.step);
+    const n = stopToOpen(stops, selectIndex);
     if (!n) return;
     setSelected(n.id);
     setDialog({ id: n.id });
@@ -515,8 +515,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       label: "Remove “" + step.title + "”",
       undo: () => {
         const now = latest.current?.id === id ? latest.current : null;
-        const back = undoPayload(step, index, now);
-        return tackOn(id, back.step, back.at);
+        return tackOn(id, step, undoAt(index, now));
       },
     });
     toast(removedToast(step.title, wasHere, next), {
@@ -546,8 +545,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       label: "Remove “" + g.name + "”",
       undo: () => {
         const now = latest.current?.id === id ? latest.current : null;
-        const back = undoPayload(g.steps[0], first, now);
-        return tackOnSteps(id, g.steps, back.at, g.name);
+        return tackOnSteps(id, g.steps, undoAt(first, now), g.name);
       },
     });
     toast(removedToast(g.name, wasHere, next), {

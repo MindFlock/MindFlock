@@ -646,7 +646,7 @@ Flights entry. The Grid / Sky toggle is on the bar only on a phone-narrow
 window; on desktop it lives on the sidebar's View row (`Ctrl+Y` and the
 palette switch when the sidebar is hidden). Its Sky half carries the badge of flights
 perched on you (a flight perched on a Verify stop is Verify's count, not this
-one; red when one halted — `perchBadge`). The palette has "Intake…",
+one; red when one halted — `needsYouBadge`). The palette has "Intake…",
 "Verify…", "Schedule…", "Switch to the Sky / grid" and "Flyways…" (the Sky
 with its shelf open).
 
@@ -1756,7 +1756,7 @@ menus can get very tricky very fast."* So:
   Schedule after the first template), fold order (Settings, Schedule, Verify,
   then the toggle) and shortcuts (`Alt+I` / `Alt+V` / `Alt+S`, the old ids).
   The Flights button is gone; the Sky toggle counts the flights perched on
-  you (`perchBadge`).
+  you (`needsYouBadge`).
 - **The Flights dialog is retired** (`FlightsDialog.tsx`, `PlanEditor.tsx`,
   `FlightsDialog.css` deleted; the kit CSS lives on as `Flights.css`, the
   palette / inspector / trigger CSS as `FlywayInspector.css`). The store
@@ -2121,7 +2121,7 @@ through one path: `DELETE /api/flights/{id}/steps/{sid}`, then a toast
 (kind, title, config, on_fail) back: `POST /api/flights/{id}/steps {step,
 at}` at its old index while that is still ahead of the flight (after its
 current stop, not past the end; read from the flight as it is when Undo is
-pressed), else at the end (`undoPayload`). In the flyway editor nothing is
+pressed), else at the end (`undoAt`). In the flyway editor nothing is
 saved until Save, so Remove there needs no undo.
 
 ### Duplicate
@@ -3035,7 +3035,7 @@ flight halts here", a flown one "Remove from the line" (lib/stopEditing
 current stop's ⏹ / ▶ show only with `onToggleHalt`, as before. `useSessionLine`
 toasts `Removed “X” — the flight is paused before “Y”` (or `… paused at the
 end`) for the current stop (and a group holding it), `Removed “X” from the line`
-otherwise, each with Undo (`undoPayload`; a group comes back through
+otherwise, each with Undo (`undoAt`; a group comes back through
 `tackOnSteps(…, name)`).
 
 **Flown stops stay (the fold flag).** `SessionDiagramOpts.foldFlown?: boolean`
@@ -4462,7 +4462,7 @@ The entries:
 
 | removal | label | undo |
 |---|---|---|
-| a stop off a line (`removeStop`) | Remove “title” | `tackOn` at `undoPayload`'s index, read against the flight as it is when Undo is pressed |
+| a stop off a line (`removeStop`) | Remove “title” | `tackOn` at `undoAt`'s index, read against the flight as it is when Undo is pressed |
 | a group off a line (`removeGroup`) | Remove “name” | `tackOnSteps(…, name)` the same way |
 | a grounded line (⋯ Remove, Delete) | Remove “name” | `reground`: `startGrounded({steps, name})`, pinned where it sat |
 | a merge onto a session | Moved N stops onto … | `reground` (the stops stay on the session too, as in round 13) |

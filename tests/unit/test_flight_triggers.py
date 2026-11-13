@@ -723,3 +723,32 @@ def test_hook_post_skips_the_gate_but_its_neighbours_stay_gated(monkeypatch):
     ):
         r = client.request(method, path, headers={"accept": "application/json"})
         assert r.status_code == 401, (method, path)
+
+
+def test_a_hook_fired_during_a_tick_keeps_its_quiet_minutes(repos, monkeypatch):
+    """The tick reads the state file, fetches every watched repo (up to a
+    minute each), then wrote back its own copy — a hook fired meanwhile lost
+    its ``fired_at``, so its quiet minutes never held and the next post fired
+    a second route. The tick writes only the rows it changed."""
+    up, watch = repos
+    _plan("main_push", str(watch))
+    hook = F.save_plan(
+        {
+            "name": "Hooked",
+            "trigger": {"kind": "hook"},
+            "steps": [{"kind": "agent", "config": {"prompt": "go"}}],
+        }
+    )
+    _tick(1000.0)  # arms the watcher: the state file exists
+    real = T.fetch_tip
+
+    def fetch_while_a_hook_fires(folder, branch):
+        st = T.load_state()
+        st[hook["id"]] = {"fired_at": 1050.0, "last_status": 202}
+        T.save_state(st)  # what hook_fire writes
+        return real(folder, branch)
+
+    monkeypatch.setattr(T, "fetch_tip", fetch_while_a_hook_fires)
+    _commit(up, "b.txt")  # main moves: this tick writes its row
+    assert len(_tick(1060.0, _starter([]))) == 1
+    assert _state()[hook["id"]]["fired_at"] == 1050.0

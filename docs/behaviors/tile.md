@@ -78,7 +78,7 @@ docs/behaviors.md §1 and the frontend half of §5. Notes for the integrator.
   stays a tile — the card opens in its place instead of growing under the
   tile. The Board card / drawer (`FlightCard`, SkyDrawer) still expand it,
   with room for the card (320 × base + 220, the card scrolls).
-- `lib/flights.ts` `perchBadge`: a flight parked on a Verify stop now counts
+- `lib/needsYou.ts` `needsYouBadge`: a flight parked on a Verify stop now counts
   in the Sky's Needs-you badge.
 - `lib/flights.ts` `legacyFlightsRoute("checklists[/<b>]")` →
   `{ to: "sky", focus: "", behaviors: { branch: b } | { board: true } }`.

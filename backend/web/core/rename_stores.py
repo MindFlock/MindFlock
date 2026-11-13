@@ -175,7 +175,7 @@ def _asking(old: str, new: str) -> None:
         for d in (m._STATE, m._INPUT_AT, m._DIALOG_MEMO, m._DISMISSED_STORED):
             moved = move_key(d, old, new) or moved
         if moved:
-            m._save_store()
+            m._save_store([new], gone=[old])
 
 
 def _tracker_claims(old: str, new: str) -> None:

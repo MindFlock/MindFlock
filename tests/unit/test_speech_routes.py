@@ -1047,14 +1047,22 @@ class TestStream:
         body = _chunk(sid).json()
         assert body["partial"] == "hi" and body["window_s"] == 1.0
 
-    def test_end_adds_the_accurate_final(self, streaming):
+    def test_end_adds_the_accurate_final(self, streaming, monkeypatch):
         heard: list = []
+        # The pass's own time and the wait are timed from different starts
+        # (the lane's start, the submit): on a virtual clock that only the
+        # pass moves, a busy machine's thread start-up cannot split them.
+        clock = [100.0]
+        monkeypatch.setattr(
+            speech_stream, "time", SimpleNamespace(monotonic=lambda: clock[0])
+        )
 
         def final_transcriber(lang="", hints=""):
             heard.append(("open", lang))
 
             def run(audio):
                 heard.append(("final", len(audio)))
+                clock[0] += 0.25
                 return "Run the tests."
 
             return run
@@ -1083,7 +1091,7 @@ class TestStream:
         assert body["final_early"] is False  # no quiet chunk came first
         assert isinstance(body["final_wait_ms"], int) and body["final_wait_ms"] >= 0
         assert isinstance(body["final_early"], bool)
-        assert body["final_wait_ms"] == body["final_ms"]
+        assert body["final_wait_ms"] == body["final_ms"] == 250
         # The whole phrase: both chunks.
         assert heard[-1] == ("final", 16000)
 

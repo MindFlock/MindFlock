@@ -39,6 +39,7 @@ List all sessions. Each item:
   "pr_url": "…",              // when a PR exists
   "failed_step": "…",         // when stage == "interrupt" (pre-commit ✗)
   "stage_reset": false,       // ↺ "back to idle" pin — show the ladder from the start
+  "pr_merged": false,         // stage is "pushed" only because the branch's PR was squash-merged: nothing is ready for a PR
   "activity": "working|clarify|idle|offline",
   "activity_since": 1756200000.0,  // epoch the reported activity last changed; 0 = no live reading
   "background": [              // jobs the agent backgrounded and left running past its turn. Null on the
@@ -130,6 +131,14 @@ base (a configured default like `staging`, or one chosen in the dialog the
 server never sees), so a base-scoped lookup would miss the real PR and wedge the
 chip on `pushed`. The base still keys the "is there work to push" (`beyond`)
 test; only the PR lookup drops the base filter.
+`pr_merged` covers the one case where that git-derived `stage` misleads: after a
+**squash merge** the branch's own commits stay beyond the base for good, so
+`stage` keeps reading `pushed` (next: Open PR) about work whose PR already
+merged. The PR lookup carries the PR's head commit (`gh` `headRefOid`, REST
+`head.sha`), and `pr_merged` is true while the branch is exactly that commit of
+a `MERGED` PR. `stage` is unchanged (Open PR is back with the next commit); the
+Needs-you lists (`attentionItems`, the phone's `needsYouKind`) leave such a
+session out of "pushed — ready for PR".
 `stage_reset` is the **↺ "back to idle"** pin
 (`POST /api/instances/{title}/reset-stage`, below), published *alongside*
 `stage` and never instead of it. The row's `stage` stays exactly what git says,
@@ -3153,7 +3162,17 @@ sessions' envelopes only), a few read-only boot calls (`/api/config` carries
 `/api/person`, `/api/voice[/help]`, `/api/mindflock/status`) and the speech
 POSTs (`/api/voice/transcribe`, `/api/voice/speak`, `/api/paste-image`).
 Everything else → `403 {"error": "not part of your invite"}` (websocket close
-4403). The routes below are the owner's: a guest gets the same 403, a relayed
+4403). Four of the allowed calls are narrowed to the reach inside their
+handlers, because the path alone does not say which session they touch:
+`/api/paste-image` needs a `?session=` the link reaches (the same 403
+otherwise, and with none: it would write into the owner's config dir);
+`POST …/messages` refuses a `from` naming a session off the link (403);
+`GET …/thread` lists only the members on the link and what passed between
+them (a shared sub-session's parent is usually not on it: `parent` is null);
+and `/api/devices` answers with `devices: []`. `WS /api/events` is filtered by
+the link as it stands now, so narrowing or revoking a link takes effect on a
+stream that is already open, and the public tunnel stops within a second of
+the access gate being turned off. The routes below are the owner's: a guest gets the same 403, a relayed
 device 403, a change needs `may_configure`.
 
 | Method | Path | Behavior |

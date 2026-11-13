@@ -9,6 +9,7 @@
  * shapes) and the helpers are pure, so the Board, the pane strip, the rail and
  * the top-bar badge read one rule each and are pinned by tests without a DOM. */
 
+import type { Instance } from "../api/types";
 import { relTime } from "./format";
 import { capSourceDepth, sourceRungLabel, type Lane } from "./autopilot";
 // Type only: lib/behaviorsFocus reads the store, which reads this module.
@@ -400,14 +401,6 @@ export function stepActor(step: Pick<FlightStep, "kind">, kinds?: readonly StepK
   return step.kind === "you" ? "you" : "robot";
 }
 
-/** Flights that wait on a person: parked on a *you* step (or a verify step's
- * human items), or halted until someone retries, skips or cancels. A paused
- * flight waits on nobody — whoever paused it resumes it — so it stays under
- * *In flight* and out of the badge. */
-export function needsYouFlights(flights: readonly Flight[]): Flight[] {
-  return flights.filter((f) => f.state === "waiting_you" || f.state === "halted");
-}
-
 /** How long the current step has been current — "4m", "2h" (the app's one
  * relative-time formatter, bare) — or "" when unknown. */
 export function currentElapsed(f: Flight, now = Date.now()): string {
@@ -545,24 +538,6 @@ export function youText(f: Flight): string {
   const cur = f.steps[f.cursor];
   const text = String(cur?.config?.text ?? "").trim();
   return text || (cur ? f.step_states?.[cur.id]?.note || "" : "") || f.reason || "";
-}
-
-// --- The badge ---------------------------------------------------------------
-
-export interface PerchBadge {
-  /** The number on the top bar's Sky toggle (0 = no badge). */
-  count: number;
-  /** One of them halted: the badge turns red. */
-  failing: boolean;
-}
-
-/** The Sky toggle's badge: flights perched on you (or halted until someone
- * retries, skips or cancels). A flight parked on a VERIFY step counts too:
- * its behaviors wait on you on the session's frame in the Sky
- * (docs/behaviors.md §5) — there is no Verify badge any more. */
-export function perchBadge(flights: readonly Flight[]): PerchBadge {
-  const perched = needsYouFlights(flights);
-  return { count: perched.length, failing: perched.some((f) => f.state === "halted") };
 }
 
 // --- Waiting to fly ----------------------------------------------------------
@@ -997,4 +972,38 @@ export interface IntakeDefault extends IntakeSourceRef {
   name: string;
   own: boolean;
   steps: FlightStep[];
+}
+
+// --- Rules the Sky's strip and the bell's rows share -------------------------
+
+/** Whether the stop the route moves to after its current one (passing the
+ * ones already done or skipped) is a halt point not yet let through. */
+export function nextIsHaltPoint(flight: Pick<Flight, "steps" | "cursor" | "step_states">): boolean {
+  for (let k = flight.cursor + 1; k < flight.steps.length; k++) {
+    const s = flight.steps[k];
+    const ss = flight.step_states?.[s.id];
+    if (ss && (ss.state === "done" || ss.state === "skipped")) continue;
+    return !!s.halt && !ss?.detail?.halt_hit;
+  }
+  return false;
+}
+
+/** Whether Skip on this route should also Carry on: the server keeps a
+ * paused route paused after a skip (`_advance_keeping_pause`), so Skip
+ * carries on too, as it says — unless the next stop is a halt point itself
+ * (it halts there) or there is no stop left (the skip finished the route;
+ * Carry on would be refused). */
+export function skipCarriesOn(flight: Pick<Flight, "state" | "steps" | "cursor" | "step_states">): boolean {
+  if (flight.state !== "paused") return false;
+  const ahead = flight.steps.slice(flight.cursor + 1).some((s) => {
+    const st = flight.step_states?.[s.id]?.state;
+    return st !== "done" && st !== "skipped";
+  });
+  return ahead && !nextIsHaltPoint(flight);
+}
+
+/** Whether the flight's session is gone (not among the rows; unknown while
+ * they load = not gone). */
+export function sessionGone(flight: Pick<Flight, "session">, rows: readonly Pick<Instance, "title">[] | null | undefined): boolean {
+  return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
 }

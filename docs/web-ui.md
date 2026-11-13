@@ -135,7 +135,7 @@ working. It refreshes on `template.run_started` / `template.run_failed`
 **The Grid · Sky toggle**'s Sky half wears the count of flights **perched on
 you** (parked on a *you* stop, or halted until someone retries or skips; a
 flight parked on a Verify stop is Verify's count, not this one) — nothing at
-zero, red when one halted (`lib/flights.ts` `perchBadge`). The toggle's home
+zero, red when one halted (`lib/needsYou.ts` `needsYouBadge`). The toggle's home
 is the sidebar View row, whose Sky half carries the count; the bar wears the
 toggle (and its folded ⋯ row the same count) only on a phone-narrow window
 (see [Switching](#switching)). A desktop window with the sidebar hidden shows

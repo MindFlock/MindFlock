@@ -31,7 +31,6 @@ import {
   holdBack,
   isAnswerPhrase,
   mayBeCommand,
-  pendingDiagnostics,
   railRow,
   railStep,
   routePhrase,
@@ -2384,12 +2383,6 @@ describe("hands-free answering (Read replies aloud)", () => {
     expect(out.listens).toHaveLength(2);
     expect(out.spoken).toEqual(["Still there? Login fix: Which branch?"]);
     expect(out.captions).toEqual(["Login fix needs you"]);
-  });
-
-  it("Diagnostics name what waits on the focused session", () => {
-    expect(pendingDiagnostics("Login fix", PERMISSION, true, "")).toBe("Pending: Login fix shows a dialog — Allow git push?");
-    expect(pendingDiagnostics("Login fix", null, false, "Which branch?")).toBe("Pending: Login fix asked — Which branch?");
-    expect(pendingDiagnostics("Login fix", null, false, "")).toBe("Pending: nothing on Login fix");
   });
 
   it("the mic wires it: a clarify reading reads the dialog, a reply's question opens the mic, and the hint names it", () => {

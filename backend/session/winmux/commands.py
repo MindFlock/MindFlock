@@ -1172,8 +1172,10 @@ def cmd_paste_buffer(ctx: "Ctx", a: Args) -> None:
         data = b"\x1b[200~" + data + b"\x1b[201~"
     if a.has("d"):
         del ctx.ns.buffers[b.name]
-    if pane.mode is None:
-        pane.write(data)
+    # Into the pane in any mode, as tmux does: copy mode only changes what
+    # the clients see, and a message pasted while the person had scrolled up
+    # must not be dropped.
+    pane.write(data)
 
 
 # -- size / clients ----------------------------------------------------------------------

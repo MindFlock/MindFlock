@@ -160,6 +160,7 @@ __all__ = [
     "get_stream",
     "lane",
     "open_stream",
+    "release",
     "same_text",
     "sweep",
 ]
@@ -1414,15 +1415,30 @@ _REG_LOCK = threading.RLock()
 _TIMER: Optional[threading.Timer] = None
 
 
+def release(stream: Optional[Stream]) -> None:
+    """Free at once what a stream forgotten without its finish holds outside
+    Python — a Moonshine stream's engine stream (its ``close``) — rather
+    than whenever the cycle collector reaches it (an early pass ties a
+    stream into a cycle with its lane job). Never raises."""
+    close = getattr(stream, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception as err:  # noqa: BLE001 — forgotten either way
+        _logger.debug("voice stream: a dropped stream did not close: %s", err)
+
+
 def sweep(now: Optional[float] = None) -> List[str]:
     """Forget every stream idle for :data:`EXPIRE_SECONDS` (one mid-pass is
-    never idle); returns the ids dropped."""
+    never idle), :func:`release`-d; returns the ids dropped."""
     stamp = _now() if now is None else now
     dropped: List[str] = []
     with _REG_LOCK:
         for sid, stream in list(_STREAMS.items()):
             if not stream.busy and stamp - stream.touched >= EXPIRE_SECONDS:
                 _STREAMS.pop(sid, None)
+                release(stream)
                 dropped.append(sid)
     return dropped
 
@@ -1445,8 +1461,9 @@ def open_stream(
             mine = [(sid, st) for sid, st in _STREAMS.items() if st.client == client]
             mine.sort(key=lambda item: (item[1].busy, item[1].touched))
             while len(mine) >= CLIENT_STREAMS:
-                old, _st = mine.pop(0)
+                old, gone = mine.pop(0)
                 _STREAMS.pop(old, None)
+                release(gone)
                 _logger.info("voice stream: a newer stream of its client replaced one")
         if len(_STREAMS) >= MAX_STREAMS:
             return None
@@ -1465,7 +1482,8 @@ def get_stream(sid: str) -> Optional[Stream]:
 
 
 def close_stream(sid: str) -> Optional[Stream]:
-    """Forget ``sid`` → the stream it was (``None`` when unknown or expired)."""
+    """Forget ``sid`` → the stream it was (``None`` when unknown or expired):
+    its caller finishes it, or :func:`release`-s it."""
     with _REG_LOCK:
         sweep()
         return _STREAMS.pop(sid, None)

@@ -1257,7 +1257,7 @@ async def voice_stream_end(sid: str) -> JSONResponse:
 @router.delete("/api/voice/stream/{sid}")
 def voice_stream_abandon(sid: str) -> Response:
     """Abandon a stream without a last pass → 204 (unknown ids too)."""
-    _stream.close_stream(sid)
+    _stream.release(_stream.close_stream(sid))
     return Response(status_code=204)
 
 

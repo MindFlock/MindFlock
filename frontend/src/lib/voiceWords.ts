@@ -192,11 +192,6 @@ export function voiceWords(): VoiceWords {
   return current;
 }
 
-/** The defaults (the server's once it answered). */
-export function voiceWordsDefault(): VoiceWords {
-  return defaults;
-}
-
 /** Moves whenever the words change: the matchers rebuild on it. */
 export function voiceWordsVersion(): number {
   return version;

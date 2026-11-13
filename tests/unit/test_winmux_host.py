@@ -660,3 +660,82 @@ def test_persistence_across_client_processes_and_race_safe_start(fresh_home):
     listed = _child("list-sessions", "-F", "#{session_name}").split("|")[0].split()
     assert sorted(listed) == sorted([a, b])  # one host holds both
     assert _child("has-session", "-t", a) == "|0"
+
+
+# -- sweep: defects pinned ---------------------------------------------------------------
+
+
+def test_paste_buffer_reaches_a_pane_in_copy_mode(home):
+    # A message to an agent rides load-buffer + paste-buffer -p -d; on Windows
+    # it silently vanished (rc 0, buffer deleted) whenever the person had
+    # scrolled the browser terminal into copy mode. tmux pastes in any mode.
+    s = name()
+    new(s, "seq 1 50; cat -v", "-y", "10")
+    wait_for(lambda: "50" in capture(s))
+    tmux("copy-mode", "-e", "-t", s)
+    tmux("send-keys", "-t", s, "-X", "-N", "3", "scroll-up")
+    assert tmux("load-buffer", "-b", "m", "-", input="hello-agent").returncode == 0
+    r = tmux("paste-buffer", "-b", "m", "-p", "-r", "-d", "-t", s)
+    assert r.returncode == 0, r.stderr
+    tmux("send-keys", "-t", s, "-X", "cancel")
+    tmux("send-keys", "-t", s, "Enter")
+    wait_for(lambda: "hello-agent" in capture(s))
+
+
+def test_attach_in_copy_mode_after_the_history_was_cleared(home):
+    # Copy mode 10 lines up, then the history goes (clear-history, ESC[3J, a
+    # lower history-limit): the attach repaint indexed lines that no longer
+    # exist — IndexError, and the client stayed listed as attached for ever.
+    s = name()
+    new(s, "seq 1 60; cat", "-y", "8")
+    wait_for(lambda: "60" in capture(s))
+    tmux("copy-mode", "-t", s)
+    tmux("send-keys", "-t", s, "-X", "-N", "10", "scroll-up")
+    assert tmux("clear-history", "-t", s).returncode == 0
+    term = client.attach(s, dimensions=(8, 80))
+    rd = Reader(term)
+    wait_for(lambda: rd.buf)  # the repaint arrived
+    assert term.isalive()
+    term.close()
+    wait_for(
+        lambda: tmux("display-message", "-p", "-t", s, "#{session_attached}").stdout
+        == "0\n"
+    )
+
+
+def test_one_failed_connect_does_not_orphan_a_live_host(fresh_home, monkeypatch):
+    # A single connect error to a host that is alive (a full accept backlog,
+    # a busy machine) put it on the client's "stopped answering" list for the
+    # rest of the process: every later query said "no server running", and
+    # the next new-session started a SECOND host that overwrote the
+    # rendezvous file, orphaning every agent in the first.
+    s = name()
+    new(s, "sleep 30")
+    first = _host_info()
+    real = client._connect
+    fails = {"n": 1}
+
+    def flaky(info, timeout):
+        if fails["n"]:
+            fails["n"] -= 1
+            raise ConnectionRefusedError("backlog full")
+        return real(info, timeout)
+
+    monkeypatch.setattr(client, "_connect", flaky)
+    try:
+        assert tmux("has-session", "-t", s).returncode == 0
+        assert tmux("has-session", "-t", s).returncode == 0
+        s2 = name()
+        new(s2, "sleep 30")
+        assert _host_info()["pid"] == first["pid"]
+        listed = tmux("list-sessions", "-F", "#{session_name}").stdout.split()
+        assert sorted(listed) == sorted([s, s2])
+    finally:
+        monkeypatch.setattr(client, "_connect", real)
+        client._bad.clear()
+        tmux("kill-server")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and client._pid_alive(first["pid"]):
+            time.sleep(0.05)
+        if client._pid_alive(first["pid"]):
+            os.kill(first["pid"], 9)

@@ -21,6 +21,19 @@ os.environ.setdefault("MINDFLOCK_SERVER_OOM_PROTECT", "0")
 
 import pytest
 
+# psutil decides which platform it is on ONCE, at its first import. Several
+# tests fake ``os.name = "nt"`` and then reach a lazy ``import psutil``
+# (memory_pressure, winmux): when that was psutil's first import in a worker
+# process it came up half-Windows (WINDOWS and LINUX both true, the Linux
+# backend loaded) and every later ``psutil.Process(pid)`` in that process
+# raised ``create_time() got an unexpected keyword argument 'fast_only'`` —
+# seven winmux tests and two others, in whichever worker drew that order
+# (4 workers: none; 5 workers: ten). Imported here, it is always the real one.
+try:
+    import psutil  # noqa: F401
+except ImportError:  # pragma: no cover — an optional dependency somewhere
+    pass
+
 # Make the unified ``backend`` package (at the repo root, not pip-installed)
 # importable under a plain ``pytest`` / ``uv run pytest`` invocation, so the
 # engine parity tests and the pipeline tests run from one environment without a
@@ -111,6 +124,13 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     markers, scroll-speed, etc.) at ``tmp_path`` so both land in auto-cleaned space.
     """
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    # A suite run from INSIDE a MindFlock session inherits the server's own
+    # ``UVICORN_PORT`` / ``PORT`` (``run.py`` exports them so the MCP attach
+    # finds its server), and every test that reads "this server's port"
+    # without setting it then answers with that server's port instead of the
+    # default: two tests failed on :9000 and nowhere else. CI has neither set.
+    monkeypatch.delenv("UVICORN_PORT", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
     monkeypatch.setenv("MINDFLOCK_ASSISTANT_DIR", str(tmp_path / "assistant"))
     # Point Claude pre-trust seeding (providers.claude.pre_trust_workdir, F2)
     # at a per-test file so no test can ever read or write the user's real

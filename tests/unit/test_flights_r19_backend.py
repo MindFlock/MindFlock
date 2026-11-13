@@ -368,6 +368,29 @@ def test_run_stops_at_a_halt_point_on_the_first_stop():
     assert (got["state"], got["reason"]) == ("paused", F.HALT_POINT)
 
 
+def test_a_refused_patch_changes_nothing(engine):
+    """``{plan_name, start_on}`` with a start_on that is refused used to keep
+    the new name (the rename was written first): a refusal changes nothing."""
+    f = ready(CMD, start_on="prompt")
+    name = F.get(f["id"])["plan_name"]
+    r = client.patch(
+        "/api/flights/" + f["id"], json={"plan_name": "Shots", "start_on": "bogus"}
+    )
+    assert (r.status_code, r.json()["error"]) == (400, "bad_start_on")
+    assert F.get(f["id"])["plan_name"] == name
+    r = client.patch(
+        "/api/flights/" + f["id"], json={"plan_name": "", "start_on": "run"}
+    )
+    assert (r.status_code, r.json()["error"]) == (400, "bad_name")
+    assert F.get(f["id"])["start_on"] == "prompt"
+    client.patch("/api/flights/" + f["id"], json={"start_on": "now"})
+    r = client.patch(
+        "/api/flights/" + f["id"], json={"plan_name": "Late", "start_on": "run"}
+    )
+    assert (r.status_code, r.json()["error"]) == (409, "not_ready")
+    assert F.get(f["id"])["plan_name"] == name
+
+
 def test_patch_start_on(engine):
     f = ready(CMD, start_on="prompt")
     r = client.patch("/api/flights/" + f["id"], json={"start_on": "run"})

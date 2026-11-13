@@ -19,7 +19,9 @@
  *  - broken      pre-commit / setup failed, offline, stuck
  *  - checks      checks failing
  *  - behaviors   a verify that failed or waits on you, unless the session's
- *                own row (its `verify`) or its route already says so
+ *                own row (its `verify`) or its route already says so — and
+ *                not a check made BEFORE the merge whose session is gone
+ *                (`behaviorsStillAsk`): nobody is left to carry it on
  *  - ready       pushed — ready for PR
  * One row per session (its most pressing reason); a row about no session (a
  * group's budget, a route with no session, behaviors) keeps its own key. */
@@ -30,7 +32,7 @@ import { queryClient, useFlights, useInstances, useTestPlans } from "../state/qu
 import { useOutbox } from "../state/runs";
 import { attentionItems } from "../components/sidebar/ordering";
 import { needsAttention, withPlanReady, type NeedsRow } from "../components/outbox/outbox";
-import { isFailing, isWaitingOnYou } from "../components/dialogs/verify";
+import { isFailing, isWaitingOnYou, latestRun, planShipped } from "../components/dialogs/verify";
 import { selectSession } from "./sessionActions";
 import { windowName } from "./windowName";
 import { toast } from "./toast";
@@ -91,7 +93,7 @@ export function withFlightYou(
   const listed = new Set(out.filter((w) => w.kind === "flight_you").map((w) => w.title));
   for (const inst of instances) {
     const fl = inst.flight;
-    if (!rowWaitsOnYou(fl) || listed.has(inst.title)) continue;
+    if (!rowWaitsOnYou(fl) || listed.has(inst.title) || elsewhere(inst)) continue;
     out.push({
       key: "flight:" + fl!.id,
       title: inst.title,
@@ -102,6 +104,15 @@ export function withFlightYou(
     });
   }
   return out;
+}
+
+/** A row of the owner's other device (`<device>::<title>`) or a session a
+ * peer shares: its route lives on that server, so Done / Skip / Retry /
+ * Carry on posting its id here would 404. Such a session is in the list the
+ * way its other rows are — by its own state (the row's chip: waiting on you,
+ * halted) — with no route buttons. */
+function elsewhere(inst: Pick<Instance, "title" | "device">): boolean {
+  return !!inst.device || String(inst.title || "").includes("::");
 }
 
 /** The waiting kind of a route paused at a halt point: in the bell under
@@ -154,8 +165,14 @@ export function withFlightRows(
   instances: readonly Instance[],
   flights?: readonly Flight[] | null
 ): FlightWaiting[] {
-  const out: FlightWaiting[] = withFlightYou(waiting, instances);
   const live = new Set(instances.map((i) => i.title));
+  const known = new Set((flights || []).map((f) => f.id));
+  // The server's row for a route whose session is no longer listed still
+  // names that session: when the full flight is here, its own row (keyed by
+  // the flight, below) stands in — one route, one row, no dead name on it.
+  const out: FlightWaiting[] = withFlightYou(waiting, instances).filter(
+    (w) => !(w.kind === "flight_you" && w.title && !live.has(w.title) && known.has((w as FlightWaiting).flight?.id || ""))
+  );
   const hasFlight = new Set(out.filter((w) => w.kind === "flight_you" || w.kind === "flight_halted").map((w) => w.title));
   const keys = new Set(out.map((w) => w.key));
   const full = new Map((flights || []).map((f) => [f.id, f]));
@@ -167,7 +184,7 @@ export function withFlightRows(
   };
   for (const inst of instances) {
     const fl = inst.flight;
-    if (!fl || !fl.id) continue;
+    if (!fl || !fl.id || elsewhere(inst)) continue;
     const f = full.get(fl.id);
     if (fl.state === "waiting_you") add(flightRow("flight_you", inst.title, { ...fl, reason: f?.reason }));
     else if (fl.state === "halted") add(flightRow("flight_halted", inst.title, { ...fl, reason: f?.reason }));
@@ -188,6 +205,22 @@ export function withFlightRows(
   return out;
 }
 
+/** Is a verify that failed or waits on you still asking anyone?
+ *
+ * Once the work has shipped it is: behaviors are meant to outlive their
+ * session, and the check after the merge is the person's to make. Before
+ * that, a check belongs to the session it was made for — the one whose work
+ * it covers, or the one that walked it. With both closed the "needs you:" its
+ * agent left can't be answered into anything (no agent to carry on, no route
+ * parked on it), and it sat in the list for good: "3 need you" with every
+ * session closed. Such a plan stays on the Behaviors board, where it can be
+ * checked again or deleted; it is just not something waiting on you. */
+export function behaviorsStillAsk(plan: TestPlan, instances: readonly Instance[]): boolean {
+  if (planShipped(plan)) return true;
+  const walker = latestRun(plan)?.session || "";
+  return instances.some((i) => (!!walker && i.title === walker) || planForSession([plan], i)?.id === plan.id);
+}
+
 function kindOf(r: NeedsRow, byTitle: Map<string, Instance>): NeedsYouKind {
   if (r.plan) return "plan";
   if (r.waiting) {
@@ -199,7 +232,11 @@ function kindOf(r: NeedsRow, byTitle: Map<string, Instance>): NeedsYouKind {
   if (p === 0) return "asking";
   if (p === 2) return "checks";
   if (p >= 3) return "ready";
-  return rowWaitsOnYou(byTitle.get(r.title)?.flight) ? "wait_for_me" : "broken";
+  const fl = byTitle.get(r.title)?.flight;
+  // A route of another device's session has no route row here: its own row
+  // still says halted (red), not just "broken".
+  if (fl && fl.state === "halted") return "halted";
+  return rowWaitsOnYou(fl) ? "wait_for_me" : "broken";
 }
 
 const ORDER = new Map<string, number>(NEEDS_YOU_KINDS.map((k, i) => [k, i]));
@@ -240,6 +277,7 @@ export function needsYouRows(src: NeedsYouSources): NeedsYouRow[] {
   for (const p of src.testPlans || []) {
     if (spoken.has(p.id)) continue;
     if (!isFailing(p) && !isWaitingOnYou(p)) continue;
+    if (!behaviorsStillAsk(p, instances)) continue;
     rows.push({ key: "behaviors:" + p.id, title: "", rank: 3, kind: "behaviors", behaviors: p });
   }
   // Stable: within a kind, the order the parts came in.

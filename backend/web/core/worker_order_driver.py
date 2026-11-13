@@ -1000,6 +1000,10 @@ def start_on_turn(srv, title: str, inst, parent: str = "") -> str:
     if queued is not None:
         return "its agent waits for memory to start"
     err = start_agent(title, inst)
+    if err:
+        # The gate noted it as starting: take that back, or it reads as an
+        # agent warming up (and holds the stagger) for nothing.
+        _launch_gate.unnote_start(title)
     if err and start_refusal(title, inst):
         raise _NotYet(err)  # paused (or held) since the check above
     return ("its agent did not start: %s" % err)[:200] if err else ""
@@ -1134,6 +1138,15 @@ def _release(
             "MindFlock: started by hand before %s finished — it may still be "
             "changing related code." % ", ".join(preds[:6])
         )
+    lost = w.get("lost") if isinstance(w.get("lost"), dict) else {}
+    if lost:
+        lines.append(
+            "MindFlock: %s could not start (%s), so this task starts without it."
+            % (
+                ", ".join(sorted(lost)[:6]),
+                "; ".join(str(lost[t]) for t in sorted(lost)[:6]),
+            )
+        )
     ftext = _order.fence_text(
         w.get("fence"), str((w.get("fence") or {}).get("by") or "")
     )
@@ -1169,7 +1182,7 @@ def _release(
         )
     except Exception:  # noqa: BLE001
         pass
-    note = lines[0][:200] if lines and preds else ""
+    note = lines[0][:200] if lines and (preds or lost) else ""
     if started:
         note = (started + (" — " + note if note else ""))[:200]
     return note
@@ -1230,6 +1243,20 @@ def _pass_sync() -> None:
                 srv._prompt_queue.set_flags(t, enabled=True, held=False)
             except Exception:  # noqa: BLE001
                 pass
+        # A step its workers wait on whose queued create FAILED before it was
+        # ever registered (on_failed_start covers a registered one): it will
+        # never start, so its waiters stop waiting on it — now, in this
+        # pass's plan, and in the store.
+        lost = _failed_steps(rec, instances, parent)
+        if lost:
+            with _order.edit() as d0:
+                live0 = (d0.get("parents") or {}).get(parent)
+                if isinstance(live0, dict):
+                    for t, why in lost.items():
+                        if _order.worker_rec(live0, t) is None:
+                            _order.forget_failed(live0, t, why)
+            for t, why in lost.items():
+                _order.forget_failed(rec, t, why)
         # 2. Plan, and carry out releases (git + the queue) outside the lock.
         acts = _order.plan(rec, observe(rec, instances, parent))
         claimed = _claim_releases(
@@ -1334,6 +1361,39 @@ def _pass_sync() -> None:
                     d2["parents"].pop(parent, None)
     _heal_orphans(srv, _order.load(), instances, now)
     _sweep_fences(srv, dict(srv.ENGINE.instances))
+
+
+def _failed_steps(rec: dict, instances: Mapping, parent: str) -> Dict[str, str]:
+    """``{title: error}`` of the steps ``parent``'s workers wait on (or it
+    declared) that are no worker of its order, no session, not waiting to be
+    created, and whose create failed (core.pending's failed rows: a queued
+    create the launch gate could not carry out). Never raises."""
+    if not parent:
+        return {}
+    names = set(rec.get("planned") or {})
+    for w in (rec.get("workers") or {}).values():
+        if isinstance(w, dict) and w.get("state") == "held":
+            names.update(w.get("after") or [])
+    names = {
+        t
+        for t in names
+        if t and t not in instances and _order.worker_rec(rec, t) is None
+    }
+    if not names:
+        return {}
+    waiting, failed = waiting_creates(parent)
+    out = {
+        t: failed[t] or "it could not start"
+        for t in names
+        if t in failed and t not in waiting
+    }
+    if out:
+        try:
+            live = _live_elsewhere().live
+        except Exception:  # noqa: BLE001
+            live = frozenset()
+        out = {t: e for t, e in out.items() if t not in live}
+    return out
 
 
 def _orphan(srv, data: Mapping, title: str, inst, now: float) -> bool:

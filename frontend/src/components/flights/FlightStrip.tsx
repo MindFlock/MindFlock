@@ -40,7 +40,7 @@ import {
 } from "../../lib/flights";
 import { HALT_POINT_REASON, atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
-import { controlFlight, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, flightAction, flightPath, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { canFlyAgain, flyAgainLabel, flyAgainPrimary, flyAgainTitle, pickAgainStop } from "../../lib/routeStart";
 import "./RouteStartMenu.css";
 import { ASK_TILE_W, OWED_OPEN, OWED_OPEN_TITLE, askOffers, askRoom, askSentence, findingsOf, flightAsk, owedGroups, owedItemsText, owedNoteOf } from "../../lib/stopAsks";
@@ -48,6 +48,12 @@ import { OwedChecks, OwedNote, ReviewFindings } from "./PerchAsks";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
 import "./Flights.css";
+import { nextIsHaltPoint, sessionGone, skipCarriesOn } from "../../lib/flights";
+
+// Pure rules the bell's rows share (outbox/WaitingRow): they live in
+// lib/flights so that importing them does not pull this component's
+// stylesheets in ahead of everything the bell loads first.
+export { nextIsHaltPoint, sessionGone, skipCarriesOn };
 
 const stop = (e: MouseEvent) => e.stopPropagation();
 
@@ -234,25 +240,15 @@ export function VerifyWalkHint({ session, here, onOpen }: { session: string; her
  * you (`on_fail: you` — waiting on you with `detail.failed_reason`). Any
  * kind: the agent gets the failure, then the stop runs again. A halt point
  * (paused, nothing failed) has nothing to fix. */
-export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "step_states"> | null | undefined): boolean {
-  if (!flight || (flight.state !== "halted" && flight.state !== "waiting_you")) return false;
+export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "step_states" | "session"> | null | undefined): boolean {
+  // No session (a free run): no agent to hand it to — the server refuses
+  // it (409 `no_session`).
+  if (!flight || !flight.session || (flight.state !== "halted" && flight.state !== "waiting_you")) return false;
   const step = flight.steps[flight.cursor];
   const ss = step ? flight.step_states?.[step.id] : undefined;
   if (!ss) return false;
   if (ss.state === "failed") return !ss.detail?.moved_on;
   return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
-}
-
-/** Whether the stop the route moves to after its current one (passing the
- * ones already done or skipped) is a halt point not yet let through. */
-export function nextIsHaltPoint(flight: Pick<Flight, "steps" | "cursor" | "step_states">): boolean {
-  for (let k = flight.cursor + 1; k < flight.steps.length; k++) {
-    const s = flight.steps[k];
-    const ss = flight.step_states?.[s.id];
-    if (ss && (ss.state === "done" || ss.state === "skipped")) continue;
-    return !!s.halt && !ss?.detail?.halt_hit;
-  }
-  return false;
 }
 
 /** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
@@ -264,7 +260,20 @@ export function nextIsHaltPoint(flight: Pick<Flight, "steps" | "cursor" | "step_
  * person paused it. A Verify stop parked on you answers its verify instead
  * (`VerifyStopActions`). `inTile` (a stop on the Sky): its text is the
  * tile's own line under its name, not a paragraph here. */
-export function YouStepActions({ flight, compact = false, inTile = false }: { flight: Flight; compact?: boolean; inTile?: boolean }) {
+export function YouStepActions({
+  flight,
+  compact = false,
+  inTile = false,
+  gone = false,
+}: {
+  flight: Flight;
+  compact?: boolean;
+  inTile?: boolean;
+  /** Its session is closed (not among the rows): no agent to hand a fix
+   * to, and Stop the route is the way to end it (it is drawn nowhere else
+   * with a ⋯). */
+  gone?: boolean;
+}) {
   const step = flight.steps[flight.cursor];
   const items = youItems(step);
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
@@ -316,7 +325,7 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
   const key = (i: number) => flight.id + ":" + step.id + ":" + i;
   const allTicked = items.every((_, i) => ticked[key(i)]);
   const halted = flight.state === "halted" || paused || handed;
-  const fix = !paused && canFixStep(flight);
+  const fix = !paused && !gone && canFixStep(flight);
   // The owed perch's sentence is the server's note ("Before this route
   // finishes: 3 checks for you"), which its own text alone would leave out.
   const text = handed ? (/^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason) : ask === "owed" ? askSentence(rec, youText(flight)) : youText(flight);
@@ -395,13 +404,22 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
           className="test-btn fl-btn fl-skip"
           disabled={busy}
           title={"Skip “" + step.title + "” — the route goes on without it"}
-          // The server keeps a paused route paused after a skip
-          // (`_advance_keeping_pause`): Skip carries on too, as it says —
-          // unless the next stop is a halt point itself (it halts there).
-          onClick={() => void run(async () => (await stepSkip(flight.id, step.id)) && flight.state === "paused" && !nextIsHaltPoint(flight) && controlFlight(flight.id, "resume"))}
+          // Skip carries on a paused route too, where there is somewhere to go (`skipCarriesOn`).
+          onClick={() => void run(async () => (await stepSkip(flight.id, step.id)) && skipCarriesOn(flight) && controlFlight(flight.id, "resume"))}
         >
           Skip
         </button>
+        {gone && (
+          <button
+            type="button"
+            className="test-btn fl-btn"
+            disabled={busy}
+            title="Its session is closed — end this route"
+            onClick={() => void run(() => flightAction("Stop the route", flightPath(flight.id, "/cancel"), {}, "Route stopped"))}
+          >
+            Stop the route
+          </button>
+        )}
       </div>
     </div>
   );
@@ -448,12 +466,6 @@ export function flyAgainItems(flight: Flight, gone = false): MenuItem[] {
     { key: "again", label: flyAgainLabel(flight), title: flyAgainTitle(flight, gone), onSelect: () => void flyAgain(flight.id) },
     { key: "again-pick", label: "Fly again from another stop…", title: "Pick the stop it flies again from", onSelect: () => pickAgainStop(flight) },
   ];
-}
-
-/** Whether the flight's session is gone (not among the rows; unknown while
- * they load = not gone). */
-export function sessionGone(flight: Pick<Flight, "session">, rows: readonly Pick<Instance, "title">[] | null | undefined): boolean {
-  return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
 }
 
 /** Fly again on an ended route, in a row: "Fly again from <stop>" (where it
