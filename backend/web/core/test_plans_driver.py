@@ -848,8 +848,76 @@ def _merging_is_shipping(live_branch: str) -> bool:
 
 
 def _test_plan_is_live(plan: dict) -> bool:
-    """Whether this plan's work has reached the live branch. Blocking (a fetch
-    plus, sometimes, a PR lookup) — call it on a thread.
+    """Whether this plan's work has reached the live branch. Blocking — call it
+    on a thread.
+
+    History first (:func:`_test_plan_live_by_history`: ancestry, then the
+    branch's own merged PR). When that says no, the CONTENT check
+    (:func:`_test_plan_content_shipped`), which is what sees a squash merge
+    through some other pull request — rate-limited per plan, because it is the
+    one question here that is not answered by the fetch already made.
+    """
+    if _test_plan_live_by_history(plan):
+        return True
+    if not _test_plan_content_shipped(plan):
+        return False
+    # Whatever the history half said about the wait ("its PR merged into
+    # staging, not sandbox") is no longer the story: the work is there.
+    _test_plans.set_live_problem(plan["id"], "")
+    return True
+
+
+#: How often ONE waiting plan's content is checked (see
+#: :func:`_test_plan_content_shipped`). The liveness pass asks every waiting
+#: plan every minute, and a fetch is shared by everything that pass does; the
+#: content check is a diff plus two applies against a fresh index, which is
+#: cheap but not free, and the squash it looks for is a once-in-a-checklist
+#: event that nobody needs noticed within the minute.
+_TEST_PLAN_CONTENT_INTERVAL_S = 15 * 60.0
+
+#: plan id -> when its content was last checked. In memory, like the liveness
+#: cursor: a restart checking every waiting plan once is the right behaviour.
+_TEST_PLAN_CONTENT_CHECKED: Dict[str, float] = {}
+
+
+def _test_plan_content_shipped(plan: dict, now: Optional[float] = None) -> bool:
+    """Whether this plan's CHANGES are already on its live branch
+    (``test_plans.probe_content_shipped``), at most once per
+    :data:`_TEST_PLAN_CONTENT_INTERVAL_S` per plan. Blocking.
+
+    The squash-merge answer the history half cannot give: in a repo whose work
+    reaches the live branch through another branch's PR (a scratch branch,
+    sometimes bundling two tickets), neither ancestry nor this branch's own PR
+    ever says yes. Local only — it reads the remote-tracking ref the history
+    half has just fetched — and time-bounded inside the probe. Stamped before
+    asking, like the liveness cursor, so a slow repo is not asked again next
+    pass.
+
+    Asked of the NEWEST pushed commit (``tip_sha``), not the liveness anchor
+    ``sha``: ancestry of the anchor is transitive, content is not — the first
+    push's changes being on the live branch says nothing about what was pushed
+    after it, and "shipped" must cover the whole branch.
+    """
+    pid = str(plan.get("id") or "")
+    now = time.time() if now is None else now
+    if not pid or now - _TEST_PLAN_CONTENT_CHECKED.get(pid, 0.0) < (
+        _TEST_PLAN_CONTENT_INTERVAL_S
+    ):
+        return False
+    _TEST_PLAN_CONTENT_CHECKED[pid] = now
+    try:
+        return _test_plans.probe_content_shipped(
+            plan.get("repo_root") or "",
+            plan.get("tip_sha") or plan.get("sha") or "",
+            plan.get("live_branch") or "",
+        )
+    except Exception:  # noqa: BLE001 — a probe that breaks is a "not yet"
+        return False
+
+
+def _test_plan_live_by_history(plan: dict) -> bool:
+    """Whether this plan's commits — or its branch's merged PR — are on the
+    live branch. Blocking (a fetch plus, sometimes, a PR lookup).
 
     Two questions, because one of them cannot answer on its own. Ancestry
     (``test_plans.is_live``) is the honest test and the only one that works for a
@@ -2615,6 +2683,8 @@ def _liveness_order(plans: list) -> list:
     # this map cannot outgrow the store it is a cursor into.
     for key in [k for k in _TEST_PLAN_LIVE_CHECKED if k not in ids]:
         _TEST_PLAN_LIVE_CHECKED.pop(key, None)
+    for key in [k for k in _TEST_PLAN_CONTENT_CHECKED if k not in ids]:
+        _TEST_PLAN_CONTENT_CHECKED.pop(key, None)
     return sorted(candidates, key=lambda p: _TEST_PLAN_LIVE_CHECKED.get(p["id"], 0.0))
 
 
@@ -2699,24 +2769,70 @@ def _check_test_plans_for_liveness(plans: list) -> None:
             # ...and from here on there is nothing left to ask origin. A plan
             # waiting out its deploy window costs one clock comparison per pass
             # instead of a fetch, so adding the wait made this loop cheaper.
-            delay = _test_plans.resolve_deploy_delay(plan.get("repo_root") or "")
-            if not _test_plans.deploy_ready(plan, delay):
-                continue
-            due = _test_plans.mark_due(pid)
-            if due is None:
-                continue  # deleted while it was waiting
-            _events.BUS.emit(
-                "session.test_plan_due",
-                session=pid,
-                data={
-                    "plan": pid,
-                    "title": due["title"],
-                    "live_branch": due["live_branch"],
-                },
-            )
-            _notify_test_plan_due(due)
+            _due_when_deployed(plan)
         except Exception:  # noqa: BLE001 — one bad plan can't stop the pass
             pass
+
+
+def _due_when_deployed(plan: dict) -> Optional[dict]:
+    """A MERGED plan whose deploy wait is over goes ``due``: the event, and the
+    phone push. Returns the plan as it now stands (``None`` once deleted).
+
+    The one path from "its work shipped" to "check it now", whoever saw the
+    shipping — ancestry, the content check, a route's land stop or a person
+    saying so (:func:`_ship_test_plan`) — so what follows a merge is the same
+    whichever of them saw it.
+    """
+    pid = plan["id"]
+    delay = _test_plans.resolve_deploy_delay(plan.get("repo_root") or "")
+    if not _test_plans.deploy_ready(plan, delay):
+        return plan
+    due = _test_plans.mark_due(pid)
+    if due is None:
+        return None  # deleted while it was waiting
+    _events.BUS.emit(
+        "session.test_plan_due",
+        session=pid,
+        data={
+            "plan": pid,
+            "title": due["title"],
+            "live_branch": due["live_branch"],
+        },
+    )
+    _notify_test_plan_due(due)
+    return due
+
+
+def _ship_test_plan(plan_id: str) -> Optional[dict]:
+    """Its work has shipped, on somebody's word: a route's land stop, or a
+    person pressing "It's merged". Blocking (store writes, a settings read).
+
+    The explicit signal for what the liveness pass cannot see — a squash
+    through another branch's PR that the content check missed. It goes
+    through exactly what ancestry does (:func:`mark_merged`, then
+    :func:`_due_when_deployed`), so the deploy wait, the after-merge check and
+    the notification are the same as for a merge the loop noticed itself; a
+    deploy wait still to run out is finished by the loop's next passes. The
+    plan is marked asked-for, so those passes follow it while Verify is
+    switched off.
+
+    Only a plan still WAITING for its merge (``generated``, no ``merged_at``)
+    is moved; anything else comes back unchanged — a checklist already merged,
+    due, running or done has nothing to learn from being told.
+    """
+    plan = _test_plans.get(plan_id)
+    if plan is None:
+        return None
+    if plan["state"] != "generated" or plan["merged_at"]:
+        return plan
+    _test_plans.mark_asked(plan_id)
+    if _test_plans.mark_merged(plan_id) is None:
+        return None
+    _test_plans.set_live_problem(plan_id, "")
+    plan = _test_plans.get(plan_id)
+    if plan is None:
+        return None
+    return _due_when_deployed(plan)
 
 
 def _check_test_plan_landings(plans: list) -> None:

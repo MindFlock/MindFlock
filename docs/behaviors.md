@@ -137,7 +137,10 @@ VerifyStep. Props are frozen in the seam (`BehaviorsCardProps`).
   **Verify again** (the session's own agent; with the session gone, the older
   `POST /api/test-plans/{plan}/run`), **Open its agent** while it verifies,
   none while it waits on you. ⋯ menu: Verify again (when it isn't the
-  primary) · It's deployed — check now · Fix in a new session (on failure) ·
+  primary) · It's merged into `<live branch>` (while it waits for its merge;
+  `POST /api/test-plans/{plan}/shipped`, for a squash through another
+  branch's PR that Verify can't see) · It's deployed — check now · Fix in a
+  new session (on failure) ·
   Open the checking run · Cancel the check · Open the work session · View
   diff · What could break · Open PR · Delete these behaviors.
 - When the verify waits on a person: their steps (text + what should happen)

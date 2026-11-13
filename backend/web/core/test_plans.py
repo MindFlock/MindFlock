@@ -119,6 +119,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from typing import Callable, Dict, List, Optional
@@ -157,6 +158,7 @@ __all__ = [
     "mark_asked",
     "is_asked_for",
     "TRIGGERS",
+    "probe_content_shipped",
     "retarget_live_branch",
     "deploy_ready",
     "generate",
@@ -4780,6 +4782,129 @@ def is_live(repo_root: str, sha: str, live_branch: str) -> bool:
     plumbing lives — this module must not import the server.
     """
     return probe_live(repo_root, sha, live_branch) == "live"
+
+
+#: The whole of one content check (:func:`probe_content_shipped`): every git
+#: call it makes shares this budget, so a huge diff or a slow disk costs one
+#: plan this long and no more.
+TIMEOUT_CONTENT = 20.0
+
+#: A branch diff bigger than this is not content-checked (the answer is "no",
+#: i.e. keep waiting): applying it twice against a fresh index would cost more
+#: than the question is worth, and such a branch still has the explicit
+#: "it's merged" signal.
+MAX_CONTENT_DIFF_BYTES = 8_000_000
+
+
+def probe_content_shipped(
+    repo_root: str, sha: str, live_branch: str, timeout: float = TIMEOUT_CONTENT
+) -> bool:
+    """Whether this branch's CHANGES are already on ``origin/<live_branch>``,
+    when its commits are not. Blocking; local only (it reads the remote-tracking
+    ref the liveness probe has just fetched).
+
+    WHY. Ancestry cannot see a squash merge — the merge is a new commit — and
+    the PR fallback cannot see work that reached the live branch through a
+    DIFFERENT pull request (a scratch branch, sometimes bundling two tickets).
+    So this asks the question both stand in for: is what this branch changed
+    present on the live branch?
+
+    HOW. The branch's diff — merge-base(sha, origin/<live>) to ``sha`` — must
+    reverse-apply cleanly to origin/<live>'s tree: every line the branch wrote
+    is there, in place. It is checked against a throwaway index
+    (``GIT_INDEX_FILE`` in a temp dir, loaded by ``read-tree``), so nothing in
+    the repository, its index or its worktrees is touched, and it works in the
+    bare base clone these plans live in. It tolerates other changes on the live
+    branch and a squash that bundled other work, because neither disturbs the
+    lines this branch wrote.
+
+    NEVER A FALSE "SHIPPED" — a miss only leaves the plan waiting, which the
+    explicit signal covers, while a false yes tells a person unmerged work is
+    live. So every doubt answers no:
+
+    * an EMPTY diff (nothing to find, so nothing shipped);
+    * the forward patch ALSO applying — the branch's preimage is still there,
+      so the reverse match is ambiguous (a hunk that only deletes lines
+      reverse-applies wherever its context lines sit together, including in
+      the unmerged file) and the forward test is what tells the cases apart;
+    * a later commit on the live branch that touched the same lines (the
+      reverse apply fails: a miss);
+    * a sha this clone no longer has, a missing live ref, any git failure, a
+      diff over :data:`MAX_CONTENT_DIFF_BYTES`, the time budget running out.
+    """
+    if not repo_root or not sha or not live_branch:
+        return False
+    deadline = time.monotonic() + max(1.0, float(timeout))
+
+    def left() -> float:
+        return max(0.5, deadline - time.monotonic())
+
+    live = "refs/remotes/origin/%s" % live_branch
+    base = _git_out(repo_root, ["merge-base", sha, live], left())
+    base = (base or "").strip()
+    if not base or time.monotonic() >= deadline:
+        return False
+    cp = gitutil.git(
+        [
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            base,
+            sha,
+        ],
+        repo_root,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=False,
+        timeout=left(),
+    )
+    patch = cp.stdout or b""
+    if cp.returncode != 0 or not patch.strip():
+        return False
+    if len(patch) > MAX_CONTENT_DIFF_BYTES or time.monotonic() >= deadline:
+        return False
+    try:
+        with tempfile.TemporaryDirectory(prefix="mf-shipped-") as tmp:
+            env = {"GIT_INDEX_FILE": os.path.join(tmp, "index")}
+            loaded = gitutil.git(
+                ["read-tree", live],
+                repo_root,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=left(),
+            )
+            if loaded.returncode != 0:
+                return False
+
+            def applies(*flags: str) -> Optional[bool]:
+                """Whether the patch applies; ``None`` when git gave no
+                answer (out of time, not runnable)."""
+                if time.monotonic() >= deadline:
+                    return None
+                res = gitutil.git(
+                    ["apply", "--cached", "--check", *flags],
+                    repo_root,
+                    env=env,
+                    input=patch,
+                    stderr=subprocess.DEVNULL,
+                    text=False,
+                    timeout=left(),
+                )
+                if res.timed_out or res.not_run:
+                    return None
+                return res.returncode == 0
+
+            if applies("-R") is not True:
+                return False
+            # Reverse fits; the forward patch must NOT (see the docstring) —
+            # and "git could not say" is not "it does not".
+            return applies() is False
+    except Exception:  # noqa: BLE001 — a temp dir that cannot be made is a no
+        return False
 
 
 # --------------------------------------------------------------------------- #

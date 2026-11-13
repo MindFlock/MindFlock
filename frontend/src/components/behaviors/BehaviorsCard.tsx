@@ -25,6 +25,7 @@ import { useUi } from "../../state/store";
 import { StopMenu, type SkyMenuItem } from "../flights/StopMenu";
 import { InlineConfirm } from "../InlineConfirm";
 import { BehaviorRow } from "./BehaviorRow";
+import { markPlanMerged } from "./markMerged";
 import { cardMenuItems, haltedLine, verifyCardView, verifyStopStand, watchSessionOf, type CardMenuItem, type CardMenuKey } from "./cardModel";
 
 /** The card's default "Let its agent fix it": today the existing fix (a new
@@ -120,6 +121,9 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded, on
     switch (key) {
       case "verify":
         verifyNow();
+        break;
+      case "merged":
+        void withBusy("merged", () => markPlanMerged(plan));
         break;
       case "deployed":
         void withBusy("deployed", () => actions.markPlanDeployed(plan));
