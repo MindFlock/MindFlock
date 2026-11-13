@@ -37,6 +37,9 @@ MAX_FAILURES = 20
 #: A run with this many failures or fewer is run once more (flakes).
 RERUN_AT_MOST = 3
 EXPECT = ("pass", "fail")
+#: The shell's exits for a command it could not run (not executable, not
+#: found): no test ran at all.
+_NEVER_RAN = (126, 127)
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 
@@ -360,7 +363,16 @@ def _judge(flight, step, ss, obs, now) -> dict:
     }
     if cfg.get("expect") == "fail":
         # A timeout or a command that could not start (exit -1) is not the
-        # failure a "write the failing test first" stop asks for.
+        # failure a "write the failing test first" stop asks for; nor is the
+        # shell's "not found" / "not executable" (127 / 126): nothing ran.
+        if code in _NEVER_RAN and not failed:
+            return {
+                "action": "fail",
+                "reason": _reason(
+                    "the test command could not run (exit %d)" % code, counts, output
+                ),
+                "detail": detail,
+            }
         if failed or (code not in (0, None, -1)):
             detail["receipt"] = receipt_of(counts, "fail", runs)
             return {"action": "done", "note": "failed as expected", "detail": detail}

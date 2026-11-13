@@ -146,8 +146,9 @@ def spend(token: str, now: Optional[float] = None) -> None:
 
 
 def forget_flight(flight_id: str) -> None:
-    """Spend every token of ``flight_id`` (nothing calls it from the core yet;
-    a finished flight's tokens already answer 404 through the step check)."""
+    """Spend every token of ``flight_id`` (``flight_driver.remove``, when a
+    route is deleted; a finished flight's tokens already answer 404 through
+    the step check)."""
     with _LOCK:
         tokens = _load_locked()
         hit = False

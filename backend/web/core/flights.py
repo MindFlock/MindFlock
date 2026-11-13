@@ -870,7 +870,7 @@ def _text(value, limit: int = MAX_TEXT) -> str:
 def _int(value, default: int, lo: int, hi: int) -> int:
     try:
         n = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: inf
         return default
     return max(lo, min(hi, n))
 
@@ -934,7 +934,7 @@ def _verify_config(c: dict, strict: bool, at: str) -> dict:
     if strict and raw_min not in (None, ""):
         try:
             ok = 0 <= int(raw_min) <= 1440
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             ok = False
         if not ok:
             raise PlanError("ready_minutes is 0 to 1440", at + ".ready_minutes")
@@ -1011,7 +1011,7 @@ def _check_options(kind: str, raw: dict, config: dict, where: str) -> None:
             if ok:
                 try:
                     n = int(value)  # 15.7 reads as 15, as it always has
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     ok = False
             if not ok:
                 raise PlanError(
@@ -1121,7 +1121,7 @@ def _step_config_body(kind: str, raw: dict, strict: bool, where: str) -> dict:
         if strict and c.get("seconds") not in (None, ""):
             try:
                 ok = 0 <= int(c["seconds"]) <= 60 * 60 * 24 * 14
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 ok = False
             if not ok:
                 raise PlanError(
@@ -1907,8 +1907,17 @@ def _plans_locked() -> Dict[str, dict]:
     return plans
 
 
-def _save_plans_locked(plans: Dict[str, dict]) -> None:
-    atomic_write_json(plans_path(), {"plans": list(plans.values())}, prefix=".flp.")
+def _save_plans_locked(plans: Dict[str, dict], writing: str = "") -> None:
+    """Write ``plans``. A saved route that holds a stop of a kind this build
+    does not know (:func:`unknown_kinds`) goes back exactly as stored —
+    normalised, that stop was dropped and the save erased it — unless it is
+    the one being written (``writing``)."""
+    stored = {str(r.get("id") or ""): r for r in _load_plans_raw() if unknown_kinds(r)}
+    out = [
+        stored[pid] if pid in stored and pid != writing else plan
+        for pid, plan in plans.items()
+    ]
+    atomic_write_json(plans_path(), {"plans": out}, prefix=".flp.")
 
 
 def _plan_order(plan: dict) -> tuple:
@@ -2025,7 +2034,7 @@ def save_plan(raw, now: Optional[float] = None) -> dict:
         plan["updated"] = ts
         mint_hook_token(plan, plans.get(pid))
         plans[pid] = plan
-        _save_plans_locked(plans)
+        _save_plans_locked(plans, writing=pid)
     return copy.deepcopy(plan)
 
 
@@ -2047,7 +2056,7 @@ def put_plan(pid: str, raw, now: Optional[float] = None) -> dict:
             plan["updated"] = float(now if now is not None else time.time())
         mint_hook_token(plan, plans.get(pid))
         plans[pid] = plan
-        _save_plans_locked(plans)
+        _save_plans_locked(plans, writing=pid)
     return plan
 
 
@@ -2061,7 +2070,7 @@ def delete_plan(plan_id: str) -> str:
             return ""
         if pid in BUILTIN_IDS:
             plans[pid] = _builtin_defaults()[pid]
-            _save_plans_locked(plans)
+            _save_plans_locked(plans, writing=pid)
             return "reset"
         plans.pop(pid, None)
         _save_plans_locked(plans)
@@ -2083,7 +2092,13 @@ def reset_plan(plan_id: str) -> Optional[dict]:
 #: one read, not N. ``(path, ino, mtime_ns, size)`` -> {id: flight}, plus
 #: the digest of the bytes it was parsed from. Never handed out: readers copy
 #: what they return. Guarded by :data:`_LOCK`.
-_CACHE: Dict[str, object] = {"key": None, "flights": {}, "digest": None}
+_CACHE: Dict[str, object] = {
+    "key": None,
+    "flights": {},
+    "digest": None,
+    # Routes holding a stop of a kind this build does not know, as stored.
+    "foreign": {},
+}
 
 
 def _file_key(path: str):
@@ -2106,7 +2121,27 @@ def _digest(blob: Optional[bytes]):
     return hashlib.sha1(blob).digest() if blob is not None else None
 
 
-def _parse_flights(blob: Optional[bytes]) -> Dict[str, dict]:
+def unknown_kinds(raw) -> List[str]:
+    """The stop kinds of a stored route (raw) that this build does not know:
+    a newer server's kind on a state dir two servers share, a plug-in that
+    was removed or failed to load."""
+    steps = raw.get("steps") if isinstance(raw, dict) else None
+    out: List[str] = []
+    for s in steps if isinstance(steps, list) else []:
+        kind = _text(s.get("kind"), 16).lower() if isinstance(s, dict) else ""
+        if kind and kind not in STEP_KINDS and kind not in out:
+            out.append(kind)
+    return out
+
+
+def _parse_flights(
+    blob: Optional[bytes], foreign: Optional[Dict[str, dict]] = None
+) -> Dict[str, dict]:
+    """The stored routes. One holding a stop of a kind this build does not
+    know goes to ``foreign`` exactly as stored instead: normalising would
+    drop that stop (its cursor then standing on the next one) and the next
+    write would erase it for every server. Nothing here drives it; every
+    write keeps it (:func:`_save_flights_locked`)."""
     try:
         data = json.loads(blob.decode("utf-8")) if blob is not None else {}
     except ValueError:
@@ -2115,6 +2150,9 @@ def _parse_flights(blob: Optional[bytes]) -> Dict[str, dict]:
     out: Dict[str, dict] = {}
     if isinstance(items, dict):
         for fid, raw in items.items():
+            if foreign is not None and unknown_kinds(raw):
+                foreign[str(fid)] = raw
+                continue
             f = _normalize_flight(fid, raw)
             if f is not None:
                 out[f["id"]] = f
@@ -2136,10 +2174,12 @@ def _cached_flights_locked(verify: bool = False) -> Dict[str, dict]:
     if digest is not None and digest == _CACHE["digest"]:
         _CACHE["key"] = key
         return _CACHE["flights"]  # type: ignore[return-value]
-    out = _parse_flights(blob)
+    foreign: Dict[str, dict] = {}
+    out = _parse_flights(blob, foreign)
     _CACHE["key"] = key
     _CACHE["flights"] = out
     _CACHE["digest"] = digest
+    _CACHE["foreign"] = foreign
     return out
 
 
@@ -2149,9 +2189,21 @@ def _load_flights_locked() -> Dict[str, dict]:
     return copy.deepcopy(_cached_flights_locked(verify=True))
 
 
+def _taken_ids(flights: Dict[str, dict]) -> set:
+    """Every route id in the store, the ones kept as stored included."""
+    return set(flights) | set(_CACHE.get("foreign") or {})  # type: ignore[arg-type]
+
+
 def _save_flights_locked(flights: Dict[str, dict]) -> None:
     path = flights_path()
-    atomic_write_json(path, {"flights": flights}, prefix=".flf.")
+    # The routes this build cannot read go back exactly as they were read
+    # (under this same lock, by the read-modify-write's own read).
+    kept = {
+        k: v
+        for k, v in dict(_CACHE.get("foreign") or {}).items()  # type: ignore[call-overload]
+        if k not in flights
+    }
+    atomic_write_json(path, {"flights": dict(kept, **flights)}, prefix=".flf.")
     _CACHE["key"] = _file_key(path)
     _CACHE["flights"] = copy.deepcopy(flights)
     # Read back (cheap; no parse): the writer still holds the lock, so these
@@ -2445,7 +2497,7 @@ def _put_new(flight: dict, replaced: Optional[list] = None) -> dict:
                 _finish(f, "cancelled", "replaced by a new route", flight["started"])
                 if replaced is not None:
                     replaced.append(copy.deepcopy(f))
-        flight["id"] = _new_id("f_", flights)
+        flight["id"] = _new_id("f_", _taken_ids(flights))
         flights[flight["id"]] = flight
         _keep_finished(flights)
         _save_flights_locked(flights)
@@ -5849,6 +5901,33 @@ def op_skip(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     return flight
 
 
+def _other_failed(flight: dict, i: int) -> List[str]:
+    """The ids of the other members of the cursor's group that failed and
+    were not moved past (the ones that halted it)."""
+    lo, hi = current_group(flight)
+    out = []
+    for k in range(lo, hi):
+        ss = flight["step_states"][flight["steps"][k]["id"]]
+        if k != i and ss["state"] == "failed" and not ss["detail"].get("moved_on"):
+            out.append(flight["steps"][k]["id"])
+    return out
+
+
+def _halted_or_running(flight: dict, i: int) -> None:
+    """After a go on member ``i`` (Retry, Let the agent fix it): the route
+    flies again — unless another member of its group still failed. Then it
+    stays halted on that one (Retry or Skip it): flying with a failed member
+    nobody is asked about would wait on it forever."""
+    left = _other_failed(flight, i)
+    if left:
+        flight["state"] = "halted"
+        flight["reason"] = flight["step_states"][left[0]]["note"] or "a stop failed"
+        return
+    flight["state"] = "running"
+    flight["reason"] = ""
+    _group_state(flight)
+
+
 def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     """Run a failed (or parked-on-failure) current step again."""
     ts = float(now if now is not None else time.time())
@@ -5889,9 +5968,7 @@ def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     _let_through(flight)
     if hi - lo > 1 and flight["steps"][i].get("halt"):
         flight["step_states"][sid]["detail"]["halt_hit"] = True  # a go, as Resume
-    flight["state"] = "running"
-    flight["reason"] = ""
-    _group_state(flight)
+    _halted_or_running(flight, i)
     flight["updated"] = ts
     _hist(flight, ts, sid, "resumed", "retry")
     return flight
@@ -5924,9 +6001,7 @@ def op_fix(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     # A person's hand-off: a follow-up next, with the re-asks starting over.
     ss["detail"] = dict(_carry(ss["detail"], RETRY_CARRY), phase="fix", reason=reason)
     _hist(flight, ts, sid, "resumed", "handed to the agent: " + reason)
-    flight["state"] = "running"
-    flight["reason"] = ""
-    _group_state(flight)
+    _halted_or_running(flight, i)
     flight["updated"] = ts
     return flight
 
@@ -6535,7 +6610,7 @@ def _insert_index(flight: dict, at, n: int = 1) -> int:
         if isinstance(at, bool):
             raise TypeError(at)
         i = int(at)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise FlightError("bad_at", 400, "at is a step index")
     if i < 0 or i > len(steps):
         raise FlightError("bad_at", 400, "at is 0..%d" % len(steps))
@@ -7564,7 +7639,7 @@ def split_off(
         chain = op_split_off(f, sid, pos, now)
         f = _normalize_flight(f["id"], f) or f
         flights[f["id"]] = f
-        chain["id"] = _new_id("f_", flights)
+        chain["id"] = _new_id("f_", _taken_ids(flights))
         flights[chain["id"]] = chain
         _save_flights_locked(flights)
     return copy.deepcopy(f), copy.deepcopy(chain)

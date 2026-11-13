@@ -416,6 +416,20 @@ def test_expect_fail():
     assert out["action"] == "fail", "a timeout is not the failure asked for"
 
 
+def test_expect_fail_is_not_met_by_a_runner_that_never_ran():
+    """Exit 127 (command not found) / 126 (not executable) is the shell's,
+    not a test's: a "write the failing test first" stop used to pass on a
+    misspelled runner. It fails, saying the command could not run."""
+    f, step, ss = _flight(expect="fail", command="pytestx -q")
+    for code, said in ((127, "sh: 1: pytestx: not found"), (126, "Permission denied")):
+        out = F.next_action(f, _obs(_done(said + "\n", code)), NOW)
+        assert out["action"] == "fail", code
+        assert out["reason"].startswith(
+            "the test command could not run (exit %d)" % code
+        )
+        assert said in out["reason"]
+
+
 def test_on_fail_agent_hands_over_the_names():
     plan = F.adhoc_plan(
         [{"kind": "test", "on_fail": "agent", "config": {"rerun_failures": False}}],

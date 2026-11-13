@@ -707,7 +707,7 @@ def _dur(seconds: int) -> str:
 def _int(v, default: int) -> int:
     try:
         return int(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
