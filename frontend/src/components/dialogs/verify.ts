@@ -113,6 +113,27 @@ function handedBack(entry: TestStepResultEntry | null | undefined): boolean {
   return entry?.result === "blocked" && entry?.by !== "human";
 }
 
+/** `progress` is optional on the wire — an older server leaves it out — so it
+ * is read through this local shape. */
+type ProgressEntry = TestStepResultEntry & { progress?: boolean };
+
+/** An agent's `blocked` that was only ever PROGRESS ("in progress: re-walking
+ * now", written while the agent's file still said `finished: false`) in a run
+ * that ended without a report — the session closed mid-walk, a cancel, a
+ * give-up. That is "not checked", not a handover: counting it put a closed
+ * session's half-walked check in Needs you (sc-25247). While the run is still
+ * in flight the cell is the agent's live word and counts. The server's
+ * `test_plans._provisional` is the same rule (fixtures/verify_shared.json). */
+export function isProvisional(
+  plan: TestPlan,
+  run: TestRun | null | undefined,
+  entry: TestStepResultEntry | null | undefined,
+): boolean {
+  if (!(entry as ProgressEntry | null | undefined)?.progress || !handedBack(entry)) return false;
+  const inFlight = plan.state === "running" && (run?.session || "") === (plan.run_session || "");
+  return !inFlight;
+}
+
 /** WHOSE STEP THIS IS NOW — which is not always whose it was written to be.
  *
  * `step.actor` is what the model GUESSED when it wrote the checklist: "an agent
@@ -135,7 +156,10 @@ function handedBack(entry: TestStepResultEntry | null | undefined): boolean {
  * afternoon permanent and quietly shrink every future run to the steps that
  * happened to work once. */
 export function stepIsYours(plan: TestPlan, step: TestStep): boolean {
-  return step.actor === "human" || handedBack(stepResult(plan, step.id));
+  if (step.actor === "human") return true;
+  const run = latestRun(plan);
+  const entry = run?.results?.[step.id] ?? null;
+  return handedBack(entry) && !isProvisional(plan, run, entry);
 }
 
 /** Whether a run record has anything in it at all.

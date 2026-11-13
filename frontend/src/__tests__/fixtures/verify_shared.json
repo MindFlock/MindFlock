@@ -1,0 +1,136 @@
+{
+  "_doc": "Plans the server (tests/unit/test_verify_shared_fixture.py: test_plans._current_run / open_human_steps) and the UI model (verifySharedFixture.test.ts: latestRun / openHumanSteps) must answer the same about. `current` is the index of the run each side treats as the current one (null: none); `open_human` the steps a person still owes.",
+  "cases": [
+    {
+      "name": "progress cells of a run released without a report are not checked",
+      "why": "sc-25247: the session closed mid re-walk; every cell was the agent's progress note 'in progress: re-walking now'. Only the human step still asks.",
+      "plan": {
+        "id": "sc-1",
+        "state": "generated",
+        "live_at": 0,
+        "run_session": "",
+        "steps": [
+          {"id": "s1", "text": "Call the API", "expect": "200", "actor": "agent"},
+          {"id": "s2", "text": "Look at it", "expect": "Right", "actor": "human"}
+        ],
+        "runs": [
+          {
+            "at": 100, "by": "agent", "session": "sc-1", "in_session": true, "prelive": true,
+            "progress_at": 101,
+            "results": {
+              "s1": {"result": "blocked", "note": "in progress: re-walking now", "at": 101, "by": "agent", "progress": true},
+              "s2": {"result": "blocked", "note": "in progress: re-walking now", "at": 101, "by": "agent", "progress": true}
+            }
+          }
+        ]
+      },
+      "current": 0,
+      "open_human": ["s2"]
+    },
+    {
+      "name": "a finished report's handover still asks",
+      "why": "'needs you: …' written in the agent's finished report is a real request to a person.",
+      "plan": {
+        "id": "sc-1",
+        "state": "generated",
+        "live_at": 0,
+        "run_session": "",
+        "steps": [
+          {"id": "s1", "text": "Call the API", "expect": "200", "actor": "agent"},
+          {"id": "s2", "text": "Look at it", "expect": "Right", "actor": "human"}
+        ],
+        "runs": [
+          {
+            "at": 100, "by": "agent", "session": "sc-1", "in_session": true, "prelive": true,
+            "results": {
+              "s1": {"result": "blocked", "note": "needs you: run aws sso login", "at": 102, "by": "agent"},
+              "s2": {"result": "blocked", "note": "needs a screen", "at": 102, "by": "agent"}
+            }
+          }
+        ]
+      },
+      "current": 0,
+      "open_human": ["s1", "s2"]
+    },
+    {
+      "name": "progress cells of a run still in flight count as the agent's live handover",
+      "why": "While the walk is running, a progress 'needs you' is what a route's Verify stop parks on.",
+      "plan": {
+        "id": "sc-1",
+        "state": "running",
+        "live_at": 0,
+        "run_session": "sc-1",
+        "steps": [
+          {"id": "s1", "text": "Call the API", "expect": "200", "actor": "agent"},
+          {"id": "s2", "text": "Look at it", "expect": "Right", "actor": "human"}
+        ],
+        "runs": [
+          {
+            "at": 100, "by": "agent", "session": "sc-1", "in_session": true, "prelive": true,
+            "progress_at": 101,
+            "results": {
+              "s1": {"result": "blocked", "note": "needs you: run aws sso login", "at": 101, "by": "agent", "progress": true}
+            }
+          }
+        ]
+      },
+      "current": 0,
+      "open_human": ["s1", "s2"]
+    },
+    {
+      "name": "a person's answer clicked off again leaves no run",
+      "why": "No run yet; answering a step opens a sessionless run, and clicking the answer off empties it. The UI has always read that as 'not run'.",
+      "plan": {
+        "id": "sc-1",
+        "state": "generated",
+        "live_at": 0,
+        "run_session": "",
+        "steps": [
+          {"id": "s1", "text": "Call the API", "expect": "200", "actor": "agent"},
+          {"id": "s2", "text": "Look at it", "expect": "Right", "actor": "human"}
+        ],
+        "runs": [
+          {
+            "at": 100, "by": "human", "session": "", "prelive": true,
+            "results": {
+              "s2": {"result": "", "note": "", "at": 101, "by": "human"}
+            }
+          }
+        ]
+      },
+      "current": null,
+      "open_human": []
+    },
+    {
+      "name": "a clicked-off answer after a real run leaves the real run current",
+      "why": "The phantom on top is skipped and the run underneath is still the answer.",
+      "plan": {
+        "id": "sc-1",
+        "state": "done",
+        "live_at": 50,
+        "run_session": "",
+        "steps": [
+          {"id": "s1", "text": "Call the API", "expect": "200", "actor": "agent"},
+          {"id": "s2", "text": "Look at it", "expect": "Right", "actor": "human"}
+        ],
+        "runs": [
+          {
+            "at": 100, "by": "agent", "session": "verify-sc-1", "prelive": false,
+            "results": {
+              "s1": {"result": "pass", "note": "200", "at": 102, "by": "agent"},
+              "s2": {"result": "pass", "note": "", "at": 103, "by": "human"}
+            }
+          },
+          {
+            "at": 200, "by": "human", "session": "", "prelive": false,
+            "results": {
+              "s2": {"result": "", "note": "", "at": 201, "by": "human"}
+            }
+          }
+        ]
+      },
+      "current": 0,
+      "open_human": []
+    }
+  ]
+}

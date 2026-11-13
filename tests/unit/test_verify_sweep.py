@@ -138,3 +138,71 @@ def test_a_dead_checker_after_merge_still_comes_due(store):
     released = tp.mark_due("sc-1", reason="Verify gave up after 2 hours.")
     assert released["live_at"] == 500.0
     assert released["state"] == "due"
+
+
+# --------------------------------------------------------------------------- #
+# Progress cells are provisional until a report confirms them
+# --------------------------------------------------------------------------- #
+# A run that ends without a report (session closed mid-walk, a cancel, a
+# give-up, a stall close) kept the agent's `finished: false` cells — "blocked:
+# in progress: re-walking now" on every step of sc-25247 — and
+# `open_human_steps` counted each as a handover to the person. A progress cell
+# is now stamped `progress`, a finished report clears the stamp, and a stamped
+# `blocked` in a run no longer in flight reads as not checked. The read rule
+# itself is pinned against the UI model by test_verify_shared_fixture.py.
+
+
+def _two_step_running():
+    tp.upsert(_plan("sc-1"))
+    tp.start_run("sc-1", "verify-sc-1")
+
+
+def test_progress_cells_are_stamped_and_a_report_clears_the_stamp(store):
+    _two_step_running()
+    p = tp.record_progress("sc-1", [{"id": "s1", "result": "blocked", "note": "x"}])
+    assert p["runs"][-1]["results"]["s1"].get("progress") is True
+    done = tp.finish_run(
+        "sc-1", [{"id": "s1", "result": "blocked", "note": "needs you: log in"}]
+    )
+    assert "progress" not in done["runs"][-1]["results"]["s1"]
+    assert [s["id"] for s in tp.open_human_steps(done)] == ["s1", "s2"]
+
+
+def test_a_released_run_hands_over_only_what_was_reported(store):
+    _two_step_running()
+    tp.record_progress(
+        "sc-1", [{"id": "s1", "result": "blocked", "note": "in progress: re-walking"}]
+    )
+    tp.prune([])  # the session was closed mid-walk
+    plan = tp.get("sc-1")
+    assert plan["state"] == "generated"
+    assert [s["id"] for s in tp.open_human_steps(plan)] == ["s2"]
+
+
+def test_a_stall_close_leaves_progress_cells_not_checked(store, monkeypatch):
+    from backend.web.core import test_plans_driver as tpd
+
+    _two_step_running()
+    tp.record_progress(
+        "sc-1",
+        [
+            {"id": "s1", "result": "blocked", "note": "in progress: re-walking"},
+        ],
+    )
+    monkeypatch.setattr(tpd, "_clear_verify_results", lambda t: None)
+    done, _session, _in = tpd._close_run_blocking("sc-1", "not checked: stalled")
+    cell = done["runs"][-1]["results"]["s1"]
+    assert cell.get("progress") is True
+    assert [s["id"] for s in tp.open_human_steps(done)] == ["s2"]
+
+
+def test_a_clicked_off_answer_leaves_no_phantom_behind(store):
+    """No run, answer a step, click it off, answer again: one run, not two."""
+    tp.upsert(_plan("sc-1"))
+    tp.record_result("sc-1", "s2", "pass")
+    tp.record_result("sc-1", "s2", "")
+    assert tp._current_run(tp.get("sc-1")) is None
+    tp.record_result("sc-1", "s2", "pass")
+    plan = tp.get("sc-1")
+    assert len(plan["runs"]) == 1
+    assert plan["runs"][0]["results"]["s2"]["result"] == "pass"
