@@ -42,10 +42,13 @@ def _fresh(monkeypatch):
         "_ERROR": "",
         "_REASON": "",
         "_WANTED": False,
+        "_WATCH": None,
     }.items():
         monkeypatch.setattr(guest_tunnel, k, v)
     monkeypatch.setattr(guest_tunnel, "_binary", lambda: "/usr/bin/cloudflared")
     monkeypatch.setattr(auth, "_FRONTED_HOSTS", set())
+    # The tunnel only stays up behind the access gate (see the gate test).
+    monkeypatch.setattr(auth, "auth_enabled", lambda: True)
     yield
 
 
@@ -135,3 +138,33 @@ def test_host_ok_passes_the_tunnel_name_in_every_mode(monkeypatch):
     assert auth.host_ok(scope) is True
     other = {"headers": [(b"host", b"evil.trycloudflare.com")]}
     assert auth.host_ok(other) is False
+
+
+def test_turning_the_gate_off_takes_the_public_link_down(monkeypatch):
+    # The quick tunnel fronts the WHOLE server and its name is on every guest
+    # URL. Links can only be made with the gate on, but the owner may turn the
+    # gate off afterwards: the tunnel must not stay up, or anyone holding a
+    # guest URL (or the hostname) reaches this machine with no token at all.
+    fake = FakeTunnel()
+    gate = {"on": True}
+    monkeypatch.setattr(auth, "auth_enabled", lambda: gate["on"])
+    monkeypatch.setattr(guest_tunnel, "_make_tunnel", lambda binary: fake)
+    monkeypatch.setattr(guest_tunnel, "GATE_CHECK_S", 0.01)
+
+    async def run():
+        guest_tunnel.ensure()
+        await asyncio.sleep(0.05)
+        assert guest_tunnel.status()["state"] == "up"
+        gate["on"] = False
+        await asyncio.sleep(0.1)
+        assert guest_tunnel.status()["state"] == "off"
+        assert fake.stopped >= 1
+        assert not auth._FRONTED_HOSTS
+        # ...and it is not brought back up while the gate stays off.
+        gate["on"] = False
+        guest_tunnel.ensure()
+        await asyncio.sleep(0.05)
+        assert guest_tunnel.status()["state"] != "up"
+        assert not auth._FRONTED_HOSTS
+
+    asyncio.run(run())

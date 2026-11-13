@@ -461,3 +461,44 @@ def test_forget_device_clears_token_and_sessions():
     # A reload from disk confirms the token is gone for good.
     remote._TOKENS = None
     assert remote.token_for("otherbox") == ""
+
+
+@pytest.mark.parametrize(
+    "status,payload",
+    [(500, {"error": "boom"}), (502, {"error": "bad gateway"}), (200, {"oops": 1})],
+)
+def test_fetch_instances_error_answer_drops_the_stale_rows(
+    monkeypatch, status, payload
+):
+    # A device that keeps answering, but with an error instead of its session
+    # list, must not keep serving its LAST good list as if current: those
+    # mirrored rows (an "asking", a "ready for PR") would sit in the sidebar
+    # and the bell forever, with nothing on that device behind them.
+    _install_session(monkeypatch, lambda m, u, **kw: _FakeResp(status, payload))
+    remote._DEVICES["otherbox"] = dev = _fake_device(
+        instances=[{"title": "old", "status": "asking"}], instances_ok=True
+    )
+    _run(remote._fetch_instances(dev))
+    assert dev["instances_ok"] is False
+    assert dev["error"]
+    assert remote.merged_instances() == []
+
+
+def test_a_device_that_stopped_answering_does_not_come_back_with_its_old_rows():
+    # The sweep marks a device unreachable before the instances poll saw it
+    # fail (the poll skips devices that are not connected), so its pre-sleep
+    # list kept instances_ok. When the device answered hello again, those
+    # rows were back at once as if current, until the next poll replaced them.
+    remote._DEVICES["otherbox"] = dev = _fake_device(
+        instances=[{"title": "old", "status": "asking"}], instances_ok=True
+    )
+    assert [r["title"] for r in remote.merged_instances()] == ["otherbox::old"]
+    remote._apply_probe(dev, None, 100.0)  # asleep: the hello went unanswered
+    assert remote.merged_instances() == []
+    remote._apply_probe(
+        dev,
+        ("http://100.1.2.3:8765", {"app": "mindflock", "remote_control": True}),
+        200.0,
+    )
+    assert dev["reachable"] is True
+    assert remote.merged_instances() == []  # until a fresh list arrives

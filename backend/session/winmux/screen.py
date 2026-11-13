@@ -157,6 +157,12 @@ def _normalize_sgr(params: str) -> str:
     return ";".join(out)
 
 
+#: The shared cells of history lines (:meth:`_Screen._push_history`), capped
+#: so a stream of distinct colours can't grow it without bound.
+_CHARS: Dict = {}
+_CHARS_MAX = 1 << 16
+
+
 class _Screen(pyte.Screen):
     """pyte's screen plus history, wrap flags and the alternate screen.
 
@@ -191,6 +197,13 @@ class _Screen(pyte.Screen):
         if self.history.maxlen == 0:
             return
         line.width = self.columns
+        # One shared Char per distinct cell (they are immutable): a Char of
+        # its own per cell held ~85 bytes each, ~1 GB for a long session at
+        # MindFlock's history-limit of 100000.
+        if len(_CHARS) > _CHARS_MAX:
+            _CHARS.clear()
+        for k, c in line.items():
+            line[k] = _CHARS.setdefault(c, c)
         self.history.append(line)
 
     def index(self) -> None:
@@ -489,21 +502,17 @@ class Term:
     def _find_st(s: str, start: int, bel: bool) -> Tuple[int, int]:
         """Index and length of the string terminator (``ESC \\``, or BEL for
         OSC) at or after ``start``; ``(-1, 0)`` when it has not arrived."""
-        k = start
-        n = len(s)
-        while k < n:
-            ch = s[k]
-            if ch == "\x07" and bel:
-                return k, 1
-            if ch == "\x9c":
-                return k, 1
-            if ch == "\x1b":
-                if k + 1 >= n:
-                    return -1, 0
-                if s[k + 1] == "\\":
-                    return k, 2
-            k += 1
-        return -1, 0
+        # str.find, not a per-character Python loop: a long string (an OSC 52
+        # copy) arrives over many reads and is searched again on each one,
+        # under the host lock.
+        best = (-1, 0)
+        for term, tlen in (("\x07", 1), ("\x9c", 1), ("\x1b\\", 2)):
+            if term == "\x07" and not bel:
+                continue
+            k = s.find(term, start)
+            if k >= 0 and (best[0] < 0 or k < best[0]):
+                best = (k, tlen)
+        return best
 
     def _csi(self, seq, params, inter, fin, client, scr, reply, flush) -> None:
         prefix = params[:1] if params[:1] in ("<", "=", ">", "?") else ""
@@ -596,9 +605,6 @@ class Term:
         client.append(seq)
 
     # -- reading -----------------------------------------------------------------
-    def total_lines(self) -> int:
-        return len(self.screen.history) + self.screen.lines
-
     def line(self, i: int):
         """Line ``i`` of history+screen (0 = the oldest history line)."""
         h = self.screen.history
@@ -751,6 +757,9 @@ class Term:
         ``[offset/history]`` position indicator at the top right."""
         scr = self.screen
         hsize = len(scr.history)
+        # The history may have shrunk under copy mode (clear-history, ESC[3J,
+        # a lower history-limit): never index lines that are gone.
+        offset = max(0, min(int(offset), hsize))
         top = hsize - offset
         out = ["\x1b[0m\x1b[?25l\x1b[H\x1b[2J"]
         for y in range(scr.lines):

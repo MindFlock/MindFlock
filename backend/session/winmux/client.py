@@ -259,7 +259,12 @@ def _request(
         except socket.timeout:
             raise
         except OSError:
-            _forget(info)
+            # One refused connect is not a dead host (a full accept backlog,
+            # a busy machine): forgetting a live one would make every later
+            # query say "no server" and the next start orphan it with a
+            # second host. Only a host that is gone or won't answer a ping is.
+            if not _pid_alive(int(info.get("pid") or 0)) or not _ping(info):
+                _forget(info)
             continue
         try:
             try:

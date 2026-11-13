@@ -585,8 +585,31 @@ def stub_rows(rows: List[dict], guest: dict) -> List[dict]:
     ]
 
 
+def _as_now(guest: dict) -> Optional[dict]:
+    """The link ``guest`` was signed in with, as it stands NOW: a guest the
+    middleware resolved (it carries ``_token``) is re-read from the store —
+    None once revoked, the new session list once narrowed. A long-lived
+    socket holds the dict from its connect, which an edit never touches."""
+    token = guest.get("_token")
+    if not token:
+        return guest
+    try:
+        with _LOCK:
+            rec = _load().get(str(guest.get("id") or ""))
+            if rec is None or not hmac.compare_digest(str(token), rec["token"]):
+                return None
+            return {**guest, "sessions": list(rec["sessions"])}
+    except Exception:  # noqa: BLE001 — a broken store is "no guest"
+        return None
+
+
 def event_allowed(env: dict, guest: dict) -> bool:
     """Whether one ``/api/events`` envelope may reach a guest: its own
-    sessions' events and the session-less ones (hello, server-wide)."""
+    sessions' events and the session-less ones (hello, server-wide) — for the
+    link as it stands now (:func:`_as_now`), not as it was when the stream
+    opened."""
+    now = _as_now(guest)
+    if now is None:
+        return False
     s = env.get("session") or ""
-    return not s or s in reach(guest)
+    return not s or s in reach(now)
