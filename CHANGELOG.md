@@ -7,6 +7,162 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A stability release: no new features. Three weeks of fast feature rounds
+(routes, Verify, voice, the memory gate, the Windows port, guest links) were
+read end to end for defects, and what was found is fixed here, each fix with
+a test that failed first.
+
+### Security
+
+- **Guest links: four allowed calls are narrowed to the link's sessions.** A
+  guest could paste a file into any session's folder by naming it (or, naming
+  none, into the owner's config folder) and read that folder's path in the
+  answer; send a message that appeared to come from any of the owner's
+  sessions; read a shared sub-session's parent (its status, branch, last
+  report and their messages) in the family thread; and list the owner's
+  other devices with their tailnet addresses. Each now answers for the
+  link's own sessions only, with the same `403 not part of your invite`.
+- **Turning the access gate off takes the public guest link down.** The
+  tunnel fronts the whole server; it kept running after the gate was turned
+  off, so anyone holding a guest URL could reach the machine with no token.
+  It now stops within a second, and never starts while the gate is off.
+- **Narrowing or revoking a guest link takes effect on an open stream.** The
+  events stream kept sending the removed sessions' events until the guest
+  reconnected.
+
+### Fixed
+
+- **"Needs you" no longer lists things nobody can act on.** The bell, the
+  Sky badge and the drawer said "3 need you" with every session closed.
+  Found and fixed:
+  - A verify check made before the merge and left "blocked — needs you"
+    stayed in the list for days after its session was closed. It counts now
+    only while the work has shipped, or a session it covers or that walked
+    it is still open. It stays on the Behaviors board.
+  - A check whose agent was still walking when its session closed ("in
+    progress: re-walking now") read as handed to you. Progress of a run that
+    never reported now reads as not checked.
+  - A session whose PR was squash-merged sat as "pushed — ready for PR"
+    until it was closed (a squash leaves the branch's commits beyond the
+    base for good). The row now knows the branch is exactly the commit its
+    merged PR was at.
+  - A verify checker's own agent going offline, idling or asking a question
+    counted, though checkers are kept off the rail: "needs you" about a
+    window nowhere to be seen. On the phone too, and in "what needs me".
+  - A team run that finished while paused for budget kept its "Raise budget
+    / Stop" row forever.
+  - A route waiting on you whose session was closed showed as two rows, and
+    neither could end it: Retry failed again and the name selected a session
+    that no longer exists. The bell and the Sky now say the session is
+    closed and offer **Stop the route**.
+  - A route on another of your devices carried Done / Skip / Retry buttons
+    that posted to this machine and failed.
+  - With two servers on one machine, a question dismissed through one came
+    back through the other, and every phone push arrived twice.
+  - A session of another device that answered with an error, or went to
+    sleep, kept its last session list as if it were current.
+- **Routes.**
+  - A route sat "running" forever when the server died in the middle of a
+    stop's action; the next server now takes the action over once the mark
+    is stale.
+  - Retry on a halted group re-ran a member that had already finished while
+    the failed one sat; and with two failed members, retrying one let the
+    route run on with the other, which nothing would ever retry. A group now
+    stays halted until each failed member is retried or skipped.
+  - Carry on at the end of a route landed it without asking for the checks a
+    Verify stop (ask at the end) still owed.
+  - A server on an older build dropped any stop whose kind it did not know,
+    moved the route past it, and erased it from the shared store for every
+    server. Such routes are now kept exactly as stored.
+  - A webhook that fired while a trigger pass was fetching could start the
+    same route twice; a scheduled route could fire on both servers.
+  - An error while judging a stop was only logged, every pass. It is now the
+    stop's own note.
+  - The whole route store (every finished route it keeps) was rewritten for
+    every active route on every pass, about 160 ms each. The lease is now
+    refreshed a few times a minute.
+  - Removing a group box removed every stop that shared its id anywhere on
+    the route. Removing or moving the stop a Loop repeats from left a Loop
+    that could only fail at run time; the edit is now refused with a
+    sentence naming the Loop.
+  - A rename and a start-on change sent together kept the rename when the
+    other half was refused. A number option of `Infinity` was a 500. A Test
+    stop expecting a failure passed when its command could not run at all.
+  - In the Sky: a refused edit put back the whole list of routes as it was
+    before the press, undoing other edits and polls; Delete with a stale
+    selection closed the focused session instead of removing the stop; Skip
+    on a paused route also sent Carry on and popped "already finished" at
+    the last stop; "Let the agent fix it" was offered on a route with no
+    session; a stop picked from the palette opened on a temporary id and
+    closed under you; Undo sent a removed stop to the end where the server
+    would have taken it back in place.
+  - Intake: "Start together" kept picks for tickets already started, and
+    two epics starting at once showed one "Starting…".
+- **Starting sessions.**
+  - A queued start whose server stopped and did not come back simply
+    vanished. A running server now takes those starts over, and one it
+    cannot carry out ends as a failed start with its reason.
+  - A worker held "after" another whose start failed waited forever, shown
+    as "(not started yet)". It now starts, and says so.
+  - Four places let a start through the memory gate and never took the
+    admission back when the start then failed, so a phantom agent read as
+    "warming up" and held back the starts behind it.
+  - A closed or deleted session's queued relaunch stayed in the queue; its
+    port block and its raised budget were never released, so a session
+    reusing the name inherited them.
+- **Verify.**
+  - A checker's check before the merge that died marked the unmerged work
+    as shipped.
+  - The whole store was rewritten once a minute per waiting plan (and every
+    few seconds during a run) even when nothing had changed, which also
+    threw away the per-row cache.
+  - The server and the UI disagreed about which run is the current one.
+  - A first answer that was also the last thing owed did not tell the route
+    waiting on it.
+- **Voice.**
+  - Phone: tapping Send mid-phrase sent the fast recogniser's live guess
+    and dropped the accurate text. Send now waits for the accurate words.
+  - Phone: a stopped upload's 45-second timer aborted the next phrase;
+    words typed while a send was on its way were cleared; turning voice off
+    while the screen lock was being granted left the screen awake.
+  - "The first one" after a session in the list had closed picked the
+    second.
+  - The ask pop-up's mic kept capturing when a hold was cancelled by a
+    scroll.
+  - Server: pages that loaded during a text-to-speech outage were kept
+    forever; a failed Moonshine install stayed "running" until a restart; a
+    dropped stream kept its native engine stream; a slow model download was
+    started a second time.
+- **Windows (native).** One refused connection made the client treat a live
+  terminal host as gone and start a second one; a message pasted into a pane
+  the person had scrolled up in was silently lost; attaching after the
+  history was cleared failed; a long unterminated escape sequence froze
+  every pane; scrollback used about a gigabyte per session at the largest
+  history setting (now under a third of that).
+
+### Changed
+
+- `GET /api/instances` rows carry `pr_merged` (see docs/web-api.md).
+- Removing or moving the stop a Loop repeats from answers `409 loop_target`.
+
+### Removed
+
+- Code nothing called: `perchBadge`, `needsYouFlights`, `getDiffMode`,
+  `undoPayload`, `pendingDiagnostics`, `voiceWordsDefault` (frontend);
+  `voice_router.list_say`, `worker_order.forget_parent`, winmux
+  `Term.total_lines` (backend).
+
+### Tests
+
+- Five browser journeys fly a route end to end on a real server: wait for
+  me, Done, land; closing the session a route waits on; a failed stop,
+  Retry, Skip; pause, carry on, stop; a server restart under a waiting
+  route.
+- Four tests that failed "at random" were fetching the owner's real Claude
+  usage with the real token and failed whenever the 5-hour window was full;
+  two failed only inside a MindFlock session because they inherited its
+  server's port; one timing test compared two clocks.
+
 ## [0.14.14] - 2026-11-12
 
 ### Fixed
