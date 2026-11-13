@@ -5991,6 +5991,7 @@ and every "why is nothing showing up?" is a question about which one hasn't:
    survive, so the wait deliberately errs long. When a deploy lands sooner than
    usual, **⋯ → It's deployed — check it now** skips the rest of it.
 
+
 **When the wait cannot end, the row says so.** Two things used to make a
 checklist wait for ever in silence, and both looked identical to "not merged
 yet":
@@ -6089,7 +6090,10 @@ second line reads *Watching 1 repository — its next pushed branch appears here
 The master switch, **Write a checklist on every push**
 (`repository.verify_enabled`), shows only once a repository is watched, and
 pauses the **automatic** half only: no checklist
-written on a push, and nothing new moved into the list. Repositories, checklists
+written on a push, and a checklist a push wrote is not watched or brought due.
+A checklist somebody **asked for** — a route's Verify stop, the Verify button,
+one you started or ran — is still watched until its work ships, whatever the
+switch says. Repositories, checklists
 and every recorded answer are kept, and asking for one, running one and
 answering a step all keep working — exactly as a forced PR review still runs with
 automated review switched off.

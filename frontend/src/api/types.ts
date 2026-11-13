@@ -1832,6 +1832,12 @@ export interface TestPlan {
    * `empty: true`) — a person writes its steps, no model call was made. ""
    * for a generated checklist. Optional: an older server doesn't send it. */
   origin?: "" | "manual";
+  /** Who wanted this checklist. "push": written by itself because a watched
+   * repo was pushed to — the one kind the Verify master switch pauses.
+   * "asked": a route's Verify stop or a person asked for it (followed until
+   * its work ships, switch or not). "" = written before the field; counts as
+   * asked. Optional: an older server doesn't send it. */
+  trigger?: "" | "push" | "asked";
   /** The MAIN repo, never the session's worktree: worktrees get reclaimed, and a
    * plan outlives the session that produced it. */
   repo_root: string;

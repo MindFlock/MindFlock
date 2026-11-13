@@ -163,7 +163,9 @@ or when turned on from the Sky ⋯ ("Show the Behaviors board", per device,
 
 The board's ⋯ holds what the dialog's header held:
 - **Write behaviors on every push** (the `verify_enabled` switch — the ONLY switch;
-  the sidebar Verify bar goes),
+  the sidebar Verify bar goes). Off pauses only what MindFlock does by itself
+  (behaviors a push wrote: not written, watched or brought due); behaviors a
+  route's Verify stop or a person asked for are still followed until they ship,
 - **Watched repositories** (per-repo live branch, prompt, deploy delay, target;
   "Watch a GitHub repository for every push"),
 - **Check another branch…** (repo + branch → POST /api/test-plans/branch).

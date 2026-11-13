@@ -158,6 +158,27 @@ def _verify_enabled() -> bool:
         return True
 
 
+def _plans_to_follow(plans: list) -> list:
+    """The plans a watcher pass may act on: every plan while Verify is on;
+    while the master switch is off, only the ones somebody asked for.
+
+    THE SWITCH STOPS WHAT MINDFLOCK DOES ON ITS OWN INITIATIVE, AND NOTHING
+    ELSE. A route's Verify stop and the Verify button do not consult it — they
+    create a checklist and walk it — so a pass that skipped everything while
+    the switch was off left exactly those checklists unwatched: created, then
+    waiting in ``generated`` for ever with ``merged_at`` 0, because nothing
+    asked origin whether their work had shipped. A checklist that was asked
+    for is followed through until its work ships, whatever the switch says;
+    a push-made one (``test_plans.is_asked_for``) waits for the switch.
+
+    Filtering the list keeps each pass's cost where it was: the same budgets
+    and rotations, over fewer plans.
+    """
+    if _verify_enabled():
+        return plans
+    return [p for p in plans if _test_plans.is_asked_for(p)]
+
+
 def _verify_auto_for(repo_root: str, wt: str) -> bool:
     """Whether a push in this repo should write a plan by itself.
 
@@ -286,6 +307,9 @@ def _ensure_verify_plan(title: str) -> Tuple[str, str]:
         return "", "this session isn't on a branch"
     existing = _test_plans.get(title)
     if existing is not None and existing.get("branch") == branch:
+        # A route's Verify stop or a person asked for THIS plan now, whoever
+        # wrote it: it is followed through while Verify is switched off.
+        _test_plans.mark_asked(title)
         return title, ""
     plan = _test_plans.ensure_plan_for(
         title,
@@ -298,6 +322,7 @@ def _ensure_verify_plan(title: str) -> Tuple[str, str]:
     )
     if plan is not None:
         return title, ""
+    # ``ensure_plan_for`` has already marked the covering plan asked-for.
     owner = _test_plans.owner_for_branch(title, repo_root, branch)
     return (owner, "") if owner else ("", "couldn't make a plan for this session")
 
@@ -325,8 +350,11 @@ def _generate_for_closed_test_plans(plans: list) -> None:
     path every rewrite of a closed session's plan already takes. Only a plan
     nothing has touched: no steps, no runs, waiting (``generated``/``due``),
     in a repo that still opts in to automatic plans. Quiet while Verify is
-    paused. A generation that fails parks the plan in ``failed`` with its
-    sentence, so it is tried once."""
+    paused — for every plan, asked-for ones included: this is writing the
+    driver starts by itself (nobody asked for these steps; a person's empty
+    checklist is theirs to fill), which is what the switch pauses (see
+    :func:`_plans_to_follow`). A generation that fails parks the plan in
+    ``failed`` with its sentence, so it is tried once."""
     if not _verify_enabled():
         return
     srv = _server()
@@ -410,6 +438,9 @@ def _ensure_test_plan_blocking(
             return
         branch = srv._current_branch(wt)
         sha = srv._git_head_sha(wt)
+        # Who wanted it, recorded on the plan: a push writing one by itself is
+        # the one thing the Verify master switch pauses (``is_asked_for``).
+        trigger = "asked" if manual else "push"
         if not manual and _session_can_self_verify(inst):
             # NO MODEL CALL FOR AN OPEN SESSION. Its Verify is the session's
             # own agent writing its own steps (self-verify), which discards
@@ -425,6 +456,7 @@ def _ensure_test_plan_blocking(
                 _test_plans.resolve_live_branch(repo_root),
                 intent=_test_plan_intent(title),
                 manual=True,
+                trigger=trigger,
             )
             return
         # ``repo_root``, not nothing: the live branch is a PER-REPO fact, and the
@@ -440,6 +472,7 @@ def _ensure_test_plan_blocking(
             repo_root,
             _test_plans.resolve_live_branch(repo_root),
             intent=_test_plan_intent(title),
+            trigger=trigger,
         )
         if plan is None:
             # This branch already has a plan — ``ensure_plan_for``'s idempotent
@@ -640,14 +673,13 @@ def _recover_stalled_test_plans(plans: list) -> None:
     :data:`_TEST_PLAN_GEN_ATTEMPTS` bounds it, and ``test_plans.is_stalled``
     guarantees we never race a generation that is merely slow.
 
-    Skipped entirely while Verify is paused, exactly like the liveness phase: the
-    switch means the feature is quiet, and a paused Verify that fired model calls
-    on a timer would be the loudest thing it does. Nothing is lost — a stalled
-    plan keeps its state and the next enabled pass recovers it.
+    While Verify is paused only plans somebody ASKED for are recovered
+    (:func:`_plans_to_follow`): finishing a writing a person or a route asked
+    for is following the request through — a plan left in ``generating`` is
+    never watched for its merge either — while a push-made plan stays exactly
+    as it is, and the next enabled pass recovers it.
     """
-    if not _verify_enabled():
-        return
-    for plan in plans:
+    for plan in _plans_to_follow(plans):
         try:
             if not _test_plans.is_stalled(plan):
                 continue
@@ -685,10 +717,10 @@ def _retry_no_commit_test_plans(plans: list) -> None:
     still open is looked at — its worktree is where the new commit is — and
     only a NEW commit claims it (:func:`test_plans.claim_no_commits_retry`), so
     a branch that is still empty costs one ``rev-list`` a minute and no model
-    call. Quiet while Verify is paused, like the stall recovery above."""
-    if not _verify_enabled():
-        return
-    for plan in plans:
+    call. While Verify is paused, asked-for plans only, like the stall
+    recovery above: "comes back automatically" is a promise made to whoever
+    asked for the checklist."""
+    for plan in _plans_to_follow(plans):
         try:
             if plan.get("state") != "failed" or plan.get("steps"):
                 continue
@@ -2605,13 +2637,12 @@ def _check_test_plans_for_liveness(plans: list) -> None:
     # on a machine that hasn't got it.
     if not _server().git_available():
         return
-    # Paused. "Off" has to mean the feature is quiet, not merely that no NEW
-    # plans get written: a paused Verify that still fetched every minute and
-    # kept moving plans into `due` would carry on lighting the top-bar badge
-    # with work the user has just said they do not want chased. Nothing is lost
-    # — the plans keep their state and the next enabled pass picks them up.
-    if not _verify_enabled():
-        return
+    # Paused. "Off" means MindFlock stops chasing what it started by itself: a
+    # push-made checklist is not fetched for or moved into `due`, and the next
+    # enabled pass picks it up with nothing lost. A checklist somebody ASKED
+    # for (a route's Verify stop, a person) is still followed until its work
+    # ships — see `_plans_to_follow`, which is what this pass walks.
+    plans = _plans_to_follow(plans)
     # A DUE plan follows the setting too — when nobody has answered anything.
     # `_liveness_order` never visits `due` (there is nothing to ask origin
     # about), so without this pass a checklist that went due against the OLD
@@ -2714,8 +2745,10 @@ def _check_test_plan_landings(plans: list) -> None:
       liveness pass — and for the same reason: the per-call caps are per CALL,
       and a remote that blackholes TCP would otherwise spend the whole loop here.
     """
-    if not _server().git_available() or not _verify_enabled():
+    if not _server().git_available():
         return
+    # Asked-for checklists only while Verify is paused (`_plans_to_follow`).
+    plans = _plans_to_follow(plans)
     live = {p["id"] for p in plans}
     for key in [k for k in _TEST_PLAN_LANDED_CHECKED if k not in live]:
         _TEST_PLAN_LANDED_CHECKED.pop(key, None)
