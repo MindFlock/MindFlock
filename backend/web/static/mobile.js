@@ -1249,7 +1249,9 @@
   function needsYouKind(inst) {
     if (!inst || inst.workspace_missing || inst.status === "paused") return "";
     var ss = sessionState(inst);
-    if (ss.reason === "question") return "asking";
+    // A verify checker: only its verify waits on you (checkerQuiet).
+    var quiet = checkerQuiet(inst, ss);
+    if (ss.reason === "question" && !quiet) return "asking";
     var fl = rowFlight(inst);
     if (fl && fl.state === "waiting_you") return "wait_for_me";
     // A route paused at its halt point waits on the person's Carry on
@@ -1258,11 +1260,26 @@
     if (atHaltPoint(inst)) return "wait_for_me";
     if (fl && fl.state === "halted") return "halted";
     if (planPending(inst)) return "plan";
+    if (quiet) return "";
     if (ss.inBell) return ss.reason === "checks_failing" ? "checks" : "broken";
     // A lane that STOPS at push is finished there (sidebar/ordering.ts).
     var lane = inst.lane && inst.lane.target ? inst.lane.target : inst.autopilot && inst.autopilot.depth;
     if (inst.stage === "pushed" && lane !== "push") return "ready";
     return "";
+  }
+  // A verify checker (`hidden_by: "verify"`; a row without the flag goes by
+  // its "verify-" title — dialogs/verifySession.ts isVerifySession) is off
+  // the rail and the ask pop-up: only its verify waits on you. Its agent's
+  // own states (offline, stuck, a dialog, a question) were "needs you"
+  // about a window nowhere to be seen (sidebar/ordering.ts attentionItems).
+  var VERIFY_REASONS = { verify_confirm: true, verify_failed: true, verify_blocked: true };
+  function isVerifyChecker(inst) {
+    var by = inst && inst.hidden_by;
+    if (by !== undefined && by !== null) return by === "verify";
+    return String((inst && inst.title) || "").indexOf("verify-") === 0;
+  }
+  function checkerQuiet(inst, ss) {
+    return isVerifyChecker(inst) && !VERIFY_REASONS[String(ss.reason || "")];
   }
   // A route paused at a halt point a person set (flightDiagram.ts
   // HALT_POINT_REASON) — not one paused by hand.
@@ -10248,7 +10265,9 @@
     // The one Needs-you list (needsYouKind), in its order.
     // (Every sessionState(i).inBell row has a kind; the kind adds halted
     // routes, a plan waiting for Go and a branch ready for its PR.)
-    var rows = instances.filter(function (i) { return !!needsYouKind(i) || sessionState(i).inBell; })
+    var rows = instances.filter(function (i) {
+      return !!needsYouKind(i) || (sessionState(i).inBell && !checkerQuiet(i, sessionState(i)));
+    })
       .sort(function (a, b) { return attnRank(a) - attnRank(b); }).slice(0, 3);
     var line = rows.length ? rows.map(function (i) {
       var ss = sessionState(i), name = nameOf(i.title), kind = needsYouKind(i);
@@ -11591,6 +11610,9 @@
   // carries the field (even null); a session.question event stands in for
   // it until the next poll; an older server's clarify is a dialog.
   function askEntryOf(inst) {
+    // A verify checker (any hidden_by) is nowhere on screen: its agent asks
+    // nobody (lib/ask.ts askingOf).
+    if (inst.hidden_by) return null;
     var t = inst.title, a = inst.asking, h = ask.hints[t];
     if (a && (a.kind === "dialog" || a.kind === "question")) {
       var ts = Number(a.ts) || 0;
