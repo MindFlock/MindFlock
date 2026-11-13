@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows desktop app no longer starts itself as the server.** On a
+  Windows computer where the MindFlock engine was not installed yet, the
+  app looked for `mindflock` and found its own `MindFlock.exe` (Windows
+  ignores case, and the search starts in the app's own folder). It then ran
+  that as the server, which only opened a second app window that quit at
+  once, so "Starting the MindFlock server…" never finished and the server
+  log filled with GPU-cache errors. The app now skips its own exe and any
+  other copy of the desktop app, so a missing engine shows the install step
+  as it should.
+
 ## [0.14.14] - 2026-11-12
 
 ### Fixed

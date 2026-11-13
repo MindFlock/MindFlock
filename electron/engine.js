@@ -51,16 +51,36 @@ function nativeEngineCandidates (env, home) {
   return out
 }
 
+// A desktop app's own exe, never the engine: Windows names are
+// case-insensitive, so `where mindflock` matches the app's MindFlock.exe (the
+// current folder comes first, and the shortcut starts the app in its install
+// folder). Spawning that as the server only opens a second app window, which
+// quits on the single-instance lock, so the server never answers. Matched as
+// this app's own exe/folder (`self`), or any folder holding an Electron
+// app (resources\app.asar): another copy of the desktop app on PATH.
+function isDesktopApp (file, self, exists) {
+  const dir = path.win32.dirname(file).toLowerCase()
+  if (self) {
+    if (file.toLowerCase() === self.toLowerCase()) return true
+    if (dir === path.win32.dirname(self).toLowerCase()) return true
+  }
+  try {
+    return !!(exists && exists(path.win32.join(path.win32.dirname(file), 'resources', 'app.asar')))
+  } catch (e) { return false }
+}
+
 // The native mindflock.exe, or '' — the uv tool dirs first, then `where`
-// (a function returning `where mindflock`'s stdout; it may throw).
-function findNativeEngine ({ env, home, exists, where }) {
+// (a function returning `where mindflock`'s stdout; it may throw). `self` is
+// the running app's exe (process.execPath), which `where` must not return.
+function findNativeEngine ({ env, home, exists, where, self }) {
   for (const p of nativeEngineCandidates(env || {}, home)) {
     try { if (exists(p)) return p } catch (e) { /* unreadable: next */ }
   }
   let out = ''
   try { out = where ? String(where() || '') : '' } catch (e) { out = '' }
   const line = out.split(/\r?\n/).map((l) => l.trim())
-    .find((l) => /\.(exe|cmd|bat)$/i.test(l) && !/\\WindowsApps\\/i.test(l))
+    .find((l) => /\.(exe|cmd|bat)$/i.test(l) && !/\\WindowsApps\\/i.test(l)
+      && !isDesktopApp(l, self, exists))
   return line || ''
 }
 
