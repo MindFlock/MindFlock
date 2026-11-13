@@ -24,6 +24,7 @@ emitters, the turn/human-input state) is reached lazily through
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import time
 from typing import Dict, Optional
@@ -1413,27 +1414,78 @@ def _drain_mailboxes() -> None:
         _MAIL_STATE.pop(gone, None)
 
 
+#: The port sweep's last look: ``key`` = (the port file's path and stat
+#: signature, this engine's titles), ``at`` = when, ``open`` = whether a block
+#: was still held for a title outside this engine (another server's session,
+#: or one gone elsewhere: looked at again every pass until settled).
+_PORT_SWEEP: Dict[str, object] = {"key": None, "at": 0.0, "open": False}
+#: The port file is read at least this often even when nothing seems to change.
+_PORT_SWEEP_EVERY_S = 60.0
+
+
+def _ports_key(engine_titles) -> tuple:
+    """What a port sweep depends on, without reading the file: its path and
+    stat signature (a release or allocation by either server changes it) and
+    this engine's titles."""
+    try:
+        p = _ports._path()
+    except Exception:  # noqa: BLE001
+        return (None, None, frozenset(engine_titles))
+    try:
+        st = os.stat(p)
+        sig = (st.st_ino, st.st_size, st.st_mtime_ns)
+    except OSError:
+        sig = None
+    return (p, sig, frozenset(engine_titles))
+
+
+def _ports_sweep_due(key, mono: float) -> bool:
+    """Whether this pass must read the port file: something it depends on
+    changed, a block of a title outside this engine is still unsettled, or
+    the last sweep is :data:`_PORT_SWEEP_EVERY_S` old."""
+    return (
+        key != _PORT_SWEEP["key"]
+        or bool(_PORT_SWEEP["open"])
+        or mono - float(_PORT_SWEEP["at"]) >= _PORT_SWEEP_EVERY_S  # type: ignore[arg-type]
+    )
+
+
 def _drain_prompt_queues() -> None:
     """One pass over every session with a queue, plus every session parked on a
     usage-limit screen, then the mailbox delivery lane. Runs in a worker thread
-    (it shells out to tmux) so it never blocks the event loop."""
+    (it shells out to tmux) so it never blocks the event loop.
+
+    The per-title sweeps run on every pass, queue or not: the port blocks of
+    sessions that are gone (a failed Start or a workspace removed from
+    Settings never passes a delete route that releases one) — read only when
+    the port file or this engine's sessions changed (:func:`_ports_sweep_due`)
+    — and the in-memory state below."""
     srv = _server()
     titles = _prompt_queue.all_titles()
-    if not titles:
-        _watch_limited_sessions()
-        _drain_mailboxes()
-        return
-    live = set(srv.ENGINE.instances.keys())
-    if (set(titles) | set(_ports.titles())) - live:
-        # Not in THIS engine is not gone: a co-running server's brand-new
-        # session reaches it only on the next state sync (and state.json only
-        # once it has started), and pruning its queue dropped a held worker's
-        # task before it was ever released.
-        from backend.web.core import worker_order_driver as _wod
+    engine_live = set(srv.ENGINE.instances.keys())
+    mono = time.monotonic()
+    pkey = _ports_key(engine_live)
+    ports_due = _ports_sweep_due(pkey, mono)
+    if titles or ports_due:
+        held = set(_ports.titles()) if ports_due else set()
+        live = engine_live
+        if (set(titles) | held) - live:
+            # Not in THIS engine is not gone: a co-running server's brand-new
+            # session reaches it only on the next state sync (and state.json
+            # only once it has started), and pruning its queue dropped a held
+            # worker's task before it was ever released.
+            from backend.web.core import worker_order_driver as _wod
 
-        live = _wod.alive_anywhere(live)
-    _prompt_queue.prune(list(live))
-    _ports.prune(list(live))
+            live = _wod.alive_anywhere(live)
+        if titles:
+            _prompt_queue.prune(list(live))
+        if ports_due:
+            _ports.prune(list(live))
+            _PORT_SWEEP.update(
+                key=_ports_key(engine_live),
+                at=mono,
+                open=bool((held & live) - engine_live),
+            )
     for title in titles:
         try:
             _drain_one_queue(title)
