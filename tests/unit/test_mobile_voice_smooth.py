@@ -1086,7 +1086,7 @@ def test_the_stream_cap_is_retried_and_deletes_land_first():
     assert "VOICE_STREAM_DELETE_WAIT_MS" in _inner(stt, "deletesSettled")
     # "disregard": its stream goes before the carried phrase's opens.
     fire = _inner(stt, "controlFire")
-    nosend = fire.split("if (!c.send) {")[1]
+    nosend = fire.split("if (!c.send && !(g.moon && stopWords)) {")[1]
     assert nosend.index("streamDrop(g);") < nosend.index("recEnd(g, mine, c.text);")
 
 

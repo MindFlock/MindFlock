@@ -166,8 +166,9 @@ def test_the_strip_never_shows_the_words_heard_or_said():
     # Quiet. for VOICE_QUIET_CAPTION_MS after a hush, then nothing — one
     # mechanism (voiceStripNote) for every moment's word.
     q = _whole(js, "voiceStripNote")
-    assert "voice.quietUntil = Date.now() + VOICE_QUIET_CAPTION_MS;" in q
-    assert "setTimeout(voiceStripPaint, VOICE_QUIET_CAPTION_MS + 20);" in q
+    assert "ms = ms > 0 ? ms : VOICE_QUIET_CAPTION_MS;" in q
+    assert "voice.quietUntil = Date.now() + ms;" in q
+    assert "setTimeout(voiceStripPaint, ms + 20);" in q
     assert 'voiceStripNote("Quiet.")' in _whole(js, "voiceQuiet")
     assert 'if (!heard) voiceStripNote("Heard nothing.");' in _whole(
         js, "voiceListenExpired"

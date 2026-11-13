@@ -253,6 +253,19 @@ class TestDescribe:
         assert body["stream_label"] == "Moonshine"
         assert body["moonshine"] == {"available": True, "reason": ""}
 
+    def test_the_accurate_pass_model_is_named(self, moon, whisper):
+        _set(stt_backend="local")
+        body = client.get("/api/voice?warm=0").json()
+        assert body["final_model"] == speech.LocalSTT().final_model_name()
+        assert body["final_model"]
+
+    def test_the_accurate_pass_off_says_so(self, moon, whisper):
+        # Moonshine detects, whisper writes: with the accurate pass off no
+        # phrase is typed — Settings → Voice reads this to say so.
+        _set(stt_backend="local", stt_final="off")
+        body = client.get("/api/voice?warm=0").json()
+        assert body["stream_engine"] == "moonshine" and body["final_model"] == ""
+
     def test_whisper_live_says_why_not_moonshine(self, moon, whisper):
         moon.on = False
         _set(stt_backend="local")
@@ -444,3 +457,30 @@ class TestStreamEnd:
         assert body["heard"] == "Send the report over."
         assert body["final"] == "Send the reports over."
         assert body["final_by"] == "whisper"
+
+    def test_end_without_whispers_text_carries_the_reason_and_no_words(self):
+        """Moonshine detects, whisper writes: a failed pass ends the phrase
+        with no ``final`` and no ``committed`` words — the reason instead."""
+        from tests.unit import test_speech_moonshine as tsm
+
+        def broke(audio):
+            raise speech.SpeechError("whisper broke")
+
+        fake = tsm.FakeTranscriber([[(1, "Send the report over.", True)]])
+        sid = sm.open_stream(
+            "", broke, client="t-end", engine_=sm.MoonshineEngine(fake, threads=1)
+        )
+        try:
+            stream = speech_stream.get_stream(sid)
+            stream.feed(tsm.loud(1.0))
+            stream.feed(tsm.quiet(0.1))
+            r = client.post("/api/voice/stream/%s/end" % sid)
+        finally:
+            speech_stream.close_stream(sid)
+        assert r.status_code == 200
+        assert r.json() == {
+            "committed": "",
+            "partial": "",
+            "heard": "Send the report over.",
+            "final_missed": "failed",
+        }

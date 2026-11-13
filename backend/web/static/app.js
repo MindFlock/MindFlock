@@ -53831,6 +53831,10 @@ function undoLine(o) {
 	return "Took back “" + (Array.from(t).length > 40 ? Array.from(t).slice(0, 39).join("") + "…" : t) + "” — go on";
 }
 var STOPPED_LINE = "Stopped listening";
+function missedLine(reason, sending = false) {
+	if (reason === "off") return (sending ? "Nothing sent" : "Nothing typed") + " — whisper's accurate pass is off: Settings → Voice";
+	return sending ? "Recognition didn't finish — nothing sent; say it again" : "Recognition didn't finish — say it again";
+}
 var HUSH_LINE = "Quiet.";
 var HUSH_CAPTION_MS = 1e3;
 var NOTE_CAPTION_MS = 3e3;
@@ -53995,6 +53999,7 @@ var Dictation = class {
 	routes = true;
 	continuous = false;
 	answering = false;
+	liveText = true;
 	phraseAt = -1;
 	marks = [];
 	addressedUntil = 0;
@@ -54167,6 +54172,7 @@ var Dictation = class {
 	finish() {
 		if (!this.listening) return { kind: "stopped" };
 		const tail = joinWords(this.held, this.partial);
+		if (!this.liveText && (tail || this.phraseAt >= 0)) return this.inFlightMissed();
 		const out = tail || this.phraseAt >= 0 ? this.heard(tail) : { kind: "continue" };
 		this.listening = false;
 		if (out.kind === "type") return withErase({
@@ -54211,12 +54217,30 @@ var Dictation = class {
 			kind: "hush",
 			end: true
 		}, this.settle("").erase || "");
+		if (!this.liveText && (all || this.phraseAt >= 0)) return this.inFlightMissed();
 		const r = parseRadio(all);
 		const rest = r.kind === "undo" ? "" : r.text;
 		return {
 			kind: "leave",
 			...this.settle(rest ? rest + " " : "")
 		};
+	}
+	missed(reason, sending = false) {
+		if (!this.listening) return { kind: "stopped" };
+		const s = this.settle("");
+		return withErase({
+			kind: "missed",
+			reason,
+			...sending ? { sending } : {}
+		}, s.erase || "");
+	}
+	inFlightMissed() {
+		this.listening = false;
+		return withErase({
+			kind: "leave",
+			text: "",
+			missed: true
+		}, this.settle("").erase || "");
 	}
 	guess() {
 		if (this.phraseAt < 0) {
@@ -54261,6 +54285,7 @@ var Dictation = class {
 	control(all, whole) {
 		if (whole && isHushPhrase(all)) return withErase({ kind: "hush" }, this.settle("").erase || "");
 		const before = stopTail(all, whole);
+		if (before !== null && !whole && !this.liveText && before.trim()) return null;
 		if (before !== null) {
 			this.listening = false;
 			const out = parseRadio(before);
@@ -54547,6 +54572,9 @@ var LiveDictation = class {
 	note = "";
 	waitLine = "";
 	noteUntil = 0;
+	missLine = "";
+	missUntil = 0;
+	waitSends = false;
 	noteTimer;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
@@ -54647,7 +54675,17 @@ var LiveDictation = class {
 		});
 	}
 	fastStands() {
-		return !!this.hooks.endsSurely?.() && !this.dict.partial && !!this.dict.held && finalClock.fastStands();
+		return this.liveText() && !!this.hooks.endsSurely?.() && !this.dict.partial && !!this.dict.held && finalClock.fastStands();
+	}
+	liveText() {
+		return this.hooks.liveIsText?.() !== false;
+	}
+	missed(reason, spokeAt) {
+		const sending = !!this.sendWait && this.waitSends;
+		clearInterval(this.early?.timer);
+		this.endPhraseAt(spokeAt);
+		if (this.phraseEnded()) return this.chain;
+		return this.step(() => this.dict.missed(reason, sending));
 	}
 	words(w) {
 		return this.stream(w, "");
@@ -54746,6 +54784,17 @@ var LiveDictation = class {
 		this.wordEnd = this.hooks.loudAt?.() || Date.now() - Math.min(quiet, 6e4);
 		const spoke = this.endPhraseAt(this.hooks.spokeAt?.());
 		this.hooks.endPhrase?.();
+		if (!this.liveText() && (radio || t.kind === "stop" && !!stopTail(t.text)?.trim())) {
+			if (early) this.watchQuiet();
+			this.sendNow = null;
+			this.waitSends = radio;
+			this.sendWait = setTimeout(() => {
+				this.sendWait = void 0;
+				this.swallow();
+				this.step(() => this.dict.missed("timeout", radio), spoke);
+			}, SWALLOW_STREAM_MAX_MS);
+			return;
+		}
 		if (radio) {
 			const e = early ? this.watchQuiet() : null;
 			const fire = () => {
@@ -54874,6 +54923,7 @@ var LiveDictation = class {
 			this.stepSpoke = spoke || this.phraseSpoke || this.spokeFrom();
 			const t = this.target;
 			this.dict.answering = t?.kind === "session" && !!this.hooks.pending?.(t.title);
+			this.dict.liveText = this.liveText();
 			return this.apply(next());
 		}).catch(() => {}).then(() => this.watchTail());
 		return this.chain;
@@ -54964,8 +55014,19 @@ var LiveDictation = class {
 				this.end(out.text ? "Disregarded" : "", false, "stopped");
 				return;
 			case "leave":
+				if (out.missed) {
+					if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
+					this.end(missedLine("failed"), false);
+					return;
+				}
 				if ((out.text || out.erase) && !await this.put(out.text, true, out.erase)) return;
-				this.end(t?.kind === "session" && this.dict.typed ? LEFT_LINE : out.stop ? STOPPED_LINE : "", false, out.stop ? "stopped" : void 0);
+				this.end(this.missNote() || (t?.kind === "session" && this.dict.typed ? LEFT_LINE : out.stop ? STOPPED_LINE : ""), false, out.stop ? "stopped" : void 0);
+				return;
+			case "missed":
+				if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
+				this.note = this.missLine = missedLine(out.reason, !!out.sending);
+				this.noteUntil = this.missUntil = Date.now() + NOTE_CAPTION_MS;
+				this.show();
 				return;
 			case "send": {
 				const quiet = this.hooks.quietMs?.();
@@ -55156,6 +55217,9 @@ var LiveDictation = class {
 			return false;
 		}
 		return this.done ? false : null;
+	}
+	missNote() {
+		return this.missUntil > Date.now() ? this.missLine : "";
 	}
 	verdict(v) {
 		if (v && typeof v === "object") {
@@ -56942,6 +57006,7 @@ var STREAM_FRESH_MS = 4e4;
 var CLIP_FINISH_WAIT_MS = 45e3;
 function finishWaitMs(rec) {
 	if (rec.name !== "server") return HOLD_FINAL_WAIT_MS;
+	if (rec.moonshine) return CLIP_FINISH_WAIT_MS;
 	return rec.streaming ? overWaitMs(finalClock.typical(rec.finalMs)) : CLIP_FINISH_WAIT_MS;
 }
 var BARGE_POLL_MS = 40;
@@ -57041,6 +57106,7 @@ function serverRecognizer(opts = {}) {
 	let capTimer;
 	const aborters = /* @__PURE__ */ new Set();
 	let streaming = false;
+	let moonLive = false;
 	let lastHeard = null;
 	const ending = [];
 	const open = /* @__PURE__ */ new Set();
@@ -57199,7 +57265,8 @@ function serverRecognizer(opts = {}) {
 			if (sid) {
 				abandon(sid);
 				h?.onPartial?.("");
-				h?.onFlush?.("");
+				if (p.moon && (p.said || p.partial)) h?.onMissed?.("failed", p.spokeAt || void 0);
+				else h?.onFlush?.("");
 			}
 			if (cur === p) {
 				clearTimeout(capTimer);
@@ -57250,6 +57317,8 @@ function serverRecognizer(opts = {}) {
 				if (r.ok && id) {
 					c.sid = id;
 					c.opened = Date.now();
+					c.moon = r.j.engine === "moonshine";
+					moonLive = c.moon;
 					open.add(id);
 					voiceMark("stream");
 					if (r.j.loading === true) setLoading(true);
@@ -57322,13 +57391,18 @@ function serverRecognizer(opts = {}) {
 			if (p === c) return;
 			await p.heardAll;
 			if (h !== hh) return;
+			if (p.moon && p.ended) {
+				await p.ended;
+				if (h !== hh) return;
+			}
 			if (p.flushed) continue;
 			p.flushed = true;
 			const i = ending.indexOf(p);
 			if (i >= 0) ending.splice(i, 1);
 			if (!p.stream) continue;
 			hh.onPartial?.("");
-			hh.onFlush?.(p.partial, void 0, p.spokeAt || void 0);
+			if (p.moon && (p.said || p.partial)) hh.onMissed?.("failed", p.spokeAt || void 0);
+			else hh.onFlush?.(p.partial, void 0, p.spokeAt || void 0);
 		}
 	};
 	const endStream = async (c) => {
@@ -57338,6 +57412,8 @@ function serverRecognizer(opts = {}) {
 		uploads++;
 		let heard = () => {};
 		c.heardAll = new Promise((r) => heard = r);
+		let over = () => {};
+		c.ended = new Promise((r) => over = r);
 		ending.push(c);
 		const unlist = () => {
 			const i = ending.indexOf(c);
@@ -57379,7 +57455,8 @@ function serverRecognizer(opts = {}) {
 					voiceMark("final");
 				}
 				const committed = wordsOf(r.j.committed);
-				lastHeard = typeof r.j.heard === "string" && r.j.heard.trim() ? {
+				const missed = c.moon && !ran ? String(r.j.final_missed || "") || (c.said || committed || c.partial ? "failed" : "") : "";
+				lastHeard = !missed && typeof r.j.heard === "string" && r.j.heard.trim() ? {
 					text: r.j.heard.trim(),
 					at: Date.now()
 				} : null;
@@ -57396,7 +57473,8 @@ function serverRecognizer(opts = {}) {
 				c.stream = false;
 				const final = ran && r.j.same !== true ? wordsOf(r.j.final) : "";
 				hh.onPartial?.("");
-				hh.onFlush?.(committed, final || void 0, c.spokeAt || void 0);
+				if (missed) hh.onMissed?.(missed, c.spokeAt || void 0);
+				else hh.onFlush?.(committed, final || void 0, c.spokeAt || void 0);
 			} catch (err) {
 				if (h !== hh || c.flushed) return;
 				c.sid = sid;
@@ -57406,6 +57484,7 @@ function serverRecognizer(opts = {}) {
 			}
 		} finally {
 			heard();
+			over();
 			unlist();
 			uploads--;
 			if (h === hh) maybeEnd();
@@ -57473,7 +57552,9 @@ function serverRecognizer(opts = {}) {
 			byWord: false,
 			endAt: 0,
 			flushed: false,
-			heardAll: null
+			heardAll: null,
+			moon: false,
+			ended: null
 		};
 		if (c.stream) openStream(c);
 		let s;
@@ -57633,6 +57714,9 @@ function serverRecognizer(opts = {}) {
 		get streaming() {
 			return streaming;
 		},
+		get moonshine() {
+			return streaming && moonLive;
+		},
 		takeHeard() {
 			const h = lastHeard;
 			lastHeard = null;
@@ -57737,6 +57821,8 @@ function serverRecognizer(opts = {}) {
 	};
 	return self;
 }
+var accurateOff$1 = (c) => !!c.server_ready.stt_stream && c.stream_engine === "moonshine" && c.final_model === "";
+var ACCURATE_OFF_HINT = "Commands only — dictation needs whisper's accurate pass, which is off: Settings → Voice";
 var DEFAULT_VOICE_CFG = {
 	stt: "phone",
 	tts: "phone",
@@ -57795,7 +57881,9 @@ async function loadVoiceCfg(prev, warm = true) {
 				approve_dialogs: j.approve_dialogs === true,
 				...typeof j.say_all === "boolean" ? { say_all: j.say_all } : {},
 				server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
-				system: j.system && typeof j.system === "object" ? j.system : {}
+				system: j.system && typeof j.system === "object" ? j.system : {},
+				...typeof j.stream_engine === "string" ? { stream_engine: j.stream_engine } : {},
+				...typeof j.final_model === "string" ? { final_model: j.final_model } : {}
 			};
 			warmStt(cfg);
 			return cfg;
@@ -59731,9 +59819,10 @@ function TopBarMic() {
 			sentIn: (ms) => void (lastSentMs = ms),
 			finalMs: () => r === serverRec ? serverRec.finalMs : null,
 			endsSurely: () => r === serverRec && serverRec.streaming,
+			liveIsText: () => !(r === serverRec && serverRec.moonshine),
 			spokeAt: () => r === serverRec ? serverRec.spokeAt : 0
 		}, {
-			hint: opts.hint,
+			hint: engine === "server" && !opts.assistant && accurateOff$1(c) ? ACCURATE_OFF_HINT : opts.hint,
 			continuous
 		});
 		live.current = d;
@@ -59798,6 +59887,10 @@ function TopBarMic() {
 				if (live.current !== d) return;
 				closeCheat();
 				d.flush(t, final, at);
+			},
+			onMissed: (reason, at) => {
+				if (live.current !== d) return;
+				d.missed(reason, at);
 			},
 			blank: () => live.current !== d || !d.dict.typed,
 			context: () => live.current === d ? d.streamContext() : null,
@@ -124478,6 +124571,13 @@ function liveWordsLine(view) {
 	if (view.stream_engine === "moonshine") return "Live words: Moonshine";
 	return view.stream_model ? "Live words: Whisper " + view.stream_model : "";
 }
+var ACCURATE_OFF_LINE = "Dictation types nothing while whisper's accurate pass is off: Moonshine only hears the control words (“over”, “stop”, a switch) — whisper writes every word typed.";
+var ACCURATE_ON_LABEL = "Turn the accurate pass on";
+function accurateOff(view, finalSetting) {
+	if (view?.stream_engine !== "moonshine") return false;
+	if (finalSetting !== void 0 && finalSetting !== null) return String(finalSetting).trim().toLowerCase() === "off";
+	return view.final_model === "";
+}
 function moonshineOffer(view, streamSetting) {
 	const sr = view?.server_ready;
 	if (!sr?.stt_stream || sr.stt_backend !== "local") return false;
@@ -124668,6 +124768,29 @@ function InstallRow({ offer, install, allowed }) {
 function LiveWordsRow({ model, view, fast }) {
 	const line = liveWordsLine(view);
 	if (!line) return null;
+	if (accurateOff(view, model.get("voice", "stt_final"))) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row onboarding-action",
+		id: "voice-accurate-off",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "onboarding-action-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				id: "voice-live-words",
+				children: line
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				id: "voice-accurate-off-hint",
+				children: ACCURATE_OFF_LINE
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "test-btn",
+			id: "voice-accurate-on-btn",
+			disabled: view?.configure_allowed === false,
+			onClick: () => void model.saveField("voice", "stt_final", ""),
+			children: ACCURATE_ON_LABEL
+		})]
+	});
 	const offer = moonshineOffer(view, model.get("voice", "stt_stream_model"));
 	if (!(!!fast?.supported && (offer || fast.status.state === "running" || fast.touched)) || !fast) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "set-hint",

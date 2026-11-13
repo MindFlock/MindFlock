@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Voice: only whisper's words are ever typed.** Moonshine, the fast
+  recogniser, is for control words and for showing words as you speak;
+  whisper, the accurate one, writes the text. But when whisper's pass was
+  off, skipped, failed or ran out of time, Moonshine's words were typed in
+  its place, and you could not tell. Several other paths did the same: "over"
+  sent the fast words when whisper took longer than its budget, letting go
+  of push-to-talk typed the phrase in flight, a stop phrase typed the fast
+  words before it, and a new phrase starting early settled the previous one
+  with its fast words. All of them now wait for whisper. When whisper does
+  not write a phrase, what the live words put in the box is taken back,
+  nothing of that phrase is typed or sent, and the caption says
+  "Recognition didn't finish — say it again". Text already in the box stays,
+  unsent. On the desktop and the phone.
+- With Moonshine on, "over", a stop phrase with words before it, and
+  letting go of push-to-talk now always wait for whisper's words (up to
+  about 1.5 seconds on a busy machine) where they used to send the fast
+  words early.
+- If whisper's accurate pass is switched off while Moonshine is on,
+  dictation types nothing. Settings → Voice and the mic's caption now say
+  so, with a button to turn the pass back on.
+- A page that was already open before the update keeps the old behaviour
+  until it is reloaded.
+
 ## [0.14.15] - 2026-11-12
 
 A stability release: no new features. Three weeks of fast feature rounds

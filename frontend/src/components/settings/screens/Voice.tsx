@@ -82,6 +82,9 @@ export interface VoiceView {
   stream_engine?: string;
   stream_model?: string;
   stream_label?: string;
+  /** The accurate pass's model (whisper, `voice.stt_final`) while recognition
+   * streams; "" when it is off. Absent on an older server. */
+  final_model?: string;
   /** Whether the Moonshine streaming lane could run on the server, and why
    * not (`speech_moonshine.unavailable_reason`); absent on an older server. */
   moonshine?: { available?: boolean; reason?: string };
@@ -968,6 +971,24 @@ export function liveWordsLine(view: VoiceView | null | undefined): string {
   return view.stream_model ? "Live words: Whisper " + view.stream_model : "";
 }
 
+/** Moonshine types the live words but never a phrase's text — whisper's
+ * accurate pass writes every word typed (owner rule 2026-11-08). With that
+ * pass off (`voice.stt_final` "off") and Moonshine live, dictation types
+ * nothing at all: the Live words row says so, with the way back. */
+export const ACCURATE_OFF_LINE =
+  "Dictation types nothing while whisper's accurate pass is off: Moonshine only hears the control words (“over”, “stop”, a switch) — whisper writes every word typed.";
+export const ACCURATE_ON_LABEL = "Turn the accurate pass on";
+
+/** Whether dictation would type nothing: Moonshine streams the live words
+ * and the accurate pass is off — the setting says "off" (what this page is
+ * about to save, read first) or, before it is read, the server names no
+ * accurate model. */
+export function accurateOff(view: VoiceView | null | undefined, finalSetting: unknown): boolean {
+  if (view?.stream_engine !== "moonshine") return false;
+  if (finalSetting !== undefined && finalSetting !== null) return String(finalSetting).trim().toLowerCase() === "off";
+  return view.final_model === "";
+}
+
 /** Whether the Live words row offers the Moonshine install: local
  * recognition streams on whisper, the server says Moonshine can't run there
  * (an older server doesn't say: no offer), and `voice.stt_stream_model`
@@ -1167,6 +1188,29 @@ function InstallRow({ offer, install, allowed }: { offer: "basic" | "local" | nu
 function LiveWordsRow({ model, view, fast }: { model: SettingsModel; view: VoiceView | null; fast?: InstallProps }) {
   const line = liveWordsLine(view);
   if (!line) return null;
+  if (accurateOff(view, model.get("voice", "stt_final"))) {
+    return (
+      <div className="set-row onboarding-action" id="voice-accurate-off">
+        <div className="onboarding-action-text">
+          <span className="set-label" id="voice-live-words">
+            {line}
+          </span>
+          <p className="set-hint" id="voice-accurate-off-hint">
+            {ACCURATE_OFF_LINE}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="test-btn"
+          id="voice-accurate-on-btn"
+          disabled={view?.configure_allowed === false}
+          onClick={() => void model.saveField("voice", "stt_final", "")}
+        >
+          {ACCURATE_ON_LABEL}
+        </button>
+      </div>
+    );
+  }
   const offer = moonshineOffer(view, model.get("voice", "stt_stream_model"));
   const showInstall = !!fast?.supported && (offer || fast.status.state === "running" || fast.touched);
   if (!showInstall || !fast) {

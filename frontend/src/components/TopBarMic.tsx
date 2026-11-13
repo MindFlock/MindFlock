@@ -123,6 +123,8 @@ import {
   LISTEN_LEASE,
   READYING_LINE,
   READY_EARLY_LINE,
+  ACCURATE_OFF_HINT,
+  accurateOff,
   READY_QUICK_MS,
   makeSttReady,
   notReadyLine,
@@ -1122,11 +1124,17 @@ export function TopBarMic() {
         // A streamed phrase's end always comes: one taken from its guess by
         // "over" ignores its late words until then (never typed or sent twice).
         endsSurely: () => r === serverRec && serverRec.streaming,
+        // Moonshine detects, whisper writes: on a Moonshine stream the live
+        // words are a preview — "over" waits for the phrase's whisper words
+        // and never sends the preview (lib/voiceDesktop LiveDictation.missed).
+        liveIsText: () => !(r === serverRec && serverRec.moonshine),
         // When the phrase being recorded began (the server recognizer's
         // first loud block; Web Speech can't say).
         spokeAt: () => (r === serverRec ? serverRec.spokeAt : 0),
       },
-      { hint: opts.hint, continuous }
+      // Moonshine live and whisper's accurate pass off: nothing would ever be
+      // typed — the caption says so before a word (lib/voiceDesktop accurateOff).
+      { hint: engine === "server" && !opts.assistant && accurateOff(c) ? ACCURATE_OFF_HINT : opts.hint, continuous }
     );
     live.current = d;
     rec.current = r;
@@ -1199,6 +1207,13 @@ export function TopBarMic() {
           if (live.current !== d) return;
           closeCheat();
           void d.flush(t, final, at);
+        },
+        // A Moonshine phrase whisper did not write: what its live words
+        // typed is taken back, nothing is typed or sent, and the caption
+        // says to say it again.
+        onMissed: (reason, at) => {
+          if (live.current !== d) return;
+          void d.missed(reason, at);
         },
         // The server's end-of-turn verdict: a lone command ("next session",
         // "repeat") ends its phrase after a short quiet only while nothing

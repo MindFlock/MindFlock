@@ -1074,7 +1074,7 @@ export type DictOutcome =
   | { kind: "type"; text: string; erase?: string; route?: boolean; guess?: boolean; addressed?: boolean }
   /** Push to talk let go, silence: type `text` (if any), stop — the words
    * stay in the field. `stop`: it was a stop phrase ("stop recording"). */
-  | { kind: "leave"; text: string; erase?: string; stop?: boolean }
+  | { kind: "leave"; text: string; erase?: string; stop?: boolean; missed?: boolean }
   /** "over": type `text` (if any) and send the draft; `end`: then stop
    * ("over and out", or a dictation that is not {@link
    * Dictation.continuous}), else the next phrase starts the next message.
@@ -1093,6 +1093,10 @@ export type DictOutcome =
    * typed (`erase` takes the phrase's guess back); listening goes on unless
    * `end` (said as push to talk let go). */
   | { kind: "hush"; end?: boolean; erase?: string }
+  /** The phrase under way ended without its text ({@link Dictation.missed}):
+   * take back `erase` (what its live words typed), type and send nothing,
+   * say why ({@link missedLine}; `sending`: "over" was waiting on it). */
+  | { kind: "missed"; reason: string; sending?: boolean; erase?: string }
   /** Nothing to do (an empty phrase). */
   | { kind: "continue" }
   /** Not listening: nothing to do. */
@@ -1125,6 +1129,16 @@ export function undoLine(o: { text: string; alone: boolean }): string {
 }
 /** The caption after a stop phrase with nothing typed. */
 export const STOPPED_LINE = "Stopped listening";
+/** The caption when a phrase ended without its text — whisper's accurate
+ * pass did not write it, and Moonshine's live words are never typed
+ * ({@link LiveDictation.missed}): what happened and what to do, nothing
+ * typed and — when "over" asked for a send — nothing sent. `reason`: the
+ * server's `final_missed`; "off" is the setting (voice.stt_final), not a
+ * miss: it says where to turn it back on. Shown {@link NOTE_CAPTION_MS}. */
+export function missedLine(reason: string, sending = false): string {
+  if (reason === "off") return (sending ? "Nothing sent" : "Nothing typed") + " — whisper's accurate pass is off: Settings → Voice";
+  return sending ? "Recognition didn't finish — nothing sent; say it again" : "Recognition didn't finish — say it again";
+}
 /** The caption after "stop talking" — shown {@link HUSH_CAPTION_MS}. */
 export const HUSH_LINE = "Quiet.";
 export const HUSH_CAPTION_MS = 1000;
@@ -1395,9 +1409,9 @@ export class FinalClock {
 export const finalClock = new FinalClock();
 /** Whether an /end answer's final is the accurate pass's — a sample for
  * {@link finalClock}: it has one, and not Moonshine's own text (`final_by:
- * "moonshine"`: a control-only phrase answered at once, or a pass that
- * timed out — neither says how long the accurate pass takes, nor whether
- * it changes words). */
+ * "moonshine"`: a control-only phrase answered at once — it says nothing of
+ * how long the accurate pass takes, nor whether it changes words; a pass
+ * that timed out has no final at all). */
 export const timedFinal = (j: Record<string, unknown> | null | undefined): boolean =>
   !!j && typeof j.final === "string" && j.final_by !== "moonshine";
 /** A phrase taken from its guess: its own late words and end are ignored —
@@ -1448,6 +1462,11 @@ export class Dictation {
   /** A dialog or a question waits on the session: an answer said as the
    * whole dictation goes to the router at once (set before each step). */
   answering = false;
+  /** The live words may stand as a phrase's text (set before each step,
+   * {@link LiveHooks.liveIsText}); false: they are Moonshine's — only a
+   * phrase's final writes it, so a stop phrase with words before it waits
+   * for that, and a phrase still in flight at the end goes in as nothing. */
+  liveText = true;
   /** {@link typed}'s length when the phrase under way began (-1: between
    * phrases): what came before it is never corrected. */
   private phraseAt = -1;
@@ -1669,6 +1688,8 @@ export class Dictation {
   finish(): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
     const tail = joinWords(this.held, this.partial);
+    // Moonshine's words with no final yet: never the text — taken back.
+    if (!this.liveText && (tail || this.phraseAt >= 0)) return this.inFlightMissed();
     const out = tail || this.phraseAt >= 0 ? this.heard(tail) : ({ kind: "continue" } as const);
     this.listening = false;
     if (out.kind === "type") return withErase({ kind: "leave" as const, text: out.text }, out.erase || "");
@@ -1694,11 +1715,30 @@ export class Dictation {
     this.listening = false;
     const all = joinWords(this.held, this.partial);
     if (isHushPhrase(all)) return withErase({ kind: "hush" as const, end: true }, this.settle("").erase || "");
+    if (!this.liveText && (all || this.phraseAt >= 0)) return this.inFlightMissed();
     // The phrase in flight goes in (a radio word among it does nothing) —
     // but not one that ended in "scratch that".
     const r = parseRadio(all);
     const rest = r.kind === "undo" ? "" : r.text;
     return { kind: "leave", ...this.settle(rest ? rest + " " : "") };
+  }
+
+  /** The phrase under way ended without its text: Moonshine's live words
+   * (whisper wrote none: the server's `final_missed`, or its stream broke)
+   * are never a phrase's text, so what they typed is taken back — exactly
+   * as a final replaces them — and nothing of the phrase goes in. Text
+   * typed before it stays. `sending`: "over" was waiting on its words. */
+  missed(reason: string, sending = false): DictOutcome {
+    if (!this.listening) return { kind: "stopped" };
+    const s = this.settle("");
+    return withErase({ kind: "missed" as const, reason, ...(sending ? { sending } : {}) }, s.erase || "");
+  }
+
+  /** Stopped with a Moonshine phrase in flight (no final yet): nothing of
+   * it goes in — its guess taken back — and listening ends. */
+  private inFlightMissed(): DictOutcome {
+    this.listening = false;
+    return withErase({ kind: "leave" as const, text: "", missed: true }, this.settle("").erase || "");
   }
 
   /** The phrase under way, typed as far as it may be now. */
@@ -1764,6 +1804,9 @@ export class Dictation {
     // "That's all" waits for the phrase's end too: "…that's all I need" is
     // words, and so is a sentence that ends in it.
     const before = stopTail(all, whole);
+    // Moonshine's words before a stop phrase are no text: the phrase's end
+    // (whisper's words) decides — the stop phrase is held back meanwhile.
+    if (before !== null && !whole && !this.liveText && before.trim()) return null;
     if (before !== null) {
       this.listening = false;
       // "Over and out, that's all": the "over and out" sends.
@@ -2143,6 +2186,14 @@ export interface LiveHooks {
    * phrase taken from its guess is ignored until its end, not just
    * {@link SWALLOW_MAX_MS}. */
   endsSurely?(): boolean;
+  /** The live words of the phrase under way may stand as its text (a
+   * whisper stream, Web Speech, clips). False while they are Moonshine's
+   * (the server streams on Moonshine): Moonshine detects, whisper writes —
+   * only a phrase's final is its text, so "over" and a stop phrase with
+   * words before it wait for that final however long /end takes, and
+   * never send or type the live words ({@link LiveDictation.missed}).
+   * Absent: true. */
+  liveIsText?(): boolean;
 }
 
 /** What the page did with a phrase it routed ({@link LiveHooks.route}): acted
@@ -2288,6 +2339,11 @@ export class LiveDictation {
   /** The caption while recognition gets ready ({@link wait}); "": none. */
   private waitLine = "";
   private noteUntil = 0;
+  /** The last phrase missed's caption, and until when it holds ({@link missNote}). */
+  private missLine = "";
+  private missUntil = 0;
+  /** Waiting on a Moonshine phrase's end for "over" (a send), not a stop. */
+  private waitSends = false;
   private noteTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
@@ -2440,7 +2496,27 @@ export class LiveDictation {
    * ({@link FinalClock.fastStands}): the final would buy little — the
    * words go without waiting for it. */
   private fastStands(): boolean {
-    return !!this.hooks.endsSurely?.() && !this.dict.partial && !!this.dict.held && finalClock.fastStands();
+    return this.liveText() && !!this.hooks.endsSurely?.() && !this.dict.partial && !!this.dict.held && finalClock.fastStands();
+  }
+
+  /** The live words may stand as the phrase's text ({@link LiveHooks.liveIsText}). */
+  private liveText(): boolean {
+    return this.hooks.liveIsText?.() !== false;
+  }
+
+  /** A phrase ended without its text ({@link RecognizerHandlers.onMissed}:
+   * whisper did not write it — Moonshine's live words are never typed):
+   * its guess is taken back, nothing of it is typed or sent — a send
+   * "over" was waiting on goes nowhere, the words already in the field stay
+   * there — and the caption says what happened and to say it again
+   * ({@link missedLine}). Listening goes on. */
+  missed(reason: string, spokeAt?: number): Promise<void> {
+    const sending = !!this.sendWait && this.waitSends;
+    clearInterval(this.early?.timer);
+    this.endPhraseAt(spokeAt);
+    // Taken from its guess already (a stop, a disregard): nothing to take back.
+    if (this.phraseEnded()) return this.chain;
+    return this.step(() => this.dict.missed(reason, sending));
   }
 
   /** Streaming: committed words with no unstable tail. */
@@ -2585,6 +2661,22 @@ export class LiveDictation {
     // brings nothing more).
     const spoke = this.endPhraseAt(this.hooks.spokeAt?.());
     this.hooks.endPhrase?.();
+    // Moonshine's live words are never the text: "over" — and a stop phrase
+    // with words before it — wait for the phrase's end (whisper's words,
+    // which then send or stop, or none: {@link missed}). Its /end always
+    // answers (or fails, which ends it too); the timer only holds the tail
+    // check off meanwhile and, should nothing come, takes the guess back.
+    if (!this.liveText() && (radio || (t.kind === "stop" && !!stopTail(t.text)?.trim()))) {
+      if (early) this.watchQuiet();
+      this.sendNow = null;
+      this.waitSends = radio;
+      this.sendWait = setTimeout(() => {
+        this.sendWait = undefined;
+        this.swallow();
+        void this.step(() => this.dict.missed("timeout", radio), spoke);
+      }, SWALLOW_STREAM_MAX_MS);
+      return;
+    }
     if (radio) {
       const e = early ? this.watchQuiet() : null;
       // The accurate final, if /end brings it within the finals' usual round
@@ -2761,6 +2853,7 @@ export class LiveDictation {
         this.stepSpoke = spoke || this.phraseSpoke || this.spokeFrom();
         const t = this.target;
         this.dict.answering = t?.kind === "session" && !!this.hooks.pending?.(t.title);
+        this.dict.liveText = this.liveText();
         return this.apply(next());
       })
       .catch(() => {})
@@ -2847,12 +2940,24 @@ export class LiveDictation {
         this.end(out.text ? "Disregarded" : "", false, "stopped");
         return;
       case "leave":
+        if (out.missed) {
+          if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
+          this.end(missedLine("failed"), false);
+          return;
+        }
         if ((out.text || out.erase) && !(await this.put(out.text, true, out.erase))) return;
         this.end(
-          t?.kind === "session" && this.dict.typed ? LEFT_LINE : out.stop ? STOPPED_LINE : "",
+          this.missNote() || (t?.kind === "session" && this.dict.typed ? LEFT_LINE : out.stop ? STOPPED_LINE : ""),
           false,
           out.stop ? "stopped" : undefined
         );
+        return;
+      case "missed":
+        // What the live words typed goes (never a key while a dialog is up).
+        if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
+        this.note = this.missLine = missedLine(out.reason, !!out.sending);
+        this.noteUntil = this.missUntil = Date.now() + NOTE_CAPTION_MS;
+        this.show();
         return;
       case "send": {
         // The word's end: from the guess's tail, else the quiet before now.
@@ -3103,6 +3208,12 @@ export class LiveDictation {
 
   /** The route's verdict, its note (if any) kept for the caption
    * ({@link show}) — a phrase not taken is typed, and the caption says why. */
+  /** The note of a phrase just missed ({@link missed}), while it shows:
+   * listening ending right after it (push to talk let go) keeps saying so. */
+  private missNote(): string {
+    return this.missUntil > Date.now() ? this.missLine : "";
+  }
+
   private verdict(v: RouteVerdict): boolean | "hush" | "end" {
     if (v && typeof v === "object") {
       if (v.note) {
@@ -5392,6 +5503,13 @@ export interface RecognizerHandlers {
    * `final`: the whole phrase as the server's accurate model heard it — set
    * only when it differs from the fast words (absent: they stand). */
   onFlush?(text: string, final?: string, spokeAt?: number): void;
+  /** Streaming on Moonshine: a phrase ended WITHOUT its text — whisper's
+   * accurate pass did not write it (/end `final_missed`: "off", "skipped",
+   * "failed", "timeout", "empty"), or its stream broke ("failed").
+   * Moonshine detects, whisper writes (owner rule 2026-11-08): its live
+   * words are never a phrase's text, so what they typed is taken back and
+   * nothing of the phrase is typed or sent ({@link LiveDictation.missed}). */
+  onMissed?(reason: string, spokeAt?: number): void;
   /** A passing line for the caption (streaming fell back to clips). */
   onNotice?(text: string): void;
   /** The person talks over a line the app is saying (the server's
@@ -5727,9 +5845,13 @@ export const CLIP_FINISH_WAIT_MS = 45_000;
  * flight this long before stopping with what it has: a streamed phrase's
  * words are typed already — only its accurate final is awaited, the finals'
  * usual round trip ({@link overWaitMs}); a clip's transcript is all of it
- * ({@link CLIP_FINISH_WAIT_MS}); Web Speech's final {@link HOLD_FINAL_WAIT_MS}. */
-export function finishWaitMs(rec: { name: string; streaming?: boolean; finalMs?: number | null }): number {
+ * ({@link CLIP_FINISH_WAIT_MS}), and so is a Moonshine phrase's final (its
+ * live words are never its text: its /end — whisper's words, or none — is
+ * waited for, which the request's own timeout bounds); Web Speech's final
+ * {@link HOLD_FINAL_WAIT_MS}. */
+export function finishWaitMs(rec: { name: string; streaming?: boolean; moonshine?: boolean; finalMs?: number | null }): number {
   if (rec.name !== "server") return HOLD_FINAL_WAIT_MS;
+  if (rec.moonshine) return CLIP_FINISH_WAIT_MS;
   return rec.streaming ? overWaitMs(finalClock.typical(rec.finalMs)) : CLIP_FINISH_WAIT_MS;
 }
 
@@ -5915,6 +6037,12 @@ interface Phrase {
   /** Resolves once its words are all in (its last chunk back) or it has no
    * more to give; null before it ends. */
   heardAll: Promise<void> | null;
+  /** Its stream is Moonshine's (POST /api/voice/stream `engine`): its live
+   * words are never its text — only its /end's whisper final is. */
+  moon: boolean;
+  /** Resolves once its end is over (its /end answered or failed); null
+   * before it ends. */
+  ended: Promise<void> | null;
 }
 
 /** A response's words (the server joins them with spaces). */
@@ -5973,6 +6101,8 @@ export function serverRecognizer(
   passMs: number | null;
   finalMs: number | null;
   readonly streaming: boolean;
+  /** Streaming on Moonshine: the live words are never a phrase's text. */
+  readonly moonshine: boolean;
   readonly spokeAt: number;
   /** The phrase just ended's Moonshine text (/end `heard`), once. */
   takeHeard(): string;
@@ -6000,6 +6130,8 @@ export function serverRecognizer(
   const aborters = new Set<AbortController>();
   /** This dictation streams (until a failure falls back to clips). */
   let streaming = false;
+  /** The last stream opened is Moonshine's ({@link Phrase.moon}). */
+  let moonLive = false;
   /** The last ended phrase's Moonshine text (/end `heard`), for the router
    * ({@link takeHeard}); cleared when the next phrase's speech starts. */
   let lastHeard: { text: string; at: number } | null = null;
@@ -6196,7 +6328,9 @@ export function serverRecognizer(
       if (sid) {
         abandon(sid);
         h?.onPartial?.("");
-        h?.onFlush?.("");
+        // Moonshine's words it typed are no text: taken back, said so.
+        if (p.moon && (p.said || p.partial)) h?.onMissed?.("failed", p.spokeAt || undefined);
+        else h?.onFlush?.("");
       }
       if (cur === p) {
         clearTimeout(capTimer);
@@ -6258,6 +6392,8 @@ export function serverRecognizer(
         if (r.ok && id) {
           c.sid = id;
           c.opened = Date.now();
+          c.moon = r.j.engine === "moonshine";
+          moonLive = c.moon;
           open.add(id);
           voiceMark("stream");
           // Nobody was listening: the model loads now, the first words wait.
@@ -6342,19 +6478,26 @@ export function serverRecognizer(
    * each, once its words are all in, ends now with its fast words (its
    * committed words and last unstable tail) — the person talks again, and
    * their new words never wait on an earlier phrase's accurate pass; that
-   * final, when it comes, is only measured. */
+   * final, when it comes, is only measured. Not a Moonshine phrase: its
+   * fast words are never its text, so its end — whisper's words, or none —
+   * is waited for, and the new words follow it. */
   const settleBefore = async (c: Phrase, hh: RecognizerHandlers) => {
     for (const p of [...ending]) {
       if (p === c) return;
       await p.heardAll;
       if (h !== hh) return;
+      if (p.moon && p.ended) {
+        await p.ended;
+        if (h !== hh) return;
+      }
       if (p.flushed) continue;
       p.flushed = true;
       const i = ending.indexOf(p);
       if (i >= 0) ending.splice(i, 1);
       if (!p.stream) continue; // fell back: its words went with the fall-back
       hh.onPartial?.("");
-      hh.onFlush?.(p.partial, undefined, p.spokeAt || undefined);
+      if (p.moon && (p.said || p.partial)) hh.onMissed?.("failed", p.spokeAt || undefined);
+      else hh.onFlush?.(p.partial, undefined, p.spokeAt || undefined);
     }
   };
 
@@ -6369,6 +6512,8 @@ export function serverRecognizer(
     uploads++;
     let heard = () => {};
     c.heardAll = new Promise<void>((r) => (heard = r));
+    let over = () => {};
+    c.ended = new Promise<void>((r) => (over = r));
     ending.push(c);
     const unlist = () => {
       const i = ending.indexOf(c);
@@ -6409,7 +6554,8 @@ export function serverRecognizer(
         if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
         // The accurate pass over the whole phrase: only when it heard it
         // otherwise (`same`: nothing to correct; absent — off, skipped,
-        // failed or timed out — the fast words stand).
+        // failed or timed out — a whisper stream's fast words stand, a
+        // Moonshine stream's are taken back: `missed`).
         const ran = typeof r.j.final === "string";
         const timed = timedFinal(r.j);
         const fms = Number(r.j.final_ms);
@@ -6418,7 +6564,10 @@ export function serverRecognizer(
           voiceMark("final");
         }
         const committed = wordsOf(r.j.committed);
-        lastHeard = typeof r.j.heard === "string" && r.j.heard.trim() ? { text: r.j.heard.trim(), at: Date.now() } : null;
+        // Moonshine heard words whisper did not write (`final_missed`; a
+        // final absent anyway: "failed"): nothing of the phrase is text.
+        const missed = c.moon && !ran ? String(r.j.final_missed || "") || (c.said || committed || c.partial ? "failed" : "") : "";
+        lastHeard = !missed && typeof r.j.heard === "string" && r.j.heard.trim() ? { text: r.j.heard.trim(), at: Date.now() } : null;
         if (timed) {
           // Measured only when an accurate final came (a timeout, or
           // Moonshine's own text, says nothing of how long one takes), late
@@ -6435,7 +6584,8 @@ export function serverRecognizer(
         c.stream = false;
         const final = ran && r.j.same !== true ? wordsOf(r.j.final) : "";
         hh.onPartial?.("");
-        hh.onFlush?.(committed, final || undefined, c.spokeAt || undefined);
+        if (missed) hh.onMissed?.(missed, c.spokeAt || undefined);
+        else hh.onFlush?.(committed, final || undefined, c.spokeAt || undefined);
       } catch (err) {
         if (h !== hh || c.flushed) return;
         // Its held words still go in (fallBack flushes a phrase with a stream).
@@ -6446,6 +6596,7 @@ export function serverRecognizer(
       }
     } finally {
       heard();
+      over();
       unlist();
       uploads--;
       if (h === hh) maybeEnd();
@@ -6531,6 +6682,8 @@ export function serverRecognizer(
       endAt: 0,
       flushed: false,
       heardAll: null,
+      moon: false,
+      ended: null,
     };
     // Its stream opens while the microphone and the audio engine get ready.
     if (c.stream) openStream(c);
@@ -6728,6 +6881,11 @@ export function serverRecognizer(
     get streaming(): boolean {
       return streaming;
     },
+    /** It streams on Moonshine: the live words are a preview, never the
+     * text — only each phrase's whisper final writes ({@link Phrase.moon}). */
+    get moonshine(): boolean {
+      return streaming && moonLive;
+    },
     /** The phrase just ended's Moonshine text (/end `heard`), once, while
      * fresh (a few seconds; never the phrase before it): POST
      * /api/voice/route sends it as `heard`. */
@@ -6888,7 +7046,20 @@ export interface VoiceCfg {
     tts_detail?: string;
   };
   system: VoiceSystem;
+  /** The live words' engine while recognition streams ("moonshine" |
+   * "whisper") and the accurate pass's model ("" off) — GET /api/voice's;
+   * absent from an older server ({@link accurateOff}). */
+  stream_engine?: string;
+  final_model?: string;
 }
+/** Moonshine streams the live words and whisper's accurate pass is off
+ * (`voice.stt_final`): no phrase is ever typed — Moonshine's words are never
+ * the text — so the mic says so as it starts ({@link ACCURATE_OFF_HINT}),
+ * not phrase by phrase. */
+export const accurateOff = (c: VoiceCfg): boolean =>
+  !!c.server_ready.stt_stream && c.stream_engine === "moonshine" && c.final_model === "";
+/** The caption before a word while {@link accurateOff}. */
+export const ACCURATE_OFF_HINT = "Commands only — dictation needs whisper's accurate pass, which is off: Settings → Voice";
 export const DEFAULT_VOICE_CFG: VoiceCfg = { stt: "phone", tts: "phone", server_ready: {}, system: {} };
 
 /** localStorage: when this device last listened with the server's
@@ -6981,6 +7152,8 @@ export async function loadVoiceCfg(prev: VoiceCfg | null, warm = true): Promise<
         ...(typeof j.say_all === "boolean" ? { say_all: j.say_all } : {}),
         server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
         system: j.system && typeof j.system === "object" ? j.system : {},
+        ...(typeof j.stream_engine === "string" ? { stream_engine: j.stream_engine } : {}),
+        ...(typeof j.final_model === "string" ? { final_model: j.final_model } : {}),
       };
       // The voice UI is up (a load, a focus): recognition warms while the
       // person reaches for the mic, when they use it here.

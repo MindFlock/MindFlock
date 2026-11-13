@@ -3922,6 +3922,7 @@
   var VOICE_REC_WAIT_MS = 50;            // the phone's recognizer waiting for a line said over the listen: checked this often
   var VOICE_BARGE_MUTE_MS = 150;         // barge-in: the mic opens this long after the speaker is cut (its tail is not heard)
   var VOICE_QUIET_CAPTION_MS = 1500;     // "Quiet." stays on the strip this long
+  var VOICE_MISSED_CAPTION_MS = 3000;    // "Recognition didn't finish — say it again" this long
 
   // --- PhoneSTT: SpeechRecognition / webkitSpeechRecognition ----------------
   // The state machine restarts it while its listening window is open; the
@@ -4456,11 +4457,19 @@
   // Whether an /end answer's final is the accurate pass's (a sample for
   // the "over" budget and the fast-trust window): it has one, and not
   // Moonshine's own text (`final_by: "moonshine"` — a control-only phrase,
-  // answered at once, or the pass timed out: neither says how long the
-  // accurate pass takes nor whether it changes words).
+  // answered at once: it says nothing of how long the accurate pass takes
+  // nor whether it changes words; a timed-out pass has no final at all).
   function voiceTimedFinal(j) {
     j = j || {};
     return typeof j.final === "string" && j.final_by !== "moonshine";
+  }
+  // What the strip says when a phrase ended without its text (/end
+  // `final_missed`; lib/voiceDesktop missedLine says the same): say it
+  // again — and, when a send waited on it, nothing was sent. "off" is the
+  // setting (voice.stt_final), and says where to turn it back on. Pure.
+  function voiceMissedLine(why, sending) {
+    if (why === "off") return (sending ? "Nothing sent" : "Nothing typed") + " — whisper's accurate pass is off: Settings → Voice";
+    return sending ? "Recognition didn't finish — nothing sent; say it again" : "Recognition didn't finish — say it again";
   }
   function voiceJoin(a, b) {
     a = String(a || "").trim();
@@ -5440,7 +5449,9 @@
           if (g.dead) { streamDelete(id); return; }
           // loading: nobody was listening, so the server's recognition is
           // loading now — the first words wait for it ("Starting the mic…").
-          if (id) { g.sid = id; g.mode = "stream"; voiceSttLoading(x.j.loading === true); if (mine) { voiceTraceMark(g, "open"); streamPump(g, mine); } return; }
+          // moon: Moonshine streams it — its words are a preview, never the
+          // phrase's text (only /end's whisper final is: streamEnd).
+          if (id) { g.sid = id; g.mode = "stream"; g.moon = x.j.engine === "moonshine"; voiceSttLoading(x.j.loading === true); if (mine) { voiceTraceMark(g, "open"); streamPump(g, mine); } return; }
           if (x.r.status === 409 && voiceStreamFull(x.j)) {
             voice.rec.streamFull = { at: Date.now(), n: ((voice.rec.streamFull && voice.rec.streamFull.n) || 0) + 1 };
             if (Date.now() - t0 + VOICE_STREAM_FULL_RETRY_MS <= VOICE_STREAM_FULL_MAX_MS) {
@@ -5525,7 +5536,7 @@
         streamWords(g, mine, x.j.committed, x.j.partial);
         // "Over" waiting for its final: this chunk settled the last of its
         // words, and the finals here seldom change them — it goes now.
-        if (g.endFire && !g.partial && voiceFastStands(voice.rec.finals)) { g.endFire(); return; }
+        if (g.endFire && !g.moon && !g.partial && voiceFastStands(voice.rec.finals)) { g.endFire(); return; }
         streamPump(g, mine);
       }, function (err) {
         if (g.dead) return;
@@ -5545,7 +5556,9 @@
       g.pend = voiceJoin(g.pend, committed);
       g.partial = String(partial || "").trim();
       var tail = voiceTail(g.pend, false, true);
-      if (tail && tail.kind === "stop") {
+      // (Moonshine's words before a stop phrase are no text: the phrase's
+      // end — whisper's words — decides, controlFire.)
+      if (tail && tail.kind === "stop" && !(g.moon && String(tail.text || "").trim())) {
         var all = g.pend;
         g.pend = g.partial = "";
         if (h.onFinal) h.onFinal(all, g.spokeAt);
@@ -5569,12 +5582,17 @@
     // has been taking here, 1.5× plus 100 ms; a later final ignored).
     // voice.rec.ctl times it: the word's end (its last loud block) → the
     // send (voiceCtlSent), and keeps the budget.
+    // On Moonshine (g.moon) the guess is a preview, never the text: a send,
+    // and a stop phrase with words before it, wait for /end however long it
+    // takes (no budget, no fast-stands) — whisper's words then send or stop,
+    // or none come (onMissed): nothing of the phrase is typed or sent.
     function controlFire(g, mine) {
       var c = g.ctl;
       g.ctl = null;
       voice.rec.ctl = { word: c.word, wordEnd: g.lastLoud || Date.now(), at: Date.now() };
       voiceTraceMark(g, "control");
-      if (!c.send) {
+      var stopWords = c.word === "stop" && String((voiceTail(c.text, false) || {}).text || "").trim();
+      if (!c.send && !(g.moon && stopWords)) {
         rec = null;
         clearTimeout(capTimer);
         // Its stream goes FIRST (DELETE on its way), then the carried
@@ -5595,7 +5613,7 @@
       if (token !== mine) return;
       // The fast words all settled (no unstable tail) and the finals here
       // seldom change them (voiceFastStands): no wait for this one's.
-      var budget = !g.partial && voiceFastStands(voice.rec.finals) ? 0 : voiceEndBudgetMs(voice.rec.endMs);
+      var budget = g.moon ? 0 : !g.partial && voiceFastStands(voice.rec.finals) ? 0 : voiceEndBudgetMs(voice.rec.endMs);
       voice.rec.ctl.budget = budget;
       g.endFire = function () {
         clearTimeout(g.endTimer);
@@ -5614,7 +5632,7 @@
         voice.rec.last = { ms: budget, backend: "stream", error: "", at: Date.now(), finalMs: 0, fixed: false, late: true };
         streamDone(g, mine, g.fast);
       };
-      g.endTimer = setTimeout(g.endFire, budget);
+      if (!g.moon) g.endTimer = setTimeout(g.endFire, budget);
       finish();
     }
     // The phrase is over: /end flushes the words the stream still holds —
@@ -5631,14 +5649,15 @@
       streamReq(g, streamUrl(g.sid, "end"), { method: "POST" }).then(function (x) {
         voiceSttLoading(false);
         if (g.dead) return;
+        var waited = !!g.endFire;   // "over" waited on it (controlFire)
         clearTimeout(g.endTimer);
         g.endFire = null;
         g.busy = false;
         if (!x.r.ok) { if (!g.late) streamFail(g, mine, streamWhy(x)); return; }
         g.sid = "";   // ended: nothing to DELETE
         var text = voiceJoin(g.pend, x.j.committed), fin = voiceStreamFinal(text, x.j);
-        // An accurate final came (absent, or Moonshine's own: off, skipped,
-        // failed, timed out or a control-only phrase — that says nothing of
+        // An accurate final came (absent — off, skipped, failed, timed out —
+        // or Moonshine's own for a control-only phrase: that says nothing of
         // how long one takes; voiceTimedFinal): its round trip, late or not,
         // is a sample for the next "over"'s budget (voiceEndBudgetMs of the
         // median, voiceEndTypicalMs); and whether it changed a word.
@@ -5648,6 +5667,18 @@
           voice.rec.finals = voiceKeepLast(voice.rec.finals, x.j.same !== true && voicePlainWords(x.j.final) !== voicePlainWords(text), VOICE_FAST_TRUST_WINDOW);
         }
         if (g.late) return;   // "over" went with the fast words already
+        // Moonshine heard words whisper did not write (`final_missed`; no
+        // final anyway: "failed"): nothing of the phrase is text — its guess
+        // comes out of the box (onMissed, then onEnd), nothing is sent.
+        var missed = g.moon && typeof x.j.final !== "string"
+          ? String(x.j.final_missed || "") || (voiceJoin(text, g.partial) ? "failed" : "") : "";
+        if (missed) {
+          voice.heardEnd = null;
+          voice.rec.last = { ms: Number(x.j.ms) || (Date.now() - t0), backend: "stream", error: "", at: Date.now(), finalMs: 0, fixed: false, missed: missed };
+          if (token === mine && mine.h.onMissed) mine.h.onMissed(missed, waited);
+          streamDone(g, mine, "");
+          return;
+        }
         // Moonshine's own text of the phrase: the router decides the
         // control words on it (voiceRouteBody's `heard`).
         voice.heardEnd = typeof x.j.heard === "string" && x.j.heard.trim() ? { final: fin.text, heard: x.j.heard, at: Date.now() } : null;
@@ -5672,8 +5703,12 @@
       g.sid = "";
       g.mode = "clip";
       streamDelete(sid);
-      g.lead = voiceJoin(g.pend, g.partial);
+      // Moonshine's words are no text: none of them lead the clip — the
+      // guess comes out of the box, and the strip says so.
+      var said = voiceJoin(g.pend, g.partial);
+      g.lead = g.moon && said ? "" : said;
       g.pend = g.partial = "";
+      if (g.moon && said && mine && token === mine && mine.h.onMissed) mine.h.onMissed("failed", !!g.endFire);
       if (g.ending && token === mine) clipSend(g, mine);
     }
     // The phrase's last words (none: the window decides, as for a clip).
@@ -6501,12 +6536,13 @@
   // A moment's word on the strip, VOICE_QUIET_CAPTION_MS long: the cue
   // that something ended — "Quiet." after a hush, "Heard nothing." when a
   // listening window closed without a word.
-  function voiceStripNote(word) {
+  function voiceStripNote(word, ms) {
+    ms = ms > 0 ? ms : VOICE_QUIET_CAPTION_MS;
     voice.quietWord = String(word || "");
-    voice.quietUntil = Date.now() + VOICE_QUIET_CAPTION_MS;
+    voice.quietUntil = Date.now() + ms;
     voiceCaption(voice.quietWord);
     clearTimeout(voice.quietTimer);
-    voice.quietTimer = setTimeout(voiceStripPaint, VOICE_QUIET_CAPTION_MS + 20);
+    voice.quietTimer = setTimeout(voiceStripPaint, ms + 20);
   }
   function voiceQuiet() { voiceStripNote("Quiet."); }
   function voiceError(msg) {
@@ -6635,6 +6671,7 @@
     var L = voiceListen_, s = voice.stt;
     if (L.mode === "dialog") { voiceListenDone(); return; }
     L.overAfter = true;
+    L.missed = "";               // only a phrase that ends from here on counts (voiceListenFlush)
     L.cont = false;
     L.until = 0;                 // no more restarts
     L.overBy = Date.now() + VOICE_OVER_WAIT_MS;
@@ -6655,14 +6692,33 @@
   }
   // The words are in: stop, keep them. Never a send — unless Send was
   // tapped while they were on their way (voiceTakesSend): then they go.
+  // Unless they never came (whisper did not write the last phrase,
+  // voiceMissed): nothing is sent — what is in the box stays — and the
+  // strip says why.
   function voiceListenFlush() {
-    var L = voiceListen_, send = L.sendTapped;
+    var L = voiceListen_, send = L.sendTapped, missed = L.missed;
     L.overAfter = false;
     L.sendTapped = false;
+    L.missed = "";
     clearTimeout(L.timer);
     voice.stt.stop();
+    if (missed) { voiceListenKept(); voiceMissedNote(missed, send); return; }
     if (send && vbox().value.trim()) { voiceSend(vbox().value); return; }
     voiceListenKept();
+  }
+  // A phrase whisper did not write (the server's `final_missed`: "off",
+  // "skipped", "failed", "timeout", "empty"): Moonshine detects, whisper
+  // writes — its words are never typed — so the person is told to say it
+  // again (voiceMissedLine); the reason is kept for voiceListenFlush.
+  // "off" is a setting, not a miss: it stays on the error line.
+  function voiceMissed(why, sending) {
+    voiceListen_.missed = String(why || "failed");
+    voiceMissedNote(why, sending);
+  }
+  function voiceMissedNote(why, sending) {
+    var line = voiceMissedLine(why, sending);
+    if (why === "off") voiceError(line);
+    voiceStripNote(line, VOICE_MISSED_CAPTION_MS);
   }
   function voiceIdle(caption) {
     clearTimeout(voiceListen_.timer);
@@ -7178,6 +7234,7 @@
     L.held = !!held;
     L.overAfter = false;
     L.sendTapped = false;
+    L.missed = "";
     L.routing = false;
     L.routeQ = [];
     L.draining = false;
@@ -7299,6 +7356,15 @@
       onBarge: function () { if (voiceIsListening()) voiceBargeIn(); },
       // "over" heard in the guess: the send is on its way (voiceRouteEarly).
       onEarly: function (t, at) { if (voiceIsListening()) voiceRouteEarly(t, mode, voiceSpokeAt(at)); },
+      // A Moonshine phrase whisper did not write (ServerSTT's streamEnd): its
+      // guess comes out of the box — nothing of it is typed or sent — and
+      // the strip says to say it again (voiceMissed).
+      onMissed: function (why, sending) {
+        if (!voiceIsListening()) return;
+        voiceGuessDrop();
+        voiceListen_.early = null;
+        voiceMissed(why, !!sending || voiceListen_.sendTapped);
+      },
       // The phrase's final: its guess is taken back first, so every rule
       // reads the box as it was before the phrase (and only final words).
       // (While the router has the phrase before it, the guess in the box is

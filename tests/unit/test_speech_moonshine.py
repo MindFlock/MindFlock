@@ -136,7 +136,10 @@ class TestInterfaceParity:
             assert list(ours.parameters) == list(theirs.parameters), name
 
     def test_result_shapes(self):
-        st, _t = make([[(1, "Fix the")], [(1, "Fix the failing test")]])
+        st, _t = make(
+            [[(1, "Fix the")], [(1, "Fix the failing test")]],
+            accurate=Accurate("Fix the failing test."),
+        )
         got = st.feed(loud())
         assert isinstance(got, tuple) and len(got) == 2
         assert all(isinstance(x, str) for x in got)
@@ -153,7 +156,7 @@ class TestInterfaceParity:
             "same",
         ):
             assert key in out, key
-        assert out["partial"] == "" and out["final_by"] == "moonshine"
+        assert out["partial"] == "" and out["final_by"] == "whisper"
         assert isinstance(out["final_ms"], int) and isinstance(out["same"], bool)
 
     def test_nothing_heard_has_no_final(self):
@@ -187,7 +190,8 @@ class TestCommit:
                 [(1, "Over and")],
                 [(1, "Over and out.", True)],
                 [(1, "Over and out.", True), (2, "Stop")],
-            ]
+            ],
+            accurate=Accurate("Over and out. Stop"),
         )
         assert st.feed(loud()) == ("", "Over and")
         assert st.feed(loud()) == ("Over and out.", "")
@@ -446,9 +450,14 @@ class TestFinalPolicy:
         t0 = time.monotonic()
         out = st.finish()
         assert time.monotonic() - t0 < 0.4
-        assert out["final"] == "Some dictation here." and out["final_by"] == "moonshine"
-        assert out["heard"] == "Some dictation here."
-        assert st.final_outcome == "timeout"
+        # Moonshine's words are never the text: no final, the reason instead.
+        assert out == {
+            "committed": "",
+            "partial": "",
+            "heard": "Some dictation here.",
+            "final_missed": "timeout",
+        }
+        assert st.final_outcome == "timeout" and st.final_missed == "timeout"
 
     def test_the_timeout_is_speech_streams(self):
         assert not hasattr(sm, "POLISH_WAIT_S") and not hasattr(
@@ -456,21 +465,24 @@ class TestFinalPolicy:
         )
         assert ss.FINAL_TIMEOUT_S >= 1.5
 
-    def test_a_failed_pass_leaves_moonshines_final(self):
+    def test_a_failed_pass_types_nothing(self):
         acc = Accurate(fail=True)
         st, _t = make([[(1, "Some dictation here.", True)]], accurate=acc)
         st.feed(loud(1.5))
         st.feed(quiet(0.6))
         out = st.finish()
         assert len(acc.calls) == 1
-        assert out["final"] == "Some dictation here." and out["final_by"] == "moonshine"
+        assert "final" not in out and "final_by" not in out
+        assert out["final_missed"] == "failed" and out["committed"] == ""
+        assert out["heard"] == "Some dictation here."
 
-    def test_without_whisper_moonshines_text_is_the_final(self):
+    def test_without_whisper_nothing_is_typed(self):
+        # voice.stt_final = "off": no accurate pass, so no phrase has text.
         st, _t = make([[(1, "Some dictation here.", True)]])
         st.feed(loud(1.5))
         out = st.finish()
-        assert out["final"] == out["heard"] == "Some dictation here."
-        assert out["final_by"] == "moonshine"
+        assert "final" not in out and out["final_missed"] == "off"
+        assert out["committed"] == "" and out["heard"] == "Some dictation here."
 
     def test_a_click_gets_no_pass(self):
         acc = Accurate()
@@ -478,7 +490,52 @@ class TestFinalPolicy:
         st.feed(loud(0.1))  # under FINAL_MIN_SECONDS of speech
         st.feed(quiet(0.6))
         out = st.finish()
-        assert acc.calls == [] and out["final_by"] == "moonshine"
+        assert acc.calls == [] and "final" not in out
+        assert out["final_missed"] == "skipped"
+
+    def test_a_phrase_over_the_buffer_types_nothing(self, monkeypatch):
+        monkeypatch.setattr(ss, "PHRASE_MAX_SECONDS", 1.0)
+        acc = Accurate("never asked")
+        st, _t = make([[(1, "A very long phrase.", True)]], accurate=acc)
+        st.feed(loud(1.5))
+        out = st.finish()
+        assert acc.calls == [] and out["final_missed"] == "skipped"
+
+    def test_whisper_hearing_nothing_types_nothing(self):
+        acc = Accurate("")
+        st, _t = make([[(1, "Hmm.", True)]], accurate=acc)
+        st.feed(loud(1.0))
+        out = st.finish()
+        assert len(acc.calls) == 1 and "final" not in out
+        assert out["final_missed"] == "empty"
+
+    def test_a_dropped_pass_types_nothing(self):
+        st, _t = make([[(1, "Some dictation here.", True)]], accurate=Accurate())
+        st.feed(loud(1.0))
+        # The lane dropped the pass (a newer job replaced it): "skipped".
+        st.final_outcome = "skipped"
+        assert st._missed_reason(True) == "skipped"
+        st.close()
+
+    def test_every_reason_is_listed(self):
+        st, _t = make([[(1, "x", True)]], accurate=Accurate())
+        got = {st._missed_reason(False)}
+        for outcome in ("timeout", "error", "skipped", "ok", "?"):
+            st.final_outcome = outcome
+            got.add(st._missed_reason(True))
+        bare, _t2 = make([[(1, "x", True)]])
+        got.add(bare._missed_reason(False))
+        assert got == set(sm.MISSED_REASONS)
+        st.close()
+        bare.close()
+
+    def test_a_control_phrase_is_not_missed_without_whisper(self):
+        # "over" alone with the accurate pass off still acts: no failure.
+        st, _t = make([[(1, "Over.", True)]])
+        st.feed(loud(0.5))
+        out = st.finish()
+        assert out["final"] == "Over." and out["final_by"] == "moonshine"
+        assert "final_missed" not in out
 
     def test_whispers_text_gets_the_wake_join_too(self):
         acc = Accurate("Mind flock, summarise the long thread.")
@@ -503,7 +560,7 @@ class TestFinalPolicy:
         # Moonshine final must not pull it under whisper's real wait.
         before = ss.final_stats()["samples"]
         for st, _t in (
-            make([[(1, "Fix the bug.", True)]]),  # no whisper
+            make([[(1, "Stop.", True)]]),  # no whisper
             make([[(1, "Stop.", True)]], accurate=Accurate("Stop.")),  # control only
         ):
             st.feed(loud())
