@@ -1,13 +1,15 @@
-"""The accurate pass held back by memory: "over" still has its words.
+"""The accurate pass held back: "over" sends nothing of Moonshine's words.
 
 Owner report 2026-11-10: with Windows memory critically low, every phrase's
 whisper pass was refused ("local recognition held back: …") and the log
-said so on every phrase. ``/end`` must still answer the fast text with its
-control phrase in it — Moonshine's own text as the ``final`` (what the
-client reads "over" / "over and out" off), and the words committed — and
-the hold-back is logged once per episode, not once per phrase.
-(The client half — the send itself — is pinned in
-frontend/src/__tests__/voiceHeldBack.test.ts.)
+said so on every phrase. Voice is exempt from the memory gate since (PR
+#342), but a refused pass is still a failed pass, and the rule since
+2026-11-12 is that Moonshine's words are never a phrase's text: ``/end``
+answers no ``final`` and no ``committed`` words — ``final_missed:
+"failed"`` and ``heard`` (Moonshine's text, the control words read off it)
+instead — and the client types and sends nothing of the phrase. The
+hold-back is still logged once per episode, not once per phrase.
+(The client half is pinned in frontend/src/__tests__/voiceHeldBack.test.ts.)
 """
 
 from __future__ import annotations
@@ -73,15 +75,16 @@ def _phrase(script, accurate, final=None) -> dict:
         ),
     ],
 )
-def test_end_answers_the_fast_text_with_its_control_phrase(script, said):
+def test_end_answers_no_text_for_a_refused_pass(script, said):
     acc = Held()
     out = _phrase(script, acc)
     assert acc.calls >= 1  # the pass was asked for, and refused
-    assert out["final"] == said and out["heard"] == said
-    assert out["final_by"] == "moonshine"
-    # Every word is committed between the chunks and /end: the client's
-    # fast words end in the control phrase too.
-    assert out["same"] is True
+    assert out == {
+        "committed": "",
+        "partial": "",
+        "heard": said,
+        "final_missed": "failed",
+    }
 
 
 def test_the_hold_back_is_logged_once_per_episode(caplog):
@@ -117,5 +120,5 @@ def test_any_other_failure_is_logged_every_time(caplog):
     script = [[(1, "Ship it")], [(1, "Ship it over")]]
     with caplog.at_level(logging.WARNING, logger=ss.__name__):
         for _ in range(3):
-            assert _phrase(script, Broke())["final"] == "Ship it over"
+            assert _phrase(script, Broke())["final_missed"] == "failed"
     assert caplog.text.count("the accurate pass failed (whisper broke)") == 3

@@ -10,7 +10,8 @@ subclass, so the routes, the registry's sweep and ``Stream.turn`` work on it
 unchanged: ``feed(samples) → (newly committed words, unstable tail)``,
 ``finish() → {"committed", "partial": "", "final", "final_ms",
 "final_wait_ms", "final_early", "same"}`` (plus ``"heard"``, Moonshine's own
-text, and ``"final_by"``: ``"moonshine"`` or ``"whisper"``), ``turn()``,
+text, and ``"final_by"``: ``"moonshine"`` or ``"whisper"`` — or, in place
+of the final's keys, ``"final_missed"``: see below), ``turn()``,
 ``last_ms``, ``last_window_s``, ``held_seconds``, ``text``, ``words``,
 ``client``, ``touched``, ``busy``.
 
@@ -45,10 +46,14 @@ early pass or the speech went on past it, waited for up to
 "whisper"``) with its trailing control phrase made Moonshine's
 (:func:`with_control`: a "…, over" whisper heard as "ober" still sends,
 with whisper's words before it). Moonshine's text is the ``final``
-(``final_by: "moonshine"``) when the pass is off, skipped, failed or timed
-out — and, at once with no pass at all, for a phrase that is only a
-control phrase (:func:`control_only`: "stop", "over", a switch to a
-session): acting on it never waits for whisper.
+(``final_by: "moonshine"``) only for a phrase that is only a control
+phrase (:func:`control_only`: "stop", "over", a switch to a session), at
+once with no pass at all: acting on it never waits for whisper, and it
+types nothing. Moonshine's text is never a phrase's TEXT (owner rule,
+2026-11-08): when the pass is off, skipped, failed, timed out or heard
+nothing, the phrase has no ``final`` and no ``committed`` words — it has
+``final_missed`` (:data:`MISSED_REASONS`) and ``heard`` instead, and the
+clients take back the live words it typed and say to say it again.
 
 Keyterms. Moonshine streaming models take a list of terms to bias towards
 (``Transcriber.set_keyterms``): :func:`keyterms` splits the same hint string
@@ -88,6 +93,7 @@ __all__ = [
     "ARCH",
     "CACHE_KEY",
     "EARLY_QUIET_SECONDS",
+    "MISSED_REASONS",
     "MODULE",
     "MoonshineEngine",
     "MoonshineStream",
@@ -151,6 +157,9 @@ NO_TEXT_KINDS = frozenset(
         "pick",
     }
 )
+#: ``finish``'s ``final_missed``: why a phrase Moonshine heard words in has
+#: no text (:meth:`MoonshineStream._missed_reason`). Nothing of it is typed.
+MISSED_REASONS = ("off", "skipped", "failed", "timeout", "empty")
 #: The quiet after the last loud frame that starts the whisper pass early
 #: when Moonshine's words do not end in a radio word (those start it after
 #: ``speech_stream.RADIO_QUIET_SECONDS``). Longer than whisper's own lane
@@ -560,7 +569,8 @@ class MoonshineStream(_stream.Stream):
     """One live recognition on Moonshine (see the module doc). ``engine``:
     a :class:`MoonshineEngine` (default: :func:`engine`); ``accurate``: the
     whisper pass that writes every phrase's ``final``
-    (``LocalSTT.final_transcriber``, or None: Moonshine's text stands);
+    (``LocalSTT.final_transcriber``, or None: no phrase has text — only
+    control phrases act);
     ``hints``: the keyterm source (``speech.recognition_hints``)."""
 
     def __init__(
@@ -582,8 +592,12 @@ class MoonshineStream(_stream.Stream):
         self._lines: dict = {}  # line id → its latest text (in first-seen order)
         self._held_from = 0.0  # stream time since the open line began
         self._passed_at = 0.0  # stream time of the last pass
-        #: Who made the last finish's ``final``: ``"moonshine"`` or ``"whisper"``.
+        #: Who made the last finish's ``final``: ``"moonshine"`` (a control
+        #: phrase only) or ``"whisper"``.
         self.final_by = ""
+        #: Why the last finish has no ``final`` though Moonshine heard words
+        #: (:data:`MISSED_REASONS`), ``""`` when it has one or heard none.
+        self.final_missed = ""
 
     # -- the public interface ------------------------------------------- #
     @property
@@ -630,12 +644,14 @@ class MoonshineStream(_stream.Stream):
         → ``{"committed": the words not committed before, "partial": ""}``
         plus, whenever any words were heard, ``final`` (the whisper accurate
         pass's text of the whole phrase, its control phrase Moonshine's:
-        :func:`with_control`; Moonshine's own text when the pass is off,
-        skipped, failed or timed out, or the phrase is only a control phrase:
-        :func:`control_only`), ``heard`` (Moonshine's own text of the whole
-        phrase: what the control words are read off), ``final_ms``,
-        ``final_wait_ms``, ``final_early``, ``same`` (``final`` is the
-        committed text up to ``same_text``) and ``final_by``."""
+        :func:`with_control`; Moonshine's own text only when the phrase is
+        only a control phrase: :func:`control_only`), ``heard`` (Moonshine's
+        own text of the whole phrase: what the control words are read off),
+        ``final_ms``, ``final_wait_ms``, ``final_early``, ``same`` (``final``
+        is the committed text up to ``same_text``) and ``final_by``. When
+        the pass is off, skipped, failed, timed out or heard nothing, there
+        is no ``final``: ``{"committed": "", "partial": "", "heard",
+        "final_missed": the reason}`` — nothing of the phrase is text."""
         with self._lock:
             self.touched = _stream._now()
             phrase, self._phrase = self._phrase, array("f")
@@ -653,12 +669,13 @@ class MoonshineStream(_stream.Stream):
             out: dict = {"committed": _stream._join(rest), "partial": ""}
             fast = self.text
             spoken = self._spoken()
+            ctl = bool(spoken) and control_only(spoken, self.words)
             run = (
                 self._accurate is not None
                 and bool(phrase)
                 and not self.phrase_trimmed
                 and self.voiced_s >= _stream.FINAL_MIN_SECONDS
-                and not control_only(spoken, self.words)
+                and not ctl
             )
             job: Optional[_stream._Early] = None
             if not run:
@@ -670,7 +687,7 @@ class MoonshineStream(_stream.Stream):
                 job = self._fresh(phrase, early)
         self.final_early = False
         self.final_outcome = ""
-        final, self.final_by = "", ""
+        final, self.final_by, self.final_missed = "", "", ""
         if run:
             if job is not None:
                 final = self._final(job)
@@ -684,10 +701,23 @@ class MoonshineStream(_stream.Stream):
                 join_wake(final, _wake_of(self.words)), spoken, self.words
             )
             self.final_by = "whisper"
-        elif spoken:
+        elif ctl:
+            # Only a control phrase: Moonshine hears those, nothing is typed.
             final, self.final_by = spoken, "moonshine"
             self.final_ms = self.final_wait_ms = moon_ms
             self.final_early = False
+        elif spoken:
+            # Words whisper did not write: none of them is the phrase's text.
+            self.final_missed = self._missed_reason(run)
+            _logger.info(
+                "voice stream: no accurate text for a %.1fs phrase (%s);"
+                " nothing of it is typed",
+                len(phrase) / _stream.RATE,
+                self.final_missed,
+            )
+            # No words to type, not even the last ones Moonshine committed:
+            # a client that does not know ``final_missed`` types less of them.
+            out.update(committed="", heard=spoken, final_missed=self.final_missed)
         if final:
             out.update(
                 final=final,
@@ -699,6 +729,25 @@ class MoonshineStream(_stream.Stream):
                 final_by=self.final_by,
             )
         return out
+
+    def _missed_reason(self, ran: bool) -> str:
+        """Why whisper wrote no text for a phrase with words
+        (:data:`MISSED_REASONS`): ``off`` (no accurate pass:
+        ``voice.stt_final`` is ``off``), ``skipped`` (under
+        ``speech_stream.FINAL_MIN_SECONDS`` of speech, a phrase over
+        ``speech_stream.PHRASE_MAX_SECONDS``, or the lane dropped the pass),
+        ``failed``, ``timeout`` (past ``speech_stream.FINAL_TIMEOUT_S``) or
+        ``empty`` (it ran and heard no words)."""
+        if self._accurate is None:
+            return "off"
+        if not ran:
+            return "skipped"
+        return {
+            "timeout": "timeout",
+            "error": "failed",
+            "skipped": "skipped",
+            "ok": "empty",
+        }.get(self.final_outcome, "failed")
 
     def close(self) -> None:
         """Free the engine stream (abandoned without ``finish``)."""

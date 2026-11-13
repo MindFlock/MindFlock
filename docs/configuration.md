@@ -1568,7 +1568,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     {"what": "moonshine"}`; it changes no setting) — a true streaming model
     that hears the live words and the control words ("over", the stop
     phrases, a session's name) ~30 ms after they are said, while the
-    accurate pass (`stt_final`) still writes every phrase's final text; a
+    accurate pass (`stt_final`) still writes every phrase's final text —
+    Moonshine's words are never typed: a phrase that pass does not write
+    types nothing and the mic says to say it again; a
     phrase that is only a control phrase is acted on at once, on
     Moonshine's words — else
     `base.en`, and `base` for any other language (Moonshine is English
@@ -1590,8 +1592,11 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     whatever the phrase's length, started once 0.5 s of quiet follows the speech so the
     correction usually lands within a second of the person stopping; it is
     skipped only under 0.2 s of speech, so a lone "stop" is still corrected,
-    and waited for at most 1.5 s, after which the fast words stand; `"off"`
-    = no accurate pass — fastest, the fast words stand; any faster-whisper size
+    and waited for at most 1.5 s, after which whisper's fast words stand —
+    with Moonshine live, nothing of the phrase is typed; `"off"`
+    = no accurate pass — fastest, whisper's fast words stand; with Moonshine
+    live, dictation types nothing at all (only the control words work:
+    Settings → Voice's *Live words* row says so and turns it back on); any faster-whisper size
     or `org/repo` id = that model, e.g. `medium.en` for more accuracy at
     more delay; a non-size name reads as blank). A third model is loaded and
     kept resident with the other two. The wake word ("MindFlock") is judged

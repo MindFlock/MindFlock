@@ -252,6 +252,104 @@ console.log(JSON.stringify(out));
     assert got["ptt"] == []
 
 
+@needs_node
+def test_send_tapped_mid_phrase_whisper_writes_nothing_sends_nothing():
+    """Moonshine detects, whisper writes (2026-11-12): the phrase on its way
+    when Send was tapped never got whisper's words (``final_missed``) — its
+    guess comes out of the box, nothing is sent, the box's earlier words
+    stay, and the strip says why."""
+    js = _js()
+    script = _takes_send_script(
+        js,
+        _whole(js, "voiceMissedLine")
+        + _whole(js, "voiceMissed")
+        + _whole(js, "voiceMissedNote")
+        + """
+var notes = [], errors = [];
+function voiceStripNote(w, ms) { notes.push([w, ms]); }
+voiceError = function (m) { errors.push(m); };
+var VOICE_MISSED_CAPTION_MS = 3000;
+var active = true, onItsWay = false;
+voice.stt.active = function () { return active; };
+voice.stt.pending = function () { return onItsWay; };
+voice.stt.finish = function () { active = false; onItsWay = true; return true; };
+(async function () {
+  // Earlier words, then this phrase's live guess, in the box.
+  composeEl.value = "fix the login bug and the do";
+  voice.guess = { box: composeEl, typed: "and the do" };
+  voiceTakesSend();
+  // /end: no final — ServerSTT's onMissed (the guess out), then onEnd.
+  voice.guess = { box: null, typed: "" };
+  composeEl.value = "fix the login bug ";
+  voiceMissed("timeout", voiceListen_.sendTapped);
+  onItsWay = false;
+  if (voiceListen_.overAfter) voiceListenFlushSoon();
+  console.log(JSON.stringify({ box: composeEl.value, notes: notes, errors: errors,
+    sent: calls.filter(function (c) { return c.indexOf("send:") === 0; }) }));
+})();
+""",
+    )
+    got = _run(script)
+    assert got["sent"] == []
+    assert got["box"] == "fix the login bug "
+    line = "Recognition didn't finish — nothing sent; say it again"
+    assert got["notes"][-1] == [line, 3000]
+    assert got["errors"] == []
+
+
+@needs_node
+def test_the_missed_lines_match_the_desktop():
+    script = _whole(_js(), "voiceMissedLine") + """
+console.log(JSON.stringify([voiceMissedLine("timeout"), voiceMissedLine("failed", true),
+  voiceMissedLine("off"), voiceMissedLine("off", true)]));
+"""
+    assert _run(script) == [
+        "Recognition didn't finish — say it again",
+        "Recognition didn't finish — nothing sent; say it again",
+        "Nothing typed — whisper's accurate pass is off: Settings → Voice",
+        "Nothing sent — whisper's accurate pass is off: Settings → Voice",
+    ]
+    desktop = (
+        Path(__file__).resolve().parents[2]
+        / "frontend"
+        / "src"
+        / "lib"
+        / "voiceDesktop.ts"
+    ).read_text()
+    for part in (
+        "Recognition didn't finish — ",
+        "nothing sent; say it again",
+        " — whisper's accurate pass is off: Settings → Voice",
+    ):
+        assert part in desktop and part in _js()
+
+
+def test_moonshine_words_are_never_the_phrase_text_on_the_phone():
+    """The phone's stream knows its engine and never lets Moonshine's words
+    stand for a phrase: no final → onMissed, no lead for a broken stream's
+    clip, no budget for "over", no instant stop with words before it."""
+    js = _js()
+    assert 'g.moon = x.j.engine === "moonshine";' in js
+    end = _inner(js, "streamEnd")
+    assert 'var missed = g.moon && typeof x.j.final !== "string"' in end
+    assert (
+        "if (token === mine && mine.h.onMissed) mine.h.onMissed(missed, waited);" in end
+    )
+    assert 'streamDone(g, mine, "");' in end
+    fail = _inner(js, "streamFail")
+    assert 'g.lead = g.moon && said ? "" : said;' in fail
+    words = _inner(js, "streamWords")
+    assert (
+        'if (tail && tail.kind === "stop" && !(g.moon && String(tail.text || "").trim())) {'
+        in words
+    )
+    fire = _inner(js, "controlFire")
+    assert "if (!c.send && !(g.moon && stopWords)) {" in fire
+    start = _whole(js, "voiceRecStart")
+    assert "onMissed: function (why, sending) {" in start
+    assert "voiceGuessDrop();" in start.split("onMissed: function")[1].split("},")[0]
+
+
 # --------------------------------------------------------------------------- #
 # The screen wake lock
 # --------------------------------------------------------------------------- #

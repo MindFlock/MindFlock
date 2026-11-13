@@ -144,16 +144,18 @@ def test_recognition_warms_only_when_it_helps():
 def test_over_waits_only_for_a_final_that_can_still_matter():
     fire = _inner("controlFire")
     assert (
-        "var budget = !g.partial && voiceFastStands(voice.rec.finals) ? 0 : voiceEndBudgetMs(voice.rec.endMs);"
+        "var budget = g.moon ? 0 : !g.partial && voiceFastStands(voice.rec.finals) ? 0 : voiceEndBudgetMs(voice.rec.endMs);"
         in fire
     )
+    # …but never on Moonshine: its guess is no text — /end is waited for.
+    assert "if (!g.moon) g.endTimer = setTimeout(g.endFire, budget);" in fire
     # Its /end is kept (measured, never typed) when it is on its way or can go now.
     assert "if (g.endSent) g.late = true;" in fire
     assert "else if (!g.busy && g.sid) { g.late = true; streamEnd(g, mine); }" in fire
     # The phrase's last chunk settling the words fires it at once.
     chunk = _inner("streamChunk")
     assert (
-        "if (g.endFire && !g.partial && voiceFastStands(voice.rec.finals)) { g.endFire(); return; }"
+        "if (g.endFire && !g.moon && !g.partial && voiceFastStands(voice.rec.finals)) { g.endFire(); return; }"
         in chunk
     )
     end = _inner("streamEnd")

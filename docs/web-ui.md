@@ -7803,8 +7803,22 @@ is retyped to it, the same backspace-then-type correction as above and never
 before the phrase's start (a text box gets its value set once), before the
 phrase's closing space — and the radio words, a stop phrase, the router and a
 dialog answer are all read off `final`, not the fast guess (a fast
-"…overall" that was really "…over all" sends). `same`, or no `final` (the
-accurate pass timed out or is off): the fast words stand.
+"…overall" that was really "…over all" sends). `same`, or no `final` on a
+whisper stream (the accurate pass timed out or is off): the fast words
+stand. **On a Moonshine stream the live words are a preview, never the
+text** (Moonshine detects, whisper writes): `/end` without a `final`
+(`final_missed`, `onMissed`) takes back what the phrase typed, types and
+sends nothing of it, and the caption says *Recognition didn't finish — say
+it again* (*…nothing sent; …* when "over" waited on it; for `"off"`,
+*Nothing typed — whisper's accurate pass is off: Settings → Voice*), while
+listening goes on. So "over", a stop phrase with words before it ("fix it,
+stop listening") and letting go of push to talk wait for the phrase's
+`/end` however long it takes — never the finals' budget, never the fast
+words even when finals seldom change them — and a phrase ended before the
+next one's words come back is waited for, not settled with its preview
+(`settleBefore`). With the accurate pass off and Moonshine live, the mic's
+caption before a word is *Commands only — dictation needs whisper's
+accurate pass, which is off: Settings → Voice*.
 
 **Pacing** (`chunkMinS` in `lib/voiceDesktop.ts`): a phrase's first chunk
 goes as soon as 150 ms of speech is recorded (`FIRST_CHUNK_S`; the short
@@ -8560,7 +8574,14 @@ of the person stopping. When
 replaced in the box by `final`, the caret at the end, **before** the phrase
 is decided: *over*, *over and out*, *disregard*, a command, a dialog's answer all
 read the accurate words. Without `final` (an older server, one model) the
-fast words stand. Diagnostics' *Last transcribe* line says *final 1.2 s*
+fast words stand — but never a Moonshine stream's (the open's `engine`):
+its `/end` without a `final` (`final_missed`) takes its guess out of the
+box, types and sends nothing — a Send tapped or an "over" waiting on it
+sends nothing, the box's earlier words stay — and the strip says
+*Recognition didn't finish — say it again* (`voiceMissedLine`; the
+accurate pass off also sets the error line). On Moonshine "over" and a stop
+phrase with words before it wait for `/end` with no budget, and a broken
+stream's words never lead its clip. Diagnostics' *Last transcribe* line says *final 1.2 s*
 (and *(corrected)* when it changed the words). A 409 on the open that says
 the server does not stream after all (a clip per phrase until `GET
 /api/voice` says otherwise) or any failed request turns the phrase into a
