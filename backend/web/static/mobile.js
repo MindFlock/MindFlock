@@ -3150,7 +3150,7 @@
     box.className = "act-speed";
     var note = document.createElement("div");
     note.className = "act-hint";
-    note.textContent = "Lines per row your finger drags — this phone's, apart from the desktop's wheel speed.";
+    note.textContent = "Lines per row your finger drags on the phone, separate from the desktop's wheel speed.";
     box.appendChild(note);
     var row = document.createElement("div");
     row.className = "act-speed-steps";
