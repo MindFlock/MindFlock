@@ -1096,6 +1096,12 @@ class UiSettings:
     # not an int: a whole value stays an int on disk. The live value is the
     # scroll-speed FILE (web/core/terminal.py); this copy is what syncs.
     scroll_speed: Optional[float] = None
+    # The phone's own scroll speed (/m touch scrollback): lines scrolled per
+    # terminal row the finger drags, whole lines 1 … 8. None = the default
+    # (MOBILE_SCROLL_SPEED_DEFAULT, how the phone felt before it had its own
+    # setting). Independent of scroll_speed: the phone divides the desktop's
+    # lines per wheel tick back out (mobile.js touchScrollTicks).
+    mobile_scroll_speed: Optional[int] = None
     cursor_autoadopt: Optional[bool] = None
     # Appearance themes (Settings → Appearance): accent preset name and surface
     # (background/panel/border/text) preset name. Empty = built-in defaults.
@@ -1108,6 +1114,8 @@ class UiSettings:
         d: dict = {}
         if self.scroll_speed is not None:
             d["scroll_speed"] = self.scroll_speed
+        if self.mobile_scroll_speed is not None:
+            d["mobile_scroll_speed"] = self.mobile_scroll_speed
         if self.cursor_autoadopt is not None:
             d["cursor_autoadopt"] = self.cursor_autoadopt
         if self.accent:
@@ -1120,6 +1128,7 @@ class UiSettings:
     def from_dict(cls, d: dict) -> "UiSettings":
         return cls(
             scroll_speed=_opt_speed(d.get("scroll_speed")),
+            mobile_scroll_speed=_opt_mobile_scroll_speed(d.get("mobile_scroll_speed")),
             cursor_autoadopt=_opt_bool(d.get("cursor_autoadopt")),
             accent=str(d.get("accent") or ""),
             surface=str(d.get("surface") or ""),
@@ -2386,6 +2395,22 @@ def _opt_speed(v: Any) -> Optional[float]:
     if f is None or f != f or f in (float("inf"), float("-inf")):  # unset / NaN
         return None
     return int(f) if f.is_integer() else f
+
+
+#: The phone's scroll speed (``ui.mobile_scroll_speed``): lines per row dragged.
+MOBILE_SCROLL_SPEED_DEFAULT = 3
+MOBILE_SCROLL_SPEED_MIN = 1
+MOBILE_SCROLL_SPEED_MAX = 8
+
+
+def _opt_mobile_scroll_speed(v: Any) -> Optional[int]:
+    """Whole lines per row dragged, clamped to MIN … MAX; None when unset or
+    not a number (the phone then uses MOBILE_SCROLL_SPEED_DEFAULT)."""
+    f = _opt_float(v)
+    if f is None or f != f:  # unset / NaN
+        return None
+    f = max(MOBILE_SCROLL_SPEED_MIN, min(MOBILE_SCROLL_SPEED_MAX, f))
+    return int(round(f))
 
 
 #: The ``general`` fields holding the spawn guard-rails (see GeneralSettings).

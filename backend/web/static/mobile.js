@@ -2030,11 +2030,68 @@
     ws.send(seq);
     return true;
   }
-  var touchLast = null, touchScrolling = false;
+  // The phone's own scroll speed (⋯ → Scroll speed; synced setting
+  // ui.mobile_scroll_speed): `speed` lines per terminal row the finger drags.
+  // Each wheel tick scrolls `perTick` lines — the desktop's wheel speed,
+  // bound globally in tmux — so a drag sends speed / perTick ticks per row
+  // and the desktop setting no longer moves the phone. Defaults are today's
+  // feel: 3 lines a row at the desktop's default of 1 line a tick.
+  var TOUCH_SPEED_STEPS = [1, 2, 3, 4, 6, 8];
+  var TOUCH_SCROLL_MAX_TICKS = 48;      // per move event: a flick, not a flood
+  var TOUCH_SPEED_STALE_MS = 60000;     // re-read the speeds once a minute of use
+  var touchSpeed = { speed: 3, def: 3, min: 1, max: 8, perTick: 1, at: 0 };
+  // Lines tmux scrolls per wheel tick at desktop speed `desktop` (pure; the
+  // server's terminal.scroll_lines_per_tick): the whole-line part, never
+  // below one — the sub-line part is the desktop browser eating ticks, which
+  // the phone's ticks never pass through.
+  function tmuxLinesPerTick(desktop) {
+    var n = Number(desktop);
+    if (!isFinite(n) || n <= 0) return 1;
+    return Math.max(1, Math.round(n));
+  }
+  // Ticks to send for a drag of `cells` rows at `speed` lines a row when one
+  // tick scrolls `perTick` lines (pure). `carry` is the part of a tick the
+  // earlier moves owed, so a slow drag (or speed < perTick) still moves.
+  function touchScrollTicks(cells, speed, perTick, carry) {
+    var want = cells * speed / (perTick > 0 ? perTick : 1) + (carry > 0 ? carry : 0);
+    var ticks = Math.floor(want + 1e-9);
+    return { ticks: ticks, carry: Math.max(0, want - ticks) };
+  }
+  // "3 lines per row dragged (default)" — the sheet row's hint (pure).
+  function touchSpeedHint(speed, def) {
+    return speed + (speed === 1 ? " line" : " lines") + " per row dragged" +
+      (speed === def ? " (default)" : "");
+  }
+  // The server's answer (GET/POST /api/mobile-scroll-speed) into touchSpeed.
+  function applyTouchSpeed(j) {
+    if (!j) return;
+    var n = Number(j.speed);
+    if (isFinite(n) && n > 0) touchSpeed.speed = n;
+    if (isFinite(Number(j["default"]))) touchSpeed.def = Number(j["default"]);
+    if (isFinite(Number(j.min))) touchSpeed.min = Number(j.min);
+    if (isFinite(Number(j.max))) touchSpeed.max = Number(j.max);
+    touchSpeed.perTick = isFinite(Number(j.lines_per_tick)) && Number(j.lines_per_tick) >= 1
+      ? Number(j.lines_per_tick) : tmuxLinesPerTick(j.desktop);
+    touchSpeed.at = Date.now();
+  }
+  function loadTouchSpeed() {
+    touchSpeed.at = Date.now();   // one read in flight at a time
+    return fetch("/api/mobile-scroll-speed")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(applyTouchSpeed)
+      .catch(function () { /* offline — keep the last speeds */ });
+  }
+  loadTouchSpeed();
+
+  var touchLast = null, touchScrolling = false, touchCarry = 0, touchUp = null;
   termHost.addEventListener("touchstart", function (ev) {
     if (ev.touches.length !== 1) { touchLast = null; return; }  // pinch etc.
     touchLast = { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
     touchScrolling = false;
+    touchCarry = 0; touchUp = null;
+    // The desktop speed can change under us (Settings, sync): re-read it now
+    // and then; this drag uses the speeds we have.
+    if (Date.now() - touchSpeed.at > TOUCH_SPEED_STALE_MS) loadTouchSpeed();
   }, { capture: true, passive: true });
   termHost.addEventListener("touchmove", function (ev) {
     if (!touchLast || ev.touches.length !== 1) return;
@@ -2045,17 +2102,16 @@
       touchScrolling = true;
     }
     var cellH = termHost.getBoundingClientRect().height / ((term && term.rows) || 24) || 16;
-    // 3 ticks per cell dragged: a 1:1 finger-to-line mapping feels glacial on
-    // a phone screen (the TUI scrolls one line per tick, and there are only
-    // ~40 rows to a full swipe). 3x tracks a fast flick without overshooting
-    // a slow precise drag.
-    var TOUCH_SCROLL_MULT = 3;
-    var lines = Math.floor(Math.abs(dy) * TOUCH_SCROLL_MULT / cellH);
-    if (lines > 0) {
-      // Finger moving down reveals earlier output = wheel up.
-      if (!sendWheelTicks(t.clientX, t.clientY, dy > 0, Math.min(24, lines))) return;
-      touchLast = { x: t.clientX, y: t.clientY };  // consume the emitted distance
-    }
+    // touchSpeed.speed lines per row dragged (default 3: a 1:1 finger-to-line
+    // mapping feels glacial on a phone, ~40 rows to a full swipe), whatever
+    // the desktop's lines per tick. A turn of direction drops what was owed.
+    var up = dy > 0;   // finger moving down reveals earlier output = wheel up
+    if (touchUp !== up) { touchCarry = 0; touchUp = up; }
+    var step = touchScrollTicks(Math.abs(dy) / cellH, touchSpeed.speed, touchSpeed.perTick, touchCarry);
+    if (step.ticks > 0 &&
+        !sendWheelTicks(t.clientX, t.clientY, up, Math.min(TOUCH_SCROLL_MAX_TICKS, step.ticks))) return;
+    touchCarry = step.carry;
+    touchLast = { x: t.clientX, y: t.clientY };  // the distance is in ticks + carry now
     ev.preventDefault();   // no page bounce, no synthetic tap after the drag
     ev.stopPropagation();
   }, { capture: true, passive: false });
@@ -2994,6 +3050,8 @@
   function openActSheet(title) {
     actFor = title || "";
     actBusy = false;
+    actSpeedOpen = false;
+    loadTouchSpeed().then(refreshSpeedHint);   // the desktop's speed may have moved since
     actOpenedAt = Date.now();
     actError("");
     renderActSheet();
@@ -3073,6 +3131,58 @@
     }
     actListEl.appendChild(actRow("Recently closed", "reopen a session you closed",
       function () { closeActSheet(); openRecentSheet(); }));
+    actSpeedRow = actListEl.appendChild(actRow("Scroll speed", touchSpeedHint(touchSpeed.speed, touchSpeed.def),
+      function () { actSpeedOpen = !actSpeedOpen; renderActSheet(); }, "act-speed-row"));
+    if (actSpeedOpen) actListEl.appendChild(touchSpeedPicker());
+  }
+
+  // ⋯ → Scroll speed: the phone's own speed, a few steps; the tapped one
+  // applies to the next drag and saves as the synced ui.mobile_scroll_speed.
+  var actSpeedOpen = false, actSpeedRow = null;
+  // A fresh read landed: say it on the row, leaving the rest of the sheet
+  // (a Delete strip, a note being typed) as it is.
+  function refreshSpeedHint() {
+    var h = actSpeedRow && actSpeedRow.querySelector(".act-hint");
+    if (h) h.textContent = touchSpeedHint(touchSpeed.speed, touchSpeed.def);
+  }
+  function touchSpeedPicker() {
+    var box = document.createElement("div");
+    box.className = "act-speed";
+    var note = document.createElement("div");
+    note.className = "act-hint";
+    note.textContent = "Lines per row your finger drags on the phone, separate from the desktop's wheel speed.";
+    box.appendChild(note);
+    var row = document.createElement("div");
+    row.className = "act-speed-steps";
+    TOUCH_SPEED_STEPS.forEach(function (n) {
+      if (n < touchSpeed.min || n > touchSpeed.max) return;
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "act-speed-step" + (n === touchSpeed.speed ? " on" : "");
+      b.textContent = String(n);
+      b.addEventListener("click", function () { setTouchSpeed(n); });
+      row.appendChild(b);
+    });
+    box.appendChild(row);
+    return box;
+  }
+  function setTouchSpeed(n) {
+    var was = touchSpeed.speed;
+    touchSpeed.speed = n;   // the next drag uses it, saved or not yet
+    actError("");
+    renderActSheet();
+    fetch("/api/mobile-scroll-speed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ speed: n })
+    })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (j) { applyTouchSpeed(j); refreshSpeedHint(); })
+      .catch(function () {
+        touchSpeed.speed = was;
+        actError("Couldn't save the scroll speed");
+        renderActSheet();
+      });
   }
 
   // One Verify or route block (verifyModel / routeModel): what it waits on in

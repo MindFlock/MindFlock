@@ -386,6 +386,7 @@ def test_mobile_session_actions_sheet(server, chrome):
         "Close",
         "Delete…",
         "Recently closed",
+        "Scroll speed",  # the phone's own touch-scroll speed, apart from the desktop's
     ]
     # Delete asks on its own inline strip, focus on Cancel; no native dialog.
     # Round 5: the Delete strip says what is lost, like the desktop's.
