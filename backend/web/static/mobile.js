@@ -2372,7 +2372,7 @@
   // the list is a cheap in-memory read on the server. Failure just leaves the
   // picker hidden, which is the single-device sheet this page always had.
   function loadDevices() {
-    fetch("/api/devices")
+    return fetch("/api/devices")
       .then(function (r) { return r.json(); })
       .then(function (j) {
         selfHost = (j && j.self && j.self.host) || "";
@@ -3362,6 +3362,25 @@
     recentErrEl.classList.toggle("hidden", !msg);
   }
 
+  // How long one other device may take to answer before its rows are given up
+  // on (the rest are shown; it gets a "couldn't reach" line).
+  var RECENT_DEVICE_MS = 8000;
+
+  // One source's list: this server's ("") or a connected device's, through
+  // the fwd relay. A device that is slow or fails rejects; this one waits.
+  function recentFetch(device) {
+    var got = fetch(devicePath(device, "/api/recently-closed")).then(function (r) {
+      if (!r.ok) throw new Error("couldn't read the list (" + r.status + ")");
+      return r.json();
+    });
+    if (!device) return got;
+    return Promise.race([got, new Promise(function (_, reject) {
+      setTimeout(function () { reject(new Error("timed out")); }, RECENT_DEVICE_MS);
+    })]);
+  }
+
+  // Every source's list, this device first. Single-device: just this one —
+  // the sheet it always was.
   function openRecentSheet() {
     closeSheet(sessionsSheet);
     recentError("");
@@ -3369,27 +3388,51 @@
     recentListEl.appendChild(folderNote("loading…"));
     openSheet(recentSheet);
     var seq = ++recentSeq;
-    fetch("/api/recently-closed")
-      .then(function (r) {
-        if (!r.ok) throw new Error("couldn't read the list (" + r.status + ")");
-        return r.json();
+    loadDevices()
+      .then(function () {
+        if (seq !== recentSeq) return null;
+        var sources = [""];
+        for (var i = 0; i < newDevices.length; i++) sources.push(newDevices[i].device);
+        return Promise.all(sources.map(function (device) {
+          return recentFetch(device).then(
+            function (list) { return { device: device, list: Array.isArray(list) ? list : [] }; },
+            function (err) { return { device: device, err: err }; });
+        }));
       })
-      .then(function (list) {
-        if (seq !== recentSeq) return;
-        list = Array.isArray(list) ? list.slice() : [];
-        list.sort(function (a, b) { return closedMs(b) - closedMs(a); });
-        recentListEl.innerHTML = "";
-        if (!list.length) { recentListEl.appendChild(folderNote("Nothing closed recently.")); return; }
-        list.forEach(function (ent) { recentListEl.appendChild(recentRow(ent)); });
-      })
-      .catch(function (err) {
-        if (seq !== recentSeq) return;
-        recentListEl.innerHTML = "";
-        recentError((err && err.message) || "couldn't read the list");
+      .then(function (answers) {
+        if (!answers || seq !== recentSeq) return;
+        renderRecent(answers);
       });
   }
 
-  function recentRow(ent) {
+  // answers: [{device, list} | {device, err}], this device first.
+  function renderRecent(answers) {
+    recentListEl.innerHTML = "";
+    if (answers.length === 1) {
+      // One source: exactly today's sheet, error and all.
+      if (answers[0].err) {
+        recentError((answers[0].err && answers[0].err.message) || "couldn't read the list");
+        return;
+      }
+    }
+    var many = answers.length > 1;
+    var rows = [], missed = [];
+    answers.forEach(function (a) {
+      if (a.err) { missed.push(deviceLabel(a.device)); return; }
+      a.list.forEach(function (ent) { rows.push({ ent: ent, device: a.device }); });
+    });
+    // Newest first across every device.
+    rows.sort(function (a, b) { return closedMs(b.ent) - closedMs(a.ent); });
+    if (!rows.length) recentListEl.appendChild(folderNote("Nothing closed recently."));
+    rows.forEach(function (r) {
+      recentListEl.appendChild(recentRow(r.ent, r.device, many));
+    });
+    if (missed.length) recentListEl.appendChild(folderNote("couldn't reach " + missed.join(", ")));
+  }
+
+  // `device`: where it was closed ("" = here); `labelled`: name the device in
+  // the sub line (only once there is more than one source; this one unnamed).
+  function recentRow(ent, device, labelled) {
     var row = document.createElement("div");
     row.className = "recent-row";
     var text = document.createElement("span");
@@ -3399,7 +3442,11 @@
     name.textContent = ent.title || "session";
     var sub = document.createElement("span");
     sub.className = "sess-sub";
-    sub.textContent = [ent.branch || "", agoWord(closedMs(ent))].filter(Boolean).join("  ·  ");
+    sub.textContent = [
+      ent.branch || "",
+      labelled && device ? deviceLabel(device) : "",
+      agoWord(closedMs(ent)),
+    ].filter(Boolean).join("  ·  ");
     text.appendChild(name);
     text.appendChild(sub);
     row.appendChild(text);
@@ -3414,15 +3461,17 @@
     btn.type = "button";
     btn.className = "act recent-reopen";
     btn.textContent = "Reopen";
-    btn.addEventListener("click", function () { reopenClosed(ent, btn); });
+    btn.addEventListener("click", function () { reopenClosed(ent, btn, device || ""); });
     row.appendChild(btn);
     return row;
   }
 
-  function reopenClosed(ent, btn) {
+  // Reopened where it was closed: another device's goes through the fwd relay
+  // and comes back listed as <device>::<title>.
+  function reopenClosed(ent, btn, device) {
     btn.disabled = true;
     recentError("");
-    fetch("/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen", {
+    fetch(devicePath(device, "/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
@@ -3437,9 +3486,9 @@
         closeSheet(recentSheet);
         // Selected once it shows up in the list — the same wait a new session
         // gets (claimPending).
-        pendingNew = (j && j.title) || ent.title || "";
+        pendingNew = deviceTitle(device, (j && j.title) || ent.title || "");
         pendingNewUntil = Date.now() + PENDING_NEW_MS;
-        flashStatus("Reopened " + (ent.title || "session"));
+        flashStatus("Reopened " + (ent.title || "session") + (device ? " on " + deviceLabel(device) : ""));
         poll();
       })
       .catch(function (err) {

@@ -8097,7 +8097,18 @@ hints name the button under ⋯ (Confirm verified / Not verified…, Verify
 again, Retry or Skip, Carry on), never "on the desktop".
 
 **Recently closed** (from the actions sheet or the Sessions sheet) lists
-`GET /api/recently-closed` with **Reopen**. No `confirm()`/`prompt()`/`alert()`
+`GET /api/recently-closed` with **Reopen** — this device's closed sessions and,
+read in parallel through `/api/devices/<device>/fwd/…`, those of every connected
+device (the `connected` rows of `GET /api/devices`, as the New sheet's **Run
+on**), merged newest first. With more than one device each other device's rows
+name it in the sub line (*branch · Mac-mini · 3h ago*; this device's stay
+unnamed). A device that fails, or takes longer than 8 s, costs only its own
+rows and one quiet line (*couldn't reach Mac-mini*); a stale answer from an
+earlier opening is dropped. **Reopen** on another device's row posts
+`/api/devices/<device>/fwd/api/recently-closed/<id>/reopen`, so the session
+comes back on the device it was closed on and is selected as
+`<device>::<title>` once it is listed. With no second device the sheet is the
+single list it always was. No `confirm()`/`prompt()`/`alert()`
 anywhere on the page — every question is a sheet.
 
 **Scrolling** — swipe up/down on the terminal to scroll history, natural

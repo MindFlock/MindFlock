@@ -42,7 +42,9 @@ Tailscale network. The moving parts:
   a short allow-list (:data:`_FWD_ALLOWED` — the folder/agent probes behind
   the New Session dialog plus the create itself) to that device, so the
   dialog browses the TARGET's filesystem and the session is born there, a
-  peer of the ones started on that device directly.
+  peer of the ones started on that device directly. The phone's Recently
+  closed sheet rides the same relay: each device's list, and the reopen of
+  one entry by id (:data:`_FWD_ALLOWED_ONE_ID`).
 
 * **One hop only.** A device answering a remote-flagged ``GET
   /api/instances`` lists only its OWN sessions (never the ones it mirrors),
@@ -1206,11 +1208,15 @@ _DEVICES_PREFIX = "/api/devices/"
 _FWD_SEG = "fwd/"
 
 # What ``/api/devices/<device>/fwd/…`` may reach on the target: exactly what
-# the New Session dialog asks while it is aimed at another device. Per-session
-# routes don't need it (they ride the namespaced title); settings writes,
-# token rotation, restarts … are deliberately not here.
+# the New Session dialog asks while it is aimed at another device, plus the
+# phone's Recently closed sheet (list every device's closed sessions, and
+# reopen one where it was closed — a closed session has no live namespaced
+# title to ride). Per-session routes don't need it (they ride the namespaced
+# title); settings writes, token rotation, restarts, forgetting a closed
+# session … are deliberately not here.
 _FWD_ALLOWED = frozenset(
     {
+        ("GET", "/api/recently-closed"),
         ("GET", "/api/config"),
         ("GET", "/api/settings"),
         ("GET", "/api/templates"),
@@ -1226,6 +1232,34 @@ _FWD_ALLOWED = frozenset(
         ("POST", "/api/instances"),
     }
 )
+
+
+# Allowed fwd routes with one id segment: ``(method, prefix, suffix)``, the id
+# being everything between — a single segment (:data:`_FWD_ID`), never a
+# path. Only the Recently closed reopen; ``…/forget`` and the rest stay off.
+_FWD_ALLOWED_ONE_ID = (("POST", "/api/recently-closed/", "/reopen"),)
+# One segment of printable text: no slash or backslash, no ``%`` (the path
+# arrives decoded, so a ``%`` left in it was double-encoded), no ``?``/``#``,
+# no control characters. A closed-session id is ``<title>-<ms>``.
+_FWD_ID = re.compile(r"[^/\\%?#\x00-\x1f\x7f]{1,256}")
+
+
+def _fwd_target(method: str, path: str) -> Optional[str]:
+    """The path to send the target for an allowed ``fwd/`` request, else None:
+    an exact :data:`_FWD_ALLOWED` pair as is, or a :data:`_FWD_ALLOWED_ONE_ID`
+    route whose id is one safe segment — re-quoted, like a namespaced title."""
+    if (method, path) in _FWD_ALLOWED:
+        return path
+    for m, prefix, suffix in _FWD_ALLOWED_ONE_ID:
+        if method != m or len(path) <= len(prefix) + len(suffix):
+            continue
+        if not (path.startswith(prefix) and path.endswith(suffix)):
+            continue
+        ident = path[len(prefix) : len(path) - len(suffix)]
+        if not _FWD_ID.fullmatch(ident) or not ident.strip(". "):
+            continue
+        return prefix + quote(ident, safe="") + suffix
+    return None
 
 
 def _split_fwd_path(path: str) -> Optional[Tuple[str, str]]:
@@ -1328,7 +1362,8 @@ class RemoteProxyMiddleware:
             return
         if fwd is not None:
             method = scope.get("method", "GET") if scope["type"] == "http" else "WS"
-            if (method, fwd[1]) not in _FWD_ALLOWED:
+            target = _fwd_target(method, fwd[1])
+            if target is None:
                 await self._reject(
                     scope,
                     receive,
@@ -1337,8 +1372,12 @@ class RemoteProxyMiddleware:
                     404,
                 )
                 return
-            hit = fwd
-            if method == "POST" and fwd[1] == "/api/instances":
+            hit = (fwd[0], target)
+            # A create or a reopen: the session it makes is listed before the
+            # answer lands.
+            if method == "POST" and (
+                target == "/api/instances" or target.endswith("/reopen")
+            ):
                 dev = _DEVICES.get(fwd[0])
                 if dev is not None:
                     send = _refresh_before_done(send, dev)

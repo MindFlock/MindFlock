@@ -221,8 +221,9 @@
       </div>
     </div>
 
-    <!-- Recently closed: GET /api/recently-closed, newest first, each with
-         Reopen (POST /api/recently-closed/<id>/reopen). -->
+    <!-- Recently closed: GET /api/recently-closed here and on every connected
+         device (via /api/devices/<device>/fwd), newest first, each with
+         Reopen (POST /api/recently-closed/<id>/reopen) on its own device. -->
     <div id="recent-sheet" class="sheet hidden" role="dialog" aria-label="Recently closed">
       <div class="sheet-box">
         <div class="sheet-title">Recently closed</div>
