@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Finished sub-sessions close themselves.** A worker an agent spawned
+  (`spawn_session`, a team run's split, Flock mode) used to sit idle in the
+  rail after it reported, looking like live work, until its orchestrator
+  remembered `kill_session`. A server sweep (`backend/web/core/auto_close.py`)
+  now CLOSES it — agent stopped, worktree and branch kept, in Recently closed,
+  never deleted — once it reported done or failed (not blocked), sits idle
+  with nothing waiting for it, and its work is merged into its parent's HEAD,
+  has no commits of its own, or its PR merged or was closed; 10 minutes after
+  it finished (`general.auto_close_grace_minutes`) and while nobody has it
+  open or typed into it. Never a session the person started, an intake
+  session, an in-place, peer-shared, team-run or routed one. Unmerged work
+  stays open; a worker whose parent was closed with its work unmerged is kept
+  and flagged *parent closed — review or close*. The toast *Closed 2 finished
+  workers of “lead”* carries Undo (reopens them, Keep open); a worker's ⋯ →
+  Keep open opts it out; Settings → Agent orchestration → *Close finished
+  sub-sessions automatically* (`general.auto_close_children`, on by default)
+  turns it off. One server per config dir runs it (a lease), judging "gone"
+  by `state.json`. The MCP instructions now tell orchestrators finished
+  workers close themselves (`kill_session` still works).
+
 ### Changed
 
 - **Recently closed on the phone shows every device.** With other devices

@@ -6755,6 +6755,15 @@ labels above the inputs.
   [One session state](#one-session-state)), and an agent the system killed
   for memory once memory recovers. Off (the default) holds them **Offline**
   until you press **Start**.
+- **Agent orchestration → Close finished sub-sessions automatically**
+  (`general.auto_close_children`, on by default) and **Minutes a finished
+  worker stays open first** (`general.auto_close_grace_minutes`, 10): a worker
+  an agent spawned closes by itself once it reported done or failed, sits idle
+  and its work is merged (or has none) — the toast *Closed 2 finished workers
+  of “lead”* carries **Undo**, which reopens them and keeps them open. A
+  worker's ⋯ → **Keep open** opts it out (✓ while on). A worker whose parent
+  was closed with its work unmerged stays, its row saying *parent closed —
+  review or close*. See [mcp.md](mcp.md#finished-workers-close-themselves).
 - **General → Put idle agents to sleep after** (`general.sleep_idle_minutes`,
   **45** when empty, **0 = never**) — how long an agent must have sat idle,
   its turn over, unwatched and with nothing waiting for it, before its CLI and

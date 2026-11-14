@@ -532,6 +532,10 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # held|running|done|stopped, "word", "detail", "after", "fence"}) or
         # null when it was never ordered or fenced (core.worker_order).
         "order": _row_order(inst.Title, getattr(inst, "Parent", "") or ""),
+        # Finished workers close themselves (core.auto_close): {"keep_open",
+        # "orphan_of", "closes_at", "why"} for an agent-spawned session, null
+        # for any other. Dict reads only.
+        "auto_close": _auto_close_row(inst),
     }
 
 
@@ -611,6 +615,16 @@ def _row_verify(title: str):
         if out is not None:
             out.setdefault("queued", queued)
         return out
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
+
+
+def _auto_close_row(inst):
+    """``auto_close.row_field(inst)``, never raising into the row build."""
+    try:
+        from backend.web.core import auto_close
+
+        return auto_close.row_field(inst)
     except Exception:  # noqa: BLE001 — enrichment only
         return None
 

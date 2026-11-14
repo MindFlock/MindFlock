@@ -422,6 +422,7 @@ from backend.web.core import revive as _revive
 from backend.web.core import launch_gate as _launch_gate
 from backend.web.core import launch_gate_push as _launch_gate_push
 from backend.web.core import sleep as _sleep
+from backend.web.core import auto_close as _auto_close
 from backend.web.core import memory_watch as _memory_watch
 from backend.web.core import loop_watchdog as _loop_watchdog
 from backend.web.core import self_update as _self_update
@@ -1005,6 +1006,13 @@ async def lifespan(app: FastAPI):
     # and this KILLS agents.
     if _sleep_loop_enabled():
         _register_task(_sleep.run_loop())
+    # Finished sub-sessions close themselves (core.auto_close): a worker an
+    # agent spawned that reported done/failed, sits idle and has its work
+    # merged is CLOSED (worktree kept) after general.auto_close_grace_minutes.
+    # Off under pytest — ENGINE is the developer's real state, and this
+    # CLOSES sessions.
+    if _auto_close_loop_enabled():
+        _register_task(_auto_close.run_loop())
     _register_task(_memory_watch_loop())
     # Per-session memory sampler + logs/memory.jsonl (core.memory_watch), on
     # the ticks' own pool. Off under pytest (ENGINE is the real state there).
@@ -2973,6 +2981,21 @@ def _sleep_loop_enabled() -> bool:
     # MINDFLOCK_SLEEP=0 forces it OFF at boot regardless of the setting
     # (sandboxed servers: the e2e journeys, a scratch `serve`).
     if os.environ.get("MINDFLOCK_SLEEP", "1") == "0":
+        return False
+    return not _restart._under_pytest()
+
+
+#: None = automatic: on in a real server, OFF under pytest (the auto-close
+#: sweep closes sessions in ENGINE, the developer's real state).
+_AUTO_CLOSE_LOOP_ENABLED: Optional[bool] = None
+
+
+def _auto_close_loop_enabled() -> bool:
+    if _AUTO_CLOSE_LOOP_ENABLED is not None:
+        return bool(_AUTO_CLOSE_LOOP_ENABLED)
+    # MINDFLOCK_AUTO_CLOSE=0 forces it OFF at boot regardless of the setting
+    # (sandboxed servers: the e2e journeys, a scratch `serve`).
+    if os.environ.get("MINDFLOCK_AUTO_CLOSE", "1") == "0":
         return False
     return not _restart._under_pytest()
 
@@ -8569,6 +8592,42 @@ async def close_instance(title: str) -> JSONResponse:
     if err is not None:
         return err
     return await _end_session_response(title, wipe=False)
+
+
+@app.post("/api/instances/{title}/keep-open")
+async def post_keep_open(title: str, request: Request) -> JSONResponse:
+    """The session's ⋯ → Keep open: the auto-close sweep (core.auto_close)
+    leaves a finished worker with it on. Body ``{"keep": bool}`` (default
+    true). → ``{"title", "keep_open"}``; **404** for an unknown session."""
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    body = await _body_dict(request)
+    keep = body.get("keep", True) is not False
+    created = getattr(inst, "CreatedAt", None)
+    try:
+        at = float(created.timestamp()) if created is not None else None
+    except Exception:  # noqa: BLE001
+        at = None
+    try:
+        state = await asyncio.to_thread(_auto_close.set_keep_open, title, keep, at)
+    except Exception as err:  # noqa: BLE001
+        return JSONResponse({"error": "not saved: %s" % err}, status_code=500)
+    _republish_session(title)
+    return JSONResponse({"title": title, "keep_open": state})
+
+
+@app.post("/api/auto-close/undo")
+async def post_auto_close_undo(request: Request) -> JSONResponse:
+    """The "Closed N finished workers" toast's Undo: reopen each Recently
+    closed entry (body ``{"ids": [...]}``, the event's ``entries[].id``) and
+    mark it Keep open so the sweep leaves it be. → ``{"reopened": [titles],
+    "failed": {id: error}}``; **400** without ids."""
+    body = await _body_dict(request)
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids):
+        return JSONResponse({"error": "ids must be a non-empty list"}, status_code=400)
+    return JSONResponse(await _auto_close.undo(ids))
 
 
 @app.post("/api/instances/{title}/copy")

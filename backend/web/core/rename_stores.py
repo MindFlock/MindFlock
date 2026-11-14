@@ -239,6 +239,12 @@ def _finished_children(old: str, new: str) -> None:
             m._save(data)
 
 
+def _auto_close(old: str, new: str) -> None:
+    from backend.web.core import auto_close as m
+
+    m.rename(old, new)
+
+
 def _flights(old: str, new: str) -> None:
     """A flight's ``session``, and the workers its join/spawn steps recorded.
     The plan copy (``steps``) is skipped: a step's ``title`` is its label."""
@@ -526,6 +532,7 @@ def install() -> None:
     register("tracker claims", _tracker_claims, files=("tracker_claims.json",))
     register("mailbox", _mailbox, files=("mailbox.json",))
     register("finished children", _finished_children, files=("finished_children.json",))
+    register("auto-close", _auto_close, files=("auto_close.json",))
     register("flights", _flights, files=("flights.json",))
     register("worker order", _worker_order, files=("worker_order.json",))
     register("guest links", _guests, files=("guest_links.json",))

@@ -105,6 +105,14 @@ def reparent_children(engine: Any, title: str) -> List[str]:
     one step, so an orchestrator's workers land under *its* orchestrator
     rather than dangling on a name the next session may take.
     """
+    # Finished workers close themselves (core.auto_close): note which of them
+    # lose the parent they were spawned by, with their report to it, before
+    # the links move and its mailbox goes.
+    from backend.web.core import auto_close as _auto_close
+
+    _auto_close.note_parent_gone(
+        dict(engine.instances), title, engine.instances.get(title)
+    )
     with engine.lock:
         me = engine.instances.get(title)
         grand = (getattr(me, "Parent", "") or "") if me is not None else ""

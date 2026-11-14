@@ -70,6 +70,9 @@ List all sessions. Each item:
              "other_mb": 174, "procs": 9, "at": 1762300000.0},  // or null
   "workspace_missing": false,  // L1(c): started but its directory vanished
   "sleeping": null,            // or {"since", "reason": "idle"|"memory"|"manual", "freed_mb"}: agent asleep
+  "auto_close": null,          // an agent-spawned worker: {"keep_open", "orphan_of", "closes_at", "why"} —
+                               // finished workers close themselves (mcp.md#finished-workers-close-themselves);
+                               // orphan_of names a closed parent ("parent closed — review or close")
   // "held_offline": true, "held_since": 1762300000.0, "held_reason": "the server restarted"
   //                            // only while held offline after a crash (omitted otherwise)
   "has_origin": true,          // L2: workspace has an `origin` remote (cached ~30s)
@@ -706,6 +709,8 @@ Errors carry one human sentence and leave the form untouched:
 | Method | Path | Effect |
 |---|---|---|
 | DELETE | `/api/instances/{title}` | Kill session, remove worktree + branch → `{ok, title, wiped: true, children}`. **409** `{error: "folder in use", sessions: [titles]}` — and nothing changes — while another live session (a copy from Duplicate session) works in the same folder (real paths compared). Recorded in Recently closed like `/close` (listed with its folder gone). `children`: its child sessions, which keep running under *its* parent (or as roots) |
+| POST | `/api/instances/{title}/keep-open` | The ⋯ menu's **Keep open** ([mcp.md](mcp.md#finished-workers-close-themselves)): `{keep: bool}` (default true) — the auto-close sweep leaves this finished worker open → `{title, keep_open}`. **404** unknown |
+| POST | `/api/auto-close/undo` | The "Closed N finished workers" toast's Undo: `{ids: [...]}` (the `system.subsessions_closed` event's `entries[].id`, Recently closed entry ids) — reopens each and marks it Keep open → `{reopened: [titles], failed: {id: error}}`. **400** without ids |
 | POST | `/api/instances/{title}/close` | End tmux, **keep** worktree; recorded in recently-closed → `{ok, title, wiped: false, children}`. Never refused for a shared folder (keeping it endangers nobody) |
 | POST | `/api/instances/{title}/cleanup` | Kill + permanently delete the workspace dir (+ close its Cursor window) → `{ok, title, wiped: true, children}`; the same **409** `folder in use` as DELETE; recorded in Recently closed |
 | POST | `/api/instances/{title}/copy` → 202 | New in-place session sharing the same worktree (inherits the source's agent **and** auth profile), titled the family name plus the lowest free `-N` (`bot` → `bot-2`; with `bot` and `bot-3` open, either → `bot-2`). A person's start: while memory is low **409** `{memory_confirm: true, …}` (as `POST /api/instances`) until resent with body `{start_anyway: true}` |

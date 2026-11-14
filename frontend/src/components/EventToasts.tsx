@@ -51,6 +51,7 @@ import { jobPastExpectedNote } from "../lib/jobExpectation";
 import { allowPath } from "../lib/codemapApi";
 import { allowableBlock, baseName, redZoneEventFocus, type RedZoneEventData } from "../lib/mapEntry";
 import { errMsg } from "../lib/format";
+import { AUTO_CLOSED_EVENT, autoClosedToast, type AutoClosedData } from "../lib/autoClose";
 
 function instances(): Instance[] {
   return queryClient.getQueryData<Instance[]>(["instances"]) || [];
@@ -587,6 +588,16 @@ export function EventToasts() {
           onClick: () => openSettings(n.screen),
           duration: 8000,
         });
+      })
+    );
+    unsubs.push(
+      // Finished workers closed by themselves (lib/autoClose): one toast per
+      // parent per pass, with Undo. Never for a replayed backlog — a
+      // reconnect must not offer to undo old closes.
+      ev.subscribe(AUTO_CLOSED_EVENT, (env) => {
+        if (isReplay(env)) return;
+        autoClosedToast((env.data || {}) as AutoClosedData);
+        refreshInstances();
       })
     );
     unsubs.push(

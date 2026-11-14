@@ -163,6 +163,7 @@ def test_event_names_vocabulary_is_complete():
         "system.memory_changed",
         "system.sessions_held",
         "system.sessions_slept",
+        "system.subsessions_closed",
     }
 
 

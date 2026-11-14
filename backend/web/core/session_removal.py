@@ -267,6 +267,17 @@ def _release_tracker_claim(title: str) -> None:
 _SESSION_REMOVED_HOOKS.append(_release_tracker_claim)
 
 
+def _forget_auto_close(title: str) -> None:
+    """Drop the session's Keep open / orphan records (core.auto_close): a
+    title that comes back is a new session."""
+    from backend.web.core import auto_close as _auto_close
+
+    _auto_close.forget(title)
+
+
+_SESSION_REMOVED_HOOKS.append(_forget_auto_close)
+
+
 def _forget_former_titles(title: str) -> None:
     """A removed session's old names (core.rename) go with it: a request for
     one must not reach a namesake, and its leftover run file / exit-marker link
@@ -290,6 +301,11 @@ def _orphan_children(title: str) -> list:
     srv = _server()
     if not title:
         return []
+    # Before the links clear (and before the mailbox hook drops the reports):
+    # core.auto_close flags an agent-spawned child whose parent left.
+    from backend.web.core import auto_close as _auto_close
+
+    _auto_close.note_parent_gone(dict(srv.ENGINE.instances), title)
     with srv.ENGINE.lock:
         orphans = [
             t

@@ -287,7 +287,8 @@ describe("the pane control and the settings", () => {
     expect(ORCH_SRC).toMatch(/<SettingField group="general" field="workers_model"/);
     expect(ORCH_SRC).toContain("Workers request");
     expect(ORCH_SRC).toContain("Workers model");
-    expect(ORCH_SRC).toMatch(/<WorkersRows \/>\s*<h3 className="set-section-title">Spawn limits<\/h3>/);
+    // …then the auto-close switch (lib/autoClose), still in Workers.
+    expect(ORCH_SRC).toMatch(/<WorkersRows \/>\s*<AutoCloseRows \/>\s*<h3 className="set-section-title">Spawn limits<\/h3>/);
     // "Workers on every prompt" lets the agent place each prompt, unless
     // this switch is off (general.workers_decide; unset reads as on).
     expect(ORCH_SRC).toContain('data-field="workers_decide"');

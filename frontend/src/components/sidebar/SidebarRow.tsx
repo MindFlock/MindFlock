@@ -71,6 +71,7 @@ import { SessionMenu } from "./SessionMenu";
 import { RowMenu, type RowMenuOpen } from "./RowMenu";
 import { MidName } from "./MidName";
 import { TaskLine, taskLineOf } from "./TaskLine";
+import { orphanLine } from "../../lib/autoClose";
 import { openWalkingSession } from "../../lib/verifyActions";
 // lib/sessionMenu's model, with Verify in it.
 import { sessionMenu } from "./verifyMenu";
@@ -409,7 +410,9 @@ export const SidebarRow = memo(function SidebarRow({
   const wait = ss.waiting && inst.waiting_for_memory ? inst.waiting_for_memory : null;
   const waitText = wait ? waitLineOf(wait, Date.now()) : "";
   const failText = ss.startFailed && inst.start_failed ? startFailedHint(inst.start_failed).split("\n")[0] : "";
-  const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !!task;
+  // A worker adrift: its parent closed with its work unmerged (lib/autoClose).
+  const orphan = orphanLine(inst);
+  const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !orphan && !!task;
   const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
@@ -785,6 +788,13 @@ export const SidebarRow = memo(function SidebarRow({
             {!editing && failText && (
               <span className="lineage startfail-line" title={ss.hint}>
                 {failText}
+              </span>
+            )}
+            {!editing && orphan && (
+              // A worker whose parent was closed while its work is unmerged
+              // (lib/autoClose): kept, and said so, rather than closed.
+              <span className="lineage orphan-line" title={orphan.title}>
+                {orphan.text}
               </span>
             )}
             {!editing && taskLine && <TaskLine inst={inst} />}
