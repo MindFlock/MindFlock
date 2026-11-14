@@ -122598,10 +122598,10 @@ function ScrollSpeedRow() {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		className: "set-row",
-		title: "How many lines the mouse wheel scrolls in the terminal, in thirds of a line (0.33–3). Below 1, wheel input is damped so a notch scrolls less than a line. Applies immediately to all open terminals.",
+		title: "How many lines the mouse wheel scrolls in the terminal, in thirds of a line (0.33–3). Below 1, wheel input is damped so a notch scrolls less than a line. Applies immediately to all open terminals. The phone has its own speed (⋯ → Scroll speed on /m).",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "set-label",
-			children: "Terminal scroll speed"
+			children: "Terminal scroll speed (desktop)"
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "ss-row",
 			children: [

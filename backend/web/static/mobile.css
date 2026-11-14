@@ -891,6 +891,23 @@ html, body {
 .act-label { font-size: 14px; }
 .act-hint { color: var(--muted); font-size: 11px; }
 .act-danger .act-label, button.act-danger { color: #f87171; }
+/* ⋯ → Scroll speed: the phone's own speed as a row of steps, the current
+   one in the accent. */
+.act-speed { display: flex; flex-direction: column; gap: 8px; padding: 4px 2px 6px; }
+.act-speed-steps { display: flex; gap: 6px; }
+.act-speed-step {
+  flex: 1 1 0;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 0;
+  font-size: 15px;
+  font-family: inherit;
+}
+.act-speed-step:active { background: var(--border); }
+.act-speed-step.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 /* Delete's inline strip — the rail's: what it does, then Cancel / Delete. */
 .delete-strip {
   display: flex;

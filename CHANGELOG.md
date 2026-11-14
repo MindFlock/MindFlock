@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The phone has its own scroll speed.** ⋯ → Scroll speed on `/m` picks how
+  many lines a swipe scrolls per row your finger drags (1, 2, 3, 4, 6 or 8;
+  default 3, which is how it felt before). It used to be 3× the desktop's
+  wheel speed, so changing the speed on the PC changed the phone too; the
+  phone now divides the desktop's lines per tick back out and carries the
+  leftover between moves, so slow drags still move. Saved as the synced
+  setting `ui.mobile_scroll_speed`; Settings → General now says *Terminal
+  scroll speed (desktop)*.
+
 ## [0.14.16] - 2026-11-14
 
 ### Added

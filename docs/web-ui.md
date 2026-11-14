@@ -7475,7 +7475,9 @@ labels above the inputs.
   here from the Setup checklist).
 - **System logs** — a grid pane tailing the server log (`GET /api/logs`,
   3 s poll).
-- **Terminal scroll speed** — 1–20 lines per wheel notch, applied live.
+- **Terminal scroll speed (desktop)** — ⅓–3 lines per wheel notch, in thirds,
+  applied live. The phone has its own (⋯ → Scroll speed on `/m`; see
+  [Mobile UI](#mobile-ui-m)).
 - **Appearance** — **Mode** (*Dark* / *Light*: the same value as the top
   bar's 🌙, held in the UI store and set through `lib/theme.ts`, synced as the
   `theme` pref; until anyone chooses, the first paint follows the OS colour
@@ -8120,6 +8122,25 @@ the desktop grid uses for the mouse wheel (and the desktop grid now accepts
 touch drags the same way, for tablets). Taps, pinches, and horizontal gestures
 pass through untouched, so tapping the terminal still raises the keyboard for
 raw keystroke mode.
+
+The phone has its **own scroll speed**, apart from the desktop's wheel speed:
+**⋯ → Scroll speed** (the last row of the actions sheet, with or without a
+session open) shows *3 lines per row dragged (default)*; tapping it unfolds
+steps **1 2 3 4 6 8** (lines scrolled per terminal row the finger drags). The
+tapped step applies to the next drag and is saved as the synced setting
+`ui.mobile_scroll_speed` (`POST /api/mobile-scroll-speed`), so it survives the
+phone clearing its site data and follows the person to their other devices; a
+failed save puts the old step back with *Couldn't save the scroll speed*.
+Because tmux scrolls every wheel tick by the desktop's speed (a global
+binding: `max(1, round(speed))` lines a tick), the phone sends
+`rows dragged × phone speed ÷ lines per tick` ticks, carrying the part of a
+tick left over to the next move so a slow drag still moves and a speed below
+the desktop's lines per tick scrolls in that many lines at a time. The phone
+reads the desktop's lines per tick from `GET /api/mobile-scroll-speed` when it
+loads, when ⋯ opens and on a drag a minute after the last read, so changing
+the desktop speed no longer changes how the phone scrolls. The default (3)
+is how the phone felt before it had its own setting, at the desktop default
+of 1.
 
 **Compose box** — a normal phone text field between the terminal and the
 soft-key bar: type or paste with full native autocorrect/clipboard support,
