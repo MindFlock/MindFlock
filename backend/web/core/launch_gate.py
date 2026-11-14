@@ -108,7 +108,6 @@ from __future__ import annotations
 import contextlib
 import itertools
 import os
-import subprocess
 import threading
 import time
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
@@ -704,7 +703,11 @@ def _tmux_agents() -> Optional[List[Tuple[str, float]]]:
             text=True,
             timeout=5,
         )
-    except (OSError, subprocess.SubprocessError):
+    except Exception:  # noqa: BLE001
+        # Any failure to ask (not only OSError / SubprocessError: the native
+        # Windows session host's client can raise others) is "can't be
+        # asked" — assess()/decide() promise never to raise, and every
+        # person's create runs through them first.
         return None
     if out.returncode != 0:
         return []  # "no server running": no agents at all

@@ -158,11 +158,15 @@ def _gate_lock() -> asyncio.Lock:
     return _launch_gate[1]
 
 
-async def _wait_for_launch_room(what: str) -> None:
+async def _wait_for_launch_room(what: str) -> float:
     """Hold an automatic launch until the previous one has had
     _LAUNCH_SPACING_SECONDS to grow, then until memory has headroom
     (:func:`_wait_for_memory`), and stamp it. The spacing is re-checked after
-    the memory wait: the previous session coming up meanwhile restarts it."""
+    the memory wait: the previous session coming up meanwhile restarts it.
+
+    Returns the seconds it held (gate queue included): a launch that waited
+    re-checks that its item is still to be launched (:class:`NotLaunched`)."""
+    began = time.monotonic()
     async with _gate_lock():
         logged = False
         while True:
@@ -184,6 +188,7 @@ async def _wait_for_launch_room(what: str) -> None:
             if wait <= 0:
                 break
         _note_launch()
+    return time.monotonic() - began
 
 
 def _ensure_engine_on_path() -> None:
@@ -315,15 +320,59 @@ def _disarm_autopilot(title: str) -> None:
         logger.warning("Could not disarm the autopilot for %s", title, exc_info=True)
 
 
-def _cancel_flight(title: str, reason: str) -> None:
+#: A launch that held at the gate at least this long re-checks its item
+#: before it arms anything (:meth:`SessionRunner.run`): the orchestrator's
+#: checks ran before the hold, and a minute is long enough for the ticket to
+#: be triaged away or launched by someone else.
+_RECHECK_AFTER_HOLD_SECONDS = 1.0
+
+
+def _armed_id(armed: list) -> str:
+    """The flight id :meth:`SessionRunner._arm` recorded as armed by this
+    attempt, ``""`` when it armed none (or reused one)."""
+    return str(armed[0]) if armed else ""
+
+
+class NotLaunched(Exception):
+    """A launch backed off without starting anything, and without touching
+    any flight or autopilot record — the item is someone else's or no
+    longer wanted. ``reason`` reads after "Not launching <item>: ".
+    ``launched_elsewhere``: a live session already works on it (the ledger
+    records it as handled); otherwise nothing is recorded and a later scan
+    may pick it up again."""
+
+    def __init__(self, reason: str, launched_elsewhere: bool = False) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.launched_elsewhere = launched_elsewhere
+
+
+def _cancel_flight(title: str, reason: str, flight_id: str | None = None) -> None:
     """The session for ``title`` could not be created: cancel the flight armed
-    for it (if any) and drop its autopilot record, so neither waits for a
-    session that won't come."""
-    _disarm_autopilot(title)
+    for it and drop its autopilot record, so neither waits for a session that
+    won't come.
+
+    ``flight_id``: the flight THIS attempt armed (``""``: it armed none, or
+    reused one already on the title). Only that flight is cancelled — a
+    launch that lost a race never tears down the flight another launch armed
+    for the same title (2026-11-13: a second pipeline's failed create
+    cancelled the live session's route). ``None`` keeps the old by-title
+    behaviour for a caller that cannot say."""
     try:
         from backend.web.core import flights as _flights
 
         f = _flights.for_session(title)
+        if flight_id is not None and (f is None or f["id"] != flight_id):
+            if f is not None:
+                logger.info(
+                    "Leaving flight %s for %s alone: this launch did not arm it",
+                    f["id"],
+                    title,
+                )
+                return
+            _disarm_autopilot(title)
+            return
+        _disarm_autopilot(title)
         if f is not None and f["state"] != "cancelled":
             _flights.mutate(f["id"], lambda x: _flights.op_cancel(x, reason[:300]))
     except Exception:  # noqa: BLE001
@@ -345,8 +394,19 @@ class SessionRunner:
         self,
         story: Ticket,
         supplemental_context: str | None = None,
+        recheck=None,
     ) -> str:
-        """Provision + launch ``story`` via MindFlock; return the branch name."""
+        """Provision + launch ``story`` via MindFlock; return the branch name.
+
+        ``recheck``: an async callable → why ``story`` should no longer
+        launch (``""``: it still should) — the caller's own pre-launch checks
+        (the orchestrator: still in its ingest state, nobody else's), asked
+        again when the launch held at the gate (:meth:`_check_launchable`).
+        Raises :class:`NotLaunched` when it backs off: before arming (the
+        item is no longer launchable), or when the create failed because
+        another launch got the same session going meanwhile — then nothing
+        is cancelled, since that live session flies the title's flight.
+        """
         prompt = self._prompt_helper._build_prompt(story, supplemental_context, None)
         if story.attachments:
             names = ", ".join(
@@ -365,9 +425,10 @@ class SessionRunner:
                 "as part of the ticket context.\n"
             )
 
-        await _wait_for_launch_room("ticket %s" % story.slug)
+        held = await _wait_for_launch_room("ticket %s" % story.slug)
         branch = _branch_name_for(story)
         title = story.slug
+        await self._check_launchable(title, held, recheck)
         agent = self._agent_for(story)
         effort = self._effort_for(story)
         # Depth is configured per SOURCE, and two sources can share a provider
@@ -375,6 +436,7 @@ class SessionRunner:
         # ``story.provider`` matched whichever source of that provider came
         # first, so the second project silently ran at the first one's rung.
         issue_repo = _issue_repo(story)
+        armed: list = []
         prompt += self._arm(
             title,
             "tix",
@@ -389,6 +451,7 @@ class SessionRunner:
                 "url": str(getattr(story, "app_url", "") or ""),
             },
             branch=branch,
+            armed=armed,
         )
         logger.info(
             "Launching ticket %s via MindFlock (agent=%s, effort=%s, mode=%s, "
@@ -415,14 +478,17 @@ class SessionRunner:
                 timeout=_INSTANCE_START_TIMEOUT,
             )
         except asyncio.TimeoutError:
-            _cancel_flight(title, "the session start timed out")
+            _cancel_flight(title, "the session start timed out", _armed_id(armed))
             raise RuntimeError(
                 f"MindFlock instance start for ticket {story.slug} timed out "
                 f"after {_INSTANCE_START_TIMEOUT:.0f}s (the worker thread may "
                 "still be running; the story is marked failed)"
             ) from None
         except Exception as err:
-            _cancel_flight(title, "the session could not be created: %s" % err)
+            self._raise_if_live_elsewhere(title, err)
+            _cancel_flight(
+                title, "the session could not be created: %s" % err, _armed_id(armed)
+            )
             raise
         finally:
             # Spaced from when it came up (or gave up), not from the gate:
@@ -458,6 +524,56 @@ class SessionRunner:
             return {str(x.get("title")) for x in (json.loads(raw) if raw else [])}
         except Exception:  # noqa: BLE001
             return set()
+
+    async def _check_launchable(self, title: str, held: float, recheck=None) -> None:
+        """Raise :class:`NotLaunched` when ``title`` must not launch after
+        all — asked AFTER the launch-spacing hold, BEFORE anything is armed.
+
+        The caller vetted the item before the hold, but a hold is up to a
+        minute (more while memory is short), and on 2026-11-13 that minute
+        was enough for a second pipeline to launch the same ticket: this
+        launch then re-armed onto that live session's flight, failed on its
+        checked-out branch and cancelled the flight. So: a session with this
+        title already in MindFlock's state is "launched elsewhere" (always
+        checked — a local read); and when the launch actually held, the
+        caller's ``recheck`` is asked again (the ticket left its ingest
+        state, a teammate took it)."""
+        if title in self._stored_titles():
+            raise NotLaunched(
+                "a session named %s is already live (launched elsewhere)" % title,
+                launched_elsewhere=True,
+            )
+        if recheck is None or held < _RECHECK_AFTER_HOLD_SECONDS:
+            return
+        try:
+            why = await recheck()
+        except Exception:  # noqa: BLE001 — a failed re-check launches as vetted
+            logger.warning(
+                "Could not re-check %s after its launch hold; launching it",
+                title,
+                exc_info=True,
+            )
+            return
+        if why:
+            raise NotLaunched("%s (while it waited to launch)" % why)
+
+    def _raise_if_live_elsewhere(self, title: str, err: BaseException) -> None:
+        """A create that failed because ANOTHER launch got ``title`` going
+        meanwhile (its branch "is already checked out" at that session's
+        worktree) is not a failure of the item: raise :class:`NotLaunched`
+        so the caller records it as launched, and nothing is cancelled. A
+        failed create persists nothing, so a stored title is the other one's."""
+        if title in self._stored_titles():
+            logger.info(
+                "Not launching %s: its session is already live — launched "
+                "elsewhere while this launch was starting (%s)",
+                title,
+                err,
+            )
+            raise NotLaunched(
+                "a session named %s is already live (launched elsewhere)" % title,
+                launched_elsewhere=True,
+            ) from err
 
     async def hand_to_builder(self, pr: PullRequest, prompt: str) -> str:
         """Give ``prompt`` to the session that BUILT the PR's branch (the
@@ -548,12 +664,16 @@ class SessionRunner:
             )
             if handed:
                 return pr.head_ref
-        await _wait_for_launch_room("PR #%s" % pr.number)
+        held = await _wait_for_launch_room("PR #%s" % pr.number)
+        title = f"pr-{pr_slug(pr)}"
+        # Before the clone is touched: a live session of this title has its
+        # worktree there.
+        await self._check_launchable(title, held)
         workspace = await self._pr_provisioner.provision(pr, launch_cursor=False)
         prompt = prompt_override or build_consolidated_pr_prompt(
             pr, comments, workspace.directory
         )
-        title = f"pr-{pr_slug(pr)}"
+        armed: list = []
         prompt += self._arm(
             title,
             "pr",
@@ -568,6 +688,7 @@ class SessionRunner:
                 "url": str(getattr(pr, "url", "") or ""),
             },
             branch=pr.head_ref,
+            armed=armed,
         )
         logger.info(
             "Launching PR #%d via MindFlock (%d comments, session=%s, branch=%s)",
@@ -589,14 +710,17 @@ class SessionRunner:
                 timeout=_INSTANCE_START_TIMEOUT,
             )
         except asyncio.TimeoutError:
-            _cancel_flight(title, "the session start timed out")
+            _cancel_flight(title, "the session start timed out", _armed_id(armed))
             raise RuntimeError(
                 f"MindFlock instance start for PR #{pr.number} timed out "
                 f"after {_INSTANCE_START_TIMEOUT:.0f}s (the worker thread may "
                 "still be running)"
             ) from None
         except Exception as err:
-            _cancel_flight(title, "the session could not be created: %s" % err)
+            self._raise_if_live_elsewhere(title, err)
+            _cancel_flight(
+                title, "the session could not be created: %s" % err, _armed_id(armed)
+            )
             raise
         finally:
             # Spaced from when it came up (or gave up), not from the gate:
@@ -659,6 +783,7 @@ class SessionRunner:
         message: str,
         subject: dict,
         branch: str = "",
+        armed: list | None = None,
     ) -> str:
         """Arm what an AUTO-ingested item carries itself with, before its
         session exists: the flight its plan resolves to (docs/flights.md), else
@@ -670,6 +795,10 @@ class SessionRunner:
         the prompt: the plan's first agent step's own ``prompt``. Never
         raises.
 
+        ``armed`` (out): gets the id of the flight THIS call took off — not of
+        one it found already waiting on the title and reused — so a failed
+        create cancels only what its own attempt armed (:func:`_cancel_flight`).
+
         The flights store is a lock-guarded file keyed by session title, like
         autopilot.json, so arming here is picked up by the server's driver."""
         flight = None
@@ -678,17 +807,27 @@ class SessionRunner:
             try:
                 from backend.web.core import flights as _flights
 
+                took_off = False
                 try:
                     flight = _flights.arm_pending(
                         title, plan_id, subject, by="intake", branch=branch
                     )
+                    took_off = True
+                    if armed is not None:
+                        armed.append(flight["id"])
                 except _flights.FlightError as err:
                     if err.error != "in_flight":
                         raise
                     # A retry of an item whose last attempt died mid-launch:
-                    # its flight is still waiting for this very title.
+                    # its flight is still waiting for this very title — or
+                    # another launch's, racing this one. Reused, not owned.
                     flight = _flights.for_session(title)
-                logger.info("Flight armed for %s (%s)", title, plan_id)
+                logger.info(
+                    "Flight %s for %s (%s)",
+                    "armed" if took_off else "reused",
+                    title,
+                    plan_id,
+                )
             except Exception:  # noqa: BLE001 — never stop an ingestion over it
                 logger.warning(
                     "Could not arm a flight for %s — falling back to its depth",

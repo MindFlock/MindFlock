@@ -346,17 +346,45 @@ did) splits the processed-story ledger across two `state.json` files, so
 already-done tickets get re-ingested; set `MINDFLOCK_REPO_ROOT` explicitly if
 the auto-detection can't see your `config.toml`.
 
-**Singleton per directory**: the process takes an exclusive `flock` on
-`.mindflock-pipeline.lock` (writing its PID on the first line and
-`{version, commit, owner}` on the second). A second copy exits **0**
-with a message — deliberately not an error, so the web controller doesn't flag
-it. Two pipelines against one repo would collide on `workspaces/pr-<n>` dirs and
-tmux session names. When the web server re-execs itself in place (the
-Tailscale bind-fallback re-exec, a self-update), the pipeline it started keeps
-running and the new image adopts it back — only when the lock says
-`owner: server` and the holder is the server's own child (`waitpid`) — so
-settings changes restart it as before. A standalone run or another server's
-pipeline stays external and is never stopped by this server.
+**One pipeline per MindFlock home**: the process takes an exclusive `flock` on
+`pipeline.lock` in the MindFlock home (`~/.mindflock`, or `$MINDFLOCK_HOME`),
+writing its PID on the first line and `{version, commit, owner, server_pid,
+server_port, root}` on the second (`server_pid` / `server_port`: the server
+that started it; `root`: its cwd, where its ledger and activity beacon live).
+It also still takes the old per-directory `<repo root>/.mindflock-pipeline.lock`,
+so an older-build pipeline still running in the same root keeps excluding it.
+A second copy exits **0** with a message naming the holder — deliberately not
+an error, so the web controller doesn't flag it.
+
+The lock used to be per directory only. Two servers sharing one
+`~/.mindflock` from different directories (2026-11-13: the :8765 service from
+`~`, a :9000 dev server from the app checkout) each started a pipeline in its
+own repo root, so both ran against one engine state: both polled Shortcut,
+both launched the same ticket, and the losing launch cancelled the winning
+session's route. Now the second server's child exits at once, and that server:
+
+- reads the other pipeline as **running** (`/api/mindflock/status`: `running`,
+  its `pid`, `other_server: {pid, port}`; the activity beacon is read from the
+  `root` the lock records) — not as an error, and not as a child to restart:
+  `start()` no-ops while it runs, and a boot or settings reconcile never
+  restarts a pipeline whose lock names another **live** server (an orphan
+  whose server is gone is restartable as before);
+- still starts its own pipeline once the other one is gone (stopped, or its
+  server shut down).
+
+The two servers still resolve their own repo roots, so each keeps its own
+`state.json` ledger, `workspaces/` and logs; whichever pipeline holds the lock
+uses its own. Point both at one root with `MINDFLOCK_REPO_ROOT` to share one
+ledger. A ticket the other root's pipeline launched is not launched twice
+either way: a live session of that title stops the launch (see "Launching
+after a hold" below).
+
+When the web server re-execs itself in place (the Tailscale bind-fallback
+re-exec, a self-update), the pipeline it started keeps running and the new
+image adopts it back — only when the lock says `owner: server` and the holder
+is the server's own child (`waitpid`) — so settings changes restart it as
+before. A standalone run or another server's pipeline stays external and is
+never restarted by this server.
 
 **It follows your settings.** Sources, the GitHub token / repos / switches and
 which device runs the GitHub halves are read once at boot, so the web server
@@ -524,6 +552,26 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
      misreading delays the queue but never stalls it. This is not the
      [cache refreshers](#cache-refreshers)' PSI ≥ 10 % skip: that is a
      different, lower threshold on a background job, not on a launch.
+   - **Launching after a hold.** Automatic launches are also spaced (60 s
+     after the previous one came up, `MINDFLOCK_LAUNCH_SPACING`), so a ticket
+     can sit in `SessionRunner` for a minute or more after the checks above
+     passed. Before it arms its route, the runner checks again: a session of
+     the same title already in MindFlock's state stops it (`Not launching
+     sc-<id>: a session named sc-<id> is already live (launched elsewhere)`,
+     recorded `skipped` in `processed_stories` — handled, not failed); and
+     when the launch actually held, the orchestrator's dequeue checks (still
+     in the ingest state, not claimed by a teammate) are asked again — a miss
+     is logged `Not launching … (while it waited to launch)` and recorded
+     nowhere, like the dequeue drop. PR reviews and issues get the
+     live-session check too.
+   - **A failed launch cancels only what it armed.** If the session can't be
+     created, the route this launch armed is cancelled — but a route it found
+     already on the title (another launch's, which it reused) is left alone.
+     And a create that failed because the session went live meanwhile
+     (typically "branch … is already checked out" at that session's worktree)
+     is "launched elsewhere": logged, nothing cancelled, the story recorded
+     `skipped`, not `failed`. The server's forced starts (Intake → Tickets,
+     Issues, PR review) follow the same rule.
 8. **Record** — the story id, branch, and status land in `state.json`.
 9. **Move it on the board** (optional, per source) — when the source sets
    `start_state`, the ticket is moved into that state right after the session is
@@ -602,7 +650,9 @@ The route's ship stops arm their own lanes, so the autopilot depth is **not**
 armed beside it — unless the plan has no ship steps, in which case the depth is
 armed as before. If the session can't be created (`session.create_failed`, a
 pipeline launch that raises or times out), the route is stopped with that
-reason. The provisioning row in the sidebar carries the `flight` field from
+reason — only when this start armed it: a route reused from the title (another
+start's) is left alone, and nothing is stopped when a live session holds the
+title (it lost a race; that session flies the route). The provisioning row in the sidebar carries the `flight` field from
 the first second. Settings are read fresh on every pipeline launch (the
 settings cache is per-process, so the pipeline drops it first).
 
@@ -873,7 +923,8 @@ connected in the UI a minute ago is exactly what the next clone needs.
 |---|---|
 | `./state.json` | `{last_run_timestamp, processed_stories: [{story_id, branch, status, processed_at}], pending_stories: [{story_id, ticket_id, source_key}], processed_prs: [{number, head_sha, processed_at}], ticket_routes: {<slug>: {repos, reason, method, at}}}` — dedup/resume state; `pending_stories` is the crash-recovery queue (see Story flow step 2): an entry is removed on dequeue, on a filter miss at restart, or when the ticket is gone (`TicketNotFound`), and kept on a transient fetch failure. `ticket_routes` keeps the last 500 multi-repo routing decisions (see "A source spanning several repos"). Corrupt/missing → starts fresh. |
 | `./automation_here.json` | `{here, runner}` — whether PR review and issue handling last ran on this device or on another of "Your devices" (`runner`, its name). The web server records "elsewhere" (only once it can tell which member it is — nothing is written while Tailscale is still booting — and a mark whose `runner` is this machine's own hostname is ignored with a warning); when they move here the pipeline, before its first PR / issue scan, adds every PR and issue open right now to `processed_prs` / the processed-issues ledger with status `handed_over` (logging "PR review moved here — n open PRs already handled on X are skipped"), then records "here". The same seeding runs, once per loop, when this device is in a group with another live device (`MINDFLOCK_PIPELINE_FLEET=1` from the server) and that loop has never run here — no ledger entry or attempt and no `ledger_started.<prs\|issues>` in `state.json` — so a device that was chosen before the group's repos reached it never re-reviews what another device handled (the log names "another device"). After the check each enabled loop is marked in `state.json`'s `ledger_started`, so a device that has been running alone is never seeded later. If GitHub can't be listed it seeds, marks and scans nothing and retries next poll |
-| `./.mindflock-pipeline.lock` | Singleton flock; the winner's PID, then `{version, commit, owner}` (`owner: server` when the web server started it — what lets a re-exec'd server adopt it back) |
+| `~/.mindflock/pipeline.lock` | Singleton flock, one pipeline per MindFlock home (`$MINDFLOCK_HOME` moves it); the winner's PID, then `{version, commit, owner, server_pid, server_port, root}` (`owner: server` when a web server started it — what lets a re-exec'd server adopt it back; `server_pid` tells that server's child from another server's) |
+| `./.mindflock-pipeline.lock` | The per-directory lock older pipelines took; still taken (same contents) so an older-build pipeline in this root excludes a new one, and still read by the server to find one |
 | `./.mindflock-pipeline-activity.json` | Activity beacon `{pid, ticket_busy, pr_busy, issue_busy, held_for_slot, config_errors: [{source, field, message}], updated}` the web status reads (counts only while `pid` is the running pipeline's) |
 | `./.mindflock-pipeline-exit.json` | `{pid, at, kind: config\|crash, message, fields}` written on the way out of a configuration error or an unhandled crash; the web status reads it (when `pid` is its child's) to say why, and deletes it on the next start |
 | `./logs/pipeline.log` | The pipeline's own log (`[logging]` config) |

@@ -407,3 +407,38 @@ def test_update_all_devices_is_the_fleet_rollout(srv, monkeypatch):
     )
     assert cli.main(["update", "--all-devices", "--ref", "v9.9.9"]) == 0
     assert seen == ["v9.9.9"]
+
+
+def test_on_windows_the_install_goes_through_the_engine_swap(
+    srv, inst, monkeypatch, capsys
+):
+    # `mindflock update` runs from the very venv it replaces; on Windows uv's
+    # in-place rebuild of it leaves half an engine (2026-11-13). The swap
+    # builds the new one beside it and puts the old one back on failure.
+    from backend import compat
+    from backend.web.core import engine_swap, self_update
+
+    _install_json(inst)
+    monkeypatch.setattr(compat, "IS_WINDOWS", True)
+    monkeypatch.setattr(engine_swap, "find_exe", lambda env=None: r"C:\b\mindflock.exe")
+    seen = {}
+
+    def fake_swap(argv, **kw):
+        seen.update(kw, argv=argv)
+        return 2
+
+    monkeypatch.setattr(engine_swap, "swap_install", fake_swap)
+    assert cli.main(["update", "-y"]) == 1
+    assert seen["argv"] == self_update.install_command("uv-tool", "a" * 40)
+    assert seen["method"] == "uv-tool" and seen["exe"] == r"C:\b\mindflock.exe"
+    assert seen["venv"] == __import__("sys").prefix
+    assert not [c for c in srv.calls if c[0] == "POST"]  # nothing restarted
+
+
+def test_off_windows_the_install_runs_directly(inst, monkeypatch):
+    from backend import compat
+
+    monkeypatch.setattr(compat, "IS_WINDOWS", False)
+    run = Installer(monkeypatch)
+    assert cli_update._install(["uv", "tool", "install"], "uv-tool") == 0
+    assert run.argv == [["uv", "tool", "install"]]

@@ -78,7 +78,8 @@ CLIs as native `.exe`/`.cmd` (claude, codex, …), PowerShell 5.1, ConPTY
   (`MINDFLOCK_DESKTOP_ENGINE`, `engine.json`, an existing WSL engine stays);
   native mode spawns `mindflock serve` hidden, installs with the bundled
   `install.ps1`, and kills the server it started on quit (the session host,
-  and so the sessions, live on). NSIS no longer requires WSL.
+  and so the sessions, live on). NSIS no longer requires WSL. Updates swap
+  the engine beside running sessions ("Updating the engine on Windows").
 * CI: `test (windows-latest)` (docs/development.md, "How CI runs the suite").
 
 ## Homes, paths and the rest (the follow-ups)
@@ -119,6 +120,87 @@ CLIs as native `.exe`/`.cmd` (claude, codex, …), PowerShell 5.1, ConPTY
   `_mf_relto` / `_mf_under`; `red_zones.rel_form` on the server side).
 * **Setup's "Install everything"** runs the doctor's one-line
   `powershell … -EncodedCommand …` plan as `bash.exe -c "sh 'C:/…/setup-install.sh'; …"`.
+
+## Updating the engine on Windows
+
+**Decision: never rebuild the engine's venv in place. Build the new engine
+beside it, move the live one aside, install, check, and put the old one back
+on any failure.** One design for every update path: the desktop app and a
+hand-run `install.ps1` (PowerShell, `Install-EngineSwapped`), and
+`mindflock update` and Settings → Advanced's in-app update
+(`backend/web/core/engine_swap.py`, the same steps in Python; the in-app
+updater copies it out of the venv and runs it with the base interpreter).
+
+**Why.** `uv tool install --force` rebuilds the tool venv in place. Windows
+refuses to delete a file a process has mapped, and on a MindFlock machine
+several processes run from that venv: the server and its ticket-pipeline
+child, the session host (`backend/session/winmux/`, whose pywinpty `.pyd`
+and `OpenConsole.exe` live in it), each session's MCP server (the venv's
+`python.exe`), and any `mindflock` command. When uv decides to recreate the
+venv (a different interpreter, for one) it deletes what it can, hits a
+mapped file and gives up: `Lib` gone, `Scripts` left, `mindflock --version`
+→ "No module named 'backend'", `uv tool list` → "Failed find package
+`mindflock` in tool environment" — while the old server keeps serving from
+memory until its next lazy import 500s ("cannot import name 'preflight'
+from 'backend.session'"). That is what a real 0.14.14 → 0.14.15
+auto-update did on 2026-11-13, and it reproduces on any Windows box (a
+running server + session host, then `uv tool install --force` with another
+3.12 patch).
+
+**What Windows does allow** (checked on a real box): renaming a folder that
+running processes execute and load DLLs from, and they keep running from
+the renamed place. So:
+
+1. **Stage.** The same install into `<tools>-mindflock-next` (a separate
+   `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` next to uv's tools folder) while the
+   engine keeps serving: the download, build and resolve happen here, then
+   an import check (`backend.cli`, `backend.session`,
+   `backend.session.preflight`, `self_update`) and `mindflock --version`. A
+   failure stops here: nothing was touched.
+2. **Move aside.** `mindflock.exe` → `mindflock.exe.old-<stamp>` (first —
+   it is the one that can be held; nothing has changed yet if it can't
+   move), then `<tools>\mindflock` → `<tools>-mindflock-old-<stamp>`
+   (beside the tools folder, never inside it: `uv tool list` errors on any
+   stranger there). Running sessions, the session host and their MCP
+   servers keep their files.
+3. **Install** into the now-empty place, from the warm cache (seconds), and
+   run the same checks.
+4. **Put back** on any failure: the half-built venv goes, the old one is
+   renamed back. On success the stage goes, and the old copy is deleted
+   once nothing holds it (now, or at the next update).
+
+**The server and the shim.** uv's `mindflock.exe` runs `python
+mindflock.exe …` — a zipapp, and `sys.path[0]`. `importlib.metadata` kept a
+ZipFile open on it for the life of every MindFlock process, so a running
+server pinned its shim and uv could not replace it; `backend/__init__.py`
+now drops it from `sys.path` (after 0.14.15). A 0.14.15-or-older server still pins it, so
+`install.ps1` stops a server that holds the shim and starts it again with
+the same arguments afterwards (on the new engine, or on the old one put
+back). The desktop app goes further: `MINDFLOCK_INSTALL_STOP_SERVER=1`
+stops its server between steps 1 and 2 (nothing serves while the venv
+moves) and starts it again itself.
+
+**Sessions are not stopped.** Stopping the session host would end every
+running session, so the swap is designed not to need it: they run on from
+the moved-aside copy. Two seams remain, both short: during step 3 (seconds)
+a hook or MCP server an agent starts finds no engine, and a session-host
+process that lazily imports later gets the new version's module (the same
+as on Linux, where an in-place upgrade replaces files under running
+processes). That is why the desktop app's **automatic** update waits on
+native Windows while any session is working — with no two-hour cap there,
+and also while it can't tell (`upd.autoUpdateVerdict`, `holdWhileWorking`).
+A manual update runs when asked.
+
+**If an install fails anyway** (an older installer, a crash mid-swap): the
+desktop app checks the engine itself after a failed update
+(`mindflock.exe --version`). An intact engine just gets its server back. A
+broken one is never left serving: the server is stopped and the install
+runs once more with nothing serving; if the engine still doesn't run, the
+window shows "MindFlock's engine needs a repair" (`engine-broken`, the
+probe's last line as the reason) with a one-click reinstall. The offline
+page runs the same probe whenever it is shown on a native engine. By hand,
+with MindFlock closed: `uv tool install --force --python 3.12
+"mindflock[web] @ git+https://github.com/MindFlock/MindFlock"`.
 
 ## Uninstalling on Windows
 

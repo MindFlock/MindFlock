@@ -235,3 +235,22 @@ test("a developer's engine is never offered an engine update", () => {
   assert.ok(check.indexOf('if (engineIsDev) {') < check.indexOf("engineNotice = { current, latest, ref: 'v' + latest }"))
   assert.match(fn('async function updateEverything'), /if \(plan\.dev\) \{ engineNotice = null; engineIsDev = true \}/)
 })
+
+test('native Windows: a working session holds the engine swap with no cap', () => {
+  // install.ps1 moves the live venv aside under the running sessions; for
+  // those seconds a hook or MCP server an agent starts finds no engine.
+  const held = autoUpdateVerdict(engineOnly({ holdWhileWorking: true, working: 1, waitedMs: 10 * AUTO_WORKING_CAP_MS }))
+  assert.equal(held.go, false)
+  assert.equal(held.wait, true)
+  assert.match(held.why, /1 session is working/)
+  // Sessions it can't count hold it too (elsewhere: unknown = go).
+  const unknown = autoUpdateVerdict(engineOnly({ holdWhileWorking: true, working: null }))
+  assert.equal(unknown.go, false)
+  assert.match(unknown.why, /couldn't tell whether a session is working/)
+  assert.equal(autoUpdateVerdict(engineOnly({ working: null })).go, true)
+  // Nothing working: it goes, as everywhere.
+  assert.equal(autoUpdateVerdict(engineOnly({ holdWhileWorking: true, working: 0 })).go, true)
+  // main.js asks for it on the native engine only.
+  const mainJs = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8')
+  assert.match(mainJs, /holdWhileWorking: WIN_NATIVE,/)
+})

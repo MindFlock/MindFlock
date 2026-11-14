@@ -20,8 +20,10 @@ import {
   SEARCH_DEBOUNCE_MS,
   SEARCH_MIN_CHARS,
   SUGGEST_SOURCES,
+  HOME_FOLDER_WARNING,
   foldChipRow,
   homeRelative,
+  isHomeFolder,
   isNameQuery,
   looksLikePath,
   type FolderAction,
@@ -719,6 +721,12 @@ export function FolderAids({
       )}
 
       {newFolderRow}
+
+      {isHomeFolder(folderPath, homePath) && (
+        <p className="nf-git-nudge" id={scope + "-home-folder"} role="status">
+          {HOME_FOLDER_WARNING}
+        </p>
+      )}
 
       {plainFolder && !gitAsked && (
         <p className="nf-git-nudge">

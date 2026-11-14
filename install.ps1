@@ -302,6 +302,182 @@ if (Test-Path -LiteralPath $VoiceRecord) {
   } catch { Say "WARNING: couldn't read $VoiceRecord - the speech models reinstall themselves later" }
 }
 
+# --- the engine swap (Windows' answer to an in-place upgrade) -----------------
+# `uv tool install --force` rebuilds the tool venv IN PLACE. Windows refuses to
+# delete a file a process has mapped - and the server, its ticket pipeline, the
+# session host and every session's MCP server all run from that venv - so when
+# uv recreates it, it deletes what it can and stops: Lib gone, Scripts left,
+# "Failed find package `mindflock` in tool environment", and the running
+# server failing on its next import. Renaming a folder (or an exe) a process
+# runs from IS allowed, and the process keeps going. So (docs/windows.md,
+# "Updating the engine on Windows"; backend/web/core/engine_swap.py is the
+# Python twin that `mindflock update` and the in-app updater run):
+#   1. stage: the same install into <tools>-mindflock-next while the engine
+#      keeps serving (download + build happen here), then an import check -
+#      a failure stops here, nothing touched;
+#   2. move mindflock.exe to mindflock.exe.old-<stamp> and the live venv to
+#      <tools>-mindflock-old-<stamp> (beside the tools dir: uv errors on
+#      strangers inside it); running sessions keep their files. The shim goes
+#      first: a 0.14.15-or-older server keeps it open (and only it), so
+#      such a server is stopped for the swap and started again afterwards;
+#   3. the real install from the warm cache, then the same check;
+#   4. on any failure the half-built venv goes and the old one is put back.
+# MINDFLOCK_INSTALL_STOP_SERVER=1 (the desktop app) stops every running
+# server between 1 and 2; the app starts it again afterwards.
+$EngineCheck = 'import backend.cli, backend.session, backend.session.preflight, backend.web.core.self_update'
+
+function Remove-Quietly([string]$p) {
+  if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
+  return -not (Test-Path -LiteralPath $p)
+}
+
+# '' when the engine at $Venv (and its shim $Exe) works, else why not.
+function Test-Engine([string]$Venv, [string]$Exe) {
+  $py = Join-Path $Venv 'Scripts\python.exe'
+  if (-not (Test-Path -LiteralPath $py -PathType Leaf)) { return "$py is missing" }
+  $out = & $py -c $EngineCheck 2>&1
+  if ($LASTEXITCODE -ne 0) { return "the engine's packages don't import: $(@($out)[-1])" }
+  if ($Exe) {
+    $out = & $Exe --version 2>&1
+    if ($LASTEXITCODE -ne 0) { return "$Exe --version fails: $(@($out)[-1])" }
+  }
+  return ''
+}
+
+# Stops MindFlock servers: every one, or ($Exe) only those started through
+# that shim. Returns the shim-started ones' argument strings, to start again.
+function Stop-EngineServer([string]$Exe = '') {
+  $again = @()
+  Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'mindflock(\.exe)?"?\s+serve|backend[\\/]web[\\/]run\.py' } |
+    ForEach-Object {
+      $mine = $_.ExecutablePath -and $Exe -and ($_.ExecutablePath -eq $Exe)
+      if ($Exe -and -not $mine) { return }
+      if ($mine) { $again += ($_.CommandLine -replace '^\s*("[^"]*"|\S+)\s*', '') }
+      taskkill /T /F /PID $_.ProcessId 2>$null | Out-Null
+    }
+  Start-Sleep -Seconds 1
+  return ,$again
+}
+
+# Renames $From to $To, retrying while something holds it; $true when done.
+function Move-Retrying([string]$From, [string]$To, [int]$Tries = 15) {
+  for ($i = 0; $i -lt $Tries; $i++) {
+    try { [IO.File]::Move($From, $To); return $true } catch { Start-Sleep -Seconds 1 }
+  }
+  return $false
+}
+
+# The servers Install-EngineSwapped stopped because they held the shim.
+$script:Restart = @()
+
+# Runs $Install (the uv line) so the engine is replaced whole or not at all.
+# Returns the exit code; on failure the engine that was there is back.
+function Install-EngineSwapped([scriptblock]$Install) {
+  # Where uv keeps tool venvs. Never an in-place fallback: that IS the bug.
+  # (No Select-Object -First here: stopping the pipeline early can leave a
+  # non-zero $LASTEXITCODE behind a perfectly good answer.)
+  $ToolDir = ''
+  $out = @(& uv tool dir 2>$null)
+  if ($LASTEXITCODE -eq 0 -and $out.Count) { $ToolDir = [string]$out[0] }
+  if (-not $ToolDir) { $ToolDir = Env 'UV_TOOL_DIR' (Join-Path $env:APPDATA 'uv\tools') }
+  $ToolDir = $ToolDir.Trim().TrimEnd('\')
+  $Venv = Join-Path $ToolDir 'mindflock'
+  $Exe = Join-Path $ToolBin 'mindflock.exe'
+  $Stamp = Get-Date -Format 'yyyyMMddHHmmss'
+  $Next = "$ToolDir-mindflock-next"
+  $Old = "$ToolDir-mindflock-old-$Stamp"
+  $OldExe = "$Exe.old-$Stamp"
+  # Earlier swaps' leftovers, once nothing runs from them any more.
+  Get-Item -Path "$ToolDir-mindflock-old-*", "$ToolDir-mindflock-failed-*", "$Exe.old-*", "$Exe.failed-*" -Force -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Quietly $_.FullName | Out-Null }
+  $Live = Test-Path -LiteralPath $Venv -PathType Container
+  if ($Live) {
+    Say "building the new engine beside the running one ($Next)..."
+    Remove-Quietly $Next | Out-Null
+    $SavedDir = $env:UV_TOOL_DIR; $SavedBin = $env:UV_TOOL_BIN_DIR
+    $env:UV_TOOL_DIR = Join-Path $Next 'tools'
+    $env:UV_TOOL_BIN_DIR = Join-Path $Next 'bin'
+    & $Install | Out-Host
+    $code = [int]$LASTEXITCODE
+    $env:UV_TOOL_DIR = $SavedDir; $env:UV_TOOL_BIN_DIR = $SavedBin
+    $why = ''
+    if ($code -ne 0) { $why = "the install failed (exit $code)" }
+    else { $why = Test-Engine (Join-Path $Next 'tools\mindflock') (Join-Path $Next 'bin\mindflock.exe') }
+    if ($why) {
+      Remove-Quietly $Next | Out-Null
+      Say "$why - nothing was changed; the engine you have keeps running"
+      if ($code -eq 0) { $code = 1 }
+      return $code
+    }
+    if ((Env 'MINDFLOCK_INSTALL_STOP_SERVER') -eq '1') {
+      Say 'stopping the MindFlock server for the swap (it starts again on the new engine)...'
+      Stop-EngineServer | Out-Null
+    }
+  }
+  # The shim first: if it can't move, nothing has changed yet.
+  $MovedExe = $false
+  if (Test-Path -LiteralPath $Exe) {
+    $MovedExe = Move-Retrying $Exe $OldExe 3
+    if (-not $MovedExe) {
+      Say "$Exe is in use - stopping the MindFlock server that runs from it for the swap..."
+      $script:Restart = Stop-EngineServer $Exe
+      $MovedExe = Move-Retrying $Exe $OldExe
+    }
+    if (-not $MovedExe) {
+      Remove-Quietly $Next | Out-Null
+      Say "$Exe is in use by a running MindFlock - nothing was changed; close it and run this again"
+      return 75
+    }
+  }
+  if ($Live) {
+    try { [IO.Directory]::Move($Venv, $Old) } catch {
+      if ($MovedExe) { try { [IO.File]::Move($OldExe, $Exe) } catch { } }
+      Remove-Quietly $Next | Out-Null
+      Say "couldn't move the running engine aside ($($_.Exception.Message)) - nothing was changed"
+      return 75
+    }
+  }
+  & $Install | Out-Host
+  $code = [int]$LASTEXITCODE
+  $why = ''
+  if ($code -ne 0) { $why = "the install failed (exit $code)" }
+  else {
+    $ChkExe = ''
+    if (Test-Path -LiteralPath $Exe -PathType Leaf) { $ChkExe = $Exe }
+    $why = Test-Engine $Venv $ChkExe
+  }
+  Remove-Quietly $Next | Out-Null
+  if (-not $why) {
+    if ($Live -and -not (Remove-Quietly $Old)) { Say "the previous engine stays at $Old until the sessions using it end" }
+    if ($MovedExe) { Remove-Quietly $OldExe | Out-Null }
+    return 0
+  }
+  Say "$why - putting the previous engine back"
+  if ($code -eq 0) { $code = 1 }
+  $Back = $true
+  if ($Live) {
+    if (Test-Path -LiteralPath $Venv) {
+      $Failed = "$ToolDir-mindflock-failed-$Stamp"
+      try { [IO.Directory]::Move($Venv, $Failed) } catch { $Failed = $Venv }
+      Remove-Quietly $Failed | Out-Null
+    }
+    $Back = $false
+    if (-not (Test-Path -LiteralPath $Venv)) {
+      try { [IO.Directory]::Move($Old, $Venv); $Back = $true } catch { Say "couldn't put $Old back: $($_.Exception.Message)" }
+    }
+  }
+  if ($MovedExe) {
+    if ((Test-Path -LiteralPath $Exe) -and -not (Remove-Quietly $Exe)) {
+      try { [IO.File]::Move($Exe, "$Exe.failed-$Stamp") } catch { }
+    }
+    try { [IO.File]::Move($OldExe, $Exe) } catch { Say "couldn't put $Exe back: $($_.Exception.Message)"; $Back = $false }
+  }
+  if (-not $Live) { Say 'there was no engine here before; nothing to put back' }
+  elseif ($Back) { Say 'the previous engine is back in place' }
+  else { Say 'the previous engine could NOT be put back - run this installer again' }
+  return $code
+}
+
 # --force makes re-runs an in-place upgrade (idempotent). An engine first
 # installed with pipx stays a pipx install, as in install.sh.
 $InstallMethod = 'uv-tool'
@@ -315,9 +491,19 @@ if ($PrevMethod -eq 'pipx' -and (Has 'pipx')) {
   & pipx install --force $Spec
   $InstallMethod = 'pipx'
 } else {
-  & uv tool install --force --python $InstallPython @Withs $Spec
+  $code = Install-EngineSwapped { & uv tool install --force --python $InstallPython @Withs $Spec }
+  # A server stopped because it held mindflock.exe starts again - on the new
+  # engine, or on the old one put back - with the arguments it had.
+  if ($script:Restart.Count -and (Env 'MINDFLOCK_INSTALL_NO_RESTART') -ne '1') {
+    $Shim = Join-Path $ToolBin 'mindflock.exe'
+    foreach ($a in $script:Restart) {
+      Say "starting the MindFlock server again: mindflock $a"
+      try { Start-Process -WindowStyle Hidden -FilePath $Shim -ArgumentList $a | Out-Null } catch { Say "couldn't start it - run: mindflock $a" }
+    }
+  }
+  if ($code -ne 0) { Fail "the MindFlock install failed (exit $code)" }
 }
-if ($LASTEXITCODE -ne 0) { Fail "the MindFlock install failed (exit $LASTEXITCODE)" }
+if ($LASTEXITCODE -ne 0 -and $InstallMethod -eq 'pipx') { Fail "the MindFlock install failed (exit $LASTEXITCODE)" }
 
 $MF = ''
 foreach ($p in @((Join-Path $ToolBin 'mindflock.exe'), (Join-Path $LocalBin 'mindflock.exe'))) {
@@ -356,7 +542,7 @@ if ($NoPathUpdate) {
 # --- 5. a server already running here ------------------------------------------
 $Port = Env 'MINDFLOCK_PORT' '8765'
 $Running = $false
-if ((Env 'MINDFLOCK_INSTALL_NO_RESTART') -ne '1') {
+if ((Env 'MINDFLOCK_INSTALL_NO_RESTART') -ne '1' -and -not $script:Restart.Count) {
   try {
     Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri "http://127.0.0.1:$Port/api/remote/hello" | Out-Null
     $Running = $true

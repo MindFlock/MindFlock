@@ -128,3 +128,20 @@ test('PowerShell argv: a file, or an encoded script with no quoting to survive',
   assert.equal(eng.installCommandPs('v0.12.1'),
     'irm https://raw.githubusercontent.com/MindFlock/MindFlock/v0.12.1/install.ps1 | iex')
 })
+
+test('engine health: --version for an install, an import for a dev checkout', () => {
+  assert.deepEqual(eng.engineHealthCommand({ exe: EXE }), { file: EXE, args: ['--version'] })
+  const dev = eng.engineHealthCommand({ repo: 'C:\\src\\MindFlock', exe: EXE })
+  assert.equal(dev.file, 'C:\\src\\MindFlock\\.venv\\Scripts\\python.exe')
+  assert.deepEqual(dev.args, ['-c', 'import backend.cli'])
+  assert.equal(eng.engineHealthCommand({ exe: '' }), null)
+})
+
+test('engine health verdict: the 2026-11-13 venv reads broken, a timeout never does', () => {
+  const out = 'Traceback (most recent call last):\r\n  File "<frozen runpy>", line 198\r\n'
+    + "ModuleNotFoundError: No module named 'backend'\r\n"
+  assert.equal(eng.engineHealthVerdict(1, out), "ModuleNotFoundError: No module named 'backend'")
+  assert.equal(eng.engineHealthVerdict(1, ''), 'it exited with code 1')
+  assert.equal(eng.engineHealthVerdict(0, 'mindflock 0.14.15'), '')
+  assert.equal(eng.engineHealthVerdict(null, 'killed'), '')
+})

@@ -120,7 +120,7 @@ def test_updater_downloads_in_background_but_never_installs_on_quit():
 
 def test_one_click_order_engine_then_stop_server_then_app():
     run = _fn(_MAIN_JS, "async function updateEverything")
-    engine = run.index("startInstall(plan.ref)")
+    engine = run.index("await installEngineForUpdate(plan.ref)")
     # The stop waits for the port to be released (stopEngineServer wraps the
     # KILL_SERVER shell) before the app swaps itself.
     stop = run.index("await stopEngineServer()")
@@ -129,9 +129,14 @@ def test_one_click_order_engine_then_stop_server_then_app():
     assert "spawnEngineShell(KILL_SERVER)" in _fn(
         _MAIN_JS, "async function stopEngineServer"
     )
-    # A failed engine update stops before touching the app.
-    failed = run.index("The engine update failed")
+    # A failed engine update stops before touching the app (the message
+    # comes from installEngineForUpdate, which checks the engine itself on
+    # native Windows — see docs/windows.md, "Updating the engine on Windows").
+    failed = run.index("if (!res.ok) {")
     assert failed < swap
+    assert "The engine update failed" in _fn(
+        _MAIN_JS, "async function installEngineForUpdate"
+    )
     # Can't self-update: engine still updated, then the download page.
     assert "shell.openExternal" in run
 

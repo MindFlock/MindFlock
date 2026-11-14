@@ -14,7 +14,11 @@ from backend.ticket_ingestion.backfill import BackfillScanner
 from backend.ticket_ingestion.providers import get_provider
 from backend.ticket_ingestion.clarification import InteractiveClarificationHandler
 from backend.ticket_ingestion.claude_runner import ClaudeCodeRunner
-from backend.ticket_ingestion.session_runner import SessionRunner, engine_bridge_error
+from backend.ticket_ingestion.session_runner import (
+    NotLaunched,
+    SessionRunner,
+    engine_bridge_error,
+)
 from backend.ticket_ingestion.config import (
     PipelineConfig,
     agent_now,
@@ -839,7 +843,13 @@ class PipelineOrchestrator:
         await self._wait_for_slot("issue #%d" % issue.number)
         try:
             if self._cs_runner is not None:
-                await self._cs_runner.run(story)
+                try:
+                    await self._cs_runner.run(story)
+                except NotLaunched as e:
+                    _logger.info("Not launching issue #%d: %s.", issue.number, e.reason)
+                    if not e.launched_elsewhere:
+                        return
+                    # Its session is live: recorded as handled below.
             else:
                 env = await self._provisioner.provision(story)
                 await self._claude_runner.invoke(
@@ -922,7 +932,13 @@ class PipelineOrchestrator:
             if self._cs_runner is not None:
                 # One consolidated session per PR via MindFlock (all comments
                 # addressed in a single window), instead of a tab per comment.
-                await self._cs_runner.run_pr(pr, comments)
+                try:
+                    await self._cs_runner.run_pr(pr, comments)
+                except NotLaunched as e:
+                    _logger.info("Not launching PR #%d: %s.", pr.number, e.reason)
+                    if not e.launched_elsewhere:
+                        return
+                    # Its session is live: recorded as reviewed below.
             else:
                 workspace = await self._pr_provisioner.provision(
                     pr, launch_cursor=_open_ide_on_ticket()
@@ -1106,8 +1122,28 @@ class PipelineOrchestrator:
                     supplemental_context = clarification.supplemental_context
 
             if self._cs_runner is not None:
+                recheck = None
+                if isinstance(item, Ticket):
+
+                    async def recheck() -> str:
+                        # The same two checks as above, asked again after a
+                        # launch hold (session_runner._check_launchable).
+                        miss = await self._ingest_filter_miss_now(story)
+                        if miss:
+                            return "%s since it was queued" % miss
+                        claimed = await self._tracker_claim_now(story)
+                        if claimed:
+                            from backend.ticket_ingestion.tracker_claims import (
+                                describe,
+                            )
+
+                            return describe(claimed)
+                        return ""
+
                 branch = await self._cs_runner.run(
-                    story, supplemental_context=supplemental_context
+                    story,
+                    supplemental_context=supplemental_context,
+                    recheck=recheck,
                 )
             else:
                 env = await self._provisioner.provision(story)
@@ -1115,6 +1151,22 @@ class PipelineOrchestrator:
                     env=env, story=story, supplemental_context=supplemental_context
                 )
                 branch = env.branch_name
+        except NotLaunched as e:
+            _logger.info("Not launching %s: %s.", story.slug, e.reason)
+            if e.launched_elsewhere:
+                # Its session is live: handled, just not by this launch. Not
+                # a failure (that would read as "needs a manual unblock").
+                update_processed_story(
+                    _STATE_DIR,
+                    story.slug,
+                    status="skipped",
+                    failure_reason=e.reason,
+                )
+            else:
+                # Like the other back-offs: nothing recorded — a ticket moved
+                # back into the ingest state is a fresh poll match again.
+                remove_in_flight_story(_STATE_DIR, story.slug)
+            return
         except Exception as e:
             # Flip the in-flight marker to a terminal ``failed`` so the story
             # is not auto-retried on the next scan (a half-provisioned

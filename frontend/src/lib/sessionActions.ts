@@ -500,6 +500,21 @@ export function addPendingSession(bare: string, device = "", keepAlias = false):
   return title;
 }
 
+/** A create's optimistic row, under `name` — the name the server will give
+ * it (newSession.pendingTitleFor). With no name to give it, NO row: the
+ * owner's rule is that a row called "untitled" never appears during a
+ * create, so a "Creating…" toast stands in and the real row shows when the
+ * server answers. → the guess, "" when no row was added (land/fail it only
+ * when non-empty). */
+export function startPendingCreate(name: string, device = ""): string {
+  const n = (name || "").trim();
+  if (!n) {
+    toast("Creating…");
+    return "";
+  }
+  return addPendingSession(n, device);
+}
+
 /** The create answered: its row replaces the optimistic one for `guess` (one
  * box, under the real title), still waiting for the snapshot to list it. */
 export function landPendingSession(guess: string, inst: Instance | null | undefined) {

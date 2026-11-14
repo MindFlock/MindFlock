@@ -32,18 +32,18 @@
  * alert(). Escape cancels.
  *
  * Fast: the moment Fly is pressed the optimistic `pending_create` row is in
- * the sessions (`addPendingSession`) and `onPending(guess)` tells the sky,
+ * the sessions (`startPendingCreate`) and `onPending(guess)` tells the sky,
  * which pins that row's line where the block sat and hides the block; a
  * refusal brings the block back with the error (`onFailed`). */
 
-import { fullPathHint } from "../../lib/serverPaths";
+import { fullPathHint, pathLeaf } from "../../lib/serverPaths";
 import { withMemoryConfirm } from "../../lib/memoryConfirm";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
 import { refreshInstances, useAgentChoices, useAuthProfiles, useDevices, useInstances, useSettingsDoc } from "../../state/queries";
 import { rememberNewSessionChoice } from "../../state/store";
-import { addPendingSession, clearStaleAlias, failPendingSession } from "../../lib/sessionActions";
+import { clearStaleAlias, failPendingSession, landPendingSession, startPendingCreate } from "../../lib/sessionActions";
 import { newSessionSubmit, type NewSessionSubmitCtx } from "../../lib/newSessionSubmit";
 import { attachGrounded, startFlightOn } from "../../lib/flightsApi";
 import { windowName } from "../../lib/windowName";
@@ -62,7 +62,7 @@ import {
   type ParentChoice,
 } from "../../lib/newBlock";
 import { errMsg } from "../../lib/format";
-import { isNameQuery, titleFromPrompt, type RepoSuggestion } from "../dialogs/newSession";
+import { isNameQuery, pendingTitleFor, type RepoSuggestion } from "../dialogs/newSession";
 import { PathField } from "../PathField";
 import { templateFiller } from "../dialogs/newSession/TemplatesStrip";
 import { useBaseBranches } from "../dialogs/newSession/WorkspaceFold";
@@ -115,7 +115,7 @@ export function repoChoices(suggestions: readonly RepoSuggestion[], max = REPO_C
   for (const s of [...suggestions].sort((a, b) => rank(a) - rank(b))) {
     if (!s.path || seen.has(s.path)) continue;
     seen.add(s.path);
-    out.push({ value: s.path, label: s.name || s.path.split("/").filter(Boolean).pop() || s.path, title: s.path });
+    out.push({ value: s.path, label: s.name || pathLeaf(s.path) || s.path, title: s.path });
     if (out.length >= max) break;
   }
   return out;
@@ -384,8 +384,9 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
     setError("");
     const named = parent ? workerTitle(parent.title, (rows || []).map((r) => r.title)) : "";
     const body = blockBody({ repo, prompt, program, launchArgs, options: { ...options, device }, title: named, parent });
-    const guess = addPendingSession(named || titleFromPrompt(prompt) || folder.split("/").filter(Boolean).pop() || "untitled", device);
-    onPending?.(guess);
+    // No "untitled" row: nothing to name it from → no row (a toast instead).
+    const guess = startPendingCreate(pendingTitleFor({ title: named, prompt, repo_path: folder }), device);
+    if (guess) onPending?.(guess);
     let title = "";
     try {
       title = await postInstance(body, device);
@@ -395,10 +396,12 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
           program: String(body.program || ""),
           profile_id: String(body.profile_id || ""),
         });
+      // The pending row becomes the session in place (renamed if numbered).
+      if (guess) landPendingSession(guess, { title } as Instance);
       clearStaleAlias(title);
       await refreshInstances();
     } catch (err) {
-      failPendingSession(guess);
+      if (guess) failPendingSession(guess);
       setError(errMsg(err));
       setBusy(false);
       onFailed?.(guess);

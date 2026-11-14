@@ -141,6 +141,39 @@ def _run_installer(argv: list) -> int:
         return 1
 
 
+def _install(argv: list, method: str) -> int:
+    """Run THE install line for ``method``. On native Windows it goes through
+    :mod:`backend.web.core.engine_swap`: this very command runs from the venv
+    being replaced (``mindflock.exe`` and its python are mapped, as are the
+    server's, the session host's and every session's MCP server's), and uv's
+    in-place rebuild there deletes what it can and leaves a half-deleted
+    engine. The swap builds the new one beside it, moves the live one aside
+    and puts it back if anything fails."""
+    from backend import compat
+
+    if not compat.IS_WINDOWS or method not in ("uv-tool", "pipx"):
+        return _run_installer(argv)
+    from backend.web.core import engine_swap
+
+    print("$ " + " ".join(shlex.quote(a) for a in argv))
+
+    def run(cmd, **kw):
+        return subprocess.run(cmd, check=False, **kw)  # noqa: S603
+
+    try:
+        return engine_swap.swap_install(
+            argv,
+            venv=sys.prefix,
+            exe=engine_swap.find_exe(),
+            method=method,
+            run=run,
+            log=lambda m: print("mindflock: " + m),
+        )
+    except (OSError, subprocess.SubprocessError) as err:
+        _err("couldn't run %s: %s" % (argv[0], err))
+        return 1
+
+
 def _carry_drivers(method: str) -> None:
     """Put the Database explorer's recorded drivers back after a pipx rebuild
     (uv carries them as ``--with`` in the install line itself). A failure only
@@ -172,7 +205,7 @@ def _rollback(previous: Optional[dict]) -> str:
     if not argv:
         return ""
     print("rolling back to %s…" % (previous.get("ref") or target))
-    if _run_installer(argv) != 0:
+    if _install(argv, method) != 0:
         return ""
     _carry_drivers(method)
     self_update.write_install_json(
@@ -326,7 +359,7 @@ def cmd_update(args: argparse.Namespace) -> int:
         _err(self_update.blocked_reason() or "no installer for %s" % kind)
         return 1
     print("installing %s…" % ref)
-    code = _run_installer(argv)
+    code = _install(argv, kind)
     if code != 0:
         _err("the install failed (exit %d) — see the lines above" % code)
         return 1

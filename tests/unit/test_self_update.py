@@ -1043,3 +1043,96 @@ def test_no_health_check_when_the_hello_was_never_reachable(statedir):
     cp, st, uv_calls, marker = _run_health_script(statedir, curl_bodies=[None])
     assert cp.returncode == 0 and st["state"] == "done"
     assert len(uv_calls) == 1 and not marker.exists()
+
+
+# --------------------------------------------------------------------------- #
+# Native Windows: the install runs through the engine swap
+# --------------------------------------------------------------------------- #
+def test_on_windows_the_install_and_rollback_lines_run_through_the_swap(statedir):
+    # 2026-11-13: `uv tool install --force` rebuilt the venv under the running
+    # server and left it half-deleted. On Windows both lines go through
+    # engine_swap (build beside, move aside, put back on failure).
+    prefix = ["C:/py/python.exe", "-I", "C:/st/engine_swap.py", "--venv", "V", "--"]
+    script = self_update._script(
+        "v9.9.9", "a" * 40, method="uv-tool", prev_commit="b" * 40, swap=prefix
+    )
+    swap = "C:/py/python.exe -I C:/st/engine_swap.py --venv V -- uv tool install"
+    assert swap + " --force" in script
+    assert script.count(swap) == 2  # the install AND the rollback
+    assert "uv tool install" not in script.replace(swap, "")
+    assert swap not in self_update._script("v9.9.9", "a" * 40, method="uv-tool")
+
+
+def test_the_swap_prefix_runs_a_copy_outside_the_venv(statedir, monkeypatch):
+    from backend.web.core import engine_swap
+
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
+    monkeypatch.setattr(
+        engine_swap, "find_exe", lambda env=None: r"C:\u\.local\bin\mindflock.exe"
+    )
+    argv = self_update.windows_swap_prefix(statedir)
+    copy = statedir / "engine_swap.py"
+    assert copy.read_text(encoding="utf-8") == Path(engine_swap.__file__).read_text(
+        encoding="utf-8"
+    )
+    assert argv[1] == "-I" and argv[2] == str(copy).replace("\\", "/")
+    assert argv[argv.index("--venv") + 1] == __import__("sys").prefix
+    assert argv[argv.index("--exe") + 1] == r"C:\u\.local\bin\mindflock.exe"
+    assert argv[argv.index("--method") + 1] == "uv-tool" and argv[-1] == "--"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX sh + a fake uv")
+@pytest.mark.parametrize("live_fails", [False, True])
+def test_the_generated_script_with_the_swap_installs_or_restores(statedir, live_fails):
+    import sys
+
+    from backend.web.core import engine_swap
+
+    venv = statedir / "uv" / "tools" / "mindflock"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\nexit 0\n")
+    (venv / "bin" / "python").chmod(0o755)
+    (venv / "OLD").write_text("old")
+    home = statedir / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    fakebin = statedir / "fakebin"
+    fakebin.mkdir()
+    uv = fakebin / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'case "$UV_TOOL_DIR" in *mindflock-next*) ;; *) if [ %d = 1 ]; then\n'
+        '  mkdir -p "$UV_TOOL_DIR/mindflock/Scripts"; exit 2; fi ;; esac\n'
+        'mkdir -p "$UV_TOOL_DIR/mindflock/bin"\n'
+        'printf "#!/bin/sh\\nexit 0\\n" > "$UV_TOOL_DIR/mindflock/bin/python"\n'
+        'chmod +x "$UV_TOOL_DIR/mindflock/bin/python"\n'
+        'echo new > "$UV_TOOL_DIR/mindflock/NEW"\n' % (1 if live_fails else 0),
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    copy = statedir / "engine_swap.py"
+    shutil.copyfile(engine_swap.__file__, copy)
+    prefix = [sys.executable, "-I", str(copy), "--venv", str(venv), "--"]
+    script = statedir / "gen.sh"
+    script.write_text(
+        self_update._script("v9.9.9", "a" * 40, swap=prefix), encoding="utf-8"
+    )
+    env = dict(
+        os.environ,
+        HOME=str(home),
+        PATH="%s:/usr/bin:/bin" % fakebin,
+        UV_TOOL_DIR=str(venv.parent),
+        UV_TOOL_BIN_DIR=str(statedir / "bin"),
+    )
+    cp = subprocess.run(
+        ["/bin/sh", str(script)], env=env, capture_output=True, text=True, timeout=60
+    )
+    state = json.loads(self_update.state_path().read_text(encoding="utf-8"))
+    log = self_update.log_path().read_text(encoding="utf-8")
+    if live_fails:
+        assert cp.returncode == 2 and state["state"] == "failed", log
+        assert (venv / "OLD").exists() and not (venv / "Scripts").exists()
+        assert "the previous engine is back in place" in log
+    else:
+        assert cp.returncode == 0 and state["state"] == "done", log
+        assert (venv / "NEW").exists() and not (venv / "OLD").exists()
+    assert sorted(p.name for p in venv.parent.parent.iterdir()) == ["tools"]

@@ -16,14 +16,25 @@ from backend.ticket_ingestion.orchestrator import PipelineOrchestrator
 
 _logger = logging.getLogger(__name__)
 
-# Held for the process lifetime so the advisory lock stays acquired. Module-level
-# so it is never garbage-collected (which would release the flock).
+# Held for the process lifetime so the advisory locks stay acquired (a list:
+# the MindFlock-home lock, then the legacy per-root one). Module-level so it
+# is never garbage-collected (which would release the flock).
 _LOCK_HANDLE = None
 
 #: Set by the web server on the child it starts (see the ticket-ingestion
 #: addon): a pipeline the server started is the server's to restart after an
 #: engine update; a standalone run is left alone.
 OWNER_ENV = "MINDFLOCK_PIPELINE_OWNER"
+#: The PID of the server that started this pipeline (same literal in the
+#: ticket-ingestion addon), recorded in the lock as ``server_pid``.
+SERVER_PID_ENV = "MINDFLOCK_PIPELINE_SERVER_PID"
+
+
+def _env_int(name: str) -> int:
+    try:
+        return int((os.environ.get(name) or "").strip() or 0)
+    except ValueError:
+        return 0
 
 
 def _lock_meta() -> dict:
@@ -32,7 +43,18 @@ def _lock_meta() -> dict:
     compares it with its own after an update and restarts a stale child —
     otherwise ticket polling, PR review and the refresher keep running the
     previous version indefinitely."""
-    meta = {"version": "", "commit": "", "owner": os.environ.get(OWNER_ENV, "")}
+    meta = {
+        "version": "",
+        "commit": "",
+        "owner": os.environ.get(OWNER_ENV, ""),
+        # Which server started it (pid + port): a second server sharing this
+        # MindFlock home reads "another server's pipeline", never its own
+        # stale child to restart (see singleton.py).
+        "server_pid": _env_int(SERVER_PID_ENV),
+        "server_port": _env_int("MINDFLOCK_SERVER_PORT"),
+        # Where its ledger / activity beacon / log live (its cwd).
+        "root": os.getcwd(),
+    }
     try:
         from backend import __version__
 
@@ -48,8 +70,8 @@ def _lock_meta() -> dict:
     return meta
 
 
-#: Written next to the lock when this process exits over a configuration
-#: error or an unhandled crash: ``{pid, at, kind, message, fields}``. The web
+#: Written in the cwd (the repo root, beside the legacy per-root lock) when
+#: this process exits over a configuration error or an unhandled crash: ``{pid, at, kind, message, fields}``. The web
 #: server reads it to say WHY its child is gone (``/api/mindflock/status`` →
 #: ``last_error`` / ``exit_reason``) instead of "starting, or exited".
 EXIT_RECORD = ".mindflock-pipeline-exit.json"
@@ -86,34 +108,57 @@ def _write_exit_record(kind: str, message: str) -> None:
 
 
 def _acquire_singleton_lock() -> bool:
-    """Take an exclusive advisory lock on a per-repo lockfile.
+    """Take the pipeline's singleton lock — one pipeline per MindFlock home.
 
-    Two pipeline instances running against the same repo both poll GitHub, both
-    see the same PR as unprocessed, and provision into the same
-    ``workspaces/pr-<n>`` directory at once — which corrupts each other's git
-    clone and collides on the shared ``mindflock_pr-<n>`` tmux session name.
-    The lock (keyed on the working directory, the repo root for both the
-    standalone and the backend.web-launched pipeline) ensures only one runs at a time.
-    Returns False if another instance already holds it.
+    Two pipelines over one engine state both poll the trackers and GitHub,
+    both see the same ticket / PR as new, and race to launch it: provisioning
+    into the same workspace and branch, and the loser's failure path tearing
+    down what the winner armed. The lock used to be keyed on the cwd (each
+    server's repo root), so two servers sharing ``~/.mindflock`` from
+    different directories ran two pipelines (2026-11-13). It is now keyed on
+    the MindFlock home (:func:`singleton.lock_path`); the old per-root lock
+    is taken as well, so an older-build pipeline still running in this root
+    excludes this one until it is restarted. Returns False if another
+    pipeline holds either.
     """
     global _LOCK_HANDLE
-    lock_path = os.path.join(os.getcwd(), ".mindflock-pipeline.lock")
-    # Open WITHOUT truncating ("a+", not "w"): a losing process must not wipe the
-    # winner's PID from the file before its flock check fails. Only the winner
-    # (which acquires the lock) rewrites the PID.
-    fh = open(lock_path, "a+")
-    try:
-        compat.flock(fh.fileno(), compat.LOCK_EX | compat.LOCK_NB)
-    except OSError:
-        fh.close()
-        return False
-    fh.seek(0)
-    fh.truncate(0)
+    from backend.ticket_ingestion import singleton
+
     # Line 1 the PID (all an older server reads), line 2 the build it runs.
-    fh.write("%d\n%s\n" % (os.getpid(), json.dumps(_lock_meta())))
-    fh.flush()
-    _LOCK_HANDLE = fh
+    text = "%d\n%s\n" % (os.getpid(), json.dumps(_lock_meta()))
+    home = singleton.lock_path(os.getcwd())
+    legacy = singleton.legacy_lock_path(os.getcwd())
+    held = singleton.take(home, text)
+    if held is None:
+        return False
+    handles = [held]
+    if legacy.resolve() != home.resolve():
+        other = singleton.take(legacy, text)
+        if other is None:
+            held.close()
+            return False
+        handles.append(other)
+    _LOCK_HANDLE = handles
     return True
+
+
+def _lock_holder_text() -> str:
+    """Who holds the lock this pipeline lost, for its exit line."""
+    from backend.ticket_ingestion import singleton
+
+    for path in (
+        singleton.lock_path(os.getcwd()),
+        singleton.legacy_lock_path(os.getcwd()),
+    ):
+        pid, meta = singleton.probe(path)
+        if pid is None:
+            continue
+        who = "pid %s" % pid
+        port = (meta or {}).get("server_port")
+        if port:
+            who += ", started by the server on port %s" % port
+        return "%s (lock: %s)" % (who, path)
+    return "lock: %s" % singleton.lock_path(os.getcwd())
 
 
 def main() -> None:
@@ -128,8 +173,8 @@ def main() -> None:
 
     if not _acquire_singleton_lock():
         msg = (
-            "Another MindFlock pipeline is already running for this repo "
-            f"(lock: {os.path.join(os.getcwd(), '.mindflock-pipeline.lock')}). Exiting."
+            "Another MindFlock pipeline is already running for this MindFlock "
+            "home — %s. Exiting." % _lock_holder_text()
         )
         _logger.error(msg)
         print(msg, file=sys.stderr)

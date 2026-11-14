@@ -835,6 +835,28 @@ async def _await_turn(title: str, ev) -> None:
         await asyncio.sleep(_TURN_POLL_SECONDS)
 
 
+def launched_elsewhere(srv, title: str, inst, err: BaseException) -> bool:
+    """Whether a forced start of ``title`` that just failed lost a race to
+    ANOTHER start of the same title — a live session other than this
+    start's own ``inst`` (``None`` when it never got that far) is registered
+    under it (the ticket pipeline's, say, or another server's sharing this
+    MindFlock home). Then the failure is "already launched elsewhere", not
+    the item's: say so in the log, and the caller skips the failure ledger
+    entry, the ``create_failed`` report and the flight cancel — that live
+    session flies the title's flight (2026-11-13)."""
+    other = srv.ENGINE.instances.get(title)
+    if other is None or other is inst:
+        return False
+    if srv.log.InfoLog is not None:
+        srv.log.InfoLog.Printf(
+            "start of %s not needed: its session is already live — launched "
+            "elsewhere (%v)",
+            title,
+            err,
+        )
+    return True
+
+
 class LaunchError(Exception):
     """A ticket start refused before anything launched: ``status`` and
     ``body`` are exactly what the route answers with."""
@@ -1007,6 +1029,7 @@ async def launch(
         spawned=lineage["spawned"],
     )
     source_depth = srv._source_intake_depth(source)
+    armed: list = []
     flight_tail = srv._arm_intake(
         title,
         depth_override or source_depth,
@@ -1029,6 +1052,7 @@ async def launch(
             "url": str(getattr(story, "app_url", "") or ""),
         },
         branch=branch,
+        armed=armed,
     )
     # The ticket's source may pin its own agent CLI; empty falls back to this
     # app's default program. Resolved before the 202 (not in the launch) so an
@@ -1082,6 +1106,7 @@ async def launch(
         # unlike the PR path there is no pre-provision step.
         marked = False
         kept = False
+        inst = None
         try:
             if turn is not None:
                 await _await_turn(title, turn[0])
@@ -1217,6 +1242,13 @@ async def launch(
             if srv.log.InfoLog is not None:
                 srv.log.InfoLog.Printf("forced ticket session %s live", title)
         except Exception as err:  # noqa: BLE001
+            if launched_elsewhere(srv, title, inst, err):
+                # Another start (the ticket pipeline's) got it going meanwhile:
+                # not a failure — no failed ledger entry, no create_failed, and
+                # its flight is left alone.
+                if marked:
+                    record_result(story, branch=branch)
+                return
             if marked:
                 record_result(story, error=str(err))
             if srv.log.ErrorLog is not None:
@@ -1246,7 +1278,9 @@ async def launch(
                     "session.create_failed", session=title, data={"error": str(err)}
                 )
             srv._cancel_intake_flight(
-                title, "the session could not be created: %s" % err
+                title,
+                "the session could not be created: %s" % err,
+                armed[0] if armed else "",
             )
         finally:
             if not kept:

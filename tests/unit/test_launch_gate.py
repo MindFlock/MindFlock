@@ -233,10 +233,23 @@ def test_tmux_probe_skips_shells_and_other_sessions(monkeypatch):
         returncode = 0
         stdout = "mindflock_a 100\nmindflock_a_sh 100\nwork 5\nmindflock_b x\n"
 
-    monkeypatch.setattr(gate.subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gate.mux, "run", lambda *a, **k: R())
     assert gate._tmux_agents() == [("mindflock_a", 100.0), ("mindflock_b", 0.0)]
     R.returncode = 1
     assert gate._tmux_agents() == []
+
+
+def test_tmux_probe_that_raises_anything_is_cant_ask(monkeypatch):
+    """assess()/decide() promise never to raise, and every person's create
+    runs through them first: a probe failure of any kind (the native-Windows
+    session host's client raises RuntimeError / ValueError, not only OSError)
+    reads as "tmux can't be asked", never as a 500 on POST /api/instances."""
+
+    def _boom(*a, **k):
+        raise RuntimeError("the MindFlock session host is not answering")
+
+    monkeypatch.setattr(gate.mux, "run", _boom)
+    assert gate._tmux_agents() is None
 
 
 def test_admit_auto_checks_and_notes_in_one_step(monkeypatch):

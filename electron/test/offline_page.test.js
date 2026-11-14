@@ -70,3 +70,11 @@ test('the Gatekeeper note is on the not-installed state and macOS-gated', () => 
   assert.ok(html.includes('Privacy &amp; Security'))
   assert.ok(/ni-gatekeeper'\)\.hidden = \(diag\.platform !== 'darwin'\)/.test(pageScript()))
 })
+
+test('a broken engine has its own screen with the reinstall button, ahead of a failed transcript', () => {
+  const script = pageScript()
+  assert.ok(html.includes('id="s-engine-broken"') && html.includes('id="do-repair"'))
+  assert.match(script, /wire\('do-repair', function \(\) \{ return window\.mfdiag\.install\(\) \}\)/)
+  assert.match(script, /if \(inst\.state === 'running' \|\| \(inst\.state === 'failed' && !broken\)\) return showInstall\(inst\)/)
+  assert.match(script, /'broken-detail'\)\.textContent/)
+})
