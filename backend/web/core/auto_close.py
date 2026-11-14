@@ -158,6 +158,8 @@ W_PR_MERGED = "its PR merged"
 W_PR_CLOSED = "its PR was closed"
 
 _LOCK = threading.RLock()
+#: How long a store transaction waits for the process lock before giving up.
+_TXN_WAIT_S = 10.0
 _CACHE_LOCK = threading.Lock()
 #: The sweep's last verdict per title: ``{"verdict", "why", "closes_at"}``
 #: (in memory, this server only — the row's ``closes_at``).
@@ -275,13 +277,28 @@ class _Txn:
     (the other server on this config dir writes it too)."""
 
     def __enter__(self) -> Dict[str, Dict[str, dict]]:
-        _LOCK.acquire()
-        p = store_path()
-        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
-        self._flock = title_store.file_lock(p)
-        self._flock.__enter__()
-        self.data = _read(p)  # fresh under the lock, never the cache
-        self._before = repr(self.data)
+        # Anything that raises in here never reaches __exit__, so it must let
+        # go of what it took itself: a leaked RLock is held by its thread for
+        # good, and the next removal on another thread blocks forever on it.
+        # Bounded: a removal path calls this, and bookkeeping must never be
+        # what hangs a close — a stuck holder costs one record, not the route.
+        if not _LOCK.acquire(timeout=_TXN_WAIT_S):
+            raise TimeoutError("auto-close store busy")
+        self._flock = None
+        try:
+            p = store_path()
+            os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+            self._flock = title_store.file_lock(p)
+            self._flock.__enter__()
+            self.data = _read(p)  # fresh under the lock, never the cache
+            self._before = repr(self.data)
+        except BaseException:
+            try:
+                if self._flock is not None:
+                    self._flock.__exit__(None, None, None)
+            finally:
+                _LOCK.release()
+            raise
         return self.data
 
     def __exit__(self, exc_type, exc, tb) -> None:

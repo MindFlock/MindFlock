@@ -324,6 +324,8 @@ def rows(engine=None) -> list:
                 # No agent launched yet, and an intake start reports to nobody.
                 "mcp_attached": None,
                 "last_report": None,
+                # Not agent-spawned: the auto-close sweep never touches it.
+                "auto_close": None,
                 "stage": "provisioning",
                 "pr_url": None,
                 "merge_state": None,

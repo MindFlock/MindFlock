@@ -717,3 +717,57 @@ def test_undo_route_wants_ids():
 
     r = TestClient(server.app).post("/api/auto-close/undo", json={})
     assert r.status_code == 400
+
+
+def test_a_store_transaction_that_fails_to_open_lets_go_of_the_lock(monkeypatch):
+    """A _Txn whose open raises never reaches __exit__: it must release the
+    process lock itself, or that thread keeps the RLock for good and the next
+    removal on another thread (session_end.reparent_children →
+    note_parent_gone) blocks forever. CI hung exactly so, once a thread that
+    had leaked it was gone."""
+
+    def boom(_p):
+        raise OSError("disk went away")
+
+    monkeypatch.setattr(ac, "_read", boom)
+    with pytest.raises(OSError):
+        with ac._Txn():
+            pass  # pragma: no cover — never entered
+    monkeypatch.undo()
+
+    got = []
+
+    def other_thread():
+        ok = ac._LOCK.acquire(timeout=2)
+        got.append(ok)
+        if ok:
+            ac._LOCK.release()
+
+    t = threading.Thread(target=other_thread)
+    t.start()
+    t.join(5)
+    assert got == [True]
+
+
+def test_a_busy_store_lock_never_hangs_a_removal(monkeypatch):
+    """A holder that never lets go costs the orphan record, not the close."""
+    monkeypatch.setattr(ac, "_TXN_WAIT_S", 0.2)
+    held = threading.Event()
+    done = threading.Event()
+
+    def hold():
+        with ac._LOCK:
+            held.set()
+            done.wait(5)
+
+    t = threading.Thread(target=hold)
+    t.start()
+    try:
+        assert held.wait(2)
+        kid = SimpleNamespace(Parent="p", Spawned=True, Title="kid")
+        start = time.monotonic()
+        assert ac.note_parent_gone({"p": object(), "kid": kid}, "p") == []
+        assert time.monotonic() - start < 3
+    finally:
+        done.set()
+        t.join(5)
