@@ -428,6 +428,109 @@ def test_fwd_to_unpaired_device_is_502():
     assert r.status_code == 502
 
 
+# The phone's Recently closed sheet lists every device's closed sessions and
+# reopens one where it was closed: the list and the reopen are forwarded, the
+# reopen only with ONE safe id segment, and nothing else under the route.
+def test_fwd_lists_another_devices_recently_closed(_captured_proxy):
+    c = TestClient(server.app)
+    r = c.get("/api/devices/otherbox/fwd/api/recently-closed")
+    assert r.status_code == 200
+    assert _captured_proxy == [
+        ("GET", "otherbox", "http://100.1.2.3:8765/api/recently-closed")
+    ]
+
+
+def test_fwd_reopens_a_closed_session_on_its_device(_captured_proxy, monkeypatch):
+    fetched = []
+
+    async def fake_fetch(dev):
+        fetched.append(dev["key"])
+
+    monkeypatch.setattr(remote, "_fetch_instances", fake_fetch)
+    c = TestClient(server.app)
+    r = c.post(
+        "/api/devices/otherbox/fwd/api/recently-closed/my-task-1731600000000/reopen",
+        json={},
+    )
+    assert r.status_code == 200
+    assert _captured_proxy == [
+        (
+            "POST",
+            "otherbox",
+            "http://100.1.2.3:8765/api/recently-closed/my-task-1731600000000/reopen",
+        )
+    ]
+    # Like a forwarded create: listed as <device>::<title> before the answer.
+    assert fetched == ["otherbox"]
+
+
+def test_fwd_reopen_id_is_requoted_as_one_segment(_captured_proxy):
+    c = TestClient(server.app)
+    r = c.post(
+        "/api/devices/otherbox/fwd/api/recently-closed/fix%20login-17/reopen", json={}
+    )
+    assert r.status_code == 200
+    assert _captured_proxy[0][2] == (
+        "http://100.1.2.3:8765/api/recently-closed/fix%20login-17/reopen"
+    )
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("POST", "/api/recently-closed/my-task-17/forget"),  # forget stays local
+        ("DELETE", "/api/recently-closed/my-task-17"),
+        ("POST", "/api/recently-closed"),
+        ("GET", "/api/recently-closed/my-task-17/reopen"),  # wrong method
+        ("POST", "/api/recently-closed//reopen"),  # no id
+        ("POST", "/api/recently-closed/a/b/reopen"),  # an extra segment
+        ("POST", "/api/recently-closed/my-task-17/reopen/x"),
+        ("POST", "/api/recently-closed/%2e%2e/reopen"),  # traversal id
+        ("POST", "/api/recently-closed/%252e%252e/reopen"),  # double-encoded
+        ("POST", "/api/recently-closed/a%2fb/reopen"),  # an encoded slash
+        ("POST", "/api/recently-closed/a%5cb/reopen"),  # a backslash
+        ("POST", "/api/recently-closed/x%3Fy/reopen"),  # a query smuggled in
+    ],
+)
+def test_fwd_refuses_everything_else_under_recently_closed(
+    _captured_proxy, method, path
+):
+    c = TestClient(server.app)
+    r = c.request(method, "/api/devices/otherbox/fwd" + path)
+    assert r.status_code in (400, 404), r.status_code
+    assert _captured_proxy == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/recently-closed/../reopen",
+        "/api/recently-closed/./reopen",
+        "/api/recently-closed/.../reopen",
+        "/api/recently-closed/a/b/reopen",
+        "/api/recently-closed/../../fleet/rekey/reopen",
+        "/api/recently-closed/a\\b/reopen",
+        "/api/recently-closed/a%2eb/reopen",
+        "/api/recently-closed/a\nb/reopen",
+        "/api/recently-closed/" + "x" * 257 + "/reopen",
+        "/api/recently-closed/reopen",
+        "/api/recently-closed/x/forget",
+    ],
+)
+def test_fwd_target_refuses_unsafe_reopen_ids(path):
+    assert remote._fwd_target("POST", path) is None
+
+
+def test_fwd_target_passes_exact_routes_and_one_id():
+    assert remote._fwd_target("GET", "/api/recently-closed") == "/api/recently-closed"
+    assert remote._fwd_target("POST", "/api/instances") == "/api/instances"
+    assert (
+        remote._fwd_target("POST", "/api/recently-closed/t-1/reopen")
+        == "/api/recently-closed/t-1/reopen"
+    )
+    assert remote._fwd_target("GET", "/api/recently-closed/t-1/reopen") is None
+
+
 # --------------------------------------------------------------------------- #
 # whose credential the proxy lends: never an anonymous caller's
 # --------------------------------------------------------------------------- #

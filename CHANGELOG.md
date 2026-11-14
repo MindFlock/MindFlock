@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Recently closed on the phone shows every device.** With other devices
+  connected over the tailnet, the sheet lists their closed sessions too,
+  newest first, each named by its device; **Reopen** brings one back on the
+  device it was closed on. A device that doesn't answer gets one line
+  (*couldn't reach Mac-mini*) instead of blanking the sheet. The device relay
+  forwards the list and the reopen (one id, nothing else under the route).
 - **The New session dialog says so when the Folder is your whole home
   folder.** The agent works on everything in the folder it is given; a line
   under the field suggests picking (or creating) a project folder inside it.

@@ -249,7 +249,8 @@ def test_actions_hit_the_rails_routes():
     post = js.split("  function postFor(")[1].split("\n  }\n")[0]
     assert '"/api/instances/" + encodeURIComponent(title) + "/" + action' in post
     assert 'method: "POST"' in post
-    assert 'fetch("/api/recently-closed")' in js
+    # Every connected device's list too (devicePath "" = this server's own).
+    assert 'fetch(devicePath(device, "/api/recently-closed"))' in js
     assert '"/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen"' in js
 
 
