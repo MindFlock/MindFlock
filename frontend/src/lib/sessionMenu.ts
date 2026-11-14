@@ -52,6 +52,7 @@ import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { toast } from "./toast";
 import { showInSky } from "./viewMode";
+import { isAutoClosable, setKeepOpen } from "./autoClose";
 
 export interface MenuItem {
   /** Stable id (data-menu): tests and the pane/row tell items apart by it. */
@@ -302,6 +303,18 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       note: inst.flock ? "on every prompt" : undefined,
       title: "Sessions this one starts: let the agent split this now, ask for workers once, or on every prompt",
     }),
+    // A worker an agent started closes by itself once it is finished and its
+    // work merged (lib/autoClose); this switch keeps this one open.
+    isAutoClosable(inst) && {
+      key: "keep-open",
+      label: (inst.auto_close?.keep_open ? "✓ " : "") + "Keep open",
+      checked: !!inst.auto_close?.keep_open,
+      note: inst.auto_close?.keep_open ? "won't close by itself" : undefined,
+      title: inst.auto_close?.keep_open
+        ? "On: this worker stays open when it is finished. Click to let it close by itself again"
+        : "This worker closes by itself once it has finished and its work is merged. Keep it open instead",
+      run: () => setKeepOpen(title, !inst.auto_close?.keep_open),
+    },
   ]);
 
   const group = remote ? null : detachableGroup(inst);

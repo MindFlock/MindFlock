@@ -1313,6 +1313,18 @@ class GeneralSettings:
     turns off only the everyday sleeping). ``None`` = 5; ``0`` turns sleeping
     for memory off.
 
+    ``auto_close_children`` ("Close finished sub-sessions automatically"):
+    whether a worker an agent spawned is CLOSED by itself — agent stopped,
+    worktree and branch kept, reopenable from Recently closed — once it has
+    reported done or failed, sits idle, and its work is merged, has no commits
+    of its own, or its PR merged or closed (:mod:`backend.web.core.auto_close`).
+    ``None`` (never set) reads as ON; ``False`` turns it off. A session's own
+    "Keep open" (its ⋯ menu) still wins.
+
+    ``auto_close_grace_minutes``: how long such a finished worker stays open
+    first, so its parent can still read it, and how long after a person last
+    typed into it. ``None`` = 10; at least 1.
+
     ``memory_low_pct`` / ``memory_critical_pct``: the share of RAM the kernel
     reports available (MemAvailable) at or below which memory reads low /
     critical — a FLOOR, one distress signal among several
@@ -1409,6 +1421,8 @@ class GeneralSettings:
     revive_on_start: Optional[bool] = None  # None = OFF (see docstring)
     sleep_idle_minutes: Optional[int] = None  # None = 45; 0 = off (see docstring)
     memory_sleep_minutes: Optional[int] = None  # None = 5; 0 = off (see docstring)
+    auto_close_children: Optional[bool] = None  # None = on (see docstring)
+    auto_close_grace_minutes: Optional[int] = None  # None = 10 (see docstring)
     memory_low_pct: Optional[int] = None  # None = 8 (see docstring)
     memory_critical_pct: Optional[int] = None  # None = 4 (see docstring)
     max_live_agents: Optional[int] = None  # None = RAM / 1.2 GB; 0 = no cap
@@ -1465,7 +1479,10 @@ class GeneralSettings:
             d["revive_on_start"] = self.revive_on_start
         if self.sleep_idle_minutes is not None:
             d["sleep_idle_minutes"] = self.sleep_idle_minutes
+        if self.auto_close_children is not None:
+            d["auto_close_children"] = self.auto_close_children
         for key in (
+            "auto_close_grace_minutes",
             "memory_sleep_minutes",
             "memory_low_pct",
             "memory_critical_pct",
@@ -1526,6 +1543,8 @@ class GeneralSettings:
             revive_on_start=_opt_bool(d.get("revive_on_start")),
             sleep_idle_minutes=_opt_nonneg_int(d.get("sleep_idle_minutes")),
             memory_sleep_minutes=_opt_nonneg_int(d.get("memory_sleep_minutes")),
+            auto_close_children=_opt_bool(d.get("auto_close_children")),
+            auto_close_grace_minutes=_opt_pos_int(d.get("auto_close_grace_minutes")),
             memory_low_pct=_opt_pct(d.get("memory_low_pct")),
             memory_critical_pct=_opt_pct(d.get("memory_critical_pct")),
             max_live_agents=_opt_nonneg_int(d.get("max_live_agents")),

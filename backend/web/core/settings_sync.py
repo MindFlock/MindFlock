@@ -180,6 +180,10 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "workers_request",
         "workers_model",
         "workers_decide",
+        # Whether finished workers close themselves (core.auto_close): how
+        # the person likes their rail, not a machine fact.
+        "auto_close_children",
+        "auto_close_grace_minutes",
     ),
     "notifications": (
         "muted_rules",
@@ -448,6 +452,8 @@ LABELS: Dict[str, str] = {
     "general.workers_request": "Workers request",
     "general.workers_model": "Workers model",
     "general.workers_decide": "Workers: the agent decides",
+    "general.auto_close_children": "Close finished sub-sessions automatically",
+    "general.auto_close_grace_minutes": "Finished sub-sessions: minutes before closing",
     "notifications.muted_rules": "Muted notifications",
     "notifications.enabled_rules": "Enabled notifications",
     "notifications.ntfy_enabled": "Phone notifications on/off",

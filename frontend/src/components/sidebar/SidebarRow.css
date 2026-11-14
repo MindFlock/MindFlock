@@ -1052,6 +1052,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   color: var(--tone-broken);
 }
 
+/* A worker whose parent closed with its work unmerged (lib/autoClose): kept
+   open, and it needs a look — the attention tone, not the broken one. */
+.inst .lineage.orphan-line {
+  color: var(--tone-attention);
+}
+
 /* The ✕ on a session with uncommitted changes asks first — the same calm strip
    as Delete's, under the row. */
 .inst-tail .close-confirm {

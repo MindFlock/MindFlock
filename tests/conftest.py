@@ -189,6 +189,11 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_SLEEP_FILE", str(tmp_path / "mindflock" / "sleeping.json")
     )
+    # The auto-close records (``~/.mindflock/auto_close.json``, core.
+    # auto_close): every agent-spawned row reads them (Keep open, orphans).
+    monkeypatch.setenv(
+        "MINDFLOCK_AUTO_CLOSE_FILE", str(tmp_path / "mindflock" / "auto_close.json")
+    )
     # The held-offline records (``~/.mindflock/held.json``, core.held): every
     # row reads them and _ensure_agent_session REFUSES a session they name.
     monkeypatch.setenv("MINDFLOCK_HELD_FILE", str(tmp_path / "mindflock" / "held.json"))

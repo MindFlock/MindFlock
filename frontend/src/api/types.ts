@@ -206,6 +206,19 @@ export interface SessionMemory {
   at: number;
 }
 
+/** A row's `auto_close` (core.auto_close.row_field). */
+export interface AutoCloseInfo {
+  /** The person's ⋯ → Keep open: the sweep leaves it alone. */
+  keep_open: boolean;
+  /** The parent it was spawned by, now closed, while its work is not merged
+   * ("" otherwise): the row says "parent closed — review or close". */
+  orphan_of: string;
+  /** Epoch seconds when this finished worker closes by itself, or null. */
+  closes_at: number | null;
+  /** Why the sweep's last pass left it open ("" when unknown). */
+  why: string;
+}
+
 export interface Instance {
   title: string;
   branch: string;
@@ -427,6 +440,10 @@ export interface Instance {
    * held until its turn, running, done or stopped — null when it was never
    * ordered or fenced. Optional: an older server doesn't send it. */
   order?: RowOrder | null;
+  /** Finished sub-sessions close themselves (backend core/auto_close.py):
+   * set on an agent-spawned session (and a worker orphaned by its parent),
+   * null on any other. Optional: an older server doesn't send it. */
+  auto_close?: AutoCloseInfo | null;
   /** A shared-folder (peer-link) session: it runs sandboxed, and the server
    * refuses ship / push / PR / the shell pane / the IDE / rename / copies for
    * it (backend core/peer_guard.py). Optional: an older server doesn't send

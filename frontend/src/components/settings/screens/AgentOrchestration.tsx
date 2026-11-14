@@ -41,6 +41,7 @@ export function AgentOrchestration(_: ScreenProps) {
         button or ⋯ menu): let the agent split it now, ask once, or on every prompt.
       </p>
       <WorkersRows />
+      <AutoCloseRows />
       <h3 className="set-section-title">Spawn limits</h3>
       <p className="set-hint orch-intro">
         Guard-rails on how far one orchestrator can fan out. A change applies to
@@ -132,6 +133,54 @@ function WorkersRows() {
         <SettingField group="general" field="workers_model" placeholder={DEFAULT_WORKERS_MODEL} />
         <span className="set-hint">The model the request asks workers to run on.</span>
       </label>
+    </>
+  );
+}
+
+/** The switch's words (exported for tests). */
+export const AUTO_CLOSE_LABEL = "Close finished sub-sessions automatically";
+export const AUTO_CLOSE_NOTE =
+  "A worker an agent started closes by itself once it has reported done, sits idle, and its work is merged. It stays in Recently closed.";
+
+/** Finished workers close themselves (backend core/auto_close.py): ON by
+ * default (unset reads as on, `general.auto_close_children`), after
+ * `general.auto_close_grace_minutes` (empty = 10). Blocked workers, unmerged
+ * work and anything you are looking at stay open; a session's ⋯ → Keep open
+ * opts one out. */
+function AutoCloseRows() {
+  const s = useSettings();
+  const stored = s.get("general", "auto_close_children");
+  const on = stored !== false && stored !== "false" && stored !== "0";
+  return (
+    <>
+      <div className="set-row set-switch-row" id="orch-auto-close">
+        <span className="notif-rule-text">
+          <span className="set-label">{AUTO_CLOSE_LABEL}</span>
+          <span className="set-hint notif-rule-desc">
+            {AUTO_CLOSE_NOTE} Blocked workers, unmerged work and a worker you have open stay. Turn it off
+            for one worker from its ⋯ menu: Keep open.
+          </span>
+        </span>
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            data-group="general"
+            data-field="auto_close_children"
+            checked={on}
+            onChange={(e) => void s.saveField("general", "auto_close_children", e.target.checked)}
+          />
+          <span className="ca-slider" />
+        </label>
+      </div>
+      {on && (
+        <label className="set-row">
+          <span className="set-label">Minutes a finished worker stays open first</span>
+          <SettingField group="general" field="auto_close_grace_minutes" type="number" placeholder="10" />
+          <span className="set-hint">
+            Time for its orchestrator to read it, counted from when it finished. Anything you type into it after its report keeps it open.
+          </span>
+        </label>
+      )}
     </>
   );
 }

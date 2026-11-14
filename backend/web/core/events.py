@@ -424,6 +424,13 @@ EVENT_NAMES = (
     # (…), so 2 idle agents were put to sleep: a, b. They wake when you open
     # or message them.").
     "system.sessions_slept",
+    # The auto-close sweep closed finished workers of one parent
+    # (core.auto_close.announce): ONE per parent per pass. ``session`` is the
+    # parent ("" when it is gone), ``new`` the count (data: {"parent",
+    # "count", "titles", "entries": [{"title", "id"}], "detail"} — ``id`` the
+    # Recently closed entry the toast's Undo reopens, ``detail`` "Closed 2
+    # finished workers of lead: a, b.").
+    "system.subsessions_closed",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

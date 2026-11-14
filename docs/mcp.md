@@ -829,6 +829,11 @@ prompts keep working). `title`, `mode` (`close` default, or `delete`), `force`
 
 → `{ok, title, mode, worktree}`.
 
+You rarely need it for a finished worker: **finished workers close
+themselves** (see [Finished workers close themselves](#finished-workers-close-themselves)).
+`kill_session` still works — to close one before its grace window ends, or
+to delete it outright.
+
 ### `set_parent`
 
 `title`, `parent` (default: you; `""` detaches). Adopts a session, moves it
@@ -2279,6 +2284,57 @@ kill_session {title: "api-upload", mode: "delete"}
 `delete` refuses a worker whose branch still has commits that are not in
 `api`'s HEAD, and lists them. Merge first, use `mode: "close"` to keep the
 worktree, or pass `force: true` to discard the work.
+
+You can also do nothing: once a worker has reported `done` (or `failed`), is
+idle, and its branch is merged into `api`'s HEAD (or never had commits of its
+own), MindFlock closes it by itself after the grace window — below.
+
+### Finished workers close themselves
+
+A worker an agent spawned used to sit idle in the rail after it reported,
+until its orchestrator remembered `kill_session` — often never, so finished
+workers looked like live work for hours. The server's auto-close sweep
+(`backend/web/core/auto_close.py`, once a minute) now **closes** such a worker
+— agent stopped, worktree and branch kept, the session in Recently closed like
+a manual ✕, never deleted — when all of these hold:
+
+1. **It is a sub-session.** `spawned: true` and under a live parent (or
+   orphaned by one, below). Never a session the person started (one an agent
+   adopted with `set_parent` stays theirs), an intake session (`pr-…`,
+   `issue-…`, a ticket branch), an in-place or peer-shared session, a feature's
+   hidden helper (a Verify run), a member of a running team run, a session on
+   a running route (or the branch of its parent's running route), a worker
+   with open workers of its own, or another device's row.
+2. **It is finished.** Its newest `report_result` is `done` or `failed` —
+   `blocked` waits on someone, so it stays — and nothing reached it since (a
+   message, a queued prompt, a person typing). Its agent is idle, gone or
+   asleep, with no question or dialog up, no prompt queued, no mail waiting, no
+   background job (`expect_background_job`), not shipping by itself.
+3. **Its work is accounted for.** A clean worktree, and either no commits
+   beyond its fork point, or every commit reachable from its parent's HEAD
+   (the same check `kill_session` `delete` makes), or — a `separate=true`
+   worker — its PR merged or was closed. **Unmerged work stays open**: that
+   is unfinished business, not clutter.
+4. **The grace window passed** — `general.auto_close_grace_minutes`, 10 by
+   default — since it finished (its report, or its last turn ending, whichever
+   is later), so you can still `read_output` / `get_diff` it. A merge inside
+   the window closes it when the window ends; a merge after it, on the next
+   pass. Nobody may be looking: no terminal attached to it in any connected
+   UI, no outside `tmux attach`, nobody typed into it within the window.
+
+Its summary stays in your Thread (`finished_children`), so nothing leaves the
+parent's view. **Orphans:** when a worker's parent is closed or deleted while
+the worker's work is unmerged, it is kept and its row says *parent closed —
+review or close* (`auto_close.orphan_of`); once its work is accounted for, it
+closes like any other. The person can opt one worker out (its ⋯ → **Keep
+open**) or all of them (Settings → Agent orchestration → *Close finished
+sub-sessions automatically*, `general.auto_close_children`). Each close is
+logged with its reason, and one `system.subsessions_closed` event per parent
+per pass drives the app's toast: *Closed 2 finished workers of “api” —
+Undo*; Undo reopens them and marks them Keep open. With two servers on one
+config dir the sweep runs in one of them (the `auto-close` lease in
+`sweep.leases`), and "gone" is judged by `state.json` tombstones, never by a
+server's own registry. `MINDFLOCK_AUTO_CLOSE=0` starts a server without it.
 
 ## Troubleshooting
 

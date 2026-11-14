@@ -61148,6 +61148,77 @@ function mapHasState(inst, chip) {
 	return (inst.diff_stat?.files || 0) > 0 || !!chip || !!rz && ((rz.zones || 0) > 0 || (rz.breaches || 0) > 0 || (rz.last_block_ts || 0) > 0);
 }
 //#endregion
+//#region src/lib/autoClose.ts
+var AUTO_CLOSED_EVENT = "system.subsessions_closed";
+function autoClosedToastText(d, nameOf = displayName) {
+	const titles = (d.titles || []).filter(Boolean);
+	const n = titles.length || Number(d.count) || 0;
+	const what = n === 1 ? "finished worker “" + nameOf(titles[0] || "") + "”" : n + " finished workers";
+	const of = d.parent ? " of “" + nameOf(d.parent) + "”" : "";
+	return "Closed " + what + of;
+}
+function autoClosedIds(d) {
+	return (d.entries || []).map((e) => String(e?.id || "")).filter(Boolean);
+}
+async function undoAutoClose(ids) {
+	if (!ids.length) return [];
+	try {
+		const r = await api("/api/auto-close/undo", {
+			method: "POST",
+			json: { ids }
+		});
+		const back = r.reopened || [];
+		const failed = Object.values(r.failed || {});
+		if (failed.length) errorPop("Some couldn't be reopened", failed.join("; "));
+		else if (back.length) toast("Reopened " + back.map(displayName).join(", ") + " · kept open");
+		return back;
+	} catch (err) {
+		errorPop("Undo failed", errMsg(err));
+		return [];
+	} finally {
+		refreshRecentlyClosed();
+		refreshInstances();
+	}
+}
+function autoClosedToast(d) {
+	const ids = autoClosedIds(d);
+	const text = autoClosedToastText(d);
+	toast(text, {
+		action: ids.length ? {
+			label: "Undo",
+			onClick: () => void undoAutoClose(ids),
+			ariaLabel: "Undo: reopen — " + text
+		} : void 0,
+		title: "They are in Recently closed. Undo reopens them and keeps them open.",
+		duration: 9e3
+	});
+	refreshRecentlyClosed();
+}
+function isAutoClosable(inst) {
+	return !!inst?.auto_close && !inst.device;
+}
+function orphanLine(inst) {
+	const of = inst?.auto_close?.orphan_of;
+	if (!of || inst?.device) return null;
+	return {
+		text: "parent closed — review or close",
+		title: "“" + displayName(of) + "”, the session that started this worker, was closed while this worker's work was not merged. Review it, merge or ship it, or close it."
+	};
+}
+async function setKeepOpen(title, keep) {
+	try {
+		await instApi(title, "/keep-open", {
+			method: "POST",
+			json: { keep }
+		});
+		toast(keep ? displayName(title) + " stays open when it finishes" : displayName(title) + " closes by itself once it is finished and merged");
+	} catch (err) {
+		errorPop("Keep open failed", errMsg(err));
+	} finally {
+		refreshInstances();
+	}
+}
+//#endregion
 //#region src/components/EventToasts.tsx
 function instances() {
 	return queryClient.getQueryData(["instances"]) || [];
@@ -61497,6 +61568,11 @@ function EventToasts() {
 				onClick: () => openSettings(n.screen),
 				duration: 8e3
 			});
+		}));
+		unsubs.push(ev.subscribe(AUTO_CLOSED_EVENT, (env) => {
+			if (isReplay(env)) return;
+			autoClosedToast(env.data || {});
+			refreshInstances();
 		}));
 		unsubs.push(ev.subscribe("session.deleted", (env) => {
 			dropActivity(env.session);
@@ -65293,7 +65369,15 @@ function sessionMenu$1(inst, ctx, opts = {}) {
 		fromTable("workers", {
 			note: inst.flock ? "on every prompt" : void 0,
 			title: "Sessions this one starts: let the agent split this now, ask for workers once, or on every prompt"
-		})
+		}),
+		isAutoClosable(inst) && {
+			key: "keep-open",
+			label: (inst.auto_close?.keep_open ? "✓ " : "") + "Keep open",
+			checked: !!inst.auto_close?.keep_open,
+			note: inst.auto_close?.keep_open ? "won't close by itself" : void 0,
+			title: inst.auto_close?.keep_open ? "On: this worker stays open when it is finished. Click to let it close by itself again" : "This worker closes by itself once it has finished and its work is merged. Keep it open instead",
+			run: () => setKeepOpen(title, !inst.auto_close?.keep_open)
+		}
 	]);
 	const group = remote ? null : detachableGroup(inst);
 	const folder = inst.folder || inst.path || "";
@@ -66886,7 +66970,8 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const wait = ss.waiting && inst.waiting_for_memory ? inst.waiting_for_memory : null;
 	const waitText = wait ? waitLine(wait, Date.now()) : "";
 	const failText = ss.startFailed && inst.start_failed ? startFailedHint(inst.start_failed).split("\n")[0] : "";
-	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !!task;
+	const orphan = orphanLine(inst);
+	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !orphan && !!task;
 	const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
 	useNow(wline?.state === "working" || ship?.state === "working" ? 3e4 : false);
 	useNow(wait ? 3e4 : false);
@@ -67171,6 +67256,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 								className: "lineage startfail-line",
 								title: ss.hint,
 								children: failText
+							}),
+							!editing && orphan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lineage orphan-line",
+								title: orphan.title,
+								children: orphan.text
 							}),
 							!editing && taskLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TaskLine, { inst }),
 							!editing && !ship && !lline && !wline && lineage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -129750,6 +129840,7 @@ function AgentOrchestration(_) {
 			children: "Sessions a session starts. Ask for them from a session's Workers… (its pane button or ⋯ menu): let the agent split it now, ask once, or on every prompt."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkersRows, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoCloseRows, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
 			children: "Spawn limits"
@@ -129872,6 +129963,54 @@ function WorkersRows() {
 			]
 		})
 	] });
+}
+var AUTO_CLOSE_LABEL = "Close finished sub-sessions automatically";
+var AUTO_CLOSE_NOTE = "A worker an agent started closes by itself once it has reported done, sits idle, and its work is merged. It stays in Recently closed.";
+function AutoCloseRows() {
+	const s = useSettings();
+	const stored = s.get("general", "auto_close_children");
+	const on = stored !== false && stored !== "false" && stored !== "0";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		id: "orch-auto-close",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: AUTO_CLOSE_LABEL
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint notif-rule-desc",
+				children: [AUTO_CLOSE_NOTE, " Blocked workers, unmerged work and a worker you have open stay. Turn it off for one worker from its ⋯ menu: Keep open."]
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				"data-group": "general",
+				"data-field": "auto_close_children",
+				checked: on,
+				onChange: (e) => void s.saveField("general", "auto_close_children", e.target.checked)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	}), on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Minutes a finished worker stays open first"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "general",
+				field: "auto_close_grace_minutes",
+				type: "number",
+				placeholder: "10"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "Time for its orchestrator to read it, counted from when it finished. Anything you type into it after its report keeps it open."
+			})
+		]
+	})] });
 }
 function CapRow({ cap, field, label, hint }) {
 	const { data: config } = useConfig();
