@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Memory popup no longer spills past its edge.** A long "Why" line
+  (e.g. "Every running process stalled on memory 42% of the last minute")
+  could not wrap, so it widened the machine table past the popup and cut off
+  every value on the right. Pressure and Why now wrap inside the popup's
+  width, and labels stay on their first line.
 - **Your other devices stop flickering.** One unanswered 2 s hello probe
   (every 20 s) marked a device unreachable, and one failed session-list fetch
   (every 5 s) dropped its list, so its sessions blinked out of the rail and
