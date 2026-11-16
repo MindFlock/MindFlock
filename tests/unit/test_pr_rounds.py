@@ -172,16 +172,10 @@ def test_check_rounds_delivers_once(tmp_path, monkeypatch):
     )
     newest = cmt(2, T0 + 100)
 
-    async def comments(p, c):
-        return [newest]
+    async def requests(p, c):
+        return [review(55, T0 + 50), newest]
 
-    async def reviews(p, c):
-        return [review(55, T0 + 50)]
-
-    monkeypatch.setattr(O, "fetch_actionable_comments", comments)
-    import backend.ticket_ingestion.pr_comments as PC
-
-    monkeypatch.setattr(PC, "fetch_changes_requested", reviews)
+    monkeypatch.setattr(O, "fetch_pr_requests", requests)
     monkeypatch.setattr("time.time", lambda: T0 + 100 + R.SETTLE_S + 5)
     orch = O.PipelineOrchestrator.__new__(O.PipelineOrchestrator)
     orch.config = type("C", (), {"github": _gh()})()
@@ -214,3 +208,185 @@ def test_off_leaves_rounds_alone(tmp_path, monkeypatch):
     orch._cs_runner = FakeRunner()
     asyncio.run(orch._check_rounds())
     assert orch._cs_runner.rounds == []
+
+
+# --------------------------------------------------------------------------- #
+# Every request kind has its own bookkeeping prefix; old ones stay valid
+# --------------------------------------------------------------------------- #
+def convo(i, t, author="rev"):
+    return PRComment(
+        id=i,
+        kind="issue",
+        author=author,
+        body="why?",
+        url="i%d" % i,
+        created_at=iso(t),
+    )
+
+
+def body_review(i, t, state="COMMENTED"):
+    return PRComment(
+        id=i,
+        kind="review",
+        author="bot",
+        body="outside the diff range: x",
+        url="b%d" % i,
+        created_at=iso(t),
+        review_state=state,
+    )
+
+
+def test_each_kind_has_its_own_prefix():
+    assert R.comment_key(cmt(2, T0)) == "c:2"
+    assert R.comment_key(review(55, T0)) == "r:55"  # no state: as before
+    cr = review(56, T0)
+    cr.review_state = "CHANGES_REQUESTED"
+    assert R.comment_key(cr) == "r:56"
+    assert R.comment_key(convo(9, T0)) == "i:9"
+    assert R.comment_key(body_review(57, T0)) == "b:57"
+    assert R.comment_key(body_review(58, T0, "APPROVED")) == "b:58"
+
+
+def test_old_state_still_marks_its_items_handled():
+    # A ledger written before conversation comments were read: c:/r: only.
+    handled = {"c:2", "r:55"}
+    st, items = R.pending_round(
+        [cmt(2, T0 + 10), convo(2, T0 + 10)],
+        [review(55, T0 + 10), body_review(55, T0 + 10)],
+        handled,
+        T0,
+        T0 + 5000,
+    )
+    # Same numeric ids, other kinds: still new.
+    assert st == "ready"
+    assert sorted(R.comment_key(c) for c in items) == ["b:55", "i:2"]
+
+
+# --------------------------------------------------------------------------- #
+# A reply to every request
+# --------------------------------------------------------------------------- #
+def _assert_replies_to_all(p):
+    assert "Reply to EVERY request" in p
+    assert "Done in `<sha>`" in p  # done: what changed + the commit sha
+    assert "say why" in p  # pushed back
+    assert "Waiting on the owner" in p  # asked the owner
+    assert "link to its reply" in p  # the summary lists each reply's link
+    assert "never force-push" in p and "never merge" in p
+    assert "Never resolve a reviewer's thread" in p
+
+
+def test_the_round_prompt_replies_to_every_request():
+    thread = cmt(3, T0, path="parser.py")
+    thread.reply_to = 1
+    items = [review(55, T0), convo(9, T0), body_review(57, T0), thread]
+    for policy in ("triage", "ask"):
+        p = R.build_round_prompt(_pr(), items, policy)
+        _assert_replies_to_all(p)
+        # Inline: its own thread, to the thread's first comment.
+        assert (
+            "gh api -X POST repos/o/r/pulls/7/comments/<thread comment id>/replies" in p
+        )
+        assert "thread comment id `1`" in p
+        # Conversation comments + review bodies: ONE conversation comment.
+        assert "gh api -X POST repos/o/r/issues/7/comments" in p
+        assert p.count("reply in your PR conversation comment") == 3
+        assert "the whole PR (conversation comment)" in p
+        assert "the whole PR (review)" in p
+    assert "every request still gets its reply" in R.build_round_prompt(
+        _pr(), items, "ask"
+    )
+
+
+def test_only_the_reply_kinds_in_play_are_spelled_out():
+    p = R.build_round_prompt(_pr(), [cmt(3, T0)], "triage")
+    assert "/replies" in p and "issues/7/comments -F" not in p
+    p = R.build_round_prompt(_pr(), [convo(9, T0)], "triage")
+    assert "issues/7/comments -F" in p and "<thread comment id>/replies -f" not in p
+
+
+def test_the_first_pass_prompt_replies_to_every_request():
+    from backend.ticket_ingestion import pr_runner as P
+
+    thread = cmt(3, T0, path="parser.py")
+    items = [convo(9, T0), body_review(57, T0), thread]
+    p = P.build_consolidated_pr_prompt(_pr(), items, "/ws", reply_all=True)
+    _assert_replies_to_all(p)
+    assert "**Do it**" in p and "**Push back**" in p and "**Ask the owner**" in p
+    assert "commit them, and push" in p
+    assert "unstaged" not in p  # the old "leave it for the human" ending is gone
+    assert "### 1. conversation comment by rev" in p
+    assert "### 2. review by bot" in p
+    assert "### 3. inline comment by rev" in p
+    assert "thread comment id `3`" in p  # no reply_to known: its own id
+    # Off (a route's Reviews stop, a forced review): the old prompt, unchanged.
+    plain = P.build_consolidated_pr_prompt(_pr(), items, "/ws")
+    assert "Reply to EVERY request" not in plain and "unstaged" in plain
+
+
+# --------------------------------------------------------------------------- #
+# A route's reviews stop owns the comments: recorded, never handed over
+# --------------------------------------------------------------------------- #
+class FlightRunner(FakeRunner):
+    async def deliver_pr_round(self, pr, prompt):
+        self.rounds.append((pr.number, prompt))
+        return "flight"
+
+
+def test_a_round_left_to_a_route_is_recorded_and_never_comes_back(
+    tmp_path, monkeypatch
+):
+    pr = _pr()
+    monkeypatch.setattr(O, "_STATE_DIR", tmp_path)
+    ST.record_processed_pr(
+        tmp_path,
+        ProcessedPR(
+            number=7,
+            head_sha="abc",
+            processed_at=datetime.fromtimestamp(T0, timezone.utc),
+            repo="o/r",
+        ),
+    )
+
+    async def requests(p, c):
+        return [convo(9, T0 + 50), cmt(2, T0 + 100)]
+
+    monkeypatch.setattr(O, "fetch_pr_requests", requests)
+    monkeypatch.setattr("time.time", lambda: T0 + 100 + R.SETTLE_S + 5)
+    orch = O.PipelineOrchestrator.__new__(O.PipelineOrchestrator)
+    orch.config = type("C", (), {"github": _gh()})()
+    orch._pr_monitor = FakeMonitor([pr])
+    orch._cs_runner = FlightRunner()
+    asyncio.run(orch._check_rounds())
+    assert set(ST.load_pr_rounds(tmp_path)["o/r#7"]["items"]) == {"i:9", "c:2"}
+    # The flight passes its reviews stop: the server now hands rounds over,
+    # but these two were the route's — nothing to deliver.
+    orch._cs_runner = FakeRunner()
+    asyncio.run(orch._check_rounds())
+    assert orch._cs_runner.rounds == []
+
+
+def test_the_first_pass_records_what_it_carried(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(O, "_STATE_DIR", tmp_path)
+    monkeypatch.setattr(
+        O,
+        "fetch_pr_requests",
+        AsyncMock(
+            return_value=[
+                convo(9, T0),
+                cmt(2, T0),
+            ]
+        ),
+    )
+    orch = O.PipelineOrchestrator.__new__(O.PipelineOrchestrator)
+    orch.config = type("C", (), {"github": _gh()})()
+    orch._cs_runner = type("R", (), {"run_pr": AsyncMock(return_value="feature/x")})()
+
+    async def _slot(*a, **k):
+        return None
+
+    orch._wait_for_slot = _slot
+    asyncio.run(orch._process_pr(_pr()))
+    assert ("o/r", 7) in ST.load_processed_prs(tmp_path)
+    assert set(ST.load_pr_rounds(tmp_path)["o/r#7"]["items"]) == {"i:9", "c:2"}

@@ -8956,7 +8956,12 @@ async def hand_off_by_branch(payload: dict) -> JSONResponse:
     ``pr-…`` one; never a verify checker) → ``{"title", "how": "queued"}``;
     else the newest recently-closed one on it, REOPENED on its worktree with
     its conversation (as the Recently closed dialog does) → ``"reopened"``;
-    else 404 — the caller starts a session of its own."""
+    else 404 — the caller starts a session of its own.
+
+    A live session on ``branch`` flying a route whose ``reviews`` stop is not
+    done yet → ``{"title", "how": "flight"}`` and NOTHING is queued: the
+    route already loops on the PR's review comments (docs/pr-review-rounds.md
+    "Routes"). A caller that predates ``"flight"`` reads it as handed."""
     body = payload or {}
     branch = str(body.get("branch") or "").strip()
     text = str(body.get("text") or "")
@@ -8975,6 +8980,13 @@ async def hand_off_by_branch(payload: dict) -> JSONResponse:
         ),
         key=_rank,
     )
+    for t in live:
+        try:
+            pending = _flights.reviews_pending(_flights.for_session(t))
+        except Exception:  # noqa: BLE001 — an unreadable store is "no route"
+            pending = False
+        if pending:
+            return JSONResponse({"title": t, "how": "flight"})
     how = "queued"
     title = live[0] if live else ""
     if not title:

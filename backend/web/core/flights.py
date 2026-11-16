@@ -2451,6 +2451,29 @@ def for_session(title: str, unfinished_only: bool = True) -> Optional[dict]:
         return copy.deepcopy(best) if best is not None else None
 
 
+def reviews_pending(flight: Optional[dict]) -> bool:
+    """Whether ``flight`` still owns its PR's review comments: unfinished,
+    with a ``reviews`` stop it has not passed (done, skipped, or failed and
+    moved on). PR intake leaves such a PR's comments to the route instead of
+    handing them to the session as well (docs/pr-review-rounds.md
+    "Routes")."""
+    if not isinstance(flight, dict) or flight.get("state") not in UNFINISHED:
+        return False
+    states = flight.get("step_states") or {}
+    for step in flight.get("steps") or []:
+        if not isinstance(step, dict) or step.get("kind") != "reviews":
+            continue
+        ss = states.get(step.get("id"))
+        if not isinstance(ss, dict):
+            return True
+        state = ss.get("state")
+        moved_on = bool((ss.get("detail") or {}).get("moved_on"))
+        if state in ("done", "skipped") or (state == "failed" and moved_on):
+            continue
+        return True
+    return False
+
+
 def mutate(flight_id: str, fn: Callable[[dict], None]) -> Optional[dict]:
     """Read-modify-write one flight under the lock; ``fn`` may raise
     :class:`FlightError` (nothing is written then)."""

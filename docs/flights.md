@@ -1079,8 +1079,9 @@ had to choose. Field and route names are unchanged.
 - **`reviews` step**: comments already open on the PR when the step starts
   are its first round, unless an earlier stop of the flight handed them to
   the agent (see "Reviews: no review left undone"); each batch goes to the
-  agent as the pipeline's consolidated prompt (which leaves the changes
-  uncommitted), then a `push` lane is armed. A PR whose comments can't be
+  agent as the consolidated PR prompt (which leaves the changes
+  uncommitted; PR intake's own first pass adds `reply_all`, the route's
+  stop does not — docs/pr-review-rounds.md), then a `push` lane is armed. A PR whose comments can't be
   read is never "quiet". `include_bots: false` drops `*[bot]` and CodeRabbit
   authors. `require_reviewer` holds the stop until that reviewer has
   reviewed the PR's current head (see "Team PR rules as a route").
@@ -8285,7 +8286,8 @@ not hide the bot from the required-reviewer check.
 Two optional fields on the `reviews` stop add to the prompt each round
 sends the agent (`_send_reviews` passes them to
 `pr_runner.build_consolidated_pr_prompt`). With both at their defaults the
-prompt is the pipeline's, byte for byte, except that the stop's first round
+prompt is the consolidated PR prompt without `reply_all` (as a forced
+review sends it), byte for byte, except that the stop's first round
 ends with "Route so far" when earlier stops finished (see "Reviews: no
 review left undone").
 

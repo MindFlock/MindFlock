@@ -6,15 +6,17 @@ and never looked again — so a reviewer's second pass ("changes requested", or
 a fresh batch of comments) went unnoticed.
 
 Now every one of your open PRs that intake already handled is watched for a new
-ROUND: a "changes requested" review, or review comments, that came after it was
-last handed to a session. A round waits until the reviewer has stopped for
+ROUND: any request (a review, a review comment or a conversation comment —
+``pr_comments.fetch_pr_requests``) that came after it was last handed to a
+session. A round waits until the reviewer has stopped for
 :data:`SETTLE_S` (a series of comments is one round, not ten), then goes to the
 PR's session — queued into it when it still exists, a new session otherwise —
 with a TRIAGE prompt: for each request decide **do it** / **push back** (reply
 with why) / **ask the owner**, write that down, and only then act. The repo's
 ``changes_requested`` setting picks how far it goes: "triage" (do what it
 decided, reply to the rest), "ask" (recommend, then wait for your go-ahead),
-"off" (leave new rounds to you).
+"off" (leave new rounds to you). Every request gets a reply on GitHub
+whatever was decided (:mod:`pr_replies`).
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional, Tuple
 
+from backend.ticket_ingestion import pr_replies
 from backend.ticket_ingestion.models import PRComment, PullRequest
 
 #: A round waits this long after its newest request before it goes out —
@@ -41,9 +44,18 @@ def _ts(iso: Optional[str]) -> float:
 
 
 def comment_key(c: PRComment) -> str:
-    """``c:<id>`` an inline review comment, ``r:<id>`` a "changes requested"
-    review (it has no file)."""
-    return ("c:%d" if c.path else "r:%d") % c.id
+    """The request's bookkeeping id in ``state.json`` ``pr_rounds``:
+    ``c:<id>`` an inline review comment, ``i:<id>`` a PR conversation
+    comment, ``b:<id>`` a "commented" / "approved" review's body, ``r:<id>``
+    a "changes requested" review (it has no file). ``c:`` and ``r:`` are what
+    they always were, so stored rounds stay valid."""
+    if c.path:
+        return "c:%d" % c.id
+    if c.kind == "issue":
+        return "i:%d" % c.id
+    if (c.review_state or "").upper() in ("COMMENTED", "APPROVED"):
+        return "b:%d" % c.id
+    return "r:%d" % c.id
 
 
 def pending_round(
@@ -92,13 +104,16 @@ def build_round_prompt(pr: PullRequest, items: List[PRComment], policy: str) -> 
         where = (
             "`%s:%s`" % (c.path, c.line)
             if c.path and c.line
-            else ("`%s`" % c.path if c.path else "the whole PR (requested changes)")
+            else (
+                "`%s`" % c.path if c.path else "the whole PR (%s)" % pr_replies.label(c)
+            )
         )
         lines.append(
             "%d. **%s** on %s — %s" % (i, c.author or "reviewer", where, c.url or "")
         )
         body = (c.body or "").strip()
         lines.append("   > " + body.replace("\n", "\n   > ")[:2000])
+        lines.append("   Reply: " + pr_replies.where_to_reply(c))
     if len(items) > MAX_ITEMS:
         lines.append("… and %d more on the PR." % (len(items) - MAX_ITEMS))
     lines += [
@@ -116,16 +131,20 @@ def build_round_prompt(pr: PullRequest, items: List[PRComment], policy: str) -> 
     if policy == "ask":
         lines += [
             "Then STOP: ask the owner to approve the triage (which you'd do, which you'd "
-            "push back on). Change nothing and reply to no thread until they answer.",
+            "push back on). Change nothing and reply to nothing until they answer; "
+            "then carry on as below — every request still gets its reply.",
         ]
     else:
         lines += [
             "Then do the **Do it** ones on this PR's branch, commit and push (the PR "
-            "updates), and reply on each thread with what you did or why you didn't. "
-            "Ask the owner about the **Ask** ones and wait for that answer before "
-            "touching them.",
+            "updates), and reply to EVERY request as below — done, pushed back, or "
+            "waiting on the owner. Ask the owner about the **Ask** ones and wait for "
+            "that answer before touching them.",
         ]
+    lines += [""] + pr_replies.reply_rules(pr, items[:MAX_ITEMS])
     lines += [
+        "",
+        pr_replies.summary_rule(),
         "",
         "Rules: stay on this PR's branch (%s); never force-push; never merge; "
         "don't resolve a reviewer's thread for them."

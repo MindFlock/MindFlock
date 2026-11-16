@@ -131,16 +131,14 @@ def _pr() -> PullRequest:
 
 def test_a_pr_with_comments_waits_for_a_slot_before_its_launch(pipeline):
     with patch.object(
-        orch, "fetch_actionable_comments", new=AsyncMock(return_value=[MagicMock()])
+        orch, "fetch_pr_requests", new=AsyncMock(return_value=[MagicMock()])
     ):
         asyncio.run(pipeline._process_pr(_pr()))
     assert pipeline.order == ["slot:PR #9", "launch:pr"]
 
 
 def test_a_pr_with_nothing_to_address_never_waits(pipeline):
-    with patch.object(
-        orch, "fetch_actionable_comments", new=AsyncMock(return_value=[])
-    ):
+    with patch.object(orch, "fetch_pr_requests", new=AsyncMock(return_value=[])):
         asyncio.run(pipeline._process_pr(_pr()))
     assert pipeline.order == []
 

@@ -50,7 +50,7 @@ from backend.ticket_ingestion.models import (
 )
 from backend.ticket_ingestion.pr_comments import (
     PRCommentsFetchError,
-    fetch_actionable_comments,
+    fetch_pr_requests,
 )
 from backend.ticket_ingestion.pr_monitor import PRMonitor
 from backend.ticket_ingestion.pr_provisioner import PRProvisioner
@@ -715,15 +715,14 @@ class PipelineOrchestrator:
 
     async def _check_rounds(self) -> None:
         """New review ROUNDS on your PRs intake already handled
-        (docs/pr-review-rounds.md): a "changes requested" review or review
-        comments said after the last pass, once the reviewer has stopped for
+        (docs/pr-review-rounds.md): any request (a review, a review or
+        conversation comment — ``fetch_pr_requests``) said after the last pass, once the reviewer has stopped for
         ``pr_rounds.SETTLE_S``, go to the PR's session with a triage prompt
         (do it / push back / ask you) — per the repo's ``changes_requested``
         ("triage", "ask", "off"). Never raises."""
         import time as _time
 
         from backend.ticket_ingestion import pr_rounds as _rounds
-        from backend.ticket_ingestion.pr_comments import fetch_changes_requested
         from backend.ticket_ingestion.state import (
             load_pr_rounds,
             processed_pr_times,
@@ -752,15 +751,14 @@ class PipelineOrchestrator:
             if policy == "off":
                 continue
             try:
-                comments = await fetch_actionable_comments(pr, cfg)
-                reviews = await fetch_changes_requested(pr, cfg)
+                requests = await fetch_pr_requests(pr, cfg)
             except PRCommentsFetchError as e:
                 _logger.warning("PR #%d rounds: fetch failed (%s)", pr.number, e)
                 continue
             key = "%s#%d" % (repo, pr.number)
             handled = set((rounds.get(key) or {}).get("items") or [])
             state, items = _rounds.pending_round(
-                comments, reviews, handled, times.get((repo, pr.number), 0.0), now
+                requests, [], handled, times.get((repo, pr.number), 0.0), now
             )
             if state != "ready":
                 if state == "settling":
@@ -778,9 +776,18 @@ class PipelineOrchestrator:
                     "PR #%d: review round failed to start: %s", pr.number, e
                 )
                 continue
+            # "flight" too: the route's reviews stop answers them, and once
+            # it has passed that stop they must not come back as a round.
             record_pr_round(
                 _STATE_DIR, repo, pr.number, [_rounds.comment_key(c) for c in items]
             )
+            if how == "flight":
+                _logger.info(
+                    "PR #%d: %d review request(s) left to its route's reviews stop",
+                    pr.number,
+                    len(items),
+                )
+                continue
             _logger.info(
                 "PR #%d: review round of %d request(s) %s (%s)",
                 pr.number,
@@ -896,7 +903,7 @@ class PipelineOrchestrator:
         assert self.config.github is not None
         _logger.info("Processing PR #%d (%s)", pr.number, pr.title)
         try:
-            comments = await fetch_actionable_comments(pr, self.config.github)
+            comments = await fetch_pr_requests(pr, self.config.github)
         except PRCommentsFetchError as e:
             # Transient GitHub failure must not read as "no comments" and
             # permanently record the PR as processed — leave it unrecorded so
@@ -989,6 +996,17 @@ class PipelineOrchestrator:
                 processed_at=datetime.now(timezone.utc),
                 repo=getattr(pr, "repo", ""),
             ),
+        )
+        # What the first pass carried (or left to the branch session's route),
+        # by key: a later round never hands these over again, timestamp or not.
+        from backend.ticket_ingestion.pr_rounds import comment_key
+        from backend.ticket_ingestion.state import record_pr_round
+
+        record_pr_round(
+            _STATE_DIR,
+            getattr(pr, "repo", ""),
+            pr.number,
+            [comment_key(c) for c in comments],
         )
 
     async def process_story(self, item: Ticket | WebhookEvent) -> None:

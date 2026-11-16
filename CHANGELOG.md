@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **PR intake reads every comment and replies to every one.** Your open PRs
+  were only scanned for unresolved review-thread comments and "changes
+  requested" reviews; now the PR's conversation comments and "commented" /
+  "approved" reviews with a body (where a bot's findings outside the diff
+  range live) count too. Pure noise is dropped: auto-generated summaries
+  with no findings, status/approval-only notes ("LGTM", a deploy notice),
+  and anything you already answered with a newer reply. Both the first pass
+  and every later round now make the session reply to EVERY request — done
+  (what changed + the commit sha), pushed back (why), or waiting on you — in
+  its own thread for an inline comment, in one PR conversation comment for
+  the rest, with the exact `gh api` commands in the prompt; its summary
+  links each reply. The first pass commits and pushes like a round does.
+  New bookkeeping ids `b:` (review body) and `i:` (conversation comment);
+  existing `c:` / `r:` state stays valid (docs/pr-review-rounds.md).
+- **No double handling with routes.** While the PR's branch session flies a
+  route whose `reviews` stop isn't passed yet, the hand-off answers
+  `{"how": "flight"}` and queues nothing; the pipeline records those
+  requests as handled so they don't return after the stop. Older servers and
+  pipelines keep working as before.
+
 ## [0.14.16] - 2026-11-14
 
 ### Added
