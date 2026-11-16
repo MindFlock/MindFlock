@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failed or timed-out launch never cancels a live session's route.**
+  0.14.16 made a failed launch cancel only the route it armed, but the
+  pipeline's cancel itself never checked whether the session was there: a
+  start that timed out while its session came up anyway (or that lost a race
+  to another launch on that route) still cancelled the route of a live
+  session, which then sat with no route until started by hand. The cancel now
+  leaves the route alone whenever a session of that title is in MindFlock's
+  state, the way the server's Intake starts already did.
+
 ## [0.14.16] - 2026-11-14
 
 ### Added

@@ -347,6 +347,21 @@ class NotLaunched(Exception):
         self.launched_elsewhere = launched_elsewhere
 
 
+def _stored_titles() -> set:
+    """Session titles in MindFlock's state.json (raw JSON, no restores): the
+    pipeline is its own process, so this is how it sees which sessions
+    exist, whichever server or pipeline created them."""
+    try:
+        from backend import config as cs_config
+
+        raw = cs_config.LoadState().GetInstances()
+        if isinstance(raw, (bytes, bytearray)):
+            raw = bytes(raw).decode("utf-8")
+        return {str(x.get("title")) for x in (json.loads(raw) if raw else [])}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def _cancel_flight(title: str, reason: str, flight_id: str | None = None) -> None:
     """The session for ``title`` could not be created: cancel the flight armed
     for it and drop its autopilot record, so neither waits for a session that
@@ -357,7 +372,19 @@ def _cancel_flight(title: str, reason: str, flight_id: str | None = None) -> Non
     launch that lost a race never tears down the flight another launch armed
     for the same title (2026-11-13: a second pipeline's failed create
     cancelled the live session's route). ``None`` keeps the old by-title
-    behaviour for a caller that cannot say."""
+    behaviour for a caller that cannot say.
+
+    Whatever the caller says, a session named ``title`` that exists in
+    MindFlock's state flies the flight, so it is left alone (as the server's
+    ``_cancel_intake_flight`` does for ``ENGINE.instances``): another launch
+    won the race, or a timed-out start came up after all."""
+    if title in _stored_titles():
+        logger.info(
+            "Leaving the flight for %s alone: its session exists (%s)",
+            title,
+            reason[:200],
+        )
+        return
     try:
         from backend.web.core import flights as _flights
 
@@ -514,16 +541,8 @@ class SessionRunner:
         return branch
 
     def _stored_titles(self) -> set:
-        """Session titles in MindFlock's state.json (raw JSON, no restores)."""
-        try:
-            from backend import config as cs_config
-
-            raw = cs_config.LoadState().GetInstances()
-            if isinstance(raw, (bytes, bytearray)):
-                raw = bytes(raw).decode("utf-8")
-            return {str(x.get("title")) for x in (json.loads(raw) if raw else [])}
-        except Exception:  # noqa: BLE001
-            return set()
+        """Session titles in MindFlock's state.json (:func:`_stored_titles`)."""
+        return _stored_titles()
 
     async def _check_launchable(self, title: str, held: float, recheck=None) -> None:
         """Raise :class:`NotLaunched` when ``title`` must not launch after
