@@ -140,7 +140,7 @@ describe("the gauge", () => {
     const m = machineFromDetail({ total_mb: 20000, available_mb: 13000, level: "low" });
     const reasons = "Processes stalled on memory 34% of the last minute";
     const model = memoryPopModel(null, m, {}, { reasons });
-    expect(model.machine).toContainEqual(["Why", reasons]);
+    expect(model.machine).toContainEqual(["Why", reasons, "wrap"]);
     expect(memoryRowText(m, { reasons }).title).toContain("(processes stalled on memory 34% of the last minute)");
     // Not at OK.
     const ok = memoryPopModel(null, { ...m, level: "ok" }, {}, { reasons });

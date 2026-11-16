@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Memory popup no longer spills past its edge.** A long "Why" line
+  (e.g. "Every running process stalled on memory 42% of the last minute")
+  could not wrap, so it widened the machine table past the popup and cut off
+  every value on the right. Pressure and Why now wrap inside the popup's
+  width, and labels stay on their first line.
+
 ## [0.14.16] - 2026-11-14
 
 ### Added
