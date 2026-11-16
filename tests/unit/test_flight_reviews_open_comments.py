@@ -155,6 +155,7 @@ def test_the_driver_sends_the_open_comments_end_to_end(monkeypatch):
             author="coderabbitai[bot]",
             body="fix %s" % i,
             url="u",
+            path="a.py",
             created_at="2027-01-15T08:00:00Z",
         )
         for i in OPEN
@@ -167,7 +168,7 @@ def test_the_driver_sends_the_open_comments_end_to_end(monkeypatch):
         return list(got)
 
     monkeypatch.setattr(D, "_pr_of", _pr_of)
-    monkeypatch.setattr(_prc, "fetch_actionable_comments", _fetch)
+    monkeypatch.setattr(_prc, "fetch_pr_requests", _fetch)
     row = {
         "present": True,
         "pending": False,
@@ -196,7 +197,8 @@ def test_the_driver_sends_the_open_comments_end_to_end(monkeypatch):
     assert len(sent) == 1
     assert all("fix %s" % i in sent[0] for i in OPEN)
     d = F.get(f["id"])["step_states"][f["steps"][0]["id"]]["detail"]
-    assert d["phase"] == "agent" and d["seen"] == OPEN and d["review_rounds"] == 1
+    assert d["phase"] == "agent" and d["review_rounds"] == 1
+    assert d["seen"] == ["c:" + i for i in OPEN]  # PR intake's keys
 
 
 # --------------------------------------------------------------------------- #
@@ -489,3 +491,69 @@ def test_a_reviews_stops_first_round_carries_the_route_so_far(monkeypatch):
     D._REVIEWS[f["id"]]["at"] = time.time()
     asyncio.run(D.step_flight(f["id"]))
     assert len(sent) == 2 and "Route so far" not in sent[1]
+
+
+# --------------------------------------------------------------------------- #
+# The route reads what PR intake reads, keyed the same way
+# (docs/pr-review-rounds.md "Routes")
+# --------------------------------------------------------------------------- #
+def _req(i, kind="review", path=None, state=None, author="rev"):
+    return PRComment(
+        id=i,
+        kind=kind,
+        author=author,
+        body="please fix %d" % i,
+        url="u%d" % i,
+        path=path,
+        created_at="2027-01-15T08:00:00Z",
+        review_state=state,
+    )
+
+
+def test_the_stop_reads_conversation_comments_and_review_bodies(monkeypatch):
+    got = [
+        _req(5, path="a.py"),
+        _req(9, kind="issue"),
+        _req(57, state="COMMENTED"),
+        _req(58, state="CHANGES_REQUESTED"),
+        _req(60, kind="issue", author="ci-bot[bot]"),
+    ]
+    pr = SimpleNamespace(number=1)
+
+    async def _pr_of(s, flight):
+        return pr, "o/r"
+
+    async def _fetch(p, cfg):
+        return list(got)
+
+    monkeypatch.setattr(D, "_pr_of", _pr_of)
+    monkeypatch.setattr(_prc, "fetch_pr_requests", _fetch)
+    f = F.take_off(plan(REVIEWS), session="s", now=NOW)
+    out = asyncio.run(D._reviews_obs(f, f["steps"][0], sess(pr_url="u"), NOW))
+    assert out["ids"] == ["c:5", "i:9", "b:57", "r:58", "i:60"]
+    # include_bots: false still drops a bot's, whatever its kind.
+    g = F.take_off(
+        plan({"kind": "reviews", "config": {"include_bots": False}}),
+        session="t",
+        now=NOW,
+    )
+    out = asyncio.run(D._reviews_obs(g, g["steps"][0], sess(pr_url="u"), NOW))
+    assert out["ids"] == ["c:5", "i:9", "b:57", "r:58"]
+
+
+def test_a_stop_that_ran_before_the_keys_does_not_resend_what_it_saw():
+    f = to_reviews(F.take_off(plan(REVIEWS), session="s", now=NOW))
+    go(f, dict(PR, reviews={"ids": []}), NOW + 1)  # seeds
+    reviews_detail(f)["seen"] = ["5"]  # a bare id: an inline comment, then
+    a = go(f, dict(PR, reviews={"ids": ["c:5", "i:9"]}), NOW + 2)
+    assert a["action"] == "run" and a["comments"] == ["i:9"]
+
+
+def test_what_the_stop_delivered_is_handled_once_it_is_past():
+    f = to_reviews(F.take_off(plan(REVIEWS), session="s", now=NOW))
+    assert F.reviews_pending(f)
+    reviews_detail(f)["seen"] = ["5", "i:9", "b:57"]
+    assert F.reviews_handled(f) == ["c:5", "i:9", "b:57"]
+    F.apply(f, {"action": "done", "note": ""}, NOW + 900)
+    assert not F.reviews_pending(f)
+    assert F.reviews_handled(f) == ["c:5", "i:9", "b:57"]

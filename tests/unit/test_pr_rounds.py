@@ -390,3 +390,115 @@ def test_the_first_pass_records_what_it_carried(tmp_path, monkeypatch):
     asyncio.run(orch._process_pr(_pr()))
     assert ("o/r", 7) in ST.load_processed_prs(tmp_path)
     assert set(ST.load_pr_rounds(tmp_path)["o/r#7"]["items"]) == {"i:9", "c:2"}
+
+
+# --------------------------------------------------------------------------- #
+# Who owns the comments: asked before every hand-over
+# --------------------------------------------------------------------------- #
+class OwnerRunner(FakeRunner):
+    def __init__(self, owner):
+        super().__init__()
+        self.owner = owner
+
+    async def review_owner(self, pr):
+        return self.owner
+
+
+def _round_orch(tmp_path, monkeypatch, runner, requests):
+    monkeypatch.setattr(O, "_STATE_DIR", tmp_path)
+    ST.record_processed_pr(
+        tmp_path,
+        ProcessedPR(
+            number=7,
+            head_sha="abc",
+            processed_at=datetime.fromtimestamp(T0, timezone.utc),
+            repo="o/r",
+        ),
+    )
+
+    async def _requests(p, c):
+        return list(requests)
+
+    monkeypatch.setattr(O, "fetch_pr_requests", _requests)
+    monkeypatch.setattr("time.time", lambda: T0 + 100 + R.SETTLE_S + 5)
+    orch = O.PipelineOrchestrator.__new__(O.PipelineOrchestrator)
+    orch.config = type("C", (), {"github": _gh()})()
+    orch._pr_monitor = FakeMonitor([_pr()])
+    orch._cs_runner = runner
+    return orch
+
+
+def test_while_the_route_owns_it_nothing_is_handed_over(tmp_path, monkeypatch):
+    runner = OwnerRunner({"owner": "route", "title": "sc-1", "handled": []})
+    orch = _round_orch(
+        tmp_path, monkeypatch, runner, [convo(9, T0 + 50), cmt(2, T0 + 100)]
+    )
+    asyncio.run(orch._check_rounds())
+    assert runner.rounds == []
+    assert set(ST.load_pr_rounds(tmp_path)["o/r#7"]["items"]) == {"i:9", "c:2"}
+
+
+def test_the_stops_seen_ids_are_not_resent_after_it_finishes(tmp_path, monkeypatch):
+    """The stop delivered c:2 and i:9 while the pipeline's round was still
+    settling; it finished, so intake owns the PR again — only b:57, which the
+    stop never sent, goes out."""
+    runner = OwnerRunner({"owner": "intake", "title": "", "handled": ["c:2", "i:9"]})
+    orch = _round_orch(
+        tmp_path,
+        monkeypatch,
+        runner,
+        [convo(9, T0 + 50), body_review(57, T0 + 60), cmt(2, T0 + 100)],
+    )
+    asyncio.run(orch._check_rounds())
+    assert len(runner.rounds) == 1
+    prompt = runner.rounds[0][1]
+    assert "1 new request since" in prompt and "b57" in prompt
+    assert "u2" not in prompt and "i9" not in prompt
+    assert set(ST.load_pr_rounds(tmp_path)["o/r#7"]["items"]) == {
+        "c:2",
+        "i:9",
+        "b:57",
+    }
+    asyncio.run(orch._check_rounds())  # nothing left: no second delivery
+    assert len(runner.rounds) == 1
+
+
+def test_an_unknown_owner_hands_everything_over_as_before(tmp_path, monkeypatch):
+    runner = OwnerRunner(None)  # no server, or one that predates the route
+    orch = _round_orch(tmp_path, monkeypatch, runner, [cmt(2, T0 + 100)])
+    asyncio.run(orch._check_rounds())
+    assert len(runner.rounds) == 1
+
+
+def test_the_first_pass_leaves_a_routed_pr_to_its_route(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(O, "_STATE_DIR", tmp_path)
+    monkeypatch.setattr(
+        O, "fetch_pr_requests", AsyncMock(return_value=[convo(9, T0), cmt(2, T0)])
+    )
+    run_pr = AsyncMock(return_value="feature/x")
+    owner = AsyncMock(return_value={"owner": "route", "title": "sc-1", "handled": []})
+    orch = O.PipelineOrchestrator.__new__(O.PipelineOrchestrator)
+    orch.config = type("C", (), {"github": _gh()})()
+    orch._cs_runner = type("R", (), {"run_pr": run_pr, "review_owner": owner})()
+    slots = []
+
+    async def _slot(*a, **k):
+        slots.append(a)
+
+    orch._wait_for_slot = _slot
+    asyncio.run(orch._process_pr(_pr()))
+    run_pr.assert_not_awaited()
+    assert slots == []  # nothing launched, no slot taken
+    assert ("o/r", 7) in ST.load_processed_prs(tmp_path)
+    assert set(ST.load_pr_rounds(tmp_path)["o/r#7"]["items"]) == {"i:9", "c:2"}
+    # After the stop: only what it did not deliver goes to the first pass.
+    tmp2 = tmp_path / "again"
+    tmp2.mkdir()
+    monkeypatch.setattr(O, "_STATE_DIR", tmp2)
+    owner.return_value = {"owner": "intake", "title": "", "handled": ["c:2"]}
+    asyncio.run(orch._process_pr(_pr()))
+    sent = run_pr.await_args.args[1]
+    assert [R.comment_key(c) for c in sent] == ["i:9"]
+    assert set(ST.load_pr_rounds(tmp2)["o/r#7"]["items"]) == {"i:9", "c:2"}

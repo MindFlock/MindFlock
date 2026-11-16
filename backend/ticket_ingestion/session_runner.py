@@ -333,6 +333,22 @@ def _armed_id(armed: list) -> str:
     return str(armed[0]) if armed else ""
 
 
+def _server_headers() -> dict:
+    """JSON headers for this machine's MindFlock server, with its token."""
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("MINDFLOCK_AUTH_TOKEN", "").strip()
+    if not token:
+        try:
+            from backend.config import settings as _settings
+
+            token = (_settings.load_settings().general.auth_token or "").strip()
+        except Exception:  # noqa: BLE001
+            token = ""
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    return headers
+
+
 class Handed(str):
     """A hand-off's session title (it IS the title, so a caller that only
     wants the title is unchanged) carrying the server's ``how``: ``queued``,
@@ -612,17 +628,7 @@ class SessionRunner:
         branch = str(getattr(pr, "head_ref", "") or "")
         if not port or not branch:
             return ""
-        headers = {"Content-Type": "application/json"}
-        token = os.environ.get("MINDFLOCK_AUTH_TOKEN", "").strip()
-        if not token:
-            try:
-                from backend.config import settings as _settings
-
-                token = (_settings.load_settings().general.auth_token or "").strip()
-            except Exception:  # noqa: BLE001
-                token = ""
-        if token:
-            headers["Authorization"] = "Bearer " + token
+        headers = _server_headers()
 
         def _post() -> str:
             import urllib.error
@@ -660,6 +666,52 @@ class SessionRunner:
                 branch,
             )
         return title
+
+    async def review_owner(self, pr: PullRequest) -> dict | None:
+        """Who owns the PR's review comments now, from the server (``GET
+        /api/sessions/by-branch/review-owner``): ``{"owner": "route" |
+        "intake", "title", "handled": [keys]}`` — ``route`` while the branch
+        session's flight has a ``reviews`` stop it has not passed;
+        ``handled``, the request keys those stops already delivered. None
+        when it can't be told (no server, out of reach, or a server that
+        predates the route): the caller goes on as before."""
+        port = os.environ.get("MINDFLOCK_SERVER_PORT", "").strip()
+        branch = str(getattr(pr, "head_ref", "") or "")
+        if not port or not branch:
+            return None
+        headers = _server_headers()
+
+        def _get() -> dict | None:
+            import urllib.error
+            import urllib.parse
+            import urllib.request
+
+            req = urllib.request.Request(
+                "http://127.0.0.1:%s/api/sessions/by-branch/review-owner?%s"
+                % (port, urllib.parse.urlencode({"branch": branch})),
+                headers=headers,
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    body = json.loads(resp.read().decode("utf-8") or "{}")
+            except (urllib.error.URLError, OSError, ValueError):
+                return None
+            if not isinstance(body, dict) or body.get("owner") not in (
+                "route",
+                "intake",
+            ):
+                return None
+            handled = body.get("handled")
+            return {
+                "owner": body["owner"],
+                "title": str(body.get("title") or ""),
+                "handled": (
+                    [str(k) for k in handled] if isinstance(handled, list) else []
+                ),
+            }
+
+        return await asyncio.to_thread(_get)
 
     async def deliver_pr_round(self, pr: PullRequest, prompt: str) -> str:
         """Hand a review round (pr_rounds) to the PR's session: the session

@@ -1,7 +1,7 @@
 """A Reviews stop's per-round additions (docs/flights.md "Reviews settle"):
 ``each_round`` — the route's own instructions added to every round's prompt —
-and ``reply_declined`` — a declined comment also gets a reply on the PR.
-Both off, every round's prompt is the pipeline's, byte for byte."""
+and ``reply_declined`` (superseded: every request gets a reply now). Every
+round's prompt is PR intake's (``reply_all``), byte for byte."""
 
 import asyncio
 import datetime as dt
@@ -130,11 +130,30 @@ def _send(monkeypatch, config):
 def test_send_reviews_delivers_each_round(monkeypatch):
     text, pr, cs = _send(monkeypatch, {"each_round": RULES, "reply_declined": True})
     assert text == P.build_consolidated_pr_prompt(
-        pr, cs, "/ws", each_round=RULES, reply_declined=True
+        pr, cs, "/ws", each_round=RULES, reply_all=True
     )
     assert "## Also, every round\n\n" + RULES in text
 
 
-def test_send_reviews_without_them_is_the_old_prompt(monkeypatch):
-    text, pr, cs = _send(monkeypatch, {})
-    assert text == P.build_consolidated_pr_prompt(pr, cs, "/ws")
+@pytest.mark.parametrize(
+    "cfg", [{}, {"reply_declined": False}, {"reply_declined": True}]
+)
+def test_send_reviews_is_pr_intakes_prompt_and_replies_to_all(monkeypatch, cfg):
+    # reply_declined off or on, every request gets a reply (superseded flag).
+    text, pr, cs = _send(monkeypatch, cfg)
+    assert text == P.build_consolidated_pr_prompt(pr, cs, "/ws", reply_all=True)
+    assert "Reply to EVERY request" in text and "Done in `<sha>`" in text
+    assert "Waiting on the owner" in text and "link to its reply" in text
+
+
+def test_send_reviews_reads_a_round_decided_before_the_keys(monkeypatch):
+    # The cache is keyed c:<id> now; an in-flight round from before names "1".
+    plan = F.save_plan({"name": "P", "steps": [{"kind": "reviews"}]}, now=NOW)
+    f = F.take_off(plan, session="s", now=NOW)
+    D._REVIEWS[f["id"]] = {"pr": _pr(), "comments": {"c:1": _comment(1)}}
+    sent: list = []
+    monkeypatch.setattr(D, "_session_obs", lambda *a: {"folder": "/ws"})
+    monkeypatch.setattr(D, "_deliver", lambda title, text: sent.append(text))
+    action = {"action": "run", "phase": "send", "comments": ["1"]}
+    asyncio.run(D._send_reviews(f, f["steps"][0], action, NOW))
+    assert len(sent) == 1 and "fix 1" in sent[0]

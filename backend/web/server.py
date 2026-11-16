@@ -8945,6 +8945,41 @@ def recently_closed() -> JSONResponse:
     return JSONResponse(out)
 
 
+def _branch_sessions(branch: str) -> list:
+    """Live sessions on ``branch`` (never a verify checker), the ticket's own
+    before a ``pr-…`` one."""
+    return sorted(
+        (
+            t
+            for t, inst in list(ENGINE.instances.items())
+            if str(getattr(inst, "Branch", "") or "") == branch
+            and not t.startswith("verify-")
+        ),
+        key=lambda t: 1 if t.startswith("pr-") else 0,
+    )
+
+
+def _review_owner(titles: list) -> dict:
+    try:
+        return _flights.review_owner(titles)
+    except Exception:  # noqa: BLE001 — an unreadable store is "no route"
+        return {"owner": "intake", "title": "", "handled": []}
+
+
+@app.get("/api/sessions/by-branch/review-owner")
+def review_owner_by_branch(branch: str = "") -> JSONResponse:
+    """Who owns a PR's review comments now (docs/pr-review-rounds.md
+    "Routes"): ``{"owner": "route" | "intake", "title", "handled"}``.
+    ``route`` while a live session on ``branch`` flies a flight whose
+    ``reviews`` stop is not passed; ``handled``: the request keys
+    (``c:<id>``, ``i:<id>`` …) those sessions' reviews stops already
+    delivered — PR intake never sends them again. Read-only."""
+    branch = str(branch or "").strip()
+    if not branch:
+        return JSONResponse({"error": "branch is required"}, status_code=400)
+    return JSONResponse(_review_owner(_branch_sessions(branch)))
+
+
 @app.post("/api/sessions/by-branch/hand-off")
 async def hand_off_by_branch(payload: dict) -> JSONResponse:
     """Give work to the session that BUILT a branch (docs/pr-review-rounds.md
@@ -8971,22 +9006,10 @@ async def hand_off_by_branch(payload: dict) -> JSONResponse:
     def _rank(title: str) -> int:
         return 1 if title.startswith("pr-") else 0
 
-    live = sorted(
-        (
-            t
-            for t, inst in list(ENGINE.instances.items())
-            if str(getattr(inst, "Branch", "") or "") == branch
-            and not t.startswith("verify-")
-        ),
-        key=_rank,
-    )
-    for t in live:
-        try:
-            pending = _flights.reviews_pending(_flights.for_session(t))
-        except Exception:  # noqa: BLE001 — an unreadable store is "no route"
-            pending = False
-        if pending:
-            return JSONResponse({"title": t, "how": "flight"})
+    live = _branch_sessions(branch)
+    owner = _review_owner(live) if live else {}
+    if owner.get("owner") == "route":
+        return JSONResponse({"title": owner["title"], "how": "flight"})
     how = "queued"
     title = live[0] if live else ""
     if not title:

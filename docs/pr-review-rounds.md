@@ -119,16 +119,34 @@ Both the first pass on a PR and every later review round go this way.
 
 ## Routes
 
-A session flying a route (docs/flights.md) with a `reviews` stop already
-loops on the PR's review comments. While the PR's branch session has an
-unfinished flight whose `reviews` stop is not passed yet (not done, skipped,
-or failed-and-moved-on — `flights.reviews_pending`), the hand-off route
-answers `{"title", "how": "flight"}` and queues **nothing**. The pipeline
-records those requests as handled (the first pass records the PR processed
-and its items; a round records its items), so they don't come back once the
-flight is past the stop. A finished or cancelled flight, or one with no
-`reviews` stop, changes nothing: the hand-off works as above.
+A session flying a route (docs/flights.md) can have a `reviews` stop that
+loops on the PR's review comments itself. One owner handles a PR's comments
+at a time:
 
-The contract is tolerant both ways: an older server never answers `"flight"`
-(a reply without `how` reads as `queued`), and an older pipeline reads
-`"flight"`'s title as handed and starts nothing.
+| When | Owner | What the other does |
+|---|---|---|
+| A live session on the PR's branch flies an unfinished flight whose `reviews` stop is not passed (pending, running, waiting on you, or failed and halted) | **the route** | PR intake hands nothing over and records what it saw as handled |
+| That stop is done, skipped, or failed and moved on; the flight finished or was cancelled; or it has no `reviews` stop | **PR intake** | anything the stop delivered (its `seen`) counts as handled and is never sent again |
+
+Both owners read the same requests (`fetch_pr_requests`, same noise rules),
+key them the same way (`c:` / `r:` / `b:` / `i:`), send the same prompt
+(`build_consolidated_pr_prompt(…, reply_all=True)`) and so reply to every
+request. A route's `reviews` stop with `include_bots: false` ignores bots'
+requests, and PR intake leaves them alone while the route owns the PR.
+
+How the pipeline knows: before every first pass and every round it asks the
+server `GET /api/sessions/by-branch/review-owner?branch=<head>` →
+`{"owner": "route" | "intake", "title", "handled": [keys]}`
+(`flights.review_owner`, over the live sessions on the branch and their
+flights in any state). `route` → it records the requests and hands nothing
+over; `intake` → it drops the `handled` keys (recording them) and hands over
+the rest. The stop's `seen` ids are read at that moment, so they hold even
+when the stop delivered them while the pipeline's round was still settling
+or the pipeline wasn't running. As a second line, the hand-off itself
+answers `{"title", "how": "flight"}` and queues nothing while the route
+owns the PR.
+
+Tolerant both ways: an older server has no `review-owner` (404 → "unknown":
+everything is handed over, as before) and never answers `"flight"` (a reply
+without `how` reads as `queued`); an older pipeline reads `"flight"`'s
+title as handed and starts nothing.

@@ -23,11 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   links each reply. The first pass commits and pushes like a round does.
   New bookkeeping ids `b:` (review body) and `i:` (conversation comment);
   existing `c:` / `r:` state stays valid (docs/pr-review-rounds.md).
-- **No double handling with routes.** While the PR's branch session flies a
-  route whose `reviews` stop isn't passed yet, the hand-off answers
-  `{"how": "flight"}` and queues nothing; the pipeline records those
-  requests as handled so they don't return after the stop. Older servers and
-  pipelines keep working as before.
+- **One owner for a PR's comments, the same handling either way.** A
+  route's `reviews` stop now reads the same requests as PR intake
+  (conversation comments and review bodies included, noise dropped), keys
+  them the same way, and sends the same prompt — every request gets a reply;
+  its `reply_declined` option is superseded (always on, still parsed). While
+  the PR's branch session flies a route whose `reviews` stop isn't passed,
+  the route owns the comments: the pipeline hands nothing over and records
+  them. After it, PR intake owns new ones, and whatever the stop delivered is
+  never sent again. The pipeline asks `GET
+  /api/sessions/by-branch/review-owner` before every pass; the hand-off
+  answers `{"how": "flight"}` without queueing as a second line. Older
+  servers and pipelines keep working as before.
 
 ## [0.14.16] - 2026-11-14
 

@@ -783,13 +783,21 @@ async def _reviewer_on_head(pr, who: str, known: str, known_since: float, now: f
 
 
 async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict:
-    """``{"ids", "created"}`` of the PR's actionable comments (``ids`` None =
-    could not ask, with ``why``; ``created``: id -> epoch seconds, 0.0 when
-    unknown), fetched at most once a minute per flight — and afresh once the
-    stop's quiet clock restarts (its own push: the head moved). With
+    """``{"ids", "created"}`` of the PR's requests (``ids`` None = could not
+    ask, with ``why``; ``created``: id -> epoch seconds, 0.0 when unknown),
+    fetched at most once a minute per flight — and afresh once the stop's
+    quiet clock restarts (its own push: the head moved). With
     ``require_reviewer``, also ``reviewer``: :func:`_reviewer_on_head`'s
-    answer for the PR's current head (None = could not ask)."""
+    answer for the PR's current head (None = could not ask).
+
+    The requests are PR intake's, read the same way
+    (``pr_comments.fetch_pr_requests``: review threads, reviews, review
+    bodies, conversation comments, noise dropped) and keyed the same way
+    (``pr_rounds.comment_key``: ``c:`` / ``r:`` / ``b:`` / ``i:``), so
+    whichever of the two owns the PR (docs/pr-review-rounds.md "Routes")
+    sees the same requests and the other can tell what it handled."""
     from backend.ticket_ingestion import pr_comments as _prc
+    from backend.ticket_ingestion import pr_rounds as _rounds
     from backend.web.core import github_pr as _gh
 
     who = str(step["config"].get("require_reviewer") or "")
@@ -811,12 +819,13 @@ async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict
                 sess.get("branch") or "?"
             )
         else:
-            got = await _prc.fetch_actionable_comments(pr, _gh._github_config())
+            got = await _prc.fetch_pr_requests(pr, _gh._github_config())
             for c in got:
                 if not step["config"].get("include_bots", True) and _is_bot(c.author):
                     continue
-                comments[str(c.id)] = c
-                created[str(c.id)] = _gh_time(getattr(c, "created_at", None))
+                key = _rounds.comment_key(c)
+                comments[key] = c
+                created[key] = _gh_time(getattr(c, "created_at", None))
             ids = list(comments)
     except Exception as err:  # noqa: BLE001 — "could not ask" is not "no comments"
         _warn("flight %s: review comments unavailable: %v", flight["id"], err)
@@ -2048,19 +2057,23 @@ async def _send_reviews(flight: dict, step: dict, action: dict, now: float) -> d
 
     cache = _REVIEWS.get(flight["id"]) or {}
     new = [str(i) for i in action.get("comments") or []]
-    comments = [cache.get("comments", {}).get(i) for i in new]
+    have = cache.get("comments", {})
+    # A round decided before the ids were keyed names a bare comment id.
+    comments = [have.get(i) or have.get(_flights.review_key(i)) for i in new]
     comments = [c for c in comments if c is not None]
     pr = cache.get("pr")
     if pr is None or not comments:
         raise _StepFailed("the new review comments could not be read")
     sess = await asyncio.to_thread(_session_obs, flight, now, False)
     cfg = step.get("config") or {}
+    # PR intake's prompt: a reply to EVERY request, whatever was decided
+    # (``reply_declined`` is superseded — always on).
     text = _pr_runner.build_consolidated_pr_prompt(
         pr,
         comments,
         sess.get("folder") or "",
         each_round=str(cfg.get("each_round") or ""),
-        reply_declined=bool(cfg.get("reply_declined")),
+        reply_all=True,
     )
     d = flight["step_states"][step["id"]]["detail"]
     if not int(d.get("review_rounds") or 0):

@@ -1079,9 +1079,15 @@ had to choose. Field and route names are unchanged.
 - **`reviews` step**: comments already open on the PR when the step starts
   are its first round, unless an earlier stop of the flight handed them to
   the agent (see "Reviews: no review left undone"); each batch goes to the
-  agent as the consolidated PR prompt (which leaves the changes
-  uncommitted; PR intake's own first pass adds `reply_all`, the route's
-  stop does not — docs/pr-review-rounds.md), then a `push` lane is armed. A PR whose comments can't be
+  agent as PR intake's own prompt (`build_consolidated_pr_prompt(…,
+  reply_all=True)`: triage, commit, and a reply to EVERY request), then a
+  `push` lane is armed. It reads what PR intake reads
+  (`pr_comments.fetch_pr_requests`: review threads, reviews, review bodies
+  and conversation comments, noise dropped) and keys them the same way
+  (`c:` / `r:` / `b:` / `i:`; a bare id stored by an older stop reads as
+  `c:<id>`). While the stop is not passed, the route owns the PR's comments
+  and PR intake hands it nothing; after it, what the stop delivered (its
+  `seen`) stays handled (docs/pr-review-rounds.md "Routes"). A PR whose comments can't be
   read is never "quiet". `include_bots: false` drops `*[bot]` and CodeRabbit
   authors. `require_reviewer` holds the stop until that reviewer has
   reviewed the PR's current head (see "Team PR rules as a route").
@@ -8285,10 +8291,9 @@ not hide the bot from the required-reviewer check.
 
 Two optional fields on the `reviews` stop add to the prompt each round
 sends the agent (`_send_reviews` passes them to
-`pr_runner.build_consolidated_pr_prompt`). With both at their defaults the
-prompt is the consolidated PR prompt without `reply_all` (as a forced
-review sends it), byte for byte, except that the stop's first round
-ends with "Route so far" when earlier stops finished (see "Reviews: no
+`pr_runner.build_consolidated_pr_prompt`). The prompt is always PR
+intake's, `reply_all=True`, byte for byte, except that the stop's first
+round ends with "Route so far" when earlier stops finished (see "Reviews: no
 review left undone").
 
 - **`each_round`** — "Also, every round" (textarea, ≤ 8000 characters,
@@ -8304,12 +8309,10 @@ review left undone").
   If the branch conflicts with the base, merge the base in and resolve it.
   ```
 
-- **`reply_declined`** — "Reply on the PR to comments it declines" (bool,
-  default false): the "When done" list gains a step asking the agent to
-  reply on the PR to each comment it decides not to act on (in the review
-  thread for an inline comment), giving the reason, so the reviewer sees it
-  on the PR and not only in the agent's summary. The pipeline's own PR
-  runner never sets it.
+- **`reply_declined`** — superseded, always on: every request gets a reply
+  on the PR whatever the agent decided (done with the commit sha, pushed
+  back with why, waiting on the owner), declined or not. The field is still
+  parsed (bool, default false) so older plans load, and changes nothing.
 
 The route editor's stop form shows both from `GET /api/flights/kinds` (the
 text as a multi-line box); `FIELD_HINT` in `frontend/src/lib/stopEditing.ts`

@@ -184,13 +184,17 @@ def _branch_sessions(monkeypatch):
     )
 
 
-def test_a_flying_reviews_stop_gets_nothing_queued(client, monkeypatch):
-    _branch_sessions(monkeypatch)
+def _flights_are(monkeypatch, *flights):
     monkeypatch.setattr(
         server._flights,
-        "for_session",
-        lambda t, unfinished_only=True: _flight("running") if t == "sc-1" else None,
+        "list_flights",
+        lambda include_finished=True: [f for f in flights if f is not None],
     )
+
+
+def test_a_flying_reviews_stop_gets_nothing_queued(client, monkeypatch):
+    _branch_sessions(monkeypatch)
+    _flights_are(monkeypatch, _flight("running"))
     r = client.post(
         "/api/sessions/by-branch/hand-off",
         json={"branch": "feature/sc-1/x", "text": "review it"},
@@ -210,9 +214,7 @@ def test_a_flying_reviews_stop_gets_nothing_queued(client, monkeypatch):
 )
 def test_finished_or_past_the_stop_is_handed_as_before(client, monkeypatch, flight):
     _branch_sessions(monkeypatch)
-    monkeypatch.setattr(
-        server._flights, "for_session", lambda t, unfinished_only=True: flight
-    )
+    _flights_are(monkeypatch, flight)
     r = client.post(
         "/api/sessions/by-branch/hand-off",
         json={"branch": "feature/sc-1/x", "text": "review it"},
@@ -322,3 +324,82 @@ def test_hand_to_builder_carries_the_servers_how(monkeypatch):
     got = asyncio.run(runner.hand_to_builder(pr, "x"))
     assert got == "sc-1" and SR.handed_how(got) == "queued"
     assert asyncio.run(runner.hand_to_builder(pr, "x")) == ""
+
+
+# --------------------------------------------------------------------------- #
+# Who owns a PR's comments: GET /api/sessions/by-branch/review-owner
+# --------------------------------------------------------------------------- #
+def _seen(flight, seen):
+    flight["step_states"]["s2"]["detail"]["seen"] = list(seen)
+    return flight
+
+
+def test_review_owner_is_the_route_while_its_stop_is_open(client, monkeypatch):
+    _branch_sessions(monkeypatch)
+    _flights_are(monkeypatch, _seen(_flight("running"), ["5", "i:9"]))
+    r = client.get(
+        "/api/sessions/by-branch/review-owner", params={"branch": "feature/sc-1/x"}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"owner": "route", "title": "sc-1", "handled": ["c:5", "i:9"]}
+
+
+def test_after_the_stop_intake_owns_and_its_seen_stay_handled(client, monkeypatch):
+    _branch_sessions(monkeypatch)
+    other = _seen(_flight("done", state="done"), ["c:77"])
+    other["session"] = "elsewhere"  # another branch's flight: not ours
+    _flights_are(
+        monkeypatch, _seen(_flight("done", state="done"), ["5", "b:57"]), other
+    )
+    r = client.get(
+        "/api/sessions/by-branch/review-owner", params={"branch": "feature/sc-1/x"}
+    )
+    assert r.json() == {"owner": "intake", "title": "", "handled": ["c:5", "b:57"]}
+    assert client.get("/api/sessions/by-branch/review-owner").status_code == 400
+
+
+def test_the_pipeline_asks_who_owns_it_and_tolerates_an_older_server(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    from backend.ticket_ingestion import session_runner as SR
+
+    runner = SR.SessionRunner.__new__(SR.SessionRunner)
+    monkeypatch.setenv("MINDFLOCK_SERVER_PORT", "1")
+    monkeypatch.setenv("MINDFLOCK_AUTH_TOKEN", "t")
+    pr = types.SimpleNamespace(number=7, head_ref="feature/sc-1/x", repo="o/r")
+    urls: list = []
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    answers = iter(
+        [
+            {"owner": "intake", "title": "", "handled": ["c:5"]},
+            urllib.error.HTTPError("u", 404, "Not Found", {}, None),  # older
+            {"error": "?"},
+        ]
+    )
+
+    def _open(req, timeout=0):
+        urls.append(req.full_url)
+        a = next(answers)
+        if isinstance(a, Exception):
+            raise a
+        return _Resp(json.dumps(a).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", _open)
+    got = asyncio.run(runner.review_owner(pr))
+    assert got == {"owner": "intake", "title": "", "handled": ["c:5"]}
+    assert urls[0].endswith(
+        "/api/sessions/by-branch/review-owner?branch=feature%2Fsc-1%2Fx"
+    )
+    assert asyncio.run(runner.review_owner(pr)) is None
+    assert asyncio.run(runner.review_owner(pr)) is None
+    monkeypatch.delenv("MINDFLOCK_SERVER_PORT")
+    assert asyncio.run(runner.review_owner(pr)) is None

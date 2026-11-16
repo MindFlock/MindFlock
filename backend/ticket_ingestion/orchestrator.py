@@ -768,6 +768,18 @@ class PipelineOrchestrator:
                         len(items),
                     )
                 continue
+            items, route_has = await self._split_for_route(pr, items)
+            if route_has:
+                # The route's reviews stop owns these (or already sent them):
+                # recorded, so they are never handed over a second time.
+                record_pr_round(_STATE_DIR, repo, pr.number, route_has)
+                _logger.info(
+                    "PR #%d: %d review request(s) left to its route's reviews stop",
+                    pr.number,
+                    len(route_has),
+                )
+            if not items:
+                continue
             prompt = _rounds.build_round_prompt(pr, items, policy)
             try:
                 how = await self._cs_runner.deliver_pr_round(pr, prompt)
@@ -795,6 +807,31 @@ class PipelineOrchestrator:
                 how,
                 policy,
             )
+
+    async def _split_for_route(self, pr, items: list) -> tuple[list, list[str]]:
+        """``(to hand over, keys the route has)`` for ``items`` (who owns a
+        PR's comments: docs/pr-review-rounds.md "Routes"). While the branch
+        session's route has a ``reviews`` stop it has not passed, the route
+        has them all; after it, the ones its stops already delivered stay
+        theirs. The server can't be asked (none, or one that predates
+        this): everything is handed over, as before."""
+        from backend.ticket_ingestion.pr_rounds import comment_key
+
+        ask = getattr(self._cs_runner, "review_owner", None)
+        owner = None
+        if ask is not None:
+            try:
+                owner = await ask(pr)
+            except Exception as e:  # noqa: BLE001 — unknown is "as before"
+                _logger.warning("PR #%d: review owner unknown (%s)", pr.number, e)
+        if not isinstance(owner, dict):
+            return list(items), []
+        if owner.get("owner") == "route":
+            return [], [comment_key(c) for c in items]
+        theirs = set(owner.get("handled") or [])
+        keep = [c for c in items if comment_key(c) not in theirs]
+        gone = [comment_key(c) for c in items if comment_key(c) in theirs]
+        return keep, gone
 
     async def _issue_loop(self) -> None:
         assert self._issue_monitor is not None and self.config.github is not None
@@ -917,10 +954,29 @@ class PipelineOrchestrator:
         _logger.info(
             "PR #%d: %d actionable comments after filtering", pr.number, len(comments)
         )
+        found = list(comments)
+        if comments and self._cs_runner is not None:
+            comments, route_has = await self._split_for_route(pr, comments)
+            if route_has:
+                _logger.info(
+                    "PR #%d: %d request(s) left to its route's reviews stop",
+                    pr.number,
+                    len(route_has),
+                )
         if not comments:
             _logger.info(
                 "PR #%d: skipping provisioning; no actionable comments.", pr.number
             )
+            from backend.ticket_ingestion.pr_rounds import comment_key
+            from backend.ticket_ingestion.state import record_pr_round
+
+            if found:
+                record_pr_round(
+                    _STATE_DIR,
+                    getattr(pr, "repo", ""),
+                    pr.number,
+                    [comment_key(c) for c in found],
+                )
             record_processed_pr(
                 _STATE_DIR,
                 ProcessedPR(
@@ -1006,7 +1062,7 @@ class PipelineOrchestrator:
             _STATE_DIR,
             getattr(pr, "repo", ""),
             pr.number,
-            [comment_key(c) for c in comments],
+            [comment_key(c) for c in found],
         )
 
     async def process_story(self, item: Ticket | WebhookEvent) -> None:
