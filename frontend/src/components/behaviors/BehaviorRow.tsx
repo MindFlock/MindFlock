@@ -4,7 +4,8 @@
  * person's part is the card's one Confirm verified, never a per-step answer
  * or edit. Open, a finished step shows its result, WHO answered it and the
  * evidence in full (and what the agent had said when a person overrode it); a
- * blocked step says why even folded. A failed step offers "Let its agent fix
+ * blocked step says why even folded. A person's step with something to paste
+ * shows it with a Copy button even folded — it is what they act on. A failed step offers "Let its agent fix
  * it". */
 
 import { useEffect, useState, type JSX } from "react";
@@ -12,6 +13,7 @@ import type { TestPlan, TestStep, TestStepResultEntry } from "../../api/types";
 import { stepResult } from "../dialogs/verify";
 import { relTime } from "../../lib/format";
 import { AGENT_FIX, byWords, rowChip, whoOf } from "./cardModel";
+import { PasteBox } from "./PasteBox";
 
 /** A result entry as the server may send it: `agent_note` is the agent's
  * evidence kept when a PERSON overrode its answer (optional — an older
@@ -87,6 +89,11 @@ export function BehaviorRow({ plan, step, index, onFix, allOpen }: BehaviorRowPr
         {ev.why && !open ? (
           <div className="bh-evidence bh-why is-clamped" title={ev.why}>
             <span className="bh-evidence-by">Why:</span> {ev.why}
+          </div>
+        ) : null}
+        {step.paste && (open || (who.you && !entry?.result)) ? (
+          <div className="bh-paste">
+            <PasteBox text={step.paste} />
           </div>
         ) : null}
         {open && step.expect ? <div className="bh-expect">Expect: {step.expect}</div> : null}

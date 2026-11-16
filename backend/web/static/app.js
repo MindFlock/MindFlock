@@ -25705,7 +25705,8 @@ function verifyProgress(v) {
 function verifyStepLines(steps) {
 	return steps.map((s) => {
 		const tail = String(s.expect || s.note || "").trim();
-		return "• " + String(s.text || "").trim() + (tail ? " — " + tail : "");
+		const paste = String(s.paste || "").trim();
+		return "• " + String(s.text || "").trim() + (tail ? " — " + tail : "") + (paste ? "\n    Paste: " + paste : "");
 	}).join("\n");
 }
 function verifyWord(state) {
@@ -42888,6 +42889,48 @@ async function askBehaviorsForBranch(repo, branch, opts = {}) {
 	}
 }
 //#endregion
+//#region src/components/behaviors/PasteBox.tsx
+var COPIED_MS = 1500;
+function pasteCopyLabel(state) {
+	return state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : "Copy";
+}
+async function copyPaste(e, text, copy = copyText) {
+	e.stopPropagation();
+	e.preventDefault?.();
+	return await copy(text) ? "copied" : "failed";
+}
+var stop$2 = (e) => e.stopPropagation();
+function PasteBox({ text }) {
+	const [state, setState] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		if (!state) return;
+		const t = setTimeout(() => setState(""), COPIED_MS);
+		return () => clearTimeout(t);
+	}, [state]);
+	const value = String(text || "").trim();
+	if (!value) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "vc-paste",
+		"data-no-drag": true,
+		onMouseDown: stop$2,
+		onPointerDown: stop$2,
+		onClick: stop$2,
+		onDoubleClick: stop$2,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+			className: "vc-paste-text",
+			children: value
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "test-btn vc-paste-copy" + (state ? " is-" + state : ""),
+			title: "Copy this, then paste it where the step says",
+			"aria-label": state ? pasteCopyLabel(state) : "Copy: " + value,
+			"aria-live": "polite",
+			onClick: (e) => void copyPaste(e, value).then(setState),
+			children: pasteCopyLabel(state)
+		})]
+	});
+}
+//#endregion
 //#region src/components/behaviors/VerifyConfirm.tsx
 function HumanSteps({ steps, marks, onMark, disabled }) {
 	if (!steps.length) return null;
@@ -42903,6 +42946,7 @@ function HumanSteps({ steps, marks, onMark, disabled }) {
 						className: "vc-step-text",
 						children: st.text
 					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PasteBox, { text: st.paste }),
 					st.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "vc-step-expect",
 						children: ["Expect: ", st.expect]
@@ -95123,6 +95167,10 @@ function BehaviorRow({ plan, step, index, onFix, allOpen }) {
 						" ",
 						ev.why
 					]
+				}) : null,
+				step.paste && (open || who.you && !entry?.result) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "bh-paste",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PasteBox, { text: step.paste })
 				}) : null,
 				open && step.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "bh-expect",

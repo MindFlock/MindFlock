@@ -1666,6 +1666,10 @@ export interface TestStep {
    * them first, and answers this one blocked ("needs s2") when one of them
    * failed. Optional, default none. */
   needs?: string[];
+  /** A PERSON's step: the exact text they paste (a chat command, a URL, a
+   * value), values filled in — the card shows it with a Copy button.
+   * Optional: absent when there is nothing to paste. */
+  paste?: string;
   /** Who can settle this step. "agent" = checkable from a shell (a command, a
    * file, an HTTP endpoint); "human" = visual judgement, a real browser, or an
    * external service. The server defaults anything it doesn't recognise to
@@ -1734,6 +1738,10 @@ export interface SessionVerifyHumanStep {
   id: string;
   text: string;
   expect: string;
+  /** The exact text the person pastes for this step (a chat command, a URL,
+   * a value), concrete values filled in — shown in a box with a Copy button.
+   * Absent when there is nothing to paste, and on an older server. */
+  paste?: string;
   /** Why the AGENT couldn't do it (a step it tried and handed back).
    * Absent on a step that was a person's from the start, and on an older
    * server. */

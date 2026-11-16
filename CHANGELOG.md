@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Verify hands a person only product steps, ready to paste.** The
+  self-verify prompt (both walks) now says a person's step is only what a
+  user does in the product's own interface — a chat command, a button, a
+  page, a look at the result. Terminal, CLI, MCP, log/metrics/cloud-console,
+  database and file-edit work is the agent's, including any setup the
+  person's step needs and reading the proof; no decisions or chores, one
+  action per step. A step gets an optional `paste`: the exact text the person
+  pastes, concrete values looked up and filled in (never `<placeholders>`),
+  and the agent's reply puts each one alone in a numbered fenced block. It
+  survives the results-file read, rides `verify.human_steps[].paste`, prints
+  as inline code in the PR comment, and shows in a monospace box with a
+  **Copy** button (*Copied* for a moment) on the pane's verify row, the bell,
+  a Verify stop, the Verify card's rows and the phone.
+
 ## [0.14.16] - 2026-11-14
 
 ### Added
