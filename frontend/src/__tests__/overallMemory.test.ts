@@ -89,7 +89,7 @@ describe("the popover model from /api/memory", () => {
     expect(model.machine).toEqual([
       ["In use", "9.8 / 19.5 GB (50%)"],
       ["Swap", "1.3 GB of 5 GB"],
-      ["Pressure", "Low — new agents wait"],
+      ["Pressure", "Low — new agents wait", "wrap"],
     ]);
     expect(model.tone).toBe("warn");
     expect(model.machineOnly).toBe(false);
@@ -127,20 +127,20 @@ describe("Windows under WSL: the host's own memory", () => {
     expect(m.machine).toEqual([
       ["In use", "9.8 / 19.5 GB (50%)"],
       ["Windows", "30 / 32 GB (94%)"],
-      ["Pressure", "Windows: Low — new agents wait"],
+      ["Pressure", "Windows: Low — new agents wait", "wrap"],
     ]);
     expect(memoryRowText(machineFromDetail(hostShort.system)).title).toContain("Windows is short of memory");
   });
   it("keeps the plain pressure words when the VM, not Windows, is the cause", () => {
     const sys = { ...hostShort.system, host_available_mb: 16 * GiB, host_level: "ok" };
     const m = memoryPopModel({ ...hostShort, system: sys }, machineFromReading(null));
-    expect(m.machine.at(-1)).toEqual(["Pressure", "Low — new agents wait"]);
+    expect(m.machine.at(-1)).toEqual(["Pressure", "Low — new agents wait", "wrap"]);
     expect(memoryRowText(machineFromDetail(sys)).title).not.toContain("Windows");
   });
   it("does not blame Windows when the VM is just as short", () => {
     const sys = { ...hostShort.system, guest_level: "low" };
     const m = memoryPopModel({ ...hostShort, system: sys }, machineFromReading(null));
-    expect(m.machine.at(-1)).toEqual(["Pressure", "Low — new agents wait"]);
+    expect(m.machine.at(-1)).toEqual(["Pressure", "Low — new agents wait", "wrap"]);
   });
   it("has no Windows line off WSL or from an older server", () => {
     expect(memoryPopModel(DETAIL, machineFromReading(null)).machine.map((r) => r[0])).not.toContain("Windows");
@@ -169,7 +169,7 @@ describe("the fallback: an older server without /api/memory", () => {
     expect(model.others).toEqual([]);
     expect(model.machine).toEqual([
       ["In use", "15 / 16 GB (94%)"],
-      ["Pressure", "Critical — close something"],
+      ["Pressure", "Critical — close something", "wrap"],
     ]);
   });
   it("reads nothing from nothing", () => {

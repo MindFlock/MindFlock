@@ -493,7 +493,11 @@ def test_a_device_that_stopped_answering_does_not_come_back_with_its_old_rows():
         instances=[{"title": "old", "status": "asking"}], instances_ok=True
     )
     assert [r["title"] for r in remote.merged_instances()] == ["otherbox::old"]
-    remote._apply_probe(dev, None, 100.0)  # asleep: the hello went unanswered
+    # Asleep: the hello went unanswered sweep after sweep (one miss alone is
+    # a blip — see the next test).
+    for i in range(remote._PROBE_MISSES):
+        remote._apply_probe(dev, None, 100.0 + i)
+    assert dev["reachable"] is False
     assert remote.merged_instances() == []
     remote._apply_probe(
         dev,
@@ -502,3 +506,75 @@ def test_a_device_that_stopped_answering_does_not_come_back_with_its_old_rows():
     )
     assert dev["reachable"] is True
     assert remote.merged_instances() == []  # until a fresh list arrives
+
+
+def test_one_unanswered_hello_is_a_blip_not_the_device_going_away():
+    # A relayed tailnet link drops a probe now and then. Blanking the device
+    # on that one miss hid every session it runs for a whole sweep, then they
+    # came back: the "connection flickers" the owner saw.
+    remote._DEVICES["otherbox"] = dev = _fake_device(
+        instances=[{"title": "work", "status": "running"}], instances_ok=True
+    )
+    remote._apply_probe(dev, None, 100.0)
+    assert dev["reachable"] is True
+    assert [r["title"] for r in remote.merged_instances()] == ["otherbox::work"]
+    # It answers again: the count starts over, so a later single miss is
+    # still only a blip.
+    remote._apply_probe(
+        dev,
+        ("http://100.1.2.3:8765", {"app": "mindflock", "remote_control": True}),
+        120.0,
+    )
+    assert dev["misses"] == 0
+    remote._apply_probe(dev, None, 140.0)
+    assert dev["reachable"] is True
+    # Silent sweep after sweep: now it is gone, rows and all.
+    for i in range(1, remote._PROBE_MISSES):
+        remote._apply_probe(dev, None, 160.0 + i)
+    assert dev["reachable"] is False
+    assert remote.merged_instances() == []
+
+
+def test_a_device_never_reached_gets_no_grace():
+    dev = _fake_device(reachable=False)
+    remote._apply_probe(dev, None, 100.0)
+    assert dev["reachable"] is False
+
+
+def test_a_dropped_session_list_fetch_keeps_the_last_good_list_briefly(monkeypatch):
+    # No answer at all (timeout / reset) is a blip on the link: the last good
+    # list stays for a few polls in a row instead of blinking out and back.
+    _install_session(
+        monkeypatch,
+        lambda m, u, **kw: _FakeResp(raise_on_enter=OSError("connection reset")),
+    )
+    remote._DEVICES["otherbox"] = dev = _fake_device(
+        instances=[{"title": "work", "status": "running"}], instances_ok=True
+    )
+    for _ in range(remote._FETCH_MISSES - 1):
+        _run(remote._fetch_instances(dev))
+        assert dev["instances_ok"] is True
+        assert [r["title"] for r in remote.merged_instances()] == ["otherbox::work"]
+    _run(remote._fetch_instances(dev))
+    assert dev["instances_ok"] is False
+    assert dev["error"]
+    assert remote.merged_instances() == []
+
+
+def test_a_good_fetch_resets_the_dropped_fetch_count(monkeypatch):
+    answers = [OSError("reset"), [{"title": "work"}], OSError("reset")]
+
+    def _next(m, u, **kw):
+        a = answers.pop(0)
+        return (
+            _FakeResp(raise_on_enter=a)
+            if isinstance(a, Exception)
+            else _FakeResp(200, a)
+        )
+
+    _install_session(monkeypatch, _next)
+    dev = _fake_device(instances=[{"title": "work"}], instances_ok=True)
+    for _ in range(3):
+        _run(remote._fetch_instances(dev))
+    assert dev["fetch_misses"] == 1
+    assert dev["instances_ok"] is True

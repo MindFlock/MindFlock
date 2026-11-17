@@ -185,7 +185,9 @@ def test_setup_runner_body_crash_marks_failed(tmp_path, monkeypatch):
     assert _wait(lambda: (ws.setup_status(str(wt)) or {}).get("state") == "failed")
     st = ws.setup_status(str(wt))
     assert st["state"] == "failed" and st["rc"] == 1
-    assert not ws.is_running(str(wt), "setup")
+    # The body writes "failed" before the runner's finally drops the running
+    # mark: read the mark once it has had its moment (raced on macOS CI).
+    assert _wait(lambda: not ws.is_running(str(wt), "setup"))
     assert "runner crashed" in ws.log_tail(str(wt), ws.SETUP_LOG)
 
 
