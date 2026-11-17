@@ -2951,9 +2951,11 @@ def test_find_index_tick_builds_only_where_it_cant_disturb(registered, monkeypat
         server,
         "ENGINE",
         types.SimpleNamespace(
+            # fi-watched FIRST: the tick builds the first eligible pane, so
+            # a watched pane let through would be picked over fi-idle.
             instances={
                 t: None
-                for t in ("fi-idle", "fi-busy", "fi-typing", "fi-noisy", "fi-watched")
+                for t in ("fi-watched", "fi-idle", "fi-busy", "fi-typing", "fi-noisy")
             }
         ),
     )
@@ -2977,12 +2979,15 @@ def test_find_index_tick_builds_only_where_it_cant_disturb(registered, monkeypat
         server._pane_scroll_find, "observe", lambda n: still.get(n, 60.0)
     )
     monkeypatch.setattr(server._pane_scroll_find, "needs_index", lambda n: True)
-    attached = {name("fi-watched"): "2"}
+    # One screen is enough to skip it: the freeze that would hide the sweep
+    # reaches only this server's browsers (owner: panes jittered until a
+    # scroll when the other server on the same sessions indexed them).
+    attached = {server._exact_pane_target(name("fi-watched")): "1"}
     monkeypatch.setattr(
         server._pane_find,
         "_tmux",
         lambda *a: types.SimpleNamespace(
-            returncode=0, stdout=attached.get(a[3], "1") + "\n"
+            returncode=0, stdout=attached.get(a[3], "0") + "\n"
         ),
     )
     built = []

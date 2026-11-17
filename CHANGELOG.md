@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Agent panes no longer jitter until you scroll.** The server builds the
+  Ctrl+F index of an idle agent pane ahead of time by making its window tall
+  and paging through the history, and it did that on a pane one screen was
+  watching, relying on the browser to freeze the view meanwhile. The freeze
+  reached only that server's own browsers: with two servers on the same
+  sessions, or a slow event loop, the pane on screen jumped through its
+  history until a scroll (human input) cancelled the sweep. The ahead-of-time
+  index now runs only on panes with no screen attached, and a screen
+  attaching cancels one in progress; a watched pane builds its index when
+  Ctrl+F opens, as before.
+
 ## [0.14.17] - 2026-11-16
 
 ### Fixed
