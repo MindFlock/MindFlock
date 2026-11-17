@@ -2306,7 +2306,10 @@ a manual ✕, never deleted — when all of these hold:
    adopted with `set_parent` stays theirs), an intake session (`pr-…`,
    `issue-…`, a ticket branch), an in-place or peer-shared session, a feature's
    hidden helper (a Verify run), a member of a running team run, a session on
-   a running route (or the branch of its parent's running route), a worker
+   a running route of its own, a worker a stop of its parent's running route
+   still waits on (one that stop names among its workers or reviewers, or the
+   stop it was spawned during — a worker of a stop the route has passed is no
+   longer held), a worker
    with open workers of its own, or another device's row.
 2. **It is finished.** Its newest `report_result` is `done` or `failed` —
    `blocked` waits on someone, so it stays — and nothing reached it since (a
