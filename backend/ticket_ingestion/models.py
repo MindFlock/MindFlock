@@ -247,6 +247,12 @@ class PRComment:
     #: ISO 8601 (GitHub's createdAt / submitted_at) — when it was said; a
     #: review round waits for the reviewer to stop (pr_rounds.SETTLE_S).
     created_at: str | None = None
+    #: An inline comment's thread: the id of the thread's FIRST comment, the
+    #: one a reply goes to (``POST …/pulls/{n}/comments/{id}/replies``).
+    reply_to: int | None = None
+    #: A review (no file): its state — ``CHANGES_REQUESTED``, ``COMMENTED``
+    #: or ``APPROVED`` (pr_rounds.comment_key gives each its own prefix).
+    review_state: str | None = None
 
 
 @dataclass

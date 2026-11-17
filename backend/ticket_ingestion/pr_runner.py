@@ -151,6 +151,7 @@ def build_consolidated_pr_prompt(
     *,
     each_round: str = "",
     reply_declined: bool = False,
+    reply_all: bool = False,
 ) -> str:
     """Build ONE prompt that addresses every actionable PR comment in a single
     pass — so a PR is handled by a single session/window (like every other
@@ -163,7 +164,14 @@ def build_consolidated_pr_prompt(
     "## Also, every round" before "## When done"; ``reply_declined`` — a
     comment the agent declines also gets a reply on the PR giving the
     reason, not only a line in its summary.
+
+    ``reply_all`` is PR intake's first pass (docs/pr-review-rounds.md "A
+    reply to every request"): triage each request (do it / push back / ask
+    the owner), commit and push the changes, and reply to EVERY request on
+    GitHub with the exact commands (:mod:`pr_replies`).
     """
+    if reply_all:
+        return _reply_all_prompt(pr, comments, workspace_dir, each_round)
     lines: list[str] = []
     lines.append(f"# PR #{pr.number}: {pr.title}")
     lines.append("")
@@ -225,6 +233,70 @@ def build_consolidated_pr_prompt(
             "3. Finish with a concise per-comment summary: what you changed, or "
             "why you skipped it."
         )
+    return "\n".join(lines)
+
+
+def _reply_all_prompt(
+    pr: PullRequest, comments: list[PRComment], workspace_dir, each_round: str
+) -> str:
+    """:func:`build_consolidated_pr_prompt` with ``reply_all``."""
+    from backend.ticket_ingestion import pr_replies
+
+    lines: list[str] = [
+        f"# PR #{pr.number}: {pr.title}",
+        "",
+        f"- PR URL: {pr.url}",
+        f"- Branch (already checked out): `{pr.head_ref}` @ `{pr.head_sha}`",
+        f"- Workspace: `{workspace_dir}`",
+        f"- Author: {pr.author}",
+        "",
+        f"## Review requests to address ({len(comments)})",
+        "",
+        "Work through ALL of the requests below in a single pass on this "
+        "branch. Do not stop after the first one — every request is handled "
+        "and every request gets a reply.",
+        "",
+    ]
+    for i, comment in enumerate(comments, 1):
+        lines.append(f"### {i}. {pr_replies.label(comment)} by {comment.author}")
+        lines.append(f"- URL: {comment.url}")
+        if comment.path:
+            loc = comment.path + (f":{comment.line}" if comment.line else "")
+            lines.append(f"- File: `{loc}`")
+        lines.append(f"- Reply: {pr_replies.where_to_reply(comment)}")
+        if comment.diff_hunk:
+            lines.append("")
+            lines.append("```diff")
+            lines.append(_strip_media(comment.diff_hunk))
+            lines.append("```")
+        lines.append("")
+        lines.append(_strip_media(comment.body) or "_(empty)_")
+        lines.append("")
+    lines += [
+        "## Triage first — decide before you change anything",
+        "For EACH request pick one:",
+        "- **Do it** — it is right and in scope: make the change.",
+        "- **Push back** — it is wrong, out of scope, or would make things "
+        "worse: change nothing for it, and say why in its reply.",
+        "- **Ask the owner** — it is a judgment call (a product decision, a "
+        "big redesign, two requests that conflict): don't guess, ask the "
+        "owner, and say in its reply that it is waiting on the owner.",
+        "Write the triage as a table (request · decision · why) first.",
+        "",
+    ]
+    extra = (each_round or "").strip()
+    if extra:
+        lines += ["## Also, every round", "", extra, ""]
+    lines += pr_replies.reply_rules(pr, comments)
+    lines += [
+        "",
+        "## When done",
+        "1. Make the **Do it** changes in this workspace, commit them, and "
+        "push to this PR's branch (`git push` — never force-push, never merge).",
+        "2. Reply to every request as above, naming the commit sha for each "
+        "one you did.",
+        "3. " + pr_replies.summary_rule(),
+    ]
     return "\n".join(lines)
 
 

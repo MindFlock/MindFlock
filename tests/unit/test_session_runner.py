@@ -283,7 +283,9 @@ def test_run_pr_title_branch_and_prompt_passthrough(config):
 
     from backend.ticket_ingestion.pr_runner import build_consolidated_pr_prompt
 
-    expected_prompt = build_consolidated_pr_prompt(pr, comments, workspace.directory)
+    expected_prompt = build_consolidated_pr_prompt(
+        pr, comments, workspace.directory, reply_all=True
+    )
     assert prompt == expected_prompt
     assert "PR #7" in prompt
 

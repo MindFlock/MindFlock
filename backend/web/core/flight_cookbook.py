@@ -157,7 +157,8 @@ STOPS: Dict[str, dict] = {
         "push) and fails if it never does; "
         "each_round='…' adds the route's own instructions to every round "
         "(re-run a review before the push, merge the base on conflict); "
-        "reply_declined=true has the agent answer declined comments on the PR",
+        "every request (inline, review body, conversation comment) always "
+        "gets a reply on the PR — reply_declined is superseded",
         "the PR to go quiet (and the required reviewer)",
     ),
     "checks": _s(

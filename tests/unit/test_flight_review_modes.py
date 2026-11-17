@@ -451,7 +451,13 @@ def _pr():
 
 def _comment(i, author, created=None):
     return PRComment(
-        id=i, kind="review", author=author, body="b", url="u", created_at=created
+        id=i,
+        kind="review",
+        author=author,
+        body="b",
+        url="u",
+        path="a.py",
+        created_at=created,
     )
 
 
@@ -477,7 +483,7 @@ def github(monkeypatch):
         return state["reviewer"]
 
     monkeypatch.setattr(D, "_pr_of", _pr_of)
-    monkeypatch.setattr(_prc, "fetch_actionable_comments", _fetch)
+    monkeypatch.setattr(_prc, "fetch_pr_requests", _fetch)
     monkeypatch.setattr(D, "_reviewer_on_head", _on_head)
     return state
 
@@ -539,9 +545,10 @@ def test_the_driver_reports_when_each_comment_was_created(github):
     ]
     f = fly({"kind": "reviews", "config": {}})
     out = _obs(f)
-    assert out["ids"] == ["5", "6"]
+    # Keyed as PR intake keys them (pr_rounds.comment_key): inline = c:<id>.
+    assert out["ids"] == ["c:5", "c:6"]
     want = dt.datetime(2027, 1, 15, 8, tzinfo=dt.timezone.utc).timestamp()
-    assert out["created"] == {"5": want, "6": 0.0}
+    assert out["created"] == {"c:5": want, "c:6": 0.0}
 
 
 def test_reviewer_matching_is_a_case_insensitive_substring():

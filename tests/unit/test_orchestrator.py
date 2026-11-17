@@ -609,7 +609,7 @@ class TestProcessPR:
         from backend.ticket_ingestion.state import load_processed_prs
 
         with patch(
-            "backend.ticket_ingestion.orchestrator.fetch_actionable_comments",
+            "backend.ticket_ingestion.orchestrator.fetch_pr_requests",
             new_callable=AsyncMock,
             side_effect=PRCommentsFetchError("502 from GraphQL"),
         ):
@@ -625,7 +625,7 @@ class TestProcessPR:
         from backend.ticket_ingestion.state import load_processed_prs
 
         with patch(
-            "backend.ticket_ingestion.orchestrator.fetch_actionable_comments",
+            "backend.ticket_ingestion.orchestrator.fetch_pr_requests",
             new_callable=AsyncMock,
             return_value=[],
         ):
@@ -651,7 +651,7 @@ class TestProcessPR:
             side_effect=RuntimeError("clone exploded")
         )
         with patch(
-            "backend.ticket_ingestion.orchestrator.fetch_actionable_comments",
+            "backend.ticket_ingestion.orchestrator.fetch_pr_requests",
             new_callable=AsyncMock,
             return_value=[comment],
         ):
@@ -683,7 +683,7 @@ class TestProcessPR:
         record_pr_attempt(_isolated_state_dir, "org/repo", 9)  # a prior failure
         comment = PRComment(id=1, kind="review", author="rev", body="fix", url="u")
         with patch(
-            "backend.ticket_ingestion.orchestrator.fetch_actionable_comments",
+            "backend.ticket_ingestion.orchestrator.fetch_pr_requests",
             new_callable=AsyncMock,
             return_value=[comment],
         ):

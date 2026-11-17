@@ -333,6 +333,42 @@ def _armed_id(armed: list) -> str:
     return str(armed[0]) if armed else ""
 
 
+def _server_headers() -> dict:
+    """JSON headers for this machine's MindFlock server, with its token."""
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("MINDFLOCK_AUTH_TOKEN", "").strip()
+    if not token:
+        try:
+            from backend.config import settings as _settings
+
+            token = (_settings.load_settings().general.auth_token or "").strip()
+        except Exception:  # noqa: BLE001
+            token = ""
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    return headers
+
+
+class Handed(str):
+    """A hand-off's session title (it IS the title, so a caller that only
+    wants the title is unchanged) carrying the server's ``how``: ``queued``,
+    ``reopened``, or ``flight`` (its route answers review comments; nothing
+    was queued)."""
+
+    how: str
+
+    def __new__(cls, title: str, how: str = "queued") -> "Handed":
+        obj = super().__new__(cls, title)
+        obj.how = how
+        return obj
+
+
+def handed_how(title: str) -> str:
+    """The ``how`` of a :meth:`SessionRunner.hand_to_builder` answer;
+    ``"queued"`` for a plain title (an older server, or a test double)."""
+    return str(getattr(title, "how", "") or "queued")
+
+
 class NotLaunched(Exception):
     """A launch backed off without starting anything, and without touching
     any flight or autopilot record — the item is someone else's or no
@@ -599,22 +635,19 @@ class SessionRunner:
         ticket's own session — live, or reopened from Recently closed) through
         the server (``POST /api/sessions/by-branch/hand-off``) → its title, or
         "" when no session on this machine built it (or the server is out of
-        reach): the caller then starts a PR session of its own."""
+        reach): the caller then starts a PR session of its own.
+
+        The title is a :class:`Handed` carrying the server's ``how``:
+        ``"flight"`` means that session's route is still looping on review
+        comments (a ``reviews`` stop it has not passed) and nothing was
+        queued — the route answers them (docs/pr-review-rounds.md "Routes").
+        A server that predates that answer never says it: ``how`` then reads
+        ``"queued"``, as before."""
         port = os.environ.get("MINDFLOCK_SERVER_PORT", "").strip()
         branch = str(getattr(pr, "head_ref", "") or "")
         if not port or not branch:
             return ""
-        headers = {"Content-Type": "application/json"}
-        token = os.environ.get("MINDFLOCK_AUTH_TOKEN", "").strip()
-        if not token:
-            try:
-                from backend.config import settings as _settings
-
-                token = (_settings.load_settings().general.auth_token or "").strip()
-            except Exception:  # noqa: BLE001
-                token = ""
-        if token:
-            headers["Authorization"] = "Bearer " + token
+        headers = _server_headers()
 
         def _post() -> str:
             import urllib.error
@@ -631,10 +664,20 @@ class SessionRunner:
                     body = json.loads(resp.read().decode("utf-8") or "{}")
             except (urllib.error.URLError, OSError, ValueError):
                 return ""
-            return str(body.get("title") or "")
+            if not isinstance(body, dict) or not body.get("title"):
+                return ""
+            return Handed(str(body["title"]), str(body.get("how") or "queued"))
 
         title = await asyncio.to_thread(_post)
-        if title:
+        if title and handed_how(title) == "flight":
+            logger.info(
+                "PR #%s: left to %s's route (its reviews stop answers review "
+                "comments on %s)",
+                pr.number,
+                title,
+                branch,
+            )
+        elif title:
             logger.info(
                 "PR #%s: handed to %s (the session that built %s)",
                 pr.number,
@@ -643,13 +686,62 @@ class SessionRunner:
             )
         return title
 
+    async def review_owner(self, pr: PullRequest) -> dict | None:
+        """Who owns the PR's review comments now, from the server (``GET
+        /api/sessions/by-branch/review-owner``): ``{"owner": "route" |
+        "intake", "title", "handled": [keys]}`` — ``route`` while the branch
+        session's flight has a ``reviews`` stop it has not passed;
+        ``handled``, the request keys those stops already delivered. None
+        when it can't be told (no server, out of reach, or a server that
+        predates the route): the caller goes on as before."""
+        port = os.environ.get("MINDFLOCK_SERVER_PORT", "").strip()
+        branch = str(getattr(pr, "head_ref", "") or "")
+        if not port or not branch:
+            return None
+        headers = _server_headers()
+
+        def _get() -> dict | None:
+            import urllib.error
+            import urllib.parse
+            import urllib.request
+
+            req = urllib.request.Request(
+                "http://127.0.0.1:%s/api/sessions/by-branch/review-owner?%s"
+                % (port, urllib.parse.urlencode({"branch": branch})),
+                headers=headers,
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    body = json.loads(resp.read().decode("utf-8") or "{}")
+            except (urllib.error.URLError, OSError, ValueError):
+                return None
+            if not isinstance(body, dict) or body.get("owner") not in (
+                "route",
+                "intake",
+            ):
+                return None
+            handled = body.get("handled")
+            return {
+                "owner": body["owner"],
+                "title": str(body.get("title") or ""),
+                "handled": (
+                    [str(k) for k in handled] if isinstance(handled, list) else []
+                ),
+            }
+
+        return await asyncio.to_thread(_get)
+
     async def deliver_pr_round(self, pr: PullRequest, prompt: str) -> str:
-        """Hand a review round (pr_rounds) to the PR's session: QUEUED into
+        """Hand a review round (pr_rounds) to the PR's session: the session
+        that built the branch → ``"handed"`` (or ``"flight"`` when its route's
+        reviews stop owns the comments: nothing queued); QUEUED into
         ``pr-<slug>`` when it still exists (the server's prompt-queue drain
         types it in once the agent is idle) → ``"queued"``; otherwise a new PR
         session with this prompt → ``"started"``."""
-        if await self.hand_to_builder(pr, prompt):
-            return "handed"
+        handed = await self.hand_to_builder(pr, prompt)
+        if handed:
+            return "flight" if handed_how(handed) == "flight" else "handed"
         title = f"pr-{pr_slug(pr)}"
         if title in self._stored_titles():
             from backend.web.core import prompt_queue as _pq
@@ -678,10 +770,12 @@ class SessionRunner:
             handed = await self.hand_to_builder(
                 pr,
                 build_consolidated_pr_prompt(
-                    pr, comments, "this session's own workspace"
+                    pr, comments, "this session's own workspace", reply_all=True
                 ),
             )
             if handed:
+                # "flight": the route's reviews stop has them — the caller
+                # records the PR handled all the same, so they never come back.
                 return pr.head_ref
         held = await _wait_for_launch_room("PR #%s" % pr.number)
         title = f"pr-{pr_slug(pr)}"
@@ -690,7 +784,7 @@ class SessionRunner:
         await self._check_launchable(title, held)
         workspace = await self._pr_provisioner.provision(pr, launch_cursor=False)
         prompt = prompt_override or build_consolidated_pr_prompt(
-            pr, comments, workspace.directory
+            pr, comments, workspace.directory, reply_all=True
         )
         armed: list = []
         prompt += self._arm(

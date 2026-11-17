@@ -41,6 +41,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaves the route alone whenever a session of that title is in MindFlock's
   state, the way the server's Intake starts already did.
 
+### Changed
+
+- **PR intake reads every comment and replies to every one.** Your open PRs
+  were only scanned for unresolved review-thread comments and "changes
+  requested" reviews; now the PR's conversation comments and "commented" /
+  "approved" reviews with a body (where a bot's findings outside the diff
+  range live) count too. Pure noise is dropped: auto-generated summaries
+  with no findings, status/approval-only notes ("LGTM", a deploy notice),
+  and anything you already answered with a newer reply. Both the first pass
+  and every later round now make the session reply to EVERY request — done
+  (what changed + the commit sha), pushed back (why), or waiting on you — in
+  its own thread for an inline comment, in one PR conversation comment for
+  the rest, with the exact `gh api` commands in the prompt; its summary
+  links each reply. The first pass commits and pushes like a round does.
+  New bookkeeping ids `b:` (review body) and `i:` (conversation comment);
+  existing `c:` / `r:` state stays valid (docs/pr-review-rounds.md).
+- **One owner for a PR's comments, the same handling either way.** A
+  route's `reviews` stop now reads the same requests as PR intake
+  (conversation comments and review bodies included, noise dropped), keys
+  them the same way, and sends the same prompt — every request gets a reply;
+  its `reply_declined` option is superseded (always on, still parsed). While
+  the PR's branch session flies a route whose `reviews` stop isn't passed,
+  the route owns the comments: the pipeline hands nothing over and records
+  them. After it, PR intake owns new ones, and whatever the stop delivered is
+  never sent again. The pipeline asks `GET
+  /api/sessions/by-branch/review-owner` before every pass; the hand-off
+  answers `{"how": "flight"}` without queueing as a second line. Older
+  servers and pipelines keep working as before.
+
 ## [0.14.17] - 2026-11-16
 
 ### Fixed
