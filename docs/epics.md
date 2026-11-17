@@ -50,8 +50,10 @@ The 2-minute auto-start pass reads only the sources that can auto-start
 The lead session is titled `sc-epic-<id>` on branch `feature/sc-epic-<id>/…`.
 Its first prompt (`backend/web/core/epic_start.py` `build_lead_prompt`) lists
 your open stories with their Shortcut links (*blocks* / *blocked by* /
-*relates to*), the rest of the epic as context, the epic's description, and
-this playbook:
+*relates to*), each story's worker session title (a ticket session is titled
+by the story's slug, `sc-<id>`, so the lead can name every worker before any
+starts), the rest of the epic as context, the epic's description, and this
+playbook:
 
 1. **Plan** the order: a story another one blocks waits for it, and so does a
    story that builds on another's code or touches the same files; the rest run
@@ -59,16 +61,26 @@ this playbook:
 2. **Start the independent stories at once**, one worker each:
    `spawn_ticket_session(ticket, source, autopilot="push", note=…)` — the
    ordinary ticket start (the story moves to its start state, gets
-   `feature/sc-<id>/…`), going only as far as a pushed branch. The note
-   carries the contract between the pieces and "message your lead before
-   changing a shared interface".
+   `feature/sc-<id>/…`), going only as far as a pushed branch. Every worker
+   is the lead's child, so the workers are each other's siblings. The note
+   carries the contract between the pieces, names the worker's sibling
+   stories with their session titles, and tells it to talk to them
+   directly: `send_message` a sibling by title before changing anything it
+   relies on (or `to="siblings"` for something every story needs to know),
+   cc the lead (`to="parent"`) on any contract change, and answer its
+   siblings' questions.
 3. **Start a dependent story** once what it waits for reported done, telling
-   it to `git reset --hard origin/<predecessor's branch>` first.
+   it to `git reset --hard origin/<predecessor's branch>` first; its note
+   names its siblings too, and the lead tells the running workers the
+   newcomer's title so they can reach it.
 4. **Open each PR itself**: `ship_session(depth="pr", base=…)` — the repo's
    PR base for an independent story, the predecessor's branch for a dependent
    one (a stacked PR shows only its own diff).
-5. **Keep them working together**: relay contract changes, answer questions,
-   keep a status table; wake on reports with `wait_for_session(mode="any")`.
+5. **Keep them working together**: the workers settle shared interfaces
+   peer to peer; the lead referees (reads the changes it is copied on, steps
+   in on a disagreement, carries a change into a not-yet-started story's
+   note), answers questions, and keeps a status table; it wakes on reports
+   with `wait_for_session(mode="any")`. PRs, order and status stay the lead's.
 6. **Finish** with story → PR → base, and the merge order of stacked PRs.
 
 It never merges a PR, never pushes to the base branch, and never starts a story

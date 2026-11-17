@@ -6,6 +6,8 @@
  *  - More than one step: each can be marked ✓ / ✗ (all ✓ to start) and the
  *    marks are sent per step; one ✗ needs a note saying what you saw.
  *  - A step the AGENT tried and couldn't do says why under it.
+ *  - A step with something to paste (`paste`) shows it in a box with a Copy
+ *    button (PasteBox).
  *  - No person steps at all (a plain sign-off): the heading is the server's
  *    own `detail` and the button reads "Sign off".
  *  - `hideSteps`: the caller already lists the steps — they are not drawn
@@ -19,12 +21,13 @@
 import { useState, type JSX } from "react";
 import type { SessionVerify, SessionVerifyFailedStep, SessionVerifyHumanStep, SessionVerifyStepAnswer } from "../../api/types";
 import { confirmVerified } from "../../lib/verifyActions";
+import { PasteBox } from "./PasteBox";
 import "./BehaviorsCard.css";
 
 export type StepMarks = Record<string, SessionVerifyStepAnswer>;
 
-/** The person's steps, numbered, each with what should happen — and, for a
- * step the agent couldn't do, why. `marks`/`onMark` add a ✓ / ✗ per step. */
+/** The person's steps, numbered, each with what to paste (copyable), what
+ * should happen — and, for a step the agent couldn't do, why. `marks`/`onMark` add a ✓ / ✗ per step. */
 export function HumanSteps({
   steps,
   marks,
@@ -44,6 +47,7 @@ export function HumanSteps({
         return (
           <li key={st.id} className={"vc-step" + (onMark && mark === "fail" ? " is-fail" : "")}>
             <span className="vc-step-text">{st.text}</span>
+            <PasteBox text={st.paste} />
             {st.expect ? <span className="vc-step-expect">Expect: {st.expect}</span> : null}
             {st.why ? <span className="vc-step-why">The agent couldn't do this: {st.why}</span> : null}
             {onMark ? (

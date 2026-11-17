@@ -206,6 +206,20 @@ def test_keystrokes_reach_the_client_through_the_writer(spawner, one_loop):
         assert proc.peer.recv(64) == b"\x1b[1;1R"
 
 
+def test_an_attaching_screen_cancels_a_background_find_index(
+    spawner, one_loop, monkeypatch
+):
+    """The ahead-of-time Ctrl+F index pages through a tall window: it starts
+    only with no screen attached, and a screen arriving stops it, or the
+    pane would jitter through the sweep until a scroll (owner bug)."""
+    stopped = []
+    monkeypatch.setattr(server._pane_scroll_find, "cancel_background", stopped.append)
+    spawner["release"].set()
+    with one_loop.websocket_connect("/api/instances/w/terminal") as ws:
+        _within(ws.receive_text)
+        assert stopped == ["mf_w"]
+
+
 def test_a_guests_keys_go_by_send_keys_and_terminal_replies_by_the_writer(
     spawner, one_loop, monkeypatch
 ):

@@ -140,6 +140,38 @@ def test_the_lead_prompt_orders_and_splits_the_work():
     assert "Detect poisoned listings." in p
 
 
+def test_the_lead_prompt_has_the_stories_talk_to_each_other():
+    """The owner's ask: the stories spawn beneath the lead and talk to each
+    other. Every worker is named up front (its title is the story slug), and
+    each worker's note sends it to its siblings directly, copying the lead."""
+    mine, others = E.open_stories(DETAIL)
+    p = E.build_lead_prompt(DETAIL, "sc", "staging", mine, others)
+    assert E.worker_titles(mine) == [
+        ("sc-1", "sc-1"),
+        ("sc-2", "sc-2"),
+        ("sc-3", "sc-3"),
+    ]
+    assert "## Their worker sessions" in p
+    assert "sc-1 → `sc-1`, sc-2 → `sc-2`, sc-3 → `sc-3`" in p
+    # Someone else's story never gets a worker title.
+    roster = p.split("## Their worker sessions", 1)[1].split("##", 1)[0]
+    assert "sc-4" not in roster and "sc-5" not in roster
+    # The note: siblings by title, direct talk, cc the lead, answer siblings.
+    assert "its SIBLINGS" in p and "worker session title" in p
+    assert "Talk to your sibling stories directly" in p
+    assert 'to=\\"siblings\\"' in p
+    assert (
+        'Copy your lead (send_message to=\\"parent\\") on any change to a shared contract'
+        in p
+    )
+    assert "Answer your siblings' questions" in p
+    # A later story is announced to the running workers.
+    assert "tell the workers still running the newcomer's title" in p
+    # The lead keeps PRs, order and the status table.
+    assert "owner of PRs, order and status" in p
+    assert "status table (story · worker · state · PR)" in p
+
+
 # --------------------------------------------------------------------------- #
 # The provider reads Shortcut's links into blocks / blocked_by / relates
 # --------------------------------------------------------------------------- #

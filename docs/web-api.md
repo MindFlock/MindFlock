@@ -89,7 +89,8 @@ List all sessions. Each item:
     "plan": "sc-19815",        // the plan id (POST /api/test-plans/{plan}/confirm)
     "steps": {"total": 4, "agent_done": 2, "human": 1},
     "human_steps": [{"id": "s4", "text": "Open the page", "expect": "the badge reads 3",
-                     "why": "agent couldn't: no browser"}],  // what a person checks before confirming; why = why the agent left it
+                     "paste": "https://staging.example.com/settings",
+                     "why": "agent couldn't: no browser"}],  // what a person checks before confirming; paste = the exact text they paste (only when set); why = why the agent left it
     "failed_steps": [{"id": "s2", "text": "Curl /health", "note": "got 500"}],
     "detail": "The agent is checking its work: 2 of 3 steps done.",  // one plain sentence
     "at": 1762300000.0,        // when it settled (or started)
@@ -120,7 +121,9 @@ to end (`detail` then reads "Waiting for the agent's turn to end."); and
 `file_error` is set only while the agent's results file can't be read
 (`detail`: "The agent's results file can't be read: …"), cleared by the next
 good read. A `human_steps` entry the agent left for a person carries `why`
-("agent couldn't: <its note>").
+("agent couldn't: <its note>"); one whose step has something for the person
+to paste (a chat command, a URL, a value — concrete values filled in) carries
+`paste`, which the UI shows with a Copy button.
 
 Stage is inferred from git (upstream, origin SHA, commit lock files) plus a
 GitHub lookup for the PR stages — `gh` when it is installed and authenticated,

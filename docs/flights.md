@@ -195,8 +195,18 @@ agent ONE prompt — "verify the work you just did" — and the agent comes up
 with its own concrete test steps (real usage, not the unit tests it already
 ran), writes them to its results file, puts them on its todo list and works
 through them. A step only a person can do, it **tells the person** in its
-reply (what to do, what to look for) and records as `actor: "human"`. No
-steps are written beforehand: starting the stop finds or makes the session's
+reply (what to do, what to look for) and records as `actor: "human"`. A
+person's step is only what a user of the product does **in the product's own
+interface**: type a command into its chat or app, click a button, open a page,
+look at a result. Anything run in a terminal, a CLI, an MCP tool, a log,
+metrics or cloud-console query, a database or a file edit is the agent's: it
+does any setup the person's step needs (and undoes it after) and reads the
+proof itself. It never hands the person a decision or a chore, and gives one
+action per step. Whatever the person types or pastes goes in the step's
+`paste`, **concrete values filled in** (the agent looks them up — never
+`<placeholders>` or "e.g."), and in its reply each paste sits alone in its own
+fenced code block, numbered in order; the UI shows it in a box with a
+**Copy** button. No steps are written beforehand: starting the stop finds or makes the session's
 plan (an empty one, nothing generated) and starts the check.
 
 The stop follows the check's outcome — the same **Verify pill** the session's
@@ -1079,8 +1089,15 @@ had to choose. Field and route names are unchanged.
 - **`reviews` step**: comments already open on the PR when the step starts
   are its first round, unless an earlier stop of the flight handed them to
   the agent (see "Reviews: no review left undone"); each batch goes to the
-  agent as the pipeline's consolidated prompt (which leaves the changes
-  uncommitted), then a `push` lane is armed. A PR whose comments can't be
+  agent as PR intake's own prompt (`build_consolidated_pr_prompt(…,
+  reply_all=True)`: triage, commit, and a reply to EVERY request), then a
+  `push` lane is armed. It reads what PR intake reads
+  (`pr_comments.fetch_pr_requests`: review threads, reviews, review bodies
+  and conversation comments, noise dropped) and keys them the same way
+  (`c:` / `r:` / `b:` / `i:`; a bare id stored by an older stop reads as
+  `c:<id>`). While the stop is not passed, the route owns the PR's comments
+  and PR intake hands it nothing; after it, what the stop delivered (its
+  `seen`) stays handled (docs/pr-review-rounds.md "Routes"). A PR whose comments can't be
   read is never "quiet". `include_bots: false` drops `*[bot]` and CodeRabbit
   authors. `require_reviewer` holds the stop until that reviewer has
   reviewed the PR's current head (see "Team PR rules as a route").
@@ -8284,9 +8301,9 @@ not hide the bot from the required-reviewer check.
 
 Two optional fields on the `reviews` stop add to the prompt each round
 sends the agent (`_send_reviews` passes them to
-`pr_runner.build_consolidated_pr_prompt`). With both at their defaults the
-prompt is the pipeline's, byte for byte, except that the stop's first round
-ends with "Route so far" when earlier stops finished (see "Reviews: no
+`pr_runner.build_consolidated_pr_prompt`). The prompt is always PR
+intake's, `reply_all=True`, byte for byte, except that the stop's first
+round ends with "Route so far" when earlier stops finished (see "Reviews: no
 review left undone").
 
 - **`each_round`** — "Also, every round" (textarea, ≤ 8000 characters,
@@ -8302,12 +8319,10 @@ review left undone").
   If the branch conflicts with the base, merge the base in and resolve it.
   ```
 
-- **`reply_declined`** — "Reply on the PR to comments it declines" (bool,
-  default false): the "When done" list gains a step asking the agent to
-  reply on the PR to each comment it decides not to act on (in the review
-  thread for an inline comment), giving the reason, so the reviewer sees it
-  on the PR and not only in the agent's summary. The pipeline's own PR
-  runner never sets it.
+- **`reply_declined`** — superseded, always on: every request gets a reply
+  on the PR whatever the agent decided (done with the commit sha, pushed
+  back with why, waiting on the owner), declined or not. The field is still
+  parsed (bool, default false) so older plans load, and changes nothing.
 
 The route editor's stop form shows both from `GET /api/flights/kinds` (the
 text as a multi-line box); `FIELD_HINT` in `frontend/src/lib/stopEditing.ts`

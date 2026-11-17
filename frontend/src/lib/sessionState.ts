@@ -362,11 +362,12 @@ export function verifyProgress(v: Pick<SessionVerify, "steps">): string {
 }
 
 /** One bulleted line per step: "• Open the app — the banner shows". */
-export function verifyStepLines(steps: ReadonlyArray<{ text: string; expect?: string; note?: string }>): string {
+export function verifyStepLines(steps: ReadonlyArray<{ text: string; expect?: string; note?: string; paste?: string }>): string {
   return steps
     .map((s) => {
       const tail = String(s.expect || s.note || "").trim();
-      return "• " + String(s.text || "").trim() + (tail ? " — " + tail : "");
+      const paste = String(s.paste || "").trim();
+      return "• " + String(s.text || "").trim() + (tail ? " — " + tail : "") + (paste ? "\n    Paste: " + paste : "");
     })
     .join("\n");
 }

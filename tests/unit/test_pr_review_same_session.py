@@ -140,3 +140,266 @@ def test_hand_to_builder_needs_the_server(monkeypatch):
     monkeypatch.delenv("MINDFLOCK_SERVER_PORT", raising=False)
     pr = types.SimpleNamespace(number=7, head_ref="feature/sc-1/x", repo="o/r")
     assert asyncio.run(runner.hand_to_builder(pr, "x")) == ""
+
+
+# --------------------------------------------------------------------------- #
+# A route's reviews stop already loops on the PR's comments
+# (docs/pr-review-rounds.md "Routes"): the hand-off leaves them to it.
+# --------------------------------------------------------------------------- #
+def _flight(review_state, state="running", moved_on=False):
+    return {
+        "session": "sc-1",
+        "state": state,
+        "steps": [{"id": "s1", "kind": "agent"}, {"id": "s2", "kind": "reviews"}],
+        "step_states": {
+            "s1": {"state": "done", "detail": {}},
+            "s2": {"state": review_state, "detail": {"moved_on": moved_on}},
+        },
+    }
+
+
+def test_reviews_pending():
+    from backend.web.core import flights as F
+
+    assert F.reviews_pending(_flight("pending"))
+    assert F.reviews_pending(_flight("running"))
+    assert F.reviews_pending(_flight("waiting_you", state="waiting_you"))
+    assert F.reviews_pending(_flight("failed", state="halted"))
+    assert not F.reviews_pending(_flight("done"))
+    assert not F.reviews_pending(_flight("skipped"))
+    assert not F.reviews_pending(_flight("failed", moved_on=True))
+    assert not F.reviews_pending(_flight("running", state="done"))
+    assert not F.reviews_pending(_flight("running", state="cancelled"))
+    no_reviews = _flight("pending")
+    no_reviews["steps"] = no_reviews["steps"][:1]
+    assert not F.reviews_pending(no_reviews)
+    assert not F.reviews_pending(None)
+
+
+def _branch_sessions(monkeypatch):
+    monkeypatch.setattr(
+        server.ENGINE,
+        "instances",
+        {"pr-o-r-7": _Inst("feature/sc-1/x"), "sc-1": _Inst("feature/sc-1/x")},
+    )
+
+
+def _flights_are(monkeypatch, *flights):
+    monkeypatch.setattr(
+        server._flights,
+        "list_flights",
+        lambda include_finished=True: [f for f in flights if f is not None],
+    )
+
+
+def test_a_flying_reviews_stop_gets_nothing_queued(client, monkeypatch):
+    _branch_sessions(monkeypatch)
+    _flights_are(monkeypatch, _flight("running"))
+    r = client.post(
+        "/api/sessions/by-branch/hand-off",
+        json={"branch": "feature/sc-1/x", "text": "review it"},
+    )
+    assert r.status_code == 200 and r.json() == {"title": "sc-1", "how": "flight"}
+    assert client.queued == []
+
+
+@pytest.mark.parametrize(
+    "flight",
+    [
+        None,
+        _flight("done", state="done"),
+        _flight("running", state="cancelled"),
+        _flight("done"),
+    ],
+)
+def test_finished_or_past_the_stop_is_handed_as_before(client, monkeypatch, flight):
+    _branch_sessions(monkeypatch)
+    _flights_are(monkeypatch, flight)
+    r = client.post(
+        "/api/sessions/by-branch/hand-off",
+        json={"branch": "feature/sc-1/x", "text": "review it"},
+    )
+    assert r.json() == {"title": "sc-1", "how": "queued"}
+    assert client.queued == [("sc-1", "review it")]
+
+
+def test_a_real_flight_owns_its_reviews_until_it_passes_the_stop(
+    client, monkeypatch, tmp_path
+):
+    from backend.web.core import flights as F
+
+    monkeypatch.setenv("MINDFLOCK_FLIGHTS_DIR", str(tmp_path / "flights"))
+    monkeypatch.setenv("MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "autopilot.json"))
+    _branch_sessions(monkeypatch)
+    plan = F.save_plan(
+        {
+            "name": "P",
+            "steps": [
+                {"kind": "agent", "config": {"prompt": "x"}},
+                {"kind": "reviews", "config": {}},
+            ],
+        },
+        now=1_800_000_000.0,
+    )
+    f = F.take_off(plan, session="sc-1", now=1_800_000_000.0)
+    post = lambda: client.post(  # noqa: E731
+        "/api/sessions/by-branch/hand-off",
+        json={"branch": "feature/sc-1/x", "text": "review it"},
+    ).json()
+    assert post()["how"] == "flight" and client.queued == []
+
+    def _pass_reviews(fl):
+        for s in fl["steps"]:
+            fl["step_states"][s["id"]]["state"] = "done"
+
+    F.mutate(f["id"], _pass_reviews)
+    assert post() == {"title": "sc-1", "how": "queued"}
+    assert client.queued == [("sc-1", "review it")]
+
+
+def test_the_pipeline_reads_flight_and_tolerates_an_older_server(monkeypatch):
+    from backend.ticket_ingestion import session_runner as SR
+
+    from datetime import datetime
+
+    from backend.ticket_ingestion.models import PullRequest
+
+    runner = SR.SessionRunner.__new__(SR.SessionRunner)
+    pr = PullRequest(
+        7,
+        "feature/sc-1/x",
+        "abc",
+        "main",
+        "T",
+        "https://pr/7",
+        "me",
+        datetime(2026, 1, 1),
+        repo="o/r",
+    )
+
+    async def flight(p, prompt):
+        return SR.Handed("sc-1", "flight")
+
+    monkeypatch.setattr(runner, "hand_to_builder", flight)
+    assert asyncio.run(runner.deliver_pr_round(pr, "round")) == "flight"
+    # The first pass: nothing launched, the PR counts as handled.
+    assert asyncio.run(runner.run_pr(pr, [])) == "feature/sc-1/x"
+    # An older server answers without "how": a plain hand-off.
+    assert SR.handed_how("sc-1") == "queued"
+    assert SR.handed_how(SR.Handed("sc-1", "reopened")) == "reopened"
+
+
+def test_hand_to_builder_carries_the_servers_how(monkeypatch):
+    import io
+    import urllib.request
+
+    from backend.ticket_ingestion import session_runner as SR
+
+    runner = SR.SessionRunner.__new__(SR.SessionRunner)
+    monkeypatch.setenv("MINDFLOCK_SERVER_PORT", "1")
+    monkeypatch.setenv("MINDFLOCK_AUTH_TOKEN", "t")
+    pr = types.SimpleNamespace(number=7, head_ref="feature/sc-1/x", repo="o/r")
+    answers = iter(
+        [
+            {"title": "sc-1", "how": "flight"},
+            {"title": "sc-1"},  # an older server
+            {"error": "nobody"},
+        ]
+    )
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=0: _Resp(json.dumps(next(answers)).encode()),
+    )
+    got = asyncio.run(runner.hand_to_builder(pr, "x"))
+    assert got == "sc-1" and SR.handed_how(got) == "flight"
+    got = asyncio.run(runner.hand_to_builder(pr, "x"))
+    assert got == "sc-1" and SR.handed_how(got) == "queued"
+    assert asyncio.run(runner.hand_to_builder(pr, "x")) == ""
+
+
+# --------------------------------------------------------------------------- #
+# Who owns a PR's comments: GET /api/sessions/by-branch/review-owner
+# --------------------------------------------------------------------------- #
+def _seen(flight, seen):
+    flight["step_states"]["s2"]["detail"]["seen"] = list(seen)
+    return flight
+
+
+def test_review_owner_is_the_route_while_its_stop_is_open(client, monkeypatch):
+    _branch_sessions(monkeypatch)
+    _flights_are(monkeypatch, _seen(_flight("running"), ["5", "i:9"]))
+    r = client.get(
+        "/api/sessions/by-branch/review-owner", params={"branch": "feature/sc-1/x"}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"owner": "route", "title": "sc-1", "handled": ["c:5", "i:9"]}
+
+
+def test_after_the_stop_intake_owns_and_its_seen_stay_handled(client, monkeypatch):
+    _branch_sessions(monkeypatch)
+    other = _seen(_flight("done", state="done"), ["c:77"])
+    other["session"] = "elsewhere"  # another branch's flight: not ours
+    _flights_are(
+        monkeypatch, _seen(_flight("done", state="done"), ["5", "b:57"]), other
+    )
+    r = client.get(
+        "/api/sessions/by-branch/review-owner", params={"branch": "feature/sc-1/x"}
+    )
+    assert r.json() == {"owner": "intake", "title": "", "handled": ["c:5", "b:57"]}
+    assert client.get("/api/sessions/by-branch/review-owner").status_code == 400
+
+
+def test_the_pipeline_asks_who_owns_it_and_tolerates_an_older_server(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    from backend.ticket_ingestion import session_runner as SR
+
+    runner = SR.SessionRunner.__new__(SR.SessionRunner)
+    monkeypatch.setenv("MINDFLOCK_SERVER_PORT", "1")
+    monkeypatch.setenv("MINDFLOCK_AUTH_TOKEN", "t")
+    pr = types.SimpleNamespace(number=7, head_ref="feature/sc-1/x", repo="o/r")
+    urls: list = []
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    answers = iter(
+        [
+            {"owner": "intake", "title": "", "handled": ["c:5"]},
+            urllib.error.HTTPError("u", 404, "Not Found", {}, None),  # older
+            {"error": "?"},
+        ]
+    )
+
+    def _open(req, timeout=0):
+        urls.append(req.full_url)
+        a = next(answers)
+        if isinstance(a, Exception):
+            raise a
+        return _Resp(json.dumps(a).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", _open)
+    got = asyncio.run(runner.review_owner(pr))
+    assert got == {"owner": "intake", "title": "", "handled": ["c:5"]}
+    assert urls[0].endswith(
+        "/api/sessions/by-branch/review-owner?branch=feature%2Fsc-1%2Fx"
+    )
+    assert asyncio.run(runner.review_owner(pr)) is None
+    assert asyncio.run(runner.review_owner(pr)) is None
+    monkeypatch.delenv("MINDFLOCK_SERVER_PORT")
+    assert asyncio.run(runner.review_owner(pr)) is None

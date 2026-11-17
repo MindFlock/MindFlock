@@ -397,6 +397,61 @@ class TestOnlyItsOwnFlight:
         assert "launched elsewhere" in caplog.text
 
 
+def _store_session(title: str) -> None:
+    """Persist a session named ``title`` in the (tmp) MindFlock home's
+    state.json, the way the engine of whichever process created it would."""
+    from backend import config as cs_config
+
+    cs_config.LoadState().SaveInstances(json.dumps([{"title": title}]).encode("utf-8"))
+
+
+class TestCancelLeavesALiveSessionsFlight:
+    """2026-11-16, the same race on 0.14.15 builds: ``_cancel_flight`` itself
+    must never cancel the flight of a session that exists, whichever failure
+    path calls it — the session in state.json is the one flying it."""
+
+    def test_a_live_session_keeps_the_flight_this_launch_armed(self, monkeypatch):
+        f = F.arm_pending("sc-42", "builtin:ticket", {"kind": "ticket"})
+        disarmed: list = []
+        monkeypatch.setattr(sr, "_disarm_autopilot", disarmed.append)
+        _store_session("sc-42")
+        sr._cancel_flight("sc-42", "the session could not be created", f["id"])
+        assert F.for_session("sc-42")["state"] != "cancelled"
+        assert disarmed == []
+
+    def test_no_session_still_cancels_it(self, monkeypatch):
+        f = F.arm_pending("sc-42", "builtin:ticket", {"kind": "ticket"})
+        disarmed: list = []
+        monkeypatch.setattr(sr, "_disarm_autopilot", disarmed.append)
+        _store_session("sc-other")
+        sr._cancel_flight("sc-42", "the session could not be created", f["id"])
+        (after,) = F.list_flights()
+        assert after["id"] == f["id"] and after["state"] == "cancelled"
+        assert disarmed == ["sc-42"]
+
+    def test_a_timed_out_start_whose_session_came_up_keeps_its_flight(
+        self, tmp_path, monkeypatch
+    ):
+        """The timeout path had no live-session check at all: the worker
+        thread (or another launch) got the session going, and the timeout
+        cancelled its route."""
+        runner = _runner(tmp_path, monkeypatch)
+        _settings_with_plan()
+        monkeypatch.setattr(sr, "_INSTANCE_START_TIMEOUT", 0.05)
+
+        def _slow_create(*a, **kw):
+            _store_session("sc-42")
+            import time
+
+            time.sleep(0.3)
+
+        with patch.object(runner, "_create_instance", side_effect=_slow_create):
+            with pytest.raises(RuntimeError, match="timed out"):
+                asyncio.run(runner.run(_story()))
+        (f,) = F.list_flights()
+        assert f["state"] != "cancelled"
+
+
 class TestRecheckAfterTheHold:
     def test_a_live_session_of_that_title_stops_it_before_arming(
         self, tmp_path, monkeypatch

@@ -838,7 +838,8 @@ def _needs_list(value) -> List[str]:
 
 
 def _normalize_step(raw, index: int) -> Optional[dict]:
-    """One stored/parsed step coerced to ``{id, text, expect, actor, needs}``.
+    """One stored/parsed step coerced to ``{id, text, expect, actor, needs,
+    paste}``.
 
     ``None`` for a step with no instruction in it — a step whose text is empty
     is not a step, and keeping it would show the user a blank checkbox they can
@@ -883,7 +884,14 @@ def _normalize_step(raw, index: int) -> Optional[dict]:
     # only place that can see every id. PRESENT ONLY WHEN NON-EMPTY, so a plan
     # written before walkthroughs existed reads back byte for byte as it always
     # did; every reader asks ``step.get("needs") or []``.
-    return _set_needs(step, _needs_list(raw.get("needs")))
+    _set_needs(step, _needs_list(raw.get("needs")))
+    # ``paste``: the exact text a PERSON pastes for this step (a chat command,
+    # a URL, a value), concrete values filled in — the UI shows it with a Copy
+    # button. Present only when non-empty, like ``needs``, for the same reason.
+    paste = _text(raw.get("paste")) if isinstance(raw.get("paste"), str) else ""
+    if paste:
+        step["paste"] = paste
+    return step
 
 
 def _set_needs(step: dict, refs: List[str]) -> dict:
@@ -3049,7 +3057,7 @@ def _report_entries(raw_steps) -> List[tuple]:
             # It answered the step, so it worked it: the agent's own (the
             # shell-hazard rule in _normalize_step still applies).
             actor = "agent"
-        raw = {k: entry.get(k) for k in ("id", "expect", "needs")}
+        raw = {k: entry.get(k) for k in ("id", "expect", "needs", "paste")}
         raw.update(text=text, actor=actor)
         step = _normalize_step(raw, len(out))
         if step is None:
@@ -3229,10 +3237,12 @@ def verify_status(
     verify starts or a person dismisses it. Pure.
 
     ``{"state", "plan", "steps": {"total", "agent_done", "human"},
-    "human_steps": [{"id", "text", "expect", "why"?}], "failed_steps": [{"id",
-    "text", "note"}], "detail", "at", "progress_at", "current",
-    "file_error"?}``. ``why`` is on a step the AGENT left for a person (its
-    note: "agent couldn't: …"). ``progress_at`` is when the run last recorded
+    "human_steps": [{"id", "text", "expect", "paste"?, "why"?}],
+    "failed_steps": [{"id", "text", "note"}], "detail", "at", "progress_at",
+    "current", "file_error"?}``. ``paste`` is the exact text the person pastes
+    for that step (shown with a Copy button), only when the step has one.
+    ``why`` is on a step the AGENT left for a person (its note: "agent
+    couldn't: …"). ``progress_at`` is when the run last recorded
     an answer (``0.0`` for none); ``current`` the ``{id, text}`` of the first
     step it walks with no answer yet (then the first of any step), or
     ``None``; ``file_error`` why the agent's results file can't be read, only
@@ -3265,6 +3275,8 @@ def verify_status(
             "text": s.get("text") or "",
             "expect": s.get("expect") or str(entry.get("note") or ""),
         }
+        if s.get("paste"):
+            item["paste"] = s["paste"]
         why = _why_not_passed(entry)
         if why:
             item["why"] = why
@@ -7240,6 +7252,8 @@ def build_run_prompt(
         parts.append("%s [%s] %s" % (sid, tag, step.get("text", "")))
         if step.get("expect"):
             parts.append("    Expect: %s" % step["expect"])
+        if step.get("paste"):
+            parts.append("    Paste: %s" % step["paste"])
         needs = [str(n) for n in (step.get("needs") or []) if str(n).strip()]
         if needs:
             parts.append("    Needs: %s" % ", ".join(needs))
@@ -7349,6 +7363,36 @@ def previous_for_prompt(plan: dict) -> List[dict]:
 #: How many steps a self-verify asks the agent to write, at most.
 SELF_MAX_STEPS = 8
 
+#: What a PERSON's step may be, said once for both walks of
+#: :func:`build_self_verify_prompt`. Agents kept handing people terminal work
+#: (a CLI call, an MCP tool, a cloud-console query, a file edit), decisions and
+#: chores, and commands with ``<placeholders>`` in them that could not be
+#: pasted. A person's step is what a USER of the product does in the product's
+#: own interface; everything else is the agent's, and anything the person
+#: types travels in ``paste``, ready to copy.
+PERSON_STEP_RULES = (
+    'A PERSON\'S STEP (actor "human") is only what a user of this product '
+    "does in the product's own interface: type a command into its chat or "
+    "app (a /deploy chat command), click a button (Save on the Settings "
+    "page), open a page, look at a result. Anything run in a terminal, a CLI, "
+    "an MCP tool, a log, metrics or cloud-console query, a database, or a "
+    "file edit is YOURS, never the person's: do any setup their step needs "
+    "before it (and undo it after), and read the proof yourself. Never hand "
+    "the person a decision or a chore. One action per person step.",
+    "When the person's step has them type or paste anything (a command, a "
+    'URL, a value), put the exact text in the step\'s "paste" with every '
+    "concrete value filled in: look the values up first; never <placeholders> "
+    'or "e.g.". In your reply, number the person\'s steps in order and put '
+    "each paste alone in its own fenced code block, so it copies in one go.",
+)
+
+
+#: The file-shape example's ``paste`` (:func:`build_self_verify_prompt`).
+_PASTE_EXAMPLE = (
+    "<the exact text the person pastes, every value filled in; leave the key "
+    "out when there is nothing to paste>"
+)
+
 
 def build_self_verify_prompt(
     plan: dict,
@@ -7367,7 +7411,7 @@ def build_self_verify_prompt(
 
     The agent comes up with a few concrete, actionable checks of what it built
     (real usage — not the unit tests it already ran), writes them to
-    :data:`RESULT_FILE` as ``{id, text, expect, actor}``, tracks them however
+    :data:`RESULT_FILE` as ``{id, text, expect, actor, paste?}``, tracks them however
     it tracks tasks and works through its own (``actor`` "agent"), recording
     ``result`` pass / fail / blocked with a ``note`` holding evidence a person
     can check, and rewriting the file after every step. ``finished: true``
@@ -7390,6 +7434,9 @@ def build_self_verify_prompt(
     ``where``/``target``/``checkout_branch`` name a deployment under test (an
     environment's reach), as for a walk; ``notes`` are this check's own.
     A person's own steps on the plan (``manual``) are listed, to be kept.
+    Both walks carry :data:`PERSON_STEP_RULES`: a person's step is only what a
+    user does in the product's own interface, and what they paste goes in the
+    step's ``paste``, values filled in, one fenced block each in the reply.
     ``confirm``: a person signs the check off even if every step passes."""
     plan = plan or {}
     pid = str(plan.get("id") or "")
@@ -7420,8 +7467,8 @@ def build_self_verify_prompt(
             "4. Hand a step to the person ONLY when no tool of yours can do or "
             'see it: record it "blocked" with a note starting "%s" that says '
             'what to do and what to look for ("%s open /settings; look for '
-            '3 toggles"), and tell the person the same in your reply.'
-            % (NEEDS_YOU, NEEDS_YOU)
+            '3 toggles"), and tell the person the same in your reply. %s'
+            % (NEEDS_YOU, NEEDS_YOU, " ".join(PERSON_STEP_RULES))
         )
     else:
         work = (
@@ -7438,7 +7485,8 @@ def build_self_verify_prompt(
             '"human" with no result. For each one, TELL THE PERSON in your '
             'reply what to do and what to look for ("open /settings; you '
             'should see 3 toggles"). Keep these to the few that truly need a '
-            "person: if any tool of yours can do or see it, it is yours."
+            "person: if any tool of yours can do or see it, it is yours. %s"
+            % " ".join(PERSON_STEP_RULES)
         )
     parts = [
         "%s verify the work you just did in this session — check, by actually "
@@ -7530,6 +7578,8 @@ def build_self_verify_prompt(
             )
             if st.get("expect"):
                 parts.append("    Expect: %s" % st["expect"])
+            if st.get("paste"):
+                parts.append("    Paste: %s" % st["paste"])
     if repo_notes:
         parts += [
             "",
@@ -7556,6 +7606,7 @@ def build_self_verify_prompt(
                     "id": "<step id>",
                     "text": "<what a person would do>",
                     "expect": "<what they should see>",
+                    "paste": _PASTE_EXAMPLE,
                     "actor": "human",
                     "result": "<pass|fail|blocked>",
                     "note": "<your evidence, or needs you: what to do, what to "
@@ -7566,6 +7617,7 @@ def build_self_verify_prompt(
                     "id": "<step id>",
                     "text": "<what the person does>",
                     "expect": "<what they should see>",
+                    "paste": _PASTE_EXAMPLE,
                     "actor": "human",
                 }
             ),
@@ -7674,4 +7726,17 @@ def results_markdown(plan: dict) -> str:
         expect = _one_line(step.get("expect"), 300)
         if expect:
             lines.append("  - expect: %s" % expect)
+        # What the person pastes, as code a reader can copy from the comment.
+        paste = _one_line(step.get("paste"), 300)
+        if paste:
+            lines.append("  - paste: %s" % _inline_code(paste))
     return "\n".join(lines) + "\n"
+
+
+def _inline_code(text: str) -> str:
+    """``text`` as one Markdown code span, fenced with one more backtick than
+    the longest run inside it (and padded when it starts or ends with one)."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return "%s%s%s%s%s" % (fence, pad, text, pad, fence)

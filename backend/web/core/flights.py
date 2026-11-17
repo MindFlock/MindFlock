@@ -569,10 +569,12 @@ STEP_KINDS: Dict[str, dict] = {
                 "Give that reviewer (minutes)",
                 default=10,
             ),
+            # Superseded: every request gets a reply now, declined or not
+            # (docs/pr-review-rounds.md). Still parsed so old plans load.
             _f(
                 "reply_declined",
                 "bool",
-                "Reply on the PR to comments it declines",
+                "Reply on the PR to comments it declines (always on now)",
                 default=False,
             ),
             _f(
@@ -2449,6 +2451,82 @@ def for_session(title: str, unfinished_only: bool = True) -> Optional[dict]:
             if best is None or f["started"] > best["started"]:
                 best = f
         return copy.deepcopy(best) if best is not None else None
+
+
+def review_key(item) -> str:
+    """A reviews stop's comment id as PR intake keys it
+    (``pr_rounds.comment_key``): ``c:`` / ``r:`` / ``b:`` / ``i:`` + id. A
+    bare id (a stop that ran before the ids were keyed read only inline
+    review comments) is ``c:<id>``."""
+    s = str(item)
+    return s if ":" in s else "c:" + s
+
+
+def reviews_handled(flight: Optional[dict]) -> List[str]:
+    """The request keys (:func:`review_key`) ``flight``'s ``reviews`` stops
+    delivered to the agent (their ``seen``), in any state: once PR intake
+    owns the PR again they count as handled and are never sent twice."""
+    out: List[str] = []
+    if not isinstance(flight, dict):
+        return out
+    states = flight.get("step_states") or {}
+    for step in flight.get("steps") or []:
+        if not isinstance(step, dict) or step.get("kind") != "reviews":
+            continue
+        ss = states.get(step.get("id"))
+        detail = (ss or {}).get("detail") if isinstance(ss, dict) else None
+        for item in (detail or {}).get("seen") or []:
+            key = review_key(item)
+            if key not in out:
+                out.append(key)
+    return out
+
+
+def review_owner(titles: Sequence[str]) -> dict:
+    """Who owns a PR's review comments, given the live sessions on its
+    branch (docs/pr-review-rounds.md "Routes"): ``{"owner": "route",
+    "title"}`` while one flies a flight whose ``reviews`` stop is not passed
+    (:func:`reviews_pending`), else ``{"owner": "intake", "title": ""}``;
+    both with ``handled`` — every key those sessions' flights' ``reviews``
+    stops delivered (:func:`reviews_handled`)."""
+    want = set(t for t in titles if t)
+    owner, handled = "", []
+    for f in list_flights(include_finished=True) if want else []:
+        if f.get("session") not in want:
+            continue
+        if not owner and reviews_pending(f):
+            owner = f["session"]
+        for key in reviews_handled(f):
+            if key not in handled:
+                handled.append(key)
+    return {
+        "owner": "route" if owner else "intake",
+        "title": owner,
+        "handled": handled,
+    }
+
+
+def reviews_pending(flight: Optional[dict]) -> bool:
+    """Whether ``flight`` still owns its PR's review comments: unfinished,
+    with a ``reviews`` stop it has not passed (done, skipped, or failed and
+    moved on). PR intake leaves such a PR's comments to the route instead of
+    handing them to the session as well (docs/pr-review-rounds.md
+    "Routes")."""
+    if not isinstance(flight, dict) or flight.get("state") not in UNFINISHED:
+        return False
+    states = flight.get("step_states") or {}
+    for step in flight.get("steps") or []:
+        if not isinstance(step, dict) or step.get("kind") != "reviews":
+            continue
+        ss = states.get(step.get("id"))
+        if not isinstance(ss, dict):
+            return True
+        state = ss.get("state")
+        moved_on = bool((ss.get("detail") or {}).get("moved_on"))
+        if state in ("done", "skipped") or (state == "failed" and moved_on):
+            continue
+        return True
+    return False
 
 
 def mutate(flight_id: str, fn: Callable[[dict], None]) -> Optional[dict]:
@@ -4663,8 +4741,8 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
         first["pr_since"] = now
     if first:
         return _wait("watching for review comments", **first)
-    seen = set(str(i) for i in d.get("seen") or [])
-    new = [str(i) for i in ids if str(i) not in seen]
+    seen = set(review_key(i) for i in d.get("seen") or [])
+    new = [str(i) for i in ids if review_key(i) not in seen]
     if new:
         if int(d.get("review_rounds") or 0) >= cfg["max_rounds"]:
             return {

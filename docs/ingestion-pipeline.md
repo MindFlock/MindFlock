@@ -571,7 +571,12 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
      (typically "branch … is already checked out" at that session's worktree)
      is "launched elsewhere": logged, nothing cancelled, the story recorded
      `skipped`, not `failed`. The server's forced starts (Intake → Tickets,
-     Issues, PR review) follow the same rule.
+     Issues, PR review) follow the same rule. Underneath both rules,
+     `session_runner._cancel_flight` never cancels a route while a session
+     of that title is in MindFlock's `state.json` (read from disk: the
+     pipeline is its own process), whichever failure path asks — including
+     a start that timed out but came up after all. That mirrors the server's
+     `_cancel_intake_flight`, which checks its live engine instead.
 8. **Record** — the story id, branch, and status land in `state.json`.
 9. **Move it on the board** (optional, per source) — when the source sets
    `start_state`, the ticket is moved into that state right after the session is

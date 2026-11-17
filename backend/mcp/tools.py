@@ -257,7 +257,8 @@ _D_SEND = (
     "Send a message to other MindFlock sessions' agents. It is stored in the "
     "recipient's inbox and typed into its terminal as \"[MindFlock message <id> "
     'from session ...]" once that agent is idle (delivery "auto"). to: a '
-    'title, a list of titles (max 20), "parent" or "children". When '
+    'title, a list of titles (max 20), "parent", "children" or "siblings" '
+    "(the other live children of your parent). When "
     'replying, set reply_to to the id you received. delivery "inbox" stores it '
     'without typing; the recipient reads it with check_inbox. delivery "now" '
     "types it immediately even mid-turn (any local session), and never "
@@ -515,7 +516,7 @@ _S_SEND = _obj(
     {
         "to": {
             "anyOf": [
-                dict(_TITLE, description='a title, "parent" or "children"'),
+                dict(_TITLE, description='a title, "parent", "children" or "siblings"'),
                 {
                     "type": "array",
                     "items": _TITLE,
@@ -523,7 +524,8 @@ _S_SEND = _obj(
                     "maxItems": MAX_TARGETS,
                 },
             ],
-            "description": 'recipient title, list of titles, "parent" or "children"',
+            "description": 'recipient title, list of titles, "parent", '
+            '"children" or "siblings" (your parent\'s other live children)',
         },
         "text": {"type": "string", "minLength": 1, "maxLength": 20000},
         "reply_to": {
@@ -1438,6 +1440,18 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
             titles = self._children(flock)
             if not titles:
                 raise ToolError("you have no live children")
+        elif to == "siblings":
+            # The other live children of your parent (an epic's story workers
+            # coordinating a shared interface without relaying via the lead).
+            me = self._require_self(flock, 'to="siblings"')
+            if not flock.parent_of(me):
+                raise ToolError(
+                    "you have no parent session, so no siblings; name the "
+                    "recipients instead"
+                )
+            titles = flock.siblings_of(me)
+            if not titles:
+                raise ToolError("you have no live siblings")
         else:
             titles = [str(to)]
         seen: List[str] = []

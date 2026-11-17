@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.18] - 2026-11-17
+
+### Added
+
+- **An epic's stories talk to each other.** The lead's playbook now names
+  every story's worker session (its slug, `sc-<id>`) up front, and each
+  worker's note lists its sibling stories by title and tells it to settle a
+  shared interface with them directly, cc'ing the lead on any contract change
+  and answering their questions. A story started later is announced to the
+  running workers. The lead still owns PRs, ordering and the status table.
+- **`send_message(to="siblings")`** sends to the other live children of
+  your parent session. It errors when you have no parent or no live
+  siblings.
+
+### Changed
+
+- **PR intake reads every comment and replies to every one.** Your open PRs
+  were only scanned for unresolved review-thread comments and "changes
+  requested" reviews; now the PR's conversation comments and "commented" /
+  "approved" reviews with a body (where a bot's findings outside the diff
+  range live) count too. Pure noise is dropped: auto-generated summaries
+  with no findings, status/approval-only notes ("LGTM", a deploy notice),
+  and anything you already answered with a newer reply. Both the first pass
+  and every later round now make the session reply to EVERY request — done
+  (what changed + the commit sha), pushed back (why), or waiting on you — in
+  its own thread for an inline comment, in one PR conversation comment for
+  the rest, with the exact `gh api` commands in the prompt; its summary
+  links each reply. The first pass commits and pushes like a round does.
+  New bookkeeping ids `b:` (review body) and `i:` (conversation comment);
+  existing `c:` / `r:` state stays valid (docs/pr-review-rounds.md).
+- **One owner for a PR's comments, the same handling either way.** A
+  route's `reviews` stop now reads the same requests as PR intake
+  (conversation comments and review bodies included, noise dropped), keys
+  them the same way, and sends the same prompt — every request gets a reply;
+  its `reply_declined` option is superseded (always on, still parsed). While
+  the PR's branch session flies a route whose `reviews` stop isn't passed,
+  the route owns the comments: the pipeline hands nothing over and records
+  them. After it, PR intake owns new ones, and whatever the stop delivered is
+  never sent again. The pipeline asks `GET
+  /api/sessions/by-branch/review-owner` before every pass; the hand-off
+  answers `{"how": "flight"}` without queueing as a second line. Older
+  servers and pipelines keep working as before.
+- **Verify hands a person only product steps, ready to paste.** The
+  self-verify prompt (both walks) now says a person's step is only what a
+  user does in the product's own interface — a chat command, a button, a
+  page, a look at the result. Terminal, CLI, MCP, log/metrics/cloud-console,
+  database and file-edit work is the agent's, including any setup the
+  person's step needs and reading the proof; no decisions or chores, one
+  action per step. A step gets an optional `paste`: the exact text the person
+  pastes, concrete values looked up and filled in (never `<placeholders>`),
+  and the agent's reply puts each one alone in a numbered fenced block. It
+  survives the results-file read, rides `verify.human_steps[].paste`, prints
+  as inline code in the PR comment, and shows in a monospace box with a
+  **Copy** button (*Copied* for a moment) on the pane's verify row, the bell,
+  a Verify stop, the Verify card's rows and the phone.
+
+### Fixed
+
+- **Agent panes no longer jitter until you scroll.** The server builds the
+  Ctrl+F index of an idle agent pane ahead of time by making its window tall
+  and paging through the history, and it did that on a pane one screen was
+  watching, relying on the browser to freeze the view meanwhile. The freeze
+  reached only that server's own browsers: with two servers on the same
+  sessions, or a slow event loop, the pane on screen jumped through its
+  history until a scroll (human input) cancelled the sweep. The ahead-of-time
+  index now runs only on panes with no screen attached, and a screen
+  attaching cancels one in progress; a watched pane builds its index when
+  Ctrl+F opens, as before.
+- **A failed or timed-out launch never cancels a live session's route.**
+  0.14.16 made a failed launch cancel only the route it armed, but the
+  pipeline's cancel itself never checked whether the session was there: a
+  start that timed out while its session came up anyway (or that lost a race
+  to another launch on that route) still cancelled the route of a live
+  session, which then sat with no route until started by hand. The cancel now
+  leaves the route alone whenever a session of that title is in MindFlock's
+  state, the way the server's Intake starts already did.
+
 ## [0.14.17] - 2026-11-16
 
 ### Fixed
@@ -6217,7 +6294,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.17...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.18...HEAD
+[0.14.18]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.18
 [0.14.17]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.17
 [0.14.16]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.16
 [0.14.15]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.15

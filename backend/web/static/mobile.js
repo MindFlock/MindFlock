@@ -1302,11 +1302,68 @@
     return "Halted" + (at ? " at " + at : "");
   }
 
+  // Copy `text` → a promise of whether it worked: the Clipboard API where the
+  // page may use it (https), else a hidden textarea and execCommand (http on
+  // a LAN address, an older WebView).
+  function copyPlain(text) {
+    function legacy() {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      ta.remove();
+      return ok;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }, legacy);
+    }
+    return Promise.resolve(legacy());
+  }
+  // A Verify step's `paste` (the exact text a person pastes — a chat command,
+  // a URL, a value) in a monospace box with a Copy button that reads "Copied"
+  // for a moment; null without one. A press stops at the box, so it never
+  // toggles or drags whatever row it sits in.
+  function pasteBoxEl(text) {
+    var value = String(text || "").trim();
+    if (!value) return null;
+    var box = document.createElement("span");
+    box.className = "vc-paste";
+    var code = document.createElement("code");
+    code.className = "vc-paste-text";
+    code.textContent = value;
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "vc-paste-copy";
+    btn.textContent = "Copy";
+    btn.setAttribute("aria-label", "Copy: " + value);
+    var reset = 0;
+    btn.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      ev.preventDefault();
+      copyPlain(value).then(function (ok) {
+        btn.textContent = ok ? "Copied" : "Copy failed";
+        clearTimeout(reset);
+        reset = setTimeout(function () { btn.textContent = "Copy"; }, 1500);
+      });
+    });
+    ["mousedown", "pointerdown", "touchstart"].forEach(function (k) {
+      box.addEventListener(k, function (ev) { ev.stopPropagation(); }, { passive: true });
+    });
+    box.appendChild(code);
+    box.appendChild(btn);
+    return box;
+  }
   // --- what a session's Verify and route wait on, and the taps that answer
   // them (the session sheet, renderActSheet). Pure: rows in, words and action
   // keys out — tests/unit/test_flowpolish_phone.py runs them under node.
   // Each answers null when there is nothing to show, else
-  // {waits, head, detail, steps: [{text, expect, why}], stepsLabel, acts: [{key, label, hint}]}
+  // {waits, head, detail, steps: [{text, expect, why, paste?}], stepsLabel, acts: [{key, label, hint}]}
+  // (`paste`: the exact text a person pastes for that step — only when set).
   // (`waits`: a Verify under way or waiting on someone — drawn first).
   //
   // Verify (lib/verifyActions.ts, components/behaviors/VerifyConfirm.tsx,
@@ -1324,8 +1381,11 @@
     if (!v) return { waits: false, head: "", detail: "", steps: [], stepsLabel: "", acts: [VERIFY] };
     var steps = function (list, key) {
       return (list || []).map(function (s) {
-        return { text: String(s.text || "").trim(), expect: String(s[key] || "").trim(),
-                 why: String(s.why || "").trim() };
+        var out = { text: String(s.text || "").trim(), expect: String(s[key] || "").trim(),
+                    why: String(s.why || "").trim() };
+        var paste = String(s.paste || "").trim();
+        if (paste) out.paste = paste;
+        return out;
       }).filter(function (s) { return s.text; });
     };
     if (v.state === "needs_you") {
@@ -1832,6 +1892,8 @@
       t.className = "vc-step-text";
       t.textContent = String(s.text || "").trim();
       li.appendChild(t);
+      var paste = pasteBoxEl(s.paste);
+      if (paste) li.appendChild(paste);
       var expect = String(s.expect || "").trim();
       if (expect) {
         var e = document.createElement("span");
@@ -3107,6 +3169,8 @@
         t.className = "act-step-text";
         t.textContent = s.text;
         li.appendChild(t);
+        var pasteEl = pasteBoxEl(s.paste);
+        if (pasteEl) li.appendChild(pasteEl);
         // Your steps say what to look for; failed ones what the agent saw.
         var lines = cls === "act-verify" && m.stepsLabel !== "What failed"
           ? [s.expect ? "Look for: " + s.expect : "", s.why ? "Why it's yours: " + s.why : ""]
