@@ -89,6 +89,12 @@
 .usage-pop-tbl td {
   padding: 2px 0;
   color: var(--muted);
+  /* A wrapped prose value (.wrap) grows down; its label stays on its first line. */
+  vertical-align: top;
+}
+
+.usage-pop-tbl td:first-child {
+  white-space: nowrap;
 }
 
 .usage-pop-tbl td.num {

@@ -69206,8 +69206,16 @@ function memoryPopModel(detail, fallback, aliases = {}, ctx = {}) {
 		const pct = Math.round((m.hostUsedMb || 0) / (m.hostTotalMb || 1) * 100);
 		machine.push(["Windows", host + " (" + pct + "%)"]);
 	}
-	machine.push(["Pressure", (hostIsCause(m) ? "Windows: " : "") + levelWords(m.level, ctx.gate)]);
-	if (ctx.reasons && (m.level === "low" || m.level === "critical")) machine.push(["Why", ctx.reasons]);
+	machine.push([
+		"Pressure",
+		(hostIsCause(m) ? "Windows: " : "") + levelWords(m.level, ctx.gate),
+		"wrap"
+	]);
+	if (ctx.reasons && (m.level === "low" || m.level === "critical")) machine.push([
+		"Why",
+		ctx.reasons,
+		"wrap"
+	]);
 	const sess = detail && Array.isArray(detail.sessions) ? detail.sessions.filter((r) => r && r.mb > 0) : [];
 	const oth = detail && Array.isArray(detail.others) ? detail.others.filter((r) => r && r.mb > 0) : [];
 	sess.sort((a, b) => b.mb - a.mb);

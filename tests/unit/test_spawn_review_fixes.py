@@ -36,6 +36,26 @@ needs_posix_spawn = pytest.mark.skipif(
 )
 
 
+def _os_posix_spawn_has_setsid() -> bool:
+    """Whether THIS Python's ``os.posix_spawn`` takes ``setsid=``: a
+    python-build-standalone interpreter (uv's, CI's) raises
+    NotImplementedError, which is why spawn_pty goes through libc first."""
+    if not hasattr(os, "posix_spawn"):
+        return False
+    try:
+        pid = os.posix_spawn("/bin/true", ["true"], dict(os.environ), setsid=True)
+    except (NotImplementedError, OSError):
+        return False
+    os.waitpid(pid, 0)
+    return True
+
+
+needs_os_setsid = pytest.mark.skipif(
+    not (mux._POSIX_SPAWN_PTY and _os_posix_spawn_has_setsid()),
+    reason="os.posix_spawn here has no setsid= (python-build-standalone)",
+)
+
+
 # --------------------------------------------------------------------------- #
 # helpers                                                                      #
 # --------------------------------------------------------------------------- #
@@ -194,7 +214,7 @@ def test_on_linux_the_spawn_always_goes_through_libc(monkeypatch):
     assert len(calls) == 1
 
 
-@needs_posix_spawn
+@needs_os_setsid
 def test_without_a_usable_libc_os_posix_spawn_is_the_fallback(monkeypatch):
     spawns: list = []
     real = os.posix_spawn
@@ -256,6 +276,8 @@ def test_an_inheritable_fd_never_reaches_the_child(monkeypatch, path):
     if path == "libc-per-fd":  # a glibc < 2.34 (no addclosefrom_np)
         monkeypatch.setattr(mux, "_LIBC_CLOSEFROM", "mf_no_such_symbol")
     elif path == "os-posix-spawn":
+        if not _os_posix_spawn_has_setsid():
+            pytest.skip("os.posix_spawn here has no setsid= (python-build-standalone)")
         monkeypatch.setattr(mux, "_LIBC", mux._NoLibc("no ctypes here"))
     rd, wr = os.pipe()
     os.set_inheritable(wr, True)
