@@ -6346,9 +6346,13 @@ button.assist-chip:hover {
   outline-offset: 3px;
 }
 
+/* In a multi-selection (Ctrl/⌘ / Shift+click, the marquee): the accent
+   ring, an accent edge and a faint wash — plainly picked, at any zoom. */
 .sky-node.is-highlighted .sky-tile {
-  outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  outline: 2px solid var(--accent);
   outline-offset: 3px;
+  border-color: var(--accent);
+  background-image: linear-gradient(rgba(var(--accent-rgb), 0.14), rgba(var(--accent-rgb), 0.14));
 }
 
 .sky-node.is-target .sky-tile {
@@ -16555,6 +16559,16 @@ button.sky-held-start:disabled {
 
 .sky-selbar-says {
   display: block;
+}
+
+/* The bar docked at the top of a pane's Route tab (FlightChain): in the
+   flow, kept in view while the chain scrolls. */
+.sky-selbar.is-docked {
+  position: sticky;
+  top: 0;
+  left: 0;
+  width: fit-content;
+  margin: -18px 0 8px;
 }
 /* A grounded flight's line (GroundedLine.tsx): a session's line (SkyLine.css)
    with a dashed edge, since nothing flies it yet, and a dashed head box where

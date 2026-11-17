@@ -68,9 +68,10 @@ import { toast } from "../../lib/toast";
 import { renameSession } from "../../lib/renameSession";
 import { useUi } from "../../state/store";
 import type { Instance } from "../../api/types";
-import { queryClient, useFlightKinds, useFlights } from "../../state/queries";
-import { closeSession, selectSession, undoLastClose } from "../../lib/sessionActions";
-import { nodeById, nodeSession, removableBox, removalNeedsAsk } from "../../lib/skySelect";
+import { useFlightKinds, useFlights } from "../../state/queries";
+import { closeSession, selectSession } from "../../lib/sessionActions";
+import { reopenClosed, runningWord, sessionOpen } from "../../lib/skyClose";
+import { nodeById, nodeSession, removableBox, removalNeedsAsk, type ClickMods } from "../../lib/skySelect";
 import { pushUndo } from "../../lib/skyUndo";
 import { deriveSessionState, type SessionState, type SessionTone } from "../../lib/sessionState";
 import { HELD_CHIP } from "../../lib/heldOffline";
@@ -129,8 +130,13 @@ export interface SkyLineProps {
   selected?: boolean;
   /** Its stop boxes in the Sky's selection (node ids). */
   highlighted?: ReadonlySet<string>;
-  /** Shift+click on a box: the host's multi-selection (SkySelection). */
-  onShiftSelect?(n: DiagramNode): void;
+  /** A click on a stop box — Ctrl/⌘ toggles it, Shift ranges from the
+   * anchor, a plain one sets the anchor — for the host's multi-selection
+   * (lib/skySelect `clickSelect`; SkyChain `onModSelect`). */
+  onModSelect?(n: DiagramNode, mods: ClickMods, order: string[]): void;
+  /** The selected boxes dragged onto another box of this line: they move
+   * right after it (null: to the front). */
+  onSelectionDrop?(target: DiagramNode | null): void;
   /** False in the sky's click mode: the bar never starts a move. */
   draggable?: boolean;
   /** The host's handle on this line's Delete (null when the line goes): given
@@ -156,15 +162,6 @@ const NO_KINDS: StepKindDef[] = [];
 /** The sky's handle on a line's Delete: a box's node id ("" = the line). */
 export type LineDelete = (node: string) => boolean;
 
-/** The session is still in the instance list (not closed, or reopened). */
-export const sessionOpen = (title: string) => (queryClient.getQueryData<Instance[]>(["instances"]) || []).some((r) => r.title === title);
-
-/** Put closed sessions back from Recently closed, the last closed first
- * (`undoLastClose`, the Ctrl+Shift+T road); one already open again is left be. */
-export async function reopenClosed(titles: readonly string[]) {
-  for (const t of [...titles].reverse()) if (!sessionOpen(t)) await undoLastClose();
-}
-
 /** The undo entry for sessions the sky closed (lib/skyUndo): Ctrl+Z reopens
  * them from Recently closed, newest first (`undoLastClose`, the Ctrl+Shift+T
  * road). closeSession's own toast keeps its own Undo; once every one of them
@@ -177,9 +174,6 @@ export function pushCloseUndo(titles: readonly string[]) {
     valid: () => titles.some((t) => !sessionOpen(t)),
   });
 }
-
-/** What a running session is doing, for the question that names it. */
-export const runningWord = (row: { activity?: string } | undefined) => (row?.activity === "working" ? "is working" : "is asking you something");
 
 /** Close a session from the sky, undoably (Ctrl+Z, or the toast's Undo). */
 export async function closeLine(title: string): Promise<void> {
@@ -532,7 +526,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
 
   const foldKid = (t: string) => setKids((k) => Object.fromEntries(Object.entries(k).filter(([x]) => x !== t)));
   // A press on the head that moved was the line's drag, not a click on it.
-  const press = useRef<{ x: number; y: number; shift: boolean; moved: boolean }>({ x: 0, y: 0, shift: false, moved: false });
+  const press = useRef<{ x: number; y: number; moved: boolean }>({ x: 0, y: 0, moved: false });
   const toggleKid = (t: string) => {
     if (kids[t]) foldKid(t);
     else setKids((k) => ({ ...k, [t]: { w: PANE_W, h: PANE_H } }));
@@ -544,10 +538,6 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     else if (n.kind === "session") p.onLayout({ open: !p.layout.open });
     else if ((n.kind === "child" || n.kind === "branch") && n.session) toggleKid(n.session);
     else gc.onOpen?.(n);
-  };
-  const onSelect = (n: DiagramNode) => {
-    if (press.current.shift && p.onShiftSelect) p.onShiftSelect(n);
-    else gc.onSelect?.(n);
   };
 
   // Round 20: the frame's bar renames on a double-click (as the rail's row
@@ -584,7 +574,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   };
   // The head tile is the chain's handle too (SkyChain lets its press bubble).
   const onChainDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    press.current = { x: e.clientX, y: e.clientY, shift: e.shiftKey, moved: false };
+    press.current = { x: e.clientX, y: e.clientY, moved: false };
     const t = e.target as Element;
     if (t.closest(".sky-head") && !t.closest("[data-port], [data-no-drag], button")) onBarDown(e);
   };
@@ -884,7 +874,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             targets={p.targets}
             over={p.over}
             bird={birdPerch(moves.diagram)}
-            onSelect={onSelect}
+            onSelect={gc.onSelect}
+            onModSelect={p.onModSelect}
+            onSelectionDrop={p.onSelectionDrop}
             onEdit={gc.onEdit}
             onOpen={onOpen}
             onRemove={gc.onRemove}

@@ -11,26 +11,32 @@
  * asks, the stop a running flight is at — and the question names it (round
  * 14, lib/skySelect `removalNeedsAsk`). No window.confirm / prompt: Electron
  * has none. The intake lane can be among the lines (round 12): it moves and
- * tidies with them, and Remove leaves it alone. */
+ * tidies with them, and Remove leaves it alone.
+ *
+ * Ctrl/⌘ and Shift clicks select stops too (docs/flights.md "Selecting stops
+ * in a chain"), and a selection dragged onto another stop moves in the
+ * route (`moveSelectedStops`). The pane's Route tab shows this bar `docked`. */
 
 import { optimisticDelete, patchFlightCache, withoutSteps } from "../../lib/flightOptimism";
 import { useEffect, useRef, useState, type JSX } from "react";
 import type { Flight, FlightStep, IntakeSourceRef, StepKindDef } from "../../lib/flights";
 import { isLive, planFromSteps } from "../../lib/flights";
 import { flightStops } from "../../lib/flightDiagram";
-import { deleteFlight, dropGroup, dropStop, groupStops, savePlan, startGrounded, tackOn, tackOnNew, tackOnSteps } from "../../lib/flightsApi";
+import { deleteFlight, dropGroup, dropStop, groupStops, moveStop, savePlan, startGrounded, tackOn, tackOnNew, tackOnSteps } from "../../lib/flightsApi";
 import { groundedIdOf, isGroundedKey } from "../../lib/groundedLines";
 import { closeSession } from "../../lib/sessionActions";
 import { INTAKE_KEY, type Pos } from "../../lib/skyLayout";
-import { consecutive, removalNeedsAsk, selectedIndexes, sessionRuns, stepIndexesOf, stopSelection, stopsRun, undoFirstOpen, type SkySelection } from "../../lib/skySelect";
+import { blockMove, consecutive, dropBefore, inOrder, moveFirstOpen, removalNeedsAsk, selectedIndexes, sessionRuns, stepIndexesOf, stopSelection, stopsRun, undoFirstOpen, undoMoves, type SkySelection, type StepMove } from "../../lib/skySelect";
 import { pushUndo, undoAction } from "../../lib/skyUndo";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { queryClient } from "../../state/queries";
-import { reopenClosed, runningWord, sessionOpen } from "./SkyLine";
+import { reopenClosed, runningWord, sessionOpen } from "../../lib/skyClose";
 import { InlineConfirm } from "../InlineConfirm";
 import { TextField } from "./controls";
-import "./SkySelection.css";
+// Its sheet (SkySelection.css) is imported by SkyView, where it always sat
+// in the stylesheet: the pane's Route tab imports this bar earlier, and the
+// cascade must not move (the app ships one style.css, so it is there too).
 
 /** What the bar is asking: nothing, the Remove confirm, or a name (for Group
  * or Save). SkyView holds it, so Delete / Backspace can ask too. */
@@ -77,6 +83,71 @@ export function putBackAt(taken: readonly Pick<TakenStops, "index" | "steps">[],
 /** A flight as the page knows it now (an Undo pressed minutes later). */
 const flightNow = (id: string): Flight | null => (queryClient.getQueryData<Flight[] | null>(["flights"]) || []).find((f) => f.id === id) || null;
 
+/** Why the selected stops can't move together on `f` ("" when they can):
+ * the route is over, or a stop among them has run or is running (the rule a
+ * single stop's move keeps: only a stop still ahead moves). */
+export function moveHint(f: Flight | null, idx: readonly number[], kinds?: readonly StepKindDef[]): string {
+  if (!f || !idx.length) return "These stops aren't on a route any more";
+  if (!isLive(f) && f.state !== "grounded") return "This route has finished: its stops stay where they are";
+  const stops = flightStops(f, kinds);
+  if (idx.some((i) => !stops[i]?.editable)) return "A stop that has run, or is running, can't move";
+  return "";
+}
+
+/** Run `moves` one by one (the server moves one step a call); false at the
+ * first refusal — its error card says why. */
+async function runMoves(fid: string, moves: readonly StepMove[]): Promise<boolean> {
+  for (const m of moves) if (!(await moveStop(fid, m.step, m.at))) return false;
+  return true;
+}
+
+/** The selected boxes `nodes` of flight `f` moved together, in their order,
+ * to right after box `target` ("" = the chain's head: to the front of what
+ * can still move) — Ctrl/Shift-click some stops, drag one of them onto
+ * another stop. Shown at once (a refusal puts the line back), as few
+ * `change_steps` moves as the server allows (one per step that changes
+ * place), ONE Undo for the lot (the toast and Ctrl+Z). A refusal says why
+ * in a toast. Resolves true when it moved. */
+export async function moveSelectedStops(f: Flight, nodes: Iterable<string>, target: string, kinds?: readonly StepKindDef[]): Promise<boolean> {
+  const idx = selectedIndexes(nodes, f.steps);
+  const why = moveHint(f, idx, kinds);
+  const first = moveFirstOpen(f);
+  const plan = why ? null : blockMove(f.steps, idx, dropBefore(target, f.steps, first), first);
+  if (!plan || !plan.ok) {
+    toast(why || (plan && !plan.ok ? plan.why : "These stops can't move there"));
+    return false;
+  }
+  if (!plan.moves.length) return false;
+  const fid = f.id;
+  const was = f.steps.map((s) => s.id);
+  const moved = idx.map((i) => f.steps[i].id);
+  const rollback = patchFlightCache(fid, (x) => ({ ...x, steps: inOrder(x.steps, plan.order) }));
+  if (!(await runMoves(fid, plan.moves))) {
+    rollback();
+    return false;
+  }
+  const n = moved.length;
+  const label = "Move " + plural(n, "stop");
+  const entry = pushUndo({
+    label,
+    undo: async () => {
+      const now = flightNow(fid);
+      const back = now ? undoMoves(now.steps.map((s) => s.id), was, moved) : null;
+      if (!now || !back) return void toast("The route changed since: its stops stay where they are");
+      if (back.some((m) => m.at < moveFirstOpen(now))) return void toast("The route has flown past where they were: they stay");
+      const undoRoll = patchFlightCache(fid, (x) => ({ ...x, steps: inOrder(x.steps, was) }));
+      if (!(await runMoves(fid, back))) undoRoll();
+    },
+    redo: async () => {
+      const now = flightNow(fid);
+      const again = now ? undoMoves(now.steps.map((s) => s.id), plan.order, moved) : null;
+      if (now && again) await runMoves(fid, again);
+    },
+  });
+  toast("Moved " + plural(n, "stop"), { action: undoAction(entry, "Undo: put " + plural(n, "stop") + " back where they were") });
+  return true;
+}
+
 /** The name a new saved chain gets unless the owner types one. */
 export const NEW_STOPS = "New route";
 /** The name a new group gets unless the owner types one. */
@@ -103,6 +174,9 @@ export interface SkySelectionProps {
   posOf?(id: string): Pos | undefined;
   /** Make a removed grounded line again from its stops, pinned at `at`. */
   restoreGrounded?(steps: FlightStep[], name: string, at: Pos | undefined, editsDefault?: IntakeSourceRef): Promise<unknown>;
+  /** Drawn in the flow at the top of its container (the pane's Route tab),
+   * not over the sky's plane at `x`, `y`. */
+  docked?: boolean;
 }
 
 const plural = (n: number, one: string, many = one + "s") => n + " " + (n === 1 ? one : many);
@@ -262,11 +336,11 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
 
   return (
     <div
-      className={"sky-selbar" + (p.ask ? " is-asking" : "")}
+      className={"sky-selbar" + (p.ask ? " is-asking" : "") + (p.docked ? " is-docked" : "")}
       data-tour="sky-selbar"
       role="toolbar"
       aria-label={what}
-      style={{ transform: `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)` }}
+      style={p.docked ? undefined : { transform: `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)` }}
       onPointerDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
     >
@@ -274,6 +348,11 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
         <span className="sky-selbar-count">{what}</span>
         {one ? (
           <>
+            {!moveHint(flight, idx, p.kinds) && (
+              <span className="sky-selbar-hint" title="Drag any selected stop onto another stop, or onto the agent: they all move right after it, in their order (Ctrl+Z puts them back)">
+                Drag onto a stop to move
+              </span>
+            )}
             <button type="button" className="test-btn fl-btn" disabled={busy || !!hint} title={hint || "Make these one group: a stop with these stops inside"} onClick={() => p.setAsk("group")}>
               Group into a stop
             </button>

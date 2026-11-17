@@ -396,9 +396,13 @@
   outline-offset: 3px;
 }
 
+/* In a multi-selection (Ctrl/⌘ / Shift+click, the marquee): the accent
+   ring, an accent edge and a faint wash — plainly picked, at any zoom. */
 .sky-node.is-highlighted .sky-tile {
-  outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  outline: 2px solid var(--accent);
   outline-offset: 3px;
+  border-color: var(--accent);
+  background-image: linear-gradient(rgba(var(--accent-rgb), 0.14), rgba(var(--accent-rgb), 0.14));
 }
 
 .sky-node.is-target .sky-tile {

@@ -74,7 +74,7 @@ import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { liveBoxParts, useCancelAsk } from "./FlightStrip";
-import { nodeById, removableBox } from "../../lib/skySelect";
+import { nodeById, removableBox, type ClickMods } from "../../lib/skySelect";
 import { pushUndo, undoAction } from "../../lib/skyUndo";
 import { pillAimer, useChainMenu } from "./useChainMenu";
 import { SkyChain, stopTileBoxes } from "./SkyChain";
@@ -104,8 +104,13 @@ export interface GroundedLineProps {
   selected?: boolean;
   /** Its stop boxes in the Sky's selection (node ids). */
   highlighted?: ReadonlySet<string>;
-  /** Shift+click on a box: the host's multi-selection (SkySelection). */
-  onShiftSelect?(n: DiagramNode): void;
+  /** A click on a stop box — Ctrl/⌘ toggles it, Shift ranges from the
+   * anchor, a plain one sets the anchor — for the host's multi-selection
+   * (lib/skySelect `clickSelect`; SkyChain `onModSelect`). */
+  onModSelect?(n: DiagramNode, mods: ClickMods, order: string[]): void;
+  /** The selected boxes dragged onto another box of this line: they move
+   * right after it (null: to the front). */
+  onSelectionDrop?(target: DiagramNode | null): void;
   /** False in the sky's click mode: the bar never starts a move. */
   draggable?: boolean;
   /** The host's handle on this line's Delete (SkyLine's `registerDelete`). */
@@ -451,7 +456,6 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   // Round 18: a tile's right-click menu; a Loop's pill dragged onto a stop re-aims it.
   const chainMenu = useChainMenu(gc, flight.id, { steps: flight.steps, kinds: p.kinds, noSession: !flight.session });
   const onPillDown = pillAimer(graph, gc.onLoopTo);
-  const shift = useRef(false);
   // No ▶ on a default-stops editor (it never runs), nor on a chain another starts.
   const run = chainRunFor(flight, head.kind, () => ({
     running,
@@ -610,7 +614,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       {editing && <div className="skl-default-hint">Change the stops, then Save — “{editing.name}” takes them; routes already running keep their own copy.</div>}
       {asking !== null && <SaveRouteAsk initial={asking} plans={p.plans} busy={busy} onSave={(n) => void save(n)} onCancel={() => setAsking(null)} />}
       {cancel.node}
-      <div ref={wrapRef} className="skl-chain-wrap" onPointerDownCapture={(e) => (shift.current = e.shiftKey)}>
+      <div ref={wrapRef} className="skl-chain-wrap">
         <SkyChain
           graph={graph}
           zoom={p.zoom}
@@ -619,7 +623,9 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
           targets={p.targets}
           over={p.over}
           bird={birdPerch(moves.diagram)}
-          onSelect={(n) => (shift.current && p.onShiftSelect ? p.onShiftSelect(n) : gc.onSelect?.(n))}
+          onSelect={gc.onSelect}
+          onModSelect={p.onModSelect}
+          onSelectionDrop={p.onSelectionDrop}
           onEdit={gc.onEdit}
           onOpen={gc.onOpen}
           onRemove={gc.onRemove}

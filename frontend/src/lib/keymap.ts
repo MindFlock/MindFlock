@@ -260,6 +260,13 @@ export function endShortcutAllowed(): boolean {
  * sky's ("remove this"), never "close the focused session". An open card's
  * pane is the session's own, so not in it. */
 export function skyBoxFocused(el: Element | null = typeof document !== "undefined" ? document.activeElement : null): boolean {
+  // A pane's Route tab draws the same chain (FlightChain): a stop or group
+  // tile there, or the chain holding a selection, takes Delete too — it
+  // removes the stop (or the selection), never closes the session.
+  if (el?.closest?.(".fl-chain-view")) {
+    const node = el.closest("[data-node]")?.getAttribute("data-node") || "";
+    return node.startsWith("stop:") || node.startsWith("group:") || !!el.closest(".fl-chain-view[data-sky-box]");
+  }
   if (!el?.closest?.(".sky")) return false;
   if (el.closest(".pane, .skl-card")) return false;
   const node = el.closest("[data-node]")?.getAttribute("data-node");

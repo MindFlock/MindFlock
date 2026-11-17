@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Select several stops of a chain with Ctrl/⌘+click and Shift+click**, in
+  the Sky and in a session's Route tab. Ctrl+click (⌘ on a Mac) takes a stop
+  or group in or out; Shift+click takes every stop from the last one clicked.
+  Delete / Backspace removes the selection (one Undo; it asks only when one
+  of them is running). Drag any selected stop and they all move together;
+  drop it on another stop and they move in the route, right after it, in
+  their order (one Undo; stops that ran or are running stay put). On the
+  Route tab the selection bar (Group, Save to the shelf, Remove) sits docked
+  at the top, and Delete on a stop there no longer closes the session.
+
 ## [0.14.18] - 2026-11-17
 
 ### Added

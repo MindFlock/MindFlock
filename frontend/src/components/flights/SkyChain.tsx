@@ -43,7 +43,8 @@ import { StopMenu, type SkyMenuItem } from "./StopMenu";
 import { agentName } from "../../lib/agentNames";
 import { firstLine } from "../../lib/format";
 import { windowName } from "../../lib/windowName";
-import { HEAD_ID, NODE_H, NODE_W, TILE, chainColor, inPortOf, isBranchRow, moveNode, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
+import { HEAD_ID, NODE_H, NODE_W, TILE, canFollow, chainColor, inPortOf, isBranchRow, moveNodes, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
+import { chainOrder, isStopNode, type ClickMods } from "../../lib/skySelect";
 import type { Pos } from "../../lib/skyLayout";
 import { haltMark } from "../../lib/stopEditing";
 import { ASK_TILE_W, askRoom } from "../../lib/stopAsks";
@@ -73,6 +74,17 @@ export interface SkyChainProps {
   onOpen?(n: DiagramNode): void;
   onRemove?(n: DiagramNode): void;
   onMenu?(n: DiagramNode, at: { clientX: number; clientY: number }): void;
+  /** A click on a stop or group tile, for the host's multi-selection
+   * (lib/skySelect `clickSelect`): with Ctrl/⌘ or Shift it is only that —
+   * the tile is not opened; a plain click is told too (it sets the anchor,
+   * clears the selection), after its own `onSelect`. `order` is the chain's
+   * boxes in flying order (`chainOrder`), what Shift ranges along. */
+  onModSelect?(n: DiagramNode, mods: ClickMods, order: string[]): void;
+  /** The selection (`highlighted`) dragged by one of its tiles and dropped
+   * on another tile of this chain: they move right after `target`'s stop
+   * (null: the head — to the front). Without it, or dropped elsewhere, the
+   * tiles just keep their new spots (`onNodeMove`, each). */
+  onSelectionDrop?(target: DiagramNode | null): void;
   /** A loop pill pressed (open the Loop) — `via` is the Loop node. */
   onLoopPill?(via: DiagramNode): void;
   /** A node dragged to a new spot (chain-local, snapped) — on release. */
@@ -234,6 +246,15 @@ function MiniChain({ stops }: { stops: readonly MiniStop[] }): JSX.Element {
 
 const DRAG_MIN = 4;
 
+/** Where a node drag puts its tiles: the lead at its (snapped) spot, a
+ * dragged selection's others by the same delta. */
+function spotsOf(d: Drag): Map<string, Pos> {
+  if (!d.group) return new Map([[d.id, d.pos]]);
+  const dx = d.pos.x - d.x0;
+  const dy = d.pos.y - d.y0;
+  return new Map(d.group.map((m) => [m.id, { x: m.x0 + dx, y: m.y0 + dy }]));
+}
+
 const STATE_WORD: Record<string, string> = {
   done: "done",
   current: "running now",
@@ -338,6 +359,11 @@ export function behaviorsLabel(n: Pick<DiagramNode, "kind" | "title">, bh: Behav
 
 interface Drag {
   id: string;
+  /** A selection dragged together: every tile's id and start (the lead's
+   * too); its spots follow the lead's snapped delta. */
+  group?: Array<{ id: string; x0: number; y0: number }>;
+  /** The tile it would drop on (a selection's move), "" none. */
+  over?: string;
   pointer: number;
   sx: number;
   sy: number;
@@ -353,7 +379,8 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
   const justDragged = useRef(false);
   const plusPress = useRef<{ pointer: number; sx: number; sy: number; sent: boolean } | null>(null);
 
-  const g = useMemo(() => (drag?.live ? moveNode(p.graph, drag.id, drag.pos) : p.graph), [p.graph, drag]);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const g = useMemo(() => (drag?.live ? moveNodes(p.graph, spotsOf(drag)) : p.graph), [p.graph, drag]);
   const head = g.head;
   const all = g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
   const byId = new Map(all.map((n) => [n.id, n]));
@@ -385,9 +412,34 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     if (d.live) {
       justDragged.current = true;
       setTimeout(() => (justDragged.current = false), 0);
-      const n = p.graph.nodes.find((x) => x.id === d.id);
-      if (commit && n && (d.pos.x !== n.x || d.pos.y !== n.y)) p.onNodeMove?.(n, d.pos);
+      if (!commit) return;
+      // A selection dropped on another tile: it moves in the chain, not on the plane.
+      if (d.group && d.over && p.onSelectionDrop) {
+        const t = d.over === HEAD_ID ? null : p.graph.nodes.find((x) => x.id === d.over);
+        if (t !== undefined) return p.onSelectionDrop(t ? t.node : null);
+      }
+      for (const [id, pos] of spotsOf(d)) {
+        const n = p.graph.nodes.find((x) => x.id === id);
+        if (n && (pos.x !== n.x || pos.y !== n.y)) p.onNodeMove?.(n, pos);
+      }
     }
+  };
+  /** The tile of this chain under the pointer a dragged selection may drop
+   * on: the head (to the front) or a stop / group after which a stop may go,
+   * never one of the selection's own. "" none. */
+  const dropAt = (x: number, y: number, mine: ReadonlySet<string>): string => {
+    const root = rootRef.current;
+    if (!root || typeof document === "undefined" || typeof document.elementsFromPoint !== "function") return "";
+    for (const el of document.elementsFromPoint(x, y)) {
+      const tile = el.closest("[data-node]");
+      if (!tile || !root.contains(tile)) continue;
+      const id = tile.getAttribute("data-node") || "";
+      if (mine.has(id)) continue;
+      if (id === HEAD_ID) return id;
+      const n = p.graph.nodes.find((m) => m.id === id);
+      return n && isStopNode(id) && canFollow(n.node, p.graph.insertFrom ?? 0) ? id : "";
+    }
+    return "";
   };
   const onDown = (e: PointerEvent<HTMLDivElement>, n: GraphNode) => {
     if (e.button !== 0 || !draggable(n)) return;
@@ -398,7 +450,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     } catch {
       /* a synthetic event has no pointer to capture */
     }
-    const d: Drag = { id: n.id, pointer: e.pointerId, sx: e.clientX, sy: e.clientY, x0: n.x, y0: n.y, live: false, pos: { x: n.x, y: n.y } };
+    // A tile of the selection drags the whole selection along.
+    const group = p.highlighted?.has(n.id) ? p.graph.nodes.filter((m) => p.highlighted!.has(m.id) && draggable(m)).map((m) => ({ id: m.id, x0: m.x, y0: m.y })) : undefined;
+    const d: Drag = { id: n.id, pointer: e.pointerId, sx: e.clientX, sy: e.clientY, x0: n.x, y0: n.y, live: false, pos: { x: n.x, y: n.y }, ...(group ? { group } : {}) };
     dragRef.current = d;
     setDrag(d);
   };
@@ -408,7 +462,8 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     const dx = e.clientX - d.sx;
     const dy = e.clientY - d.sy;
     if (!d.live && Math.hypot(dx, dy) < DRAG_MIN) return;
-    const next: Drag = { ...d, live: true, pos: snapPos({ x: d.x0 + dx / zoom, y: d.y0 + dy / zoom }, e.altKey) };
+    const over = d.group && p.onSelectionDrop ? dropAt(e.clientX, e.clientY, new Set(d.group.map((m) => m.id))) : "";
+    const next: Drag = { ...d, live: true, pos: snapPos({ x: d.x0 + dx / zoom, y: d.y0 + dy / zoom }, e.altKey), ...(d.group ? { over } : {}) };
     dragRef.current = next;
     setDrag(next);
   };
@@ -509,8 +564,8 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       p.targets?.has(n.id) ? "is-target" : "",
       // The agent tile as a wire's drop (a Loop back to the agent).
       isAgent && p.targets?.has(n.id) ? "is-agent-target" : "",
-      p.over === n.id ? "is-over" : "",
-      drag?.live && drag.id === n.id ? "is-dragging" : "",
+      p.over === n.id || (drag?.live && drag.over === n.id) ? "is-over" : "",
+      drag?.live && (drag.id === n.id || drag.group?.some((m) => m.id === n.id)) ? "is-dragging" : "",
       draggable(n) ? "is-draggable" : "",
     ]
       .filter(Boolean)
@@ -552,7 +607,15 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         onPointerCancel={onUp}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("[data-port], [data-no-drag], button")) return;
+          // Ctrl/⌘ or Shift on a stop: the selection's, nothing opens.
+          const box = !isHead && isStopNode(n.id) && !!p.onModSelect;
+          const mods = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
+          if (box && (mods.ctrl || mods.shift)) {
+            if (!justDragged.current) p.onModSelect!(dn, mods, chainOrder(p.graph.nodes.map((m) => ({ id: m.id, index: m.node.index }))));
+            return;
+          }
           activate(n);
+          if (box && !justDragged.current) p.onModSelect!(dn, {}, []);
         }}
         onDoubleClick={(e) => {
           if (isHead || !isStopish(dn) || !p.onEdit) return;
@@ -684,6 +747,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
 
   return (
     <div
+      ref={rootRef}
       className={"sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "") + (p.run && socket ? " has-run" : "") + (p.targets && p.targets.size ? " is-wiring" : "")}
       style={{ position: "relative", width: Math.max(0, b.x + b.w), height: Math.max(0, b.y + b.h), ["--sky-chain-color" as string]: head.color }}
       data-chain={g.key}

@@ -111,3 +111,13 @@
 .sky-selbar-says {
   display: block;
 }
+
+/* The bar docked at the top of a pane's Route tab (FlightChain): in the
+   flow, kept in view while the chain scrolls. */
+.sky-selbar.is-docked {
+  position: sticky;
+  top: 0;
+  left: 0;
+  width: fit-content;
+  margin: -18px 0 8px;
+}

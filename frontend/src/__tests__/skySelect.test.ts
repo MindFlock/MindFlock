@@ -491,7 +491,8 @@ describe("round 14: the selection's Remove puts the lot back (one Undo)", () => 
 
   it("the bar pushes ONE entry for the lot and its toast takes that entry", () => {
     const bar = code("components/flights/SkySelection.tsx");
-    expect(bar.match(/pushUndo\(/g)?.length).toBe(2);
+    // Remove lines, Remove stops, and the selection's move (one entry each).
+    expect(bar.match(/pushUndo\(/g)?.length).toBe(3);
     expect(bar).toContain('label: "Remove " + plural(n, "line"),');
     expect(bar).toContain('label: "Remove " + plural(n, "stop"),');
     expect(bar).toContain("await reopenClosed(closed);");

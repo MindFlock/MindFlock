@@ -392,3 +392,178 @@ export function undoFirstOpen(f: Pick<Flight, "state" | "cursor" | "steps" | "st
 export function undoAt(index: number, now: Pick<Flight, "state" | "cursor" | "steps" | "step_states"> | null): number | undefined {
   return now && index >= undoFirstOpen(now) && index < now.steps.length ? index : undefined;
 }
+
+// --- Ctrl/⌘ and Shift clicks on a chain's stops (docs/flights.md "Selecting stops in a chain")
+
+/** The box a Shift-click ranges from: the last stop clicked (plainly, or
+ * with Ctrl/⌘) on its line. */
+export interface SelectAnchor {
+  line: string;
+  node: string;
+}
+
+/** The modifiers a click on a stop carried: Ctrl (⌘ on a Mac) and Shift. */
+export interface ClickMods {
+  ctrl?: boolean;
+  shift?: boolean;
+}
+
+/** A chain's stop and group boxes in the order they fly (by their first
+ * step's index), once each — what a Shift-click ranges along. Anything else
+ * (the head, a sub-session, the + …) is left out. */
+export function chainOrder(nodes: readonly { id: string; index?: number }[]): string[] {
+  const seen = new Set<string>();
+  return nodes
+    .filter((n) => isStopNode(n.id) && n.index !== undefined && !seen.has(n.id) && !!seen.add(n.id))
+    .sort((a, b) => (a.index as number) - (b.index as number))
+    .map((n) => n.id);
+}
+
+/** The boxes from `a` to `b` along `order`, both ends in, either way round;
+ * [] when either is not on it. */
+export function rangeOf(order: readonly string[], a: string, b: string): string[] {
+  const i = order.indexOf(a);
+  const j = order.indexOf(b);
+  if (i < 0 || j < 0) return [];
+  return order.slice(Math.min(i, j), Math.max(i, j) + 1);
+}
+
+/** What a click on stop box `node` of line `line` does to the selection:
+ * - plain: the box is the anchor; a stop selection clears (a selection of
+ *   whole lines stays — a press on a selected line's box keeps them);
+ * - Ctrl/⌘: the box in or out (`toggleStop`), and it is the anchor;
+ * - Shift: every box from the anchor to it along `order` (the chain's
+ *   boxes, `chainOrder`) — those only, or added to the line's selection
+ *   with Ctrl/⌘ too; the anchor stays. No anchor on this line: as Ctrl.
+ * A node that is not a stop or a group changes nothing. */
+export function clickSelect(
+  s: SkySelection,
+  anchor: SelectAnchor | null,
+  line: string,
+  node: string,
+  mods: ClickMods,
+  order: readonly string[]
+): { selection: SkySelection; anchor: SelectAnchor | null } {
+  if (!isStopNode(node)) return { selection: s, anchor };
+  const here = { line, node };
+  if (!mods.ctrl && !mods.shift) return { selection: s.stops.size ? NO_SELECTION : s, anchor: here };
+  const range = mods.shift && anchor?.line === line ? rangeOf(order, anchor.node, node) : [];
+  if (!range.length) return { selection: toggleStop(s, line, node), anchor: here };
+  const mine = mods.ctrl && s.stops.size === 1 && s.stops.has(line) && !s.lines.size ? [...(s.stops.get(line) || [])] : [];
+  return { selection: { lines: new Set(), stops: new Map([[line, new Set([...mine, ...range])]]) }, anchor };
+}
+
+// --- Moving the selected stops together -------------------------------------------
+
+/** The first index a stop may be moved from or to (the server's
+ * `_first_open` for `change_steps` op `move`): any on a route not flying yet
+ * (grounded, ready), else the one after the current stop — past its
+ * parallel group. */
+export function moveFirstOpen(f: Pick<Flight, "state" | "cursor" | "steps">): number {
+  if (f.state === "grounded" || f.state === "ready") return 0;
+  let end = f.cursor + 1;
+  const par = f.steps[f.cursor]?.parallel?.id;
+  while (par && f.steps[end]?.parallel?.id === par) end++;
+  return end;
+}
+
+/** The index a selection dropped on box `target` goes before: right after
+ * the box (a group: after its last sub-step; a stop running beside others:
+ * after the whole parallel group). "" (the chain's head) = the front, the
+ * first place a stop may go (`first`). -1 when the box is not on `steps`. */
+export function dropBefore(target: string, steps: readonly Pick<FlightStep, "id" | "group" | "parallel">[], first: number): number {
+  if (!target) return first;
+  const idx = stepIndexesOf(target, steps);
+  if (!idx.length) return -1;
+  let at = idx[idx.length - 1] + 1;
+  const par = steps[at - 1]?.parallel?.id;
+  while (par && steps[at]?.parallel?.id === par) at++;
+  return at;
+}
+
+/** One `change_steps` move: step `step` to index `at` of the final list (the
+ * server pops it, then inserts it there). */
+export interface StepMove {
+  step: string;
+  at: number;
+}
+
+/** The fewest single-step moves that turn `current` into `target` when only
+ * the ids in `moving` change place (every other id keeps its order). Moving
+ * earlier, each moving id, in `target`'s order, goes right after its
+ * predecessor there (the front when it has none); moving later, each, last
+ * first, goes right before its successor there (the end when it has none) —
+ * so a stop and a Loop that repeats from it, moved together, never pass each
+ * other on the way (the server refuses a move that breaks a Loop). A move
+ * that would change nothing is left out. Indexes are the server's
+ * (`op_move_step`): after the pop. */
+export function movesToOrder(current: readonly string[], target: readonly string[], moving: Iterable<string>): StepMove[] {
+  const set = new Set(moving);
+  const list = current.slice();
+  const out: StepMove[] = [];
+  const lead = target.find((id) => set.has(id));
+  const later = lead !== undefined && target.indexOf(lead) > current.indexOf(lead);
+  const place = (id: string, at: (l: string[]) => number) => {
+    const p = list.indexOf(id);
+    if (p < 0) return;
+    list.splice(p, 1);
+    const i = at(list);
+    list.splice(i, 0, id);
+    if (i !== p) out.push({ step: id, at: i });
+  };
+  if (later) {
+    for (let k = target.length - 1; k >= 0; k--)
+      if (set.has(target[k])) place(target[k], (l) => (k === target.length - 1 ? l.length : l.indexOf(target[k + 1])));
+  } else {
+    for (let k = 0; k < target.length; k++) if (set.has(target[k])) place(target[k], (l) => (k === 0 ? 0 : l.indexOf(target[k - 1]) + 1));
+  }
+  return out;
+}
+
+/** A block move worked out: the final order of the flight's step ids and
+ * the moves that make it — or why it can't go. */
+export type BlockMove = { ok: true; order: string[]; moves: StepMove[] } | { ok: false; why: string };
+
+/** The steps at `picked` (step indexes) moved together, in their order, to
+ * just before index `before` of `steps` as they are now (`steps.length` =
+ * the end). `first` is the first index a stop may move from or to
+ * (`moveFirstOpen`): a stop at or before the one the route is at stays, and
+ * nothing lands before it. Part of a parallel group can't leave it, and the
+ * block never lands inside one. */
+export function blockMove(steps: readonly Pick<FlightStep, "id" | "parallel">[], picked: readonly number[], before: number, first: number): BlockMove {
+  const idx = [...new Set(picked)].filter((i) => i >= 0 && i < steps.length).sort((a, b) => a - b);
+  if (!idx.length) return { ok: false, why: "These stops aren't on the route any more" };
+  if (idx[0] < first) return { ok: false, why: "A stop that has run, or is running, can't move" };
+  if (before < first || before < 0) return { ok: false, why: "Stops can only move after the one the route is at" };
+  const pickedIds = new Set(idx.map((i) => steps[i].id));
+  for (const i of idx) {
+    const par = steps[i].parallel?.id;
+    if (par && steps.some((s) => s.parallel?.id === par && !pickedIds.has(s.id))) return { ok: false, why: "Pick every stop of a side-by-side group, or none of them" };
+  }
+  const rest = steps.filter((s) => !pickedIds.has(s.id));
+  const at = Math.min(rest.length, Math.max(0, before - idx.filter((i) => i < before).length));
+  const par = rest[at - 1]?.parallel?.id;
+  if (par && rest[at]?.parallel?.id === par) return { ok: false, why: "Stops can't land inside a side-by-side group" };
+  const order = [...rest.slice(0, at).map((s) => s.id), ...idx.map((i) => steps[i].id), ...rest.slice(at).map((s) => s.id)];
+  return { ok: true, order, moves: movesToOrder(steps.map((s) => s.id), order, pickedIds) };
+}
+
+/** Undo of a block move: the moves that put `moved` back into `before`
+ * (the order the move started from), while the route `now` still holds the
+ * same steps with the others in the same order — else null (it changed
+ * since: nothing safe to undo). */
+export function undoMoves(now: readonly string[], before: readonly string[], moved: Iterable<string>): StepMove[] | null {
+  const set = new Set(moved);
+  if (now.length !== before.length || !before.every((id) => now.includes(id))) return null;
+  const others = (l: readonly string[]) => l.filter((id) => !set.has(id)).join("\n");
+  if (others(now) !== others(before)) return null;
+  return movesToOrder(now, before, set);
+}
+
+/** `steps` in the order of `ids` (a move shown before the server answers);
+ * as they were when the ids are not exactly theirs. */
+export function inOrder<T extends { id: string }>(steps: readonly T[], ids: readonly string[]): T[] {
+  const by = new Map(steps.map((s) => [s.id, s]));
+  if (ids.length !== steps.length || !ids.every((id) => by.has(id))) return steps.slice();
+  return ids.map((id) => by.get(id)!);
+}
