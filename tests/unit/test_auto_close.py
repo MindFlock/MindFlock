@@ -170,7 +170,7 @@ def _quiet(monkeypatch):
     """No tmux, no team runs, no routes; git accounted unless a test says."""
     monkeypatch.setattr(sleep, "_outside_clients", lambda name: 0)
     monkeypatch.setattr(team_runs, "owner_of_title", lambda title, exclude_run="": None)
-    monkeypatch.setattr(ac, "_route_running", lambda title, parent: False)
+    monkeypatch.setattr(ac, "_route_running", lambda title, parent, created=None: False)
     monkeypatch.setattr(
         ac,
         "work_accounted",
@@ -245,24 +245,72 @@ def test_a_team_run_member_and_a_routed_session_stay(monkeypatch):
     )
     assert _judge(srv, w)[:2] == (ac.KEEP, ac.R_TEAM)
     monkeypatch.setattr(team_runs, "owner_of_title", lambda title, exclude_run="": None)
-    monkeypatch.setattr(ac, "_route_running", lambda title, parent: True)
+    monkeypatch.setattr(ac, "_route_running", lambda title, parent, created=None: True)
     assert _judge(srv, w)[:2] == (ac.KEEP, ac.R_ROUTE)
+
+
+def _flight(*steps):
+    """A parent's route: ``steps`` are ``(id, kind, state, since, children)``."""
+    return {
+        "id": "f",
+        "session": "lead",
+        "state": "running",
+        "cursor": next(
+            (n for n, s in enumerate(steps) if s[2] in ("running", "waiting_you")),
+            len(steps) - 1,
+        ),
+        "steps": [{"id": i, "kind": k, "config": {}} for i, k, *_ in steps],
+        "step_states": {
+            i: {"state": st, "since": since, "detail": {"children": kids}}
+            for i, _k, st, since, kids in steps
+        },
+    }
+
+
+def _routes(monkeypatch, by_session):
+    from backend.web.core import flights
+
+    monkeypatch.setattr(
+        flights, "for_session", lambda t, unfinished_only=True: by_session.get(t)
+    )
 
 
 def test_route_running_reads_its_own_and_its_parents_flight(monkeypatch):
     monkeypatch.undo()  # the real _route_running
-    from backend.web.core import flights
-
-    live = {"lead"}
-    monkeypatch.setattr(
-        flights,
-        "for_session",
-        lambda t, unfinished_only=True: {"id": "f"} if t in live else None,
-    )
-    assert ac._route_running("w", "lead") is True
+    running = _flight(("s1", "agent", "running", NOW - 100, []))
+    _routes(monkeypatch, {"lead": running})
+    # Spawned during the stop that is running now: the route's.
+    assert ac._route_running("w", "lead", NOW - 50) is True
     assert ac._route_running("w", "") is False
-    live = {"w"}
+    _routes(monkeypatch, {"w": {"id": "own"}})
     assert ac._route_running("w", "") is True
+
+
+def test_a_worker_of_a_stop_the_route_passed_is_not_held(monkeypatch):
+    """The owner's clutter: reviewers an agent stop spawned stayed open for
+    hours while the route sat at a later stop waiting on PR comments."""
+    monkeypatch.undo()
+    later = _flight(
+        ("s1c", "agent", "done", NOW - 900, [{"title": "w", "state": "done"}]),
+        ("s4r", "reviews", "running", NOW - 300, []),
+    )
+    _routes(monkeypatch, {"lead": later})
+    assert ac._route_running("w", "lead", NOW - 800) is False
+
+
+def test_a_running_stop_that_names_the_worker_holds_it(monkeypatch):
+    monkeypatch.undo()
+    for kids in ([{"title": "w", "state": "running"}], ["w"]):
+        f = _flight(
+            ("s0", "agent", "done", NOW - 900, []),
+            ("s1", "agent", "running", NOW - 100, kids),
+        )
+        _routes(monkeypatch, {"lead": f})
+        # Spawned before this stop began, but it waits on it: held.
+        assert ac._route_running("w", "lead", NOW - 800) is True
+    parked = _flight(("s1", "review", "waiting_you", NOW - 100, ["w"]))
+    _routes(monkeypatch, {"lead": parked})
+    assert ac._route_running("w", "lead", NOW - 50) is True
 
 
 def test_a_worker_with_open_workers_of_its_own_stays():
