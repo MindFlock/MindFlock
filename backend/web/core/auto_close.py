@@ -601,12 +601,51 @@ def _has_live_children(instances: Mapping, title: str) -> bool:
     )
 
 
-def _route_running(title: str, parent: str) -> bool:
+def _route_running(title: str, parent: str, created: Optional[float] = None) -> bool:
+    """Whether a route still needs ``title``: its OWN route is in the air, or
+    its parent's route has a stop running (or parked on you) that still
+    waits on it — one that names it among its workers (an agent stop's
+    workers, a split's, a review stop's reviewer), or the stop it was
+    spawned during. A worker of a stop the route has already passed is no
+    longer the route's: it closes by the ordinary rules. (Holding every
+    worker for the whole route kept finished reviewers open for hours while
+    the route sat at a later stop, e.g. waiting on PR comments.)"""
     from backend.web.core import flights as _flights
 
     if _flights.for_session(title) is not None:
         return True
-    return bool(parent) and _flights.for_session(parent) is not None
+    if not parent:
+        return False
+    pf = _flights.for_session(parent)
+    if pf is None:
+        return False
+    return _route_waits_on(pf, title, created)
+
+
+def _route_waits_on(flight: Mapping, title: str, created: Optional[float]) -> bool:
+    from backend.web.core import flights as _flights
+
+    try:
+        states = flight.get("step_states") or {}
+        active = [
+            s
+            for s in flight.get("steps") or []
+            if (states.get(s.get("id")) or {}).get("state") in _flights.ACTIVE
+        ]
+        for s in active:
+            kids = ((states.get(s["id"]) or {}).get("detail") or {}).get(
+                "children"
+            ) or []
+            for k in kids:
+                name = k.get("title") if isinstance(k, Mapping) else k
+                if str(name or "") == title:
+                    return True
+        if not active:
+            return False
+        spawned_in = _flights.branch_step(dict(flight), title, created)
+        return any(s["id"] == spawned_in for s in active)
+    except Exception:  # noqa: BLE001 — can't tell: the route keeps it
+        return True
 
 
 def judge(
@@ -674,7 +713,7 @@ def judge(
     except Exception:  # noqa: BLE001
         return KEEP, R_TEAM, None
     try:
-        if _route_running(title, parent):
+        if _route_running(title, parent, created):
             return KEEP, R_ROUTE, None
     except Exception:  # noqa: BLE001
         return KEEP, R_ROUTE, None

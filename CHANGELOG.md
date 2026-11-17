@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `feature-sc-26339-v2-spelunk-1` at create, and a session already named that
   way is renamed at server start — even with its agent running (tmux keeps
   it, and its MCP server's old, `%2F`-encoded name still reaches it).
+- **Finished workers of a session on a route close themselves again.** A
+  worker whose parent was flying a route was held open for the WHOLE route,
+  so reviewers and helpers an agent stop spawned sat idle in the rail for
+  hours while the route waited at a later stop (e.g. on PR comments). Now a
+  route holds a worker only while a stop that is running (or parked on you)
+  still waits on it — it names it among its workers or reviewers, or it is
+  the stop the worker was spawned during. Past that stop, a finished worker
+  closes by the ordinary rules (reported done, idle, work merged, grace
+  window).
 
 ## [0.14.18] - 2026-11-17
 
