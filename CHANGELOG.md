@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attaching cancels one in progress; a watched pane builds its index when
   Ctrl+F opens, as before.
 
+### Added
+
+- **An epic's stories talk to each other.** The lead's playbook now names
+  every story's worker session (its slug, `sc-<id>`) up front, and each
+  worker's note lists its sibling stories by title and tells it to settle a
+  shared interface with them directly, cc'ing the lead on any contract change
+  and answering their questions. A story started later is announced to the
+  running workers. The lead still owns PRs, ordering and the status table.
+- **`send_message(to="siblings")`** sends to the other live children of
+  your parent session. It errors when you have no parent or no live
+  siblings.
+
 ## [0.14.17] - 2026-11-16
 
 ### Fixed

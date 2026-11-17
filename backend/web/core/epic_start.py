@@ -158,6 +158,18 @@ def _story_line(st: dict, ids: Dict[str, str]) -> str:
     return line
 
 
+def worker_titles(stories: List[dict]) -> List[Tuple[str, str]]:
+    """``[(slug, worker session title)]`` for the lead's stories. A ticket
+    session is titled by the story's slug (``ticket_start.session_title``),
+    so the lead can name every sibling before any of them starts."""
+    out = []
+    for st in stories:
+        slug = str(st.get("slug") or "").strip()
+        if slug:
+            out.append((slug, slug))
+    return out
+
+
 def build_lead_prompt(
     detail: dict, source: str, base_branch: str, mine: List[dict], others: List[dict]
 ) -> str:
@@ -177,6 +189,18 @@ def build_lead_prompt(
         "## Your stories — owned by you, not done (work exactly these)",
     ]
     parts += [_story_line(st, ids) for st in mine] or ["- (none)"]
+    roster = worker_titles(mine)
+    if roster:
+        parts += [
+            "",
+            "## Their worker sessions",
+            "`spawn_ticket_session` titles each story's worker by the story's "
+            "slug, so you can name a worker before it starts: "
+            + ", ".join("%s → `%s`" % (sl, t) for sl, t in roster)
+            + ". (If spawn_ticket_session returns a different title, use that one "
+            "and tell the others.) They all run as YOUR children, so to each "
+            "other they are siblings.",
+        ]
     if others:
         parts += [
             "",
@@ -199,20 +223,32 @@ def build_lead_prompt(
         '`autopilot="push"`: the worker commits and pushes its own branch and stops '
         "there — YOU open the PRs (step 4). In each `note`: what its neighbours are "
         "building, the contract between them (names, interfaces, files each one owns), "
-        'and: "Before changing anything another story relies on, message your lead '
-        '(send_message to=\\"parent\\")."' % source,
+        "its SIBLINGS — every other story of yours with its worker session title "
+        '(running now, or starting later and waiting for what) — and: "Talk to '
+        "your sibling stories directly. Before changing anything a sibling relies "
+        "on, or when you need something from one, send_message that sibling by its "
+        'title (or to=\\"siblings\\" for something every story needs to know) and '
+        'settle it between you. Copy your lead (send_message to=\\"parent\\") on '
+        "any change to a shared contract. Answer your siblings' questions when "
+        'they message you."' % source,
         "3. **Start a dependent story** once every story it waits for has reported "
         'done, with this at the top of its note: "This story builds on '
         "<predecessor's branch>. Before changing anything run `git fetch origin && "
         "git reset --hard origin/<predecessor's branch>`, then work on top of it.\" "
-        "(Two predecessors: reset onto one, `git merge` the other.)",
+        "(Two predecessors: reset onto one, `git merge` the other.) Its note names "
+        "its siblings like step 2's. Then tell the workers still running the "
+        "newcomer's title and its piece (`send_message` to them), so they can "
+        "reach it.",
         "4. **Open each story's PR yourself** when its worker reports done: look at "
         '`get_diff` first, then `ship_session(title=<worker>, depth="pr", '
         'base=<"%s", or the predecessor\'s branch when the story builds on one>)` — '
         "a stacked PR shows only its own story's diff. Put the story id in the PR title."
         % (base_branch or "the repo's base branch"),
-        "5. **Keep them working together.** Relay any change to a shared contract to "
-        "every worker it touches (`send_message`), answer their questions, and keep a "
+        "5. **Keep them working together.** The workers settle shared interfaces "
+        "between themselves; you stay the referee and the owner of PRs, order and "
+        "status. Read the contract changes they copy you on, step in when two "
+        "disagree or a change reaches a story that isn't running yet (put it in "
+        "that story's note), answer what they ask you, and keep a "
         "status table (story · worker · state · PR). Wake on the next report with "
         '`wait_for_session(titles=[…], mode="any")` — never poll.',
         "6. **When every story has a PR**, end with the list: story → PR link → its "

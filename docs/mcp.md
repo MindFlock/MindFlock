@@ -539,13 +539,16 @@ external diff tool), so your gitconfig can't break the per-file split. The
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `to` | required | a title, a list of up to 20 titles, `"parent"` or `"children"` |
+| `to` | required | a title, a list of up to 20 titles, `"parent"`, `"children"` or `"siblings"` |
 | `text` | required | ≤ 20000 chars |
 | `reply_to` | — | the id of the message you are answering |
 | `delivery` | `auto` | `auto`, `inbox` or `now` (see [Messages](#messages)) |
 
 → `{sent: [{to, id, delivery, detail?}], failed?}`. Every recipient is
-validated before any message is sent. `delivery: "now"` reaches any local session
+validated before any message is sent. `"children"` and `"siblings"` mean your
+live children, and the other live children of your parent (an epic's story
+workers use it to reach each other); each errors when there are none, and
+`"siblings"` also when you have no parent. `delivery: "now"` reaches any local session
 (never your own), in every scope but `readonly`. `to` may be a `<peer>::<title>` row another person
 shares with you: `delivery` must be `auto`, and the entry reads `{to, id,
 delivery: "sent", peer: true, detail}` — see [Across people](#across-people-peer-links).
