@@ -18,6 +18,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaves the route alone whenever a session of that title is in MindFlock's
   state, the way the server's Intake starts already did.
 
+## [0.14.17] - 2026-11-16
+
+### Fixed
+
+- **The Memory popup no longer spills past its edge.** A long "Why" line
+  (e.g. "Every running process stalled on memory 42% of the last minute")
+  could not wrap, so it widened the machine table past the popup and cut off
+  every value on the right. Pressure and Why now wrap inside the popup's
+  width, and labels stay on their first line.
+- **Your other devices stop flickering.** One unanswered 2 s hello probe
+  (every 20 s) marked a device unreachable, and one failed session-list fetch
+  (every 5 s) dropped its list, so its sessions blinked out of the rail and
+  came back. Both happen on a tailnet link through a DERP relay (WSL2 behind
+  Windows' NAT never gets a direct path). Now a device has to miss two sweeps
+  in a row (~20 s of silence) before it shows unreachable, the probe waits 4 s,
+  and a fetch that gets no answer keeps the last good list for up to three
+  polls (~15 s). A device that answers with an error still drops its list at
+  once, and Refresh in Your devices still reports a miss straight away.
+
 ## [0.14.16] - 2026-11-14
 
 ### Added
@@ -6209,7 +6228,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.16...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.17...HEAD
+[0.14.17]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.17
 [0.14.16]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.16
 [0.14.15]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.15
 [0.14.14]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.14

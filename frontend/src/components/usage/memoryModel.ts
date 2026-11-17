@@ -16,6 +16,7 @@
 import type { MemoryReading } from "../../api/types";
 import { fmtMb } from "../../lib/sessionMemory";
 import { gaugeOkWords, type WaitWhy } from "../../lib/waitWhy";
+import type { UsageRowData } from "./usageModel";
 
 /** `system` of GET /api/memory (binary MB; any field may be null). */
 export interface MemorySystem {
@@ -248,8 +249,9 @@ export interface MemoryPopRow {
 }
 
 export interface MemoryPopModel {
-  /** [label, value] rows for the machine table. */
-  machine: [string, string][];
+  /** [label, value] rows for the machine table; a third "wrap" entry lets a
+   * prose value break onto more lines instead of widening the popover. */
+  machine: UsageRowData[];
   tone: MemoryRowTone;
   sessions: MemoryPopRow[];
   others: MemoryPopRow[];
@@ -274,7 +276,7 @@ export function memoryPopModel(
   ctx: MemoryContext = {},
 ): MemoryPopModel {
   const m = detail ? machineFromDetail(detail.system) : fallback;
-  const machine: [string, string][] = [];
+  const machine: UsageRowData[] = [];
   const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
   if (pair) {
     const pct = Math.round(((m.usedMb || 0) / (m.totalMb || 1)) * 100);
@@ -288,8 +290,10 @@ export function memoryPopModel(
     const pct = Math.round(((m.hostUsedMb || 0) / (m.hostTotalMb || 1)) * 100);
     machine.push(["Windows", host + " (" + pct + "%)"]);
   }
-  machine.push(["Pressure", (hostIsCause(m) ? "Windows: " : "") + levelWords(m.level, ctx.gate)]);
-  if (ctx.reasons && (m.level === "low" || m.level === "critical")) machine.push(["Why", ctx.reasons]);
+  // Pressure and Why are words, not numbers: they wrap inside the popover's
+  // width (a long "Why" used to push every value past its right edge).
+  machine.push(["Pressure", (hostIsCause(m) ? "Windows: " : "") + levelWords(m.level, ctx.gate), "wrap"]);
+  if (ctx.reasons && (m.level === "low" || m.level === "critical")) machine.push(["Why", ctx.reasons, "wrap"]);
 
   const sess = detail && Array.isArray(detail.sessions) ? detail.sessions.filter((r) => r && r.mb > 0) : [];
   const oth = detail && Array.isArray(detail.others) ? detail.others.filter((r) => r && r.mb > 0) : [];

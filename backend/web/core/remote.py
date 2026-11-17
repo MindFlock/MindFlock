@@ -113,7 +113,19 @@ _MOBILE_OS = frozenset({"ios", "android", "ipados"})
 _DISCOVERY_INTERVAL = 20.0  # s between tailnet sweeps
 _INSTANCES_INTERVAL = 5.0  # s between remote /api/instances refreshes
 _STALE_AFTER = 90.0  # keep a device visible through this many s of failed probes
-_PROBE_TIMEOUT = 2.0
+#: A hello probe's whole budget. A tailnet link through a DERP relay (WSL2
+#: behind Windows' NAT never gets a direct path) answers in ~0.1 s but now and
+#: then stalls for a second or two; 2 s turned those stalls into "offline".
+_PROBE_TIMEOUT = 4.0
+#: Consecutive unanswered hello sweeps before a device that was reachable is
+#: shown unreachable (2 = at least one whole sweep, ~20 s, of silence). One
+#: dropped probe used to blank the device and all its sessions until the next
+#: sweep: the flicker on a relayed link.
+_PROBE_MISSES = 2
+#: Consecutive /api/instances fetches that fail on the NETWORK (no answer at
+#: all) before the device's last good session list stops being served (3 ≈
+#: 15 s). An answer that is an error drops the list at once, as before.
+_FETCH_MISSES = 3
 _HTTP_TIMEOUT = 60.0
 #: Forwarded routes that legitimately run longer than ``_HTTP_TIMEOUT``. The
 #: session plan waits on a model turn the TARGET bounds at its own
@@ -670,6 +682,10 @@ def _device_state(key: str) -> dict:
             # MindFlock is too old to say).
             "automation": None,
             "last_seen": 0.0,
+            # Unanswered hello sweeps / network-failed session-list fetches
+            # in a row (see _PROBE_MISSES / _FETCH_MISSES).
+            "misses": 0,
+            "fetch_misses": 0,
             "instances": [],
             "instances_ok": False,
             "error": "",
@@ -677,15 +693,27 @@ def _device_state(key: str) -> dict:
     )
 
 
-def _apply_probe(dev: dict, hit: Optional[Tuple[str, dict]], now: float) -> None:
+def _apply_probe(
+    dev: dict, hit: Optional[Tuple[str, dict]], now: float, grace: bool = True
+) -> None:
     """Fold one :func:`_probe_peer` answer into ``dev`` (a miss only clears
-    ``reachable`` — the rest is kept for the stale grace period)."""
+    ``reachable`` — the rest is kept for the stale grace period).
+
+    A reachable device rides out ``_PROBE_MISSES - 1`` unanswered sweeps in a
+    row: one dropped packet on a relayed tailnet link is not the device going
+    away, and blanking it hid every one of its sessions for a whole sweep.
+    ``grace=False`` (an explicit re-probe, :func:`refresh_device`) takes a
+    miss at its word."""
     if not hit:
+        dev["misses"] = int(dev.get("misses") or 0) + 1
+        if grace and dev.get("reachable") and dev["misses"] < _PROBE_MISSES:
+            return
         # Its session list is no longer known: a device that comes back must
         # not show its pre-sleep rows as current until it is asked again.
         dev.update(reachable=False, instances_ok=False)
         return
     base, hello = hit
+    dev["misses"] = 0
     dev["probe"] = "ok"
     try:
         proto = int(hello.get("fleet_proto") or 0)
@@ -916,7 +944,7 @@ async def refresh_device(key: str) -> Optional[dict]:
     if aiohttp is not None and (dev.get("ip") or dev.get("dns")):
         peer = {"ip": dev.get("ip", ""), "dns": dev.get("dns", "")}
         hit = await _probe_peer(peer)
-        _apply_probe(dev, hit, time.time())
+        _apply_probe(dev, hit, time.time(), grace=False)
         if not hit and peer.get("probe"):
             dev["probe"] = peer["probe"]
     return dict(dev)
@@ -949,7 +977,7 @@ async def _fetch_instances(dev: dict) -> None:
                 return
             data = await resp.json(content_type=None) if resp.status == 200 else None
             if isinstance(data, list):
-                dev.update(instances=data, instances_ok=True, error="")
+                dev.update(instances=data, instances_ok=True, error="", fetch_misses=0)
             else:
                 # An error page / unexpected body: the last good list is no
                 # longer this device's state — never serve it as current.
@@ -963,6 +991,12 @@ async def _fetch_instances(dev: dict) -> None:
                     ),
                 )
     except Exception as err:  # noqa: BLE001
+        # No answer at all (timeout, reset): a blip on the link, not news
+        # about the device. Keep serving its last good list through a few in
+        # a row — dropping it at once made its sessions blink out and back.
+        dev["fetch_misses"] = int(dev.get("fetch_misses") or 0) + 1
+        if dev.get("instances_ok") and dev["fetch_misses"] < _FETCH_MISSES:
+            return
         dev.update(instances_ok=False, error=plain_error(err))
 
 
