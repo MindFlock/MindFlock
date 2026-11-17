@@ -87,6 +87,19 @@ def title_error(name: str) -> str:
     return ""
 
 
+_UNSAFE_RUN = re.compile(r"(?:[/\\]|::)+")
+
+
+def safe_title(name: str) -> str:
+    """``name`` with every run of ``/``, ``\\`` or ``::`` turned into one
+    ``-`` (``feature/sc-1/x`` → ``feature-sc-1-x``), trimmed of edge
+    dashes and spaces. A person may type a branch-like name into Name; a
+    title is a URL path segment, so the slashes cannot stay (a request for
+    ``/api/instances/feature%2Fsc-1%2Fx/close`` never reaches the route)."""
+    out = _UNSAFE_RUN.sub("-", str(name or "")).strip()
+    return out.strip("-").strip() or out
+
+
 def _taken_by(srv, name: str, exclude: str) -> str:
     """The live session already called ``name`` — by title, by tmux name (two
     titles may sanitise to one: whitespace is dropped, ``.`` becomes ``_``), or
@@ -682,6 +695,43 @@ def migrate_once(srv) -> Dict[str, str]:
         return {}
 
 
+def migrate_unsafe_titles(srv) -> Dict[str, str]:
+    """Rename every session whose title cannot be a URL path segment (one
+    holding ``/`` or ``\\`` — made before session creation refused them) to
+    :func:`safe_title` of it, numbered when taken. Unlike the alias migration
+    this renames under a RUNNING agent too: such a session's every route
+    already 404s (it cannot be closed, its status cannot update), tmux keeps
+    the agent running through the rename, and its MCP server's old title
+    still reaches it through :class:`RenamedTitleMiddleware` (which reads the
+    still-encoded ``%2F`` from ``raw_path``). Returns ``{old: new}``. Never
+    raises."""
+    done: Dict[str, str] = {}
+    try:
+        titles = [t for t in list(srv.ENGINE.instances) if "/" in t or "\\" in t]
+    except Exception:  # noqa: BLE001
+        return done
+    for old in titles:
+        try:
+            base = safe_title(old) or "untitled"
+            new, n = base, 2
+            while _taken_by(srv, new, exclude=old) or (
+                new != old and new in srv.ENGINE.instances
+            ):
+                new = "%s-%d" % (base, n)
+                n += 1
+            res = rename_session(srv, old, new)
+            if res.status == 200 and not res.body.get("unchanged"):
+                done[old] = res.body["title"]
+            elif log.ErrorLog is not None:
+                log.ErrorLog.Printf(
+                    "unsafe title %s not renamed: %v", old, res.body.get("error")
+                )
+        except Exception as err:  # noqa: BLE001
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("unsafe title %s not renamed: %v", old, err)
+    return done
+
+
 # --------------------------------------------------------------------------- #
 # Requests that still carry an old title
 # --------------------------------------------------------------------------- #
@@ -704,6 +754,32 @@ def rewrite_path(path: str, live) -> str:
     return _PREFIX + to + sep + tail
 
 
+def rewrite_raw_path(scope, live) -> str:
+    """For a request whose title segment held an encoded ``/`` (``%2F``,
+    or ``%5C`` for ``\\``): the decoded ``path`` has lost where the title
+    ends, so read it from the still-encoded ``raw_path``. When that title is
+    a recorded former name of a live session (:func:`migrate_unsafe_titles`
+    renamed it), the path for the new title; "" otherwise."""
+    from urllib.parse import unquote
+
+    raw = scope.get("raw_path") or b""
+    try:
+        raw_s = raw.decode("latin-1") if isinstance(raw, bytes) else str(raw)
+    except Exception:  # noqa: BLE001
+        return ""
+    raw_s = raw_s.split("?", 1)[0]
+    if not raw_s.startswith(_PREFIX):
+        return ""
+    seg, sep, tail = raw_s[len(_PREFIX) :].partition("/")
+    title = unquote(seg)
+    if ("/" not in title and "\\" not in title) or title in live:
+        return ""
+    to = resolve(title)
+    if to == title or to not in live:
+        return ""
+    return _PREFIX + to + sep + unquote(tail)
+
+
 class RenamedTitleMiddleware:
     """Route a request (HTTP or websocket) for an old title to the renamed
     session — a running agent's MCP server and hooks may still say the name it
@@ -720,7 +796,8 @@ class RenamedTitleMiddleware:
                 try:
                     from urllib.parse import quote
 
-                    new = rewrite_path(path, self._live())
+                    live = self._live()
+                    new = rewrite_raw_path(scope, live) or rewrite_path(path, live)
                     if new != path:
                         scope = dict(scope)
                         scope["path"] = new

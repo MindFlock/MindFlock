@@ -28,6 +28,7 @@ from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import launch_gate as _launch_gate
 from backend.web.core import lineage as _lineage
 from backend.web.core import pending as _pending
+from backend.web.core import rename as _rename
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import plain_repo as _plain_repo
 from backend.web.core import shared_branch as _shared_branch
@@ -301,6 +302,16 @@ async def _create(
                 # Deterministic branch: feature/sc-<id>/<slug> with a story,
                 # else mindflock/<title>.
                 new_branch = srv.provisioning.branch_name_for(story_id or None, title)
+
+    # A title is a URL path segment, a tmux name and a file name: a typed
+    # "feature/sc-1/x" (a branch, as a Name) becomes "feature-sc-1-x" here, or
+    # every /api/instances/<title>/… route — close included — would 404.
+    if title and title != _rename.safe_title(title):
+        title = _rename.safe_title(title)
+    if title:
+        terr = _rename.title_error(title)
+        if terr:
+            return JSONResponse({"error": terr}, status_code=400)
 
     # Whether WE invented this name. A title the caller typed is theirs and a
     # collision is theirs to hear about; one we generated is ours to make unique,

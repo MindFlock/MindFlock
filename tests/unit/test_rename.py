@@ -735,3 +735,65 @@ def test_a_queued_launch_follows_the_rename(monkeypatch, tmp_path):
     assert [(i["title"], i["parent"]) for i in saved] == [("new", ""), ("w1", "new")]
     assert saved[1]["args"]["payload"]["parent"] == "new"
     assert gate.drain_once() == "new" and ran == ["new"]
+
+
+# --------------------------------------------------------------------------- #
+# Titles that cannot be a path segment (a branch typed as a Name)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "name, safe",
+    [
+        ("feature/sc-26339/v2-spelunk-1", "feature-sc-26339-v2-spelunk-1"),
+        ("a\\b", "a-b"),
+        ("dev::x", "dev-x"),
+        ("/lead//trail/", "lead-trail"),
+        ("fine-name", "fine-name"),
+    ],
+)
+def test_safe_title(name, safe):
+    assert rename.safe_title(name) == safe
+    assert rename.title_error(rename.safe_title(name)) == ""
+
+
+def test_unsafe_titles_are_renamed_even_under_a_running_agent():
+    """A slashed title 404s on every per-session route (it can't even be
+    closed), so it is renamed although its agent runs: tmux keeps the agent
+    and the old name still resolves."""
+    srv = _srv(
+        _Inst("feature/sc-1/x"),
+        _Inst("feature-sc-1-x"),
+        _Inst("child", parent="feature/sc-1/x"),
+        _Inst("ok"),
+    )
+    srv._live_session_name = lambda name: name
+    assert rename.migrate_unsafe_titles(srv) == {"feature/sc-1/x": "feature-sc-1-x-2"}
+    assert "feature/sc-1/x" not in srv.ENGINE.instances
+    assert srv.ENGINE.instances["child"].Parent == "feature-sc-1-x-2"
+    assert rename.resolve("feature/sc-1/x") == "feature-sc-1-x-2"
+    assert rename.migrate_unsafe_titles(srv) == {}
+
+
+def test_an_encoded_slash_title_reaches_the_renamed_session(monkeypatch):
+    """The running agent's MCP server still says the old title, encoded as
+    one segment (``%2F``): the decoded path lost where the title ends, so the
+    middleware reads raw_path."""
+    from fastapi.testclient import TestClient
+
+    from backend.web import server
+
+    srv = _srv(_Inst("feature/sc-1/x"))
+    eng = srv.ENGINE
+    assert rename.migrate_unsafe_titles(srv) == {"feature/sc-1/x": "feature-sc-1-x"}
+    monkeypatch.setattr(server, "ENGINE", eng)
+    seen = []
+    monkeypatch.setattr(
+        server,
+        "_inst_or_404",
+        lambda t: (seen.append(t), (None, server.JSONResponse({}, 404)))[1],
+    )
+    client = TestClient(server.app)
+    client.get("/api/instances/feature%2Fsc-1%2Fx/budget")
+    assert seen == ["feature-sc-1-x"]
+    # A title that was never renamed is left to 404 as before.
+    scope = {"raw_path": b"/api/instances/nope%2Fx/budget"}
+    assert rename.rewrite_raw_path(scope, eng.instances) == ""
