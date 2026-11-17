@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A session named like a branch can be closed again.** A Name with a `/`
+  (e.g. `feature/sc-26339/v2-spelunk-1`) made a session whose every
+  per-session request missed its route (a title is one URL path segment), so
+  its X did nothing and its status stuck on Working. Such a Name now becomes
+  `feature-sc-26339-v2-spelunk-1` at create, and a session already named that
+  way is renamed at server start — even with its agent running (tmux keeps
+  it, and its MCP server's old, `%2F`-encoded name still reaches it).
+
 ## [0.14.18] - 2026-11-17
 
 ### Added
