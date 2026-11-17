@@ -195,8 +195,18 @@ agent ONE prompt — "verify the work you just did" — and the agent comes up
 with its own concrete test steps (real usage, not the unit tests it already
 ran), writes them to its results file, puts them on its todo list and works
 through them. A step only a person can do, it **tells the person** in its
-reply (what to do, what to look for) and records as `actor: "human"`. No
-steps are written beforehand: starting the stop finds or makes the session's
+reply (what to do, what to look for) and records as `actor: "human"`. A
+person's step is only what a user of the product does **in the product's own
+interface**: type a command into its chat or app, click a button, open a page,
+look at a result. Anything run in a terminal, a CLI, an MCP tool, a log,
+metrics or cloud-console query, a database or a file edit is the agent's: it
+does any setup the person's step needs (and undoes it after) and reads the
+proof itself. It never hands the person a decision or a chore, and gives one
+action per step. Whatever the person types or pastes goes in the step's
+`paste`, **concrete values filled in** (the agent looks them up — never
+`<placeholders>` or "e.g."), and in its reply each paste sits alone in its own
+fenced code block, numbered in order; the UI shows it in a box with a
+**Copy** button. No steps are written beforehand: starting the stop finds or makes the session's
 plan (an empty one, nothing generated) and starts the check.
 
 The stop follows the check's outcome — the same **Verify pill** the session's

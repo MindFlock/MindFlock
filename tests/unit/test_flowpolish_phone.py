@@ -388,3 +388,37 @@ def test_phone_says_no_desktop_only_for_verify_or_routes():
     js = _js()
     assert "confirm verified on the desktop" not in js
     assert "resume it from the desktop" not in js
+
+
+@needs_node
+def test_a_persons_step_carries_its_paste_on_the_phone():
+    """A step's ``paste`` reaches the phone's model (only when set), and both
+    renderers draw it in a copyable box."""
+    rows = [
+        {
+            "title": "you",
+            "activity": "idle",
+            "verify": _verify(
+                "needs_you",
+                human_steps=[
+                    {
+                        "id": "h1",
+                        "text": "In the team chat run the deploy command",
+                        "expect": "a reply",
+                        "paste": " /deploy staging --service web ",
+                    },
+                    {"id": "h2", "text": "Click Save in Settings", "expect": "Saved"},
+                ],
+            ),
+        }
+    ]
+    (you,) = _run(rows, "rows.map(verifyModel)")
+    assert you["steps"][0]["paste"] == "/deploy staging --service web"
+    assert "paste" not in you["steps"][1]
+    assert "pasteBoxEl(s.paste)" in _fn("verifyStepsEl")
+    js = _js()
+    assert "var pasteEl = pasteBoxEl(s.paste);" in js
+    box = _fn("pasteBoxEl")
+    assert "copyPlain(value)" in box and '"Copied"' in box
+    assert "ev.stopPropagation()" in box
+    assert ".vc-paste-text" in CSS.read_text()

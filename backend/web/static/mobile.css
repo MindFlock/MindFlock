@@ -357,6 +357,32 @@ html, body {
   font-size: 12px;
 }
 .vc-step-expect { display: block; color: var(--muted); }
+/* A step's paste (pasteBoxEl): the exact text, then Copy. */
+.vc-paste { display: flex; align-items: flex-start; gap: 6px; margin: 3px 0; max-width: 100%; }
+.vc-paste-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg, var(--panel));
+  color: var(--text);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+  -webkit-user-select: all;
+}
+.vc-paste-copy {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
 .vc-acts { display: flex; flex-wrap: wrap; gap: 6px; }
 .vc-acts .act { flex: 1 1 0; }
 /* Not verified…'s inline note — never window.prompt (Electron has none).

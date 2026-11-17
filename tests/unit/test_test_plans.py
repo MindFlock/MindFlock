@@ -8632,3 +8632,147 @@ def test_a_no_commits_checklist_comes_back_when_the_session_commits(feature_sess
     assert plan["sha"] == plan["tip_sha"] != "a" * 40
     tp_driver._retry_no_commit_test_plans(tp.list_plans())
     assert len(calls) == 1
+
+
+# --------------------------------------------------------------------------- #
+# A person's step: product-interface only, paste-ready (``paste``)
+# --------------------------------------------------------------------------- #
+_PASTE = "/deploy staging --service web"
+
+
+@pytest.mark.parametrize("walk", ["agent", "all"])
+def test_self_verify_prompt_carries_the_person_step_rules(walk):
+    p = tp.build_self_verify_prompt(_plan(), walk=walk)
+    flat = " ".join(p.split())
+    # What a person's step may be — and what is the agent's instead.
+    assert (
+        "only what a user of this product does in the product's own interface" in flat
+    )
+    assert "a /deploy chat command" in flat and "click a button" in flat
+    for agents_work in (
+        "a terminal",
+        "a CLI",
+        "an MCP tool",
+        "cloud-console query",
+        "a database",
+        "file edit is YOURS",
+    ):
+        assert agents_work in flat
+    assert "do any setup their step needs before it (and undo it after)" in flat
+    assert "read the proof yourself" in flat
+    assert "Never hand the person a decision or a chore" in flat
+    assert "One action per person step" in flat
+    # Paste-ready, concrete, and one fenced block each in the reply.
+    assert 'the step\'s "paste"' in flat
+    assert "never <placeholders>" in flat and '"e.g."' in flat
+    assert "look the values up first" in flat
+    assert "each paste alone in its own fenced code block" in flat
+    assert "number the person's steps in order" in flat
+    # The file-shape example's person step has a ``paste``; the agent's does not.
+    example = json.loads(p[p.index("{") :])
+    agent_step, human_step = example["steps"]
+    assert human_step["actor"] == "human" and "paste" in human_step
+    assert "paste" not in agent_step
+
+
+def test_self_verify_prompt_lists_a_kept_steps_paste():
+    plan = _plan(
+        steps=[
+            {
+                "id": "m1",
+                "text": "Run the deploy command in chat",
+                "actor": "human",
+                "manual": True,
+                "paste": _PASTE,
+            }
+        ]
+    )
+    p = tp.build_self_verify_prompt(plan)
+    assert "m1 [human] Run the deploy command in chat\n    Paste: %s" % _PASTE in p
+
+
+def test_normalize_step_keeps_a_paste_and_omits_an_empty_one():
+    base = {"id": "s1", "text": "Run the deploy command", "actor": "human"}
+    kept = tp._normalize_step(dict(base, paste="  %s \n" % _PASTE), 0)
+    assert kept["paste"] == _PASTE
+    for empty in (None, "", "   ", 7, ["x"]):
+        step = tp._normalize_step(dict(base, paste=empty), 0)
+        assert "paste" not in step
+    # An old plan (no paste) reads back byte for byte.
+    assert "paste" not in tp._normalize_step(base, 0)
+
+
+def test_store_round_trips_a_paste_and_leaves_old_plans_alone(store):
+    steps = [
+        {"id": "s1", "text": "Run it", "expect": "It runs", "actor": "agent"},
+        {
+            "id": "s2",
+            "text": "Run the deploy command in chat",
+            "expect": "a reply",
+            "actor": "human",
+            "paste": _PASTE,
+        },
+    ]
+    _write_store(store, {"sc-1": _plan("sc-1", steps=steps), "sc-2": _plan("sc-2")})
+    assert tp.get("sc-1")["steps"][1]["paste"] == _PASTE
+    assert all("paste" not in s for s in tp.get("sc-2")["steps"])
+
+
+def _self_verified(steps, answers):
+    tp.upsert(_plan("sc-1", steps=[]))
+    tp.start_run("sc-1", "sc-1", in_session=True, self_authored=True)
+    tp.adopt_reported_steps("sc-1", steps)
+    return tp.finish_run("sc-1", answers)
+
+
+def test_a_results_file_paste_reaches_the_verify_view():
+    agent = {"id": "s1", "text": "Curl it", "expect": "200", "actor": "agent"}
+    person = {
+        "id": "s2",
+        "text": "In the team chat run the deploy command",
+        "expect": "a 'deploying web' reply",
+        "actor": "human",
+        "paste": _PASTE,
+    }
+    plain = {
+        "id": "s3",
+        "text": "Click Save in Settings",
+        "expect": "Saved",
+        "actor": "human",
+    }
+    plan = _self_verified(
+        [agent, person, plain],
+        [dict(agent, result="pass", note="200 OK"), person, plain],
+    )
+    assert plan["steps"][1]["paste"] == _PASTE  # survived the results-file read
+    assert "paste" not in plan["steps"][2]
+    v = tp.verify_status(plan)
+    assert v["state"] == "needs_you"
+    by_id = {s["id"]: s for s in v["human_steps"]}
+    assert by_id["s2"]["paste"] == _PASTE
+    assert "paste" not in by_id["s3"]
+
+
+def test_results_markdown_shows_a_paste_as_inline_code():
+    md = tp.results_markdown(
+        _plan(
+            steps=[
+                {
+                    "id": "s1",
+                    "text": "Run the deploy command in chat",
+                    "expect": "a reply",
+                    "actor": "human",
+                    "paste": _PASTE,
+                },
+                {"id": "s2", "text": "Look", "expect": "", "actor": "human"},
+            ]
+        )
+    )
+    lines = md.splitlines()
+    at = lines.index("- ⬜ open · human · Run the deploy command in chat")
+    assert lines[at + 1] == "  - expect: a reply"
+    assert lines[at + 2] == "  - paste: `%s`" % _PASTE
+    assert lines[-1] == "- ⬜ open · human · Look"
+    # A backtick inside the paste widens the fence instead of breaking it.
+    assert tp._inline_code("echo `date`") == "`` echo `date` ``"
+    assert tp._inline_code("a``b") == "```a``b```"

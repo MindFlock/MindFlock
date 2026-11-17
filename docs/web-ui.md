@@ -5831,8 +5831,13 @@ a fixed height with a glyph per state, so the terminal never jumps. By state:
 - `passed` — "All N steps passed" with **Steps**, for its ten minutes.
 
 **Confirm verified / Not verified…** (`VerifyConfirm`, components/behaviors)
-sit under the person's steps — each step's text, what should happen, and,
-for a step the agent left for you, why ("the agent couldn't: …") — on the
+sit under the person's steps — each step's text, what to paste (the step's
+`paste`: the exact chat command, URL or value, in a monospace box with a
+**Copy** button — `PasteBox`, components/behaviors — that copies through
+`lib/clipboard`'s `copyText`, since Electron blocks `navigator.clipboard`,
+reads *Copied* for a moment and never lets the press reach a drag or
+selection), what should happen, and, for a step the agent left for you, why
+("the agent couldn't: …") — on the
 pane's verify row, the bell's row, the Verify card and a **Verify stop**
 parked on you. With more than one step for you, each gets ✓ / ✗ (all ✓ to
 start; a ✗ needs a note) and the confirm sends `steps: {id: "pass"|"fail"}`.
@@ -5867,7 +5872,8 @@ Verify adds none). The ⋯ menu's item is **Verify** / **Verify again**, or
 ranking (`sessionState`, `needsYouKind`), in tones of its own in `mobile.css`:
 **Verifying** in the desktop's violet (`--tone-verifying`, a pulsing dot) and
 **Verified** in a calm green (`--tone-verified`, no glow). A verify in
-`needs_you` draws the person's steps (each with *Expect: …*) and **Confirm
+`needs_you` draws the person's steps (each with its paste and **Copy** when it
+has one, and *Expect: …*) and **Confirm
 verified** / **Not verified…** in two places: a card for the current session
 under the header (`#verify-card`, under the plan and flight cards), and under
 that session's row in the **Sessions** sheet — the phone's Needs-you list.
