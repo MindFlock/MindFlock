@@ -2754,9 +2754,14 @@ def _find_index_tick() -> None:
     folds new output into existing indexes), then build at most ONE missing
     index, only where it can't disturb anyone: the agent idle (never while
     it waits on a question — paging keys could move a dialog's selection),
-    no input from a person for a while, the screen still, and at most one
-    screen attached (the browser freezes its view on the notify event;
-    other screens wouldn't). Skipped whole while memory reads low: a sweep
+    no input from a person for a while, the screen still, and NO screen
+    attached. One attached screen used to be allowed (the browser freezes
+    its view on the notify event), but the freeze reaches only a browser of
+    THIS server: the second server on the same sessions, or a notify held
+    up by a busy loop, left the pane on screen jittering through the tall
+    window and the PageUp/PageDown sweep until a scroll — human input —
+    cancelled it. A pane someone watches builds its index on Ctrl+F (which
+    freezes it from the asking browser). Skipped whole while memory reads low: a sweep
     is dozens of tmux round trips per pane, and Ctrl+F still works without
     an index (it builds one on demand)."""
     if _memory_low():
@@ -2789,7 +2794,7 @@ def _find_index_tick() -> None:
                 _exact_pane_target(name),
                 "#{session_attached}",
             )
-            if out.returncode == 0 and int(out.stdout.strip() or 0) <= 1:
+            if out.returncode == 0 and int(out.stdout.strip() or 0) == 0:
                 pick = (title, name)
     if pick is not None:
         title, name = pick
@@ -14753,6 +14758,12 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # would hand them tmux itself — a new window with a plain shell, another
     # session, run-shell. The owner's own browsers keep the writable attach.
     guest = _guests.scope_guest(ws) is not None
+    # A screen arriving stops a background Ctrl+F index of this pane (one
+    # only starts with nobody attached): the sweep must never be watched.
+    try:
+        _pane_scroll_find.cancel_background(name)
+    except Exception:  # noqa: BLE001 — an attach never fails on find
+        pass
     proc = await _attach_pty(ws, name, guest)
     if proc is None:
         return
