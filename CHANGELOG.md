@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.19] - 2026-11-17
+
 ### Fixed
 
 - **A session named like a branch can be closed again.** A Name with a `/`
@@ -6304,7 +6306,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.18...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.19...HEAD
+[0.14.19]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.19
 [0.14.18]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.18
 [0.14.17]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.17
 [0.14.16]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.16
