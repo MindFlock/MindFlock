@@ -7,18 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Agent panes no longer jitter until you scroll.** The server builds the
-  Ctrl+F index of an idle agent pane ahead of time by making its window tall
-  and paging through the history, and it did that on a pane one screen was
-  watching, relying on the browser to freeze the view meanwhile. The freeze
-  reached only that server's own browsers: with two servers on the same
-  sessions, or a slow event loop, the pane on screen jumped through its
-  history until a scroll (human input) cancelled the sweep. The ahead-of-time
-  index now runs only on panes with no screen attached, and a screen
-  attaching cancels one in progress; a watched pane builds its index when
-  Ctrl+F opens, as before.
+## [0.14.18] - 2026-11-17
 
 ### Added
 
@@ -31,15 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`send_message(to="siblings")`** sends to the other live children of
   your parent session. It errors when you have no parent or no live
   siblings.
-
-- **A failed or timed-out launch never cancels a live session's route.**
-  0.14.16 made a failed launch cancel only the route it armed, but the
-  pipeline's cancel itself never checked whether the session was there: a
-  start that timed out while its session came up anyway (or that lost a race
-  to another launch on that route) still cancelled the route of a live
-  session, which then sat with no route until started by hand. The cancel now
-  leaves the route alone whenever a session of that title is in MindFlock's
-  state, the way the server's Intake starts already did.
 
 ### Changed
 
@@ -69,9 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   /api/sessions/by-branch/review-owner` before every pass; the hand-off
   answers `{"how": "flight"}` without queueing as a second line. Older
   servers and pipelines keep working as before.
-
-### Changed
-
 - **Verify hands a person only product steps, ready to paste.** The
   self-verify prompt (both walks) now says a person's step is only what a
   user does in the product's own interface — a chat command, a button, a
@@ -85,6 +62,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as inline code in the PR comment, and shows in a monospace box with a
   **Copy** button (*Copied* for a moment) on the pane's verify row, the bell,
   a Verify stop, the Verify card's rows and the phone.
+
+### Fixed
+
+- **Agent panes no longer jitter until you scroll.** The server builds the
+  Ctrl+F index of an idle agent pane ahead of time by making its window tall
+  and paging through the history, and it did that on a pane one screen was
+  watching, relying on the browser to freeze the view meanwhile. The freeze
+  reached only that server's own browsers: with two servers on the same
+  sessions, or a slow event loop, the pane on screen jumped through its
+  history until a scroll (human input) cancelled the sweep. The ahead-of-time
+  index now runs only on panes with no screen attached, and a screen
+  attaching cancels one in progress; a watched pane builds its index when
+  Ctrl+F opens, as before.
+- **A failed or timed-out launch never cancels a live session's route.**
+  0.14.16 made a failed launch cancel only the route it armed, but the
+  pipeline's cancel itself never checked whether the session was there: a
+  start that timed out while its session came up anyway (or that lost a race
+  to another launch on that route) still cancelled the route of a live
+  session, which then sat with no route until started by hand. The cancel now
+  leaves the route alone whenever a session of that title is in MindFlock's
+  state, the way the server's Intake starts already did.
 
 ## [0.14.17] - 2026-11-16
 
@@ -6296,7 +6294,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.17...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.18...HEAD
+[0.14.18]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.18
 [0.14.17]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.17
 [0.14.16]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.16
 [0.14.15]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.15
