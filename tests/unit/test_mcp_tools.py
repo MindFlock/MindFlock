@@ -438,6 +438,33 @@ class TestSendMessage:
         out = box.send_message({"to": ["w1", "w1", "other"], "text": "x"}, _ctx(clock))
         assert [s["to"] for s in out["sent"]] == ["w1", "other"]
 
+    def test_siblings_are_the_parents_other_live_children(self):
+        """An epic's story workers talk to each other directly: to="siblings"
+        is every other live child of the caller's parent."""
+        box, api, clock = make_box(_tree(), me="w1")
+        out = box.send_message({"to": "siblings", "text": "iface"}, _ctx(clock))
+        assert [s["to"] for s in out["sent"]] == ["w2"]
+        assert api.mail["w2"][0]["from"] == "w1"
+        assert "orch" not in api.mail and "w1a" not in api.mail
+
+    def test_siblings_refusals(self):
+        box, _, clock = make_box(_tree(), me="root")
+        with pytest.raises(ToolError, match="no parent session, so no siblings"):
+            box.send_message({"to": "siblings", "text": "x"}, _ctx(clock))
+        # w1a's parent w1 has no other live child.
+        box2, api2, clock2 = make_box(_tree(), me="w1a")
+        with pytest.raises(ToolError, match="no live siblings"):
+            box2.send_message({"to": "siblings", "text": "x"}, _ctx(clock2))
+        assert not api2.mail
+        # A dead sibling (gone from the live set) is not a recipient.
+        rows = [r for r in _tree() if r["title"] != "w2"]
+        box3, _, clock3 = make_box(rows, me="w1")
+        with pytest.raises(ToolError, match="no live siblings"):
+            box3.send_message({"to": "siblings", "text": "x"}, _ctx(clock3))
+        box4, _, clock4 = make_box(_tree(), me=None)
+        with pytest.raises(ToolError, match="session identity"):
+            box4.send_message({"to": "siblings", "text": "x"}, _ctx(clock4))
+
     def test_list_serialized_as_a_string_is_accepted(self):
         box, api, clock = make_box(_tree())
         out = box.send_message({"to": '["w1", "w2"]', "text": "x"}, _ctx(clock))
