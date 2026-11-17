@@ -808,6 +808,14 @@ async def lifespan(app: FastAPI):
     # ENGINE is the developer's real state there.
     if not _restart._under_pytest():
         try:
+            # A title holding "/" (created before create refused one) 404s on
+            # every per-session route — it can't even be closed: rename it.
+            await asyncio.to_thread(
+                _rename.migrate_unsafe_titles, sys.modules[__name__]
+            )
+        except Exception:  # noqa: BLE001 — never block startup on a migration
+            pass
+        try:
             await asyncio.to_thread(_rename.migrate_once, sys.modules[__name__])
         except Exception:  # noqa: BLE001 — never block startup on a migration
             pass

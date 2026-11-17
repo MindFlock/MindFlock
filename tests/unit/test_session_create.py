@@ -56,6 +56,27 @@ def test_create_result_claims_the_title_and_answers_202(reg, monkeypatch):
     assert opts.title == "q4-ratelimit" and opts.in_place is False
 
 
+def test_a_branch_typed_as_the_name_becomes_a_path_safe_title(reg, monkeypatch):
+    """A title is one URL path segment: "feature/sc-1/x" as a Name used to
+    make a session whose every route 404'd (it couldn't even be closed)."""
+    captured: list = []
+    _stub_create(monkeypatch, captured, git_enabled=True)
+    status, body = asyncio.run(
+        session_create.create_result(
+            {
+                "title": "feature/sc-26339/v2-spelunk-1",
+                "program": "bash",
+                "repo_path": "/tmp/x",
+            }
+        )
+    )
+    assert status == 202
+    assert body["title"] == "feature-sc-26339-v2-spelunk-1"
+    assert list(reg) == ["feature-sc-26339-v2-spelunk-1"]
+    (opts,) = captured
+    assert opts.title == "feature-sc-26339-v2-spelunk-1"
+
+
 def test_create_result_reports_a_refusal_as_status_and_error(reg, monkeypatch):
     _stub_create(monkeypatch, git_enabled=True)
     reg["taken"] = object()
