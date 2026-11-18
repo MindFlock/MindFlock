@@ -101,7 +101,7 @@ def flights(monkeypatch):
 
     fake = types.SimpleNamespace(
         get=lambda fid: db.get(fid),
-        list_flights=lambda: list(db.values()),
+        list_flights=lambda include_finished=True: list(db.values()),
         waiting_step=waiting_step,
         you_text=you_text,
     )
@@ -136,8 +136,10 @@ def runs(monkeypatch):
     db: dict = {}
     fake = types.SimpleNamespace(
         load=lambda rid: db.get(rid),
-        list_runs=lambda: list(db.values()),
+        list_runs=lambda include_finished=True: list(db.values()),
         RUN_FINISHED=real_tr.RUN_FINISHED,
+        ANNOUNCED_REASONS=real_tr.ANNOUNCED_REASONS,
+        ref_of=lambda t: t.get("ticket_id") or t.get("title"),
         lead_gone=lambda run, now: run.get("_lead_gone", ""),
     )
     monkeypatch.setattr(auto, "_team_runs", lambda: fake)
@@ -424,3 +426,128 @@ def test_a_failing_handler_does_not_kill_the_worker(monkeypatch):
     assert done.wait(5)
     src.stop()
     assert calls == ["run.changed", "run.changed"]
+
+
+# --------------------------------------------------------------------------- #
+# The reconcile pass also ADDS what is missing
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def nothing(plans, flights, runs):
+    """All three stores faked (and empty unless a test fills them)."""
+    return plans, flights, runs
+
+
+def test_a_quiet_you_stop_gets_its_item_on_the_pass(nothing):
+    _plans, flights, _runs = nothing
+    # A "you" stop with notify: false never emits flight.needs_you.
+    flights["f1"] = _flight()
+    flights["f1"]["steps"][0]["config"]["notify"] = False
+    auto.reconcile()
+    (item,) = _open()
+    assert item["key"] == "flight:f1:st1:100" and item["source"] == "flight"
+    # A second pass is a no-op (no update, no event churn).
+    before = S.list_items()
+    auto.reconcile()
+    assert S.list_items() == before
+
+
+def test_after_a_restart_the_pass_adds_every_open_ask(nothing):
+    plans, flights, runs = nothing
+    plans["sess-a"] = _plan()
+    flights["f1"] = _flight()
+    runs["r_abcd"] = _run(
+        tasks=[
+            {
+                "id": "t1",
+                "state": "needs_you",
+                "reason": "stuck",
+                "title": "w1",
+                "detail": "stuck after two nudges",
+                "kind": "task",
+                "incarnation": 5.0,
+            },
+            {"id": "t2", "state": "needs_you", "reason": "prompt", "title": "w2"},
+        ],
+        paused=True,
+        pause_reason="budget",
+    )
+    added = auto.ensure()
+    assert sorted(added) == sorted(
+        [
+            "verify:sess-a:s1",
+            "verify:sess-a:s2",
+            "flight:f1:st1:100",
+            "run:r_abcd:t1:stuck",
+            "run:r_abcd::budget",
+        ]
+    )  # a dialog ("prompt") is not a run escalation: needs_input covers it
+    run_item = next(i for i in _open() if i["key"] == "run:r_abcd:t1:stuck")
+    assert run_item["session"] == "w1" and "stuck after two nudges" in run_item["text"]
+    # The event path then finds them there: no doubles.
+    auto.handle(_checked())
+    auto.handle(_needs_you())
+    assert len(_open()) == 5
+
+
+def test_the_pass_never_brings_back_what_a_person_closed(nothing):
+    plans, flights, _runs = nothing
+    plans["sess-a"] = _plan()
+    flights["f1"] = _flight()
+    auto.reconcile()
+    by_key = {i["key"]: i for i in _open()}
+    # Ticked off by hand, and deleted.
+    S.patch_item(by_key["verify:sess-a:s1"]["id"], {"done": True})
+    S.delete_item(by_key["flight:f1:st1:100"]["id"])
+    auto.reconcile()
+    assert [i["key"] for i in _open()] == ["verify:sess-a:s2"]
+
+
+def test_a_new_round_of_the_same_ask_comes_back(nothing):
+    plans, _flights, _runs = nothing
+    plans["sess-a"] = _plan()
+    plans["sess-a"]["runs"][-1]["at"] = 1000.0
+    auto.reconcile()
+    s1 = next(i for i in _open() if i["key"] == "verify:sess-a:s1")
+    S.patch_item(s1["id"], {"done": True})
+    auto.reconcile()
+    assert "verify:sess-a:s1" not in {i["key"] for i in _open()}
+    # A re-run started after that close asks again.
+    plans["sess-a"]["runs"][-1]["at"] = __import__("time").time() + 60
+    auto.reconcile()
+    assert "verify:sess-a:s1" in {i["key"] for i in _open()}
+
+
+def test_a_server_close_does_not_block_a_later_add(nothing):
+    plans, _flights, _runs = nothing
+    plans["sess-a"] = _plan()
+    auto.reconcile()
+    plans["sess-a"] = _plan(outcome="passed")
+    auto.reconcile()
+    assert _open() == []
+    assert all(i.get("auto_closed") for i in S.list_items())
+    plans["sess-a"] = _plan()  # same keys, waiting on the person again
+    auto.reconcile()
+    assert len(_open()) == 2
+    assert not any(i.get("auto_closed") for i in _open())
+
+
+def test_the_pass_adds_no_double_at_a_verify_stop(nothing):
+    plans, flights, _runs = nothing
+    plans["sess-b"] = _plan(pid="sess-b")
+    flights["f1"] = _flight(kind="verify")
+    auto.reconcile()
+    assert {i["source"] for i in _open()} == {"verify"}
+    assert len(_open()) == 2
+
+
+def test_an_unreadable_store_skips_only_its_own_asks(nothing, monkeypatch):
+    plans, flights, _runs = nothing
+    plans["sess-a"] = _plan()
+    flights["f1"] = _flight()
+
+    def boom(**_kw):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(auto._flights(), "list_flights", boom)
+    auto.ensure()
+    assert {i["source"] for i in _open()} == {"verify"}
