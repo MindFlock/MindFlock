@@ -56,6 +56,9 @@ _TOOLS = (
     # A split lead's two reports (review finding 34).
     "propose_run_plan",
     "report_integrated",
+    # The person's To-do list: adding to it never asks.
+    "add_todo",
+    "list_todos",
 )
 
 
@@ -831,7 +834,8 @@ def test_every_auto_approved_tool_is_a_read_or_the_report():
     """Both lists come from AUTO_APPROVED_TOOLS; each entry must be a real
     tool, and every one but the reports (report_result, and a split lead's
     propose_run_plan / report_integrated — the user approves the plan, the
-    server re-verifies the merge) must be read-only."""
+    server re-verifies the merge) and add_todo (it only adds a line to the
+    person's own To-do list) must be read-only."""
     from backend.mcp.tools import build_tools
     from tests.unit._mcp_fakes import make_box
 
@@ -839,7 +843,12 @@ def test_every_auto_approved_tool_is_a_read_or_the_report():
     by = {t.name: t for t in build_tools(box)}
     for name in mcp_attach.AUTO_APPROVED_TOOLS:
         assert name in by, name
-        if name not in ("report_result", "propose_run_plan", "report_integrated"):
+        if name not in (
+            "report_result",
+            "propose_run_plan",
+            "report_integrated",
+            "add_todo",
+        ):
             assert by[name].annotations["readOnlyHint"] is True, name
     assert "list_tickets" in mcp_attach.AUTO_APPROVED_TOOLS
 
