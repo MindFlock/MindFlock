@@ -137,6 +137,11 @@ class ExtensionSpec:
     #: MINIMUM host API level required — the host refuses activation when its
     #: own level is lower.
     api_version: int = 1
+    #: Optional API path (``/api/…``) returning ``{"count": n, "title": "…"}``.
+    #: The host shows the count next to the bar label (0 = no badge) and
+    #: refetches it on any ``addon.<ext id>.*`` bus event and about every 60 s
+    #: — no extension code runs for it.
+    badge: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -201,6 +206,11 @@ def validate_extension_spec(addon_id: str, spec: ExtensionSpec) -> List[str]:
             problems.append(
                 "command %r opens multi surface %r without a ref" % (c.id, c.surface)
             )
+
+    if spec.badge is not None and not (
+        isinstance(spec.badge, str) and spec.badge.startswith("/api/")
+    ):
+        problems.append("badge %r must be an API path starting with /api/" % spec.badge)
 
     for b in spec.buttons:
         if b.command not in command_ids:

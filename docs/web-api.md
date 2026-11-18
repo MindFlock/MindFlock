@@ -3671,8 +3671,9 @@ also detects and can stop an externally-started pipeline):
 | WS | `/api/mindflock/logs` | read-only `tail -F` of `logs/ticket-ingestion.log` |
 
 **Assistant** (addon id `assistant`, prefix `/api/assistant`) — one long-lived
-`claude` tmux session in `~/.mindflock-assistant` (repo-independent), plus a todo
-store:
+`claude` tmux session in `~/.mindflock-assistant` (repo-independent). Its todo
+routes are kept for the reminder dialog and older clients; they read and write
+the one [To-do](#to-do) store:
 
 | Method | Path | Returns |
 |---|---|---|
@@ -3680,8 +3681,10 @@ store:
 | GET | `/api/assistant/state` | `{"activity": "working\|clarify\|limit\|idle\|offline"}` — what the Assistant's agent is doing, for the window's sidebar pill. **Polled, not pushed**: `WS /api/events` speaks for sessions the *engine* owns, and the Assistant is a window, not one of them. `offline` covers both "never started" and "it died", which is what the row should say before its first chat. The read goes through the same `_agent_activity` ladder and the same ~2.5 s probe memo a session row uses (the addon hands it a singleton stand-in shaped like an instance), so the two can never disagree about what "running" means |
 | GET/PUT | `/api/assistant/instructions` | The assistant's standing instructions file |
 | POST | `/api/assistant/restart` | Kill + relaunch the assistant tmux |
-| GET | `/api/assistant/todos` | `{todos: [{id, text, done}]}` |
-| PUT | `/api/assistant/todos` | Replace the full (reordered) todo array |
+| GET | `/api/assistant/todos` | `{todos: [item…]}` — the [To-do](#to-do) list, items without the `created_at` / `done_at` stamps |
+| PUT | `/api/assistant/todos` | Replace the full (reordered) array. For an id the store knows, every field the client did not send is kept (details, priority, kind, session, source, key, link, created_at, the reminder fields); a changed `due` is a new reminder; an item left out moves to the To-do history (`removed`) |
+| GET | `/api/assistant/todos/due` | `{due: [item…]}` — the items whose reminder time has come, oldest first |
+| POST | `/api/assistant/todos/{id}/snooze` · `/dismiss` · `/done` | The reminder dialog's buttons (`snooze` takes `{minutes}` or `{until}`) → `{todo: item}`; 404 unknown |
 
 **Settings** (addon id `settings`, prefix `/api/settings`) — besides GET/POST
 of the masked settings store (groups include `general`, e.g.
@@ -4055,6 +4058,76 @@ Hence two things worth not undoing: this endpoint takes the same auth middleware
 everything else, and the gate switches itself on for any non-local `CS_WEB_MODE`
 (see [Authentication](#authentication)). An exposed server with `MINDFLOCK_AUTH=0`
 would hand this probe to the network.
+
+### To-do
+
+**To-do** (addon id `todo`, prefix `/api/todo`; an Addon API v3 extension, bar
+"To-do", badge `/api/todo/badge`) — one list of everything a *person* has to
+do by hand, each entry saying which session it came from. Stored in
+`~/.mindflock-assistant/todos.json` (a JSON array; array order = display
+order; the Assistant's `claude` edits it by hand, so a plain `{id, text, done}`
+row is valid and fields a writer did not send are kept) and
+`todos-history.json` (newest first, capped at 2000). One lock around every
+read-modify-write; atomic writes. Errors are `{"error": "…"}` with 400 (bad
+input), 404 (no such item) or 500 (the file can't be read — a malformed
+`todos.json` is never overwritten — or written).
+
+Item shape (optional fields only when set):
+
+```
+{"id": "a1b2c3d4", "text": "one line", "done": false,
+ "details": "≤ 20000 chars", "priority": "high" | "low",       // absent = normal
+ "kind": "manual_test" | "needs_you",                          // absent = a task
+ "session": "session-title", "source": "you"|"agent"|"assistant"|"verify"|"flight"|"run",
+ "key": "verify:<plan>:<step>", "link": "https://…",
+ "created_at": 1795000000.0, "done_at": 1795000500.0,          // done_at only while done
+ "due", "snoozed_until", "dismissed_at", "notified_at"}        // reminders
+```
+
+A history entry is the item plus `closed_at` and `outcome` (`done` |
+`removed`). Open items are kept in three tiers — high, normal, low — by a
+stable sort into the open items' slots (a done item keeps its place); a new
+priority puts the item at the END of that tier.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/todo` | | `{todos: [item…], counts: {open, needs_you, high}}` — every item, open and done, in order; `needs_you` counts open `manual_test` / `needs_you` items |
+| POST | `/api/todo/items` | one item (`text` required; `details, priority, kind, session, source, key, link, due`) or `{items: […]}` (≤ 50, all or nothing) | `{added: [item…], updated: [item…], counts}` — an OPEN item with the same non-empty `key` is updated in place, not duplicated |
+| PATCH | `/api/todo/items/{id}` | any of `text, details, priority ("high"/"low"/"" or "normal" = clear), done, due ("" clears), kind ("" clears), session, link` | `{todo: item}` — `done` stamps / clears `done_at`; a new `due` resets the reminder |
+| DELETE | `/api/todo/items/{id}` | | `{ok: true}` — moved to history, outcome `removed` |
+| POST | `/api/todo/order` | `{ids: [...]}` open ids in the wanted order | `{todos: […]}` — unknown ids ignored, open items not named keep their relative order after the named ones; tiers still win |
+| GET | `/api/todo/history?limit=200&q=text` | | `{history: [entry…]}` newest first: done items still in the list + the history file; `q` matches text, details and session |
+| POST | `/api/todo/history/{id}/restore` | | `{todo: item}` — back in the list, open, at the end of its tier |
+| DELETE | `/api/todo/history/{id}` | | `{ok: true}` — forget one entry (a done item still in the list is removed without going to history) |
+| GET | `/api/todo/badge` | | `{count: open, title: "2 need you · 7 open"}` (`count` 0 = no badge) |
+
+Done items stay in `todos.json` (the Assistant reads them there) and also show
+in history; after 7 days done they move into `todos-history.json` (on write,
+at startup and on the slow pass).
+
+**Event.** `addon.todo.changed` on the bus after every change to the list or
+history, whoever made it (these routes, the MCP tools, the Assistant's routes,
+an auto source): `data: {reason: "added"|"updated"|"done"|"reopened"|"removed"|
+"restored"|"order"|"archived", id, open, needs_you}`. Clients refetch on it.
+The reminder loop stamping `notified_at` is bookkeeping and emits only
+`todo.due`.
+
+**Auto sources** (server-side, from the bus, never left to an agent):
+`session.test_plan_checked` with outcome `needs_you` adds one `manual_test`
+item per step the person is asked to check (`source: "verify"`, `key:
+"verify:<plan>:<step>"`, details = what to expect, what to paste, and to press
+Confirm verified) — or one "Confirm verified: <title>" item
+(`verify:<plan>:confirm`) when every step has an answer; `flight.needs_you`
+adds a `needs_you` item (`source: "flight"`, `key:
+"flight:<id>:<step>:<since>"`) unless the flight is parked on a Verify stop
+whose checklist the verify item already covers; `run.needs_you` adds a
+`needs_you` item (`source: "run"`, `key: "run:<run>:<task>:<reason>"`). Each
+closes itself (marked done) when the thing moved on — the verify confirmed,
+answered or re-run, the flight off that stop, the run task no longer waiting —
+on the plan's / flight's / run's own events and on a slow pass about every
+60 s. The pass only closes auto items, and only on a state it read: a store
+that reads empty closes nothing. Ticking an auto item off by hand does not
+confirm the verify or move the flight.
 
 ## Authentication
 

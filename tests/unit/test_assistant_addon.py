@@ -207,10 +207,14 @@ class TestTodosEndpoints:
         assert "list" in r.json()["error"]
 
     def test_put_todos_write_failure_is_500(self, client, A, monkeypatch):
+        from backend.web.addons.todo import store
+
         def _boom(*a, **k):
             raise RuntimeError("disk full")
 
-        monkeypatch.setattr(A, "_atomic_write", _boom)
+        # The list's one writer is the To-do store's (the Assistant's own
+        # _atomic_write now only writes its instruction files).
+        monkeypatch.setattr(store, "_write_text", _boom)
         r = client.put("/api/assistant/todos", json={"todos": []})
         assert r.status_code == 500
         assert "disk full" in r.json()["error"]
