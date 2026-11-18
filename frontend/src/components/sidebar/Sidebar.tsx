@@ -74,7 +74,6 @@ const NO_FOLDS: ReadonlySet<string> = new Set();
 
 interface Props {
   onOpenChat(): void;
-  onOpenTodo(): void;
 }
 
 /** The grid's pane counts on the footer's View row. */
@@ -163,7 +162,7 @@ export function closeDrawerForModal(): boolean {
   return true;
 }
 
-export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
+export function Sidebar({ onOpenChat }: Props) {
   useEffect(() => {
     const on = () => void closeDrawerForModal();
     window.addEventListener(MODAL_OPEN_EVENT, on);
@@ -788,7 +787,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
             onLeave={secLeave}
             onDropSection={moveSection}
           >
-            {barContent(key, { onOpenChat, onOpenTodo })}
+            {barContent(key, { onOpenChat })}
           </BarSlot>
         );
       })}

@@ -348,7 +348,7 @@ function renderRail(list: Instance[], devices: unknown[] = []) {
   queryClient.setQueryData<Instance[]>(["instances"], list);
   queryClient.setQueryData(["devices"], { devices, self: devices.length ? { device: "me", host: "me", os: "" } : null });
   const html = renderToStaticMarkup(
-    createElement(QueryClientProvider, { client: queryClient }, createElement(Sidebar, { onOpenChat() {}, onOpenTodo() {} }))
+    createElement(QueryClientProvider, { client: queryClient }, createElement(Sidebar, { onOpenChat() {} }))
   );
   // One entry per rail row, with that row's own markup (up to the next row).
   const parts = html.split(/(?=<li class="inst)/).slice(1);

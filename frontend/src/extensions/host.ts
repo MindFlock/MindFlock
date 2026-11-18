@@ -16,6 +16,7 @@
 import { api } from "../api/client";
 import { toast } from "../lib/toast";
 import { useUi } from "../state/store";
+import { instances, selectSession } from "../lib/sessionActions";
 import type {
   ApiOptions,
   Disposable,
@@ -28,8 +29,10 @@ import type {
 } from "./types";
 
 /** The host's API level. `api_version` in a manifest is the MINIMUM level the
- * extension needs; bump this on every addition to the ExtensionApi surface. */
-export const HOST_API_VERSION = 1;
+ * extension needs; bump this on every addition to the ExtensionApi surface.
+ *   1 — the first shape.
+ *   2 — ui.focusSession(title) and ui.focusedSession(). */
+export const HOST_API_VERSION = 2;
 
 declare global {
   interface Window {
@@ -398,6 +401,36 @@ export async function runCommand(extId: string, commandId: string, ...args: unkn
         toast("Extension " + (ext.label || extId) + ": unknown command " + commandId);
       }
   }
+}
+
+/** Whether the host has this extension enabled right now (the set
+ * syncExtensions was last fed). */
+export function extensionEnabled(extId: string): boolean {
+  return known.has(extId);
+}
+
+/** What the app says when built-in chrome reaches for an extension that is
+ * off or missing. */
+export function extensionOffText(label: string): string {
+  return "The " + label + " extension is turned off (Settings → Extensions)";
+}
+
+/** Run an extension command from the app's OWN chrome (a reminder's button,
+ * the voice assistant) — places that predate the extension and cannot assume
+ * it is on. Off or missing: nothing runs, the person is told where to turn it
+ * on, and the answer is false. */
+export function runAppExtCommand(
+  extId: string,
+  commandId: string,
+  label: string,
+  say: (msg: string) => void = (msg) => toast(msg)
+): boolean {
+  if (!extensionEnabled(extId)) {
+    say(extensionOffText(label));
+    return false;
+  }
+  void runCommand(extId, commandId);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -786,6 +819,27 @@ function deepFreeze<T>(obj: T): T {
   return obj;
 }
 
+/** api.ui.focusSession (level 2): select that session the way a sidebar click
+ * does (lib/sessionActions.selectSession — unhide, MRU, focus, keyboard).
+ * False, with nothing changed, when no session has that title. */
+export function focusSessionByTitle(
+  title: unknown,
+  deps: { titles(): string[]; select(title: string): void } = {
+    titles: () => instances().map((i) => i.title),
+    select: (t) => selectSession(t),
+  }
+): boolean {
+  if (typeof title !== "string" || !title) return false;
+  if (!deps.titles().includes(title)) return false;
+  deps.select(title);
+  return true;
+}
+
+/** api.ui.focusedSession (level 2): the focused session's title, or null. */
+export function focusedSessionTitle(): string | null {
+  return useUi.getState().focused || null;
+}
+
 /** Build one extension's frozen api object. Sub-objects are fresh per
  * extension and frozen individually; the manifest is a deep-frozen
  * structuredClone. The shared live objects (window.mindflock.events, the
@@ -806,6 +860,8 @@ function makeApi(ext: ExtensionInfo): ExtensionApi {
       openPane: (surfaceId, opts) => openExtPane(extId, surfaceId, opts),
       closePane: (surfaceId, ref) => closeExtPane(extId, surfaceId, ref),
       toast: (msg, opts) => toast(msg, { duration: opts?.duration }),
+      focusSession: (title) => focusSessionByTitle(title),
+      focusedSession: () => focusedSessionTitle(),
     },
     commands: {
       register: (commandId, handler) => registerCommand(extId, commandId, handler),

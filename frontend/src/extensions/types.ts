@@ -50,6 +50,12 @@ export interface ExtensionSpec {
   stylesheet: boolean;
   /** MINIMUM host API level required. */
   api_version: number;
+  /** Optional API path answering `{count: n, title?: "…"}`: the host-rendered
+   * bar shows the count as a pill after its label (nothing at 0 or on an
+   * error), refetched about every 60 s and on any `addon.<id>.*` bus event
+   * (extensions/badge.ts). No extension code runs for it. Absent on a server
+   * that predates it. */
+  badge?: string | null;
 }
 
 /** What useExtensions() exposes per addon carrying a non-null `extension`. */
@@ -106,7 +112,9 @@ export interface SurfaceHost {
 
 export type SurfaceRenderer = (host: SurfaceHost) => Disposable | void;
 
-/** The one deep-frozen object activate(api) receives (host API level 1). */
+/** The one deep-frozen object activate(api) receives. Level 1 is the first
+ * shape; level 2 added ui.focusSession / ui.focusedSession. An extension that
+ * also runs on an older host feature-detects them (`api.ui.focusSession?.(t)`). */
 export interface ExtensionApi {
   readonly id: string;
   /** The HOST's level. */
@@ -122,6 +130,13 @@ export interface ExtensionApi {
     openPane(surfaceId: string, opts?: { ref?: string; title?: string; ctx?: unknown }): string;
     closePane(surfaceId: string, ref?: string): void;
     toast(msg: string, opts?: { duration?: number }): void;
+    /** Level 2. Select and focus the session with this title, the way a
+     * sidebar click does. False (nothing changes) when there is no such
+     * session. */
+    focusSession?(title: string): boolean;
+    /** Level 2. The title of the session the person is looking at now (the
+     * focused one), or null when none is. */
+    focusedSession?(): string | null;
   };
   commands: {
     /** Own prefix enforced. */

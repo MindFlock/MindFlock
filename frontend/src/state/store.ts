@@ -154,7 +154,6 @@ export type DialogName =
   // Customize → Prompts: the saved-prompt library.
   | "prompts"
   | "setup"
-  | "todo"
   | "assistant-agent"
   | "palette"
   | "shortcuts"

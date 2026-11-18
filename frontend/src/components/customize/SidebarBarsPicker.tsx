@@ -11,7 +11,8 @@
  * Availability gating still applies on top — a switched-on bar can stay
  * absent (the Tickets bar with no tracker connected) — so each built-in bar
  * carries a static note saying when it shows, with a door to the place that
- * makes it show. The notes are always true, never computed: a line that read
+ * makes it show (EXT_NOTES does the same for the extension bars MindFlock
+ * ships, keyed "ext:<id>"). The notes are always true, never computed: a line that read
  * live state would be one more thing to disagree with the bar itself. */
 
 import { useUi, type DialogName } from "../../state/store";
@@ -19,7 +20,7 @@ import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
 import { SESSIONS_KEY, orderedBars, orderedSections } from "../sidebar/barDefs";
 import { CustomizeRow } from "./CustomizeRow";
 
-interface BarNote {
+export interface BarNote {
   text: string;
   link?: { label: string; dialog: DialogName; target?: string };
 }
@@ -39,14 +40,28 @@ const NOTES: Record<string, BarNote> = {
     text: "Appears once a repository is added",
     link: { label: "Intake → GitHub issues", dialog: "intake", target: "issues" },
   },
-  assistant: { text: "Chat, a todo list, and its editable agent file" },
+  assistant: { text: "Chat, and its editable agent file" },
   prompts: {
     text: "Your saved prompts — pick one to paste it into the session you are in",
     link: { label: "Manage prompts", dialog: "prompts" },
   },
 };
 
+/** Extension bars ("ext:<id>") that ship with MindFlock get a real line too;
+ * any other extension's bar says where it comes from. */
+const EXT_NOTES: Record<string, BarNote> = {
+  "ext:todo": {
+    text: "Things you need to do by hand — manual test steps, anything waiting on you",
+    link: { label: "Settings → Extensions", dialog: "settings", target: "extensions" },
+  },
+};
+
 const EXTENSION_NOTE: BarNote = { text: "From an extension" };
+
+/** The line under a bar's row in Customize → Sidebar. */
+export function barNote(key: string): BarNote {
+  return NOTES[key] || EXT_NOTES[key] || EXTENSION_NOTE;
+}
 
 export function SidebarBarsPicker() {
   const hiddenBars = useUi((s) => s.hiddenBars);
@@ -93,7 +108,7 @@ export function SidebarBarsPicker() {
             );
           const b = byKey.get(key);
           if (!b) return null;
-          const note = NOTES[b.key] || EXTENSION_NOTE;
+          const note = barNote(b.key);
           return (
             <CustomizeRow
               key={b.key}

@@ -302,7 +302,7 @@ function renderRail(list: Instance[], runs: RunInfo[]) {
   queryClient.setQueryData(["devices"], { devices: [], self: null });
   queryClient.setQueryData(["runs"], runs);
   const html = renderToStaticMarkup(
-    createElement(QueryClientProvider, { client: queryClient }, createElement(Sidebar, { onOpenChat() {}, onOpenTodo() {} }))
+    createElement(QueryClientProvider, { client: queryClient }, createElement(Sidebar, { onOpenChat() {} }))
   );
   const parts = html.split(/(?=<li class=")/).slice(1);
   return parts.map((h) => {
