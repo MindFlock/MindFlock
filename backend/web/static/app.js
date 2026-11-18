@@ -38350,6 +38350,10 @@ function endShortcutAllowed() {
 	return true;
 }
 function skyBoxFocused(el = typeof document !== "undefined" ? document.activeElement : null) {
+	if (el?.closest?.(".fl-chain-view")) {
+		const node = el.closest("[data-node]")?.getAttribute("data-node") || "";
+		return node.startsWith("stop:") || node.startsWith("group:") || !!el.closest(".fl-chain-view[data-sky-box]");
+	}
 	if (!el?.closest?.(".sky")) return false;
 	if (el.closest(".pane, .skl-card")) return false;
 	const node = el.closest("[data-node]")?.getAttribute("data-node");
@@ -98185,15 +98189,18 @@ function autoPlace(nodes) {
 	}
 	return out;
 }
-function moveNode(g, id, pos) {
+function moveNodes(g, spots) {
 	const all = g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
-	if (!all.some((n) => n.id === id) || id === HEAD_ID) return g;
-	const placed = autoPlace(all.map((n) => n.id === id ? {
-		...n,
-		x: Math.round(pos.x),
-		y: Math.round(pos.y),
-		pinned: true
-	} : n));
+	if (!all.some((n) => n.id !== HEAD_ID && spots.has(n.id))) return g;
+	const placed = autoPlace(all.map((n) => {
+		const pos = n.id === HEAD_ID ? void 0 : spots.get(n.id);
+		return pos ? {
+			...n,
+			x: Math.round(pos.x),
+			y: Math.round(pos.y),
+			pinned: true
+		} : n;
+	}));
 	const hn = g.headNode ? placed[0] : null;
 	const specs = g.wires.map((w) => ({
 		from: w.from,
@@ -98575,6 +98582,369 @@ function ReadyHead({ flight }) {
 	});
 }
 //#endregion
+//#region src/lib/skySelect.ts
+var NO_SELECTION = {
+	lines: /* @__PURE__ */ new Set(),
+	stops: /* @__PURE__ */ new Map()
+};
+var WHOLE_LINE = .5;
+var MARQUEE_MIN = 4;
+function rectFrom(a, b) {
+	return {
+		x: Math.min(a.x, b.x),
+		y: Math.min(a.y, b.y),
+		w: Math.abs(a.x - b.x),
+		h: Math.abs(a.y - b.y)
+	};
+}
+function overlapArea(a, b) {
+	const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+	const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+	return w > 0 && h > 0 ? w * h : 0;
+}
+var overlaps = (a, b) => overlapArea(a, b) > 0;
+function lineTouched(m, l) {
+	if (l.heads.some((h) => overlaps(m, h))) return true;
+	const area = l.rect.w * l.rect.h;
+	return area > 0 && overlapArea(m, l.rect) >= area * WHOLE_LINE;
+}
+var isStopNode = (id) => id.startsWith("stop:") || id.startsWith("group:");
+function select(m, items) {
+	const whole = new Set(items.lines.filter((l) => lineTouched(m, l)).map((l) => l.id));
+	const stops = /* @__PURE__ */ new Map();
+	for (const s of items.stops) {
+		if (!isStopNode(s.node) || !overlaps(m, s.rect)) continue;
+		const set = stops.get(s.line) || /* @__PURE__ */ new Set();
+		set.add(s.node);
+		stops.set(s.line, set);
+	}
+	if (!whole.size && stops.size === 1) return {
+		lines: /* @__PURE__ */ new Set(),
+		stops
+	};
+	for (const id of stops.keys()) whole.add(id);
+	return {
+		lines: whole,
+		stops: /* @__PURE__ */ new Map()
+	};
+}
+function addSelection(a, b) {
+	if (!a.lines.size && !b.lines.size) {
+		if ((/* @__PURE__ */ new Set([...a.stops.keys(), ...b.stops.keys()])).size <= 1) {
+			const out = /* @__PURE__ */ new Map();
+			for (const [line, set] of [...a.stops, ...b.stops]) out.set(line, /* @__PURE__ */ new Set([...out.get(line) || [], ...set]));
+			return {
+				lines: /* @__PURE__ */ new Set(),
+				stops: out
+			};
+		}
+	}
+	return {
+		lines: /* @__PURE__ */ new Set([
+			...a.lines,
+			...a.stops.keys(),
+			...b.lines,
+			...b.stops.keys()
+		]),
+		stops: /* @__PURE__ */ new Map()
+	};
+}
+var selectLines = (ids) => ({
+	lines: new Set(ids),
+	stops: /* @__PURE__ */ new Map()
+});
+function toggleLine(s, id) {
+	const lines = /* @__PURE__ */ new Set([...s.lines, ...s.stops.keys()]);
+	if (s.lines.has(id)) lines.delete(id);
+	else lines.add(id);
+	return {
+		lines,
+		stops: /* @__PURE__ */ new Map()
+	};
+}
+function toggleStop(s, line, node) {
+	const mine = s.stops.size === 1 && s.stops.has(line) && !s.lines.size ? new Set(s.stops.get(line)) : /* @__PURE__ */ new Set();
+	if (mine.has(node)) mine.delete(node);
+	else mine.add(node);
+	if (!mine.size) return NO_SELECTION;
+	return {
+		lines: /* @__PURE__ */ new Set(),
+		stops: /* @__PURE__ */ new Map([[line, mine]])
+	};
+}
+function pruneSelection(s, shown) {
+	if (![...s.lines, ...s.stops.keys()].some((id) => !shown.has(id))) return s;
+	return {
+		lines: new Set([...s.lines].filter((id) => shown.has(id))),
+		stops: new Map([...s.stops].filter(([id]) => shown.has(id)))
+	};
+}
+var selectionEmpty = (s) => !s.lines.size && !s.stops.size;
+function stopSelection(s) {
+	const first = [...s.stops][0];
+	return first && first[1].size ? {
+		line: first[0],
+		nodes: [...first[1]]
+	} : null;
+}
+function stepIndexesOf(node, steps) {
+	if (node.startsWith("stop:")) {
+		const id = node.slice(5);
+		const i = steps.findIndex((s, k) => (s.id || "i" + k) === id);
+		return i < 0 ? [] : [i];
+	}
+	if (!node.startsWith("group:")) return [];
+	const rest = node.slice(6);
+	const at = rest.lastIndexOf("@");
+	const gid = at >= 0 ? rest.slice(0, at) : rest;
+	const from = at >= 0 ? Number(rest.slice(at + 1)) : steps.findIndex((s) => s.group?.id === gid);
+	if (!Number.isInteger(from) || from < 0 || steps[from]?.group?.id !== gid) return [];
+	const out = [];
+	for (let i = from; i < steps.length && steps[i].group?.id === gid; i++) out.push(i);
+	return out;
+}
+function selectedIndexes(nodes, steps) {
+	const all = /* @__PURE__ */ new Set();
+	for (const n of nodes) for (const i of stepIndexesOf(n, steps)) all.add(i);
+	return [...all].sort((a, b) => a - b);
+}
+function consecutive(indexes) {
+	const s = [...new Set(indexes)].sort((a, b) => a - b);
+	return s.length > 0 && s[s.length - 1] - s[0] === s.length - 1;
+}
+function screenToPlane(cam, r) {
+	const z = cam.z || 1;
+	return {
+		x: (r.x - cam.x) / z,
+		y: (r.y - cam.y) / z,
+		w: r.w / z,
+		h: r.h / z
+	};
+}
+function planeToScreen(cam, r) {
+	return {
+		x: cam.x + r.x * cam.z,
+		y: cam.y + r.y * cam.z,
+		w: r.w * cam.z,
+		h: r.h * cam.z
+	};
+}
+var SKY_TOOLS = ["drag", "click"];
+var SKY_TOOL_KEY = "mf_sky_tool";
+function gestureFor(tool, target, mods = {}) {
+	if (mods.space) return "pan";
+	if (target === "control") return "none";
+	if (tool === "click") return mods.shift && !mods.touch ? "marquee" : "pan";
+	if (target === "ground") return mods.touch ? "pan" : "marquee";
+	return target === "line" ? "move-line" : "select";
+}
+function loadSkyTool(store = localStore()) {
+	try {
+		return store?.getItem(SKY_TOOL_KEY) === "click" ? "click" : "drag";
+	} catch {
+		return "drag";
+	}
+}
+function saveSkyTool(tool, store = localStore()) {
+	try {
+		store?.setItem(SKY_TOOL_KEY, tool);
+	} catch {}
+}
+function localStore() {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage;
+	} catch {
+		return null;
+	}
+}
+var deletableNode = (node) => isStopNode(node) || /^(session|child|branch):./.test(node);
+var nodeSession = (node) => {
+	const m = /^(session|child|branch):(.+)$/.exec(node);
+	return m ? m[2] : "";
+};
+function deleteFor(selection, focus, selectedBox) {
+	if (!selectionEmpty(selection)) return { kind: "selection" };
+	const at = focus || selectedBox;
+	if (!at) return { kind: "keymap" };
+	if (at.line === "intake") return { kind: "swallow" };
+	if (!at.node) return {
+		kind: "line",
+		line: at.line
+	};
+	return deletableNode(at.node) ? {
+		kind: "box",
+		line: at.line,
+		node: at.node
+	} : { kind: "swallow" };
+}
+function nodeById(nodes, id) {
+	for (const n of nodes) {
+		if (n.id === id) return n;
+		const sub = n.group?.nodes.find((s) => s.id === id);
+		if (sub) return sub;
+	}
+	return null;
+}
+var removableBox = (n) => !!n && (n.kind === "stop" || n.kind === "group") && n.editable !== false;
+function mergeTargetAt(point, lines, except = "") {
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const { id, rect: r } = lines[i];
+		if (!id || id === except || id === "intake" || id === "palette" || id.startsWith("flight:")) continue;
+		if (point.x >= r.x && point.x <= r.x + r.w && point.y >= r.y && point.y <= r.y + r.h) return id;
+	}
+	return "";
+}
+var sessionRuns = (row) => !!row && (row.activity === "working" || row.activity === "clarify" || !!row.asking);
+var stopsRun = (indexes, flight) => !!flight && (flight.state === "running" || flight.state === "waiting_you") && indexes.includes(flight.cursor);
+function removalNeedsAsk(t) {
+	switch (t.kind) {
+		case "session": return sessionRuns(t.row);
+		case "stops": return stopsRun(t.indexes, t.flight);
+		case "grounded": return false;
+		case "selection": return t.items.some(removalNeedsAsk);
+	}
+}
+function undoFirstOpen(f) {
+	if (f.state === "grounded" || f.state === "ready") return 0;
+	const cur = f.steps[f.cursor];
+	const ss = cur ? f.step_states?.[cur.id] : void 0;
+	if (f.state === "paused" && (!cur || (ss?.state ?? "pending") === "pending" && !ss?.detail?.performing)) return f.cursor;
+	let end = f.cursor + 1;
+	const par = cur?.parallel?.id;
+	while (par && f.steps[end]?.parallel?.id === par) end++;
+	return end;
+}
+function undoAt(index, now) {
+	return now && index >= undoFirstOpen(now) && index < now.steps.length ? index : void 0;
+}
+function chainOrder(nodes) {
+	const seen = /* @__PURE__ */ new Set();
+	return nodes.filter((n) => isStopNode(n.id) && n.index !== void 0 && !seen.has(n.id) && !!seen.add(n.id)).sort((a, b) => a.index - b.index).map((n) => n.id);
+}
+function rangeOf(order, a, b) {
+	const i = order.indexOf(a);
+	const j = order.indexOf(b);
+	if (i < 0 || j < 0) return [];
+	return order.slice(Math.min(i, j), Math.max(i, j) + 1);
+}
+function clickSelect(s, anchor, line, node, mods, order) {
+	if (!isStopNode(node)) return {
+		selection: s,
+		anchor
+	};
+	const here = {
+		line,
+		node
+	};
+	if (!mods.ctrl && !mods.shift) return {
+		selection: s.stops.size ? NO_SELECTION : s,
+		anchor: here
+	};
+	const range = mods.shift && anchor?.line === line ? rangeOf(order, anchor.node, node) : [];
+	if (!range.length) return {
+		selection: toggleStop(s, line, node),
+		anchor: here
+	};
+	const mine = mods.ctrl && s.stops.size === 1 && s.stops.has(line) && !s.lines.size ? [...s.stops.get(line) || []] : [];
+	return {
+		selection: {
+			lines: /* @__PURE__ */ new Set(),
+			stops: /* @__PURE__ */ new Map([[line, /* @__PURE__ */ new Set([...mine, ...range])]])
+		},
+		anchor
+	};
+}
+function moveFirstOpen(f) {
+	if (f.state === "grounded" || f.state === "ready") return 0;
+	let end = f.cursor + 1;
+	const par = f.steps[f.cursor]?.parallel?.id;
+	while (par && f.steps[end]?.parallel?.id === par) end++;
+	return end;
+}
+function dropBefore(target, steps, first) {
+	if (!target) return first;
+	const idx = stepIndexesOf(target, steps);
+	if (!idx.length) return -1;
+	let at = idx[idx.length - 1] + 1;
+	const par = steps[at - 1]?.parallel?.id;
+	while (par && steps[at]?.parallel?.id === par) at++;
+	return at;
+}
+function movesToOrder(current, target, moving) {
+	const set = new Set(moving);
+	const list = current.slice();
+	const out = [];
+	const lead = target.find((id) => set.has(id));
+	const later = lead !== void 0 && target.indexOf(lead) > current.indexOf(lead);
+	const place = (id, at) => {
+		const p = list.indexOf(id);
+		if (p < 0) return;
+		list.splice(p, 1);
+		const i = at(list);
+		list.splice(i, 0, id);
+		if (i !== p) out.push({
+			step: id,
+			at: i
+		});
+	};
+	if (later) {
+		for (let k = target.length - 1; k >= 0; k--) if (set.has(target[k])) place(target[k], (l) => k === target.length - 1 ? l.length : l.indexOf(target[k + 1]));
+	} else for (let k = 0; k < target.length; k++) if (set.has(target[k])) place(target[k], (l) => k === 0 ? 0 : l.indexOf(target[k - 1]) + 1);
+	return out;
+}
+function blockMove(steps, picked, before, first) {
+	const idx = [...new Set(picked)].filter((i) => i >= 0 && i < steps.length).sort((a, b) => a - b);
+	if (!idx.length) return {
+		ok: false,
+		why: "These stops aren't on the route any more"
+	};
+	if (idx[0] < first) return {
+		ok: false,
+		why: "A stop that has run, or is running, can't move"
+	};
+	if (before < first || before < 0) return {
+		ok: false,
+		why: "Stops can only move after the one the route is at"
+	};
+	const pickedIds = new Set(idx.map((i) => steps[i].id));
+	for (const i of idx) {
+		const par = steps[i].parallel?.id;
+		if (par && steps.some((s) => s.parallel?.id === par && !pickedIds.has(s.id))) return {
+			ok: false,
+			why: "Pick every stop of a side-by-side group, or none of them"
+		};
+	}
+	const rest = steps.filter((s) => !pickedIds.has(s.id));
+	const at = Math.min(rest.length, Math.max(0, before - idx.filter((i) => i < before).length));
+	const par = rest[at - 1]?.parallel?.id;
+	if (par && rest[at]?.parallel?.id === par) return {
+		ok: false,
+		why: "Stops can't land inside a side-by-side group"
+	};
+	const order = [
+		...rest.slice(0, at).map((s) => s.id),
+		...idx.map((i) => steps[i].id),
+		...rest.slice(at).map((s) => s.id)
+	];
+	return {
+		ok: true,
+		order,
+		moves: movesToOrder(steps.map((s) => s.id), order, pickedIds)
+	};
+}
+function undoMoves(now, before, moved) {
+	const set = new Set(moved);
+	if (now.length !== before.length || !before.every((id) => now.includes(id))) return null;
+	const others = (l) => l.filter((id) => !set.has(id)).join("\n");
+	if (others(now) !== others(before)) return null;
+	return movesToOrder(now, before, set);
+}
+function inOrder(steps, ids) {
+	const by = new Map(steps.map((s) => [s.id, s]));
+	if (ids.length !== steps.length || !ids.every((id) => by.has(id))) return steps.slice();
+	return ids.map((id) => by.get(id));
+}
+//#endregion
 //#region src/components/flights/StopIcons.tsx
 var FAMILY = {
 	agent: "work",
@@ -98810,6 +99180,15 @@ function MiniChain({ stops }) {
 	});
 }
 var DRAG_MIN = 4;
+function spotsOf(d) {
+	if (!d.group) return /* @__PURE__ */ new Map([[d.id, d.pos]]);
+	const dx = d.pos.x - d.x0;
+	const dy = d.pos.y - d.y0;
+	return new Map(d.group.map((m) => [m.id, {
+		x: m.x0 + dx,
+		y: m.y0 + dy
+	}]));
+}
 var STATE_WORD = {
 	done: "done",
 	current: "running now",
@@ -98882,7 +99261,8 @@ function SkyChain(p) {
 	const dragRef = (0, import_react.useRef)(null);
 	const justDragged = (0, import_react.useRef)(false);
 	const plusPress = (0, import_react.useRef)(null);
-	const g = (0, import_react.useMemo)(() => drag?.live ? moveNode(p.graph, drag.id, drag.pos) : p.graph, [p.graph, drag]);
+	const rootRef = (0, import_react.useRef)(null);
+	const g = (0, import_react.useMemo)(() => drag?.live ? moveNodes(p.graph, spotsOf(drag)) : p.graph, [p.graph, drag]);
 	const head = g.head;
 	const all = g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
 	const byId = new Map(all.map((n) => [n.id, n]));
@@ -98907,9 +99287,30 @@ function SkyChain(p) {
 		if (d.live) {
 			justDragged.current = true;
 			setTimeout(() => justDragged.current = false, 0);
-			const n = p.graph.nodes.find((x) => x.id === d.id);
-			if (commit && n && (d.pos.x !== n.x || d.pos.y !== n.y)) p.onNodeMove?.(n, d.pos);
+			if (!commit) return;
+			if (d.group && d.over && p.onSelectionDrop) {
+				const t = d.over === HEAD_ID ? null : p.graph.nodes.find((x) => x.id === d.over);
+				if (t !== void 0) return p.onSelectionDrop(t ? t.node : null);
+			}
+			for (const [id, pos] of spotsOf(d)) {
+				const n = p.graph.nodes.find((x) => x.id === id);
+				if (n && (pos.x !== n.x || pos.y !== n.y)) p.onNodeMove?.(n, pos);
+			}
 		}
+	};
+	const dropAt = (x, y, mine) => {
+		const root = rootRef.current;
+		if (!root || typeof document === "undefined" || typeof document.elementsFromPoint !== "function") return "";
+		for (const el of document.elementsFromPoint(x, y)) {
+			const tile = el.closest("[data-node]");
+			if (!tile || !root.contains(tile)) continue;
+			const id = tile.getAttribute("data-node") || "";
+			if (mine.has(id)) continue;
+			if (id === HEAD_ID) return id;
+			const n = p.graph.nodes.find((m) => m.id === id);
+			return n && isStopNode(id) && canFollow(n.node, p.graph.insertFrom ?? 0) ? id : "";
+		}
+		return "";
 	};
 	const onDown = (e, n) => {
 		if (e.button !== 0 || !draggable(n)) return;
@@ -98918,6 +99319,11 @@ function SkyChain(p) {
 		try {
 			e.currentTarget.setPointerCapture(e.pointerId);
 		} catch {}
+		const group = p.highlighted?.has(n.id) ? p.graph.nodes.filter((m) => p.highlighted.has(m.id) && draggable(m)).map((m) => ({
+			id: m.id,
+			x0: m.x,
+			y0: m.y
+		})) : void 0;
 		const d = {
 			id: n.id,
 			pointer: e.pointerId,
@@ -98929,7 +99335,8 @@ function SkyChain(p) {
 			pos: {
 				x: n.x,
 				y: n.y
-			}
+			},
+			...group ? { group } : {}
 		};
 		dragRef.current = d;
 		setDrag(d);
@@ -98940,13 +99347,15 @@ function SkyChain(p) {
 		const dx = e.clientX - d.sx;
 		const dy = e.clientY - d.sy;
 		if (!d.live && Math.hypot(dx, dy) < DRAG_MIN) return;
+		const over = d.group && p.onSelectionDrop ? dropAt(e.clientX, e.clientY, new Set(d.group.map((m) => m.id))) : "";
 		const next = {
 			...d,
 			live: true,
 			pos: snapPos({
 				x: d.x0 + dx / zoom,
 				y: d.y0 + dy / zoom
-			}, e.altKey)
+			}, e.altKey),
+			...d.group ? { over } : {}
 		};
 		dragRef.current = next;
 		setDrag(next);
@@ -99033,8 +99442,8 @@ function SkyChain(p) {
 			p.highlighted?.has(n.id) || isHead && headNodeId && p.highlighted?.has(headNodeId) ? "is-highlighted" : "",
 			p.targets?.has(n.id) ? "is-target" : "",
 			isAgent && p.targets?.has(n.id) ? "is-agent-target" : "",
-			p.over === n.id ? "is-over" : "",
-			drag?.live && drag.id === n.id ? "is-dragging" : "",
+			p.over === n.id || drag?.live && drag.over === n.id ? "is-over" : "",
+			drag?.live && (drag.id === n.id || drag.group?.some((m) => m.id === n.id)) ? "is-dragging" : "",
 			draggable(n) ? "is-draggable" : ""
 		].filter(Boolean).join(" ");
 		const said = sub_ ? "Sub-session " + dn.title + " — its agent" + (frame ? " (" + frame.agent + ")" : "") + (dn.chip ? " " + dn.chip.label.toLowerCase() : "") + (sub ? ", " + sub : "") : bh ? behaviorsLabel(dn, bh) : (isAgent ? "Agent: " : "") + tileLabel(isHead ? {
@@ -99079,7 +99488,20 @@ function SkyChain(p) {
 			onPointerCancel: onUp,
 			onClick: (e) => {
 				if (e.target.closest("[data-port], [data-no-drag], button")) return;
+				const box = !isHead && isStopNode(n.id) && !!p.onModSelect;
+				const mods = {
+					ctrl: e.ctrlKey || e.metaKey,
+					shift: e.shiftKey
+				};
+				if (box && (mods.ctrl || mods.shift)) {
+					if (!justDragged.current) p.onModSelect(dn, mods, chainOrder(p.graph.nodes.map((m) => ({
+						id: m.id,
+						index: m.node.index
+					}))));
+					return;
+				}
 				activate(n);
+				if (box && !justDragged.current) p.onModSelect(dn, {}, []);
 			},
 			onDoubleClick: (e) => {
 				if (isHead || !isStopish(dn) || !p.onEdit) return;
@@ -99253,6 +99675,7 @@ function SkyChain(p) {
 	const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
 	const socket = head.kind === "none" && firstStop && !p.run?.running ? inPortOf(firstStop) : null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		ref: rootRef,
 		className: "sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "") + (p.run && socket ? " has-run" : "") + (p.targets && p.targets.size ? " is-wiring" : ""),
 		style: {
 			position: "relative",
@@ -100956,6 +101379,770 @@ function useTourHooks(root, hooks) {
 	});
 }
 //#endregion
+//#region src/lib/flightOptimism.ts
+function patchFlightCache(id, edit) {
+	const key = ["flights"];
+	queryClient.cancelQueries({ queryKey: key });
+	const before = queryClient.getQueryData(key);
+	const orig = before?.find((f) => f.id === id);
+	if (!before || !orig) return () => {};
+	queryClient.setQueryData(key, before.map((f) => f.id === id ? edit(f) : f));
+	const guess = queryClient.getQueryData(key)?.find((f) => f.id === id);
+	return () => queryClient.setQueryData(key, (now) => now ? now.map((f) => f === guess ? orig : f) : now);
+}
+async function optimistic(id, edit, request) {
+	const rollback = patchFlightCache(id, edit);
+	try {
+		const ok = await request();
+		if (!ok) rollback();
+		return ok;
+	} catch (err) {
+		rollback();
+		throw err;
+	}
+}
+function withoutSteps(ids) {
+	return (f) => {
+		const before = f.steps.slice(0, Math.max(0, f.cursor)).filter((s) => ids.has(s.id)).length;
+		return {
+			...f,
+			steps: f.steps.filter((s) => !ids.has(s.id)),
+			cursor: Math.max(0, f.cursor - before)
+		};
+	};
+}
+var GUESS_ID = "s_tmp";
+function stopToOpen(stops, index) {
+	return stops.find((s) => s.index === index && s.step && !s.step.id.startsWith(GUESS_ID)) || null;
+}
+var tmp = 0;
+var PENDING = {
+	state: "pending",
+	since: 0,
+	note: "",
+	detail: {},
+	rounds: 0
+};
+function withSteps(steps, at) {
+	return (f) => {
+		const fresh = steps.map((s) => ({
+			...s,
+			id: GUESS_ID + ++tmp
+		}));
+		const i = at === void 0 ? f.steps.length : Math.max(0, Math.min(at, f.steps.length));
+		const states = { ...f.step_states };
+		for (const s of fresh) states[s.id] = {
+			...PENDING,
+			since: Date.now() / 1e3
+		};
+		return {
+			...f,
+			steps: [
+				...f.steps.slice(0, i),
+				...fresh,
+				...f.steps.slice(i)
+			],
+			step_states: states,
+			cursor: i < f.cursor && f.state !== "grounded" ? f.cursor + fresh.length : f.cursor
+		};
+	};
+}
+async function optimisticDelete(id, request) {
+	const key = ["flights"];
+	queryClient.cancelQueries({ queryKey: key });
+	const before = queryClient.getQueryData(key);
+	const at = before ? before.findIndex((f) => f.id === id) : -1;
+	if (before && at >= 0) queryClient.setQueryData(key, before.filter((f) => f.id !== id));
+	const putBack = () => {
+		if (!before || at < 0) return;
+		const orig = before[at];
+		const after = new Set(before.slice(at + 1).map((f) => f.id));
+		queryClient.setQueryData(key, (now) => {
+			if (!now || now.some((f) => f.id === id)) return now;
+			const i = now.findIndex((f) => after.has(f.id));
+			return i < 0 ? [...now, orig] : [
+				...now.slice(0, i),
+				orig,
+				...now.slice(i)
+			];
+		});
+	};
+	try {
+		const ok = await request();
+		if (!ok) putBack();
+		return ok;
+	} catch (err) {
+		putBack();
+		throw err;
+	}
+}
+//#endregion
+//#region src/lib/skyUndo.ts
+var UNDO_MAX = 20;
+var UNDO_TTL_MS = 6e5;
+var stack = [];
+var redoStack = [];
+var seq = 0;
+var live = (e, now) => now - e.at < UNDO_TTL_MS && (!e.valid || e.valid());
+var liveRedo = (e, now) => now - e.at < UNDO_TTL_MS;
+function prune(now) {
+	stack = stack.filter((e) => live(e, now));
+	redoStack = redoStack.filter((e) => liveRedo(e, now));
+}
+function pushUndo(input, now = Date.now()) {
+	const e = {
+		...input,
+		id: ++seq,
+		at: now
+	};
+	prune(now);
+	stack.push(e);
+	if (stack.length > UNDO_MAX) stack = stack.slice(stack.length - UNDO_MAX);
+	redoStack = [];
+	return e;
+}
+function popUndo(now = Date.now()) {
+	prune(now);
+	const e = stack.pop() || null;
+	if (e?.redo) {
+		redoStack.push({
+			...e,
+			at: now
+		});
+		if (redoStack.length > UNDO_MAX) redoStack = redoStack.slice(redoStack.length - UNDO_MAX);
+	}
+	return e;
+}
+function popRedo(now = Date.now()) {
+	prune(now);
+	const e = redoStack.pop() || null;
+	if (!e) return null;
+	const back = {
+		...e,
+		at: now
+	};
+	stack.push(back);
+	if (stack.length > UNDO_MAX) stack = stack.slice(stack.length - UNDO_MAX);
+	return back;
+}
+function takeUndo(entry, now = Date.now()) {
+	const i = stack.findIndex((e) => e.id === entry.id);
+	if (i < 0) return false;
+	const [e] = stack.splice(i, 1);
+	const ok = live(e, now);
+	if (ok && e.redo) redoStack.push({
+		...e,
+		at: now
+	});
+	return ok;
+}
+function undoAction(entry, ariaLabel) {
+	return {
+		label: "Undo",
+		...ariaLabel ? { ariaLabel } : {},
+		onClick: () => {
+			if (takeUndo(entry)) entry.undo();
+		}
+	};
+}
+//#endregion
+//#region src/lib/skyClose.ts
+var sessionOpen = (title) => (queryClient.getQueryData(["instances"]) || []).some((r) => r.title === title);
+async function reopenClosed(titles) {
+	for (const t of [...titles].reverse()) if (!sessionOpen(t)) await undoLastClose();
+}
+var runningWord = (row) => row?.activity === "working" ? "is working" : "is asking you something";
+//#endregion
+//#region src/components/dialogs/FastTrackChoice.tsx
+function Seg({ value, options, onChange, label, id }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "rt-seg",
+		role: "group",
+		"aria-label": label,
+		id,
+		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: o.v === value ? "on" : void 0,
+			"aria-pressed": o.v === value,
+			title: o.title,
+			disabled: o.disabled || void 0,
+			onClick: () => onChange(o.v),
+			children: o.label
+		}, o.v))
+	});
+}
+function FastTrackChoice({ id, label, value, onChange, askFirst, onAskFirst, lanes = LANE_CHOICES, laneLabel, laneTitle, disabledReason, askReason }) {
+	const askWhy = askReason || (askFirstApplies(value) ? "" : "Goes as far as Agent only: nothing is committed, pushed or merged for you");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+		id,
+		label,
+		value,
+		options: lanes.map((l) => ({
+			v: l,
+			label: laneLabel?.[l] || LANE_LABEL[l],
+			title: disabledReason?.[l] || laneTitle?.[l] || LANE_DESC[l],
+			disabled: !!disabledReason?.[l]
+		})),
+		onChange
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "check rt-ask" + (askWhy ? " disabled" : ""),
+		title: askWhy || ASK_FIRST_DESC,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				id: id + "-ask",
+				checked: !askWhy && askFirst,
+				disabled: !!askWhy,
+				onChange: (e) => onAskFirst(e.target.checked)
+			}),
+			ASK_FIRST_LABEL,
+			askWhy && !askReason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: " (needs Commit or further)"
+			})
+		]
+	})] });
+}
+//#endregion
+//#region src/components/flights/controls.tsx
+function FlField({ label, hint, children, wide }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-fld" + (wide ? " fl-fld-wide" : ""),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-fld-label",
+				children: label
+			}),
+			children,
+			hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-fld-hint",
+				children: hint
+			})
+		]
+	});
+}
+function TextField({ value, onChange, placeholder, label, mono, id, onEnter }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+		id,
+		type: "text",
+		className: "fl-input" + (mono ? " fl-mono" : ""),
+		"aria-label": label,
+		value,
+		placeholder,
+		spellCheck: !mono,
+		onChange: (e) => onChange(e.target.value),
+		onKeyDown: (e) => {
+			if (e.key === "Enter" && onEnter) {
+				e.preventDefault();
+				onEnter();
+			}
+		}
+	});
+}
+function PromptBox({ value, onChange, placeholder, label, rows = 3, mono, onSubmit, id }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+		id,
+		className: "fl-prompt" + (mono ? " fl-mono" : ""),
+		"aria-label": label,
+		rows,
+		value,
+		placeholder,
+		spellCheck: !mono,
+		onChange: (e) => onChange(e.target.value),
+		onKeyDown: (e) => {
+			if (onSubmit && e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+				e.preventDefault();
+				onSubmit();
+			}
+		}
+	});
+}
+function NumberField({ value, onChange, unit, label, min = 0 }) {
+	const shown = value === void 0 || value === null || value === "" ? "" : String(value);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "fl-num",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			type: "text",
+			inputMode: "numeric",
+			className: "fl-input fl-num-input",
+			"aria-label": label + (unit ? " (" + unit + ")" : ""),
+			value: shown,
+			onChange: (e) => {
+				const raw = e.target.value.replace(/[^\d]/g, "");
+				onChange(raw === "" ? "" : Math.max(min, Math.trunc(Number(raw))));
+			}
+		}), unit && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "fl-num-unit",
+			children: unit
+		})]
+	});
+}
+function Toggle({ on, onChange, label, title }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
+		className: "fl-toggle" + (on ? " on" : ""),
+		"aria-pressed": on,
+		title,
+		onClick: () => onChange(!on),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "fl-toggle-track",
+			"aria-hidden": "true",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "fl-toggle-knob" })
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "fl-toggle-label",
+			children: label
+		})]
+	});
+}
+function ChipRow({ value, options, onChange, label, className, field }) {
+	const id = (0, import_react.useId)();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "fl-chiprow" + (className ? " " + className : ""),
+		role: "radiogroup",
+		"aria-label": label,
+		id,
+		...field,
+		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			role: "radio",
+			"aria-checked": o.value === value,
+			className: "fl-pick" + (o.value === value ? " on" : "") + (o.value === "" ? " fl-pick-default" : ""),
+			title: o.title,
+			"data-value": o.value,
+			onClick: () => onChange(o.value),
+			children: o.label
+		}, o.value || "default"))
+	});
+}
+function DurationField({ value, onChange, label }) {
+	const secs = value === void 0 || value === null || value === "" ? null : Math.max(0, Math.trunc(Number(value) || 0));
+	const auto = secs && secs % 3600 === 0 ? "h" : secs && secs % 60 === 0 ? "min" : secs ? "s" : "min";
+	const [picked, setPicked] = (0, import_react.useState)(null);
+	const unit = picked ?? auto;
+	const per = DURATION_UNITS[unit];
+	const amount = secs === null ? "" : secs % per === 0 ? secs / per : Math.round(secs / per * 100) / 100;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "fl-num fl-duration",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			type: "text",
+			inputMode: "decimal",
+			className: "fl-input fl-num-input",
+			"aria-label": label + " (" + unit + ")",
+			value: String(amount),
+			onChange: (e) => {
+				const raw = e.target.value.replace(/[^\d.]/g, "");
+				onChange(raw === "" ? "" : Math.max(0, Math.round(Number(raw) * per)));
+			}
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+			label: label + " unit",
+			value: unit,
+			options: [
+				{
+					v: "s",
+					label: "sec"
+				},
+				{
+					v: "min",
+					label: "min"
+				},
+				{
+					v: "h",
+					label: "hours"
+				}
+			],
+			onChange: (x) => {
+				const next = x;
+				setPicked(next);
+				if (secs !== null) onChange(Math.max(0, Math.round(Number(amount) * DURATION_UNITS[next])));
+			}
+		})]
+	});
+}
+var DURATION_UNITS = {
+	s: 1,
+	min: 60,
+	h: 3600
+};
+//#endregion
+//#region src/components/flights/SkySelection.tsx
+function takenStops(nodes, steps) {
+	const out = [];
+	for (const n of nodes) {
+		const idx = stepIndexesOf(n, steps);
+		if (!idx.length) continue;
+		const group = n.startsWith("group:") ? steps[idx[0]].group?.name || "" : "";
+		out.push({
+			index: idx[0],
+			steps: group ? idx.map((i) => steps[i]) : [steps[idx[0]]],
+			group
+		});
+	}
+	return out.sort((a, b) => a.index - b.index);
+}
+function putBackAt(taken, flight) {
+	let len = flight.length;
+	let atEnd = false;
+	const first = flight.first ?? flight.cursor + 1;
+	return taken.map((t) => {
+		atEnd ||= !(t.index >= first && t.index < len);
+		len += t.steps.length;
+		return atEnd ? void 0 : t.index;
+	});
+}
+var flightNow = (id) => (queryClient.getQueryData(["flights"]) || []).find((f) => f.id === id) || null;
+function moveHint(f, idx, kinds) {
+	if (!f || !idx.length) return "These stops aren't on a route any more";
+	if (!isLive(f) && f.state !== "grounded") return "This route has finished: its stops stay where they are";
+	const stops = flightStops(f, kinds);
+	if (idx.some((i) => !stops[i]?.editable)) return "A stop that has run, or is running, can't move";
+	return "";
+}
+async function runMoves(fid, moves) {
+	for (const m of moves) if (!await moveStop(fid, m.step, m.at)) return false;
+	return true;
+}
+async function moveSelectedStops(f, nodes, target, kinds) {
+	const idx = selectedIndexes(nodes, f.steps);
+	const why = moveHint(f, idx, kinds);
+	const first = moveFirstOpen(f);
+	const plan = why ? null : blockMove(f.steps, idx, dropBefore(target, f.steps, first), first);
+	if (!plan || !plan.ok) {
+		toast(why || (plan && !plan.ok ? plan.why : "These stops can't move there"));
+		return false;
+	}
+	if (!plan.moves.length) return false;
+	const fid = f.id;
+	const was = f.steps.map((s) => s.id);
+	const moved = idx.map((i) => f.steps[i].id);
+	const rollback = patchFlightCache(fid, (x) => ({
+		...x,
+		steps: inOrder(x.steps, plan.order)
+	}));
+	if (!await runMoves(fid, plan.moves)) {
+		rollback();
+		return false;
+	}
+	const n = moved.length;
+	const entry = pushUndo({
+		label: "Move " + plural$2(n, "stop"),
+		undo: async () => {
+			const now = flightNow(fid);
+			const back = now ? undoMoves(now.steps.map((s) => s.id), was, moved) : null;
+			if (!now || !back) return void toast("The route changed since: its stops stay where they are");
+			if (back.some((m) => m.at < moveFirstOpen(now))) return void toast("The route has flown past where they were: they stay");
+			const undoRoll = patchFlightCache(fid, (x) => ({
+				...x,
+				steps: inOrder(x.steps, was)
+			}));
+			if (!await runMoves(fid, back)) undoRoll();
+		},
+		redo: async () => {
+			const now = flightNow(fid);
+			const again = now ? undoMoves(now.steps.map((s) => s.id), plan.order, moved) : null;
+			if (now && again) await runMoves(fid, again);
+		}
+	});
+	toast("Moved " + plural$2(n, "stop"), { action: undoAction(entry, "Undo: put " + plural$2(n, "stop") + " back where they were") });
+	return true;
+}
+var NEW_STOPS = "New route";
+var NEW_GROUP = "New group";
+var plural$2 = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
+function groupHint(f, idx, kinds) {
+	if (!f || !idx.length) return "These stops aren't on a route any more";
+	if (!consecutive(idx)) return "Pick stops that sit next to each other";
+	const stops = flightStops(f, kinds);
+	if (idx.some((i) => !stops[i]?.editable)) return "A stop that has run, or is running, can't join a group";
+	const gid = f.steps[idx[0]]?.group?.id;
+	if (gid && f.steps.every((s, i) => s.group?.id === gid === idx.includes(i))) return "These already are one stop";
+	return "";
+}
+function SkySelectionBar(p) {
+	const [name, setName] = (0, import_react.useState)(NEW_STOPS);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const one = stopSelection(p.selection);
+	const lines = [...p.selection.lines];
+	const removable = lines.filter((id) => id !== INTAKE_KEY);
+	const flight = one ? p.flightOf(one.line) : null;
+	const idx = one && flight ? selectedIndexes(one.nodes, flight.steps) : [];
+	const hint = one ? groupHint(flight, idx, p.kinds) : "";
+	const askRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (p.ask !== "group" && p.ask !== "save") return;
+		setName(p.ask === "group" ? NEW_GROUP : NEW_STOPS);
+		const input = askRef.current?.querySelector("input");
+		input?.focus({ preventScroll: true });
+		input?.select();
+	}, [p.ask]);
+	const run = async (what) => {
+		setBusy(true);
+		try {
+			await what();
+		} finally {
+			setBusy(false);
+			p.setAsk("");
+			p.onClear();
+		}
+	};
+	const runningLines = removable.filter((id) => !isGroundedKey(id) && sessionRuns(p.rowOf?.(id)));
+	const runningStop = one && flight && stopsRun(idx, flight) ? flight.steps[flight.cursor]?.title || "a stop" : "";
+	const asks = one ? removalNeedsAsk({
+		kind: "stops",
+		indexes: idx,
+		flight
+	}) : removalNeedsAsk({
+		kind: "selection",
+		items: removable.map((id) => isGroundedKey(id) ? { kind: "grounded" } : {
+			kind: "session",
+			row: p.rowOf?.(id)
+		})
+	});
+	const removeLines = () => run(async () => {
+		const closed = [];
+		const gone = [];
+		for (const id of removable) if (isGroundedKey(id)) {
+			const f = p.flightOf(id);
+			const at = p.posOf?.(id);
+			if (await optimisticDelete(groundedIdOf(id), () => deleteFlight(groundedIdOf(id)))) gone.push({
+				steps: f?.steps || [],
+				name: f?.plan_name || "",
+				at,
+				ed: f?.edits_default
+			});
+		} else {
+			await closeSession(id);
+			if (!sessionOpen(id)) closed.push(id);
+		}
+		const n = gone.length + closed.length;
+		if (!n) return;
+		const entry = pushUndo({
+			label: "Remove " + plural$2(n, "line"),
+			undo: async () => {
+				for (const g of gone) if (g.steps.length) await (p.restoreGrounded ? p.restoreGrounded(g.steps, g.name, g.at, g.ed) : startGrounded({
+					steps: g.steps,
+					...g.name ? { name: g.name } : {},
+					...g.ed ? { edits_default: g.ed } : {}
+				}));
+				await reopenClosed(closed);
+			}
+		});
+		const said = [closed.length ? "closed " + plural$2(closed.length, "session") : "", gone.length ? "removed " + plural$2(gone.length, "route") + " with no session" : ""].filter(Boolean).join(", ");
+		toast(said.charAt(0).toUpperCase() + said.slice(1), { action: undoAction(entry, "Undo: put " + plural$2(n, "line") + " back") });
+	});
+	const removeStops = () => run(async () => {
+		if (!one || !flight) return;
+		const fid = flight.id;
+		const title = isGroundedKey(one.line) ? "" : one.line;
+		const taken = takenStops(one.nodes, flight.steps);
+		const out = [];
+		const rollback = patchFlightCache(fid, withoutSteps(new Set(taken.flatMap((t) => t.steps.map((s) => s.id)))));
+		for (const t of taken) if (await (t.group ? dropGroup(fid, t.steps[0].id) : dropStop(fid, t.steps[0].id))) out.push(t);
+		if (out.length < taken.length) rollback();
+		if (!out.length) return;
+		const n = out.length;
+		const entry = pushUndo({
+			label: "Remove " + plural$2(n, "stop"),
+			undo: async () => {
+				const now = flightNow(fid);
+				if (!now || !isLive(now) && now.state !== "grounded") {
+					const steps = out.flatMap((t) => t.steps);
+					if (title) return tackOnNew(title, steps);
+					return p.restoreGrounded ? p.restoreGrounded(steps, flight.plan_name || "", p.posOf?.(one.line)) : startGrounded({ steps });
+				}
+				const ats = putBackAt(out, {
+					cursor: now.cursor,
+					length: now.steps.length,
+					first: undoFirstOpen(now)
+				});
+				for (let i = 0; i < out.length; i++) {
+					const t = out[i];
+					if (t.group) await tackOnSteps(fid, t.steps, ats[i], t.group);
+					else await tackOn(fid, t.steps[0], ats[i]);
+				}
+			}
+		});
+		toast("Removed " + plural$2(n, "stop"), { action: undoAction(entry, "Undo: put " + plural$2(n, "stop") + " back") });
+	});
+	const group = () => run(async () => {
+		if (!flight || hint) return;
+		await groupStops(flight.id, idx.map((i) => flight.steps[i].id), name.trim() || NEW_GROUP);
+	});
+	const save = () => run(async () => {
+		if (!flight || !idx.length) return;
+		const plan = planFromSteps(name.trim() || NEW_STOPS, idx.map((i) => flight.steps[i]));
+		try {
+			toast("Saved “" + (await savePlan({
+				...plan,
+				id: "",
+				updated: 0
+			})).name + "” on the shelf");
+		} catch (err) {
+			toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+		}
+	});
+	const removeNow = () => one ? removeStops() : removeLines();
+	const askRemove = () => {
+		if (asks) p.setAsk("remove");
+		else removeNow();
+	};
+	(0, import_react.useEffect)(() => {
+		if (p.ask === "remove" && !asks && !busy) removeNow();
+	}, [p.ask]);
+	if (!lines.length && !one) return null;
+	const what = one ? plural$2(one.nodes.length, "stop") + " selected" : plural$2(lines.length, "route") + " selected";
+	const sessions = removable.filter((id) => !isGroundedKey(id));
+	const groundedLines = removable.filter(isGroundedKey);
+	const names = (ids) => ids.slice(0, 4).map(p.nameOf).join(", ") + (ids.length > 4 ? " and " + (ids.length - 4) + " more" : "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-selbar" + (p.ask ? " is-asking" : "") + (p.docked ? " is-docked" : ""),
+		"data-tour": "sky-selbar",
+		role: "toolbar",
+		"aria-label": what,
+		style: p.docked ? void 0 : { transform: `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)` },
+		onPointerDown: (e) => e.stopPropagation(),
+		onDoubleClick: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-selbar-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-selbar-count",
+						children: what
+					}),
+					one ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						!moveHint(flight, idx, p.kinds) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-selbar-hint",
+							title: "Drag any selected stop onto another stop, or onto the agent: they all move right after it, in their order (Ctrl+Z puts them back)",
+							children: "Drag onto a stop to move"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn",
+							disabled: busy || !!hint,
+							title: hint || "Make these one group: a stop with these stops inside",
+							onClick: () => p.setAsk("group"),
+							children: "Group into a stop"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn",
+							disabled: busy || !idx.length,
+							title: "Keep these stops on the shelf as a saved route",
+							onClick: () => p.setAsk("save"),
+							children: "Save to the shelf"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn sky-selbar-danger",
+							disabled: busy || !flight,
+							title: "Take these stops off the route",
+							onClick: askRemove,
+							children: "Remove"
+						})
+					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-selbar-hint",
+							title: "Drag the bar of any selected route: they all move together",
+							children: "Drag a bar to move them (Select, V)"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn",
+							disabled: busy,
+							title: "Forget where you put them: back to their places in the rows",
+							onClick: () => p.onTidy(lines),
+							children: "Tidy these"
+						}),
+						removable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn sky-selbar-danger",
+							disabled: busy,
+							title: "Close their sessions, remove their stops (Ctrl+Z puts them back)",
+							onClick: askRemove,
+							children: "Remove"
+						})
+					] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike sky-selbar-clear",
+						title: "Clear the selection (Esc)",
+						onClick: p.onClear,
+						children: "Clear"
+					})
+				]
+			}),
+			one && hint && hint !== "These stops aren't on a route any more" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "sky-selbar-note muted",
+				children: hint
+			}),
+			(p.ask === "group" || p.ask === "save") && one && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				ref: askRef,
+				className: "sky-selbar-ask",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
+						value: name,
+						onChange: setName,
+						label: p.ask === "group" ? "The new group's name" : "The saved route's name",
+						placeholder: p.ask === "group" ? NEW_GROUP : NEW_STOPS,
+						onEnter: () => void (p.ask === "group" ? group() : save())
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary fl-btn",
+						disabled: busy,
+						onClick: () => void (p.ask === "group" ? group() : save()),
+						children: p.ask === "group" ? "Group" : "Save"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => p.setAsk(""),
+						children: "Cancel"
+					})
+				]
+			}),
+			p.ask === "remove" && asks && !one && removable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Remove " + plural$2(removable.length, "route") + "? " + names(runningLines) + (runningLines.length === 1 ? " " + runningWord(p.rowOf?.(runningLines[0])) : " are running") + ".",
+				body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "sky-selbar-says",
+					children: [
+						plural$2(sessions.length, "session"),
+						" ",
+						sessions.length === 1 ? "closes" : "close",
+						" (",
+						names(sessions),
+						"): ",
+						sessions.length === 1 ? "its agent stops and it moves" : "their agents stop and they move",
+						" to Recently closed."
+					]
+				}), groundedLines.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "sky-selbar-says",
+					children: [
+						plural$2(groundedLines.length, "route"),
+						" with no session ",
+						groundedLines.length === 1 ? "leaves" : "leave",
+						" the Sky (",
+						names(groundedLines),
+						"). A saved route on the shelf stays."
+					]
+				})] }),
+				confirmLabel: "Remove",
+				busy,
+				onConfirm: () => void removeLines(),
+				onCancel: () => p.setAsk("")
+			}),
+			p.ask === "remove" && asks && one && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Remove " + plural$2(one.nodes.length, "stop") + "? The route is at “" + runningStop + "” right now.",
+				body: "They leave “" + p.nameOf(one.line) + "”, and the route pauses right before what follows. Ctrl+Z puts them back.",
+				confirmLabel: "Remove",
+				busy,
+				onConfirm: () => void removeStops(),
+				onCancel: () => p.setAsk("")
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/flights/FlightChain.tsx
 function FlightChain({ title, line, kinds, label }) {
 	const row = line.row;
@@ -101024,6 +102211,59 @@ function FlightChain({ title, line, kinds, label }) {
 		return () => cancelAnimationFrame(raf);
 	}, [parkedId]);
 	const [band, setBand] = (0, import_react.useState)(null);
+	const [sel, setSel] = (0, import_react.useState)(NO_SELECTION);
+	const [ask, setAsk] = (0, import_react.useState)("");
+	const anchor = (0, import_react.useRef)(null);
+	const clearSel = () => {
+		setSel(NO_SELECTION);
+		setAsk("");
+	};
+	const steps = line.flight?.steps;
+	(0, import_react.useEffect)(() => {
+		const mine = sel.stops.get(title);
+		if (!mine) return;
+		const kept = [...mine].filter((n) => steps && stepIndexesOf(n, steps).length);
+		if (kept.length === mine.size) return;
+		setSel(kept.length ? {
+			lines: /* @__PURE__ */ new Set(),
+			stops: /* @__PURE__ */ new Map([[title, new Set(kept)]])
+		} : NO_SELECTION);
+		if (!kept.length) setAsk("");
+	}, [
+		steps,
+		sel,
+		title
+	]);
+	const onModSelect = (n, mods, order) => {
+		const r = clickSelect(sel, anchor.current, title, n.id, mods, order);
+		anchor.current = r.anchor;
+		if (r.selection === sel) return;
+		setSel(r.selection);
+		setAsk("");
+	};
+	const onSelectionDrop = (target) => {
+		const nodes = [...sel.stops.get(title) || []].filter(isStopNode);
+		if (line.flight && nodes.length) moveSelectedStops(line.flight, nodes, target?.id || "", kinds);
+	};
+	const typingIn = (el) => el instanceof Element && !!el.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']");
+	const onKeyCapture = (e) => {
+		if (selectionEmpty(sel) || e.ctrlKey || e.metaKey || e.altKey) return;
+		if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			if (ask) setAsk("");
+			else clearSel();
+		} else if ((e.key === "Delete" || e.key === "Backspace") && !typingIn(e.target) && !e.target.closest?.(".sky-selbar")) {
+			e.preventDefault();
+			e.stopPropagation();
+			setAsk("remove");
+		}
+	};
+	const onDownCapture = (e) => {
+		if (selectionEmpty(sel) || e.button !== 0) return;
+		if (e.target.closest("[data-node], .sky-selbar, [role=menu], button, input, textarea, a")) return;
+		clearSel();
+	};
 	const onPortDown = (src, side, e) => {
 		if (side !== "out" || e.button !== 0) return;
 		e.preventDefault();
@@ -101126,7 +102366,24 @@ function FlightChain({ title, line, kinds, label }) {
 		ref: rootRef,
 		className: "fl-chain-view sky-own-scroll" + (behaviors.frameClass ? " " + behaviors.frameClass : ""),
 		"aria-label": label,
+		"data-sky-box": selectionEmpty(sel) ? void 0 : "",
+		onKeyDownCapture: onKeyCapture,
+		onPointerDownCapture: onDownCapture,
 		children: [
+			!selectionEmpty(sel) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkySelectionBar, {
+				docked: true,
+				selection: sel,
+				x: 0,
+				y: 0,
+				ask,
+				setAsk,
+				nameOf: (t) => windowName(t),
+				flightOf: () => line.flight || null,
+				kinds,
+				onTidy: () => {},
+				onClear: clearSel,
+				rowOf: (t) => t === title ? row || void 0 : rows?.find((r) => r.title === t)
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fl-chain-frame",
 				style: { ["--sky-chain-color"]: head.color },
@@ -101168,9 +102425,12 @@ function FlightChain({ title, line, kinds, label }) {
 						graph,
 						zoom: 1,
 						selected: gc.selected,
+						highlighted: sel.stops.get(title),
 						bird: birdPerch(moves.diagram),
 						kinds,
 						onSelect: gc.onSelect,
+						onModSelect,
+						onSelectionDrop,
 						onEdit: gc.onEdit,
 						onOpen,
 						onRemove: gc.onRemove,
@@ -101563,217 +102823,6 @@ function whenChecker(opts) {
 		}
 	};
 }
-//#endregion
-//#region src/components/dialogs/FastTrackChoice.tsx
-function Seg({ value, options, onChange, label, id }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "rt-seg",
-		role: "group",
-		"aria-label": label,
-		id,
-		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: o.v === value ? "on" : void 0,
-			"aria-pressed": o.v === value,
-			title: o.title,
-			disabled: o.disabled || void 0,
-			onClick: () => onChange(o.v),
-			children: o.label
-		}, o.v))
-	});
-}
-function FastTrackChoice({ id, label, value, onChange, askFirst, onAskFirst, lanes = LANE_CHOICES, laneLabel, laneTitle, disabledReason, askReason }) {
-	const askWhy = askReason || (askFirstApplies(value) ? "" : "Goes as far as Agent only: nothing is committed, pushed or merged for you");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
-		id,
-		label,
-		value,
-		options: lanes.map((l) => ({
-			v: l,
-			label: laneLabel?.[l] || LANE_LABEL[l],
-			title: disabledReason?.[l] || laneTitle?.[l] || LANE_DESC[l],
-			disabled: !!disabledReason?.[l]
-		})),
-		onChange
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "check rt-ask" + (askWhy ? " disabled" : ""),
-		title: askWhy || ASK_FIRST_DESC,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "checkbox",
-				id: id + "-ask",
-				checked: !askWhy && askFirst,
-				disabled: !!askWhy,
-				onChange: (e) => onAskFirst(e.target.checked)
-			}),
-			ASK_FIRST_LABEL,
-			askWhy && !askReason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "muted",
-				children: " (needs Commit or further)"
-			})
-		]
-	})] });
-}
-//#endregion
-//#region src/components/flights/controls.tsx
-function FlField({ label, hint, children, wide }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "fl-fld" + (wide ? " fl-fld-wide" : ""),
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "fl-fld-label",
-				children: label
-			}),
-			children,
-			hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "fl-fld-hint",
-				children: hint
-			})
-		]
-	});
-}
-function TextField({ value, onChange, placeholder, label, mono, id, onEnter }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-		id,
-		type: "text",
-		className: "fl-input" + (mono ? " fl-mono" : ""),
-		"aria-label": label,
-		value,
-		placeholder,
-		spellCheck: !mono,
-		onChange: (e) => onChange(e.target.value),
-		onKeyDown: (e) => {
-			if (e.key === "Enter" && onEnter) {
-				e.preventDefault();
-				onEnter();
-			}
-		}
-	});
-}
-function PromptBox({ value, onChange, placeholder, label, rows = 3, mono, onSubmit, id }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-		id,
-		className: "fl-prompt" + (mono ? " fl-mono" : ""),
-		"aria-label": label,
-		rows,
-		value,
-		placeholder,
-		spellCheck: !mono,
-		onChange: (e) => onChange(e.target.value),
-		onKeyDown: (e) => {
-			if (onSubmit && e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-				e.preventDefault();
-				onSubmit();
-			}
-		}
-	});
-}
-function NumberField({ value, onChange, unit, label, min = 0 }) {
-	const shown = value === void 0 || value === null || value === "" ? "" : String(value);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		className: "fl-num",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-			type: "text",
-			inputMode: "numeric",
-			className: "fl-input fl-num-input",
-			"aria-label": label + (unit ? " (" + unit + ")" : ""),
-			value: shown,
-			onChange: (e) => {
-				const raw = e.target.value.replace(/[^\d]/g, "");
-				onChange(raw === "" ? "" : Math.max(min, Math.trunc(Number(raw))));
-			}
-		}), unit && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "fl-num-unit",
-			children: unit
-		})]
-	});
-}
-function Toggle({ on, onChange, label, title }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-		type: "button",
-		className: "fl-toggle" + (on ? " on" : ""),
-		"aria-pressed": on,
-		title,
-		onClick: () => onChange(!on),
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "fl-toggle-track",
-			"aria-hidden": "true",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "fl-toggle-knob" })
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "fl-toggle-label",
-			children: label
-		})]
-	});
-}
-function ChipRow({ value, options, onChange, label, className, field }) {
-	const id = (0, import_react.useId)();
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "fl-chiprow" + (className ? " " + className : ""),
-		role: "radiogroup",
-		"aria-label": label,
-		id,
-		...field,
-		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			role: "radio",
-			"aria-checked": o.value === value,
-			className: "fl-pick" + (o.value === value ? " on" : "") + (o.value === "" ? " fl-pick-default" : ""),
-			title: o.title,
-			"data-value": o.value,
-			onClick: () => onChange(o.value),
-			children: o.label
-		}, o.value || "default"))
-	});
-}
-function DurationField({ value, onChange, label }) {
-	const secs = value === void 0 || value === null || value === "" ? null : Math.max(0, Math.trunc(Number(value) || 0));
-	const auto = secs && secs % 3600 === 0 ? "h" : secs && secs % 60 === 0 ? "min" : secs ? "s" : "min";
-	const [picked, setPicked] = (0, import_react.useState)(null);
-	const unit = picked ?? auto;
-	const per = DURATION_UNITS[unit];
-	const amount = secs === null ? "" : secs % per === 0 ? secs / per : Math.round(secs / per * 100) / 100;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		className: "fl-num fl-duration",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-			type: "text",
-			inputMode: "decimal",
-			className: "fl-input fl-num-input",
-			"aria-label": label + " (" + unit + ")",
-			value: String(amount),
-			onChange: (e) => {
-				const raw = e.target.value.replace(/[^\d.]/g, "");
-				onChange(raw === "" ? "" : Math.max(0, Math.round(Number(raw) * per)));
-			}
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
-			label: label + " unit",
-			value: unit,
-			options: [
-				{
-					v: "s",
-					label: "sec"
-				},
-				{
-					v: "min",
-					label: "min"
-				},
-				{
-					v: "h",
-					label: "hours"
-				}
-			],
-			onChange: (x) => {
-				const next = x;
-				setPicked(next);
-				if (secs !== null) onChange(Math.max(0, Math.round(Number(amount) * DURATION_UNITS[next])));
-			}
-		})]
-	});
-}
-var DURATION_UNITS = {
-	s: 1,
-	min: 60,
-	h: 3600
-};
 //#endregion
 //#region src/components/flights/VerifyStopFields.tsx
 var VERIFY_OWN_FIELDS = [
@@ -102741,409 +103790,6 @@ function DescribeField({ want = "step", taken, onStops, placeholder = "Describe 
 			children: note
 		})]
 	});
-}
-//#endregion
-//#region src/lib/flightOptimism.ts
-function patchFlightCache(id, edit) {
-	const key = ["flights"];
-	queryClient.cancelQueries({ queryKey: key });
-	const before = queryClient.getQueryData(key);
-	const orig = before?.find((f) => f.id === id);
-	if (!before || !orig) return () => {};
-	queryClient.setQueryData(key, before.map((f) => f.id === id ? edit(f) : f));
-	const guess = queryClient.getQueryData(key)?.find((f) => f.id === id);
-	return () => queryClient.setQueryData(key, (now) => now ? now.map((f) => f === guess ? orig : f) : now);
-}
-async function optimistic(id, edit, request) {
-	const rollback = patchFlightCache(id, edit);
-	try {
-		const ok = await request();
-		if (!ok) rollback();
-		return ok;
-	} catch (err) {
-		rollback();
-		throw err;
-	}
-}
-function withoutSteps(ids) {
-	return (f) => {
-		const before = f.steps.slice(0, Math.max(0, f.cursor)).filter((s) => ids.has(s.id)).length;
-		return {
-			...f,
-			steps: f.steps.filter((s) => !ids.has(s.id)),
-			cursor: Math.max(0, f.cursor - before)
-		};
-	};
-}
-var GUESS_ID = "s_tmp";
-function stopToOpen(stops, index) {
-	return stops.find((s) => s.index === index && s.step && !s.step.id.startsWith(GUESS_ID)) || null;
-}
-var tmp = 0;
-var PENDING = {
-	state: "pending",
-	since: 0,
-	note: "",
-	detail: {},
-	rounds: 0
-};
-function withSteps(steps, at) {
-	return (f) => {
-		const fresh = steps.map((s) => ({
-			...s,
-			id: GUESS_ID + ++tmp
-		}));
-		const i = at === void 0 ? f.steps.length : Math.max(0, Math.min(at, f.steps.length));
-		const states = { ...f.step_states };
-		for (const s of fresh) states[s.id] = {
-			...PENDING,
-			since: Date.now() / 1e3
-		};
-		return {
-			...f,
-			steps: [
-				...f.steps.slice(0, i),
-				...fresh,
-				...f.steps.slice(i)
-			],
-			step_states: states,
-			cursor: i < f.cursor && f.state !== "grounded" ? f.cursor + fresh.length : f.cursor
-		};
-	};
-}
-async function optimisticDelete(id, request) {
-	const key = ["flights"];
-	queryClient.cancelQueries({ queryKey: key });
-	const before = queryClient.getQueryData(key);
-	const at = before ? before.findIndex((f) => f.id === id) : -1;
-	if (before && at >= 0) queryClient.setQueryData(key, before.filter((f) => f.id !== id));
-	const putBack = () => {
-		if (!before || at < 0) return;
-		const orig = before[at];
-		const after = new Set(before.slice(at + 1).map((f) => f.id));
-		queryClient.setQueryData(key, (now) => {
-			if (!now || now.some((f) => f.id === id)) return now;
-			const i = now.findIndex((f) => after.has(f.id));
-			return i < 0 ? [...now, orig] : [
-				...now.slice(0, i),
-				orig,
-				...now.slice(i)
-			];
-		});
-	};
-	try {
-		const ok = await request();
-		if (!ok) putBack();
-		return ok;
-	} catch (err) {
-		putBack();
-		throw err;
-	}
-}
-//#endregion
-//#region src/lib/skyUndo.ts
-var UNDO_MAX = 20;
-var UNDO_TTL_MS = 6e5;
-var stack = [];
-var redoStack = [];
-var seq = 0;
-var live = (e, now) => now - e.at < UNDO_TTL_MS && (!e.valid || e.valid());
-var liveRedo = (e, now) => now - e.at < UNDO_TTL_MS;
-function prune(now) {
-	stack = stack.filter((e) => live(e, now));
-	redoStack = redoStack.filter((e) => liveRedo(e, now));
-}
-function pushUndo(input, now = Date.now()) {
-	const e = {
-		...input,
-		id: ++seq,
-		at: now
-	};
-	prune(now);
-	stack.push(e);
-	if (stack.length > UNDO_MAX) stack = stack.slice(stack.length - UNDO_MAX);
-	redoStack = [];
-	return e;
-}
-function popUndo(now = Date.now()) {
-	prune(now);
-	const e = stack.pop() || null;
-	if (e?.redo) {
-		redoStack.push({
-			...e,
-			at: now
-		});
-		if (redoStack.length > UNDO_MAX) redoStack = redoStack.slice(redoStack.length - UNDO_MAX);
-	}
-	return e;
-}
-function popRedo(now = Date.now()) {
-	prune(now);
-	const e = redoStack.pop() || null;
-	if (!e) return null;
-	const back = {
-		...e,
-		at: now
-	};
-	stack.push(back);
-	if (stack.length > UNDO_MAX) stack = stack.slice(stack.length - UNDO_MAX);
-	return back;
-}
-function takeUndo(entry, now = Date.now()) {
-	const i = stack.findIndex((e) => e.id === entry.id);
-	if (i < 0) return false;
-	const [e] = stack.splice(i, 1);
-	const ok = live(e, now);
-	if (ok && e.redo) redoStack.push({
-		...e,
-		at: now
-	});
-	return ok;
-}
-function undoAction(entry, ariaLabel) {
-	return {
-		label: "Undo",
-		...ariaLabel ? { ariaLabel } : {},
-		onClick: () => {
-			if (takeUndo(entry)) entry.undo();
-		}
-	};
-}
-//#endregion
-//#region src/lib/skySelect.ts
-var NO_SELECTION = {
-	lines: /* @__PURE__ */ new Set(),
-	stops: /* @__PURE__ */ new Map()
-};
-var WHOLE_LINE = .5;
-var MARQUEE_MIN = 4;
-function rectFrom(a, b) {
-	return {
-		x: Math.min(a.x, b.x),
-		y: Math.min(a.y, b.y),
-		w: Math.abs(a.x - b.x),
-		h: Math.abs(a.y - b.y)
-	};
-}
-function overlapArea(a, b) {
-	const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
-	const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
-	return w > 0 && h > 0 ? w * h : 0;
-}
-var overlaps = (a, b) => overlapArea(a, b) > 0;
-function lineTouched(m, l) {
-	if (l.heads.some((h) => overlaps(m, h))) return true;
-	const area = l.rect.w * l.rect.h;
-	return area > 0 && overlapArea(m, l.rect) >= area * WHOLE_LINE;
-}
-var isStopNode = (id) => id.startsWith("stop:") || id.startsWith("group:");
-function select(m, items) {
-	const whole = new Set(items.lines.filter((l) => lineTouched(m, l)).map((l) => l.id));
-	const stops = /* @__PURE__ */ new Map();
-	for (const s of items.stops) {
-		if (!isStopNode(s.node) || !overlaps(m, s.rect)) continue;
-		const set = stops.get(s.line) || /* @__PURE__ */ new Set();
-		set.add(s.node);
-		stops.set(s.line, set);
-	}
-	if (!whole.size && stops.size === 1) return {
-		lines: /* @__PURE__ */ new Set(),
-		stops
-	};
-	for (const id of stops.keys()) whole.add(id);
-	return {
-		lines: whole,
-		stops: /* @__PURE__ */ new Map()
-	};
-}
-function addSelection(a, b) {
-	if (!a.lines.size && !b.lines.size) {
-		if ((/* @__PURE__ */ new Set([...a.stops.keys(), ...b.stops.keys()])).size <= 1) {
-			const out = /* @__PURE__ */ new Map();
-			for (const [line, set] of [...a.stops, ...b.stops]) out.set(line, /* @__PURE__ */ new Set([...out.get(line) || [], ...set]));
-			return {
-				lines: /* @__PURE__ */ new Set(),
-				stops: out
-			};
-		}
-	}
-	return {
-		lines: /* @__PURE__ */ new Set([
-			...a.lines,
-			...a.stops.keys(),
-			...b.lines,
-			...b.stops.keys()
-		]),
-		stops: /* @__PURE__ */ new Map()
-	};
-}
-var selectLines = (ids) => ({
-	lines: new Set(ids),
-	stops: /* @__PURE__ */ new Map()
-});
-function toggleLine(s, id) {
-	const lines = /* @__PURE__ */ new Set([...s.lines, ...s.stops.keys()]);
-	if (s.lines.has(id)) lines.delete(id);
-	else lines.add(id);
-	return {
-		lines,
-		stops: /* @__PURE__ */ new Map()
-	};
-}
-function toggleStop(s, line, node) {
-	const mine = s.stops.size === 1 && s.stops.has(line) && !s.lines.size ? new Set(s.stops.get(line)) : /* @__PURE__ */ new Set();
-	if (mine.has(node)) mine.delete(node);
-	else mine.add(node);
-	if (!mine.size) return NO_SELECTION;
-	return {
-		lines: /* @__PURE__ */ new Set(),
-		stops: /* @__PURE__ */ new Map([[line, mine]])
-	};
-}
-function pruneSelection(s, shown) {
-	if (![...s.lines, ...s.stops.keys()].some((id) => !shown.has(id))) return s;
-	return {
-		lines: new Set([...s.lines].filter((id) => shown.has(id))),
-		stops: new Map([...s.stops].filter(([id]) => shown.has(id)))
-	};
-}
-var selectionEmpty = (s) => !s.lines.size && !s.stops.size;
-function stopSelection(s) {
-	const first = [...s.stops][0];
-	return first && first[1].size ? {
-		line: first[0],
-		nodes: [...first[1]]
-	} : null;
-}
-function stepIndexesOf(node, steps) {
-	if (node.startsWith("stop:")) {
-		const id = node.slice(5);
-		const i = steps.findIndex((s, k) => (s.id || "i" + k) === id);
-		return i < 0 ? [] : [i];
-	}
-	if (!node.startsWith("group:")) return [];
-	const rest = node.slice(6);
-	const at = rest.lastIndexOf("@");
-	const gid = at >= 0 ? rest.slice(0, at) : rest;
-	const from = at >= 0 ? Number(rest.slice(at + 1)) : steps.findIndex((s) => s.group?.id === gid);
-	if (!Number.isInteger(from) || from < 0 || steps[from]?.group?.id !== gid) return [];
-	const out = [];
-	for (let i = from; i < steps.length && steps[i].group?.id === gid; i++) out.push(i);
-	return out;
-}
-function selectedIndexes(nodes, steps) {
-	const all = /* @__PURE__ */ new Set();
-	for (const n of nodes) for (const i of stepIndexesOf(n, steps)) all.add(i);
-	return [...all].sort((a, b) => a - b);
-}
-function consecutive(indexes) {
-	const s = [...new Set(indexes)].sort((a, b) => a - b);
-	return s.length > 0 && s[s.length - 1] - s[0] === s.length - 1;
-}
-function screenToPlane(cam, r) {
-	const z = cam.z || 1;
-	return {
-		x: (r.x - cam.x) / z,
-		y: (r.y - cam.y) / z,
-		w: r.w / z,
-		h: r.h / z
-	};
-}
-function planeToScreen(cam, r) {
-	return {
-		x: cam.x + r.x * cam.z,
-		y: cam.y + r.y * cam.z,
-		w: r.w * cam.z,
-		h: r.h * cam.z
-	};
-}
-var SKY_TOOLS = ["drag", "click"];
-var SKY_TOOL_KEY = "mf_sky_tool";
-function gestureFor(tool, target, mods = {}) {
-	if (mods.space) return "pan";
-	if (target === "control") return "none";
-	if (tool === "click") return mods.shift && !mods.touch ? "marquee" : "pan";
-	if (target === "ground") return mods.touch ? "pan" : "marquee";
-	return target === "line" ? "move-line" : "select";
-}
-function loadSkyTool(store = localStore()) {
-	try {
-		return store?.getItem(SKY_TOOL_KEY) === "click" ? "click" : "drag";
-	} catch {
-		return "drag";
-	}
-}
-function saveSkyTool(tool, store = localStore()) {
-	try {
-		store?.setItem(SKY_TOOL_KEY, tool);
-	} catch {}
-}
-function localStore() {
-	try {
-		return typeof localStorage === "undefined" ? null : localStorage;
-	} catch {
-		return null;
-	}
-}
-var deletableNode = (node) => isStopNode(node) || /^(session|child|branch):./.test(node);
-var nodeSession = (node) => {
-	const m = /^(session|child|branch):(.+)$/.exec(node);
-	return m ? m[2] : "";
-};
-function deleteFor(selection, focus, selectedBox) {
-	if (!selectionEmpty(selection)) return { kind: "selection" };
-	const at = focus || selectedBox;
-	if (!at) return { kind: "keymap" };
-	if (at.line === "intake") return { kind: "swallow" };
-	if (!at.node) return {
-		kind: "line",
-		line: at.line
-	};
-	return deletableNode(at.node) ? {
-		kind: "box",
-		line: at.line,
-		node: at.node
-	} : { kind: "swallow" };
-}
-function nodeById(nodes, id) {
-	for (const n of nodes) {
-		if (n.id === id) return n;
-		const sub = n.group?.nodes.find((s) => s.id === id);
-		if (sub) return sub;
-	}
-	return null;
-}
-var removableBox = (n) => !!n && (n.kind === "stop" || n.kind === "group") && n.editable !== false;
-function mergeTargetAt(point, lines, except = "") {
-	for (let i = lines.length - 1; i >= 0; i--) {
-		const { id, rect: r } = lines[i];
-		if (!id || id === except || id === "intake" || id === "palette" || id.startsWith("flight:")) continue;
-		if (point.x >= r.x && point.x <= r.x + r.w && point.y >= r.y && point.y <= r.y + r.h) return id;
-	}
-	return "";
-}
-var sessionRuns = (row) => !!row && (row.activity === "working" || row.activity === "clarify" || !!row.asking);
-var stopsRun = (indexes, flight) => !!flight && (flight.state === "running" || flight.state === "waiting_you") && indexes.includes(flight.cursor);
-function removalNeedsAsk(t) {
-	switch (t.kind) {
-		case "session": return sessionRuns(t.row);
-		case "stops": return stopsRun(t.indexes, t.flight);
-		case "grounded": return false;
-		case "selection": return t.items.some(removalNeedsAsk);
-	}
-}
-function undoFirstOpen(f) {
-	if (f.state === "grounded" || f.state === "ready") return 0;
-	const cur = f.steps[f.cursor];
-	const ss = cur ? f.step_states?.[cur.id] : void 0;
-	if (f.state === "paused" && (!cur || (ss?.state ?? "pending") === "pending" && !ss?.detail?.performing)) return f.cursor;
-	let end = f.cursor + 1;
-	const par = cur?.parallel?.id;
-	while (par && f.steps[end]?.parallel?.id === par) end++;
-	return end;
-}
-function undoAt(index, now) {
-	return now && index >= undoFirstOpen(now) && index < now.steps.length ? index : void 0;
 }
 //#endregion
 //#region src/components/flights/StopDialog.tsx
@@ -134764,7 +135410,7 @@ function fmtPct(part, whole) {
 	if (!whole) return "—";
 	return (part / whole * 100).toFixed(1) + "%";
 }
-function plural$2(n, word) {
+function plural$1(n, word) {
 	return `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
 }
 var CHART_W = 640;
@@ -135113,7 +135759,7 @@ function VisitorsChart({ days }) {
 				children: hovered ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: fmtDate(hovered.day) }),
 					" — ",
-					plural$2(hovered.visitors, "visitor"),
+					plural$1(hovered.visitors, "visitor"),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "traffic-tooltip-detail",
 						children: [
@@ -139285,7 +139931,7 @@ function whenTitle(e) {
 	const ms = closedMs(e);
 	return [ms ? "Closed " + new Date(ms).toLocaleString() : "", e.last_used ? "Last touched " + (/* @__PURE__ */ new Date(e.last_used * 1e3)).toLocaleString() : ""].filter(Boolean).join("\n");
 }
-var plural$1 = (n, one, many = one + "s") => n === 1 ? one : many;
+var plural = (n, one, many = one + "s") => n === 1 ? one : many;
 function nothingMessage(r) {
 	const k = r.kept || {
 		active: [],
@@ -139298,9 +139944,9 @@ function nothingMessage(r) {
 	const parts = [];
 	if (k.active.length) parts.push(`${k.active.length} in use by a running session (${k.active.join(", ")})`);
 	if (k.recent) parts.push(`${k.recent} used within the last ${days} days`);
-	if (k.not_worktree) parts.push(`${k.not_worktree} that ${plural$1(k.not_worktree, "is", "are")} not a worktree — a repository or a clone, which this never removes`);
+	if (k.not_worktree) parts.push(`${k.not_worktree} that ${plural(k.not_worktree, "is", "are")} not a worktree — a repository or a clone, which this never removes`);
 	if (outside) parts.push(`${outside} outside MindFlock's own worktrees folder (one you made yourself — never removed from here)`);
-	if (k.protected) parts.push(`${k.protected} protected base ${plural$1(k.protected, "clone")}`);
+	if (k.protected) parts.push(`${k.protected} protected base ${plural(k.protected, "clone")}`);
 	return `No unused worktrees to remove.\n\n` + (parts.length ? "Kept: " + parts.join("; ") + "." : `Nothing is older than ${days} days.`);
 }
 function pruneMessage(r) {
@@ -139308,15 +139954,15 @@ function pruneMessage(r) {
 	const days = Math.round(r.days);
 	const size = r.total_bytes ? ` (${humanSize(r.total_bytes)})` : "";
 	const dirty = r.dirty_count || 0;
-	return `Delete ${n} unused ${plural$1(n, "worktree")}${size}?\n\n` + previewList(r.candidates.map((c) => c.name)) + `
+	return `Delete ${n} unused ${plural(n, "worktree")}${size}?\n\n` + previewList(r.candidates.map((c) => c.name)) + `
 
-Only worktrees git generated are ever removed — never a repository, a clone, or a folder git did not make. Left alone: anything a session is using, and anything touched in the last ${days} days.\n\nEach branch and its commits stay in the repository the worktree came from, so it is the checkout that goes, not the work. Files git ignores (build output, a local database, the .env copied in at setup) go with it.` + (dirty ? `\n\n${dirty} of ${plural$1(n, "it", "them")} ${plural$1(dirty, "has", "have")} uncommitted changes, which would be lost — asked about separately.` : "") + `\n\nThis cannot be undone.`;
+Only worktrees git generated are ever removed — never a repository, a clone, or a folder git did not make. Left alone: anything a session is using, and anything touched in the last ${days} days.\n\nEach branch and its commits stay in the repository the worktree came from, so it is the checkout that goes, not the work. Files git ignores (build output, a local database, the .env copied in at setup) go with it.` + (dirty ? `\n\n${dirty} of ${plural(n, "it", "them")} ${plural(dirty, "has", "have")} uncommitted changes, which would be lost — asked about separately.` : "") + `\n\nThis cannot be undone.`;
 }
 function dirtyMessage(r) {
 	const dirty = r.candidates.filter((c) => c.dirty);
 	const clean = r.candidates.length - dirty.length;
-	if (!clean) return `All ${dirty.length} unused ${plural$1(dirty.length, "worktree")} ${plural$1(dirty.length, "has", "have")} uncommitted changes. Delete ${plural$1(dirty.length, "it", "them")} anyway?\n\n` + previewList(dirty.map((c) => c.name)) + "\n\nCommitted work stays on the branch; these changes do not.\n\nThis cannot be undone.";
-	return `Include the ${dirty.length} ${plural$1(dirty.length, "worktree")} with uncommitted changes?\n\n` + previewList(dirty.map((c) => c.name)) + `\n\nDelete all ${r.candidates.length} — or only the ${clean} that ${plural$1(clean, "is", "are")} clean.`;
+	if (!clean) return `All ${dirty.length} unused ${plural(dirty.length, "worktree")} ${plural(dirty.length, "has", "have")} uncommitted changes. Delete ${plural(dirty.length, "it", "them")} anyway?\n\n` + previewList(dirty.map((c) => c.name)) + "\n\nCommitted work stays on the branch; these changes do not.\n\nThis cannot be undone.";
+	return `Include the ${dirty.length} ${plural(dirty.length, "worktree")} with uncommitted changes?\n\n` + previewList(dirty.map((c) => c.name)) + `\n\nDelete all ${r.candidates.length} — or only the ${clean} that ${plural(clean, "is", "are")} clean.`;
 }
 function dirtyChoices(r) {
 	const dirty = r.candidates.filter((c) => c.dirty).length;
@@ -139333,7 +139979,7 @@ function dirtyChoices(r) {
 function prunedMessage(r) {
 	const n = r.removed_count || 0;
 	return [
-		n ? `Removed ${n} ${plural$1(n, "worktree")}` : "Removed nothing",
+		n ? `Removed ${n} ${plural(n, "worktree")}` : "Removed nothing",
 		r.freed_bytes ? humanSize(r.freed_bytes) + " freed" : "",
 		r.kept_dirty && r.kept_dirty.length ? `kept ${r.kept_dirty.length} with uncommitted work` : "",
 		r.failed && r.failed.length ? `${r.failed.length} failed` : ""
@@ -147916,10 +148562,6 @@ function ChainPanels({ graph, anchor, anchorPos, children }) {
 //#endregion
 //#region src/components/flights/SkyLine.tsx
 var NO_KINDS$1 = [];
-var sessionOpen = (title) => (queryClient.getQueryData(["instances"]) || []).some((r) => r.title === title);
-async function reopenClosed(titles) {
-	for (const t of [...titles].reverse()) if (!sessionOpen(t)) await undoLastClose();
-}
 function pushCloseUndo(titles) {
 	if (!titles.length) return;
 	pushUndo({
@@ -147928,7 +148570,6 @@ function pushCloseUndo(titles) {
 		valid: () => titles.some((t) => !sessionOpen(t))
 	});
 }
-var runningWord = (row) => row?.activity === "working" ? "is working" : "is asking you something";
 async function closeLine(title) {
 	await closeSession(title);
 	if (!sessionOpen(title)) pushCloseUndo([title]);
@@ -148235,7 +148876,6 @@ function SkyLine(p) {
 	const press = (0, import_react.useRef)({
 		x: 0,
 		y: 0,
-		shift: false,
 		moved: false
 	});
 	const toggleKid = (t) => {
@@ -148255,10 +148895,6 @@ function SkyLine(p) {
 		else if (n.kind === "session") p.onLayout({ open: !p.layout.open });
 		else if ((n.kind === "child" || n.kind === "branch") && n.session) toggleKid(n.session);
 		else gc.onOpen?.(n);
-	};
-	const onSelect = (n) => {
-		if (press.current.shift && p.onShiftSelect) p.onShiftSelect(n);
-		else gc.onSelect?.(n);
 	};
 	const [naming, setNaming] = (0, import_react.useState)(null);
 	const named = (0, import_react.useRef)(false);
@@ -148290,7 +148926,6 @@ function SkyLine(p) {
 		press.current = {
 			x: e.clientX,
 			y: e.clientY,
-			shift: e.shiftKey,
 			moved: false
 		};
 		const t = e.target;
@@ -148689,7 +149324,9 @@ function SkyLine(p) {
 						targets: p.targets,
 						over: p.over,
 						bird: birdPerch(moves.diagram),
-						onSelect,
+						onSelect: gc.onSelect,
+						onModSelect: p.onModSelect,
+						onSelectionDrop: p.onSelectionDrop,
 						onEdit: gc.onEdit,
 						onOpen,
 						onRemove: gc.onRemove,
@@ -148731,325 +149368,6 @@ function SkyLine(p) {
 			cards.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "skl-cards",
 				children: cards
-			})
-		]
-	});
-}
-//#endregion
-//#region src/components/flights/SkySelection.tsx
-function takenStops(nodes, steps) {
-	const out = [];
-	for (const n of nodes) {
-		const idx = stepIndexesOf(n, steps);
-		if (!idx.length) continue;
-		const group = n.startsWith("group:") ? steps[idx[0]].group?.name || "" : "";
-		out.push({
-			index: idx[0],
-			steps: group ? idx.map((i) => steps[i]) : [steps[idx[0]]],
-			group
-		});
-	}
-	return out.sort((a, b) => a.index - b.index);
-}
-function putBackAt(taken, flight) {
-	let len = flight.length;
-	let atEnd = false;
-	const first = flight.first ?? flight.cursor + 1;
-	return taken.map((t) => {
-		atEnd ||= !(t.index >= first && t.index < len);
-		len += t.steps.length;
-		return atEnd ? void 0 : t.index;
-	});
-}
-var flightNow = (id) => (queryClient.getQueryData(["flights"]) || []).find((f) => f.id === id) || null;
-var NEW_STOPS = "New route";
-var NEW_GROUP = "New group";
-var plural = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
-function groupHint(f, idx, kinds) {
-	if (!f || !idx.length) return "These stops aren't on a route any more";
-	if (!consecutive(idx)) return "Pick stops that sit next to each other";
-	const stops = flightStops(f, kinds);
-	if (idx.some((i) => !stops[i]?.editable)) return "A stop that has run, or is running, can't join a group";
-	const gid = f.steps[idx[0]]?.group?.id;
-	if (gid && f.steps.every((s, i) => s.group?.id === gid === idx.includes(i))) return "These already are one stop";
-	return "";
-}
-function SkySelectionBar(p) {
-	const [name, setName] = (0, import_react.useState)(NEW_STOPS);
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const one = stopSelection(p.selection);
-	const lines = [...p.selection.lines];
-	const removable = lines.filter((id) => id !== INTAKE_KEY);
-	const flight = one ? p.flightOf(one.line) : null;
-	const idx = one && flight ? selectedIndexes(one.nodes, flight.steps) : [];
-	const hint = one ? groupHint(flight, idx, p.kinds) : "";
-	const askRef = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		if (p.ask !== "group" && p.ask !== "save") return;
-		setName(p.ask === "group" ? NEW_GROUP : NEW_STOPS);
-		const input = askRef.current?.querySelector("input");
-		input?.focus({ preventScroll: true });
-		input?.select();
-	}, [p.ask]);
-	const run = async (what) => {
-		setBusy(true);
-		try {
-			await what();
-		} finally {
-			setBusy(false);
-			p.setAsk("");
-			p.onClear();
-		}
-	};
-	const runningLines = removable.filter((id) => !isGroundedKey(id) && sessionRuns(p.rowOf?.(id)));
-	const runningStop = one && flight && stopsRun(idx, flight) ? flight.steps[flight.cursor]?.title || "a stop" : "";
-	const asks = one ? removalNeedsAsk({
-		kind: "stops",
-		indexes: idx,
-		flight
-	}) : removalNeedsAsk({
-		kind: "selection",
-		items: removable.map((id) => isGroundedKey(id) ? { kind: "grounded" } : {
-			kind: "session",
-			row: p.rowOf?.(id)
-		})
-	});
-	const removeLines = () => run(async () => {
-		const closed = [];
-		const gone = [];
-		for (const id of removable) if (isGroundedKey(id)) {
-			const f = p.flightOf(id);
-			const at = p.posOf?.(id);
-			if (await optimisticDelete(groundedIdOf(id), () => deleteFlight(groundedIdOf(id)))) gone.push({
-				steps: f?.steps || [],
-				name: f?.plan_name || "",
-				at,
-				ed: f?.edits_default
-			});
-		} else {
-			await closeSession(id);
-			if (!sessionOpen(id)) closed.push(id);
-		}
-		const n = gone.length + closed.length;
-		if (!n) return;
-		const entry = pushUndo({
-			label: "Remove " + plural(n, "line"),
-			undo: async () => {
-				for (const g of gone) if (g.steps.length) await (p.restoreGrounded ? p.restoreGrounded(g.steps, g.name, g.at, g.ed) : startGrounded({
-					steps: g.steps,
-					...g.name ? { name: g.name } : {},
-					...g.ed ? { edits_default: g.ed } : {}
-				}));
-				await reopenClosed(closed);
-			}
-		});
-		const said = [closed.length ? "closed " + plural(closed.length, "session") : "", gone.length ? "removed " + plural(gone.length, "route") + " with no session" : ""].filter(Boolean).join(", ");
-		toast(said.charAt(0).toUpperCase() + said.slice(1), { action: undoAction(entry, "Undo: put " + plural(n, "line") + " back") });
-	});
-	const removeStops = () => run(async () => {
-		if (!one || !flight) return;
-		const fid = flight.id;
-		const title = isGroundedKey(one.line) ? "" : one.line;
-		const taken = takenStops(one.nodes, flight.steps);
-		const out = [];
-		const rollback = patchFlightCache(fid, withoutSteps(new Set(taken.flatMap((t) => t.steps.map((s) => s.id)))));
-		for (const t of taken) if (await (t.group ? dropGroup(fid, t.steps[0].id) : dropStop(fid, t.steps[0].id))) out.push(t);
-		if (out.length < taken.length) rollback();
-		if (!out.length) return;
-		const n = out.length;
-		const entry = pushUndo({
-			label: "Remove " + plural(n, "stop"),
-			undo: async () => {
-				const now = flightNow(fid);
-				if (!now || !isLive(now) && now.state !== "grounded") {
-					const steps = out.flatMap((t) => t.steps);
-					if (title) return tackOnNew(title, steps);
-					return p.restoreGrounded ? p.restoreGrounded(steps, flight.plan_name || "", p.posOf?.(one.line)) : startGrounded({ steps });
-				}
-				const ats = putBackAt(out, {
-					cursor: now.cursor,
-					length: now.steps.length,
-					first: undoFirstOpen(now)
-				});
-				for (let i = 0; i < out.length; i++) {
-					const t = out[i];
-					if (t.group) await tackOnSteps(fid, t.steps, ats[i], t.group);
-					else await tackOn(fid, t.steps[0], ats[i]);
-				}
-			}
-		});
-		toast("Removed " + plural(n, "stop"), { action: undoAction(entry, "Undo: put " + plural(n, "stop") + " back") });
-	});
-	const group = () => run(async () => {
-		if (!flight || hint) return;
-		await groupStops(flight.id, idx.map((i) => flight.steps[i].id), name.trim() || NEW_GROUP);
-	});
-	const save = () => run(async () => {
-		if (!flight || !idx.length) return;
-		const plan = planFromSteps(name.trim() || NEW_STOPS, idx.map((i) => flight.steps[i]));
-		try {
-			toast("Saved “" + (await savePlan({
-				...plan,
-				id: "",
-				updated: 0
-			})).name + "” on the shelf");
-		} catch (err) {
-			toast("Saving to the shelf failed: " + errMsg(err), { error: true });
-		}
-	});
-	const removeNow = () => one ? removeStops() : removeLines();
-	const askRemove = () => {
-		if (asks) p.setAsk("remove");
-		else removeNow();
-	};
-	(0, import_react.useEffect)(() => {
-		if (p.ask === "remove" && !asks && !busy) removeNow();
-	}, [p.ask]);
-	if (!lines.length && !one) return null;
-	const what = one ? plural(one.nodes.length, "stop") + " selected" : plural(lines.length, "route") + " selected";
-	const sessions = removable.filter((id) => !isGroundedKey(id));
-	const groundedLines = removable.filter(isGroundedKey);
-	const names = (ids) => ids.slice(0, 4).map(p.nameOf).join(", ") + (ids.length > 4 ? " and " + (ids.length - 4) + " more" : "");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "sky-selbar" + (p.ask ? " is-asking" : ""),
-		"data-tour": "sky-selbar",
-		role: "toolbar",
-		"aria-label": what,
-		style: { transform: `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)` },
-		onPointerDown: (e) => e.stopPropagation(),
-		onDoubleClick: (e) => e.stopPropagation(),
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "sky-selbar-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-selbar-count",
-						children: what
-					}),
-					one ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn",
-							disabled: busy || !!hint,
-							title: hint || "Make these one group: a stop with these stops inside",
-							onClick: () => p.setAsk("group"),
-							children: "Group into a stop"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn",
-							disabled: busy || !idx.length,
-							title: "Keep these stops on the shelf as a saved route",
-							onClick: () => p.setAsk("save"),
-							children: "Save to the shelf"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn sky-selbar-danger",
-							disabled: busy || !flight,
-							title: "Take these stops off the route",
-							onClick: askRemove,
-							children: "Remove"
-						})
-					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-selbar-hint",
-							title: "Drag the bar of any selected route: they all move together",
-							children: "Drag a bar to move them (Select, V)"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn",
-							disabled: busy,
-							title: "Forget where you put them: back to their places in the rows",
-							onClick: () => p.onTidy(lines),
-							children: "Tidy these"
-						}),
-						removable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn sky-selbar-danger",
-							disabled: busy,
-							title: "Close their sessions, remove their stops (Ctrl+Z puts them back)",
-							onClick: askRemove,
-							children: "Remove"
-						})
-					] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "linklike sky-selbar-clear",
-						title: "Clear the selection (Esc)",
-						onClick: p.onClear,
-						children: "Clear"
-					})
-				]
-			}),
-			one && hint && hint !== "These stops aren't on a route any more" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "sky-selbar-note muted",
-				children: hint
-			}),
-			(p.ask === "group" || p.ask === "save") && one && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				ref: askRef,
-				className: "sky-selbar-ask",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
-						value: name,
-						onChange: setName,
-						label: p.ask === "group" ? "The new group's name" : "The saved route's name",
-						placeholder: p.ask === "group" ? NEW_GROUP : NEW_STOPS,
-						onEnter: () => void (p.ask === "group" ? group() : save())
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary fl-btn",
-						disabled: busy,
-						onClick: () => void (p.ask === "group" ? group() : save()),
-						children: p.ask === "group" ? "Group" : "Save"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "linklike",
-						onClick: () => p.setAsk(""),
-						children: "Cancel"
-					})
-				]
-			}),
-			p.ask === "remove" && asks && !one && removable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-				title: "Remove " + plural(removable.length, "route") + "? " + names(runningLines) + (runningLines.length === 1 ? " " + runningWord(p.rowOf?.(runningLines[0])) : " are running") + ".",
-				body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "sky-selbar-says",
-					children: [
-						plural(sessions.length, "session"),
-						" ",
-						sessions.length === 1 ? "closes" : "close",
-						" (",
-						names(sessions),
-						"): ",
-						sessions.length === 1 ? "its agent stops and it moves" : "their agents stop and they move",
-						" to Recently closed."
-					]
-				}), groundedLines.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "sky-selbar-says",
-					children: [
-						plural(groundedLines.length, "route"),
-						" with no session ",
-						groundedLines.length === 1 ? "leaves" : "leave",
-						" the Sky (",
-						names(groundedLines),
-						"). A saved route on the shelf stays."
-					]
-				})] }),
-				confirmLabel: "Remove",
-				busy,
-				onConfirm: () => void removeLines(),
-				onCancel: () => p.setAsk("")
-			}),
-			p.ask === "remove" && asks && one && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-				title: "Remove " + plural(one.nodes.length, "stop") + "? The route is at “" + runningStop + "” right now.",
-				body: "They leave “" + p.nameOf(one.line) + "”, and the route pauses right before what follows. Ctrl+Z puts them back.",
-				confirmLabel: "Remove",
-				busy,
-				onConfirm: () => void removeStops(),
-				onCancel: () => p.setAsk("")
 			})
 		]
 	});
@@ -149740,7 +150058,6 @@ function GroundedLine(p) {
 		noSession: !flight.session
 	});
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
-	const shift = (0, import_react.useRef)(false);
 	const run = chainRunFor(flight, head.kind, () => ({
 		running,
 		label: running ? "Stop this run" : "Run these stops (⋯ Run on a session… to pick where)",
@@ -149916,7 +150233,6 @@ function GroundedLine(p) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				ref: wrapRef,
 				className: "skl-chain-wrap",
-				onPointerDownCapture: (e) => shift.current = e.shiftKey,
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyChain, {
 						graph,
@@ -149926,7 +150242,9 @@ function GroundedLine(p) {
 						targets: p.targets,
 						over: p.over,
 						bird: birdPerch(moves.diagram),
-						onSelect: (n) => shift.current && p.onShiftSelect ? p.onShiftSelect(n) : gc.onSelect?.(n),
+						onSelect: gc.onSelect,
+						onModSelect: p.onModSelect,
+						onSelectionDrop: p.onSelectionDrop,
 						onEdit: gc.onEdit,
 						onOpen: gc.onOpen,
 						onRemove: gc.onRemove,
@@ -150504,7 +150822,11 @@ var SKY_SHORTCUT_GROUPS = [
 			},
 			{
 				keys: ["Shift", "click"],
-				what: "Add or take out one route or stop"
+				what: "On a route's bar: add or take it out; on a stop: every stop from the last one clicked"
+			},
+			{
+				keys: ["Ctrl", "click"],
+				what: "Add or take out one stop (⌘ on a Mac)"
 			},
 			{
 				keys: ["Ctrl", "A"],
@@ -150534,6 +150856,10 @@ var SKY_SHORTCUT_GROUPS = [
 			{
 				keys: ["right-click"],
 				what: "A stop's menu"
+			},
+			{
+				keys: ["drag"],
+				what: "Drag a selected stop onto another: the selection moves right after it"
 			},
 			{
 				keys: ["Delete"],
@@ -152852,6 +153178,7 @@ function SkyView() {
 		if (el?.closest(".sky-chain [data-port]")) return;
 		const t = space.current ? "click" : tool;
 		if (t === "drag") return;
+		if ((e.shiftKey || e.ctrlKey || e.metaKey) && !space.current && isStopNode(el?.closest(".sky-chain [data-node]")?.getAttribute("data-node") || "")) return;
 		const g = gestureFor(t, skyTargetOf(e.target, ground), {
 			shift: e.shiftKey,
 			space: space.current,
@@ -153023,6 +153350,9 @@ function SkyView() {
 		const next = m.add ? addSelection(sel, got) : got;
 		setSel(next);
 		setSelAsk("");
+		placeSelBar(next, items);
+	};
+	const placeSelBar = (next, items = selectables()) => {
 		const one = stopSelection(next);
 		const b = boundsOf(one ? items.stops.filter((x) => x.line === one.line && one.nodes.includes(x.node)).map((x) => x.rect) : []);
 		const at = one ? posOf(one.line) : null;
@@ -153031,6 +153361,21 @@ function SkyView() {
 			x: b.x - at.x,
 			y: b.y - at.y
 		} : null);
+	};
+	const selAnchor = (0, import_react.useRef)(null);
+	const modSelectFor = (id) => (n, mods, order) => {
+		const r = clickSelect(sel, selAnchor.current, id, n.id, mods, order);
+		selAnchor.current = r.anchor;
+		if (r.selection === sel) return;
+		setSel(r.selection);
+		setSelAsk("");
+		placeSelBar(r.selection);
+	};
+	const dropSelFor = (id) => (target) => {
+		const nodes = [...sel.stops.get(id) || []].filter(isStopNode);
+		const f = lines.find((l) => l.id === id)?.flight || liveFlightOf(id);
+		if (!nodes.length || !f) return;
+		moveSelectedStops(f, nodes, target?.id || "", kinds);
 	};
 	const onMove = (e) => {
 		if (marquee.current?.id === e.pointerId) return moveMarquee(e);
@@ -153842,7 +154187,8 @@ function SkyView() {
 			merging: !!mergeOver && !!drag?.from[id],
 			selected: at ? sel.lines.has(id) : void 0,
 			highlighted: at ? sel.stops.get(id) : void 0,
-			onShiftSelect: at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : void 0,
+			onModSelect: at ? modSelectFor(id) : void 0,
+			onSelectionDrop: at ? dropSelFor(id) : void 0,
 			head: triggerHeads.get(f.id) || null,
 			registerChain: at ? chainReg.registerFor(id) : void 0,
 			onPortDown: at ? portDownFor(id) : void 0,
@@ -153871,7 +154217,8 @@ function SkyView() {
 		mergeTarget: mergeOver === id,
 		selected: at ? sel.lines.has(id) : void 0,
 		highlighted: at ? sel.stops.get(id) : void 0,
-		onShiftSelect: at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : void 0,
+		onModSelect: at ? modSelectFor(id) : void 0,
+		onSelectionDrop: at ? dropSelFor(id) : void 0,
 		registerChain: at ? chainReg.registerFor(id) : void 0,
 		onPortDown: at ? portDownFor(id) : void 0,
 		targets: wiring.targetsOf(id),

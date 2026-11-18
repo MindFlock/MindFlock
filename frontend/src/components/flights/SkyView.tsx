@@ -151,7 +151,7 @@ import { needsYouTitles } from "../../lib/needsYou";
 import { MINIMAP_H, MINIMAP_W } from "../../lib/minimap";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
-import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
+import { layoutDiagram, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { STOP_MIME, isShown, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type IntakeSourceRef, type StepKindDef } from "../../lib/flights";
 import { startSavedRoute } from "../../lib/routeStart";
 import { attachGrounded, DEFAULT_SESSION, deleteFlight, renameFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
@@ -256,7 +256,12 @@ import {
   type SelectStop,
   type SkySelection,
   type SkyTarget,
-  type SkyTool, toggleStop } from "../../lib/skySelect";
+  type SkyTool,
+  clickSelect,
+  isStopNode as isStopBox,
+  type ClickMods,
+  type SelectAnchor,
+} from "../../lib/skySelect";
 import { ChipRow, TextField } from "./controls";
 import { OverflowMenu } from "../OverflowMenu";
 import { liveBoxParts } from "./FlightStrip";
@@ -266,7 +271,8 @@ import { SkyDrawer } from "./SkyDrawer";
 import { useBehaviorsBoard, useBehaviorsRequest } from "./BehaviorsBoard";
 import { SkyFlock, WeatherWord } from "./SkyFlock";
 import { SkyLine, type LineDelete } from "./SkyLine";
-import { SkySelectionBar, type SelectionAsk } from "./SkySelection";
+import { SkySelectionBar, moveSelectedStops, type SelectionAsk } from "./SkySelection";
+import "./SkySelection.css";
 import { GroundedLine, groundedName, markRouteEdit } from "./GroundedLine";
 import { SkyWires, handoffWires } from "./SkyWires";
 import { runWireIntent, useChainRegistry, useSkyWiring, type PlacedChain } from "./useSkyWiring";
@@ -1858,6 +1864,9 @@ export function SkyView() {
     if (el?.closest(".sky-chain [data-port]")) return;
     const t = space.current ? "click" : tool;
     if (t === "drag") return;
+    // Ctrl/⌘ or Shift on a stop box is the box's click (the selection's),
+    // not the marquee or a pan, in click mode too.
+    if ((e.shiftKey || e.ctrlKey || e.metaKey) && !space.current && isStopBox(el?.closest(".sky-chain [data-node]")?.getAttribute("data-node") || "")) return;
     const g = gestureFor(t, skyTargetOf(e.target as Element, ground), { shift: e.shiftKey, space: space.current, touch: e.pointerType === "touch" });
     if (g === "none") return;
     e.stopPropagation();
@@ -1988,12 +1997,36 @@ export function SkyView() {
     const next = m.add ? addSelection(sel, got) : got;
     setSel(next);
     setSelAsk("");
-    // The stops' own boxes, relative to their line: the bar sits over them.
+    placeSelBar(next, items);
+  };
+  /** The stops' own boxes, relative to their line: the bar sits over them. */
+  const placeSelBar = (next: SkySelection, items = selectables()) => {
     const one = stopSelection(next);
     const boxes = one ? items.stops.filter((x) => x.line === one.line && one.nodes.includes(x.node)).map((x) => x.rect) : [];
     const b = boundsOf(boxes);
     const at = one ? posOf(one.line) : null;
     setSelStops(b && at ? { ...b, x: b.x - at.x, y: b.y - at.y } : null);
+  };
+  // Ctrl/⌘ and Shift clicks on a line's stops (lib/skySelect `clickSelect`):
+  // Ctrl toggles a box, Shift takes every box from the anchor (the last one
+  // clicked) to it; a plain click makes the box the anchor and lets a stop
+  // selection go.
+  const selAnchor = useRef<SelectAnchor | null>(null);
+  const modSelectFor = (id: string) => (n: DiagramNode, mods: ClickMods, order: string[]) => {
+    const r = clickSelect(sel, selAnchor.current, id, n.id, mods, order);
+    selAnchor.current = r.anchor;
+    if (r.selection === sel) return;
+    setSel(r.selection);
+    setSelAsk("");
+    placeSelBar(r.selection);
+  };
+  /** The selected stops of line `id` dragged onto one of its boxes: they
+   * move right after it, together (SkySelection `moveSelectedStops`). */
+  const dropSelFor = (id: string) => (target: DiagramNode | null) => {
+    const nodes = [...(sel.stops.get(id) || [])].filter(isStopBox);
+    const f = lines.find((l) => l.id === id)?.flight || liveFlightOf(id);
+    if (!nodes.length || !f) return;
+    void moveSelectedStops(f, nodes, target?.id || "", kinds);
   };
   const onMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (marquee.current?.id === e.pointerId) return moveMarquee(e);
@@ -2807,7 +2840,8 @@ export function SkyView() {
           merging={!!mergeOver && !!drag?.from[id]}
           selected={at ? sel.lines.has(id) : undefined}
           highlighted={at ? sel.stops.get(id) : undefined}
-          onShiftSelect={at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : undefined}
+          onModSelect={at ? modSelectFor(id) : undefined}
+          onSelectionDrop={at ? dropSelFor(id) : undefined}
           head={triggerHeads.get(f.id) || null}
           registerChain={at ? chainReg.registerFor(id) : undefined}
           onPortDown={at ? portDownFor(id) : undefined}
@@ -2836,7 +2870,8 @@ export function SkyView() {
       mergeTarget={mergeOver === id}
       selected={at ? sel.lines.has(id) : undefined}
       highlighted={at ? sel.stops.get(id) : undefined}
-      onShiftSelect={at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : undefined}
+      onModSelect={at ? modSelectFor(id) : undefined}
+      onSelectionDrop={at ? dropSelFor(id) : undefined}
       registerChain={at ? chainReg.registerFor(id) : undefined}
       onPortDown={at ? portDownFor(id) : undefined}
       targets={wiring.targetsOf(id)}

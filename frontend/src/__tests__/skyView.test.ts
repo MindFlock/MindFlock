@@ -522,7 +522,8 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the Sky", 
     expect(line).toContain('if (removalNeedsAsk({ kind: "session", row: p.rows.find((r) => r.title === t) })) setClosing(t);');
     expect(line).toContain("onSelect: () => askClose(p.title) },");
     expect(line).toContain("if (!sessionOpen(title)) pushCloseUndo([title]);");
-    expect(line).toContain("for (const t of [...titles].reverse()) if (!sessionOpen(t)) await undoLastClose();");
+    // The reopening lives in lib/skyClose (shared with the selection bar).
+    expect(code("lib/skyClose.ts")).toContain("for (const t of [...titles].reverse()) if (!sessionOpen(t)) await undoLastClose();");
     expect(line).toContain("valid: () => titles.some((t) => !sessionOpen(t)),");
     expect(line).toContain('"Its agent " + runningWord(');
   });

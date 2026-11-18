@@ -4506,6 +4506,14 @@ otherwise, 2 min on a server without the routes), and `flight.changed`,
 with its shelf open) and **Learn the Sky** (the Sky guide), beside **Intake…** (and each Intake tab), **Verify…**
 and **Schedule…**.
 
+**Selecting stops in a chain** (the Sky and a pane's Route tab alike,
+docs/flights.md "Selecting stops in a chain"): Ctrl+click (⌘ on a Mac) takes
+a stop or group in or out of the selection, Shift+click takes every stop from
+the last one clicked; Delete / Backspace removes them (one Undo), and dragging
+one of them onto another stop moves them all right after it, in order. Esc or
+a click on empty space lets them go. On the Route tab the selection bar sits
+docked at the top.
+
 **The Sky tour** (`lib/tours/sky.ts`, id `sky`; the ? at the end of the Sky's
 toolbar, and by itself once, the first time the Sky is shown in the calm
 first hour) walks every surface in the order a newcomer meets it, one plain

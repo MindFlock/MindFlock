@@ -11,8 +11,15 @@
  * session a FRAME round the chain (its bar: name · branch · state), the
  * agent the chain's first tile (its name, what it is doing, its chip, the
  * bird; a click or Open terminal goes to the pane's Agent tab; right-click:
- * Open terminal, Send a prompt…, Stop), sub-sessions small frames under it. */
-import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+ * Open terminal, Send a prompt…, Stop), sub-sessions small frames under it.
+ *
+ * Its stops select as the Sky's do (docs/flights.md "Selecting stops in a
+ * chain"): Ctrl/⌘+click toggles one, Shift+click takes the run from the last
+ * one clicked; the Sky's selection bar sits docked at the top (Group, Save to
+ * the shelf, Remove); Delete / Backspace removes them (asking only when one
+ * is running), dragging one of them onto another stop moves them all right
+ * after it; Esc or a click on empty space lets them go. */
+import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { birdPerch, lineWhere, whereBesideChip, type DiagramNode } from "../../lib/flightDiagram";
 import { deriveSessionState } from "../../lib/sessionState";
@@ -28,6 +35,8 @@ import { useUi } from "../../state/store";
 import { useNodeMoves } from "./useSkyWiring";
 import { currentNodeId } from "./FlightStrip";
 import type { useSessionLine } from "./useSessionLine";
+import { NO_SELECTION, clickSelect, isStopNode, selectionEmpty, stepIndexesOf, type ClickMods, type SelectAnchor, type SkySelection } from "../../lib/skySelect";
+import { SkySelectionBar, moveSelectedStops, type SelectionAsk } from "./SkySelection";
 
 type Line = ReturnType<typeof useSessionLine>;
 
@@ -72,6 +81,59 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
     return () => cancelAnimationFrame(raf);
   }, [parkedId]);
   const [band, setBand] = useState<{ x1: number; y1: number; x2: number; y2: number; over: boolean } | null>(null);
+
+  // The chain's own multi-selection (the Sky's model, lib/skySelect): one
+  // line, this session's.
+  const [sel, setSel] = useState<SkySelection>(NO_SELECTION);
+  const [ask, setAsk] = useState<SelectionAsk>("");
+  const anchor = useRef<SelectAnchor | null>(null);
+  const clearSel = () => {
+    setSel(NO_SELECTION);
+    setAsk("");
+  };
+  // A box the route no longer has (removed, flown off) leaves the selection.
+  const steps = line.flight?.steps;
+  useEffect(() => {
+    const mine = sel.stops.get(title);
+    if (!mine) return;
+    const kept = [...mine].filter((n) => steps && stepIndexesOf(n, steps).length);
+    if (kept.length === mine.size) return;
+    setSel(kept.length ? { lines: new Set(), stops: new Map([[title, new Set(kept)]]) } : NO_SELECTION);
+    if (!kept.length) setAsk("");
+  }, [steps, sel, title]);
+  const onModSelect = (n: DiagramNode, mods: ClickMods, order: string[]) => {
+    const r = clickSelect(sel, anchor.current, title, n.id, mods, order);
+    anchor.current = r.anchor;
+    if (r.selection === sel) return;
+    setSel(r.selection);
+    setAsk("");
+  };
+  const onSelectionDrop = (target: DiagramNode | null) => {
+    const nodes = [...(sel.stops.get(title) || [])].filter(isStopNode);
+    if (line.flight && nodes.length) void moveSelectedStops(line.flight, nodes, target?.id || "", kinds);
+  };
+  const typingIn = (el: EventTarget | null) => el instanceof Element && !!el.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']");
+  // Esc lets the selection go (or the bar's question); Delete / Backspace
+  // asks the bar to remove it — before a tile's own Delete (one stop).
+  const onKeyCapture = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (selectionEmpty(sel) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (ask) setAsk("");
+      else clearSel();
+    } else if ((e.key === "Delete" || e.key === "Backspace") && !typingIn(e.target) && !(e.target as Element).closest?.(".sky-selbar")) {
+      e.preventDefault();
+      e.stopPropagation();
+      setAsk("remove");
+    }
+  };
+  // A press on empty space (not a tile, the bar, a menu or a control) clears it.
+  const onDownCapture = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (selectionEmpty(sel) || e.button !== 0) return;
+    if ((e.target as Element).closest("[data-node], .sky-selbar, [role=menu], button, input, textarea, a")) return;
+    clearSel();
+  };
 
   // A wire dragged out of a tile's port, within this chain.
   const onPortDown = (src: GraphNode, side: "in" | "out", e: ReactPointerEvent<HTMLElement>) => {
@@ -152,7 +214,30 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   // moves the chain in by as much.
   const shift = { marginLeft: -Math.min(0, Math.floor(graph.bbox.x)), marginTop: -Math.min(0, Math.floor(graph.bbox.y)) };
   return (
-    <div ref={rootRef} className={"fl-chain-view sky-own-scroll" + (behaviors.frameClass ? " " + behaviors.frameClass : "")} aria-label={label}>
+    <div
+      ref={rootRef}
+      className={"fl-chain-view sky-own-scroll" + (behaviors.frameClass ? " " + behaviors.frameClass : "")}
+      aria-label={label}
+      data-sky-box={selectionEmpty(sel) ? undefined : ""}
+      onKeyDownCapture={onKeyCapture}
+      onPointerDownCapture={onDownCapture}
+    >
+      {!selectionEmpty(sel) && (
+        <SkySelectionBar
+          docked
+          selection={sel}
+          x={0}
+          y={0}
+          ask={ask}
+          setAsk={setAsk}
+          nameOf={(t) => windowName(t)}
+          flightOf={() => line.flight || null}
+          kinds={kinds}
+          onTidy={() => {}}
+          onClear={clearSel}
+          rowOf={(t) => (t === title ? row || undefined : rows?.find((r) => r.title === t))}
+        />
+      )}
       <div className="fl-chain-frame" style={{ ["--sky-chain-color" as string]: head.color }}>
         <div className="fl-chain-frame-bar">
           <div className="fl-chain-frame-bar-in">
@@ -184,9 +269,12 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
             graph={graph}
             zoom={1}
             selected={gc.selected}
+            highlighted={sel.stops.get(title)}
             bird={birdPerch(moves.diagram)}
             kinds={kinds}
             onSelect={gc.onSelect}
+            onModSelect={onModSelect}
+            onSelectionDrop={onSelectionDrop}
             onEdit={gc.onEdit}
             onOpen={onOpen}
             onRemove={gc.onRemove}

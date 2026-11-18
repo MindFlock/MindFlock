@@ -3230,6 +3230,81 @@ Delete is "close the focused session" (`lib/keymap.ts`). Without that,
 selecting stops and pressing Delete closed the session instead. With no
 selection, Delete on the sky still closes the focused session, as before.
 
+### Selecting stops in a chain (Ctrl/⌘ and Shift clicks, moving them together)
+
+> Code: `frontend/src/lib/skySelect.ts` (`clickSelect`, `chainOrder`,
+> `rangeOf`, and the move math: `moveFirstOpen`, `dropBefore`, `blockMove`,
+> `movesToOrder`, `undoMoves`), `components/flights/SkyChain.tsx`
+> (`onModSelect`, `onSelectionDrop`, the selection's drag),
+> `SkySelection.tsx` (`moveSelectedStops`, `moveHint`, the bar's `docked`
+> form), `SkyView.tsx` (`modSelectFor`, `dropSelFor`), `FlightChain.tsx` (the
+> pane's Route tab), `lib/keymap.ts` (`skyBoxFocused`). Tests:
+> `chainMultiSelect.test.ts`.
+
+The owner: "In route or sky I want to be able to control click or shift
+click items in a chain to select multiple so I can move them or delete them."
+Both places draw a chain with `SkyChain`, so both get the same gestures, on
+the Sky's selection model (`SkySelection`: the stops of ONE line).
+
+**Clicks on a stop or group tile.**
+
+| click | what it does |
+|---|---|
+| plain | what it always did (selects the tile, opens a halted stop's Details…); the tile becomes the **anchor**, and a stop selection lets go (a selection of whole lines stays) |
+| Ctrl (⌘ on a Mac) | the tile in or out of the selection (`toggleStop`); it becomes the anchor; nothing opens |
+| Shift | every tile from the anchor to this one, in flying order (`chainOrder`: stop and group boxes by their first step's index; a group box counts once, whole) — replacing the selection; the anchor stays. No anchor on this line: as Ctrl |
+| Ctrl+Shift | that range added to what is selected |
+
+A tile of another line starts a new selection there (a stop selection is
+always one line's). In the Sky's click mode a Ctrl/⌘ or Shift press on a stop
+tile is the tile's click, not the marquee or a pan. Esc, or a click on empty
+space, lets the selection go. Selected tiles wear `.is-highlighted`: the
+accent ring, an accent edge and a faint wash.
+
+**Delete / Backspace** removes the selection through the selection bar's
+Remove (`removalNeedsAsk`): at once with ONE Undo, asking inline only when it
+holds the stop a running route is at. No `window.confirm` (Electron has none).
+
+**Moving them.** Drag any selected tile: every selected tile follows (their
+spots on the plane move by the same snapped delta, saved together through
+`queueStopPos`). Release over another tile of the same chain (it lights,
+`.is-over`): the selection **moves in the chain** instead, right after that
+tile, in its own order — onto a group box, after the whole group; onto a stop
+running beside others, after its whole parallel group; onto the chain's head
+(the agent tile), to the front of what can still move. Their spots stay as
+they were. The bar says so ("Drag onto a stop to move") when they can move.
+
+- The rule a single stop's move keeps applies to every one of them: a stop
+  that has run or is running can't move, nor can anything land at or before
+  the stop the route is at (`moveFirstOpen` = the server's `_first_open`:
+  anywhere on a grounded or ready route, else after the current stop and its
+  parallel group). A finished route's stops stay. Part of a side-by-side
+  (parallel) group can't leave it, and the block never lands inside one. The
+  refusal is a toast saying which.
+- The server moves one step per call (`POST …/steps/{sid}/move {at}`,
+  `change_steps` op `move`: pop, then insert at `at` of the final list), so a
+  block is as many calls as steps that change place (`movesToOrder`), never
+  the steps between. Moving earlier they go first-first, each right after its
+  predecessor in the final order; moving later, last-first, each right before
+  its successor — so a stop and a Loop that repeats from it, moved together,
+  never pass each other on the way (the server refuses any move that breaks a
+  Loop, `_keep_loops`).
+- The new order shows at once (`patchFlightCache` + `inOrder`); a refusal puts
+  the line back and its error card says why. ONE Undo for the lot (the toast's
+  Undo and Ctrl+Z): the moves that put them back (`undoMoves`), while the
+  route still holds the same steps with the others in the same order —
+  else a toast says it changed since. Ctrl+Shift+Z does it again.
+- Cross-chain moves are not part of this: a single stop has none either (a
+  wire onto another chain merges or hands off whole chains).
+
+**The Route tab** (a pane's `FlightChain`) keeps its own selection of this
+session's chain. The Sky's selection bar sits **docked** at the top of the
+tab (`.sky-selbar.is-docked`, sticky): Group into a stop, Save to the shelf,
+Remove, Clear. Esc and Delete / Backspace are taken in the chain's capture
+phase, before a tile's own Delete (one stop). The app's keymap no longer
+closes the session on Delete from a Route tab's stop tile, or while its chain
+holds a selection (`skyBoxFocused` counts `.fl-chain-view` as the sky's).
+
 ### As built: round 11 style
 
 The owner: "the tidy button and a few other buttons are not in the correct
@@ -3919,7 +3994,7 @@ head or rail), `ground`.
 |---|---|---|
 | empty sky | marquee (touch: pan) | pan; a still press clears the selection |
 | a line's bar / the lane's head | move it (and the other selected lines) | pan; a still press focuses the line |
-| a box | the box's own (its click selects it, its drag reorders) | pan; a still press is its own click: selected, and given the keyboard |
+| a box | the box's own (its click selects it, its drag reorders) | pan; a still press is its own click: selected, and given the keyboard; Ctrl/⌘ or Shift on a stop box is the box's click (the selection's) |
 | a control | its own | its own |
 | Shift+drag | marquee on empty sky; Shift+click on a bar toggles the line | marquee from anywhere; Shift+click on a line toggles it |
 | Space held | pan from anywhere | pan from anywhere |
@@ -3999,6 +4074,8 @@ A text field keeps it (redo), and nothing happens behind a dialog.
   `toggleStop` in `lib/skySelect.ts`; a stop selection is always one line's,
   so a box of another line, or a line selection, gives way. The canvas's
   `onShiftSelect` prop carries it up through SkyLine / GroundedLine.
+  (Since "Selecting stops in a chain": Ctrl/⌘+click toggles a box and
+  Shift+click takes the range from the anchor; `onModSelect` carries both.)
 - **What sits on the shelf is a pick** (`mf_sky_shelf`, `ShelfPick {kinds,
   plans}` in `lib/stopCatalog.ts`): the five default blocks and NO multi-step
   block to begin with. Right-click any chip → **Take off the shelf**; every

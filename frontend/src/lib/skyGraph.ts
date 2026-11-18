@@ -465,9 +465,18 @@ export function autoPlace(nodes: readonly GraphNode[]): GraphNode[] {
  * have no `pos` follow, the wires re-route, the bbox follows — the drag's
  * preview, and what the chain looks like once the host saves the spot. */
 export function moveNode(g: ChainGraph, id: string, pos: Pos): ChainGraph {
+  return moveNodes(g, new Map([[id, pos]]));
+}
+
+/** `moveNode` for several nodes at once (a selection dragged together): each
+ * at its spot, pinned; the head never moves. */
+export function moveNodes(g: ChainGraph, spots: ReadonlyMap<string, Pos>): ChainGraph {
   const all = g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
-  if (!all.some((n) => n.id === id) || id === HEAD_ID) return g;
-  const placed = autoPlace(all.map((n) => (n.id === id ? { ...n, x: Math.round(pos.x), y: Math.round(pos.y), pinned: true } : n)));
+  if (!all.some((n) => n.id !== HEAD_ID && spots.has(n.id))) return g;
+  const placed = autoPlace(all.map((n) => {
+    const pos = n.id === HEAD_ID ? undefined : spots.get(n.id);
+    return pos ? { ...n, x: Math.round(pos.x), y: Math.round(pos.y), pinned: true } : n;
+  }));
   const hn = g.headNode ? placed[0] : null;
   const specs: WireSpec[] = g.wires.map((w) => ({ from: w.from, to: w.to, kind: w.kind, ...marksOf(w) }));
   return assemble({ key: g.key, flightId: g.flightId, head: g.head, insertFrom: g.insertFrom }, hn, hn ? placed.slice(1) : placed, specs);
