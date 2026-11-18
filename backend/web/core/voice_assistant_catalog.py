@@ -37,6 +37,7 @@ __all__ = [
     "DESTRUCTIVE_SESSION_ACTIONS",
     "DIALOGS",
     "EXCLUDED",
+    "EXTENSION_TARGETS",
     "OPEN_DIALOGS",
     "SESSION_ACTIONS",
     "SETTINGS_SCREENS",
@@ -61,7 +62,6 @@ DIALOGS = (
     "recent",
     "prompts",
     "setup",
-    "todo",
     "assistant-agent",
     "palette",
     "shortcuts",
@@ -73,25 +73,33 @@ DIALOGS = (
     "peer-session",
     "ask",
 )
+#: Open targets that are not dialogs: an extension's window, opened by its
+#: command (frontend ``ASSISTANT_EXT_TARGETS`` in lib/assistantHost.ts). The
+#: to-do list was a dialog until it became the To-do extension; "open to-do"
+#: keeps working.
+EXTENSION_TARGETS = ("todo",)
 #: The dialogs ``{"do": "open"}`` may name: those that open without a
 #: target. The per-session ones (commit, make-pr, rename, move) are
 #: ``session_action``s; "templates" / "flights" are legacy names of
 #: "schedule" and the sky; extension / peer-session / ask need a payload.
-OPEN_DIALOGS = tuple(
-    d
-    for d in DIALOGS
-    if d
-    not in (
-        "commit",
-        "make-pr",
-        "rename",
-        "move",
-        "templates",
-        "flights",
-        "extension",
-        "peer-session",
-        "ask",
+OPEN_DIALOGS = (
+    tuple(
+        d
+        for d in DIALOGS
+        if d
+        not in (
+            "commit",
+            "make-pr",
+            "rename",
+            "move",
+            "templates",
+            "flights",
+            "extension",
+            "peer-session",
+            "ask",
+        )
     )
+    + EXTENSION_TARGETS
 )
 #: Friendly names a person says for a dialog (the instant path and the
 #: prompt both use them).
