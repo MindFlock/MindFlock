@@ -66,6 +66,11 @@ _KNOWN = frozenset(
     + TEXT_FIELDS
     + REMINDER_FIELDS
 )
+#: Stamped (``true``) on an item the SERVER closed because the thing it waited
+#: on moved on; dropped when the item is reopened. Everything else that closes
+#: an item — a tick, a delete — is a person's (see :func:`person_closed`).
+AUTO_CLOSED = "auto_closed"
+
 #: Only on history entries; stripped when one is restored to the list.
 _HISTORY_ONLY = ("closed_at", "outcome")
 
@@ -395,6 +400,7 @@ def _finish(tx: _Tx) -> None:
                 item["done_at"] = now  # the Assistant ticked it by hand
         else:
             item.pop("done_at", None)
+            item.pop(AUTO_CLOSED, None)  # reopened: no longer the server's close
     old = [
         i
         for i in tx.items
@@ -628,6 +634,29 @@ def history(limit: int = 200, q: str = "") -> List[dict]:
     return rows[: max(1, min(int(limit), HISTORY_CAP))]
 
 
+def person_closed() -> Dict[str, float]:
+    """``{key: when}``: the keys of items a PERSON closed — ticked off in the
+    list, or deleted / done in history — and the latest time each was. The
+    auto sources' reconcile pass reads it so it never brings back an item
+    somebody already dealt with."""
+    with _LOCK:
+        items = _read_items()
+        hist = _read_history()
+    out: Dict[str, float] = {}
+
+    def note(row: dict, at: float) -> None:
+        key = row.get("key")
+        if key and not row.get(AUTO_CLOSED):
+            out[key] = max(out.get(key, 0.0), at)
+
+    for item in items:
+        if item.get("done"):
+            note(item, num(item.get("done_at")) or num(item.get("created_at")))
+    for row in hist:
+        note(row, num(row.get("closed_at")))
+    return out
+
+
 def badge() -> dict:
     """What the sidebar bar shows: ``{"count", "title"}`` (0 = no badge)."""
     c = counts(list_items())
@@ -855,7 +884,9 @@ def replace_all(rows: List[Tuple[str, dict]]) -> List[dict]:
 
 def close_items(keys: List[str]) -> List[dict]:
     """Mark the OPEN items carrying one of ``keys`` done → the closed items.
-    The auto sources' resolution: one change, one event."""
+    The auto sources' resolution: one change, one event. Each is stamped
+    :data:`AUTO_CLOSED`, so it never reads as a person's close
+    (:func:`person_closed`)."""
     wanted = set(k for k in keys if k)
 
     def fn(tx: _Tx):
@@ -864,6 +895,7 @@ def close_items(keys: List[str]) -> List[dict]:
             if not item.get("done") and item.get("key") in wanted:
                 item["done"] = True
                 item["done_at"] = tx.now
+                item[AUTO_CLOSED] = True
                 closed.append(item)
         if closed:
             tx.changed("done", closed[0]["id"])

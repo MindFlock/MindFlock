@@ -4126,8 +4126,14 @@ closes itself (marked done) when the thing moved on — the verify confirmed,
 answered or re-run, the flight off that stop, the run task no longer waiting —
 on the plan's / flight's / run's own events and on a slow pass about every
 60 s. The pass only closes auto items, and only on a state it read: a store
-that reads empty closes nothing. Ticking an auto item off by hand does not
-confirm the verify or move the flight.
+that reads empty closes nothing. The same pass also ADDS the item for every
+open ask that has none — a flight parked on you (a "you" stop with
+`notify: false` emits no event), a verify waiting on you, an open run
+escalation — so a missed event or a restart never loses one. It never brings
+back an item a person ticked off or deleted during the same ask (a close the
+server made itself is marked `auto_closed: true` and does not count; a later
+round of the ask — a re-run, a re-parked stop — does come back). Ticking an
+auto item off by hand does not confirm the verify or move the flight.
 
 ## Authentication
 

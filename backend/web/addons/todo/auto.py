@@ -18,7 +18,11 @@ waits on (``verify:<plan>:<step>``, ``flight:<id>:<step>:<since>``,
 settled — the item is marked done. Events trigger that check for the one
 plan / flight / run they name; a slow pass (:data:`RECONCILE_EVERY_S`)
 rechecks every open auto item, so a missed event or a restart never leaves a
-stale one. The pass only ever closes items whose ``source`` is an auto
+stale one. The same pass also ADDS: every flight parked on a person, every
+verify waiting on one and every open team-run escalation gets its item if it
+has none (a "you" stop with ``notify: false`` emits no event; a restart loses
+any) — but never an item a person already closed for that same ask
+(:func:`ensure`). The pass only ever closes items whose ``source`` is an auto
 source, and only on a condition it actually READ: a store that reads empty
 (missing or unreadable) closes nothing.
 
@@ -406,6 +410,176 @@ def readable_nonempty(rows) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# The reconcile pass: make sure every open ask HAS its item
+# --------------------------------------------------------------------------- #
+def _verify_wanted() -> List[tuple]:
+    """``[(item, since)]`` for every plan whose newest run waits on a person;
+    ``since`` = when that run started."""
+    out = []
+    for plan in _test_plans().list_plans():
+        run = _newest_run(plan)
+        if str(run.get("outcome") or "") != "needs_you":
+            continue
+        since = float(run.get("at") or 0.0)
+        out += [(item, since) for item in verify_items(plan)]
+    return out
+
+
+def _flight_wanted() -> List[tuple]:
+    """``[(item, since)]`` for every flight parked on a person — a "you" stop
+    that rings no bell (``notify: false``) included; ``since`` = when the
+    stop started (already part of the key)."""
+    out = []
+    for flight in _flights().list_flights(include_finished=False):
+        if flight.get("state") != "waiting_you":
+            continue
+        item = flight_item(flight)
+        if item is not None:
+            out.append((item, float(item["key"].rsplit(":", 1)[-1] or 0)))
+    return out
+
+
+def _run_asks(run: dict, tr) -> List[tuple]:
+    """``[(reason, text, session)]`` the GROUP itself waits on you for."""
+    state = run.get("state")
+    lead = str((run.get("lead") or {}).get("title") or "")
+    out = []
+    if run.get("paused") and run.get("pause_reason") == "budget":
+        out.append(("budget", "paused: its budget is spent", ""))
+    if state == "plan_ready" and run.get("plan"):
+        n = len((run.get("plan") or {}).get("pieces") or [])
+        out.append(
+            (
+                "plan",
+                "%s proposed %d pieces — approve them" % (lead or "the lead", n),
+                lead,
+            )
+        )
+    rel = run.get("release") or {}
+    if (
+        state == "release_ready"
+        and rel.get("state") == "ready"
+        and (run.get("policy") or {}).get("release") == "ask"
+    ):
+        out.append(("release", "one PR is ready to open", lead))
+    if state == "checking" and (run.get("check") or {}).get("state") == "failed":
+        out.append(("check_failed", "the check failed on the merged branch", lead))
+    try:
+        gone = tr.lead_gone(run, time.time())
+    except Exception:  # noqa: BLE001
+        gone = ""
+    if gone:
+        out.append(("lead_gone", gone, lead))
+    return out
+
+
+def _run_wanted() -> List[tuple]:
+    """``[(item, since)]`` for every open team-run escalation: a member
+    waiting on you for a reason the run announces, and the group's own asks.
+    ``since`` = the member's incarnation (0 for the group's)."""
+    tr = _team_runs()
+    announced = getattr(tr, "ANNOUNCED_REASONS", None)
+    out = []
+    for run in tr.list_runs(include_finished=False):
+        if run.get("state") in tr.RUN_FINISHED:
+            continue
+        rid, name = str(run.get("id") or ""), str(run.get("name") or "")
+        for t in run.get("tasks") or []:
+            reason = str(t.get("reason") or "")
+            if t.get("state") != "needs_you" or (
+                announced is not None and reason not in announced
+            ):
+                continue
+            title = str(t.get("title") or "")
+            try:
+                ref = tr.ref_of(t) if t.get("kind") == "ticket" else title
+            except Exception:  # noqa: BLE001
+                ref = title
+            text = str(t.get("detail") or reason)
+            env = {
+                "session": title,
+                "data": {
+                    "run": rid,
+                    "name": name,
+                    "task": t.get("id") or "",
+                    "title": title,
+                    "ref": ref,
+                    "reason": reason,
+                    "text": text,
+                    "detail": "%s: %s %s" % (name, ref, text),
+                },
+            }
+            item = run_item(env)
+            if item is not None:
+                out.append((item, float(t.get("incarnation") or 0.0)))
+        for reason, text, session in _run_asks(run, tr):
+            env = {
+                "session": session,
+                "data": {
+                    "run": rid,
+                    "name": name,
+                    "task": "",
+                    "title": session,
+                    "reason": reason,
+                    "text": text,
+                    "detail": "%s: %s" % (name, text),
+                },
+            }
+            item = run_item(env)
+            if item is not None:
+                out.append((item, 0.0))
+    return out
+
+
+def ensure() -> List[str]:
+    """Add the item for every open ask that has none → the keys added.
+
+    Covers what the event path cannot: a stop that rings no bell, a missed
+    event, a restart. Same keys as the event path, and an ask whose key is
+    already OPEN is left alone. Never brings back what a PERSON closed: a key
+    somebody ticked off or deleted during this same ask (closed at or after
+    its ``since``) stays closed — only a close the server made itself
+    (``auto_closed``) or one from an earlier round does not count."""
+    wanted: List[tuple] = []
+    for name, fn in (
+        ("verify", _verify_wanted),
+        ("flights", _flight_wanted),
+        ("runs", _run_wanted),
+    ):
+        try:
+            wanted += fn()
+        except Exception as err:  # noqa: BLE001 — one unreadable store skips its asks
+            _log("todo auto: reading %s for the pass failed: %v", name, err)
+    if not wanted:
+        return []
+    open_keys = {
+        i.get("key") for i in store.list_items() if not i.get("done") and i.get("key")
+    }
+    closed = store.person_closed()
+    add: List[dict] = []
+    seen = set()
+    for item, since in wanted:
+        key = item["key"]
+        if key in open_keys or key in seen:
+            continue
+        if key in closed and closed[key] >= since:
+            continue
+        seen.add(key)
+        add.append(_clean(item))
+    if not add:
+        return []
+    for start in range(0, len(add), store.MAX_BATCH):
+        store.add_items(add[start : start + store.MAX_BATCH])
+    return [a["key"] for a in add]
+
+
+def reconcile() -> None:
+    """The slow pass: close what ended, then add what is missing."""
+    resolve()
+    ensure()
+
+
+# --------------------------------------------------------------------------- #
 # Events
 # --------------------------------------------------------------------------- #
 def handle(env: dict) -> None:
@@ -522,7 +696,7 @@ class AutoSources:
                     _log("todo auto: %s failed: %v", env.get("event"), err)
             if time.time() >= due:
                 try:
-                    resolve()
+                    reconcile()
                     store.archive_now()
                 except Exception as err:  # noqa: BLE001
                     _log("todo auto: reconcile failed: %v", err)
