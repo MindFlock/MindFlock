@@ -43,7 +43,7 @@ interface Due {
 }
 
 const sortByTier = model.sortByTier as (items: Item[]) => Item[];
-const buildSections = model.buildSections as (todos: Item[], q?: string) => Sections;
+const buildSections = model.buildSections as (todos: Item[], q?: string, keep?: Set<string>) => Sections;
 const orderAfterDrop = model.orderAfterDrop as (order: Item[], dragId: string, anchorId: string, place: "before" | "after") => Move;
 const orderAfterStep = model.orderAfterStep as (order: Item[], visible: Item[], id: string, dir: number) => Move | null;
 const applyOrder = model.applyOrder as (todos: Item[], ids: string[]) => Item[];
@@ -113,6 +113,16 @@ describe("buildSections", () => {
     expect(ids(s.needsYou[0].items)).toEqual(["m2", "m1"]);
     expect(s.needs).toBe(4);
     expect(s.open).toBe(6);
+  });
+
+  it("keeps a just-checked item listed in place, never counted as open", () => {
+    const s = buildSections(todos, "", new Set(["d1"]));
+    expect(ids(s.needsYou[0].items)).toEqual(["m2", "m1", "d1"]);
+    expect(s.needs).toBe(4);
+    expect(s.open).toBe(6);
+    expect(s.shown).toBe(7);
+    // Without it the done item is gone from the list.
+    expect(ids(buildSections(todos).needsYou[0].items)).toEqual(["m2", "m1"]);
   });
 
   it("splits the rest by tier and shows tier headings only when >1 tier is used", () => {

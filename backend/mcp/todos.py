@@ -8,8 +8,10 @@ every session they run, each entry naming the session it came from.
 Adding to the person's list is talking to the PERSON, not steering a
 session, so ``add_todo`` (and the read ``list_todos``) work in every scope,
 ``readonly`` included, and from an external client (no session to stamp).
-``update_todo`` edits only what the caller may answer for: its own items, its
-descendants' and items with no session — any item under scope ``all``.
+``update_todo`` edits what the caller answers for (its own items, its
+descendants' and items with no session; any item under scope ``all``) and,
+with ``person_asked=true``, any item: the list is the person's, so "mark the
+staging login done" works from whichever session they say it in.
 
 Peer mode (:mod:`backend.mcp.peer_tools`) never serves these: a peer's agent
 does not reach the owner's list.
@@ -77,10 +79,14 @@ D_LIST = (
 )
 D_UPDATE = (
     "Change a To-do item by id: done=true checks it off (false reopens it), "
-    "text, details, priority (high | normal | low). You may change your own "
-    "items, your descendants' items and items with no session (any item with "
-    "scope all). Check off an item you added once it is done or no longer "
-    "applies; never one the person still has to do."
+    'text, details, priority (high | normal | low), due ("YYYY-MM-DDTHH:MM", '
+    '"" clears), link ("" clears); remove=true takes it off the list (it '
+    "stays in History). You may change your own items, your descendants' and "
+    "items with no session (any item with scope all). The person asked you "
+    'to change another session\'s item ("mark the staging login done")? '
+    "list_todos(mine=false) for the id, then pass person_asked=true; never "
+    "set it on your own initiative. Check off an item you added once it is "
+    "done or no longer applies; never one the person still has to do."
 )
 
 
@@ -141,6 +147,10 @@ S_UPDATE = _obj(
         "text": _TEXT,
         "details": _DETAILS,
         "priority": _PRIORITY,
+        "due": {"type": "string", "maxLength": 16},
+        "link": {"type": "string", "maxLength": 2000},
+        "remove": {"type": "boolean"},
+        "person_asked": {"type": "boolean"},
     },
     ("id",),
 )
@@ -267,7 +277,8 @@ class TodoTools:
             return
         raise ToolError(
             "to-do %r belongs to session %r, which is not %s; leave it to that "
-            "session or the person (scope all may change any item)"
+            "session — or, when the person asked you for this change, pass "
+            "person_asked=true"
             % (
                 str(item.get("id") or ""),
                 owner,
@@ -376,8 +387,19 @@ class TodoTools:
             if priority not in PRIORITIES:
                 raise ToolError("priority must be one of %s" % ", ".join(PRIORITIES))
             change["priority"] = priority
-        if not change:
-            raise ToolError("nothing to change: pass done, text, details or priority")
+        if args.get("due") is not None:
+            due = str(args["due"]).strip()
+            if due and not _DUE_RE.fullmatch(due):
+                raise ToolError('due must be "YYYY-MM-DDTHH:MM" (or "" to clear)')
+            change["due"] = due
+        if args.get("link") is not None:
+            change["link"] = str(args["link"]).strip()
+        remove = bool(args.get("remove"))
+        if not change and not remove:
+            raise ToolError(
+                "nothing to change: pass done, text, details, priority, due, "
+                "link or remove"
+            )
         flock = self.flock()
         items, _ = self._todo_items()
         item = next((i for i in items if str(i.get("id") or "") == todo_id), None)
@@ -385,9 +407,13 @@ class TodoTools:
             raise ToolError(
                 "no to-do %r on the list (call list_todos for the ids)" % todo_id
             )
-        self._may_update_todo(flock, item)
+        if not args.get("person_asked"):
+            self._may_update_todo(flock, item)
         path = "/api/todo/items/" + urllib.parse.quote(todo_id, safe="")
         try:
+            if remove:
+                self.api.delete(path)
+                return {"removed": todo_id, "todo": _row(item)}
             resp = self.api.patch(path, change)
         except client.ApiError as err:
             raise self._todo_error(err, "update_todo(%s)" % todo_id) from None

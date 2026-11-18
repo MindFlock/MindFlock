@@ -328,6 +328,11 @@ class FakeFlockApi(Api):
                 else:
                     item[k] = v
             return {"todo": item}
+        if method == "DELETE" and len(rest) == 2 and rest[0] == "items":
+            if not any(t["id"] == rest[1] for t in self.todos):
+                raise client.ApiError(404, "no such to-do: %s" % rest[1])
+            self.todos[:] = [t for t in self.todos if t["id"] != rest[1]]
+            return {"ok": True}
         raise client.ApiError(404, "Not Found")
 
     def _create(self, payload: dict) -> dict:

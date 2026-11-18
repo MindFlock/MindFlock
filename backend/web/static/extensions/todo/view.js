@@ -71,6 +71,8 @@ export function renderList(api, host) {
 
   // --- state -----------------------------------------------------------------
   let todos = [];
+  /** Ids checked off in this view, still listed crossed out (see leaveList). */
+  const lingering = new Set();
   let loaded = false;
   let loadFailed = "";
   let tab = (host.ctx && host.ctx.tab) === "history" || wantTab === "history" ? "history" : "todo";
@@ -368,6 +370,7 @@ export function renderList(api, host) {
   function showTab(next) {
     if (next !== "todo" && next !== "history") return;
     const changed = tab !== next;
+    if (changed) lingering.clear();
     tab = next;
     forgetAsk = null;
     tabTodo.setAttribute("aria-selected", tab === "todo" ? "true" : "false");
@@ -443,10 +446,10 @@ export function renderList(api, host) {
       }
       return [el("p", { class: "mfx-todo-loading", text: "Loading…" })];
     }
-    const s = buildSections(todos, q);
+    const s = buildSections(todos, q, lingering);
     const known = knownSessions();
     const parts = [];
-    if (!s.open) {
+    if (!s.open && !s.shown) {
       parts.push(emptyState("Nothing to do", EMPTY_LINE));
     } else if (!s.shown) {
       parts.push(emptyState("Nothing matches", "No open item mentions “" + q.trim() + "”. History has the finished ones."));
@@ -494,7 +497,7 @@ export function renderList(api, host) {
         )
       );
     }
-    const done = todos.filter((t) => t.done).length;
+    const done = todos.filter((t) => t.done && !lingering.has(t.id)).length;
     if (done) {
       parts.push(
         el(
@@ -624,7 +627,7 @@ export function renderList(api, host) {
     const node = el(
       "div",
       {
-        class: "mfx-todo-row" + (isOpen ? " is-open" : "") + (t.id.startsWith("tmp-") ? " is-pending" : ""),
+        class: "mfx-todo-row" + (isOpen ? " is-open" : "") + (t.done ? " is-done" : "") + (t.id.startsWith("tmp-") ? " is-pending" : ""),
         role: "listitem",
         tabindex: "0",
         "aria-label": t.text,
@@ -1082,6 +1085,11 @@ export function renderList(api, host) {
   function setDone(id, done) {
     const item = find(id);
     if (!item) return;
+    // Checked off here: the row stays, crossed out, until the person leaves
+    // the list (leaveList) — a slip is one click to undo, and the list does
+    // not jump under the pointer.
+    if (done) lingering.add(id);
+    else lingering.delete(id);
     void mutate(
       done ? "check the item off" : "reopen the item",
       () => {
@@ -1091,8 +1099,15 @@ export function renderList(api, host) {
       },
       () => call(api, "/api/todo/items/" + encodeURIComponent(id), { method: "PATCH", json: { done } })
     );
-    if (done) showUndo("Done · " + item.text, () => setDone(id, false));
-    else hideUndo();
+    hideUndo();
+  }
+
+  /** The person left the list (another tab, another window, the pane out of
+   * sight): the items they checked off go to History's side for good. */
+  function leaveList() {
+    if (!lingering.size) return;
+    lingering.clear();
+    draw();
   }
 
   function removeItem(id) {
@@ -1172,9 +1187,11 @@ export function renderList(api, host) {
   function step(id, dir) {
     const node = list.querySelector('.mfx-todo-row[data-id="' + CSS.escape(id) + '"]');
     if (!node) return;
+    const moving = find(id);
+    if (!moving || moving.done) return;
     const visible = scopeRows(node.dataset.scope)
       .map((r) => find(r.dataset.id))
-      .filter(Boolean);
+      .filter((t) => t && !t.done);
     applyMove(id, orderAfterStep(sortByTier(openItems(todos)), visible, id, dir));
   }
 
@@ -1182,6 +1199,8 @@ export function renderList(api, host) {
 
   function startDrag(e, id, scope, node) {
     if (e.button !== 0 || tab !== "todo") return;
+    const dragged = find(id);
+    if (dragged && dragged.done) return;
     e.preventDefault();
     e.stopPropagation();
     const grip = e.currentTarget;
@@ -1429,9 +1448,25 @@ export function renderList(api, host) {
     }
   }
 
+  // Out of sight = left: a pane hidden behind another window, a grid that no
+  // longer shows it, the app in the background.
+  let seen = null;
+  if (typeof IntersectionObserver === "function") {
+    seen = new IntersectionObserver((entries) => {
+      if (entries.some((en) => !en.isIntersecting)) leaveList();
+    });
+    seen.observe(root);
+  }
+  const onHidden = () => {
+    if (document.hidden) leaveList();
+  };
+  document.addEventListener("visibilitychange", onHidden);
+
   return {
     dispose() {
       disposed = true;
+      if (seen) seen.disconnect();
+      document.removeEventListener("visibilitychange", onHidden);
       live.delete(view);
       if (drag) endDrag(false);
       clearInterval(tick);

@@ -96,11 +96,16 @@ export function groupBySession(items) {
  *   showTiers  true when more than one tier is in use among `rest`
  *   open       open count (ignoring the filter)
  *   needs      needs-you count (ignoring the filter)
- *   shown      how many rows the filter let through */
-export function buildSections(todos, q) {
+ *   shown      how many rows the filter let through
+ * `keep` (a Set of ids) names the done items still listed, in place and
+ * crossed out: the ones the person just checked off in this view. They are
+ * rows, never counted as open. */
+export function buildSections(todos, q, keep) {
   const open = sortByTier(openItems(todos));
   const needsAll = open.filter(isNeedsYou);
-  const visible = open.filter((t) => matchesFilter(t, q));
+  const listed =
+    keep && keep.size ? sortByTier((todos || []).filter((t) => t && (!t.done || keep.has(t.id)))) : open;
+  const visible = listed.filter((t) => matchesFilter(t, q));
   const needsYou = groupBySession(visible.filter(isNeedsYou));
   const others = visible.filter((t) => !isNeedsYou(t));
   const rest = TIERS.map((tier) => ({ tier, items: others.filter((t) => tierOf(t) === tier) })).filter(

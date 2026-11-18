@@ -627,6 +627,21 @@
   opacity: 0.65;
 }
 
+/* Checked off in this view: stays in place, crossed out, until the person
+   leaves the list. */
+.mfx-todo .mfx-todo-row.is-done .mfx-todo-text {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.mfx-todo .mfx-todo-row.is-done .mfx-todo-chips {
+  opacity: 0.55;
+}
+
+.mfx-todo .mfx-todo-row.is-done .mfx-todo-grip {
+  visibility: hidden;
+}
+
 .mfx-todo .mfx-todo-row.is-dragging {
   opacity: 0.4;
 }
@@ -1149,20 +1164,49 @@
 }
 
 /* --- the quick-add dialog --------------------------------------------------- */
+/* The host's shared dialog is a fixed 960 x 720 card (sized for a database
+   explorer); a five-field form floats lost in it. While this dialog is the
+   one open, the card hugs the form instead. */
+#ext-dialog-panel:has(.mfx-todo-dialog-root) {
+  width: min(600px, 94vw);
+  height: auto;
+  max-height: 86vh;
+}
+
 .mfx-todo .mfx-todo-dialog {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: 520px;
-  max-width: 100%;
+  gap: 12px;
+  width: 100%;
   box-sizing: border-box;
-  padding: 2px;
+  padding: 2px 2px 0;
 }
 
 .mfx-todo .mfx-todo-dialog-text {
-  height: 34px;
-  font-size: 14px;
-  padding: 0 10px;
+  height: 38px;
+  font-size: 14.5px;
+  padding: 0 12px;
+}
+
+.mfx-todo .mfx-todo-dialog .mfx-todo-details-edit {
+  min-height: 96px;
+  padding: 9px 12px;
+  line-height: 1.45;
+}
+
+.mfx-todo .mfx-todo-dialog .mfx-todo-fields {
+  gap: 14px;
+}
+
+.mfx-todo .mfx-todo-dialog-actions {
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.mfx-todo .mfx-todo-dialog-actions .mfx-todo-btn {
+  height: 30px;
+  padding: 0 14px;
 }
 
 .mfx-todo .mfx-todo-dialog .mfx-todo-fields {

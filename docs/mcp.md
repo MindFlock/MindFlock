@@ -384,7 +384,7 @@ it.
 | `run_pr_review` | write, flies the PR review route (may push; a merge stop needs `confirm_merge`) | **no** |
 | `add_todo` | write (the person's To-do list), every scope | **no** |
 | `list_todos` | read | **no** |
-| `update_todo` | write (your own items, your descendants', items with no session) | **no** |
+| `update_todo` | write (your own items, your descendants', items with no session; any item with `person_asked`) | **no** |
 
 "Auto-approved" is the `--allowedTools` list for Claude and the
 `approval_mode = "approve"` table for Codex. The server also sends
@@ -1628,9 +1628,14 @@ one item in full as `{todo}`, details uncut, with its `source`, `link`,
 
 ### `update_todo`
 
-`{id, done?, text?, details?, priority?}` → `{todo: row}`. `done: true`
-checks the item off, `false` reopens it; `priority: "normal"` clears a
-priority. Under scope `all` any item; otherwise only an item whose `session`
+`{id, done?, text?, details?, priority?, due?, link?, remove?,
+person_asked?}` → `{todo: row}` (`{removed: id, todo: row}` for a remove).
+`done: true` checks the item off, `false` reopens it; `priority: "normal"`
+clears a priority; `due: ""` and `link: ""` clear those; `remove: true` takes
+the item off the list (it stays in History; `DELETE /api/todo/items/{id}`).
+`person_asked: true` lifts the ownership rule below: the list is the
+person's, so when they ask an agent to change an item ("mark the staging
+login done") it works from any session. An agent never sets it on its own. Under scope `all` any item; otherwise only an item whose `session`
 is the caller or one of its descendants, or that has no session (an external
 client: one with no session, or a session it spawned and their descendants),
 in every scope including `readonly`. Anything else is refused with the
@@ -2139,7 +2144,8 @@ needs only write scope; `save_flight_plan` too. See
 **To-do.** `add_todo` and `list_todos` work in every scope, `readonly`
 included: adding to the person's list talks to the person and steers no
 session. `update_todo` changes the caller's own items, its descendants' and
-items with no session (any item under `all`). See
+items with no session (any item under `all`, or with `person_asked: true`
+when the person asked for the change). See
 [To-do](#to-do-what-the-person-does-by-hand).
 
 An unknown scope value, or an auto-attached server that can't confirm its

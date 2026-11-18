@@ -362,6 +362,26 @@ class TestUpdate:
                 box.update_todo({"id": tid, "done": True}, ctx)
         assert not [c for c in api.calls if c[0] == "PATCH"]
 
+    def test_the_person_asked_changes_any(self):
+        box, api, ctx = self._seeded()
+        out = box.update_todo({"id": "s4", "done": True, "person_asked": True}, ctx)
+        assert out["todo"]["done"] is True
+        assert ("PATCH", "/api/todo/items/s4", {"done": True}) in api.calls
+
+    def test_due_link_and_remove(self):
+        box, api, ctx = self._seeded()
+        out = box.update_todo(
+            {"id": "s0", "due": "2026-12-01T09:30", "link": "https://x.test/a"}, ctx
+        )
+        assert out["todo"]["due"] == "2026-12-01T09:30"
+        assert api.todos[0]["link"] == "https://x.test/a"
+        with pytest.raises(ToolError, match="due must be"):
+            box.update_todo({"id": "s0", "due": "tomorrow"}, ctx)
+        with pytest.raises(ToolError, match="belongs to session"):
+            box.update_todo({"id": "s4", "remove": True}, ctx)
+        assert box.update_todo({"id": "s0", "remove": True}, ctx)["removed"] == "s0"
+        assert [t["id"] for t in api.todos][0] == "s1"
+
     def test_scope_all_changes_any(self):
         box, api, ctx = self._seeded(scope="all")
         out = box.update_todo(

@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs you first, grouped by session, each with a chip that takes you to
   that session; drag to reorder; High / Normal / Low; details per item
   (links, and code blocks with a Copy button); a due time; and a History tab
-  of what you finished or removed, with Restore. The Assistant bar is now
+  of what you finished or removed, with Restore. An item you check off stays
+  where it is, crossed out, until you leave the list. The Assistant bar is now
   Chat · Instructions; the list is the same file, so the Assistant still
   reads and edits it and timed reminders work as before.
 - **What you have to do by hand lands on the To-do list by itself.** A
@@ -25,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Agents can add to it: `add_todo`, `list_todos`, `update_todo`** in the
   MindFlock MCP (40 tools now). An agent is told to add anything you must do
   by hand, one item per action, tagged with its session. Adding and listing
-  never ask for approval.
+  never ask for approval. Ask any session to change an item ("mark the
+  staging login done", "push that to Friday", "remove it") and it can, even
+  when another session added it.
 - Extensions can show a count on their bar (`badge` in the manifest) and,
   at host API level 2, focus a session (`ui.focusSession`,
   `ui.focusedSession`).
