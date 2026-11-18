@@ -26,6 +26,7 @@ def test_manifest_lists_migrated_addons():
     assert ids == [
         "mindflock",
         "assistant",
+        "todo",
         "settings",
         "doctor",
         "connections",

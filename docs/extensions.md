@@ -545,6 +545,7 @@ ExtensionSpec(
 | `surfaces` | `ExtensionSurface` list — the dialogs and panes the extension may open. |
 | `stylesheet` | `True` → at activation the host injects `<module dir>/style.css` into `layer(components)`. Default `False`. |
 | `api_version` | The **minimum** host API level the module was written against (default `1`). See `HOST_API_VERSION` below. |
+| `badge` | Optional API path (must start with `/api/`) returning `{"count": n, "title": "…"}`. The host shows `count` next to the bar label (`0` = no badge, `title` as its tooltip) and refetches it on any `addon.<ext id>.*` bus event and about every 60 s — no extension code runs for it. Default `None`. The To-do extension's is `/api/todo/badge`. |
 
 #### `ExtensionButton`
 
