@@ -24,6 +24,7 @@ import { errMsg } from "../../lib/format";
 import { errorPop } from "../../lib/errorPop";
 import { toast } from "../../lib/toast";
 import { AnswerStrip } from "../AnswerStrip";
+import { InlineConfirm } from "../InlineConfirm";
 import {
   approvalKey,
   messageHead,
@@ -493,18 +494,35 @@ export async function skipPausedStop(fl: { id: string; step: { id: string } }, f
 }
 
 /** Its session is closed: Stop the route ends it (the Sky's words,
- * FlightStrip `YouStepActions gone`). */
+ * FlightStrip `YouStepActions gone`), after the same "Stop this route?"
+ * question every other Stop the route asks (FlightStrip `useCancelAsk`). */
 function StopRouteButton({ id, busy, run }: { id: string; busy: boolean; run: (fn: () => Promise<unknown>) => Promise<void> }) {
+  const [asking, setAsking] = useState(false);
   return (
-    <button
-      type="button"
-      className="test-btn"
-      disabled={busy}
-      title="Its session is closed — end this route"
-      onClick={() => void run(() => flightAction("Stop the route", flightPath(id, "/cancel"), {}, "Route stopped"))}
-    >
-      Stop the route
-    </button>
+    <>
+      <button
+        type="button"
+        className="test-btn"
+        disabled={busy}
+        title="Its session is closed — end this route"
+        onClick={() => setAsking(true)}
+      >
+        Stop the route
+      </button>
+      {asking && (
+        <InlineConfirm
+          title="Stop this route?"
+          body="It stops where it is. Its session, branch and work are kept."
+          confirmLabel="Stop the route"
+          cancelLabel="Keep it running"
+          busy={busy}
+          onCancel={() => setAsking(false)}
+          onConfirm={() =>
+            void run(() => flightAction("Stop the route", flightPath(id, "/cancel"), {}, "Route stopped")).finally(() => setAsking(false))
+          }
+        />
+      )}
+    </>
   );
 }
 
