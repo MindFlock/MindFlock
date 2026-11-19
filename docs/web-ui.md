@@ -952,7 +952,7 @@ Schedule*, the name it had, kept so the word still finds it), **New scheduled te
 ticked; *schedule a session* still finds it), one **Run template:
 <name>** (*fresh session, task sent*) per template that has a folder,
 **Assistant instructions (agent file)…**,
-**Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
+**Reopen last closed session** (`Ctrl+Shift+T`), **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
 **Settings → …** rows for what you typed (`palette/settingsSearch.ts`: one
 entry per screen plus a few controls, matched on the words people use —
 "github", "notification", "worktree", "parallel", "phone", "token", "theme"
@@ -1042,7 +1042,10 @@ the API (including the friendly 400 in this case) surface as toasts.
   under 700px reads Unified (Split's four columns crush the code there). The
   open tab reloads when the session's diff stats move, and on **↻**. Each
   file header has a **Map** button (*Show <file> on the map*); the Map's file
-  card **Open diff** opens this tab on that file.
+  card **Open diff** opens this tab on that file. Switching baseline or file
+  shows *Loading diff…* until that diff arrives (never the previous one under
+  the new heading), and a slower earlier answer is dropped. `Ctrl+K G` opens
+  this tab; each tab's tooltip names its chord.
 
 Terminals keep tmux mouse scrolling (speed configurable in settings);
 **Shift+drag** (Alt+drag on macOS) selects text and auto-copies it.
@@ -1773,6 +1776,10 @@ button), because a merge cannot be undone from MindFlock. Questions like these
 yet; a *failure* (push refused, delete failed, pause did not take) is a red
 card that stays until dismissed, and a *success* is a one-line toast. None of
 them is a browser `confirm()` / `alert()`, which do nothing in the desktop app.
+A question card takes the keyboard when it opens: focus lands on **Cancel**
+(so `Enter` never destroys), `Esc` answers Cancel and stops there, and a
+**Delete** answer is drawn red like the row menu's strip. A failure card never
+takes focus, since it can arrive while you are typing into a terminal.
 
 **A status line that needs you is a door.** When a fast-tracked row's line
 ends **— open the bell** (an escalation or a failure) or **· ready — approve in
@@ -2143,8 +2150,12 @@ In the **Thread** tab's composer, **Send now** (`Ctrl+Enter`) asks the server
 to type it in: when the agent turns out to be on a prompt or at the usage
 limit, it is queued for when the agent is free instead (the toast says
 "queued"), never typed into the dialog. **Let name decide** queues a prompt
-naming the worker by its session title, not its alias. Delete and `Ctrl+W`
-never close the session while the keyboard is anywhere in the Thread tab.
+naming the worker by its session title, not its alias. `Alt+Enter` is
+**When idle** (queue it for when the agent is free), as in the Queue tab.
+Delete and `Ctrl+W` never close the session while the keyboard is anywhere in
+the Thread tab. A thread that fails to load says so with a **Retry**; a refresh
+that fails while messages are showing keeps them and says *thread may be out
+of date · Retry*, as the Map does.
 
 ## Code map (Map tab): the Code Tree, zones and the plan loop
 
@@ -2619,7 +2630,9 @@ edit" notification rule is off by default, the other two are on.
 
 **The bell is the one place for everything that needs you.** Its panel (*Notifications —
 what needs you, and what happened while you were away*, about 400px wide) has
-two lists: **Needs you** on top, then the history feed.
+two lists: **Needs you** on top, then the history feed. Opening it puts focus
+on its first row; `Esc` closes only the panel (select mode, if on, stays on)
+and gives focus back to the bell.
 
 **Needs you** merges two sources into one list, one row per session: the
 sessions whose [one state](#one-session-state) is "in the bell" — **Question**,
@@ -3081,7 +3094,9 @@ their worktrees and branches). Close and Delete ask first on an inline strip
 app. Actions fan out over the per-session endpoints and tolerate individual
 failures: the toast counts what landed (*Closed 2/3 session(s)*, plus *N worker
 sessions kept running* when workers stayed up), failures are named on a
-bottom-right card, and a folder another live session holds is reported in the
+bottom-right card. A bulk Close's toast carries an **Undo** that reopens every
+session it closed, and each one also goes on the `Ctrl+Shift+T` stack, as a
+single Close does; a bulk Hide's toast has the same **Undo** button, and a folder another live session holds is reported in the
 strip (*Folder in use by …. Close those first.*). **✕** or **Esc** leaves select
 mode and drops the picks.
 
@@ -3154,9 +3169,15 @@ Authentication section. If the token leaks, regenerate it from Settings →
   This rule only started rendering at all once `activity_since` was populated
   (see [web-api.md](web-api.md#get-apiinstances)); before that it read a field
   that was always `0` and never fired.
-- **Undo** — reversible actions (hide, bulk hide) show a *click to undo* toast
-  instead of a modal; only Delete (worktree and branch gone) still asks first,
-  inline.
+- **Undo** — reversible actions (close, hide, and their bulk forms; deleting
+  a saved prompt) show a toast with an **Undo** button instead of a modal;
+  only Delete (worktree and branch gone) still asks first, inline. Deleting a
+  session that works in place says its folder and branch were kept, in the
+  toast and in the menu's tooltip.
+- **Rename refuses a taken name without losing it** — the rail's inline
+  rename stays open with what you typed and says *Another session is already
+  named "…"* under the box (typing clears it, `Esc` leaves), as the Rename
+  dialog does; both stop at 120 characters.
 - **Hidden sessions stick** — a session you hide stays hidden across reloads
   (persisted per browser); showing it again clears that. Expanded action menus
   are transient (a reload starts them collapsed).
@@ -3207,6 +3228,8 @@ built-in alias.
 | `Ctrl+K B` | Branch session — a new worktree on a new branch from the focused session, with its uncommitted changes ([more](#branch-session)) |
 | `Ctrl+K H` | Hide/show window |
 | `Ctrl+K M` | Code map — open the focused session's Map tab |
+| `Ctrl+K G` | Diff — open the focused session's Diff tab (G, as D is Duplicate) |
+| `Ctrl+K Q` | Queue prompt — the focused session's Queue tab, its box focused |
 | `Ctrl+K S` | Message… — the Thread composer, addressed to the focused session |
 | `Ctrl+K F` | Fast-track — the focused pane's ⏩ picker |
 | `Ctrl+K T` | Thread — the focused session's workers and messages |
@@ -4317,7 +4340,7 @@ Opened from the **Recently closed (n)** link under the session list, which
 shows only while there is something to list (it shares the `recently-closed`
 query Verify uses, and refreshes when a session is deleted) or from the
 palette's **Recently closed…**; `Ctrl+Shift+T` / `Ctrl+Z` reopen the last one
-without it. Rows come from `GET /api/recent`. Forget, Delete, **Delete unused worktrees** and its
+without it. **Reopen** here says *Reopened <name>*, as `Ctrl+Shift+T` does. Rows come from `GET /api/recent`. Forget, Delete, **Delete unused worktrees** and its
 follow-up confirm in a bar under the header, and failures show in a
 bottom-right card — never a browser `confirm()` or `alert()`, which the desktop
 app does not implement.
@@ -4710,7 +4733,9 @@ clouds and night tint show either way.
 **Lines.** Each session is a line (`SkyLine`): a title bar — the bird, the
 name, its state chip, a 📌 when you placed it by hand, a size control and a ⋯
 (**Open the box** · **Open in the grid** · **Show only this line** · the size
-· **Tidy this line** · **Fly a flyway…** · **Close session**) — then its
+· **Tidy this line** · **Fly a flyway…**; on a line with a route, that
+route's **Pause** or **Carry on**, **Stop the route** (asks first) and **Fly
+again**, the same items as the pane strip's ⋯; **Close session**) — then its
 session diagram on the flyway canvas (`sessionDiagram`: the session box, its
 workers branching below, the fast-track's rungs or the flight's stops, and the
 trailing **+ Tack on a stop**), then, opened, its session box as the real
@@ -4804,7 +4829,9 @@ above (details in docs/flights.md "Flow polish"):
   the same remedies, and a place in the Needs you view.
 - **The Needs you drawer** says why each route waits, shows *Loading…* on its
   first read and *Can't reach the server — this list may be out of date.* on
-  an error (*Nothing needs you.* only after a read that worked); pressing a
+  an error (*Nothing needs you.* only after a read that worked), and while the
+  routes can't be read the Sky's toolbar says *Can't reach the server — routes
+  may be out of date.* whether the drawer is open or not; pressing a
   route flies the camera to it (switching to All when the view doesn't draw
   it). One Verify is one row.
 - **Saving routes.** A session's route menu has **Save as a route…**; a route
