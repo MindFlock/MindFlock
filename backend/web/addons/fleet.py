@@ -232,13 +232,18 @@ class FleetAddon(Addon):
                 await fleet.refresh_exposure()  # for gate_warning
             except Exception:  # noqa: BLE001
                 pass
-            return JSONResponse(
-                {
-                    **fleet.status(privileged=await _privileged(request)),
+            privileged = await _privileged(request)
+
+            # Both readings stat/read (and may rewrite) their JSON files, and
+            # the phone page asks every 4 s: off the event loop.
+            def _read() -> dict:
+                return {
+                    **fleet.status(privileged=privileged),
                     # "Update all my devices": the last (or running) rollout.
                     "update": fleet_update.status(),
                 }
-            )
+
+            return JSONResponse(await asyncio.to_thread(_read))
 
         @router.post("/fleet/update")
         async def post_fleet_update(request: Request) -> JSONResponse:

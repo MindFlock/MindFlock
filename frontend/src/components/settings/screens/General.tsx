@@ -276,9 +276,12 @@ function ScrollSpeedRow() {
         setPos(Math.round(s.speed * 3));
         setWheelDamping(s.speed);
       }
-      toast("Terminal scroll speed: " + fmt((s?.speed ?? want)) + " lines");
-    } catch {
-      toast("Scroll speed change failed");
+      // "Saved" by the row (the value already reads beside the slider).
+      if (!flashSaved(document.getElementById("scroll-speed")))
+        toast("Terminal scroll speed: " + fmt(s?.speed ?? want) + " lines");
+    } catch (err) {
+      const why = (err as Error)?.message;
+      toast("Scroll speed change failed" + (why ? ": " + why : ""));
     }
   };
 

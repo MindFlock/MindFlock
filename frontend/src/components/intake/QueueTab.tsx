@@ -23,6 +23,7 @@
  */
 
 import { api } from "../../api/client";
+import { openSettings } from "../../lib/openSettings";
 import {
   refreshInstances,
   useMindflockStatus,
@@ -136,10 +137,32 @@ export function stalledText(
   );
 }
 
+/** The screen a stalled sentence points at, drawn as a link in it. */
+export const DEVICES_LINK = "Settings → Your devices";
+
+/** `text` cut around the first `link` in it: [before, after], or null when
+ * the sentence doesn't name it. */
+export function splitAtLink(text: string, link: string): [string, string] | null {
+  const at = text.indexOf(link);
+  return at < 0 ? null : [text.slice(0, at), text.slice(at + link.length)];
+}
+
 function StalledNote({ s }: { s: Section }) {
+  const text = stalledText(s, s.items.length !== 1);
+  const cut = splitAtLink(text, DEVICES_LINK);
   return (
     <div className="ik-queue-stalled" data-runs-on={s.state === "elsewhere" ? s.runsOn || "" : undefined}>
-      {stalledText(s, s.items.length !== 1)}
+      {cut ? (
+        <>
+          {cut[0]}
+          <button type="button" className="linklike" onClick={() => openSettings("devices")}>
+            {DEVICES_LINK}
+          </button>
+          {cut[1]}
+        </>
+      ) : (
+        text
+      )}
     </div>
   );
 }

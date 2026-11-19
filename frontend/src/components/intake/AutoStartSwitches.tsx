@@ -26,6 +26,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
+import { openSettings } from "../../lib/openSettings";
 import { errorPop } from "../../lib/errorPop";
 import { toast } from "../../lib/toast";
 import {
@@ -341,8 +342,11 @@ export function TicketSessionOptions() {
             ]}
           />
           <span className="set-hint">
-            A worktree shares your repo&apos;s history; a clone is fully separate. Where they live is
-            Settings › Workspace.
+            A worktree shares your repo&apos;s history; a clone is fully separate. Where they live is{" "}
+            <button type="button" className="linklike" onClick={() => openSettings("workspace")}>
+              Settings › Workspace
+            </button>
+            .
           </span>
         </label>
         <div
