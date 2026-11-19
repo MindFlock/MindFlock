@@ -364,7 +364,7 @@ describe("the row menu ends a session in exactly two ways", () => {
     expect(bar).toContain("if (!bulkMode) return null;");
     expect(bar).toMatch(/>\s*Close\s*<\/button>/);
     expect(bar).toMatch(/>\s*Delete…\s*<\/button>/);
-    expect(bar).toContain("Removes their worktrees and branches");
+    expect(bar).toContain("deleteManyConfirmText(");
     expect(bar).toContain("Keeps their worktrees");
     expect(strip(bar)).not.toMatch(/\bconfirm\(/);
     // The rail keeps its rows checkbox-free (frontend/src/__tests__/bulkBar.test.ts).

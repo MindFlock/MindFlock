@@ -11,7 +11,7 @@ import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
 import { landPendingRow, markMoving, patchInstance, queryClient, refreshInstances, refreshRecentlyClosed } from "../state/queries";
 import { freshStage } from "./stageWatch";
-import { displayName, effectiveViewMode, setSessionSelector, useUi, windowKey } from "../state/store";
+import { displayName, effectiveViewMode, setSessionSelector, useUi, windowKey, type EndingKind } from "../state/store";
 import { toast } from "./toast";
 import { errMsg } from "./format";
 import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
@@ -252,11 +252,39 @@ function forgetLocally(title: string) {
   releaseTerms(title);
 }
 
+/** Longest session name the server takes (backend/web/core/rename.py
+ * MAX_TITLE_LEN): the New dialog's Name box and the rail's rename box stop
+ * there rather than let the server refuse it. */
+export const MAX_TITLE_LEN = 120;
+
+/** Run `work` with the row marked "Closing…" / "Deleting…" (store `ending`),
+ * cleared once it settles. Resolves to undefined, without running `work`,
+ * when an end is already in flight for that session: a second click must not
+ * fire a second request at a session the first one is removing. */
+export async function whileEnding<T>(
+  title: string,
+  kind: EndingKind,
+  work: () => Promise<T>
+): Promise<T | undefined> {
+  const ui = useUi.getState();
+  if (ui.ending[title]) return undefined;
+  ui.setEnding(title, kind);
+  try {
+    return await work();
+  } finally {
+    useUi.getState().setEnding(title, null);
+  }
+}
+
 /** Close: stop the agent and move the session to Recently closed (its
  * worktree is kept); reopen it from there. Not Pause, which leaves the
  * session in the sidebar. */
 export async function closeSession(title: string) {
   if (!title) return;
+  await whileEnding(title, "closing", () => closeNow(title));
+}
+
+async function closeNow(title: string) {
   let r: EndResult | null = null;
   try {
     r = await instApi<EndResult>(title, "/close", { method: "POST" });
@@ -301,6 +329,21 @@ export function deleteConfirmText(inst: { branch?: string; in_place?: boolean } 
   );
 }
 
+/** The bulk bar's Delete question for several sessions: the single-row
+ * wording (deleteConfirmText) said for all of them, including that sessions
+ * working in place keep their folder and branch. */
+export function deleteManyConfirmText(insts: Array<{ branch?: string; in_place?: boolean }>): string {
+  if (insts.length <= 1) return deleteConfirmText(insts[0]);
+  const inPlace = insts.filter((i) => i.in_place).length;
+  if (inPlace === insts.length)
+    return "Removes these sessions. Their folders and branches stay as they are; Close keeps them to reopen.";
+  return (
+    "Deletes their folders and branches, including uncommitted changes" +
+    (inPlace ? " (the " + inPlace + " working in place keep theirs)" : "") +
+    ". This can't be undone — use Close to keep them."
+  );
+}
+
 /** Delete: remove the worktree and the branch. Asks first unless `confirmed`
  * — the row's menu asks on its own inline strip and passes true; the palette
  * and the pane go through the neutral corner card here.
@@ -330,6 +373,10 @@ export async function deleteSession(
     );
     return null;
   }
+  return (await whileEnding(title, "deleting", () => deleteNow(title))) ?? null;
+}
+
+async function deleteNow(title: string): Promise<"done" | { inUse: string[] } | null> {
   let r: EndResult | null = null;
   try {
     r = await instApi<EndResult>(title, "/cleanup", { method: "POST" });

@@ -89,6 +89,15 @@ export function ModeText({ title, desc }: { title: ReactNode; desc: ReactNode })
 }
 
 /** "Separate worktree"'s plain line. */
+/** A typed name another session already has: the server refuses it, so
+ * Start stays off and this line says why (under the branch, and on Start). */
+export function nameClashText(title: string): string {
+  return (
+    "A session called “" + title + "” already exists — give this one another name under More " +
+    "options, or clear it to name it from the task."
+  );
+}
+
 export const WORKTREE_HINT = "Its own branch, so several sessions can run at once";
 
 /** "Separate worktree": the recommended answer for a git repo. */
@@ -421,8 +430,7 @@ export function WorksIn({
           )}
           {name?.clash && (
             <p className="nf-opt-sub nf-git-nudge" id="new-name-clash" role="status">
-              A session called “{name.title}” already exists — give this one another name under More
-              options, or clear it to name it from the task.
+              {nameClashText(name.title)}
             </p>
           )}
           {othersLine && (

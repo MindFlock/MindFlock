@@ -336,13 +336,21 @@ export function placeNewRunMembers(
   return order;
 }
 
+/** The filter box's text as matched: trimmed and lowercased. The box keeps
+ * the raw text, so "fix bug" can be typed with its space. */
+export function filterQuery(raw: string): string {
+  return (raw || "").trim().toLowerCase();
+}
+
 /** Match only the session's own identifiers — name, alias, branch. NOT repo
- * or path (every worktree of one repo shares those). */
+ * or path (every worktree of one repo shares those). `filter` is the box's
+ * raw text. */
 export function matchesFilter(
   inst: Instance,
-  filter: string,
+  raw: string,
   aliases: Record<string, string>
 ): boolean {
+  const filter = filterQuery(raw);
   if (!filter) return true;
   const hay = [inst.title, aliases[inst.title], inst.branch]
     .filter(Boolean)
