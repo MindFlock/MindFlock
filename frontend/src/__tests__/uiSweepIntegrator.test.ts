@@ -2,7 +2,9 @@
  * any worker's fence.
  *  - The outbox's Stop the route for a closed session (WaitingRow
  *    `StopRouteButton`) asks "Stop this route?" first, like the strip (#22).
- *  - The palette lists the new Diff action (Ctrl+K G, #32) next to Map. */
+ *  - The palette lists the new Diff action (Ctrl+K G, #32) next to Map.
+ *  - Settings → Extensions' switch shows the inline "✓ Saved" on the
+ *    extension's name (savedCue knows its row), not a toast (#29). */
 
 import { describe, expect, it } from "vitest";
 import { code } from "./sourceText";
@@ -32,5 +34,18 @@ describe("the palette lists Diff", () => {
     const ids = [...list.matchAll(/"(\w+)"/g)].map((m) => m[1]);
     expect(ids.indexOf("diff")).toBe(ids.indexOf("map") + 1);
     expect(ids[ids.length - 1]).toBe("merge");
+  });
+});
+
+describe("an extension's switch gets the inline Saved cue", () => {
+  const cue = code("components/settings/savedCue.ts");
+  it("its row is one savedCue marks, on the extension's name", () => {
+    expect(cue).toMatch(/const ROW = "[^"]*\.ext-row-head[^"]*";/);
+    expect(cue).toContain('row.querySelector(".set-label") || row.querySelector(".prov-name") || row');
+  });
+  it("the switch sits inside that row and hands its element to the save", () => {
+    const ext = code("components/settings/screens/Extensions.tsx");
+    const head = ext.slice(ext.indexOf('className="prov-conn-head ext-row-head"'));
+    expect(head.slice(0, head.indexOf("</div>"))).toContain("setEnabled(ext, e.target.checked, e.target)");
   });
 });
