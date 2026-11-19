@@ -34,7 +34,7 @@ def _js(rel: str) -> str:
 # --------------------------------------------------------------------------- #
 # GET /api/fleet
 # --------------------------------------------------------------------------- #
-def test_get_fleet_reads_its_files_off_the_event_loop(monkeypatch):
+def test_get_fleet_reads_the_rollout_file_off_the_event_loop(monkeypatch):
     calls: list = []
     real = asyncio.to_thread
 
@@ -68,9 +68,10 @@ def test_get_fleet_reads_its_files_off_the_event_loop(monkeypatch):
     r = TestClient(app).get("/api/fleet")
     assert r.status_code == 200
     assert r.json() == {"members": [], "update": {"state": "idle"}}
-    # Both readings ran, inside the one function handed to to_thread.
+    # Both readings ran; the rollout's file read is the one handed to
+    # to_thread (fleet.status stays on the loop: see get_fleet).
     assert seen == {"fleet": True, "update": True}
-    assert len(calls) == 1 and calls[0].__name__ == "_read"
+    assert calls == [update_status]
 
 
 # --------------------------------------------------------------------------- #

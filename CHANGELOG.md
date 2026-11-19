@@ -164,8 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Settings → Connections and the Usage, Workflow and To-do windows rest while
   the window is hidden; history and chat catch up when you come back.
 - **The phone page and the ticket status cost the server less.** The fleet
-  status (asked every 4 s by the phone) reads its files off the server's event
-  loop, and the ticket pipeline's status is reused for 2 seconds; starting,
+  status (asked every 4 s by the phone) reads its rollout file off the
+  server's event loop, and the ticket pipeline's status is reused for 2 seconds; starting,
   stopping or changing a setting refreshes it at once.
 - **The Thread tab offers Retry.** A failed load has a Retry button, and a
   failed refresh says "thread may be out of date · Retry", as the Map does.

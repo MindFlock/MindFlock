@@ -233,17 +233,15 @@ class FleetAddon(Addon):
             except Exception:  # noqa: BLE001
                 pass
             privileged = await _privileged(request)
-
-            # Both readings stat/read (and may rewrite) their JSON files, and
-            # the phone page asks every 4 s: off the event loop.
-            def _read() -> dict:
-                return {
-                    **fleet.status(privileged=privileged),
-                    # "Update all my devices": the last (or running) rollout.
-                    "update": fleet_update.status(),
-                }
-
-            return JSONResponse(await asyncio.to_thread(_read))
+            st = fleet.status(privileged=privileged)
+            # "Update all my devices": the last (or running) rollout. It reads,
+            # and may rewrite, fleet_update.json on every call, and the phone
+            # page asks every 4 s: off the event loop. (fleet.status stays on
+            # the loop: its requests and invites are in memory, and the fleet
+            # tests' devices share one process, told apart by a settings path
+            # that their own tasks switch while the loop runs them.)
+            st["update"] = await asyncio.to_thread(fleet_update.status)
+            return JSONResponse(st)
 
         @router.post("/fleet/update")
         async def post_fleet_update(request: Request) -> JSONResponse:
