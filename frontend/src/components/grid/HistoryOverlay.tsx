@@ -27,6 +27,7 @@ import { copyPaneHistory, fetchPaneHistory, historyForClipboard } from "../../li
 import { type DragScreenCtx } from "../../lib/terminals";
 import { FIND_MAX, findAll, pickStart, stepMatch } from "../../lib/textFind";
 import { toast } from "../../lib/toast";
+import { pollWhileVisible } from "./visiblePoll";
 
 /** Caret under a viewport point, across the two DOM APIs. */
 function caretAt(x: number, y: number): { node: Node; offset: number } | null {
@@ -374,9 +375,10 @@ export function HistoryOverlay({
   // Live tail: re-capture every few seconds while open, so the page never
   // goes stale — scrolling to the bottom always reaches the present. Skipped
   // while the reader is mid-press or has text selected (a refresh would
-  // shift the text under their highlight).
+  // shift the text under their highlight). Rests while the page is hidden
+  // (each tick re-captures the whole scrollback) and catches up when shown.
   useEffect(() => {
-    const id = setInterval(() => {
+    return pollWhileVisible(() => {
       if (pressAt.current) return;
       // Same reason while searching: a refresh that trims the top of the
       // history shifts every hit, and the one being read jumps away.
@@ -385,7 +387,6 @@ export function HistoryOverlay({
       if (sel && !sel.isCollapsed && sel.toString().trim()) return;
       load();
     }, 3000);
-    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
 
