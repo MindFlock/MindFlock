@@ -25087,7 +25087,8 @@ function errorPop(title, detail, actions) {
 function confirmPop(title, detail, actions, cancel = "Cancel") {
 	pop("confirm", title, detail, cancel ? [...actions, {
 		label: cancel,
-		run: () => {}
+		run: () => {},
+		cancel: true
 	}] : actions);
 }
 function pop(kind, title, detail, actions) {
@@ -25119,7 +25120,7 @@ function pop(kind, title, detail, actions) {
 		for (const a of actions) {
 			const b = document.createElement("button");
 			b.type = "button";
-			b.className = "cs-error-act" + (a.primary ? " primary" : "");
+			b.className = actClass(a);
 			b.textContent = a.label;
 			if (a.title) b.title = a.title;
 			b.onclick = () => {
@@ -25130,8 +25131,29 @@ function pop(kind, title, detail, actions) {
 		}
 		card.appendChild(row);
 	}
+	card.addEventListener("keydown", (e) => {
+		if (e.key !== "Escape") return;
+		e.preventDefault();
+		e.stopPropagation();
+		card.remove();
+		const no = (actions || []).find((a) => a.cancel);
+		if (no) no.run();
+	});
 	box.appendChild(card);
 	while (box.children.length > MAX_CARDS) box.removeChild(box.children[0]);
+	if (kind === "confirm") {
+		const buttons = Array.from(card.querySelectorAll(".cs-error-act"));
+		const at = focusIndex(actions || []);
+		if (at >= 0) buttons[at]?.focus();
+	}
+}
+function actClass(a) {
+	return "cs-error-act" + (a.primary ? " primary" : "") + (a.danger ? " danger" : "") + (a.cancel ? " cancel" : "");
+}
+function focusIndex(actions) {
+	const no = actions.findIndex((a) => a.cancel);
+	if (no >= 0) return no;
+	return actions.findIndex((a) => a.primary);
 }
 //#endregion
 //#region src/components/dialogs/verifySession.ts
@@ -33111,7 +33133,7 @@ async function closeNow(title) {
 		return;
 	}
 	forgetLocally(title);
-	closeUndo.push(title);
+	rememberClosed(title);
 	const kept = keptRunningText(r);
 	toast(closedToastText(displayName(title), kept), {
 		action: {
@@ -33125,6 +33147,9 @@ async function closeNow(title) {
 	refreshRecentlyClosed();
 	await refreshInstances();
 }
+function rememberClosed(title) {
+	if (title) closeUndo.push(title);
+}
 function closedToastText(name, kept) {
 	return "Closed “" + name + "”" + (kept ? " · " + kept : "");
 }
@@ -33132,6 +33157,9 @@ var CLOSED_UNDO_HINT = "Reopen it — click to Undo (Ctrl+Shift+T)";
 function deleteConfirmText(inst) {
 	if (inst?.in_place) return "Removes this session. Its folder and branch stay as they are; Close keeps the session to reopen.";
 	return "Deletes the folder and branch" + (inst?.branch ? " “" + inst.branch + "”" : "") + ", including uncommitted changes. This can't be undone — use Close to keep it.";
+}
+function deleteMenuTitle(inst) {
+	return inst?.in_place ? "Removes it from MindFlock; its folder and branch stay (asks first)" : "Deletes its folder and branch, uncommitted changes included (asks first)";
 }
 function deleteManyConfirmText(insts) {
 	if (insts.length <= 1) return deleteConfirmText(insts[0]);
@@ -33145,6 +33173,7 @@ async function deleteSession(title, confirmed = false) {
 		confirmPop("Delete " + displayName(title) + "?", deleteConfirmText(instances$2().find((i) => i.title === title)), [{
 			label: "Delete",
 			primary: true,
+			danger: true,
 			run: () => void deleteSession(title, true).then((r) => {
 				if (r && r !== "done") errorPop("Can't delete " + displayName(title), folderInUseText(r.inUse));
 			})
@@ -33154,6 +33183,7 @@ async function deleteSession(title, confirmed = false) {
 	return await whileEnding(title, "deleting", () => deleteNow(title)) ?? null;
 }
 async function deleteNow(title) {
+	const inPlace = !!instances$2().find((i) => i.title === title)?.in_place;
 	let r = null;
 	try {
 		r = await instApi(title, "/cleanup", { method: "POST" });
@@ -33165,15 +33195,83 @@ async function deleteNow(title) {
 	}
 	forgetLocally(title);
 	const kept = keptRunningText(r);
-	toast("Deleted " + displayName(title) + " — worktree and branch removed" + (kept ? " · " + kept : ""), kept ? { duration: 5e3 } : void 0);
+	toast(deletedToastText(displayName(title), inPlace, kept), kept ? { duration: 5e3 } : void 0);
 	await refreshInstances();
 	return "done";
+}
+function deletedToastText(name, inPlace, kept) {
+	return "Deleted " + name + (inPlace ? " — its folder and branch were kept" : " — worktree and branch removed") + (kept ? " · " + kept : "");
 }
 var closedWhen = (x) => {
 	const n = typeof x.closed_at === "number" ? x.closed_at : Date.parse(x.closed_at);
 	return isNaN(n) ? 0 : n;
 };
 var undoBusy = false;
+function newestEntries(list, titles) {
+	const out = [];
+	for (const t of titles) {
+		const ent = list.filter((e) => e.title === t).sort((a, b) => closedWhen(b) - closedWhen(a))[0];
+		if (ent) out.push(ent);
+	}
+	return out;
+}
+function reopenedManyText(reopened, failed) {
+	const head = reopened === 1 ? "Reopened 1 session" : "Reopened " + reopened + " sessions";
+	return failed ? head + " · " + failed + " could not be reopened" : head;
+}
+async function reopenEntry(ent) {
+	const guess = addPendingSession(ent.title || "session", "", true);
+	try {
+		const inst = await api("/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen", { method: "POST" });
+		landPendingSession(guess, inst);
+		return inst;
+	} catch (err) {
+		failPendingSession(guess);
+		throw err;
+	}
+}
+async function reopenClosed$1(titles) {
+	if (!titles.length || undoBusy) return;
+	undoBusy = true;
+	try {
+		let list;
+		try {
+			const data = await api("/api/recently-closed");
+			list = Array.isArray(data) ? data : [];
+		} catch (err) {
+			errorPop("Reopen failed", errMsg(err));
+			return;
+		}
+		const ents = newestEntries(list, titles);
+		for (const t of titles) {
+			const at = closeUndo.lastIndexOf(t);
+			if (at >= 0) closeUndo.splice(at, 1);
+		}
+		let ok = 0;
+		let failed = titles.length - ents.length;
+		const errs = [];
+		await Promise.all(ents.map(async (ent) => {
+			if (!ent.exists) {
+				failed++;
+				errs.push(displayName(ent.title) + " — its worktree is gone");
+				return;
+			}
+			try {
+				await reopenEntry(ent);
+				ok++;
+			} catch (err) {
+				failed++;
+				errs.push(displayName(ent.title) + " — " + errMsg(err));
+			}
+		}));
+		refreshRecentlyClosed();
+		await refreshInstances();
+		toast(reopenedManyText(ok, failed), failed ? { duration: 5e3 } : void 0);
+		if (errs.length) errorPop("Reopen failed for " + errs.length + " session(s)", errs.join("; "));
+	} finally {
+		undoBusy = false;
+	}
+}
 async function undoLastClose() {
 	if (undoBusy) return;
 	undoBusy = true;
@@ -33204,16 +33302,13 @@ async function undoLastClose() {
 			toast("Can’t reopen “" + (ent.title ? displayName(ent.title) : "session") + "” — its worktree is gone", { duration: 5e3 });
 			return;
 		}
-		const guess = addPendingSession(ent.title || "session", "", true);
 		try {
-			const inst = await api("/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen", { method: "POST" });
-			landPendingSession(guess, inst);
+			const inst = await reopenEntry(ent);
 			refreshRecentlyClosed();
 			await refreshInstances();
 			if (inst?.title) selectSession(inst.title);
 			toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
 		} catch (err) {
-			failPendingSession(guess);
 			errorPop("Reopen failed", errMsg(err));
 		}
 	} finally {
@@ -33226,6 +33321,7 @@ async function cleanupMissing(title, confirmed = false) {
 		confirmPop("Delete “" + displayName(title) + "”?", "Its workspace folder no longer exists — this removes the dead session.", [{
 			label: "Delete",
 			primary: true,
+			danger: true,
 			run: () => void cleanupMissing(title, true)
 		}]);
 		return;
@@ -33598,8 +33694,12 @@ function hideSession(title) {
 	}
 	ui.setHidden(title, true);
 	if (ui.focused === title) ui.setFocused(null);
-	toast("Hid " + (ui.aliases[title] || title) + " — click to undo", {
-		onClick: () => useUi.getState().setHidden(title, false),
+	toast("Hid " + (ui.aliases[title] || title), {
+		action: {
+			label: "Undo",
+			onClick: () => useUi.getState().setHidden(title, false),
+			ariaLabel: "Undo hiding “" + (ui.aliases[title] || title) + "”"
+		},
 		duration: 5e3
 	});
 }
@@ -33956,6 +34056,8 @@ var SESSION_ACTIONS = {
 	},
 	queue: {
 		label: "Queue prompt…",
+		keys: "Ctrl+K Q",
+		chord: "q",
 		note: "runs when idle",
 		enabled: () => true,
 		run: (t) => focusQueueInput(t)
@@ -34045,6 +34147,14 @@ var SESSION_ACTIONS = {
 		enabled: git,
 		run: (t) => useUi.getState().openMap(t)
 	},
+	diff: {
+		label: "Diff",
+		keys: "Ctrl+K G",
+		chord: "g",
+		note: "what this session changed",
+		enabled: git,
+		run: (t) => useUi.getState().openDiff(t)
+	},
 	pause: {
 		label: "Pause session",
 		note: "stops the agent; keeps it in the sidebar to resume",
@@ -34096,6 +34206,8 @@ var CHORD_ACTIONS = [
 	"branch",
 	"hide",
 	"map",
+	"diff",
+	"queue",
 	"message",
 	"fastTrack",
 	"thread"
@@ -34103,7 +34215,7 @@ var CHORD_ACTIONS = [
 function chordDesc(id) {
 	if (id === "ide") return "Open in your code editor";
 	if (id === "hide") return "Hide / show window";
-	if (id === "thread") return "Thread — " + actionNote(id, {});
+	if (id === "thread" || id === "diff") return sessionAction(id).label + " — " + actionNote(id, {});
 	if (id === "flock") return "Workers on every prompt";
 	const l = sessionAction(id).label;
 	return typeof l === "string" ? l : id;
@@ -38523,6 +38635,9 @@ var CHORDS = {
 function chordKeyFor(id) {
 	return String(_keyOv.chords[id] || id).toLowerCase();
 }
+function chordLabel(id) {
+	return "Ctrl+K " + chordKeyFor(id).toUpperCase();
+}
 function chordShadowedBy(id) {
 	if (_keyOv.chords[id]) return null;
 	const key = chordKeyFor(id);
@@ -41270,6 +41385,48 @@ function ExtensionDialog() {
 	});
 }
 //#endregion
+//#region node_modules/zustand/esm/vanilla/shallow.mjs
+var isIterable = (obj) => Symbol.iterator in obj;
+var hasIterableEntries = (value) => "entries" in value;
+var compareEntries = (valueA, valueB) => {
+	const mapA = valueA instanceof Map ? valueA : new Map(valueA.entries());
+	const mapB = valueB instanceof Map ? valueB : new Map(valueB.entries());
+	if (mapA.size !== mapB.size) return false;
+	for (const [key, value] of mapA) if (!mapB.has(key) || !Object.is(value, mapB.get(key))) return false;
+	return true;
+};
+var compareIterables = (valueA, valueB) => {
+	const iteratorA = valueA[Symbol.iterator]();
+	const iteratorB = valueB[Symbol.iterator]();
+	let nextA = iteratorA.next();
+	let nextB = iteratorB.next();
+	while (!nextA.done && !nextB.done) {
+		if (!Object.is(nextA.value, nextB.value)) return false;
+		nextA = iteratorA.next();
+		nextB = iteratorB.next();
+	}
+	return !!nextA.done && !!nextB.done;
+};
+function shallow(valueA, valueB) {
+	if (Object.is(valueA, valueB)) return true;
+	if (typeof valueA !== "object" || valueA === null || typeof valueB !== "object" || valueB === null) return false;
+	if (Object.getPrototypeOf(valueA) !== Object.getPrototypeOf(valueB)) return false;
+	if (isIterable(valueA) && isIterable(valueB)) {
+		if (hasIterableEntries(valueA) && hasIterableEntries(valueB)) return compareEntries(valueA, valueB);
+		return compareIterables(valueA, valueB);
+	}
+	return compareEntries({ entries: () => Object.entries(valueA) }, { entries: () => Object.entries(valueB) });
+}
+//#endregion
+//#region node_modules/zustand/esm/react/shallow.mjs
+function useShallow(selector) {
+	const prev = import_react.useRef(void 0);
+	return (state) => {
+		const next = selector(state);
+		return shallow(prev.current, next) ? prev.current : prev.current = next;
+	};
+}
+//#endregion
 //#region src/components/flights/Bird.tsx
 var SPRITE_W$1 = 216;
 var SPRITE_H$1 = 160;
@@ -43277,6 +43434,40 @@ function VerifyConfirm({ verify, session, hideSteps }) {
 	});
 }
 //#endregion
+//#region src/components/InlineConfirm.tsx
+function InlineConfirm(props) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-confirm",
+		role: "alertdialog",
+		"aria-label": props.title,
+		id: props.id,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-confirm-text",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: props.title }),
+				" ",
+				props.body
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-confirm-actions",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn set-confirm-yes",
+				disabled: props.busy,
+				onClick: props.onConfirm,
+				children: props.confirmLabel
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				autoFocus: true,
+				disabled: props.busy,
+				onClick: props.onCancel,
+				children: props.cancelLabel ?? "Cancel"
+			})]
+		})]
+	});
+}
+//#endregion
 //#region src/lib/flightsApi.ts
 var enc$1 = encodeURIComponent;
 var flightPath = (id, rest = "") => "/api/flights/" + enc$1(id) + rest;
@@ -43286,6 +43477,9 @@ async function fetchFlights(all = false) {
 }
 function refreshFlights() {
 	queryClient.invalidateQueries({ queryKey: ["flight-plans"] });
+	return refreshFlightsOnly();
+}
+function refreshFlightsOnly() {
 	return queryClient.invalidateQueries({ queryKey: ["flights"] });
 }
 async function flightAction(what, path, body = {}, done = "") {
@@ -43297,8 +43491,7 @@ async function flightAction(what, path, body = {}, done = "") {
 		errorPop(what + " failed", errMsg(err));
 		return false;
 	} finally {
-		refreshFlights();
-		refreshInstances();
+		refreshFlightsOnly();
 	}
 }
 function isAnswerBehaviors(err) {
@@ -43329,8 +43522,7 @@ async function stepDone(flightId, stepId, note = "") {
 		} else errorPop("Done failed", errMsg(err));
 		return false;
 	} finally {
-		refreshFlights();
-		refreshInstances();
+		refreshFlightsOnly();
 	}
 }
 function stepFix(flightId, stepId) {
@@ -44343,14 +44535,23 @@ async function skipPausedStop(fl, full) {
 	return await stepSkip(fl.id, fl.step.id) && !!full && skipCarriesOn(full) && controlFlight(fl.id, "resume");
 }
 function StopRouteButton({ id, busy, run }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: "test-btn",
 		disabled: busy,
 		title: "Its session is closed — end this route",
-		onClick: () => void run(() => flightAction("Stop the route", flightPath(id, "/cancel"), {}, "Route stopped")),
+		onClick: () => setAsking(true),
 		children: "Stop the route"
-	});
+	}), asking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+		title: "Stop this route?",
+		body: "It stops where it is. Its session, branch and work are kept.",
+		confirmLabel: "Stop the route",
+		cancelLabel: "Keep it running",
+		busy,
+		onCancel: () => setAsking(false),
+		onConfirm: () => void run(() => flightAction("Stop the route", flightPath(id, "/cancel"), {}, "Route stopped")).finally(() => setAsking(false))
+	})] });
 }
 function RouteMain({ w, row, shown, full, gone }) {
 	if (gone && full) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
@@ -45794,6 +45995,11 @@ function saveClearedTs(rows, prev) {
 	} catch {}
 	return mark;
 }
+var BELL_FIRST_ITEM = ".notif-attn [tabindex=\"0\"], .notif-attn button, .notif-list .notif-item, .notif-pop button";
+function refocusBellOnEscape(active, pop, btn, body) {
+	if (!active || active === body || active === btn) return true;
+	return !!pop && pop.contains(active);
+}
 function NotificationsBell() {
 	const { data: instances = [] } = useInstances();
 	const { data: runs } = useRuns();
@@ -45845,7 +46051,11 @@ function NotificationsBell() {
 			setOpen(false);
 		};
 		const onKey = (e) => {
-			if (e.key === "Escape" && !e.defaultPrevented) setOpen(false);
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			const back = refocusBellOnEscape(document.activeElement, popRef.current, btnRef.current, document.body);
+			setOpen(false);
+			if (back) btnRef.current?.focus();
 		};
 		document.addEventListener("click", onClick);
 		document.addEventListener("keydown", onKey);
@@ -45899,6 +46109,10 @@ function NotificationsBell() {
 			document.removeEventListener("mf-close-bell", onClose);
 		};
 	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		popRef.current?.querySelector(BELL_FIRST_ITEM)?.focus({ preventScroll: true });
+	}, [open]);
 	(0, import_react.useEffect)(() => {
 		if (!open || !flash) return;
 		(popRef.current?.querySelector("[data-needs=\"" + CSS.escape(flash) + "\"]"))?.scrollIntoView({ block: "nearest" });
@@ -50604,6 +50818,7 @@ var PALETTE_ACTIONS = [
 	"commit",
 	"push",
 	"pr",
+	"viewPr",
 	"ide",
 	"duplicate",
 	"branch",
@@ -50613,6 +50828,7 @@ var PALETTE_ACTIONS = [
 	"close",
 	"delete",
 	"map",
+	"diff",
 	"merge"
 ];
 var ACTION_KEYWORDS = {
@@ -50640,6 +50856,9 @@ var TOP = {
 	tour: 7,
 	shortcuts: 8
 };
+function copyPathOf(inst) {
+	return inst?.folder || inst?.path || "";
+}
 function buildPaletteActions({ config, host, extensions }) {
 	const ui = useUi.getState();
 	const caps = config?.caps ?? {
@@ -50755,6 +50974,12 @@ function buildPaletteActions({ config, host, extensions }) {
 		});
 	}
 	acts.push({
+		label: "Reopen last closed session",
+		hint: "Ctrl+Shift+T",
+		keywords: "undo close restore reopen recently closed",
+		run: () => void undoLastClose()
+	});
+	acts.push({
 		label: "Recently closed…",
 		hint: "reopen or delete closed sessions",
 		run: () => ui.openDialogFor("recent")
@@ -50864,6 +51089,15 @@ function buildPaletteActions({ config, host, extensions }) {
 				run: () => useUi.getState().openMap(t, { section: "search" })
 			});
 		}
+		const folder = copyPathOf(c.inst);
+		if (folder) acts.push({
+			label: `Copy folder path — ${name}`,
+			hint: folder,
+			keywords: "copy path folder directory worktree clipboard",
+			run: () => void copyText(folder).then((ok) => {
+				if (ok) toast("Copied path");
+			})
+		});
 	}
 	const needs = needsYouNow();
 	for (const inst of rows) {
@@ -62302,7 +62536,13 @@ function fitTopBar({ room, fixed, brand, items, more }) {
 	};
 }
 function TopBar() {
-	const ui = useUi();
+	const ui = useUi(useShallow((s) => ({
+		narrow: s.narrow,
+		view: s.view,
+		sidebarHidden: s.sidebarHidden,
+		toggleSidebar: s.toggleSidebar,
+		openDialogFor: s.openDialogFor
+	})));
 	const light = useUi((s) => s.themeLight);
 	const version = engineVersion(useDoctor().data?.version);
 	useTestPlans();
@@ -63913,7 +64153,10 @@ function Connections({ gotoScreen }) {
 	(0, import_react.useEffect)(() => {
 		alive.current = true;
 		load(true);
-		const timer = window.setInterval(() => void load(false), REFRESH_MS);
+		const timer = window.setInterval(() => {
+			if (document.hidden) return;
+			load(false);
+		}, REFRESH_MS);
 		const onChanged = () => void load(true);
 		window.addEventListener(CONNECTIONS_CHANGED_EVENT, onChanged);
 		return () => {
@@ -64166,7 +64409,7 @@ var NOTHING_TO_PUSH = "Nothing to push yet";
 var CONNECT_GITHUB_FOR_PRS = "Connect GitHub to open PRs";
 //#endregion
 //#region src/components/settings/savedCue.ts
-var ROW = ".set-row, .notif-channel, .ntfy-field-row, .set-switch-row";
+var ROW = ".set-row, .notif-channel, .ntfy-field-row, .set-switch-row, .ext-row-head";
 var SHOW_MS = 1600;
 var FRESH_MS = 5e3;
 var touched = null;
@@ -64180,7 +64423,7 @@ function noteTouched(target) {
 function cueTarget(el) {
 	const row = el.closest(ROW);
 	if (!row) return null;
-	return row.querySelector(".set-label") || row;
+	return row.querySelector(".set-label") || row.querySelector(".prov-name") || row;
 }
 function flashSaved(el) {
 	const source = el ?? (touched && Date.now() - touched.at < FRESH_MS ? touched.el : null);
@@ -64395,40 +64638,6 @@ function FlagChips({ provider, value, onChange }) {
 				children: p.label
 			}, p.flag);
 		})
-	});
-}
-//#endregion
-//#region src/components/InlineConfirm.tsx
-function InlineConfirm(props) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-confirm",
-		role: "alertdialog",
-		"aria-label": props.title,
-		id: props.id,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-confirm-text",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: props.title }),
-				" ",
-				props.body
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-confirm-actions",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn set-confirm-yes",
-				disabled: props.busy,
-				onClick: props.onConfirm,
-				children: props.confirmLabel
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				autoFocus: true,
-				disabled: props.busy,
-				onClick: props.onCancel,
-				children: props.cancelLabel ?? "Cancel"
-			})]
-		})]
 	});
 }
 //#endregion
@@ -64813,7 +65022,7 @@ function CodingCli({ gotoScreen }) {
 		setFlags(flagsMap.current[name] || "");
 		s.saveField("coding_cli", "default_provider", name).then((ok) => ok && setDefaultSaved((n) => n + 1));
 	};
-	const saveFlags = (0, import_react.useCallback)(async (value) => {
+	const saveFlags = (0, import_react.useCallback)(async (value, from) => {
 		const prov = selected.trim();
 		if (!prov) return;
 		const val = value.trim();
@@ -64821,9 +65030,9 @@ function CodingCli({ gotoScreen }) {
 		else delete flagsMap.current[prov];
 		try {
 			await api("/api/settings", { json: { coding_cli: { default_launch_args: flagsMap.current } } });
-			toast("Saved launch flags");
-		} catch {
-			toast("Save failed: launch flags");
+			if (!flashSaved(from ?? document.getElementById("default-launch-args-input"))) toast("Saved launch flags");
+		} catch (err) {
+			toast("Save failed: " + (err?.message || "launch flags"));
 		}
 	}, [selected]);
 	const others = providers.filter((p) => p.name !== selected);
@@ -64922,7 +65131,7 @@ function CodingCli({ gotoScreen }) {
 					placeholder: flagsPlaceholder(selected),
 					value: flags,
 					onChange: (e) => setFlags(e.target.value),
-					onBlur: () => saveFlags(flags),
+					onBlur: (e) => saveFlags(flags, e.currentTarget),
 					onKeyDown: (e) => {
 						if (e.key === "Enter") e.target.blur();
 					}
@@ -65880,7 +66089,7 @@ function sessionMenu$1(inst, ctx, opts = {}) {
 		label: sessionAction("delete").short,
 		danger: true,
 		confirm: deleteConfirmText(inst),
-		title: "Deletes its folder and branch, uncommitted changes included (asks first)",
+		title: deleteMenuTitle(inst),
 		run: () => deleteSession(title, true)
 	}]);
 	return {
@@ -67245,6 +67454,21 @@ function closeGuarded(now) {
 	lastCloseClick = now;
 	return false;
 }
+function inlineRenameVerdict(raw, shown, takenBy) {
+	const name = raw.trim();
+	if (!name || name === shown) return { kind: "keep" };
+	if (takenBy(name)) return {
+		kind: "taken",
+		name
+	};
+	return {
+		kind: "rename",
+		name
+	};
+}
+function renameTakenText(name) {
+	return "Another session is already named “" + name + "”.";
+}
 function railRowKey(e) {
 	if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null;
 	switch (e.key) {
@@ -67277,6 +67501,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const strip = (0, import_react.useRef)(null);
 	const [editing, setEditing] = (0, import_react.useState)(false);
 	const cancelled = (0, import_react.useRef)(false);
+	const [renameTaken, setRenameTaken] = (0, import_react.useState)("");
 	const editEndedAt = (0, import_react.useRef)(0);
 	const { data: config } = useConfig();
 	const focused = useUi((s) => s.focused);
@@ -67379,7 +67604,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const failText = ss.startFailed && inst.start_failed ? startFailedHint(inst.start_failed).split("\n")[0] : "";
 	const orphan = orphanLine(inst);
 	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !orphan && !!task;
-	const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
+	const subline = editing ? !!renameTaken : !!(ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
 	useNow(wline?.state === "working" || ship?.state === "working" ? 3e4 : false);
 	useNow(wait ? 3e4 : false);
 	useNow(backgroundJobs(inst).some((j) => expectOf(j)) ? 6e4 : false);
@@ -67438,6 +67663,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const startRename = () => {
 		if (pending || picking || theirs) return;
 		cancelled.current = false;
+		setRenameTaken("");
 		setEditing(true);
 	};
 	const reselect = () => {
@@ -67446,18 +67672,23 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
 	};
 	const commitRename = (raw) => {
-		setEditing(false);
-		editEndedAt.current = Date.now();
 		if (cancelled.current) {
 			cancelled.current = false;
+			setRenameTaken("");
+			setEditing(false);
+			editEndedAt.current = Date.now();
 			return;
 		}
-		const next = raw.trim();
-		if (!next || next === shown) return;
-		if (nameTakenBy(title, next)) {
-			toast(`Another session is already named “${next}”`);
+		const verdict = inlineRenameVerdict(raw, shown, (n) => nameTakenBy(title, n));
+		if (verdict.kind === "taken") {
+			setRenameTaken(verdict.name);
 			return;
 		}
+		setRenameTaken("");
+		setEditing(false);
+		editEndedAt.current = Date.now();
+		if (verdict.kind === "keep") return;
+		const next = verdict.name;
 		renameSession(title, next, { plain: label.text });
 	};
 	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (offlinePeer ? " peer-gone" : "") + (picked ? " bulk-picked" : "") + (menuAt ? " menu-open" : "") + (dropCue ? ` drop-${dropCue}` : "");
@@ -67558,6 +67789,9 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 								onMouseDown: (e) => e.stopPropagation(),
 								onClick: (e) => e.stopPropagation(),
 								onDoubleClick: (e) => e.stopPropagation(),
+								"aria-invalid": !!renameTaken,
+								"aria-describedby": renameTaken ? "rename-taken-" + idx : void 0,
+								onChange: () => renameTaken && setRenameTaken(""),
 								onBlur: (e) => commitRename(e.currentTarget.value),
 								onKeyDown: (e) => {
 									if (e.key === "Enter") {
@@ -67567,6 +67801,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 										e.preventDefault();
 										cancelled.current = true;
 										editEndedAt.current = Date.now();
+										setRenameTaken("");
 										setEditing(false);
 									}
 								}
@@ -67587,6 +67822,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 									picking ? "" : "Ctrl+click or Shift+click to select several"
 								].filter(Boolean).join("\n"),
 								children: /(-\d+|\(\d+\))$/.test(shown) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: shown }) : shown
+							}),
+							editing && renameTaken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lineage rename-taken",
+								id: "rename-taken-" + idx,
+								role: "alert",
+								children: renameTakenText(renameTaken)
 							}),
 							!editing && ship && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "lineage ship-line " + ship.cls + (shipOpensBell ? " opens-bell" : ""),
@@ -68918,6 +69159,9 @@ function shortReason$1(msg, max = 80) {
 function bulkFailText(failed) {
 	return failed.map((f) => f.name + " — " + shortReason$1(f.why)).join("; ");
 }
+function bulkEndText(verb, done, total, keptText) {
+	return `${verb} ${done}/${total} session(s)` + (keptText ? " · " + keptText : "");
+}
 function BulkBar() {
 	const { data: instances = [] } = useInstances();
 	const bulkMode = useUi((s) => s.bulkMode);
@@ -68993,7 +69237,20 @@ function BulkBar() {
 		finish(done);
 		setHeld(inUse);
 		const keptText = keptRunningText({ children: new Array(kept).fill("") });
-		toast(`${verb} ${done.length}/${titles.length} session(s)` + (keptText ? " · " + keptText : ""), { duration: keptText ? 5e3 : void 0 });
+		const text = bulkEndText(verb, done.length, titles.length, keptText);
+		if (kind === "close" && done.length) {
+			for (const t of done) rememberClosed(t);
+			const closed = done.slice();
+			toast(text, {
+				action: {
+					label: "Undo",
+					onClick: () => void reopenClosed$1(closed),
+					ariaLabel: `Undo closing ${closed.length} session(s)`
+				},
+				title: "Reopen them — click to Undo (Ctrl+Shift+T reopens one at a time)",
+				duration: 7e3
+			});
+		} else toast(text, { duration: keptText ? 5e3 : void 0 });
 		if (failed.length) errorPop(`${verb === "Closed" ? "Close" : "Delete"} failed for ${failed.length} session(s)`, bulkFailText(failed));
 		await refreshInstances();
 	};
@@ -69005,10 +69262,14 @@ function BulkBar() {
 			if (s.focused === t) s.setFocused(null);
 		}
 		s.clearBulk();
-		toast(`Hid ${hid.length} session(s) — click to undo`, {
-			onClick: () => {
-				const st = useUi.getState();
-				for (const t of hid) st.setHidden(t, false);
+		toast(`Hid ${hid.length} session(s)`, {
+			action: {
+				label: "Undo",
+				onClick: () => {
+					const st = useUi.getState();
+					for (const t of hid) st.setHidden(t, false);
+				},
+				ariaLabel: `Undo hiding ${hid.length} session(s)`
 			},
 			duration: 5e3
 		});
@@ -71395,6 +71656,14 @@ function useDoctorAutoShow() {
 function plainDetail(text) {
 	return (text || "").replace(/`([^`]*)`/g, "$1");
 }
+function isCommand(fix) {
+	return /^(git|gh|ssh-keygen|ssh-add|sudo|brew|winget|xcode-select|curl|npm|npx|pipx?|uv|apt|apt-get|dnf|pacman|zypper|tailscale|wsl|powershell|mindflock)\s/.test((fix || "").trim());
+}
+function fixCommand(fix) {
+	const text = plainDetail(fix).trim();
+	if (!isCommand(text)) return null;
+	return text.replace(/\s+\((?:or|until)\b.*$/, "").trim();
+}
 function GitIdentityForm({ fix, onSaved }) {
 	const [name, setName] = (0, import_react.useState)("");
 	const [email, setEmail] = (0, import_react.useState)("");
@@ -71477,6 +71746,18 @@ function GitIdentityForm({ fix, onSaved }) {
 		]
 	});
 }
+function CopyFix({ command }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn doctor-fix-copy",
+		"aria-label": "Copy " + command,
+		onClick: (e) => {
+			e.stopPropagation();
+			copyText(command).then((ok) => toast(ok ? "Copied — paste it into a terminal" : "Copy failed"));
+		},
+		children: "Copy"
+	});
+}
 function CheckRow({ c, onSignedIn }) {
 	const identity = asksGitIdentity(c);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
@@ -71502,7 +71783,8 @@ function CheckRow({ c, onSignedIn }) {
 						children: [
 							" ",
 							"fix: ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: plainDetail(c.fix) })
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: plainDetail(c.fix) }),
+							fixCommand(c.fix) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyFix, { command: fixCommand(c.fix) })
 						]
 					}),
 					signInTarget(c) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
@@ -72303,7 +72585,11 @@ var VIEW_MODES = [
 	"9"
 ];
 function ViewRow({ calm }) {
-	const ui = useUi();
+	const ui = useUi(useShallow((s) => ({
+		view: s.view,
+		viewMode: s.viewMode,
+		setViewMode: s.setViewMode
+	})));
 	const perch = needsYouBadge(useNeedsYou());
 	(0, import_react.useSyncExternalStore)(subscribeKeymap, keymapVersion, keymapVersion);
 	const k = usableShortcuts("view");
@@ -72379,7 +72665,34 @@ function Sidebar({ onOpenChat }) {
 	instancesRef.current = instances;
 	(0, import_react.useEffect)(() => installPeerFocus(() => instancesRef.current), []);
 	const { data: devices } = useDevices();
-	const ui = useUi();
+	const ui = useUi(useShallow((s) => ({
+		aliases: s.aliases,
+		barOrder: s.barOrder,
+		barsExplicit: s.barsExplicit,
+		collapsedDevices: s.collapsedDevices,
+		collapsedFamilies: s.collapsedFamilies,
+		collapsedRuns: s.collapsedRuns,
+		extPanes: s.extPanes,
+		filter: s.filter,
+		filterPeek: s.filterPeek,
+		focused: s.focused,
+		gridRows: s.gridRows,
+		hidden: s.hidden,
+		hiddenBars: s.hiddenBars,
+		mru: s.mru,
+		narrow: s.narrow,
+		openDialogFor: s.openDialogFor,
+		order: s.order,
+		railPulse: s.railPulse,
+		setBarOrder: s.setBarOrder,
+		setOrder: s.setOrder,
+		showFilter: s.showFilter,
+		specialOpen: s.specialOpen,
+		toggleDeviceCollapsed: s.toggleDeviceCollapsed,
+		toggleRunCollapsed: s.toggleRunCollapsed,
+		verifyPanes: s.verifyPanes,
+		viewMode: s.viewMode
+	})));
 	const doctorWarn = useDoctorWarn();
 	const { data: config } = useConfig();
 	const { data: setup } = useSetup();
@@ -73301,14 +73614,27 @@ function setDiffBase(b) {
 var diffCache = /* @__PURE__ */ new Map();
 var DIFF_CACHE_MAX = 24;
 var focusDone = /* @__PURE__ */ new Map();
-function DiffTab({ title, active, stamp = "" }) {
+function diffForKey(shown, key) {
+	if (shown && shown.key === key) return {
+		payload: shown.payload,
+		error: shown.error,
+		switching: false
+	};
+	return {
+		payload: null,
+		error: "",
+		switching: !!(shown && (shown.payload || shown.error))
+	};
+}
+var DiffTab = (0, import_react.memo)(DiffTabImpl);
+function DiffTabImpl({ title, active, stamp = "" }) {
 	const [picked, setPicked] = (0, import_react.useState)(pickedDiffMode());
 	const [width, setWidth] = (0, import_react.useState)(0);
 	const mode = diffModeFor(picked, width);
 	const [base, setBase] = (0, import_react.useState)(getDiffBase());
 	const [file, setFile] = (0, import_react.useState)(null);
-	const [payload, setPayload] = (0, import_react.useState)(null);
-	const [error, setError] = (0, import_react.useState)("");
+	const [shown, setShown] = (0, import_react.useState)(null);
+	const reqSeq = (0, import_react.useRef)(0);
 	const [collapsed, setCollapsed] = (0, import_react.useState)(/* @__PURE__ */ new Set());
 	const [reloading, setReloading] = (0, import_react.useState)(false);
 	const [rootEl, setRootEl] = (0, import_react.useState)(null);
@@ -73330,26 +73656,40 @@ function DiffTab({ title, active, stamp = "" }) {
 		focusDone.set(title, focus.seq);
 		setFile(focus.path || null);
 	}, [focus, title]);
+	const reqKey = title + "\0" + base + "\0" + (file || "");
 	const load = (0, import_react.useCallback)(async () => {
-		const key = title + "\0" + base + "\0" + (file || "");
+		const key = reqKey;
+		const seq = ++reqSeq.current;
 		const cached = diffCache.get(key);
-		if (cached) {
-			setPayload(cached);
-			setError("");
-		}
+		if (cached) setShown({
+			key,
+			payload: cached,
+			error: ""
+		});
 		let d;
 		try {
 			d = file ? await instApi(title, `/file-diff?path=${encodeURIComponent(file)}&base=${base}`) : await instApi(title, `/diff?base=${base}`);
 		} catch (err) {
-			if (!cached) setError(err.message);
+			if (seq !== reqSeq.current) return;
+			const msg = err.message;
+			if (!cached) setShown((s) => ({
+				key,
+				payload: s?.key === key ? s.payload : null,
+				error: msg
+			}));
 			return;
 		}
-		setError("");
+		if (seq !== reqSeq.current) return;
 		diffCache.delete(key);
 		diffCache.set(key, d);
 		while (diffCache.size > DIFF_CACHE_MAX) diffCache.delete(diffCache.keys().next().value);
-		setPayload(d);
+		setShown({
+			key,
+			payload: d,
+			error: ""
+		});
 	}, [
+		reqKey,
 		title,
 		base,
 		file
@@ -73370,9 +73710,11 @@ function DiffTab({ title, active, stamp = "" }) {
 		setPicked(m);
 	};
 	const showOnMap = (path) => useUi.getState().openMap(title, { path });
+	const { payload, error, switching } = diffForKey(shown, reqKey);
+	const segments = (0, import_react.useMemo)(() => payload?.content ? splitDiffByFile(payload.content) : [], [payload?.content]);
 	if (!active && !payload) return null;
 	const failure = diffFailure(payload, error);
-	if (!payload && !failure) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	if (!payload && !failure && !switching) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "diff-loading muted",
 		ref: setRootEl,
 		children: "Loading diff…"
@@ -73423,6 +73765,26 @@ function DiffTab({ title, active, stamp = "" }) {
 			children: "Unified"
 		})]
 	})] });
+	if (!payload && !failure) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pane-diff-inner",
+		ref: setRootEl,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "diff-toolbar",
+			children: [
+				file && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					className: "diff-back",
+					type: "button",
+					onClick: () => setFile(null),
+					children: "← All files"
+				}),
+				reloadButton,
+				modeButtons
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "diff-loading muted",
+			children: "Loading diff…"
+		})]
+	});
 	if (failure || !payload) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pane-diff-inner",
 		ref: setRootEl,
@@ -73486,7 +73848,6 @@ function DiffTab({ title, active, stamp = "" }) {
 			children: "No changes in this file"
 		})]
 	});
-	const segments = payload.content ? splitDiffByFile(payload.content) : [];
 	const anyOpen = segments.some((s) => !collapsed.has(s.file));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pane-diff-inner",
@@ -73578,9 +73939,9 @@ function MapButton({ path, onClick }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "map" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Map" })]
 	});
 }
-function OneDiff({ content, mode }) {
+var OneDiff = (0, import_react.memo)(function OneDiff({ content, mode }) {
 	return mode === "split" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitDiff, { content }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UnifiedDiff, { content });
-}
+});
 function UnifiedDiff({ content }) {
 	const lines = unifiedBody(parseUnifiedDiff(content));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
@@ -73660,6 +74021,23 @@ function stepMatch(cur, dir, n) {
 	if (n <= 0) return -1;
 	if (cur < 0) return dir === 1 ? 0 : n - 1;
 	return (cur + dir + n) % n;
+}
+//#endregion
+//#region src/components/grid/visiblePoll.ts
+function pollWhileVisible(run, ms, doc = typeof document === "undefined" ? void 0 : document) {
+	const tick = () => {
+		if (doc?.hidden) return;
+		run();
+	};
+	const t = setInterval(tick, ms);
+	const onVis = () => {
+		if (!doc?.hidden) run();
+	};
+	doc?.addEventListener("visibilitychange", onVis);
+	return () => {
+		clearInterval(t);
+		doc?.removeEventListener("visibilitychange", onVis);
+	};
 }
 //#endregion
 //#region src/components/grid/HistoryOverlay.tsx
@@ -73875,14 +74253,13 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 		el.scrollTop = want === "top" ? 0 : want === "bottom" ? el.scrollHeight : want.fromTop;
 	}, [text]);
 	(0, import_react.useEffect)(() => {
-		const id = setInterval(() => {
+		return pollWhileVisible(() => {
 			if (pressAt.current) return;
 			if (findQueryRef.current) return;
 			const sel = window.getSelection?.();
 			if (sel && !sel.isCollapsed && sel.toString().trim()) return;
 			load();
 		}, 3e3);
-		return () => clearInterval(id);
 	}, [load]);
 	const buttonDown = (0, import_react.useRef)(dragSelection != null);
 	const suppressElementCopy = (0, import_react.useRef)(false);
@@ -76777,6 +77154,10 @@ onSessionRenamed((from, to) => {
 	renameMapKey(toKeys, from, to, { values: true });
 });
 var nameOf = (t) => displayName(t);
+function threadLoadNote(hasData, loadErr) {
+	if (!loadErr) return null;
+	return hasData ? "stale" : "failed";
+}
 function Spans({ text }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: codeSpans(text).map((s, i) => s.code ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: s.text }, i) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: s.text }, i)) });
 }
@@ -76984,6 +77365,7 @@ function ThreadTab({ title, active }) {
 	const summary = headerSummary(workers, finished.length);
 	const progress = progressOf(workers, finished);
 	const entries = logEntries(data?.items ?? [], filter);
+	const loadNote = threadLoadNote(!!data, loadErr);
 	const hasWorkers = workers.length > 0 || finished.length > 0;
 	const selfMember = data?.members.find((m) => m.role === "self");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -77197,9 +77579,38 @@ function ThreadTab({ title, active }) {
 						entries.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "thread-log",
 							children: entries.map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogCard, { entry: e }, e.key))
+						}) : loadNote === "failed" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "thread-empty",
+							role: "alert",
+							children: [
+								"Couldn't load the thread: ",
+								loadErr,
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "th-retry",
+									onClick: () => void reload(),
+									children: "Retry"
+								})
+							]
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "thread-empty",
-							children: loadErr ? "Couldn't load the thread: " + loadErr : !data ? "Loading…" : filter === "reports" ? "No reports yet." : "Nothing between sessions yet — spawns, messages and reports show up here."
+							children: !data ? "Loading…" : filter === "reports" ? "No reports yet." : "Nothing between sessions yet — spawns, messages and reports show up here."
+						}),
+						loadNote === "stale" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "th-stale",
+							role: "status",
+							title: loadErr,
+							children: [
+								"thread may be out of date ·",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "th-retry",
+									onClick: () => void reload(),
+									children: "Retry"
+								})
+							]
 						})
 					]
 				})
@@ -77231,6 +77642,9 @@ function ThreadTab({ title, active }) {
 						if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
 							e.preventDefault();
 							send("now");
+						} else if (composerKey(e) === "add") {
+							e.preventDefault();
+							send("idle");
 						}
 					}
 				}),
@@ -77239,13 +77653,13 @@ function ThreadTab({ title, active }) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "th-hint",
-							children: plan.later.length ? (plan.later.length === 1 ? nameOf(plan.later[0]) + " is on a prompt" : plan.later.length + " are on a prompt") + " — queued for when it's free · Ctrl+Enter" : "Typed in as you, like the Queue tab · Ctrl+Enter sends now"
+							children: plan.later.length ? (plan.later.length === 1 ? nameOf(plan.later[0]) + " is on a prompt" : plan.later.length + " are on a prompt") + " — queued for when it's free · Ctrl+Enter · Alt+Enter when idle" : "Typed in as you, like the Queue tab · Ctrl+Enter sends now · Alt+Enter when idle"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "th-btn th-idle",
 							disabled: sending || !draft.trim(),
-							title: "Queue it — it runs when the session is next idle (the Queue tab's queue)",
+							title: "Queue it — it runs when the session is next idle (the Queue tab's queue) (Alt+Enter)",
 							onClick: () => void send("idle"),
 							children: "When idle"
 						}),
@@ -97791,6 +98205,7 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 	const items = youItems(step);
 	const [ticked, setTicked] = (0, import_react.useState)({});
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const cancel = useCancelAsk(flight);
 	const haltPoint = atHaltPoint(flight);
 	const paused = haltPoint || flight.state === "paused";
 	const failedReason = step ? String(flight.step_states?.[step.id]?.detail?.failed_reason ?? "").trim() : "";
@@ -97924,16 +98339,16 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 						className: "test-btn fl-btn",
 						disabled: busy,
 						title: "Its session is closed — end this route",
-						onClick: () => void run(() => flightAction("Stop the route", flightPath(flight.id, "/cancel"), {}, "Route stopped")),
+						onClick: cancel.ask,
 						children: "Stop the route"
 					})
 				]
-			})
+			}),
+			cancel.node
 		]
 	});
 }
 function FlightMenu({ flight, onCancelAsk, openSession = true }) {
-	const live = isLive(flight);
 	const rows = useInstances().data;
 	const items = [];
 	if (openSession && flight.session) items.push({
@@ -97941,7 +98356,20 @@ function FlightMenu({ flight, onCancelAsk, openSession = true }) {
 		label: "Open session",
 		onSelect: () => openFlightSession(flight.session)
 	});
-	if (live) {
+	items.push(...routeMenuItems(flight, onCancelAsk, sessionGone(flight, rows)));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		onClick: stop,
+		className: "fl-menu",
+		"data-no-drag": true,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
+			label: "Route actions",
+			items
+		})
+	});
+}
+function routeMenuItems(flight, onCancelAsk, gone = false) {
+	const items = [];
+	if (isLive(flight)) {
 		items.push(flight.state === "halted" || flight.state === "paused" ? {
 			key: "resume",
 			label: "Carry on",
@@ -97961,16 +98389,8 @@ function FlightMenu({ flight, onCancelAsk, openSession = true }) {
 			onSelect: onCancelAsk
 		});
 	}
-	items.push(...flyAgainItems(flight, sessionGone(flight, rows)));
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		onClick: stop,
-		className: "fl-menu",
-		"data-no-drag": true,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
-			label: "Route actions",
-			items
-		})
-	});
+	items.push(...flyAgainItems(flight, gone));
+	return items;
 }
 function flyAgainItems(flight, gone = false) {
 	if (!canFlyAgain(flight)) return [];
@@ -106009,6 +106429,50 @@ function WorkersMenu({ title, anchor, keys, onClose }) {
 	}), document.body);
 }
 //#endregion
+//#region src/components/grid/paneFamily.ts
+function derivePaneFamily(title, rows) {
+	const { parent, children } = familyOf(title, rows);
+	return {
+		parent,
+		children,
+		memRank: memoryRank(rows.filter((r) => !r.device && !isPeerRow(r)), title)
+	};
+}
+function samePaneFamily(a, b) {
+	if (a === b) return true;
+	if (a.parent !== b.parent || a.memRank !== b.memRank) return false;
+	if (a.children.length !== b.children.length) return false;
+	return a.children.every((c, i) => c === b.children[i]);
+}
+function familySnapshot(title, read) {
+	let lastRows = null;
+	let last = null;
+	return () => {
+		const rows = read();
+		if (last && rows === lastRows) return last;
+		const next = derivePaneFamily(title, rows ?? []);
+		lastRows = rows;
+		if (last && samePaneFamily(last, next)) return last;
+		last = next;
+		return next;
+	};
+}
+var readRows = () => queryClient.getQueryData(["instances"]);
+function subscribeInstances(cb) {
+	return queryClient.getQueryCache().subscribe((event) => {
+		if (event.query.queryKey[0] === "instances") cb();
+	});
+}
+function usePaneFamily(title) {
+	const ref = (0, import_react.useRef)(null);
+	if (!ref.current || ref.current.title !== title) ref.current = {
+		title,
+		get: familySnapshot(title, readRows)
+	};
+	const get = (0, import_react.useCallback)(() => ref.current.get(), []);
+	return (0, import_react.useSyncExternalStore)(subscribeInstances, get, get);
+}
+//#endregion
 //#region src/components/grid/Pane.tsx
 var GIT_TABS = /* @__PURE__ */ new Set(["diff", "map"]);
 var MAP_PREFETCH_MS = 1500;
@@ -106059,19 +106523,19 @@ function queueRelTime(ms) {
 	const h = Math.floor(m / 60);
 	return h + "h " + (m - h * 60) + "m";
 }
-function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
+function PaneImpl({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const title = inst.title;
 	const held = (0, import_react.useSyncExternalStore)(subscribeHolds, () => !embedded && (embedHolds.get(title) || 0) > 0, () => false);
 	(0, import_react.useLayoutEffect)(() => embedded ? holdTerms(title) : void 0, [embedded, title]);
 	const { data: config } = useConfig();
+	(0, import_react.useSyncExternalStore)(subscribeKeymap, keymapVersion, keymapVersion);
 	const focused = useUi((s) => s.focused === title);
 	const alias = useUi((s) => s.aliases[title]);
 	const lastTab = useUi((s) => s.lastTab[title]);
 	const setLastTab = useUi((s) => s.setLastTab);
 	const reduceMotion = useUi((s) => s.reduceMotion);
-	const { data: allRows } = useInstances();
+	const family = usePaneFamily(title);
 	const { data: sysMem } = useMemory();
-	const family = familyOf(title, allRows ?? []);
 	const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
 	const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
 	const threadShown = threadTabShown(!!family.parent || family.children.length > 0 || inst.run?.role === "lead", threadOpened || lastTab === "thread");
@@ -106437,7 +106901,15 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			setFit(next);
 		}
 	}, []);
-	(0, import_react.useLayoutEffect)(measureFit);
+	const measuredSig = (0, import_react.useRef)(null);
+	(0, import_react.useLayoutEffect)(() => {
+		const el = headRef.current;
+		if (!el) return;
+		const sig = headMeasureSig(el);
+		if (sig === measuredSig.current) return;
+		measuredSig.current = sig;
+		measureFit();
+	});
 	(0, import_react.useEffect)(() => {
 		const el = headRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
@@ -106593,7 +107065,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const hasDiffStat = !!(ds && (ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0);
 	const mem = memoryReading(inst.memory);
 	const memLocal = !theirs && !inst.device;
-	const memTone = mem ? memoryTone(mem.mb, memLocal ? (sysMem?.total || 0) / 1048576 : 0, memLocal ? sysMem?.level : void 0, memLocal ? memoryRank((allRows ?? []).filter((r) => !r.device && !isPeerRow(r)), title) : -1) : "";
+	const memTone = mem ? memoryTone(mem.mb, memLocal ? (sysMem?.total || 0) / 1048576 : 0, memLocal ? sysMem?.level : void 0, memLocal ? family.memRank : -1) : "";
 	const act = effectiveActivity(inst);
 	const quiet = !!ns && !ns.hint && !ns.disabled && (act === "working" || act === "clarify" || act === "limit");
 	const items = headerItems(paneHeader, {
@@ -106649,6 +107121,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		canResume ? 1 : 0,
 		deviceName
 	].join("|");
+	const chordTip = (letter) => " (" + chordLabel(letter) + ")";
 	const tabEls = {
 		agent: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			"data-tab": "agent",
@@ -106685,7 +107158,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			role: "tab",
 			"aria-selected": tab === "diff",
 			className: tab === "diff" ? "active" : "",
-			title: "Diff — what this session changed",
+			title: "Diff — what this session changed" + chordTip("g"),
 			onClick: (e) => {
 				e.stopPropagation();
 				showTab("diff");
@@ -106700,7 +107173,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			role: "tab",
 			"aria-selected": tab === "map",
 			className: "map-tab" + (tab === "map" ? " active" : ""),
-			title: "Code map — the worktree as a tree: agents, zones, plan, blast radius" + (mapBadge ? "\n" + mapBadge.title : ""),
+			title: "Code map — the worktree as a tree: agents, zones, plan, blast radius" + chordTip("m") + (mapBadge ? "\n" + mapBadge.title : ""),
 			"aria-label": mapBadge ? "Map, " + mapBadge.title : void 0,
 			onClick: (e) => {
 				e.stopPropagation();
@@ -106724,7 +107197,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			role: "tab",
 			"aria-selected": tab === "queue",
 			className: "queue-tab" + (tab === "queue" ? " active" : "") + (pending > 0 && q?.enabled === false ? " q-paused" : "") + (q?.loop ? " q-loop" : "") + (holding ? " q-limited" : ""),
-			title: holding ? q?.wait_for_limit !== false ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)` : `Usage limit reached · queue stopped (${pending} queued)` : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits",
+			title: holding ? q?.wait_for_limit !== false ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)` : `Usage limit reached · queue stopped (${pending} queued)` : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits" + chordTip("q"),
 			onClick: (e) => {
 				e.stopPropagation();
 				showTab("queue");
@@ -106769,7 +107242,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			role: "tab",
 			"aria-selected": tab === "thread",
 			className: "thread-tab" + (tab === "thread" ? " active" : ""),
-			title: "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" + (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") + (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : ""),
+			title: "Thread — this session's workers, what they reported and what passed between them; write to any of them as you" + chordTip("t") + (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") + (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : ""),
 			onClick: (e) => {
 				e.stopPropagation();
 				showTab("thread");
@@ -107212,6 +107685,15 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			})
 		]
 	});
+}
+var Pane = (0, import_react.memo)(PaneImpl);
+function headMeasureSig(head) {
+	return [
+		head.dataset.fitKey || "",
+		head.classList.contains("head-icons") ? "i" : "w",
+		head.childElementCount,
+		head.textContent || ""
+	].join("");
 }
 function headNeed(head) {
 	const cs = getComputedStyle(head);
@@ -107823,7 +108305,15 @@ function sentinelRef(p) {
 function TerminalGrid({ specialPanes }) {
 	const { data: instances, isSuccess } = useInstances();
 	const { data: config } = useConfig();
-	const ui = useUi();
+	const ui = useUi(useShallow((s) => ({
+		hidden: s.hidden,
+		viewMode: s.viewMode,
+		narrow: s.narrow,
+		mru: s.mru,
+		order: s.order,
+		gridRows: s.gridRows,
+		setGridRows: s.setGridRows
+	})));
 	const [drag, setDrag] = (0, import_react.useState)(null);
 	const workable = (0, import_react.useMemo)(() => (instances || []).filter((i) => !isVerifySession(i)), [instances]);
 	const specialByKey = (0, import_react.useMemo)(() => new Map(specialPanes.map((p) => [sentinel(p.kind, sentinelRef(p)), p])), [specialPanes]);
@@ -108884,7 +109374,10 @@ function otherSessionsLine(titles, worktree) {
 function agentMissingReason(agent, installed) {
 	if (!installed || !agent) return "";
 	if (installed[agent] !== false) return "";
-	return agentName(agent) + " isn't installed on this device. Install it in one click from Get set up (step ①; a custom agent: Settings → Custom agents), or pick another agent.";
+	return agentName(agent) + " isn't installed on this device. Install it in one click from Setup (step ①; a custom agent: Settings → Custom agents), or pick another agent.";
+}
+function agentSignedOutLine(agent) {
+	return agentName(agent) + " isn't signed in yet — a session would stop at its sign-in screen.";
 }
 function preferInstalled(agent, names, installed) {
 	if (!installed || installed[agent] !== false) return agent;
@@ -111638,9 +112131,10 @@ function TemplatesDialogView(p) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "tpl-btn",
+							className: "tpl-btn tpl-confirm-no",
+							autoFocus: true,
 							onClick: () => p.dispatch({ t: "cancel" }),
-							children: "Keep"
+							children: "Cancel"
 						})
 					]
 				}),
@@ -114610,6 +115104,7 @@ function NewSessionDialog() {
 	const loadCleanup = (0, import_react.useRef)(null);
 	const loadDone = (0, import_react.useRef)(false);
 	const [signedOut, setSignedOut] = (0, import_react.useState)({});
+	const [signInFor, setSignInFor] = (0, import_react.useState)("");
 	const [folder, folderDo] = (0, import_react.useReducer)(folderReducer, FOLDER_INIT);
 	const repoPath = folder.path;
 	const browserOpen = folder.browsing;
@@ -115300,17 +115795,33 @@ function NewSessionDialog() {
 		id: "new-agent-signin",
 		role: "status",
 		children: [
-			canonAgent(program),
-			" isn't signed in yet — a session would stop at its sign-in screen.",
+			agentSignedOutLine(canonAgent(program)),
 			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "linklike",
+				id: "new-agent-signin-btn",
+				onClick: () => setSignInFor(canonAgent(program)),
+				children: "Sign in…"
+			})
+		]
+	});
+	const missingNote = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "nf-git-nudge nf-agent-missing",
+		id: "new-agent-missing",
+		role: "status",
+		children: [
+			agentMissing,
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike",
+				id: "new-agent-open-setup",
 				onClick: () => {
 					closeDialog();
-					openSettings("coding");
+					useUi.getState().openDialogFor("setup");
 				},
-				children: "Sign in…"
+				children: "Open Setup"
 			})
 		]
 	});
@@ -115371,7 +115882,7 @@ function NewSessionDialog() {
 			setPage(2);
 		}
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "new-dialog",
 		className: "modal top-dialog",
 		ref: rootRef,
@@ -115393,7 +115904,7 @@ function NewSessionDialog() {
 				else submit();
 			}
 		},
-		children: shownTab === "ticket" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		children: [shownTab === "ticket" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "new-ticket-form",
 			className: "ta-drop",
 			ref: dropZoneRef,
@@ -115498,12 +116009,7 @@ function NewSessionDialog() {
 								foldMissing: true
 							})]
 						}),
-						agentMissing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "nf-git-nudge nf-agent-missing",
-							id: "new-agent-missing",
-							role: "status",
-							children: agentMissing
-						}),
+						agentMissing && missingNote,
 						agentSignedOut && signedOutNote,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModelRow, {
 							selectedProfile,
@@ -115773,7 +116279,18 @@ function NewSessionDialog() {
 					startBlocked
 				})
 			]
-		})
+		}), signInFor && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "nf-signin-host",
+			onKeyDown: (e) => e.stopPropagation(),
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SignInWindow, {
+				provider: signInFor,
+				onClose: () => {
+					setSignInFor("");
+					notifyConnectionsChanged();
+					refreshAgentState();
+				}
+			})
+		})]
 	});
 }
 function NewHead({ tab, tabs, onTab, onClose }) {
@@ -119687,9 +120204,19 @@ function TicketSessionOptions() {
 								label: "Full clone — a standalone copy"
 							}]
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "set-hint",
-							children: "A worktree shares your repo's history; a clone is fully separate. Where they live is Settings › Workspace."
+							children: [
+								"A worktree shares your repo's history; a clone is fully separate. Where they live is",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "linklike",
+									onClick: () => openSettings("workspace"),
+									children: "Settings › Workspace"
+								}),
+								"."
+							]
 						})
 					]
 				}),
@@ -121372,11 +121899,22 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 						"."
 					]
 				}) : null,
-				ownGithubToken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				ownGithubToken && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "set-hint tk-own-token",
 					role: "note",
 					"data-tk-notice": "own-token",
-					children: "This source still has its own token — move it to Settings → Connections → GitHub → Connect (read as a fallback this release, ignored from the next)"
+					children: [
+						"This source still has its own token — move it to",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => openSettings("connections"),
+							children: "Settings → Connections → GitHub → Connect"
+						}),
+						" ",
+						"(read as a fallback this release, ignored from the next)"
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "tk-fields",
@@ -121971,7 +122509,11 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		fetching: prsQuery.isFetching,
 		loaded: !!prs
 	}) || (prsQuery.data?.login_error ? "GitHub login unknown — force review may still work" : "");
-	const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
+	const saveGithub = async (patch, fieldId) => {
+		if (await s.saveGroup("github", patch)) {
+			if (!flashSaved(document.getElementById(fieldId))) toast("Saved");
+		}
+	};
 	const n = repos.length;
 	const shownPrs = (prs || []).filter((p) => prMatches(p, filter.tokens));
 	const byRepo = /* @__PURE__ */ new Map();
@@ -122248,7 +122790,7 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 								id: "gh-skip-authors",
 								stored: String(skipAuthors),
 								placeholder: "dependabot, renovate",
-								onSave: (list) => void saveGithub({ skip_authors: list }, "Saved")
+								onSave: (list) => void saveGithub({ skip_authors: list }, "gh-skip-authors")
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-hint",
@@ -122287,7 +122829,11 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		fetching: issuesQuery.isFetching,
 		loaded: !!issues
 	});
-	const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
+	const saveGithub = async (patch, fieldId) => {
+		if (await s.saveGroup("github", patch)) {
+			if (!flashSaved(document.getElementById(fieldId))) toast("Saved");
+		}
+	};
 	const n = repos.length;
 	const shown = (issues || []).filter((i) => issueMatches(i, filter.tokens));
 	const byRepo = /* @__PURE__ */ new Map();
@@ -122536,7 +123082,7 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 								id: "gh-issue-skip-authors",
 								stored: String(skipAuthors),
 								placeholder: "dependabot, renovate",
-								onSave: (list) => void saveGithub({ issue_skip_authors: list }, "Saved")
+								onSave: (list) => void saveGithub({ issue_skip_authors: list }, "gh-issue-skip-authors")
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-hint",
@@ -122651,11 +123197,27 @@ function stalledText(s, many) {
 	if (s.state === "unset") return "Not set up — auto-start isn't available for " + s.label + " here yet. You can still start " + any + " with Start.";
 	return they + " won't start on " + (many ? "their" : "its") + " own: " + s.switchName + " is off (above). You can still start " + any + " here, with Start.";
 }
+var DEVICES_LINK = "Settings → Your devices";
+function splitAtLink(text, link) {
+	const at = text.indexOf(link);
+	return at < 0 ? null : [text.slice(0, at), text.slice(at + link.length)];
+}
 function StalledNote({ s }) {
+	const text = stalledText(s, s.items.length !== 1);
+	const cut = splitAtLink(text, DEVICES_LINK);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ik-queue-stalled",
 		"data-runs-on": s.state === "elsewhere" ? s.runsOn || "" : void 0,
-		children: stalledText(s, s.items.length !== 1)
+		children: cut ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			cut[0],
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike",
+				onClick: () => openSettings("devices"),
+				children: DEVICES_LINK
+			}),
+			cut[1]
+		] }) : text
 	});
 }
 function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
@@ -123230,6 +123792,8 @@ function IntakeDialog({ embedded = false, target: embeddedTarget = null } = {}) 
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				id: "intake-body",
+				onChangeCapture: (e) => noteTouched(e.target),
+				onBlurCapture: (e) => noteTouched(e.target),
 				children: TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
 					className: "ik-panel" + (tab === t.key ? " active" : ""),
 					"data-intake-tab": t.key,
@@ -123820,9 +124384,10 @@ function ScrollSpeedRow() {
 				setPos(Math.round(s.speed * 3));
 				setWheelDamping(s.speed);
 			}
-			toast("Terminal scroll speed: " + fmt(s?.speed ?? want) + " lines");
-		} catch {
-			toast("Scroll speed change failed");
+			if (!flashSaved(document.getElementById("scroll-speed"))) toast("Terminal scroll speed: " + fmt(s?.speed ?? want) + " lines");
+		} catch (err) {
+			const why = err?.message;
+			toast("Scroll speed change failed" + (why ? ": " + why : ""));
 		}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -129864,7 +130429,7 @@ function Ntfy({ onChange, setup = 0 } = {}) {
 	const save = (0, import_react.useCallback)(async (patch, from) => {
 		try {
 			apply(await api("/api/notify/ntfy", { json: patch }));
-			if (from) flashSaved(from);
+			if (!from || !flashSaved(from)) toast("Saved");
 		} catch (err) {
 			toast(err.message || "Couldn't save the ntfy settings");
 			load();
@@ -129876,7 +130441,7 @@ function Ntfy({ onChange, setup = 0 } = {}) {
 		setupSeen.current = setup;
 		if (view.topic || !view.suggested_topic) return;
 		setTopic(view.suggested_topic);
-		save({ topic: view.suggested_topic });
+		save({ topic: view.suggested_topic }, document.getElementById("ntfy-topic"));
 	}, [
 		setup,
 		view,
@@ -130358,7 +130923,7 @@ function Accounts(_) {
 		setDefaultId(data?.default_profile || "");
 		setEnvPinned(data?.default_profile_env || "");
 	}, [data]);
-	const save = async (next, nextDefault, force) => {
+	const save = async (next, nextDefault, force, from) => {
 		setError("");
 		setPendingForce(null);
 		try {
@@ -130373,7 +130938,7 @@ function Accounts(_) {
 			setDefaultId(r.default_profile || "");
 			setEnvPinned(r.default_profile_env || "");
 			refreshAuthProfiles();
-			toast("Accounts saved");
+			if (!(from && flashSaved(from))) toast("Accounts saved");
 		} catch (err) {
 			const msg = err.message || "";
 			if (/still in use by/.test(msg)) {
@@ -130387,10 +130952,10 @@ function Accounts(_) {
 			setError(msg);
 		}
 	};
-	const patch = (id, p) => save(profiles.map((x) => x.id === id ? {
+	const patch = (id, p, from) => save(profiles.map((x) => x.id === id ? {
 		...x,
 		...p
-	} : x));
+	} : x), void 0, void 0, from);
 	const addDraft = () => {
 		const id = accountId(draft.id, draft.label || "");
 		if (!ID_RE.test(id)) {
@@ -130461,7 +131026,7 @@ function Accounts(_) {
 					id: "acct-default",
 					value: defaultId,
 					disabled: !!envPinned,
-					onChange: (e) => save(profiles, e.target.value),
+					onChange: (e) => save(profiles, e.target.value, void 0, e.target),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: "",
 						children: "Each CLI's own login (no profile)"
@@ -130556,7 +131121,7 @@ function Accounts(_) {
 								placeholder: p.api_key === SECRET_MASK ? "•••set (saved)" : "paste a key",
 								defaultValue: "",
 								onBlur: (e) => {
-									if (e.target.value.trim()) patch(p.id, { api_key: e.target.value.trim() });
+									if (e.target.value.trim()) patch(p.id, { api_key: e.target.value.trim() }, e.target);
 								}
 							})]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -130568,7 +131133,7 @@ function Accounts(_) {
 								}),
 								models.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 									value: p.model || "",
-									onChange: (e) => patch(p.id, { model: e.target.value }),
+									onChange: (e) => patch(p.id, { model: e.target.value }, e.target),
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 											value: "",
@@ -130589,7 +131154,7 @@ function Accounts(_) {
 									placeholder: p.kind === "openrouter" ? "anthropic/claude-sonnet-4.5" : "model id",
 									defaultValue: p.model || "",
 									onBlur: (e) => {
-										if (e.target.value !== (p.model || "")) patch(p.id, { model: e.target.value.trim() });
+										if (e.target.value !== (p.model || "")) patch(p.id, { model: e.target.value.trim() }, e.target);
 									}
 								}),
 								p.kind === "openrouter" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -131465,7 +132030,9 @@ function RepoBranches() {
 	const save = (next) => {
 		const map = mapFrom(next);
 		if (JSON.stringify(map) === storedKey) return;
-		s.saveGroups({ repository: { repo_branches: map } }, "Saved per-repo branches");
+		s.saveGroups({ repository: { repo_branches: map } }).then((ok) => {
+			if (ok && !flashSaved(document.getElementById("workspace-repo-branches"))) toast("Saved per-repo branches");
+		});
 	};
 	const edit = (i, patch) => setRows((prev) => prev.map((r, j) => j === i ? {
 		...r,
@@ -135522,6 +136089,10 @@ function ServerEngineUpdate() {
 		})
 	] });
 }
+function failSentence(what, err) {
+	const why = String(err?.message ?? (typeof err === "string" ? err : "")).trim();
+	return why ? what + ": " + why.replace(/\.$/, "") + "." : what + ".";
+}
 function ShellEngineUpdate() {
 	const mfengine = window.mfengine;
 	const mfupdate = window.mfupdate;
@@ -135553,13 +136124,27 @@ function ShellEngineUpdate() {
 		mfupdate?.setAuto?.(on).then((r) => setInfo((i) => ({
 			...i || {},
 			autoUpdate: r?.autoUpdate !== false
-		}))).catch(() => {});
+		}))).catch((err) => {
+			setInfo((i) => ({
+				...i || {},
+				autoUpdate: !on
+			}));
+			toast(failSentence("Couldn't change automatic updates", err));
+		});
 	};
 	const update = () => {
 		if (busy || !mfengine.install) return;
 		setBusy(true);
 		setRun(null);
-		mfengine.install().catch(() => {});
+		mfengine.install().catch((err) => {
+			if (timer.current) clearInterval(timer.current);
+			timer.current = null;
+			setBusy(false);
+			setRun({
+				state: "failed",
+				message: failSentence("The update didn't start", err)
+			});
+		});
 		if (timer.current) clearInterval(timer.current);
 		timer.current = setInterval(async () => {
 			try {
@@ -135708,6 +136293,11 @@ function readLoadFailures(raw) {
 		error: String(f.error || "")
 	}));
 }
+function openCustomize() {
+	const ui = useUi.getState();
+	ui.setCustomizePage("sidebar");
+	ui.openDialogFor("customize");
+}
 function Extensions(_) {
 	const s = useSettings();
 	const { data: extensions, isLoading, isError } = useExtensions();
@@ -135721,10 +136311,12 @@ function Extensions(_) {
 			live = false;
 		};
 	}, []);
-	const setEnabled = async (ext, on) => {
+	const setEnabled = async (ext, on, from) => {
 		const cur = disabled ?? (extensions || []).filter((e) => !e.enabled).map((e) => e.id);
 		const next = on ? cur.filter((id) => id !== ext.id) : cur.includes(ext.id) ? cur : [...cur, ext.id];
-		await s.saveGroup("extensions", { disabled: next }, (on ? "Enabled " : "Disabled ") + ext.label);
+		if (await s.saveGroup("extensions", { disabled: next })) {
+			if (!flashSaved(from)) toast((on ? "Enabled " : "Disabled ") + ext.label);
+		}
 		refreshExtensions();
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -135732,9 +136324,19 @@ function Extensions(_) {
 			className: "set-section-title",
 			children: "Extensions"
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
-			children: "Each extension adds one sidebar bar whose buttons run its commands, and opens its own dialogs and grid windows. Its bar drags and hides like the built-in ones (footer Customize); its commands are in the command palette."
+			children: [
+				"Each extension adds one sidebar bar whose buttons run its commands, and opens its own dialogs and grid windows. Its bar drags and hides like the built-in ones (",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					id: "ext-open-customize",
+					onClick: openCustomize,
+					children: "Customize"
+				}),
+				"); its commands are in the command palette."
+			]
 		}),
 		isLoading && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
@@ -135781,7 +136383,7 @@ function Extensions(_) {
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 										type: "checkbox",
 										checked: on,
-										onChange: (e) => void setEnabled(ext, e.target.checked)
+										onChange: (e) => void setEnabled(ext, e.target.checked, e.target)
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 								})
 							]
@@ -137678,6 +138280,12 @@ function CustomizeDialog() {
 }
 //#endregion
 //#region src/components/dialogs/PromptsDialog.tsx
+function restorePreset(current, preset, at) {
+	if (current.some((q) => q.name === preset.name)) return current;
+	const list = current.slice();
+	list.splice(Math.max(0, Math.min(at, list.length)), 0, preset);
+	return list;
+}
 function PromptsPanel({ onUse } = {}) {
 	const closeDialog = useUi((s) => s.closeDialog);
 	const focused = useUi((s) => s.focused);
@@ -137786,9 +138394,24 @@ function PromptsPanel({ onUse } = {}) {
 						onClick: (e) => {
 							e.stopPropagation();
 							setPop(null);
-							const list = loadUserPresets().filter((q) => q.name !== p.name);
+							const before = loadUserPresets();
+							const at = before.findIndex((q) => q.name === p.name);
+							const gone = at >= 0 ? before[at] : p;
+							const list = before.filter((q) => q.name !== p.name);
 							saveUserPresets(list);
 							setSaved(list);
+							toast("Deleted “" + p.name + "”", {
+								action: {
+									label: "Undo",
+									onClick: () => {
+										const back = restorePreset(loadUserPresets(), gone, at);
+										saveUserPresets(back);
+										setSaved(back);
+									},
+									ariaLabel: "Undo deleting “" + p.name + "”"
+								},
+								duration: 6e3
+							});
 						},
 						children: "✕"
 					})
@@ -139843,8 +140466,7 @@ function ChatPanel() {
 	const any = state.windows.length > 0;
 	(0, import_react.useEffect)(() => {
 		if (!any) return;
-		const t = setInterval(pollChats, CHAT_POLL_MS);
-		return () => clearInterval(t);
+		return pollWhileVisible(pollChats, CHAT_POLL_MS);
 	}, [any]);
 	const peopleOn = (title) => Object.values(focus).filter((f) => f.title === title);
 	const withWhom = (title) => {
@@ -140038,6 +140660,7 @@ function RenameDialog() {
 					type: "text",
 					id: "rename-input",
 					ref: inputRef,
+					maxLength: MAX_TITLE_LEN,
 					autoComplete: "off",
 					spellCheck: false,
 					"aria-invalid": !!taken,
@@ -140653,6 +141276,9 @@ function reasonText(e) {
 	}
 	return reason.charAt(0).toUpperCase() + reason.slice(1) + ".";
 }
+function reopenedText(title) {
+	return "Reopened " + (title ? displayName(title) : "session");
+}
 function deletable(e) {
 	return e.exists && !e.in_place && !!e.path && !e.active_session;
 }
@@ -141102,6 +141728,7 @@ function RecentDialog() {
 													await refreshInstances();
 													refreshRecentlyClosed();
 													if (inst?.title) selectSession(inst.title);
+													toast(reopenedText(inst?.title || e.title || ""));
 												} catch (err) {
 													errorPop("Reopen failed", err.message);
 													load();
@@ -141168,9 +141795,15 @@ function pushTargetLine(t) {
 	if (!t?.name) return "Checks your project's repo once a session has opened one — no token needed.";
 	return "Checks " + t.name + (t.remote ? " → " + t.remote : " (it has no remote called origin yet)");
 }
-function isCommand(fix) {
-	return /^(git|gh|ssh-keygen|ssh-add)\s/.test((fix || "").trim());
+function githubSourceWords(source) {
+	const s = (source || "").trim();
+	if (!s || s === "none") return "";
+	if (s === "settings") return "your saved token";
+	if (s === "gh-cli") return "gh's sign-in";
+	if (s.startsWith("env:") && s.length > 4) return "the " + s.slice(4) + " variable";
+	return s;
 }
+var GH_NOT_CONNECTED = "Not connected yet. Finish the steps in the terminal, or paste a token.";
 function connectLayout(st) {
 	const device = primaryGithubMethod(st) === "device";
 	const gh = (st?.methods || []).includes("gh") || !!st?.gh?.installed;
@@ -141275,6 +141908,7 @@ function ConnectGitHub({ onChange, onDone }) {
 	const [push, setPush] = (0, import_react.useState)(null);
 	const [test, setTest] = (0, import_react.useState)(null);
 	const [tokenResult, setTokenResult] = (0, import_react.useState)(null);
+	const [ghNote, setGhNote] = (0, import_react.useState)("");
 	const changeRef = (0, import_react.useRef)(onChange);
 	changeRef.current = onChange;
 	const load = (0, import_react.useCallback)(async () => {
@@ -141324,9 +141958,31 @@ function ConnectGitHub({ onChange, onDone }) {
 			setBusy("");
 		}
 	};
-	if (err) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-		className: "error",
-		children: ["GitHub status failed: ", err]
+	if (err) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "gh-load-failed",
+		id: "gh-load-failed",
+		role: "alert",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "error",
+			children: [
+				"Couldn't check GitHub.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike gh-retry",
+					id: "gh-retry",
+					disabled: busy === "retry",
+					onClick: (e) => {
+						e.stopPropagation();
+						run("retry", load);
+					},
+					children: busy === "retry" ? "Retrying…" : "Retry"
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "muted gh-load-reason",
+			children: err
+		})]
 	});
 	if (!st) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "muted",
@@ -141365,6 +142021,24 @@ function ConnectGitHub({ onChange, onDone }) {
 			setTest(describeConnectionTest(await api("/api/settings/test/github", { method: "POST" })));
 		} catch {}
 	});
+	const saveIdentity = () => {
+		if (busy || !name.trim() || !email.trim()) return;
+		return run("identity", async () => {
+			await api("/api/github/identity", { json: {
+				name: name.trim(),
+				email: email.trim()
+			} });
+			toast("git now knows who you are");
+			await load();
+			changeRef.current?.();
+		});
+	};
+	const identityKeyDown = (e) => {
+		if (e.key !== "Enter") return;
+		e.preventDefault();
+		e.stopPropagation();
+		saveIdentity();
+	};
 	const tokenSteps = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
 		className: "gh-steps",
 		id: "gh-token-steps",
@@ -141479,9 +142153,9 @@ function ConnectGitHub({ onChange, onDone }) {
 					children: [
 						"✓ Connected",
 						st.login ? " as @" + st.login : "",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						githubSourceWords(st.source) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "muted",
-							children: [" · ", st.source === "gh-cli" ? "via gh" : st.source]
+							children: [" · via ", githubSourceWords(st.source)]
 						}),
 						st.user_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "error",
@@ -141530,6 +142204,23 @@ function ConnectGitHub({ onChange, onDone }) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "muted",
 							children: "waiting for you to approve…"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike gh-device-cancel",
+							id: "gh-device-cancel",
+							disabled: !!busy,
+							onClick: (e) => {
+								e.stopPropagation();
+								run("cancel", async () => {
+									try {
+										await api("/api/github/device", { method: "DELETE" });
+									} finally {
+										setFlow(null);
+									}
+								});
+							},
+							children: "Cancel"
 						})
 					]
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -141562,20 +142253,30 @@ function ConnectGitHub({ onChange, onDone }) {
 					onClick: (e) => e.stopPropagation(),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Other ways to connect" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "setup-actions gh-cli-alt",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "gh-cli-signin",
-							className: "test-btn",
-							disabled: !!busy,
-							onClick: (e) => {
-								e.stopPropagation();
-								setGhOpen(true);
-							},
-							children: "Sign in with the GitHub CLI"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "a terminal asks one question, then opens GitHub in your browser"
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "gh-cli-signin",
+								className: "test-btn",
+								disabled: !!busy,
+								onClick: (e) => {
+									e.stopPropagation();
+									setGhNote("");
+									setGhOpen(true);
+								},
+								children: "Sign in with the GitHub CLI"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "a terminal asks one question, then opens GitHub in your browser"
+							}),
+							ghNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "test-result bad gh-cli-note",
+								id: "gh-cli-note",
+								role: "status",
+								children: ghNote
+							})
+						]
 					})]
 				}),
 				layout.tokenFolded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -141602,15 +142303,20 @@ function ConnectGitHub({ onChange, onDone }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 								className: "gh-ident-name",
 								placeholder: "Your Name",
+								"aria-label": "Your name for commits",
 								value: name,
 								onChange: (e) => setName(e.target.value),
+								onKeyDown: identityKeyDown,
 								onClick: (e) => e.stopPropagation()
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 								className: "gh-ident-email",
 								placeholder: "you@example.com",
+								"aria-label": "Your email for commits",
+								type: "email",
 								value: email,
 								onChange: (e) => setEmail(e.target.value),
+								onKeyDown: identityKeyDown,
 								onClick: (e) => e.stopPropagation()
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -141620,15 +142326,7 @@ function ConnectGitHub({ onChange, onDone }) {
 								title: !name.trim() || !email.trim() ? "Fill in both your name and email" : void 0,
 								onClick: (e) => {
 									e.stopPropagation();
-									run("identity", async () => {
-										await api("/api/github/identity", { json: {
-											name: name.trim(),
-											email: email.trim()
-										} });
-										toast("git now knows who you are");
-										await load();
-										changeRef.current?.();
-									});
+									saveIdentity();
 								},
 								children: "Use these"
 							})
@@ -141739,6 +142437,7 @@ function ConnectGitHub({ onChange, onDone }) {
 						const r = await api("/api/github/import-gh", { method: "POST" });
 						await connected(r.login);
 					} catch {
+						setGhNote(GH_NOT_CONNECTED);
 						await load();
 					}
 				});
@@ -149026,6 +149725,16 @@ function SkyStateChip({ ss, title, className }) {
 		children: busy ? "Starting…" : HELD_CHIP
 	});
 }
+function hasFlownToFold(d, folded) {
+	return flownCount(folded ? d : collapseFlown(d)) > 0;
+}
+function lineRouteItems(flight, onCancelAsk, rows) {
+	if (!flight) return [];
+	return routeMenuItems(flight, onCancelAsk, sessionGone(flight, rows)).map((it, i) => i === 0 ? {
+		...it,
+		className: [it.className, "skl-mi-group"].filter(Boolean).join(" ")
+	} : it);
+}
 function SkyLine(p) {
 	const flights = useFlights().data;
 	const kinds = useFlightKinds().data;
@@ -149049,17 +149758,7 @@ function SkyLine(p) {
 	useUi((s) => s.aliases[p.title]);
 	const name = windowName(p.title);
 	const { foldFlown, setFoldFlown } = line;
-	const folds = flownCount((0, import_react.useMemo)(() => sessionDiagram(p.rows, p.title, {
-		flights,
-		kinds,
-		family: true,
-		foldFlown: true
-	}), [
-		p.rows,
-		p.title,
-		flights,
-		kinds
-	])) > 0;
+	const folds = (0, import_react.useMemo)(() => hasFlownToFold(line.diagram, foldFlown), [line.diagram, foldFlown]);
 	const [kids, setKids] = (0, import_react.useState)({});
 	const rootRef = (0, import_react.useRef)(null);
 	const wrapRef = (0, import_react.useRef)(null);
@@ -149354,6 +150053,7 @@ function SkyLine(p) {
 			title: "Keep this route's stops on the shelf as a saved route — you name it",
 			onSelect: () => setSavingAs(line.flight?.plan_name && line.flight.plan_name !== "Stops" ? line.flight.plan_name : name)
 		}] : [],
+		...lineRouteItems(line.flight || line.landed, line.cancel.ask, p.rows),
 		{
 			key: "close",
 			label: "Close session",
@@ -151213,6 +151913,18 @@ var SKY_SHORTCUT_GROUPS = [
 			{
 				keys: ["Ctrl", "Y"],
 				what: "Switch between the grid and the sky"
+			},
+			{
+				keys: [
+					"Ctrl",
+					"K",
+					"N"
+				],
+				what: "Next session that needs you (K first, then N)"
+			},
+			{
+				keys: ["Alt", "V"],
+				what: "Next Verify that needs you"
 			}
 		]
 	},
@@ -151955,10 +152667,15 @@ var NO_KINDS = [];
 var NO_ROWS = [];
 var NO_PLANS = [];
 var memo = null;
+var SKY_FLIGHTS_UNREACHABLE = "Can't reach the server — routes may be out of date.";
+function skyFlightsNote(q) {
+	return q.isError ? SKY_FLIGHTS_UNREACHABLE : "";
+}
 function SkyView() {
 	const instQ = useInstances();
 	const flightsQ = useFlights();
 	const flights = flightsQ.data;
+	const flightsNote = skyFlightsNote(flightsQ);
 	const kinds = useFlightKinds().data || NO_KINDS;
 	const rows = (0, import_react.useMemo)(() => withLiveFlights(instQ.data || NO_ROWS, flights, kinds), [
 		instQ.data,
@@ -154228,6 +154945,12 @@ function SkyView() {
 				onClick: tidy,
 				children: "Tidy"
 			}),
+			flightsNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-note error sky-flights-note",
+				role: "status",
+				title: flightsNote,
+				children: flightsNote
+			}),
 			!narrow && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WeatherWord, {}),
 			!narrow && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "sky-zoom",
@@ -155141,7 +155864,9 @@ var GUEST_FOCUS_HEARTBEAT_MS = 3e4;
 function App() {
 	const { data: config } = useConfig();
 	const { data: instances } = useInstances();
-	const ui = useUi();
+	const focused = useUi((s) => s.focused);
+	const sidebarHidden = useUi((s) => s.sidebarHidden);
+	const sidebarWidth = useUi((s) => s.sidebarWidth);
 	useDoctorAutoShow();
 	useIntakeWarm(!!config?.caps?.ticketing);
 	(0, import_react.useEffect)(() => {
@@ -155154,7 +155879,7 @@ function App() {
 		if (isGuest === null) return;
 		installAliasSync(isGuest);
 	}, [isGuest]);
-	const focusedTitle = ui.focused || "";
+	const focusedTitle = focused || "";
 	const guestNamed = !!config?.guest?.name;
 	(0, import_react.useEffect)(() => {
 		if (!isGuest || !guestNamed || !focusedTitle) return;
@@ -155174,10 +155899,10 @@ function App() {
 		document.body.classList.toggle("no-ticketing", caps ? !caps.ticketing : false);
 	}, [config?.caps]);
 	(0, import_react.useEffect)(() => {
-		document.body.classList.toggle("sidebar-collapsed", ui.sidebarHidden);
+		document.body.classList.toggle("sidebar-collapsed", sidebarHidden);
 		const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 60);
 		return () => clearTimeout(t);
-	}, [ui.sidebarHidden]);
+	}, [sidebarHidden]);
 	(0, import_react.useEffect)(() => {
 		if (typeof window === "undefined" || !window.matchMedia) return;
 		const mq = window.matchMedia("(max-width: 760px)");
@@ -155191,11 +155916,11 @@ function App() {
 	}, []);
 	(0, import_react.useEffect)(() => {
 		const s = useUi.getState();
-		if (s.narrow && !s.sidebarHidden && ui.focused) s.toggleSidebar();
-	}, [ui.focused]);
+		if (s.narrow && !s.sidebarHidden && focused) s.toggleSidebar();
+	}, [focused]);
 	(0, import_react.useEffect)(() => {
-		document.body.style.setProperty("--sidebar-w", ui.sidebarWidth + "px");
-	}, [ui.sidebarWidth]);
+		document.body.style.setProperty("--sidebar-w", sidebarWidth + "px");
+	}, [sidebarWidth]);
 	(0, import_react.useEffect)(() => {
 		for (const inst of instances || []) {
 			noteActivity(inst);

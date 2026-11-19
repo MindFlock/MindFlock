@@ -2672,6 +2672,26 @@ button.assist-chip:hover {
 .gh-connected-row .setup-primary:hover {
   filter: brightness(1.1);
 }
+
+/* The status read failed: the sentence and its Retry, the reason under it. */
+.gh-load-failed p {
+  margin: 0;
+}
+.gh-load-failed .gh-load-reason {
+  margin-top: 4px;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+/* Cancel a pending device-flow code: quiet, at the end of the code row. */
+.gh-device .gh-device-cancel {
+  color: var(--muted);
+}
+
+/* "Not connected yet…" after the gh window closed early: its own line. */
+.gh-cli-alt .gh-cli-note {
+  flex-basis: 100%;
+}
 /* Settings → Connections dashboard (Connections.tsx). The base row/pill
    styles live in ticketingConnections.css; this adds the groups, the
    three-state pills, the action column, the fix line and the Test result. */
@@ -3481,6 +3501,15 @@ button.assist-chip:hover {
   display: block;
   margin-top: 4px;
   word-break: break-word;
+}
+
+/* A doctor fix that is a command gets the same Copy as Connect GitHub's push
+   fix and the install window. */
+.doctor-check .doctor-fix-copy {
+  margin-left: 6px;
+  padding: 1px 8px;
+  font-size: 11px;
+  vertical-align: baseline;
 }
 /* Getting-started hint callout. Uses the accent tint so it reads as a friendly
    nudge, not a warning. Inline in the layout flow — see Hint.tsx. */
@@ -7385,6 +7414,17 @@ body.view-switch #sky-view {
 
 .sky-toolbar > * {
   flex: none;
+}
+
+/* "Can't reach the server": one line that gives way before the controls. */
+.sky-toolbar > .sky-flights-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.85em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The toolbar's controls are the app's button tiers (docs/flights.md "As
@@ -22309,6 +22349,13 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
     background: rgba(var(--accent-rgb), 0.2);
   }
 }
+
+/* A refused inline rename (another session has the name): the reason under
+   the box, in red, while the typed text stays in it. */
+.inst .lineage.rename-taken {
+  color: var(--red);
+  white-space: normal;
+}
 }
 
 /* 080 */
@@ -31399,6 +31446,25 @@ button.ct-chip:hover {
   font-size: 12.5px;
 }
 
+/* A failed load's Retry, and the "may be out of date" note a failed refresh
+   leaves under messages already shown (the Map's cm-note-stale wording). */
+.th-stale {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.th-retry {
+  font: inherit;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+}
+.th-retry:hover {
+  text-decoration: underline;
+}
+
 /* --- the composer ------------------------------------------------------------ */
 .thread-compose {
   flex: none;
@@ -34612,6 +34678,13 @@ button.ct-chip:hover {
 .nf-skip-perms {
   margin-top: 4px;
 }
+
+/* The agent sign-in window opened from the "isn't signed in yet" note is
+   portalled; its React host is an empty wrapper that must not take a slot in
+   the dialog's layout. */
+.nf-signin-host {
+  display: contents;
+}
 }
 
 /* 170 */
@@ -36355,6 +36428,25 @@ body.conn-lost #cs-errors {
 
 #cs-errors .cs-confirm .cs-error-act.primary:hover {
   background: rgba(120, 160, 255, 0.12);
+}
+
+/* A destructive answer (Delete) is red on either card, like the row menu's
+   confirm strip, so a question's Delete never reads as the safe default. */
+#cs-errors .cs-error-act.danger,
+#cs-errors .cs-confirm .cs-error-act.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+#cs-errors .cs-error-act.danger:hover,
+#cs-errors .cs-confirm .cs-error-act.danger:hover {
+  background: rgba(222, 97, 62, 0.12);
+}
+
+/* Cards take focus on open (Cancel first): show where it is. */
+#cs-errors .cs-error-act:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 }
 
