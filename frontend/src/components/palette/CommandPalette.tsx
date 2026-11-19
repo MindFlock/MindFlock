@@ -65,6 +65,7 @@ const PALETTE_ACTIONS: SessionActionId[] = [
   "close",
   "delete",
   "map",
+  "diff",
   "merge",
 ];
 
