@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.20] - 2026-11-19
+
 ### Added
 
 - **Select several stops of a chain with Ctrl/⌘+click and Shift+click**, in
@@ -6339,7 +6341,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.19...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.20...HEAD
+[0.14.20]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.20
 [0.14.19]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.19
 [0.14.18]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.18
 [0.14.17]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.17
