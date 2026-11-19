@@ -55,7 +55,7 @@ def test_session_actions_ask_on_inline_cards():
         "export async function cleanupMissing(title: string, confirmed = false)" in src
     )
     assert (
-        '{ label: "Delete", primary: true, run: () => void cleanupMissing(title, true) }'
+        '{ label: "Delete", primary: true, danger: true, run: () => void cleanupMissing(title, true) }'
         in src
     )
     assert (

@@ -9,6 +9,7 @@ import { useUi } from "../../state/store";
 import { Modal } from "../Modal";
 import { renameSession } from "../../lib/renameSession";
 import { nameTakenBy, windowName } from "../../lib/windowName";
+import { MAX_TITLE_LEN } from "../../lib/sessionActions";
 
 export function RenameDialog() {
   const open = useUi((s) => s.openDialog === "rename");
@@ -61,6 +62,7 @@ export function RenameDialog() {
             type="text"
             id="rename-input"
             ref={inputRef}
+            maxLength={MAX_TITLE_LEN}
             autoComplete="off"
             spellCheck={false}
             aria-invalid={!!taken}

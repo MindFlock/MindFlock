@@ -197,8 +197,9 @@ describe("keyboard shortcut cheat-sheet", () => {
 
 describe("undo toasts, favicon dot, no maximize", () => {
   it("offers Undo on a single hide and on a bulk hide", () => {
-    expect(normCode("lib/sessionActions.ts")).toContain("— click to undo");
-    expect(normCode("components/sidebar/BulkBar.tsx")).toContain("— click to undo");
+    // A real Undo button, like Close's — never the whole toast as the target.
+    expect(normCode("lib/sessionActions.ts")).toContain('toast("Hid " + (ui.aliases[title] || title), { action: { label: "Undo",');
+    expect(normCode("components/sidebar/BulkBar.tsx")).toContain('toast(`Hid ${hid.length} session(s)`, { action: { label: "Undo",');
   });
 
   it("dots the favicon off the same clarify count that badges the title", () => {

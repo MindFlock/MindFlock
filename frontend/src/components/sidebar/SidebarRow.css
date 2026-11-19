@@ -1175,3 +1175,10 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
     background: rgba(var(--accent-rgb), 0.2);
   }
 }
+
+/* A refused inline rename (another session has the name): the reason under
+   the box, in red, while the typed text stays in it. */
+.inst .lineage.rename-taken {
+  color: var(--red);
+  white-space: normal;
+}

@@ -220,3 +220,22 @@ body.conn-lost #cs-errors {
 #cs-errors .cs-confirm .cs-error-act.primary:hover {
   background: rgba(120, 160, 255, 0.12);
 }
+
+/* A destructive answer (Delete) is red on either card, like the row menu's
+   confirm strip, so a question's Delete never reads as the safe default. */
+#cs-errors .cs-error-act.danger,
+#cs-errors .cs-confirm .cs-error-act.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+#cs-errors .cs-error-act.danger:hover,
+#cs-errors .cs-confirm .cs-error-act.danger:hover {
+  background: rgba(222, 97, 62, 0.12);
+}
+
+/* Cards take focus on open (Cancel first): show where it is. */
+#cs-errors .cs-error-act:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
