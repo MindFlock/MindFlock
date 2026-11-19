@@ -65,7 +65,7 @@
       <p class="logcap" id="starting-cap" hidden>Server log (<span class="logpath"></span>):</p>
       <pre class="log" id="starting-log" hidden></pre>
       <p class="hint" id="starting-hint" hidden>Taking longer than usual?
-        Press <code>Ctrl+Shift+L</code> for app logs.<br>
+        Press <code class="logkey">Ctrl+Shift+L</code> for app logs.<br>
         Server startup log: <code class="logpath">~/.mindflock/desktop-server.log</code></p>
     </section>
 
@@ -82,7 +82,7 @@
       <button class="action quiet" id="copy-diag">Copy diagnostics</button>
       <p class="hint">Copy diagnostics puts the log tail and the app’s details on
          your clipboard, ready to paste into a bug report.<br>
-         Press <code>Ctrl+Shift+L</code> for the app’s own log folder.</p>
+         Press <code class="logkey">Ctrl+Shift+L</code> for the app’s own log folder.</p>
     </section>
 
     <!-- wsl.exe errored or hung: offer the fix, don't make them type anything. -->
@@ -148,7 +148,7 @@
       <p class="detail" id="broken-detail"></p>
       <button class="action" id="do-repair">Repair the engine (about 3 min)</button>
       <p class="hint">Sessions that are still running keep running while it reinstalls.<br>
-         Press <code>Ctrl+Shift+L</code> for the app’s log folder.</p>
+         Press <code class="logkey">Ctrl+Shift+L</code> for the app’s log folder.</p>
     </section>
 
     <!-- macOS without Homebrew. tmux comes from Homebrew, so offer to install it
@@ -324,24 +324,49 @@
   wireQuiet('inst-copy-diag', 'copy-diagnostics', 'Copied')
   wireQuiet('retry-start', 'retry-start', 'Starting…')
 
+  // The logs shortcut is Ctrl+Shift+L, or Cmd+Shift+L on a Mac (main.js
+  // takes either modifier); say the one this keyboard has.
+  var isMac = (window.mfshell && window.mfshell.platform === 'darwin')
+    || /Mac/.test((navigator && navigator.platform) || '')
+  if (isMac) setAll('.logkey', 'Cmd+Shift+L')
+
+  // Restart WSL is a two-step confirm (--shutdown closes other WSL work).
+  // The armed question stands down by itself after RESTART_ARM_MS, and the
+  // button says how the restart went before it reads "Restart WSL" again.
+  var RESTART_ARM_MS = 5000
+  var RESTART_RESULT_MS = 2500
   var restarting = false
   var armed = false
+  var disarmTimer = null
   var btn = document.getElementById('restart-wsl')
+  var btnLabel = btn.textContent
+  function disarm() {
+    armed = false
+    if (disarmTimer) { clearTimeout(disarmTimer); disarmTimer = null }
+    if (!restarting) btn.textContent = btnLabel
+  }
   btn.addEventListener('click', function () {
     if (restarting) return
-    if (!armed) {   // two-step confirm: --shutdown closes other WSL work
+    if (!armed) {
       armed = true
       btn.textContent = 'Restart WSL now? (closes other WSL apps)'
+      disarmTimer = setTimeout(disarm, RESTART_ARM_MS)
       return
     }
+    disarm()
     restarting = true
     btn.disabled = true
     btn.textContent = 'Restarting WSL…'
     Promise.resolve(window.mfdiag && window.mfdiag.restartWsl())
-      .catch(function () {})
-      .then(function () {
-        restarting = false; armed = false
-        btn.disabled = false; btn.textContent = 'Restart WSL'
+      .then(function (r) { return !!r && r.ok !== false })
+      .catch(function () { return false })
+      .then(function (ok) {
+        btn.textContent = ok ? 'Restarted' : 'Didn’t work'
+        setTimeout(function () {
+          restarting = false
+          btn.disabled = false; btn.textContent = btnLabel
+          tick()
+        }, RESTART_RESULT_MS)
       })
   })
 
