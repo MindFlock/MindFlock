@@ -291,16 +291,33 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
               onChangeCapture={(e) => noteTouched(e.target)}
               onBlurCapture={(e) => noteTouched(e.target)}
             >
-              {screens.map((s) => (
-                <section
-                  key={s.key}
-                  className={"set-screen" + (screen === s.key ? " active" : "")}
-                  data-screen={s.key}
-                  data-caps-need={s.key === "workspace" ? "git" : undefined}
-                >
-                  {screen === s.key && s.el(props)}
-                </section>
-              ))}
+              {/* Until the settings document has loaded, fields would read
+                  empty and switches off — values that aren't real. Say so
+                  instead of showing them. */}
+              {model.status === "loading" && (
+                <p className="set-hint" id="settings-load-state" role="status">
+                  Loading settings…
+                </p>
+              )}
+              {model.status === "error" && (
+                <p className="set-hint" id="settings-load-state" role="alert">
+                  Couldn't read settings.{" "}
+                  <button type="button" className="linklike" onClick={() => void model.reload()}>
+                    Retry
+                  </button>
+                </p>
+              )}
+              {model.status === "ready" &&
+                screens.map((s) => (
+                  <section
+                    key={s.key}
+                    className={"set-screen" + (screen === s.key ? " active" : "")}
+                    data-screen={s.key}
+                    data-caps-need={s.key === "workspace" ? "git" : undefined}
+                  >
+                    {screen === s.key && s.el(props)}
+                  </section>
+                ))}
             </div>
           </div>
         </div>

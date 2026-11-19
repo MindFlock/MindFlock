@@ -134,6 +134,9 @@ export function CommitDialog() {
   }
 
   async function submitCommit() {
+    // ✨ is still writing: committing now would take the half-typed hint and
+    // drop the message being written (Ctrl+Enter reaches here too).
+    if (writing) return;
     const title = target;
     const m = msg.trim();
     if (!m) {
@@ -275,7 +278,13 @@ export function CommitDialog() {
           <button type="button" id="commit-cancel" onClick={closeDialog}>
             Cancel
           </button>
-          <button type="submit">{submitLabel}</button>
+          <button
+            type="submit"
+            disabled={writing}
+            title={writing ? "Wait for the message being written" : undefined}
+          >
+            {submitLabel}
+          </button>
         </div>
         <p id="commit-error" className="error">
           {error}

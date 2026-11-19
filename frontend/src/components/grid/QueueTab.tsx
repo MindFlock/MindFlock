@@ -61,6 +61,13 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
   const [inserting, setInserting] = useState<{ index: number; value: string } | null>(null);
   // A file (not a queue row) is being dragged over the tab.
   const [fileHover, setFileHover] = useState(false);
+  // A Send now / Add to queue in flight: both buttons disable and the keys
+  // are ignored, so a double click or a second Ctrl+Enter can't send the same
+  // prompt twice. The ref guards within one tick, the state paints it.
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  // The first load failed (nothing cached to show): say so, with a Retry.
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const reload = useCallback(async () => {
     if (draggingRef.current) return; // don't reshuffle rows under a drag
@@ -68,8 +75,10 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
       const st = await qApi(title, "/queue");
       queueCache.set(title, st);
       setState((prev) => (JSON.stringify(prev) === JSON.stringify(st) ? prev : st));
+      setLoadFailed(false);
     } catch {
       /* keep the last render on error */
+      setLoadFailed(true);
     }
   }, [title]);
 
@@ -100,7 +109,18 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
     return () => clearInterval(t);
   }, [active, reload]);
 
-  if (!state) return <div className="queue-loading muted">Loading…</div>;
+  if (!state) {
+    return loadFailed ? (
+      <div className="queue-loading muted" role="alert">
+        Couldn't load the queue.{" "}
+        <button type="button" className="queue-retry" onClick={() => void reload()}>
+          Retry
+        </button>
+      </div>
+    ) : (
+      <div className="queue-loading muted">Loading…</div>
+    );
+  }
 
   const items = state.items || [];
   const enabled = state.enabled !== false;
@@ -136,7 +156,22 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
       : items.length + " queued · next sends automatically when idle";
   }
 
-  const send = async () => {
+  /** Run one Send now / Add to queue, unless one is already in flight. */
+  const once = async (go: () => Promise<void>) => {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
+    try {
+      await go();
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  };
+  const send = () => once(sendText);
+  const add = () => once(addText);
+
+  const sendText = async () => {
     const text = draft.trim();
     if (!text) return;
     try {
@@ -155,7 +190,7 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
       toast("Send failed: " + ((err as Error).message || ""));
     }
   };
-  const add = async () => {
+  const addText = async () => {
     const text = draft.trim();
     if (!text) return;
     try {
@@ -300,10 +335,10 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
         }}
       />
       <div className="queue-actions">
-        <button className="queue-add primary" type="button" title="Add to queue (Alt+Enter)" onClick={add}>
+        <button className="queue-add primary" type="button" title="Add to queue (Alt+Enter)" disabled={sending} onClick={add}>
           Add to queue
         </button>
-        <button className="queue-send" type="button" title="Send now (Ctrl+Enter)" onClick={send}>
+        <button className="queue-send" type="button" title="Send now (Ctrl+Enter)" disabled={sending} onClick={send}>
           Send now
         </button>
       </div>

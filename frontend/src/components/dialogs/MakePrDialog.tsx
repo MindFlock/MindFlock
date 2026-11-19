@@ -35,6 +35,10 @@ export function MakePrDialog() {
   const [value, setValue] = useState("");
   const [info, setInfo] = useState<BranchInfo | null>(null);
   const [loading, setLoading] = useState(false);
+  // The branch list didn't load: say so, with a Retry (typing a name still works).
+  const [listFailed, setListFailed] = useState(false);
+  // Bumped per load, so a slow answer for an earlier open/Retry is dropped.
+  const loadSeq = useRef(0);
   const [showList, setShowList] = useState(false);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -46,29 +50,42 @@ export function MakePrDialog() {
   }, [target]);
   const repo = inst?.repo || "";
 
-  // On open: reset, load the branch list, pre-fill from the per-repo memory
-  // (else the server-computed default), focus.
-  useEffect(() => {
-    if (!open || !target) return;
-    let alive = true;
-    setInfo(null);
-    setShowList(false);
-    setActive(0);
-    setValue(repo ? prBaseByRepo[repo] || "" : "");
+  /** Load the branch list (on open, and from Retry). Never touches what is
+   * typed beyond filling an empty box with the server default. */
+  function loadBranches(title: string) {
+    const seq = ++loadSeq.current;
+    const alive = () => seq === loadSeq.current;
     setLoading(true);
-    instApi<BranchInfo>(target, "/branches")
+    setListFailed(false);
+    instApi<BranchInfo>(title, "/branches")
       .then((data) => {
-        if (!alive) return;
+        if (!alive()) return;
         setInfo(data);
         // No remembered choice → fall back to the server default.
         setValue((prev) => prev || data.default || "");
       })
-      .catch(() => alive && setInfo({ branches: [], current: "", default: "" }))
-      .finally(() => alive && setLoading(false));
+      .catch(() => {
+        if (!alive()) return;
+        setInfo({ branches: [], current: "", default: "" });
+        setListFailed(true);
+      })
+      .finally(() => alive() && setLoading(false));
+  }
+
+  // On open: reset, load the branch list, pre-fill from the per-repo memory
+  // (else the server-computed default), focus.
+  useEffect(() => {
+    if (!open || !target) return;
+    setInfo(null);
+    setShowList(false);
+    setActive(0);
+    setValue(repo ? prBaseByRepo[repo] || "" : "");
+    loadBranches(target);
     setTimeout(() => inputRef.current?.focus(), 0);
     return () => {
-      alive = false;
+      loadSeq.current++;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, target, repo, prBaseByRepo]);
 
   const filtered = useMemo(() => {
@@ -191,6 +208,14 @@ export function MakePrDialog() {
             )}
           </div>
         </label>
+        {listFailed && (
+          <p className="set-hint" id="make-pr-branches-failed" role="alert">
+            Couldn't load the branch list. You can still type a branch name.{" "}
+            <button type="button" className="linklike" onClick={() => loadBranches(target)}>
+              Retry
+            </button>
+          </p>
+        )}
         {risk && (
           <p className="set-hint" id="make-pr-risk">
             ⚠ Could break: {risk} —{" "}
