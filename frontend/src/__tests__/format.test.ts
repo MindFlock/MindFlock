@@ -22,15 +22,17 @@ describe("errMsg", () => {
   it("reads .message off any object with one", () => {
     expect(errMsg({ message: "custom" })).toBe("custom");
   });
-  it("falls back to 'error' for null/undefined and messageless values", () => {
-    expect(errMsg(null)).toBe("error");
-    expect(errMsg(undefined)).toBe("error");
-    expect(errMsg("a string")).toBe("error");
-    expect(errMsg(42)).toBe("error");
+  it("reads a thrown string as its own reason", () => {
+    expect(errMsg("a string")).toBe("a string");
   });
-  it("falls back when the message is empty", () => {
-    expect(errMsg(new Error(""))).toBe("error");
-    expect(errMsg({ message: "" })).toBe("error");
+  it("falls back to a sentence, never the bare word 'error'", () => {
+    const fallback = "Something went wrong, and MindFlock got no reason why.";
+    expect(errMsg(null)).toBe(fallback);
+    expect(errMsg(undefined)).toBe(fallback);
+    expect(errMsg("")).toBe(fallback);
+    expect(errMsg(42)).toBe(fallback);
+    expect(errMsg(new Error(""))).toBe(fallback);
+    expect(errMsg({ message: "" })).toBe(fallback);
   });
 });
 
@@ -92,6 +94,13 @@ describe("provLabel", () => {
     expect(provLabel("claude")).toBe("Claude");
     expect(provLabel("codex")).toBe("Codex");
     expect(provLabel("aider")).toBe("Aider");
+  });
+  it("names every shipped agent the way the other screens do (lib/agentNames)", () => {
+    expect(provLabel("opencode")).toBe("OpenCode");
+    expect(provLabel("copilot")).toBe("GitHub Copilot");
+    expect(provLabel("antigravity")).toBe("Antigravity");
+    expect(provLabel("cline")).toBe("Cline");
+    expect(provLabel("goose")).toBe("Goose");
   });
   it("capitalizes unknown provider names", () => {
     expect(provLabel("gemini")).toBe("Gemini");

@@ -5090,10 +5090,24 @@ async def delete_instance(title: str) -> JSONResponse:
     is GC'd. **409** ``{"error": "folder in use", "sessions": [...]}`` — and
     nothing changes — when another live session (a copy made by Duplicate
     session) works in the same folder. → ``{ok, title, wiped, children}``."""
-    inst, err = _inst_or_404(title)
-    if err is not None:
-        return err
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return _session_gone(title)
     return await _end_session_response(title, wipe=True)
+
+
+#: What a person reads when they close/delete a session that is gone already
+#: (the web client shows ``detail`` over ``error``). ``error`` keeps the
+#: ``instance not found`` text the MCP tools and the CLI match on.
+SESSION_GONE_DETAIL = "That session is already gone."
+
+
+def _session_gone(title: str) -> JSONResponse:
+    """The 404 for ending a session that is not there any more."""
+    return JSONResponse(
+        {"error": "instance not found: %s" % title, "detail": SESSION_GONE_DETAIL},
+        status_code=404,
+    )
 
 
 async def _end_session_response(title: str, *, wipe: bool, scrub: bool = False):
@@ -5106,9 +5120,7 @@ async def _end_session_response(title: str, *, wipe: bool, scrub: bool = False):
     except _session_end.FolderInUse as err:
         return JSONResponse(err.to_json(), status_code=409)
     except _session_end.SessionNotFound:
-        return JSONResponse(
-            {"error": "instance not found: %s" % title}, status_code=404
-        )
+        return _session_gone(title)
     return JSONResponse({"ok": True, **result})
 
 
@@ -8581,9 +8593,9 @@ async def instance_cleanup(title: str) -> JSONResponse:
     → ``{ok, title, wiped, children}``. In-place sessions run in the user's
     OWN repo — it is never deleted.
     """
-    inst, err = _inst_or_404(title)
-    if err is not None:
-        return err
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return _session_gone(title)
     peer_err = _peer_guard.refusal(inst, "cleanup (unshare the folder instead)")
     if peer_err is not None:
         return peer_err
@@ -8601,9 +8613,9 @@ async def close_instance(title: str) -> JSONResponse:
     fresh agent pointed at the same worktree; its children keep running under
     its own parent and are reported. → ``{ok, title, wiped: false, children}``.
     """
-    inst, err = _inst_or_404(title)
-    if err is not None:
-        return err
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return _session_gone(title)
     return await _end_session_response(title, wipe=False)
 
 
