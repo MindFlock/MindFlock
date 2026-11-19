@@ -41,6 +41,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Customize: Reset to default offers Undo.**
 - **Settings waits for its data.** It shows "Loading settings…" or "Couldn't
   read settings" with a Retry instead of empty fields and off switches.
+- **Undo is a button everywhere.** Closing several sessions at once now has
+  an Undo that reopens them all (and Ctrl+Shift+T reopens them one by one),
+  Hide's toast has an Undo button like Close's, and deleting a saved prompt
+  can be undone. Reopen in Recently closed says "Reopened X", and the template
+  delete question says Cancel and focuses it, like every other question.
+- **Ctrl+K G opens Diff and Ctrl+K Q opens Queue.** Both are in the `?` sheet
+  and can be rebound, and each pane tab's tooltip names its shortcut. The
+  palette also lists Diff, View PR, Reopen last closed session and Copy folder
+  path.
+- **Alt+Enter in the Thread composer means When idle**, as it does in the
+  Queue tab; the hint and the button say so.
+- **Questions on the corner card answer the keyboard.** Delete and Merge from
+  the palette or a pane focus Cancel, Escape closes the question, and Delete is
+  red like the row menu's. An error card never takes focus, so it can't catch
+  what you're typing.
+- **The bell takes the keyboard.** Opening it focuses its first row, and
+  Escape closes only the bell (select mode stays on) and returns focus to it.
+- **A Sky line's ⋯ has its route's controls**: Pause or Carry on, Stop the
+  route and Fly again, as in the pane strip's ⋯. The Sky's `?` sheet lists
+  Ctrl+K N (next session that needs you) and Alt+V (next Verify).
+- **Connect GitHub no longer dead-ends.** If it can't check GitHub it says so
+  with a Retry, a pending sign-in code has Cancel, and closing the gh terminal
+  early says "Not connected yet". The Connected line says where the sign-in
+  comes from ("your saved token", "the GITHUB_TOKEN variable"), and the name
+  and email boxes save on Enter, as in Setup.
+- **The New dialog fixes a signed-out agent in place.** "Claude Code isn't
+  signed in yet" opens the sign-in window over the dialog, so your draft
+  stays. A missing agent's note says Setup and has an Open Setup button.
+- **Setup's fix commands have a Copy button**, like the install window and
+  Connect GitHub.
+- **The Mac first launch has a way out of the Homebrew and Xcode waits.**
+  "Skip for now" works while Homebrew installs in Terminal, and the developer
+  tools wait has "Open Apple's installer again", instead of waiting out 30
+  minutes.
+- **"Saved" appears next to what you changed, in Intake too.** Intake fields,
+  the Ignore-comments lists, launch flags, scroll speed, accounts, per-repo
+  branches and an extension's switch show the small "✓ Saved" by the control
+  instead of a toast, and a failed save says the server's reason.
+- **"Settings → …" in Intake is a link.** The pointers to Connections,
+  Workspace and Your devices open that screen, and "Customize" in Settings →
+  Extensions opens Customize.
+- **The Usage and Workflow windows say what went wrong.** A failed load shows
+  the server's message (or "Couldn't reach MindFlock. Is it still running?")
+  with a Retry, instead of always "Could not reach the server."
 
 ### Fixed
 
@@ -105,6 +149,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setup checklist.
 - **Desktop app, offline page:** it shows Cmd+Shift+L on a Mac, and "Restart
   WSL now?" stands down after 5 seconds and says whether it worked.
+- **Typing, switching tabs and polls no longer redraw every pane.** The top
+  bar, the sidebar and the grid redraw only for what they show, a pane only
+  when its own session or family changes, and a pane header measures itself
+  only when its contents change rather than on every redraw.
+- **Route buttons answer faster.** Skip, Retry, Jump, Pause and Done refetch
+  only the routes, not the saved routes and the session list twice over, and
+  each Sky line builds its diagram once per poll instead of twice.
+- **The Diff tab shows what you asked for.** Switching to Uncommitted or to one
+  file says "Loading diff…" instead of leaving the old diff under the new
+  heading, a slow earlier load can't replace a newer one, and a hidden Diff
+  tab no longer re-parses its diff.
+- **Hidden windows stop polling.** The full-history view, chat windows,
+  Settings → Connections and the Usage, Workflow and To-do windows rest while
+  the window is hidden; history and chat catch up when you come back.
+- **The phone page and the ticket status cost the server less.** The fleet
+  status (asked every 4 s by the phone) reads its files off the server's event
+  loop, and the ticket pipeline's status is reused for 2 seconds; starting,
+  stopping or changing a setting refreshes it at once.
+- **The Thread tab offers Retry.** A failed load has a Retry button, and a
+  failed refresh says "thread may be out of date · Retry", as the Map does.
+- **The Sky says when it can't load routes.** Its toolbar shows "Can't reach
+  the server — routes may be out of date." instead of quietly drawing an old
+  copy.
+- **Stopping a closed session's route asks first** on its strip and in the
+  outbox, like every other Stop the route.
+- **Deleting an in-place session says what really happened.** The toast and
+  the menu's tooltip say its folder and branch were kept.
+- **Rename refuses a taken name without losing it.** The rail's rename box
+  stays open with your text and says another session has that name, and the
+  Rename dialog stops at 120 characters like the rest.
+- **The phone keeps your sessions when the server hiccups.** A sign-in lapse
+  or server error no longer empties the list and closes the terminal you were
+  reading. The header says "Loading sessions…" until the list arrives, and
+  "Couldn't reach MindFlock. Is it still running?" while it can't be reached.
+- **Phone git actions are easier to read and harder to double-tap.** A failed
+  push, PR, merge or commit stays on screen until your next action, a lost
+  connection says "Couldn't reach MindFlock" instead of "Load failed", the
+  action bar waits for each request, and a failed commit keeps your message.
+- **The Database window asks before dropping unsaved edits, in the desktop
+  app too.** Clicking another table shows a "Discard N unsaved changes?" bar;
+  before, the click silently did nothing in the desktop app.
+- **Automatic updates say when a change didn't take.** If turning auto-update
+  on or off fails, the switch flips back and says why; if an update can't
+  start, Update stops spinning and shows the reason.
 
 ## [0.14.21] - 2026-11-19
 
