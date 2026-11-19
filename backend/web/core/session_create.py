@@ -51,6 +51,17 @@ def _server():
     return server
 
 
+def _name_taken(title: str) -> dict:
+    """The 409 body for a title a live session already has. ``detail`` is the
+    sentence a person reads (the web client shows it over ``error``);
+    ``error`` keeps the ``instance … already exists`` text the MCP tools, the
+    team-run and flight drivers and the CLI match on."""
+    return {
+        "error": "instance %s already exists" % title,
+        "detail": "Another session is already named %s. Pick a different name." % title,
+    }
+
+
 async def create(
     payload: dict,
     *,
@@ -334,9 +345,7 @@ async def _create(
         if is_provisioned and not new_branch:
             new_branch = srv.provisioning.branch_name_for(story_id or None, title)
     if title in srv.ENGINE.instances:
-        return JSONResponse(
-            {"error": "instance %s already exists" % title}, status_code=409
-        )
+        return JSONResponse(_name_taken(title), status_code=409)
     # A renamed session goes by its new name everywhere, so that name is taken
     # too — a new session may not be called what another one is called.
     renamed = srv._aliases.owner_of(title, srv._session_branches())
@@ -353,9 +362,7 @@ async def _create(
     # create fail later, its task lost. Not for that create itself (nor for
     # the gated create whose admission reserved this title for it).
     if not auto_title and not drained and title in _waiting_names(claiming=False):
-        return JSONResponse(
-            {"error": "instance %s already exists" % title}, status_code=409
-        )
+        return JSONResponse(_name_taken(title), status_code=409)
 
     # --- Sessions based off a user-chosen local repo --------------------------
     # Without this, plain sessions would default to the server's own cwd (the
@@ -598,9 +605,7 @@ async def _create(
                 )
                 inst.Title = title
             else:
-                return JSONResponse(
-                    {"error": "instance %s already exists" % title}, status_code=409
-                )
+                return JSONResponse(_name_taken(title), status_code=409)
         # Lineage, re-checked where it counts: the parent may have gone while
         # the repo was prepared, and the spawn caps only hold if the count and
         # the claim happen under one lock (two concurrent spawns must not both
@@ -1571,9 +1576,7 @@ def _title_refusal(title: str) -> Optional[JSONResponse]:
     along), a start in flight, or a gated create just let through."""
     srv = _server()
     if title in srv.ENGINE.instances:
-        return JSONResponse(
-            {"error": "instance %s already exists" % title}, status_code=409
-        )
+        return JSONResponse(_name_taken(title), status_code=409)
     renamed = srv._aliases.owner_of(title, srv._session_branches())
     if renamed:
         return JSONResponse(
