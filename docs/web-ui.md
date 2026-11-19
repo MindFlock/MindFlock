@@ -3358,13 +3358,15 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
   unknown answer never blocks; the chosen agent always shows). The default never starts on a missing agent
   when another is installed. Picking a missing one shows *<Agent> isn't
-  installed on this device. Install it in one click from Get set up (step ①;
+  installed on this device. Install it in one click from Setup (step ①;
   a custom agent: Settings → Custom agents), or pick another agent.* under
-  the field, and **Start** (on either page)
+  the field, with an **Open Setup** button, and **Start** (on either page)
   refuses — a session would otherwise sit "Idle" on *command not found*. An
-  installed agent `GET /api/setup` knows is NOT signed in gets *<agent> isn't
-  signed in yet — a session would stop at its sign-in screen.* **Sign in…**
-  (Settings → Agents) — under the field and on page 1. A note, not a block.
+  installed agent `GET /api/setup` knows is NOT signed in gets *<Agent> isn't
+  signed in yet — a session would stop at its sign-in screen.* (the agent's
+  display name) with **Sign in…**, which opens the sign-in window over the
+  dialog, so the draft stays, and re-reads the agent's state when it closes —
+  under the field and on page 1. A note, not a block.
 - **Task** — what the agent starts on (blank starts it idle), always on the
   form — two rows to start, growing with its text up to 220 px, then
   scrolling — with **Insert saved text…** (built-ins first, then yours; it
@@ -4017,7 +4019,9 @@ go** starts the Welcome [tour](#tours) over the checklist. It counts as seen
     install plan covers shows inside *All checks* only). *All checks (N)*
     lists only checks that can block ①–③ (each doctor row's `required`);
     phone, Tailscale, MTU and sudo fixes never show in Setup — they belong to
-    Settings → Your phone and Settings → Doctor. Before any payload arrives
+    Settings → Your phone and Settings → Doctor. A row's *fix:* that is a
+    command has a **Copy** button beside it, as the install window and Connect
+    GitHub do. Before any payload arrives
     the step shows a skeleton of the install row, then the setup payload's own
     doctor result, never an empty card. **Re-check**. ② **Sign in to your
     agent** (the default agent's **agent card** — the same card Settings →
@@ -4279,7 +4283,9 @@ remote. The dialog has ONE primary path (`connectLayout`):
 - **Device flow configured** (an OAuth App client id: the build's constant,
   `github.oauth_client_id` or `$MINDFLOCK_GITHUB_CLIENT_ID`): one **Sign in
   with GitHub** button (a code to type at github.com/login/device); the token
-  steps are folded under *Or paste a token*.
+  steps are folded under *Or paste a token*. A pending code has a quiet
+  **Cancel** (`DELETE /api/github/device`), so reopening the dialog no longer
+  brings an abandoned code back.
 - **Not configured**: the three numbered token steps ARE the path — **Make a
   token on GitHub** (a pre-filled classic-token page: `repo`, `read:org`) →
   paste it → **Save & test** (GitHub checks it before it is saved). When gh
@@ -4289,13 +4295,19 @@ remote. The dialog has ONE primary path (`connectLayout`):
   what the terminal asks, in order (*Authenticate Git with your GitHub
   credentials?* → Enter; the one-time code → Enter opens GitHub; approve), and
   says *✓ Connected as @…* + **Done** once GitHub reports the sign-in (gh's
-  token is copied in when the window closes).
+  token is copied in when the window closes). Closing it before the sign-in
+  finished says *Not connected yet. Finish the steps in the terminal, or paste
+  a token.*
 
-After *✓ Connected as @…* a **Done** button closes the dialog, back to the
+When the status can't be read the dialog says *Couldn't check GitHub.* with the
+reason under it and a **Retry**. *✓ Connected as @…* names where the sign-in
+comes from in words (*your saved token*, *the GITHUB_TOKEN variable*, *gh's
+sign-in*). After it a **Done** button closes the dialog, back to the
 Setup checklist with ④ ticked. *Your name and email for commits* (in the
 dialog's step-heading style) shows when git has none — pre-filled from the
 account with its private `@users.noreply.github.com` address; **Use these**
-writes the global git config, nothing writes it on its own. **Check I can
+writes the global git config (`Enter` in either box does the same, as in
+Setup), nothing writes it on its own. **Check I can
 push** says what it will ask before the click (*Checks repo → <origin URL>*,
 from `push_target` on `GET /api/github/status`), asks that origin for real (a
 `push --dry-run` with prompts off), and on a failure names the repo and the
@@ -6635,7 +6647,10 @@ A few screens got quieter:
 - **Every save says "✓ Saved" right by the control** — text fields, numbers,
   selects and toggles alike (`savedCue.ts`: the screens pane notes the control
   last changed or left, and the save marks its label for a moment; a toast
-  only when no such control is on screen). A number field refuses a value it
+  only when no such control is on screen). The same cue marks Intake's fields
+  and its *Ignore comments from* lists, the launch flags, scroll speed,
+  accounts, per-repo branches and an extension's switch (on its name); a
+  failed save's message carries the server's reason. A number field refuses a value it
   can't take (below 0) with the reason under it — *Enter a number, 0 or more,
   or leave it blank for no limit.* — instead of saving `-2` as "no limit".
 - **Search settings…** heads the nav (`#settings-search`, on the command
@@ -8147,6 +8162,12 @@ is already serving. The copy of that banner written to the server log
 (the Settings → System logs pane, `GET /api/logs`) is redacted — no token, no
 QR; the full banner appears only on the operator's console.
 
+**Loading and losing the server** — until the first session list arrives
+the picker reads *Loading sessions…* (not *no sessions*). Only a good answer
+replaces the list: a sign-in lapse, a server error or no answer keeps the last
+list and the open terminal, and two failed polls in a row put *Couldn't reach
+MindFlock. Is it still running?* on the status line until one succeeds.
+
 **Sessions and their actions** — the picker is a button that opens a
 **Sessions** sheet, attention first; each row reads like the rail's: a tone dot,
 the name, the state word, the rail's zone chip (⛔ / ! / **plan · n** / 🛡 / ✓,
@@ -8260,7 +8281,12 @@ PR?*). **Push** honors the O3 soft gate like the desktop `pushSession` flow: a
 re-pushes the same session with `{force: true}`. A red-zone `409`
 (`red_zone_breaches`) on Push / PR / Merge is explained on the same sheet in the
 desktop's words; the override itself is desktop-only for now. After a PR opens
-the phone resets the stage (`POST /reset-stage`), as the desktop does.
+the phone resets the stage (`POST /reset-stage`), as the desktop does. One git
+request runs at a time: the bar is off until the server answers, so a double
+tap can't push twice. A failure (git's own message) stays on the status line
+until your next action rather than fading after a moment, a request that got
+no answer says *Couldn't reach MindFlock. Is it still running?* instead of the
+browser's *Load failed*, and a failed commit keeps its message in the box.
 
 **New session (`+`)** — the `+` in the top bar (and the "No sessions yet" line,
 which is itself the button) opens a bottom sheet that starts a session from the
