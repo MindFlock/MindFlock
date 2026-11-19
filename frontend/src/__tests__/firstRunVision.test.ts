@@ -113,7 +113,7 @@ describe("the empty Sky", () => {
     expect(skyEmptyShows({ blank: false, waiting: 0 })).toBe(false);
   });
 
-  it("says what the Sky is for, with New session and Connect a source in Intake", () => {
+  it("says what the Sky is for, with New session and Add a ticket source", () => {
     const html = withQuery(createElement(SkyEmpty, { blank: true, className: "sky-empty muted" }, "plain line"));
     expect(html).toContain('class="sky-empty-card"');
     expect(html).toContain('data-no-drag=""');
@@ -121,7 +121,8 @@ describe("the empty Sky", () => {
     expect(html).toContain(esc(SKY_LINE));
     expect(html).toContain('class="vision-picture is-compact"');
     expect(html).toContain(">New session<");
-    expect(html).toContain(">Connect a source in Intake<");
+    expect(html).toContain(">Add a ticket source<");
+    expect(html).not.toContain("Connect a source in Intake");
     expect(html).not.toContain("plain line");
   });
 
