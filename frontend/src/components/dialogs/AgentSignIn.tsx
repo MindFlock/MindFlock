@@ -63,6 +63,26 @@ export function signInSteps(provider: string): string[] {
   ];
 }
 
+/** The terminal's connection as a person reads it, for the install and
+ * sign-in windows' header (`useWsTerm`'s raw states are "connecting",
+ * "disconnected"…). "" while it streams: the terminal speaks for itself. */
+export function termStateText(state: string): string {
+  switch (state) {
+    case "streaming":
+      return "";
+    case "connecting":
+      return "Opening the terminal…";
+    case "starting":
+      return "Starting…";
+    case "reconnecting":
+      return "Reconnecting…";
+    case "disconnected":
+      return "The terminal closed.";
+    default:
+      return "";
+  }
+}
+
 /** How often the window re-checks the login while it is open. */
 export const SIGNIN_POLL_MS = 3000;
 
@@ -118,7 +138,11 @@ export function SignInWindow({
     closeRef.current();
   };
 
-  const status = signedIn ? "✓ Signed in. You can close this window." : state === "streaming" ? "" : state;
+  const status = signedIn
+    ? "✓ Signed in. You can close this window."
+    : state === "disconnected"
+      ? "The terminal closed. If you didn't finish, close this and try again."
+      : termStateText(state);
 
   // Escape is caught in the capture phase: it must close this window before
   // the terminal inside it (or the dialog under it) sees the key.

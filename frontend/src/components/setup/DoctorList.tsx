@@ -7,7 +7,7 @@
  * (Moved out of dialogs/SetupDialog.tsx, which re-exports them, so the Setup
  * modal and the checklist it renders can import this without a cycle.) */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { create } from "zustand";
 import type { DoctorCheckItem, DoctorPayload } from "../../api/types";
 import { reprobeDoctor, useDoctor } from "../../state/queries";
@@ -80,13 +80,36 @@ export function plainDetail(text: string | undefined): string {
 
 /** The git identity row's own fix in a browser: the name and email, written
  * to the global git config (the endpoint Connect GitHub's "Use these" uses).
- * Its terminal command stays folded underneath for whoever prefers it. */
+ * Enter in either field saves, the same as the button. Its terminal command
+ * stays folded underneath for whoever prefers it. */
 export function GitIdentityForm({ fix, onSaved }: { fix?: string; onSaved(): void }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const ready = !!name.trim() && !!email.trim();
+  const save = () => {
+    if (busy || !ready) return;
+    setBusy(true);
+    setError("");
+    api("/api/github/identity", { json: { name: name.trim(), email: email.trim() } }).then(
+      () => {
+        setBusy(false);
+        toast("git now knows who you are");
+        onSaved();
+      },
+      (err) => {
+        setBusy(false);
+        setError((err as Error).message || "couldn't save");
+      }
+    );
+  };
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    e.stopPropagation();
+    save();
+  };
   return (
     <span className="doctor-identity">
       <span className="doctor-identity-row">
@@ -96,6 +119,7 @@ export function GitIdentityForm({ fix, onSaved }: { fix?: string; onSaved(): voi
           aria-label="Your name for commits"
           value={name}
           onChange={(e) => setName(e.target.value)}
+          onKeyDown={onKeyDown}
           onClick={(e) => e.stopPropagation()}
         />
         <input
@@ -105,6 +129,7 @@ export function GitIdentityForm({ fix, onSaved }: { fix?: string; onSaved(): voi
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={onKeyDown}
           onClick={(e) => e.stopPropagation()}
         />
         <button
@@ -114,19 +139,7 @@ export function GitIdentityForm({ fix, onSaved }: { fix?: string; onSaved(): voi
           title={ready ? undefined : "Fill in both your name and email"}
           onClick={(e) => {
             e.stopPropagation();
-            setBusy(true);
-            setError("");
-            api("/api/github/identity", { json: { name: name.trim(), email: email.trim() } }).then(
-              () => {
-                setBusy(false);
-                toast("git now knows who you are");
-                onSaved();
-              },
-              (err) => {
-                setBusy(false);
-                setError((err as Error).message || "couldn't save");
-              }
-            );
+            save();
           }}
         >
           {busy ? "Saving…" : "Save"}
@@ -182,16 +195,24 @@ function CheckRow({ c, onSignedIn }: { c: DoctorCheckItem; onSignedIn(): void })
  * `essential` is the setup checklist's view: the install button, then ONLY
  * the problems getting started cares about (`isEssentialCheck` — no phone,
  * Tailscale, peer-link or local-model rows), with every check folded under
- * "All checks". Settings → Doctor draws the full list. */
+ * "All checks". Settings → Doctor draws the full list.
+ *
+ * A re-check that fails keeps the last good result on screen with a line
+ * under it, rather than replacing the list (and its Install button) with the
+ * error. `onChecking` reports a re-check in flight, so the caller's Re-check
+ * button can say "Checking…" and hold still. */
 export function DoctorList({
   reprobeKey,
   onChange,
+  onChecking,
   essential = false,
   fallback,
   tourNext = false,
 }: {
   reprobeKey?: number;
   onChange?(): void;
+  /** True while a re-check runs, false when it lands (or fails). */
+  onChecking?(busy: boolean): void;
   essential?: boolean;
   /** The last known doctor payload (the setup payload carries one) to draw
    * while /api/doctor is in flight, so step ① never sits empty. */
@@ -206,22 +227,36 @@ export function DoctorList({
   // asked for explicitly below and lands in the same cache.
   const query = useDoctor({ enabled: !reprobe });
   const [reprobeError, setReprobeError] = useState("");
+  const [probing, setProbing] = useState(false);
+  const checkingRef = useRef(onChecking);
+  checkingRef.current = onChecking;
 
   useEffect(() => {
     if (!reprobe) return;
     let live = true;
-    reprobeDoctor().then(
-      () => {
+    setProbing(true);
+    checkingRef.current?.(true);
+    reprobeDoctor()
+      .then(
+        () => {
+          if (!live) return;
+          setReprobeError("");
+          onChange?.();
+        },
+        (e) => {
+          if (live) setReprobeError((e as Error).message || "failed");
+        }
+      )
+      .finally(() => {
         if (!live) return;
-        setReprobeError("");
-        onChange?.();
-      },
-      (e) => {
-        if (live) setReprobeError((e as Error).message);
-      }
-    );
+        setProbing(false);
+        checkingRef.current?.(false);
+      });
     return () => {
       live = false;
+      // Unmounted (or superseded) mid-probe: never leave the caller's
+      // button stuck on "Checking…" (a superseding run sets it again).
+      checkingRef.current?.(false);
     };
     // onChange is a notification, not an input: re-running the probe because
     // the parent re-rendered with a new closure would re-probe forever.
@@ -230,11 +265,29 @@ export function DoctorList({
   const doctor = query.data ?? (essential ? fallback : null) ?? null;
   const error = reprobe ? reprobeError : query.error ? (query.error as Error).message : "";
 
-  if (error) return <p className="error">doctor failed: {error}</p>;
+  // Nothing to keep on screen: say the checks didn't run (the reason is the
+  // server's, kept in the tooltip).
+  if (error && !doctor?.checks?.length)
+    return (
+      <p className="error doctor-failed" title={error}>
+        Couldn't run the checks. Try again.
+      </p>
+    );
   if (!doctor && essential) return <DoctorSkeleton />;
   if (!doctor) return <p className="muted">Checking dependencies…</p>;
-  if (!doctor.checks || !doctor.checks.length) return <p className="muted">doctor unavailable</p>;
+  if (!doctor.checks || !doctor.checks.length) return <p className="muted">No checks to show yet. Try again.</p>;
   const bump = () => setInstalled((n) => n + 1);
+  // A failed re-check under the last good result; a re-check in flight on a
+  // screen without its own "Checking…" button (Settings → Doctor).
+  const note = error ? (
+    <p className="muted doctor-recheck-failed" role="status" title={error}>
+      Couldn't re-check. Try again.
+    </p>
+  ) : probing && !essential ? (
+    <p className="muted doctor-checking" role="status">
+      Checking…
+    </p>
+  ) : null;
   const all = (
     <ul className="doctor-list">
       {doctor.checks.map((c, i) => (
@@ -247,6 +300,7 @@ export function DoctorList({
       <>
         <InstallMissing steps={doctor.install?.steps} onDone={bump} />
         {all}
+        {note}
       </>
     );
   // Step ①'s view: the install button, the problems it does NOT fix, and —
@@ -276,6 +330,7 @@ export function DoctorList({
           ))}
         </ul>
       </details>
+      {note}
     </>
   );
 }

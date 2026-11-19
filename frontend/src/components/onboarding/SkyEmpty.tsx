@@ -2,7 +2,9 @@
  * Intake — instead of a blank canvas, a calm centred card that says what the
  * Sky is FOR (the Sky in one line, docs/vocabulary.md), the three-part picture
  * (session → route → Needs you), and the two ways work gets here: New session
- * and Connect a source in Intake.
+ * and Add a ticket source (Intake on its Tickets tab — the setup checklist's
+ * own words and door for the same step; a bare Intake open would land on
+ * whichever tab was used last).
  *
  * SkyView mounts it where its plain "nothing here" line used to draw, passing
  * that line as `children`: when the sky is only filtered or folded (a search,
@@ -28,13 +30,16 @@ export function skyEmptyShows(o: { blank: boolean; waiting: number }): boolean {
 
 export const SKY_EMPTY_TITLE = "Nothing in the Sky yet";
 
+/** The ticket-source button: the setup checklist's ⑤ says the same. */
+export const ADD_TICKET_SOURCE = "Add a ticket source";
+
 /** `newSession`: there is no session at all (round 21) — when the plain line
  * shows instead of the card (something is waiting in Intake), it still
  * carries the New session button, so no empty view is a dead end. */
 export function SkyEmpty({ blank, className, children, newSession = false }: { blank: boolean; className: string; children?: ReactNode; newSession?: boolean }) {
   // fetch=false: the Intake lane (or App's warm-up) already reads the panels.
   const { waiting } = useWaiting(false);
-  const open = (d: "new-session" | "intake") => useUi.getState().openDialogFor(d);
+  const open = (d: "new-session" | "intake", target?: string) => useUi.getState().openDialogFor(d, target);
   if (!skyEmptyShows({ blank, waiting: waiting.length })) {
     if (!children) return null;
     return newSession ? (
@@ -62,8 +67,8 @@ export function SkyEmpty({ blank, className, children, newSession = false }: { b
         <button type="button" className="btn-primary sky-empty-new" onClick={() => open("new-session")}>
           New session
         </button>
-        <button type="button" className="test-btn sky-empty-intake" onClick={() => open("intake")}>
-          Connect a source in Intake
+        <button type="button" className="test-btn sky-empty-intake" onClick={() => open("intake", "tickets")}>
+          {ADD_TICKET_SOURCE}
         </button>
       </div>
     </div>

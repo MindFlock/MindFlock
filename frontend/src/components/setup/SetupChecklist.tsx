@@ -248,6 +248,9 @@ export function SetupChecklist() {
   const focused = useUi((st) => st.focused);
   const installOpen = useInstallWindow((st) => st.open);
   const [reprobeKey, setReprobeKey] = useState(0);
+  // A re-check in flight: the button says "Checking…" and holds still, so a
+  // few-second probe never looks like nothing happened (or starts another).
+  const [checking, setChecking] = useState(false);
   const steps = orderedSteps(status);
   const by = new Map(steps.map((s) => [s.id, s]));
   const step = (id: string) => by.get(id) as SetupStep;
@@ -292,7 +295,19 @@ export function SetupChecklist() {
   return (
     <div className="setup-checklist" data-setup-next={status?.summary.next || ""}>
       {error ? (
-        <p className="error">setup status failed: {(error as Error).message}</p>
+        <p className="error setup-load-failed" title={(error as Error).message}>
+          Couldn't load setup.{" "}
+          <button
+            type="button"
+            className="linklike setup-retry"
+            onClick={(e) => {
+              e.stopPropagation();
+              void refreshSetup();
+            }}
+          >
+            Retry
+          </button>
+        </p>
       ) : (
         <p className="muted setup-progress">{progressLine(status)}</p>
       )}
@@ -313,7 +328,12 @@ export function SetupChecklist() {
             <details className="setup-fold" onClick={(e) => e.stopPropagation()}>
               <summary>Show checks</summary>
               <div className="setup-doctor">
-                <DoctorList essential reprobeKey={reprobeKey} onChange={() => void refreshSetup()} />
+                <DoctorList
+                  essential
+                  reprobeKey={reprobeKey}
+                  onChecking={setChecking}
+                  onChange={() => void refreshSetup()}
+                />
               </div>
             </details>
           }
@@ -325,6 +345,7 @@ export function SetupChecklist() {
               fallback={status?.doctor}
               tourNext={tools.id === next}
               reprobeKey={reprobeKey}
+              onChecking={setChecking}
               onChange={() => void refreshSetup()}
             />
           </div>
@@ -332,19 +353,23 @@ export function SetupChecklist() {
             <button
               type="button"
               className="linklike setup-recheck"
+              disabled={checking}
+              aria-busy={checking || undefined}
               onClick={(e) => {
                 e.stopPropagation();
-                setReprobeKey((k) => k + 1);
+                if (!checking) setReprobeKey((k) => k + 1);
               }}
             >
-              Re-check
+              {checking ? "Checking…" : "Re-check"}
             </button>
           </div>
         </Step>
 
         {/* ② Sign in to your agent */}
         <Step step={agent} next={next}>
-          {!status ? (
+          {!status && error ? (
+            <p className="muted setup-hint setup-agent-unknown">Couldn't check your agent — Retry above.</p>
+          ) : !status ? (
             <p className="muted setup-hint">Checking…</p>
           ) : !defaultInstalled ? (
             <p className="muted setup-hint">

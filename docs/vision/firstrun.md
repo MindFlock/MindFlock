@@ -99,7 +99,7 @@ that teaches a retired word.
 | | Copy |
 |---|---|
 | Before | a blank canvas with one grey line: "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one." |
-| After | a centred card: **Nothing in the Sky yet** · "Air traffic control for your agents — every piece of work in flight, the route it's cleared to fly, and the ones that need you." · *[compact picture]* · "Each session is one agent working on its own branch. Start one, or let work arrive by itself from your tracker." · [**New session**] [Connect a source in Intake] |
+| After | a centred card: **Nothing in the Sky yet** · "Air traffic control for your agents — every piece of work in flight, the route it's cleared to fly, and the ones that need you." · *[compact picture]* · "Each session is one agent working on its own branch. Start one, or let work arrive by itself from your tracker." · [**New session**] [Add a ticket source] |
 
 Shown only when the sky is truly empty: no sessions, no route on its own, not
 filtered (no search, not Needs you / This session), and nothing waiting in the

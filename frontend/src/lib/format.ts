@@ -1,12 +1,16 @@
 /** Formatting helpers (ports of app.js sections 2/5/7/8). */
 
 import type { Instance } from "../api/types";
+import { agentName } from "./agentNames";
 
 /** Human error string from an unknown catch value, with a safe fallback.
  * Consolidates the repeated `(err as Error).message` cast used at catch
  * sites. */
 export function errMsg(err: unknown): string {
-  return (err as Error)?.message || "error";
+  const msg = (err as Error)?.message;
+  if (typeof msg === "string" && msg) return msg;
+  if (typeof err === "string" && err) return err;
+  return "Something went wrong, and MindFlock got no reason why.";
 }
 
 export function fmtTokens(n: number | null | undefined): string {
@@ -25,12 +29,13 @@ export function fmtUsd(u: number | null | undefined): string {
   return "$" + (u / 1e3).toFixed(1) + "k";
 }
 
-const PROV_LABELS: Record<string, string> = { claude: "Claude", codex: "Codex", aider: "Aider" };
-
-/** Human label for a coding provider; capitalizes user-defined CLIs. */
+/** Human label for a coding provider: the agent's product name, the same as
+ * every other screen (lib/agentNames), short enough for a chip — "Claude",
+ * not "Claude Code", the way the Sky's chain reads it. A user-defined CLI
+ * reads as its id, capitalised. */
 export function provLabel(name: string | null | undefined): string {
   if (!name) return "";
-  return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
+  return agentName(name).replace(/ Code$/, "");
 }
 
 /** "40s ago" / "6m ago" / "2h ago" / "3d ago" since `ts` (epoch seconds) —

@@ -77,7 +77,7 @@ import {
   askFirstApplies,
 } from "../../lib/laneActions";
 import { FAST_TRACK_LEVELS } from "../../lib/vocab";
-import { PR_FALLBACK_HINT, hasPrSupport } from "../../lib/sessionActions";
+import { MAX_TITLE_LEN, PR_FALLBACK_HINT, hasPrSupport } from "../../lib/sessionActions";
 import { agentName } from "../../lib/agentNames";
 import { splitGate } from "../../lib/playbooks";
 import {
@@ -141,10 +141,11 @@ import {
   type FolderCheck,
 } from "./newSession/FolderPicker";
 import { AgentFields, ModelRow, accountSetter } from "./newSession/AgentAccount";
-import { GitOptions, WorksIn, useBaseBranches } from "./newSession/WorkspaceFold";
+import { GitOptions, WorksIn, nameClashText, useBaseBranches } from "./newSession/WorkspaceFold";
 import { PlanFirstRow, TaskField } from "./newSession/PromptFold";
 import { LaunchFold } from "./newSession/LaunchFold";
 import { FooterActions, SaveTemplateRow } from "./newSession/FooterActions";
+import { folderErrorText } from "./newSession/folderErrors";
 import { TourButton } from "../onboarding/TourButton";
 import { useAutoTour } from "../onboarding/useAutoTour";
 
@@ -1235,10 +1236,15 @@ export function NewSessionDialog() {
   );
   /** A plan's proposed folder still waiting to be made reads the same way. */
   const askFolder = newFolderAsk && !newFolderOk ? newFolderAsk : folderMissing ? missingLabel : "";
-  const startBlocked =
-    askFolder && !runMode
-      ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists."
-      : "";
+  // A typed name another session has: the server would refuse it, after the
+  // dialog closed — so Start stays off, with the clash line as the reason.
+  const startBlocked = runMode
+    ? ""
+    : askFolder
+    ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists."
+    : planned.clash
+    ? nameClashText(planned.title)
+    : "";
   const createFolder = async () => {
     const full = (folderCheck?.asked === folderPath && folderCheck?.resolved) || folderPath;
     // Cut where the SERVER's OS cuts: `C:\Users\me\app` → `C:\Users\me` +
@@ -1262,14 +1268,7 @@ export function NewSessionDialog() {
       // page 1's sentence box.
       (page === 2 ? repoRef.current : describeRef.current)?.focus({ preventScroll: true });
     } catch (err) {
-      const msg = errMsg(err);
-      setMkError(
-        /not a directory/i.test(msg)
-          ? "The folder it would go in doesn't exist either — use Browse… to pick a place."
-          : /already exists/i.test(msg)
-          ? "Something is already there — pick it with Browse…."
-          : "Couldn't create it: " + msg
-      );
+      setMkError(folderErrorText(errMsg(err), "field"));
     } finally {
       setMkBusy(false);
     }
@@ -1825,6 +1824,7 @@ export function NewSessionDialog() {
                       id="new-title"
                       ref={titleRef}
                       autoComplete="off"
+                      maxLength={MAX_TITLE_LEN}
                       placeholder={planned.from === "none" ? "named from the task" : planned.title}
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}

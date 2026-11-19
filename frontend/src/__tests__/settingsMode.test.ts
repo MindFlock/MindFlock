@@ -60,6 +60,9 @@ function renderNav(target: string | null = null) {
   // server snapshot): copy the live state into it (as flockRail.test does).
   Object.assign(useUi.getInitialState(), useUi.getState());
   const client = new QueryClient();
+  // The screens render once the settings document has loaded (before that
+  // the dialog says "Loading settings…" instead of showing blank values).
+  client.setQueryData(["settings"], {});
   const html = renderToStaticMarkup(
     createElement(QueryClientProvider, { client }, createElement(SettingsDialog, {}))
   );

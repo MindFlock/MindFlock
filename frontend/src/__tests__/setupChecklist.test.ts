@@ -377,9 +377,26 @@ describe("SetupChecklist", () => {
     expect(render()).toContain("Optional — pushing works without it; needed to open and merge pull requests.");
   });
 
-  it("reports a failed status read instead of a blank card", () => {
+  it("reports a failed status read in words, with Retry, and step ② stops saying Checking…", () => {
     setupData.error = new Error("/api/setup -> 500");
-    expect(render()).toContain("setup status failed");
+    const html = render();
+    expect(html).toContain("Couldn&#x27;t load setup.");
+    expect(html).toContain("setup-retry");
+    expect(html).toContain(">Retry<");
+    expect(html).not.toContain("setup status failed");
+    const agent = html.slice(html.indexOf('data-step="agent_login"'), html.indexOf('data-step="repo"'));
+    expect(agent).toContain("Couldn&#x27;t check your agent");
+    expect(agent).not.toContain("Checking…");
+    // Before any answer (no error yet) it still says Checking….
+    setupData.error = undefined;
+    const waiting = render();
+    expect(waiting.slice(waiting.indexOf('data-step="agent_login"'), waiting.indexOf('data-step="repo"'))).toContain("Checking…");
+  });
+
+  it("step ①'s Re-check is enabled and says Re-check while nothing is in flight", () => {
+    setupData.current = status();
+    const tools = render().slice(0, render().indexOf('data-step="agent_login"'));
+    expect(tools).toMatch(/<button type="button" class="linklike setup-recheck">Re-check<\/button>/);
   });
 
   it("step ① lets a Copilot-only computer pick its agent before anything is installed", () => {

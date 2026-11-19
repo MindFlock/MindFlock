@@ -37,6 +37,7 @@ import { orderedSections, SESSIONS_KEY } from "./barDefs";
 import { FooterCustomize } from "./FooterCustomize";
 import {
   matchesFilter,
+  filterQuery,
   movedRailOrder,
   orderedInstances,
   orderedKeys,
@@ -300,7 +301,10 @@ export function Sidebar({ onOpenChat }: Props) {
     [ui.specialOpen, ui.verifyPanes, ui.extPanes]
   );
   const winFiltered = useMemo(
-    () => windows.filter((w) => !ui.filter || w.title.toLowerCase().includes(ui.filter)),
+    () => {
+      const q = filterQuery(ui.filter);
+      return windows.filter((w) => !q || w.title.toLowerCase().includes(q));
+    },
     [windows, ui.filter]
   );
   // The full rail in display order, UNFILTERED — what a drag reorders (the
@@ -750,7 +754,7 @@ export function Sidebar({ onOpenChat }: Props) {
                   renderLocal()
                 )}
                 {ui.filter && !filtered.length && !winFiltered.length && (
-                  <li className="filter-empty muted">No sessions match “{ui.filter}”</li>
+                  <li className="filter-empty muted">No sessions match “{ui.filter.trim()}”</li>
                 )}
               </ul>
               {/* A button, never an <li>: everything inside #instance-list is

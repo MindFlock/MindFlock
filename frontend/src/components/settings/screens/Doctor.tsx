@@ -6,11 +6,12 @@ import type { ScreenProps } from "../SettingsDialog";
 
 export function Doctor(_: ScreenProps) {
   const [reprobeKey, setReprobeKey] = useState(0);
+  const [checking, setChecking] = useState(false);
   return (
     <>
       <h3 className="set-section-title">Dependency doctor</h3>
       <div id="settings-doctor">
-        <DoctorList reprobeKey={reprobeKey} />
+        <DoctorList reprobeKey={reprobeKey} onChecking={setChecking} />
       </div>
       <div className="set-row">
         <span className="test-row">
@@ -18,9 +19,10 @@ export function Doctor(_: ScreenProps) {
             type="button"
             id="settings-doctor-recheck"
             className="test-btn"
+            disabled={checking}
             onClick={() => setReprobeKey((k) => k + 1)}
           >
-            Re-check
+            {checking ? "Checking…" : "Re-check"}
           </button>
         </span>
         <span className="set-hint">

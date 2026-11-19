@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The app says why it is slow when memory is low.** The memory notice now
+  says sessions may be slow to show what you type and their output until
+  memory recovers. When the server stops answering while memory was low, the
+  connection card says *MindFlock is slow to respond: memory is low* and what
+  frees memory, instead of *the server may have stopped*.
+- **Errors read as sentences.** When the server can't be reached, toasts say
+  "Couldn't reach MindFlock. Is it still running?" instead of "Failed to
+  fetch". A rejected form field names the field and the problem instead of
+  "error 422". Closing or deleting a session that is already gone says so,
+  a taken name says "Another session is already named …", the folder browser
+  says "You don't have permission to create a folder there" instead of raw
+  server text, and a setup check that crashes says it couldn't run. Agent
+  names in the usage chip match the rest of the app (OpenCode, GitHub
+  Copilot).
+- **Setup recovers from a failed read.** A failed status read says "Couldn't
+  load setup" with Retry, and step 2 no longer says "Checking…" forever. A
+  failed re-check keeps the last result and the Install button; Re-check
+  shows "Checking…" and can't be clicked again while it runs (in Settings →
+  Doctor too). When agent status can't be read, the agent card says so and
+  still offers Sign in. The install and sign-in windows describe the
+  terminal in plain words, and the install window shows the run-it-yourself
+  commands as soon as its terminal is gone. Enter saves the git name and
+  email form.
+- **A session row says "Closing…" or "Deleting…"** while that runs, and its
+  close and delete stay off until it finishes.
+- **Bulk bar.** Escape closes an open question before leaving select mode,
+  "Delete missing…" asks first, the Delete question says uncommitted changes
+  are lost (and that in-place sessions keep their folder), and failures say
+  why each one failed.
+- **Customize: Reset to default offers Undo.**
+- **Settings waits for its data.** It shows "Loading settings…" or "Couldn't
+  read settings" with a Retry instead of empty fields and off switches.
+
 ### Fixed
 
 - **Typing into a session no longer writes a file on every keystroke.**
@@ -26,14 +61,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's +/- figures are re-checked with `git status` and friends (about
   260 ms of git per session); while memory reads low or critical that happens
   every 60 s instead of every 10 s.
-
-### Changed
-
-- **The app says why it is slow when memory is low.** The memory notice now
-  says sessions may be slow to show what you type and their output until
-  memory recovers. When the server stops answering while memory was low, the
-  connection card says *MindFlock is slow to respond: memory is low* and what
-  frees memory, instead of *the server may have stopped*.
+- **The sidebar filter keeps spaces.** Typing "fix bug" no longer becomes
+  "fixbug"; the box shows what you typed and matching ignores case.
+- **A name another session already has keeps Start off** in the New dialog,
+  with the reason shown, instead of failing after the dialog closes. Session
+  names stop at 120 characters, the server's limit.
+- **Closing the "Sign in…" window relaunches a blocked session only once the
+  agent is signed in.**
+- **The Diff tab no longer dead-ends on an error.** Its toolbar stays
+  (refresh, All changes / Uncommitted, All files) and it says "Couldn't load
+  the diff" with git's message underneath.
+- **A prompt can't be sent twice from the Queue tab.** Send now and Add to
+  queue are off while a send is in flight. A queue that fails to load says
+  so, with a Retry.
+- **Commit is off while "Write it" is writing the message**, so the
+  generated text is not lost.
+- **An API key stays in its box if saving it fails.**
+- **Open PR says when the branch list can't be loaded**, with a Retry; you
+  can still type a branch name.
+- **A to-do reminder no longer takes keyboard focus** when it pops up, so it
+  can't swallow what you're typing to an agent.
+- **The connection banner tells "answering with errors" apart from "not
+  answering" again.**
+- **Clearing the notification bell stays cleared after a reload.**
+- **Empty Sky: "Add a ticket source" opens Intake on Tickets**, like the
+  setup checklist.
+- **Desktop app, offline page:** it shows Cmd+Shift+L on a Mac, and "Restart
+  WSL now?" stands down after 5 seconds and says whether it worked.
 
 ## [0.14.21] - 2026-11-19
 

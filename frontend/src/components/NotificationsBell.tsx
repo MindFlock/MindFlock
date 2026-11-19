@@ -46,6 +46,7 @@ import { isFailing } from "./dialogs/verify";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
+export const NOTIF_CLEARED_KEY = "mf_notif_cleared_ts";
 /** Rows of "Needs you" shown before "+N more". */
 const NEEDS_SHOWN = 6;
 
@@ -367,6 +368,29 @@ function rowKey(e: React.KeyboardEvent<HTMLElement>) {
   e.currentTarget.click();
 }
 
+/** Clear's mark, kept across reloads: the event bus replays its backlog on
+ * every page load, so without it each row Clear removed came straight back.
+ * Rows at or before the mark stay cleared. */
+export function loadClearedTs(): number {
+  try {
+    return parseFloat(localStorage.getItem(NOTIF_CLEARED_KEY) || "0") || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Clear: the mark moves to the newest row being cleared (its server-clock
+ * ts, the same clock as every replayed row) and is saved. Returns the mark. */
+export function saveClearedTs(rows: ReadonlyArray<{ ts: number }>, prev: number): number {
+  const mark = rows.reduce((m, n) => Math.max(m, n.ts), prev);
+  try {
+    localStorage.setItem(NOTIF_CLEARED_KEY, String(mark));
+  } catch {
+    /* storage unavailable: Clear still clears for this page */
+  }
+  return mark;
+}
+
 export function NotificationsBell() {
   const { data: instances = [] } = useInstances();
   const { data: runs } = useRuns();
@@ -387,6 +411,7 @@ export function NotificationsBell() {
    * from elsewhere — a rail line, a toast — is still bubbling, and must not
    * read as a click outside it. */
   const openedAt = useRef(0);
+  const clearedTs = useRef(loadClearedTs());
 
   // Feed from the event bus; the replayed backlog IS the away-history,
   // deduped by seq. "Unread" keys on ts (seq resets on server restart).
@@ -401,13 +426,12 @@ export function NotificationsBell() {
       if (!n) return;
       if (n.rule && !ruleOn(n.rule)) return;
       const seq = typeof env.seq === "number" ? env.seq : 0;
+      const ts = env.ts || Date.now() / 1000;
+      if (ts <= clearedTs.current) return; // cleared before this page loaded
       setNotifs((prev) => {
         if (seq && prev.some((x) => x.seq === seq)) return prev;
         if (n.dedupe && prev.some((x) => x.dedupe === n.dedupe)) return prev;
-        const next = [
-          ...prev,
-          { seq, ts: env.ts || Date.now() / 1000, session: env.session || "", ...n },
-        ].sort((a, b) => a.ts - b.ts);
+        const next = [...prev, { seq, ts, session: env.session || "", ...n }].sort((a, b) => a.ts - b.ts);
         return next.length > NOTIF_CAP ? next.slice(next.length - NOTIF_CAP) : next;
       });
     });
@@ -572,7 +596,14 @@ export function NotificationsBell() {
               >
                 ⚙
               </button>
-              <button className="notif-clear" type="button" onClick={() => setNotifs([])}>
+              <button
+                className="notif-clear"
+                type="button"
+                onClick={() => {
+                  clearedTs.current = saveClearedTs(notifs, clearedTs.current);
+                  setNotifs([]);
+                }}
+              >
                 Clear
               </button>
             </div>

@@ -7,7 +7,11 @@
  *
  * Cards mounted together share one request (`loadAgentRows`), and every card
  * re-reads when something announces a change (`mf:connections-changed`: a
- * sign-in, an install, a Test). */
+ * sign-in, an install, a Test).
+ *
+ * When `/api/connections` can't be read the card says so, with Retry, and
+ * still offers the agent's sign-in — never an empty space where step ②'s
+ * button should be. */
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api/client";
@@ -15,6 +19,7 @@ import type { ConnectionRow, ConnectionsResponse } from "../../api/types";
 import { useUi } from "../../state/store";
 import { openSettings, type SettingsScreen } from "../../lib/openSettings";
 import { agentName } from "../../lib/agentNames";
+import { AgentSignIn } from "../dialogs/AgentSignIn";
 import {
   CONNECTIONS_CHANGED_EVENT,
   ConnectionRowView,
@@ -28,14 +33,20 @@ export const SHARE_MS = 3000;
 let shared: { at: number; rows: Promise<ConnectionRow[]> } | null = null;
 
 /** The agent rows of `/api/connections`, one request for every card that
- * asks within `SHARE_MS`. `refresh` re-probes (after a sign-in or install). */
+ * asks within `SHARE_MS`. `refresh` re-probes (after a sign-in or install).
+ * Rejects when the read fails, so a card can tell "couldn't check" from "no
+ * such agent"; a failed read is not kept for the next ask. */
 export function loadAgentRows(refresh = false): Promise<ConnectionRow[]> {
   const now = Date.now();
   if (!refresh && shared && now - shared.at < SHARE_MS) return shared.rows;
-  const rows = api<ConnectionsResponse>("/api/connections" + (refresh ? "?refresh=1" : ""))
-    .then((d) => (d?.connections || []).filter((c) => c.kind === "agent"))
-    .catch(() => [] as ConnectionRow[]);
-  shared = { at: now, rows };
+  const rows = api<ConnectionsResponse>("/api/connections" + (refresh ? "?refresh=1" : "")).then((d) =>
+    (d?.connections || []).filter((c) => c.kind === "agent")
+  );
+  const mine = { at: now, rows };
+  shared = mine;
+  rows.catch(() => {
+    if (shared === mine) shared = null;
+  });
   return rows;
 }
 
@@ -66,6 +77,7 @@ export function AgentCard({
   tourNext?: boolean;
 }) {
   const [row, setRow] = useState<ConnectionRow | null | undefined>(undefined);
+  const [failed, setFailed] = useState(false);
   const [result, setResult] = useState<TestOutcome | undefined>();
   const [testing, setTesting] = useState(false);
   const openDialogFor = useUi((st) => st.openDialogFor);
@@ -73,8 +85,14 @@ export function AgentCard({
 
   const load = useCallback(
     async (refresh = false) => {
-      const rows = await loadAgentRows(refresh);
-      setRow(agentRowFor(rows, provider));
+      try {
+        const rows = await loadAgentRows(refresh);
+        setFailed(false);
+        setRow(agentRowFor(rows, provider));
+      } catch {
+        setFailed(true);
+        setRow(null);
+      }
     },
     [provider]
   );
@@ -93,6 +111,18 @@ export function AgentCard({
     return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
   }, [load]);
 
+  if (failed)
+    return (
+      <AgentCardError
+        provider={provider}
+        tourNext={tourNext}
+        onRetry={() => void load(true)}
+        onSignedIn={() => {
+          void load(true);
+          onChanged?.();
+        }}
+      />
+    );
   if (row === undefined)
     return (
       <div className="agent-card agent-card-loading" aria-busy="true">
@@ -128,6 +158,46 @@ export function AgentCard({
           onChanged?.();
         }}
       />
+    </div>
+  );
+}
+
+/** The card when `/api/connections` couldn't be read: say so, offer Retry,
+ * and still offer the sign-in for this agent (`provider` "" = the default,
+ * which can't be named without the read — Retry only). */
+export function AgentCardError({
+  provider,
+  tourNext = false,
+  onRetry,
+  onSignedIn,
+}: {
+  provider: string;
+  tourNext?: boolean;
+  onRetry(): void;
+  onSignedIn(): void;
+}) {
+  return (
+    <div className="agent-card agent-card-error" data-provider={provider}>
+      <span className="set-hint agent-card-failed">
+        Couldn't check {agentName(provider || "claude")}.{" "}
+        <button
+          type="button"
+          className="linklike agent-card-retry"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRetry();
+          }}
+        >
+          Retry
+        </button>
+      </span>
+      {provider ? (
+        <AgentSignIn
+          provider={provider}
+          onDone={onSignedIn}
+          dataTour={tourNext ? "setup-next" : undefined}
+        />
+      ) : null}
     </div>
   );
 }

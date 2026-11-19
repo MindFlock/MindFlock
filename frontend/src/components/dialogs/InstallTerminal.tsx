@@ -21,7 +21,7 @@ import { useWsTerm } from "../../lib/wsTerm";
 import { Modal } from "../Modal";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
 import { agentName } from "../../lib/agentNames";
-import { SignInWindow } from "./AgentSignIn";
+import { SignInWindow, termStateText } from "./AgentSignIn";
 import "./ConnectGitHub.css";
 
 export type { InstallStep };
@@ -47,6 +47,20 @@ interface InstallState {
  * hang, and the person must never be left watching a cursor. The run itself
  * keeps going (sudo may simply be waiting for a password). */
 export const INSTALL_SLOW_S = 90;
+
+/** How long a terminal that closed after its run was seen waits for the
+ * run's exit status (polled each second) before it counts as lost. */
+export const TERM_CLOSE_GRACE_MS = 3000;
+
+/** Whether the window's terminal is gone with no result to show: the socket
+ * closed and no exit status came — at once when no run was ever seen (it
+ * never opened), else after TERM_CLOSE_GRACE_MS (a finished run closes its
+ * terminal too, and its exit status lands on the next poll). Then the "run it
+ * yourself" commands show straight away instead of after INSTALL_SLOW_S. */
+export function terminalFailed(state: string, exit: number | null, sawRun: boolean, closedForMs: number): boolean {
+  if (state !== "disconnected" || exit !== null) return false;
+  return !sawRun || closedForMs >= TERM_CLOSE_GRACE_MS;
+}
 
 /** "1:05" for a span in seconds. */
 export function fmtElapsed(secs: number): string {
@@ -181,6 +195,11 @@ function InstallWindow({
   const [planned] = useState(() => steps || []);
   const doneRef = useRef(onDone);
   doneRef.current = onDone;
+  // When the terminal's socket closed (for terminalFailed's grace).
+  const [closedAt, setClosedAt] = useState<number | null>(null);
+  useEffect(() => {
+    setClosedAt(state === "disconnected" ? Date.now() : null);
+  }, [state]);
 
   useEffect(() => {
     let live = true;
@@ -228,15 +247,20 @@ function InstallWindow({
 
   const secs = exit === null ? elapsedSince(run, seenAt.current, now) : 0;
   const slow = exit === null && secs >= INSTALL_SLOW_S;
+  const noTerm = terminalFailed(state, exit, run !== null, closedAt === null ? 0 : now - closedAt);
   const agent = installedAgent(planned);
   const status =
     exit === 0
       ? installedMessage(planned)
       : exit !== null
         ? "✗ some steps failed — scroll up to see which"
-        : state === "streaming"
-          ? installProgress(planned, secs)
-          : state;
+        : noTerm
+          ? run
+            ? "The terminal closed."
+            : "Couldn't open the terminal."
+          : state === "streaming"
+            ? installProgress(planned, secs)
+            : termStateText(state);
 
   // Escape is caught in the capture phase: it must close this window before
   // the terminal inside it (or Settings under it) sees the key.
@@ -272,13 +296,15 @@ function InstallWindow({
             )}
           </div>
         )}
-        {(slow || (exit !== null && exit !== 0)) && (
+        {(slow || noTerm || (exit !== null && exit !== 0)) && (
           <ManualFallback
             cmds={cmds}
             lead={
-              slow
-                ? "Taking a while — it may be stuck on the network. It keeps trying; or run this in your own terminal:"
-                : "Didn't finish. Run this in your own terminal instead:"
+              noTerm
+                ? "Run this in your own terminal instead:"
+                : slow
+                  ? "Taking a while — it may be stuck on the network. It keeps trying; or run this in your own terminal:"
+                  : "Didn't finish. Run this in your own terminal instead:"
             }
           />
         )}

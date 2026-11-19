@@ -1882,6 +1882,16 @@ _ALL_CHECKS: List[Callable[[], "Optional[Check] | List[Check]"]] = list(
 )
 
 
+def _check_crashed_detail(err: BaseException) -> str:
+    """The line a check that threw shows: the check itself could not run (not
+    that the thing it checks is broken), try again, and the exception as a
+    short detail — its first line, capped."""
+    why = (str(err).strip().splitlines() or [""])[0] or type(err).__name__
+    if len(why) > 120:
+        why = why[:117] + "..."
+    return "This check couldn't run, so its result is unknown. Try again. (%s)" % why
+
+
 def run_checks(group: str = "") -> List[Check]:
     """Run every check; an individual probe blowing up becomes a ``warn`` result
     (the doctor itself must never 500). ``group`` runs only that heading's
@@ -1897,7 +1907,7 @@ def run_checks(group: str = "") -> List[Check]:
             check = fn()
         except Exception as err:  # noqa: BLE001 — degrade, never raise
             cid = fn.__name__.removeprefix("check_").replace("_", "-")
-            check = Check(cid, cid, "warn", f"check errored: {err}")
+            check = Check(cid, cid, "warn", _check_crashed_detail(err))
         if isinstance(check, list):
             out.extend(check)
         elif check is not None:
