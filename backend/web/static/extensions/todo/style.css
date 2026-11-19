@@ -1,0 +1,1278 @@
+/* todo extension styles — loaded into layer(components); every selector is
+ * scoped under .mfx-todo (the host's surface root) and every class carries
+ * the mfx-todo- prefix. Colours come from the app's tokens only (--bg,
+ * --panel, --panel-2, --border, --text, --muted, --accent, --green, --red,
+ * --gold), mixed with color-mix, so the window follows the light/dark theme
+ * and every accent. Gold = waiting on you, red = overdue / high / delete,
+ * green = done. */
+
+/* --- frame ---------------------------------------------------------------- */
+.mfx-todo {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mfx-todo.mfx-todo-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--panel);
+}
+
+.mfx-todo .mfx-todo-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.mfx-todo [hidden] {
+  display: none !important;
+}
+
+.mfx-todo button {
+  font: inherit;
+  color: inherit;
+}
+
+.mfx-todo :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mfx-todo .mfx-todo-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.mfx-todo .mfx-todo-muted {
+  color: var(--muted);
+}
+
+/* --- header: tabs + filter ----------------------------------------------- */
+.mfx-todo .mfx-todo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px 6px;
+  flex: none;
+}
+
+.mfx-todo .mfx-todo-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  flex: none;
+}
+
+.mfx-todo .mfx-todo-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mfx-todo .mfx-todo-tab:hover {
+  color: var(--text);
+}
+
+.mfx-todo .mfx-todo-tab.is-on {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.mfx-todo .mfx-todo-count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 17px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.mfx-todo .mfx-todo-count.is-needs {
+  background: color-mix(in srgb, var(--gold) 28%, transparent);
+}
+
+.mfx-todo .mfx-todo-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 120px;
+  min-width: 0;
+  max-width: 280px;
+  margin-left: auto;
+  padding: 0 8px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.mfx-todo .mfx-todo-filter:focus-within {
+  border-color: var(--accent);
+}
+
+.mfx-todo .mfx-todo-filter-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  padding: 0;
+}
+
+/* --- quick add ------------------------------------------------------------ */
+.mfx-todo .mfx-todo-add {
+  flex: none;
+  padding: 2px 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mfx-todo .mfx-todo-add-box {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  padding: 0 4px 0 10px;
+  height: 34px;
+}
+
+.mfx-todo .mfx-todo-add-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.mfx-todo .mfx-todo-add-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 0;
+}
+
+.mfx-todo .mfx-todo-add-input::placeholder,
+.mfx-todo .mfx-todo-filter-input::placeholder,
+.mfx-todo .mfx-todo-input::placeholder {
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.mfx-todo .mfx-todo-add-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  margin-top: 5px;
+  flex-wrap: wrap;
+}
+
+.mfx-todo .mfx-todo-add-meta .mfx-todo-link-btn {
+  margin-left: auto;
+}
+
+/* "for <session>" */
+.mfx-todo .mfx-todo-tag-wrap {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mfx-todo .mfx-todo-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 2px 0 8px;
+  border-radius: 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.mfx-todo .mfx-todo-tag.is-off {
+  appearance: none;
+  gap: 4px;
+  padding: 0 8px 0 6px;
+  border-style: dashed;
+  border-color: var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.mfx-todo .mfx-todo-tag.is-off:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.mfx-todo .mfx-todo-tag-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.mfx-todo .mfx-todo-tag-x {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  flex: none;
+}
+
+.mfx-todo .mfx-todo-tag-x:hover {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--text);
+}
+
+.mfx-todo .mfx-todo-tag-x .mfx-todo-icon svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* --- buttons -------------------------------------------------------------- */
+.mfx-todo .mfx-todo-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.mfx-todo .mfx-todo-btn:hover {
+  border-color: var(--accent);
+}
+
+.mfx-todo .mfx-todo-btn.is-quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  padding: 0 6px;
+}
+
+.mfx-todo .mfx-todo-btn.is-quiet:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.mfx-todo .mfx-todo-btn.is-danger {
+  color: var(--red);
+}
+
+.mfx-todo .mfx-todo-btn.is-danger:hover {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, var(--panel-2));
+}
+
+.mfx-todo .mfx-todo-btn.is-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg, #fff);
+  font-weight: 600;
+}
+
+.mfx-todo .mfx-todo-btn.is-primary:hover {
+  background: color-mix(in srgb, var(--accent) 85%, #000);
+}
+
+.mfx-todo .mfx-todo-icon-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.mfx-todo .mfx-todo-icon-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.mfx-todo .mfx-todo-add-btn {
+  color: var(--accent);
+}
+
+.mfx-todo .mfx-todo-link-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0 2px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
+  text-underline-offset: 2px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.mfx-todo .mfx-todo-link-btn:hover {
+  color: var(--text);
+  text-decoration-color: currentColor;
+}
+
+/* --- error line + undo strip ---------------------------------------------- */
+.mfx-todo .mfx-todo-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin: 6px 10px 0;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--red) 55%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--red) 10%, var(--panel));
+  color: var(--text);
+  font-size: 12px;
+}
+
+.mfx-todo .mfx-todo-error-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mfx-todo .mfx-todo-undo {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 4px 4px 4px 12px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--bg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  font-size: 12px;
+  animation: mfx-todo-rise 0.16s ease-out;
+}
+
+.mfx-todo .mfx-todo-undo-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mfx-todo .mfx-todo-undo-btn {
+  appearance: none;
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--bg) 40%, transparent);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--bg);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mfx-todo .mfx-todo-undo-btn:hover {
+  background: color-mix(in srgb, var(--bg) 16%, transparent);
+}
+
+.mfx-todo .mfx-todo-undo .mfx-todo-icon-btn {
+  width: 24px;
+  height: 24px;
+  color: color-mix(in srgb, var(--bg) 70%, var(--text));
+}
+
+.mfx-todo .mfx-todo-undo .mfx-todo-icon-btn:hover {
+  color: var(--bg);
+  background: color-mix(in srgb, var(--bg) 16%, transparent);
+}
+
+.mfx-todo .mfx-todo-undo :focus-visible {
+  outline-color: var(--bg);
+}
+
+@keyframes mfx-todo-rise {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* --- the list -------------------------------------------------------------- */
+.mfx-todo .mfx-todo-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 6px 56px;
+  outline: none;
+}
+
+.mfx-todo .mfx-todo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mfx-todo .mfx-todo-loading {
+  margin: 14px 8px;
+  color: var(--muted);
+}
+
+.mfx-todo .mfx-todo-empty {
+  margin: 18px 8px;
+  padding: 18px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.mfx-todo .mfx-todo-empty-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.mfx-todo .mfx-todo-empty-line {
+  margin: 0 auto 8px;
+  max-width: 34em;
+  color: var(--muted);
+}
+
+.mfx-todo .mfx-todo-empty-line:last-child {
+  margin-bottom: 0;
+}
+
+.mfx-todo .mfx-todo-section,
+.mfx-todo .mfx-todo-day {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mfx-todo .mfx-todo-section-head,
+.mfx-todo .mfx-todo-tier-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 4px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mfx-todo .mfx-todo-section.is-needs > .mfx-todo-section-head {
+  color: var(--text);
+}
+
+.mfx-todo .mfx-todo-section.is-needs {
+  padding: 4px 4px 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--gold) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gold) 24%, var(--border));
+}
+
+.mfx-todo .mfx-todo-tier-head {
+  margin-top: 8px;
+  font-size: 10.5px;
+}
+
+.mfx-todo .mfx-todo-tier.is-high .mfx-todo-tier-head::before,
+.mfx-todo .mfx-todo-tier.is-normal .mfx-todo-tier-head::before,
+.mfx-todo .mfx-todo-tier.is-low .mfx-todo-tier-head::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.mfx-todo .mfx-todo-tier.is-high .mfx-todo-tier-head::before {
+  background: var(--red);
+}
+
+.mfx-todo .mfx-todo-tier.is-normal .mfx-todo-tier-head::before {
+  background: var(--accent);
+}
+
+.mfx-todo .mfx-todo-tier.is-low .mfx-todo-tier-head::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--muted);
+}
+
+.mfx-todo .mfx-todo-tier-n {
+  font-weight: 500;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.mfx-todo .mfx-todo-group + .mfx-todo-group {
+  margin-top: 4px;
+}
+
+.mfx-todo .mfx-todo-group-head {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin: 4px 4px 2px;
+  font-size: 12px;
+}
+
+.mfx-todo .mfx-todo-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mfx-todo .mfx-todo-foot {
+  display: flex;
+  justify-content: center;
+  margin: 4px 0 0;
+}
+
+/* --- a row ------------------------------------------------------------------ */
+.mfx-todo .mfx-todo-row,
+.mfx-todo .mfx-todo-hrow {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: default;
+}
+
+.mfx-todo .mfx-todo-row:hover,
+.mfx-todo .mfx-todo-hrow:hover {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.mfx-todo .mfx-todo-row:focus-visible,
+.mfx-todo .mfx-todo-hrow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.mfx-todo .mfx-todo-row.is-open,
+.mfx-todo .mfx-todo-hrow.is-open {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+.mfx-todo .mfx-todo-row.is-pending {
+  opacity: 0.65;
+}
+
+/* Checked off in this view: stays in place, crossed out, until the person
+   leaves the list. */
+.mfx-todo .mfx-todo-row.is-done .mfx-todo-text {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.mfx-todo .mfx-todo-row.is-done .mfx-todo-chips {
+  opacity: 0.55;
+}
+
+.mfx-todo .mfx-todo-row.is-done .mfx-todo-grip {
+  visibility: hidden;
+}
+
+.mfx-todo .mfx-todo-row.is-dragging {
+  opacity: 0.4;
+}
+
+.mfx-todo.is-dragging,
+.mfx-todo.is-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.mfx-todo .mfx-todo-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 5px 4px 5px 0;
+  min-width: 0;
+}
+
+.mfx-todo .mfx-todo-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 22px;
+  color: var(--muted);
+  opacity: 0;
+  cursor: grab;
+  touch-action: none;
+  border-radius: 4px;
+}
+
+.mfx-todo .mfx-todo-row:hover .mfx-todo-grip,
+.mfx-todo .mfx-todo-row:focus-within .mfx-todo-grip {
+  opacity: 0.75;
+}
+
+.mfx-todo .mfx-todo-grip:hover {
+  opacity: 1 !important;
+  color: var(--text);
+}
+
+@media (hover: none) {
+  .mfx-todo .mfx-todo-grip {
+    opacity: 0.6;
+  }
+}
+
+.mfx-todo .mfx-todo-check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 3px 6px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.mfx-todo .mfx-todo-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 3px;
+  flex: 1;
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.mfx-todo .mfx-todo-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 20px;
+}
+
+.mfx-todo .mfx-todo-text-edit {
+  flex: 1 1 100%;
+  min-width: 0;
+  height: 24px;
+  margin: -2px 0;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.mfx-todo .mfx-todo-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mfx-todo .mfx-todo-chips:empty {
+  display: none;
+}
+
+.mfx-todo .mfx-todo-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  min-width: 0;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  text-decoration: none;
+  vertical-align: middle;
+}
+
+.mfx-todo .mfx-todo-chip .mfx-todo-icon svg {
+  width: 11px;
+  height: 11px;
+}
+
+.mfx-todo .mfx-todo-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.mfx-todo button.mfx-todo-chip,
+.mfx-todo a.mfx-todo-chip {
+  cursor: pointer;
+}
+
+.mfx-todo .mfx-todo-chip.is-session {
+  max-width: 22ch;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.mfx-todo button.mfx-todo-chip.is-session:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.mfx-todo .mfx-todo-group-head .mfx-todo-chip.is-session {
+  max-width: 100%;
+  height: 20px;
+  font-size: 12px;
+}
+
+.mfx-todo .mfx-todo-chip.is-session.is-muted {
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+  border-style: dashed;
+}
+
+.mfx-todo .mfx-todo-chip.is-kind {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--gold) 55%, var(--border));
+  background: color-mix(in srgb, var(--gold) 14%, transparent);
+  font-weight: 500;
+}
+
+.mfx-todo .mfx-todo-chip.is-tier.is-high {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 50%, var(--border));
+}
+
+.mfx-todo .mfx-todo-chip.is-due.is-soon {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
+}
+
+.mfx-todo .mfx-todo-chip.is-due.is-overdue {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+  background: color-mix(in srgb, var(--red) 9%, transparent);
+  font-weight: 500;
+}
+
+.mfx-todo .mfx-todo-chip.is-link,
+.mfx-todo .mfx-todo-chip.is-notes {
+  width: 22px;
+  padding: 0;
+  justify-content: center;
+}
+
+.mfx-todo a.mfx-todo-chip.is-link:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.mfx-todo .mfx-todo-chip.is-notes {
+  border-color: transparent;
+}
+
+.mfx-todo .mfx-todo-expand {
+  width: 24px;
+  height: 24px;
+  margin-top: -1px;
+}
+
+.mfx-todo .mfx-todo-expand .mfx-todo-icon {
+  transition: transform 0.12s ease;
+}
+
+.mfx-todo .mfx-todo-expand[aria-expanded="true"] .mfx-todo-icon {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mfx-todo .mfx-todo-expand .mfx-todo-icon,
+  .mfx-todo .mfx-todo-undo {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* --- the expanded part ------------------------------------------------------ */
+.mfx-todo .mfx-todo-more {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 10px 10px 42px;
+  cursor: auto;
+}
+
+.mfx-todo .mfx-todo-hrow .mfx-todo-more {
+  padding-left: 12px;
+}
+
+.mfx-todo .mfx-todo-details-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mfx-todo .mfx-todo-details-wrap.is-editing {
+  align-items: stretch;
+}
+
+.mfx-todo .mfx-todo-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-self: stretch;
+  max-height: 340px;
+  overflow: auto;
+  min-width: 0;
+  padding-right: 2px;
+}
+
+.mfx-todo .mfx-todo-prose {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.mfx-todo .mfx-todo-prose a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mfx-todo .mfx-todo-code {
+  position: relative;
+  min-width: 0;
+}
+
+.mfx-todo .mfx-todo-pre {
+  margin: 0;
+  padding: 8px 64px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow-x: auto;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  user-select: text;
+  tab-size: 4;
+}
+
+.mfx-todo .mfx-todo-code.is-open .mfx-todo-pre {
+  border-style: dashed;
+}
+
+.mfx-todo .mfx-todo-copy {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mfx-todo .mfx-todo-copy:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.mfx-todo .mfx-todo-copy.is-done {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.mfx-todo .mfx-todo-copy .mfx-todo-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.mfx-todo .mfx-todo-details-edit,
+.mfx-todo .mfx-todo-input {
+  box-sizing: border-box;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.mfx-todo .mfx-todo-details-edit {
+  width: 100%;
+  min-height: 64px;
+  max-height: 340px;
+  padding: 7px 9px;
+  resize: vertical;
+  line-height: 1.45;
+  overflow-y: auto;
+}
+
+.mfx-todo .mfx-todo-input {
+  height: 28px;
+  padding: 0 8px;
+}
+
+.mfx-todo .mfx-todo-details-edit:focus,
+.mfx-todo .mfx-todo-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.mfx-todo .mfx-todo-hint,
+.mfx-todo .mfx-todo-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mfx-todo .mfx-todo-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+}
+
+.mfx-todo .mfx-todo-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mfx-todo .mfx-todo-field.is-wide {
+  flex: 1 1 180px;
+}
+
+.mfx-todo .mfx-todo-field.is-wide .mfx-todo-input {
+  width: 100%;
+}
+
+.mfx-todo .mfx-todo-field-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mfx-todo .mfx-todo-field-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mfx-todo .mfx-todo-due {
+  width: 190px;
+  max-width: 100%;
+}
+
+.mfx-todo .mfx-todo-delete {
+  margin-left: auto;
+}
+
+.mfx-todo .mfx-todo-seg {
+  display: inline-flex;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.mfx-todo .mfx-todo-seg-btn {
+  appearance: none;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.mfx-todo .mfx-todo-seg-btn:last-child {
+  border-right: 0;
+}
+
+.mfx-todo .mfx-todo-seg-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.mfx-todo .mfx-todo-seg-btn:focus-visible {
+  outline-offset: -2px;
+}
+
+.mfx-todo .mfx-todo-seg-btn.is-on {
+  color: var(--text);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.mfx-todo .mfx-todo-seg-btn.is-high.is-on {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--red);
+}
+
+/* --- history ---------------------------------------------------------------- */
+.mfx-todo .mfx-todo-hrow {
+  cursor: pointer;
+}
+
+.mfx-todo .mfx-todo-hrow .mfx-todo-line {
+  padding-left: 6px;
+  gap: 8px;
+}
+
+.mfx-todo .mfx-todo-outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  width: 76px;
+  height: 20px;
+  font-size: 11px;
+  color: var(--green);
+}
+
+.mfx-todo .mfx-todo-outcome.is-removed {
+  color: var(--muted);
+}
+
+.mfx-todo .mfx-todo-hrow.is-removed .mfx-todo-text {
+  color: var(--muted);
+}
+
+.mfx-todo .mfx-todo-time {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mfx-todo .mfx-todo-ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+/* Narrow panes: chips drop under the text, the outcome word goes. */
+@container (max-width: 380px) {
+  .mfx-todo .mfx-todo-outcome {
+    width: auto;
+  }
+  .mfx-todo .mfx-todo-outcome-word {
+    display: none;
+  }
+  .mfx-todo .mfx-todo-more {
+    padding-left: 10px;
+  }
+}
+
+.mfx-todo.mfx-todo-root {
+  container-type: inline-size;
+}
+
+/* --- the quick-add dialog --------------------------------------------------- */
+/* The host's shared dialog is a fixed 960 x 720 card (sized for a database
+   explorer); a five-field form floats lost in it. While this dialog is the
+   one open, the card hugs the form instead. */
+#ext-dialog-panel:has(.mfx-todo-dialog-root) {
+  width: min(600px, 94vw);
+  height: auto;
+  max-height: 86vh;
+}
+
+.mfx-todo .mfx-todo-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 2px 2px 0;
+}
+
+.mfx-todo .mfx-todo-dialog-text {
+  height: 38px;
+  font-size: 14.5px;
+  padding: 0 12px;
+}
+
+.mfx-todo .mfx-todo-dialog .mfx-todo-details-edit {
+  min-height: 96px;
+  padding: 9px 12px;
+  line-height: 1.45;
+}
+
+.mfx-todo .mfx-todo-dialog .mfx-todo-fields {
+  gap: 14px;
+}
+
+.mfx-todo .mfx-todo-dialog-actions {
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.mfx-todo .mfx-todo-dialog-actions .mfx-todo-btn {
+  height: 30px;
+  padding: 0 14px;
+}
+
+.mfx-todo .mfx-todo-dialog .mfx-todo-fields {
+  align-items: flex-end;
+}
+
+.mfx-todo .mfx-todo-dialog .mfx-todo-tag-wrap {
+  align-self: flex-end;
+  margin-bottom: 3px;
+}
+
+.mfx-todo .mfx-todo-dialog-status {
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--green);
+  overflow-wrap: anywhere;
+}
+
+.mfx-todo .mfx-todo-dialog-status.is-error {
+  color: var(--red);
+}
+
+.mfx-todo .mfx-todo-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mfx-todo .mfx-todo-spacer {
+  flex: 1;
+}
+
+/* --- drag insertion line ---------------------------------------------------- */
+.mfx-todo .mfx-todo-dropline {
+  position: absolute;
+  z-index: 2;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.mfx-todo .mfx-todo-dropline::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: var(--panel);
+  box-sizing: border-box;
+}
+
+.mfx-todo .mfx-todo-dropline-tier {
+  position: absolute;
+  right: 4px;
+  top: -10px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}

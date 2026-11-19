@@ -130,6 +130,11 @@ class FakeFlockApi(Api):
         #: Extra top-level routes: (method, path) -> value, or
         #: callable(payload, query) (/api/tickets, /api/tickets/start).
         self.top_routes: Dict[tuple, Any] = {}
+        #: The To-do list behind /api/todo (docs: the todo extension's REST
+        #: contract); ``todo_route = False`` serves FastAPI's bare 404, like a
+        #: server without the extension.
+        self.todos: List[dict] = []
+        self.todo_route = True
 
     # -- helpers for tests ---------------------------------------------------- #
     def deliver(
@@ -190,6 +195,10 @@ class FakeFlockApi(Api):
             route = self.top_routes[(method, parsed.path)]
             out = route(copy.deepcopy(payload), q) if callable(route) else route
             return copy.deepcopy(out)
+        if parts[:2] == ["api", "todo"]:
+            if not self.todo_route:
+                raise client.ApiError(404, "Not Found")
+            return copy.deepcopy(self._todo(method, parts[2:], payload))
         if parsed.path == "/api/config":
             return copy.deepcopy(self.config_payload)
         if parsed.path == "/api/create_failures":
@@ -271,6 +280,60 @@ class FakeFlockApi(Api):
             r["parent"] = payload.get("parent") or ""
             return copy.deepcopy(r)
         raise client.ApiError(404, "{'detail': 'Not Found'}")
+
+    # -- the To-do list (/api/todo) ------------------------------------------ #
+    def _todo_counts(self) -> dict:
+        open_ = [t for t in self.todos if not t.get("done")]
+        return {
+            "open": len(open_),
+            "needs_you": sum(
+                1 for t in open_ if t.get("kind") in ("manual_test", "needs_you")
+            ),
+            "high": sum(1 for t in open_ if t.get("priority") == "high"),
+        }
+
+    def _todo(self, method: str, rest: List[str], payload: Any) -> dict:
+        if method == "GET" and not rest:
+            return {"todos": self.todos, "counts": self._todo_counts()}
+        if method == "POST" and rest == ["items"]:
+            raws = payload.get("items") if "items" in payload else [payload]
+            added: List[dict] = []
+            updated: List[dict] = []
+            for raw in raws:
+                key = raw.get("key")
+                same = next(
+                    (
+                        t
+                        for t in self.todos
+                        if key and t.get("key") == key and not t.get("done")
+                    ),
+                    None,
+                )
+                if same is not None:
+                    same.update(raw)
+                    updated.append(same)
+                    continue
+                item = dict(raw, id="t%d" % next(self._ids), done=False)
+                item["created_at"] = self.clock.now
+                self.todos.append(item)
+                added.append(item)
+            return {"added": added, "updated": updated, "counts": self._todo_counts()}
+        if method == "PATCH" and len(rest) == 2 and rest[0] == "items":
+            item = next((t for t in self.todos if t["id"] == rest[1]), None)
+            if item is None:
+                raise client.ApiError(404, "no such to-do: %s" % rest[1])
+            for k, v in payload.items():
+                if k == "priority" and v in ("", "normal"):
+                    item.pop("priority", None)
+                else:
+                    item[k] = v
+            return {"todo": item}
+        if method == "DELETE" and len(rest) == 2 and rest[0] == "items":
+            if not any(t["id"] == rest[1] for t in self.todos):
+                raise client.ApiError(404, "no such to-do: %s" % rest[1])
+            self.todos[:] = [t for t in self.todos if t["id"] != rest[1]]
+            return {"ok": True}
+        raise client.ApiError(404, "Not Found")
 
     def _create(self, payload: dict) -> dict:
         title = payload.get("title")

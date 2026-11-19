@@ -195,10 +195,11 @@ def test_the_door_style_exists():
     assert "#mindflock-bar .dc-open:focus-visible" in css
 
 
-def test_the_assistant_bar_is_chat_todo_and_agent():
+def test_the_assistant_bar_is_chat_and_agent():
+    # The to-do list is its own extension now (addons/todo), not a button here.
     bars = _code("components/sidebar/SidebarBars.tsx")
     assert 'id="assistant-chat-btn"' in bars
-    assert 'id="assistant-todo-btn"' in bars
+    assert 'id="assistant-todo-btn"' not in bars
     assert 'id="assistant-agent-btn"' in bars
     assert 'openDialogFor("assistant-agent")' in bars
 
@@ -479,9 +480,7 @@ def test_the_assistant_bar_no_longer_takes_a_dialog_opener():
     assert "openDialogFor" not in cbs
     assert "DialogName" not in bars
     assert "assistant-instructions" not in bars and ">Instructions<" not in bars
-    assert "barContent(key, { onOpenChat, onOpenTodo })" in _code(
-        "components/sidebar/Sidebar.tsx"
-    )
+    assert "barContent(key, { onOpenChat })" in _code("components/sidebar/Sidebar.tsx")
 
 
 def test_the_view_buttons_offer_the_five_modes():

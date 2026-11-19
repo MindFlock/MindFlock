@@ -545,6 +545,7 @@ ExtensionSpec(
 | `surfaces` | `ExtensionSurface` list — the dialogs and panes the extension may open. |
 | `stylesheet` | `True` → at activation the host injects `<module dir>/style.css` into `layer(components)`. Default `False`. |
 | `api_version` | The **minimum** host API level the module was written against (default `1`). See `HOST_API_VERSION` below. |
+| `badge` | Optional API path (must start with `/api/`) returning `{"count": n, "title": "…"}`. The host shows `count` next to the bar label (`0` = no badge, `title` as its tooltip) and refetches it on any `addon.<ext id>.*` bus event and about every 60 s — no extension code runs for it. Default `None`. The To-do extension's is `/api/todo/badge`. |
 
 #### `ExtensionButton`
 
@@ -691,7 +692,7 @@ registers on `window.mindflockExtensions[<id>]` — an object with
 button, a palette entry, a surface being mounted) and awaits `activate` once;
 every caller of the same extension awaits the same promise. Before importing,
 the host compares the manifest's `api_version` against its own
-`HOST_API_VERSION` (`frontend/src/extensions/host.ts`, currently `1`) and
+`HOST_API_VERSION` (`frontend/src/extensions/host.ts`, currently `2`) and
 refuses with `needs host API level N (this app provides M)` when the
 extension asks for more than the host has. The rule behind the number:
 **`api_version` is the minimum host level the module was written against**,
@@ -714,6 +715,8 @@ interface ExtensionApi {
     openPane(surfaceId: string, opts?: {ref?: string; title?: string; ctx?: unknown}): string; // pane key, "" on error
     closePane(surfaceId: string, ref?: string): void;
     toast(msg: string, opts?: {duration?: number}): void;
+    focusSession(title: string): boolean;   // level 2: select/focus that session; false when none
+    focusedSession(): string | null;        // level 2: the session the person is looking at
   };
   commands: {
     register(commandId: string, handler: (...args: unknown[]) => void): Disposable; // own prefix enforced
@@ -767,6 +770,15 @@ What each member does, and the rules the host enforces:
   so opening a different surface or ref of the same extension replaces the
   body. `ui.closeDialog` is a no-op unless the dialog on screen belongs to
   the caller — no extension can swat someone else's modal.
+- **`ui.focusSession(title)`** (host level 2) selects and focuses that
+  session in the app — the same as clicking its row — and returns `true`;
+  `false` when there is no session with that title. **`ui.focusedSession()`**
+  (level 2) returns the title of the session the person is looking at now,
+  or `null`. Both were added at level 2, so an extension that must also run
+  on a level-1 host keeps `api_version=1` and calls them feature-detected:
+  `api.ui.focusSession?.(title)` / `api.ui.focusedSession?.() ?? null` (the
+  To-do extension does this for its "go to session" links). One that cannot
+  work without them declares `api_version=2` instead.
 - **`commands.register`** refuses (attributed error, no-op disposable) an id
   without the `<ext-id>.` prefix. **`commands.run`** runs the extension's
   *own* commands only in v1 and resolves immediately otherwise. A registered
@@ -800,6 +812,16 @@ is honored for the keys it knows; a missing *built-in* key is appended at the
 tail, as before; a missing *extension* key is inserted immediately **above
 the session list**, so a freshly installed extension lands where the eye is
 even for a user with a years-old saved order.
+
+**The badge.** A manifest `badge` (an `/api/…` path returning `{"count": n,
+"title": "…"}`) makes the host draw a small pill right after the bar label,
+with `title` as its tooltip. The host fetches it when the bar mounts, polls
+it about every 60 s, and refetches at once on any `addon.<ext id>.*` bus
+event — so an extension that emits on every change (`ctx.emit("<id>.changed",
+…)`) gets a live count for free. Nothing is shown when the count is `0` or
+the fetch fails (an error never paints a stale or wrong number), and a count
+past 99 reads `99+`. Like the rest of the bar it runs no extension code: the
+module is not loaded for it.
 
 The command palette adds one action per command of every enabled extension —
 labelled with the command's `title`, hinted with the extension's label — from

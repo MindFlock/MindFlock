@@ -147,6 +147,11 @@ AUTO_APPROVED_TOOLS = (
     "wait_for_run",
     "propose_run_plan",
     "report_integrated",
+    # The person's To-do list: adding to it is telling the person something,
+    # and an ask before each manual step would be the very interruption the
+    # list exists to spare them. Changing an item still asks.
+    "add_todo",
+    "list_todos",
 )
 
 #: Management scopes the MCP server understands, narrowest first; the attach

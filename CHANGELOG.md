@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **To-do is its own extension.** A **To-do** bar in the sidebar (show or
+  hide it in Customize → Sidebar) with a count of what is open, **Open** and
+  **Add**. The list opens as a window in the grid like any session: what
+  needs you first, grouped by session, each with a chip that takes you to
+  that session; drag to reorder; High / Normal / Low; details per item
+  (links, and code blocks with a Copy button); a due time; and a History tab
+  of what you finished or removed, with Restore. An item you check off stays
+  where it is, crossed out, until you leave the list. The Assistant bar is now
+  Chat · Instructions; the list is the same file, so the Assistant still
+  reads and edits it and timed reminders work as before.
+- **What you have to do by hand lands on the To-do list by itself.** A
+  Verify waiting on you adds one item per step you are asked to check, a
+  route parked on you adds one, and so does a team run's escalation. They
+  close themselves when the wait ends, and come back after a restart.
+- **Agents can add to it: `add_todo`, `list_todos`, `update_todo`** in the
+  MindFlock MCP (40 tools now). An agent is told to add anything you must do
+  by hand, one item per action, tagged with its session. Adding and listing
+  never ask for approval. Ask any session to change an item ("mark the
+  staging login done", "push that to Friday", "remove it") and it can, even
+  when another session added it.
+- Extensions can show a count on their bar (`badge` in the manifest) and,
+  at host API level 2, focus a session (`ui.focusSession`,
+  `ui.focusedSession`).
 - **Select several stops of a chain with Ctrl/⌘+click and Shift+click**, in
   the Sky and in a session's Route tab. Ctrl+click (⌘ on a Mac) takes a stop
   or group in or out; Shift+click takes every stop from the last one clicked.

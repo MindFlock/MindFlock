@@ -40496,7 +40496,7 @@ var __vitePreload = function preload(baseModule, deps, importerUrl) {
 };
 //#endregion
 //#region src/extensions/host.ts
-var HOST_API_VERSION = 1;
+var HOST_API_VERSION = 2;
 var records = /* @__PURE__ */ new Map();
 var known = /* @__PURE__ */ new Map();
 var epochCounter = 0;
@@ -40584,7 +40584,7 @@ function activateExtension(ext) {
 	rec.activation = (async () => {
 		try {
 			const spec = ext.extension;
-			if ((spec.api_version || 1) > HOST_API_VERSION) throw new Error("needs host API level " + spec.api_version + " (this app provides 1)");
+			if ((spec.api_version || 1) > HOST_API_VERSION) throw new Error("needs host API level " + spec.api_version + " (this app provides 2)");
 			if (spec.stylesheet) injectStylesheet(rec, spec);
 			const entry = (await __vitePreload(() => import(
 				/* @vite-ignore */
@@ -40705,6 +40705,20 @@ async function runCommand(extId, commandId, ...args) {
 			extError(extId, "command " + commandId + " is not registered");
 			if (rec.status === "active") toast("Extension " + (ext.label || extId) + ": unknown command " + commandId);
 	}
+}
+function extensionEnabled(extId) {
+	return known.has(extId);
+}
+function extensionOffText(label) {
+	return "The " + label + " extension is turned off (Settings → Extensions)";
+}
+function runAppExtCommand(extId, commandId, label, say = (msg) => toast(msg)) {
+	if (!extensionEnabled(extId)) {
+		say(extensionOffText(label));
+		return false;
+	}
+	runCommand(extId, commandId);
+	return true;
 }
 function makeSurfaceEl(extId) {
 	const el = document.createElement("div");
@@ -40974,6 +40988,18 @@ function deepFreeze(obj) {
 	}
 	return obj;
 }
+function focusSessionByTitle(title, deps = {
+	titles: () => instances$2().map((i) => i.title),
+	select: (t) => selectSession(t)
+}) {
+	if (typeof title !== "string" || !title) return false;
+	if (!deps.titles().includes(title)) return false;
+	deps.select(title);
+	return true;
+}
+function focusedSessionTitle() {
+	return useUi.getState().focused || null;
+}
 function makeApi(ext) {
 	const extId = ext.id;
 	const apiObj = {
@@ -40986,7 +41012,9 @@ function makeApi(ext) {
 			closeDialog: () => closeExtDialog(extId),
 			openPane: (surfaceId, opts) => openExtPane(extId, surfaceId, opts),
 			closePane: (surfaceId, ref) => closeExtPane(extId, surfaceId, ref),
-			toast: (msg, opts) => toast(msg, { duration: opts?.duration })
+			toast: (msg, opts) => toast(msg, { duration: opts?.duration }),
+			focusSession: (title) => focusSessionByTitle(title),
+			focusedSession: () => focusedSessionTitle()
 		},
 		commands: {
 			register: (commandId, handler) => registerCommand(extId, commandId, handler),
@@ -52061,7 +52089,7 @@ function meterRef(el) {
 var passes = [];
 var t0 = 0;
 var marks = {};
-var clock$2 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
+var clock$1 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
 function debugOn() {
 	try {
 		return typeof localStorage !== "undefined" && localStorage.getItem("cs_voice_debug") === "1";
@@ -52071,10 +52099,10 @@ function debugOn() {
 }
 function voiceMark(m) {
 	if (m === "start") {
-		t0 = clock$2();
+		t0 = clock$1();
 		marks = {};
 	} else if (!t0 || m in marks) return;
-	marks[m] = Math.round(clock$2() - t0);
+	marks[m] = Math.round(clock$1() - t0);
 	if (typeof window !== "undefined") window.__mfVoiceTiming = { ...marks };
 	if (debugOn()) console.debug("[voice] " + m + " +" + marks[m] + " ms");
 }
@@ -58188,6 +58216,14 @@ function openingScreen(target, keys) {
 	return DEFAULT_SETTINGS_SCREEN;
 }
 //#endregion
+//#region src/lib/todoExt.ts
+var TODO_EXT_ID = "todo";
+var TODO_OPEN_COMMAND = "todo.open";
+var TODO_LABEL = "To-do";
+function openTodoList() {
+	return runAppExtCommand(TODO_EXT_ID, TODO_OPEN_COMMAND, TODO_LABEL);
+}
+//#endregion
 //#region src/lib/assistantHost.ts
 var ASSISTANT_DIALOGS = {
 	"new-session": "New session",
@@ -58198,13 +58234,17 @@ var ASSISTANT_DIALOGS = {
 	recent: "Recently closed",
 	prompts: "Prompts",
 	setup: "the Setup checklist",
-	todo: "To-do",
 	"assistant-agent": "Assistant instructions",
 	palette: "the command palette",
 	shortcuts: "Keyboard shortcuts",
 	"red-zones": "Zones",
 	schedule: "Schedule"
 };
+var ASSISTANT_EXT_TARGETS = { todo: {
+	ext: TODO_EXT_ID,
+	command: TODO_OPEN_COMMAND,
+	label: TODO_LABEL
+} };
 var ASSISTANT_SETTINGS_SCREENS = {
 	general: "General",
 	connections: "Connections",
@@ -58411,6 +58451,11 @@ var realEnv = {
 	openSettings: (screen) => openSettings(screen),
 	closeDialog: () => useUi.getState().closeDialog(),
 	openDialogName: () => useUi.getState().openDialog,
+	extCommand: (extId, commandId) => {
+		if (!extensionEnabled(extId)) return false;
+		runCommand(extId, commandId);
+		return true;
+	},
 	setView: (mode) => setView(mode),
 	titles: () => instances$2().map((i) => i.title),
 	name: displayName,
@@ -58456,7 +58501,10 @@ var SCREEN_PREFIX = "settings:";
 function chipJump(c) {
 	if (c.session) selectSession(c.session, { voice: true });
 	else if (c.open?.startsWith(SCREEN_PREFIX)) openSettings(c.open.slice(9));
-	else if (c.open) useUi.getState().openDialogFor(c.open);
+	else if (c.open && ASSISTANT_EXT_TARGETS[c.open]) {
+		const t = ASSISTANT_EXT_TARGETS[c.open];
+		runAppExtCommand(t.ext, t.command, t.label);
+	} else if (c.open) useUi.getState().openDialogFor(c.open);
 }
 function execUiAction(a, env = realEnv) {
 	try {
@@ -58473,6 +58521,18 @@ function execUiAction(a, env = realEnv) {
 					return {
 						ok: true,
 						text: "Opened Settings → " + label,
+						open: a.target
+					};
+				}
+				const ext = ASSISTANT_EXT_TARGETS[a.target];
+				if (ext) {
+					if (!env.extCommand(ext.ext, ext.command)) return {
+						ok: false,
+						text: extensionOffText(ext.label)
+					};
+					return {
+						ok: true,
+						text: "Opened " + ext.label,
 						open: a.target
 					};
 				}
@@ -59194,7 +59254,7 @@ var loadingListeners = /* @__PURE__ */ new Set();
 serverRec.onLoading = (on) => loadingListeners.forEach((l) => l(on));
 var tracker = new ReplyTracker();
 var heard = new HeardTurns();
-var clock$1 = new HeardClock();
+var clock = new HeardClock();
 var speakingListeners = /* @__PURE__ */ new Set();
 var audibleListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)), { onAudible: (on) => audibleListeners.forEach((l) => l(on)) });
@@ -59564,7 +59624,7 @@ function TopBarMic() {
 	}, []);
 	const repliesOn = prefs.replies !== "off";
 	(0, import_react.useEffect)(() => {
-		if (repliesOn) clock$1.restart();
+		if (repliesOn) clock.restart();
 	}, [repliesOn]);
 	(0, import_react.useEffect)(() => {
 		let unsubs = [];
@@ -59574,7 +59634,7 @@ function TopBarMic() {
 			const mode = prefsRef.current.replies;
 			const inline = String(data.say || "").trim();
 			const ours = tracker.waiting(title);
-			if (!ours && !isNews(turnEndedAt(ts, data.idle_for), clock$1.heardAt(title))) return;
+			if (!ours && !isNews(turnEndedAt(ts, data.idle_for), clock.heardAt(title))) return;
 			const speak = (words, ask = "", listen = true) => {
 				if (!words) return;
 				say(spokenLine(displayName(title), words));
@@ -59586,11 +59646,11 @@ function TopBarMic() {
 						focused: useUi.getState().focused,
 						name: displayName(title),
 						headline: taskHeadline(title),
-						lastAt: Math.max(clock$1.last(title), tracker.sentAt(title)),
+						lastAt: Math.max(clock.last(title), tracker.sentAt(title)),
 						now: Date.now(),
 						text: words
 					});
-					clock$1.mark(title);
+					clock.mark(title);
 					return line;
 				}, { title });
 				if (!ask) return;
@@ -59640,11 +59700,11 @@ function TopBarMic() {
 		};
 		attach();
 		refreshQuestion(useUi.getState().focused || "");
-		clock$1.mark(useUi.getState().focused);
+		clock.mark(useUi.getState().focused);
 		const unsubFocus = useUi.subscribe((s, prev) => {
 			if (s.focused === prev.focused) return;
-			clock$1.mark(prev.focused);
-			clock$1.mark(s.focused);
+			clock.mark(prev.focused);
+			clock.mark(s.focused);
 			refreshQuestion(s.focused || "");
 			if (s.focused && followsFocus.current) live.current?.follow();
 		});
@@ -68981,6 +69041,27 @@ function PeerSharedRows() {
 	});
 }
 //#endregion
+//#region src/extensions/badge.ts
+var BADGE_POLL_MS = 6e4;
+function badgeView(resp) {
+	if (!resp || typeof resp !== "object") return null;
+	const r = resp;
+	const n = typeof r.count === "number" && Number.isFinite(r.count) ? Math.floor(r.count) : 0;
+	if (n <= 0) return null;
+	const title = typeof r.title === "string" && r.title.trim() ? r.title.trim() : String(n);
+	return {
+		count: n,
+		text: n > 99 ? "99+" : String(n),
+		title
+	};
+}
+function badgeRefreshOn(extId, eventName) {
+	return !!extId && typeof eventName === "string" && eventName.startsWith("addon." + extId + ".");
+}
+function badgePath(badge) {
+	return typeof badge === "string" && badge.startsWith("/") && !badge.startsWith("//") ? badge : null;
+}
+//#endregion
 //#region src/extensions/ExtensionBar.tsx
 function useExtensionBarDefs() {
 	const { data: extensions } = useExtensions();
@@ -68989,16 +69070,51 @@ function useExtensionBarDefs() {
 		label: e.extension.bar_label || e.label
 	})), [extensions]);
 }
+function ExtBadge({ extId, path }) {
+	const queryKey = (0, import_react.useMemo)(() => [
+		"ext-badge",
+		extId,
+		path
+	], [extId, path]);
+	const q = useQuery({
+		queryKey,
+		queryFn: () => api(path),
+		refetchInterval: BADGE_POLL_MS,
+		retry: false
+	});
+	(0, import_react.useEffect)(() => {
+		const ev = window.mindflock?.events;
+		if (!ev) return;
+		return ev.subscribe("*", (env) => {
+			if (badgeRefreshOn(extId, env?.event)) queryClient.invalidateQueries({ queryKey });
+		});
+	}, [extId, queryKey]);
+	const view = q.isError ? null : badgeView(q.data);
+	if (!view) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "ext-badge",
+		title: view.title,
+		"aria-label": view.title,
+		children: view.text
+	});
+}
 function ExtensionBar({ extId }) {
 	const { data: extensions } = useExtensions();
 	const ext = extensions?.find((e) => e.id === extId && e.enabled);
 	if (!ext) return null;
+	const badge = badgePath(ext.extension.badge);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ext-bar",
 		id: "ext-bar-" + ext.id,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "ext-label",
-			children: ext.extension.bar_label || ext.label
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ext-label-text",
+				children: ext.extension.bar_label || ext.label
+			}), badge && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtBadge, {
+				extId: ext.id,
+				path: badge
+			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "ext-actions",
 			children: ext.extension.buttons.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -70435,35 +70551,25 @@ function barContent(key, cbs) {
 		case "issue-handling": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GitIssueBar, {});
 		case "assistant": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "assistant-bar",
-			title: "A personal AI assistant (it runs on your default agent) — answers questions and manages your todo list",
+			title: "A personal AI assistant (it runs on your default agent) — answers questions, with instructions you can edit",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "as-label",
 				children: "Assistant"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "as-actions",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						id: "assistant-chat-btn",
-						className: "as-toggle",
-						title: "Open a chat window with your personal assistant",
-						onClick: cbs.onOpenChat,
-						children: "Chat"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						id: "assistant-todo-btn",
-						className: "as-toggle",
-						title: "Show the todo list (drag to reorder)",
-						onClick: cbs.onOpenTodo,
-						children: "Todo"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						id: "assistant-agent-btn",
-						className: "as-toggle",
-						title: "Edit the assistant's agent file — its standing instructions",
-						onClick: () => useUi.getState().openDialogFor("assistant-agent"),
-						children: "Instructions"
-					})
-				]
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					id: "assistant-chat-btn",
+					className: "as-toggle",
+					title: "Open a chat window with your personal assistant",
+					onClick: cbs.onOpenChat,
+					children: "Chat"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					id: "assistant-agent-btn",
+					className: "as-toggle",
+					title: "Edit the assistant's agent file — its standing instructions",
+					onClick: () => useUi.getState().openDialogFor("assistant-agent"),
+					children: "Instructions"
+				})]
 			})]
 		});
 		case "prompts": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsBar, {});
@@ -71962,7 +72068,7 @@ function closeDrawerForModal() {
 	ui.toggleSidebar();
 	return true;
 }
-function Sidebar({ onOpenChat, onOpenTodo }) {
+function Sidebar({ onOpenChat }) {
 	(0, import_react.useEffect)(() => {
 		const on = () => void closeDrawerForModal();
 		window.addEventListener(MODAL_OPEN_EVENT, on);
@@ -72396,10 +72502,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 					onOver: secOver,
 					onLeave: secLeave,
 					onDropSection: moveSection,
-					children: barContent(key, {
-						onOpenChat,
-						onOpenTodo
-					})
+					children: barContent(key, { onOpenChat })
 				}, key);
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("footer", {
@@ -136718,7 +136821,7 @@ var NOTES = {
 			target: "issues"
 		}
 	},
-	assistant: { text: "Chat, a todo list, and its editable agent file" },
+	assistant: { text: "Chat, and its editable agent file" },
 	prompts: {
 		text: "Your saved prompts — pick one to paste it into the session you are in",
 		link: {
@@ -136727,7 +136830,18 @@ var NOTES = {
 		}
 	}
 };
+var EXT_NOTES = { "ext:todo": {
+	text: "Things you need to do by hand — manual test steps, anything waiting on you",
+	link: {
+		label: "Settings → Extensions",
+		dialog: "settings",
+		target: "extensions"
+	}
+} };
 var EXTENSION_NOTE = { text: "From an extension" };
+function barNote(key) {
+	return NOTES[key] || EXT_NOTES[key] || EXTENSION_NOTE;
+}
 function SidebarBarsPicker() {
 	const hiddenBars = useUi((s) => s.hiddenBars);
 	const toggleBarHidden = useUi((s) => s.toggleBarHidden);
@@ -136773,7 +136887,7 @@ function SidebarBarsPicker() {
 					}, key);
 					const b = byKey.get(key);
 					if (!b) return null;
-					const note = NOTES[b.key] || EXTENSION_NOTE;
+					const note = barNote(b.key);
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeRow, {
 						id: b.key,
 						list: "bars",
@@ -141258,79 +141372,12 @@ function fromDue(due) {
 	const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], 0, 0);
 	return isNaN(d.getTime()) ? null : d;
 }
-function clock(hRaw, mRaw, ampm) {
-	let h = +hRaw;
-	const m = mRaw ? +mRaw : 0;
-	if (m > 59) return null;
-	const ap = (ampm || "").toLowerCase().replace(/\./g, "");
-	if (ap === "pm" && h < 12) h += 12;
-	else if (ap === "am" && h === 12) h = 0;
-	else if (!ap && h >= 1 && h <= 6) h += 12;
-	if (h > 23) return null;
-	return [h, m];
-}
 var TIME = String.raw`(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?`;
 var DAY = String.raw`(today|tonight|tomorrow|tmrw|tmr|` + Object.keys(DAY_ALIASES).join("|") + ")";
-var RE_IN = new RegExp(String.raw`\s+in\s+(\d+)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\s*$`, "i");
-var RE_DAY_TIME = new RegExp(String.raw`\s+(?:on\s+|next\s+)?` + DAY + String.raw`(?:\s+` + TIME + String.raw`)?\s*$`, "i");
-var RE_TIME_DAY = new RegExp(String.raw`\s+` + TIME + String.raw`\s+(?:on\s+)?` + DAY + String.raw`\s*$`, "i");
-var RE_TIME = new RegExp(String.raw`\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\s*$`, "i");
-function onDay(day, now) {
-	const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-	const key = day.toLowerCase();
-	if (key === "today" || key === "tonight") return d;
-	if (key === "tomorrow" || key === "tmrw" || key === "tmr") {
-		d.setDate(d.getDate() + 1);
-		return d;
-	}
-	let ahead = (DAY_ALIASES[key] - d.getDay() + 7) % 7;
-	if (ahead === 0) ahead = 7;
-	d.setDate(d.getDate() + ahead);
-	return d;
-}
-function parseWhen(input, now = /* @__PURE__ */ new Date()) {
-	const raw = " " + String(input || "").trim();
-	let m = RE_IN.exec(raw);
-	if (m) {
-		const n = +m[1];
-		const unit = m[2].toLowerCase();
-		const ms = unit.startsWith("d") ? 864e5 : unit.startsWith("h") ? 36e5 : 6e4;
-		const text = raw.slice(0, m.index).trim();
-		if (!text || !n) return null;
-		return {
-			text,
-			due: toDue(new Date(now.getTime() + n * ms))
-		};
-	}
-	m = RE_TIME_DAY.exec(raw);
-	let day;
-	let hm = null;
-	if (m) {
-		hm = clock(m[1], m[2], m[3]);
-		day = m[4];
-	} else if (m = RE_DAY_TIME.exec(raw)) {
-		day = m[1];
-		if (m[2]) hm = clock(m[2], m[3], m[4]);
-		else hm = day.toLowerCase() === "tonight" ? [20, 0] : [DEFAULT_HOUR, 0];
-	} else if (m = RE_TIME.exec(raw)) hm = clock(m[1], m[2], m[3]);
-	if (!m || !hm) return null;
-	const text = raw.slice(0, m.index).trim();
-	if (!text) return null;
-	let d;
-	if (day) {
-		d = onDay(day, now);
-		const key = day.toLowerCase();
-		if (key in DAY_ALIASES && DAY_ALIASES[key] === now.getDay()) {
-			if (new Date(now.getFullYear(), now.getMonth(), now.getDate(), hm[0], hm[1]) > now) d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-		}
-	} else d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-	d.setHours(hm[0], hm[1], 0, 0);
-	if (!day && d <= now) d.setDate(d.getDate() + 1);
-	return {
-		text,
-		due: toDue(d)
-	};
-}
+new RegExp(String.raw`\s+in\s+(\d+)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\s*$`, "i");
+new RegExp(String.raw`\s+(?:on\s+|next\s+)?` + DAY + String.raw`(?:\s+` + TIME + String.raw`)?\s*$`, "i");
+new RegExp(String.raw`\s+` + TIME + String.raw`\s+(?:on\s+)?` + DAY + String.raw`\s*$`, "i");
+new RegExp(String.raw`\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\s*$`, "i");
 function clockText(d) {
 	let h = d.getHours();
 	const ap = h >= 12 ? "PM" : "AM";
@@ -141357,10 +141404,6 @@ function formatDue(due, now = /* @__PURE__ */ new Date()) {
 	}
 	return lead + " " + clockText(d);
 }
-function isOverdue(due, now = /* @__PURE__ */ new Date()) {
-	const d = fromDue(due);
-	return !!d && d.getTime() <= now.getTime();
-}
 function snoozeChoices(now = /* @__PURE__ */ new Date()) {
 	const t9 = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, DEFAULT_HOUR, 0);
 	return [
@@ -141377,267 +141420,6 @@ function snoozeChoices(now = /* @__PURE__ */ new Date()) {
 			until: toDue(t9)
 		}
 	];
-}
-//#endregion
-//#region src/components/dialogs/TodoDialog.tsx
-var rid = () => Math.random().toString(36).slice(2, 10);
-function TodoDialog() {
-	const open = useUi((s) => s.openDialog === "todo");
-	const closeDialog = useUi((s) => s.closeDialog);
-	const [todos, setTodos] = (0, import_react.useState)([]);
-	const [state, setState] = (0, import_react.useState)("");
-	const [draft, setDraft] = (0, import_react.useState)("");
-	const dragId = (0, import_react.useRef)(null);
-	const [dragOver, setDragOver] = (0, import_react.useState)(null);
-	const dragging = (0, import_react.useRef)(false);
-	const addRef = (0, import_react.useRef)(null);
-	const [editingId, setEditingId] = (0, import_react.useState)(null);
-	const [editDraft, setEditDraft] = (0, import_react.useState)("");
-	const [dueEditId, setDueEditId] = (0, import_react.useState)(null);
-	const editCancelled = (0, import_react.useRef)(false);
-	const editingRef = (0, import_react.useRef)(null);
-	const setEditing = (0, import_react.useCallback)((id) => {
-		editingRef.current = id;
-		setEditingId(id);
-	}, []);
-	const save = (0, import_react.useCallback)(async (next) => {
-		setTodos(next);
-		setState("saving…");
-		try {
-			const r = await api("/api/assistant/todos", {
-				method: "PUT",
-				json: { todos: next }
-			});
-			setTodos(r.todos || []);
-			setState("saved");
-		} catch {
-			setState("save failed");
-		}
-	}, []);
-	const load = (0, import_react.useCallback)(async () => {
-		if (dragging.current || document.activeElement === addRef.current || editingRef.current) return;
-		try {
-			const r = await api("/api/assistant/todos");
-			setTodos(r.todos || []);
-			setState((s) => s === "load failed" ? "" : s);
-		} catch {
-			setState("load failed");
-		}
-	}, []);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const t = setTimeout(() => addRef.current?.focus(), 0);
-		return () => clearTimeout(t);
-	}, [open]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		load();
-		const poll = setInterval(() => {
-			if (!document.hidden) load();
-		}, 4e3);
-		return () => clearInterval(poll);
-	}, [open, load]);
-	if (!open) return null;
-	const add = () => {
-		const text = draft.trim();
-		if (!text) return;
-		setDraft("");
-		const when = parseWhen(text);
-		save([...todos, when ? {
-			id: rid(),
-			text: when.text,
-			done: false,
-			due: when.due
-		} : {
-			id: rid(),
-			text,
-			done: false
-		}]);
-	};
-	const setDue = (id, due) => {
-		setDueEditId(null);
-		save(todos.map((x) => x.id === id ? due ? {
-			...x,
-			due
-		} : {
-			id: x.id,
-			text: x.text,
-			done: x.done
-		} : x));
-	};
-	const startEdit = (t) => {
-		setEditing(t.id);
-		setEditDraft(t.text);
-		editCancelled.current = false;
-	};
-	const commitEdit = (id) => {
-		if (editCancelled.current) return;
-		setEditing(null);
-		const text = editDraft.trim();
-		const cur = todos.find((x) => x.id === id);
-		if (!cur || !text || text === cur.text) return;
-		save(todos.map((x) => x.id === id ? {
-			...x,
-			text
-		} : x));
-	};
-	const cancelEdit = () => {
-		editCancelled.current = true;
-		setEditing(null);
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-		id: "todo-dialog",
-		onClose: closeDialog,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "todo-panel",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ws-head",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Todo" }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							id: "todo-state",
-							className: "muted",
-							children: state
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "todo-close",
-							onClick: closeDialog,
-							children: "Close"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "todo-add",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "todo-add-input",
-						ref: addRef,
-						autoComplete: "off",
-						placeholder: "Add a todo… (add a time to be reminded: “call the bank tue 9am”)",
-						value: draft,
-						onChange: (e) => setDraft(e.target.value),
-						onKeyDown: (e) => {
-							if (e.key === "Enter") add();
-						}
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "todo-add-btn",
-						onClick: add,
-						children: "Add"
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-					id: "todo-list",
-					className: "todo-list",
-					children: !todos.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-						className: "todo-empty",
-						children: "No todos yet. Add one, or ask the assistant."
-					}) : todos.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-						className: "todo-row" + (t.done ? " done" : "") + (dragOver === t.id ? " drag-over" : ""),
-						draggable: editingId !== t.id,
-						onDragStart: (e) => {
-							dragId.current = t.id;
-							dragging.current = true;
-							e.dataTransfer.effectAllowed = "move";
-						},
-						onDragEnd: () => {
-							dragging.current = false;
-							setDragOver(null);
-						},
-						onDragOver: (e) => {
-							e.preventDefault();
-							if (dragId.current && dragId.current !== t.id) setDragOver(t.id);
-						},
-						onDragLeave: () => setDragOver((d) => d === t.id ? null : d),
-						onDrop: (e) => {
-							e.preventDefault();
-							setDragOver(null);
-							const from = todos.findIndex((x) => x.id === dragId.current);
-							const to = todos.findIndex((x) => x.id === t.id);
-							dragId.current = null;
-							if (from < 0 || to < 0 || from === to) return;
-							const next = todos.slice();
-							const [moved] = next.splice(from, 1);
-							next.splice(to, 0, moved);
-							save(next);
-						},
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "drag-handle",
-								title: "Drag to reorder",
-								children: "⠿"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "checkbox",
-								checked: t.done,
-								onChange: (e) => save(todos.map((x) => x.id === t.id ? {
-									...x,
-									done: e.target.checked
-								} : x))
-							}),
-							editingId === t.id ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "text",
-								className: "todo-edit",
-								autoFocus: true,
-								autoComplete: "off",
-								value: editDraft,
-								onChange: (e) => setEditDraft(e.target.value),
-								onBlur: () => commitEdit(t.id),
-								onKeyDown: (e) => {
-									if (e.key === "Enter") e.currentTarget.blur();
-									else if (e.key === "Escape") {
-										e.stopPropagation();
-										cancelEdit();
-									}
-								}
-							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "todo-text",
-								title: "Click to edit",
-								onClick: () => startEdit(t),
-								children: t.text
-							}),
-							dueEditId === t.id ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "todo-due-edit",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "datetime-local",
-									autoFocus: true,
-									defaultValue: t.due || "",
-									onKeyDown: (e) => {
-										if (e.key === "Enter") setDue(t.id, e.currentTarget.value);
-										else if (e.key === "Escape") {
-											e.stopPropagation();
-											setDueEditId(null);
-										}
-									},
-									onBlur: (e) => setDue(t.id, e.currentTarget.value)
-								}), t.due && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "todo-due-clear",
-									onMouseDown: (e) => e.preventDefault(),
-									onClick: () => setDue(t.id, ""),
-									children: "No reminder"
-								})]
-							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "todo-due" + (t.due ? " has-due" : "") + (t.due && !t.done && isOverdue(t.due) ? " overdue" : ""),
-								title: t.due ? "Reminds you then — click to change" : "Remind me at a time",
-								onClick: () => setDueEditId(t.id),
-								children: t.due ? "⏰ " + formatDue(t.due) : "⏰"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "todo-del",
-								title: "Delete",
-								onClick: () => save(todos.filter((x) => x.id !== t.id)),
-								children: "×"
-							})
-						]
-					}, t.id))
-				})
-			]
-		})
-	});
 }
 //#endregion
 //#region src/components/dialogs/TodoReminder.tsx
@@ -141784,9 +141566,9 @@ function TodoReminder() {
 						className: "tr-open",
 						onClick: () => {
 							setHiddenUntil(Date.now() + CLOSE_HIDE_MS);
-							useUi.getState().openDialogFor("todo", "");
+							openTodoList();
 						},
-						children: "Open the todo list"
+						children: "Open the To-do list"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						onClick: () => setHiddenUntil(Date.now() + CLOSE_HIDE_MS),
@@ -141860,7 +141642,7 @@ function AssistantAgentDialog() {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "set-hint",
-					children: "Your own instructions for the personal assistant — added on top of its built-in behavior. MindFlock always keeps the assistant's core rules (how it answers, how it manages your todo list), so nothing here can break those. Describe how it should behave, what it knows, tone, etc. Applies the next time it starts."
+					children: "Your own instructions for the personal assistant — added on top of its built-in behavior. MindFlock always keeps the assistant's core rules (how it answers, how it manages your To-do list), so nothing here can break those. Describe how it should behave, what it knows, tone, etc. Applies the next time it starts."
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentPicker, {
 					label: "Agent",
@@ -155042,10 +154824,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryNotice, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateNotice, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TopBar, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sidebar, {
-			onOpenChat: () => toggleSpecial("chat"),
-			onOpenTodo: () => useUi.getState().openDialogFor("todo")
-		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sidebar, { onOpenChat: () => toggleSpecial("chat") }),
 		view === "sky" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyView, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TerminalGrid, { specialPanes }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewSessionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsDialog, { onOpenSysLogsPane: () => toggleSpecial("syslogs") }),
@@ -155061,7 +154840,6 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHubDialog, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TodoDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TodoReminder, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantAgentDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RedZonesDialog, {}),

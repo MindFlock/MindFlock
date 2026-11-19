@@ -223,7 +223,7 @@ def test_stdio_server_end_to_end(fake_server, decoy_cwd, tmp_path):
 
         tools = c.request("tools/list")["result"]["tools"]
         assert (
-            len(tools) == 37
+            len(tools) == 40
         )  # + the seven flight tools (run_pr_review) and the two Verify tools
         assert {t["name"] for t in tools} >= {"whoami", "spawn_session", "kill_session"}
 

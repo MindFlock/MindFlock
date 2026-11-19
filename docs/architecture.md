@@ -475,11 +475,14 @@ FastAPI app `backend.web.server:app`. Key pieces:
   by `engine.disk_view()`. See
   [mcp.md](mcp.md#finished-workers-close-themselves).
 - **Addons** (`web/addons/`) — self-registering feature modules with their own
-  `APIRouter` and optional managed subprocess. Seven ship today: **mindflock**
+  `APIRouter` and optional managed subprocess. Among them: **mindflock**
   (start/stop/tail the ingestion pipeline), **assistant** (a long-lived
-  repo-independent Claude chat + todo list), **settings**, **doctor**,
-  **connections**, **templates**, and **notify** (the reference addon for the
-  extension path — see [extensions.md](extensions.md)).
+  repo-independent Claude chat that also edits the to-do list), **todo** (the
+  To-do extension: one list of what a person must do by hand, its history,
+  and the auto items Verify, routes and team runs add and resolve —
+  `web/addons/todo/`, see [web-api.md](web-api.md#to-do)), **settings**,
+  **doctor**, **connections**, **templates**, and **notify** (the reference
+  addon for the extension path — see [extensions.md](extensions.md)).
 
 ### Frontend (`backend/web/static`)
 
@@ -559,7 +562,7 @@ prunes workspaces untouched for 3 days. See
 ### MindFlock MCP (`backend/mcp`, `providers/mcp_attach.py`)
 
 A stdlib-only Model Context Protocol server, `python -P -m backend.mcp` or
-`mindflock mcp`, that gives an agent 37 tools over the rest of the flock:
+`mindflock mcp`, that gives an agent 40 tools over the rest of the flock:
 list and inspect sessions, read their output and diffs, message them, spawn
 workers (or start tickets as workers), wait for them, answer their dialogs,
 ship their work (commit, push, PR, merge, or arm Fast-track), close
@@ -670,7 +673,7 @@ independent cadences, so each side has to tolerate the other being older. See
 | `~/.mindflock/red_zones.json` | config (`backend/config/red_zones.py`) + web | keep-out (red) and only-here (green) zones per repo ([web-ui.md → Zones](web-ui.md#zones-keep-out-red-and-only-here-green)); read by the agent tool hook too |
 | `~/.mindflock/peer/` | peer (`backend/peer/paths.py`) | `identity/` (this install's peer key), `links.json`, `shares/<id>/` (one shared folder each), `relay/` (the relay ingress) |
 | `~/.mindflock/hooks/` | user | shell hooks run on session events ([extensions.md](extensions.md)) |
-| `~/.mindflock-assistant/` | providers/web | assistant instructions + todos, `providers/*.toml`, `pricing.json`, `usage-history.json`, `usage-parse-cache.json`, `scroll-speed`, `.exit-markers/`, `prompts/`, `.activity-markers/` (the hooks' `{state, ts}` markers and, per session, the `Stop` hook's `<session>.reply.json` the spoken line is read from), `.voice/<session>.on` (a phone is in a voice conversation with the session) and the one-shot `.voice/<session>.next` (a `/send {say: true}` prompt's request for a `Say:` line, consumed by the `UserPromptSubmit` hook) |
+| `~/.mindflock-assistant/` | providers/web | assistant instructions, the to-do list (`todos.json`, shared by the Assistant and the To-do extension) and its history (`todos-history.json`), `providers/*.toml`, `pricing.json`, `usage-history.json`, `usage-parse-cache.json`, `scroll-speed`, `.exit-markers/`, `prompts/`, `.activity-markers/` (the hooks' `{state, ts}` markers and, per session, the `Stop` hook's `<session>.reply.json` the spoken line is read from), `.voice/<session>.on` (a phone is in a voice conversation with the session) and the one-shot `.voice/<session>.next` (a `/send {say: true}` prompt's request for a `Say:` line, consumed by the `UserPromptSubmit` hook) |
 | `~/.mindflock/voice/` | web (`core/speech.py`) | the local speech backend's downloaded models (`whisper/`, `piper/`), only when a server backend is `local` |
 | `./config.toml` | pipeline + provisioning | all configuration (gitignored — holds tokens) |
 | `./state.json` | pipeline | `last_run_timestamp`, `processed_stories`, `processed_prs` |

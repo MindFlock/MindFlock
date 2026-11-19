@@ -158,7 +158,6 @@ describe("Ctrl+W / Delete guard: dialogs and overlays", () => {
       "settings",
       "make-pr",
       "setup",
-      "todo",
       "shortcuts",
       "assistant-agent",
       "new-session",

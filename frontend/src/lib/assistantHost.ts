@@ -11,6 +11,7 @@
  * {@link scanClickables}, {@link typeInto}. */
 
 import type { Config } from "../api/types";
+import { extensionEnabled, extensionOffText, runAppExtCommand, runCommand } from "../extensions/host";
 import { buildPaletteActions } from "../components/palette/CommandPalette";
 import type { PaletteAction } from "../components/palette/paletteRank";
 import type { SettingsScreen } from "../components/settings/SettingsDialog";
@@ -23,6 +24,7 @@ import { lastSettingsScreen } from "./settingsLastScreen";
 import { instances, selectSession } from "./sessionActions";
 import { SESSION_ACTIONS, actionCtx, actionLabel, runChordAction, sessionAction, type SessionActionId } from "./sessionActionTable";
 import { setView } from "./viewMode";
+import { TODO_EXT_ID, TODO_LABEL, TODO_OPEN_COMMAND } from "./todoExt";
 import {
   SNAPSHOT_CLICKABLES_MAX,
   SNAPSHOT_COMMANDS_MAX,
@@ -45,12 +47,20 @@ export const ASSISTANT_DIALOGS: Partial<Record<DialogName, string>> = {
   recent: "Recently closed",
   prompts: "Prompts",
   setup: "the Setup checklist",
-  todo: "To-do",
   "assistant-agent": "Assistant instructions",
   palette: "the command palette",
   shortcuts: "Keyboard shortcuts",
   "red-zones": "Zones",
   schedule: "Schedule",
+};
+
+/** The `{do:"open"}` targets that are an extension's window rather than a
+ * dialog: the name the voice catalog uses (backend voice_assistant_catalog)
+ * → the extension command that opens it, and the name a chip says. "todo"
+ * was a dialog until the to-do list became the To-do extension; the spoken
+ * name stays. */
+export const ASSISTANT_EXT_TARGETS: Record<string, { ext: string; command: string; label: string }> = {
+  todo: { ext: TODO_EXT_ID, command: TODO_OPEN_COMMAND, label: TODO_LABEL },
 };
 
 /** Settings' screens (SettingsDialog SCREENS keys), with their labels. */
@@ -353,6 +363,8 @@ export interface ExecEnv {
   openSettings(screen: string): void;
   closeDialog(): void;
   openDialogName(): string | null;
+  /** Run an extension's command; false (nothing run) when it is off. */
+  extCommand(extId: string, commandId: string): boolean;
   setView(mode: "grid" | "sky"): void;
   titles(): string[];
   name(title: string): string;
@@ -369,6 +381,11 @@ export const realEnv: ExecEnv = {
   openSettings: (screen) => openSettings(screen as SettingsScreen),
   closeDialog: () => useUi.getState().closeDialog(),
   openDialogName: () => useUi.getState().openDialog,
+  extCommand: (extId, commandId) => {
+    if (!extensionEnabled(extId)) return false;
+    void runCommand(extId, commandId);
+    return true;
+  },
   setView: (mode) => setView(mode),
   titles: () => instances().map((i) => i.title),
   name: displayName,
@@ -402,7 +419,10 @@ const SCREEN_PREFIX = "settings:";
 export function chipJump(c: AssistantChip): void {
   if (c.session) selectSession(c.session, { voice: true });
   else if (c.open?.startsWith(SCREEN_PREFIX)) openSettings(c.open.slice(SCREEN_PREFIX.length) as SettingsScreen);
-  else if (c.open) useUi.getState().openDialogFor(c.open as DialogName);
+  else if (c.open && ASSISTANT_EXT_TARGETS[c.open]) {
+    const t = ASSISTANT_EXT_TARGETS[c.open];
+    runAppExtCommand(t.ext, t.command, t.label);
+  } else if (c.open) useUi.getState().openDialogFor(c.open as DialogName);
 }
 
 /** Perform one UiAction: what it did (a chip), or why not. Never throws. */
@@ -416,6 +436,11 @@ export function execUiAction(a: UiAction, env: ExecEnv = realEnv): ExecResult {
           if (!label) return { ok: false, text: "No Settings screen called " + key };
           env.openSettings(key);
           return { ok: true, text: "Opened Settings → " + label, open: a.target };
+        }
+        const ext = ASSISTANT_EXT_TARGETS[a.target];
+        if (ext) {
+          if (!env.extCommand(ext.ext, ext.command)) return { ok: false, text: extensionOffText(ext.label) };
+          return { ok: true, text: "Opened " + ext.label, open: a.target };
         }
         const label = ASSISTANT_DIALOGS[a.target as DialogName];
         if (!label) return { ok: false, text: "Can't open " + a.target };

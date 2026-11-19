@@ -45,7 +45,6 @@ import { GuestNameDialog } from "./components/dialogs/GuestNameDialog";
 import { RecentDialog } from "./components/dialogs/RecentDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
 import { ConnectGitHubDialog } from "./components/dialogs/ConnectGitHub";
-import { TodoDialog } from "./components/dialogs/TodoDialog";
 import { TodoReminder } from "./components/dialogs/TodoReminder";
 import { AssistantAgentDialog } from "./components/dialogs/AssistantAgentDialog";
 import { RedZonesDialog } from "./components/dialogs/RedZonesDialog";
@@ -321,10 +320,7 @@ export default function App() {
       <MemoryNotice />
       <StateNotice />
       <TopBar />
-      <Sidebar
-        onOpenChat={() => toggleSpecial("chat")}
-        onOpenTodo={() => useUi.getState().openDialogFor("todo")}
-      />
+      <Sidebar onOpenChat={() => toggleSpecial("chat")} />
       {/* The main area: the grid of panes, or the sky — the same sessions,
           the same focused one, drawn as lines (lib/viewMode.ts). */}
       {view === "sky" ? <SkyView /> : <TerminalGrid specialPanes={specialPanes} />}
@@ -344,7 +340,6 @@ export default function App() {
       <RecentDialog />
       <SetupDialog />
       <ConnectGitHubDialog />
-      <TodoDialog />
       {/* A timed todo whose time has come: pops up by itself (lib/todoTime). */}
       <TodoReminder />
       <AssistantAgentDialog />

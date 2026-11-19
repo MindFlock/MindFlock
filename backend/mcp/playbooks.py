@@ -108,6 +108,9 @@ TOOL_NAMES = (
     "verify_session",
     "confirm_verify",
     "run_pr_review",
+    "add_todo",
+    "list_todos",
+    "update_todo",
 )
 
 #: First line of a launch prompt decorated with ``split`` — also how
