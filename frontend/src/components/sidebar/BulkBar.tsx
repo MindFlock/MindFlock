@@ -27,6 +27,8 @@ import {
   folderInUse,
   folderInUseText,
   keptRunningText,
+  rememberClosed,
+  reopenClosed,
   type EndResult,
 } from "../../lib/sessionActions";
 
@@ -47,6 +49,12 @@ export function shortReason(msg: string, max = 80): string {
 /** The failure card's body: each session with why it failed ("a — reason; b — reason"). */
 export function bulkFailText(failed: Array<{ name: string; why: string }>): string {
   return failed.map((f) => f.name + " — " + shortReason(f.why)).join("; ");
+}
+
+/** The bulk end toast's words: "Closed 3/4 session(s)", plus the workers
+ * that stayed up. */
+export function bulkEndText(verb: string, done: number, total: number, keptText: string | null): string {
+  return `${verb} ${done}/${total} session(s)` + (keptText ? " · " + keptText : "");
 }
 
 export function BulkBar() {
@@ -135,9 +143,24 @@ export function BulkBar() {
     finish(done);
     setHeld(inUse);
     const keptText = keptRunningText({ children: new Array(kept).fill("") });
-    toast(`${verb} ${done.length}/${titles.length} session(s)` + (keptText ? " · " + keptText : ""), {
-      duration: keptText ? 5000 : undefined,
-    });
+    const text = bulkEndText(verb, done.length, titles.length, keptText);
+    if (kind === "close" && done.length) {
+      // Like a single Close: each one is on the Ctrl+Shift+T stack, and the
+      // toast's Undo reopens all of them at once.
+      for (const t of done) rememberClosed(t);
+      const closed = done.slice();
+      toast(text, {
+        action: {
+          label: "Undo",
+          onClick: () => void reopenClosed(closed),
+          ariaLabel: `Undo closing ${closed.length} session(s)`,
+        },
+        title: "Reopen them — click to Undo (Ctrl+Shift+T reopens one at a time)",
+        duration: 7000,
+      });
+    } else {
+      toast(text, { duration: keptText ? 5000 : undefined });
+    }
     if (failed.length)
       errorPop(
         `${verb === "Closed" ? "Close" : "Delete"} failed for ${failed.length} session(s)`,
@@ -154,10 +177,14 @@ export function BulkBar() {
       if (s.focused === t) s.setFocused(null);
     }
     s.clearBulk();
-    toast(`Hid ${hid.length} session(s) — click to undo`, {
-      onClick: () => {
-        const st = useUi.getState();
-        for (const t of hid) st.setHidden(t, false);
+    toast(`Hid ${hid.length} session(s)`, {
+      action: {
+        label: "Undo",
+        onClick: () => {
+          const st = useUi.getState();
+          for (const t of hid) st.setHidden(t, false);
+        },
+        ariaLabel: `Undo hiding ${hid.length} session(s)`,
       },
       duration: 5000,
     });

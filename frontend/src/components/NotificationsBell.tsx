@@ -391,6 +391,25 @@ export function saveClearedTs(rows: ReadonlyArray<{ ts: number }>, prev: number)
   return mark;
 }
 
+/** What the panel focuses when it opens: its first row (a Needs-you item, else
+ * a notification), else its first button. Keyboard users land inside it, so
+ * Tab walks its rows and Escape closes it from there. */
+export const BELL_FIRST_ITEM =
+  '.notif-attn [tabindex="0"], .notif-attn button, .notif-list .notif-item, .notif-pop button';
+
+/** After Escape closes the panel, does focus go back to the bell? Yes when it
+ * was inside the panel, on the bell, or nowhere (the body); no when it was
+ * somewhere else (a terminal, a box being typed in), which keeps it. */
+export function refocusBellOnEscape(
+  active: Element | null,
+  pop: { contains(n: Node | null): boolean } | null,
+  btn: Element | null,
+  body: Element | null
+): boolean {
+  if (!active || active === body || active === btn) return true;
+  return !!pop && pop.contains(active);
+}
+
 export function NotificationsBell() {
   const { data: instances = [] } = useInstances();
   const { data: runs } = useRuns();
@@ -451,7 +470,13 @@ export function NotificationsBell() {
       setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) setOpen(false);
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Handled: one Escape closes the bell and nothing else (the bulk bar's
+      // Escape, on window, sees defaultPrevented and keeps select mode).
+      e.preventDefault();
+      const back = refocusBellOnEscape(document.activeElement, popRef.current, btnRef.current, document.body);
+      setOpen(false);
+      if (back) btnRef.current?.focus();
     };
     document.addEventListener("click", onClick);
     document.addEventListener("keydown", onKey);
@@ -527,6 +552,13 @@ export function NotificationsBell() {
       document.removeEventListener("mf-close-bell", onClose);
     };
   }, []);
+
+  // Opening moves focus into the panel (its first row), so the keyboard
+  // works there at once. Before the flash below, which scrolls to its row.
+  useEffect(() => {
+    if (!open) return;
+    popRef.current?.querySelector<HTMLElement>(BELL_FIRST_ITEM)?.focus({ preventScroll: true });
+  }, [open]);
 
   // Scroll a requested row into view and flash it, once it has rendered.
   useEffect(() => {

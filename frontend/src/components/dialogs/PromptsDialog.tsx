@@ -25,6 +25,15 @@ import {
   type Preset,
 } from "../../lib/presets";
 
+/** Undo of a deleted saved prompt: put it back where it was in the CURRENT
+ * list (anything saved since stays), unless one by that name is back already. */
+export function restorePreset(current: Preset[], preset: Preset, at: number): Preset[] {
+  if (current.some((q) => q.name === preset.name)) return current;
+  const list = current.slice();
+  list.splice(Math.max(0, Math.min(at, list.length)), 0, preset);
+  return list;
+}
+
 export function PromptsPanel({
   onUse,
 }: {
@@ -166,9 +175,24 @@ export function PromptsPanel({
                     onClick={(e) => {
                       e.stopPropagation();
                       setPop(null);
-                      const list = loadUserPresets().filter((q) => q.name !== p.name);
+                      const before = loadUserPresets();
+                      const at = before.findIndex((q) => q.name === p.name);
+                      const gone = at >= 0 ? before[at] : p;
+                      const list = before.filter((q) => q.name !== p.name);
                       saveUserPresets(list);
                       setSaved(list);
+                      toast("Deleted “" + p.name + "”", {
+                        action: {
+                          label: "Undo",
+                          onClick: () => {
+                            const back = restorePreset(loadUserPresets(), gone, at);
+                            saveUserPresets(back);
+                            setSaved(back);
+                          },
+                          ariaLabel: "Undo deleting “" + p.name + "”",
+                        },
+                        duration: 6000,
+                      });
                     }}
                   >
                     ✕

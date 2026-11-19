@@ -840,8 +840,10 @@ export function TemplatesDialogView(p: ViewProps) {
             >
               {busy ? "Deleting…" : "Delete"}
             </button>
-            <button type="button" className="tpl-btn" onClick={() => p.dispatch({ t: "cancel" })}>
-              Keep
+            {/* Focus lands on the harmless answer, as on every other
+                question: Enter never deletes. */}
+            <button type="button" className="tpl-btn tpl-confirm-no" autoFocus onClick={() => p.dispatch({ t: "cancel" })}>
+              Cancel
             </button>
           </div>
         )}

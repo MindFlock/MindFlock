@@ -263,7 +263,8 @@ describe("no dead dialogs on the zone path", () => {
     // errorPop grew buttons for it.
     const pop = src("lib/errorPop.ts");
     expect(pop).toContain('row.className = "cs-error-actions"');
-    expect(pop).toContain('b.className = "cs-error-act" + (a.primary ? " primary" : "")');
+    expect(pop).toContain("b.className = actClass(a);");
+    expect(pop).toContain('"cs-error-act" + (a.primary ? " primary" : "")');
   });
 
   it("recognizes a 409 carrying red_zone_breaches, and nothing else", () => {

@@ -46,7 +46,6 @@ import {
   rerunSetup,
   selectSession,
 } from "../../lib/sessionActions";
-import { toast } from "../../lib/toast";
 import { nameTakenBy } from "../../lib/windowName";
 import { renameSession } from "../../lib/renameSession";
 import { peekTerm, subscribeTermStates } from "../../lib/terminals";
@@ -166,6 +165,24 @@ export function closeGuarded(now: number): boolean {
   return false;
 }
 
+/** What committing an inline rename does: keep the name (blank or unchanged),
+ * refuse it (another session has it — the edit stays open), or rename. */
+export function inlineRenameVerdict(
+  raw: string,
+  shown: string,
+  takenBy: (name: string) => string
+): { kind: "keep" } | { kind: "taken"; name: string } | { kind: "rename"; name: string } {
+  const name = raw.trim();
+  if (!name || name === shown) return { kind: "keep" };
+  if (takenBy(name)) return { kind: "taken", name };
+  return { kind: "rename", name };
+}
+
+/** The reason under a refused inline rename: the Rename dialog's words. */
+export function renameTakenText(name: string): string {
+  return "Another session is already named “" + name + "”.";
+}
+
 /** What a key pressed on a rail row itself (not a control inside it) does:
  * ↑/↓ (and Home/End) move between rows, Enter selects, F2 renames. Null for
  * any other key, or one with a modifier held. */
@@ -245,6 +262,9 @@ export const SidebarRow = memo(function SidebarRow({
   // Escape must abandon the edit; unmounting the focused input can still run
   // the blur handler, so the cancel is flagged rather than inferred.
   const cancelled = useRef(false);
+  // The name an inline rename was refused for (another session has it): the
+  // edit stays open with the typed text, and says why under it.
+  const [renameTaken, setRenameTaken] = useState("");
   // When a click ends an edit, that same click also reaches the row — without
   // this the dismiss would immediately re-arm the rename.
   const editEndedAt = useRef(0);
@@ -416,7 +436,10 @@ export const SidebarRow = memo(function SidebarRow({
   // A worker adrift: its parent closed with its work unmerged (lib/autoClose).
   const orphan = orphanLine(inst);
   const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !orphan && !!task;
-  const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
+  // Editing, the only sub-line is a refused rename's reason.
+  const subline = editing
+    ? !!renameTaken
+    : !!(ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
   useNow(wline?.state === "working" || ship?.state === "working" ? 30_000 : false);
@@ -500,6 +523,7 @@ export const SidebarRow = memo(function SidebarRow({
   const startRename = () => {
     if (pending || picking || theirs) return;
     cancelled.current = false;
+    setRenameTaken("");
     setEditing(true);
   };
 
@@ -513,21 +537,27 @@ export const SidebarRow = memo(function SidebarRow({
   };
 
   const commitRename = (raw: string) => {
-    setEditing(false);
-    editEndedAt.current = Date.now();
     if (cancelled.current) {
       cancelled.current = false;
+      setRenameTaken("");
+      setEditing(false);
+      editEndedAt.current = Date.now();
       return;
     }
-    const next = raw.trim();
-    // Blank or unchanged keeps the name. A rename is the session's name
-    // everywhere, so a name another session has is refused, not shared.
-    if (!next || next === shown) return;
-    const taken = nameTakenBy(title, next);
-    if (taken) {
-      toast(`Another session is already named “${next}”`);
+    // A rename is the session's name everywhere, so a name another session
+    // has is refused, not shared. The edit stays open with what was typed
+    // and the reason under it (as the Rename dialog does); Escape leaves.
+    const verdict = inlineRenameVerdict(raw, shown, (n) => nameTakenBy(title, n));
+    if (verdict.kind === "taken") {
+      setRenameTaken(verdict.name);
       return;
     }
+    setRenameTaken("");
+    setEditing(false);
+    editEndedAt.current = Date.now();
+    // Blank or unchanged keeps the name.
+    if (verdict.kind === "keep") return;
+    const next = verdict.name;
     // The session itself is renamed (its title, on the server); typed back
     // to what the row shows by itself, an old rename (alias) is just dropped.
     void renameSession(title, next, { plain: label.text });
@@ -662,6 +692,9 @@ export const SidebarRow = memo(function SidebarRow({
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => e.stopPropagation()}
+                aria-invalid={!!renameTaken}
+                aria-describedby={renameTaken ? "rename-taken-" + idx : undefined}
+                onChange={() => renameTaken && setRenameTaken("")}
                 onBlur={(e) => commitRename(e.currentTarget.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
@@ -671,6 +704,7 @@ export const SidebarRow = memo(function SidebarRow({
                     e.preventDefault();
                     cancelled.current = true;
                     editEndedAt.current = Date.now();
+                    setRenameTaken("");
                     setEditing(false);
                   }
                 }}
@@ -704,6 +738,11 @@ export const SidebarRow = memo(function SidebarRow({
                     "fix-typo-readme" to "fi…eadme"); middle-truncated only
                     when a "-2" / "(3)" suffix is what tells two rows apart. */}
                 {/(-\d+|\(\d+\))$/.test(shown) ? <MidName text={shown} /> : shown}
+              </span>
+            )}
+            {editing && renameTaken && (
+              <span className="lineage rename-taken" id={"rename-taken-" + idx} role="alert">
+                {renameTakenText(renameTaken)}
               </span>
             )}
             {!editing && ship && (

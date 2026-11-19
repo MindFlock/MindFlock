@@ -30,7 +30,7 @@ import type { Instance } from "../api/types";
 import { instApi } from "../api/client";
 import { isMovingRow, refreshInstances } from "../state/queries";
 import { displayName, useUi } from "../state/store";
-import { PR_FALLBACK_HINT, cleanupMissing, deleteConfirmText, deleteSession, openMoveSession, selectSession } from "./sessionActions";
+import { PR_FALLBACK_HINT, cleanupMissing, deleteConfirmText, deleteMenuTitle, deleteSession, openMoveSession, selectSession } from "./sessionActions";
 import { api } from "../api/client";
 import { CONNECT_GITHUB_FOR_PRS, NOTHING_TO_PUSH } from "./vocab";
 import { actionLabel, actionNote, sessionAction, type ActionCtx, type SessionActionId } from "./sessionActionTable";
@@ -425,7 +425,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       label: sessionAction("delete").short!,
       danger: true,
       confirm: deleteConfirmText(inst),
-      title: "Deletes its folder and branch, uncommitted changes included (asks first)",
+      title: deleteMenuTitle(inst),
       // Already asked (the strip): the answer may name the sessions holding
       // its folder, which the menu shows under the row.
       run: () => deleteSession(title, true),

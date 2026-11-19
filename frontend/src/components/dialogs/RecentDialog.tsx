@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClosedReason, Instance } from "../../api/types";
 import { api } from "../../api/client";
 import { refreshInstances, refreshRecentlyClosed } from "../../state/queries";
-import { useUi } from "../../state/store";
+import { displayName, useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { errorPop } from "../../lib/errorPop";
 import { humanSize } from "../../lib/format";
@@ -108,6 +108,11 @@ export function reasonText(e: ClosedReason & { branch?: string | null }): string
  * closed session can SHARE its worktree with a session that is still running
  * (a copy and its origin), where deleting the directory would pull the rug out
  * from under the live one — the server refuses that too. */
+/** The toast after a Reopen here: Ctrl+Shift+T's words ("Reopened X"). */
+export function reopenedText(title: string): string {
+  return "Reopened " + (title ? displayName(title) : "session");
+}
+
 function deletable(e: RecentRow): boolean {
   return e.exists && !e.in_place && !!e.path && !e.active_session;
 }
@@ -682,6 +687,8 @@ export function RecentDialog() {
                             await refreshInstances();
                             refreshRecentlyClosed(); // the "(n)" link follows at once (r5-new #11)
                             if (inst?.title) selectSession(inst.title);
+                            // The same word Ctrl+Shift+T says.
+                            toast(reopenedText(inst?.title || e.title || ""));
                           } catch (err) {
                             errorPop("Reopen failed", (err as Error).message);
                             load();
