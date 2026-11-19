@@ -451,8 +451,27 @@ FastAPI app `backend.web.server:app`. Key pieces:
   bwrap self-test remembered for 10 minutes) and the epic loop's config parse.
   Background work that only refreshes what a row shows backs off while memory
   reads low: the per-session diff stat is re-checked every 60 s instead of
-  10 s (`core/snapshot.py` `_diff_stat_ttl`), as the probe pool narrows and
-  the dialog watch and Ctrl+F indexing slow down.
+  10 s (`core/snapshot.py` `_diff_stat_ttl`); the instances tick's stage
+  probe (~10 git children per session) is reused for up to 20 s for a session
+  with no terminal open and no input for a minute
+  (`server._session_stage_for_tick`; the watched session and every session at
+  normal memory are recomputed each tick); Claude's `claude agents --json`
+  map (a 167 MB node process per call) is served 6 s instead of 2 s
+  (`providers/claude.py` `_agents_json_ttl`, so every other 4 s tick: a
+  prompt can read up to ~4 s later). The tick itself and the tmux activity
+  probe keep their pace. As before, the probe pool narrows and the dialog
+  watch and Ctrl+F indexing slow down.
+- **Activity-marker sweep** (`web/core/marker_sweep.py`) — the activity
+  hooks write `<session>.json` and the Stop hook `<session>.reply.json` into
+  `~/.mindflock-assistant/.activity-markers` from any hooked tmux session
+  (this server's, a second server's, the ticket pipeline's), and nothing
+  removed them. On the ticks' pool, two minutes after boot and then every
+  6 hours, at most 500 files a pass, it removes the files whose session is
+  neither in `ENGINE` (the shared `state.json`) nor a live tmux session AND
+  that are older than 7 days; with tmux unreachable it removes nothing.
+  `.json` markers are ignored by every reader after 6 hours anyway, but a
+  reply is read with no age limit, which is why a session in the state keeps
+  its files however old. `MINDFLOCK_MARKER_SWEEP=0` turns it off.
 - **Heavy-job slots** (`backend/slot.py`, `mindflock slot -- CMD`) — the
   other half: a server-less, flock-based semaphore that repos put in front of
   heavy commands (test suites in commit hooks), so jobs from many sessions

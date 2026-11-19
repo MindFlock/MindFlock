@@ -382,6 +382,7 @@ def _forget_session_state(title: str) -> None:
         srv._LIMIT_PROBE,
         srv._TRUST_DISMISS_AT,
         srv._HUMAN_INPUT_AT,
+        srv._STAGE_LOW_MEMO,
     ):
         _d.pop(title, None)
     # A namesake must not come back hidden from the rail either.

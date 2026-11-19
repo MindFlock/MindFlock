@@ -1026,6 +1026,13 @@ async def lifespan(app: FastAPI):
     # the ticks' own pool. Off under pytest (ENGINE is the real state there).
     if _memory_watch.enabled():
         _register_task(_memory_watch.run_loop(sys.modules[__name__]))
+    # Activity markers of sessions long gone (core.marker_sweep): the reply
+    # watch rescans that directory on every hook write. Rare, bounded, on the
+    # ticks' pool. Off under pytest (ENGINE is the real state there).
+    from backend.web.core import marker_sweep as _marker_sweep
+
+    if _marker_sweep.enabled():
+        _register_task(_marker_sweep.run_loop(sys.modules[__name__]))
     # Windows' own memory (backend.host_memory): inside WSL, one PowerShell
     # loop feeds memory_pressure so the gate and the shield see a short host,
     # not just the VM. A no-op elsewhere; off under pytest.
@@ -1504,6 +1511,7 @@ def _forget_probes(title: str) -> None:
     with _PROBE_CACHE_LOCK:
         for k in [k for k in _PROBE_CACHE if k[1] == title]:
             _PROBE_CACHE.pop(k, None)
+    _STAGE_LOW_MEMO.pop(title, None)
     _forget_tokens(title)
 
 
@@ -1539,6 +1547,57 @@ def _session_stage_fresh(inst) -> dict:
     the distinction is worth a second function.
     """
     return _probe_seed("stage", inst, _session_stage(inst))
+
+
+# ---- The stage probe while memory is low ---------------------------------- #
+# The instances tick recomputes every session's stage each 4 s: ~10 git
+# children per session (rev-parse, status, rev-list, symbolic-ref, remote),
+# measured at 63 subprocesses and ~600 ms of child CPU per tick for 6 live
+# sessions on the owner's box (2026-11-19). While memory reads low or critical
+# (``_memory_low``), a session nobody has open in a terminal and nobody typed
+# into for :data:`_STAGE_HANDS_ON_S` reuses its stage for up to
+# :data:`_STAGE_LOW_TTL`: the stage pill (committed / pushed / PR) of a session
+# in the background can lag 20 s. The activity probe (tmux, what needs-input
+# rides on) is NOT stretched, nor the tick, and normal memory takes the
+# original path unchanged.
+_STAGE_LOW_TTL = 20.0
+_STAGE_HANDS_ON_S = 60.0
+#: title -> (computed monotonic, weakref(inst), stage dict); written only
+#: while memory reads low.
+_STAGE_LOW_MEMO: Dict[str, tuple] = {}
+
+
+def _session_watched(title: str) -> bool:
+    """Whether a person has ``title`` in front of them: a terminal pane open
+    on it (core.ownership), or input from them in the last
+    :data:`_STAGE_HANDS_ON_S`. Unknown reads as watched."""
+    try:
+        if _ownership.terminals(title) > 0:
+            return True
+    except Exception:  # noqa: BLE001
+        return True
+    return time.time() - float(_HUMAN_INPUT_AT.get(title, 0.0) or 0.0) <= (
+        _STAGE_HANDS_ON_S
+    )
+
+
+def _session_stage_for_tick(inst) -> dict:
+    """The publisher's stage: :func:`_session_stage_fresh`, except that while
+    memory reads low an unwatched session reuses one computed in the last
+    :data:`_STAGE_LOW_TTL` (see the block comment above)."""
+    if not _memory_low():
+        return _session_stage_fresh(inst)
+    title = getattr(inst, "Title", "") or ""
+    if not _session_watched(title):
+        hit = _STAGE_LOW_MEMO.get(title)
+        if hit and time.monotonic() - hit[0] < _STAGE_LOW_TTL and hit[1]() is inst:
+            return hit[2]
+    value = _session_stage_fresh(inst)
+    try:
+        _STAGE_LOW_MEMO[title] = (time.monotonic(), weakref.ref(inst), value)
+    except TypeError:  # non-weakref-able stand-in (tests): don't memoize
+        pass
+    return value
 
 
 def _agent_activity_cached(inst, title: str) -> str:
@@ -1930,7 +1989,8 @@ def _session_snapshot(i, queues: dict) -> dict:
     d = _instance_json(i)
     # The publisher COMPUTES the stage and donates it to the memo; it must not
     # serve one the other 4s ticker filled up to 2.5s ago (see _probe_seed).
-    d.update(_session_stage_fresh(i))
+    # While memory reads low an unwatched session's may be up to 20 s old.
+    d.update(_session_stage_for_tick(i))
     # Mergeability, ONLY at the PR rung: it is two network round trips, and every
     # other stage is indifferent to it. None = "could not find out", which the UI
     # must treat as "leave the button alone", never as "cannot merge".

@@ -61,6 +61,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's +/- figures are re-checked with `git status` and friends (about
   260 ms of git per session); while memory reads low or critical that happens
   every 60 s instead of every 10 s.
+- **Session status costs half as much while memory is low.** The 4 s status
+  tick ran about 10 git commands per session for its stage pill (committed,
+  pushed, PR) whatever the memory level. While memory reads low, a session
+  you don't have open and haven't typed into for a minute reuses its stage
+  for up to 20 s; the one in front of you is checked every tick as before.
+  Claude's live session list (`claude agents --json`, a 167 MB node process
+  per call) is asked every 8 s instead of every 4 s. Measured on 6 live
+  sessions: 60 to 32 subprocesses and 614 to 287 ms of git/tmux CPU per tick.
+  A prompt waiting on you shows up at most about 4 s later than at normal
+  memory; at normal memory nothing changed.
+- **Old activity markers are cleaned up.** The activity-marker folder kept a
+  file for every session ever run (1,693 on the owner's machine, 1,512 of
+  them from sessions long gone), and the reply watch rescans it on every
+  hook write. A sweep now removes the files of sessions that are neither in
+  MindFlock's state nor a live tmux session and that are over 7 days old: at
+  most 500 per pass, two minutes after start and then every 6 hours, off the
+  event loop. It removes nothing when tmux can't be asked.
 - **The sidebar filter keeps spaces.** Typing "fix bug" no longer becomes
   "fixbug"; the box shows what you typed and matching ignores case.
 - **A name another session already has keeps Start off** in the New dialog,
