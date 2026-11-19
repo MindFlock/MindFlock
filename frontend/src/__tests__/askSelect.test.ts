@@ -27,7 +27,7 @@ vi.mock("../api/client", async (orig) => ({
 const { ApiError } = await import("../api/client");
 const { normDialog } = await import("../lib/flockActions");
 const sel = await import("../lib/askSelect");
-const { selectPosts, runSelect, selectKey, selectStage, fieldPhrase, SelectFlows, answerSelect, SELECT_GRACE_MS } = sel;
+const { selectPosts, runSelect, selectKey, selectStage, selectFinal, fieldPhrase, SelectFlows, answerSelect, SELECT_GRACE_MS } = sel;
 const { SelectView, SELECT_KEYS, navLabel } = await import("../components/dialogs/AskDialog");
 const { askKindLabel } = await import("../lib/ask");
 const { dialogChoices, dialogRetryLine, HandsFree } = await import("../lib/voiceDesktop");
@@ -373,6 +373,62 @@ describe("the flow: steps without closing", () => {
     f.offer("s", normDialog(body({ id: "new" })), 4);
     expect(f.get("s")?.ended).toBe("");
     expect(f.get("s")?.dialog.id).toBe("new");
+  });
+
+  it("the LAST answer lets the pop-up go as soon as it is sent; the steps before it hold it", async () => {
+    // What is final: the review's Submit / Cancel, the last question when no
+    // review follows, Cancel the question, Chat about this.
+    expect(selectFinal(single(), { type: "pick", key: "1" })).toBe(false); // a step follows
+    expect(selectFinal(multi(), { type: "next" })).toBe(false); // the review follows
+    expect(selectFinal(review(), { type: "pick", key: "1" })).toBe(true);
+    expect(selectFinal(review(), { type: "pick", key: "2" })).toBe(true);
+    expect(selectFinal(single(), { type: "cancel" })).toBe(true);
+    expect(selectFinal(single(), { type: "chat", key: "4", text: "hm" })).toBe(true);
+    expect(selectFinal(review(), { type: "prev" })).toBe(false);
+    const alone = normDialog(body({ steps: [], step: 0 }));
+    expect(selectFinal(alone, { type: "pick", key: "1" })).toBe(true);
+    expect(selectFinal(alone, { type: "text", key: "3", text: "SAML" })).toBe(true);
+    const lastMulti = normDialog(body({ multi: true, steps: [], options: [opt("1", "A", { checked: false })] }));
+    expect(selectFinal(lastMulti, { type: "next" })).toBe(true);
+    expect(selectFinal(lastMulti, { type: "pick", key: "1" })).toBe(false);
+
+    // An intermediate step: never `sent`, the flow stays active.
+    const f = new SelectFlows();
+    f.offer("s", single(), 1);
+    const seen: boolean[] = [];
+    const watch = () => seen.push(!!f.get("s")?.sent);
+    const unsub = f.subscribe(watch);
+    await f.act("s", { type: "pick", key: "1" }, deps({ ...noSleep, fetch: vi.fn(async () => multi()) }).d, () => 100);
+    expect(seen.some(Boolean)).toBe(false);
+    expect(f.active("s", 101)).toBe(true);
+    // The review's Submit: `sent` (and no longer active) BEFORE the read after it.
+    f.offer("s", review(), 200);
+    let atRead: { sent: boolean; active: boolean } | null = null;
+    const fetch = vi.fn(async () => {
+      atRead = { sent: !!f.get("s")?.sent, active: f.active("s", 300) };
+      return review(); // Claude hasn't redrawn yet: the same prompt
+    });
+    await f.act("s", { type: "pick", key: "1" }, deps({ ...noSleep, fetch }).d, () => 300);
+    unsub();
+    expect(atRead).toEqual({ sent: true, active: false });
+    // The read found it still up: a fresh step (its row brings it back if it stays).
+    expect(f.get("s")?.sent).toBe(false);
+    expect(f.get("s")?.ended).toBe("");
+  });
+
+  it("a final answer that fails is never `sent`: the pop-up stays with why", async () => {
+    const f = new SelectFlows();
+    f.offer("s", review(), 1);
+    const { d } = deps({
+      ...noSleep,
+      answer: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    });
+    await f.act("s", { type: "pick", key: "1" }, d, () => 5);
+    expect(f.get("s")?.sent).toBe(false);
+    expect(f.get("s")?.note).toBe("Couldn't answer: boom");
+    expect(f.active("s", 6)).toBe(true);
   });
 
   it("a field being typed in survives the same step redrawn under another id", () => {

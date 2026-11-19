@@ -239,12 +239,69 @@ describe("askSuppressed: the open / suppress rules", () => {
     expect(askSuppressed(item, { ...base, otherDialog: true })).toBe("other-dialog");
   });
 
-  it("never again for an ask answered, put off, or opened in its pane", () => {
+  it("never again for an ask put off or opened in its pane; an answered one not while its row catches up", () => {
     for (const how of ["answered", "later", "pane", "typing"] as const) {
       const m = new AskMemory();
-      m.handle(item, how);
+      m.handle(item, how, null, NOW);
       expect(askSuppressed(item, { ...base, memory: m })).toBe("handled");
     }
+  });
+
+  it("an answer moves the pop-up on at once; the row still asking for a few seconds doesn't bring it back", () => {
+    const m = new AskMemory();
+    const act = { activity: (i: Instance) => i.activity };
+    const [d1] = askQueue([dlg("s", 1, "idA")], null, null, act);
+    m.saw("s", "idA");
+    m.handle(d1, "answered", "idA", NOW);
+    // Gone from the pop-up's queue the moment the server took it…
+    expect(ask.cardQueue([d1], m, NOW + 1)).toEqual([]);
+    // …and the row a poll behind: the same ask re-stamped, or the screen
+    // mid-redraw (no id, unparsed), stays quiet through ANSWERED_QUIET_MS.
+    const [restamped] = askQueue([dlg("s", 5, "idA")], null, null, act);
+    expect(askSuppressed(restamped, { ...base, memory: m, now: NOW + 4000 })).toBe("handled");
+    const [redraw] = askQueue([inst({ title: "s", activity: "clarify" })], null, null, act);
+    expect(m.handled(redraw, NOW + 4000)).toBe(true);
+    // A NEW question from the same session (another id) shows right away.
+    const [next] = askQueue([dlg("s", 5, "idB")], null, null, act);
+    expect(askSuppressed(next, { ...base, memory: m, now: NOW + 1000 })).toBe("");
+    expect(ask.cardQueue([next], m, NOW + 1000)).toEqual([next]);
+    // The same ask still up past the quiet: it is asking again — it shows.
+    expect(askSuppressed(d1, { ...base, memory: m, now: NOW + ask.ANSWERED_QUIET_MS })).toBe("");
+  });
+
+  it("every step the pop-up showed is covered by the answer (Claude's question prompt, a poll behind)", () => {
+    const m = new AskMemory();
+    const act = { activity: (i: Instance) => i.activity };
+    m.saw("s", "step1");
+    m.saw("s", "review");
+    m.handle({ title: "s", key: "sel:s", kind: "dialog", dialogId: "review" }, "answered", "review", NOW);
+    const [lagging] = askQueue([dlg("s", 1, "step1")], null, null, act);
+    expect(m.handled(lagging, NOW + 2000)).toBe(true);
+    // Another session is untouched.
+    const [other] = askQueue([dlg("o", 1, "step1")], null, null, act);
+    expect(m.handled(other, NOW + 2000)).toBe(false);
+    // A prune while the row says "not asking" keeps the quiet; past it, it goes.
+    m.prune(new Set(), NOW + 3000);
+    expect(m.handled(lagging, NOW + 3000)).toBe(true);
+    m.prune(new Set(), NOW + ask.ANSWERED_QUIET_MS);
+    expect(m.handled(lagging, NOW + ask.ANSWERED_QUIET_MS - 1)).toBe(false);
+  });
+
+  it("a Reply on the session shows its ask even inside the quiet", () => {
+    const m = new AskMemory();
+    m.handle(item, "answered", null, NOW);
+    m.forget(item.title);
+    expect(m.handled(item, NOW + 1)).toBe(false);
+  });
+
+  it("the pop-up leaves on the POST: a one-shot answer remembers the dialog it went into and moves on", () => {
+    const c = code("components/dialogs/AskDialog.tsx");
+    expect(c).toContain('onDone("answered", answered?.id || strip.state.dialog?.id)');
+    expect(c).toContain('onDone("answered");');
+    expect(code("components/AnswerStrip.tsx")).toContain("answeredCb.current?.(key, opt.kind, out.dialog)");
+    // Each dialog shown is remembered; a sent select flow is answered at once.
+    expect(c).toContain("askMemory.saw(title, d?.id)");
+    expect(c).toMatch(/targetFlow\?\.sent && !targetFlow\.ended/);
   });
 
   it("a dialog put off stays put off while its id holds, even re-stamped; a new id asks again", () => {

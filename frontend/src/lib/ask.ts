@@ -186,32 +186,70 @@ export function askQueue(
 
 // --- What you already did about an ask ------------------------------------------ //
 
+/** After an answer from the pop-up went through, how long that session's row
+ * may still say it asks the same thing (the rows poll every 4 s, the CLI
+ * takes a moment to redraw, the agent to digest) without the pop-up coming
+ * back. Past it, the same ask still up is asked again: it shows. */
+export const ANSWERED_QUIET_MS = 12_000;
+
+type AskRef = Pick<AskItem, "title" | "key" | "kind" | "dialogId"> & { parsed?: boolean };
+
 /** Asks dealt with here, by session: answered, put off ("Later"), opened in
  * the pane, or left to the pane you were typing in. Keyed by the ask's key;
  * a dialog put off is also remembered by its dialog id ("until that id
- * changes" — a redraw that re-stamps the ask keeps it snoozed). */
+ * changes" — a redraw that re-stamps the ask keeps it snoozed).
+ *
+ * An answer is remembered for {@link ANSWERED_QUIET_MS} only — the pop-up
+ * leaves the moment the server took it, not when the row catches up — and
+ * covers, on that session, the ask answered under any key, a dialog id the
+ * pop-up showed for it (an earlier step of Claude's question prompt, a poll
+ * behind), and a dialog the row cannot read (the screen redrawing). A parsed
+ * dialog with an id never shown is a NEW question: it shows at once. */
 export class AskMemory {
   private done = new Map<string, Set<string>>();
   private snoozedDialog = new Map<string, string>();
   /** Sessions whose prose question you opened (Reply): it steps with the
    * dialogs until it is dealt with. */
   private asked = new Set<string>();
+  /** The dialog ids the pop-up showed, by session (`saw`). */
+  private seen = new Map<string, Set<string>>();
+  /** The last answer from here, by session. */
+  private answered = new Map<string, { at: number; key: string; ids: Set<string> }>();
 
-  /** `how` is informational (tests, debugging); every way counts the same. */
-  handle(item: Pick<AskItem, "title" | "key" | "kind" | "dialogId">, _how: "answered" | "later" | "pane" | "typing" = "answered", dialogId?: string | null): void {
-    let s = this.done.get(item.title);
-    if (!s) this.done.set(item.title, (s = new Set()));
-    s.add(item.key);
+  /** `how` is informational for the rest; an answer is remembered for a while
+   * (see the class), everything else for good. */
+  handle(item: AskRef, _how: "answered" | "later" | "pane" | "typing" = "answered", dialogId?: string | null, now: number = Date.now()): void {
     // Dealt with: the session's NEXT prose question waits for its own Reply.
     if (item.kind === "question") this.asked.delete(item.title);
     const id = dialogId || item.dialogId;
+    if (_how === "answered") {
+      const ids = new Set(this.seen.get(item.title) || []);
+      if (item.dialogId) ids.add(item.dialogId);
+      if (dialogId) ids.add(dialogId);
+      this.answered.set(item.title, { at: now, key: item.key, ids });
+      return;
+    }
+    let s = this.done.get(item.title);
+    if (!s) this.done.set(item.title, (s = new Set()));
+    s.add(item.key);
     if (_how === "later" && item.kind === "dialog" && id) this.snoozedDialog.set(item.title, id);
   }
 
-  handled(item: Pick<AskItem, "title" | "key" | "kind" | "dialogId">): boolean {
+  handled(item: AskRef, now: number = Date.now()): boolean {
     if (this.done.get(item.title)?.has(item.key)) return true;
+    const a = this.answered.get(item.title);
+    if (a && now - a.at < ANSWERED_QUIET_MS && answeredCovers(a, item)) return true;
     const snoozed = this.snoozedDialog.get(item.title);
     return item.kind === "dialog" && !!snoozed && !!item.dialogId && snoozed === item.dialogId;
+  }
+
+  /** The pop-up showed `title`'s dialog `dialogId` (each step of Claude's
+   * question prompt has its own). */
+  saw(title: string, dialogId: string | null | undefined): void {
+    if (!title || !dialogId) return;
+    let s = this.seen.get(title);
+    if (!s) this.seen.set(title, (s = new Set()));
+    s.add(dialogId);
   }
 
   /** You asked for it (the bell's Reply, a toast, a notification): every
@@ -219,6 +257,7 @@ export class AskMemory {
   forget(title: string): void {
     this.done.delete(title);
     this.snoozedDialog.delete(title);
+    this.answered.delete(title);
   }
 
   /** You opened `title`'s ask yourself: its prose question joins the pop-up. */
@@ -232,18 +271,29 @@ export class AskMemory {
 
   /** Drop what is remembered for sessions no longer asking (keeps it small;
    * a later ask has a new key anyway). */
-  prune(asking: ReadonlySet<string>): void {
+  prune(asking: ReadonlySet<string>, now: number = Date.now()): void {
     for (const t of [...this.done.keys()]) if (!asking.has(t)) this.done.delete(t);
+    for (const t of [...this.seen.keys()]) if (!asking.has(t)) this.seen.delete(t);
+    // An answer's quiet outlives a poll that says "not asking" for a moment.
+    for (const [t, a] of [...this.answered]) if (now - a.at >= ANSWERED_QUIET_MS) this.answered.delete(t);
     for (const t of [...this.snoozedDialog.keys()]) if (!asking.has(t)) this.snoozedDialog.delete(t);
     for (const t of [...this.asked]) if (!asking.has(t)) this.asked.delete(t);
   }
 }
 
+/** Whether a recent answer on the session covers `item` (see AskMemory). */
+function answeredCovers(a: { key: string; ids: Set<string> }, item: AskRef): boolean {
+  if (item.key === a.key) return true;
+  if (item.kind !== "dialog") return false;
+  // The row reading the screen mid-redraw, or a step the pop-up showed.
+  return item.parsed === false || !item.dialogId || a.ids.has(item.dialogId);
+}
+
 /** What the pop-up steps through: the asks not dealt with — every dialog,
  * and a prose question only once you opened it (Reply, a toast, a
  * notification). */
-export function cardQueue(queue: readonly AskItem[], memory: Pick<AskMemory, "handled" | "invited">): AskItem[] {
-  return queue.filter((i) => !memory.handled(i) && (i.kind === "dialog" || memory.invited(i.title)));
+export function cardQueue(queue: readonly AskItem[], memory: Pick<AskMemory, "handled" | "invited">, now?: number): AskItem[] {
+  return queue.filter((i) => !memory.handled(i, now) && (i.kind === "dialog" || memory.invited(i.title)));
 }
 
 /** The page's one memory (the pop-up, the bell's Reply and the toasts share it). */
@@ -271,7 +321,7 @@ export function askSuppressed(
   // So does a dialog with nothing to answer here: the pop-up could only say
   // "open the pane", and a misread frame is the usual reason there is one.
   if (!item.parsed) return "unparsed";
-  if (ctx.memory.handled(item)) return "handled";
+  if (ctx.memory.handled(item, ctx.now)) return "handled";
   const now = ctx.now ?? Date.now();
   if (ctx.focused === item.title && ctx.typedAt && now - ctx.typedAt < TYPED_RECENTLY_MS) return "typing";
   if (ctx.otherDialog) return "other-dialog";
