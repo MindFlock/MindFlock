@@ -39,6 +39,7 @@ import { EXPECT_PRESETS, expectOf, formatSpan, parseDuration } from "../../lib/j
 import { sessionLabel } from "../../lib/sessionLabel";
 import { useNow } from "../../lib/useNow";
 import {
+  MAX_TITLE_LEN,
   cleanupMissing,
   folderInUseText,
   ideSession,
@@ -67,7 +68,7 @@ import { AnswerStrip, type AnswerStripHandle } from "../AnswerStrip";
 import { leadChip, leadLine, railExtraChips } from "../../lib/splitRun";
 import { RUN_DONE_STATES, type RunInfo } from "../../lib/runs";
 import type { RunDTO } from "../../api/types";
-import { SessionMenu } from "./SessionMenu";
+import { SessionMenu, endingLabel } from "./SessionMenu";
 import { RowMenu, type RowMenuOpen } from "./RowMenu";
 import { MidName } from "./MidName";
 import { TaskLine, taskLineOf } from "./TaskLine";
@@ -257,6 +258,8 @@ export const SidebarRow = memo(function SidebarRow({
   const alias = aliases[inst.title];
   const picking = useUi((s) => s.bulkMode);
   const picked = useUi((s) => s.bulkSelected.has(inst.title));
+  // Its Close / Delete in flight (lib/sessionActions whileEnding).
+  const ending = useUi((s) => s.ending[inst.title]);
 
   const title = inst.title;
   const missing = !!inst.workspace_missing;
@@ -650,6 +653,7 @@ export const SidebarRow = memo(function SidebarRow({
               <input
                 className="title title-edit"
                 type="text"
+                maxLength={MAX_TITLE_LEN}
                 defaultValue={shown}
                 autoFocus
                 autoComplete="off"
@@ -836,7 +840,13 @@ export const SidebarRow = memo(function SidebarRow({
               </span>
             )}
           </span>
-          {ss.waiting && !inst.device ? (
+          {ending ? (
+            // Close / Delete in flight (Delete can take seconds): say so, and
+            // the row's ends stay off until it settles.
+            <span className="stagechip chip-ending" role="status">
+              {endingLabel(ending)}
+            </span>
+          ) : ss.waiting && !inst.device ? (
             // Waiting in the launch gate (lib/launchGate): it starts by itself
             // once the gate allows; the chip's remedy is Start anyway, and
             // Stop waiting beside it takes it out of the queue.
@@ -1079,8 +1089,11 @@ export const SidebarRow = memo(function SidebarRow({
             <button
               className={"kill" + (missing ? " cleanup" : "")}
               aria-label={missing ? "Delete session" : "Close session"}
+              disabled={!!ending}
               title={
-                missing
+                ending
+                  ? endingLabel(ending)
+                  : missing
                   ? "Delete — its workspace is gone; this removes the session"
                   : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)"
               }
@@ -1090,6 +1103,7 @@ export const SidebarRow = memo(function SidebarRow({
                   // second ✕ inside the guard is the same double-click, not a
                   // second close.
                   if (closeGuarded(Date.now())) return;
+                  if (ending) return;
                   if (missing) return cleanupMissing(title);
                   // Uncommitted work: say so before the agent stops.
                   if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
@@ -1181,6 +1195,7 @@ export const SidebarRow = memo(function SidebarRow({
               },
               picked,
             })}
+            ending={ending}
             onInUse={setInUse}
             onDone={() => closeMenu()}
           />

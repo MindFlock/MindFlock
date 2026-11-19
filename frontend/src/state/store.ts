@@ -112,6 +112,9 @@ function drop(key: string) {
  * windows are per-instance lists of their own). */
 export type SpecialKind = "logs" | "syslogs" | "chat";
 
+/** A Close or Delete in flight on a session row. */
+export type EndingKind = "closing" | "deleting";
+
 /** The grid token for a window that is not a session — a "\u0000" prefix no
  * tmux session title can carry, so window keys and session titles share one
  * namespace (the MRU, the row layout, the view cap) without ever colliding.
@@ -218,8 +221,14 @@ interface UiState {
   railOrder: string[];
   /** Most-recently-used order (selection updates it; fills fixed views). */
   mru: string[];
-  /** Sidebar filter text, lowercased. */
+  /** Sidebar filter text as typed (spaces and case kept, so the box shows
+   * what you typed); whitespace-only is "". Matching trims and lowercases
+   * it (sidebar/ordering filterQuery). */
   filter: string;
+  /** Sessions whose Close or Delete is in flight (lib/sessionActions): the
+   * row says "Closing…" / "Deleting…" and its ends are off until it settles,
+   * so a second try never hits a session already gone. Transient. */
+  ending: Record<string, EndingKind>;
   /** Titles hidden from the grid. */
   hidden: Set<string>;
   /** Verify runs currently shown as a read-only pane, by session title.
@@ -410,6 +419,8 @@ interface UiState {
   setRailOrder(keys: string[]): void;
   moveInOrder(title: string, before: string | null): void;
   setFilter(f: string): void;
+  /** Mark a session's Close/Delete as in flight (null: settled). */
+  setEnding(title: string, kind: EndingKind | null): void;
   setHidden(title: string, hidden: boolean): void;
   /** Show a verify run's read-only pane (idempotent), or close it. */
   openVerifyPane(title: string): void;
@@ -535,6 +546,7 @@ export const useUi = create<UiState>((set, get) => ({
   railOrder: [],
   mru: load<string[]>("cs_mru", []),
   filter: "",
+  ending: {},
   hidden: new Set(load<string[]>("mf_hidden", [])),
   verifyPanes: [],
   extPanes: [],
@@ -666,7 +678,11 @@ export const useUi = create<UiState>((set, get) => ({
     save("cs_order", order);
     set({ order });
   },
-  setFilter: (filter) => set({ filter: filter.toLowerCase() }),
+  setFilter: (filter) => set({ filter: filter.trim() ? filter : "" }),
+  setEnding: (title, kind) => {
+    const { [title]: _was, ...rest } = get().ending;
+    set({ ending: kind ? { ...rest, [title]: kind } : rest });
+  },
   setHidden: (title, hidden) => {
     const next = new Set(get().hidden);
     if (hidden) next.add(title);
