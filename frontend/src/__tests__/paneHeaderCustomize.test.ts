@@ -257,7 +257,9 @@ describe("Customize has two pages", () => {
     expect(dlg).toContain('label: "Sidebar"');
     expect(dlg).toContain('label: "Pane header"');
     expect(dlg).toContain('{cur.id === "pane" ? <PaneHeaderPicker /> : <SidebarBarsPicker />}');
-    expect(dlg).toContain('onClick={() => (cur.id === "pane" ? setPaneHeader(null) : resetSidebarBars())}');
+    // Reset goes through resetLayout, which hands back an Undo for the toast.
+    expect(dlg).toContain("const undo = resetLayout(cur.id);");
+    expect(dlg).toContain('action: { label: "Undo", ariaLabel: "Undo the reset", onClick: undo }');
     expect(dlg).toContain("Reset to default");
   });
 
