@@ -47,7 +47,8 @@ Without it a question put off with Later, or answered in a way that left no
 newer reply, came back as a Question chip after every restart — a reply that
 ended with a question at 5 PM was asking again at 8 PM. The file is written
 only when a dismissal or an answer changes what shows (``note_input`` fires
-on every keystroke; it writes only while that session has a question), and
+on every keystroke, on the event loop; it writes only while that session has
+a question, and once per question: :data:`_INPUT_SAVED`), and
 holds at most :data:`STORE_MAX` sessions.
 """
 
@@ -259,6 +260,13 @@ _STORE_LOADED = False
 #: a question dismissed or answered through one must leave the other's Needs
 #: you too, so a changed file is read again — one stat per look, no read.
 _STORE_SIG = None
+#: (store path, title) -> the ``input_at`` the store is known to hold for that
+#: title (this process wrote it, or read it there). :func:`note_input` skips
+#: the write while it already postdates the question: one write per question,
+#: not one per keystroke (each was a locked read + fsync'd rewrite on the
+#: event loop, 9 ms median and up to 0.5 s measured at normal load; seconds
+#: under memory pressure, logs/stacks.log 2026-11-10).
+_INPUT_SAVED: Dict[tuple, float] = {}
 
 
 def _store_path() -> Optional[Path]:
@@ -332,7 +340,23 @@ def _load_store() -> None:
         return
     _STORE_LOADED = True
     _STORE_SIG = sig
-    _adopt(*_read_doc(path))
+    dismissed, input_at = _read_doc(path)
+    _adopt(dismissed, input_at)
+    _note_saved(path, input_at)
+
+
+def _note_saved(path: Path, input_at: Dict[str, float], titles=None) -> None:
+    """Remember what the store at ``path`` holds in ``input_at`` for
+    ``titles`` (None: the whole file was read, every title is replaced)."""
+    key = str(path)
+    if titles is None:
+        for k in [k for k in _INPUT_SAVED if k[0] == key]:
+            del _INPUT_SAVED[k]
+    for title in input_at if titles is None else titles:
+        if title in input_at:
+            _INPUT_SAVED[(key, title)] = input_at[title]
+        else:
+            _INPUT_SAVED.pop((key, title), None)
 
 
 def _save_store(titles=(), gone=()) -> None:
@@ -370,6 +394,7 @@ def _save_store(titles=(), gone=()) -> None:
                 if at > input_at.get(title, 0.0):
                     input_at[title] = at
             if (dismissed, input_at) == before and path.exists():
+                _note_saved(path, input_at, list(titles) + list(gone))
                 return
             if len(input_at) > STORE_MAX:
                 keep = sorted(input_at, key=input_at.get)[-STORE_MAX:]
@@ -383,6 +408,7 @@ def _save_store(titles=(), gone=()) -> None:
                 mode=0o600,
             )
             _STORE_SIG = title_store._signature(str(path))
+            _note_saved(path, input_at, list(titles) + list(gone))
     except Exception:  # noqa: BLE001
         pass
 
@@ -412,8 +438,16 @@ def note_input(title: str) -> None:
     _INPUT_AT[title] = time.time()
     with _LOCK:
         _load_store()
-        if _STATE.get(title, {}).get("text"):
-            _save_store([title])
+        st = _STATE.get(title) or {}
+        if not st.get("text"):
+            return
+        # The store already says input came after this question: nothing a
+        # later keystroke writes would change what shows after a restart.
+        path = _store_path()
+        saved = _INPUT_SAVED.get((str(path), title), 0.0)
+        if path is not None and saved > float(st.get("ts") or 0.0):
+            return
+        _save_store([title])
 
 
 def forget(title: str) -> None:

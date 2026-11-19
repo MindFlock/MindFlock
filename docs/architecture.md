@@ -442,7 +442,17 @@ FastAPI app `backend.web.server:app`. Key pieces:
   `server._BG_POOL` (`_in_bg_pool`, 6 threads), never on the default executor
   the request handlers' `asyncio.to_thread` uses; `web/core/loop_watchdog.py`
   appends every thread's stack to `logs/stacks.log` when the event loop's
-  heartbeat is 10 s old.
+  heartbeat is 10 s old. Read it before guessing what slows the server under
+  memory pressure: the frame on the main thread is what every keystroke and
+  pane frame waited on. Work that log caught on the loop has since moved off
+  it or been cut: the reply watch's marker-directory scan (its own one-thread
+  pool, `server._WATCH_POOL`), the per-keystroke `asking.json` rewrite (now
+  one write per question), `GET /api/peer`'s status (a worker thread, with the
+  bwrap self-test remembered for 10 minutes) and the epic loop's config parse.
+  Background work that only refreshes what a row shows backs off while memory
+  reads low: the per-session diff stat is re-checked every 60 s instead of
+  10 s (`core/snapshot.py` `_diff_stat_ttl`), as the probe pool narrows and
+  the dialog watch and Ctrl+F indexing slow down.
 - **Heavy-job slots** (`backend/slot.py`, `mindflock slot -- CMD`) — the
   other half: a server-less, flock-based semaphore that repos put in front of
   heavy commands (test suites in commit hooks), so jobs from many sessions

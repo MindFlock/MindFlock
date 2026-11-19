@@ -6,6 +6,8 @@
 import { useEffect, useRef, useState } from "react";
 import { queryClient } from "../state/queries";
 import { useNow } from "../lib/useNow";
+import { memoryConnText } from "../lib/memorySlow";
+import type { MemoryReading } from "../api/types";
 
 declare global {
   interface Window {
@@ -15,6 +17,11 @@ declare global {
     };
   }
 }
+
+/** How long a lost connection is put down to low memory before the card
+ * says the server may have stopped (the longest stall logged under memory
+ * pressure was 281 s, 2026-11-10). */
+const SLOW_MAX_MS = 5 * 60_000;
 
 export function ConnBanner() {
   const [pollFails, setPollFails] = useState(0);
@@ -89,8 +96,20 @@ export function ConnBanner() {
   if (!lost) return null;
 
   let text: string;
+  let head = "⚠ Connection to MindFlock lost";
   let fixLabel: string | undefined;
-  if (diag && pollFails >= 2 && diag.state === "wsl-down") {
+  // The last memory reading before things went quiet: a server stalled on
+  // memory is slow, not stopped (lib/memorySlow). WSL's own states win, and
+  // past SLOW_MAX_MS of silence the server may really be gone (the OOM killer
+  // takes processes too), so the plain wording comes back.
+  const memLevel = queryClient.getQueryData<MemoryReading>(["system-memory"])?.level;
+  const wslState = !!diag && ["wsl-down", "wsl-missing", "not-installed", "starting"].includes(diag.state || "");
+  const slow =
+    wslState || (lostAt && now - lostAt > SLOW_MAX_MS) ? null : memoryConnText(memLevel, pollFails >= 2);
+  if (slow && !/^HTTP \d/.test(lastErr)) {
+    head = slow.head;
+    text = slow.text;
+  } else if (diag && pollFails >= 2 && diag.state === "wsl-down") {
     text =
       "WSL (" +
       (diag.distro || "Ubuntu") +
@@ -121,7 +140,7 @@ export function ConnBanner() {
 
   return (
     <div id="conn-banner" role="alert">
-      <div className="conn-head">⚠ Connection to MindFlock lost</div>
+      <div className="conn-head">{head}</div>
       <div className="conn-detail" id="conn-detail">{text}</div>
       <div className="conn-foot">
         <span id="conn-elapsed">{elapsed}</span>

@@ -133,6 +133,27 @@ _DIFF_STAT_CACHE: Dict[str, tuple] = (
     {}
 )  # worktree -> (expires_epoch, dict|None, fingerprint|None)
 _DIFF_STAT_TTL = 10.0
+#: The TTL while memory reads low or critical (``srv._memory_low()``). Even
+#: the cheap re-check is ``rev-parse`` + ``merge-base`` + ``status
+#: --untracked-files=all`` per session: ~260 ms of git per session measured on
+#: the owner's worktrees at normal load (2026-11-19), every 10 s for every
+#: session, and the status walk reads every directory of the worktree back
+#: into the page cache the agents are short of. The row's +/- counts can lag
+#: a minute while the machine is short; nothing gates on them.
+_DIFF_STAT_TTL_LOW = 60.0
+
+
+def _diff_stat_ttl() -> float:
+    """How long a diff-stat entry is trusted: :data:`_DIFF_STAT_TTL`, or
+    :data:`_DIFF_STAT_TTL_LOW` while memory reads low. Never raises."""
+    try:
+        if _server()._memory_low():
+            return _DIFF_STAT_TTL_LOW
+    except Exception:  # noqa: BLE001
+        pass
+    return _DIFF_STAT_TTL
+
+
 # Fingerprinting stats every dirty/untracked path; past this many, skip it and
 # fall back to plain TTL caching (a pathological status listing would cost
 # more to stat than it saves).
@@ -279,13 +300,14 @@ def _session_diff_stat(inst) -> Optional[dict]:
         cached = _DIFF_STAT_CACHE.get(wt)
         if cached and cached[0] > now:
             return cached[1]
+        ttl = _diff_stat_ttl()
         base_ref = srv._session_fork_point(inst, wt)
         fp = _worktree_fingerprint(wt, base_ref)
         if cached and fp is not None and len(cached) > 2 and cached[2] == fp:
             # TTL lapsed but HEAD/fork-point/dirty-set are exactly as at the
             # last full compute — the numbers cannot have moved. Re-arm the
             # TTL and skip the expensive shortstat pair.
-            _DIFF_STAT_CACHE[wt] = (now + _DIFF_STAT_TTL, cached[1], fp)
+            _DIFF_STAT_CACHE[wt] = (now + ttl, cached[1], fp)
             return cached[1]
         with scratch_index_env(wt) as env:
             cp = subprocess.run(
@@ -296,7 +318,7 @@ def _session_diff_stat(inst) -> Optional[dict]:
                 timeout=60,
             )
             if cp.returncode != 0:
-                _DIFF_STAT_CACHE[wt] = (now + _DIFF_STAT_TTL, None, None)
+                _DIFF_STAT_CACHE[wt] = (now + ttl, None, None)
                 return None
             result = _parse_shortstat(cp.stdout.decode("utf-8", "replace").strip())
             cp = subprocess.run(
@@ -319,7 +341,7 @@ def _session_diff_stat(inst) -> Optional[dict]:
         # The fingerprint taken BEFORE the diffs: the probe no longer changes
         # the status output (no intent-to-add in the real index), and an edit
         # made while the diffs ran then reads as a change on the next probe.
-        _DIFF_STAT_CACHE[wt] = (now + _DIFF_STAT_TTL, result, fp)
+        _DIFF_STAT_CACHE[wt] = (now + ttl, result, fp)
         return result
     except Exception:  # noqa: BLE001
         return None

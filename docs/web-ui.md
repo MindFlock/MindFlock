@@ -1260,7 +1260,22 @@ share of the last minute spent stalled) and what MindFlock is holding back
 (agent spawns, team-run lines, restarts). While it is up it also polls
 `GET /api/system/slots` and, when heavy commands are using `mindflock slot`,
 adds a line for them (*Heavy jobs: fix-auth running · 2 waiting for a slot*).
-**Hide** lasts until the level worsens or clears and returns.
+It also says the thing a person notices first: *Sessions may be slow to show
+what you type and their new output until memory recovers*, and that putting
+idle agents to sleep or closing sessions frees memory fastest (the wording
+lives in `lib/memorySlow.ts`). **Hide** lasts until the level worsens or
+clears and returns.
+
+**A slow server is not a lost one.** Under memory pressure the server itself
+can stall for seconds to minutes (every process waits on the disk), long
+enough for the connection-lost card to appear. While the last memory reading
+was low or critical, the card says so instead of *may have stopped*: its
+header reads *MindFlock is slow to respond: memory is low* (or *critically
+low*) and its text says the server usually catches up on its own and what
+frees memory. WSL's own diagnoses (WSL down, not installed, starting) and an
+HTTP error keep their wording, and after 5 minutes without an answer the card
+goes back to the plain *isn't answering* text: the OOM killer can take the
+server too.
 
 **After a server restart, sessions stay offline until you start them.** By
 default the sessions whose agents died with the server are held offline

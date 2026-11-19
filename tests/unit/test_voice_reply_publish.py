@@ -786,3 +786,40 @@ def test_a_tick_built_before_a_dialog_and_its_reply_overwrites_neither(
     assert row["last_say"] == "Redis is in."
     assert row["asking"] is None
     assert _activity_events(got) == [("working", "clarify"), ("clarify", "idle")]
+
+
+def test_reply_watch_polls_off_the_event_loop(monkeypatch, tmp_path):
+    """The poll scans the marker directory (one file per session ever seen):
+    under memory pressure that scan stalled the event loop, and every
+    keystroke and pane frame with it (logs/stacks.log). It runs on the
+    watch's own thread."""
+    import threading
+
+    monkeypatch.setenv("MINDFLOCK_ACTIVITY_MARKER_DIR", str(tmp_path / "m"))
+    monkeypatch.setattr(server, "_REPLY_WATCH_LOOP_ENABLED", True)
+    seen = []
+
+    class _Watch:
+        def __init__(self, _directory):
+            pass
+
+        def poll(self):
+            seen.append(threading.get_ident())
+            return []
+
+    monkeypatch.setattr(server, "_ReplyWatch", _Watch)
+
+    async def run():
+        loop_thread = threading.get_ident()
+        task = asyncio.create_task(server._reply_watch_loop())
+        await asyncio.sleep(0.2)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return loop_thread
+
+    loop_thread = asyncio.run(run())
+    assert seen, "the loop never polled"
+    assert loop_thread not in seen

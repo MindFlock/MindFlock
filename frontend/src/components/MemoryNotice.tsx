@@ -17,6 +17,7 @@
 import { useState } from "react";
 import { useMemory, useSlots } from "../state/queries";
 import type { MemoryReading, SlotJob, SlotsReading } from "../api/types";
+import { FREE_MEMORY_HINT, SLOW_SESSIONS_LINE } from "../lib/memorySlow";
 
 const GB = 1024 ** 3;
 const RANK: Record<string, number> = { ok: 0, unknown: 0, low: 1, critical: 2 };
@@ -127,11 +128,11 @@ export function MemoryNotice() {
         </div>
       )}
       {heavy && <div className="mn-detail mn-slots">{heavy}</div>}
+      <div className="mn-detail mn-slow">{SLOW_SESSIONS_LINE}</div>
       <div className="mn-detail mn-what">
         Agents that start by themselves (a worker an agent spawns, a queued prompt, a restart) wait
-        until it recovers, one at a time; a start of yours asks first. Putting idle agents to sleep or
-        closing sessions frees memory fastest
-        {critical ? " — the system may start killing agents soon." : "."}
+        until it recovers, one at a time; a start of yours asks first. {FREE_MEMORY_HINT}
+        {critical ? " The system may start killing agents soon." : ""}
       </div>
       <div className="mn-foot">
         <button type="button" className="mn-btn" onClick={() => setHiddenAt(rank)}>

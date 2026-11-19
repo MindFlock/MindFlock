@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Typing into a session no longer writes a file on every keystroke.**
+  While a session's last reply ended in a question, each keystroke rewrote
+  and fsynced `asking.json` on the server's event loop, the same loop that
+  carries every pane's output: 200 keystrokes cost 2.5 s (9 ms median, up to
+  0.5 s each) at normal load, and seconds each when memory was short. It is
+  now written once per question (200 keystrokes: 14 ms).
+- **Less of the server's work blocks every session when memory is short.**
+  The server's own stall log (`logs/stacks.log`) showed the event loop held
+  up to 5 minutes at a time under memory pressure. Moved off the loop: the
+  reply watch's scan of the activity-marker directory (four of the logged
+  stalls), the sidebar's peer-link status (`GET /api/peer`, polled every 10 s
+  by every window; its bwrap sandbox self-test, 10-120 ms each, is now
+  remembered for 10 minutes) and the epic auto-start loop's config parse.
+- **The sidebar's change counts back off while memory is low.** Each
+  session's +/- figures are re-checked with `git status` and friends (about
+  260 ms of git per session); while memory reads low or critical that happens
+  every 60 s instead of every 10 s.
+
+### Changed
+
+- **The app says why it is slow when memory is low.** The memory notice now
+  says sessions may be slow to show what you type and their output until
+  memory recovers. When the server stops answering while memory was low, the
+  connection card says *MindFlock is slow to respond: memory is low* and what
+  frees memory, instead of *the server may have stopped*.
+
 ## [0.14.21] - 2026-11-19
 
 ### Added

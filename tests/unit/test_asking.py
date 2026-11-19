@@ -12,6 +12,7 @@ voice router, Codex's ``last_assistant_text`` and the ``ask_popup`` setting.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -721,6 +722,7 @@ def _restart():
     asking._STATE.clear()
     asking._INPUT_AT.clear()
     asking._DISMISSED_STORED.clear()
+    asking._INPUT_SAVED.clear()
     asking._STORE_LOADED = False
     spoken._REPLY_CACHE.clear()
 
@@ -770,6 +772,60 @@ def test_an_answer_survives_a_restart(monkeypatch, tmp_path):
     assert "t" in json.loads((tmp_path / "asking.json").read_text())["input_at"]
     _restart()
     assert asking.current("t", inst, "idle") is None
+
+
+def test_typing_writes_the_store_once_per_question(monkeypatch, tmp_path):
+    """``note_input`` runs on the event loop for every keystroke. It used to
+    rewrite (and fsync) asking.json on each one while the session had a
+    question: one write per question is all a restart needs."""
+    monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path))
+    _restart()
+    inst = _Inst("t")
+    _reply("t", "Should I push?", time.time() - 30)
+    assert asking.current("t", inst, "idle") is not None
+    from backend import fsutil
+
+    writes = []
+    real = fsutil.atomic_write_bytes
+    monkeypatch.setattr(
+        fsutil,
+        "atomic_write_bytes",
+        lambda *a, **k: (writes.append(a[0]), real(*a, **k))[1],
+    )
+    for _ in range(50):
+        asking.note_input("t")
+    assert len(writes) == 1
+    assert asking.current("t", inst, "idle") is None
+    # A newer reply that asks again is answered (and written) once more.
+    _reply("t", "Pushed.\n\nOpen a PR?", time.time() + 1)
+    assert asking.current("t", inst, "idle") is not None
+    time.sleep(0.01)
+    asking._INPUT_AT["t"] = 0.0
+    monkeypatch.setattr(asking.time, "time", lambda: 9e9)
+    for _ in range(5):
+        asking.note_input("t")
+    assert len(writes) == 2
+    _restart()
+    assert asking.current("t", inst, "idle") is None
+
+
+def test_a_store_rewritten_elsewhere_is_written_again(monkeypatch, tmp_path):
+    """Another server dropped the answered-mark (its own forget): this one's
+    memory of what the file holds is refreshed on the next read, so the next
+    keystroke writes it back."""
+    monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path))
+    _restart()
+    inst = _Inst("t")
+    _reply("t", "Should I push?", time.time() - 30)
+    asking.current("t", inst, "idle")
+    asking.note_input("t")
+    store = tmp_path / "asking.json"
+    data = json.loads(store.read_text())
+    data["input_at"] = {}
+    store.write_text(json.dumps(data))
+    os.utime(store, ns=(time.time_ns() + 10**9, time.time_ns() + 10**9))
+    asking.note_input("t")
+    assert "t" in json.loads(store.read_text())["input_at"]
 
 
 def test_input_into_a_session_without_a_question_writes_nothing(monkeypatch, tmp_path):
@@ -844,7 +900,13 @@ class _Process:
     so a test can play two processes over the same asking.json (the service
     on :8765 and a dev server on :9000 share ~/.mindflock)."""
 
-    _NAMES = ("_STATE", "_INPUT_AT", "_DISMISSED_STORED", "_DIALOG_MEMO")
+    _NAMES = (
+        "_STATE",
+        "_INPUT_AT",
+        "_DISMISSED_STORED",
+        "_DIALOG_MEMO",
+        "_INPUT_SAVED",
+    )
 
     def __init__(self):
         self.saved = {n: {} for n in self._NAMES}

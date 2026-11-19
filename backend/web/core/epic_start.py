@@ -563,11 +563,15 @@ async def auto_start_once() -> List[str]:
 
 async def run_loop() -> None:
     """The auto-start loop (started by the ticket-ingestion addon). Never
-    raises; idle while no source has ``epic_auto`` on."""
+    raises; idle while no source has ``epic_auto`` on. The sources are read
+    in a worker thread: parsing the ticketing config stats and resolves
+    paths, and once stalled the event loop for 12 s under memory pressure
+    (logs/stacks.log, 2026-11-10)."""
     srv = _server()
     while True:
         try:
-            if any(getattr(s, "epic_auto", False) for s, _p in _sources()):
+            sources = await asyncio.to_thread(_sources)
+            if any(getattr(s, "epic_auto", False) for s, _p in sources):
                 await auto_start_once()
         except Exception as err:  # noqa: BLE001
             if srv.log.ErrorLog is not None:

@@ -2598,17 +2598,32 @@ def _reply_titles(names) -> list:
     return out
 
 
+#: The reply watch's own thread. Its poll stats the marker directory 20
+#: times a second and rescans it (one entry per session ever seen: 1,673 on
+#: the owner's box, 2026-11-19) whenever any hook writes a marker. Run on the
+#: event loop, that scan was what the loop was doing in 4 of the stalls
+#: logs/stacks.log recorded under memory pressure (11-04, 11-10, 11-17):
+#: with the directory's pages evicted, every keystroke and pane frame waited
+#: on it. One thread, not the ticks' pool: a reply must not queue behind a
+#: slow tick, and one poller owns the ReplyWatch (it is not thread-safe).
+_WATCH_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="mf-reply-watch"
+)
+
+
 async def _reply_watch_loop() -> None:
     """Republish a session the moment its Stop hook files the reply
-    (core.state_events.ReplyWatch; started by the lifespan)."""
+    (core.state_events.ReplyWatch; started by the lifespan). The poll runs
+    on :data:`_WATCH_POOL`, never the event loop."""
     if not _reply_watch_loop_enabled():
         return
     from backend.providers import activity_markers as _am
 
     watch = _ReplyWatch(_am.marker_dir)
+    loop = asyncio.get_running_loop()
     while True:
         try:
-            names = watch.poll()
+            names = await loop.run_in_executor(_WATCH_POOL, watch.poll)
             if names:
                 for title in _reply_titles(names):
                     await asyncio.to_thread(_republish_reply, title)
