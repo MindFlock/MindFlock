@@ -229,7 +229,7 @@ def test_mobile_plan_failure_reaches_the_folder_list():
     # list takes over inside the same sheet.
     plan_fn = js.split("  function describeIt() {")[1].split("\n  function ")[0]
     assert "loadFolders(" in plan_fn
-    assert '(err && err.message) || "couldn\'t read that"' in plan_fn
+    assert 'errText(err, "couldn\'t read that")' in plan_fn
     assert 'fetch(devicePath(newTarget, "/api/repos/suggest"))' in js
     # The typed sentence still becomes the prompt on the manual path.
     assert "prompt: (newPlan && newPlan.prompt) || newTextEl.value.trim()," in js

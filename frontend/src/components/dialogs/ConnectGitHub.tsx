@@ -28,7 +28,7 @@
  * asks the remote. No native prompt/confirm anywhere (the desktop app has
  * neither). */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { api } from "../../api/client";
 import { refreshGithubStatus } from "../../state/queries";
 import { copyText } from "../../lib/clipboard";
@@ -50,6 +50,7 @@ import { toast } from "../../lib/toast";
 import { useWsTerm } from "../../lib/wsTerm";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
 import { Modal } from "../Modal";
+import { isCommand } from "../setup/DoctorList";
 import "../settings/connectGitHub.css";
 import "./ConnectGitHub.css";
 
@@ -79,10 +80,25 @@ export function pushTargetLine(t: PushTarget | null | undefined): string {
   return "Checks " + t.name + (t.remote ? " → " + t.remote : " (it has no remote called origin yet)");
 }
 
-/** A fix that is a command goes in a Copy box; prose stays prose. */
-export function isCommand(fix: string | undefined): boolean {
-  return /^(git|gh|ssh-keygen|ssh-add)\s/.test((fix || "").trim());
+/** A fix that is a command goes in a Copy box; prose stays prose (shared
+ * with the doctor rows, so it lives in setup/DoctorList). */
+export { isCommand };
+
+/** Where the token "✓ Connected" uses comes from, in words: the server's
+ * source id ("settings", "env:GITHUB_TOKEN", "gh-cli"), never shown raw unless
+ * it is one this does not know. Empty for "none". */
+export function githubSourceWords(source: string | undefined): string {
+  const s = (source || "").trim();
+  if (!s || s === "none") return "";
+  if (s === "settings") return "your saved token";
+  if (s === "gh-cli") return "gh's sign-in";
+  if (s.startsWith("env:") && s.length > 4) return "the " + s.slice(4) + " variable";
+  return s;
 }
+
+/** What closing the gh sign-in window early says (import-gh answered 409:
+ * gh has no login to hand over yet). */
+export const GH_NOT_CONNECTED = "Not connected yet. Finish the steps in the terminal, or paste a token.";
 
 /** The dialog's one primary path, and what is folded under it:
  *  - the device flow configured → ONE "Sign in with GitHub" button; the token
@@ -222,6 +238,8 @@ export function ConnectGitHub({
   const [test, setTest] = useState<TestLine | null>(null);
   /** Step 3's answer: "Connected as @handle" or why GitHub said no. */
   const [tokenResult, setTokenResult] = useState<TestLine | null>(null);
+  /** The gh window closed before gh had a login to hand over. */
+  const [ghNote, setGhNote] = useState("");
   const changeRef = useRef(onChange);
   changeRef.current = onChange;
 
@@ -279,7 +297,30 @@ export function ConnectGitHub({
     }
   };
 
-  if (err) return <p className="error">GitHub status failed: {err}</p>;
+  // The status read failed: say so in words, the reason under it, and a Retry
+  // (the Setup dialog's "Couldn't load setup" + Retry), never a dead end that
+  // has to be closed and reopened.
+  if (err)
+    return (
+      <div className="gh-load-failed" id="gh-load-failed" role="alert">
+        <p className="error">
+          Couldn't check GitHub.{" "}
+          <button
+            type="button"
+            className="linklike gh-retry"
+            id="gh-retry"
+            disabled={busy === "retry"}
+            onClick={(e) => {
+              e.stopPropagation();
+              void run("retry", load);
+            }}
+          >
+            {busy === "retry" ? "Retrying…" : "Retry"}
+          </button>
+        </p>
+        <p className="muted gh-load-reason">{err}</p>
+      </div>
+    );
   if (!st) return <p className="muted">Checking GitHub…</p>;
 
   const layout = connectLayout(st);
@@ -317,6 +358,24 @@ export function ConnectGitHub({
         /* the save worked; Test stays one click away */
       }
     });
+
+  /** git's name and email, from "Use these" or Enter in either box (the same
+   * as Setup's GitIdentityForm). */
+  const saveIdentity = () => {
+    if (busy || !name.trim() || !email.trim()) return;
+    return run("identity", async () => {
+      await api("/api/github/identity", { json: { name: name.trim(), email: email.trim() } });
+      toast("git now knows who you are");
+      await load();
+      changeRef.current?.();
+    });
+  };
+  const identityKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    e.stopPropagation();
+    void saveIdentity();
+  };
 
   const tokenSteps = (
     <ol className="gh-steps" id="gh-token-steps">
@@ -399,7 +458,9 @@ export function ConnectGitHub({
           <div className="gh-connected-row">
             <p className="gh-connected" id="gh-connected" role="status">
               ✓ Connected{st.login ? " as @" + st.login : ""}
-              <span className="muted"> · {st.source === "gh-cli" ? "via gh" : st.source}</span>
+              {githubSourceWords(st.source) && (
+                <span className="muted"> · via {githubSourceWords(st.source)}</span>
+              )}
               {st.user_error && <span className="error"> — {st.user_error}</span>}
             </p>
             {onDone && (
@@ -442,6 +503,26 @@ export function ConnectGitHub({
                   Open {flow.verification_uri.replace(/^https?:\/\//, "")}
                 </a>
                 <span className="muted">waiting for you to approve…</span>
+                {/* Without this the same code came back on every reopen until
+                    it expired (~15 minutes). */}
+                <button
+                  type="button"
+                  className="linklike gh-device-cancel"
+                  id="gh-device-cancel"
+                  disabled={!!busy}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void run("cancel", async () => {
+                      try {
+                        await api("/api/github/device", { method: "DELETE" });
+                      } finally {
+                        setFlow(null);
+                      }
+                    });
+                  }}
+                >
+                  Cancel
+                </button>
               </div>
             ) : (
               <div className="setup-actions">
@@ -482,12 +563,18 @@ export function ConnectGitHub({
                   disabled={!!busy}
                   onClick={(e) => {
                     e.stopPropagation();
+                    setGhNote("");
                     setGhOpen(true);
                   }}
                 >
                   Sign in with the GitHub CLI
                 </button>
                 <span className="set-hint">a terminal asks one question, then opens GitHub in your browser</span>
+                {ghNote && (
+                  <span className="test-result bad gh-cli-note" id="gh-cli-note" role="status">
+                    {ghNote}
+                  </span>
+                )}
               </div>
             </details>
           )}
@@ -510,15 +597,20 @@ export function ConnectGitHub({
             <input
               className="gh-ident-name"
               placeholder="Your Name"
+              aria-label="Your name for commits"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              onKeyDown={identityKeyDown}
               onClick={(e) => e.stopPropagation()}
             />
             <input
               className="gh-ident-email"
               placeholder="you@example.com"
+              aria-label="Your email for commits"
+              type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={identityKeyDown}
               onClick={(e) => e.stopPropagation()}
             />
             <button
@@ -528,12 +620,7 @@ export function ConnectGitHub({
               title={!name.trim() || !email.trim() ? "Fill in both your name and email" : undefined}
               onClick={(e) => {
                 e.stopPropagation();
-                void run("identity", async () => {
-                  await api("/api/github/identity", { json: { name: name.trim(), email: email.trim() } });
-                  toast("git now knows who you are");
-                  await load();
-                  changeRef.current?.();
-                });
+                void saveIdentity();
               }}
             >
               Use these
@@ -658,7 +745,10 @@ export function ConnectGitHub({
                 });
                 await connected(r.login);
               } catch {
-                await load(); // not signed in yet: nothing to import
+                // Not signed in yet (409: gh has no login to hand over). Say so
+                // here; a reload alone looked like nothing happened.
+                setGhNote(GH_NOT_CONNECTED);
+                await load();
               }
             });
           }}

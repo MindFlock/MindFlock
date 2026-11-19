@@ -16,6 +16,7 @@ import { InstallMissing } from "../dialogs/InstallTerminal";
 import { AgentSignIn, signInTarget } from "../dialogs/AgentSignIn";
 import { api } from "../../api/client";
 import { toast } from "../../lib/toast";
+import { copyText } from "../../lib/clipboard";
 import { asksGitIdentity, checkLabel, consumeSetupIntent, requiredChecks, stepProblems } from "./setupModel";
 import "./setup.css";
 
@@ -76,6 +77,23 @@ export function useDoctorAutoShow() {
  * the runnable command is the row's own fix line. */
 export function plainDetail(text: string | undefined): string {
   return (text || "").replace(/`([^`]*)`/g, "$1");
+}
+
+/** A fix that is a command goes in a Copy box; prose stays prose. Shared by
+ * the doctor rows here and Connect GitHub's push check. */
+export function isCommand(fix: string | undefined): boolean {
+  return /^(git|gh|ssh-keygen|ssh-add|sudo|brew|winget|xcode-select|curl|npm|npx|pipx?|uv|apt|apt-get|dnf|pacman|zypper|tailscale|wsl|powershell|mindflock)\s/.test(
+    (fix || "").trim()
+  );
+}
+
+/** What a doctor row's Copy puts on the clipboard: the command alone, without
+ * a trailing aside like " (or: brew install git)" or " (until reboot); …".
+ * Null when the fix is prose. */
+export function fixCommand(fix: string | undefined): string | null {
+  const text = plainDetail(fix).trim();
+  if (!isCommand(text)) return null;
+  return text.replace(/\s+\((?:or|until)\b.*$/, "").trim();
 }
 
 /** The git identity row's own fix in a browser: the name and email, written
@@ -159,6 +177,24 @@ export function GitIdentityForm({ fix, onSaved }: { fix?: string; onSaved(): voi
   );
 }
 
+/** The Copy beside a fix command: the same button and toast as Connect
+ * GitHub's push fix and the install window. */
+function CopyFix({ command }: { command: string }) {
+  return (
+    <button
+      type="button"
+      className="test-btn doctor-fix-copy"
+      aria-label={"Copy " + command}
+      onClick={(e) => {
+        e.stopPropagation();
+        void copyText(command).then((ok) => toast(ok ? "Copied — paste it into a terminal" : "Copy failed"));
+      }}
+    >
+      Copy
+    </button>
+  );
+}
+
 /** One doctor row: icon, label, detail, the fix, a sign-in button on an
  * agent row, and the name/email form on the git identity row. */
 function CheckRow({ c, onSignedIn }: { c: DoctorCheckItem; onSignedIn(): void }) {
@@ -177,6 +213,7 @@ function CheckRow({ c, onSignedIn }: { c: DoctorCheckItem; onSignedIn(): void })
             <span className="doctor-fix">
               {" "}
               fix: <code>{plainDetail(c.fix)}</code>
+              {fixCommand(c.fix) && <CopyFix command={fixCommand(c.fix) as string} />}
             </span>
           )
         )}
