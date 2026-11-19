@@ -22,6 +22,8 @@
  * for by name — never automatic. */
 
 import { api } from "../../api/client";
+import { toast } from "../../lib/toast";
+import { flashSaved } from "../settings/savedCue";
 import {
   refreshInstances,
   usePanelQuery,
@@ -127,8 +129,13 @@ export function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }: Ta
     panelNote({ error: prsError, fetching: prsQuery.isFetching, loaded: !!prs }) ||
     (prsQuery.data?.login_error ? "GitHub login unknown — force review may still work" : "");
 
-  const saveGithub = (patch: Record<string, unknown>, okMsg: string) =>
-    s.saveGroup("github", patch, okMsg);
+  // "Saved" by the list's own row, like every Settings field (savedCue.ts);
+  // a toast only when the row is no longer on screen.
+  const saveGithub = async (patch: Record<string, unknown>, fieldId: string) => {
+    if (await s.saveGroup("github", patch)) {
+      if (!flashSaved(document.getElementById(fieldId))) toast("Saved");
+    }
+  };
 
   const n = repos.length;
   // FILTERED BEFORE GROUPED, so a heading's count describes what is under it.
@@ -388,7 +395,7 @@ export function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }: Ta
               id="gh-skip-authors"
               stored={String(skipAuthors)}
               placeholder="dependabot, renovate"
-              onSave={(list) => void saveGithub({ skip_authors: list }, "Saved")}
+              onSave={(list) => void saveGithub({ skip_authors: list }, "gh-skip-authors")}
             />
             <span className="set-hint">
               GitHub logins, comma-separated — e.g. bots whose comments you don't want acted on.

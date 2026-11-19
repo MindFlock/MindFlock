@@ -28,6 +28,7 @@ import {
   useTicketingSources,
 } from "../../state/queries";
 import { SettingsCtx, useSettingsModel } from "../settings/useSettings";
+import { noteTouched } from "../settings/savedCue";
 import { countInBuckets, loadMineOnly, loadShownBuckets, visibleBuckets } from "./buckets";
 import { TicketsTab } from "./TicketsTab";
 import { EpicsTab } from "./EpicsTab";
@@ -446,7 +447,13 @@ export function IntakeDialog({ embedded = false, target: embeddedTarget = null }
               </button>
             ))}
           </div>
-          <div id="intake-body">
+          {/* The last touched control, so a save marks it with the inline
+              "Saved" cue the way Settings does (savedCue.ts). */}
+          <div
+            id="intake-body"
+            onChangeCapture={(e) => noteTouched(e.target)}
+            onBlurCapture={(e) => noteTouched(e.target)}
+          >
             {TABS.map((t) => (
               <section
                 key={t.key}

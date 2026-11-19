@@ -297,7 +297,9 @@ function Ntfy({ onChange, setup = 0 }: { onChange?(v: NtfyView): void; setup?: n
     async (patch: Record<string, unknown>, from?: Element | null) => {
       try {
         apply(await api<NtfyView>("/api/notify/ntfy", { json: patch }));
-        if (from) flashSaved(from);
+        // A save with no row of its own (or one gone from the screen) still
+        // says so: the toast is the fallback, never silence.
+        if (!from || !flashSaved(from)) toast("Saved");
       } catch (err) {
         toast((err as Error).message || "Couldn't save the ntfy settings");
         load();
@@ -316,7 +318,7 @@ function Ntfy({ onChange, setup = 0 }: { onChange?(v: NtfyView): void; setup?: n
     setupSeen.current = setup;
     if (view.topic || !view.suggested_topic) return;
     setTopic(view.suggested_topic);
-    void save({ topic: view.suggested_topic });
+    void save({ topic: view.suggested_topic }, document.getElementById("ntfy-topic"));
   }, [setup, view, save]);
 
   if (failed)

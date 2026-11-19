@@ -8,6 +8,8 @@
  * the Connect GitHub dialog; this tab shows its state on one line. */
 
 import { api } from "../../api/client";
+import { toast } from "../../lib/toast";
+import { flashSaved } from "../settings/savedCue";
 import {
   refreshInstances,
   usePanelQuery,
@@ -102,8 +104,13 @@ export function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps
     loaded: !!issues,
   });
 
-  const saveGithub = (patch: Record<string, unknown>, okMsg: string) =>
-    s.saveGroup("github", patch, okMsg);
+  // "Saved" by the list's own row, like every Settings field (savedCue.ts);
+  // a toast only when the row is no longer on screen.
+  const saveGithub = async (patch: Record<string, unknown>, fieldId: string) => {
+    if (await s.saveGroup("github", patch)) {
+      if (!flashSaved(document.getElementById(fieldId))) toast("Saved");
+    }
+  };
 
   const n = repos.length;
   // FILTERED BEFORE GROUPED, so the counts on the headings describe what is
@@ -339,7 +346,7 @@ export function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps
               id="gh-issue-skip-authors"
               stored={String(skipAuthors)}
               placeholder="dependabot, renovate"
-              onSave={(list) => void saveGithub({ issue_skip_authors: list }, "Saved")}
+              onSave={(list) => void saveGithub({ issue_skip_authors: list }, "gh-issue-skip-authors")}
             />
             <span className="set-hint">GitHub logins, comma-separated.</span>
           </label>

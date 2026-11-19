@@ -156,7 +156,7 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
   };
 
   const saveFlags = useCallback(
-    async (value: string) => {
+    async (value: string, from?: Element | null) => {
       const prov = selected.trim();
       if (!prov) return;
       const val = value.trim();
@@ -167,9 +167,11 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
         await api("/api/settings", {
           json: { coding_cli: { default_launch_args: flagsMap.current } },
         });
-        toast("Saved launch flags");
-      } catch {
-        toast("Save failed: launch flags");
+        // "Saved" by the flags row, like every other field here.
+        if (!flashSaved(from ?? document.getElementById("default-launch-args-input"))) toast("Saved launch flags");
+      } catch (err) {
+        // The server's reason, like every other "Save failed" in Settings.
+        toast("Save failed: " + ((err as Error)?.message || "launch flags"));
       }
     },
     [selected]
@@ -247,7 +249,7 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
           placeholder={flagsPlaceholder(selected)}
           value={flags}
           onChange={(e) => setFlags(e.target.value)}
-          onBlur={() => saveFlags(flags)}
+          onBlur={(e) => saveFlags(flags, e.currentTarget)}
           onKeyDown={(e) => {
             if (e.key === "Enter") (e.target as HTMLInputElement).blur();
           }}

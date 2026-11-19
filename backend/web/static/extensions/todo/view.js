@@ -1430,7 +1430,10 @@ export function renderList(api, host) {
   draw(true);
   void load();
 
+  // A hidden window skips its tick: nobody is looking, and the events
+  // stream and the next visible tick catch it up.
   const tick = setInterval(() => {
+    if (document.hidden) return;
     void load();
     if (tab === "history") scheduleHistory(0);
   }, REFRESH_MS);
