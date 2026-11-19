@@ -1,6 +1,7 @@
-/** The reminder dialog for timed todos (the Assistant's todo list, `due`):
+/** The reminder dialog for timed todos (the To-do list, `due`):
  * pops up by itself when a todo's time has come — at it or any time after —
  * over whatever is open, until you check it off, snooze it or dismiss it.
+ * "Open the To-do list" opens the To-do extension's window (lib/todoExt).
  *
  * The server owns the clock (backend/web/addons/assistant.py): `GET
  * /api/assistant/todos/due` lists what is due now, and its reminder loop
@@ -15,9 +16,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api/client";
-import { useUi } from "../../state/store";
 import { Modal } from "../Modal";
 import { formatDue, snoozeChoices } from "../../lib/todoTime";
+import { openTodoList } from "../../lib/todoExt";
 import "./todoReminder.css";
 
 interface DueTodo {
@@ -159,10 +160,10 @@ export function TodoReminder() {
             className="tr-open"
             onClick={() => {
               setHiddenUntil(Date.now() + CLOSE_HIDE_MS);
-              useUi.getState().openDialogFor("todo", "");
+              openTodoList();
             }}
           >
-            Open the todo list
+            Open the To-do list
           </button>
           <button type="button" onClick={() => setHiddenUntil(Date.now() + CLOSE_HIDE_MS)}>
             Later

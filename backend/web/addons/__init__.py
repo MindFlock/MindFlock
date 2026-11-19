@@ -62,6 +62,7 @@ from .workflow import WorkflowAddon
 from .settings import SettingsAddon
 from .ticket_ingestion import TicketIngestionAddon
 from .templates import TemplatesAddon
+from .todo import TodoAddon
 from .traffic import TrafficAddon
 
 _logger = logging.getLogger(__name__)
@@ -123,6 +124,7 @@ RESERVED_EXTENSION_IDS = frozenset(
         "onboarding",
         "github",
         "workflow",
+        "todo",
     }
 )
 
@@ -155,6 +157,9 @@ def build_addons(ctx: AppContext) -> List[Addon]:
     return [
         TicketIngestionAddon(ctx),
         AssistantAddon(ctx),
+        # To-do: one list of what a person has to do by hand (shares the
+        # Assistant's todos.json; auto-fed by Verify, routes and team runs).
+        TodoAddon(ctx),
         SettingsAddon(ctx),
         DoctorAddon(ctx),
         ConnectionsAddon(ctx),

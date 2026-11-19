@@ -24,7 +24,6 @@ export const SECTION_MIME = "application/x-mf-section";
 
 interface ContentCbs {
   onOpenChat(): void;
-  onOpenTodo(): void;
 }
 
 /** The inner content for a given bar key (visibility is each bar's own call —
@@ -50,13 +49,14 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
     // behaviors live in the Sky (docs/behaviors.md §4) — a saved order that
     // still names it renders an empty slot (`.bar-slot:empty`).
     case "assistant":
-      // Chat, Todo, and Instructions: the assistant's standing instructions
-      // (its agent file), editable in place. Not "Agent" — that word is the
-      // coding agent's alone.
+      // Chat and Instructions: the assistant's standing instructions (its
+      // agent file), editable in place. Not "Agent" — that word is the
+      // coding agent's alone. (The to-do list is its own extension now: the
+      // To-do bar, extensions/ExtensionBar.)
       return (
         <div
           id="assistant-bar"
-          title="A personal AI assistant (it runs on your default agent) — answers questions and manages your todo list"
+          title="A personal AI assistant (it runs on your default agent) — answers questions, with instructions you can edit"
         >
           <span className="as-label">Assistant</span>
           <span className="as-actions">
@@ -67,14 +67,6 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
               onClick={cbs.onOpenChat}
             >
               Chat
-            </button>
-            <button
-              id="assistant-todo-btn"
-              className="as-toggle"
-              title="Show the todo list (drag to reorder)"
-              onClick={cbs.onOpenTodo}
-            >
-              Todo
             </button>
             <button
               id="assistant-agent-btn"

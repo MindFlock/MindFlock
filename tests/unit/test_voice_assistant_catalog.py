@@ -63,7 +63,9 @@ def test_session_actions_mirror_the_table():
 
 
 def test_open_dialogs_are_dialogs_with_labels():
-    assert set(cat.OPEN_DIALOGS) <= set(cat.DIALOGS)
+    # A dialog, or an extension's window (the To-do list).
+    assert set(cat.OPEN_DIALOGS) <= set(cat.DIALOGS) | set(cat.EXTENSION_TARGETS)
+    assert "todo" in cat.OPEN_DIALOGS and "todo" not in cat.DIALOGS
     for d in cat.OPEN_DIALOGS:
         assert cat.DIALOG_LABELS.get(d), d
     for needs_target in (

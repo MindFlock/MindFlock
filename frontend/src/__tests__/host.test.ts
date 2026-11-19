@@ -1,8 +1,9 @@
 /** The extension host's pure seams: target strings (pane keys / dialogTarget)
  * and the command-routing decision behind runCommand. Kept to the exported pure
  * functions — activation, mounting and the store are exercised only in the
- * browser. host.ts imports the UI store, toast and the api wrapper, all of
- * which are inert at import time under the node environment (setup.ts). */
+ * browser. host.ts imports the UI store, toast, the api wrapper and
+ * lib/sessionActions (ui.focusSession), all of which are inert at import time
+ * under the node environment (setup.ts). */
 
 import { describe, it, expect } from "vitest";
 import { buildTarget, parseTarget, routeCommand } from "../extensions/host";

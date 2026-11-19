@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ASSISTANT_DIALOGS,
+  ASSISTANT_EXT_TARGETS,
   chipJump,
   ASSISTANT_SETTINGS_SCREENS,
   clickableName,
@@ -49,6 +50,7 @@ function fakeEnv(over: Partial<ExecEnv> = {}) {
       dialog = null;
     },
     openDialogName: () => dialog,
+    extCommand: (e, c) => (log.push("ext:" + e + ":" + c), true),
     setView: (m) => void log.push("view:" + m),
     titles: () => ["fix-login", "docs-refresh"],
     name: (t) => (t === "fix-login" ? "Login fix" : t),
@@ -71,6 +73,23 @@ describe("the executors", () => {
     expect(execUiAction({ do: "open", target: "settings:nope" }, env).ok).toBe(false);
     expect(execUiAction({ do: "open", target: "ask" }, env).ok).toBe(false);
     expect(log).toEqual(["open:intake", "settings:voice"]);
+  });
+
+  it("open todo: the To-do extension's window, by its command — not a dialog", () => {
+    const { env, log } = fakeEnv();
+    expect(ASSISTANT_DIALOGS).not.toHaveProperty("todo");
+    expect(ASSISTANT_EXT_TARGETS.todo).toEqual({ ext: "todo", command: "todo.open", label: "To-do" });
+    expect(execUiAction({ do: "open", target: "todo" }, env)).toEqual({ ok: true, text: "Opened To-do", open: "todo" });
+    expect(log).toEqual(["ext:todo:todo.open"]);
+  });
+
+  it("open todo with the extension turned off: a failure chip that says where to turn it on", () => {
+    const { env, log } = fakeEnv({ extCommand: (e, c) => (log.push("ext:" + e + ":" + c), false) });
+    expect(execUiAction({ do: "open", target: "todo" }, env)).toEqual({
+      ok: false,
+      text: "The To-do extension is turned off (Settings → Extensions)",
+    });
+    expect(log).toEqual(["ext:todo:todo.open"]);
   });
 
   it("close: the open dialog, by its name; nothing open is fine", () => {

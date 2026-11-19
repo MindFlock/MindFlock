@@ -333,7 +333,7 @@ against every fresh listing.
 
 ## The tools
 
-The 37 tools. Every result is JSON text. Clients that negotiate protocol
+The 40 tools. Every result is JSON text. Clients that negotiate protocol
 `2025-06-18` or later also get `structuredContent`. Arguments are checked
 against each tool's JSON schema, and a violation comes back as a tool error
 with a fix-it message, not a protocol error. The check is lenient about what
@@ -382,6 +382,9 @@ it.
 | `edit_flight` | write (add, remove, edit, rename stops) | **no** |
 | `save_flight_plan` | write (a saved route on the shelf) | **no** |
 | `run_pr_review` | write, flies the PR review route (may push; a merge stop needs `confirm_merge`) | **no** |
+| `add_todo` | write (the person's To-do list), every scope | **no** |
+| `list_todos` | read | **no** |
+| `update_todo` | write (your own items, your descendants', items with no session; any item with `person_asked`) | **no** |
 
 "Auto-approved" is the `--allowedTools` list for Claude and the
 `approval_mode = "approve"` table for Codex. The server also sends
@@ -419,6 +422,8 @@ skip-permissions**:
   writes the shelf. The
   two route reads, `describe_flight` and `flight_status`, are not on the
   pre-approved list yet (see [Routes](#routes-from-a-sentence-to-a-running-route)).
+- `add_todo`, `list_todos` and `update_todo` are not on the pre-approved
+  list yet either (see [To-do](#to-do-what-the-person-does-by-hand)).
 
 So an orchestrator launched **without** skip-permissions stops on a
 permission dialog for each message, spawn, answer and close/delete. Run orchestrators
@@ -1565,6 +1570,78 @@ fix anything red, open a PR and wait for its checks"*.
 5. To keep the route for next time:
    `save_flight_plan({name: "Tests to PR", steps: [...]})`.
 
+## To-do: what the person does by hand
+
+The person runs many sessions at once and switches between them all day, so
+the small things only they can do (a manual test step, a click in a product,
+a login, a decision, a follow-up after a merge) get lost in scrollback. The
+To-do extension keeps them in ONE list, each entry naming the session it came
+from (one click goes back there). Three tools let any agent put things on it
+and keep its own entries current, over the extension's `/api/todo` routes
+([web-api.md](web-api.md), [extensions.md](extensions.md)). Verify steps that
+wait on the person, routes parked on them and team-run escalations land there
+by themselves, server-side; these tools are for everything else an agent asks
+of the person. The server `instructions` say it in one line: when the person
+must do something by hand, `add_todo` it, one item per action, even if the
+agent also says it in chat.
+
+Adding to the list is talking to the person, not steering a session:
+`add_todo` and `list_todos` work in **every** scope, `readonly` included, and
+from an external client. They are never served in
+[peer mode](#peer-mode-shared-folder-sessions): another person's agent does
+not reach your list.
+
+### `add_todo`
+
+`{text, details?, kind?, priority?, due?, link?, items?}` → `{added: [{id,
+text}], updated: [{id, text}], session?, counts?}`. One item's fields at the
+top level, or `items: [{text, ...}, ...]` (at most 20) for several in one
+call; both together add the top-level one first.
+
+| Argument | Default | Notes |
+|---|---|---|
+| `text` | required (per item) | the one-line action, ≤ 500 chars (whitespace runs fold to one space) |
+| `details` | — | everything needed to do it without re-reading the chat: exact commands, URLs, values, what to expect; ≤ 20000 chars |
+| `kind` | `task` | `manual_test` (a test step), `needs_you` (anything else that blocks on the person) or `task` |
+| `priority` | `normal` | `high`, `normal` or `low` |
+| `due` | — | `YYYY-MM-DDTHH:MM` (or a date), local time: a reminder |
+| `link` | — | a URL to open |
+
+Sends `POST /api/todo/items` (one item's fields, or `{"items": [...]}` for
+several). Each item is stamped `session` = the caller's own session title
+(nothing for an external client) and `source: "agent"`; `kind` `task` and
+`priority` `normal` are sent as absent, the list's defaults. An open item the
+server already holds under the same dedupe `key` comes back under `updated`.
+
+### `list_todos`
+
+`{mine?, include_done?, id?, limit?}` → `{mine, todos: [row], more,
+counts?, note?}`. A row is `{id, text, done, kind, priority, session?, due?,
+details?, has_more_details?}`: `details` is cut to about 300 characters and
+`has_more_details` says it was. `mine` defaults to true inside a session
+(only the items whose `session` is the caller) and false for an external
+client (asking for it there notes that and shows everyone's). `include_done`
+(default false) adds checked-off items still on the list. `id` returns that
+one item in full as `{todo}`, details uncut, with its `source`, `link`,
+`created_at` and `done_at`. `limit` defaults to 100 (max 500). Sends
+`GET /api/todo`.
+
+### `update_todo`
+
+`{id, done?, text?, details?, priority?, due?, link?, remove?,
+person_asked?}` → `{todo: row}` (`{removed: id, todo: row}` for a remove).
+`done: true` checks the item off, `false` reopens it; `priority: "normal"`
+clears a priority; `due: ""` and `link: ""` clear those; `remove: true` takes
+the item off the list (it stays in History; `DELETE /api/todo/items/{id}`).
+`person_asked: true` lifts the ownership rule below: the list is the
+person's, so when they ask an agent to change an item ("mark the staging
+login done") it works from any session. An agent never sets it on its own. Under scope `all` any item; otherwise only an item whose `session`
+is the caller or one of its descendants, or that has no session (an external
+client: one with no session, or a session it spawned and their descendants),
+in every scope including `readonly`. Anything else is refused with the
+owning session's name. Sends `PATCH /api/todo/items/{id}`; the server's
+`{"error": …}` comes back as the tool error.
+
 ## Messages
 
 A message is stored in the **recipient's mailbox** (`~/.mindflock/mailbox.json`)
@@ -2063,6 +2140,13 @@ stop at lane `merge`, or a kind whose `risk` includes `irreversible`), whose
 target under `children` must be a descendant. A grounded flight (no session)
 needs only write scope; `save_flight_plan` too. See
 [Routes](#routes-from-a-sentence-to-a-running-route).
+
+**To-do.** `add_todo` and `list_todos` work in every scope, `readonly`
+included: adding to the person's list talks to the person and steers no
+session. `update_todo` changes the caller's own items, its descendants' and
+items with no session (any item under `all`, or with `person_asked: true`
+when the person asked for the change). See
+[To-do](#to-do-what-the-person-does-by-hand).
 
 An unknown scope value, or an auto-attached server that can't confirm its
 session, runs `readonly`.
@@ -2644,8 +2728,8 @@ launches, and a stub Anthropic API that records the tool list of each request
 
 A session created by a [peer link](peer-link.md) — its folder shared with
 another person's MindFlock — gets a different MCP: `MINDFLOCK_MCP_MODE=peer`.
-It serves ONLY the peer toolset and never touches the HTTP API, tmux or the
-settings file:
+It serves ONLY the peer toolset (never the flock tools, the To-do ones
+included) and never touches the HTTP API, tmux or the settings file:
 
 | Tool | Does |
 |---|---|
@@ -2685,7 +2769,7 @@ saying a person decides it — see [peer-link.md](peer-link.md#joint-tasks--cont
 
 | What | Where |
 |---|---|
-| MCP server | `backend/mcp/` (`protocol.py`, `tools.py`, `ship.py`, `runs.py`, `flights.py`, `waiting.py`, `identity.py`, `policy.py`, `api.py`, `gitlocal.py`) |
+| MCP server | `backend/mcp/` (`protocol.py`, `tools.py`, `ship.py`, `runs.py`, `flights.py`, `todos.py`, `waiting.py`, `identity.py`, `policy.py`, `api.py`, `gitlocal.py`) |
 | Flights | `backend/web/core/flights.py` (store + planner), `flight_driver.py` (loop + operations), `flight_kinds/` (plug-in kinds), `flight_describe.py` (the one-shot); routes `/api/flights*` ([flights.md](flights.md)) |
 | Team runs | `backend/web/core/team_runs.py` (store + planner), `team_run_driver.py` (loop + operations), `outbox.py`, `lanes.py`; routes `/api/runs*`, `/api/outbox` ([team-runs.md](team-runs.md)) |
 | Ship status | `backend/web/core/ship_status.py`; route `GET /api/instances/{title}/ship-status` |
@@ -2701,6 +2785,7 @@ saying a person decides it — see [peer-link.md](peer-link.md#joint-tasks--cont
 | Finished children | `backend/web/core/finished_children.py` (`~/.mindflock/finished_children.json`, `MINDFLOCK_FINISHED_CHILDREN_FILE`); recorded by `_remember_finished_child` in `server.py` |
 | Run files | `~/.mindflock/run/mcp-<tmux name>.json`, plus a digest when the name had to be sanitized (`MINDFLOCK_RUN_DIR`), removed with the session and by `mindflock uninstall` |
 | Create failures | `GET /api/create_failures?title=…` ([web-api.md](web-api.md#get-apicreate_failures)) |
+| To-do | the To-do extension's `/api/todo` routes ([web-api.md](web-api.md)); the tools in `backend/mcp/todos.py` |
 | Mailbox store | `~/.mindflock/mailbox.json` (`MINDFLOCK_MAILBOX_FILE`) |
 | Routes | [web-api.md](web-api.md#inter-agent-messages) |
 | Settings + env vars | [configuration.md](configuration.md#environment-variables) |

@@ -18,10 +18,37 @@
 .ext-bar .ext-label {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 600;
+}
+
+.ext-bar .ext-label-text {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The count badge (ExtensionSpec.badge) sits right after the label, inside
+   the label's flex:1 box: the buttons stay where they were whether it shows
+   or not. No height of its own beyond the label's line, so the bar never
+   grows when it appears. */
+.ext-bar .ext-badge {
+  flex: none;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
 }
 
 .ext-bar .ext-actions {

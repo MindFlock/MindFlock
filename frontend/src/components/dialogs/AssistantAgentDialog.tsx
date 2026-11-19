@@ -77,7 +77,7 @@ export function AssistantAgentDialog() {
         <p className="set-hint">
           Your own instructions for the personal assistant — added on top of its built-in
           behavior. MindFlock always keeps the assistant's core rules (how it answers, how it
-          manages your todo list), so nothing here can break those. Describe how it should
+          manages your To-do list), so nothing here can break those. Describe how it should
           behave, what it knows, tone, etc. Applies the next time it starts.
         </p>
         <AgentPicker

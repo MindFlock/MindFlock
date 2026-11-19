@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.21] - 2026-11-19
+
+### Added
+
+- **To-do is its own extension.** A **To-do** bar in the sidebar (show or
+  hide it in Customize → Sidebar) with a count of what is open, **Open** and
+  **Add**. The list opens as a window in the grid like any session: what
+  needs you first, grouped by session, each with a chip that takes you to
+  that session; drag to reorder; High / Normal / Low; details per item
+  (links, and code blocks with a Copy button); a due time; and a History tab
+  of what you finished or removed, with Restore. An item you check off stays
+  where it is, crossed out, until you leave the list. The Assistant bar is now
+  Chat · Instructions; the list is the same file, so the Assistant still
+  reads and edits it and timed reminders work as before.
+- **What you have to do by hand lands on the To-do list by itself.** A
+  Verify waiting on you adds one item per step you are asked to check, a
+  route parked on you adds one, and so does a team run's escalation. They
+  close themselves when the wait ends, and come back after a restart.
+- **Agents can add to it: `add_todo`, `list_todos`, `update_todo`** in the
+  MindFlock MCP (40 tools now). An agent is told to add anything you must do
+  by hand, one item per action, tagged with its session. Adding and listing
+  never ask for approval. Ask any session to change an item ("mark the
+  staging login done", "push that to Friday", "remove it") and it can, even
+  when another session added it.
+- Extensions can show a count on their bar (`badge` in the manifest) and,
+  at host API level 2, focus a session (`ui.focusSession`,
+  `ui.focusedSession`).
+
 ## [0.14.20] - 2026-11-19
 
 ### Added
@@ -856,7 +884,6 @@ a test that failed first.
   those agents say "memory was low".
 
 ## [0.14.8] - 2026-11-11
-
 
 ### Added
 
@@ -1893,7 +1920,6 @@ a test that failed first.
 - **"What did it say?"** reads the session's last reply on demand ("read
   it", "what did login fix say").
 
-
 - **Switching sessions no longer replays an old reply.** Moving to a
   session by voice says where you are — *Now on login-fix, idle: Fix login
   redirect.* — and reads its last reply only if it finished in the last two
@@ -2558,7 +2584,6 @@ fresh-eyes testers who could only use the UI (never the code or docs).
 - **Light/Dark in Settings → Appearance**, and a first launch follows the
   system's colour scheme.
 
-
 - **Cron sessions: templates run on any cron schedule.** Besides every day /
   weekdays at a time, a template's schedule can be a cron expression
   (`*/30 * * * *`, `0 21 * * 1-5`, `@weekly`), previewed in words with its next
@@ -2704,7 +2729,6 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   "provider"), *auto-start* (never "ingestion"), *checklist* and *step*
   (never "plan").
 
-
 - **Workers always stay with their orchestrator on the rail.** A worker now
   draws directly under its parent's family whatever the saved order says.
   Dragging a worker elsewhere no longer un-nests it (it only reorders among
@@ -2727,7 +2751,6 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   ordinary words, and never makes Push/Merge/Delete the Enter default.
 - Esc closes the Shortcuts sheet; top-bar tooltips show the shortcut that
   actually works (Alt+N in a browser tab).
-
 
 ## [0.8.6] - 2026-10-13
 
@@ -3343,7 +3366,6 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   `docs/peer-link.md` is marked shipped (0.7.0 / 0.7.1). A TROUBLESHOOTING
   section for ticket sources, a feature-request issue template, and
   CODEOWNERS no longer names the non-existent `CLA.md`.
-
 
 ### Added
 
@@ -6341,7 +6363,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.20...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.21...HEAD
+[0.14.21]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.21
 [0.14.20]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.20
 [0.14.19]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.19
 [0.14.18]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.18

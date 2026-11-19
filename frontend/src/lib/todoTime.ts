@@ -1,4 +1,4 @@
-/** Timed todos (the Assistant's todo list): `due` is a LOCAL minute,
+/** Timed todos (the To-do list): `due` is a LOCAL minute,
  * "YYYY-MM-DDTHH:MM" — the same string the server and the assistant write
  * (backend/web/addons/assistant.py `_DUE_FMT`) and an <input type=
  * "datetime-local"> reads. Pure helpers: parsing "… tue 9am" off the end of a

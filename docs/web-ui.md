@@ -785,11 +785,12 @@ a status line under its name; the parent carries a roll-up of its workers. Above
 **+ New** and a stack of **customizable bars** (see below) — the token/cost
 **Usage** readout (hidden while there are no sessions), its twin the
 **Memory** row (see below), the **Assistant** bar
-(**Chat** · **Todo** · **Instructions** — **Instructions** opens the
+(**Chat** · **Instructions** — **Instructions** opens the
 assistant's editable agent file, its standing instructions; the chat window's
 head has the same editor under the same word, and so does the palette's
 **Assistant instructions (agent file)…** — "Agent" on its own means the coding
-agent only), the **Prompts** bar (your saved prompts, one click from any
+agent only; the to-do list that used to sit here is the **To-do** bar now —
+see [To-do](#to-do)), the **Prompts** bar (your saved prompts, one click from any
 session — see [Saved prompts](#saved-prompts)), the **Tickets** bar (pipeline on/off switch and state dot;
 it appears once a ticket source is connected), the **Pull requests** and
 **Issues** bars, the opt-in **Verify** bar, and one bar per extension. Under the
@@ -3920,6 +3921,38 @@ are not stored. A browser's old per-browser list (`localStorage`
 (`mf_presets_migrated`): a prompt already there by name and text is skipped,
 a same-named different one is saved as *<name> (saved prompt)*.
 
+## To-do
+
+One list for everything **you** have to do by hand while the agents work —
+a manual test step Verify is waiting on, a route parked on you, something an
+agent asked of you, a note to self — each entry saying which session it came
+from, one click from going back to it. It is the built-in **To-do extension**
+(id `todo`), not a dialog of the Assistant's any more: the Assistant bar's old
+**Todo** button and its modal are gone.
+
+- **The bar.** *To-do*, with a **count badge** right after the label when
+  anything is open (its tooltip says how many need you, e.g. *2 need you · 7
+  open*; nothing at zero), then **Open** and **Add**. The count comes from
+  `GET /api/todo/badge`, refetched about every minute and whenever the list
+  changes (`addon.todo.*` on the event bus), so an item an agent adds shows up
+  at once.
+- **Open** opens the **To-do window** — a grid window like a session's
+  (it sits in the rail's window list, drags and closes like any other) with the
+  list, priorities, reorder, details per entry and the history. **Add** opens
+  the quick-add dialog. Both are also in the command palette (*To-do: Open the
+  list*, *To-do: Add an item*), and the voice assistant's *open To-do* opens the
+  window.
+- **The due reminder** stays: a timed entry still pops up its reminder when its
+  time comes, and its **Open the To-do list** button opens the window.
+- **Show or hide** the bar in **Customize → Sidebar** like any bar; **turn the
+  whole extension off** in **Settings → Extensions**. While it is off, the
+  reminder's button and the voice assistant say *The To-do extension is turned
+  off (Settings → Extensions)* instead of opening anything.
+
+The window's own code is the extension's (`/extensions/todo/index.js`); the
+list's API, its events and the MCP tools agents use to add to it are in
+[web-api.md](web-api.md), [extensions.md](extensions.md) and [mcp.md](mcp.md).
+
 ## First-run onboarding
 
 One checklist, shown in one place at a time. On a genuinely first launch the
@@ -5656,9 +5689,12 @@ with an **Intake → Tickets** link (Tickets); *Appears once a repository is
 added* with **Intake → GitHub PRs** / **Intake → GitHub issues** (Pull requests,
 Issues); *Appears once Verify tracks a repository or has a checklist* with
 **Open Verify** (the sidebar's Verify bar — the top bar's **Verify** button is
-always there); *Chat, a todo list, and its editable agent file* (Assistant);
+always there); *Chat, and its editable agent file* (Assistant);
 *Your saved prompts — pick one to paste it into the session you are in* with **Manage
-prompts** (Prompts); *From an extension* for an extension's bar. *Session list*
+prompts** (Prompts); *Things you need to do by hand — manual test steps, anything
+waiting on you* with **Settings → Extensions** (To-do — an extension bar MindFlock
+ships carries its own line, `EXT_NOTES` keyed `ext:<id>`); *From an extension* for
+any other extension's bar. *Session list*
 → **Filter box**. Reset brings back the starter bars (Usage, Memory, Tickets,
 Assistant), the default order and the filter box.
 
@@ -9315,6 +9351,17 @@ same rules drive the server-side ntfy push in `web/core/ntfy.py`) is the
 reference for this generic path — the full contract lives in
 [docs/extensions.md](extensions.md). `slots.js` also feeds the provider list
 into the New-session dialog's Program field.
+
+Extensions proper (Addon API v3, `frontend/src/extensions/`) get two shell
+features worth knowing from the UI side. **A bar badge**: a manifest's optional
+`badge` (an API path answering `{count, title?}`) puts a count pill after the
+bar's label — host-rendered, no extension code runs for it; refetched about
+every 60 s and on any `addon.<id>.*` bus event; an error or a zero draws
+nothing (`extensions/badge.ts`). **Host API level 2** (`HOST_API_VERSION = 2`):
+`api.ui.focusSession(title)` selects a session exactly as a sidebar click does
+(false when there is none) and `api.ui.focusedSession()` returns the focused
+session's title or `null`; an extension that must also run on a level-1 host
+calls them as `api.ui.focusSession?.(…)`.
 
 `core/ws-xterm.js` exports `WsXterm`, the shared xterm↔WebSocket bridge used by
 addon panes (binary PTY frames in, resize JSON out, auto-reconnect except on

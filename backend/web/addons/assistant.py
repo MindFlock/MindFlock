@@ -1,10 +1,13 @@
 """Assistant addon: a long-lived personal ``claude`` session + a todo list.
 
-A single ``claude`` session whose only job is to answer questions and manage a
-drag-orderable todo list. It lives in its own directory (kept out of any repo so
-its ``claude`` never inherits a project's CLAUDE.md) and edits ``todos.json``
+A single ``claude`` session whose only job is to answer questions and manage
+the to-do list. It lives in its own directory (kept out of any repo so its
+``claude`` never inherits a project's CLAUDE.md) and edits ``todos.json``
 there directly. Exposes ``/api/assistant/terminal`` (interactive chat) and
-``/api/assistant/todos`` (REST).
+``/api/assistant/todos`` (REST, kept for the reminder dialog and older
+clients). The list itself belongs to the To-do extension (``addons/todo/``):
+one store, one history, one ``addon.todo.changed`` — this module reads and
+writes it through ``addons/todo/store.py``.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ from backend.web.core.terminal import (
 )
 
 from .base import Addon, AppContext, FrontendDescriptor
+from .todo import store as _todo_store
 
 ASSIST_DIR = Path(
     os.environ.get("MINDFLOCK_ASSISTANT_DIR", str(Path.home() / ".mindflock-assistant"))
@@ -83,8 +87,19 @@ Rules for editing it:
   for items you add.
 - The **array order is the display order** — the user reorders items by dragging
   in the UI, so don't reshuffle unless they ask you to.
-- `done: true` marks an item checked off; leave it in the list unless asked to
-  remove it.
+- `done: true` marks an item checked off. **Never delete an item from the
+  file to finish it — mark it done.** MindFlock keeps the to-do history from
+  the list, so a deleted item vanishes from it. Only remove an item when the
+  user asks to delete it.
+- Optional fields (leave out the ones you don't need; keep any you find on an
+  item you edit, including ones not listed here):
+  - `"details"`: longer free text — steps, links, what to paste.
+  - `"priority"`: `"high"` or `"low"` (absent = normal). High items sort first.
+  - `"kind"`: `"manual_test"` (a check the user must do by hand) or
+    `"needs_you"` (a decision or action only they can take); absent = a task.
+  - `"session"`: the title of the MindFlock session the item belongs to.
+  - `source`, `key`, `link`, `created_at`, `done_at` are set by MindFlock —
+    leave them as they are.
 - **Reminders:** an item may carry `"due": "YYYY-MM-DDTHH:MM"` — a LOCAL date
   and time (e.g. `"2026-11-10T09:00"` for Tuesday at 9 AM). At that time, or
   any time after while it isn't done, MindFlock pops it up in a dialog the user
@@ -94,8 +109,9 @@ Rules for editing it:
   `dismissed_at` and `notified_at` alone — MindFlock manages those.
 - After you change the list, briefly tell the user what you changed.
 
-The UI shows this same list in a "Todo" tab and writes to the same file, so
-always re-read before editing to avoid clobbering a change made there.
+The UI shows this same list in the To-do window and writes to the same file
+(so do MindFlock's agents and its Verify / route reminders), so always
+re-read right before editing to avoid clobbering a change made there.
 """
 
 
@@ -404,175 +420,43 @@ def _assistant_activity() -> str:
         return "offline"
 
 
-#: A reminder's local time, as the UI and the assistant write it.
-_DUE_FMT = "%Y-%m-%dT%H:%M"
+# --------------------------------------------------------------------------- #
+# The todo list. Its ONE store is the To-do extension's (addons/todo/store.py):
+# the same todos.json, one lock, one history, one ``addon.todo.changed``. The
+# names below are what this module has always exported (the reminder dialog,
+# the old routes and their tests use them); the rows they return keep the
+# shape these routes have always returned (:func:`_todo_store.compat`).
+# --------------------------------------------------------------------------- #
+_DUE_FMT = _todo_store.DUE_FMT
+_norm_due = _todo_store.norm_due
+due_epoch = _todo_store.due_epoch
+_num = _todo_store.num
+remind_at = _todo_store.remind_at
+due_now = _todo_store.due_now
 #: How often the reminder loop looks for todos that came due.
 REMIND_EVERY_S = 20.0
 
 
-def _norm_due(value) -> str:
-    """A todo's ``due`` → ``"YYYY-MM-DDTHH:MM"`` in LOCAL time, or ``""``.
-
-    Accepts that exact form, a full ISO 8601 stamp (seconds, ``Z`` or an
-    offset — converted to local time), or epoch seconds; anything else is no
-    reminder at all rather than a guess."""
-    if value in (None, ""):
-        return ""
-    import datetime as _dt
-
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        try:
-            return _dt.datetime.fromtimestamp(float(value)).strftime(_DUE_FMT)
-        except (OverflowError, OSError, ValueError):
-            return ""
-    text = str(value).strip()
-    if not text:
-        return ""
-    try:
-        stamp = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return ""
-    if stamp.tzinfo is not None:
-        stamp = stamp.astimezone().replace(tzinfo=None)
-    return stamp.strftime(_DUE_FMT)
-
-
-def due_epoch(item: dict) -> float:
-    """The epoch seconds of ``item["due"]`` (local time), or 0."""
-    due = str(item.get("due") or "")
-    if not due:
-        return 0.0
-    import datetime as _dt
-
-    try:
-        return _dt.datetime.strptime(due, _DUE_FMT).timestamp()
-    except ValueError:
-        return 0.0
-
-
-def _num(value) -> float:
-    try:
-        out = float(value or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-    return out if out > 0 else 0.0
-
-
 def _norm_todo(item: dict, index: int) -> dict:
-    """One row → ``{id, text, done, due?, snoozed_until?, dismissed_at?,
-    notified_at?}`` (the reminder fields only when set, so a list without
-    reminders reads exactly as it always did)."""
-    out = {
-        "id": str(item.get("id") or "t%d" % index),
-        "text": str(item.get("text", "")),
-        "done": bool(item.get("done", False)),
-    }
-    due = _norm_due(item.get("due"))
-    if due:
-        out["due"] = due
-        for key in ("snoozed_until", "dismissed_at", "notified_at"):
-            val = _num(item.get(key))
-            if val:
-                out[key] = val
-    return out
-
-
-def remind_at(item: dict) -> float:
-    """When ``item`` should next pop up: its due time, or a later snooze; 0
-    when it has no reminder, is done, or was dismissed for this due time."""
-    if item.get("done"):
-        return 0.0
-    due = due_epoch(item)
-    if not due:
-        return 0.0
-    if _num(item.get("dismissed_at")) >= due:
-        return 0.0
-    return max(due, _num(item.get("snoozed_until")))
-
-
-def due_now(items: list, now: Optional[float] = None) -> list:
-    """The todos whose reminder time has come (at it or any time after),
-    oldest first — what the reminder dialog shows."""
-    import time as _time
-
-    t = _time.time() if now is None else now
-    hits = [(remind_at(i), i) for i in items]
-    return [i for at, i in sorted(hits, key=lambda x: x[0]) if at and at <= t]
+    """One row → its canonical shape, as these routes return it."""
+    return _todo_store.compat(_todo_store.norm_item(item, index))
 
 
 def _read_todos() -> list[dict]:
-    """Load todos.json as a list of todo dicts (see :func:`_norm_todo`),
-    tolerating a missing or malformed file (returns [])."""
-    try:
-        raw = ASSIST_TODOS.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    try:
-        data = json.loads(raw or "[]")
-    except (ValueError, TypeError):
-        return []
-    if not isinstance(data, list):
-        return []
-    return [
-        _norm_todo(item, i) for i, item in enumerate(data) if isinstance(item, dict)
-    ]
-
-
-def _write_todos(items: list) -> None:
-    _seed_assistant_dir()
-    _atomic_write(ASSIST_TODOS, json.dumps(items, indent=2) + "\n")
+    """The list, tolerating a missing or malformed file (returns [])."""
+    return [_todo_store.compat(i) for i in _todo_store.list_items()]
 
 
 def _update_todo(todo_id: str, fn) -> Optional[dict]:
     """Read-modify-write one todo by id → the updated row, or None."""
-    items = _read_todos()
-    for item in items:
-        if item["id"] == todo_id:
-            fn(item)
-            clean = _norm_todo(item, 0)
-            item.clear()
-            item.update(clean)
-            _write_todos(items)
-            return item
-    return None
+    row = _todo_store.update_item(todo_id, fn)
+    return None if row is None else _todo_store.compat(row)
 
 
 def _announce_due(now: Optional[float] = None) -> list:
-    """Mark and announce the todos that came due since they were last
-    announced → the announced rows. ``notified_at`` lives ON the todo, in the
-    shared file, so two servers reading one todo list (the installed one and a
-    dev one) push a reminder once, not twice."""
-    import time as _time
-
-    t = _time.time() if now is None else now
-    items = _read_todos()
-    fresh = []
-    for item in items:
-        at = remind_at(item)
-        if at and at <= t and _num(item.get("notified_at")) < at:
-            item["notified_at"] = t
-            fresh.append(item)
-    if not fresh:
-        return []
-    _write_todos(items)
-    try:
-        from backend.web.core import events as _events
-
-        for item in fresh:
-            _events.BUS.emit(
-                "todo.due",
-                session="",
-                data={
-                    "id": item["id"],
-                    "text": item["text"],
-                    "due": item.get("due", ""),
-                    "detail": item["text"],
-                },
-            )
-    except Exception as err:  # noqa: BLE001 — the dialog still finds it by polling
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("todo reminders: announce failed: %v", err)
-    return fresh
+    """Mark and announce (``todo.due``) the todos that came due since they
+    were last announced → the announced rows (see the store)."""
+    return _todo_store.announce_due(now)
 
 
 class AssistantAddon(Addon):
@@ -651,13 +535,16 @@ class AssistantAddon(Addon):
         @router.put("/todos")
         async def put_todos(payload: dict) -> JSONResponse:
             """Replace the whole list (the UI sends the full, reordered array).
-            Normalizes each row to {id, text, done} and writes todos.json
-            atomically."""
+
+            For an id the store already knows, every field the client did NOT
+            send is kept — details, priority, kind, session, source, key, link,
+            created_at, and the reminder fields (a client that never heard of
+            snoozes must not wipe one by saving the list); a new ``due`` is a
+            new reminder. An item left out moves to the To-do history."""
             items = (payload or {}).get("todos")
             if not isinstance(items, list):
                 return JSONResponse({"error": "todos must be a list"}, status_code=400)
-            before = {t["id"]: t for t in await asyncio.to_thread(_read_todos)}
-            clean = []
+            rows = []
             seen = set()
             for i, item in enumerate(items):
                 if not isinstance(item, dict):
@@ -666,29 +553,12 @@ class AssistantAddon(Addon):
                 while tid in seen:  # keep ids unique even if the client sent dupes
                     tid += "_"
                 seen.add(tid)
-                row = _norm_todo(dict(item, id=tid), i)
-                old = before.get(tid) or {}
-                if row.get("due") and row.get("due") == old.get("due"):
-                    # The server owns these: a client that never heard of
-                    # reminders must not wipe a snooze by saving the list.
-                    for key in ("snoozed_until", "dismissed_at", "notified_at"):
-                        if key in old and key not in item:
-                            row[key] = old[key]
-                elif row.get("due") != old.get("due"):
-                    # A new time is a new reminder: no snooze, not dismissed,
-                    # not yet announced.
-                    for key in ("snoozed_until", "dismissed_at", "notified_at"):
-                        row.pop(key, None)
-                clean.append(row)
-
-            def _write() -> None:
-                _write_todos(clean)
-
+                rows.append((tid, dict(item, id=tid)))
             try:
-                await asyncio.to_thread(_write)
+                stored = await asyncio.to_thread(_todo_store.replace_all, rows)
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=500)
-            return JSONResponse({"todos": clean})
+            return JSONResponse({"todos": [_todo_store.compat(t) for t in stored]})
 
         @router.get("/todos/due")
         async def get_due_todos() -> JSONResponse:
