@@ -24177,9 +24177,27 @@ function fullPathHint() {
 	return windowsServer ? "a full path like C:\\Users\\you\\project" : "a full path starting with / or ~";
 }
 //#endregion
+//#region src/lib/agentNames.ts
+var AGENT_NAMES = {
+	claude: "Claude Code",
+	codex: "Codex",
+	aider: "Aider",
+	antigravity: "Antigravity",
+	opencode: "OpenCode",
+	cline: "Cline",
+	goose: "Goose",
+	copilot: "GitHub Copilot"
+};
+function agentName(provider) {
+	return AGENT_NAMES[provider] || (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Agent");
+}
+//#endregion
 //#region src/lib/format.ts
 function errMsg(err) {
-	return err?.message || "error";
+	const msg = err?.message;
+	if (typeof msg === "string" && msg) return msg;
+	if (typeof err === "string" && err) return err;
+	return "Something went wrong, and MindFlock got no reason why.";
 }
 function fmtTokens(n) {
 	n = n || 0;
@@ -24195,14 +24213,9 @@ function fmtUsd(u) {
 	if (u < 1e3) return "$" + u.toFixed(1);
 	return "$" + (u / 1e3).toFixed(1) + "k";
 }
-var PROV_LABELS = {
-	claude: "Claude",
-	codex: "Codex",
-	aider: "Aider"
-};
 function provLabel(name) {
 	if (!name) return "";
-	return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
+	return agentName(name).replace(/ Code$/, "");
 }
 function relTime(ts, opts = {}) {
 	const suffix = opts.suffix ?? " ago";
@@ -24831,7 +24844,13 @@ async function request(path, opts) {
 		};
 		init.body = JSON.stringify(opts.json);
 	}
-	const r = await fetch(path, init);
+	let r;
+	try {
+		r = await fetch(path, init);
+	} catch (err) {
+		if (err?.name === "AbortError") throw err;
+		throw new ApiError(0, UNREACHABLE, null);
+	}
 	if (r.status === 401) {
 		location.reload();
 		throw new ApiError(401, "unauthorized", null);
@@ -24842,12 +24861,24 @@ async function request(path, opts) {
 		let msg = statusSentence(r.status);
 		if (body && typeof body === "object") {
 			const b = body;
+			const listed = validationSentence(b.detail);
 			if (typeof b.detail === "string" && b.detail) msg = b.detail;
+			else if (listed) msg = listed;
 			else if (typeof b.error === "string" && b.error) msg = b.error;
 		}
 		throw new ApiError(r.status, msg, body);
 	}
 	return text;
+}
+var UNREACHABLE = "Couldn't reach MindFlock. Is it still running?";
+function validationSentence(detail) {
+	if (!Array.isArray(detail) || !detail.length) return "";
+	const first = detail[0];
+	const msg = typeof first?.msg === "string" ? first.msg.trim() : "";
+	if (!msg) return "";
+	const loc = Array.isArray(first?.loc) ? first.loc : [];
+	const field = loc.length > 1 ? loc[loc.length - 1] : "";
+	return typeof field === "string" && field ? field + ": " + msg : msg;
 }
 function statusSentence(status) {
 	if (status === 404) return "MindFlock couldn't find that — it may have just been removed.";
@@ -25296,21 +25327,6 @@ function backgroundHint(inst, now = nowS()) {
 	if (running) return jobChipText(running, now).title;
 	const chip = backgroundChip(inst, now);
 	return chip ? chip.title.replace(/ — click to .*$/, "") : "";
-}
-//#endregion
-//#region src/lib/agentNames.ts
-var AGENT_NAMES = {
-	claude: "Claude Code",
-	codex: "Codex",
-	aider: "Aider",
-	antigravity: "Antigravity",
-	opencode: "OpenCode",
-	cline: "Cline",
-	goose: "Goose",
-	copilot: "GitHub Copilot"
-};
-function agentName(provider) {
-	return AGENT_NAMES[provider] || (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Agent");
 }
 //#endregion
 //#region src/lib/heldOffline.ts
@@ -26630,7 +26646,11 @@ function placeNewRunMembers(saved, live) {
 	}
 	return order;
 }
-function matchesFilter(inst, filter, aliases) {
+function filterQuery(raw) {
+	return (raw || "").trim().toLowerCase();
+}
+function matchesFilter(inst, raw, aliases) {
+	const filter = filterQuery(raw);
 	if (!filter) return true;
 	return [
 		inst.title,
@@ -27755,6 +27775,7 @@ var useUi = create((set, get) => ({
 	railOrder: [],
 	mru: load$1("cs_mru", []),
 	filter: "",
+	ending: {},
 	hidden: new Set(load$1("mf_hidden", [])),
 	verifyPanes: [],
 	extPanes: [],
@@ -27885,7 +27906,14 @@ var useUi = create((set, get) => ({
 		save("cs_order", order);
 		set({ order });
 	},
-	setFilter: (filter) => set({ filter: filter.toLowerCase() }),
+	setFilter: (filter) => set({ filter: filter.trim() ? filter : "" }),
+	setEnding: (title, kind) => {
+		const { [title]: _was, ...rest } = get().ending;
+		set({ ending: kind ? {
+			...rest,
+			[title]: kind
+		} : rest });
+	},
 	setHidden: (title, hidden) => {
 		const next = new Set(get().hidden);
 		if (hidden) next.add(title);
@@ -33059,8 +33087,22 @@ function forgetLocally(title) {
 	if (ui.focused === title) ui.setFocused(null);
 	releaseTerms(title);
 }
+var MAX_TITLE_LEN = 120;
+async function whileEnding(title, kind, work) {
+	const ui = useUi.getState();
+	if (ui.ending[title]) return void 0;
+	ui.setEnding(title, kind);
+	try {
+		return await work();
+	} finally {
+		useUi.getState().setEnding(title, null);
+	}
+}
 async function closeSession(title) {
 	if (!title) return;
+	await whileEnding(title, "closing", () => closeNow(title));
+}
+async function closeNow(title) {
 	let r = null;
 	try {
 		r = await instApi(title, "/close", { method: "POST" });
@@ -33091,6 +33133,12 @@ function deleteConfirmText(inst) {
 	if (inst?.in_place) return "Removes this session. Its folder and branch stay as they are; Close keeps the session to reopen.";
 	return "Deletes the folder and branch" + (inst?.branch ? " “" + inst.branch + "”" : "") + ", including uncommitted changes. This can't be undone — use Close to keep it.";
 }
+function deleteManyConfirmText(insts) {
+	if (insts.length <= 1) return deleteConfirmText(insts[0]);
+	const inPlace = insts.filter((i) => i.in_place).length;
+	if (inPlace === insts.length) return "Removes these sessions. Their folders and branches stay as they are; Close keeps them to reopen.";
+	return "Deletes their folders and branches, including uncommitted changes" + (inPlace ? " (the " + inPlace + " working in place keep theirs)" : "") + ". This can't be undone — use Close to keep them.";
+}
 async function deleteSession(title, confirmed = false) {
 	if (!title) return null;
 	if (!confirmed) {
@@ -33103,6 +33151,9 @@ async function deleteSession(title, confirmed = false) {
 		}]);
 		return null;
 	}
+	return await whileEnding(title, "deleting", () => deleteNow(title)) ?? null;
+}
+async function deleteNow(title) {
 	let r = null;
 	try {
 		r = await instApi(title, "/cleanup", { method: "POST" });
@@ -41095,7 +41146,9 @@ function backdropPress(onClose) {
 }
 function modalEscape(token, e, p) {
 	if (e.key !== "Escape" || e.defaultPrevented) return false;
-	if (stack$1[stack$1.length - 1] !== token) return false;
+	let top = stack$1.length - 1;
+	while (top >= 0 && stack$1[top].passive?.()) top--;
+	if (stack$1[top] !== token) return false;
 	const spent = p.onEscape?.(e) === true;
 	if (!spent && p.closeOnEscape === false) return false;
 	e.preventDefault();
@@ -41110,7 +41163,7 @@ function pushModal(token) {
 		if (i >= 0) stack$1.splice(i, 1);
 	};
 }
-function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true, escapeCapture = false, portal = false, className, children, ...rest }) {
+function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true, escapeCapture = false, portal = false, keepFocus = false, className, children, ...rest }) {
 	const ref = (0, import_react.useRef)(null);
 	const props = (0, import_react.useRef)({
 		onClose,
@@ -41125,7 +41178,7 @@ function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true
 		escapeCapture
 	};
 	(0, import_react.useEffect)(() => {
-		const token = {};
+		const token = keepFocus ? { passive: () => !(ref.current && ref.current.contains(document.activeElement)) } : {};
 		const pop = pushModal(token);
 		window.dispatchEvent(new CustomEvent(MODAL_OPEN_EVENT));
 		const onKey = (e) => {
@@ -41134,7 +41187,7 @@ function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true
 		window.addEventListener("keydown", onKey, escapeCapture);
 		const node = ref.current;
 		const prev = document.activeElement;
-		if (node && !node.contains(prev)) node.focus({ preventScroll: true });
+		if (node && !keepFocus && !node.contains(prev)) node.focus({ preventScroll: true });
 		return () => {
 			window.removeEventListener("keydown", onKey, escapeCapture);
 			pop();
@@ -45481,6 +45534,7 @@ function installPeerRowMemory(qc) {
 //#region src/components/NotificationsBell.tsx
 var NOTIF_CAP = 100;
 var NOTIF_SEEN_KEY = "mf_notif_seen_ts";
+var NOTIF_CLEARED_KEY = "mf_notif_cleared_ts";
 var NEEDS_SHOWN = 6;
 function BellGlyph({ size = 15 }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
@@ -45726,6 +45780,20 @@ function rowKey(e) {
 	e.preventDefault();
 	e.currentTarget.click();
 }
+function loadClearedTs() {
+	try {
+		return parseFloat(localStorage.getItem(NOTIF_CLEARED_KEY) || "0") || 0;
+	} catch {
+		return 0;
+	}
+}
+function saveClearedTs(rows, prev) {
+	const mark = rows.reduce((m, n) => Math.max(m, n.ts), prev);
+	try {
+		localStorage.setItem(NOTIF_CLEARED_KEY, String(mark));
+	} catch {}
+	return mark;
+}
 function NotificationsBell() {
 	const { data: instances = [] } = useInstances();
 	const { data: runs } = useRuns();
@@ -45743,6 +45811,7 @@ function NotificationsBell() {
 	const btnRef = (0, import_react.useRef)(null);
 	const popRef = (0, import_react.useRef)(null);
 	const openedAt = (0, import_react.useRef)(0);
+	const clearedTs = (0, import_react.useRef)(loadClearedTs());
 	useNotifyConfig();
 	(0, import_react.useEffect)(() => {
 		const bus = window.mindflock?.events;
@@ -45752,12 +45821,14 @@ function NotificationsBell() {
 			if (!n) return;
 			if (n.rule && !ruleOn(n.rule)) return;
 			const seq = typeof env.seq === "number" ? env.seq : 0;
+			const ts = env.ts || Date.now() / 1e3;
+			if (ts <= clearedTs.current) return;
 			setNotifs((prev) => {
 				if (seq && prev.some((x) => x.seq === seq)) return prev;
 				if (n.dedupe && prev.some((x) => x.dedupe === n.dedupe)) return prev;
 				const next = [...prev, {
 					seq,
-					ts: env.ts || Date.now() / 1e3,
+					ts,
 					session: env.session || "",
 					...n
 				}].sort((a, b) => a.ts - b.ts);
@@ -45890,7 +45961,10 @@ function NotificationsBell() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						className: "notif-clear",
 						type: "button",
-						onClick: () => setNotifs([]),
+						onClick: () => {
+							clearedTs.current = saveClearedTs(notifs, clearedTs.current);
+							setNotifs([]);
+						},
 						children: "Clear"
 					})
 				]
@@ -62679,9 +62753,13 @@ function useNow(ms) {
 }
 //#endregion
 //#region src/components/ConnBanner.tsx
+function pollFailText(err) {
+	const status = err instanceof ApiError ? err.status : 0;
+	return status > 0 ? "The server is reachable but answering with errors (HTTP " + status + "). It may recover on its own; if not, check the server logs." : "The server isn’t answering — it may have stopped or be restarting. Reconnecting automatically.";
+}
 function ConnBanner() {
 	const [pollFails, setPollFails] = (0, import_react.useState)(0);
-	const [lastErr, setLastErr] = (0, import_react.useState)("");
+	const [lastErr, setLastErr] = (0, import_react.useState)(null);
 	const [evtDropped, setEvtDropped] = (0, import_react.useState)(false);
 	const [diag, setDiag] = (0, import_react.useState)(null);
 	const [lostAt, setLostAt] = (0, import_react.useState)(0);
@@ -62696,7 +62774,7 @@ function ConnBanner() {
 				if (action?.type === "success") setPollFails(0);
 				else if (action?.type === "error") {
 					setPollFails((n) => n + 1);
-					setLastErr(action.error?.message || "");
+					setLastErr(action.error ?? null);
 				}
 			}
 		});
@@ -62742,7 +62820,7 @@ function ConnBanner() {
 	} else if (diag && pollFails >= 2 && diag.state === "wsl-missing") text = "WSL isn’t installed on this computer. Run “wsl --install” in PowerShell, restart, then reopen MindFlock.";
 	else if (diag && pollFails >= 2 && diag.state === "not-installed") text = "WSL is up, but MindFlock isn’t installed in it anymore. Reinstall it to continue.";
 	else if (diag && pollFails >= 2 && diag.state === "starting") text = "The server is starting back up — this connects on its own, usually within a few seconds.";
-	else if (pollFails >= 2) text = /^HTTP \d/.test(lastErr) ? "The server is reachable but answering with errors (" + lastErr + "). It may recover on its own; if not, check the server logs." : "The server isn’t answering — it may have stopped or be restarting. Reconnecting automatically.";
+	else if (pollFails >= 2) text = pollFailText(lastErr);
 	else text = "The live update stream dropped — the page may lag a few seconds behind. Reconnecting automatically.";
 	const s = Math.max(0, Math.round((now - lostAt) / 1e3));
 	const elapsed = "Retrying… (" + (s < 90 ? s + "s" : Math.floor(s / 60) + "m " + s % 60 + "s") + ")";
@@ -63121,6 +63199,11 @@ var useInstallWindow = create((set) => ({
 	set: (open) => set({ open })
 }));
 var INSTALL_SLOW_S = 90;
+var TERM_CLOSE_GRACE_MS = 3e3;
+function terminalFailed(state, exit, sawRun, closedForMs) {
+	if (state !== "disconnected" || exit !== null) return false;
+	return !sawRun || closedForMs >= TERM_CLOSE_GRACE_MS;
+}
 function fmtElapsed(secs) {
 	const s = Math.max(0, Math.floor(secs));
 	return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
@@ -63201,6 +63284,10 @@ function InstallWindow({ steps, onClose, onDone, onSignIn }) {
 	const [planned] = (0, import_react.useState)(() => steps || []);
 	const doneRef = (0, import_react.useRef)(onDone);
 	doneRef.current = onDone;
+	const [closedAt, setClosedAt] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		setClosedAt(state === "disconnected" ? Date.now() : null);
+	}, [state]);
 	(0, import_react.useEffect)(() => {
 		let live = true;
 		let fired = false;
@@ -63236,8 +63323,9 @@ function InstallWindow({ steps, onClose, onDone, onSignIn }) {
 	};
 	const secs = exit === null ? elapsedSince(run, seenAt.current, now) : 0;
 	const slow = exit === null && secs >= INSTALL_SLOW_S;
+	const noTerm = terminalFailed(state, exit, run !== null, closedAt === null ? 0 : now - closedAt);
 	const agent = installedAgent(planned);
-	const status = exit === 0 ? installedMessage(planned) : exit !== null ? "✗ some steps failed — scroll up to see which" : state === "streaming" ? installProgress(planned, secs) : state;
+	const status = exit === 0 ? installedMessage(planned) : exit !== null ? "✗ some steps failed — scroll up to see which" : noTerm ? run ? "The terminal closed." : "Couldn't open the terminal." : state === "streaming" ? installProgress(planned, secs) : termStateText(state);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "install-dialog",
 		role: "dialog",
@@ -63283,9 +63371,9 @@ function InstallWindow({ steps, onClose, onDone, onSignIn }) {
 						children: "Done"
 					})
 				}),
-				(slow || exit !== null && exit !== 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualFallback, {
+				(slow || noTerm || exit !== null && exit !== 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualFallback, {
 					cmds,
-					lead: slow ? "Taking a while — it may be stuck on the network. It keeps trying; or run this in your own terminal:" : "Didn't finish. Run this in your own terminal instead:"
+					lead: noTerm ? "Run this in your own terminal instead:" : slow ? "Taking a while — it may be stuck on the network. It keeps trying; or run this in your own terminal:" : "Didn't finish. Run this in your own terminal instead:"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "prov-login-term login-term-dark",
@@ -63922,6 +64010,16 @@ function signInSteps(provider) {
 	];
 	return ["Answer " + agentDisplayName(provider) + "'s prompts in the terminal below.", "If it shows a link, open it in your browser and sign in."];
 }
+function termStateText(state) {
+	switch (state) {
+		case "streaming": return "";
+		case "connecting": return "Opening the terminal…";
+		case "starting": return "Starting…";
+		case "reconnecting": return "Reconnecting…";
+		case "disconnected": return "The terminal closed.";
+		default: return "";
+	}
+}
 var SIGNIN_POLL_MS = 3e3;
 function SignInWindow({ provider, profile, onClose }) {
 	const hostRef = (0, import_react.useRef)(null);
@@ -63954,7 +64052,7 @@ function SignInWindow({ provider, profile, onClose }) {
 		} catch {}
 		closeRef.current();
 	};
-	const status = signedIn ? "✓ Signed in. You can close this window." : state === "streaming" ? "" : state;
+	const status = signedIn ? "✓ Signed in. You can close this window." : state === "disconnected" ? "The terminal closed. If you didn't finish, close this and try again." : termStateText(state);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "signin-dialog",
 		role: "dialog",
@@ -64302,9 +64400,15 @@ function InlineConfirm(props) {
 //#endregion
 //#region src/components/settings/useSettings.tsx
 var SECRET_MASK = "•••set";
+function settingsStatus(q) {
+	if (q.data !== void 0) return "ready";
+	return q.isError && !q.isFetching ? "error" : "loading";
+}
 var EMPTY_SETTINGS = {};
 function useSettingsModel(open) {
-	const settings = useSettingsDoc(open).data ?? EMPTY_SETTINGS;
+	const doc = useSettingsDoc(open);
+	const settings = doc.data ?? EMPTY_SETTINGS;
+	const status = settingsStatus(doc);
 	const reload = (0, import_react.useCallback)(async () => {
 		try {
 			await fetchSettingsDoc();
@@ -64338,6 +64442,7 @@ function useSettingsModel(open) {
 	}, [reload]);
 	return {
 		settings,
+		status,
 		reload,
 		saveField,
 		saveGroup: (0, import_react.useCallback)((group, patch, okMsg) => saveGroups({ [group]: patch }, okMsg), [saveGroups]),
@@ -64378,8 +64483,9 @@ function SettingField(props) {
 			if (why) return;
 		}
 		if (value === display && !isSecret) return;
-		s.saveField(props.group, props.field, value);
-		if (isSecret) setValue("");
+		s.saveField(props.group, props.field, value).then((ok) => {
+			if (ok && isSecret) setValue((cur) => cur === value ? "" : cur);
+		});
 	};
 	if (props.options) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
 		"data-group": props.group,
@@ -64470,11 +64576,15 @@ var shared = null;
 function loadAgentRows(refresh = false) {
 	const now = Date.now();
 	if (!refresh && shared && now - shared.at < SHARE_MS) return shared.rows;
-	const rows = api("/api/connections" + (refresh ? "?refresh=1" : "")).then((d) => (d?.connections || []).filter((c) => c.kind === "agent")).catch(() => []);
-	shared = {
+	const rows = api("/api/connections" + (refresh ? "?refresh=1" : "")).then((d) => (d?.connections || []).filter((c) => c.kind === "agent"));
+	const mine = {
 		at: now,
 		rows
 	};
+	shared = mine;
+	rows.catch(() => {
+		if (shared === mine) shared = null;
+	});
 	return rows;
 }
 function agentRowFor(rows, provider) {
@@ -64484,13 +64594,20 @@ function agentRowFor(rows, provider) {
 }
 function AgentCard({ provider, here, gotoScreen, onChanged, tourNext = false }) {
 	const [row, setRow] = (0, import_react.useState)(void 0);
+	const [failed, setFailed] = (0, import_react.useState)(false);
 	const [result, setResult] = (0, import_react.useState)();
 	const [testing, setTesting] = (0, import_react.useState)(false);
 	const openDialogFor = useUi((st) => st.openDialogFor);
 	const closeDialog = useUi((st) => st.closeDialog);
 	const load = (0, import_react.useCallback)(async (refresh = false) => {
-		const rows = await loadAgentRows(refresh);
-		setRow(agentRowFor(rows, provider));
+		try {
+			const rows = await loadAgentRows(refresh);
+			setFailed(false);
+			setRow(agentRowFor(rows, provider));
+		} catch {
+			setFailed(true);
+			setRow(null);
+		}
 	}, [provider]);
 	(0, import_react.useEffect)(() => {
 		setResult(void 0);
@@ -64504,6 +64621,15 @@ function AgentCard({ provider, here, gotoScreen, onChanged, tourNext = false }) 
 		window.addEventListener(CONNECTIONS_CHANGED_EVENT, on);
 		return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
 	}, [load]);
+	if (failed) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentCardError, {
+		provider,
+		tourNext,
+		onRetry: () => void load(true),
+		onSignedIn: () => {
+			load(true);
+			onChanged?.();
+		}
+	});
 	if (row === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "agent-card agent-card-loading",
 		"aria-busy": "true",
@@ -64549,6 +64675,34 @@ function AgentCard({ provider, here, gotoScreen, onChanged, tourNext = false }) 
 				onChanged?.();
 			}
 		})
+	});
+}
+function AgentCardError({ provider, tourNext = false, onRetry, onSignedIn }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "agent-card agent-card-error",
+		"data-provider": provider,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "set-hint agent-card-failed",
+			children: [
+				"Couldn't check ",
+				agentName(provider || "claude"),
+				".",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike agent-card-retry",
+					onClick: (e) => {
+						e.stopPropagation();
+						onRetry();
+					},
+					children: "Retry"
+				})
+			]
+		}), provider ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
+			provider,
+			onDone: onSignedIn,
+			dataTour: tourNext ? "setup-next" : void 0
+		}) : null]
 	});
 }
 //#endregion
@@ -64995,6 +65149,15 @@ function useBlockedPoll(b) {
 		return () => window.clearInterval(t);
 	}, [signedOut]);
 }
+function readsSignedIn(status, provider) {
+	const row = (status?.logins || []).find((l) => l.name === provider);
+	return !!row && row.logged_in !== false;
+}
+async function reviveIfSignedIn(title, provider) {
+	await refreshSetup(true);
+	if (!readsSignedIn(queryClient.getQueryData(SETUP_KEY), provider)) return false;
+	return reviveSession(title);
+}
 function useSignInThenRestart(title, b) {
 	const [open, setOpen] = (0, import_react.useState)(false);
 	return {
@@ -65004,7 +65167,7 @@ function useSignInThenRestart(title, b) {
 			onClose: () => {
 				setOpen(false);
 				notifyConnectionsChanged();
-				refreshSetup(true).then(() => reviveSession(title));
+				reviveIfSignedIn(title, b.name);
 			}
 		}) : null
 	};
@@ -65119,7 +65282,28 @@ async function expectBackgroundJob(title, jobId, secs) {
 }
 //#endregion
 //#region src/components/sidebar/SessionMenu.tsx
-function SessionMenu({ model, onDone, onInUse }) {
+function endingLabel(kind) {
+	return kind === "closing" ? "Closing…" : "Deleting…";
+}
+function withEnding(model, kind) {
+	if (!kind) return model;
+	const off = (it) => it.key === "close" || it.key === "delete" ? {
+		...it,
+		disabled: true,
+		confirm: void 0,
+		note: endingLabel(kind),
+		title: endingLabel(kind)
+	} : it;
+	return {
+		...model,
+		groups: model.groups.map((g) => g.id === "danger" ? {
+			...g,
+			items: g.items.map(off)
+		} : g)
+	};
+}
+function SessionMenu({ model: given, onDone, onInUse, ending }) {
+	const model = withEnding(given, ending);
 	const [moreOpen, setMoreOpen] = (0, import_react.useState)(false);
 	const [deleteArmed, setDeleteArmed] = (0, import_react.useState)(false);
 	const moreRef = (0, import_react.useRef)(null);
@@ -67067,6 +67251,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const alias = aliases[inst.title];
 	const picking = useUi((s) => s.bulkMode);
 	const picked = useUi((s) => s.bulkSelected.has(inst.title));
+	const ending = useUi((s) => s.ending[inst.title]);
 	const title = inst.title;
 	const missing = !!inst.workspace_missing;
 	const paused = inst.status === "paused";
@@ -67330,6 +67515,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 								className: "title title-edit",
 								type: "text",
+								maxLength: MAX_TITLE_LEN,
 								defaultValue: shown,
 								autoFocus: true,
 								autoComplete: "off",
@@ -67480,7 +67666,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							})
 						]
 					}),
-					ss.waiting && !inst.device ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					ending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "stagechip chip-ending",
+						role: "status",
+						children: endingLabel(ending)
+					}) : ss.waiting && !inst.device ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: "stagechip chip-restart chip-waitmem " + chip.cls,
 						title: chip.title,
@@ -67682,9 +67872,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 					!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						className: "kill" + (missing ? " cleanup" : ""),
 						"aria-label": missing ? "Delete session" : "Close session",
-						title: missing ? "Delete — its workspace is gone; this removes the session" : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)",
+						disabled: !!ending,
+						title: ending ? endingLabel(ending) : missing ? "Delete — its workspace is gone; this removes the session" : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)",
 						onClick: (e) => act(() => {
 							if (closeGuarded(Date.now())) return;
+							if (ending) return;
 							if (missing) return cleanupMissing(title);
 							if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
 							setCloseArmed(false);
@@ -67778,6 +67970,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 					},
 					picked
 				}),
+				ending,
 				onInUse: setInUse,
 				onDone: () => closeMenu()
 			})
@@ -68598,7 +68791,7 @@ function SessionFilter() {
 			"aria-label": "Filter sessions",
 			value: filter,
 			autoFocus: peek,
-			onChange: (e) => setFilter(e.target.value.trim()),
+			onChange: (e) => setFilter(e.target.value),
 			onBlur: (e) => {
 				if (peek && !e.target.value.trim()) setFilterPeek(false);
 			},
@@ -68681,6 +68874,16 @@ function SidebarResizer() {
 }
 //#endregion
 //#region src/components/sidebar/BulkBar.tsx
+function bulkEscape(ask) {
+	return ask ? "cancel-ask" : "leave";
+}
+function shortReason$1(msg, max = 80) {
+	const line = firstLine$1(msg) || "error";
+	return line.length > max ? line.slice(0, max - 1).trimEnd() + "…" : line;
+}
+function bulkFailText(failed) {
+	return failed.map((f) => f.name + " — " + shortReason$1(f.why)).join("; ");
+}
 function BulkBar() {
 	const { data: instances = [] } = useInstances();
 	const bulkMode = useUi((s) => s.bulkMode);
@@ -68695,17 +68898,18 @@ function BulkBar() {
 			if (useUi.getState().openDialog) return;
 			e.preventDefault();
 			setAsk(null);
-			useUi.getState().setBulkMode(false);
+			if (bulkEscape(ask) === "leave") useUi.getState().setBulkMode(false);
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [bulkMode]);
+	}, [bulkMode, ask]);
 	if (!bulkMode) return null;
 	const rows = instances.filter((i) => !i.pending);
 	const live = new Set(rows.map((i) => i.title));
 	const selected = rows.filter((i) => bulkSelected.has(i.title)).map((i) => i.title);
 	const n = selected.length;
-	const anyMissing = rows.some((i) => selected.includes(i.title) && i.workspace_missing);
+	const missingN = rows.filter((i) => selected.includes(i.title) && i.workspace_missing).length;
+	const anyMissing = missingN > 0;
 	const finish = (titles) => {
 		const s = useUi.getState();
 		s.setBulk(titles, false);
@@ -68745,7 +68949,10 @@ function BulkBar() {
 			} catch (err) {
 				const h = folderInUse(err);
 				if (h) inUse.push(...h.filter((x) => !inUse.includes(x)));
-				else failed.push(t);
+				else failed.push({
+					name: displayName(t),
+					why: errMsg(err)
+				});
 			}
 		}));
 		setBusy(false);
@@ -68753,7 +68960,7 @@ function BulkBar() {
 		setHeld(inUse);
 		const keptText = keptRunningText({ children: new Array(kept).fill("") });
 		toast(`${verb} ${done.length}/${titles.length} session(s)` + (keptText ? " · " + keptText : ""), { duration: keptText ? 5e3 : void 0 });
-		if (failed.length) errorPop(`${verb === "Closed" ? "Close" : "Delete"} failed for ${failed.length} session(s)`, failed.map((t) => displayName(t)).join(", "));
+		if (failed.length) errorPop(`${verb === "Closed" ? "Close" : "Delete"} failed for ${failed.length} session(s)`, bulkFailText(failed));
 		await refreshInstances();
 	};
 	const hide = () => {
@@ -68807,12 +69014,12 @@ function BulkBar() {
 				"aria-label": ask === "close" ? "Close selected?" : "Delete selected?",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "bulk-q",
-					children: ask === "close" ? `Close ${n} session(s)? Keeps their worktrees — reopen from Recently closed.` : `Delete ${n} session(s)? Removes their worktrees and branches.`
+					children: ask === "close" ? `Close ${n} session(s)? Keeps their worktrees — reopen from Recently closed.` : ask === "cleanmissing" ? `Delete ${missingN} session(s) whose folder is gone? This removes the dead sessions.` : `Delete ${n} session(s)? ` + deleteManyConfirmText(rows.filter((i) => selected.includes(i.title)))
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "bulk-acts",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: ask === "delete" ? "danger" : void 0,
+						className: ask === "close" ? void 0 : "danger",
 						disabled: busy,
 						onClick: () => void run(ask),
 						children: ask === "close" ? "Close" : "Delete"
@@ -68842,10 +69049,10 @@ function BulkBar() {
 					}),
 					anyMissing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						title: "Remove selected sessions whose workspace is gone",
+						title: "Remove selected sessions whose workspace is gone (asks first)",
 						disabled: busy,
-						onClick: () => void run("cleanmissing"),
-						children: "Delete missing"
+						onClick: () => setAsk("cleanmissing"),
+						children: "Delete missing…"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -71160,6 +71367,28 @@ function GitIdentityForm({ fix, onSaved }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)("");
 	const ready = !!name.trim() && !!email.trim();
+	const save = () => {
+		if (busy || !ready) return;
+		setBusy(true);
+		setError("");
+		api("/api/github/identity", { json: {
+			name: name.trim(),
+			email: email.trim()
+		} }).then(() => {
+			setBusy(false);
+			toast("git now knows who you are");
+			onSaved();
+		}, (err) => {
+			setBusy(false);
+			setError(err.message || "couldn't save");
+		});
+	};
+	const onKeyDown = (e) => {
+		if (e.key !== "Enter") return;
+		e.preventDefault();
+		e.stopPropagation();
+		save();
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 		className: "doctor-identity",
 		children: [
@@ -71172,6 +71401,7 @@ function GitIdentityForm({ fix, onSaved }) {
 						"aria-label": "Your name for commits",
 						value: name,
 						onChange: (e) => setName(e.target.value),
+						onKeyDown,
 						onClick: (e) => e.stopPropagation()
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -71181,6 +71411,7 @@ function GitIdentityForm({ fix, onSaved }) {
 						type: "email",
 						value: email,
 						onChange: (e) => setEmail(e.target.value),
+						onKeyDown,
 						onClick: (e) => e.stopPropagation()
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -71190,19 +71421,7 @@ function GitIdentityForm({ fix, onSaved }) {
 						title: ready ? void 0 : "Fill in both your name and email",
 						onClick: (e) => {
 							e.stopPropagation();
-							setBusy(true);
-							setError("");
-							api("/api/github/identity", { json: {
-								name: name.trim(),
-								email: email.trim()
-							} }).then(() => {
-								setBusy(false);
-								toast("git now knows who you are");
-								onSaved();
-							}, (err) => {
-								setBusy(false);
-								setError(err.message || "couldn't save");
-							});
+							save();
 						},
 						children: busy ? "Saving…" : "Save"
 					})
@@ -71262,30 +71481,41 @@ function CheckRow({ c, onSignedIn }) {
 		]
 	});
 }
-function DoctorList({ reprobeKey, onChange, essential = false, fallback, tourNext = false }) {
+function DoctorList({ reprobeKey, onChange, onChecking, essential = false, fallback, tourNext = false }) {
 	const [installed, setInstalled] = (0, import_react.useState)(0);
 	const reprobe = (reprobeKey || 0) > 0 || installed > 0;
 	const query = useDoctor({ enabled: !reprobe });
 	const [reprobeError, setReprobeError] = (0, import_react.useState)("");
+	const [probing, setProbing] = (0, import_react.useState)(false);
+	const checkingRef = (0, import_react.useRef)(onChecking);
+	checkingRef.current = onChecking;
 	(0, import_react.useEffect)(() => {
 		if (!reprobe) return;
 		let live = true;
+		setProbing(true);
+		checkingRef.current?.(true);
 		reprobeDoctor().then(() => {
 			if (!live) return;
 			setReprobeError("");
 			onChange?.();
 		}, (e) => {
-			if (live) setReprobeError(e.message);
+			if (live) setReprobeError(e.message || "failed");
+		}).finally(() => {
+			if (!live) return;
+			setProbing(false);
+			checkingRef.current?.(false);
 		});
 		return () => {
 			live = false;
+			checkingRef.current?.(false);
 		};
 	}, [reprobeKey, installed]);
 	const doctor = query.data ?? (essential ? fallback : null) ?? null;
 	const error = reprobe ? reprobeError : query.error ? query.error.message : "";
-	if (error) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-		className: "error",
-		children: ["doctor failed: ", error]
+	if (error && !doctor?.checks?.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "error doctor-failed",
+		title: error,
+		children: "Couldn't run the checks. Try again."
 	});
 	if (!doctor && essential) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorSkeleton, {});
 	if (!doctor) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -71294,9 +71524,19 @@ function DoctorList({ reprobeKey, onChange, essential = false, fallback, tourNex
 	});
 	if (!doctor.checks || !doctor.checks.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "muted",
-		children: "doctor unavailable"
+		children: "No checks to show yet. Try again."
 	});
 	const bump = () => setInstalled((n) => n + 1);
+	const note = error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "muted doctor-recheck-failed",
+		role: "status",
+		title: error,
+		children: "Couldn't re-check. Try again."
+	}) : probing && !essential ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "muted doctor-checking",
+		role: "status",
+		children: "Checking…"
+	}) : null;
 	const all = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 		className: "doctor-list",
 		children: doctor.checks.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckRow, {
@@ -71304,10 +71544,14 @@ function DoctorList({ reprobeKey, onChange, essential = false, fallback, tourNex
 			onSignedIn: bump
 		}, c.id || i))
 	});
-	if (!essential) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
-		steps: doctor.install?.steps,
-		onDone: bump
-	}), all] });
+	if (!essential) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+			steps: doctor.install?.steps,
+			onDone: bump
+		}),
+		all,
+		note
+	] });
 	const steps = doctor.install?.steps;
 	const problems = stepProblems(doctor.checks);
 	const required = requiredChecks(doctor.checks);
@@ -71342,7 +71586,8 @@ function DoctorList({ reprobeKey, onChange, essential = false, fallback, tourNex
 					onSignedIn: bump
 				}, c.id || i))
 			})]
-		})
+		}),
+		note
 	] });
 }
 function DoctorSkeleton() {
@@ -71504,6 +71749,7 @@ function SetupChecklist$1() {
 	const focused = useUi((st) => st.focused);
 	const installOpen = useInstallWindow((st) => st.open);
 	const [reprobeKey, setReprobeKey] = (0, import_react.useState)(0);
+	const [checking, setChecking] = (0, import_react.useState)(false);
 	const steps = orderedSteps(status);
 	const by = new Map(steps.map((s) => [s.id, s]));
 	const step = (id) => by.get(id);
@@ -71544,8 +71790,21 @@ function SetupChecklist$1() {
 		"data-setup-next": status?.summary.next || "",
 		children: [
 			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "error",
-				children: ["setup status failed: ", error.message]
+				className: "error setup-load-failed",
+				title: error.message,
+				children: [
+					"Couldn't load setup.",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike setup-retry",
+						onClick: (e) => {
+							e.stopPropagation();
+							refreshSetup();
+						},
+						children: "Retry"
+					})
+				]
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "muted setup-progress",
 				children: progressLine(status)
@@ -71573,6 +71832,7 @@ function SetupChecklist$1() {
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, {
 									essential: true,
 									reprobeKey,
+									onChecking: setChecking,
 									onChange: () => void refreshSetup()
 								})
 							})]
@@ -71589,6 +71849,7 @@ function SetupChecklist$1() {
 									fallback: status?.doctor,
 									tourNext: tools.id === next,
 									reprobeKey,
+									onChecking: setChecking,
 									onChange: () => void refreshSetup()
 								})
 							}),
@@ -71597,11 +71858,13 @@ function SetupChecklist$1() {
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "linklike setup-recheck",
+									disabled: checking,
+									"aria-busy": checking || void 0,
 									onClick: (e) => {
 										e.stopPropagation();
-										setReprobeKey((k) => k + 1);
+										if (!checking) setReprobeKey((k) => k + 1);
 									},
-									children: "Re-check"
+									children: checking ? "Checking…" : "Re-check"
 								})
 							})
 						]
@@ -71609,7 +71872,10 @@ function SetupChecklist$1() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Step, {
 						step: agent,
 						next,
-						children: [!status ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						children: [!status && error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "muted setup-hint setup-agent-unknown",
+							children: "Couldn't check your agent — Retry above."
+						}) : !status ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "muted setup-hint",
 							children: "Checking…"
 						}) : !defaultInstalled ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -72150,7 +72416,10 @@ function Sidebar({ onOpenChat }) {
 		ui.verifyPanes,
 		ui.extPanes
 	]);
-	const winFiltered = (0, import_react.useMemo)(() => windows.filter((w) => !ui.filter || w.title.toLowerCase().includes(ui.filter)), [windows, ui.filter]);
+	const winFiltered = (0, import_react.useMemo)(() => {
+		const q = filterQuery(ui.filter);
+		return windows.filter((w) => !q || w.title.toLowerCase().includes(q));
+	}, [windows, ui.filter]);
 	const railKeys = (0, import_react.useMemo)(() => {
 		const parentOf = new Map(allRows.map((i) => [i.title, i.parent || ""]));
 		return keepFamiliesTogether(orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], order), (k) => parentOf.get(k));
@@ -72470,7 +72739,7 @@ function Sidebar({ onOpenChat }) {
 								className: "filter-empty muted",
 								children: [
 									"No sessions match “",
-									ui.filter,
+									ui.filter.trim(),
 									"”"
 								]
 							})]
@@ -73030,7 +73299,10 @@ function DiffTab({ title, active, stamp = "" }) {
 	const load = (0, import_react.useCallback)(async () => {
 		const key = title + "\0" + base + "\0" + (file || "");
 		const cached = diffCache.get(key);
-		if (cached) setPayload(cached);
+		if (cached) {
+			setPayload(cached);
+			setError("");
+		}
 		let d;
 		try {
 			d = file ? await instApi(title, `/file-diff?path=${encodeURIComponent(file)}&base=${base}`) : await instApi(title, `/diff?base=${base}`);
@@ -73065,20 +73337,11 @@ function DiffTab({ title, active, stamp = "" }) {
 	};
 	const showOnMap = (path) => useUi.getState().openMap(title, { path });
 	if (!active && !payload) return null;
-	if (error && !payload) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pane-diff-inner",
-		ref: setRootEl,
-		children: ["Error: ", error]
-	});
-	if (!payload) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	const failure = diffFailure(payload, error);
+	if (!payload && !failure) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "diff-loading muted",
 		ref: setRootEl,
 		children: "Loading diff…"
-	});
-	if (payload.error) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pane-diff-inner",
-		ref: setRootEl,
-		children: ["Error: ", payload.error]
 	});
 	const reloadButton = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		className: "diff-reload",
@@ -73126,6 +73389,37 @@ function DiffTab({ title, active, stamp = "" }) {
 			children: "Unified"
 		})]
 	})] });
+	if (failure || !payload) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pane-diff-inner",
+		ref: setRootEl,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "diff-toolbar",
+			children: [
+				file && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					className: "diff-back",
+					type: "button",
+					onClick: () => setFile(null),
+					children: "← All files"
+				}),
+				reloadButton,
+				modeButtons
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "diff-empty diff-error",
+			role: "alert",
+			style: { padding: "12px 14px" },
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: "Couldn't load the diff" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "muted",
+				style: {
+					fontSize: "12px",
+					marginTop: "4px",
+					whiteSpace: "pre-wrap",
+					wordBreak: "break-word"
+				},
+				children: failure
+			})]
+		})]
+	});
 	if (file) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pane-diff-inner",
 		ref: setRootEl,
@@ -73232,6 +73526,10 @@ function DiffTab({ title, active, stamp = "" }) {
 			})]
 		}, seg.file))]
 	});
+}
+function diffFailure(payload, error) {
+	if (payload?.error) return payload.error;
+	return !payload ? error : "";
 }
 function MapButton({ path, onClick }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -74568,13 +74866,19 @@ function QueueTab$1({ title, active }) {
 	const draggingRef = (0, import_react.useRef)(false);
 	const [inserting, setInserting] = (0, import_react.useState)(null);
 	const [fileHover, setFileHover] = (0, import_react.useState)(false);
+	const [sending, setSending] = (0, import_react.useState)(false);
+	const sendingRef = (0, import_react.useRef)(false);
+	const [loadFailed, setLoadFailed] = (0, import_react.useState)(false);
 	const reload = (0, import_react.useCallback)(async () => {
 		if (draggingRef.current) return;
 		try {
 			const st = await qApi(title, "/queue");
 			queueCache.set(title, st);
 			setState((prev) => JSON.stringify(prev) === JSON.stringify(st) ? prev : st);
-		} catch {}
+			setLoadFailed(false);
+		} catch {
+			setLoadFailed(true);
+		}
 	}, [title]);
 	const mutate = (0, import_react.useCallback)(async (path, opts) => {
 		try {
@@ -74596,7 +74900,20 @@ function QueueTab$1({ title, active }) {
 		}, 15e3);
 		return () => clearInterval(t);
 	}, [active, reload]);
-	if (!state) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	if (!state) return loadFailed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "queue-loading muted",
+		role: "alert",
+		children: [
+			"Couldn't load the queue.",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "queue-retry",
+				onClick: () => void reload(),
+				children: "Retry"
+			})
+		]
+	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "queue-loading muted",
 		children: "Loading…"
 	});
@@ -74621,7 +74938,20 @@ function QueueTab$1({ title, active }) {
 		const nextMs = lastSent ? lastSent + loopInterval * 6e4 - Date.now() : 0;
 		statusText = nextMs > 0 ? `${items.length} queued · loops every ${loopInterval} min · next send in ${fmtDurationShort(nextMs)}` : `${items.length} queued · loops every ${loopInterval} min · sends when idle`;
 	} else statusText = loop ? items.length + " queued · next sends when idle, then re-queues (loop)" : items.length + " queued · next sends automatically when idle";
-	const send = async () => {
+	const once = async (go) => {
+		if (sendingRef.current) return;
+		sendingRef.current = true;
+		setSending(true);
+		try {
+			await go();
+		} finally {
+			sendingRef.current = false;
+			setSending(false);
+		}
+	};
+	const send = () => once(sendText);
+	const add = () => once(addText);
+	const sendText = async () => {
 		const text = draft.trim();
 		if (!text) return;
 		try {
@@ -74639,7 +74969,7 @@ function QueueTab$1({ title, active }) {
 			toast("Send failed: " + (err.message || ""));
 		}
 	};
-	const add = async () => {
+	const addText = async () => {
 		const text = draft.trim();
 		if (!text) return;
 		try {
@@ -74778,12 +75108,14 @@ function QueueTab$1({ title, active }) {
 					className: "queue-add primary",
 					type: "button",
 					title: "Add to queue (Alt+Enter)",
+					disabled: sending,
 					onClick: add,
 					children: "Add to queue"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "queue-send",
 					type: "button",
 					title: "Send now (Ctrl+Enter)",
+					disabled: sending,
 					onClick: send,
 					children: "Send now"
 				})]
@@ -109337,6 +109669,9 @@ function ModeText({ title, desc }) {
 		})]
 	});
 }
+function nameClashText(title) {
+	return "A session called “" + title + "” already exists — give this one another name under More options, or clear it to name it from the task.";
+}
 var WORKTREE_HINT = "Its own branch, so several sessions can run at once";
 function WorktreeText() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
@@ -109538,15 +109873,11 @@ function WorksIn({ inPlace, setInPlace, setProvision, provisionOn, laneNeedsWork
 				],
 				muted: name.renumbered ? "“" + name.renumbered + "” is taken, so this one is numbered" : ""
 			}) : null),
-			name?.clash && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			name?.clash && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "nf-opt-sub nf-git-nudge",
 				id: "new-name-clash",
 				role: "status",
-				children: [
-					"A session called “",
-					name.title,
-					"” already exists — give this one another name under More options, or clear it to name it from the task."
-				]
+				children: nameClashText(name.title)
 			}),
 			othersLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "nf-opt-sub nf-branch-line nf-others",
@@ -114144,6 +114475,18 @@ function LaunchFold({ launchOpen, setLaunchOpen, launchArgs, setLaunchArgs, prog
 	});
 }
 //#endregion
+//#region src/components/dialogs/newSession/folderErrors.ts
+function osErrorText(msg) {
+	return msg.replace(/^could not create folder:\s*/i, "").replace(/^\[Errno \d+\]\s*/i, "").replace(/:\s*'[^']*'\s*$/, "").trim();
+}
+function folderErrorText(msg, from) {
+	if (/permission denied/i.test(msg)) return from === "list" ? "You don't have permission to open that folder." : "You don't have permission to create a folder there — pick another place.";
+	if (/not a directory/i.test(msg)) return from === "field" ? "The folder it would go in doesn't exist either — use Browse… to pick a place." : from === "browser" ? "The folder it would go in doesn't exist anymore — pick another place." : "That folder doesn't exist anymore — pick another one.";
+	if (/already exists/i.test(msg)) return from === "field" ? "Something is already there — pick it with Browse…." : "Something called that is already here — give it another name.";
+	if (/must not contain a path/i.test(msg)) return "Use a single folder name, without / or \\.";
+	return (from === "list" ? "Couldn't open it: " : "Couldn't create it: ") + osErrorText(msg);
+}
+//#endregion
 //#region src/components/dialogs/NewSessionDialog.tsx
 function NewSessionDialog() {
 	const open = useUi((s) => s.openDialog === "new-session");
@@ -114717,7 +115060,7 @@ function NewSessionDialog() {
 	const folderMissing = folderCheck?.asked === folderPath && !!folderCheck?.missing;
 	const missingLabel = homeRelative(folderCheck?.asked === folderPath && folderCheck?.resolved || folderPath, homePath);
 	const askFolder = newFolderAsk && !newFolderOk ? newFolderAsk : folderMissing ? missingLabel : "";
-	const startBlocked = askFolder && !runMode ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists." : "";
+	const startBlocked = runMode ? "" : askFolder ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists." : planned.clash ? nameClashText(planned.title) : "";
 	const createFolder = async () => {
 		const full = folderCheck?.asked === folderPath && folderCheck?.resolved || folderPath;
 		const { parent, name } = splitPath(full.trim());
@@ -114741,8 +115084,7 @@ function NewSessionDialog() {
 			setPlanError("");
 			(page === 2 ? repoRef.current : describeRef.current)?.focus({ preventScroll: true });
 		} catch (err) {
-			const msg = errMsg(err);
-			setMkError(/not a directory/i.test(msg) ? "The folder it would go in doesn't exist either — use Browse… to pick a place." : /already exists/i.test(msg) ? "Something is already there — pick it with Browse…." : "Couldn't create it: " + msg);
+			setMkError(folderErrorText(errMsg(err), "field"));
 		} finally {
 			setMkBusy(false);
 		}
@@ -115214,6 +115556,7 @@ function NewSessionDialog() {
 										id: "new-title",
 										ref: titleRef,
 										autoComplete: "off",
+										maxLength: MAX_TITLE_LEN,
 										placeholder: planned.from === "none" ? "named from the task" : planned.title,
 										value: title,
 										onChange: (e) => setTitle(e.target.value)
@@ -134637,6 +134980,7 @@ function SettingsSyncRows(props) {
 //#region src/components/settings/screens/Doctor.tsx
 function Doctor(_) {
 	const [reprobeKey, setReprobeKey] = (0, import_react.useState)(0);
+	const [checking, setChecking] = (0, import_react.useState)(false);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -134644,7 +134988,10 @@ function Doctor(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "settings-doctor",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, { reprobeKey })
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, {
+				reprobeKey,
+				onChecking: setChecking
+			})
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row",
@@ -134654,8 +135001,9 @@ function Doctor(_) {
 					type: "button",
 					id: "settings-doctor-recheck",
 					className: "test-btn",
+					disabled: checking,
 					onClick: () => setReprobeKey((k) => k + 1),
-					children: "Re-check"
+					children: checking ? "Checking…" : "Re-check"
 				})
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
@@ -136692,16 +137040,39 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 									onChange: changeMode
 								})
 							]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							id: "settings-screens",
 							onChangeCapture: (e) => noteTouched(e.target),
 							onBlurCapture: (e) => noteTouched(e.target),
-							children: screens.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
-								className: "set-screen" + (screen === s.key ? " active" : ""),
-								"data-screen": s.key,
-								"data-caps-need": s.key === "workspace" ? "git" : void 0,
-								children: screen === s.key && s.el(props)
-							}, s.key))
+							children: [
+								model.status === "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "set-hint",
+									id: "settings-load-state",
+									role: "status",
+									children: "Loading settings…"
+								}),
+								model.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "set-hint",
+									id: "settings-load-state",
+									role: "alert",
+									children: [
+										"Couldn't read settings.",
+										" ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "linklike",
+											onClick: () => void model.reload(),
+											children: "Retry"
+										})
+									]
+								}),
+								model.status === "ready" && screens.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
+									className: "set-screen" + (screen === s.key ? " active" : ""),
+									"data-screen": s.key,
+									"data-caps-need": s.key === "workspace" ? "git" : void 0,
+									children: screen === s.key && s.el(props)
+								}, s.key))
+							]
 						})]
 					})]
 				})
@@ -137175,13 +137546,28 @@ var PAGES = [{
 	label: "Pane header",
 	intro: "Choose the tabs and buttons along the top of every session window. The rest stay in its ⋯ menu."
 }];
+function resetLayout(page, get = useUi.getState) {
+	const ui = get();
+	if (page === "pane") {
+		const prev = ui.paneHeader;
+		ui.setPaneHeader(null);
+		return () => get().setPaneHeader(prev);
+	}
+	const hidden = new Set(ui.hiddenBars);
+	const { barsExplicit, barOrder, showFilter } = ui;
+	ui.resetSidebarBars();
+	return () => {
+		get().setBarOrder(barOrder);
+		get().setShowFilter(showFilter);
+		if (!barsExplicit) return;
+		for (const k of /* @__PURE__ */ new Set([...hidden, ...get().hiddenBars])) if (hidden.has(k) !== get().hiddenBars.has(k)) get().toggleBarHidden(k);
+	};
+}
 function CustomizeDialog() {
 	const open = useUi((s) => s.openDialog === "customize");
 	const closeDialog = useUi((s) => s.closeDialog);
 	const page = useUi((s) => s.customizePage);
 	const setPage = useUi((s) => s.setCustomizePage);
-	const resetSidebarBars = useUi((s) => s.resetSidebarBars);
-	const setPaneHeader = useUi((s) => s.setPaneHeader);
 	const paneCustomized = useUi((s) => s.paneHeader !== null);
 	const barsCustomized = useUi((s) => s.barsExplicit || s.barOrder.length > 0 || !s.showFilter);
 	if (!open) return null;
@@ -137234,7 +137620,14 @@ function CustomizeDialog() {
 						className: "linklike",
 						disabled: !canReset,
 						title: canReset ? "Back to what a fresh install shows" : "Already the default",
-						onClick: () => cur.id === "pane" ? setPaneHeader(null) : resetSidebarBars(),
+						onClick: () => {
+							const undo = resetLayout(cur.id);
+							toast(cur.id === "pane" ? "Pane header reset to default" : "Sidebar reset to default", { action: {
+								label: "Undo",
+								ariaLabel: "Undo the reset",
+								onClick: undo
+							} });
+						},
 						children: "Reset to default"
 					})]
 				}),
@@ -137578,6 +137971,7 @@ function CommitDialog() {
 		}
 	}
 	async function submitCommit() {
+		if (writing) return;
 		const title = target;
 		const m = msg.trim();
 		if (!m) {
@@ -137688,6 +138082,8 @@ function CommitDialog() {
 						children: "Cancel"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "submit",
+						disabled: writing,
+						title: writing ? "Wait for the message being written" : void 0,
 						children: submitLabel
 					})]
 				}),
@@ -138199,32 +138595,43 @@ function MakePrDialog() {
 	const [value, setValue] = (0, import_react.useState)("");
 	const [info, setInfo] = (0, import_react.useState)(null);
 	const [loading, setLoading] = (0, import_react.useState)(false);
+	const [listFailed, setListFailed] = (0, import_react.useState)(false);
+	const loadSeq = (0, import_react.useRef)(0);
 	const [showList, setShowList] = (0, import_react.useState)(false);
 	const [active, setActive] = (0, import_react.useState)(0);
 	const inputRef = (0, import_react.useRef)(null);
 	const repo = (0, import_react.useMemo)(() => {
 		return (queryClient.getQueryData(["instances"]) || []).find((i) => i.title === target) || null;
 	}, [target])?.repo || "";
+	function loadBranches(title) {
+		const seq = ++loadSeq.current;
+		const alive = () => seq === loadSeq.current;
+		setLoading(true);
+		setListFailed(false);
+		instApi(title, "/branches").then((data) => {
+			if (!alive()) return;
+			setInfo(data);
+			setValue((prev) => prev || data.default || "");
+		}).catch(() => {
+			if (!alive()) return;
+			setInfo({
+				branches: [],
+				current: "",
+				default: ""
+			});
+			setListFailed(true);
+		}).finally(() => alive() && setLoading(false));
+	}
 	(0, import_react.useEffect)(() => {
 		if (!open || !target) return;
-		let alive = true;
 		setInfo(null);
 		setShowList(false);
 		setActive(0);
 		setValue(repo ? prBaseByRepo[repo] || "" : "");
-		setLoading(true);
-		instApi(target, "/branches").then((data) => {
-			if (!alive) return;
-			setInfo(data);
-			setValue((prev) => prev || data.default || "");
-		}).catch(() => alive && setInfo({
-			branches: [],
-			current: "",
-			default: ""
-		})).finally(() => alive && setLoading(false));
+		loadBranches(target);
 		setTimeout(() => inputRef.current?.focus(), 0);
 		return () => {
-			alive = false;
+			loadSeq.current++;
 		};
 	}, [
 		open,
@@ -138335,6 +138742,21 @@ function MakePrDialog() {
 						})]
 					})
 				] }),
+				listFailed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					id: "make-pr-branches-failed",
+					role: "alert",
+					children: [
+						"Couldn't load the branch list. You can still type a branch name.",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => loadBranches(target),
+							children: "Retry"
+						})
+					]
+				}),
 				risk && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "set-hint",
 					id: "make-pr-risk",
@@ -141487,6 +141909,7 @@ function TodoReminder() {
 		id: "todo-reminder",
 		role: "dialog",
 		"aria-label": "Reminder",
+		keepFocus: true,
 		onClose: () => setHiddenUntil(Date.now() + CLOSE_HIDE_MS),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "todo-reminder",
@@ -142722,7 +143145,7 @@ function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick, f
 		} catch (err) {
 			if (quiet) return false;
 			leaving.current = null;
-			setError(err.message);
+			setError(folderErrorText(err.message, "list"));
 			return false;
 		}
 	}, [device]);
@@ -142768,7 +143191,7 @@ function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick, f
 			setNewFolder(null);
 			onPick(r.path);
 		} catch (err) {
-			setError(err.message);
+			setError(folderErrorText(err.message, "browser"));
 		} finally {
 			setMaking(false);
 		}
@@ -151347,9 +151770,10 @@ function skyEmptyShows(o) {
 	return o.blank && o.waiting === 0;
 }
 var SKY_EMPTY_TITLE = "Nothing in the Sky yet";
+var ADD_TICKET_SOURCE = "Add a ticket source";
 function SkyEmpty({ blank, className, children, newSession = false }) {
 	const { waiting } = useWaiting(false);
-	const open = (d) => useUi.getState().openDialogFor(d);
+	const open = (d, target) => useUi.getState().openDialogFor(d, target);
 	if (!skyEmptyShows({
 		blank,
 		waiting: waiting.length
@@ -151396,8 +151820,8 @@ function SkyEmpty({ blank, className, children, newSession = false }) {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn sky-empty-intake",
-					onClick: () => open("intake"),
-					children: "Connect a source in Intake"
+					onClick: () => open("intake", "tickets"),
+					children: ADD_TICKET_SOURCE
 				})]
 			})
 		]
