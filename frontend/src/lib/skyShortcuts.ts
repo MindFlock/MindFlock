@@ -65,6 +65,8 @@ export const SKY_SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ["Ctrl", "N"], what: "A new session on the sky (Alt+N in a browser tab)" },
       { keys: ["double-click"], what: "On empty sky: a new session there" },
       { keys: ["Ctrl", "Y"], what: "Switch between the grid and the sky" },
+      { keys: ["Ctrl", "K", "N"], what: "Next session that needs you (K first, then N)" },
+      { keys: ["Alt", "V"], what: "Next Verify that needs you" },
     ],
   },
   {
