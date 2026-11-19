@@ -58,6 +58,7 @@ import { sayOnSend } from "../../lib/voiceDesktop";
 import { useRun } from "../../state/runs";
 import { RunLeadPanel } from "./RunLeadPanel";
 import { OrderDiagram } from "./OrderDiagram";
+import { composerKey } from "./QueueTab";
 import { fenceChips, orderWorthShowing } from "../../lib/order";
 import { onSessionRenamed, renameMapKey } from "../../lib/renameSession";
 
@@ -80,6 +81,14 @@ onSessionRenamed((from, to) => {
 });
 
 const nameOf = (t: string) => displayName(t);
+
+/** What a failed load says. "failed": nothing to show yet — the error with a
+ * Retry. "stale": a refresh failed under messages already on screen — they
+ * stay, with Map's "may be out of date · Retry" note. null: nothing to say. */
+export function threadLoadNote(hasData: boolean, loadErr: string): "failed" | "stale" | null {
+  if (!loadErr) return null;
+  return hasData ? "stale" : "failed";
+}
 
 function Spans({ text }: { text: string }) {
   return (
@@ -344,6 +353,7 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
   const summary = headerSummary(workers, finished.length);
   const progress = progressOf(workers, finished);
   const entries = logEntries(data?.items ?? [], filter);
+  const loadNote = threadLoadNote(!!data, loadErr);
   // Finished workers count: an orchestrator whose workers are all done still
   // shows them (and its progress), not "No workers yet".
   const hasWorkers = workers.length > 0 || finished.length > 0;
@@ -522,15 +532,28 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
                 <LogCard key={e.key} entry={e} />
               ))}
             </div>
+          ) : loadNote === "failed" ? (
+            <p className="thread-empty" role="alert">
+              Couldn't load the thread: {loadErr}{" "}
+              <button type="button" className="th-retry" onClick={() => void reload()}>
+                Retry
+              </button>
+            </p>
           ) : (
             <p className="thread-empty">
-              {loadErr
-                ? "Couldn't load the thread: " + loadErr
-                : !data
-                  ? "Loading…"
-                  : filter === "reports"
-                    ? "No reports yet."
-                    : "Nothing between sessions yet — spawns, messages and reports show up here."}
+              {!data
+                ? "Loading…"
+                : filter === "reports"
+                  ? "No reports yet."
+                  : "Nothing between sessions yet — spawns, messages and reports show up here."}
+            </p>
+          )}
+          {loadNote === "stale" && (
+            <p className="th-stale" role="status" title={loadErr}>
+              thread may be out of date ·{" "}
+              <button type="button" className="th-retry" onClick={() => void reload()}>
+                Retry
+              </button>
             </p>
           )}
         </section>
@@ -562,6 +585,10 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
             if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
               e.preventDefault();
               void send("now");
+            } else if (composerKey(e) === "add") {
+              // Alt+Enter: "When idle", as it adds to the queue in the Queue tab.
+              e.preventDefault();
+              void send("idle");
             }
           }}
         />
@@ -571,14 +598,14 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
               ? (plan.later.length === 1
                   ? nameOf(plan.later[0]) + " is on a prompt"
                   : plan.later.length + " are on a prompt") +
-                " — queued for when it's free · Ctrl+Enter"
-              : "Typed in as you, like the Queue tab · Ctrl+Enter sends now"}
+                " — queued for when it's free · Ctrl+Enter · Alt+Enter when idle"
+              : "Typed in as you, like the Queue tab · Ctrl+Enter sends now · Alt+Enter when idle"}
           </span>
           <button
             type="button"
             className="th-btn th-idle"
             disabled={sending || !draft.trim()}
-            title="Queue it — it runs when the session is next idle (the Queue tab's queue)"
+            title="Queue it — it runs when the session is next idle (the Queue tab's queue) (Alt+Enter)"
             onClick={() => void send("idle")}
           >
             When idle

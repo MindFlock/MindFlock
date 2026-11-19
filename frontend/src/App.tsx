@@ -66,7 +66,12 @@ const NARROW_PX = 760;
 export default function App() {
   const { data: config } = useConfig();
   const { data: instances } = useInstances();
-  const ui = useUi();
+  // Field selectors, not a bare useUi(): a bare subscription re-rendered the
+  // whole app (and every child that is not memoized) on every store write —
+  // a keystroke in the sidebar filter, a tab switch, a Thread "seen" mark.
+  const focused = useUi((s) => s.focused);
+  const sidebarHidden = useUi((s) => s.sidebarHidden);
+  const sidebarWidth = useUi((s) => s.sidebarWidth);
   useDoctorAutoShow();
   // Intake's lists are upstream fan-outs, so they have to be fetched before the
   // dialog exists or the first thing it shows is a spinner. Gated on a
@@ -110,7 +115,7 @@ export default function App() {
   // owner's rail shows a pill with the guest's name on that row and can
   // follow it. Never from the owner's own browser, and not before the guest
   // has said who they are (GuestNameDialog): the pill carries their name.
-  const focusedTitle = ui.focused || "";
+  const focusedTitle = focused || "";
   const guestNamed = !!config?.guest?.name;
   useEffect(() => {
     if (!isGuest || !guestNamed || !focusedTitle) return;
@@ -132,10 +137,10 @@ export default function App() {
   // Sidebar visibility class (CSS drops the sidebar column on <body>); let
   // the grid resize, then refit terminals.
   useEffect(() => {
-    document.body.classList.toggle("sidebar-collapsed", ui.sidebarHidden);
+    document.body.classList.toggle("sidebar-collapsed", sidebarHidden);
     const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 60);
     return () => clearTimeout(t);
-  }, [ui.sidebarHidden]);
+  }, [sidebarHidden]);
 
   // A phone-narrow window: the sidebar becomes an overlay that starts closed
   // (▯ in the top bar opens it), "Auto" view shows one pane, and picking a
@@ -154,16 +159,16 @@ export default function App() {
   }, []);
   useEffect(() => {
     const s = useUi.getState();
-    if (s.narrow && !s.sidebarHidden && ui.focused) s.toggleSidebar();
+    if (s.narrow && !s.sidebarHidden && focused) s.toggleSidebar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ui.focused]);
+  }, [focused]);
 
   // Sidebar width (dragged from its right edge) drives the body grid column.
   // SidebarResizer writes the var directly while dragging; this is what makes
   // the committed width survive a reload.
   useEffect(() => {
-    document.body.style.setProperty("--sidebar-w", ui.sidebarWidth + "px");
-  }, [ui.sidebarWidth]);
+    document.body.style.setProperty("--sidebar-w", sidebarWidth + "px");
+  }, [sidebarWidth]);
 
   // Feed the activity debounce on every poll, and retire the post-Make-PR loop
   // pin once the real stage has left "pr". Without the reconcile the pin is

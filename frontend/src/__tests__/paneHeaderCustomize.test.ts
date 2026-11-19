@@ -316,7 +316,11 @@ describe("words until they don't fit, then icons", () => {
 
   it("the pane measures before paint, on resize, and when its contents change", () => {
     const pane = code("components/grid/Pane.tsx");
-    expect(pane).toContain("useLayoutEffect(measureFit);");
+    // Before paint, but only when what the header holds changed (its fit
+    // key, icons state or text) — not on every render of every pane.
+    expect(pane).toContain("const sig = headMeasureSig(el);");
+    expect(pane).toContain("if (sig === measuredSig.current) return;");
+    expect(pane).not.toContain("useLayoutEffect(measureFit);");
     expect(pane).toContain("const ro = new ResizeObserver(() => measureFit());");
     expect(pane).toContain("data-fit-key={fitKeyNow}");
     expect(pane).toContain('className={"pane-head pane-head-fit" + (icons ? " head-icons" : "")}');

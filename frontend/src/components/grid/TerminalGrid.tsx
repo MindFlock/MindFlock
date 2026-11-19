@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConfig, useInstances } from "../../state/queries";
+import { useShallow } from "zustand/react/shallow";
 import { effectiveViewMode, windowKey, useUi } from "../../state/store";
 import { releaseTerms } from "../../lib/terminals";
 import { dropActivity } from "../../lib/stage";
@@ -54,7 +55,19 @@ export interface DragCtx {
 export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[] }) {
   const { data: instances, isSuccess } = useInstances();
   const { data: config } = useConfig();
-  const ui = useUi();
+  // Only the layout fields the grid reads: a bare useUi() re-rendered the grid
+  // (and so every pane) on every store write — a filter keystroke, a tab switch.
+  const ui = useUi(
+    useShallow((s) => ({
+      hidden: s.hidden,
+      viewMode: s.viewMode,
+      narrow: s.narrow,
+      mru: s.mru,
+      order: s.order,
+      gridRows: s.gridRows,
+      setGridRows: s.setGridRows,
+    }))
+  );
   const [drag, setDrag] = useState<{ dragTitle: string; targetTitle?: string; side?: DropSide } | null>(null);
 
   // A verify run never gets an ordinary pane. It is a real session (it needs a

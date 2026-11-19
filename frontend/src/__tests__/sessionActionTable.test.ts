@@ -50,6 +50,8 @@ describe("the chords are table rows", () => {
       b: "Branch session",
       h: "Hide / show window",
       m: "Code map",
+      g: "Diff — what this session changed",
+      q: "Queue prompt…",
       s: "Message…",
       f: "Goes as far as…",
       t: "Thread — workers and messages",

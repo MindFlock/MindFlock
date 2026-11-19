@@ -30,6 +30,7 @@ import { isPeerRow } from "../../lib/peerSessions";
 import { windowName } from "../../lib/windowName";
 import { useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
+import { pollWhileVisible } from "../grid/visiblePoll";
 import "./ChatPanel.css";
 
 export function ChatPanel() {
@@ -65,8 +66,8 @@ export function ChatPanel() {
   const any = state.windows.length > 0;
   useEffect(() => {
     if (!any) return;
-    const t = setInterval(pollChats, CHAT_POLL_MS);
-    return () => clearInterval(t);
+    // Not while the page is hidden; once on coming back instead.
+    return pollWhileVisible(pollChats, CHAT_POLL_MS);
   }, [any]);
 
   const peopleOn = (title: string) => Object.values(focus).filter((f) => f.title === title);

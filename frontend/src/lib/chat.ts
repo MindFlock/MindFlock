@@ -297,7 +297,8 @@ export function installChatEvents(guest: boolean): boolean {
   return true;
 }
 
-/** Re-read every window (the 15 s fallback). */
+/** Re-read every window (the 15 s fallback; ChatPanel skips it while the
+ * page is hidden and runs it once on coming back). */
 export function pollChats(): void {
   for (const w of state.windows) void loadChat(w.title, true);
 }

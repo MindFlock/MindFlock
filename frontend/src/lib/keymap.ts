@@ -457,6 +457,11 @@ export function chordKeyFor(id: string): string {
   return String(_keyOv.chords[id] || id).toLowerCase();
 }
 
+/** A chord as a tooltip says it, under the user's rebinding: "Ctrl+K M". */
+export function chordLabel(id: string): string {
+  return "Ctrl+K " + chordKeyFor(id).toUpperCase();
+}
+
 /** The chord whose user-chosen key took `id`'s DEFAULT letter, or null.
  * A chord added later (S, F, T) can find its letter already given to
  * another action by a rebinding made before it existed: the user's own

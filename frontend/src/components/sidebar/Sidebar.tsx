@@ -9,6 +9,7 @@ import { MemoryWaitBar } from "./MemoryWaitBar";
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { VIEWS, VIEW_BLURB, setView, viewLabel } from "../../lib/viewMode";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useShallow } from "zustand/react/shallow";
 import type { Instance, RunTask } from "../../api/types";
 import { api } from "../../api/client";
 import { refreshInstances, useConfig, useDevices, useInstances } from "../../state/queries";
@@ -91,7 +92,10 @@ const VIEW_MODES: ViewMode[] = ["auto", "1" as ViewMode, "2", "4", "9"];
  * nothing with one or two panes — unless one was already picked; the toggle
  * always shows, so the sky is never out of reach. */
 export function ViewRow({ calm }: { calm: boolean }) {
-  const ui = useUi();
+  // Only the fields it reads: a bare useUi() re-rendered on every store write.
+  const ui = useUi(
+    useShallow((s) => ({ view: s.view, viewMode: s.viewMode, setViewMode: s.setViewMode }))
+  );
   // The one Needs you list (lib/needsYou): the bell, the Sky strip and the
   // top bar count the same rows.
   const perch = needsYouBadge(useNeedsYou());
@@ -175,7 +179,39 @@ export function Sidebar({ onOpenChat }: Props) {
   instancesRef.current = instances;
   useEffect(() => installPeerFocus(() => instancesRef.current), []);
   const { data: devices } = useDevices();
-  const ui = useUi();
+  // Only the fields the rail reads (a bare useUi() also re-rendered it on
+  // tab switches, Thread "seen" marks and every other unrelated store write).
+  // Keep this list in step with the `ui.` reads below.
+  const ui = useUi(
+    useShallow((s) => ({
+      aliases: s.aliases,
+      barOrder: s.barOrder,
+      barsExplicit: s.barsExplicit,
+      collapsedDevices: s.collapsedDevices,
+      collapsedFamilies: s.collapsedFamilies,
+      collapsedRuns: s.collapsedRuns,
+      extPanes: s.extPanes,
+      filter: s.filter,
+      filterPeek: s.filterPeek,
+      focused: s.focused,
+      gridRows: s.gridRows,
+      hidden: s.hidden,
+      hiddenBars: s.hiddenBars,
+      mru: s.mru,
+      narrow: s.narrow,
+      openDialogFor: s.openDialogFor,
+      order: s.order,
+      railPulse: s.railPulse,
+      setBarOrder: s.setBarOrder,
+      setOrder: s.setOrder,
+      showFilter: s.showFilter,
+      specialOpen: s.specialOpen,
+      toggleDeviceCollapsed: s.toggleDeviceCollapsed,
+      toggleRunCollapsed: s.toggleRunCollapsed,
+      verifyPanes: s.verifyPanes,
+      viewMode: s.viewMode,
+    }))
+  );
   const doctorWarn = useDoctorWarn();
   const { data: config } = useConfig();
   const { data: setup } = useSetup();

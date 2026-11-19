@@ -184,7 +184,15 @@ export const SESSION_ACTIONS = {
     enabled: () => true,
     run: (t) => useUi.getState().threadOpen(t, { composeTo: t }),
   },
-  queue: { label: "Queue prompt…", note: "runs when idle", enabled: () => true, run: (t) => focusQueueInput(t) },
+  // Opens the Queue tab with its box focused (Ctrl+K Q, like Map's M).
+  queue: {
+    label: "Queue prompt…",
+    keys: "Ctrl+K Q",
+    chord: "q",
+    note: "runs when idle",
+    enabled: () => true,
+    run: (t) => focusQueueInput(t),
+  },
   // Opens the pane's ⏩ picker — the ONE fast-track control, never a second
   // copy of its choices; each item acts at once, nothing is pasted.
   fastTrack: {
@@ -297,6 +305,16 @@ export const SESSION_ACTIONS = {
     enabled: git,
     run: (t) => useUi.getState().openMap(t),
   },
+  // The Diff tab, through store.openDiff (no file: the whole diff). G, as
+  // D is Duplicate.
+  diff: {
+    label: "Diff",
+    keys: "Ctrl+K G",
+    chord: "g",
+    note: "what this session changed",
+    enabled: git,
+    run: (t) => useUi.getState().openDiff(t),
+  },
   // Pause and Close both stop the agent; WHERE the session goes is the
   // difference, so that is what each one says. A shared folder can't be
   // paused (its sandbox would be torn down), only resumed.
@@ -366,6 +384,8 @@ export const CHORD_ACTIONS: SessionActionId[] = [
   "branch",
   "hide",
   "map",
+  "diff",
+  "queue",
   "message",
   "fastTrack",
   "thread",
@@ -376,7 +396,7 @@ export const CHORD_ACTIONS: SessionActionId[] = [
 export function chordDesc(id: SessionActionId): string {
   if (id === "ide") return "Open in your code editor";
   if (id === "hide") return "Hide / show window";
-  if (id === "thread") return "Thread — " + actionNote(id, {} as ActionCtx);
+  if (id === "thread" || id === "diff") return sessionAction(id).label + " — " + actionNote(id, {} as ActionCtx);
   if (id === "flock") return "Workers on every prompt";
   const l = sessionAction(id).label;
   return typeof l === "string" ? l : id;

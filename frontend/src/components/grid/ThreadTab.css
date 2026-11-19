@@ -456,6 +456,25 @@
   font-size: 12.5px;
 }
 
+/* A failed load's Retry, and the "may be out of date" note a failed refresh
+   leaves under messages already shown (the Map's cm-note-stale wording). */
+.th-stale {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.th-retry {
+  font: inherit;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+}
+.th-retry:hover {
+  text-decoration: underline;
+}
+
 /* --- the composer ------------------------------------------------------------ */
 .thread-compose {
   flex: none;
