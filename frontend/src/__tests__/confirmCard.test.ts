@@ -2,7 +2,7 @@
  * like the row menu's confirm strip:
  *
  *  - it takes focus on open, on Cancel (Enter never destroys); an error card
- *    with no Cancel focuses its primary; one with no buttons leaves focus be;
+ *    never takes focus (it can arrive while someone types);
  *  - Escape closes it as Cancel, and stops there (nothing under it hears it);
  *  - a destructive answer (Delete) is drawn red (`danger`), not as the
  *    accent primary, and every Delete that asks on the card passes it.
@@ -146,11 +146,9 @@ describe("the question card takes the keyboard", () => {
     expect(cards()).toHaveLength(1);
   });
 
-  it("an error card with buttons focuses its primary; one without buttons leaves focus alone", () => {
+  it("an error card never takes focus (it can land mid-typing; Enter must not press its primary)", () => {
     errorPop("Push blocked", "x", [{ label: "Open map", run: vi.fn() }, { label: "Push anyway", primary: true, run: vi.fn() }]);
-    const [, anyway] = buttons(cards()[0]);
-    expect(focused).toBe(anyway);
-    focused = null;
+    expect(focused).toBeNull();
     errorPop("Delete failed", "y");
     expect(focused).toBeNull();
     // Escape still closes a plain error card.
