@@ -31,8 +31,13 @@
  *  - a question in plain words: an answer box (Enter sends with /send
  *    {text, dialog_safe: true}; Shift+Enter is a new line) and "Open the pane ↗".
  * "Later" (Esc) puts it off: a question is dismissed on the server, a dialog
- * snoozed here until its id changes. After an answer it steps to the next
- * one still asking, or closes.
+ * snoozed here until its id changes. Once the server took an answer it
+ * steps to the next one still asking, or closes — at once, not when the
+ * session's row catches up: a dialog's press or a typed reply as soon as the
+ * POST succeeds; Claude's question prompt once its LAST answer went through
+ * (`selectFinal`; the steps before it stay in place). The row still saying
+ * it asks for a few seconds does not bring it back (`ANSWERED_QUIET_MS`); a
+ * new question from the session does. A failed answer stays, with why.
  *
  * The mic (lib/askVoice): its button — and the Talk hotkey, and the top-bar
  * mic — listen for THIS session's answer while the pop-up is up; with "Read
@@ -251,7 +256,7 @@ export function AskDialog() {
     [instances, outbox, tick]
   );
   // A select flow's step posted or read: re-render (it holds the pop-up open).
-  useSyncExternalStore(selectFlows.subscribe, () => selectFlows.get(target || ""), () => null);
+  const targetFlow = useSyncExternalStore(selectFlows.subscribe, () => selectFlows.get(target || ""), () => null);
   // Not memoized: the memory changes outside React (a Reply forgets, an
   // answer remembers); the effects below key on `queueKey`.
   const queue = cardQueue(all, askMemory);
@@ -339,6 +344,19 @@ export function AskDialog() {
   const current = open && target ? queue.find((q) => q.title === target) || (flowing ? flowItem(target) : null) : null;
   if (current) shown.current = queue.map((q) => q.title);
   const currentKey = current?.key || "";
+  const currentRef = useRef(current);
+  currentRef.current = current;
+  // Claude's question prompt: its LAST answer went through (`selectFinal`) —
+  // answered now, not when the read after it or the row catches up; that
+  // read carries on without the pop-up (a prompt still up comes back by its
+  // row once ANSWERED_QUIET_MS is over).
+  const sentFlow = open && !!target && !!targetFlow?.sent && !targetFlow.ended ? targetFlow : null;
+  useEffect(() => {
+    if (!target || !sentFlow) return;
+    const id = sentFlow.dialog.id;
+    askMemory.handle(currentRef.current || flowItem(target), "answered", id);
+    bump();
+  }, [target, sentFlow, bump]);
   useEffect(() => {
     if (!open || !target || currentKey) return;
     // Answered, put off, or answered elsewhere: the next one, or close.
@@ -408,9 +426,9 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
   const isDialog = item.kind === "dialog";
   const strip = useAnswerStrip(title, isDialog, {
     activity: item.key,
-    onAnswered: (_key, kind) => {
+    onAnswered: (_key, kind, answered) => {
       if (kind === "already") toast("Already answered — " + name);
-      onDone("answered", strip.state.dialog?.id);
+      onDone("answered", answered?.id || strip.state.dialog?.id);
       if (kind === "no") {
         // "No…": the agent now wants to hear what to do instead — say it in
         // its pane (the keyboard goes there), with no pop-up in the way.
@@ -435,6 +453,9 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
   // A hand-off reads the strip again: until then its select read is stale.
   const handingOff = flow?.ended === "handoff" && isSelect(stripD);
   const d = sel ? sel.dialog : handingOff ? null : stripD;
+  // Every dialog shown here (each step has its own id): a row a poll behind
+  // still showing one of them after the answer does not bring the pop-up back.
+  useEffect(() => askMemory.saw(title, d?.id), [title, d?.id]);
   const ended = flow?.ended || "";
   useEffect(() => {
     if (ended === "done") onDone("answered", selectFlows.get(title)?.dialog.id);
@@ -705,7 +726,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
 
       {sel && d && isSelect(d) && (
         <SelectView
-          flow={sel.ended ? { ...sel, busy: true } : sel}
+          flow={sel.ended || sel.sent ? { ...sel, busy: true } : sel}
           primaryRef={primaryBtn}
           fieldRef={selField}
           onAct={(a) => void act(a)}

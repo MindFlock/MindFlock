@@ -41848,26 +41848,49 @@ function askQueue(instances, waiting, events, opts = {}) {
 	}
 	return [...out.values()].sort((a, b) => a.ts - b.ts || a.title.localeCompare(b.title));
 }
+var ANSWERED_QUIET_MS = 12e3;
 var AskMemory = class {
 	done = /* @__PURE__ */ new Map();
 	snoozedDialog = /* @__PURE__ */ new Map();
 	asked = /* @__PURE__ */ new Set();
-	handle(item, _how = "answered", dialogId) {
+	seen = /* @__PURE__ */ new Map();
+	answered = /* @__PURE__ */ new Map();
+	handle(item, _how = "answered", dialogId, now = Date.now()) {
+		if (item.kind === "question") this.asked.delete(item.title);
+		const id = dialogId || item.dialogId;
+		if (_how === "answered") {
+			const ids = new Set(this.seen.get(item.title) || []);
+			if (item.dialogId) ids.add(item.dialogId);
+			if (dialogId) ids.add(dialogId);
+			this.answered.set(item.title, {
+				at: now,
+				key: item.key,
+				ids
+			});
+			return;
+		}
 		let s = this.done.get(item.title);
 		if (!s) this.done.set(item.title, s = /* @__PURE__ */ new Set());
 		s.add(item.key);
-		if (item.kind === "question") this.asked.delete(item.title);
-		const id = dialogId || item.dialogId;
 		if (_how === "later" && item.kind === "dialog" && id) this.snoozedDialog.set(item.title, id);
 	}
-	handled(item) {
+	handled(item, now = Date.now()) {
 		if (this.done.get(item.title)?.has(item.key)) return true;
+		const a = this.answered.get(item.title);
+		if (a && now - a.at < ANSWERED_QUIET_MS && answeredCovers(a, item)) return true;
 		const snoozed = this.snoozedDialog.get(item.title);
 		return item.kind === "dialog" && !!snoozed && !!item.dialogId && snoozed === item.dialogId;
+	}
+	saw(title, dialogId) {
+		if (!title || !dialogId) return;
+		let s = this.seen.get(title);
+		if (!s) this.seen.set(title, s = /* @__PURE__ */ new Set());
+		s.add(dialogId);
 	}
 	forget(title) {
 		this.done.delete(title);
 		this.snoozedDialog.delete(title);
+		this.answered.delete(title);
 	}
 	invite(title) {
 		this.asked.add(title);
@@ -41875,21 +41898,28 @@ var AskMemory = class {
 	invited(title) {
 		return this.asked.has(title);
 	}
-	prune(asking) {
+	prune(asking, now = Date.now()) {
 		for (const t of [...this.done.keys()]) if (!asking.has(t)) this.done.delete(t);
+		for (const t of [...this.seen.keys()]) if (!asking.has(t)) this.seen.delete(t);
+		for (const [t, a] of [...this.answered]) if (now - a.at >= ANSWERED_QUIET_MS) this.answered.delete(t);
 		for (const t of [...this.snoozedDialog.keys()]) if (!asking.has(t)) this.snoozedDialog.delete(t);
 		for (const t of [...this.asked]) if (!asking.has(t)) this.asked.delete(t);
 	}
 };
-function cardQueue(queue, memory) {
-	return queue.filter((i) => !memory.handled(i) && (i.kind === "dialog" || memory.invited(i.title)));
+function answeredCovers(a, item) {
+	if (item.key === a.key) return true;
+	if (item.kind !== "dialog") return false;
+	return item.parsed === false || !item.dialogId || a.ids.has(item.dialogId);
+}
+function cardQueue(queue, memory, now) {
+	return queue.filter((i) => !memory.handled(i, now) && (i.kind === "dialog" || memory.invited(i.title)));
 }
 var askMemory = new AskMemory();
 function askSuppressed(item, ctx) {
 	if (!ctx.popupOn) return "off";
 	if (item.kind === "question") return "prose";
 	if (!item.parsed) return "unparsed";
-	if (ctx.memory.handled(item)) return "handled";
+	if (ctx.memory.handled(item, ctx.now)) return "handled";
 	const now = ctx.now ?? Date.now();
 	if (ctx.focused === item.title && ctx.typedAt && now - ctx.typedAt < TYPED_RECENTLY_MS) return "typing";
 	if (ctx.otherDialog) return "other-dialog";
@@ -42097,6 +42127,7 @@ async function runSelect(d, posts, deps) {
 		}
 		first = false;
 	}
+	deps.sent?.();
 	await deps.sleep(SELECT_REDRAW_MS);
 	return {
 		kind: "done",
@@ -42125,6 +42156,18 @@ function selectKey(d, e, typing) {
 		key: o.key
 	};
 }
+function selectFinal(d, act) {
+	if (act.type === "cancel" || act.type === "chat") return true;
+	if (act.type === "prev") return false;
+	const stage = selectStage(d);
+	if (stage === "review") {
+		if (act.type !== "pick") return false;
+		const o = d.options.find((x) => x.key === act.key);
+		return o?.kind === "yes" || o?.kind === "no";
+	}
+	if ((d.step ?? 0) < (d.steps?.length ?? 0) - 1) return false;
+	return stage === "multi" ? act.type === "next" : act.type === "pick" || act.type === "text";
+}
 function fieldPhrase(text) {
 	const t = text.toLowerCase().replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
 	if (/^(type|write) (something|my own|an answer|it)\b/.test(t) || t === "other") return "text";
@@ -42142,7 +42185,8 @@ function fresh(d, now) {
 		busy: false,
 		note: "",
 		at: now,
-		ended: ""
+		ended: "",
+		sent: false
 	};
 }
 var SelectFlows = class {
@@ -42258,7 +42302,10 @@ var SelectFlows = class {
 			note: "",
 			at: now()
 		});
-		const out = await runSelect(f.dialog, posts, deps);
+		const out = await runSelect(f.dialog, posts, selectFinal(f.dialog, act) ? {
+			...deps,
+			sent: () => this.patch(title, { sent: true })
+		} : deps);
 		if (out.kind === "failed") {
 			const msg = out.error?.message || String(out.error || "error");
 			this.patch(title, {
@@ -42272,7 +42319,7 @@ var SelectFlows = class {
 	}
 	active(title, now = Date.now()) {
 		const f = this.map.get(title);
-		return !!f && !f.ended && (f.busy || now - f.at < SELECT_GRACE_MS);
+		return !!f && !f.ended && !f.sent && (f.busy || now - f.at < SELECT_GRACE_MS);
 	}
 	prune(asking) {
 		let gone = false;
@@ -42579,7 +42626,7 @@ function useAnswerStrip(title, waiting, opts = {}) {
 					dialog: out.dialog
 				});
 				if (opt.kind === "no") redirect.current?.();
-				answeredCb.current?.(key, opt.kind);
+				answeredCb.current?.(key, opt.kind, out.dialog);
 			} else if (out.kind === "already") {
 				dispatch({ type: "answered" });
 				answeredCb.current?.(key, "already");
@@ -138354,7 +138401,7 @@ function AskDialog() {
 		outbox,
 		tick
 	]);
-	(0, import_react.useSyncExternalStore)(selectFlows.subscribe, () => selectFlows.get(target || ""), () => null);
+	const targetFlow = (0, import_react.useSyncExternalStore)(selectFlows.subscribe, () => selectFlows.get(target || ""), () => null);
 	const queue = cardQueue(all, askMemory);
 	const queueKey = queue.map((q) => q.title + "|" + q.key).join("\n");
 	const queueRef = (0, import_react.useRef)(queue);
@@ -138435,6 +138482,19 @@ function AskDialog() {
 	const current = open && target ? queue.find((q) => q.title === target) || (flowing ? flowItem(target) : null) : null;
 	if (current) shown.current = queue.map((q) => q.title);
 	const currentKey = current?.key || "";
+	const currentRef = (0, import_react.useRef)(current);
+	currentRef.current = current;
+	const sentFlow = open && !!target && !!targetFlow?.sent && !targetFlow.ended ? targetFlow : null;
+	(0, import_react.useEffect)(() => {
+		if (!target || !sentFlow) return;
+		const id = sentFlow.dialog.id;
+		askMemory.handle(currentRef.current || flowItem(target), "answered", id);
+		bump();
+	}, [
+		target,
+		sentFlow,
+		bump
+	]);
 	(0, import_react.useEffect)(() => {
 		if (!open || !target || currentKey) return;
 		const next = nextAfter(queueRef.current, target, shown.current);
@@ -138494,9 +138554,9 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 	const isDialog = item.kind === "dialog";
 	const strip = useAnswerStrip(title, isDialog, {
 		activity: item.key,
-		onAnswered: (_key, kind) => {
+		onAnswered: (_key, kind, answered) => {
 			if (kind === "already") toast("Already answered — " + name);
-			onDone("answered", strip.state.dialog?.id);
+			onDone("answered", answered?.id || strip.state.dialog?.id);
 			if (kind === "no") {
 				autoOpenPausedUntil = Date.now() + TYPED_RECENTLY_MS;
 				selectSession(title);
@@ -138516,6 +138576,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 	const sel = flow && flow.ended !== "handoff" ? flow : null;
 	const handingOff = flow?.ended === "handoff" && isSelect(stripD);
 	const d = sel ? sel.dialog : handingOff ? null : stripD;
+	(0, import_react.useEffect)(() => askMemory.saw(title, d?.id), [title, d?.id]);
 	const ended = flow?.ended || "";
 	(0, import_react.useEffect)(() => {
 		if (ended === "done") onDone("answered", selectFlows.get(title)?.dialog.id);
@@ -138808,7 +138869,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 				children: d.command
 			}),
 			sel && d && isSelect(d) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SelectView, {
-				flow: sel.ended ? {
+				flow: sel.ended || sel.sent ? {
 					...sel,
 					busy: true
 				} : sel,

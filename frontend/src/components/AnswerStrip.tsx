@@ -366,9 +366,9 @@ export function useAnswerStrip(
     activity?: string;
     /** After a "No…" answer went through. */
     onRedirect?: () => void;
-    /** After any answer went through (or someone else's did): the key and
-     * the option's kind. */
-    onAnswered?: (key: string, kind: string) => void;
+    /** After any answer went through (or someone else's did): the key, the
+     * option's kind, and the dialog the key went into (when it was this one). */
+    onAnswered?: (key: string, kind: string, dialog?: Dialog) => void;
   } = {}
 ) {
   const { activity = "", onRedirect, onAnswered } = opts;
@@ -461,7 +461,7 @@ export function useAnswerStrip(
       if (out.kind === "answered") {
         dispatch({ type: "answered", dialog: out.dialog });
         if (opt.kind === "no") redirect.current?.();
-        answeredCb.current?.(key, opt.kind);
+        answeredCb.current?.(key, opt.kind, out.dialog);
       } else if (out.kind === "already") {
         // Someone got there first (the bell's strip, the orchestrator):
         // the prompt has its answer — this one is answered too.

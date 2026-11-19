@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.20] - 2026-11-19
+
 ### Added
 
 - **Select several stops of a chain with Ctrl/⌘+click and Shift+click**, in
@@ -18,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their order (one Undo; stops that ran or are running stay put). On the
   Route tab the selection bar (Group, Save to the shelf, Remove) sits docked
   at the top, and Delete on a stop there no longer closes the session.
+
+### Fixed
+
+- **The ask pop-up goes away as soon as your answer is in.** It closes (or
+  moves to the next question) the moment the server takes the answer: a
+  dialog's option or a typed reply when the send succeeds, and Claude's
+  question prompt once its last answer (the review's Submit, or the only
+  question's answer) is sent. It no longer sits there reading "sending…"
+  while the agent digests it. The steps before the last one still stay in
+  the pop-up, a failed answer still stays with why, and the session's row
+  still saying it asks for a few seconds does not bring it back; a new
+  question from that session does.
 
 ## [0.14.19] - 2026-11-17
 
@@ -6327,7 +6341,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.19...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.20...HEAD
+[0.14.20]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.20
 [0.14.19]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.19
 [0.14.18]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.18
 [0.14.17]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.17
