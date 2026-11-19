@@ -2947,8 +2947,17 @@ notification, and their **Reply** opens the card on it. Then:
 
 **Later** (**Esc**) puts it off: a question is dismissed on the server
 (`POST …/asking/dismiss`), a dialog is snoozed until its prompt changes; the
-bell keeps either. After an answer the card steps to the next session still
-asking, or closes. Several asking at once share **one** card with a **1 of N**
+bell keeps either. Once the server takes an answer the card steps to the next
+session still asking, or closes — right away, not when the session's row
+catches up: an option or a typed reply as soon as the send succeeds; Claude's
+question prompt once its **last** answer is sent (the review's Submit or
+Cancel, the only question's answer, Cancel the question, Chat about this —
+the steps before it stay on the card). The read after that last answer
+carries on without the card. For 12 seconds after an answer the session's row
+still saying it asks the same thing (the same ask, a step the card showed, or
+a screen it cannot read mid-redraw) does not bring the card back; a new
+dialog from that session does, and the same one still up after that asks
+again. A failed answer keeps the card up with why. Several asking at once share **one** card with a **1 of N**
 stepper (‹ ›), the longest-waiting first — the dialogs, and a question in
 words only once you opened it with Reply; `Ctrl+K N` still walks everything
 that needs you.
@@ -2956,8 +2965,8 @@ that needs you.
 It does **not** open by itself for a question in words; for a dialog the
 server could not parse (no options to answer on the card — it could only say
 *open the pane* — and a misread frame of a busy screen is the usual reason
-there is one: that ask stays in the bell, the rail and the toasts); for an ask you already
-answered, put off or opened in its pane; for the focused session when you typed into it in the last
+there is one: that ask stays in the bell, the rail and the toasts); for an ask you just
+answered (above), put off or opened in its pane; for the focused session when you typed into it in the last
 10 seconds (you are already answering it there); or over another dialog (it
 waits for that one to close). It waits for the keyboard to be quiet for a
 moment first, so a word you are typing elsewhere isn't cut in half. The bell's

@@ -129,6 +129,8 @@ export interface SelectDeps {
   send(text: string): Promise<unknown>;
   fetch(): Promise<Dialog | null>;
   sleep(ms: number): Promise<void>;
+  /** Every post went through (before the redraw wait and the read). */
+  sent?(): void;
 }
 
 /** How a sequence went, and the dialog read after it (null: the prompt is
@@ -181,6 +183,7 @@ export async function runSelect(d: Dialog, posts: readonly SelectPost[], deps: S
     }
     first = false;
   }
+  deps.sent?.();
   await deps.sleep(SELECT_REDRAW_MS);
   return { kind: "done", dialog: await read() };
 }
@@ -206,6 +209,26 @@ export function selectKey(
   if (!o) return null;
   if (takesWords(o)) return { type: "field", key: o.key };
   return { type: d.multi && isBox(o) ? "toggle" : "pick", key: o.key };
+}
+
+/** Whether `act` on `d` is the prompt's LAST answer: no step of it is left
+ * to show once it is sent — the review's Submit (or Cancel), the answer to
+ * the last question when no review follows it, "Cancel the question", or
+ * "Chat about this" (its words go to the session). The pop-up lets go as
+ * soon as such an answer went through (`SelectFlow.sent`). A multi-select
+ * box's own press, Back, and any step with another one after it are not. */
+export function selectFinal(d: Dialog, act: SelectAct): boolean {
+  if (act.type === "cancel" || act.type === "chat") return true;
+  if (act.type === "prev") return false;
+  const stage = selectStage(d);
+  if (stage === "review") {
+    if (act.type !== "pick") return false;
+    const o = d.options.find((x) => x.key === act.key);
+    return o?.kind === "yes" || o?.kind === "no";
+  }
+  // Another tab after this one (the next question, or the review).
+  if ((d.step ?? 0) < (d.steps?.length ?? 0) - 1) return false;
+  return stage === "multi" ? act.type === "next" : act.type === "pick" || act.type === "text";
 }
 
 /** A spoken "type something" / "chat about this": which kind of field it opens. */
@@ -240,10 +263,14 @@ export interface SelectFlow {
   /** "done": the prompt is gone (answered); "handoff": another kind of
    * prompt is up now — the card draws that one the usual way. */
   ended: "" | "done" | "handoff";
+  /** The prompt's last answer went through (`selectFinal`): the pop-up is
+   * done with it, while the read after it still runs. A read that finds the
+   * prompt still up starts the step afresh (the row brings it back). */
+  sent: boolean;
 }
 
 function fresh(d: Dialog, now: number): SelectFlow {
-  return { dialog: d, checked: initialChecked(d), field: "", text: "", busy: false, note: "", at: now, ended: "" };
+  return { dialog: d, checked: initialChecked(d), field: "", text: "", busy: false, note: "", at: now, ended: "", sent: false };
 }
 
 /** Every session's select flow. Survives the panel being re-mounted (a new
@@ -345,7 +372,11 @@ export class SelectFlows {
     const posts = selectPosts(f.dialog, act, f.checked);
     if (!posts.length) return;
     this.patch(title, { busy: true, note: "", at: now() });
-    const out = await runSelect(f.dialog, posts, deps);
+    const out = await runSelect(
+      f.dialog,
+      posts,
+      selectFinal(f.dialog, act) ? { ...deps, sent: () => this.patch(title, { sent: true }) } : deps
+    );
     if (out.kind === "failed") {
       const msg = (out.error as Error)?.message || String(out.error || "error");
       this.patch(title, { busy: false, note: "Couldn't answer: " + msg, at: now() });
@@ -356,10 +387,11 @@ export class SelectFlows {
     this.took(title, out.dialog, now(), out.kind === "changed" ? "The prompt changed — this is the new one" : "");
   }
 
-  /** Still walking `title` through its steps (see {@link SELECT_GRACE_MS}). */
+  /** Still walking `title` through its steps (see {@link SELECT_GRACE_MS});
+   * not once its last answer was sent. */
   active(title: string, now: number = Date.now()): boolean {
     const f = this.map.get(title);
-    return !!f && !f.ended && (f.busy || now - f.at < SELECT_GRACE_MS);
+    return !!f && !f.ended && !f.sent && (f.busy || now - f.at < SELECT_GRACE_MS);
   }
 
   /** Forget the sessions no longer asking. */
