@@ -214,7 +214,8 @@ describe("flown stops and the ⋯'s words", () => {
   it("draws the hook's diagram (the fold and the open groups are its), and asks it what a fold would hide", () => {
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain("const { foldFlown, setFoldFlown } = line;");
-    expect(src).toContain("{ flights, kinds, family: true, foldFlown: true }");
+    // UI sweep P3: asked of the line it already drew, not of a second diagram.
+    expect(src).toContain("hasFlownToFold(line.diagram, foldFlown)");
     // Round 18: the chain draws the hook's diagram in the flight's indexes.
     expect(src).toContain("const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);");
     expect(src).toContain('if (n.kind === "flown") setFoldFlown((x) => !x);');

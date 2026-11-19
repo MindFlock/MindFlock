@@ -40,7 +40,7 @@ import {
 } from "../../lib/flights";
 import { HALT_POINT_REASON, atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
-import { controlFlight, flightAction, flightPath, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { canFlyAgain, flyAgainLabel, flyAgainPrimary, flyAgainTitle, pickAgainStop } from "../../lib/routeStart";
 import "./RouteStartMenu.css";
 import { ASK_TILE_W, OWED_OPEN, OWED_OPEN_TITLE, askOffers, askRoom, askSentence, findingsOf, flightAsk, owedGroups, owedItemsText, owedNoteOf } from "../../lib/stopAsks";
@@ -278,6 +278,8 @@ export function YouStepActions({
   const items = youItems(step);
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
+  // A closed session's "Stop the route" asks first, as every other one does.
+  const cancel = useCancelAsk(flight);
   const haltPoint = atHaltPoint(flight);
   const paused = haltPoint || flight.state === "paused";
   const failedReason = step ? String(flight.step_states?.[step.id]?.detail?.failed_reason ?? "").trim() : "";
@@ -415,12 +417,13 @@ export function YouStepActions({
             className="test-btn fl-btn"
             disabled={busy}
             title="Its session is closed — end this route"
-            onClick={() => void run(() => flightAction("Stop the route", flightPath(flight.id, "/cancel"), {}, "Route stopped"))}
+            onClick={cancel.ask}
           >
             Stop the route
           </button>
         )}
       </div>
+      {cancel.node}
     </div>
   );
 }
@@ -437,12 +440,24 @@ export function FlightMenu({
   /** The pane is already in the session: no "Open session". */
   openSession?: boolean;
 }) {
-  const live = isLive(flight);
   const rows = useInstances().data;
   const items: MenuItem[] = [];
   if (openSession && flight.session)
     items.push({ key: "open", label: "Open session", onSelect: () => openFlightSession(flight.session) });
-  if (live) {
+  items.push(...routeMenuItems(flight, onCancelAsk, sessionGone(flight, rows)));
+  return (
+    <span onClick={stop} className="fl-menu" data-no-drag>
+      <OverflowMenu label="Route actions" items={items} />
+    </span>
+  );
+}
+
+/** A route's own items in a ⋯ (the pane strip's FlightMenu, a Sky line's ⋯):
+ * a live route's Pause / Carry on and Stop the route (`onCancelAsk` asks
+ * first), an ended one's Fly again. */
+export function routeMenuItems(flight: Flight, onCancelAsk: () => void, gone = false): MenuItem[] {
+  const items: MenuItem[] = [];
+  if (isLive(flight)) {
     items.push(
       flight.state === "halted" || flight.state === "paused"
         ? { key: "resume", label: "Carry on", title: "Go on from the current stop", onSelect: () => void controlFlight(flight.id, "resume") }
@@ -450,12 +465,8 @@ export function FlightMenu({
     );
     items.push({ key: "cancel", label: "Stop the route", danger: true, title: "End this route — its session is kept", onSelect: onCancelAsk });
   }
-  items.push(...flyAgainItems(flight, sessionGone(flight, rows)));
-  return (
-    <span onClick={stop} className="fl-menu" data-no-drag>
-      <OverflowMenu label="Route actions" items={items} />
-    </span>
-  );
+  items.push(...flyAgainItems(flight, gone));
+  return items;
 }
 
 /** An ended route's (done, cancelled, halted) Fly again in a ⋯: from where

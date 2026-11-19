@@ -361,11 +361,16 @@ describe("a line in the sky", () => {
       "Add a stop…",
       // Flow polish: its stops as a saved route, named inline (a route on the line).
       ...(html.includes("Save as a route…") ? ["Save as a route…"] : []),
+      // UI sweep P3: the route's own controls, as the pane strip's ⋯ has them.
+      "Pause",
+      "Stop the route",
       "Close session",
     ]);
     const cls = Object.fromEntries(labels);
     expect(cls["Fold finished stops"]).toContain("skl-mi-group");
     expect(cls["Add a stop…"]).toContain("skl-mi-group");
+    expect(cls["Pause"]).toContain("skl-mi-group");
+    expect(cls["Stop the route"]).toContain("vf-menu-danger");
     expect(cls["Close session"]).toContain("skl-mi-group");
     expect(cls["Close session"]).toContain("vf-menu-danger");
   });

@@ -77,10 +77,12 @@ import { deriveSessionState, type SessionState, type SessionTone } from "../../l
 import { HELD_CHIP } from "../../lib/heldOffline";
 import { startSession } from "../../lib/revive";
 import { firstLine } from "../../lib/format";
-import { atHaltPoint, birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, whereBesideChip, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { atHaltPoint, birdPerch, collapseFlown, drawnIndexes, flownCount, lineWhere, whereBesideChip, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { NODE_W, TILE, chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { ageOf, ageWord, fmtDuration, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
-import type { FlightPlan, FlightRow, FlightState, StepKindDef } from "../../lib/flights";
+import type { Flight, FlightPlan, FlightRow, FlightState, StepKindDef } from "../../lib/flights";
+import { sessionGone } from "../../lib/flights";
+import { routeMenuItems } from "./FlightStrip";
 import { InlineConfirm } from "../InlineConfirm";
 import { planToSave, savedWords } from "../../lib/groundedLines";
 import { savePlan } from "../../lib/flightsApi";
@@ -413,6 +415,24 @@ export function SkyStateChip({ ss, title, className }: { ss: SessionState; title
   );
 }
 
+/** Whether a line has finished stops to fold into one pill (the ⋯'s "Fold
+ * finished stops" / "Show finished stops"), read off the diagram the line
+ * already drew: folded, it holds the pill; unfolded, the fold is tried on
+ * it. No second diagram is built for this. */
+export function hasFlownToFold(d: Diagram, folded: boolean): boolean {
+  return flownCount(folded ? d : collapseFlown(d)) > 0;
+}
+
+/** A Sky line's ⋯ items for its route: Pause / Carry on, Stop the route
+ * (asks first) and Fly again, the same items as the pane strip's ⋯
+ * (FlightStrip `routeMenuItems`), drawn as a group of their own. None when
+ * the line has no route. */
+export function lineRouteItems(flight: Flight | null | undefined, onCancelAsk: () => void, rows: readonly Instance[]): MenuItem[] {
+  if (!flight) return [];
+  const items = routeMenuItems(flight, onCancelAsk, sessionGone(flight, rows));
+  return items.map((it, i) => (i === 0 ? { ...it, className: [it.className, "skl-mi-group"].filter(Boolean).join(" ") } : it));
+}
+
 export function SkyLine(p: SkyLineProps): JSX.Element {
   const flights = useFlights().data;
   const kinds = useFlightKinds().data;
@@ -425,8 +445,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // (`line.foldFlown`): the hook draws the diagram with the fold and the
   // open groups.
   const { foldFlown, setFoldFlown } = line;
-  const folded = useMemo(() => sessionDiagram(p.rows, p.title, { flights, kinds, family: true, foldFlown: true }), [p.rows, p.title, flights, kinds]);
-  const folds = flownCount(folded) > 0;
+  const folds = useMemo(() => hasFlownToFold(line.diagram, foldFlown), [line.diagram, foldFlown]);
   // Workers' open cards, by the worker's title (their pane sizes with them).
   const [kids, setKids] = useState<Record<string, { w: number; h: number }>>({});
   const rootRef = useRef<HTMLDivElement>(null);
@@ -668,6 +687,8 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     ...(routeSteps.length
       ? [{ key: "save-route", label: "Save as a route…", title: "Keep this route's stops on the shelf as a saved route — you name it", onSelect: () => setSavingAs(line.flight?.plan_name && line.flight.plan_name !== "Stops" ? line.flight.plan_name : name) }]
       : []),
+    // The route's own controls, as the pane strip's ⋯ has them.
+    ...lineRouteItems(line.flight || line.landed, line.cancel.ask, p.rows),
     { key: "close", label: "Close session", danger: true, className: "skl-mi-group", title: "Stops the agent and moves it to Recently closed", onSelect: () => askClose(p.title) },
   ];
   // Round 20: the agent tile's right-click menu — the agent's own items, then
