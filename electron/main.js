@@ -737,7 +737,9 @@ function diagnosticsText() {
 //   retry-start       failed-to-start → respawn the server now (no cooldown)
 //   copy-diagnostics  put diagnosticsText() on the clipboard
 //   brew-install      needs-homebrew → run Homebrew's installer, then continue
-//   brew-skip         needs-homebrew → continue the engine install without it
+//   brew-skip         needs-homebrew, or Homebrew's installer running in
+//                     Terminal → continue the engine install without it
+//   xcode-reopen      waiting on Apple's developer tools → open its installer again
 ipcMain.handle('diag:action', (_e, name) => {
   switch (String(name || '')) {
     case 'retry-start':
@@ -757,6 +759,8 @@ ipcMain.handle('diag:action', (_e, name) => {
       return { ok: installHomebrew() }
     case 'brew-skip':
       return { ok: skipHomebrew() }
+    case 'xcode-reopen':
+      return { ok: reopenXcodeInstaller() }
     default:
       return { ok: false, error: 'unknown action' }
   }
@@ -962,12 +966,32 @@ function installHomebrew() {
   return true
 }
 
+// Also while Homebrew's installer runs in Terminal ('homebrew-run'): closing
+// that window early otherwise left the page waiting out the full 30 minutes.
 function skipHomebrew() {
-  if (install.state !== 'running' || install.waiting !== 'homebrew') return false
+  if (install.state !== 'running') return false
+  if (install.waiting !== 'homebrew' && install.waiting !== 'homebrew-run') return false
+  if (installPoll) { try { installPoll.stop() } catch (e) {}; installPoll = null }
   brewSkipped = true
   install.waiting = ''
   installLog('Continuing without Homebrew (tmux can be installed later from Setup).')
   darwinPreflight()
+  return true
+}
+
+// The trigger for Apple's Command Line Tools installer window.
+function openXcodeInstaller() {
+  try {
+    spawn('xcode-select', ['--install'], { stdio: 'ignore', detached: true }).unref()
+  } catch (e) { installLog('could not open it: run  xcode-select --install') }
+}
+
+// The page's "Open Apple's installer again", for a window closed by mistake:
+// the same trigger, and the wait already running carries on.
+function reopenXcodeInstaller() {
+  if (install.state !== 'running' || install.waiting !== 'xcode') return false
+  installLog('Opening Apple’s installer again.')
+  openXcodeInstaller()
   return true
 }
 
@@ -992,9 +1016,7 @@ function darwinPreflight() {
     // press. The install stays 'running' throughout.
     installLog('Apple is installing developer tools (git) — finish its window.')
     installLog('MindFlock will continue on its own when it’s done.')
-    try {
-      spawn('xcode-select', ['--install'], { stdio: 'ignore', detached: true }).unref()
-    } catch (e) { installLog('could not open it: run  xcode-select --install') }
+    openXcodeInstaller()
     install.waiting = 'xcode'
     installPoll = fl.pollUntil(hasXcodeCLT, { intervalMs: XCODE_POLL_MS, timeoutMs: XCODE_WAIT_MS })
     installPoll.then((ok) => {

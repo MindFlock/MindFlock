@@ -485,3 +485,12 @@
   margin-top: 4px;
   word-break: break-word;
 }
+
+/* A doctor fix that is a command gets the same Copy as Connect GitHub's push
+   fix and the install window. */
+.doctor-check .doctor-fix-copy {
+  margin-left: 6px;
+  padding: 1px 8px;
+  font-size: 11px;
+  vertical-align: baseline;
+}

@@ -60,7 +60,8 @@ import {
   type Template,
 } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
-import { openSettings } from "../../lib/openSettings";
+import { SignInWindow } from "./AgentSignIn";
+import { notifyConnectionsChanged } from "../settings/screens/Connections";
 import { toast } from "../../lib/toast";
 import { errMsg } from "../../lib/format";
 import { TemplatesDialog } from "./TemplatesDialog";
@@ -113,6 +114,7 @@ import {
   rememberedProfileVerdict,
   worktreeClampReason,
   agentMissingReason,
+  agentSignedOutLine,
   hasTypedDraft,
   newSessionResume,
   openingMode,
@@ -399,6 +401,8 @@ export function NewSessionDialog() {
   const loadDone = useRef(false);
   /** Agents installed here but known NOT signed in (GET /api/setup). */
   const [signedOut, setSignedOut] = useState<Record<string, boolean>>({});
+  /** The agent whose sign-in window is open over the dialog ("" = none). */
+  const [signInFor, setSignInFor] = useState("");
   // The Folder field and the browser's visibility travel together: see
   // folderReducer for the two orderings that forced them into one value. These
   // aliases keep the form's many readers reading a plain value, while every
@@ -1477,19 +1481,36 @@ export function NewSessionDialog() {
   });
 
   /** The agent would stop at its own sign-in: said before Create, with the
-   * way to fix it. */
+   * way to fix it. Sign in… opens the sign-in window OVER the dialog (as the
+   * pane's AgentBlocked banner does), so the form and its draft stay put;
+   * closing it re-reads which agents are signed in. */
   const signedOutNote = (
     <p className="nf-git-nudge nf-agent-missing" id="new-agent-signin" role="status">
-      {canonAgent(program)} isn't signed in yet — a session would stop at its sign-in screen.{" "}
+      {agentSignedOutLine(canonAgent(program))}{" "}
       <button
         type="button"
         className="linklike"
-        onClick={() => {
-          closeDialog();
-          openSettings("coding");
-        }}
+        id="new-agent-signin-btn"
+        onClick={() => setSignInFor(canonAgent(program))}
       >
         Sign in…
+      </button>
+    </p>
+  );
+  /** Not installed: the sentence names Setup, and this opens it. */
+  const missingNote = (
+    <p className="nf-git-nudge nf-agent-missing" id="new-agent-missing" role="status">
+      {agentMissing}{" "}
+      <button
+        type="button"
+        className="linklike"
+        id="new-agent-open-setup"
+        onClick={() => {
+          closeDialog();
+          useUi.getState().openDialogFor("setup");
+        }}
+      >
+        Open Setup
       </button>
     </p>
   );
@@ -1723,11 +1744,7 @@ export function NewSessionDialog() {
                   foldMissing
                 />
               </div>
-              {agentMissing && (
-                <p className="nf-git-nudge nf-agent-missing" id="new-agent-missing" role="status">
-                  {agentMissing}
-                </p>
-              )}
+              {agentMissing && missingNote}
               {agentSignedOut && signedOutNote}
 
               <ModelRow
@@ -2002,6 +2019,20 @@ export function NewSessionDialog() {
           startBlocked={startBlocked}
         />
       </form>
+      )}
+      {/* Portalled over the dialog. Its keys stop here: the dialog's own
+          Escape / Ctrl+Enter must not see what is typed into the login. */}
+      {signInFor && (
+        <div className="nf-signin-host" onKeyDown={(e) => e.stopPropagation()}>
+          <SignInWindow
+            provider={signInFor}
+            onClose={() => {
+              setSignInFor("");
+              notifyConnectionsChanged();
+              refreshAgentState();
+            }}
+          />
+        </div>
       )}
     </div>
   );

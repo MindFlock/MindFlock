@@ -2506,3 +2506,10 @@
 .nf-skip-perms {
   margin-top: 4px;
 }
+
+/* The agent sign-in window opened from the "isn't signed in yet" note is
+   portalled; its React host is an empty wrapper that must not take a slot in
+   the dialog's layout. */
+.nf-signin-host {
+  display: contents;
+}

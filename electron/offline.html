@@ -173,6 +173,10 @@
          MindFlock starts on its own when it’s done.</p>
       <pre class="log" id="inst-log"></pre>
       <button class="action" id="do-retry" hidden>Try again</button>
+      <!-- Ways out of a wait: Homebrew's Terminal window closed early, or
+           Apple's installer window closed by mistake. -->
+      <button class="action quiet" id="inst-brew-skip" hidden>Skip for now</button>
+      <button class="action quiet" id="xcode-reopen" hidden>Open Apple’s installer again</button>
       <button class="action quiet" id="inst-copy-diag" hidden>Copy diagnostics</button>
       <p class="hint" id="inst-manual" hidden></p>
     </section>
@@ -272,6 +276,8 @@
         : 'This takes a few minutes. You can leave this window open — MindFlock starts on its own when it’s done.'
     renderLog(inst.lines)
     document.getElementById('do-retry').hidden = !failed
+    document.getElementById('inst-brew-skip').hidden = waiting !== 'homebrew-run'
+    document.getElementById('xcode-reopen').hidden = waiting !== 'xcode'
     document.getElementById('inst-copy-diag').hidden = !failed
     var manual = document.getElementById('inst-manual')
     manual.hidden = !failed
@@ -301,6 +307,7 @@
   wire('do-repair', function () { return window.mfdiag.install() })
   wire('brew-install', function () { return window.mfdiag.action('brew-install') })
   wire('brew-skip', function () { return window.mfdiag.action('brew-skip') })
+  wire('inst-brew-skip', function () { return window.mfdiag.action('brew-skip') })
 
   // Buttons that stay on their own screen: flip the label while the action
   // runs, then let the next poll redraw. Electron has no alert(), so the
@@ -323,6 +330,7 @@
   wireQuiet('copy-diag', 'copy-diagnostics', 'Copied')
   wireQuiet('inst-copy-diag', 'copy-diagnostics', 'Copied')
   wireQuiet('retry-start', 'retry-start', 'Starting…')
+  wireQuiet('xcode-reopen', 'xcode-reopen', 'Opened')
 
   // The logs shortcut is Ctrl+Shift+L, or Cmd+Shift+L on a Mac (main.js
   // takes either modifier); say the one this keyboard has.
