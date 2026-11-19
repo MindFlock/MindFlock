@@ -62752,7 +62752,22 @@ function useNow(ms) {
 	return Date.now();
 }
 //#endregion
+//#region src/lib/memorySlow.ts
+var SLOW_SESSIONS_LINE = "Sessions may be slow to show what you type and their new output until memory recovers.";
+var FREE_MEMORY_HINT = "Putting idle agents to sleep or closing sessions frees memory fastest.";
+function memoryIsShort(level) {
+	return level === "low" || level === "critical";
+}
+function memoryConnText(level, pollFailing) {
+	if (!memoryIsShort(level)) return null;
+	return {
+		head: "MindFlock is slow to respond: memory is " + (level === "critical" ? "critically low" : "low"),
+		text: pollFailing ? "The server is slow to answer because this computer is short of memory. It usually catches up on its own. " + FREE_MEMORY_HINT : "Live updates are lagging because this computer is short of memory, and sessions may be slow to respond. " + FREE_MEMORY_HINT
+	};
+}
+//#endregion
 //#region src/components/ConnBanner.tsx
+var SLOW_MAX_MS = 3e5;
 function pollFailText(err) {
 	const status = err instanceof ApiError ? err.status : 0;
 	return status > 0 ? "The server is reachable but answering with errors (HTTP " + status + "). It may recover on its own; if not, check the server logs." : "The server isn’t answering — it may have stopped or be restarting. Reconnecting automatically.";
@@ -62813,8 +62828,19 @@ function ConnBanner() {
 	}, [lost, pollFails]);
 	if (!lost) return null;
 	let text;
+	let head = "⚠ Connection to MindFlock lost";
 	let fixLabel;
-	if (diag && pollFails >= 2 && diag.state === "wsl-down") {
+	const memLevel = queryClient.getQueryData(["system-memory"])?.level;
+	const slow = !!diag && [
+		"wsl-down",
+		"wsl-missing",
+		"not-installed",
+		"starting"
+	].includes(diag.state || "") || lostAt && now - lostAt > SLOW_MAX_MS ? null : memoryConnText(memLevel, pollFails >= 2);
+	if (slow && !(lastErr instanceof ApiError && lastErr.status > 0)) {
+		head = slow.head;
+		text = slow.text;
+	} else if (diag && pollFails >= 2 && diag.state === "wsl-down") {
 		text = "WSL (" + (diag.distro || "Ubuntu") + ") isn’t responding, so the server can’t run. Restarting WSL usually fixes this.";
 		fixLabel = "Restart WSL";
 	} else if (diag && pollFails >= 2 && diag.state === "wsl-missing") text = "WSL isn’t installed on this computer. Run “wsl --install” in PowerShell, restart, then reopen MindFlock.";
@@ -62831,7 +62857,7 @@ function ConnBanner() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "conn-head",
-				children: "⚠ Connection to MindFlock lost"
+				children: head
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "conn-detail",
@@ -62962,9 +62988,17 @@ function MemoryNotice() {
 				className: "mn-detail mn-slots",
 				children: heavy
 			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mn-detail mn-slow",
+				children: SLOW_SESSIONS_LINE
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-detail mn-what",
-				children: ["Agents that start by themselves (a worker an agent spawns, a queued prompt, a restart) wait until it recovers, one at a time; a start of yours asks first. Putting idle agents to sleep or closing sessions frees memory fastest", critical ? " — the system may start killing agents soon." : "."]
+				children: [
+					"Agents that start by themselves (a worker an agent spawns, a queued prompt, a restart) wait until it recovers, one at a time; a start of yours asks first. ",
+					FREE_MEMORY_HINT,
+					critical ? " The system may start killing agents soon." : ""
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "mn-foot",
