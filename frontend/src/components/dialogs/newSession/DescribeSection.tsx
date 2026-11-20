@@ -3,7 +3,7 @@
  * the form, and the confirm row for a folder a plan wants made. State stays
  * in NewSessionDialog; these read and write it through what they are handed. */
 
-import { useEffect, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from "react";
+import { useEffect, useRef, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from "react";
 import type { PlanAnswer } from "../../../api/types";
 import type { deviceApi } from "../../../lib/devices";
 import { errMsg } from "../../../lib/format";
@@ -521,8 +521,16 @@ export function DescribeSection({
 }: DescribeSectionProps) {
   // "Runs in" → Browse… (one session) or the list's "tasks start in" →
   // Browse…: the same floating picker window every path field opens (never a
-  // browser dialog: Electron has none). A click fills the picker; "Use this
-  // folder", ✕ and Escape all leave the folder last clicked, as Done did.
+  // browser dialog: Electron has none). A click fills the folder; "Use this
+  // folder" keeps it, and ✕ / Escape (or another field taking the window)
+  // put back the folder the browse started from — the form's browse-cancel,
+  // and what the picker's own "Esc cancels" says.
+  const browseFrom = useRef<string | null>(null);
+  useEffect(() => {
+    browseFrom.current = runBrowse ? repoPath : null;
+    // The folder at open only: every click changes repoPath.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runBrowse]);
   useFolderPickerWhile(runBrowse, () => ({
     title: runMode ? "Pick the folder the tasks start in" : "Pick the folder it runs in",
     device,
@@ -532,9 +540,15 @@ export function DescribeSection({
     onSelect: (p) => folderDo({ t: "user-set", path: p }),
     onPick: (p) => {
       folderDo({ t: "user-set", path: p });
+      browseFrom.current = null;
       setRunBrowse(false);
     },
-    onCancel: () => setRunBrowse(false),
+    onCancel: () => {
+      const from = browseFrom.current;
+      browseFrom.current = null;
+      if (from !== null && from !== repoPath) folderDo({ t: "user-set", path: from });
+      setRunBrowse(false);
+    },
   }));
   /* The one-sentence door, the whole of page 1 because it is the widest of
      the three ways to fill this form in (a sentence, a template chip, or by
