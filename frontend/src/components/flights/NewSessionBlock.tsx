@@ -137,6 +137,16 @@ interface KeyLike {
   stopPropagation(): void;
 }
 
+/** The prompt typed in a card that closed without starting a session (its
+ * Esc, ×, Cancel, the Sky's own Esc): the next card opens with it, the way
+ * the New dialog keeps its draft. Starting a session clears it; so does
+ * clearing the box. Module-level: it outlives the card, not the page. */
+let promptDraft = "";
+export const newBlockDraft = (): string => promptDraft;
+export function keepNewBlockDraft(text: string): void {
+  promptDraft = text.trim() ? text : "";
+}
+
 /** Escape anywhere in the card cancels it — and stops there, so the sky (or
  * the dialog under it) doesn't also take the key. */
 export function cardKey(e: KeyLike, onCancel: () => void): void {
@@ -229,7 +239,9 @@ export function blockBody(c: BlockChoice): Record<string, unknown> {
 
 export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, attach, onPending, onFailed, hidden }: NewSessionBlockProps) {
   const [repo, setRepo] = useState("");
-  const [prompt, setPrompt] = useState("");
+  // A prompt typed before an Esc comes back (`newBlockDraft`).
+  const [prompt, setPrompt] = useState(newBlockDraft);
+  useEffect(() => keepNewBlockDraft(prompt), [prompt]);
   const [plan, setPlan] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<RepoSuggestion[]>([]);
@@ -390,6 +402,8 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
     let title = "";
     try {
       title = await postInstance(body, device);
+      // The prompt went to a session: it is no draft any more.
+      keepNewBlockDraft("");
       if (!device)
         rememberNewSessionChoice(String(body.repo_path || ""), {
           template: shown.template,
@@ -438,7 +452,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
       >
         <Bird size={13} />
         <span className="sky-new-name">{attach ? "New session for “" + attach.name + "”" : "New session"}</span>
-        <button type="button" className="sky-new-close" aria-label="Cancel the new session" title="Cancel (Esc)" onClick={onCancel}>
+        <button type="button" className="sky-new-close" aria-label="Cancel the new session" title="Cancel (Esc) — a prompt you typed is kept for next time" onClick={onCancel}>
           ×
         </button>
       </div>

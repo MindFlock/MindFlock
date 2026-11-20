@@ -128,6 +128,9 @@ export interface StopCatalogBodyProps {
   onDrag?(on: boolean, landed: boolean): void;
   /** Set to "Esc answers the open question" (true when it did): the Modal's. */
   escRef?: MutableRefObject<(() => boolean) | null>;
+  /** A saved route's ⋯ Edit its stops: the host puts an editable copy on the
+   * Sky (SkyView `editPlan`). Unset: no such item. */
+  onEditPlan?(plan: FlightPlan): void;
 }
 
 /** How many columns a grid of cards is laid out in right now (1 when it
@@ -148,6 +151,30 @@ function reveal(list: HTMLElement | null, el: HTMLElement | null) {
   const scale = list.offsetHeight ? l.height / list.offsetHeight : 1;
   if (r.top < l.top) list.scrollTop -= (l.top - r.top) / scale;
   else if (r.bottom > l.bottom) list.scrollTop += (r.bottom - l.bottom) / scale;
+}
+
+/** Reset to default on a built-in saved route (the catalog card's ⋯ and the
+ * shelf chip's menu): at once, as Delete is not — so the toast's Undo saves
+ * back the route as it was just before. */
+export async function resetSavedRoute(plan: FlightPlan): Promise<void> {
+  const before: FlightPlan = { ...plan, steps: plan.steps.map((s) => ({ ...s, config: { ...s.config } })) };
+  try {
+    await resetPlan(plan.id);
+  } catch (e) {
+    toast("Reset failed: " + errMsg(e), { error: true });
+    return;
+  }
+  toast("“" + plan.name + "” is back to its default", {
+    action: {
+      label: "Undo",
+      ariaLabel: "Undo: put back your version of “" + plan.name + "”",
+      onClick: () =>
+        void savePlan(before).then(
+          () => toast("“" + plan.name + "” is back as you had it"),
+          (e) => toast("Undo failed: " + errMsg(e), { error: true })
+        ),
+    },
+  });
 }
 
 /** A click on a card's own controls (★, ⋯, the rename field, Add, the
@@ -174,6 +201,7 @@ export function StopCatalogBody({
   autoFocus = false,
   onDrag,
   escRef,
+  onEditPlan,
 }: StopCatalogBodyProps): JSX.Element {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -256,14 +284,7 @@ export function StopCatalogBody({
   };
   const onDragEnd = (e: DragEvent) => onDrag?.(false, !!e.dataTransfer && e.dataTransfer.dropEffect !== "none");
 
-  const reset = async (plan: FlightPlan) => {
-    try {
-      await resetPlan(plan.id);
-      toast("“" + plan.name + "” is back to its default");
-    } catch (e) {
-      toast("Reset failed: " + errMsg(e), { error: true });
-    }
-  };
+  const reset = (plan: FlightPlan) => resetSavedRoute(plan);
   const remove = async (plan: FlightPlan) => {
     setBusy(true);
     try {
@@ -342,7 +363,7 @@ export function StopCatalogBody({
             <OverflowMenu
               label={"“" + plan.name + "” — rename, delete, shelf"}
               boundaryId={listId}
-              items={cardMenu(plan, shelf ? shelf(c.drop) : false)
+              items={cardMenu(plan, shelf ? shelf(c.drop) : false, { edit: !!onEditPlan })
                 .filter((it) => it.key !== "shelf" || onShelfToggle)
                 .map((it) => ({
                   key: it.key,
@@ -350,6 +371,7 @@ export function StopCatalogBody({
                   danger: it.danger,
                   onSelect: () => {
                     if (it.key === "rename") setRenaming(plan.id);
+                    else if (it.key === "edit") onEditPlan?.(plan);
                     else if (it.key === "takeoff") setTakeoff(plan);
                     else if (it.key === "shelf") onShelfToggle?.(c.drop);
                     else if (it.key === "reset") void reset(plan);

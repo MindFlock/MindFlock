@@ -164,7 +164,7 @@ function WaitingChip({ w, block, onFly }: { w: LaneWaiting; block: SourceBlock; 
           title={"Run on " + w.item.reference + " · " + block.flyway.name}
           onClick={() => void fly()}
         >
-          {busy ? "…" : "Run"}
+          {busy ? "Starting…" : "Run"}
         </button>
       </div>
       {error && (

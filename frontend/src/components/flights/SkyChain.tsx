@@ -54,6 +54,11 @@ import { TileIcon, nodeFamily } from "./StopIcons";
 import "./FlywayCanvas.css";
 import "./SkyChain.css";
 
+/** The keys that open a focused element's menu: ContextMenu, or Shift+F10. */
+export function isMenuKey(e: { key: string; shiftKey: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean }): boolean {
+  return e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey);
+}
+
 export interface SkyChainProps {
   graph: ChainGraph;
   /** The sky's zoom (pills and handles stay screen-sized). */
@@ -94,8 +99,9 @@ export interface SkyChainProps {
   /** The trailing + clicked without a drag: the palette after the last node. */
   onPlus?(after: GraphNode | null): void;
   /** A chain with no session (n8n's trigger button): ▶ on the left of its
-   * first stop runs it; while it runs the same button stops it. */
-  run?: { running: boolean; label: string; onRun(): void; onStop(): void } | null;
+   * first stop runs it; while it runs the same button stops it. `starting`:
+   * pressed and not started yet — the ▶ waits, its title the `label`. */
+  run?: { running: boolean; starting?: boolean; label: string; onRun(): void; onStop(): void } | null;
   /** Extra content in or under a tile (a perch's Done / Skip …). */
   renderInBox?(n: DiagramNode): ReactNode;
   /** A node drawn open instead of as a tile (an open sub-session's card):
@@ -490,6 +496,12 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     } else if ((e.key === "Delete" || e.key === "Backspace") && n.id !== HEAD_ID && isStopish(n.node) && p.onRemove) {
       e.preventDefault();
       p.onRemove(n.node);
+    } else if (isMenuKey(e) && p.onMenu) {
+      // The ContextMenu key or Shift+F10: the tile's right-click menu, at the tile.
+      e.preventDefault();
+      e.stopPropagation();
+      const r = e.currentTarget.getBoundingClientRect();
+      p.onMenu(n.node, { clientX: r.left, clientY: r.bottom });
     }
   };
 
@@ -783,12 +795,14 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         return (
           <button
             type="button"
-            className={"sky-run fl-icon-btn" + (r.running ? " is-running" : "")}
+            className={"sky-run fl-icon-btn" + (r.running ? " is-running" : "") + (r.starting ? " is-starting" : "")}
             // One affordance, not two circles: the ▶ sits where the empty
             // socket does (the socket shows again only while something is
             // dragged that could land there — SkyChain.css `.has-run`).
             style={{ left: at.x - 24, top: at.y }}
             data-no-drag
+            disabled={!r.running && !!r.starting}
+            aria-busy={r.starting || undefined}
             aria-label={r.label}
             title={r.label}
             onPointerDown={(e) => e.stopPropagation()}
