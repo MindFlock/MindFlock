@@ -148,7 +148,8 @@ describe("Search settings…", () => {
   it("renders a search box on the palette's index", () => {
     const html = renderToStaticMarkup(createElement(SettingsSearch, { onPick: () => undefined }));
     expect(html).toContain('id="settings-search"');
-    expect(html).toContain('placeholder="Search settings…"');
+    expect(html).toContain('placeholder="Search…  ( Ctrl+F )"');
+    expect(html).toContain('aria-label="Search settings"');
     const f = src("components/settings/SettingsSearch.tsx");
     expect(f).toContain('from "../palette/settingsSearch"');
     expect(f).toContain("searchSettings(query, 8)");

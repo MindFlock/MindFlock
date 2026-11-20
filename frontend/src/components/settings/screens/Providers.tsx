@@ -16,6 +16,8 @@ import type { ProviderStatus, ProvidersStatusResponse } from "../../../api/types
 import { agentName } from "../../../lib/agentNames";
 import { providerRows, type ProviderRow, type Row } from "../../../lib/providerRows";
 import { toast } from "../../../lib/toast";
+import { InlineConfirm } from "../../InlineConfirm";
+import { flashSaved } from "../savedCue";
 import { refreshProviders } from "../../../state/queries";
 import { AgentCard } from "../../setup/AgentCard";
 import { notifyConnectionsChanged } from "./Connections";
@@ -93,7 +95,7 @@ function BinaryPathField({
   // A reload (another window saved, the row re-rendered) resets the draft.
   useEffect(() => setValue(row.binaryPath), [row.binaryPath]);
 
-  const save = async () => {
+  const save = async (el: Element) => {
     const path = value.trim();
     if (path === row.binaryPath) return;
     try {
@@ -102,7 +104,11 @@ function BinaryPathField({
         { method: "PUT", json: { path } }
       );
       setWarning(r?.warning || "");
-      toast((path ? "Binary path saved for " : "Binary path cleared for ") + agentName(row.name));
+      // The inline "✓ Saved" by the field, as everywhere else in Settings; a
+      // toast only when the field is no longer on screen.
+      if (!flashSaved(el)) {
+        toast((path ? "Binary path saved for " : "Binary path cleared for ") + agentName(row.name));
+      }
       if (r?.status) onSaved(r.status);
       // A new path can flip installed / signed in: every agent card re-reads.
       notifyConnectionsChanged();
@@ -124,7 +130,7 @@ function BinaryPathField({
         placeholder={row.installed ? "on PATH — set to use another build" : "/full/path/to/" + row.name}
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        onBlur={() => void save()}
+        onBlur={(e) => void save(e.target)}
         onKeyDown={(e) => {
           if (e.key === "Enter") (e.target as HTMLInputElement).blur();
         }}
@@ -150,6 +156,11 @@ export function Providers({ gotoScreen }: ScreenProps) {
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [warning, setWarning] = useState("");
+  /** Neither list could be read: say so, instead of an empty screen. */
+  const [loadFailed, setLoadFailed] = useState(false);
+  /** The custom agent whose Delete is asking "are you sure?" inline. */
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const [delBusy, setDelBusy] = useState(false);
 
   const load = useCallback(async () => {
     // Fetch independently: the status endpoint is newer than /manage, so on a
@@ -159,6 +170,7 @@ export function Providers({ gotoScreen }: ScreenProps) {
       api<ProvidersStatusResponse & { providers_dir?: string }>("/api/providers/status"),
       api<{ providers?: ManagedProvider[] }>("/api/providers/manage"),
     ]);
+    setLoadFailed(s.status === "rejected" && m.status === "rejected");
     const statusList = s.status === "fulfilled" ? s.value?.providers || [] : [];
     setStatuses(statusList);
     setLoadErrors(s.status === "fulfilled" ? s.value?.errors || [] : []);
@@ -187,16 +199,20 @@ export function Providers({ gotoScreen }: ScreenProps) {
   }, [load]);
 
   const del = async (name: string) => {
+    setDelBusy(true);
     try {
       await api("/api/providers/" + encodeURIComponent(name), { method: "DELETE" });
-      toast("Removed " + agentName(name));
+      toast("Deleted " + agentName(name));
+      setConfirmDel(null);
       if (editing === name) cancelEdit();
       load();
       notifyConnectionsChanged();
       window.reloadProviderPicker?.();
       void refreshProviders();
     } catch (err) {
-      toast("Delete failed: " + ((err as Error).message || name));
+      toast("Couldn't delete " + agentName(name) + ": " + ((err as Error).message || "unknown error"));
+    } finally {
+      setDelBusy(false);
     }
   };
 
@@ -345,6 +361,15 @@ export function Providers({ gotoScreen }: ScreenProps) {
         </div>
       </details>
 
+      {loadFailed && (
+        <p className="set-hint" id="prov-load-state" role="alert">
+          Couldn't load agents.{" "}
+          <button type="button" className="linklike" onClick={() => void load()}>
+            Retry
+          </button>
+        </p>
+      )}
+
       <div className="prov-conn-list">
         {rows.map((row) => {
           if (row.kind === "error") {
@@ -393,10 +418,23 @@ export function Providers({ gotoScreen }: ScreenProps) {
                   <button type="button" onClick={() => edit(mgr)}>
                     Edit
                   </button>
-                  <button type="button" onClick={() => del(row.name)}>
+                  <button type="button" onClick={() => setConfirmDel(row.name)} disabled={confirmDel === row.name}>
                     Delete
                   </button>
                 </div>
+              )}
+              {/* Delete removes the agent's TOML file: ask first, like every
+                  other removal in Settings. */}
+              {mgr?.editable && confirmDel === row.name && (
+                <InlineConfirm
+                  id="prov-delete-confirm"
+                  title={"Delete custom agent " + agentName(row.name) + "?"}
+                  body="Its file is removed."
+                  confirmLabel={delBusy ? "Deleting…" : "Delete"}
+                  busy={delBusy}
+                  onConfirm={() => void del(row.name)}
+                  onCancel={() => setConfirmDel(null)}
+                />
               )}
             </div>
           );

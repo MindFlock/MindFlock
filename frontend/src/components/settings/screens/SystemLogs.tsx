@@ -23,10 +23,22 @@ interface LogsPayload {
   truncated?: boolean;
 }
 
+/** What the log pane shows: the last good text, else why there is none. */
+export function logViewText(text: string | null, exists: boolean, failed: boolean): string {
+  if (text === null) return failed ? "" : "Loading…";
+  return text || (exists ? "(log is empty)" : "(no log file yet)");
+}
+
 export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
   const [sources, setSources] = useState<Array<{ name: string; label: string; path?: string }>>([]);
   const [selected, setSelected] = useState("server");
-  const [text, setText] = useState("Loading…");
+  /** The last log text that loaded (null = none yet). A failed refresh keeps
+   *  it on screen and says so on its own line, instead of replacing the log
+   *  with the error — and Copy log only ever copies a real log. */
+  const [text, setText] = useState<string | null>(null);
+  /** The log file exists (an empty text then reads "(log is empty)"). */
+  const [exists, setExists] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [meta, setMeta] = useState("");
   const [path, setPath] = useState("");
   const [follow, setFollow] = useState(false);
@@ -68,7 +80,7 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
   }, [path]);
 
   const copyLog = useCallback(async () => {
-    if (!text) return;
+    if (!text) return; // nothing loaded yet (or an empty log): nothing to copy
     const ok = await copyText(text);
     toast(ok ? "Log copied to clipboard" : "Copy failed");
   }, [text]);
@@ -78,13 +90,15 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
     try {
       d = await api<LogsPayload>("/api/logs?name=" + encodeURIComponent(selected || "server"));
     } catch {
-      setText("Could not load logs.");
+      setLoadFailed(true);
       return;
     }
+    setLoadFailed(false);
     setSources(d.sources || []);
     const view = viewRef.current;
     const atBottom = view ? view.scrollTop + view.clientHeight >= view.scrollHeight - 4 : true;
-    setText(d.text || (d.exists ? "(log is empty)" : "(no log file yet)"));
+    setText(d.text || "");
+    setExists(!!d.exists);
     if (atBottom && view) requestAnimationFrame(() => (view.scrollTop = view.scrollHeight));
     const src = (d.sources || []).find((s) => s.name === d.selected);
     const kb = Math.round((d.size || 0) / 1024);
@@ -118,7 +132,11 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
           id="logs-source"
           title="Which log to view"
           value={selected}
-          onChange={(e) => setSelected(e.target.value)}
+          onChange={(e) => {
+            // Another log: the one shown no longer applies.
+            setText(null);
+            setSelected(e.target.value);
+          }}
         >
           {sources.map((s) => (
             <option key={s.name} value={s.name}>
@@ -134,6 +152,7 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
           id="logs-copy"
           className="test-btn"
           title="Copy everything shown here (the last 256 KB) to the clipboard"
+          disabled={!text}
           onClick={copyLog}
         >
           Copy log
@@ -168,8 +187,16 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
           {path}
         </button>
       )}
+      {loadFailed && (
+        <p className="set-hint" id="logs-load-state" role="alert">
+          Couldn't load the log.{" "}
+          <button type="button" className="linklike" onClick={() => void load()}>
+            Retry
+          </button>
+        </p>
+      )}
       <pre id="logs-view" className="logs-view" ref={viewRef}>
-        {text}
+        {logViewText(text, exists, loadFailed)}
       </pre>
       <FirstStartReport />
     </>

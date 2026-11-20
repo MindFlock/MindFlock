@@ -9,11 +9,21 @@
  * the screen, scrolls to the control (opening a fold around it) and
  * highlights it for a moment. */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { revealInSettings, searchSettings, type SettingsSearchEntry } from "../palette/settingsSearch";
 import "./SettingsSearch.css";
 
 const HIT_MS = 2000;
+
+/** The box's placeholder. The Ctrl+F hint is the one the list dialogs'
+ *  filters carry (DialogFilter); "settings" is dropped so the hint fits the
+ *  172px nav — the aria-label still says "Search settings". */
+export const SEARCH_PLACEHOLDER = "Search…  ( Ctrl+F )";
+
+/** Ctrl+F / Cmd+F (no Alt): the shortcut the box answers to. */
+export function isFindKey(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean }): boolean {
+  return (e.key === "f" || e.key === "F") && (e.ctrlKey || e.metaKey) && !e.altKey;
+}
 
 /** Outline the matched control once its screen has rendered (the reveal
  * itself — scroll + open folds — is the palette's revealInSettings). */
@@ -38,6 +48,23 @@ export function SettingsSearch({ onPick }: { onPick(key: string, advanced?: bool
   const [cursor, setCursor] = useState(0);
   const query = q.trim();
   const hits = query ? searchSettings(query, 8) : [];
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Ctrl+F focuses this box instead of opening the browser's find bar, as in
+  // Recently closed and every Intake tab (DialogFilter). Mounted only while
+  // Settings is open, so the shortcut belongs to Settings only then. Capture,
+  // so it beats the app's own document dispatcher and the browser.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isFindKey(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
 
   const pick = (e: SettingsSearchEntry) => {
     setQ("");
@@ -54,10 +81,12 @@ export function SettingsSearch({ onPick }: { onPick(key: string, advanced?: bool
   return (
     <div className="set-search">
       <input
+        ref={inputRef}
         type="search"
         id="settings-search"
         className="set-search-input"
-        placeholder="Search settings…"
+        placeholder={SEARCH_PLACEHOLDER}
+        aria-keyshortcuts="Control+F Meta+F"
         aria-label="Search settings"
         aria-controls="settings-search-results"
         autoComplete="off"
