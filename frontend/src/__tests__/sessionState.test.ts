@@ -1,20 +1,22 @@
 /** lib/sessionState — the ONE session state every channel reads.
  *
  * Pinned: every row of the table (state, tone, label, who is in the bell,
- * restartable), limit with and without a known resume time, idle that turns
- * "stuck" only after 20 minutes on uncommitted work, offline that is
+ * restartable), limit with and without a known resume time, idle that says
+ * "N files uncommitted" (calmly, out of the bell) only after 20 minutes on
+ * uncommitted changes, offline that is
  * restartable locally but not on a proxied device row, and the notify switch
  * each state answers to. */
 
 import { describe, expect, it } from "vitest";
 import type { Instance } from "../api/types";
 import {
-  STUCK_IDLE_S,
+  UNCOMMITTED_IDLE_S,
   attentionPriority,
-  attentionReason,
   deriveSessionState,
   fmtClock,
+  idleUncommittedText,
   notifyRuleFor,
+  uncommittedWhat,
 } from "../lib/sessionState";
 
 const inst = (o: Partial<Instance>): Partial<Instance> => ({ title: "t", status: "running", ...o });
@@ -115,36 +117,77 @@ describe("limit", () => {
   });
 });
 
-describe("idle → stuck", () => {
+describe("idle on uncommitted changes", () => {
   const dirty = { files: 2, additions: 12, deletions: 3, uncommitted: { files: 2, additions: 12, deletions: 3 } };
+  const at = (idleS: number, o: Partial<Instance> = {}, diff: unknown = dirty) =>
+    deriveSessionState(
+      inst({ activity: "idle", stage: "agent", diff_stat: diff as Instance["diff_stat"], activity_since: NOW / 1000 - idleS, ...o }),
+      { now: NOW, activity: "idle" }
+    );
 
-  it("joins the bell only after 20 minutes idle on uncommitted work", () => {
-    const at = (idleS: number, diff = dirty) =>
-      deriveSessionState(
-        inst({ activity: "idle", stage: "agent", diff_stat: diff as unknown as Instance["diff_stat"], activity_since: NOW / 1000 - idleS }),
-        { now: NOW, activity: "idle" }
-      );
-    const fresh = at(STUCK_IDLE_S - 60);
-    expect(fresh.inBell).toBe(false);
-    expect(fresh.reason).toBeUndefined();
-    const stuck = at(STUCK_IDLE_S + 60);
-    expect(stuck.state).toBe("idle");
-    expect(stuck.reason).toBe("stuck");
-    expect(stuck.inBell).toBe(true);
-    // Not the plain idle word: how long, in the tone the bell's rows wear.
-    expect(stuck.label).toBe("Idle 21m");
-    expect(stuck.tone).toBe("attention");
+  it("says what it is after 20 minutes idle — calm, out of the bell", () => {
+    const fresh = at(UNCOMMITTED_IDLE_S - 60);
+    expect(fresh.uncommitted).toBeUndefined();
     expect(fresh.label).toBe("Idle");
-    expect(fresh.tone).toBe("neutral");
-    expect(attentionReason(stuck)).toMatch(/^Idle 21m with unfinished work/);
+    const left = at(UNCOMMITTED_IDLE_S + 60);
+    expect(left.state).toBe("idle");
+    expect(left.reason).toBeUndefined();
+    expect(left.inBell).toBe(false);
+    expect(left.tone).toBe("neutral");
+    expect(left.label).toBe("Idle");
+    expect(notifyRuleFor(left)).toBe("");
+    expect(left.uncommitted).toEqual({ files: 2, additions: 12, deletions: 3, idleS: UNCOMMITTED_IDLE_S + 60 });
+    expect(idleUncommittedText(left.uncommitted!)).toBe("2 files uncommitted · idle 21m");
+    // The hint: the words, the line counts, and what you can do — never
+    // "unfinished work" or "possibly stuck".
+    expect(left.hint).toMatch(/^2 files uncommitted · idle 21m \(\+12 \u22123\)\n/);
+    expect(left.hint).toContain("Nothing is waiting on you");
+    expect(left.hint).toContain("Commit…");
+    expect(left.hint).toContain("Carry on");
+    expect(left.hint).not.toMatch(/unfinished work|possibly stuck/);
   });
 
-  it("a committed-and-left branch is not unfinished work", () => {
+  it("names one file, and falls back to line counts from a server with no file count", () => {
+    expect(uncommittedWhat({ files: 1, additions: 3, deletions: 0 })).toBe("1 file uncommitted");
+    expect(uncommittedWhat({ files: 0, additions: 120, deletions: 4 })).toBe("+120 \u22124 uncommitted");
+    const old = at(3 * 3600, {}, { files: 1, additions: 5, deletions: 1, uncommitted: { additions: 5, deletions: 1 } });
+    expect(idleUncommittedText(old.uncommitted!)).toBe("+5 \u22121 uncommitted · idle 3h");
+  });
+
+  it("is left out where it says nothing about the session's own work", () => {
+    const long = UNCOMMITTED_IDLE_S + 600;
+    // In place on a person's own checkout: the changes may be theirs.
+    expect(at(long, { in_place: true }).uncommitted).toBeUndefined();
+    // A background job that will wake the agent: it is waiting, not left.
+    const job = (state: string) => [{ pid: 1, id: "j", command: "sleep 9", state }] as unknown as Instance["background"];
+    expect(at(long, { background: job("waiting") }).uncommitted).toBeUndefined();
+    expect(at(long, { background: job("running") }).uncommitted).toBeUndefined();
+    // …but a stuck job never wakes it: still said.
+    expect(at(long, { background: job("stuck") }).uncommitted).toBeDefined();
+    // A route in flight owns the next step (its own Commit stop included).
+    const flight = (state: string) => ({ id: "f1", state, plan_name: "p", step: { title: "Checks" } }) as unknown as Instance["flight"];
+    expect(at(long, { flight: flight("running") }).uncommitted).toBeUndefined();
+    // A route a person paused says "Paused route" instead.
+    const paused = at(long, { flight: flight("paused") });
+    expect(paused.uncommitted).toBeUndefined();
+    expect(paused.label).toBe("Paused route");
+    // A finished route's leftovers are the session's own: still said.
+    expect(at(long, { flight: flight("done") }).uncommitted).toBeDefined();
+    // Paused and sleeping sessions have their own words.
+    expect(at(long, { status: "paused" }).label).toBe("Paused");
+    expect(at(long, { status: "paused" }).uncommitted).toBeUndefined();
+    const asleep = at(long, { sleeping: { since: NOW / 1000 - 60, reason: "idle" } as Instance["sleeping"] });
+    expect(asleep.label).toBe("Sleeping");
+    expect(asleep.uncommitted).toBeUndefined();
+  });
+
+  it("a committed-and-left branch has nothing to say", () => {
     const ss = deriveSessionState(
       inst({ activity: "idle", stage: "committed", diff_stat: { files: 0, additions: 0, deletions: 0 } as unknown as Instance["diff_stat"], activity_since: NOW / 1000 - 36000 }),
       { now: NOW, activity: "idle" }
     );
     expect(ss.inBell).toBe(false);
+    expect(ss.uncommitted).toBeUndefined();
   });
 
   it("an unknown activity_since never counts as idle time", () => {
@@ -152,7 +195,7 @@ describe("idle → stuck", () => {
       inst({ activity: "idle", stage: "agent", diff_stat: dirty as unknown as Instance["diff_stat"], activity_since: 0 }),
       { now: NOW, activity: "idle" }
     );
-    expect(ss.inBell).toBe(false);
+    expect(ss.uncommitted).toBeUndefined();
   });
 });
 

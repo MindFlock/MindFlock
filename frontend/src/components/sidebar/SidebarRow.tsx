@@ -23,10 +23,13 @@ import {
   agentBlockedLine,
   agentBlockedState,
   deriveSessionState,
+  idleUncommittedText,
   needsYouAction,
   startFailedHint,
+  uncommittedWhat,
   type NeedsYouAct,
 } from "../../lib/sessionState";
+import { carryOn } from "../../lib/sendPrompt";
 import { waitLine as waitLineOf } from "../../lib/waitWhy";
 import { AgentBlockedChip } from "../setup/AgentBlocked";
 import { useSetup } from "../setup/useSetup";
@@ -41,6 +44,7 @@ import { useNow } from "../../lib/useNow";
 import {
   MAX_TITLE_LEN,
   cleanupMissing,
+  commitSession,
   folderInUseText,
   ideSession,
   rerunSetup,
@@ -250,6 +254,10 @@ export const SidebarRow = memo(function SidebarRow({
   const [jobMenuAt, setJobMenuAt] = useState<RowMenuOpen | null>(null);
   const jobChipRef = useRef<HTMLButtonElement | null>(null);
   const jobMenuId = useId();
+  // The uncommitted chip's menu (Commit…, Carry on), under the chip.
+  const [leftMenuAt, setLeftMenuAt] = useState<RowMenuOpen | null>(null);
+  const leftChipRef = useRef<HTMLButtonElement | null>(null);
+  const leftMenuId = useId();
   // The row's ✕ on a session with uncommitted changes asks first, on a strip
   // under the row (never confirm(): the desktop app has none).
   const [closeArmed, setCloseArmed] = useState(false);
@@ -1007,6 +1015,36 @@ export const SidebarRow = memo(function SidebarRow({
                 Wake
               </span>
             </button>
+          ) : ss.uncommitted && !inst.device && !pending && !paused && !missing ? (
+            // Idle on uncommitted changes (lib/sessionState `uncommitted`): a
+            // calm chip that says what it is ("3 files uncommitted") and
+            // opens what you can do about it — Commit…, Carry on. Not a
+            // needs-you door: nothing is waiting on you.
+            <button
+              type="button"
+              ref={leftChipRef}
+              className={"stagechip chip-uncommitted s-idle tone-" + ss.tone}
+              title={ss.hint + "\nClick for Commit… or Carry on"}
+              aria-label={idleUncommittedText(ss.uncommitted) + " — Commit or tell the agent to carry on"}
+              aria-haspopup="menu"
+              aria-expanded={!!leftMenuAt}
+              aria-controls={leftMenuAt ? leftMenuId : undefined}
+              onClick={(e) =>
+                act(() => {
+                  if (leftMenuAt) return setLeftMenuAt(null);
+                  const b = leftChipRef.current?.getBoundingClientRect();
+                  if (b) setLeftMenuAt({ x: b.left, y: b.bottom + 4, flipY: b.top - 4, align: "start", keyboard: e.detail === 0 });
+                }, e)
+              }
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              {uncommittedWhat(ss.uncommitted)}
+            </button>
+          ) : ss.uncommitted ? (
+            // Another device's row: the words, its actions are on that device.
+            <span className={"stagechip chip-uncommitted s-idle tone-" + ss.tone} title={ss.hint}>
+              {uncommittedWhat(ss.uncommitted)}
+            </span>
           ) : needsAct && !pending && !paused && !missing ? (
             // "Needs you" is a door to where you act (lib/sessionState
             // needsYouAction): the bell's answer row, the Terminal, a setup
@@ -1254,9 +1292,62 @@ export const SidebarRow = memo(function SidebarRow({
           <JobMenu title={title} job={bg.job} stopPid={bg.stopPid} onDone={() => setJobMenuAt(null)} />
         </RowMenu>
       )}
+      {leftMenuAt && ss.uncommitted && (
+        <RowMenu
+          id={leftMenuId}
+          at={leftMenuAt}
+          label={"Uncommitted changes in " + shown}
+          opener={leftChipRef.current}
+          onClose={(refocus) => {
+            setLeftMenuAt(null);
+            if (refocus) leftChipRef.current?.focus();
+          }}
+        >
+          <UncommittedMenu title={title} text={idleUncommittedText(ss.uncommitted)} onDone={() => setLeftMenuAt(null)} />
+        </RowMenu>
+      )}
     </>
   );
 });
+
+/** The uncommitted chip's menu: what is left ("3 files uncommitted · idle
+ * 25m"), then Commit… (the Commit dialog) and Carry on (tells the agent to
+ * finish, or say what blocks it). Drawn with SessionMenu's look. */
+export function UncommittedMenu({ title, text, onDone }: { title: string; text: string; onDone(): void }) {
+  return (
+    <div className="session-menu uncommitted-menu">
+      <div className="sm-head">{text}</div>
+      <button
+        type="button"
+        role="menuitem"
+        data-menu="commit"
+        onClick={() => {
+          onDone();
+          commitSession(title);
+        }}
+      >
+        <span className="sm-verb">
+          <span className="sm-label">Commit…</span>
+        </span>
+        <span className="end-sub">Keep the changes in a commit</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        data-menu="carry-on"
+        onClick={() => {
+          onDone();
+          void carryOn(title);
+        }}
+      >
+        <span className="sm-verb">
+          <span className="sm-label">Carry on</span>
+        </span>
+        <span className="end-sub">Tell the agent to finish, or say what blocks it</span>
+      </button>
+    </div>
+  );
+}
 
 /** The background-job chip's menu: Stop (a stuck job), then "Expected to
  * take…" — 30 min / 1 h / 6 h / 24 h, or Custom… as one inline field (never

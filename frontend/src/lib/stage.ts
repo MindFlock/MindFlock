@@ -217,7 +217,7 @@ export function chipState(inst: Partial<Instance>, ss: SessionState = deriveSess
   const stage = guidedStage(inst);
   if (stage === "agent" || stage === "interrupt") return stateChip(ss);
   const m = stageMeta(stage);
-  return { label: m.label, cls: "s-" + stage, title: ss.reason === "stuck" && ss.hint ? ss.hint : m.label };
+  return { label: m.label, cls: "s-" + stage, title: ss.uncommitted && ss.hint ? ss.hint : m.label };
 }
 
 /** O3 verification-gate chip descriptor (second, smaller chip) or null. */

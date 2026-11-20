@@ -159,7 +159,7 @@ describe("isHeldRefusal", () => {
   });
 
   it("is what the send paths check before calling it a failure", () => {
-    for (const f of ["components/grid/QueueTab.tsx", "components/grid/ThreadTab.tsx", "components/flights/useChainMenu.tsx", "lib/playbooks.ts"])
+    for (const f of ["components/grid/QueueTab.tsx", "components/grid/ThreadTab.tsx", "lib/sendPrompt.ts", "lib/playbooks.ts"])
       expect(code(f)).toContain("isHeldRefusal(");
     expect(code("lib/voiceDesktop.ts")).toContain("body?.held");
   });

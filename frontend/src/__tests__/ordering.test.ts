@@ -232,7 +232,7 @@ describe("attentionItems", () => {
     expect(items).toEqual([]);
   });
 
-  it("flags a calm-but-wedged session sitting on uncommitted work", () => {
+  it("leaves a session idle on uncommitted changes out — a fact the row says, not a request", () => {
     const items = attentionItems([
       inst({
         title: "wedged",
@@ -242,9 +242,7 @@ describe("attentionItems", () => {
         activity_since: Date.now() / 1000 - 2000,
       }),
     ]);
-    expect(items).toHaveLength(1);
-    expect(items[0].p).toBe(1);
-    expect(items[0].reason).toContain("possibly stuck");
+    expect(items).toEqual([]);
   });
 
   it("does not flag a recently-active idle session", () => {

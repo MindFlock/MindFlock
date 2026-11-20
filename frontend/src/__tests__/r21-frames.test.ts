@@ -165,3 +165,48 @@ describe("SkyLine.css: neutral box, state border", () => {
     expect(rule(".skl-chainline.skl-frame > .skl-bar.skl-frame-bar .skl-name")).toMatch(/font-size: clamp\([^;]*var\(--sky-z, 1\)/);
   });
 });
+
+describe("idle on uncommitted changes: a quiet note, never the amber frame", () => {
+  const dirty = () =>
+    rowOf({
+      activity_since: Date.now() / 1000 - 25 * 60,
+      diff_stat: { files: 3, additions: 120, deletions: 4, uncommitted: { files: 3, additions: 120, deletions: 4 } },
+    });
+
+  it("the frame stays idle (not `you`), the bar says what it is and offers Commit… / Carry on", () => {
+    const html = render(dirty());
+    expect(html).toContain('data-frame="idle"');
+    expect(html).not.toContain('data-frame="you"');
+    const bar = html.slice(html.indexOf('class="skl-bar skl-label skl-frame-bar"'), html.indexOf('class="skl-menu"'));
+    expect(bar).toContain('<span class="skl-uncommitted-text">3 files uncommitted · idle 25m</span>');
+    expect(bar).toMatch(/class="linklike skl-uncommitted-act"[^>]*>Commit…<\/button>/);
+    expect(bar).toMatch(/class="linklike skl-uncommitted-act"[^>]*>Carry on<\/button>/);
+    // The state chip is the calm Idle, not "Idle 25m" in the attention tone.
+    expect(bar).toContain("tone-neutral");
+    expect(bar).not.toContain("tone-attention");
+    expect(html).not.toMatch(/unfinished work|possibly stuck/);
+  });
+
+  it("a fresh idle session, or one in place on a person's checkout, has no note", () => {
+    expect(render(rowOf({ diff_stat: { files: 3, additions: 1, deletions: 0, uncommitted: { files: 3, additions: 1, deletions: 0 } }, activity_since: Date.now() / 1000 - 60 }))).not.toContain("skl-uncommitted");
+    expect(render({ ...dirty(), in_place: true } as Instance)).not.toContain("skl-uncommitted");
+  });
+
+  it("another device's row: the words, no actions", () => {
+    const html = render({ ...dirty(), device: "rig" } as Instance);
+    expect(html).toContain("3 files uncommitted · idle 25m");
+    expect(html).not.toContain("skl-uncommitted-act");
+  });
+
+  it("its look is the neutral surfaces: no amber, no glow, no breathing", () => {
+    const sheet = css("components/flights/SkyLine.css");
+    const i = sheet.indexOf(".skl-frame-bar .skl-uncommitted {");
+    expect(i).toBeGreaterThanOrEqual(0);
+    const note = sheet.slice(i, sheet.indexOf("}", i));
+    expect(note).toContain("var(--border)");
+    expect(note).toContain("var(--panel-2)");
+    expect(note).toContain("var(--muted)");
+    const all = sheet.slice(i, sheet.indexOf('.skl[data-lod="far"] .skl-uncommitted-act'));
+    expect(all).not.toMatch(/tone-attention|box-shadow|animation/);
+  });
+});

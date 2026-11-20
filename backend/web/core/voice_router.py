@@ -154,9 +154,10 @@ MAX_LIST = 10
 #: A reply this fresh (seconds since its turn ended) is read out when you
 #: switch to its session; an older one only when asked ("what did it say").
 FRESH_REPLY_S = 120
-#: Idle this long on uncommitted work and the bell lists it as stuck
-#: (mobile.js ``STUCK_IDLE_S``).
-STUCK_IDLE_S = 20 * 60
+#: Idle this long on uncommitted changes and the row notes it — calmly, out
+#: of the bell, so "what needs me" never reads it (mobile.js
+#: ``UNCOMMITTED_IDLE_S``).
+UNCOMMITTED_IDLE_S = 20 * 60
 #: Longest title made from a "called <name>" (the New dialog's cap).
 TITLE_MAX = 32
 #: Words of the task a title is made from.
@@ -1709,9 +1710,10 @@ def session_state(row: dict, now: Optional[float] = None) -> dict:
 
     ``in_bell`` is the rail bell's attention set — a question, a failed
     setup or pre-commit, failing checks, a gone terminal, a Verify waiting
-    on you (or failed, or blocked), or idle with
-    unfinished work for :data:`STUCK_IDLE_S` — the one rule the phone's "what
-    needs me" reads too."""
+    on you (or failed, or blocked) — the one rule the phone's "what needs me"
+    reads too. Idle on uncommitted changes for :data:`UNCOMMITTED_IDLE_S` is
+    reason ``uncommitted`` and NOT in the bell: a fact the row says, not a
+    request."""
     now = time.time() if now is None else now
 
     def st(state, label, reason="", in_bell=False):
@@ -1773,11 +1775,23 @@ def session_state(row: dict, now: Optional[float] = None) -> dict:
     idle_for = now - since if since > 0 else 0
     ds = row.get("diff_stat") if isinstance(row.get("diff_stat"), dict) else {}
     un = ds.get("uncommitted") if isinstance(ds.get("uncommitted"), dict) else {}
-    dirty = _num(un.get("additions")) + _num(un.get("deletions")) > 0
+    dirty = (
+        _num(un.get("files")) + _num(un.get("additions")) + _num(un.get("deletions"))
+        > 0
+    )
+    # Where it says nothing about the session's own work (sessionState.ts
+    # idleUncommittedOf): in place on a person's checkout, a background job
+    # that will wake the agent, a route in flight.
+    jobs = row.get("background") if isinstance(row.get("background"), list) else []
+    job_wakes = any(isinstance(j, dict) and j.get("state") != "stuck" for j in jobs)
+    flight = row.get("flight") if isinstance(row.get("flight"), dict) else {}
+    own_work = (
+        not row.get("in_place") and not job_wakes and flight.get("state") != "running"
+    )
     if vstate == "passed":
         return st("idle", "Verified", "verified")
-    if idle_for > STUCK_IDLE_S and dirty:
-        return st("idle", "Idle", "stuck", True)
+    if idle_for > UNCOMMITTED_IDLE_S and dirty and own_work:
+        return st("idle", "Idle", "uncommitted")
     return st("idle", "Idle")
 
 

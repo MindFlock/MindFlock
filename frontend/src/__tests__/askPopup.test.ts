@@ -458,7 +458,10 @@ describe("a question in words reads Question, like a dialog", () => {
       diff_stat: { uncommitted: { additions: 3, deletions: 0 } } as never,
     };
     expect(deriveSessionState(stale, { activity: "idle", now: NOW }).reason).toBe("question");
-    expect(deriveSessionState({ ...stale, asking: null }, { activity: "idle", now: NOW }).reason).toBe("stuck");
+    const left = deriveSessionState({ ...stale, asking: null }, { activity: "idle", now: NOW });
+    expect(left.reason).toBeUndefined();
+    expect(left.uncommitted).toBeDefined();
+    expect(left.inBell).toBe(false);
   });
 
   it("the bell: one answer row with the question, whether from the rows or the outbox", () => {
