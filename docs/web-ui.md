@@ -4663,7 +4663,7 @@ hidden the step has no target and centres its card) · a line's bar (drag it, �
 or carries on, drag jumps) · a stop's hover toolbar · a stop's dialog · the
 shelf (default blocks, saved stops, All blocks…) · a grounded line (drop a
 block on empty sky, attach the Session chip) · selection (marquee, Group into
-a stop, Save to the shelf) · the Drag / Click tools (V / H / Space) · Delete
+a stop, Save as a route…) · the Drag / Click tools (V / H / Space) · Delete
 · the intake lane · zoom and Fit (0 / 1 / + / −) · the ?. A selector list
 matches in document order and the top bar comes first, so no step falls back
 to the toggle (it would always win): each target is the element's
@@ -4896,11 +4896,27 @@ above (details in docs/flights.md "Flow polish"):
 - **Saving routes.** A session's route menu has **Save as a route…**; a route
   with no session asks for its name in an inline field (checked like a rename,
   never `window.prompt`); a line from a saved route offers **Save to “<name>”**
-  and **Save as a new route…**; a saved route's menu has **Edit its stops**,
+  and **Save as a new route…**; the selection bar and the group dialog say
+  **Save as a route** too; a saved route's menu (on the shelf, and its ⋯ in
+  **All stops…**, docked or floating) has **Edit its stops**,
   which places an editable copy on the Sky under a bar *Editing “<name>”* with
   **Save** (it writes back, then takes the copy off). Every save's toast ends
   *— routes already running keep their own copy*. With no saved routes the
-  shelf says what a route is and offers **Start a route**.
+  shelf says what a route is and offers **Start a route**. **Reset to
+  default** on a built-in saved route has **Undo** on its toast, which saves
+  your version back.
+- **Removals ask, or undo.** Removing the stop a route is at asks *Remove
+  “X”? The route is at it right now…* wherever you remove it from (the tile's
+  Delete / ⋯ / 🗑, the stop dialog's **Remove**, a group's Remove, a sub-step's
+  🗑); removing a stop of a finished route asks *Clear the finished route? Its
+  record goes.*; ■ on a route with no session asks *Stop this route?*; and
+  discarding a default-stops edit has **Undo**. ▶ on a route with no session
+  reads *Starting…* and can't be pressed again until the run begins.
+- **The keyboard reaches a stop's menu**: with a stop focused, the Menu key or
+  `Shift+F10` opens it (Jump here, the halt point, Loop back to…, Run in
+  parallel). A prompt typed in the Sky's New session card survives `Esc` or a
+  click away and is there the next time the card opens, until a session is
+  created from it.
 - **The stop dialog** (`StopDialog.tsx`) of a stop that is halted, waiting on
   you or on a paused route leads with the state chip, the reason in plain
   words and what the stop asks of you, then the **remedies**, the one that
