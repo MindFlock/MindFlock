@@ -3,7 +3,7 @@
  * (lib/keymap KEYMAP help entries + CHORDS) so the sheet can never drift
  * from the real bindings. */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { inShell } from "../../lib/shell";
@@ -17,8 +17,10 @@ import {
   defaultCombosFor,
   getKeyOverride,
   hasOverrides,
+  keyOverridesSnapshot,
   keymapVersion,
   resetAllOverrides,
+  restoreKeyOverrides,
   resetChordOverride,
   resetKeyOverride,
   sameCombo,
@@ -132,6 +134,7 @@ export function ShortcutsSheet() {
   // it, and a click on a row shouldn't start recording keystrokes.
   const [editing, setEditing] = useState(false);
   const [, setVersion] = useState(keymapVersion());
+  const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => subscribeKeymap(() => setVersion(keymapVersion())), []);
   useEffect(() => {
@@ -139,6 +142,11 @@ export function ShortcutsSheet() {
       setCapturing(null);
       setEditing(false);
     }
+  }, [open]);
+  // The sheet takes focus when it opens, like every other dialog, so Tab
+  // walks its buttons and rows rather than the page behind it.
+  useEffect(() => {
+    if (open) cardRef.current?.focus();
   }, [open]);
 
   // Esc closes the sheet (its own Dialogs row says so). Window capture, so a
@@ -229,7 +237,7 @@ export function ShortcutsSheet() {
         if (e.target === e.currentTarget) closeDialog();
       }}
     >
-      <div className="shortcuts-card">
+      <div className="shortcuts-card" ref={cardRef} tabIndex={-1} role="dialog" aria-label="Keyboard shortcuts">
         <div className="shortcuts-head">
           <span>Keyboard shortcuts</span>
           <button
@@ -251,9 +259,13 @@ export function ShortcutsSheet() {
               title="Forget every custom binding and go back to the defaults"
               onClick={() => {
                 setCapturing(null);
+                // Kept so Undo can put every custom key back.
+                const saved = keyOverridesSnapshot();
                 resetAllOverrides();
                 setVersion(keymapVersion());
-                toast("Shortcuts restored to defaults");
+                toast("Restored the default shortcuts", {
+                  action: { label: "Undo", onClick: () => restoreKeyOverrides(saved) },
+                });
               }}
             >
               Restore defaults
@@ -320,6 +332,19 @@ export function ShortcutsSheet() {
                         : undefined
                     }
                     onClick={meta ? () => setCapturing({ meta, mode: "set" }) : undefined}
+                    // A rebindable row is a button to the keyboard too: Tab
+                    // reaches it, Enter or Space starts the recording.
+                    role={meta ? "button" : undefined}
+                    tabIndex={meta ? 0 : undefined}
+                    onKeyDown={
+                      meta
+                        ? (e) => {
+                            if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+                            e.preventDefault();
+                            setCapturing({ meta, mode: "set" });
+                          }
+                        : undefined
+                    }
                   >
                     <span className="shortcut-keys">
                       {isCapturing
@@ -369,6 +394,10 @@ export function ShortcutsSheet() {
                             if (meta.kind === "chord") resetChordOverride(meta.id);
                             else resetKeyOverride(meta.id);
                             setVersion(keymapVersion());
+                            toast(
+                              "Restored the default for " +
+                                (meta.kind === "chord" ? CHORDS[meta.id].desc : desc)
+                            );
                           }}
                         >
                           ↺

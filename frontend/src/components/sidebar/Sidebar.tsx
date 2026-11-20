@@ -38,7 +38,7 @@ import { orderedSections, SESSIONS_KEY } from "./barDefs";
 import { FooterCustomize } from "./FooterCustomize";
 import {
   matchesFilter,
-  filterQuery,
+  matchesWindowFilter,
   movedRailOrder,
   orderedInstances,
   orderedKeys,
@@ -337,10 +337,7 @@ export function Sidebar({ onOpenChat }: Props) {
     [ui.specialOpen, ui.verifyPanes, ui.extPanes]
   );
   const winFiltered = useMemo(
-    () => {
-      const q = filterQuery(ui.filter);
-      return windows.filter((w) => !q || w.title.toLowerCase().includes(q));
-    },
+    () => windows.filter((w) => matchesWindowFilter(w.title, ui.filter)),
     [windows, ui.filter]
   );
   // The full rail in display order, UNFILTERED — what a drag reorders (the

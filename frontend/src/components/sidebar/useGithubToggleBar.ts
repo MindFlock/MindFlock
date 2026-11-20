@@ -7,13 +7,24 @@
  * status flag means "actively working", and the switch name. Each bar keeps its
  * own markup; only this behavior is shared. */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
 import { refreshMindflockStatus, useConfig, useMindflockStatus } from "../../state/queries";
 import { useUi } from "../../state/store";
+
+/** The browser's online/offline events — the Tickets bar's red dot reads the
+ * same signal (AutomationBar). */
+function subscribeOnline(cb: () => void) {
+  window.addEventListener("online", cb);
+  window.addEventListener("offline", cb);
+  return () => {
+    window.removeEventListener("online", cb);
+    window.removeEventListener("offline", cb);
+  };
+}
 
 interface GithubSettings {
   enabled?: boolean;
@@ -31,6 +42,12 @@ export interface GithubToggleBar {
   active: boolean;
   starting: boolean;
   busy: boolean;
+  /** Offline, or the pipeline's last poll hit a network error: the dot turns
+   * red, as the Tickets bar's does. */
+  netIssue: boolean;
+  online: boolean;
+  /** The switch's name (its aria-label), as passed in. */
+  toggleLabel: string;
   toggle: (enable: boolean) => Promise<void>;
 }
 
@@ -61,6 +78,7 @@ export function useGithubToggleBar(opts: {
   });
   // The one shared status query (AutomationBar's too) — TanStack dedupes it.
   const { data: ingestion } = useMindflockStatus();
+  const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine);
 
   // The Settings dialog edits github.* without touching this query — re-read
   // whenever a dialog closes so the bar reflects it at once.
@@ -82,6 +100,7 @@ export function useGithubToggleBar(opts: {
   // "waits" (gold) for a new item to appear.
   const active = running && !!ingestion?.[activeFlag];
   const starting = on && !running;
+  const netIssue = !online || !!ingestion?.net_error;
 
   const toggle = async (enable: boolean) => {
     if (busy) return;
@@ -102,5 +121,5 @@ export function useGithubToggleBar(opts: {
     }
   };
 
-  return { visible, repos, on, running, active, starting, busy, toggle };
+  return { visible, repos, on, running, active, starting, busy, netIssue, online, toggleLabel, toggle };
 }

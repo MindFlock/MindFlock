@@ -4,6 +4,7 @@
 import type { Instance } from "../../api/types";
 import { attentionPriority, attentionReason, deriveSessionState, effectiveActivity, verifyOf } from "../../lib/sessionState";
 import { laneOf } from "../../lib/agentMessages";
+import { matchesTokens, searchTokens } from "../../lib/rowSearch";
 import { isVerifySession } from "../dialogs/verifySession";
 
 /** The states of a session's own verify (lib/sessionState `verifyNeedsYou`). */
@@ -344,19 +345,20 @@ export function filterQuery(raw: string): string {
 
 /** Match only the session's own identifiers — name, alias, branch. NOT repo
  * or path (every worktree of one repo shares those). `filter` is the box's
- * raw text. */
+ * raw text; each word must appear somewhere, like Recently closed, so
+ * "fix bug" finds fix-login-bug. */
 export function matchesFilter(
   inst: Instance,
   raw: string,
   aliases: Record<string, string>
 ): boolean {
-  const filter = filterQuery(raw);
-  if (!filter) return true;
-  const hay = [inst.title, aliases[inst.title], inst.branch]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  return hay.indexOf(filter) >= 0;
+  return matchesTokens([inst.title, aliases[inst.title], inst.branch], searchTokens(raw || ""));
+}
+
+/** An open window's row (logs, chat, a pane) against the box's raw text —
+ * the same every-word match as matchesFilter, on its title. */
+export function matchesWindowFilter(title: string, raw: string): boolean {
+  return matchesTokens([title], searchTokens(raw || ""));
 }
 
 export interface AttentionItem {

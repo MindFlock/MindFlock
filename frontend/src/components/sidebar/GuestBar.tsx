@@ -4,7 +4,8 @@
  * click (DELETE /api/guests/tunnel) revokes every link and closes the public
  * address; a guest's open terminal closes on its next frame. Never shown to
  * a guest (config.guest) — they have no links of their own to see. Polled
- * every 10 s: the state is tiny and the bar is the owner's reassurance. The
+ * every 10 s while the window is shown (a hidden one rests and catches up on
+ * return): the state is tiny and the bar is the owner's reassurance. The
  * same poll feeds where each guest is (lib/guestFocus: the pill on the rail
  * row they are looking at), and the bus moves it between polls. */
 
@@ -12,6 +13,9 @@ import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import type { GuestLink, GuestTunnel } from "../../api/types";
 import { toast } from "../../lib/toast";
+import { errorPop } from "../../lib/errorPop";
+import { errMsg } from "../../lib/format";
+import { pollWhileVisible } from "../grid/visiblePoll";
 import { feedGuestFocus, installGuestFocusEvents } from "../../lib/guestFocus";
 import { useConfig } from "../../state/queries";
 import { killedText } from "../settings/screens/peer/GuestLinks";
@@ -49,10 +53,10 @@ export function GuestBar() {
           /* a 403 on a gate-off tailnet caller, a blip: nothing to show */
         });
     void tick();
-    const t = setInterval(() => void tick(), POLL_MS);
+    const stop = pollWhileVisible(() => void tick(), POLL_MS);
     return () => {
       live = false;
-      clearInterval(t);
+      stop();
     };
   }, [owner]);
 
@@ -67,7 +71,7 @@ export function GuestBar() {
       setTunnel(null);
       toast(killedText(r.revoked || 0));
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e));
+      errorPop("Kill guest links failed", errMsg(e));
     } finally {
       setBusy(false);
     }

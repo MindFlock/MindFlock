@@ -16,7 +16,7 @@ import { useGithubToggleBar } from "./useGithubToggleBar";
 export function GitIssueBar() {
   const openDialogFor = useUi((s) => s.openDialogFor);
   // Opt-in: absent => off (only an explicit true switches issue handling on).
-  const { visible, repos, on, active, starting, busy, toggle } = useGithubToggleBar({
+  const { visible, repos, on, active, starting, busy, netIssue, online, toggleLabel, toggle } = useGithubToggleBar({
     settingKey: "issues_enabled",
     reposKey: "issue_repos",
     defaultOn: false,
@@ -37,15 +37,20 @@ export function GitIssueBar() {
         id="git-issue-dot"
         // `active` outranks the switch: an issue forced from Intake is
         // genuinely in flight even with automated handling switched off.
-        className={"dc-dot " + (active ? "on" : !on ? "off" : "idle")}
+        // Red on a network problem, like the Tickets bar's dot.
+        className={"dc-dot " + (netIssue ? "dc-error" : active ? "on" : !on ? "off" : "idle")}
         title={
           active
             ? "An issue is starting right now"
-            : on
-              ? starting
-                ? "Switched on — the pipeline is starting"
-                : "Waiting for a newly opened issue — turns green while one is being handled"
-              : undefined
+            : netIssue
+              ? online
+                ? "Connection problems — see Settings → System logs"
+                : "No network connection"
+              : on
+                ? starting
+                  ? "Switched on — the pipeline is starting"
+                  : "Waiting for a newly opened issue — turns green while one is being handled"
+                : undefined
         }
       />
       <button
@@ -58,6 +63,7 @@ export function GitIssueBar() {
         GitHub issues
       </button>
       <span className="dc-actions">
+        <span className="dc-sw-label">Auto-start</span>
         <label
           className="dc-switch"
           title="Auto-start new issues — the same switch as Intake → GitHub issues (your repositories are kept either way)"
@@ -66,6 +72,7 @@ export function GitIssueBar() {
             type="checkbox"
             id="git-issue-toggle"
             checked={on}
+            aria-label={toggleLabel}
             disabled={busy}
             onChange={(e) => toggle(e.target.checked)}
           />
