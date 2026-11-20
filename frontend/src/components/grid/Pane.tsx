@@ -23,9 +23,12 @@ import {
   getTerm,
   peekTerm,
   releaseTerm,
+  termCover,
+  UNREACHABLE_MS,
   type DragScreenCtx,
   type TermHandle,
 } from "../../lib/terminals";
+import { startSession } from "../../lib/revive";
 import { isShown, repaintTerm, trackRepaint } from "../../lib/wsTerm";
 import { toast } from "../../lib/toast";
 import { copyPaneHistory } from "../../lib/paneHistory";
@@ -259,6 +262,9 @@ function PaneImpl({
   const [booted, setBooted] = useState(false);
   const [wsState, setWsState] = useState("connecting");
   const [shellStarted, setShellStarted] = useState(savedTab === "shell");
+  // The shell terminal's own state and first bytes, for its cover (TermCover).
+  const [shellState, setShellState] = useState("connecting");
+  const [shellBooted, setShellBooted] = useState(false);
   // Held offline after a crash (lib/heldOffline, backend core/held.py): the
   // row says so, or the agent socket was refused with 4424 ("held"). Like
   // Paused, the Agent tab is a placeholder (HeldBody) and NO agent socket is
@@ -393,6 +399,11 @@ function PaneImpl({
         // Re-adopting an already-booted terminal (pane remounted by a grid
         // move) never fires onBoot again — sync the cover off its flag.
         if (handle.booted) setBooted(true);
+      } else {
+        handle.onState = (s) => setShellState(s);
+        handle.onBoot = () => setShellBooted(true);
+        setShellState(handle.state);
+        if (handle.booted) setShellBooted(true);
       }
       // Fit AND repaint: an adopted container was detached (a grid move, the
       // trip to the sky and back), and its rows are not drawn again until
@@ -1524,16 +1535,13 @@ function PaneImpl({
               {ghost ? <div className="ghost-row-mask" aria-hidden="true" /> : null}
             </div>
           ) : null}
-          {!booted && (
-            <div className="term-loading">
-              <div className="spinner" />
-              <p>Loading session…</p>
-            </div>
-          )}
+          <TermCover title={title} kind="agent" state={wsState} booted={booted} />
         </div>
         )}
         {shellStarted ? (
-          <div className={"pane-term shell-term" + (tab !== "shell" ? " hidden" : "")} ref={adopt("shell")} />
+          <div className={"pane-term shell-term" + (tab !== "shell" ? " hidden" : "")} ref={adopt("shell")}>
+            <TermCover title={title} kind="shell" state={shellState} booted={shellBooted} />
+          </div>
         ) : (
           <div className={"pane-term shell-term" + (tab !== "shell" ? " hidden" : "")} />
         )}
@@ -1686,6 +1694,98 @@ function textWidth(text: string, font: string): number {
   if (!measureCtx) return text.length * 7;
   measureCtx.font = font;
   return measureCtx.measureText(text).width;
+}
+
+/** What a pane draws over one of its terminals (lib/terminals termCover):
+ * "Loading session…" before the first bytes; a "Reconnecting…" line over the
+ * old screen while the socket is down; after UNREACHABLE_MS down, "Can't reach
+ * the session — retrying" with Retry; an ordered worker before its turn,
+ * "Waiting its turn" with Start now; and when the server's errors ran out
+ * the retries, the error with Retry. The terminal keeps its own socket — the
+ * buttons only ask it (or the session) to go now. */
+export function TermCover({
+  title,
+  kind,
+  state,
+  booted,
+}: {
+  title: string;
+  kind: "agent" | "shell";
+  state: string;
+  booted: boolean;
+}) {
+  const [, redraw] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const h = peekTerm(title, kind);
+  const since = h?.downSince || 0;
+  const downFor = since ? Date.now() - since : 0;
+  const cover = termCover(state, booted, downFor);
+  // Redraw when the outage crosses UNREACHABLE_MS (nothing else would).
+  useEffect(() => {
+    if (cover !== "loading" && cover !== "reconnecting") return;
+    if (!since) return;
+    const t = setTimeout(() => redraw((n) => n + 1), Math.max(0, UNREACHABLE_MS - downFor) + 50);
+    return () => clearTimeout(t);
+  }, [cover, since, downFor]);
+  const retry = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    peekTerm(title, kind)?.retry();
+  };
+  if (cover === "none") return null;
+  if (cover === "reconnecting")
+    return (
+      <div className="term-reconnecting" role="status">
+        Reconnecting…
+      </div>
+    );
+  if (cover === "loading")
+    return (
+      <div className="term-loading">
+        <div className="spinner" />
+        <p>{kind === "shell" ? "Loading shell…" : "Loading session…"}</p>
+      </div>
+    );
+  if (cover === "waiting")
+    return (
+      <div className="term-loading term-cover" role="status">
+        <p className="term-cover-head">Waiting its turn</p>
+        <p>Its agent starts when the workers before it finish.</p>
+        <button
+          type="button"
+          disabled={busy}
+          title="Start this worker's agent now, before its turn"
+          onClick={(e) => {
+            e.stopPropagation();
+            setBusy(true);
+            void startSession(title).then((r) => {
+              setBusy(false);
+              // Taken: attach now rather than at the next 5 s check.
+              if (r) peekTerm(title, kind)?.retry();
+            });
+          }}
+        >
+          {busy ? "Starting…" : "▶ Start now"}
+        </button>
+      </div>
+    );
+  if (cover === "failed")
+    return (
+      <div className="term-loading term-cover" role="alert">
+        <p className="term-cover-head">{kind === "shell" ? "The shell didn't start" : "The session didn't attach"}</p>
+        {h?.error ? <p className="term-cover-error">{h.error}</p> : null}
+        <button type="button" onClick={retry}>
+          Retry
+        </button>
+      </div>
+    );
+  return (
+    <div className="term-loading term-cover" role="status">
+      <p className="term-cover-head">Can't reach the session — retrying</p>
+      <button type="button" onClick={retry}>
+        Retry
+      </button>
+    </div>
+  );
 }
 
 /** Reduce-motion cover (Settings → General): while the agent is running, an

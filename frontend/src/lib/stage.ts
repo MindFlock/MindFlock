@@ -649,16 +649,19 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
       // that case leave the button alone rather than block on a guess.
       {
         const ms = inst.merge_state;
-        if (ms && !ms.can_merge)
-          return {
-            label: "Merge blocked",
-            disabled: true,
-            title:
-              "This PR cannot be merged yet:\n" +
-              (ms.blockers || []).map((b) => "• " + b).join("\n") +
-              (inst.pr_url ? "\n\nOpen the PR to resolve it." : ""),
-            run: () => {},
-          };
+        if (ms && !ms.can_merge) {
+          const why = "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n");
+          // With a PR to go to, the step goes there (like "Merge on GitHub ↗"
+          // above): the blockers are resolved on the PR, not here.
+          return inst.pr_url
+            ? {
+                label: "Merge blocked ↗",
+                hint: true,
+                title: why + "\n\nOpens the PR to resolve it.",
+                run: () => window.open(inst.pr_url!, "_blank"),
+              }
+            : { label: "Merge blocked", disabled: true, title: why, run: () => {} };
+        }
       }
       return { label: "Merge", run: () => mergeSession(title) };
     case "merged":

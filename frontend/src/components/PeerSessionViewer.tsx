@@ -29,6 +29,7 @@ import { toast } from "../lib/toast";
 import { openSettings } from "../lib/openSettings";
 import { PEER_SCREEN, viewerGateText } from "../lib/peer";
 import { MessageThread } from "./settings/screens/peer/MessageThread";
+import { pollWhileVisible } from "./grid/visiblePoll";
 
 type Tab = "session" | "files" | "changes";
 
@@ -148,10 +149,14 @@ function Viewer({ linkId, onClose }: { linkId: string; onClose(): void }) {
 function SessionTab({ base, name }: { base: string; name: string }) {
   const [screen, setScreen] = useState<Screen | null>(null);
   const [err, setErr] = useState("");
+  // Each read makes the peer capture its pane: none while this page is
+  // hidden (one as soon as it is shown again), and never two at once.
   useEffect(() => {
     let live = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let busy = false;
     const tick = async () => {
+      if (busy) return;
+      busy = true;
       try {
         const s = await api<Screen>(base + "/their-screen");
         if (!live) return;
@@ -159,13 +164,15 @@ function SessionTab({ base, name }: { base: string; name: string }) {
         setErr("");
       } catch (e) {
         if (live) setErr(errMsg(e));
+      } finally {
+        busy = false;
       }
-      if (live) timer = setTimeout(() => void tick(), SCREEN_POLL_MS);
     };
     void tick();
+    const stop = pollWhileVisible(() => void tick(), SCREEN_POLL_MS);
     return () => {
       live = false;
-      if (timer) clearTimeout(timer);
+      stop();
     };
   }, [base]);
   const lines = useMemo(() => ansiLines(screen?.text || ""), [screen?.text]);
