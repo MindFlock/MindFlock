@@ -7,8 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Updates take care of themselves.** One setting, Settings → Advanced →
+  Updates, the same in the browser and the desktop app: **Automatic** (a new
+  version installs by itself and the server restarts onto it when nobody has
+  typed for a minute, or after 30 minutes; sessions keep running), **Ask me**
+  (one offer per version, with an Update button right on the toast and the
+  bell row) or **Off**. Ask me is the default; a desktop app that had
+  automatic updates on keeps them. Also `mindflock update --auto on|ask|off`
+  and `mindflock update --check`.
+- **A development checkout updates like any other install.** On its default
+  branch with nothing uncommitted it fast-forwards, refreshes the install
+  without removing packages that are not in the lock (never `uv sync`), and
+  restarts, by one click or by itself in Automatic. If the new code does not
+  come up, the branch is moved back. On another branch, or with uncommitted
+  changes, it stays quiet and Settings says why in one line. No git commands
+  to copy any more, and the version shown is right after a pull.
+- Events `update.installing`, `update.done` and `update.failed`: a brief
+  "Updating…", then "Updated to vX" with What's new, or the reason it failed.
+
 ### Changed
 
+- Updates: the desktop app looks for a new version every 30 minutes (was
+  6 hours) and reads the update mode from the server; in Automatic it shows no
+  "Update available" toast, only one "Updated" line afterwards. While the
+  server restarts onto a new version the window shows a calm "Updating
+  MindFlock" card and reloads by itself.
+- `mindflock update` and `mindflock restart` act on the server that runs from
+  this install, whatever its port, and leave another install's server alone.
 - **The app says why it is slow when memory is low.** The memory notice now
   says sessions may be slow to show what you type and their output until
   memory recovers. When the server stops answering while memory was low, the
@@ -153,6 +180,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Updates: a development checkout is no longer told about releases it cannot
+  install; a failed GitHub lookup no longer announces the same release again;
+  the desktop app's update requests use the port the window is really on.
 - **Typing into a session no longer writes a file on every keystroke.**
   While a session's last reply ended in a question, each keystroke rewrote
   and fsynced `asking.json` on the server's event loop, the same loop that

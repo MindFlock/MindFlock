@@ -304,6 +304,9 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "relay_url",
         "relay_port",
     ),
+    # How THIS machine takes a new version (auto · ask · off): each install
+    # updates itself, and the desktop app migrates its own switch per machine.
+    "updates": ("mode",),
     # Not machine-specific, but never stamped or adopted as an edit: the
     # devices AGREE on one id — the pairing handshake, then
     # :func:`backend.web.core.person.reconcile` on every pass (sync_once).

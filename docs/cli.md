@@ -35,9 +35,10 @@ mindflock uninstall         # undo MindFlock's writes to your repos (see below)
 mindflock mcp               # the MindFlock MCP server on stdio (for an agent CLI to start)
 mindflock mcp --print-config  # how to register it with your own Claude Code / Codex
 mindflock token             # print this machine's access token (for sign-in / pairing)
-mindflock update            # install the newest release (the way install.json says) and restart the server onto it
-mindflock update --check    # …only print the installed and newest versions (exit 1 when behind)
-mindflock restart           # restart the running server (onto whatever is installed)
+mindflock update            # install the newest version (a release, or a checkout's own branch) and restart this install's server onto it
+mindflock update --check    # …only say what would happen and why (exit 1 when an update would run)
+mindflock update --auto on  # …install new versions by themselves (ask: say once per version; off: no checks)
+mindflock restart           # restart this install's server (onto whatever is installed)
 mindflock slot -- CMD ...   # run a heavy command (tests, builds) once a machine-wide slot is free
 mindflock --version         # print the installed version
 ```
@@ -140,7 +141,7 @@ identity has no command to run, so `--fix` asks for your name and email
 browser checklist's row does. Optional fixes are offered only with
 `--fix --all`, and always with Enter = no.
 
-### `mindflock update [--check] [--ref REF] [--yes] [--all-devices]`
+### `mindflock update [--check] [--ref REF] [--yes] [--all-devices] [--auto on|ask|off]`
 
 One update path for every way MindFlock gets installed. The command reads
 `$MINDFLOCK_HOME/install.json` (default `~/.mindflock/install.json`, written by
@@ -156,11 +157,22 @@ question), then:
   tag is resolved to its commit first, so what gets installed can't move under
   it);
 - **pipx** — runs `pipx install --force "mindflock[web] @ git+<repo>@<tag>"`;
-- **editable** (a development checkout) — prints the git commands that update
-  it (`cd <checkout>`, `git fetch --tags origin`, `git checkout <tag>`, `uv sync
-  --group web`, `mindflock restart`) and changes nothing, exit 0. A checkout is
-  recognised from the running package even when a stale install.json says
-  otherwise, so a release install is never written over your working tree.
+- **editable** (a development checkout) — the same update the server runs for
+  it (`backend/web/core/dev_update.py`), in the foreground: when the checkout
+  is on its default branch (`origin/HEAD`, else main/master) with nothing
+  uncommitted in tracked files and its upstream has new commits, `git fetch`,
+  `git merge --ff-only <the fetched tip>`, then a refresh of the editable
+  install that adds new dependencies and removes nothing (`uv pip install
+  --python <this interpreter> --reinstall-package mindflock -e
+  "<checkout>[web]"`, pip without uv — never `uv sync`, which would remove the
+  voice models, database drivers and anything else not in the lock). On
+  another branch, with uncommitted changes or diverged it prints why in one
+  line and changes nothing (exit 1). When the server doesn't come back, the
+  branch is moved back with `git reset --keep <old commit>` while the tree is
+  still clean. No release lookup, and `--ref` is ignored: a checkout follows
+  its own branch. A checkout is recognised from the running package even when
+  a stale install.json says otherwise, so a release install is never written
+  over your working tree.
 
 Database explorer drivers installed from the app (recorded in
 `~/.mindflock/dbclient/drivers.json`) and the local speech models' packages
@@ -174,28 +186,47 @@ carries them the same way. See
 [extensions.md](extensions.md#worked-example-the-database-client).
 
 The install runs in the foreground with its output on your terminal. After a
-good install the command refreshes install.json (`ref`, `sha`, `at`) and, if a
-server is running, restarts it onto the new engine (`POST /api/server/restart`
-with `{"keep_mode": true}` — a server started in tailscale mode stays in it;
-sessions are tmux sessions and keep running), waits until the server's own
-hello answers with the new build, and prints the version it now reports. With
-no server running it just installs and says `start it with: mindflock serve`.
+good install the command refreshes install.json (`ref`, `sha`, `at`) and, if
+the server that runs **from this install** is up, restarts it onto the new
+engine (`POST /api/server/restart` with `{"keep_mode": true}` — a server
+started in tailscale mode stays in it; sessions are tmux sessions and keep
+running), waits until the server's own hello answers with the new build, and
+prints the version it now reports. "From this install" is the hello's
+`install_id` (a fingerprint of where the engine is installed), looked for on
+every port a MindFlock server process on this machine listens on — not just
+whatever answers on 8765, so a developer's checkout server on another port is
+the one restarted, and a different install's server is left alone (and named).
+A server too old to report `install_id` counts when it runs this very
+interpreter. `--host`/`--port` (or `MINDFLOCK_HOST`/`MINDFLOCK_PORT`) name the
+server instead. With no such server running it just installs and says `start
+it with: mindflock serve`.
 It exits 1 when the install fails (the installer's output is already on the
 terminal), when the ref resolves to nothing, or when the server doesn't come
 back on the new build in time (run `mindflock restart`).
 
 `--ref` takes a release tag or a commit (a commit `git ls-remote` can't name is
-installed as itself). `--check` only prints the two versions and exits **0 when
-current, 1 when behind** (2 when GitHub couldn't be reached — "couldn't tell"
-is not "current"). `--all-devices` is `mindflock devices update`. Settings →
+installed as itself). `--check` changes nothing: it prints the versions, how
+updates are set (`Updates: ask`, …) and what `mindflock update` would do and
+why, and exits **0 when current (or when nothing can happen here, such as a
+checkout on another branch), 1 when an update would run** (2 when GitHub
+couldn't be reached — "couldn't tell" is not "current"). `--auto on|ask|off`
+sets how this computer takes new versions (`updates.mode`, see
+[configuration.md](configuration.md)): `on` installs them by itself and
+restarts when nobody is typing, `ask` says once per version, `off` doesn't
+check. It goes through the server of this install when one runs (`POST
+/api/update/mode`, so it takes effect at once), else straight into
+settings.json. `--all-devices` is `mindflock devices update`. Settings →
 Advanced in a browser does the same install through the server
 (`/api/update/*`), and the desktop app's **Update** does it for the engine and
 the app together — see [electron/README.md](../electron/README.md#updating).
 
 ### `mindflock restart`
 
-Restarts the running server (`POST /api/server/restart` with
-`{"keep_mode": true}`, so a server started in tailscale mode stays in it) and
+Restarts the server that runs from this install — found by the hello's
+`install_id` on any port, like `mindflock update` does, else whatever answers
+where discovery looks (`--host`/`--port` name one) — (`POST
+/api/server/restart` with `{"keep_mode": true}`, so a server started in
+tailscale mode stays in it) and
 waits until it answers again — use it after installing a new engine underneath a running
 server (install.sh does this for you). `mindflock serve` on a port where an
 older build is still running says so and points here.

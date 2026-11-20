@@ -2632,16 +2632,52 @@ def test_update_check_never_calls_an_unreachable_github_up_to_date(monkeypatch):
     assert body["available"] is False and body["latest"] == ""
 
 
-def test_update_check_passes_the_block_through(monkeypatch):
+def _checkout_status(monkeypatch, **over):
+    from backend.web.core import dev_update
+
+    st = {
+        "checkout": "/src/mf",
+        "branch": "main",
+        "default_branch": "main",
+        "dirty": False,
+        "behind": 2,
+        "ahead": 0,
+        "can_update": True,
+        "why_not": "",
+        "remote": "origin",
+        "upstream": "origin/main",
+        "head": "b" * 40,
+        "target": "c" * 40,
+        "target_version": "9.9.9",
+    }
+    st.update(over)
+    seen = []
+
+    def _status(*a, **k):
+        seen.append(k)
+        return dict(st)
+
+    monkeypatch.setattr(dev_update, "status", _status)
+    return seen
+
+
+def test_update_check_passes_a_checkouts_reason_through(monkeypatch):
     async def _latest(force=False):
         return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
 
+    why = (
+        "This is a development checkout on branch foo. Updates apply when it "
+        "is on main with nothing uncommitted."
+    )
     monkeypatch.setattr(server._self_update, "latest_release", _latest)
     monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.3.2")
     monkeypatch.setattr(server._self_update, "install_kind", lambda: "editable")
+    _checkout_status(monkeypatch, branch="foo", can_update=False, why_not=why)
     body = client.get("/api/update/check").json()
     assert body["kind"] == "editable"
-    assert "development checkout" in body["blocked"]
+    assert body["blocked"] == why and body["available"] is False
+    assert body["dev"]["can_update"] is False and body["dev"]["why_not"] == why
+    assert body["auto"]["active"] is False
 
 
 def test_update_check_classifies_a_pipx_install_as_pipx(monkeypatch):
@@ -2663,7 +2699,7 @@ def test_update_check_classifies_a_pipx_install_as_pipx(monkeypatch):
     assert body["available"] is True and body["editable_commands"] == []
 
 
-def test_update_check_gives_a_checkout_its_git_commands(monkeypatch):
+def test_update_check_offers_a_checkout_the_same_button(monkeypatch):
     async def _latest(force=False):
         return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
 
@@ -2671,20 +2707,96 @@ def test_update_check_gives_a_checkout_its_git_commands(monkeypatch):
     monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.3.2")
     monkeypatch.setattr(server._self_update, "_detected_kind", lambda: "editable")
     monkeypatch.setattr(server._self_update, "install_checkout", lambda: "/src/mf")
+    _checkout_status(monkeypatch)
     body = client.get("/api/update/check").json()
     assert body["kind"] == "editable" and body["method_source"] == "detected"
     assert body["checkout"] == "/src/mf"
+    assert body["available"] is True and body["blocked"] == ""
+    assert body["dev"] == {
+        "branch": "main",
+        "default_branch": "main",
+        "dirty": False,
+        "behind": 2,
+        "ahead": 0,
+        "can_update": True,
+        "why_not": "",
+    }
+    # Kept for screens from before checkouts updated themselves — and safe.
     assert body["editable_commands"] == [
         "cd /src/mf",
-        "git fetch --tags origin",
-        "git checkout v9.9.9",
-        "uv sync --group web",
+        "git pull --ff-only",
         "mindflock restart",
     ]
-    assert "development checkout" in body["blocked"]
+
+
+def test_update_check_reports_the_mode_and_the_automatic_path(monkeypatch):
+    async def _latest(force=False):
+        return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(server._self_update, "install_kind", lambda: "uv-tool")
+    monkeypatch.setattr(server._self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(server._self_update, "managed_by_shell", lambda: False)
+    body = client.get("/api/update/check").json()
+    assert body["mode"] == "ask" and body["mode_set"] is False
+    assert body["managed_by_shell"] is False and body["dev"] is None
+    assert set(body["auto"]) == {"active", "why", "waiting"}
+    assert body["auto"]["active"] is False
+
+
+def test_update_check_in_mode_off_looks_nothing_up_unless_asked(monkeypatch):
+    calls = []
+
+    async def _latest(force=False):
+        calls.append(force)
+        return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(server._self_update, "update_mode", lambda: ("off", True))
+    monkeypatch.setattr(server._self_update, "install_kind", lambda: "editable")
+    seen = _checkout_status(monkeypatch)
+    body = client.get("/api/update/check").json()
+    assert calls == [] and seen[-1]["refresh"] is False
+    assert body["mode"] == "off"
+    # "Check now" still looks.
+    client.get("/api/update/check?refresh=1")
+    assert calls == [True] and seen[-1]["refresh"] is True
+
+
+def test_update_mode_is_set_by_the_owner_only(monkeypatch):
+    checks = []
+    monkeypatch.setattr(server._update_watch, "check_soon", lambda: checks.append(1))
+    r = local_client.post("/api/update/mode", json={"mode": "auto"})
+    assert r.status_code == 200 and r.json() == {"mode": "auto"}
+    assert server._self_update.update_mode() == ("auto", True)
+    assert checks == [1]  # acts at the next tick, not in half an hour
+    r = local_client.post("/api/update/mode", json={"mode": "sometimes"})
+    assert r.status_code == 400 and "auto, ask, off" in r.json()["error"]
+    r = client.post("/api/update/mode", json={"mode": "off"})  # a tailnet peer
+    assert r.status_code == 403
+    assert server._self_update.update_mode() == ("auto", True)
+
+
+def test_update_start_on_a_checkout_skips_the_release_lookup(monkeypatch):
+    async def _never(force=False):
+        raise AssertionError("a checkout looked for a release")
+
+    seen = []
+    monkeypatch.setattr(server._self_update, "latest_release", _never)
+    monkeypatch.setattr(server._self_update, "install_kind", lambda: "editable")
+    monkeypatch.setattr(
+        server._self_update,
+        "start_update",
+        lambda ref, **k: seen.append(ref) or {"ok": True, "ref": "main"},
+    )
+    r = local_client.post("/api/update/start", json={})
+    assert r.status_code == 200 and seen == [""]
 
 
 def test_update_start_resolves_the_newest_ref_itself(monkeypatch):
+    # A release install (the suite's own venv is a development checkout).
+    monkeypatch.setattr(server._self_update, "install_kind", lambda: "uv-tool")
+
     # The client asks for "the newest version", not for a specific tag: a stale
     # settings screen must not get to choose which release is installed.
     async def _latest(force=False):
@@ -2704,6 +2816,9 @@ def test_update_start_resolves_the_newest_ref_itself(monkeypatch):
 
 
 def test_update_start_reports_a_refusal_as_400(monkeypatch):
+    # A release install (the suite's own venv is a development checkout).
+    monkeypatch.setattr(server._self_update, "install_kind", lambda: "uv-tool")
+
     async def _latest(force=False):
         return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
 
@@ -2801,6 +2916,8 @@ def test_update_start_reports_an_unreachable_github_as_502(monkeypatch):
     """Not a 400 (the client did nothing wrong) and not a silent no-op: the
     button asked for "the newest release" and there is no newest release to be
     had right now."""
+    # A release install (the suite's own venv is a development checkout).
+    monkeypatch.setattr(server._self_update, "install_kind", lambda: "uv-tool")
 
     async def _latest(force=False):
         return None
@@ -2878,6 +2995,8 @@ def test_update_start_refuses_a_downgrade_from_another_machine(monkeypatch):
 def test_update_start_takes_only_a_published_release_from_another_machine(
     monkeypatch,
 ):
+    # A release install (the suite's own venv is a development checkout).
+    monkeypatch.setattr(server._self_update, "install_kind", lambda: "uv-tool")
     _privileged_remote(monkeypatch)
     monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.7.4")
     published = {"v0.8.0"}
@@ -2903,6 +3022,8 @@ def test_update_start_takes_only_a_published_release_from_another_machine(
 def test_update_start_from_this_machine_still_takes_any_ref(monkeypatch):
     """The developer's escape hatch stays: at this machine's own keyboard a
     branch (or an older tag) can still be installed."""
+    # A release install (the suite's own venv is a development checkout).
+    monkeypatch.setattr(server._self_update, "install_kind", lambda: "uv-tool")
     seen = []
     monkeypatch.setattr(
         server._self_update,

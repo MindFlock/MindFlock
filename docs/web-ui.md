@@ -6887,47 +6887,68 @@ labels above the inputs.
   names which installed CLIs can be pointed at it. It also states plainly that
   Claude Code has no local route, because a session silently using its hosted API
   is the one outcome the privacy claim cannot afford to be quiet about.
-- **Advanced → Version & updates** — one section with two transports, picked by
-  which one can actually do the work. Inside the Electron shell `window.mfengine`
-  owns it (`engine:update-info` / `engine:install`): the shell can install while
-  nothing of *its* own is being replaced. There the section also carries
-  **Install updates automatically** (on by default): releases install
-  themselves once you've been away 10 minutes (or locked the screen) and no
-  agent is mid-turn, honouring "Skip this version" — see
-  [electron/README.md](../electron/README.md#automatic-updates). A shell
-  **running from source** (the dev shell, or any unpackaged run) shows no
-  shell updater at all: a one-line *running from source — update the checkout
-  with git* note under the engine's own view. In any other browser — one on the
-  tailnet, a second machine — the shell object is absent and the **server
-  updates itself** over `/api/update/*` (see
-  [web-api.md](web-api.md#engine-updates)). The version line reads *This engine
-  is **vX** · newest release **vY** (release notes)*, or *· couldn't reach
-  GitHub to check for a newer one* when the lookup failed — never "you're on the
-  newest release", which is a different claim. A **dev/editable checkout** shows
-  the exact git commands instead of a button (fetch and check out the release,
-  then restart), with the install method named on the version line:
-  that is a **refusal, not a failure** — reinstalling over an editable install
-  would swap a contributor's working tree for a release build. Otherwise
-  **Update to vY** starts the install, **Installer output** folds open a live log
-  tail, and the screen polls `/api/update/state` until the install is done. The
-  server restarts itself onto it (no tab needed — closing this one doesn't stop
-  it), so the screen shows *Installed — restarting…* — also on a later visit
-  that finds an install the server hasn't picked up yet, never a second
-  **Update** offer — and reloads onto the new bundle once the new build
-  answers. Your sessions are tmux sessions, so nothing running is lost. When
-  the last update didn't end well the screen says how: *interrupted — try
-  again* (its installer died), *failed* (System logs has the output), or *vY
-  didn't start, so vX was put back* (the installer's health check rolled it
-  back). If the server doesn't come back within 3 minutes the screen says so
-  and points at System logs / `mindflock restart` rather than spinning.
-- **Update notices.** When a newer release is out and this device — or
-  another of "Your devices" — runs an older one, the bell gets one **Updates**
-  row per release ("MindFlock vY is out — 2 of your devices are behind"; the
-  click opens Settings → Your devices when other devices are behind, else
-  Advanced), a browser tab gets one toast (the desktop app has its own), and
-  `/m` shows a one-line banner with **Update** / **Update all**. Settings → Your
-  devices offers **Update all my devices to vY** and follows the rollout one
-  line per device.
+- **Advanced → Updates** — one block, the same in a browser and in the desktop
+  app (Settings search finds it under *update*, *automatic updates*,
+  *version*). **Install updates**: *Automatic* (installs a new version by
+  itself and restarts when you pause), *Ask me* (tells you once per version,
+  one click installs it) or *Off* (never checks by itself; **Check now** still
+  works). The choice is the server's `updates.mode` (`POST /api/update/mode`,
+  see [web-api.md](web-api.md#engine-updates)); in the desktop app it is also
+  handed to the shell (`window.mfupdate.setAuto`, only after the server has
+  it: the shell's own `setAuto(false)` posts *ask* while it still thinks the
+  mode is automatic) and marks its row with the inline "Saved" cue. Under it:
+  the running version, what is available (*vY is available (release notes)*,
+  or for a development checkout *3 new commits on main*), *It's the newest
+  version*, or *Couldn't check for a newer version just now* — and one plain
+  line of state: why a development checkout can't update (`dev.why_not`: on
+  another branch, uncommitted changes, diverged), else what automatic updates
+  are doing (`auto.why`). No git commands are shown: a development checkout
+  that can fast-forward gets the same **Update** button and progress as every
+  other install. **Who installs** when the button is pressed
+  (`lib/updates.installPath`): the desktop shell where it manages this engine
+  (`managed_by_shell: true`, a packaged app: `window.mfengine.install`, so the
+  app updates too and the shell reloads the window), else the server itself
+  (`/api/update/start`, a dev engine under a desktop window included).
+  **Installer output** folds open a live log tail while the screen polls
+  `/api/update/state`; the server restarts itself onto the install, so the
+  screen shows *Installed. Restarting onto it* — also on a later visit that
+  finds an install the server hasn't picked up yet — and reloads onto the new
+  bundle once the new build answers. Your sessions are tmux sessions, so
+  nothing running is lost. When the last update didn't end well the screen
+  says how (*interrupted*, *failed* — System logs has the output — or *vY
+  didn't start, so vX was put back*); if the server doesn't come back within 3
+  minutes it says so and points at System logs / `mindflock restart`.
+  **An older server** (no `mode` / `managed_by_shell` / `dev` in its check)
+  gets no three-way choice; the desktop app keeps its own **Install updates
+  automatically** switch there, and the split between shell and server is the
+  old one (the shell, unless it runs from source).
+- **Update notices.** `update.available` (sent only in *Ask me*, and only when
+  you can act on it): when this device is behind, the toast and the bell's
+  **Updates** row carry an **Update** button that installs it right there
+  (the owner only — a guest link sees the words, no button). When other
+  devices are behind, the row keeps the fleet wording ("MindFlock vY is out —
+  2 of your devices are behind") and opens Settings → Your devices. The
+  desktop app shows its own toast where its shell drives; the in-app toast
+  covers a dev engine there (`managed_by_shell: false`). `/m` shows a one-line
+  banner with **Update** / **Update all**; Settings → Your devices offers
+  **Update all my devices to vY** and follows the rollout one line per device.
+  The install itself: `update.installing` is one quiet toast (*Updating to
+  vY…*), `update.done` one toast and a bell row (*Updated to vY*, with a
+  **What's new** button when What's new has entries for it; in the desktop app
+  where its shell drives, the shell says "Updated" itself, so only the row), `update.failed`
+  one toast and a bell row (*Couldn't update to vY: why.*, opening Settings →
+  Advanced). In *Automatic* that is all a person sees.
+- **The restart onto a new version** (`lib/updateRestart`). From an install's
+  start (`update.installing`, or an Update pressed in this window) the server
+  going quiet is expected: the connection card reads *Updating MindFlock — the
+  server is restarting onto vY; your sessions keep running, and this window
+  reconnects on its own* (a status, not an alert), and when the server answers
+  again on the new build the window reloads onto its bundle by itself —
+  whether the update was automatic, started from a toast, the bell or
+  Settings. The page that reloaded still says *Updated to vY* once (a fresh
+  replayed `update.done`, remembered per browser). A failed install, or a
+  server not back within 3 minutes, ends the expectation, so the card then
+  says what is really wrong.
 - **Advanced → Engine → Ticket sessions in MindFlock** (`engine.enabled`,
   **default on**) — where ingested tickets land. On: each one becomes a MindFlock
   session with its own worktree, branch, seeded agent, stage badge and guided git

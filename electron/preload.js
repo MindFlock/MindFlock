@@ -92,8 +92,10 @@ contextBridge.exposeInMainWorld('mfupdate', {
   // for progress — { app: {state, version, percent, error}, run: {state, step, message} }.
   install: () => ipcRenderer.invoke('update:install'),
   state: () => ipcRenderer.invoke('update:state'),
-  // Settings → Advanced's "Install updates automatically" switch; resolves to
-  // { autoUpdate } as stored. The current value rides on mfengine.updateInfo().
+  // The automatic-updates switch: on -> update mode auto; off -> ask (an
+  // explicit off stays off). main also sets it on the server
+  // (POST /api/update/mode); resolves to { autoUpdate, mode }. get() and
+  // mfengine.updateInfo() carry the current `mode` (auto | ask | off).
   setAuto: (on) => ipcRenderer.invoke('update:set-auto', !!on),
   // The "Updated to X" note after an update, handed out ONCE (null after).
   done: () => ipcRenderer.invoke('update:done'),

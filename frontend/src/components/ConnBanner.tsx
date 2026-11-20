@@ -9,6 +9,8 @@ import { queryClient } from "../state/queries";
 import { useNow } from "../lib/useNow";
 import { memoryConnText } from "../lib/memorySlow";
 import type { MemoryReading } from "../api/types";
+import { useUpdateRestart } from "../lib/updateRestart";
+import { vLabel } from "../lib/updates";
 
 declare global {
   interface Window {
@@ -23,6 +25,20 @@ declare global {
  * says the server may have stopped (the longest stall logged under memory
  * pressure was 281 s, 2026-11-10). */
 const SLOW_MAX_MS = 5 * 60_000;
+
+/** The card while an update's restart is expected (lib/updateRestart): the
+ * server going quiet is the update, not a failure, and the window comes back
+ * by itself. */
+export function updateRestartText(version: string): { head: string; text: string } {
+  const v = vLabel(version);
+  return {
+    head: "Updating MindFlock",
+    text:
+      "The server is restarting onto " +
+      (v || "the new version") +
+      ". Your sessions keep running, and this window reconnects on its own.",
+  };
+}
 
 /** The sentence for a failing instances poll, from the last error's HTTP
  * status (ApiError.status): a status means the server answered, with an
@@ -46,6 +62,7 @@ export function ConnBanner() {
   const [fixArmed, setFixArmed] = useState(false);
   const [fixBusy, setFixBusy] = useState(false);
   const everConnected = useRef(false);
+  const updating = useUpdateRestart();
 
   // Consecutive instances-poll failures via the query cache.
   useEffect(() => {
@@ -120,7 +137,10 @@ export function ConnBanner() {
   const wslState = !!diag && ["wsl-down", "wsl-missing", "not-installed", "starting"].includes(diag.state || "");
   const slow =
     wslState || (lostAt && now - lostAt > SLOW_MAX_MS) ? null : memoryConnText(memLevel, pollFails >= 2);
-  if (slow && !(lastErr instanceof ApiError && lastErr.status > 0)) {
+  if (updating && !wslState && !(lastErr instanceof ApiError && lastErr.status > 0)) {
+    // An update's restart: expected, and over in seconds.
+    ({ head, text } = updateRestartText(updating.version));
+  } else if (slow && !(lastErr instanceof ApiError && lastErr.status > 0)) {
     head = slow.head;
     text = slow.text;
   } else if (diag && pollFails >= 2 && diag.state === "wsl-down") {
@@ -149,7 +169,7 @@ export function ConnBanner() {
   const canFix = !!(fixLabel && window.mfdiag?.restartWsl);
 
   return (
-    <div id="conn-banner" role="alert">
+    <div id="conn-banner" role={updating ? "status" : "alert"} data-updating={updating ? "" : undefined}>
       <div className="conn-head">{head}</div>
       <div className="conn-detail" id="conn-detail">{text}</div>
       <div className="conn-foot">

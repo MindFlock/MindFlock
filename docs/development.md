@@ -68,14 +68,48 @@ bridge has to be optional on both sides:
 ### The in-app updater and your editable install
 
 Settings → Advanced can make the **server update itself** (`/api/update/*`,
-`backend/web/core/self_update.py`). It **refuses to run against a dev checkout**:
-`install_kind()` calls an install `editable` when the `backend` package that is
-currently imported lives *outside* site-packages, and the update answers with a
-the exact git commands (fetch, check out the release, restart) instead of a
-button, and names the install method (uv tool, pipx, or editable). So an
-`uv tool install --force --editable` install is never clobbered by that screen —
-but do not defeat the check, because `uv tool install --force` would replace your
-working tree with a release build.
+`backend/web/core/self_update.py`). `install_kind()` calls an install
+`editable` when the `backend` package that is currently imported lives
+*outside* site-packages, and such a checkout **never gets the installer**
+(`uv tool install --force` would replace your working tree with a release
+build — do not defeat the check). It updates from git instead
+(`backend/web/core/dev_update.py`), the same way from Settings, from
+`mindflock update` and, with automatic updates on, by itself:
+
+- **What counts as new**: the checkout is on its default branch (the one
+  `origin/HEAD` names, else `main`/`master`) and that branch's upstream has
+  commits it lacks. The check is `git ls-remote` against your local
+  remote-tracking ref, with a `git fetch` only when they differ, at most every
+  15 minutes (a **Check again** forces it). No GitHub release lookup.
+- **When it updates**: on that branch, nothing uncommitted in tracked files
+  (untracked files don't count), not diverged. Otherwise it is quiet — no
+  `update.available`, no toast — and Settings says why in one line ("This is a
+  development checkout on branch foo. Updates apply when it is on main with
+  nothing uncommitted."). Working on a feature branch in the same checkout is
+  therefore always safe.
+- **The update**: `git fetch`, `git merge --ff-only <the fetched tip>`, then
+  `uv pip install --python <the server's interpreter> --reinstall-package
+  mindflock -e "<checkout>[web]"` (pip when there is no uv) — it adds new
+  dependencies and refreshes the install metadata **without removing
+  anything**. Never `uv sync`: that removes every package the lock doesn't
+  name (the voice models, database drivers, anything you added). Then the
+  same restart and health check as a release; when the server doesn't come
+  back, the branch is moved back with `git reset --keep <old commit>` (only
+  while the tree is still clean — never `--hard`) and the install refreshed
+  again. The script re-checks the branch, a clean tree and an unmoved HEAD
+  right before it merges.
+- **Automatic** (`updates.mode = "auto"`, `mindflock update --auto on`): a
+  checkout's update moves files under the running server (and under any
+  session using the checkout in place), so it starts at the first minute
+  nobody types into a terminal (at most 30 min after it was found) and the
+  restart follows at once.
+- **The version it reports** comes from the checkout's own `pyproject.toml`
+  (`backend/__init__.py`), and its `commit` from `HEAD`, both read at boot —
+  so neither goes stale after a pull the way the editable dist-info did.
+
+`mindflock update` and `mindflock restart` act on the server that runs from
+**this** install (matched by the hello's `install_id` on any port), so a dev
+server on `:9000` beside a release one on `:8765` is never confused for it.
 
 The update path runs the **same step `install.sh` runs** — pick the newest
 release (the GitHub releases API's `tag_name`, falling back to the highest

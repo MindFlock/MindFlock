@@ -463,6 +463,7 @@ NOT_SESSION_KEYED = {
     "streaming_config.json": "a Moonshine model file in the voice dir (core.speech_moonshine.MODEL_FILES), not a store",
     "settings.json": "settings (no per-session keys)",
     "install.json": "install record",
+    "update_auto.json": "what the automatic updater tried and reported, keyed by version",
     "pricing.json": "model prices",
     "recently_closed.json": "a closed session keeps the name it closed under",
     "ntfy_recent.json": "recent phone pushes, keyed by a hash of their words",

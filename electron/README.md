@@ -118,8 +118,9 @@ Overrides:
   `MINDFLOCK_DEV_PROFILE` and `MINDFLOCK_REPO`; a flag wins over an inherited
   variable.
 - `MINDFLOCK_UPDATE_REPO` — `owner/name` of the GitHub repo whose Releases the
-  app polls for update notifications (default `MindFlock/MindFlock`). The check
-  is best-effort: offline or a non-200 (e.g. a private repo's 404) is silent.
+  app polls for updates (default `MindFlock/MindFlock`), 20 s after launch and
+  then every 30 minutes. The check is best-effort: offline or a non-200 (e.g. a
+  private repo's 404) is silent.
 - `MINDFLOCK_UPDATE_FEED` — point the in-app updater at a plain directory URL
   holding a `latest*.yml` and the build it names (staging, or an end-to-end
   test) instead of the GitHub release. `MINDFLOCK_UPDATE_AUTOINSTALL=1` installs
@@ -129,8 +130,8 @@ Overrides:
 
 ## Updating
 
-One path, one click. The app toast's **Update**, the engine toast's **Update
-engine** and the Settings → Advanced button all run the same
+One path, one click. The app toast's **Update**, the engine-only toast's
+**Update** and the Settings → Advanced button all run the same
 `updateEverything({engine, app})` in `main.js`, and all poll the same run
 state, so none of them can drift from the others (Settings → Advanced used to
 have its own copy that stopped polling on "done" and never restarted the
@@ -142,8 +143,9 @@ The run, in order:
    install (`/api/update/check` says `uv-tool` or `pipx`; install.sh reinstalls
    it the way install.json records), the pinned `install.sh` updates it. A
    developer checkout (`MINDFLOCK_REPO`, or an `editable` engine) is left
-   alone, and an engine that is already at or ahead of the target is never
-   downgraded.
+   alone, so is an engine whose server says it updates itself
+   (`managed_by_shell: false`), and an engine that is already at or ahead of
+   the target is never downgraded.
 2. **App.** When a release is out, electron-updater has already downloaded it
    in the background (from the GitHub release's `latest*.yml` + blockmaps): the
    run stops the old server, waits until the port is actually released, then
@@ -158,9 +160,10 @@ The run, in order:
 Version skew the other way — the engine newer than the app (install.sh re-run
 by hand, `mindflock update` on a machine whose app is behind) — is never
 silent and never a downgrade: when an app release is out, the app-update toast
-says "Your engine is newer than the app — update the app"; when none is, a
-one-line notice says so and the engine stays as it is. An engine that is older
-than the app keeps today's engine-update toast.
+says "Your engine is newer than the app — update the app"; when none is,
+there is nothing to click, so it is only logged (and shown in Settings) and
+the engine stays as it is. An engine that is older than the app gets the
+engine-only offer.
 
 - **Windows / Linux** (NSIS / AppImage) update in place.
 - **macOS** updates through Squirrel.Mac, which accepts an update only when it
@@ -173,19 +176,55 @@ than the app keeps today's engine-update toast.
   failed signature check, a build without update metadata) the button still
   updates the engine and then opens the download page.
 - A **run from source** — the dev shell (`--mindflock-dev` / `MINDFLOCK_DEV=1`)
-  or any unpackaged `electron .` — never offers an update at all: no app
-  toast, no OS notification for a release, no engine toast, no automatic run.
-  It is a git checkout; a release download would replace it rather than
-  update it. Settings → Advanced says *running from source — update the
-  checkout with git* and shows the engine's own update view (git commands for
-  an editable engine). `main.log` records `running from source … update checks
-  off`.
+  or any unpackaged `electron .` — never updates itself: no app toast, no
+  engine toast, no automatic run. It is a git checkout; a release download
+  would replace it rather than update it. Its server (a development checkout)
+  updates itself when it can (the server's update mode), and only then does
+  this shell pass on its OS notification for a release. `main.log` records
+  `running from source … app update checks off`.
+
+### The update mode
+
+One setting, kept by the server (`updates.mode`; Settings → Advanced →
+Updates, or `mindflock update --auto on|ask|off`): **Automatic**, **Ask me**
+or **Off**. The shell reads it from `GET /api/update/check` (`mode`,
+`mode_set`, `managed_by_shell`) at every check and whenever a page or
+Settings asks, and caches it in `update-state.json` (`mode`) for when the
+server is down. The rules are pure, in `electron/update.js`, pinned in
+`electron/test/update_mode.test.js`:
+
+- **Automatic**: the automatic run below. No "update available" toast while
+  it can install by itself; afterwards one line, *Updated to MindFlock
+  0.8.1.* If it can't (the app can't swap itself here) or a try didn't land,
+  the normal offer appears.
+- **Ask me**: one toast per release with one **Update** button (the app toast
+  when the app is behind — it moves the engine too — else the engine-only
+  one; never both).
+- **Off**: no checks and no toasts. Settings' check still works.
+- **The server drives its own update** (`managed_by_shell: false`, e.g. a
+  development checkout under a dev launcher): the shell shows no engine
+  toast for it and never installs the engine; the server's own page does.
+- **An older engine** answers without `mode`: the shell behaves exactly as
+  before, from its own `autoUpdate` switch (on unless turned off).
+- **Moving the switch onto the server**, once: while the server says nobody
+  chose a mode (`mode_set: false`), an explicit `autoUpdate` is POSTed to
+  `/api/update/mode` (on → auto, off → ask). With no switch stored, the
+  desktop default (on) carries over as auto, but only when the app manages
+  the engine — a server that drives itself is not switched to automatic by a
+  default nobody chose. `modeMigrated` records that it happened.
+- The old switch (`mfupdate.setAuto`, IPC `update:set-auto`) still works and
+  now also POSTs the mode (on → auto; off → ask when it was auto, an explicit
+  off stays off). `mfupdate.get()` (`update:get`) and
+  `mfengine.updateInfo()` include `mode`.
+
+Every local request the update code makes (`fetchLocalJSON`,
+`postLocalJSON`, the port-free wait) goes to the port the window is on —
+`MINDFLOCK_URL` / `--mindflock-url`, e.g. `:9000` — never an assumed 8765.
 
 ### Automatic updates
 
-On by default; **Settings → Advanced → Install updates automatically** turns
-them off (stored as `autoUpdate` in the shell's `update-state.json`, next to
-the skipped version). Off means updates are only offered, as above.
+This runs when the update mode is **Automatic** (see above; with an older engine, the
+shell's own switch, on by default).
 
 Once a minute `autoUpdateTick` asks the pure `autoUpdateVerdict`
 (`electron/update.js`, pinned in `electron/test/autoupdate.test.js`) whether
@@ -215,7 +254,7 @@ Why not "install on quit": `autoInstallOnAppQuit` stays false because the
 engine has to be updated *before* the app is swapped — a shell run inside
 WSL/your home that a quitting app can't reliably wait for — and quitting must
 stay instant. After an update (automatic or not) the next app page shows a
-one-off note: *Updated MindFlock to 0.8.1 while you were away.* The decision
+one-off note: *Updated to MindFlock 0.8.1.* The decision
 for each tick is logged to `main.log` when it changes (`auto-update: not now —
 the person is active (app 0.8.1)`).
 

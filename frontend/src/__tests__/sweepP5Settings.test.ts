@@ -25,11 +25,11 @@ describe("#12 Engine updates never claim a change that failed", () => {
     expect(failSentence("The update didn't start", "no network")).toBe("The update didn't start: no network.");
   });
 
-  it("a setAuto failure flips the switch back and toasts why", () => {
+  it("a failed mode change (or the older shell switch) flips back and toasts why", () => {
     const src = flat("components/settings/screens/Advanced.tsx");
-    expect(src).not.toContain(".catch(() => {}); }; const update");
-    expect(src).toContain("setInfo((i) => ({ ...(i || {}), autoUpdate: !on }));");
-    expect(src).toContain('toast(failSentence("Couldn\'t change automatic updates", err));');
+    expect(src).toContain("setInfo((i) => ({ ...(i || {}), mode: prev }));");
+    expect(src).toContain("setShellInfo((i) => ({ ...(i || {}), autoUpdate: !on }));");
+    expect(src.split('toast(failSentence("Couldn\'t change automatic updates", err));').length).toBe(3);
   });
 
   it("a rejected install() stops the poll, clears busy and says failed", () => {
@@ -37,7 +37,7 @@ describe("#12 Engine updates never claim a change that failed", () => {
     expect(src).not.toContain("mfengine.install().catch(() => {});");
     expect(src).toContain(
       "mfengine.install().catch((err: unknown) => { if (timer.current) clearInterval(timer.current); " +
-        "timer.current = null; setBusy(false); " +
+        "timer.current = null; setBusy(false); clearUpdateRestart(); " +
         'setRun({ state: "failed", message: failSentence("The update didn\'t start", err) }); });'
     );
   });

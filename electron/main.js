@@ -243,7 +243,11 @@ const NATIVE_HOST = process.platform !== 'win32' && (() => {
 
 // Auto-start the MindFlock server in WSL if it isn't already up, so the
 // installed app is self-contained (no separate launcher). Overridable by env.
-const PORT = (() => { try { return Number(new URL(APP_URL).port) || 8765 } catch (e) { return 8765 } })()
+// The port the window is really on (MINDFLOCK_URL / --mindflock-url, e.g. a
+// development server on :9000): the launcher's probe and EVERY local request
+// the update code makes (fetchLocalJSON / postLocalJSON) use it, never 8765
+// unless the URL says so (upd.localPort).
+const PORT = upd.localPort(APP_URL)
 // Empty means "whatever `wsl.exe` picks", i.e. the user's DEFAULT distro --
 // which is the one the Windows installer (build/installer.nsh) puts the CLI
 // into, and matches the backend's own default (settings.platform.wsl_distro).
@@ -1597,16 +1601,19 @@ const TITLEBAR_JS = `
 // ---------------------------------------------------------------------------
 const UPDATE_REPO = process.env.MINDFLOCK_UPDATE_REPO || 'MindFlock/MindFlock'
 const UPDATE_RELEASES_URL = 'https://github.com/' + UPDATE_REPO + '/releases/latest'
-// Check shortly after launch (once the window has settled), then on a long
-// interval so a long-lived app still learns about releases without nagging.
+// Check shortly after launch (once the window has settled), then every 30
+// minutes, so a release reaches someone with automatic updates within the
+// hour. Checking is not nagging: what the person SEES is decided by the mode
+// (upd.offerToast) — in auto mode nothing until it has updated.
 const UPDATE_FIRST_DELAY_MS = 20 * 1000
-const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000     // 6h
+const UPDATE_INTERVAL_MS = 30 * 60 * 1000         // 30 min
 // Where "skip this version", the automatic-updates switch and the "what just
 // got updated" record are remembered across restarts (and across the swap: an
 // app update keeps userData).
 const updateStorePath = () => path.join(app.getPath('userData'), 'update-state.json')
 
 let updateAvailable = null   // { version, url, notes } once a newer release is seen
+let modeLogged = ''          // the update mode last written to main.log
 let skippedVersion = ''      // a version the user asked us to stop nudging about
 
 function readUpdateStore() {
@@ -1621,9 +1628,99 @@ function writeUpdateStore(patch) {
   const next = Object.assign({}, readUpdateStore(), patch || {})
   try { fs.writeFileSync(updateStorePath(), JSON.stringify(next)) } catch (e) {}
 }
-// Automatic updates: ON unless the person turned them off (an absent key is
-// the default, so every existing install gets them).
-function autoUpdateEnabled() { return readUpdateStore().autoUpdate !== false }
+// The update mode (auto | ask | off) is ONE setting on the SERVER
+// (`updates.mode`), shared by the browser, this app and the CLI. serverUpd is
+// the last GET /api/update/check answer (null until one comes back); the mode
+// it carries is cached in update-state.json (`mode`) for when the server is
+// down. An engine older than that setting answers without `mode`: then the
+// shell's own switch (`autoUpdate`, ON unless turned off) decides, exactly as
+// before. See upd.resolveMode.
+let serverUpd = null
+let serverUpdAt = 0
+const SERVER_UPD_STALE_MS = 60 * 1000
+
+function updateMode() { return upd.resolveMode(serverUpd, readUpdateStore()) }
+// Automatic updates: the mode is auto (with an older engine: the switch is on,
+// the default).
+function autoUpdateEnabled() { return updateMode() === 'auto' }
+// The server drives its own update (a development checkout, an engine this
+// shell doesn't manage) and says so: no engine toast here and no engine
+// install. An older engine never says so, and then nothing changes.
+function serverDrivesEngine() { return !!serverUpd && serverUpd.managed_by_shell === false }
+// A server that knows about the mode only announces what the person can act
+// on (update.available: mode ask, and installable with one click).
+function serverKnowsMode() { return !!serverUpd && upd.MODES.includes(serverUpd.mode) }
+
+// The local access token for the update code's own reads, kept for a few
+// minutes: reading it runs a shell (inside WSL on Windows), and the mode is
+// read every 30 min and whenever Settings asks.
+let tokenCache = { value: '', at: 0 }
+async function engineToken() {
+  if (tokenCache.value && Date.now() - tokenCache.at < 10 * 60 * 1000) return tokenCache.value
+  const value = await readEngineToken().catch(() => '')
+  tokenCache = { value, at: value ? Date.now() : 0 }
+  return value
+}
+
+// Read the server's update view, cache its mode, and make the one-time move of
+// the shell's switch onto the server (upd.modeToMigrate). Never throws;
+// resolves null when the server didn't answer (the last answer is kept).
+let serverUpdInFlight = null
+function refreshServerUpdate() {
+  if (serverUpdInFlight) return serverUpdInFlight
+  serverUpdInFlight = (async () => {
+    const token = await engineToken()
+    const chk = await fetchLocalJSON('/api/update/check?refresh=0', 8000, token)
+    if (!chk || typeof chk !== 'object') return null
+    serverUpd = chk
+    serverUpdAt = Date.now()
+    if (!upd.MODES.includes(chk.mode)) {
+      // An older engine: nothing to cache, the shell's switch decides.
+      if (readUpdateStore().mode) writeUpdateStore({ mode: undefined })
+      return serverUpd
+    }
+    const store = readUpdateStore()
+    // Not from source: a dev shell's store holds no choice anybody made.
+    const migrate = SOURCE_RUN ? '' : upd.modeToMigrate(chk, store)
+    if (migrate) {
+      const res = await postLocalJSON('/api/update/mode', { mode: migrate }, 8000, token)
+      if (res && upd.MODES.includes(res.mode)) {
+        console.log('[mindflock] update mode set on the server from this app’s switch:', res.mode)
+        serverUpd = Object.assign({}, chk, { mode: res.mode, mode_set: true })
+        writeUpdateStore({ modeMigrated: true })
+      }
+    } else if (chk.mode_set === true && !store.modeMigrated) {
+      writeUpdateStore({ modeMigrated: true })
+    }
+    // Cache it. A chosen mode keeps the old switch in step too, so an older
+    // engine (a downgrade, a restore) behaves as the person last chose.
+    const mode = serverUpd.mode
+    writeUpdateStore(serverUpd.mode_set === false ? { mode } : { mode, autoUpdate: mode === 'auto' })
+    return serverUpd
+  })().catch(() => null).finally(() => { serverUpdInFlight = null })
+  return serverUpdInFlight
+}
+
+// The server's view, re-read when older than a minute — but never holding a
+// caller up longer than `waitMs` (the page asks while it loads).
+async function freshServerUpdate(waitMs) {
+  if (Date.now() - serverUpdAt < SERVER_UPD_STALE_MS) return serverUpd
+  await Promise.race([refreshServerUpdate(), sleep(waitMs || 3000)])
+  return serverUpd
+}
+
+// Whether the person is shown the offer for an app release `p` / an engine
+// notice `n` (upd.offerToast): never when off, always when ask, and in auto
+// mode only when it can't install itself or already tried and didn't land.
+function offerApp(p) {
+  return upd.offerToast({
+    mode: updateMode(), version: p.version, tried: autoTried,
+    canAuto: !!autoUpdater && appUpd.state !== 'error',
+  })
+}
+function offerEngine(n) {
+  return upd.offerToast({ mode: updateMode(), version: n.latest, tried: autoTried, canAuto: true })
+}
 
 // Compare dotted numeric versions. >0 if a newer than b, <0 older, 0 equal.
 // Lives in electron/update.js (pure, node --test'able) with the skew verdict.
@@ -1669,13 +1766,13 @@ function pendingUpdate() {
 
 // What the renderer's app-update toast gets: the pending release plus, when
 // the engine has run ahead of this app, why the app update matters now.
+// null when there is nothing to offer: no release, or the mode says not to
+// (off; or auto, which installs it by itself and says so once afterwards).
 function updatePayload() {
   const p = pendingUpdate()
-  if (!p) return null
+  if (!p || !offerApp(p)) return null
   return Object.assign({}, p, {
     auto: appUpd.state,
-    // The toast says it will install itself (see autoUpdateTick) when it can.
-    autoInstall: autoUpdateEnabled() && !!autoUpdater && appUpd.state !== 'error',
     skew: engineSkew && engineSkew.appUpdate ? engineSkew.message : '',
   })
 }
@@ -1705,8 +1802,10 @@ async function checkForUpdates() {
   // The in-window toast now announces `latest`; minimized or in the
   // background, an OS notification says so too — once per version, and the
   // page's update.available for the same release adds nothing more.
+  // Only what the toast offers (ask mode, or an automatic install that can't
+  // happen here): in auto mode the person hears about it once, afterwards.
   const unfocused = win && !win.isDestroyed() && !win.isFocused()
-  if (claimUpdateNotice(latest) && unfocused) {
+  if (offerApp(updateAvailable) && claimUpdateNotice(latest) && unfocused) {
     showNotification('MindFlock ' + latest + ' is available', 'Click to open MindFlock and update', 'update')
   }
 }
@@ -1716,7 +1815,7 @@ function startUpdateChecks() {
     // No release checks at all: there is nothing a release could do for a
     // checkout. Logged so "why no update toast?" has an answer in main.log.
     console.log('[mindflock] running from source (' + (DEV ? 'dev shell' : 'unpackaged') +
-      ') — update checks off; update this checkout with git')
+      ') — app update checks off; its server updates a development checkout itself')
     return
   }
   const store = readUpdateStore()
@@ -1729,13 +1828,26 @@ function startUpdateChecks() {
     console.log('[mindflock] last update:', updatedNote ? updatedNote.message : 'did not land (' + store.updated.to + ')')
   }
   initAutoUpdater()
-  const tick = () => {
+  const tick = async () => {
+    await refreshServerUpdate()           // the mode (and the one-time move)
+    const mode = updateMode()
+    if (mode !== modeLogged) {
+      modeLogged = mode
+      console.log('[mindflock] updates:', mode, serverKnowsMode() ? '(server setting)' : '(this app\u2019s switch)',
+        serverDrivesEngine() ? '\u2014 the engine updates itself' : '')
+    }
+    if (mode === 'off') {
+      // Off: no checks and no toasts. Settings' "Check now" still asks.
+      updateAvailable = null
+      engineNotice = null
+      return
+    }
     checkForUpdates().catch(() => {})     // a newer release? (drives the toast)
     checkAppUpdate()                      // …and start downloading it
     checkEngineVersion().catch(() => {})  // engine release (offer to update)
   }
-  setTimeout(tick, UPDATE_FIRST_DELAY_MS)
-  setInterval(tick, UPDATE_INTERVAL_MS)
+  setTimeout(() => { tick().catch(() => {}) }, UPDATE_FIRST_DELAY_MS)
+  setInterval(() => { tick().catch(() => {}) }, UPDATE_INTERVAL_MS)
   setInterval(() => { autoUpdateTick().catch(() => {}) }, AUTO_TICK_MS)
 }
 
@@ -1843,6 +1955,12 @@ async function enginePlan(target) {
   const token = await readEngineToken().catch(() => '')
   const chk = await fetchLocalJSON('/api/update/check', 8000, token)
   const kind = chk && chk.kind
+  // The server drives its own update (a development checkout under this
+  // window, an engine this app doesn't manage): installing here as well
+  // would be a second update racing the first.
+  if (chk && chk.managed_by_shell === false) {
+    return { needed: false, selfManaged: true, why: 'the engine updates itself' }
+  }
   // install.sh (pinned) reinstalls a uv-tool OR a pipx engine the way it was
   // installed (install.json); an editable checkout or an unknown install is
   // left alone.
@@ -1873,7 +1991,7 @@ async function updateEverything(opts) {
   if (SOURCE_RUN) {
     // No button reaches here from a source run (nothing offers one), but a
     // stale page could still call it: never install a release over a checkout.
-    updateRun = { state: 'idle', step: 'manual', message: 'Running from source \u2014 update this checkout with git.' }
+    updateRun = { state: 'idle', step: 'manual', message: 'Running from source \u2014 this app doesn\u2019t update itself.' }
     return updateRun
   }
   updateRun = { state: 'running', step: 'engine', message: 'Checking the engine…' }
@@ -1897,6 +2015,7 @@ async function updateEverything(opts) {
       // A developer's engine: nothing here will ever update it, so stop
       // offering to (the engine toast, Settings, the automatic run).
       if (plan.dev) { engineNotice = null; engineIsDev = true }
+      if (plan.selfManaged) engineNotice = null
     }
 
     const appNewer = want.app && (
@@ -2029,7 +2148,12 @@ async function installEngineForUpdate(ref) {
 
 // Renderer bridge (see preload's `mfupdate`). `get` lets a freshly-loaded page
 // pull the current state even if the push fired before its listener existed.
-ipcMain.handle('update:get', () => updatePayload())
+// It also carries the update mode (auto | ask | off), whether or not there is
+// anything to offer.
+ipcMain.handle('update:get', async () => {
+  await freshServerUpdate(3000)
+  return Object.assign({ mode: updateMode() }, updatePayload() || {})
+})
 ipcMain.handle('update:install', () => updateEverything({ engine: true, app: true }))
 ipcMain.handle('update:state', () => ({ app: appUpd, run: updateRun }))
 ipcMain.on('update:open', (_e, url) => {
@@ -2040,12 +2164,31 @@ ipcMain.on('update:skip', (_e, version) => {
   skippedVersion = String(version || (updateAvailable && updateAvailable.version) || '')
   writeUpdateStore({ skippedVersion })
 })
-// Settings → Advanced's "Install updates automatically" switch.
-ipcMain.handle('update:set-auto', (_e, on) => {
+// Settings → Advanced's "Install updates automatically" switch. The mode
+// lives on the server now, so the switch is carried there too (on -> auto;
+// off -> ask when it was auto, an explicit off stays off: upd.modeForSwitch).
+// An older engine has no mode: the stored switch is all there is, as before.
+ipcMain.handle('update:set-auto', async (_e, on) => {
   writeUpdateStore({ autoUpdate: !!on })
   console.log('[mindflock] automatic updates', on ? 'on' : 'off')
   autoVerdictLogged = ''               // the next tick logs its verdict afresh
-  return { autoUpdate: autoUpdateEnabled() }
+  const srv = await refreshServerUpdate()
+  if (srv && upd.MODES.includes(srv.mode)) {
+    const want = upd.modeForSwitch(!!on, srv.mode)
+    if (want !== srv.mode) {
+      const res = await postLocalJSON('/api/update/mode', { mode: want }, 8000, await engineToken())
+      if (res && upd.MODES.includes(res.mode)) {
+        serverUpd = Object.assign({}, serverUpd, { mode: res.mode, mode_set: true })
+        writeUpdateStore({ mode: res.mode, autoUpdate: res.mode === 'auto', modeMigrated: true })
+      } else {
+        console.log('[mindflock] could not set the update mode on the server')
+      }
+    }
+  }
+  // Turned off (ask): what was waiting to install itself is offered instead.
+  pushUpdateToRenderer()
+  pushEngineNotice()
+  return { autoUpdate: autoUpdateEnabled(), mode: updateMode() }
 })
 // The "Updated to X" note, taken ONCE: the page that shows it consumes it.
 ipcMain.handle('update:done', () => { const n = updatedNote; updatedNote = null; return n })
@@ -2072,7 +2215,7 @@ ipcMain.handle('update:done', () => { const n = updatedNote; updatedNote = null;
 // that, so an overnight loop can't hold every update off forever. Each
 // version is attempted at most once per run of the app; a failed run leaves
 // the toast and Settings → Advanced to the person. After it lands, the next
-// page load says "Updated … to X while you were away" once (updatedNote).
+// page load says "Updated to MindFlock X." once (updatedNote).
 const AUTO_TICK_MS = 60 * 1000
 let updatedNote = null       // { version, auto, message } until a page takes it
 let autoTried = []           // versions auto-attempted this run of the app
@@ -2138,7 +2281,10 @@ async function autoUpdateTick() {
       holdWhileWorking: WIN_NATIVE,
     }, systemIdle())
     let v = upd.autoUpdateVerdict(st)
-    // Everything else says go: only now pay for the sessions read.
+    // Everything else says go: only now pay for a fresh look at the mode
+    // (another device or `mindflock update --auto` may have changed it)...
+    if (v.go) st.enabled = (await freshServerUpdate(10000), autoUpdateEnabled())
+    // ...and for the sessions read.
     if (v.go) v = upd.autoUpdateVerdict(Object.assign(st, { working: await workingSessions() }))
     autoWaitSince = v.wait ? (autoWaitSince || now) : 0
     const line = v.why + (v.version ? ' (' + v.kind + ' ' + v.version + ')' : '')
@@ -2150,6 +2296,9 @@ async function autoUpdateTick() {
     autoTried.push(v.version)
     const run = await updateEverything({ engine: true, app: v.kind === 'app', auto: true })
     console.log('[mindflock] auto-update finished:', run.state, run.step, run.message)
+    // Didn't land (failed, or the app can't swap itself here): it is now the
+    // person's to do, so the toast offers it (upd.offerToast: already tried).
+    if (run.state !== 'running') { pushUpdateToRenderer(); pushEngineNotice() }
   } finally {
     autoTicking = false
   }
@@ -2223,6 +2372,43 @@ function fetchLocalJSON(pathname, timeoutMs, token) {
   })
 }
 
+// POST a JSON body to the local server and resolve its JSON answer, or null on
+// ANY failure (not 200, offline, bad JSON). Never throws. The same port,
+// token and shell header as fetchLocalJSON.
+function postLocalJSON(pathname, body, timeoutMs, token) {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (v) => { if (!done) { done = true; resolve(v) } }
+    const data = JSON.stringify(body || {})
+    let req
+    try {
+      req = http.request(
+        {
+          method: 'POST', host: '127.0.0.1', port: PORT, path: pathname, timeout: timeoutMs || 4000,
+          headers: Object.assign(
+            {
+              'Content-Type': 'application/json',
+              'Content-Length': Buffer.byteLength(data),
+              'X-MindFlock-Shell': app.getVersion(),
+            },
+            token ? { Authorization: 'Bearer ' + token } : {}
+          ),
+        },
+        (res) => {
+          if (res.statusCode !== 200) { res.resume(); return finish(null) }
+          let out = ''
+          res.setEncoding('utf8')
+          res.on('data', (c) => { out += c; if (out.length > 1_000_000) req.destroy() })
+          res.on('end', () => { try { finish(JSON.parse(out)) } catch (e) { finish(null) } })
+        }
+      )
+    } catch (e) { return finish(null) }
+    req.on('error', () => finish(null))
+    req.on('timeout', () => { req.destroy(); finish(null) })
+    req.end(data)
+  })
+}
+
 // The running engine's version ('' when it can't be read).
 async function localEngineVersion() {
   for (const p of ['/api/remote/hello', '/api/doctor']) {
@@ -2261,7 +2447,9 @@ async function checkEngineVersion() {
       skew.appUpdate ? '— an app update is out' : '— no app update available')
     engineNotice = null                // an older engine is not the problem here
     if (skew.appUpdate) { pushUpdateToRenderer(); return }
-    if (skewChanged) pushEngineNotice()
+    // No app release to fix it with: nothing the person can do, so it is
+    // logged (above) and shown in Settings, never toasted.
+    if (skewChanged) console.log('[mindflock] the app catches up with the engine at its next release')
     // No app update to offer (none out, or the person skipped it): the engine
     // can still be behind the newest release — fall through so that toast is
     // not lost behind the skew note.
@@ -2274,6 +2462,13 @@ async function checkEngineVersion() {
   // offered an update nothing here can do — the button would only say
   // "update it yourself". Asked once per run of the app (enginePlan reads
   // /api/update/check with the token), and only once an update exists.
+  // The server drives its own update (it said so: managed_by_shell false):
+  // no engine toast here, it installs by itself or offers it in its own page.
+  if (serverDrivesEngine()) {
+    engineNotice = null
+    console.log('[mindflock] engine', current, '< release', latest, '\u2014 the engine updates itself')
+    return
+  }
   if (engineIsDev == null) {
     const plan = await enginePlan(latest)
     if (plan.dev) engineIsDev = true
@@ -2293,21 +2488,25 @@ function pushEngineNotice() {
   // With an app update pending, its one "Update" button updates the engine too
   // (see updateEverything) — a second toast would be two buttons for one job.
   if (pendingUpdate()) return
-  const notice = engineNotice || engineSkew
+  // Only an engine behind the newest release, and only when the mode says to
+  // offer it (off: never; auto: when it installs by itself, afterwards).
+  const notice = engineNotice && offerEngine(engineNotice) ? engineNotice : null
   if (notice && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
     win.webContents.send('engine:notice', notice)
   }
 }
 
-ipcMain.handle('engine:get', () => (pendingUpdate() ? null : (engineNotice || engineSkew)))
+ipcMain.handle('engine:get', () =>
+  (pendingUpdate() || !engineNotice || !offerEngine(engineNotice) ? null : engineNotice))
 // What Settings → Advanced polls to show/hide its engine-update control.
 // `checked` is false when the last check couldn't read the engine's version
 // or the latest release (offline, server booting) -- not "up to date".
 //
 // A failed last check is run again before answering (bounded: the local
 // probe and the GitHub read each time out), so Settings' "Check again" really
-// checks instead of re-reading the same failure until the 6-hour tick.
+// checks instead of re-reading the same failure until the next 30-minute tick.
 ipcMain.handle('engine:update-info', async () => {
+  await freshServerUpdate(3000)
   if (!SOURCE_RUN && !engineNotice && !engineCheck.checked) {
     try { await checkEngineVersion() } catch (e) { /* stays "couldn't check" */ }
   }
@@ -2322,7 +2521,10 @@ function engineUpdateInfo() {
     { appUpdate: !!pendingUpdate(), skew: engineSkew ? engineSkew.message : '' },
     // A run from source: Settings says "update with git" instead of a button.
     // Otherwise the automatic-updates switch (on unless turned off).
-    SOURCE_RUN ? { source: true } : { autoUpdate: autoUpdateEnabled() }
+    SOURCE_RUN ? { source: true } : { autoUpdate: autoUpdateEnabled() },
+    // The mode (auto | ask | off) and whether the server updates the engine
+    // by itself (then there is no engine button here).
+    { mode: updateMode(), selfManaged: serverDrivesEngine() }
   )
 }
 // The engine toast and Settings → Advanced: the SAME run as the app toast's
@@ -2347,7 +2549,7 @@ const UPDATE_CSS = `
   align-items: flex-end; pointer-events: none;
 }
 #mf-toast-stack > * { pointer-events: auto; }
-#mf-update-toast, #mf-engine-toast, #mf-skew-note, #mf-done-note {
+#mf-update-toast, #mf-engine-toast, #mf-done-note {
   position: relative;
   width: 300px; max-width: calc(100vw - 36px);
   background: #171b24; color: #d7dae3;
@@ -2356,10 +2558,10 @@ const UPDATE_CSS = `
   padding: 14px 16px 12px; font: 13px system-ui, 'Segoe UI', sans-serif;
   animation: mf-up-in .18s ease-out;
 }
-/* Drift is a "your install is inconsistent" state, not a new-release nudge. */
-#mf-engine-toast, #mf-skew-note { border-left: 3px solid #d6a53c; }
-#mf-skew-note, #mf-done-note { padding-right: 34px; }
-#mf-skew-note .mf-up-body, #mf-done-note .mf-up-body { margin-bottom: 0; }
+/* The engine-only offer (the app is current). */
+#mf-engine-toast { border-left: 3px solid #d6a53c; }
+#mf-done-note { padding-right: 34px; }
+#mf-done-note .mf-up-body { margin-bottom: 0; }
 /* "Updated to X" after an update (automatic or not): done, nothing to click. */
 #mf-done-note { border-left: 3px solid #3fb27f; }
 #mf-engine-toast .mf-up-title { color: #e2b658; }
@@ -2477,13 +2679,14 @@ const UPDATE_JS = `
     // version they’re already running — it’s the desktop app that’s behind.
     // An engine that ran ahead of this app (install.sh by hand, mindflock
     // update) makes this the fix, not just a nudge: say so first.
+    // Plain: what is out, what they're on, what the click does. In auto mode
+    // this only shows when it couldn't install itself (main's offerApp).
     c.appendChild(el('div', 'mf-up-body',
       (info.skew ? info.skew + ' ' : '')
-      + 'MindFlock ' + info.version + ' is available'
+      + 'MindFlock ' + info.version + ' is ready'
       + (info.current && info.current !== info.version
-          ? ' \\u2014 you\\u2019re on ' + info.current : '')
-      + '. Update installs it and restarts — the engine too.'
-      + (info.autoInstall ? ' Or leave it: it installs itself once you\u2019ve been away for a while.' : '')));
+          ? ' (you\\u2019re on ' + info.current + ')' : '')
+      + '. Update installs it and restarts MindFlock.'));
     c.appendChild(status); c.appendChild(row); c.appendChild(skip);
   }
 
@@ -2504,25 +2707,18 @@ const UPDATE_JS = `
   // dismisses for this run. Updating pulls only the small engine package (uv
   // reuses its dependency cache) — NOT the ~100 MB desktop shell — then the
   // server self-restarts and the window reconnects.
-  // --- engine newer than the app (one line, no button) ---------------------
-  function showSkew(info) {
-    var c = card('mf-skew-note');
-    c.appendChild(closeBtn(c, function () { window.mfengine.dismiss(); }));
-    c.appendChild(el('div', 'mf-up-body', info.message));
-  }
-
+  // (An engine AHEAD of the app is never toasted: with no app release out
+  // there is nothing to click. main.js logs it; Settings shows it.)
   function showEngine(info) {
-    if (!info) return;
-    if (info.kind === 'skew') return showSkew(info);
-    if (!info.latest) return;
+    if (!info || !info.latest) return;
     var c = card('mf-engine-toast');
     var body = el('div', 'mf-up-body',
-      'A new MindFlock engine (' + info.latest + ') is available \\u2014 you\\u2019re on '
-      + info.current + '. This updates just the engine (a small download), not the app.');
+      'MindFlock ' + info.latest + ' is ready (you\\u2019re on ' + info.current + '). '
+      + 'Update installs it and restarts MindFlock in a few seconds.');
     var log = el('pre', 'mf-up-log');
     log.hidden = true;
     var row = el('div', 'mf-up-row');
-    var fix = el('button', 'mf-up-btn mf-up-primary', 'Update engine');
+    var fix = el('button', 'mf-up-btn mf-up-primary', 'Update');
     var later = el('button', 'mf-up-btn', 'Later');
     later.addEventListener('click', function () { drop(c); window.mfengine.dismiss(); });
 
@@ -2559,7 +2755,7 @@ const UPDATE_JS = `
     });
     row.appendChild(fix); row.appendChild(later);
     c.appendChild(closeBtn(c, function () { stopPolling(); window.mfengine.dismiss(); }));
-    c.appendChild(el('div', 'mf-up-title', 'Engine update available'));
+    c.appendChild(el('div', 'mf-up-title', 'Update available'));
     c.appendChild(body); c.appendChild(log); c.appendChild(row);
   }
 
@@ -3042,7 +3238,7 @@ function showNotification(title, body, target) {
   return true
 }
 
-ipcMain.handle('notify:show', (_e, o) => {
+ipcMain.handle('notify:show', async (_e, o) => {
   const opts = o && typeof o === 'object' ? o : {}
   const target = notifyTarget(opts.target)
   // The page only asks while unfocused; re-check here (it can race a focus).
@@ -3053,8 +3249,12 @@ ipcMain.handle('notify:show', (_e, o) => {
   // update toast, or its own notification below).
   const version = String(opts.version || '').replace(/^v/i, '')
   if (version) {
-    // A run from source never announces a release (see SOURCE_RUN).
-    if (SOURCE_RUN) return { ok: false }
+    // A run from source never announces a release (see SOURCE_RUN) — unless
+    // the server knows the update mode: then it only announces what it can
+    // install itself with one click (a development checkout included).
+    if (SOURCE_RUN && !serverKnowsMode()) await freshServerUpdate(3000)
+    if (SOURCE_RUN && !serverKnowsMode()) return { ok: false }
+    if (updateMode() === 'off') return { ok: false }
     if (!claimUpdateNotice(version)) return { ok: false }
   }
   return { ok: showNotification(opts.title, opts.body, target) }

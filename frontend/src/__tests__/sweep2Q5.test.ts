@@ -3,8 +3,9 @@
  * - New → Ticket: Retry after a failed filing sends the shown draft back, so
  *   the server files it without another model turn; a failed source list has
  *   a Retry beside its message.
- * - Settings → Advanced: "Couldn't check for engine updates" has a
- *   "Check again" button that says "Checking…" while it runs. */
+ * - Settings → Advanced: a failed update check has a "Check now" button that
+ *   says "Checking…" while it runs (the Updates block replaced the shell's
+ *   own "Check again", 2026-11 updates overhaul). */
 
 import { describe, expect, it } from "vitest";
 import { composeBody } from "../components/dialogs/NewTicketPane";
@@ -45,15 +46,16 @@ describe("New → Ticket's source list", () => {
   });
 });
 
-describe("Settings → Advanced, a failed engine check", () => {
-  it("offers Check again, and says Checking… while it runs", () => {
-    expect(ADVANCED).toContain("Couldn’t check for engine updates right now");
-    expect(ADVANCED).toContain('{checking ? ( "Checking…" ) : (');
-    expect(ADVANCED).toContain("disabled={checking} onClick={checkAgain}> Check again </button>");
+describe("Settings → Advanced, a failed update check", () => {
+  it("says so, and Check now says Checking… while it runs", () => {
+    expect(ADVANCED).toContain("Couldn’t check for a newer version just now.");
+    expect(ADVANCED).toContain('{checking ? "Checking…" : "Check now"}');
+    expect(ADVANCED).toContain("onClick={checkNow}");
   });
 
-  it("re-asks the shell, which re-runs a failed check before answering", () => {
-    expect(ADVANCED).toMatch(/const checkAgain = \(\) => \{[^}]*mfengine \.updateInfo\(\) \.then\(setInfo\)/);
+  it("re-asks the shell too, which re-runs a failed check before answering", () => {
+    expect(ADVANCED).toMatch(/const check = useCallback\( async \(refresh: boolean\) => \{ const shellAsk = mfengine\?\.updateInfo \? mfengine \.updateInfo\(\) \.then\(setShellInfo\)/);
+    expect(ADVANCED).toMatch(/const checkNow = \(\) => \{[^}]*void check\(true\)/);
     // No dead-end "try again in a minute" left behind the button.
     expect(ADVANCED).not.toContain("Try again in a minute");
   });

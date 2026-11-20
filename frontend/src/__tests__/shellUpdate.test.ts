@@ -1,13 +1,13 @@
-/** Settings → Advanced on the desktop shell: a run from source never offers
- * an update (it says "update with git"), and the automatic-updates switch is
- * shown only by shells that report it. */
+/** Settings → Advanced on the desktop shell: a run from source never installs
+ * through the shell (the server does), and the shell's own automatic-updates
+ * switch is drawn only by shells that report it, and only when the server is
+ * too old to hold the setting (no `mode` in its check). */
 
 import { describe, expect, it } from "vitest";
 import {
   autoUpdateHint,
   shellUpdateMode,
   showAutoUpdateSwitch,
-  SOURCE_RUN_NOTE,
 } from "../lib/shellUpdate";
 
 const ADVANCED = Object.values(
@@ -42,24 +42,33 @@ describe("wording", () => {
     expect(autoUpdateHint(true)).toMatch(/away for 10 minutes/);
     expect(autoUpdateHint(true)).toMatch(/Skip this version/);
     expect(autoUpdateHint(false)).toMatch(/only offered/);
-    expect(SOURCE_RUN_NOTE).toMatch(/running from source/);
-    expect(SOURCE_RUN_NOTE).toMatch(/git/);
   });
 });
 
 describe("Advanced.tsx wiring", () => {
-  it("a source run renders the note and the engine's own view, no shell button", () => {
-    expect(ADVANCED).toContain('shellUpdateMode(info) === "source"');
-    const branch = ADVANCED.slice(ADVANCED.indexOf('shellUpdateMode(info) === "source"'));
-    const src = branch.slice(0, branch.indexOf("\n  }\n")); // the if-block
-    expect(src).toContain("return (");
-    expect(src).toContain("SOURCE_RUN_NOTE");
-    expect(src).toContain("<ServerEngineUpdate />");
-    expect(src).not.toContain("mfengine.install");
+  it("one Updates block for the browser and the desktop app, no git commands", () => {
+    expect(ADVANCED).toContain("<UpdatesBlock />");
+    expect(ADVANCED).not.toContain("ShellEngineUpdate");
+    expect(ADVANCED).not.toContain("ServerEngineUpdate");
+    expect(ADVANCED).not.toContain("editable_commands");
+    expect(ADVANCED).not.toContain("SOURCE_RUN_NOTE");
   });
-  it("the switch saves through the shell bridge", () => {
-    expect(ADVANCED).toContain("showAutoUpdateSwitch(info)");
-    expect(ADVANCED).toContain("mfupdate?.setAuto");
+  it("a source run reaches the server's install, through installPath", () => {
+    expect(ADVANCED).toContain('shellSource: shellUpdateMode(shellInfo) === "source"');
+    expect(ADVANCED).toContain("managedByShell: info?.managed_by_shell");
+    expect(ADVANCED).toContain('path === "shell" ? viaShell() : void viaServer()');
+  });
+  it("the choice saves to the server, then (awaited) tells the desktop app", () => {
+    expect(ADVANCED).toContain('const r = await api<{ mode?: string }>("/api/update/mode", { json: { mode: next } });');
+    expect(ADVANCED).toContain('await mfupdate?.setAuto?.(next === "auto")');
+    // The shell's setAuto(false) posts "ask" itself: told first, it could
+    // turn "off" into "ask".
+    expect(ADVANCED.indexOf('"/api/update/mode"')).toBeLessThan(
+      ADVANCED.indexOf('mfupdate?.setAuto?.(next === "auto")')
+    );
+  });
+  it("the older shell switch stays for an older server", () => {
+    expect(ADVANCED).toContain('const legacyAuto = !mode && path === "shell" && showAutoUpdateSwitch(shellInfo);');
     expect(ADVANCED).toContain("Install updates automatically");
   });
 });
