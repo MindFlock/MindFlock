@@ -539,4 +539,140 @@ def test_summary_counts_the_safe_bytes(env):
     its = gc.inventory(gc.Usage(repos=[env["repo"]]), root=env["root"], now=LATER)
     s = gc.summarize(its)
     assert s["count"] == 2 and s["safe_count"] == 1
-    assert s["safe_bytes"] == next(i["size_bytes"] for i in its if i["safe"])
+    assert s["safe_bytes"] == next(i["free_bytes"] for i in its if i["safe"])
+
+
+# ---------------------------------------- the clock a read cannot move
+
+
+def test_last_used_is_not_moved_by_a_scan_or_anyone_elses_git_status(env):
+    """A real machine read "used 18 hours ago" on worktrees closed weeks
+    before: someone's survey (and the server's diff probe) ran `git status`,
+    which rewrites the index. The clock is the HEAD reflog now; reads, a
+    rewritten index and a touched folder all leave it alone."""
+    stamp = "@%d +0000" % int(time.time() - 40 * DAY)
+    os.environ["GIT_COMMITTER_DATE"] = stamp
+    try:
+        wt = add_wt(env, "quiet", record=False)  # its reflog entry is 40 days old
+    finally:
+        del os.environ["GIT_COMMITTER_DATE"]
+    now = time.time()
+    first = items(env, now=now)["quiet"]
+    assert now - first["last_used"] > 39 * DAY
+    assert first["state"] == gc.SAFE
+    second = items(env, now=now)["quiet"]
+    assert second["last_used"] == first["last_used"]
+    # Someone else's plain `git status` (optional locks ON) refreshes the
+    # index; a touch moves the folder and index mtimes. Neither counts.
+    subprocess.run(["git", "-C", wt, "status"], capture_output=True, check=True)
+    os.utime(wt, None)
+    os.utime(os.path.join(gc.gitdir_of(wt), "index"), None)
+    third = items(env, now=now)["quiet"]
+    assert third["last_used"] == first["last_used"] and third["safe"]
+    # A commit is use.
+    commit(wt, "b.txt")
+    after = items(env, now=time.time())["quiet"]
+    assert time.time() - after["last_used"] < 60
+    assert after["kept"][-1].startswith("used ")
+
+
+def test_every_probe_runs_with_optional_locks_off(env, monkeypatch):
+    seen = []
+    real = gc.gitutil.git
+
+    def spy(args, cwd=None, **kw):
+        seen.append((list(args), dict(kw.get("env") or {})))
+        return real(args, cwd, **kw)
+
+    monkeypatch.setattr(gc.gitutil, "git", spy)
+    add_wt(env, "locks")
+    items(env)
+    probes = [(a, e) for a, e in seen if a and a[0] == "--no-optional-locks"]
+    assert probes and all(e.get("GIT_OPTIONAL_LOCKS") == "0" for _, e in probes)
+
+
+# ------------------------------------------------- sizes, nesting
+
+
+def test_a_worktree_inside_another_is_left_out_of_its_size_and_keeps_it(env):
+    outer = add_wt(env, "outer")
+    # An agent's own worktree under an ignored .claude/worktrees/.
+    os.makedirs(os.path.join(env["repo"], ".git", "info"), exist_ok=True)
+    with open(os.path.join(env["repo"], ".git", "info", "exclude"), "a") as f:
+        f.write(".claude/\n")
+    inner = os.path.join(outer, ".claude", "worktrees", "agent-1")
+    git(env["repo"], "worktree", "add", "-q", "-b", "agent-1", inner)
+    with open(os.path.join(inner, "blob.bin"), "wb") as f:
+        f.write(os.urandom(2 * 1024 * 1024))
+    got = items(env)
+    o, i = got["outer"], got["agent-1"]
+    assert not o["safe"] and o["nested"] == [gc.norm(inner)]
+    assert any(k.startswith("contains 1 other worktree") for k in o["kept"])
+    assert o["size_bytes"] < 1024 * 1024 <= i["size_bytes"]
+    # Removal refuses to take a checkout inside along with it, even forced.
+    res = gc.remove_one(o, confirmed=True, root=env["root"])
+    assert not res["ok"] and "another git checkout inside" in res["error"]
+    assert os.path.isdir(inner)
+
+
+def test_the_totals_count_a_hard_linked_file_once(env, tmp_path):
+    a = add_wt(env, "hl-a")
+    b = add_wt(env, "hl-b")
+    big = os.path.join(a, "cache.bin")
+    with open(big, "wb") as f:
+        f.write(os.urandom(4 * 1024 * 1024))
+    os.link(big, os.path.join(b, "cache.bin"))  # what uv does to every .venv
+    os.makedirs(os.path.join(env["repo"], ".git", "info"), exist_ok=True)
+    with open(os.path.join(env["repo"], ".git", "info", "exclude"), "a") as f:
+        f.write("cache.bin\n")  # ignored, like a .venv: not "work"
+    its = gc.inventory(gc.Usage(repos=[env["repo"]]), root=env["root"], now=LATER)
+    naive = sum(i["size_bytes"] for i in its)
+    s = gc.summarize(its, gc.measure_totals(its))
+    assert naive >= 8 * 1024 * 1024  # each item's du counts the shared file
+    assert s["safe_count"] == 2
+    # On disk: once. Freed by removing them: none of it — another path (here
+    # each other; on a real machine uv's cache) still links the blocks.
+    assert 4 * 1024 * 1024 <= s["bytes"] < 6 * 1024 * 1024
+    assert s["safe_bytes"] < 1024 * 1024
+    a_item = next(i for i in its if i["path"] == gc.norm(a))
+    assert a_item["free_bytes"] < 1024 * 1024 <= a_item["size_bytes"]
+
+
+def test_worktrees_mindflock_did_not_make_stay_out_of_the_headline(env, tmp_path):
+    add_wt(env, "mine")
+    theirs = tmp_path / "theirs"
+    git(env["repo"], "worktree", "add", "-q", "-b", "theirs", str(theirs))
+    with open(theirs / "big.bin", "wb") as f:
+        f.write(os.urandom(3 * 1024 * 1024))
+    its = gc.inventory(gc.Usage(repos=[env["repo"]]), root=env["root"], now=LATER)
+    s = gc.summarize(its, gc.measure_totals(its))
+    assert s["count"] == 1 and s["other_count"] == 1
+    assert s["bytes"] < 1024 * 1024 <= s["other_bytes"]
+
+
+def test_what_is_left_of_a_worktree_folder_is_one_item_not_its_insides(env):
+    left = os.path.join(env["root"], "u", "gone_0123456789abcdef")
+    os.makedirs(os.path.join(left, ".claude"))
+    open(os.path.join(left, ".claude", "settings.json"), "w").write("{}")
+    deep = os.path.join(
+        env["root"], "u", "ctx_fedcba9876543210", "web", ".vite", "deps"
+    )
+    os.makedirs(deep)
+    open(os.path.join(deep, "x.js"), "w").write("1")
+    paths = {i["path"] for i in gc.inventory(gc.Usage(), root=env["root"], now=LATER)}
+    assert gc.norm(left) in paths
+    assert gc.norm(os.path.join(env["root"], "u", "ctx_fedcba9876543210")) in paths
+    assert not any(p.endswith(".claude") or p.endswith("deps") for p in paths)
+
+
+def test_a_branch_squash_merged_into_staging_counts_as_merged(env):
+    git(env["repo"], "branch", "staging")
+    wt = add_wt(env, "ticket")
+    commit(wt, "fix.txt")
+    git(env["repo"], "checkout", "-q", "staging")
+    git(env["repo"], "merge", "-q", "--squash", "u/ticket")
+    git(env["repo"], "commit", "-q", "-m", "squash into staging")
+    git(env["repo"], "checkout", "-q", "main")
+    commit(env["repo"], "README", "main moved\n")
+    it = items(env)["ticket"]
+    assert it["merged"] == "content" and it["safe"]

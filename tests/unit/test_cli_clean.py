@@ -22,14 +22,12 @@ def _git(cwd, *a):
     subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True)
 
 
-def _age(path, days=60):
-    old = time.time() - days * DAY
-    os.utime(path, (old, old))
-    gd = gc.gitdir_of(path)
-    for n in ("HEAD", "index", os.path.join("logs", "HEAD")):
-        p = os.path.join(gd, n)
-        if os.path.exists(p):
-            os.utime(p, (old, old))
+def _old_git(monkeypatch, days=60):
+    """Make every commit and reflog entry from here on ``days`` old: the
+    collector's clock is the worktree's HEAD reflog, not file mtimes."""
+    stamp = "@%d +0000" % int(time.time() - days * DAY)
+    monkeypatch.setenv("GIT_COMMITTER_DATE", stamp)
+    monkeypatch.setenv("GIT_AUTHOR_DATE", stamp)
 
 
 @pytest.fixture
@@ -49,6 +47,7 @@ def setup(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cursor_windows, "_close_cursor_window", lambda path: None)
     gc._size_cache.clear()
+    _old_git(monkeypatch)
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
@@ -60,8 +59,6 @@ def setup(tmp_path, monkeypatch):
     _git(repo, "worktree", "add", "-q", "-b", "u/safe", str(safe))
     _git(repo, "worktree", "add", "-q", "-b", "u/wip", str(wip))
     (wip / "draft.txt").write_text("unsaved idea\n")
-    _age(str(safe))
-    _age(str(wip))
     return {"home": home, "safe": safe, "wip": wip}
 
 

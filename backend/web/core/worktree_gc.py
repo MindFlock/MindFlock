@@ -69,6 +69,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -160,12 +161,22 @@ def strictly_under(path: str, root: str) -> bool:
 # ----------------------------------------------------------------- git probes
 
 
+#: Every probe runs with optional locks off (``--no-optional-locks`` and the
+#: env var, which also reaches git's own sub-commands): ``git status`` would
+#: otherwise rewrite the index while refreshing it, and a scan must leave a
+#: worktree exactly as it found it.
+READ_ONLY_ENV = {"GIT_OPTIONAL_LOCKS": "0"}
+
+
 def _git(cwd: str, *args: str, env=None, timeout: float = GIT_TIMEOUT, text=True):
+    full = dict(READ_ONLY_ENV)
+    if env:
+        full.update(env)
     return gitutil.git(
         ["--no-optional-locks", *args],
         cwd,
         timeout=timeout,
-        env=env,
+        env=full,
         text=text,
         stdin=subprocess.DEVNULL,
     )
@@ -212,7 +223,9 @@ def main_repo_of(path: str) -> str:
 def base_refs(repo: str, hint: str = "") -> List[str]:
     """The base branches work in ``repo`` merges into, as refs that exist:
     the recorded base (``hint``), what ``origin/HEAD`` points at, and local
-    ``main`` / ``master``, each with its ``origin/`` counterpart."""
+    ``main`` / ``master`` / ``staging`` / ``develop``, each with its
+    ``origin/`` counterpart. Content found in any of them is content a remote
+    (or the repo's own integration branch) already has."""
     names: List[str] = []
     h = (hint or "").strip()
     for pre in ("refs/heads/", "refs/remotes/origin/", "origin/"):
@@ -223,7 +236,9 @@ def base_refs(repo: str, hint: str = "") -> List[str]:
     head = _out(repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
     if head and head.startswith("origin/"):
         names.append(head[len("origin/") :])
-    names += ["main", "master"]
+    # The usual integration branches too: a repo that ships through
+    # `staging` (sitecheck does) squash-merges into it, not into main.
+    names += ["main", "master", "staging", "develop", "development"]
     out: List[str] = []
     for n in names:
         for ref in ("refs/heads/" + n, "refs/remotes/origin/" + n):
@@ -309,78 +324,207 @@ def status_counts(path: str) -> Optional[Dict[str, int]]:
     return {"tracked": tracked, "untracked": untracked}
 
 
-def last_activity(path: str) -> float:
-    """The newest of the folder's own mtime and its git admin files (HEAD,
-    index, reflog): the last checkout, commit, stage or top-level change.
-    Taking the max can only make a folder look NEWER, the safe direction."""
-    cands = [path]
-    gd = gitdir_of(path) or (
-        os.path.join(path, ".git") if os.path.isdir(os.path.join(path, ".git")) else ""
-    )
-    if gd:
-        cands += [
-            os.path.join(gd, "HEAD"),
-            os.path.join(gd, "index"),
-            os.path.join(gd, "logs", "HEAD"),
-        ]
+def _reflog_last(path: str) -> float:
+    """The time of the newest entry of a reflog file (``<old> <new> <who>
+    <epoch> <tz>\t<msg>``), 0 when there is none. Parsed from the entries,
+    not the file's mtime: ``git gc`` rewrites the file when it expires old
+    entries."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 8192))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return 0.0
     best = 0.0
-    for c in cands:
-        try:
-            best = max(best, os.stat(c).st_mtime)
-        except OSError:
-            continue
+    for line in tail.splitlines():
+        head = line.split("\t", 1)[0].rsplit(" ", 2)
+        if len(head) == 3:
+            try:
+                best = max(best, float(head[1]))
+            except ValueError:
+                continue
     return best
 
 
-_size_cache: Dict[str, tuple] = {}
+def last_activity(path: str) -> float:
+    """When work last happened here, from signals a READ cannot move: the
+    newest entry of the worktree's own HEAD reflog (a commit, checkout, reset,
+    rebase, the ``worktree add`` itself), else its HEAD commit's time.
+
+    Deliberately NOT the folder's mtime or the git index's: ``git status``
+    (anyone's — a person's survey, the server's diff-stat probe) rewrites the
+    index to refresh it, and editors and tools touch folders, so either would
+    keep resetting the very clock that decides what is old. Work that never
+    reached a commit does not need this clock: it shows as uncommitted or
+    untracked, which keeps the worktree on its own. The caller adds
+    MindFlock's own records (a session's close time, its last update, the
+    worktree's creation record)."""
+    gd = gitdir_of(path) or (
+        os.path.join(path, ".git") if os.path.isdir(os.path.join(path, ".git")) else ""
+    )
+    best = _reflog_last(os.path.join(gd, "logs", "HEAD")) if gd else 0.0
+    if not best:
+        out = _out(path, "log", "-1", "--format=%ct", "HEAD")
+        try:
+            best = float(out) if out else 0.0
+        except ValueError:
+            best = 0.0
+    return best
+
+
+_size_cache: Dict[tuple, tuple] = {}
 _size_lock = threading.Lock()
 
 
-def _du(path: str) -> Optional[int]:
-    """Bytes on disk (``du -sk``: what removing it frees), or a walk's
-    apparent size where there is no ``du``; None past :data:`SIZE_TIMEOUT`."""
+def _du(path: str, exclude: Sequence[str] = ()) -> Optional[int]:
+    """Bytes on disk under ``path`` (``du -sk -x``: what removing it frees),
+    leaving out the folders in ``exclude`` (other items nested inside it);
+    a walk's apparent size where there is no ``du``. None past
+    :data:`SIZE_TIMEOUT`."""
+    return du_total([path], exclude)
+
+
+def du_total(paths: Sequence[str], exclude: Sequence[str] = ()) -> Optional[int]:
+    """Bytes on disk of ``paths`` together, each file counted ONCE however
+    many of them hard-link it (uv and pnpm hard-link their caches into every
+    checkout, so a per-folder sum counts the same bytes many times over), and
+    without ``exclude``. None when it can't be measured in time."""
+    paths = [p for p in paths if p and os.path.isdir(p)]
+    if not paths:
+        return 0
     if os.name != "nt" and shutil.which("du"):
+        argv = ["du", "-sck", "-x"]
+        argv += ["--exclude=" + e for e in exclude]
         try:
             cp = subprocess.run(
-                ["du", "-sk", "-x", path],
+                argv + ["--"] + list(paths),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                timeout=SIZE_TIMEOUT * max(1, min(len(paths), 10)),
+                text=True,
+            )
+            # du exits 1 on an unreadable entry but still prints the total.
+            last = (cp.stdout or "").strip().splitlines()[-1:]
+            first = last[0].split("\t", 1)[0].strip() if last else ""
+            if first.isdigit():
+                return int(first) * 1024
+        except (OSError, subprocess.SubprocessError):
+            pass
+    skip = {norm(e) for e in exclude}
+    seen: Set[tuple] = set()
+    total = 0
+    deadline = time.monotonic() + SIZE_TIMEOUT
+    for top in paths:
+        for root, dirs, files in os.walk(top):
+            if time.monotonic() > deadline:
+                return None
+            dirs[:] = [d for d in dirs if norm(os.path.join(root, d)) not in skip]
+            for name in files:
+                try:
+                    st = os.lstat(os.path.join(root, name))
+                except OSError:
+                    continue
+                key = (st.st_dev, st.st_ino)
+                if key in seen:
+                    continue
+                seen.add(key)
+                total += st.st_size
+    return total
+
+
+def size_of(
+    path: str,
+    stamp: float,
+    *,
+    now: Optional[float] = None,
+    exclude: Sequence[str] = (),
+) -> Optional[int]:
+    """:func:`_du` of the item's OWN folder (nested items left out), cached
+    until it shows newer use (``stamp``) or :data:`SIZE_TTL_S` passes."""
+    now = time.time() if now is None else now
+    key = (norm(path), tuple(sorted(exclude)))
+    with _size_lock:
+        hit = _size_cache.get(key)
+    if hit and hit[0] == stamp and now - hit[1] < SIZE_TTL_S:
+        return hit[2]
+    n = _du(path, exclude)
+    if n is not None:
+        with _size_lock:
+            _size_cache[key] = (stamp, now, n)
+    return n
+
+
+def _freeable(path: str, exclude: Sequence[str] = ()) -> Optional[int]:
+    """Bytes removing ``path`` would actually give back: files no other path
+    hard-links (link count 1), leaving out ``exclude``. A checkout's ``.venv``
+    is mostly hard links into uv's cache — 8.5 of 10.1 GB in one measured
+    worktree — and those blocks stay allocated for as long as the cache
+    holds them, so ``du`` alone promises space a removal never frees. None
+    when it can't be measured in time."""
+    if not os.path.isdir(path):
+        return 0
+    if os.name != "nt" and shutil.which("find"):
+        argv = ["find", path, "-xdev"]
+        for e in exclude:
+            argv += ["-path", e, "-prune", "-o"]
+        argv += ["-type", "f", "-links", "1", "-printf", "%b\n"]
+        try:
+            cp = subprocess.run(
+                argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
                 timeout=SIZE_TIMEOUT,
                 text=True,
             )
-            # du exits 1 on an unreadable entry but still prints the total.
-            first = (cp.stdout or "").split("\t", 1)[0].strip()
-            if first.isdigit():
-                return int(first) * 1024
+            total = 0
+            for line in cp.stdout.splitlines():
+                if line.isdigit():
+                    total += int(line) * 512
+            return total
         except (OSError, subprocess.SubprocessError):
             pass
+    skip = {norm(e) for e in exclude}
     total = 0
     deadline = time.monotonic() + SIZE_TIMEOUT
-    for root, _dirs, files in os.walk(path):
+    for root, dirs, files in os.walk(path):
         if time.monotonic() > deadline:
             return None
+        dirs[:] = [d for d in dirs if norm(os.path.join(root, d)) not in skip]
         for name in files:
             try:
-                total += os.lstat(os.path.join(root, name)).st_size
+                st = os.lstat(os.path.join(root, name))
             except OSError:
                 continue
+            if st.st_nlink == 1 and not os.path.islink(os.path.join(root, name)):
+                total += getattr(st, "st_blocks", 0) * 512 or st.st_size
     return total
 
 
-def size_of(path: str, stamp: float, *, now: Optional[float] = None) -> Optional[int]:
-    """:func:`_du`, cached until the folder shows newer use (``stamp``) or
-    :data:`SIZE_TTL_S` passes."""
+_free_cache: Dict[tuple, tuple] = {}
+
+
+def free_of(
+    path: str,
+    stamp: float,
+    *,
+    now: Optional[float] = None,
+    exclude: Sequence[str] = (),
+) -> Optional[int]:
+    """:func:`_freeable`, cached like :func:`size_of`."""
     now = time.time() if now is None else now
-    key = norm(path)
+    key = (norm(path), tuple(sorted(exclude)))
     with _size_lock:
-        hit = _size_cache.get(key)
+        hit = _free_cache.get(key)
     if hit and hit[0] == stamp and now - hit[1] < SIZE_TTL_S:
         return hit[2]
-    n = _du(path)
+    n = _freeable(path, exclude)
     if n is not None:
         with _size_lock:
-            _size_cache[key] = (stamp, now, n)
+            _free_cache[key] = (stamp, now, n)
     return n
 
 
@@ -449,7 +593,10 @@ def _folders_under(root: str, depth: int = 6) -> List[str]:
         except OSError:
             return
         for e in entries:
-            if os.path.lexists(os.path.join(e.path, ".git")):
+            if os.path.lexists(os.path.join(e.path, ".git")) or _LEAF.search(e.name):
+                # A worktree, or what is left of one (``<slug>_<hex>`` is the
+                # name MindFlock gives a worktree folder; a branch-slug level
+                # never has it): one item, never its insides.
                 out.append(e.path)
                 continue
             try:
@@ -467,6 +614,11 @@ def _folders_under(root: str, depth: int = 6) -> List[str]:
     if root and os.path.isdir(root):
         walk(root, 1)
     return out
+
+
+#: The ``_<hex unixnano>`` suffix of a MindFlock worktree folder
+#: (``resolve_worktree_paths``).
+_LEAF = re.compile(r"_[0-9a-f]{12,}$")
 
 
 def _is_infra_clone(name: str) -> bool:
@@ -611,10 +763,13 @@ def classify(
     root: Optional[str] = None,
     records: Optional[Dict[str, dict]] = None,
     measure: bool = True,
+    nested: Sequence[str] = (),
 ) -> dict:
     """One inventory item: the raw record plus what it holds and whether it
     is safe to collect; ``kept`` lists every reason it is not. A probe that
-    fails becomes a "couldn't check" reason, which keeps the item."""
+    fails becomes a "couldn't check" reason, which keeps the item.
+    ``nested`` = other items inside this one's folder: they are left out of
+    its size, and they keep it (removing it would take them along)."""
     now = time.time() if now is None else now
     root = worktrees_root() if root is None else root
     records = load_records() if records is None else records
@@ -642,6 +797,7 @@ def classify(
         merged_into="",
         last_used=0.0,
         size_bytes=None,
+        free_bytes=None,
         kept=[],
         safe=False,
         state=UNKNOWN,
@@ -653,16 +809,31 @@ def classify(
         kept.append(item["in_use"])
     if rec.get("locked"):
         kept.append("locked in git")
+    if nested:
+        kept.append(
+            "contains %s inside it (%s)"
+            % (
+                _plural(len(nested), "other worktree or checkout"),
+                ", ".join(os.path.relpath(n, path) for n in list(nested)[:3])
+                + ("…" if len(nested) > 3 else ""),
+            )
+        )
 
     if not os.path.isdir(path):
         item["state"] = MISSING
         kept.append("its folder is already gone; only git's record of it is left")
         return item
 
-    last = max(last_activity(path), usage.last_used.get(path, 0.0))
+    last = max(
+        last_activity(path),
+        usage.last_used.get(path, 0.0),
+        float(created.get("ts") or 0.0),
+    )
     item["last_used"] = last
+    item["nested"] = list(nested)
     if measure:
-        item["size_bytes"] = size_of(path, last, now=now)
+        item["size_bytes"] = size_of(path, last, now=now, exclude=nested)
+        item["free_bytes"] = free_of(path, last, now=now, exclude=nested)
 
     def _state(holds: bool, recent: bool) -> str:
         if item["in_use"]:
@@ -805,6 +976,7 @@ def inventory(
     root = worktrees_root() if root is None else root
     records = load_records()
     recs = discover(usage, root)
+    inner = nesting([r["path"] for r in recs])
 
     def one(rec: dict) -> dict:
         try:
@@ -816,6 +988,7 @@ def inventory(
                 root=root,
                 records=records,
                 measure=measure,
+                nested=inner.get(rec["path"], ()),
             )
         except Exception as exc:  # noqa: BLE001 — one item never stops the scan
             out = dict(rec)
@@ -849,22 +1022,87 @@ def inventory(
     return items
 
 
-def summarize(items: Sequence[dict]) -> dict:
+def nesting(paths: Iterable[str]) -> Dict[str, List[str]]:
+    """For each path, the other paths strictly inside it (a worktree made
+    inside another checkout, an agent's ``.claude/worktrees/…``)."""
+    ps = sorted({norm(p) for p in paths if p})
+    out: Dict[str, List[str]] = {}
+    for p in ps:
+        kids = [q for q in ps if strictly_under(q, p)]
+        if kids:
+            out[p] = kids
+    return out
+
+
+def _outermost(paths: Iterable[str]) -> List[str]:
+    ps = sorted({norm(p) for p in paths if p})
+    return [p for p in ps if not any(strictly_under(p, q) for q in ps if q != p)]
+
+
+def measure_totals(items: Sequence[dict]) -> Dict[str, Optional[int]]:
+    """The on-disk headline numbers, measured as ONE ``du`` each so a file is
+    counted once however many items hard-link it or contain it: what
+    MindFlock made (``bytes``) and what it did not (``other_bytes``). What
+    collecting would FREE is the safe items' ``free_bytes`` (see
+    :func:`summarize`). None for a number that couldn't be measured in time."""
+
+    def present(pred):
+        return [
+            i["path"] for i in items if pred(i) and os.path.isdir(i.get("path") or "")
+        ]
+
+    ours = present(lambda i: i.get("ours"))
+    others = present(lambda i: not i.get("ours"))
+    return {
+        "bytes": du_total(_outermost(ours)) if ours else 0,
+        "other_bytes": du_total(_outermost(others)) if others else 0,
+    }
+
+
+def summarize(items: Sequence[dict], totals: Optional[dict] = None) -> dict:
+    """Counts and sizes. ``totals`` (:func:`measure_totals`) gives the true
+    byte numbers; without it they are a sum of the items' own sizes, nested
+    items included once (each item's size already leaves its nested ones
+    out), which over-counts only shared hard links."""
+
     def total(xs):
         return sum(int(x.get("size_bytes") or 0) for x in xs)
 
+    def freed(xs):
+        return sum(
+            int(
+                x["free_bytes"]
+                if x.get("free_bytes") is not None
+                else x.get("size_bytes") or 0
+            )
+            for x in xs
+        )
+
     safe = [i for i in items if i.get("safe")]
+    ours = [i for i in items if i.get("ours")]
+    others = [i for i in items if not i.get("ours")]
     by_state: Dict[str, int] = {}
     for i in items:
         s = i.get("state") or UNKNOWN
         by_state[s] = by_state.get(s, 0) + 1
-    return {
-        "count": len(items),
-        "bytes": total(items),
+    # ``count`` / ``bytes``: what MindFlock made (the headline). Worktrees
+    # it did not make are listed but never removed, so they are counted on
+    # their own (``other_*``), never in the number a person reads as "mine".
+    out = {
+        "count": len(ours),
+        "bytes": total(ours),
+        "other_count": len(others),
+        "other_bytes": total(others),
         "safe_count": len(safe),
-        "safe_bytes": total(safe),
+        # What collecting the safe set gives back: files nothing else
+        # hard-links (an item's free_bytes), never shared cache blocks.
+        "safe_bytes": freed(safe),
         "by_state": by_state,
     }
+    for k in ("bytes", "other_bytes", "safe_bytes"):
+        if totals and totals.get(k) is not None:
+            out[k] = int(totals[k])
+    return out
 
 
 # ----------------------------------------------------------------- removing
@@ -939,10 +1177,40 @@ def _remove_folder(item: dict, root: str, usage: Usage, *, allow_orphan: bool) -
     return "" if not os.path.exists(path) else "some files could not be deleted"
 
 
+def nested_checkout(path: str, limit_s: float = SIZE_TIMEOUT) -> str:
+    """The first git checkout INSIDE ``path`` (a ``.git`` below its top), ""
+    when there is none, or ``"?"`` when the walk ran out of time. Removing a
+    worktree takes everything git ignores along with it, and an agent's own
+    worktree under an ignored ``.claude/worktrees/`` is exactly such a thing."""
+    deadline = time.monotonic() + limit_s
+    for root, dirs, files in os.walk(path):
+        if time.monotonic() > deadline:
+            return "?"
+        if root != path and (".git" in dirs or ".git" in files):
+            return root
+        dirs[:] = [d for d in dirs if d != ".git"]
+    return ""
+
+
+def _nested_refusal(path: str) -> str:
+    inner = nested_checkout(path)
+    if inner == "?":
+        return "couldn't finish checking it for checkouts inside it"
+    if inner:
+        return "it has another git checkout inside it (%s)" % inner
+    return ""
+
+
 def _remove(
     item: dict, root: str, usage: Usage, *, force: bool, allow_orphan: bool = False
 ) -> str:
     kind = item.get("kind")
+    if os.path.isdir(item["path"]):
+        # Never take another checkout down with this one (git deletes what
+        # it ignores along with the worktree).
+        refusal = _nested_refusal(item["path"])
+        if refusal:
+            return "Not removed: " + refusal + "."
     if kind == KIND_WORKTREE:
         return _remove_worktree(item["repo"], item["path"], force=force)
     return _remove_folder(item, root, usage, allow_orphan=allow_orphan)
@@ -992,10 +1260,18 @@ def collect(
         if err:
             skipped.append({"path": it["path"], "reason": err})
             continue
-        size = (
-            it.get("size_bytes")
-            if fresh.get("size_bytes") is None
-            else fresh.get("size_bytes")
+        size = next(
+            (
+                v
+                for v in (
+                    fresh.get("free_bytes"),
+                    it.get("free_bytes"),
+                    fresh.get("size_bytes"),
+                    it.get("size_bytes"),
+                )
+                if v is not None
+            ),
+            None,
         )
         removed.append(
             {
@@ -1003,7 +1279,7 @@ def collect(
                 "kind": fresh.get("kind"),
                 "branch": fresh.get("branch") or "",
                 "merged": fresh.get("merged") or "",
-                "size_bytes": size,
+                "freed_bytes": size,
             }
         )
         freed += int(size or 0)

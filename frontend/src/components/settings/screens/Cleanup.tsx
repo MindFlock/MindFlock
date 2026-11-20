@@ -17,6 +17,8 @@ import {
   CLEANUP_MODES,
   canRemove,
   failSentence,
+  freeBytes,
+  sizeText,
   cleanupModeOf,
   confirmText,
   groupItems,
@@ -209,7 +211,7 @@ export function CleanupView(p: {
             {p.busy === "collect"
               ? "Removing…"
               : s?.safe_count
-                ? "Remove " + s.safe_count + " safe (" + humanBytes(s.safe_bytes) + ")"
+                ? "Remove " + s.safe_count + " safe (frees " + humanBytes(s.safe_bytes) + ")"
                 : "Nothing safe to remove"}
           </button>
           <button type="button" className="test-btn" disabled={!!rep?.scanning} onClick={p.onRefresh}>
@@ -223,7 +225,7 @@ export function CleanupView(p: {
         <details className="cleanup-group" key={g.key} open={g.key === "safe" || g.key === "kept"}>
           <summary>
             {g.title} <span className="cleanup-count">{g.items.length}</span>
-            <span className="cleanup-size">{humanBytes(g.items.reduce((a, i) => a + (i.size_bytes || 0), 0))}</span>
+            <span className="cleanup-size">{"frees " + humanBytes(g.items.reduce((a, i) => a + freeBytes(i), 0))}</span>
           </summary>
           <ul className="cleanup-list">
             {g.items.map((it) => (
@@ -234,7 +236,7 @@ export function CleanupView(p: {
                   </span>
                   <span className="cleanup-badge">{STATE_LABEL[it.state] || it.state}</span>
                   <span className="cleanup-meta">
-                    {humanBytes(it.size_bytes)}
+                    {sizeText(it)}
                     {it.last_used ? " · " + usedAgo(it.last_used) : ""}
                   </span>
                   {canRemove(it) && (

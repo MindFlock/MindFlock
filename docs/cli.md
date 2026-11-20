@@ -247,7 +247,9 @@ remove    1.2G    41d ago  emandel2630/old-fix_18e9c7ee85c92524  merged
 has work  830.0M  20d ago  emandel2630/spike_18ea01f2c4d1a9b0     2 commits in no base branch and on no remote
 recent    2.1G    today    emandel2630/new_18eb3a6f71e0c2d4      used 3 hours ago
 
-3 items, 4.1G in all (5 in use or not MindFlock's hidden; --all shows them).
+MindFlock made 8 of these: 4.1G on disk.
+82 other worktrees of the same repositories (61.0G) are listed, never removed.
+87 in use or not MindFlock's are hidden; --all shows them.
 1 can be removed safely (1.2G): mindflock clean --collect
 Background: ask, after 14 days unused.
 ```

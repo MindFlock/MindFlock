@@ -6821,7 +6821,9 @@ A few screens got quieter:
   `lib/cleanup.ts`) is the worktree garbage collector: what agents left
   behind, how much space it takes, what would be removed and why the rest is
   kept (`GET /api/cleanup`, docs/web-api.md *Disk cleanup*). The header line
-  says "*N* items, *X GB*. *M* can go safely (*Y GB*)" with **Remove *M* safe
+  says "MindFlock made *N* of these: *X GB*. *M* can go safely, freeing *Y
+  GB*." (plus how many other worktrees of the same repos are listed, and
+  their size, kept out of both numbers) with **Remove *M* safe
   (*Y GB*)** (`#cleanup-collect`, `POST /api/cleanup/collect`, no confirm —
   safe means nothing can be lost: merged or pushed, nothing uncommitted, no
   session/route/run on it, unused long enough) and **Check again**. Items sit

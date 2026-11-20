@@ -261,6 +261,10 @@ def test_collect_now_removes_only_the_safe_and_forgets_closed_rows(
     gcfg.write_text("[user]\n\tname = t\n\temail = t@example.com\n")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gcfg))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    old = time.time() - 60 * DAY
+    # The collector's clock is the HEAD reflog: make every entry old.
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "@%d +0000" % int(old))
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "@%d +0000" % int(old))
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
@@ -271,13 +275,6 @@ def test_collect_now_removes_only_the_safe_and_forgets_closed_rows(
     safe, busy = str(root / "safe"), str(root / "busy")
     _git(repo, "worktree", "add", "-q", "-b", "u/safe", safe)
     _git(repo, "worktree", "add", "-q", "-b", "u/busy", busy)
-    old = time.time() - 60 * DAY
-    for p in (safe, busy):
-        os.utime(p, (old, old))
-        gd = gc.gitdir_of(p)
-        for n in ("HEAD", "index", os.path.join("logs", "HEAD")):
-            if os.path.exists(os.path.join(gd, n)):
-                os.utime(os.path.join(gd, n), (old, old))
     closed = [
         {
             "title": "safe",

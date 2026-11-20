@@ -83,9 +83,23 @@ describe("the words", () => {
     expect(lib.humanBytes(3 * 1024 ** 3)).toBe("3.0 GB");
     expect(lib.humanBytes(null)).toBe("…");
     expect(lib.summaryLine({ count: 3, bytes: 4 * 1024 ** 3, safe_count: 1, safe_bytes: 3 * 1024 ** 3 })).toBe(
-      "3 items, 4.0 GB. 1 can go safely (3.0 GB).",
+      "MindFlock made 3 of these: 4.0 GB. 1 can go safely, freeing 3.0 GB.",
+    );
+    // Worktrees MindFlock didn't make never inflate "mine" or "reclaimable".
+    expect(
+      lib.summaryLine({ count: 1, bytes: 1024, other_count: 82, other_bytes: 5 * 1024 ** 3, safe_count: 0, safe_bytes: 0 }),
+    ).toBe(
+      "MindFlock made 1 of these: 1.0 KB. Nothing is safe to remove right now. 82 other worktrees of the same repos (5.0 GB) are listed, never removed.",
     );
     expect(lib.summaryLine({ count: 1, bytes: 10, safe_count: 0, safe_bytes: 0 })).toContain("Nothing is safe");
+  });
+
+  it("tells on-disk size from what a removal frees (hard-linked caches)", () => {
+    expect(lib.sizeText(item({ size_bytes: 10 * 1024 ** 3, free_bytes: 1.7 * 1024 ** 3 }))).toBe(
+      "10 GB on disk · frees 1.7 GB",
+    );
+    expect(lib.sizeText(item({ size_bytes: 1024 ** 3, free_bytes: 1024 ** 3 }))).toBe("1.0 GB");
+    expect(lib.freeBytes(item({ free_bytes: undefined, size_bytes: 5 }))).toBe(5);
   });
 
   it("defaults the mode to Ask me", () => {
@@ -129,7 +143,7 @@ describe("the screen", () => {
   it("draws the summary, one collect button and the sections", () => {
     const html = render();
     expect(html).toContain("Disk cleanup");
-    expect(html).toContain("Remove 1 safe (3.0 GB)");
+    expect(html).toContain("Remove 1 safe (frees 3.0 GB)");
     expect(html).toContain("Will be removed");
     expect(html).toContain("Kept");
     expect(html).toContain("In use");

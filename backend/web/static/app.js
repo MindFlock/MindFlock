@@ -62193,9 +62193,18 @@ function removedText(it, r) {
 }
 function summaryLine$1(s) {
 	if (!s) return "";
-	const all = s.count + (s.count === 1 ? " item" : " items") + ", " + humanBytes(s.bytes);
-	if (!s.safe_count) return all + ". Nothing is safe to remove right now.";
-	return all + ". " + s.safe_count + " can go safely (" + humanBytes(s.safe_bytes) + ").";
+	const mine = "MindFlock made " + s.count + " of these: " + humanBytes(s.bytes) + ".";
+	const reclaim = s.safe_count ? " " + s.safe_count + " can go safely, freeing " + humanBytes(s.safe_bytes) + "." : " Nothing is safe to remove right now.";
+	const other = s.other_count ? " " + s.other_count + " other worktree" + (s.other_count === 1 ? "" : "s") + " of the same repos (" + humanBytes(s.other_bytes ?? 0) + ") are listed, never removed." : "";
+	return mine + reclaim + other;
+}
+function freeBytes(it) {
+	return Number(it.free_bytes ?? it.size_bytes ?? 0) || 0;
+}
+function sizeText(it) {
+	if (it.size_bytes == null) return humanBytes(null);
+	if (it.free_bytes == null || it.free_bytes >= it.size_bytes * .95) return humanBytes(it.size_bytes);
+	return humanBytes(it.size_bytes) + " on disk · frees " + humanBytes(it.free_bytes);
 }
 function groupItems(items) {
 	const by = (states) => items.filter((i) => states.includes(i.state));
@@ -134132,7 +134141,7 @@ function CleanupView(p) {
 					id: "cleanup-collect",
 					disabled: !s?.safe_count || !!p.busy,
 					onClick: p.onCollect,
-					children: p.busy === "collect" ? "Removing…" : s?.safe_count ? "Remove " + s.safe_count + " safe (" + humanBytes(s.safe_bytes) + ")" : "Nothing safe to remove"
+					children: p.busy === "collect" ? "Removing…" : s?.safe_count ? "Remove " + s.safe_count + " safe (frees " + humanBytes(s.safe_bytes) + ")" : "Nothing safe to remove"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
@@ -134158,7 +134167,7 @@ function CleanupView(p) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "cleanup-size",
-					children: humanBytes(g.items.reduce((a, i) => a + (i.size_bytes || 0), 0))
+					children: "frees " + humanBytes(g.items.reduce((a, i) => a + freeBytes(i), 0))
 				})
 			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 				className: "cleanup-list",
@@ -134179,7 +134188,7 @@ function CleanupView(p) {
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 									className: "cleanup-meta",
-									children: [humanBytes(it.size_bytes), it.last_used ? " · " + usedAgo(it.last_used) : ""]
+									children: [sizeText(it), it.last_used ? " · " + usedAgo(it.last_used) : ""]
 								}),
 								canRemove(it) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",

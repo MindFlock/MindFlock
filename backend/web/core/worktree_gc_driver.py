@@ -442,7 +442,11 @@ def scan(srv=None, *, measure: bool = True, now: Optional[float] = None) -> dict
         )
         rep = {
             "items": items,
-            "summary": gc.summarize(items),
+            # One du per headline number: a file shared by many checkouts
+            # (hard-linked caches) or an item inside another counts once.
+            "summary": gc.summarize(
+                items, gc.measure_totals(items) if measure else None
+            ),
             "scanned_at": now,
             "settings": cfg,
             "worktrees_root": gc.worktrees_root(),
@@ -579,8 +583,9 @@ def _refresh_one(item: dict, usage: gc.Usage, after_days: float) -> dict:
             path, item.get("kind") or gc.KIND_ORPHAN, item.get("repo") or ""
         )
     fresh = gc.classify(rec, usage, after_days=after_days, measure=False)
-    if fresh.get("size_bytes") is None:
-        fresh["size_bytes"] = item.get("size_bytes")
+    for k in ("size_bytes", "free_bytes"):
+        if fresh.get(k) is None:
+            fresh[k] = item.get(k)
     return fresh
 
 
@@ -671,10 +676,29 @@ def _drop_from_report(paths) -> None:
     with _lock:
         items = _report.get("items")
         if isinstance(items, list):
+            removed = [i for i in items if gc.norm(i.get("path") or "") in gone]
             _report["items"] = [
                 i for i in items if gc.norm(i.get("path") or "") not in gone
             ]
-            _report["summary"] = gc.summarize(_report["items"])
+            # Keep the measured (deduplicated) totals, less what went, until
+            # the next scan measures again: a plain per-item sum would bring
+            # the over-count back.
+            old = _report.get("summary") or {}
+            new = gc.summarize(_report["items"])
+            freed = sum(int(i.get("size_bytes") or 0) for i in removed)
+            freed_safe = sum(
+                int(i.get("free_bytes") or i.get("size_bytes") or 0)
+                for i in removed
+                if i.get("safe")
+            )
+            for k, less in (("bytes", freed), ("safe_bytes", freed_safe)):
+                if k in old:
+                    new[k] = max(0, int(old[k]) - less)
+            if "other_bytes" in old:
+                new["other_bytes"] = old["other_bytes"]
+            if not new["safe_count"]:
+                new["safe_bytes"] = 0
+            _report["summary"] = new
 
 
 def _human(n) -> str:

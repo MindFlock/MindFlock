@@ -498,7 +498,7 @@ pass off whatever the mode says.
 | Key | Values | Notes |
 |---|---|---|
 | `mode` | `auto` \| `ask` \| `off` \| `""` | `auto`: a background pass (15 min after start, then every 6 h) removes the provably safe leftovers by itself, at most 25 per pass. `ask` (and `""`, never chosen): the pass only looks, and the first time the safe set is worth reclaiming (≥ 2 GB or ≥ 10 items) it says so ONCE (`system.cleanup_available`, the bell's "Leftover worktrees can be cleaned up" rule); it says so again only after something has been collected and a new pile has built up. `off`: no pass, no notice — the Settings list and `mindflock clean` still work on demand |
-| `after_days` | integer 1–3650 (unset = 14) | How long a worktree must sit unused (its folder, git index, HEAD and reflog untouched, and no session closed on it more recently) before it can count as safe. A session closed within this many days keeps its folder, since it can still be reopened |
+| `after_days` | integer 1–3650 (unset = 14) | How long a worktree must sit unused before it can count as safe. "Used" is read only from signals a read cannot move: the newest entry of the worktree's own HEAD reflog (a commit, checkout, reset, the `worktree add` itself; else its HEAD commit's time), its creation record, and MindFlock's session records (a close, a session's last update). Never the folder's or the git index's mtime: anyone's `git status` rewrites the index, and that would reset the clock on every scan. Work that never reached a commit shows as uncommitted and keeps the worktree anyway. A session closed within this many days keeps its folder, since it can still be reopened |
 
 ### Auth profiles (`[auth_profiles]`, settings store only)
 

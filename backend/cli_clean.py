@@ -149,6 +149,7 @@ def render(rep: dict, show_all: bool = False) -> str:
             [
                 _BADGE.get(i.get("state"), i.get("state") or "?"),
                 human(i.get("size_bytes")),
+                human(i.get("free_bytes")),
                 _ago(i.get("last_used")),
                 name,
                 why,
@@ -158,23 +159,29 @@ def render(rep: dict, show_all: bool = False) -> str:
 
     out = []
     if rows:
-        out.append(_render_table(rows, ["STATE", "SIZE", "USED", "ITEM", "WHY"]))
+        out.append(
+            _render_table(rows, ["STATE", "SIZE", "FREES", "USED", "ITEM", "WHY"])
+        )
     s = rep.get("summary") or {}
     hidden = len(items) - len(shown)
     out.append("")
     out.append(
-        "%d item%s, %s in all%s."
-        % (
-            s.get("count", 0),
-            "" if s.get("count", 0) == 1 else "s",
-            human(s.get("bytes", 0)),
-            (
-                (" (%d in use or not MindFlock's hidden; --all shows them)" % hidden)
-                if hidden
-                else ""
-            ),
-        )
+        "MindFlock made %d of these: %s on disk."
+        % (s.get("count", 0), human(s.get("bytes", 0)))
     )
+    if s.get("other_count"):
+        out.append(
+            "%d other worktree%s of the same repositories (%s) are listed, never removed."
+            % (
+                s["other_count"],
+                "" if s["other_count"] == 1 else "s",
+                human(s.get("other_bytes", 0)),
+            )
+        )
+    if hidden:
+        out.append(
+            "%d in use or not MindFlock's are hidden; --all shows them." % hidden
+        )
     if s.get("safe_count"):
         out.append(
             "%d can be removed safely (%s): mindflock clean --collect"
@@ -296,7 +303,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
     if args.collect:
         res = be.collect()
         for r in res.get("removed") or []:
-            print("removed  %s  (%s)" % (r.get("path"), human(r.get("size_bytes"))))
+            print("removed  %s  (%s)" % (r.get("path"), human(r.get("freed_bytes"))))
         for b in res.get("branches_deleted") or []:
             print("deleted merged branch %s" % b)
         for s in res.get("skipped") or []:

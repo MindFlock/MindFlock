@@ -22,7 +22,10 @@ export interface CleanupItem {
   merged: "" | "ancestor" | "content" | "pr";
   merged_into: string;
   kept: string[];
+  /** On disk (``du``), shared hard-linked files included. */
   size_bytes: number | null;
+  /** What removing it alone gives back: files nothing else hard-links. */
+  free_bytes?: number | null;
   last_used: number;
   session: string;
   tracked_changes: number;
@@ -31,8 +34,13 @@ export interface CleanupItem {
 }
 
 export interface CleanupSummary {
+  /** What MindFlock made (the headline); `other_*` = worktrees of the same
+   * repos it did not make (listed, never removed). Bytes are measured once
+   * across items, so shared hard links and nested items count once. */
   count: number;
   bytes: number;
+  other_count?: number;
+  other_bytes?: number;
   safe_count: number;
   safe_bytes: number;
 }
@@ -163,9 +171,26 @@ export function removedText(it: CleanupItem, r: RemoveResult): string {
 /** The header line over the list. */
 export function summaryLine(s: CleanupSummary | undefined): string {
   if (!s) return "";
-  const all = s.count + (s.count === 1 ? " item" : " items") + ", " + humanBytes(s.bytes);
-  if (!s.safe_count) return all + ". Nothing is safe to remove right now.";
-  return all + ". " + s.safe_count + " can go safely (" + humanBytes(s.safe_bytes) + ").";
+  const mine = "MindFlock made " + s.count + " of these: " + humanBytes(s.bytes) + ".";
+  const reclaim = s.safe_count
+    ? " " + s.safe_count + " can go safely, freeing " + humanBytes(s.safe_bytes) + "."
+    : " Nothing is safe to remove right now.";
+  const other = s.other_count
+    ? " " + s.other_count + " other worktree" + (s.other_count === 1 ? "" : "s") + " of the same repos (" + humanBytes(s.other_bytes ?? 0) + ") are listed, never removed."
+    : "";
+  return mine + reclaim + other;
+}
+
+/** What removing it frees (falls back to its size on an older server). */
+export function freeBytes(it: CleanupItem): number {
+  return Number(it.free_bytes ?? it.size_bytes ?? 0) || 0;
+}
+
+/** "10.1 GB on disk · frees 1.7 GB" when shared files make the two differ. */
+export function sizeText(it: CleanupItem): string {
+  if (it.size_bytes == null) return humanBytes(null);
+  if (it.free_bytes == null || it.free_bytes >= it.size_bytes * 0.95) return humanBytes(it.size_bytes);
+  return humanBytes(it.size_bytes) + " on disk · frees " + humanBytes(it.free_bytes);
 }
 
 /** The sections the list is drawn in, in order, with the items in each. */

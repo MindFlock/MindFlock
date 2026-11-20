@@ -28,7 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Automatic**, **Ask me** (the default: it tells you once when there is a
   meaningful amount to reclaim) or **Off**. Also from a terminal:
   `mindflock clean` (a dry-run listing), `--collect`, `--remove ITEM`,
-  `--mode`, `--after-days`.
+  `--mode`, `--after-days`. "Unused" is read from the worktree's own HEAD
+  reflog and MindFlock's session records, never from file times a `git
+  status` would move, and a scan never writes to a repository. Sizes say
+  what a removal really frees: a checkout's `.venv` is mostly hard links into
+  uv's cache, so "10 GB on disk" can free under 2 GB, and totals count every
+  shared file once.
 
 ## [0.14.22] - 2026-11-19
 
