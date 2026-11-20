@@ -1717,7 +1717,8 @@ come along as a copy**: edits, deletions and untracked files (`.gitignore`d
 ones stay behind) appear in the new worktree as uncommitted changes, nothing
 staged; the source's files, index and branch are not touched. The new session
 runs the same agent CLI with the source's own launch flags, auth profile and
-model; like Duplicate it starts a fresh conversation, with no parent. Its
+model; like Duplicate it starts a fresh conversation, with no parent, and like
+New and Duplicate it asks *Start anyway?* while memory is low. Its
 recorded base is the source's branch, so its diff shows only what happens on
 the branch and **Open PR** targets the source's branch. It lands right under
 its source and takes focus; the toast says whether uncommitted changes came
@@ -3683,7 +3684,9 @@ title bar (it stays wholly on screen, and at ~420 px it is as wide as the
 screen less a margin); its corner resizes it; it reopens where it was left and
 at the size it was left, per browser (`localStorage` `mf_folder_picker_rect`,
 never a synced pref). Inside is the folder browser New always had (📦 repos /
-📁 folders, *Click selects · double-click or → opens · ← up*, **+ Folder**),
+📁 folders — 📦 only for a folder holding its own `.git`, checked with one
+lookup per row, not a git process — *Click selects · double-click or → opens ·
+← up*, **+ Folder**; *Loading…* until the first list arrives),
 the folder you are in on the top line and the chosen one in the footer beside
 **Use this folder** (Enter; Enter on a row takes that row; ↑/↓ walk the rows).
 **✕** or Escape closes it without a pick — Escape goes to the picker before the
