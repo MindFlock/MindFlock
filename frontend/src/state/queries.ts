@@ -825,6 +825,13 @@ export function patchInstance(title: string, patch: Partial<Instance>) {
 const PANEL_STALE_MS = 20_000;
 /** How soon to pull the fresh copy after the server hands us a stale one. */
 const PANEL_STALE_RETRY_MS = 2_000;
+/** Stale answers in a row after which the upstream is plainly struggling —
+ * the server's 30 s backoff after a failed sweep, or a sweep that can take
+ * 60 s — and asking every 2 s only costs the server a workspace and fleet
+ * check per answer to say the same thing. */
+export const PANEL_STALE_STREAK = 3;
+/** The re-poll interval while that streak lasts. */
+export const PANEL_BACKOFF_MS = 15_000;
 /** Keep panels well past the default 5min: "cached across dialog opens" has to
  * survive lunch, or the wait comes back exactly when it feels worst. */
 const PANEL_GC_MS = 60 * 60_000;
@@ -837,6 +844,51 @@ export const PANELS = {
 
 export type PanelKey = keyof typeof PANELS;
 
+/* Stale answers in a row, per panel: the backoff's counter. Held outside the
+ * query so every fetch of a panel (its tab, the Auto-start tab, the warm-up)
+ * counts toward the same run. It changes only inside a fetch, and the fetch
+ * ending re-renders every usePanelQuery reader (its spread of the query result
+ * tracks isFetching), so reading it during render is current. */
+const staleRuns = new Map<PanelKey, number>();
+
+/** The panel's re-poll interval: none once an answer is fresh, 2 s while the
+ * server is replacing a stale one, 15 s after {@link PANEL_STALE_STREAK} stale
+ * answers in a row (until a fresh one arrives). */
+export function panelRefetchMs(stale: boolean | undefined, run: number): number | false {
+  if (!stale) return false;
+  return run >= PANEL_STALE_STREAK ? PANEL_BACKOFF_MS : PANEL_STALE_RETRY_MS;
+}
+
+/** Fetch one panel and count the answer: a stale one (or a failed one) adds
+ * to the run, a fresh one ends it. Every fetch of a panel goes through here. */
+async function fetchPanel<T>(key: PanelKey, fresh = false): Promise<T> {
+  let r: T;
+  try {
+    r = await api<T>(PANELS[key] + (fresh ? "?fresh=1" : ""));
+  } catch (err) {
+    staleRuns.set(key, (staleRuns.get(key) ?? 0) + 1);
+    throw err;
+  }
+  const stale = !!(r as { stale?: boolean } | null)?.stale;
+  staleRuns.set(key, stale ? (staleRuns.get(key) ?? 0) + 1 : 0);
+  return r;
+}
+
+/** The Refresh button's sweep (`?fresh=1`). An ordinary fetch already in
+ * flight is cancelled first: fetchQuery would otherwise join it, and the click
+ * would wait on a cached answer and never ask for the fresh one. */
+async function sweepPanel<T>(key: PanelKey): Promise<T | undefined> {
+  await queryClient.cancelQueries({ queryKey: [key] });
+  return queryClient
+    .fetchQuery({
+      queryKey: [key],
+      queryFn: () => fetchPanel<T>(key, true),
+      staleTime: 0,
+      retry: false,
+    })
+    .catch(() => undefined);
+}
+
 /** A work panel's list, cached across dialog opens.
  *
  * `placeholderData` keeps the previous rows on screen while the refetch runs,
@@ -846,7 +898,7 @@ export type PanelKey = keyof typeof PANELS;
 export function usePanelQuery<T extends { stale?: boolean }>(key: PanelKey, opts: { enabled?: boolean } = {}) {
   const q = useQuery<T>({
     queryKey: [key],
-    queryFn: () => api<T>(PANELS[key]),
+    queryFn: () => fetchPanel<T>(key),
     // false = read the cache only (the top bar's Flights badge counts what the
     // lists already hold; it never fans out upstream itself).
     enabled: opts.enabled ?? true,
@@ -856,37 +908,25 @@ export function usePanelQuery<T extends { stale?: boolean }>(key: PanelKey, opts
     // An unconfigured integration answers 502; retrying it just doubles the
     // requests to say the same thing, and the panel has a Refresh button.
     retry: false,
-    // Served something the server is already replacing → come back for it once.
-    refetchInterval: (query) =>
-      query.state.data?.stale ? PANEL_STALE_RETRY_MS : false,
+    // Served something the server is already replacing → come back for it
+    // soon; after a run of stale answers, back off (panelRefetchMs).
+    refetchInterval: (query) => panelRefetchMs(query.state.data?.stale, staleRuns.get(key) ?? 0),
   });
   /** The Refresh button: skip both caches and wait for a real upstream sweep.
    * The rejection is swallowed because the failure is already in query state,
    * which is what renders the error banner. */
-  const refresh = () =>
-    queryClient
-      .fetchQuery({
-        queryKey: [key],
-        queryFn: () => api<T>(PANELS[key] + "?fresh=1"),
-        staleTime: 0,
-        retry: false,
-      })
-      .catch(() => undefined);
-  return { ...q, refresh };
+  const refresh = () => sweepPanel<T>(key);
+  /** The backoff is on: the list on screen is old and the server can't get a
+   * new one yet — the tab says "Couldn't refresh" with a Retry (= refresh). */
+  const stalled = !!q.data?.stale && (staleRuns.get(key) ?? 0) >= PANEL_STALE_STREAK;
+  return { ...q, refresh, stalled };
 }
 
 /** Re-sweep one panel now (`?fresh=1`), outside the component that shows it —
  * the add flow uses it after a repository joins a list, so the tab's new
  * heading fills with that repository's rows instead of waiting out the cache. */
 export function refreshPanel(key: PanelKey) {
-  return queryClient
-    .fetchQuery({
-      queryKey: [key],
-      queryFn: () => api(PANELS[key] + "?fresh=1"),
-      staleTime: 0,
-      retry: false,
-    })
-    .catch(() => undefined);
+  return sweepPanel(key);
 }
 
 /** Warm all three panels, so opening Intake — or switching to a tab inside it —
@@ -897,7 +937,7 @@ export function prefetchIntakePanels() {
   for (const key of Object.keys(PANELS) as PanelKey[]) {
     void queryClient.prefetchQuery({
       queryKey: [key],
-      queryFn: () => api(PANELS[key]),
+      queryFn: () => fetchPanel(key),
       staleTime: PANEL_STALE_MS,
       gcTime: PANEL_GC_MS,
       retry: false,
@@ -931,8 +971,11 @@ export function useEpicsQuery() {
     retry: false,
     refetchInterval: EPICS_POLL_MS,
   });
-  const refresh = () =>
-    queryClient
+  // Cancel a poll in flight first, or fetchQuery joins it and ?refresh=1 is
+  // never sent (as for the panels' sweepPanel).
+  const refresh = async () => {
+    await queryClient.cancelQueries({ queryKey: ["epics"] });
+    return queryClient
       .fetchQuery({
         queryKey: ["epics"],
         queryFn: () => api<EpicsResponse>("/api/epics?refresh=1"),
@@ -940,6 +983,7 @@ export function useEpicsQuery() {
         retry: false,
       })
       .catch(() => undefined);
+  };
   return { ...q, refresh };
 }
 

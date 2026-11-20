@@ -13,9 +13,9 @@ import { useState } from "react";
 import { ApiError, api } from "../../api/client";
 import { toast } from "../../lib/toast";
 import { errorPop } from "../../lib/errorPop";
-import { useEpicsQuery } from "../../state/queries";
+import { queryClient, useEpicsQuery } from "../../state/queries";
 import { WorkGroup, WorkListPanel, openSessionFromIntake, panelNote, useToggleSet } from "./kit";
-import { autoStarts, epicMeta, epicSourceNote, groupEpics, type EpicRow } from "./epics";
+import { autoStarts, epicMeta, epicSourceNote, groupEpics, type EpicRow, type EpicsResponse } from "./epics";
 import type { TabProps } from "./IntakeDialog";
 import "./EpicsTab.css";
 
@@ -85,6 +85,24 @@ function EpicItem({ e, busy, onStart }: { e: EpicRow; busy: boolean; onStart(e: 
   );
 }
 
+/** The cached list with one epic marked as having its lead: the row flips to
+ * "Open lead ›" the moment the start returns, rather than after the tracker
+ * re-sweep — a second click on a Start still showing would only be refused. */
+export function markEpicStarted(
+  data: EpicsResponse | undefined,
+  source: string,
+  id: string,
+  title?: string
+): EpicsResponse | undefined {
+  if (!data?.epics) return data;
+  return {
+    ...data,
+    epics: data.epics.map((e) =>
+      e.source === source && e.id === id ? { ...e, has_session: true, title: title || e.title } : e
+    ),
+  };
+}
+
 export function EpicsTab({ gotoTab }: TabProps) {
   const q = useEpicsQuery();
   // The epics starting now, by source:id — several may be in flight at once.
@@ -103,9 +121,12 @@ export function EpicsTab({ gotoTab }: TabProps) {
     try {
       const r = await api<{ title?: string; stories?: number }>("/api/epics/start", { json: { source: e.source, id: e.id } });
       toast("Started " + (r.title || e.title) + " — its lead will run " + (r.stories ?? "your") + " stor" + (r.stories === 1 ? "y" : "ies"));
+      queryClient.setQueryData<EpicsResponse>(["epics"], (d) => markEpicStarted(d, e.source, e.id, r.title));
       void q.refresh();
     } catch (err) {
-      errorPop("Couldn't start the epic", err instanceof ApiError ? err.message : String(err));
+      // The tickets' wording (WorkItemRow's failPrefix), so a refused start
+      // reads the same on every tab.
+      errorPop("Start failed — " + e.name, err instanceof ApiError ? err.message : String(err));
     } finally {
       setBusy((b) => {
         const next = new Set(b);
@@ -124,7 +145,7 @@ export function EpicsTab({ gotoTab }: TabProps) {
   return (
     <WorkListPanel
       label="Assigned epics"
-      onRefresh={() => void q.refresh()}
+      onRefresh={q.refresh}
       note={note}
       rowId="ep-assigned-row"
       refreshId="ep-epics-refresh"

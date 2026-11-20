@@ -59,6 +59,10 @@ export function renderQueryPad(shared, host) {
   });
   const runBtn = button("Run", { kind: "primary", icon: "play", title: "Run the statement at the cursor (Ctrl+Enter)", disabled: true, onClick: () => runAtCursor() });
   const runAllBtn = button("Run all", { icon: "play-all", title: "Run every statement in order, stopping at the first error (Ctrl+Shift+Enter)", disabled: true, onClick: () => runAll() });
+  // The exports share Run's busy guard: a double-click must not start two
+  // 10,000-row exports, and an export must not overlap a Run.
+  const csvBtn = button("CSV", { icon: "download", title: "Export the statement at the cursor as CSV (up to 10,000 rows)", onClick: () => exportAtCursor("csv") });
+  const jsonBtn = button("JSON", { icon: "download", title: "Export the statement at the cursor as JSON (up to 10,000 rows)", onClick: () => exportAtCursor("json") });
   const historySel = el("select", { class: "dbc-select dbc-history", title: "Recent statements" });
   historySel.addEventListener("change", () => {
     const v = historySel.value;
@@ -80,8 +84,8 @@ export function renderQueryPad(shared, host) {
     runAllBtn,
     el("span", { class: "dbc-spacer" }),
     historySel,
-    button("CSV", { icon: "download", title: "Export the statement at the cursor as CSV (up to 10,000 rows)", onClick: () => exportAtCursor("csv") }),
-    button("JSON", { icon: "download", title: "Export the statement at the cursor as JSON (up to 10,000 rows)", onClick: () => exportAtCursor("json") })
+    csvBtn,
+    jsonBtn
   );
   const textarea = el("textarea", {
     class: "dbc-sql mono",
@@ -150,6 +154,7 @@ export function renderQueryPad(shared, host) {
     running = on;
     runBtn.disabled = on || !picker.scope().connId;
     runAllBtn.disabled = runBtn.disabled;
+    csvBtn.disabled = jsonBtn.disabled = on;
     root.classList.toggle("busy", on);
   }
 
@@ -260,12 +265,22 @@ export function renderQueryPad(shared, host) {
 
   // --- export -------------------------------------------------------------
   async function exportAtCursor(format) {
+    if (running) return;
     const stmt = currentStatement();
     const s = picker.scope();
     if (!stmt || !s.connId) {
       info.textContent = "Put the cursor on a statement to export its rows.";
       return;
     }
+    setBusy(true);
+    try {
+      await exportOne(stmt, s, format);
+    } finally {
+      if (!disposed) setBusy(false);
+    }
+  }
+
+  async function exportOne(stmt, s, format) {
     notice.clear();
     info.textContent = "Exporting…";
     const body = { sql: stmt.text, format };

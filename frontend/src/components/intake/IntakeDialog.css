@@ -2193,3 +2193,17 @@
   display: flex;
   justify-content: flex-end;
 }
+
+/* Under a list whose re-polling has backed off (the server can't get a new one
+   yet): the rows are the last ones read, and Retry sweeps now. Quiet, like the
+   toolbar note: the rows above are still good to act on. */
+.ik-stalled-refresh {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+/* An Auto-start section whose list couldn't be read: the reason, then Retry. */
+.ik-queue-error .linklike {
+  margin-left: 6px;
+}
