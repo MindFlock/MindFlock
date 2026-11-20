@@ -30,6 +30,7 @@ import { fetchCompanions, saveCompanions, type CompanionsDoc } from "../../lib/c
 import { refreshInstances } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
+import { toast } from "../../lib/toast";
 import { Modal } from "../Modal";
 import { instances } from "../../lib/sessionActions";
 
@@ -211,6 +212,11 @@ export function RedZonesDialog() {
   );
 }
 
+/** The toast after a zone's ×: names it the way its row does. */
+export function removedZoneLine(z: Pick<RedZone, "pattern" | "name">): string {
+  return "Removed keep-out zone " + (z.name || z.pattern);
+}
+
 function RepoCard({ row, onRepos }: { row: RepoRow; onRepos: (r: Record<string, RepoDoc>) => void }) {
   const [pattern, setPattern] = useState("");
   const [name, setName] = useState("");
@@ -270,16 +276,29 @@ function RepoCard({ row, onRepos }: { row: RepoRow; onRepos: (r: Record<string, 
     }
   };
 
-  const add = async () => {
-    const p = pattern.trim();
+  /** Add a repo zone: the form's fields, or (`undo`) the zone a × just
+   * removed, with its own pattern, name and note. */
+  const add = async (undo?: { pattern: string; name: string; note: string }) => {
+    const p = undo ? undo.pattern : pattern.trim();
     if (!p) return;
     const ok = await call("add", () =>
-      api("/api/red-zones", { json: { repo_id: row.id, pattern: p, name: name.trim(), note: "", label: row.label } })
+      api("/api/red-zones", { json: { repo_id: row.id, pattern: p, name: undo ? undo.name : name.trim(), note: undo ? undo.note : "", label: row.label } })
     );
-    if (ok) {
+    if (ok && !undo) {
       setPattern("");
       setName("");
     }
+  };
+
+  /** After a zone's × took: say so, with Undo (adds the same zone back). */
+  const removed = async (z: RedZone, took: Promise<boolean>) => {
+    if (!(await took)) return;
+    toast(removedZoneLine(z), {
+      action: {
+        label: "Undo",
+        onClick: () => void add({ pattern: z.pattern, name: z.name || "", note: z.note || "" }),
+      },
+    });
   };
 
   return (
@@ -354,7 +373,7 @@ function RepoCard({ row, onRepos }: { row: RepoRow; onRepos: (r: Record<string, 
                 title="Remove this red zone"
                 disabled={busy === "del:" + z.id}
                 onClick={() =>
-                  void call("del:" + z.id, () => api("/api/red-zones/" + encodeURIComponent(z.id), { method: "DELETE" }))
+                  void removed(z, call("del:" + z.id, () => api("/api/red-zones/" + encodeURIComponent(z.id), { method: "DELETE" })))
                 }
               >
                 ×

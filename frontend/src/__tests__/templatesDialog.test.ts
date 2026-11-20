@@ -143,7 +143,7 @@ describe("TemplatesDialogView — the markup", () => {
   });
   it("shows a failed load at list level instead of loading forever", () => {
     const html = view({ templates: [], loaded: false, loadError: "HTTP 500" });
-    expect(html).toContain("Could not load templates: HTTP 500");
+    expect(html).toContain("Couldn&#x27;t load templates. HTTP 500");
     expect(html).toContain('role="alert"');
     expect(html).not.toContain("Loading templates…");
     // Not hidden behind the editor or a confirming card, which is all ui.error reaches.
