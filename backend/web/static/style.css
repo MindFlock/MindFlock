@@ -20200,9 +20200,29 @@ p.set-hint {
   background: var(--panel-2);
 }
 
-/* Settings → Advanced, Version & updates. The update button and "Check again"
-   sit on one row so the pair reads as one control; the installer output is a
-   fold because it is the thing you want only when the update went wrong. */
+/* Settings → Advanced, Updates. The three-way choice (Automatic / Ask me /
+   Off) sits in the row's value column as one line of radios. The update
+   button and "Check now" sit on one row so the pair reads as one control; the
+   installer output is a fold because it is the thing you want only when the
+   update went wrong. */
+.upd-mode-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+.upd-mode-choice {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.upd-mode-choice input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .upd-btn-row {
   display: flex;
   align-items: center;

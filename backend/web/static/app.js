@@ -24912,7 +24912,7 @@ function instApi(title, suffix, opts) {
 //#endregion
 //#region src/lib/guest.ts
 var locked = [];
-var listeners$10 = /* @__PURE__ */ new Set();
+var listeners$11 = /* @__PURE__ */ new Set();
 function splitLockedRows(list) {
 	if (!Array.isArray(list)) {
 		setLocked([]);
@@ -24936,7 +24936,7 @@ function splitLockedRows(list) {
 function setLocked(rows) {
 	if (rows.length === locked.length && rows.every((r, i) => r.title === locked[i].title && r.status === locked[i].status && r.device === locked[i].device)) return;
 	locked = rows;
-	for (const l of listeners$10) l();
+	for (const l of listeners$11) l();
 }
 function guestNote(guest) {
 	if (!guest) return "";
@@ -28409,13 +28409,13 @@ function memoryConfirmOf(e) {
 	};
 }
 var pending$3 = null;
-var listeners$9 = /* @__PURE__ */ new Set();
-function emit$1() {
-	for (const l of listeners$9) l();
+var listeners$10 = /* @__PURE__ */ new Set();
+function emit$2() {
+	for (const l of listeners$10) l();
 }
 function subscribeMemoryConfirm(fn) {
-	listeners$9.add(fn);
-	return () => listeners$9.delete(fn);
+	listeners$10.add(fn);
+	return () => listeners$10.delete(fn);
 }
 function currentMemoryConfirm() {
 	return pending$3;
@@ -28430,13 +28430,13 @@ function askMemoryConfirm(body, what, canSleep = true) {
 			resolve(choice) {
 				if (pending$3 === me) {
 					pending$3 = null;
-					emit$1();
+					emit$2();
 				}
 				resolve(choice);
 			}
 		};
 		pending$3 = me;
-		emit$1();
+		emit$2();
 	});
 }
 var memoryConfirmDeps = {
@@ -40408,7 +40408,7 @@ function installJoinLink() {
 var KEY$1 = "mf_codemap_seen";
 var MAX_TITLES = 200;
 var cache = null;
-var listeners$8 = /* @__PURE__ */ new Set();
+var listeners$9 = /* @__PURE__ */ new Set();
 function load() {
 	if (cache) return cache;
 	try {
@@ -40443,7 +40443,7 @@ function markCodemapSeen(title, ts) {
 	try {
 		localStorage.setItem(KEY$1, JSON.stringify(next));
 	} catch {}
-	listeners$8.forEach((l) => l());
+	listeners$9.forEach((l) => l());
 }
 function renameCodemapSeen(from, to) {
 	const cur = load();
@@ -40455,11 +40455,11 @@ function renameCodemapSeen(from, to) {
 	try {
 		localStorage.setItem(KEY$1, JSON.stringify(next));
 	} catch {}
-	listeners$8.forEach((l) => l());
+	listeners$9.forEach((l) => l());
 }
 function subscribeCodemapSeen(cb) {
-	listeners$8.add(cb);
-	return () => listeners$8.delete(cb);
+	listeners$9.add(cb);
+	return () => listeners$9.delete(cb);
 }
 function redZoneChip(rz, seenAt) {
 	if (!rz) return null;
@@ -40541,10 +40541,10 @@ function saveNodePos(chain, spots) {
 //#endregion
 //#region src/lib/renameSession.ts
 var VERIFY = "\0verify:";
-var listeners$7 = /* @__PURE__ */ new Set();
+var listeners$8 = /* @__PURE__ */ new Set();
 function onSessionRenamed(fn) {
-	listeners$7.add(fn);
-	return () => listeners$7.delete(fn);
+	listeners$8.add(fn);
+	return () => listeners$8.delete(fn);
 }
 function renameMapKey(m, from, to, opts = {}) {
 	if (m.has(from)) {
@@ -40657,7 +40657,7 @@ function moveSessionTitle(from, to) {
 			parent: r.parent === from ? to : r.parent
 		} : r);
 	});
-	for (const fn of listeners$7) try {
+	for (const fn of listeners$8) try {
 		fn(from, to);
 	} catch {}
 }
@@ -40843,11 +40843,11 @@ var records = /* @__PURE__ */ new Map();
 var known = /* @__PURE__ */ new Map();
 var epochCounter = 0;
 var version$1 = 0;
-var listeners$6 = /* @__PURE__ */ new Set();
+var listeners$7 = /* @__PURE__ */ new Set();
 function subscribeHost(cb) {
-	listeners$6.add(cb);
+	listeners$7.add(cb);
 	return () => {
-		listeners$6.delete(cb);
+		listeners$7.delete(cb);
 	};
 }
 function hostVersion() {
@@ -40855,7 +40855,7 @@ function hostVersion() {
 }
 function bump() {
 	version$1++;
-	for (const cb of listeners$6) cb();
+	for (const cb of listeners$7) cb();
 }
 function buildTarget(extId, surfaceId, ref) {
 	return extId + ":" + surfaceId + (ref ? ":" + ref : "");
@@ -45689,6 +45689,706 @@ function approvableRequest(event, data) {
 	};
 }
 //#endregion
+//#region src/lib/whatsNew.ts
+function parseVersion(raw) {
+	const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec((raw || "").trim());
+	if (!m) return null;
+	return [
+		Number(m[1]),
+		Number(m[2] || 0),
+		Number(m[3] || 0)
+	];
+}
+function compareVersions(a, b) {
+	const pa = parseVersion(a);
+	const pb = parseVersion(b);
+	if (!pa || !pb) return (pa ? 1 : 0) - (pb ? 1 : 0);
+	for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
+	return 0;
+}
+function isReleaseVersion(raw) {
+	const v = (raw || "").trim();
+	return !!parseVersion(v) && !v.startsWith("0+");
+}
+function minorOf(raw) {
+	const p = parseVersion(raw);
+	return p ? `${p[0]}.${p[1]}` : raw;
+}
+function sorted(releases) {
+	return [...releases].sort((a, b) => compareVersions(b.version, a.version));
+}
+function planWhatsNew(input) {
+	const none = {
+		pop: false,
+		entries: [],
+		markSeen: null
+	};
+	if (!isReleaseVersion(input.running)) return none;
+	const running = input.running.trim();
+	const seen = isReleaseVersion(input.lastSeen) ? input.lastSeen.trim() : null;
+	if (!seen) {
+		if (!input.onboarded) return {
+			pop: false,
+			entries: [],
+			markSeen: running
+		};
+	}
+	const entries = sorted(input.releases).filter((r) => compareVersions(r.version, running) <= 0 && (!seen || compareVersions(r.version, seen) > 0));
+	if (!entries.some((r) => r.big)) return none;
+	return {
+		pop: true,
+		entries,
+		markSeen: null
+	};
+}
+function sinceNewestBig(newestFirst) {
+	const i = newestFirst.findIndex((r) => r.big);
+	return i < 0 ? newestFirst.slice(0, 1) : newestFirst.slice(0, i + 1);
+}
+function reopenEntries(releases, running) {
+	const cap = isReleaseVersion(running) ? running.trim() : null;
+	return sinceNewestBig(sorted(releases).filter((r) => !cap || compareVersions(r.version, cap) <= 0));
+}
+function laterVersion(a, b) {
+	const x = isReleaseVersion(a) ? a.trim() : null;
+	const y = isReleaseVersion(b) ? b.trim() : null;
+	if (!x || !y) return x || y;
+	return compareVersions(x, y) >= 0 ? x : y;
+}
+function whatsNewTitle(entries) {
+	const lead = entries.find((r) => r.big) || entries[0];
+	return lead ? `What's new in MindFlock ${minorOf(lead.version)}` : "What's new in MindFlock";
+}
+function splitEntries(entries) {
+	return {
+		big: entries.filter((r) => r.big),
+		small: entries.filter((r) => !r.big)
+	};
+}
+function knownAction(f, known) {
+	return f.action && known(f.action.run) ? f.action : void 0;
+}
+var WHATS_NEW_DECIDE_MS = 8e3;
+function popupTurn(q) {
+	if (q.whatsNew === "shown") return "whats-new";
+	if (q.askOpen) return "ask";
+	if (q.otherOpen) return null;
+	if (q.whatsNew === "due") return "whats-new";
+	if (q.whatsNew === "deciding" && q.sinceLoadMs < WHATS_NEW_DECIDE_MS) return null;
+	return q.askWaiting ? "ask" : null;
+}
+//#endregion
+//#region src/lib/updates.ts
+var UPDATE_MODES = [
+	{
+		value: "auto",
+		label: "Automatic",
+		hint: "Installs new versions by itself and restarts when you pause."
+	},
+	{
+		value: "ask",
+		label: "Ask me",
+		hint: "Tells you once per version; one click installs it."
+	},
+	{
+		value: "off",
+		label: "Off",
+		hint: "Never checks by itself. Check now still works."
+	}
+];
+function updateModeOf(c) {
+	const m = c?.mode;
+	return m === "auto" || m === "ask" || m === "off" ? m : null;
+}
+function vLabel(raw) {
+	const v = String(raw ?? "").trim().replace(/^v/i, "");
+	return v ? "v" + v : "";
+}
+function updateStateLine(c) {
+	if (!c) return "";
+	if (c.dev && c.dev.can_update === false) return String(c.dev.why_not || "").trim();
+	return String(c.auto?.why || "").trim();
+}
+function updateAvailable(c) {
+	if (!c) return false;
+	if (c.dev) return !!c.available && c.dev.can_update !== false;
+	return !!c.available && !c.blocked;
+}
+function updateButtonLabel(c) {
+	const v = vLabel(c?.latest);
+	const behind = Number(c?.dev?.behind) || 0;
+	if (c?.dev && behind > 0 && (!v || !c.available || v === vLabel(c.current))) return "Update (" + behind + " new commit" + (behind === 1 ? "" : "s") + ")";
+	return v ? "Update to " + v : "Update";
+}
+function installPath(o) {
+	if (!o.desktop) return "server";
+	if (o.managedByShell === false) return "server";
+	if (o.managedByShell === true) return "shell";
+	return o.shellSource ? "server" : "shell";
+}
+function restartLanded(c) {
+	return !!c && !c.restart_pending && c.state !== "started";
+}
+function runFailText(st) {
+	if (st.state === "rolled_back") return "The new version didn’t start, so the previous one was put back.";
+	if (st.error === "interrupted") return "The update was interrupted. Try again.";
+	if (st.error && !/^\w+$/.test(st.error)) return st.error.replace(/\.?$/, ".");
+	return "The update didn’t finish (exit " + (st.code ?? "?") + ").";
+}
+function updateEventNote(event, data) {
+	const d = data || {};
+	const version = String(d.version || d.latest || "").trim().replace(/^v/i, "");
+	const v = vLabel(version);
+	switch (event) {
+		case "update.installing": return {
+			text: "",
+			toast: (v ? "Updating to " + v : "Updating MindFlock") + "…",
+			cls: "n-info",
+			version
+		};
+		case "update.done": return {
+			text: v ? "Updated to " + v : "Updated MindFlock",
+			toast: v ? "Updated to " + v : "Updated MindFlock",
+			cls: "n-done",
+			version
+		};
+		case "update.failed": {
+			const why = String(d.error || "").trim().replace(/\.$/, "");
+			const head = v ? "Couldn’t update to " + v : "Couldn’t update MindFlock";
+			const text = why ? head + ": " + why + "." : head + ".";
+			return {
+				text,
+				toast: text,
+				cls: "n-warn",
+				version
+			};
+		}
+		default: return null;
+	}
+}
+function canOfferUpdate(data, owner) {
+	const d = data || {};
+	if (!owner || !d.latest) return false;
+	if (d.auto === true) return false;
+	if (d.here === false) return false;
+	return !String(d.blocked || "").trim();
+}
+var DONE_TOAST_FRESH_S = 600;
+function doneToastWanted(o) {
+	if (o.seen && o.version && o.seen === o.version) return false;
+	if (!o.replay) return true;
+	return o.nowS - o.ts <= DONE_TOAST_FRESH_S;
+}
+function whatsNewCovers(releases, to, from) {
+	if (!isReleaseVersion(to)) return false;
+	const since = isReleaseVersion(from) ? from : null;
+	return releases.some((r) => compareVersions(r.version, to) <= 0 && (!since || compareVersions(r.version, since) > 0));
+}
+//#endregion
+//#region src/lib/updateRestart.ts
+var EXPECT_MAX_MS = 27e5;
+var BACK_WAIT_MS = 18e4;
+var POLL_MS$6 = 2e3;
+var expected = null;
+var dropped = false;
+var listeners$6 = /* @__PURE__ */ new Set();
+function emit$1() {
+	for (const l of listeners$6) l();
+}
+function expectUpdateRestart(version, since = Date.now()) {
+	const v = String(version || "").replace(/^v/i, "");
+	if (expected && expected.version === v && expected.since === since) return;
+	expected = {
+		version: v,
+		since
+	};
+	dropped = false;
+	emit$1();
+}
+function clearUpdateRestart() {
+	if (!expected) return;
+	expected = null;
+	dropped = false;
+	stopPoll();
+	emit$1();
+}
+function updateRestartExpected(now = Date.now()) {
+	return expected && now - expected.since <= EXPECT_MAX_MS ? expected : null;
+}
+function subscribe$3(l) {
+	listeners$6.add(l);
+	return () => listeners$6.delete(l);
+}
+function useUpdateRestart() {
+	return (0, import_react.useSyncExternalStore)(subscribe$3, () => updateRestartExpected(), () => null);
+}
+var poll$1 = null;
+function stopPoll() {
+	if (poll$1) clearInterval(poll$1);
+	poll$1 = null;
+}
+function reload() {
+	stopPoll();
+	if (typeof window !== "undefined") window.location.reload();
+}
+function watchForNewBuild() {
+	if (poll$1 || !updateRestartExpected()) return;
+	const t0 = Date.now();
+	poll$1 = setInterval(async () => {
+		if (!updateRestartExpected()) return stopPoll();
+		let c;
+		try {
+			c = await api("/api/update/check");
+		} catch (err) {
+			if (err instanceof ApiError && err.status > 0 && err.status < 500) return reload();
+			if (Date.now() - t0 > BACK_WAIT_MS) clearUpdateRestart();
+			return;
+		}
+		if (restartLanded(c)) return reload();
+		if (c.state === "failed" || c.state === "rolled_back") return clearUpdateRestart();
+		stopPoll();
+	}, POLL_MS$6);
+}
+function installUpdateRecovery(ev) {
+	return ev.onStatus((s) => {
+		if (s !== "disconnected" || !updateRestartExpected()) return;
+		dropped = true;
+		watchForNewBuild();
+	});
+}
+function onUpdateDone(live) {
+	const wasDropped = dropped && !!updateRestartExpected();
+	clearUpdateRestart();
+	if (!(live && wasDropped)) return false;
+	reload();
+	return true;
+}
+function shellBridge() {
+	if (typeof window === "undefined") return null;
+	return window.mfengine || null;
+}
+var starting = false;
+async function startUpdateHere(version) {
+	if (starting) return;
+	starting = true;
+	try {
+		let check = null;
+		try {
+			check = await api("/api/update/check");
+		} catch {}
+		const shell = shellBridge();
+		let shellSource = false;
+		if (shell?.install && typeof check?.managed_by_shell !== "boolean") shellSource = !!(await shell.updateInfo?.().catch(() => null))?.source;
+		const path = installPath({
+			desktop: !!shell?.install,
+			shellSource,
+			managedByShell: check?.managed_by_shell
+		});
+		const v = String(version || check?.latest || "").replace(/^v/i, "");
+		const words = (v ? "Updating to " + vLabel(v) : "Updating MindFlock") + "…";
+		if (path === "shell") {
+			expectUpdateRestart(v);
+			toast(words);
+			shell.install().catch((err) => {
+				clearUpdateRestart();
+				toast(failText("The update didn’t start", err), { error: true });
+			});
+			return;
+		}
+		try {
+			await api("/api/update/start", {
+				method: "POST",
+				json: {}
+			});
+		} catch (err) {
+			toast(failText("The update didn’t start", err), { error: true });
+			return;
+		}
+		expectUpdateRestart(v);
+		toast(words);
+		if (!updateModeOf(check)) followOldServerRun();
+	} finally {
+		starting = false;
+	}
+}
+function failText(what, err) {
+	const why = String(err?.message ?? "").trim();
+	return why ? what + ": " + why.replace(/\.$/, "") + "." : what + ".";
+}
+function followOldServerRun() {
+	const t0 = Date.now();
+	const t = setInterval(async () => {
+		if (Date.now() - t0 > 6e5) return clearInterval(t);
+		let st;
+		try {
+			st = await api("/api/update/state");
+		} catch {
+			return;
+		}
+		if (st.restarting || st.state === "done") {
+			clearInterval(t);
+			watchForNewBuild();
+		} else if (st.state === "failed" || st.state === "rolled_back") {
+			clearInterval(t);
+			clearUpdateRestart();
+			toast(runFailText(st), { error: true });
+		}
+	}, POLL_MS$6);
+}
+//#endregion
+//#region src/whatsNew/releases.ts
+var RELEASES = [
+	{
+		version: "0.14.8",
+		date: "2026-11-11",
+		big: false,
+		headline: "Your team's PR rules as a route.",
+		features: [
+			{
+				title: "Review against your rules",
+				body: "A route's Review stop can now run a security review, or a standards review that follows your team's own rules, and every finding must be fixed or answered in writing."
+			},
+			{
+				title: "Wait for the bot reviewer",
+				body: "Reviews settle can require a reviewer such as CodeRabbit: it waits for its review, and says the PR needs a human when it never comes or comments stay open after five rounds."
+			},
+			{
+				title: "A round of fixes from a code review",
+				body: "Verify, held workers, the memory gauge, terminals and diff counts each got fixes for edge cases a review turned up."
+			}
+		]
+	},
+	{
+		version: "0.14.7",
+		date: "2026-11-10",
+		big: false,
+		headline: "MindFlock leaves your git staging alone.",
+		features: [{
+			title: "Your staged files stay yours",
+			body: "Showing a session's changes no longer marks new files as added or stages deletions in your repo. What you stage is only what you staged."
+		}, {
+			title: "Verify, said plainly",
+			body: "Voice now says \"needs you to confirm it's verified\" and \"failed its verify\", and the desktop's \"what needs me\" includes sessions waiting on your confirm."
+		}]
+	},
+	{
+		version: "0.14.6",
+		date: "2026-11-10",
+		big: false,
+		headline: "Terminals work on every Linux install.",
+		features: [{
+			title: "Terminals on fresh Linux installs",
+			body: "On a Linux machine whose Python was set up by the installer, session terminals and sign-in terminals failed to open since 0.14.4. They open again, and starting a session never copies the whole server anymore."
+		}]
+	},
+	{
+		version: "0.14.5",
+		date: "2026-11-10",
+		big: false,
+		headline: "Verify on your phone, and a steadier server.",
+		features: [{
+			title: "Confirm verified from the phone",
+			body: "The phone shows Verifying and Verified like the desktop, lists the steps that need you, and has Confirm verified and Not verified buttons, plus a Verify action in a session's menu."
+		}, {
+			title: "Login terminals can't freeze the server",
+			body: "Sign-in terminals and the ticket log no longer copy the whole server to start, and terminal typing and closing happen off its main thread."
+		}]
+	},
+	{
+		version: "0.14.4",
+		date: "2026-11-10",
+		big: false,
+		headline: "Verify is the session's own agent checking its work.",
+		features: [
+			{
+				title: "Verifying, in the session",
+				body: "Verify asks the session's own agent to write real test steps for what it built and work through them while you watch. A Verifying pill shows it is at work, and anything only you can do, it tells you."
+			},
+			{
+				title: "You confirm when a step is yours",
+				body: "If any step needs a person, Verify waits for you: Confirm verified or Not verified, right on the pane, the bell or the route's stop."
+			},
+			{
+				title: "No more white panes",
+				body: "Terminals repaint when the window comes back, so a pane no longer stays blank until you scroll. New agents also stop waiting on a memory reading that was never short."
+			}
+		]
+	},
+	{
+		version: "0.14.3",
+		date: "2026-11-10",
+		big: false,
+		headline: "Memory warnings you can trust, and voice that sends.",
+		features: [
+			{
+				title: "Memory reads real trouble",
+				body: "Low and critical now mean processes are stalling on memory, swap is being read back, or Windows is near its commit limit, held for 30 seconds, and each warning names the signal. Starts no longer wait while WSL has gigabytes it can reuse."
+			},
+			{
+				title: "Over sends again",
+				body: "Saying \"over\" presses Enter again, and \"over and out\" sends what is already in the box. Voice also stays on when memory gets low."
+			},
+			{
+				title: "Verify talks to you in the session",
+				body: "Check now hands the behaviors to the session that wrote the work: they show up on its todo list, and you can talk to it while it walks them."
+			}
+		]
+	},
+	{
+		version: "0.14.2",
+		date: "2026-11-09",
+		big: false,
+		headline: "Verify you can hand to an agent, start to finish.",
+		features: [
+			{
+				title: "Checks an agent can walk",
+				body: "Each behavior now says what to do and what to expect, in order, so the checker triggers things itself instead of waiting for someone to have used the feature."
+			},
+			{
+				title: "Agent only means the agent does it all",
+				body: "Choose Agent only on a Verify stop, or \"Let the agent walk every behavior\" on a Behaviors card, and the agent tries your steps too. It needs evidence to pass one, and it still asks you for what it can't do."
+			},
+			{
+				title: "Checks start on the right commit",
+				body: "MindFlock now checks out the code under test before the checker starts, so a check no longer fails on its first step."
+			}
+		]
+	},
+	{
+		version: "0.14.1",
+		date: "2026-11-09",
+		big: false,
+		headline: "Your assigned epics, in their own tab.",
+		features: [{
+			title: "Intake → Epics",
+			body: "Every Shortcut epic you own is listed in its own Intake tab, grouped by state, with how many of your stories are left. Start any of them; the ones in your auto-start states still start by themselves."
+		}]
+	},
+	{
+		version: "0.14.0",
+		date: "2026-11-09",
+		big: true,
+		headline: "Talk to MindFlock, hand it whole epics, and let reviews come back to the right session.",
+		features: [
+			{
+				title: "Talk to MindFlock",
+				body: "Say \"MindFlock, …\" or press Alt+M to drive the app by voice: open a dialog, start a session on a project, change a setting, or ask what a session is doing. It asks before anything destructive and never repeats back what you just did."
+			},
+			{
+				title: "A built-in voice",
+				body: "Kokoro is a natural voice that runs on your machine. Install it from Settings → Voice; the assistant speaks with it."
+			},
+			{
+				title: "Whole epics, one lead",
+				body: "A Shortcut source can take your epics too. Each one gets a single lead session that works your stories in it side by side, or one after another where one blocks another, with a pull request per story."
+			},
+			{
+				title: "Review rounds go back to work",
+				body: "When a reviewer asks for changes on one of your PRs, the session that built it decides per request whether to do it, push back with a reply, or ask you."
+			},
+			{
+				title: "Verify says where, and never stalls silently",
+				body: "A Verify stop now picks where to check (this branch or an environment like sandbox) and when it's ready. A check that can't go on tells you why, and a step only you can do comes to you."
+			},
+			{
+				title: "Timed todos",
+				body: "Give a todo a time (\"call the bank tue 9am\") and it pops up then, with snooze."
+			}
+		]
+	},
+	{
+		version: "0.13.1",
+		date: "2026-11-09",
+		big: false,
+		headline: "Dictation that follows the whole sentence.",
+		features: [{
+			title: "Words heard in context",
+			body: "When you dictate a message in several pauses, each part is now transcribed knowing what you already said, so fewer words come out wrong."
+		}, {
+			title: "A sharper English model",
+			body: "English dictation now uses Whisper's English-only model. It makes about half as many mistakes on coding talk and is just as fast."
+		}]
+	},
+	{
+		version: "0.13.0",
+		date: "2026-11-09",
+		big: true,
+		headline: "Voice that hears you right, and does more hands-free.",
+		features: [
+			{
+				title: "Accurate words, instant commands",
+				body: "Whisper now writes everything you dictate, while the fast Moonshine model listens only for commands like \"over\", stop and session names, so those still act the moment you say them."
+			},
+			{
+				title: "Scroll by voice",
+				body: "Say \"scroll up\", \"page down\", \"scroll to the top\" or \"back to the bottom\" to move through a session's output, and \"more\" to keep going."
+			},
+			{
+				title: "Interrupt, go back, where am I",
+				body: "\"Interrupt\" presses Escape in the session, \"go back\" returns to the session you were on, and \"where am I\" says which one is focused."
+			},
+			{
+				title: "Scratch that",
+				body: "Say \"scratch that\" to take back just the last phrase instead of everything. \"Disregard\" still clears it all."
+			},
+			{
+				title: "The rail keeps up",
+				body: "When you switch sessions, the list on the left scrolls to show the one you picked, and a voice switch makes its row blink once so you can spot it."
+			},
+			{
+				title: "What can I say?",
+				body: "Ask \"what can I say\" for a cheat sheet of every voice command. It's also in the mic's right-click menu."
+			}
+		]
+	},
+	{
+		version: "0.12.0",
+		date: "2026-11-04",
+		big: true,
+		headline: "Steadier with many agents: they wait for memory instead of freezing the machine.",
+		features: [
+			{
+				title: "Agents wait their turn for memory",
+				body: "When memory is getting low, agents that start by themselves (workers, Intake, schedules, routes) wait in line and show \"Waiting for memory\", and starting one yourself asks first. Each agent also has its own memory limit, so one that runs away is stopped on its own instead of freezing everything."
+			},
+			{
+				title: "After a crash, sessions stay offline",
+				body: "A session whose agent died stays Offline until you press Start, so a restart can't refill memory and crash again. Prompts sent to it wait on its queue."
+			},
+			{
+				title: "One name per session",
+				body: "Renaming a session renames it everywhere — there's no hidden second name any more — and a copy is named after it with the next free number (api-fix → api-fix-2)."
+			},
+			{
+				title: "Quieter, quicker voice",
+				body: "Voice Lab starts only when something is spoken and stops when idle; dictation never wakes it, and speech recognition loads only while you listen. \"MindFlock\" wakes the mic faster and more reliably."
+			},
+			{
+				title: "The Sky opens on This session",
+				body: "The Sky starts on the session you're on, fits its route to the window on every switch, and never pops the terminal open. Frames show their state at a glance: amber needs you, red halted.",
+				action: {
+					label: "Show me",
+					run: "sky-tour"
+				}
+			}
+		]
+	},
+	{
+		version: "0.11.0",
+		date: "2026-11-03",
+		big: true,
+		headline: "The Sky: see where every piece of work is, and set the route it takes.",
+		features: [
+			{
+				title: "The Sky",
+				body: "A second view beside the Grid: a session's route drawn as a row of stops, with a bird on the stop where the work is now. It opens on This session; All shows every route at once, and Needs you lists what is waiting on you. Ctrl+Y switches between the Grid and the Sky.",
+				action: {
+					label: "Show me",
+					run: "sky-tour"
+				}
+			},
+			{
+				title: "Saved routes",
+				body: "Build a route once — the agent, its checks, your OK, the PR — and keep it on the shelf as a saved route. Run it on a session, on its own in a folder, from an Intake source or on a schedule.",
+				action: {
+					label: "Show me",
+					run: "saved-routes"
+				}
+			},
+			{
+				title: "Behaviors on the route",
+				body: "What the work should do in real use is a list of behaviors, each checked by the agent or by you. Verify is now a stop on the session's route, and you answer them on its card there instead of in a separate dialog.",
+				action: {
+					label: "Show me",
+					run: "behaviors"
+				}
+			},
+			{
+				title: "Halt",
+				body: "A stop that fails halts the route, so nothing ships past a failure: Retry it, Skip it, or Let the agent fix it, right on the stop. Halt here on a stop ahead makes the route halt before it until you press Carry on."
+			},
+			{
+				title: "Loops, side-by-side stops and workers",
+				body: "Drag from a stop's out port back onto an earlier stop to repeat it; when a check sends the work back to the agent, the return wire says why (\"fixing 1/2\"). Stops can run side by side, and workers the session starts show up inside its route, as small outlines under its agent.",
+				action: {
+					label: "Show me",
+					run: "sky-guide"
+				}
+			},
+			{
+				title: "Any agent, GitHub Copilot too",
+				body: "GitHub Copilot is now one of the agents a session can run, alongside Claude, Codex and the others. Setup's first step asks which agent you use, then installs and signs in to that one.",
+				action: {
+					label: "Choose agents",
+					run: "agents"
+				}
+			}
+		]
+	},
+	{
+		version: "0.10.6",
+		date: "2026-10-29",
+		big: false,
+		headline: "Ask for workers in one keystroke.",
+		features: [{
+			title: "Ask for workers",
+			body: "Alt+G types a request for workers into the session's prompt; Flock mode keeps asking on every prompt, so a big task gets split without you writing it out."
+		}, {
+			title: "Invite with sessions",
+			body: "An invite to another person can carry the sessions you want to share, and you can chat with them across the link."
+		}]
+	}
+];
+//#endregion
+//#region src/components/whatsNew/seen.ts
+var WHATS_NEW_LS = "mf_whats_new_seen";
+var WHATS_NEW_PREF = "whats_new_seen";
+function readLocalSeen() {
+	try {
+		const v = localStorage.getItem(WHATS_NEW_LS);
+		return isReleaseVersion(v) ? v : null;
+	} catch {
+		return null;
+	}
+}
+function writeLocalSeen(v) {
+	try {
+		localStorage.setItem(WHATS_NEW_LS, v);
+	} catch {}
+}
+async function loadSeen() {
+	let server = null;
+	try {
+		const v = (await api("/api/prefs"))?.[WHATS_NEW_PREF];
+		server = typeof v === "string" ? v : null;
+	} catch {}
+	return laterVersion(server, readLocalSeen());
+}
+function saveSeen(v) {
+	if (!isReleaseVersion(v)) return;
+	writeLocalSeen(v);
+	api("/api/prefs", { json: { [WHATS_NEW_PREF]: v } }).catch(() => {});
+}
+var useWhatsNew = create((set) => ({
+	shown: null,
+	running: "",
+	seen: null,
+	auto: "deciding",
+	open: (entries) => set({ shown: entries }),
+	close: () => set({ shown: null })
+}));
+function whatsNewStage(s) {
+	return s.shown && s.shown.length ? "shown" : s.auto;
+}
+//#endregion
+//#region src/components/whatsNew/open.ts
+function openWhatsNew() {
+	const entries = reopenEntries(RELEASES, useWhatsNew.getState().running);
+	if (!entries.length) return;
+	useUi.getState().closeDialog();
+	useWhatsNew.getState().open(entries);
+}
+//#endregion
 //#region src/lib/deviceActions.ts
 var DEVICES_FOCUS_EVENT = "mf-devices-focus";
 var pending$1 = null;
@@ -46061,6 +46761,9 @@ var VERIFY_NEEDS_YOU = "Verify needs you";
 function verifyNotifTitle(row, name) {
 	return (row.verifyTitle || "Verify") + " — " + name;
 }
+function viewerIsOwner$1() {
+	return !queryClient.getQueryData(["config"])?.guest;
+}
 function notifFromEvent(env) {
 	const d = env.data || {};
 	switch (env.event) {
@@ -46256,12 +46959,33 @@ function notifFromEvent(env) {
 			const n = updateNote(d);
 			if (!n) return null;
 			const dedupe = "update:" + String(d.latest || "") + ":" + String(d.count ?? "");
-			return {
+			const row = {
 				text: n.text,
 				cls: "n-info",
 				settings: n.screen,
 				dedupe
 			};
+			if (n.screen === "advanced" && canOfferUpdate(d, viewerIsOwner$1())) row.update = String(d.latest);
+			return row;
+		}
+		case "update.done":
+		case "update.failed": {
+			const n = updateEventNote(env.event, d);
+			if (!n) return null;
+			if (env.event === "update.failed") return {
+				text: n.text,
+				cls: n.cls,
+				settings: "advanced",
+				dedupe: "update-failed:" + n.version + ":" + env.ts
+			};
+			const row = {
+				text: n.text,
+				cls: n.cls,
+				settings: "advanced",
+				dedupe: "update-done:" + n.version
+			};
+			if (whatsNewCovers(RELEASES, n.version, String(d.from_version || ""))) row.whatsNew = true;
+			return row;
 		}
 		default: return null;
 	}
@@ -46727,6 +47451,31 @@ function NotificationsBell() {
 								});
 							},
 							children: "Approve"
+						}),
+						n.update && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn notif-approve",
+							"data-bell-update": n.update,
+							onClick: (e) => {
+								e.stopPropagation();
+								const v = n.update;
+								setNotifs((prev) => prev.map((x) => x.update === v ? {
+									...x,
+									update: null
+								} : x));
+								startUpdateHere(v);
+							},
+							children: "Update"
+						}),
+						n.whatsNew && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn notif-approve",
+							onClick: (e) => {
+								e.stopPropagation();
+								setOpen(false);
+								openWhatsNew();
+							},
+							children: "What’s new"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-time",
@@ -48353,8 +49102,27 @@ var SETTINGS_SEARCH = [
 	},
 	{
 		key: "advanced",
+		label: "Engine & updates → Updates",
+		sub: "Automatic updates, the version you're on, Update now",
+		terms: [
+			"update",
+			"updates",
+			"automatic updates",
+			"auto update",
+			"auto-update",
+			"autoupdate",
+			"version",
+			"upgrade",
+			"new version",
+			"release",
+			"check for updates"
+		],
+		anchor: "#set-updates"
+	},
+	{
+		key: "advanced",
 		label: "Engine & updates",
-		sub: "Version and updates, restart, uninstall",
+		sub: "Updates, restart, uninstall",
 		terms: [
 			"engine",
 			"update",
@@ -50437,399 +51205,6 @@ function replayPeopleTour() {
 	useUi.getState().openCoachTour("people");
 }
 //#endregion
-//#region src/lib/whatsNew.ts
-function parseVersion(raw) {
-	const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec((raw || "").trim());
-	if (!m) return null;
-	return [
-		Number(m[1]),
-		Number(m[2] || 0),
-		Number(m[3] || 0)
-	];
-}
-function compareVersions(a, b) {
-	const pa = parseVersion(a);
-	const pb = parseVersion(b);
-	if (!pa || !pb) return (pa ? 1 : 0) - (pb ? 1 : 0);
-	for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
-	return 0;
-}
-function isReleaseVersion(raw) {
-	const v = (raw || "").trim();
-	return !!parseVersion(v) && !v.startsWith("0+");
-}
-function minorOf(raw) {
-	const p = parseVersion(raw);
-	return p ? `${p[0]}.${p[1]}` : raw;
-}
-function sorted(releases) {
-	return [...releases].sort((a, b) => compareVersions(b.version, a.version));
-}
-function planWhatsNew(input) {
-	const none = {
-		pop: false,
-		entries: [],
-		markSeen: null
-	};
-	if (!isReleaseVersion(input.running)) return none;
-	const running = input.running.trim();
-	const seen = isReleaseVersion(input.lastSeen) ? input.lastSeen.trim() : null;
-	if (!seen) {
-		if (!input.onboarded) return {
-			pop: false,
-			entries: [],
-			markSeen: running
-		};
-	}
-	const entries = sorted(input.releases).filter((r) => compareVersions(r.version, running) <= 0 && (!seen || compareVersions(r.version, seen) > 0));
-	if (!entries.some((r) => r.big)) return none;
-	return {
-		pop: true,
-		entries,
-		markSeen: null
-	};
-}
-function sinceNewestBig(newestFirst) {
-	const i = newestFirst.findIndex((r) => r.big);
-	return i < 0 ? newestFirst.slice(0, 1) : newestFirst.slice(0, i + 1);
-}
-function reopenEntries(releases, running) {
-	const cap = isReleaseVersion(running) ? running.trim() : null;
-	return sinceNewestBig(sorted(releases).filter((r) => !cap || compareVersions(r.version, cap) <= 0));
-}
-function laterVersion(a, b) {
-	const x = isReleaseVersion(a) ? a.trim() : null;
-	const y = isReleaseVersion(b) ? b.trim() : null;
-	if (!x || !y) return x || y;
-	return compareVersions(x, y) >= 0 ? x : y;
-}
-function whatsNewTitle(entries) {
-	const lead = entries.find((r) => r.big) || entries[0];
-	return lead ? `What's new in MindFlock ${minorOf(lead.version)}` : "What's new in MindFlock";
-}
-function splitEntries(entries) {
-	return {
-		big: entries.filter((r) => r.big),
-		small: entries.filter((r) => !r.big)
-	};
-}
-function knownAction(f, known) {
-	return f.action && known(f.action.run) ? f.action : void 0;
-}
-var WHATS_NEW_DECIDE_MS = 8e3;
-function popupTurn(q) {
-	if (q.whatsNew === "shown") return "whats-new";
-	if (q.askOpen) return "ask";
-	if (q.otherOpen) return null;
-	if (q.whatsNew === "due") return "whats-new";
-	if (q.whatsNew === "deciding" && q.sinceLoadMs < WHATS_NEW_DECIDE_MS) return null;
-	return q.askWaiting ? "ask" : null;
-}
-//#endregion
-//#region src/whatsNew/releases.ts
-var RELEASES = [
-	{
-		version: "0.14.8",
-		date: "2026-11-11",
-		big: false,
-		headline: "Your team's PR rules as a route.",
-		features: [
-			{
-				title: "Review against your rules",
-				body: "A route's Review stop can now run a security review, or a standards review that follows your team's own rules, and every finding must be fixed or answered in writing."
-			},
-			{
-				title: "Wait for the bot reviewer",
-				body: "Reviews settle can require a reviewer such as CodeRabbit: it waits for its review, and says the PR needs a human when it never comes or comments stay open after five rounds."
-			},
-			{
-				title: "A round of fixes from a code review",
-				body: "Verify, held workers, the memory gauge, terminals and diff counts each got fixes for edge cases a review turned up."
-			}
-		]
-	},
-	{
-		version: "0.14.7",
-		date: "2026-11-10",
-		big: false,
-		headline: "MindFlock leaves your git staging alone.",
-		features: [{
-			title: "Your staged files stay yours",
-			body: "Showing a session's changes no longer marks new files as added or stages deletions in your repo. What you stage is only what you staged."
-		}, {
-			title: "Verify, said plainly",
-			body: "Voice now says \"needs you to confirm it's verified\" and \"failed its verify\", and the desktop's \"what needs me\" includes sessions waiting on your confirm."
-		}]
-	},
-	{
-		version: "0.14.6",
-		date: "2026-11-10",
-		big: false,
-		headline: "Terminals work on every Linux install.",
-		features: [{
-			title: "Terminals on fresh Linux installs",
-			body: "On a Linux machine whose Python was set up by the installer, session terminals and sign-in terminals failed to open since 0.14.4. They open again, and starting a session never copies the whole server anymore."
-		}]
-	},
-	{
-		version: "0.14.5",
-		date: "2026-11-10",
-		big: false,
-		headline: "Verify on your phone, and a steadier server.",
-		features: [{
-			title: "Confirm verified from the phone",
-			body: "The phone shows Verifying and Verified like the desktop, lists the steps that need you, and has Confirm verified and Not verified buttons, plus a Verify action in a session's menu."
-		}, {
-			title: "Login terminals can't freeze the server",
-			body: "Sign-in terminals and the ticket log no longer copy the whole server to start, and terminal typing and closing happen off its main thread."
-		}]
-	},
-	{
-		version: "0.14.4",
-		date: "2026-11-10",
-		big: false,
-		headline: "Verify is the session's own agent checking its work.",
-		features: [
-			{
-				title: "Verifying, in the session",
-				body: "Verify asks the session's own agent to write real test steps for what it built and work through them while you watch. A Verifying pill shows it is at work, and anything only you can do, it tells you."
-			},
-			{
-				title: "You confirm when a step is yours",
-				body: "If any step needs a person, Verify waits for you: Confirm verified or Not verified, right on the pane, the bell or the route's stop."
-			},
-			{
-				title: "No more white panes",
-				body: "Terminals repaint when the window comes back, so a pane no longer stays blank until you scroll. New agents also stop waiting on a memory reading that was never short."
-			}
-		]
-	},
-	{
-		version: "0.14.3",
-		date: "2026-11-10",
-		big: false,
-		headline: "Memory warnings you can trust, and voice that sends.",
-		features: [
-			{
-				title: "Memory reads real trouble",
-				body: "Low and critical now mean processes are stalling on memory, swap is being read back, or Windows is near its commit limit, held for 30 seconds, and each warning names the signal. Starts no longer wait while WSL has gigabytes it can reuse."
-			},
-			{
-				title: "Over sends again",
-				body: "Saying \"over\" presses Enter again, and \"over and out\" sends what is already in the box. Voice also stays on when memory gets low."
-			},
-			{
-				title: "Verify talks to you in the session",
-				body: "Check now hands the behaviors to the session that wrote the work: they show up on its todo list, and you can talk to it while it walks them."
-			}
-		]
-	},
-	{
-		version: "0.14.2",
-		date: "2026-11-09",
-		big: false,
-		headline: "Verify you can hand to an agent, start to finish.",
-		features: [
-			{
-				title: "Checks an agent can walk",
-				body: "Each behavior now says what to do and what to expect, in order, so the checker triggers things itself instead of waiting for someone to have used the feature."
-			},
-			{
-				title: "Agent only means the agent does it all",
-				body: "Choose Agent only on a Verify stop, or \"Let the agent walk every behavior\" on a Behaviors card, and the agent tries your steps too. It needs evidence to pass one, and it still asks you for what it can't do."
-			},
-			{
-				title: "Checks start on the right commit",
-				body: "MindFlock now checks out the code under test before the checker starts, so a check no longer fails on its first step."
-			}
-		]
-	},
-	{
-		version: "0.14.1",
-		date: "2026-11-09",
-		big: false,
-		headline: "Your assigned epics, in their own tab.",
-		features: [{
-			title: "Intake → Epics",
-			body: "Every Shortcut epic you own is listed in its own Intake tab, grouped by state, with how many of your stories are left. Start any of them; the ones in your auto-start states still start by themselves."
-		}]
-	},
-	{
-		version: "0.14.0",
-		date: "2026-11-09",
-		big: true,
-		headline: "Talk to MindFlock, hand it whole epics, and let reviews come back to the right session.",
-		features: [
-			{
-				title: "Talk to MindFlock",
-				body: "Say \"MindFlock, …\" or press Alt+M to drive the app by voice: open a dialog, start a session on a project, change a setting, or ask what a session is doing. It asks before anything destructive and never repeats back what you just did."
-			},
-			{
-				title: "A built-in voice",
-				body: "Kokoro is a natural voice that runs on your machine. Install it from Settings → Voice; the assistant speaks with it."
-			},
-			{
-				title: "Whole epics, one lead",
-				body: "A Shortcut source can take your epics too. Each one gets a single lead session that works your stories in it side by side, or one after another where one blocks another, with a pull request per story."
-			},
-			{
-				title: "Review rounds go back to work",
-				body: "When a reviewer asks for changes on one of your PRs, the session that built it decides per request whether to do it, push back with a reply, or ask you."
-			},
-			{
-				title: "Verify says where, and never stalls silently",
-				body: "A Verify stop now picks where to check (this branch or an environment like sandbox) and when it's ready. A check that can't go on tells you why, and a step only you can do comes to you."
-			},
-			{
-				title: "Timed todos",
-				body: "Give a todo a time (\"call the bank tue 9am\") and it pops up then, with snooze."
-			}
-		]
-	},
-	{
-		version: "0.13.1",
-		date: "2026-11-09",
-		big: false,
-		headline: "Dictation that follows the whole sentence.",
-		features: [{
-			title: "Words heard in context",
-			body: "When you dictate a message in several pauses, each part is now transcribed knowing what you already said, so fewer words come out wrong."
-		}, {
-			title: "A sharper English model",
-			body: "English dictation now uses Whisper's English-only model. It makes about half as many mistakes on coding talk and is just as fast."
-		}]
-	},
-	{
-		version: "0.13.0",
-		date: "2026-11-09",
-		big: true,
-		headline: "Voice that hears you right, and does more hands-free.",
-		features: [
-			{
-				title: "Accurate words, instant commands",
-				body: "Whisper now writes everything you dictate, while the fast Moonshine model listens only for commands like \"over\", stop and session names, so those still act the moment you say them."
-			},
-			{
-				title: "Scroll by voice",
-				body: "Say \"scroll up\", \"page down\", \"scroll to the top\" or \"back to the bottom\" to move through a session's output, and \"more\" to keep going."
-			},
-			{
-				title: "Interrupt, go back, where am I",
-				body: "\"Interrupt\" presses Escape in the session, \"go back\" returns to the session you were on, and \"where am I\" says which one is focused."
-			},
-			{
-				title: "Scratch that",
-				body: "Say \"scratch that\" to take back just the last phrase instead of everything. \"Disregard\" still clears it all."
-			},
-			{
-				title: "The rail keeps up",
-				body: "When you switch sessions, the list on the left scrolls to show the one you picked, and a voice switch makes its row blink once so you can spot it."
-			},
-			{
-				title: "What can I say?",
-				body: "Ask \"what can I say\" for a cheat sheet of every voice command. It's also in the mic's right-click menu."
-			}
-		]
-	},
-	{
-		version: "0.12.0",
-		date: "2026-11-04",
-		big: true,
-		headline: "Steadier with many agents: they wait for memory instead of freezing the machine.",
-		features: [
-			{
-				title: "Agents wait their turn for memory",
-				body: "When memory is getting low, agents that start by themselves (workers, Intake, schedules, routes) wait in line and show \"Waiting for memory\", and starting one yourself asks first. Each agent also has its own memory limit, so one that runs away is stopped on its own instead of freezing everything."
-			},
-			{
-				title: "After a crash, sessions stay offline",
-				body: "A session whose agent died stays Offline until you press Start, so a restart can't refill memory and crash again. Prompts sent to it wait on its queue."
-			},
-			{
-				title: "One name per session",
-				body: "Renaming a session renames it everywhere — there's no hidden second name any more — and a copy is named after it with the next free number (api-fix → api-fix-2)."
-			},
-			{
-				title: "Quieter, quicker voice",
-				body: "Voice Lab starts only when something is spoken and stops when idle; dictation never wakes it, and speech recognition loads only while you listen. \"MindFlock\" wakes the mic faster and more reliably."
-			},
-			{
-				title: "The Sky opens on This session",
-				body: "The Sky starts on the session you're on, fits its route to the window on every switch, and never pops the terminal open. Frames show their state at a glance: amber needs you, red halted.",
-				action: {
-					label: "Show me",
-					run: "sky-tour"
-				}
-			}
-		]
-	},
-	{
-		version: "0.11.0",
-		date: "2026-11-03",
-		big: true,
-		headline: "The Sky: see where every piece of work is, and set the route it takes.",
-		features: [
-			{
-				title: "The Sky",
-				body: "A second view beside the Grid: a session's route drawn as a row of stops, with a bird on the stop where the work is now. It opens on This session; All shows every route at once, and Needs you lists what is waiting on you. Ctrl+Y switches between the Grid and the Sky.",
-				action: {
-					label: "Show me",
-					run: "sky-tour"
-				}
-			},
-			{
-				title: "Saved routes",
-				body: "Build a route once — the agent, its checks, your OK, the PR — and keep it on the shelf as a saved route. Run it on a session, on its own in a folder, from an Intake source or on a schedule.",
-				action: {
-					label: "Show me",
-					run: "saved-routes"
-				}
-			},
-			{
-				title: "Behaviors on the route",
-				body: "What the work should do in real use is a list of behaviors, each checked by the agent or by you. Verify is now a stop on the session's route, and you answer them on its card there instead of in a separate dialog.",
-				action: {
-					label: "Show me",
-					run: "behaviors"
-				}
-			},
-			{
-				title: "Halt",
-				body: "A stop that fails halts the route, so nothing ships past a failure: Retry it, Skip it, or Let the agent fix it, right on the stop. Halt here on a stop ahead makes the route halt before it until you press Carry on."
-			},
-			{
-				title: "Loops, side-by-side stops and workers",
-				body: "Drag from a stop's out port back onto an earlier stop to repeat it; when a check sends the work back to the agent, the return wire says why (\"fixing 1/2\"). Stops can run side by side, and workers the session starts show up inside its route, as small outlines under its agent.",
-				action: {
-					label: "Show me",
-					run: "sky-guide"
-				}
-			},
-			{
-				title: "Any agent, GitHub Copilot too",
-				body: "GitHub Copilot is now one of the agents a session can run, alongside Claude, Codex and the others. Setup's first step asks which agent you use, then installs and signs in to that one.",
-				action: {
-					label: "Choose agents",
-					run: "agents"
-				}
-			}
-		]
-	},
-	{
-		version: "0.10.6",
-		date: "2026-10-29",
-		big: false,
-		headline: "Ask for workers in one keystroke.",
-		features: [{
-			title: "Ask for workers",
-			body: "Alt+G types a request for workers into the session's prompt; Flock mode keeps asking on every prompt, so a big task gets split without you writing it out."
-		}, {
-			title: "Invite with sessions",
-			body: "An invite to another person can carry the sessions you want to share, and you can chat with them across the link."
-		}]
-	}
-];
-//#endregion
 //#region src/components/whatsNew/actions.ts
 var WHATS_NEW_ACTIONS = {
 	sky: () => setView("sky"),
@@ -50852,54 +51227,7 @@ function runWhatsNewAction(id) {
 	if (isKnownAction(id)) WHATS_NEW_ACTIONS[id]();
 }
 //#endregion
-//#region src/components/whatsNew/seen.ts
-var WHATS_NEW_LS = "mf_whats_new_seen";
-var WHATS_NEW_PREF = "whats_new_seen";
-function readLocalSeen() {
-	try {
-		const v = localStorage.getItem(WHATS_NEW_LS);
-		return isReleaseVersion(v) ? v : null;
-	} catch {
-		return null;
-	}
-}
-function writeLocalSeen(v) {
-	try {
-		localStorage.setItem(WHATS_NEW_LS, v);
-	} catch {}
-}
-async function loadSeen() {
-	let server = null;
-	try {
-		const v = (await api("/api/prefs"))?.[WHATS_NEW_PREF];
-		server = typeof v === "string" ? v : null;
-	} catch {}
-	return laterVersion(server, readLocalSeen());
-}
-function saveSeen(v) {
-	if (!isReleaseVersion(v)) return;
-	writeLocalSeen(v);
-	api("/api/prefs", { json: { [WHATS_NEW_PREF]: v } }).catch(() => {});
-}
-var useWhatsNew = create((set) => ({
-	shown: null,
-	running: "",
-	seen: null,
-	auto: "deciding",
-	open: (entries) => set({ shown: entries }),
-	close: () => set({ shown: null })
-}));
-function whatsNewStage(s) {
-	return s.shown && s.shown.length ? "shown" : s.auto;
-}
-//#endregion
 //#region src/components/whatsNew/WhatsNew.tsx
-function openWhatsNew() {
-	const entries = reopenEntries(RELEASES, useWhatsNew.getState().running);
-	if (!entries.length) return;
-	useUi.getState().closeDialog();
-	useWhatsNew.getState().open(entries);
-}
 function closeWhatsNew() {
 	const s = useWhatsNew.getState();
 	const seen = laterVersion(s.running, s.seen);
@@ -62029,6 +62357,22 @@ function notifyOnce(session, state, msg, opts) {
 	notifyAt.set(key, now);
 	toast(msg, opts);
 }
+function viewerIsOwner() {
+	return !queryClient.getQueryData(["config"])?.guest;
+}
+var DONE_TOASTED_KEY = "mf_update_done_toasted";
+function readDoneToasted() {
+	try {
+		return localStorage.getItem(DONE_TOASTED_KEY);
+	} catch {
+		return null;
+	}
+}
+function writeDoneToasted(v) {
+	try {
+		localStorage.setItem(DONE_TOASTED_KEY, v);
+	} catch {}
+}
 function namedSlot(session) {
 	const n = slotNumber(session);
 	return (n ? "[" + n + "] " : "") + displayName(session);
@@ -62356,13 +62700,70 @@ function EventToasts() {
 			if (isReplay(env)) return;
 			const desktop = !!window.mfengine;
 			if (desktop) desktopNotify(env.event, env.data);
-			if (!updateToastWanted(env.data, desktop)) return;
 			const n = updateNote(env.data);
 			if (!n) return;
-			notifyOnce("*update:" + String(env.data?.latest || ""), "update.available", n.toast, {
-				onClick: () => openSettings(n.screen),
-				duration: 8e3
+			const offer = canOfferUpdate(env.data, viewerIsOwner()) && n.screen === "advanced";
+			const show = () => {
+				const latest = String(env.data?.latest || "");
+				notifyOnce("*update:" + latest, "update.available", offer ? n.text : viewerIsOwner() ? n.toast : n.text, offer ? {
+					action: {
+						label: "Update",
+						onClick: () => void startUpdateHere(latest)
+					},
+					duration: 1e4
+				} : viewerIsOwner() ? {
+					onClick: () => openSettings(n.screen),
+					duration: 8e3
+				} : { duration: 8e3 });
+			};
+			if (updateToastWanted(env.data, desktop)) return show();
+			api("/api/update/check").then((c) => {
+				if (c?.managed_by_shell === false) show();
+			}).catch(() => {});
+		}));
+		unsubs.push(installUpdateRecovery(ev));
+		unsubs.push(ev.subscribe("update.installing", (env) => {
+			const d = env.data || {};
+			expectUpdateRestart(String(d.version || ""), (env.ts || Date.now() / 1e3) * 1e3);
+			if (isReplay(env)) return;
+			const n = updateEventNote(env.event, d);
+			if (n) toast(n.toast, { duration: 4e3 });
+		}));
+		unsubs.push(ev.subscribe("update.failed", (env) => {
+			clearUpdateRestart();
+			if (isReplay(env)) return;
+			const n = updateEventNote(env.event, env.data);
+			if (n) toast(n.toast, {
+				error: true,
+				...viewerIsOwner() ? { onClick: () => openSettings("advanced") } : {}
 			});
+		}));
+		unsubs.push(ev.subscribe("update.done", (env) => {
+			const live = !isReplay(env);
+			if (onUpdateDone(live)) return;
+			const d = env.data || {};
+			const n = updateEventNote(env.event, d);
+			if (!n) return;
+			const seen = readDoneToasted();
+			if (!doneToastWanted({
+				version: n.version,
+				replay: !live,
+				ts: env.ts || 0,
+				nowS: Date.now() / 1e3,
+				seen
+			})) return;
+			const say = () => {
+				writeDoneToasted(n.version);
+				const news = whatsNewCovers(RELEASES, n.version, String(d.from_version || ""));
+				toast(n.toast, news ? { action: {
+					label: "What's new",
+					onClick: openWhatsNew
+				} } : { duration: 4e3 });
+			};
+			if (!window.mfengine) return say();
+			api("/api/update/check").then((c) => {
+				if (c?.managed_by_shell !== true) say();
+			}).catch(say);
 		}));
 		unsubs.push(ev.subscribe(AUTO_CLOSED_EVENT, (env) => {
 			if (isReplay(env)) return;
@@ -63330,6 +63731,12 @@ function memoryConnText(level, pollFailing) {
 //#endregion
 //#region src/components/ConnBanner.tsx
 var SLOW_MAX_MS = 3e5;
+function updateRestartText(version) {
+	return {
+		head: "Updating MindFlock",
+		text: "The server is restarting onto " + (vLabel(version) || "the new version") + ". Your sessions keep running, and this window reconnects on its own."
+	};
+}
 function pollFailText(err) {
 	const status = err instanceof ApiError ? err.status : 0;
 	return status > 0 ? "The server is reachable but answering with errors (HTTP " + status + "). It may recover on its own; if not, check the server logs." : "The server isn’t answering — it may have stopped or be restarting. Reconnecting automatically.";
@@ -63343,6 +63750,7 @@ function ConnBanner() {
 	const [fixArmed, setFixArmed] = (0, import_react.useState)(false);
 	const [fixBusy, setFixBusy] = (0, import_react.useState)(false);
 	const everConnected = (0, import_react.useRef)(false);
+	const updating = useUpdateRestart();
 	(0, import_react.useEffect)(() => {
 		return queryClient.getQueryCache().subscribe((event) => {
 			if (event.query.queryKey[0] !== "instances") return;
@@ -63393,13 +63801,15 @@ function ConnBanner() {
 	let head = "⚠ Connection to MindFlock lost";
 	let fixLabel;
 	const memLevel = queryClient.getQueryData(["system-memory"])?.level;
-	const slow = !!diag && [
+	const wslState = !!diag && [
 		"wsl-down",
 		"wsl-missing",
 		"not-installed",
 		"starting"
-	].includes(diag.state || "") || lostAt && now - lostAt > SLOW_MAX_MS ? null : memoryConnText(memLevel, pollFails >= 2);
-	if (slow && !(lastErr instanceof ApiError && lastErr.status > 0)) {
+	].includes(diag.state || "");
+	const slow = wslState || lostAt && now - lostAt > SLOW_MAX_MS ? null : memoryConnText(memLevel, pollFails >= 2);
+	if (updating && !wslState && !(lastErr instanceof ApiError && lastErr.status > 0)) ({head, text} = updateRestartText(updating.version));
+	else if (slow && !(lastErr instanceof ApiError && lastErr.status > 0)) {
 		head = slow.head;
 		text = slow.text;
 	} else if (diag && pollFails >= 2 && diag.state === "wsl-down") {
@@ -63415,7 +63825,8 @@ function ConnBanner() {
 	const canFix = !!(fixLabel && window.mfdiag?.restartWsl);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "conn-banner",
-		role: "alert",
+		role: updating ? "status" : "alert",
+		"data-updating": updating ? "" : void 0,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "conn-head",
@@ -136751,7 +137162,6 @@ function shellUpdateMode(info) {
 function showAutoUpdateSwitch(info) {
 	return !info?.source && typeof info?.autoUpdate === "boolean";
 }
-var SOURCE_RUN_NOTE = "This desktop app is running from source (a dev run), so it never updates itself — update the checkout with git. Nothing here offers or installs a release.";
 function autoUpdateHint(on) {
 	return on ? "New releases download in the background and install themselves once you’ve been away for 10 minutes (or the screen is locked) and no agent is mid-turn — waiting at most 2 hours for that. The app restarts onto the new version and says what it updated. “Skip this version” is still honoured." : "Updates are only offered: the toast’s Update button (or the one below) installs them when you choose.";
 }
@@ -136777,7 +137187,7 @@ function Advanced(_) {
 			hint: "Whether tickets become MindFlock sessions, and how they copy the repo.",
 			selector: "#ik-engine-sessions-row"
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EngineUpdate, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UpdatesBlock, {}),
 		showPlatform && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 				className: "set-section-title",
@@ -136838,37 +137248,46 @@ function Advanced(_) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UninstallSection, {})
 	] });
 }
-function EngineUpdate() {
-	return window.mfengine ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShellEngineUpdate, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ServerEngineUpdate, {});
-}
 var NEW_BUILD_WAIT_MS = 18e4;
-var METHOD_WORDS = {
-	"uv-tool": "uv tool",
-	pipx: "pipx",
-	editable: "a development checkout (editable)",
-	other: "an installer MindFlock doesn’t recognise"
-};
-function ServerEngineUpdate() {
+function failSentence(what, err) {
+	const why = String(err?.message ?? (typeof err === "string" ? err : "")).trim();
+	return why ? what + ": " + why.replace(/\.$/, "") + "." : what + ".";
+}
+function UpdatesBlock() {
+	const w = window;
+	const mfengine = w.mfengine;
+	const mfupdate = w.mfupdate;
 	const [info, setInfo] = (0, import_react.useState)(null);
-	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [shellInfo, setShellInfo] = (0, import_react.useState)(null);
+	const [checking, setChecking] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [lines, setLines] = (0, import_react.useState)([]);
-	const timer = (0, import_react.useRef)(null);
+	const [run, setRun] = (0, import_react.useState)(null);
 	const [waiting, setWaiting] = (0, import_react.useState)(false);
 	const [waitTimedOut, setWaitTimedOut] = (0, import_react.useState)(false);
+	const timer = (0, import_react.useRef)(null);
 	const check = (0, import_react.useCallback)(async (refresh) => {
+		const shellAsk = mfengine?.updateInfo ? mfengine.updateInfo().then(setShellInfo).catch(() => {}) : Promise.resolve();
 		try {
 			setInfo(await api("/api/update/check" + (refresh ? "?refresh=1" : "")));
 		} catch (err) {
 			setError(err.message);
 		}
-	}, []);
+		await shellAsk;
+	}, [mfengine]);
 	(0, import_react.useEffect)(() => {
 		check(false);
 		return () => {
 			if (timer.current) clearInterval(timer.current);
 		};
 	}, [check]);
+	const checkNow = () => {
+		if (checking) return;
+		setChecking(true);
+		setError("");
+		check(true).finally(() => setChecking(false));
+	};
 	const pending = !!info?.restart_pending;
 	(0, import_react.useEffect)(() => {
 		if (!pending && !waiting) return;
@@ -136880,8 +137299,7 @@ function ServerEngineUpdate() {
 				return;
 			}
 			try {
-				const c = await api("/api/update/check");
-				if (!c.restart_pending && c.state !== "started") {
+				if (restartLanded(await api("/api/update/check"))) {
 					clearInterval(t);
 					window.location.reload();
 				}
@@ -136889,7 +137307,85 @@ function ServerEngineUpdate() {
 		}, 2e3);
 		return () => clearInterval(t);
 	}, [pending, waiting]);
-	const update = async () => {
+	const path = installPath({
+		desktop: !!mfengine?.install,
+		shellSource: shellUpdateMode(shellInfo) === "source",
+		managedByShell: info?.managed_by_shell
+	});
+	const mode = updateModeOf(info);
+	const setMode = async (next, el) => {
+		const prev = info?.mode;
+		setInfo((i) => ({
+			...i || {},
+			mode: next,
+			mode_set: true
+		}));
+		try {
+			const r = await api("/api/update/mode", { json: { mode: next } });
+			setInfo((i) => ({
+				...i || {},
+				mode: r?.mode || next
+			}));
+			await mfupdate?.setAuto?.(next === "auto").catch(() => {});
+			if (!(el && flashSaved(el))) toast("Saved");
+			check(false);
+		} catch (err) {
+			setInfo((i) => ({
+				...i || {},
+				mode: prev
+			}));
+			toast(failSentence("Couldn't change automatic updates", err));
+		}
+	};
+	const legacyAuto = !mode && path === "shell" && showAutoUpdateSwitch(shellInfo);
+	const setLegacyAuto = (on) => {
+		setShellInfo((i) => ({
+			...i || {},
+			autoUpdate: on
+		}));
+		mfupdate?.setAuto?.(on).then((r) => setShellInfo((i) => ({
+			...i || {},
+			autoUpdate: r?.autoUpdate !== false
+		}))).catch((err) => {
+			setShellInfo((i) => ({
+				...i || {},
+				autoUpdate: !on
+			}));
+			toast(failSentence("Couldn't change automatic updates", err));
+		});
+	};
+	const viaShell = () => {
+		if (busy || !mfengine?.install) return;
+		setBusy(true);
+		setRun(null);
+		expectUpdateRestart(shellInfo?.latest || info?.latest || "");
+		mfengine.install().catch((err) => {
+			if (timer.current) clearInterval(timer.current);
+			timer.current = null;
+			setBusy(false);
+			clearUpdateRestart();
+			setRun({
+				state: "failed",
+				message: failSentence("The update didn't start", err)
+			});
+		});
+		if (timer.current) clearInterval(timer.current);
+		timer.current = setInterval(async () => {
+			try {
+				const st = await mfengine.installState?.();
+				if (!st) return;
+				setRun(st);
+				if (st.state === "done" || st.state === "failed") {
+					if (timer.current) clearInterval(timer.current);
+					timer.current = null;
+					setBusy(false);
+					if (st.state === "failed") clearUpdateRestart();
+					if (st.state === "done") check(false);
+				}
+			} catch {}
+		}, 1e3);
+	};
+	const viaServer = async () => {
 		setBusy(true);
 		setError("");
 		setLines([]);
@@ -136900,9 +137396,10 @@ function ServerEngineUpdate() {
 			});
 		} catch (err) {
 			setBusy(false);
-			setError(err.message);
+			setError(failSentence("The update didn't start", err));
 			return;
 		}
+		expectUpdateRestart(info?.latest || "");
 		if (timer.current) clearInterval(timer.current);
 		timer.current = setInterval(async () => {
 			let st;
@@ -136920,33 +137417,99 @@ function ServerEngineUpdate() {
 				if (timer.current) clearInterval(timer.current);
 				timer.current = null;
 				setBusy(false);
-				setError(st.state === "rolled_back" ? "The new version didn’t start, so the previous one was put back — see the installer output." : st.error === "interrupted" ? "The update was interrupted — try again." : "The update didn’t finish (exit " + (st.code ?? "?") + ").");
+				clearUpdateRestart();
+				setError(runFailText(st));
 				check(false);
 			}
 		}, 2e3);
 	};
-	const blocked = info?.blocked || "";
-	const version = info?.current ? "v" + info.current : "unknown";
-	const last = info?.last || {};
-	const editable = info?.kind === "editable";
-	const method = METHOD_WORDS[info?.kind || ""] || info?.kind || "";
+	const shellDrives = path === "shell" && !!shellInfo;
+	const current = vLabel(info?.current || shellInfo?.current) || "unknown";
+	const available = shellDrives ? !!shellInfo?.available : updateAvailable(info);
+	const latest = vLabel(shellDrives ? shellInfo?.latest || info?.latest : info?.latest);
+	const checked = shellDrives ? shellInfo?.checked !== false : !!info?.checked || !!info?.dev;
+	const dev = info?.dev || null;
 	const installing = info?.state === "started";
-	const lastNote = error || pending || waiting ? "" : info?.state === "rolled_back" ? "v" + (last.version || "?") + " didn’t start, so v" + (last.from_version || "?") + " was put back (Settings → System logs has the installer output)." : info?.state === "failed" && last.error === "interrupted" ? "The last update was interrupted — try again." : info?.state === "failed" ? "The last update failed — Settings → System logs has the installer output." : "";
+	const last = info?.last || {};
+	const stateLine = updateStateLine(info) || (dev ? "" : String(info?.blocked || "").trim());
+	const cantUpdate = dev ? dev.can_update === false : !!info?.blocked;
+	const failed = run?.state === "failed";
+	const lastNote = error || pending || waiting ? "" : info?.state === "rolled_back" ? vLabel(last.version || "?") + " didn’t start, so " + vLabel(last.from_version || "?") + " was put back (Settings → System logs has the installer output)." : info?.state === "failed" && last.error === "interrupted" ? "The last update was interrupted. Try again." : info?.state === "failed" ? "The last update failed. Settings → System logs has the installer output." : "";
+	const buttonLabel = shellDrives ? latest ? "Update to " + latest : "Update" : updateButtonLabel(info);
+	const showButton = available && !pending && !waiting && !installing;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
-			children: "Version & updates"
+			id: "set-updates",
+			children: "Updates"
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-hint",
+		mode && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			id: "upd-mode-row",
 			children: [
-				"This engine is ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: version }),
-				info?.checked && info?.latest ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					id: "upd-mode-label",
+					children: "Install updates"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "upd-mode-choices",
+					role: "radiogroup",
+					"aria-labelledby": "upd-mode-label",
+					children: UPDATE_MODES.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "upd-mode-choice",
+						title: m.hint,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "radio",
+							name: "upd-mode",
+							value: m.value,
+							checked: mode === m.value,
+							onChange: (e) => void setMode(m.value, e.currentTarget)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: m.label })]
+					}, m.value))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: UPDATE_MODES.find((m) => m.value === mode)?.hint
+				})
+			]
+		}),
+		legacyAuto && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Install updates automatically"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "upd-auto",
+					checked: shellInfo?.autoUpdate !== false,
+					disabled: !mfupdate?.setAuto,
+					onChange: (e) => setLegacyAuto(e.target.checked)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: autoUpdateHint(shellInfo?.autoUpdate !== false)
+		})] }),
+		(info || shellInfo) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			id: "upd-version",
+			children: [
+				"This is ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: current }),
+				dev?.branch ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					" (a development checkout on ",
+					dev.branch,
+					")"
+				] }) : null,
+				".",
+				available && latest ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 					" ",
-					"· newest release ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: ["v", info.latest] }),
-					info.release_url ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: latest }),
+					" is available",
+					info?.release_url && !dev ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 						" ",
 						"(",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
@@ -136956,60 +137519,46 @@ function ServerEngineUpdate() {
 							children: "release notes"
 						}),
 						")"
-					] }) : null
-				] }) : info && !info.checked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: " · couldn’t reach GitHub to check for a newer one" }) : null,
-				method ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					] }) : null,
+					"."
+				] }) : available && dev?.behind ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 					" ",
-					"· installed with ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: method }),
-					info?.method_source === "install.json" ? " (per install.json)" : ""
-				] }) : null,
-				"."
+					dev.behind,
+					" new commit",
+					dev.behind === 1 ? "" : "s",
+					" on ",
+					dev.default_branch || dev.branch,
+					"."
+				] }) : info && checked && !available && !cantUpdate ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: " It’s the newest version." }) : info && !checked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: " Couldn’t check for a newer version just now." }) : null,
+				shellDrives && available && shellInfo?.appUpdate ? " The app is behind too: Update does both." : ""
 			]
 		}),
-		editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		shellInfo?.skew && !available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
-			id: "upd-editable",
-			children: [
-				"This is a development checkout",
-				info?.checkout ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					" ",
-					"(",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: info.checkout }),
-					")"
-				] }) : null,
-				", so the update comes from git — run these there, then the server restarts onto it:"
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
-			className: "upd-log",
-			id: "upd-editable-commands",
-			children: (info?.editable_commands || []).join("\n")
-		})] }) : null,
+			id: "upd-skew",
+			children: shellInfo.skew
+		}) : null,
+		stateLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			id: "upd-state",
+			children: stateLine
+		}),
 		pending || waiting ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
 			id: "upd-restarting",
 			children: [
 				"Installed",
-				last.version ? " v" + last.version : "",
-				" — restarting onto it… This window reloads on its own once the server answers again."
+				last.version ? " " + vLabel(last.version) : "",
+				". Restarting onto it; this window reloads on its own once the server answers again."
 			]
 		}) : installing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
 			id: "upd-installing",
 			children: [
-				"An update",
-				last.version ? " to v" + last.version : "",
-				" is installing…"
+				"Installing",
+				last.version ? " " + vLabel(last.version) : " the update",
+				"…"
 			]
-		}) : blocked && !editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: blocked
-		}) : editable ? null : info?.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "Updating downloads the new engine, replaces this install, and restarts the server — your sessions are tmux sessions, so nothing running is lost. This window reloads on its own once the server answers again."
-		}) : info?.checked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "You’re on the newest release."
 		}) : null,
 		lastNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
@@ -137018,20 +137567,29 @@ function ServerEngineUpdate() {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "upd-btn-row",
-			children: [!blocked && info?.available && !pending && !waiting && !installing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			children: [showButton && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "test-btn",
+				id: "upd-install",
 				disabled: busy,
-				onClick: update,
-				children: busy ? "Updating…" : "Update to v" + info.latest
+				onClick: () => path === "shell" ? viaShell() : void viaServer(),
+				children: busy ? "Updating…" : failed ? "Retry" : buttonLabel
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "test-btn",
-				disabled: busy || waiting,
-				onClick: () => check(true),
-				children: "Check again"
+				disabled: checking || busy || waiting,
+				onClick: checkNow,
+				children: checking ? "Checking…" : "Check now"
 			})]
 		}),
+		run?.message ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: failed ? "error" : "set-hint",
+			id: "upd-run",
+			children: run.message
+		}) : failed ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "error",
+			children: "The update didn’t finish. Try again, or check Settings → System logs."
+		}) : null,
 		error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "error",
 			children: error
@@ -137044,182 +137602,12 @@ function ServerEngineUpdate() {
 				" on that machine."
 			]
 		}),
-		lines.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		(lines.length > 0 || (run?.lines || []).length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "upd-fold",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Installer output" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
 				className: "upd-log",
-				children: lines.join("\n")
+				children: (lines.length ? lines : run?.lines || []).join("\n")
 			})]
-		})
-	] });
-}
-function failSentence(what, err) {
-	const why = String(err?.message ?? (typeof err === "string" ? err : "")).trim();
-	return why ? what + ": " + why.replace(/\.$/, "") + "." : what + ".";
-}
-function ShellEngineUpdate() {
-	const mfengine = window.mfengine;
-	const mfupdate = window.mfupdate;
-	const [info, setInfo] = (0, import_react.useState)(null);
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const [run, setRun] = (0, import_react.useState)(null);
-	const [checking, setChecking] = (0, import_react.useState)(false);
-	const timer = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		if (!mfengine?.updateInfo) return;
-		let alive = true;
-		mfengine.updateInfo().then((i) => alive && setInfo(i)).catch(() => {});
-		return () => {
-			alive = false;
-			if (timer.current) clearInterval(timer.current);
-		};
-	}, [mfengine]);
-	if (!mfengine?.updateInfo) return null;
-	if (shellUpdateMode(info) === "source") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ServerEngineUpdate, {}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "set-hint",
-		id: "upd-source",
-		children: SOURCE_RUN_NOTE
-	})] });
-	const auto = info?.autoUpdate !== false;
-	const setAuto = (on) => {
-		setInfo((i) => ({
-			...i || {},
-			autoUpdate: on
-		}));
-		mfupdate?.setAuto?.(on).then((r) => setInfo((i) => ({
-			...i || {},
-			autoUpdate: r?.autoUpdate !== false
-		}))).catch((err) => {
-			setInfo((i) => ({
-				...i || {},
-				autoUpdate: !on
-			}));
-			toast(failSentence("Couldn't change automatic updates", err));
-		});
-	};
-	const checkAgain = () => {
-		if (checking || !mfengine.updateInfo) return;
-		setChecking(true);
-		mfengine.updateInfo().then(setInfo).catch(() => {}).finally(() => setChecking(false));
-	};
-	const update = () => {
-		if (busy || !mfengine.install) return;
-		setBusy(true);
-		setRun(null);
-		mfengine.install().catch((err) => {
-			if (timer.current) clearInterval(timer.current);
-			timer.current = null;
-			setBusy(false);
-			setRun({
-				state: "failed",
-				message: failSentence("The update didn't start", err)
-			});
-		});
-		if (timer.current) clearInterval(timer.current);
-		timer.current = setInterval(async () => {
-			try {
-				const st = await mfengine.installState?.();
-				if (!st) return;
-				setRun(st);
-				if (st.state === "done" || st.state === "failed") {
-					if (timer.current) clearInterval(timer.current);
-					timer.current = null;
-					setBusy(false);
-					if (st.state === "done") mfengine.updateInfo?.().then(setInfo).catch(() => {});
-				}
-			} catch {}
-		}, 1e3);
-	};
-	const failed = run?.state === "failed";
-	const done = run?.state === "done";
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "Engine updates"
-		}),
-		showAutoUpdateSwitch(info) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-row set-switch-row",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Install updates automatically"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "ca-switch",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					id: "upd-auto",
-					checked: auto,
-					disabled: !mfupdate?.setAuto,
-					onChange: (e) => setAuto(e.target.checked)
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: autoUpdateHint(auto)
-		})] }),
-		info?.skew && !info?.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			id: "upd-skew",
-			children: info.skew
-		}) : null,
-		info?.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				children: [
-					"A new engine (",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: info.latest }),
-					") is available — you’re on ",
-					info.current,
-					".",
-					info.appUpdate ? " The app is behind too: Update installs the engine first, then the app, and restarts." : " Update installs just the engine (a small download), restarts the server, and this window reconnects on its own."
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				disabled: busy,
-				onClick: update,
-				children: busy ? "Updating…" : done ? "Done" : failed ? "Retry" : `Update to ${info.latest}`
-			}),
-			run?.message ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: failed ? "error" : "set-hint",
-				id: "upd-run",
-				children: run.message
-			}) : null,
-			failed && !run?.message && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "error",
-				children: "The update didn’t finish. Try again, or check Settings → System logs."
-			}),
-			(run?.lines || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-				className: "upd-fold",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Installer output" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
-					className: "upd-log",
-					children: (run?.lines || []).join("\n")
-				})]
-			})
-		] }) : info?.checked === false ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-hint",
-			children: [
-				checking ? "Checking…" : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					"Couldn’t check for engine updates right now",
-					info.current ? ` (this engine is ${info.current})` : "",
-					"."
-				] }),
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: checking,
-					onClick: checkAgain,
-					children: "Check again"
-				})
-			]
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-hint",
-			children: [
-				"The engine is up to date",
-				info?.current ? ` (${info.current})` : "",
-				"."
-			]
 		})
 	] });
 }
