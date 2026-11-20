@@ -350,7 +350,9 @@ SHELL_HEADER = "x-mindflock-shell"
 #: The desktop app version last seen on this machine ("" = none seen): a
 #: member's engine and its desktop shell update separately, so "Update all my
 #: devices" says when the shell on one lags (it updates on its next launch).
-_SHELL = {"version": ""}
+#: ``at`` is when it last did (``self_update.managed_by_shell``: a desktop
+#: app that stopped asking no longer drives this engine's updates).
+_SHELL = {"version": "", "at": 0.0}
 
 _SHELL_VERSION_RE = re.compile(r"^[0-9][0-9A-Za-z.+-]{0,31}$")
 
@@ -360,19 +362,26 @@ def note_shell_version(version: str) -> None:
     v = str(version or "").strip()
     if _SHELL_VERSION_RE.match(v):
         _SHELL["version"] = v
+        _SHELL["at"] = time.time()
 
 
 def _update_facts() -> dict:
-    """``{commit, install}`` for the hello — the installed commit (so two
-    builds that both say 0.7.4 can be told apart) and how this engine is
-    installed (``uv-tool`` · ``editable`` · ``other``: whether "Update all my
-    devices" can update it). Never raises."""
+    """``{commit, install, install_id}`` for the hello — the installed commit
+    (so two builds that both say 0.7.4 can be told apart; a development
+    checkout's HEAD at boot), how this engine is installed (``uv-tool`` ·
+    ``editable`` · ``other``: whether "Update all my devices" can update it)
+    and a fingerprint of where (``mindflock update``/``restart`` find the
+    server of their own install by it). Never raises."""
     try:
         from backend.web.core import self_update as _su
 
-        return {"commit": _su.installed_commit(), "install": _su.install_kind()}
+        return {
+            "commit": _su.installed_commit(),
+            "install": _su.install_kind(),
+            "install_id": _su.install_id(),
+        }
     except Exception:  # noqa: BLE001 — the hello must never fail
-        return {"commit": "", "install": ""}
+        return {"commit": "", "install": "", "install_id": ""}
 
 
 def hello_json() -> dict:

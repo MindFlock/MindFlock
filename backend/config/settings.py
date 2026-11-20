@@ -2195,6 +2195,33 @@ class FlightsSettings:
         return cls(pr_review_plan=str(d.get("pr_review_plan") or "").strip()[:120])
 
 
+#: ``updates.mode``'s choices (:mod:`backend.web.core.self_update`).
+UPDATE_MODES = ("auto", "ask", "off")
+
+
+@dataclass
+class UpdatesSettings:
+    """How THIS machine takes a new MindFlock version (Settings → Advanced,
+    ``POST /api/update/mode``, ``mindflock update --auto``).
+
+    ``mode``: ``"auto"`` installs a new version by itself and restarts onto
+    it when nobody is typing; ``"ask"`` says so once per version, one click
+    installs; ``"off"`` neither checks nor announces (a manual check still
+    works). Blank = never chosen, which acts as ``"ask"`` (the desktop app
+    migrates its own old switch into it once). Machine-local: never synced.
+    """
+
+    mode: str = ""
+
+    def to_dict(self) -> dict:
+        return {"mode": self.mode} if self.mode else {}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UpdatesSettings":
+        mode = str(d.get("mode") or "").strip().lower()
+        return cls(mode=mode if mode in UPDATE_MODES else "")
+
+
 @dataclass
 class Settings:
     """The whole user settings document. All groups default to empty.
@@ -2224,6 +2251,7 @@ class Settings:
     person: PersonSettings = field(default_factory=PersonSettings)
     voice: VoiceSettings = field(default_factory=VoiceSettings)
     flights: FlightsSettings = field(default_factory=FlightsSettings)
+    updates: UpdatesSettings = field(default_factory=UpdatesSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -2257,6 +2285,7 @@ class Settings:
             "person": self.person,
             "voice": self.voice,
             "flights": self.flights,
+            "updates": self.updates,
         }
 
     @classmethod
@@ -2302,6 +2331,7 @@ class Settings:
             person=PersonSettings.from_dict(_group(d, "person")),
             voice=VoiceSettings.from_dict(_group(d, "voice")),
             flights=FlightsSettings.from_dict(_group(d, "flights")),
+            updates=UpdatesSettings.from_dict(_group(d, "updates")),
             schema_version=version,
         )
         _derive_setup_from_store(obj)

@@ -9,9 +9,10 @@ Two halves, the same two audiences as the rest of "Your devices"
   keeps ``/api/update/*`` out on purpose), and it installs only a published
   release tag at or above what runs here (default: the newest release) — one
   member must not be able to downgrade another, or move it onto a branch. A
-  dev checkout or an engine not installed by ``install.sh`` answers 409 with
-  why (:func:`~backend.web.core.self_update.blocked_reason`), which the
-  rollout reports as "skipped", not as a failure. The install itself is the
+  dev checkout (it follows its own branch and updates itself —
+  :mod:`backend.web.core.dev_update`) or an engine not installed by
+  ``install.sh`` answers 409 with why, which the rollout reports as
+  "skipped", not as a failure. The install itself is the
   same detached :func:`~backend.web.core.self_update.start_update` the
   Settings → Advanced button runs, and the receiver's own watcher
   (:mod:`backend.web.core.update_watch`) restarts it onto the new build.
@@ -79,7 +80,7 @@ _LOCK = asyncio.Lock()
 _TASK: dict = {"task": None}
 
 _BLOCKED_COPY = {
-    "editable": "dev checkout — `git pull` there, then restart it",
+    "editable": "development checkout — it updates from its own branch",
     "other": "not installed by install.sh — update it there",
 }
 
@@ -281,12 +282,18 @@ async def apply(body: Optional[dict]) -> Tuple[dict, int]:
     reason, status = await _self_update.check_remote_ref(tag)
     if reason:
         return {"ok": False, "error": reason}, status
-    blocked = _self_update.blocked_reason()
+    install = _self_update.install_kind()
+    # A checkout never takes a release tag: it follows its own branch.
+    blocked = (
+        _BLOCKED_COPY["editable"]
+        if install == "editable"
+        else _self_update.blocked_reason()
+    )
     if blocked:
         return {
             "ok": False,
             "blocked": True,
-            "install": _self_update.install_kind(),
+            "install": install,
             "error": blocked,
         }, 409
     current = _self_update.installed_version()
@@ -304,11 +311,16 @@ def member_state() -> dict:
     its version and commit, how it is installed, and the update state."""
     _self_update.running()  # settles a dead installer as interrupted
     st = _self_update.read_state()
+    install = _self_update.install_kind()
     return {
         "version": _self_update.installed_version(),
         "commit": _self_update.installed_commit(),
-        "install": _self_update.install_kind(),
-        "blocked": _self_update.blocked_reason(),
+        "install": install,
+        "blocked": (
+            _BLOCKED_COPY["editable"]
+            if install == "editable"
+            else _self_update.blocked_reason()
+        ),
         "state": st.get("state", "idle"),
         "ref": st.get("ref", ""),
         "error": st.get("error", ""),
@@ -455,11 +467,15 @@ async def _run(doc: dict) -> None:
         return
     if me is not None:
         current = _self_update.installed_version()
-        blocked = _self_update.blocked_reason()
+        install = _self_update.install_kind()
+        blocked = (
+            _BLOCKED_COPY["editable"]
+            if install == "editable"
+            else _self_update.blocked_reason()
+        )
         if not _self_update.is_newer(version, current):
             me.update(step="current", detail="already on v%s" % current)
         elif blocked:
-            install = _self_update.install_kind()
             me.update(step="skipped", detail=_BLOCKED_COPY.get(install) or blocked)
         else:
             result = await asyncio.to_thread(_self_update.start_update, tag)

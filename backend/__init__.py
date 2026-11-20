@@ -30,7 +30,33 @@ def _drop_shim_from_path(path=_sys.path, windows=_os.name == "nt") -> None:
 
 _drop_shim_from_path()
 
+
+def _checkout_version(pkg_dir: str = "") -> str:
+    """A development checkout's OWN version: ``[project] version`` of the
+    ``pyproject.toml`` beside this package, "" when there is none (a release
+    install keeps ``backend/`` in site-packages, with no pyproject beside it).
+
+    An editable install's dist-info is written once, at install time, so
+    after a ``git pull`` that bumps the version it named the old one until
+    someone reinstalled by hand. The checkout's code is what this process
+    imported, so the checkout's pyproject is what it runs."""
+    pkg_dir = pkg_dir or _os.path.dirname(_os.path.abspath(__file__))
+    path = _os.path.join(_os.path.dirname(pkg_dir), "pyproject.toml")
+    if not _os.path.isfile(path):
+        return ""
+    try:
+        import tomllib
+
+        with open(path, "rb") as fh:
+            project = tomllib.load(fh).get("project") or {}
+    except Exception:  # noqa: BLE001 — a version line never breaks an import
+        return ""
+    if project.get("name") != "mindflock":
+        return ""
+    return str(project.get("version") or "").strip()
+
+
 try:
-    __version__ = version("mindflock")
+    __version__ = _checkout_version() or version("mindflock")
 except PackageNotFoundError:  # source tree without an installed dist
     __version__ = "0+unknown"

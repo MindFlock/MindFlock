@@ -3368,22 +3368,65 @@ def _memory_shield_tick(snap: dict) -> dict:
 # file rather than a variable in this process.
 
 
+def _note_local_shell(request: Request) -> None:
+    """The desktop app's update poll carries ``X-MindFlock-Shell`` too: it
+    keeps ``managed_by_shell`` fresh (core.self_update)."""
+    shell = request.headers.get(_remote.SHELL_HEADER) if request is not None else None
+    if shell and _auth._from_this_machine(request.scope):
+        _remote.note_shell_version(shell)
+
+
 @app.get("/api/update/check")
-async def get_update_check(refresh: int = 0) -> JSONResponse:
+async def get_update_check(request: Request, refresh: int = 0) -> JSONResponse:
     """What is installed, what is released, and whether this install can update.
 
     Never 500s and never turns "couldn't reach GitHub" into "up to date": a
     failed lookup answers ``latest: null``, which the screen renders as exactly
-    that. ``refresh=1`` bypasses the 15-minute cache behind the Check button.
+    that. ``refresh=1`` bypasses the 15-minute cache behind the Check button
+    (and, for a development checkout, looks at its remote now).
+
+    Also how this machine takes new versions (``mode``, ``mode_set``,
+    ``managed_by_shell``, ``auto``) and, for a development checkout, where
+    it stands (``dev``) — see core.update_watch.status_fields.
     """
+    _note_local_shell(request)
     current = _self_update.installed_version()
+    # Mode off: nothing is looked up unless the person asks (refresh=1) —
+    # the desktop app still polls this route for the mode alone.
+    look = bool(refresh) or _self_update.update_mode()[0] != "off"
     try:
-        release = await _self_update.latest_release(force=bool(refresh))
+        if look:
+            release = await _self_update.latest_release(force=bool(refresh))
+        else:
+            release = _self_update.cached_release()
     except Exception:  # noqa: BLE001 — a version line never fails a screen
         release = None
     latest = (release or {}).get("version", "")
-    blocked = _self_update.blocked_reason()
     kind = _self_update.install_kind()
+    dev = None
+    if kind == "editable":
+        from backend.web.core import dev_update as _dev_update
+
+        try:
+            dev = await asyncio.to_thread(
+                _dev_update.status, refresh=look, force=bool(refresh)
+            )
+        except Exception:  # noqa: BLE001
+            dev = None
+        blocked = (
+            ""
+            if dev and dev.get("can_update")
+            else str((dev or {}).get("why_not") or "")
+            or "This development checkout could not be found."
+        )
+        available = bool(dev and dev.get("can_update") and dev.get("behind", 0) > 0)
+    else:
+        blocked = _self_update.blocked_reason()
+        available = _self_update.is_newer(latest, current)
+    if refresh:
+        # A "Check now" is a detection like the half-hourly one: in auto mode
+        # what it found starts installing; in ask mode it is announced once.
+        await _update_watch.announce()
     # Settles a dead installer as interrupted before the state is read.
     await asyncio.to_thread(_self_update.running)
     st = _self_update.read_state()
@@ -3397,7 +3440,7 @@ async def get_update_check(refresh: int = 0) -> JSONResponse:
             "release_url": (release or {}).get("url", ""),
             "notes": (release or {}).get("notes", ""),
             "checked": release is not None,
-            "available": _self_update.is_newer(latest, current),
+            "available": available,
             "kind": kind,
             # Where `kind` came from: install.sh's install.json, or the path
             # of the running package. A dev checkout always wins the path.
@@ -3407,8 +3450,8 @@ async def get_update_check(refresh: int = 0) -> JSONResponse:
                 and _self_update.read_install_json().get("method") == kind
                 else "detected"
             ),
-            # For a development checkout: where it is and the exact commands
-            # that update it — the screen shows them instead of a button.
+            # For a development checkout: where it is. `editable_commands` is
+            # for screens from before checkouts updated themselves (`dev`).
             "checkout": _self_update.install_checkout(),
             "editable_commands": (
                 _self_update.editable_update_commands(tag) if kind == "editable" else []
@@ -3426,8 +3469,44 @@ async def get_update_check(refresh: int = 0) -> JSONResponse:
                 for k in ("ref", "version", "from_version", "error", "code", "healthy")
                 if k in st
             },
+            **_update_watch.status_fields(blocked, dev),
         }
     )
+
+
+@app.post("/api/update/mode")
+async def post_update_mode(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Set how this machine takes new versions (``updates.mode``): ``auto``
+    installs by itself and restarts when nobody is typing, ``ask`` offers
+    each version once, ``off`` neither checks nor announces. Owner only,
+    like ``/api/update/start``. → ``{mode}``; 400 for any other value."""
+    _note_local_shell(request)
+    try:
+        allowed = bool(await _auth.privileged(request.scope))
+    except Exception:  # noqa: BLE001 — fail closed
+        allowed = False
+    if not allowed:
+        return JSONResponse(
+            {"error": "updates can only be set by this device's owner"},
+            status_code=403,
+        )
+    mode = (payload or {}).get("mode") if isinstance(payload, dict) else None
+    if not isinstance(mode, str) or mode.strip().lower() not in _self_update.MODES:
+        return JSONResponse(
+            {"error": "mode must be one of: %s" % ", ".join(_self_update.MODES)},
+            status_code=400,
+        )
+    from backend.config.settings import SettingsUnreadable, UNREADABLE_HINT
+
+    try:
+        mode = await asyncio.to_thread(_self_update.set_update_mode, mode)
+    except SettingsUnreadable:
+        return JSONResponse({"error": UNREADABLE_HINT}, status_code=409)
+    # A switch to auto (or ask) acts at the next tick, not in half an hour.
+    _update_watch.check_soon()
+    return JSONResponse({"mode": mode})
 
 
 @app.post("/api/update/start")
@@ -3465,6 +3544,10 @@ async def post_update_start(
         reason, status = await _self_update.check_remote_ref(ref)
         if reason:
             return JSONResponse({"ok": False, "error": reason}, status_code=status)
+    if _self_update.install_kind() == "editable":
+        # A development checkout follows its own branch: no release to find.
+        result = await asyncio.to_thread(_self_update.start_update, "")
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
     if not ref:
         try:
             release = await _self_update.latest_release()

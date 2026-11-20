@@ -359,6 +359,30 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_checkout_fetch(monkeypatch, tmp_path_factory):
+    """A suite run from a development checkout reports ``kind: editable``, so
+    ``GET /api/update/check`` asks the checkout's remote what is new
+    (``dev_update._sync_remote``: ``git ls-remote``, then a fetch into the
+    REAL repository). Only repos the tests made themselves (under pytest's
+    temp dir, with a local bare "origin") get the real look."""
+    try:
+        from backend.web.core import dev_update
+    except Exception:  # noqa: BLE001
+        return
+    real = dev_update._sync_remote
+    base = Path(tmp_path_factory.getbasetemp()).resolve()
+
+    def _guarded(checkout, *a, **kw):
+        try:
+            Path(checkout).resolve().relative_to(base)
+        except ValueError:
+            return None
+        return real(checkout, *a, **kw)
+
+    monkeypatch.setattr(dev_update, "_sync_remote", _guarded)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_github_token(monkeypatch):
     """A developer's own ``$GH_TOKEN``/``$GITHUB_TOKEN`` must not reach the
     suite: with one, every session would launch "connected to GitHub" (the

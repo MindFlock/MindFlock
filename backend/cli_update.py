@@ -10,22 +10,27 @@ the server answers with the new build — the only proof the update took.
 
 ``update`` is the exception: it runs the install HERE, in the foreground,
 with the method ``install.json`` records (uv tool, pipx — or, for a
-development checkout, it only prints the git commands), then restarts a
-running server onto the result. Headless machines (a rig nobody sits at) are
-the point: before these commands, re-running install.sh replaced the venv
-under a live server that kept running the old code.
+development checkout, a fast-forward of its own branch plus a refresh of the
+install, :mod:`backend.web.core.dev_update`), then restarts the server that
+runs from THIS install onto the result (:func:`find_own_server`: matched by
+the hello's ``install_id``, never just whatever answers on the default port
+— two servers on one machine are normal for a developer). Headless machines
+(a rig nobody sits at) are the point: before these commands, re-running
+install.sh replaced the venv under a live server that kept running the old
+code. ``update --auto on|ask|off`` sets how this machine takes new versions.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import re
 import shlex
 import subprocess
 import sys
 import time
-from typing import Optional
+from typing import Callable, List, Optional, Tuple
 
 from backend import client
 
@@ -96,13 +101,109 @@ def wait_for_build(
 
 
 # --------------------------------------------------------------------------- #
+# Which server is "mine"
+# --------------------------------------------------------------------------- #
+#: A MindFlock server's command line (``python -m backend.web.run …``,
+#: ``mindflock serve …``), as opposed to any other mindflock command.
+_SERVER_CMD = re.compile(r"backend[./]web[./]run|mindflock(?:\.exe)?\S*\s+serve\b")
+
+
+def _explicit(args: argparse.Namespace) -> bool:
+    """Whether the person named a server (``--host``/``--port`` or the env)."""
+    if (
+        getattr(args, "host", None) is not None
+        or getattr(args, "port", None) is not None
+    ):
+        return True
+    return bool(
+        (os.environ.get("MINDFLOCK_HOST") or "").strip()
+        or (os.environ.get("MINDFLOCK_PORT") or "").strip()
+    )
+
+
+def _local_servers() -> List[Tuple[int, bool]]:
+    """``[(port, runs_this_interpreter)]`` for every MindFlock server process
+    on this machine that listens on TCP — found by command line, so a server
+    on any port counts. ``runs_this_interpreter``: its python is this
+    process's (``sys.executable``, unresolved — venvs share a base binary),
+    the fallback for a server too old to report ``install_id``. Best-effort:
+    ``[]`` without psutil or permission."""
+    try:
+        import psutil
+    except ImportError:
+        return []
+    out: List[Tuple[int, bool]] = []
+    me = os.path.abspath(sys.executable)
+    for proc in psutil.process_iter(["cmdline"]):
+        try:
+            argv = list(proc.info.get("cmdline") or [])
+            if not argv or not _SERVER_CMD.search(" ".join(argv)):
+                continue
+            conns = (
+                proc.net_connections(kind="tcp")
+                if hasattr(proc, "net_connections")
+                else proc.connections(kind="tcp")
+            )
+        except (psutil.Error, OSError):
+            continue
+        same = os.path.abspath(argv[0]) == me
+        for conn in conns:
+            if conn.status == psutil.CONN_LISTEN and conn.laddr:
+                out.append((int(conn.laddr.port), same))
+    return out
+
+
+def find_own_server() -> Tuple[str, List[str]]:
+    """``(base URL of the server running from THIS install or "", [every
+    other MindFlock server found here])``.
+
+    "This install" is the hello's ``install_id`` (a fingerprint of where the
+    engine is installed — :func:`backend.web.core.self_update.install_id`);
+    a server too old to report one counts when it runs this very
+    interpreter. The default port is always asked too, so a server whose
+    process can't be inspected is still found there."""
+    from backend.web.core import self_update
+
+    mine = self_update.install_id()
+    ports: List[Tuple[int, bool]] = _local_servers()
+    ports.append((client.DEFAULT_PORT, False))
+    seen: dict = {}
+    for port, same in ports:
+        seen[port] = seen.get(port, False) or same
+    own, others = "", []
+    for port, same in seen.items():
+        base = client.base_url(client.DEFAULT_HOST, port)
+        hello = _hello(base)
+        if not hello or hello.get("app") != "mindflock":
+            continue
+        theirs = str(hello.get("install_id") or "")
+        if not own and ((mine and theirs == mine) or (not theirs and same)):
+            own = base
+        else:
+            others.append(base)
+    return own, others
+
+
+def _own_base(args: argparse.Namespace) -> Tuple[str, List[str]]:
+    """The server to act on: the one named (``--host``/``--port``/env), else
+    :func:`find_own_server`'s. ``("", others)`` when none runs from here."""
+    if _explicit(args):
+        try:
+            return client.discover(args.host, args.port), []
+        except client.ServerNotFound:
+            return "", []
+    return find_own_server()
+
+
+# --------------------------------------------------------------------------- #
 # restart
 # --------------------------------------------------------------------------- #
 def cmd_restart(args: argparse.Namespace) -> int:
     """Re-exec the running server (picks up an engine installed under it),
     in the mode it runs in — a server started with ``mindflock serve
-    tailscale`` stays on the tailnet."""
-    base = client.discover(args.host, args.port)
+    tailscale`` stays on the tailnet. The server of THIS install first (any
+    port), else whatever answers where discovery looks."""
+    base = _own_base(args)[0] or client.discover(args.host, args.port)
     client.post(base, "/api/server/restart", {"keep_mode": True}, timeout=10.0)
     time.sleep(1.5)  # it answers once more before the re-exec lands
     hello = wait_for_build(base, timeout=60.0)
@@ -123,7 +224,7 @@ def cmd_restart(args: argparse.Namespace) -> int:
 _METHOD_WORDS = {
     "uv-tool": "uv tool",
     "pipx": "pipx",
-    "editable": "a development checkout (editable)",
+    "editable": "a development checkout",
     "other": "an installer MindFlock doesn't recognise",
 }
 
@@ -220,15 +321,27 @@ def _rollback(previous: Optional[dict]) -> str:
 
 
 def _restart_running_server(
-    args: argparse.Namespace, ref: str, commit: str, previous: Optional[dict] = None
+    args: argparse.Namespace,
+    ref: str,
+    commit: str,
+    previous: Optional[dict] = None,
+    rollback: Optional[Callable[[], str]] = None,
+    version: str = "",
 ) -> int:
-    """After a successful install: if a server is running, restart it onto
-    the new engine (``POST /api/server/restart``, same mode) and print the
-    version it reports once back. With none, say how to start it."""
-    try:
-        base = client.discover(args.host, args.port)
-    except client.ServerNotFound:
+    """After a successful install: if the server of THIS install is running
+    (:func:`_own_base`), restart it onto the new engine (``POST
+    /api/server/restart``, same mode) and print the version it reports once
+    back. With none, say how to start it — and leave any other install's
+    server alone. ``rollback`` undoes the install when the server doesn't
+    come back (default: put ``previous`` back)."""
+    base, others = _own_base(args)
+    if not base:
         print("installed %s — start it with: mindflock serve" % ref)
+        for other in others:
+            print(
+                "(the MindFlock at %s runs from another install and was left alone)"
+                % other
+            )
         return 0
     try:
         client.post(base, "/api/server/restart", {"keep_mode": True}, timeout=10.0)
@@ -240,9 +353,9 @@ def _restart_running_server(
         return 1
     print("restarting the server onto it…")
     time.sleep(1.5)  # it answers once more before the re-exec lands
-    hello = wait_for_build(base, version=ref.lstrip("vV"), commit=commit)
+    hello = wait_for_build(base, version=version or ref.lstrip("vV"), commit=commit)
     if not hello:
-        rolled = _rollback(previous)
+        rolled = rollback() if rollback is not None else _rollback(previous)
         _err(
             "installed %s, but the server did not come back within %ds — "
             "%s"
@@ -257,8 +370,141 @@ def _restart_running_server(
     return 0
 
 
+#: ``--auto``'s words → ``updates.mode``.
+_AUTO_WORDS = {"on": "auto", "auto": "auto", "ask": "ask", "off": "off"}
+
+#: How each mode reads on a terminal.
+_MODE_WORDS = {
+    "auto": "automatic (installs by itself and restarts when you pause)",
+    "ask": "ask (says once when a new version is out)",
+    "off": "off (no checks; `mindflock update` still works)",
+}
+
+
+def _mode_line() -> str:
+    from backend.web.core import self_update
+
+    mode, chosen = self_update.update_mode()
+    return "Updates: %s%s" % (
+        _MODE_WORDS.get(mode, mode),
+        "" if chosen else " (default)",
+    )
+
+
+def _set_auto(args: argparse.Namespace) -> int:
+    """``mindflock update --auto on|ask|off``: through the server of this
+    install when one runs (its settings cache sees the change at once), else
+    straight into the settings file."""
+    from backend.web.core import self_update
+
+    word = str(args.auto or "").strip().lower()
+    mode = _AUTO_WORDS.get(word)
+    if not mode:
+        _err("--auto takes on, ask or off")
+        return 2
+    base, others = _own_base(args)
+    if base:
+        try:
+            client.post(base, "/api/update/mode", {"mode": mode}, timeout=10.0)
+        except client.ClientError as err:
+            _err("the server at %s couldn't take it (%s)" % (base, err))
+            return 1
+    else:
+        try:
+            self_update.set_update_mode(mode)
+        except Exception as err:  # noqa: BLE001 — a broken settings file
+            _err("couldn't save the setting: %s" % err)
+            return 1
+        for other in others:
+            print(
+                "(the MindFlock at %s runs from another install; set it there with "
+                "`mindflock update --auto %s --port %s`)"
+                % (other, word, other.rsplit(":", 1)[-1])
+            )
+    print("Updates: %s" % _MODE_WORDS[mode])
+    return 0
+
+
+def _update_checkout(args: argparse.Namespace) -> int:
+    """``mindflock update`` on a development checkout: the same fast-forward
+    the server runs (:mod:`backend.web.core.dev_update`), in the foreground,
+    then a restart of the server that runs from this checkout. When it
+    doesn't come back, the branch is moved back (only while the tree is
+    clean) and the install refreshed again."""
+    from backend.web.core import dev_update
+    from backend.web.core import self_update
+
+    current = self_update.installed_version()
+    st = dev_update.status(refresh=True, force=True)
+    if st is None:
+        _err("this development checkout could not be found")
+        return 1
+    print(
+        "This MindFlock: v%s (%s) · a development checkout%s"
+        % (
+            current or "?",
+            (st.get("head") or "?")[:7],
+            " on %s" % st["branch"] if st.get("branch") else "",
+        )
+    )
+    print(_mode_line())
+    behind = int(st.get("behind") or 0)
+    if not st["can_update"]:
+        print(st["why_not"])
+        if args.check:
+            print("Nothing would happen.")
+            return 0
+        return 1
+    newer = st.get("target_version") or ""
+    if behind <= 0:
+        print("Up to date with %s." % (st.get("upstream") or "its remote"))
+        return 0
+    plan = "%d new commit%s on %s%s" % (
+        behind,
+        "" if behind == 1 else "s",
+        st.get("upstream") or st["branch"],
+        " (v%s)" % newer if newer and newer != current else "",
+    )
+    if args.check:
+        print(
+            "`mindflock update` would move %s forward: %s, refresh the install "
+            "and restart the server that runs from it." % (st["branch"], plan)
+        )
+        return 1
+    if self_update.running():
+        _err("an update is already running")
+        return 1
+    if not args.yes and not _confirm(
+        "Move %s forward (%s) and restart the server (sessions keep running)?"
+        % (st["branch"], plan)
+    ):
+        print("not updated")
+        return 1
+    ok, why = dev_update.apply_here(st)
+    if not ok:
+        _err(why)
+        return 1
+
+    def _move_back() -> str:
+        if dev_update.move_back(st["checkout"], st.get("head") or ""):
+            return (
+                "moved the checkout back to %s (run `mindflock restart` to boot it)"
+                % ((st.get("head") or "")[:7])
+            )
+        return ""
+
+    return _restart_running_server(
+        args,
+        st["branch"],
+        st["target"],
+        rollback=_move_back,
+        version=newer or current,
+    )
+
+
 def cmd_update(args: argparse.Namespace) -> int:
-    """``mindflock update [--check] [--ref <tag|sha>] [--yes] [--all-devices]``.
+    """``mindflock update [--check] [--ref <tag|sha>] [--yes] [--all-devices]
+    [--auto on|ask|off]``.
 
     One update path for every install method. ``install.json`` (what
     ``install.sh`` wrote: ``~/.mindflock/install.json``) says how this
@@ -268,20 +514,29 @@ def cmd_update(args: argparse.Namespace) -> int:
     * ``uv-tool`` — the pinned ``uv tool install --force`` the server's own
       updater runs (the tag resolved to its commit first);
     * ``pipx`` — ``pipx install --force "mindflock[web] @ git+<repo>@<tag>"``;
-    * ``editable`` — prints the git commands and changes nothing (exit 0).
+    * ``editable`` — a development checkout: a fast-forward of its default
+      branch and a refresh of the install that removes nothing
+      (:func:`_update_checkout`); refused, with why, on another branch, with
+      uncommitted changes or diverged.
 
     Database explorer drivers recorded in ``~/.mindflock/dbclient/drivers.json``
     ride along: one ``--with`` each on the uv line, ``pipx inject`` after pipx.
 
-    ``--check`` prints the installed and newest versions and exits 0 when
-    current, 1 when behind (2 when GitHub couldn't be reached). After a good
-    install a running server is restarted onto the new engine and the
-    version it then reports is printed.
+    ``--check`` prints what would happen and why, changing nothing: exit 0
+    when current (or nothing can happen), 1 when an update would run (2 when
+    GitHub couldn't be reached). After a good install the server running
+    from THIS install is restarted onto it and the version it then reports
+    is printed. ``--auto on|ask|off`` sets ``updates.mode`` instead.
     """
     if getattr(args, "all_devices", False):
         args.tag = args.ref
         return cmd_devices_update(args)
+    if getattr(args, "auto", None):
+        return _set_auto(args)
     from backend.web.core import self_update
+
+    if self_update.install_kind() == "editable":
+        return _update_checkout(args)
 
     current = self_update.installed_version()
     commit_now = self_update.installed_commit()
@@ -304,27 +559,26 @@ def cmd_update(args: argparse.Namespace) -> int:
             " · newest release: v%s" % latest if latest else "",
         )
     )
+    print(_mode_line())
     behind = bool(latest) and self_update.is_newer(latest, current)
     if not latest_tag:
         print("Couldn't reach GitHub to check for a newer release.")
     if args.check:
         if not latest_tag:
             return 2
+        if not behind:
+            print("Already on the newest release.")
+            return 0
+        blocked = self_update.blocked_reason()
+        if blocked:
+            print("An update is available, but it can't be installed here: " + blocked)
+            return 1
         print(
-            "Already on the newest release."
-            if not behind
-            else "An update is available."
+            "`mindflock update` would install %s with %s and restart the server "
+            "that runs from this install." % (latest_tag, _METHOD_WORDS.get(kind, kind))
         )
-        return 0 if not behind else 1
+        return 1
     ref = str(args.ref or "").strip() or latest_tag
-    if kind == "editable":
-        print(
-            "This is a development checkout, so the update comes from git. "
-            "Run these yourself:"
-        )
-        for line in self_update.editable_update_commands(ref):
-            print("  " + line)
-        return 0
     blocked = self_update.blocked_reason()
     if blocked:
         _err(blocked)

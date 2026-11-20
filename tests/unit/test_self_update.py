@@ -47,14 +47,29 @@ def test_an_unreadable_version_never_offers_an_update():
 # --------------------------------------------------------------------------- #
 # What this install is, and whether it may be replaced
 # --------------------------------------------------------------------------- #
-def test_a_dev_checkout_is_refused_rather_than_clobbered(monkeypatch):
+def test_a_dev_checkout_never_gets_the_installer(monkeypatch):
     # The whole reason install_kind exists: `uv tool install --force` over an
-    # editable install swaps the developer's checkout for a release build.
+    # editable install swaps the developer's checkout for a release build. A
+    # checkout takes its own git path instead, and says plainly why it can't.
+    from backend.web.core import dev_update
+
+    why = (
+        "This is a development checkout on branch foo. Updates apply when it "
+        "is on main with nothing uncommitted."
+    )
     monkeypatch.setattr(self_update, "install_kind", lambda: "editable")
+    monkeypatch.setattr(
+        dev_update,
+        "status",
+        lambda *a, **k: {"can_update": False, "why_not": why, "behind": 2},
+    )
+    monkeypatch.setattr(
+        self_update, "_resolve_commit", lambda ref: pytest.fail("installer path")
+    )
     reason = self_update.blocked_reason()
-    assert "development checkout" in reason
-    assert "git pull" in reason
-    assert self_update.start_update("v9.9.9") == {"ok": False, "error": reason}
+    assert reason == why
+    assert "git" not in reason.replace("development", "")
+    assert self_update.start_update("v9.9.9") == {"ok": False, "error": why}
 
 
 def test_an_install_we_dont_recognise_is_refused_too(monkeypatch):
@@ -131,7 +146,6 @@ def test_a_dev_checkout_wins_over_a_stale_install_json(home, monkeypatch):
     monkeypatch.setattr(self_update, "_detected_kind", lambda: "editable")
     _write(home, method="uv-tool")
     assert self_update.install_kind() == "editable"
-    assert "development checkout" in self_update.blocked_reason()
 
 
 def test_write_install_json_keeps_the_rest(home):
@@ -195,20 +209,20 @@ def test_install_command_per_method():
     assert self_update.install_command("other", "v9.9.9") is None
 
 
-def test_editable_update_commands_are_the_exact_git_lines(monkeypatch):
+def test_the_legacy_editable_lines_are_at_least_safe(monkeypatch):
+    # Only screens from before checkouts updated themselves still print these:
+    # never `git checkout <tag>` (detaches HEAD), never `uv sync` (removes
+    # every package the lock doesn't name).
     monkeypatch.setattr(self_update, "install_checkout", lambda: "")
     lines = self_update.editable_update_commands("v9.9.9", "/home/me/My Flock")
     assert lines == [
         "cd '/home/me/My Flock'",
-        "git fetch --tags origin",
-        "git checkout v9.9.9",
-        "uv sync --group web",
+        "git pull --ff-only",
         "mindflock restart",
     ]
-    # No tag known yet: main, and no cd for an unknown checkout.
-    assert self_update.editable_update_commands("", "")[:2] == [
-        "git fetch --tags origin",
-        "git checkout main",
+    assert self_update.editable_update_commands("", "") == [
+        "git pull --ff-only",
+        "mindflock restart",
     ]
 
 
@@ -364,6 +378,7 @@ def test_log_tail_is_bounded_and_survives_a_missing_file(statedir):
 # --------------------------------------------------------------------------- #
 def test_start_refuses_a_ref_that_resolves_to_nothing(statedir, monkeypatch):
     monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
     monkeypatch.setattr(self_update, "_resolve_commit", lambda ref: "")
     out = self_update.start_update("v0.0.0-nope")
     assert not out["ok"] and "could not resolve" in out["error"]
@@ -373,6 +388,7 @@ def test_start_refuses_a_ref_that_resolves_to_nothing(statedir, monkeypatch):
 
 def test_start_refuses_while_one_is_already_running(statedir, monkeypatch):
     monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
     monkeypatch.setattr(self_update, "running", lambda: True)
     out = self_update.start_update("v9.9.9")
     assert not out["ok"] and "already running" in out["error"]
@@ -382,6 +398,7 @@ def test_start_marks_the_state_before_it_spawns(statedir, monkeypatch):
     # The window between "spawned" and "the script's first write" is real, and a
     # UI polling in it must see `started`, not `idle`.
     monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
     monkeypatch.setattr(self_update, "_resolve_commit", lambda ref: "b" * 40)
     spawned = {}
 
@@ -402,6 +419,7 @@ def test_start_marks_the_state_before_it_spawns(statedir, monkeypatch):
 
 def test_the_installer_script_is_not_world_readable(statedir, monkeypatch):
     monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
     monkeypatch.setattr(self_update, "_resolve_commit", lambda ref: "c" * 40)
     monkeypatch.setattr(self_update.subprocess, "Popen", lambda *a, **k: None)
     self_update.start_update("v9.9.9")
@@ -492,6 +510,7 @@ def test_start_update_refuses_a_ref_with_whitespace_before_anything_is_written(
     never reach the script generator, the state file or a subprocess at all.
     """
     monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
     monkeypatch.setattr(
         self_update, "_resolve_commit", lambda r: pytest.fail("resolved " + r)
     )
@@ -652,6 +671,7 @@ def test_a_timed_out_install_can_be_started_again(statedir, monkeypatch):
         state="started", started_at=_time.time() - self_update.INSTALL_TIMEOUT_S - 1
     )
     monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
     monkeypatch.setattr(self_update, "_resolve_commit", lambda ref: "d" * 40)
     monkeypatch.setattr(self_update.subprocess, "Popen", lambda *a, **k: None)
     assert self_update.start_update("v9.9.9")["ok"] is True
@@ -743,6 +763,7 @@ def test_a_dead_pid_never_overwrites_a_state_the_script_just_finished(
 
 def test_start_records_the_installers_pid(statedir, monkeypatch):
     monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
     monkeypatch.setattr(self_update, "_resolve_commit", lambda ref: "e" * 40)
 
     class _Popen:
@@ -1136,3 +1157,90 @@ def test_the_generated_script_with_the_swap_installs_or_restores(statedir, live_
         assert cp.returncode == 0 and state["state"] == "done", log
         assert (venv / "NEW").exists() and not (venv / "OLD").exists()
     assert sorted(p.name for p in venv.parent.parent.iterdir()) == ["tools"]
+
+
+# --------------------------------------------------------------------------- #
+# updates.mode, the desktop app, and what the bus hears
+# --------------------------------------------------------------------------- #
+def test_a_never_chosen_mode_acts_as_ask():
+    # conftest points the settings store at a per-test file.
+    assert self_update.update_mode() == ("ask", False)
+
+
+def test_the_mode_round_trips_and_refuses_anything_else():
+    for mode in ("auto", "off", "ask"):
+        assert self_update.set_update_mode(mode) == mode
+        assert self_update.update_mode() == (mode, True)
+    with pytest.raises(ValueError):
+        self_update.set_update_mode("sometimes")
+    assert self_update.update_mode() == ("ask", True)
+
+
+def test_the_mode_never_syncs_to_other_devices():
+    from backend.web.core import settings_sync
+
+    assert settings_sync.LOCAL["updates"] == ("mode",)
+    assert "updates" not in settings_sync.SYNCED
+
+
+def test_only_a_release_install_with_a_recent_shell_is_managed_by_it(monkeypatch):
+    import time as _time
+
+    from backend.web.core import remote
+
+    monkeypatch.setattr(remote, "_SHELL", {"version": "", "at": 0.0})
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
+    assert self_update.managed_by_shell() is False
+    remote.note_shell_version("0.14.21")
+    assert self_update.managed_by_shell() is True
+    # A development checkout is never the app's to update, window or not.
+    monkeypatch.setattr(self_update, "install_kind", lambda: "editable")
+    assert self_update.managed_by_shell() is False
+    # An app that stopped asking no longer drives anything.
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
+    remote._SHELL["at"] = _time.time() - self_update.SHELL_FRESH_S - 1
+    assert self_update.managed_by_shell() is False
+
+
+def test_a_started_install_says_so_on_the_bus(statedir, monkeypatch):
+    from backend.web.core import events
+
+    seen = []
+    monkeypatch.setattr(
+        events.BUS, "emit", lambda name, **kw: seen.append((name, kw.get("data")))
+    )
+    monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
+    monkeypatch.setattr(self_update, "_resolve_commit", lambda ref: "c" * 40)
+    monkeypatch.setattr(self_update.subprocess, "Popen", lambda *a, **k: None)
+    assert self_update.start_update("v9.9.9", auto=True)["ok"] is True
+    assert seen == [
+        ("update.installing", {"version": "9.9.9", "tag": "v9.9.9", "auto": True})
+    ]
+    # The flag rides the state file, so the restart and the report know.
+    assert self_update.read_state()["auto"] is True
+
+
+def test_the_auto_flag_survives_the_installers_own_writes(statedir):
+    script = statedir / "gen.sh"
+    script.write_text(self_update._script("v9.9.9", "a" * 40, auto=True))
+    text = script.read_text()
+    assert '\\"auto\\": true' in text or '"auto": true' in text
+
+
+def test_the_cached_release_never_asks_github(monkeypatch):
+    import time as _time
+
+    monkeypatch.setattr(self_update, "_release_cache", {"at": 0.0, "value": None})
+    assert self_update.cached_release() is None
+    value = {"tag": "v9.9.9", "version": "9.9.9"}
+    monkeypatch.setattr(
+        self_update, "_release_cache", {"at": _time.time(), "value": value}
+    )
+    assert self_update.cached_release() == value
+
+
+def test_the_install_id_is_a_short_fingerprint_not_a_path():
+    iid = self_update.install_id()
+    assert len(iid) == 16 and "/" not in iid
+    assert iid == self_update.install_id()
