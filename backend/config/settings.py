@@ -2222,6 +2222,44 @@ class UpdatesSettings:
         return cls(mode=mode if mode in UPDATE_MODES else "")
 
 
+#: ``cleanup.mode``'s choices (:mod:`backend.web.core.worktree_gc_driver`).
+CLEANUP_MODES = ("auto", "ask", "off")
+
+
+@dataclass
+class CleanupSettings:
+    """The worktree garbage collector on THIS machine (Settings → Disk
+    cleanup, ``mindflock clean``).
+
+    ``mode``: ``"auto"`` removes the provably safe leftovers by itself (a
+    background pass every few hours); ``"ask"`` tells the person once when
+    there is a meaningful amount to reclaim and removes nothing on its own;
+    ``"off"`` neither scans nor tells (the Settings list and ``mindflock
+    clean`` still work on demand). Blank = never chosen, which acts as
+    ``"ask"``. ``after_days``: how long a worktree must sit unused before it
+    counts as safe (None = 14). Machine-local: never synced.
+    """
+
+    mode: str = ""
+    after_days: Optional[int] = None
+
+    def to_dict(self) -> dict:
+        out: dict = {}
+        if self.mode:
+            out["mode"] = self.mode
+        if self.after_days is not None:
+            out["after_days"] = self.after_days
+        return out
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CleanupSettings":
+        mode = str(d.get("mode") or "").strip().lower()
+        days = _opt_pos_int(d.get("after_days"))
+        if days is not None:
+            days = min(days, 3650)
+        return cls(mode=mode if mode in CLEANUP_MODES else "", after_days=days)
+
+
 @dataclass
 class Settings:
     """The whole user settings document. All groups default to empty.
@@ -2252,6 +2290,7 @@ class Settings:
     voice: VoiceSettings = field(default_factory=VoiceSettings)
     flights: FlightsSettings = field(default_factory=FlightsSettings)
     updates: UpdatesSettings = field(default_factory=UpdatesSettings)
+    cleanup: CleanupSettings = field(default_factory=CleanupSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -2286,6 +2325,7 @@ class Settings:
             "voice": self.voice,
             "flights": self.flights,
             "updates": self.updates,
+            "cleanup": self.cleanup,
         }
 
     @classmethod
@@ -2332,6 +2372,7 @@ class Settings:
             voice=VoiceSettings.from_dict(_group(d, "voice")),
             flights=FlightsSettings.from_dict(_group(d, "flights")),
             updates=UpdatesSettings.from_dict(_group(d, "updates")),
+            cleanup=CleanupSettings.from_dict(_group(d, "cleanup")),
             schema_version=version,
         )
         _derive_setup_from_store(obj)

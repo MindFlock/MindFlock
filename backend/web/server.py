@@ -710,6 +710,7 @@ from backend.web.core import voice_actions as _voice_actions
 from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
 from backend.web.routes import memory as _memory_routes
+from backend.web.routes import cleanup as _cleanup_routes
 from backend.web.routes import flock as _flock_routes
 from backend.web.routes.peer import (
     _peer_body,
@@ -1036,6 +1037,13 @@ async def lifespan(app: FastAPI):
 
     if _marker_sweep.enabled():
         _register_task(_marker_sweep.run_loop(sys.modules[__name__]))
+    # Leftover worktrees (core.worktree_gc_driver): per cleanup.mode, collect
+    # the provably safe ones (auto) or say once that there is space to
+    # reclaim (ask, the default). Rare, on the ticks' pool; off under pytest.
+    from backend.web.core import worktree_gc_driver as _worktree_gc
+
+    if _worktree_gc.enabled():
+        _register_task(_worktree_gc.run_loop(sys.modules[__name__]))
     # Windows' own memory (backend.host_memory): inside WSL, one PowerShell
     # loop feeds memory_pressure so the gate and the shield see a short host,
     # not just the VM. A no-op elsewhere; off under pytest.
@@ -10653,6 +10661,9 @@ app.include_router(_flock_routes.router)
 
 # --- Per-session memory + its history: routes/memory.py ------------------------
 app.include_router(_memory_routes.router)
+
+# --- Disk cleanup (the worktree garbage collector): routes/cleanup.py ---------
+app.include_router(_cleanup_routes.router)
 
 
 # --- Forced PR review (Intake → Pull requests) ----------------------------------

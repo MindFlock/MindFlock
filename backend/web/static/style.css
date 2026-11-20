@@ -11324,6 +11324,118 @@ details.fl-group-waiting > summary {
 #peer-sessions-theirs {
   margin-top: 6px;
 }
+/* Settings → Disk cleanup (Cleanup.tsx): the leftover-worktree list. */
+.cleanup-days input {
+  width: 5em;
+}
+
+.cleanup-head {
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cleanup-summary {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.cleanup-error {
+  color: var(--red);
+}
+
+.cleanup-group {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.cleanup-group > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.cleanup-count,
+.cleanup-size {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.cleanup-size {
+  margin-left: auto;
+}
+
+.cleanup-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.cleanup-item {
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.cleanup-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cleanup-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.cleanup-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.cleanup-safe .cleanup-badge {
+  border-color: color-mix(in srgb, var(--green) 50%, var(--border));
+  color: var(--green);
+}
+
+.cleanup-holds_work .cleanup-badge {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+  color: var(--red);
+}
+
+.cleanup-meta {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.cleanup-why {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.cleanup-item .set-confirm {
+  margin-top: 6px;
+}
 /* Settings → Your devices ("Your devices"). Rows are a dot + name/status stack +
    buttons pinned right, the same shape as the sidebar's device rows, so a
    computer reads the same wherever it is listed. */

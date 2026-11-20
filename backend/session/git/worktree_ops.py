@@ -107,6 +107,7 @@ class GitWorktreeOpsMixin:
         if self.isExistingBranch:
             self.setup_from_existing_branch()
             self._enable_untracked_cache()
+            self._record_created()
             return None
 
         # Check if branch exists using git CLI (much faster than go-git).
@@ -137,7 +138,26 @@ class GitWorktreeOpsMixin:
         else:
             self.setup_new_worktree()
         self._enable_untracked_cache()
+        self._record_created()
         return None
+
+    def _record_created(self) -> None:
+        """Note this worktree in the creation records the worktree garbage
+        collector reads (``backend/session/git/created.py``): that MindFlock
+        made it, and whether its branch is one MindFlock cut. Never raises."""
+        try:
+            from backend.session.git.created import record_created
+
+            record_created(
+                self.worktreePath,
+                self.repoPath,
+                self.branchName,
+                title=getattr(self, "sessionName", "") or "",
+                base=getattr(self, "baseRef", "") or "",
+                existing_branch=bool(self.isExistingBranch),
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _enable_untracked_cache(self) -> None:
         """Best-effort perf knob after a successful worktree add (a Python-side

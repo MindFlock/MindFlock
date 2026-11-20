@@ -3,8 +3,8 @@
 Ending a session (the ✕ button / Delete key) keeps its worktree on disk and
 stashes the instance's serialized data here, so it can be reopened later as a
 fresh agent session pointed at the same worktree. Persisted next to the engine
-state in ``~/.mindflock/recently_closed.json``, capped at the newest
-``_RECENTLY_CLOSED_CAP`` entries.
+state in ``~/.mindflock/recently_closed.json``. Every closed session is kept
+until it is reopened or forgotten: there is no cap.
 
 Split out of ``backend.web.server`` (which re-imports these names — the
 recently-closed routes and tests reference them through the server namespace).
@@ -34,8 +34,6 @@ def _server():
 
     return server
 
-
-_RECENTLY_CLOSED_CAP = 50
 
 #: ``reason`` of an entry the engine recorded for a session whose folder and
 #: tmux were both gone at load (not reopenable — ``wiped`` is set too).
@@ -69,7 +67,7 @@ def _save_recently_closed(items: list) -> None:
         path = _path_fn()()
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
-            json.dump(items[:_RECENTLY_CLOSED_CAP], f)
+            json.dump(items, f)
     except OSError as err:  # noqa: BLE001
         if log.ErrorLog is not None:
             log.ErrorLog.Printf("failed to save recently-closed: %v", err)

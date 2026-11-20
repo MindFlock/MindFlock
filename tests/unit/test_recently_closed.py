@@ -55,13 +55,14 @@ def test_save_load_round_trip(store):
     assert [i["title"] for i in items] == ["a", "b"]
 
 
-def test_save_caps_at_the_newest(store):
-    many = [{"title": "s%d" % i} for i in range(rc._RECENTLY_CLOSED_CAP + 25)]
+def test_save_keeps_every_entry(store):
+    # No cap: Recently closed lists every closed session until it is reopened
+    # or forgotten.
+    many = [{"title": "s%d" % i} for i in range(500)]
     rc._save_recently_closed(many)
     loaded = rc._load_recently_closed()
-    assert len(loaded) == rc._RECENTLY_CLOSED_CAP
-    # The head (newest-first slice) is retained.
-    assert loaded[0]["title"] == "s0"
+    assert len(loaded) == 500
+    assert loaded[0]["title"] == "s0" and loaded[-1]["title"] == "s499"
 
 
 def test_record_closed_stashes_reopenable_entry(store, tmp_path):
