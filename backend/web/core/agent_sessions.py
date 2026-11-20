@@ -143,7 +143,8 @@ HELD_REFUSED = "offline since a crash — press Start to bring it back"
 #: reading Waiting over an agent idling at an empty prompt). Its turn starts
 #: it (through the launch gate); a person's Start (``POST /revive``, which
 #: notes the start first) starts it early. The terminal socket shows it as
-#: the pane's error line.
+#: the pane's error line and closes with 4410 ("waiting its turn"), which the
+#: pane reads as waiting, not gone.
 WAITING_TURN_REFUSED = "waiting its turn — press Start to start it early"
 
 #: How recently a person's start must have been noted

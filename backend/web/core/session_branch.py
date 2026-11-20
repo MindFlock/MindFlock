@@ -22,6 +22,11 @@ starting, a folder that isn't a git repo or has no commit, a clone-strategy
 workspace (its repository IS the source's own folder, removed with it), and
 uncommitted changes git can't snapshot.
 
+A person's start like New and Duplicate: while memory is low it is **409**
+``{"memory_confirm": true, ...}`` (``server._person_memory_refusal``) until
+resent with ``{"start_anyway": true}``, and once it goes the new session
+counts as warming from then (``launch_gate.note_start``).
+
 Like the other extracted modules this calls back through the server namespace
 (``srv.<name>``) so ``monkeypatch.setattr(server, "_foo", ...)`` keeps working.
 """
@@ -121,11 +126,16 @@ def _launch_args(src) -> Optional[list]:
 
 
 async def branch(
-    title: str, *, person: str = "", relayed: bool = False
+    title: str,
+    *,
+    person: str = "",
+    relayed: bool = False,
+    payload: Optional[dict] = None,
 ) -> JSONResponse:
     """Branch ``title`` into a new session (202 + the new row, ``branched_from``
     and ``carried``), or refuse with ``{"error"}`` — see the module docstring.
-    ``relayed`` is True for a request another MindFlock forwarded here."""
+    ``relayed`` is True for a request another MindFlock forwarded here.
+    ``payload``: the request body (``start_anyway`` past the memory question)."""
     srv = _server()
     from backend.session import git as _git
     from backend.web.core import peer_guard as _peer_guard
@@ -148,6 +158,9 @@ async def branch(
     peer_err = _peer_guard.refusal(src, "Branch")
     if peer_err is not None:
         return peer_err
+    refusal = await srv._person_memory_refusal(payload)
+    if refusal is not None:
+        return refusal
     try:
         started = bool(src.Started())
     except Exception:  # noqa: BLE001
@@ -198,7 +211,7 @@ async def branch(
     if new_title is None:
         return _refuse("no free name for a branch of %s — rename or close one" % title)
 
-    payload = {
+    create_payload = {
         "title": new_title,
         "program": getattr(src, "Program", "") or srv.ENGINE.default_program(),
         "repo_path": root,
@@ -207,14 +220,17 @@ async def branch(
         "profile_model": getattr(src, "ProfileModel", "") or "",
     }
     if facts["branch"]:
-        payload["base_branch"] = facts["branch"]
+        create_payload["base_branch"] = facts["branch"]
     launch_args = _launch_args(src)
     if launch_args is not None:
-        payload["launch_args"] = launch_args
+        create_payload["launch_args"] = launch_args
+    # Counted as warming from now, like New and Duplicate.
+    srv._launch_gate.note_start(new_title)
     resp = await srv._session_create.create(
-        payload, person=person, carry_ref=carry, branched_from=title
+        create_payload, person=person, carry_ref=carry, branched_from=title
     )
     if resp.status_code != 202:
+        await asyncio.to_thread(srv._launch_gate.unnote_start, new_title)
         return resp
     body = json.loads(resp.body)
     body["branched_from"] = title

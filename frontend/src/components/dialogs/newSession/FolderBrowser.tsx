@@ -248,6 +248,10 @@ export function FolderBrowser({
         </div>
       )}
       <div id="rb-list" ref={listRef}>
+        {/* The first listing can take a moment (a slow disk, another device):
+            say so instead of showing an empty list. Later moves keep the old
+            rows until the new ones land. */}
+        {!data && !error && <p className="rb-loading">Loading…</p>}
         {data && (
           /* Names the folder it means. Child rows are selectable now, so "use
              this folder" on its own would be ambiguous about which folder — the

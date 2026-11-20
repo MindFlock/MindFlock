@@ -561,15 +561,18 @@ async def _create(
     )
     # O4: every session gets a deterministic dev-server port block, injected
     # into the agent's tmux env at launch (PORT / MINDFLOCK_PORT_BASE). Not a
-    # shared-folder one: nothing of the host env rides into its sandbox.
-    inst.ExtraEnv = {} if peer_share else srv._ports.env_for(title)
+    # shared-folder one: nothing of the host env rides into its sandbox. Off
+    # the event loop: it reads and rewrites (fsyncs) the ports file.
+    inst.ExtraEnv = (
+        {} if peer_share else await asyncio.to_thread(srv._ports.env_for, title)
+    )
 
     # O2: per-worktree setup (repo-committed .mindflock.toml [workspace]).
     # Plain worktree sessions only — provisioned workspaces run their own
     # setup, and in-place sessions share the repo dir (deps already there).
     setup_cfg = None
     if git_enabled and not is_provisioned and not in_place and not peer_share:
-        setup_cfg = srv._wt_setup.load_config(plain_path)
+        setup_cfg = await asyncio.to_thread(srv._wt_setup.load_config, plain_path)
     # Start does the heavy lifting (git worktree/clone + provisioning + tmux),
     # which can take minutes on the first worktree run (one-time base clone +
     # uv sync). Register the instance as "loading" and run Start in the

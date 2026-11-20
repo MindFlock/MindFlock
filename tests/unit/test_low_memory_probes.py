@@ -113,3 +113,22 @@ def test_the_snapshot_publisher_uses_it():
     src = inspect.getsource(server._session_snapshot)
     assert "_session_stage_for_tick(i)" in src
     assert "_session_stage_fresh(i)" not in src
+
+
+def test_a_reused_stage_is_donated_to_the_memo(probe, monkeypatch):
+    """The other reader (the /api/events ticker) goes through the 2.5 s memo:
+    the stage reused while memory is low must be there, or that reader
+    recomputes every background session's stage each pass."""
+    monkeypatch.setattr(server, "_memory_low", lambda: True)
+    monkeypatch.setattr(server, "_PROBE_CACHE", {})
+
+    def no_probe(inst):
+        raise AssertionError("the memo should have served this")
+
+    inst = _Inst("bg")
+    first = server._session_stage_for_tick(inst)
+    server._PROBE_CACHE.clear()  # whatever the first pass left, gone
+    assert server._session_stage_for_tick(inst) == first  # reused...
+    monkeypatch.setattr(server, "_session_stage", no_probe)
+    assert server._session_stage_cached(inst) == first  # ...and donated
+    assert probe == ["bg"]

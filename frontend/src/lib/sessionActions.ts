@@ -746,7 +746,7 @@ export async function copySession(title: string) {
   try {
     // A person's start: while memory is low the server asks first
     // (lib/memoryConfirm), and Start anyway resends it.
-    const inst = await withMemoryConfirm(displayName(title) + "'s copy", (anyway) =>
+    const inst = await withMemoryConfirm("a duplicate of " + displayName(title), (anyway) =>
       instApi<Instance>(title, "/copy", anyway ? { json: { start_anyway: true } } : { method: "POST" })
     );
     // The server picks the real title (_copy_title), which can differ from
@@ -763,7 +763,7 @@ export async function copySession(title: string) {
     }
   } catch (err) {
     failPendingSession(guess);
-    if (!isMemoryCancel(err)) errorPop("Copy failed", errMsg(err));
+    if (!isMemoryCancel(err)) errorPop("Duplicate failed", errMsg(err));
   }
 }
 
@@ -785,7 +785,11 @@ export async function branchSession(title: string) {
   const guess = addPendingSession(title + "-branch");
   placeAfter(guess, title);
   try {
-    const inst = await instApi<BranchResult>(title, "/branch", { method: "POST" });
+    // A person's start, like Duplicate: while memory is low the server asks
+    // first (lib/memoryConfirm), and Start anyway resends it.
+    const inst = await withMemoryConfirm("a branch of " + displayName(title), (anyway) =>
+      instApi<BranchResult>(title, "/branch", anyway ? { json: { start_anyway: true } } : { method: "POST" })
+    );
     if (inst?.title) clearStaleAlias(inst.title);
     landPendingSession(guess, inst);
     await refreshInstances();
@@ -801,7 +805,7 @@ export async function branchSession(title: string) {
     }
   } catch (err) {
     failPendingSession(guess);
-    errorPop("Branch failed", errMsg(err));
+    if (!isMemoryCancel(err)) errorPop("Branch failed", errMsg(err));
   }
 }
 
