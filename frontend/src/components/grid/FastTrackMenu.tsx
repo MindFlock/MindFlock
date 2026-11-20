@@ -166,7 +166,11 @@ export function FastTrackMenu({
           ? "S"
           : model.items.find((i) => i.lane === e.lane)?.key || "";
 
-  const activate = (e: Entry | undefined) => {
+  // `byKey`: picked with Enter, Space or its letter — the keyboard goes back
+  // to the terminal the picker took it from, as Escape does. A click leaves
+  // focus where the person clicked. Edit its stops / Open in the Sky move to
+  // another view, so they never pull focus to the (hidden) terminal.
+  const activate = (e: Entry | undefined, byKey = false) => {
     if (!e) return;
     const why = whyOf(e);
     if (why) {
@@ -183,7 +187,7 @@ export function FastTrackMenu({
     if (!inst) return;
     // Close first: the answer is the ⏩ button itself (it flips at once) and a
     // toast, not this picker.
-    close();
+    close(byKey);
     const cur = model.current;
     if (e.kind === "ask") void pickFastTrack(title, name, cur.lane, !model.ask.on);
     else void pickFastTrack(title, name, e.lane, cur.askFirst);
@@ -204,7 +208,7 @@ export function FastTrackMenu({
       setSel((i) => (i - 1 + entries.length) % entries.length);
     } else if (k === "Enter" || k === " ") {
       handled();
-      activate(entries[sel]);
+      activate(entries[sel], true);
     } else if (k === "Escape") {
       handled();
       close(true);
@@ -213,7 +217,7 @@ export function FastTrackMenu({
       if (i >= 0) {
         handled();
         setSel(i);
-        activate(entries[i]);
+        activate(entries[i], true);
       }
     }
   };

@@ -28,10 +28,28 @@ import {
 import { guestName, useGuestFocus } from "../../lib/guestFocus";
 import { isPeerRow } from "../../lib/peerSessions";
 import { windowName } from "../../lib/windowName";
+import { focusTerm } from "../../lib/terminals";
 import { useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { pollWhileVisible } from "../grid/visiblePoll";
 import "./ChatPanel.css";
+
+/** Chats opened BY HAND (the launcher, a pill) whose card has not mounted
+ * yet: that card puts the cursor in its box. A card that popped up by itself
+ * (someone arrived, someone wrote) never takes focus from what you're typing
+ * in. */
+const handOpened = new Set<string>();
+
+/** Open `title`'s chat because the person asked to: its card takes focus. */
+export function openChatByHand(title: string) {
+  handOpened.add(title);
+  openChat(title);
+}
+
+/** Whether the card for `title` should take focus as it mounts — once. */
+export function takeHandOpen(title: string): boolean {
+  return handOpened.delete(title);
+}
 
 export function ChatPanel() {
   const { data: config } = useConfig();
@@ -107,7 +125,7 @@ export function ChatPanel() {
           type="button"
           className="chat-launcher"
           title={"Chat with the people on " + windowName(focused)}
-          onClick={() => openChat(focused)}
+          onClick={() => openChatByHand(focused)}
         >
           💬 Chat
         </button>
@@ -123,7 +141,7 @@ function ChatPill({ w }: { w: ChatWindow }) {
       className={"chat-pill" + (w.unread ? " unread" : "")}
       data-chat={w.title}
       title={w.unread ? `${w.unread} new — open the chat` : "Open the chat"}
-      onClick={() => openChat(w.title)}
+      onClick={() => openChatByHand(w.title)}
     >
       <span className="chat-pill-name">💬 {windowName(w.title)}</span>
       {w.unread > 0 && <span className="chat-unread">{w.unread}</span>}
@@ -155,6 +173,11 @@ function ChatCard({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length]);
 
+  // Opened by hand: the cursor goes in the box (an auto-pop never moves it).
+  useEffect(() => {
+    if (takeHandOpen(title)) inputRef.current?.focus();
+  }, [title]);
+
   const send = async () => {
     if (busy || !draft.trim()) return;
     setBusy(true);
@@ -172,6 +195,8 @@ function ChatCard({
     } else if (e.key === "Escape") {
       e.preventDefault();
       minimizeChat(title);
+      // The keyboard goes back to the session's terminal, not the body.
+      setTimeout(() => focusTerm(title), 0);
     }
   };
 

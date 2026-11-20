@@ -88,8 +88,14 @@ export function readClipboardImage(): Promise<Blob | null> {
 }
 
 /** Paste THIS machine's clipboard into a terminal: text straight to the PTY
- * (bracketed paste); an image uploads and its saved path is pasted. */
-export async function pasteClipboard(term: Terminal, session?: string) {
+ * (bracketed paste); an image uploads and its saved path is pasted.
+ *
+ * `canSend` (a session terminal's) says whether its socket is open; when it
+ * isn't, nothing is pasted, uploaded or toasted — the terminal itself says
+ * "Reconnecting — that wasn't sent", where a "Pasted N chars" toast would
+ * claim text arrived that went nowhere. */
+export async function pasteClipboard(term: Terminal, session?: string, canSend?: () => boolean) {
+  if (canSend && !canSend()) return;
   const text = await readClipboardText();
   if (text) {
     term.paste(text);
@@ -173,8 +179,10 @@ export async function uploadFilesAsPathText(
 export async function pasteFilesAsPaths(
   files: FileList | File[] | null,
   term: Terminal,
-  session?: string
+  session?: string,
+  canSend?: () => boolean
 ) {
+  if (canSend && !canSend()) return;
   const text = await uploadFilesAsPathText(files, session);
   if (text) term.paste(text + " ");
 }
@@ -204,7 +212,8 @@ export const dtHasFiles = (dt: DataTransfer | null): boolean =>
 export function attachFileDrop(
   host: HTMLElement,
   term: Terminal,
-  session?: string
+  session?: string,
+  canSend?: () => boolean
 ): () => void {
   const onPaste = (ev: ClipboardEvent) => {
     const cd = ev.clipboardData;
@@ -216,12 +225,13 @@ export function attachFileDrop(
     const onlyImages =
       files.length > 0 && files.every((f) => (f.type || "").startsWith("image/"));
     if (files.length && !(text && onlyImages)) {
-      pasteFilesAsPaths(files, term, session);
+      pasteFilesAsPaths(files, term, session, canSend);
     } else if (text) {
+      if (canSend && !canSend()) return;
       term.paste(text);
       toast("Pasted " + text.length + " chars");
     } else {
-      pasteClipboard(term, session);
+      pasteClipboard(term, session, canSend);
     }
   };
   const onDragOver = (ev: DragEvent) => {
@@ -242,7 +252,7 @@ export function attachFileDrop(
     ev.preventDefault();
     ev.stopPropagation();
     host.classList.remove("file-drop");
-    pasteFilesAsPaths(ev.dataTransfer!.files, term, session);
+    pasteFilesAsPaths(ev.dataTransfer!.files, term, session, canSend);
   };
   host.addEventListener("paste", onPaste, true);
   host.addEventListener("dragover", onDragOver);
