@@ -13,7 +13,7 @@
  * where you read about it — then the Rules (below, so a rule added from a
  * Changes row never moves that row under the pointer). The legend is behind "?". */
 
-import { useContext, useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { RedZone } from "../../../api/types";
 import { isGreen } from "../../../lib/codemap";
 import { relTime } from "../../../lib/format";
@@ -208,7 +208,11 @@ function helperWhere(M: Model, S: AgentState): string {
 export function BirdIndex(p: BirdIndexProps) {
   const [legend, setLegend] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
-  useEffect(() => setRailOpen(false), [p.closeSeq]);
+  // a click on the canvas or Escape there (CodeTree's shutRail) folds the column and the legend alike
+  useEffect(() => {
+    setRailOpen(false);
+    setLegend(false);
+  }, [p.closeSeq]);
   const [, bump] = useState(0);
   const tops = p.agents.filter((A) => !A.ag.parent);
   const subsOf = (A: AgentState) => p.agents.filter((S) => S.ag.parent === A.ag.key);
@@ -235,8 +239,24 @@ export function BirdIndex(p: BirdIndexProps) {
     if (p.size !== "wide") setRailOpen(true);
   }, [guide.riskAsk, exKey, p]);
 
+  // Escape inside the legend closes it and puts focus back on its ? button
+  const legendKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const back = e.currentTarget.parentElement?.querySelector<HTMLElement>(".ct-left .ct-bix-q[aria-label^='Legend']");
+    setLegend(false);
+    back?.focus();
+  };
+  // …and so does Escape on the ? button itself, the legend open
+  const legendBtnKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== "Escape" || !legend) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setLegend(false);
+  };
   const legendCard = legend && (
-    <div className="ct-bix-legend" data-hud="pop">
+    <div className="ct-bix-legend" data-hud="pop" onKeyDown={legendKey}>
       <LegendCard open onToggle={() => setLegend(false)} primary={primary ? primary.ag.color : "var(--accent)"} />
     </div>
   );
@@ -245,7 +265,7 @@ export function BirdIndex(p: BirdIndexProps) {
     <>
       <div className="ct-bix-head">
         <h4>Agents</h4>
-        <button type="button" className="ct-bix-q" aria-expanded={legend} aria-label="Legend: how to read the map" title="How to read the map" onClick={() => setLegend(!legend)}>
+        <button type="button" className="ct-bix-q" aria-expanded={legend} aria-label="Legend: how to read the map" title="How to read the map" onClick={() => setLegend(!legend)} onKeyDown={legendBtnKey}>
           ?
         </button>
         {p.size !== "wide" && (
@@ -287,7 +307,7 @@ export function BirdIndex(p: BirdIndexProps) {
           <button type="button" className="ct-bix-q" aria-expanded={railOpen} aria-label="Expand the agents column" title="Expand: details, changes, rules" onClick={() => setRailOpen(!railOpen)}>
             »
           </button>
-          <button type="button" className="ct-bix-q" aria-expanded={legend} aria-label="Legend: how to read the map" title="How to read the map" onClick={() => setLegend(!legend)}>
+          <button type="button" className="ct-bix-q" aria-expanded={legend} aria-label="Legend: how to read the map" title="How to read the map" onClick={() => setLegend(!legend)} onKeyDown={legendBtnKey}>
             ?
           </button>
         </div>

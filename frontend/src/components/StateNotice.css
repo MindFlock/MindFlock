@@ -64,3 +64,19 @@
 #state-notice .sn-btn:hover {
   border-color: var(--accent);
 }
+
+/* "Copy the rename command": small, inline after the sentence it acts on. */
+#state-notice .sn-copy {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#state-notice .sn-copy:hover {
+  border-color: var(--accent);
+}

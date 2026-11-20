@@ -301,6 +301,10 @@ interface UiState {
   /** Customize's open page (this browser's own convenience, not a pref). */
   customizePage: "sidebar" | "pane";
   setCustomizePage(page: "sidebar" | "pane"): void;
+  /** Bumped to ask the sidebar's Memory row to open its popover (the
+   * low-memory notice's "See what's using it"); 0 = never asked. */
+  memoryPopAsk: number;
+  askMemoryPop(): void;
   /** Reduce motion: while an agent is running, cover its terminal with a static
    * "running" panel instead of showing the live (flickering) output. Off by
    * default; the cover lifts on interaction and re-covers after a short idle. */
@@ -569,6 +573,7 @@ export const useUi = create<UiState>((set, get) => ({
   barOrder: load<string[]>("mf_barorder", []),
   paneHeader: asPaneHeaderPref(load<unknown>("mf_paneheader", null)),
   customizePage: load<string>("mf_customize_page", "sidebar") === "pane" ? "pane" : "sidebar",
+  memoryPopAsk: 0,
   showFilter: load<boolean>("mf_show_filter", true),
   filterPeek: false,
   reduceMotion: load<boolean>("mf_reduce_motion", false),
@@ -843,6 +848,7 @@ export const useUi = create<UiState>((set, get) => ({
     save("mf_customize_page", page);
     set({ customizePage: page });
   },
+  askMemoryPop: () => set({ memoryPopAsk: get().memoryPopAsk + 1 }),
   setReduceMotion: (on) => {
     save("mf_reduce_motion", on);
     set({ reduceMotion: on });

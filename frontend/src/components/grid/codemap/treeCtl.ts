@@ -60,6 +60,15 @@ export const FOLLOW_Z = 2.6;
  * the gaps: z 12 is where the densest clump's pitch (1.15·S0·z ≈ 138 px) has room for every leaf's name at its tip. */
 export const MAX_Z = 12;
 
+/** What setHud's inputs come to, as one comparable string: the same panels at the same places (to a tenth of a
+ * pixel) with the same insets and card allowances give the same signature. Exported for tests. */
+export function hudSig(rects: ReadonlyArray<readonly [number, number, number, number]>, insets: Insets, cardInset: number, cardBot: number): string {
+  const r = (n: number) => Math.round(n * 10) / 10;
+  const parts = rects.map((q) => q.map(r).join(","));
+  parts.push([insets.top, insets.bot, insets.left, insets.right, cardInset, cardBot].map(r).join(","));
+  return parts.join(";");
+}
+
 /** Per-title view memory (camera, folds, history) — survives remounts. */
 const MEMORY = new Map<string, { cam: Cam; hist: Cam[]; folded: string[]; model: Model }>();
 
@@ -78,6 +87,9 @@ export class TreeCtl {
   cardInset = 0;
   /** …or, in a small pane, the card's bottom sheet (over the bottom) */
   cardBot = 0;
+  /** the view and the panels' signature the last setHud applied (an unchanged one is skipped) */
+  private hudFor: TreeView | null = null;
+  private hudLast = "";
   /** zoomed in past the whole-tree view: only then is the minimap worth its corner */
   zoomedIn = false;
   active = false;
@@ -254,10 +266,16 @@ export class TreeCtl {
   }
 
   setHud(rects: Array<[number, number, number, number]>, insets: Insets) {
+    // the panels measured as they were (a hover's tip, a poll re-rendered the pane): nothing to move, and no
+    // redraw — the whole canvas used to repaint on every one
+    const sig = hudSig(rects, insets, this.cardInset, this.cardBot);
+    if (this.v && this.v === this.hudFor && sig === this.hudLast) return;
     // a whole-tree view stays whole when a panel opens, docks or grows
     const whole = this.atWhole();
     this.insets = insets;
     if (!this.v) return;
+    this.hudFor = this.v;
+    this.hudLast = sig;
     this.v.hudRects = rects;
     this.v.free = { x0: insets.left, y0: insets.top, x1: this.v.W - insets.right, y1: this.v.H - insets.bot - this.cardBot };
     this.v.fitZv = this.fitZ();

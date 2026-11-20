@@ -11,7 +11,26 @@
 
 import { useState } from "react";
 import { api } from "../api/client";
+import { copyText } from "../lib/clipboard";
+import { toast } from "../lib/toast";
 import { useDoctor } from "../state/queries";
+
+/** The command that puts the moved-aside file back as state.json, in the
+ * same folder: `mv '<backup>' '<dir>/state.json'` — or, for a Windows path,
+ * PowerShell's `Move-Item -Force` (the fresh state.json is there already).
+ * Both paths single-quoted, so spaces and `$` stay literal. Exported for
+ * tests. */
+export function restoreCommand(backup: string): string {
+  const win = /^[A-Za-z]:[\\/]/.test(backup) || (backup.includes("\\") && !backup.includes("/"));
+  const cut = Math.max(backup.lastIndexOf("/"), win ? backup.lastIndexOf("\\") : -1);
+  const dest = (cut >= 0 ? backup.slice(0, cut + 1) : "") + "state.json";
+  if (win) {
+    const q = (x: string) => "'" + x.replace(/'/g, "''") + "'";
+    return "Move-Item -Force " + q(backup) + " " + q(dest);
+  }
+  const q = (x: string) => "'" + x.replace(/'/g, "'\\''") + "'";
+  return "mv " + q(backup) + " " + q(dest);
+}
 
 export function StateNotice() {
   const notice = useDoctor().data?.state_notice;
@@ -37,7 +56,19 @@ export function StateNotice() {
             Nothing was deleted. Your sessions are preserved in{" "}
             <code className="sn-path">{notice.backup_path}</code> — upgrade MindFlock, then
             rename that file back to <code className="sn-path">state.json</code> to recover
-            them.
+            them.{" "}
+            <button
+              type="button"
+              className="sn-copy"
+              title={restoreCommand(notice.backup_path)}
+              onClick={() =>
+                void copyText(restoreCommand(notice.backup_path!)).then((ok) =>
+                  toast(ok ? "Copied — run it in a terminal after upgrading" : "Copy failed"),
+                )
+              }
+            >
+              Copy the rename command
+            </button>
           </>
         ) : (
           " The original file could not be moved aside, so check ~/.mindflock/state.json before making changes."

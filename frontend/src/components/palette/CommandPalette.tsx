@@ -192,7 +192,7 @@ export function buildPaletteActions({ config, host, extensions }: PaletteSources
     },
   });
   // Customize and its tabs: the extras you opt into.
-  acts.push({ label: "Customize…", hint: "choose sidebar bars", run: () => ui.openDialogFor("customize") });
+  acts.push({ label: "Customize…", hint: "choose sidebar bars and the pane header", run: () => ui.openDialogFor("customize") });
   acts.push({
     label: "Select sessions…",
     hint: "close, hide or delete several at once · Ctrl+click a row",
