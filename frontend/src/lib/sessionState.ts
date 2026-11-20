@@ -24,8 +24,11 @@
  *                                              Setup failed
  *   idle       neutral    nobody     no        Idle (the ship-stage chip shows
  *                                              beside it)
- *   idle       attention  you        yes       Idle 25m — 20 min on uncommitted
- *   (stuck)                                    work (reason "stuck")
+ *   idle       neutral    nobody     no        Idle, with a quiet note "3 files
+ *   (uncommitted)                              uncommitted · idle 25m" — 20 min
+ *                                              idle on changes nobody committed
+ *                                              (`uncommitted`); a fact with
+ *                                              Commit… / Carry on, not a request
  *   limit      waiting    nobody     no        Waiting on limit[, resumes HH:MM]
  *   offline    broken     you        yes       Offline (the chip's Restart action)
  *   offline    broken     you        no        Offline — HELD after a crash
@@ -55,7 +58,7 @@
  * guided ship ladder keeps its import. */
 
 import type { Instance, SessionVerify } from "../api/types";
-import { backgroundHint } from "./backgroundJobs";
+import { backgroundHint, backgroundJobs } from "./backgroundJobs";
 import { agentName } from "./agentNames";
 import { haltedWhy, perchLabel, perchedOnYou } from "./flights";
 import { heldHint, isHeldOffline } from "./heldOffline";
@@ -122,7 +125,6 @@ export type SessionReason =
   | "precommit_failed"
   | "checks_failing"
   | "setup_failed"
-  | "stuck"
   | "verify_confirm"
   | "verify_failed"
   | "verify_blocked";
@@ -151,6 +153,21 @@ export interface SessionState {
   /** An automatic start that waited and then failed (`start_failed`): the
    * row says "Couldn't start" with the error. */
   startFailed?: boolean;
+  /** Idle a while on changes nobody committed (`idleUncommittedOf`): a calm
+   * fact the row and the Sky say with Commit… and Carry on — never a request,
+   * so out of the bell and never the Sky's amber frame. */
+  uncommitted?: IdleUncommitted;
+}
+
+/** What an idle session left uncommitted, and for how long it has sat. The
+ * counts are the row's `diff_stat.uncommitted` (`git diff --shortstat HEAD`,
+ * untracked files included). */
+export interface IdleUncommitted {
+  files: number;
+  additions: number;
+  deletions: number;
+  /** Seconds idle. */
+  idleS: number;
 }
 
 export interface SessionStateExtras {
@@ -160,8 +177,8 @@ export interface SessionStateExtras {
   activity?: string;
 }
 
-/** Idle-with-unfinished-work threshold before a session counts as stuck. */
-export const STUCK_IDLE_S = 20 * 60;
+/** Idle this long on uncommitted changes and the row says so (calmly). */
+export const UNCOMMITTED_IDLE_S = 20 * 60;
 
 /** The label of each state that has only one. */
 export const STATE_LABEL: Record<Exclude<SessionStateKey, "needs_you">, string> = {
@@ -183,7 +200,6 @@ export const REASON_LABEL: Record<SessionReason, string> = {
   precommit_failed: "Pre-commit failed",
   checks_failing: "Checks failing",
   setup_failed: "Setup failed",
-  stuck: "Idle",
   // The agent did its own verify steps; a person did theirs and says so.
   verify_confirm: "Confirm verified",
   verify_failed: "Verify failed",
@@ -206,7 +222,6 @@ export const NOTIFY_RULE: Record<SessionReason | "offline", string> = {
   precommit_failed: "precommit_failed",
   setup_failed: "setup_failed",
   checks_failing: "checks_failing",
-  stuck: "",
   verify_confirm: "verify_needs_you",
   verify_failed: "verify_failed",
   verify_blocked: "verify_failed",
@@ -224,7 +239,7 @@ export function notifyRuleFor(ss: SessionState): string {
 export function attentionPriority(ss: SessionState): number {
   if (ss.reason === "question") return 0;
   if (ss.reason === "checks_failing") return 2;
-  return 1; // pre-commit / setup failed, offline, stuck, verify
+  return 1; // pre-commit / setup failed, offline, verify
 }
 
 /** "HH:MM" local time for an epoch in seconds. */
@@ -242,10 +257,51 @@ function spanWord(secs: number): string {
   return Math.round(secs / 86400) + "d";
 }
 
-function uncommittedWork(inst: Partial<Instance>): boolean {
-  const un = (inst.diff_stat as { uncommitted?: { additions?: number; deletions?: number } } | null | undefined)
+/** The idle-on-uncommitted-changes reading, or null where it would say
+ * nothing about the session's OWN work:
+ *  - an in-place session (`in_place`): its folder is a person's checkout,
+ *    whose uncommitted changes are as likely theirs as the agent's;
+ *  - a background job that will wake the agent (running / waiting): it is
+ *    waiting on its job, not left alone — a stuck job never wakes it, so
+ *    that one still counts;
+ *  - a route in flight (`flight.state` running): the route owns the next
+ *    step, its own Commit stop included.
+ * A paused, sleeping, held or moving session never gets here (each has its
+ * own row state above), nor a route paused, halted or waiting on you. */
+export function idleUncommittedOf(inst: Partial<Instance>, idleS: number): IdleUncommitted | null {
+  if (!(idleS > UNCOMMITTED_IDLE_S)) return null;
+  const un = (inst.diff_stat as { uncommitted?: { files?: number; additions?: number; deletions?: number } | null } | null | undefined)
     ?.uncommitted;
-  return (Number(un?.additions) || 0) + (Number(un?.deletions) || 0) > 0;
+  const files = Number(un?.files) || 0;
+  const additions = Number(un?.additions) || 0;
+  const deletions = Number(un?.deletions) || 0;
+  if (files + additions + deletions <= 0) return null;
+  if (inst.in_place) return null;
+  if (backgroundJobs(inst).some((j) => j.state !== "stuck")) return null;
+  if (inst.flight?.state === "running") return null;
+  return { files, additions, deletions, idleS };
+}
+
+/** "3 files uncommitted" — or, from a server that sends no file count,
+ * "+120 −4 uncommitted". */
+export function uncommittedWhat(u: Pick<IdleUncommitted, "files" | "additions" | "deletions">): string {
+  if (u.files > 0) return u.files + (u.files === 1 ? " file" : " files") + " uncommitted";
+  return "+" + u.additions + " \u2212" + u.deletions + " uncommitted";
+}
+
+/** The marker's words: "3 files uncommitted · idle 25m". */
+export function idleUncommittedText(u: IdleUncommitted): string {
+  return uncommittedWhat(u) + " · idle " + spanWord(u.idleS);
+}
+
+/** Its tooltip: the words, the line counts, and what you can do — said as a
+ * fact, not a request. */
+export function idleUncommittedHint(u: IdleUncommitted): string {
+  return (
+    idleUncommittedText(u) +
+    (u.files > 0 ? " (+" + u.additions + " \u2212" + u.deletions + ")" : "") +
+    "\nThe agent stopped with changes nobody has committed. Nothing is waiting on you — Commit… keeps them, Carry on tells the agent to finish."
+  );
 }
 
 /** The row says its agent asked a question in plain words (`asking.kind`
@@ -636,23 +692,16 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   // Verified, calm, for the ten minutes the server keeps saying so.
   if (verify?.state === "passed")
     return { state: "idle", label: VERIFIED_LABEL, tone: "verified", inBell: false, restartable: false, hint: verifyHint(verify) };
-  // Idle. In the bell only once it has sat on uncommitted work for a while:
-  // an agent that stopped in the middle of something with nobody typing. A
-  // committed branch is not unfinished work — git considers it done.
+  // Idle a while on changes nobody committed: said as what it is ("3 files
+  // uncommitted · idle 25m", `uncommitted`), calm and out of the bell — an
+  // agent that finished its turn and a person who walked away look the same
+  // from here, and neither is a request. The row and the Sky offer Commit…
+  // and Carry on beside it. A committed branch has nothing to say here.
   const since = Number(inst.activity_since) || 0;
   const idleFor = since > 0 ? now / 1000 - since : 0;
-  // Its chip says how long ("Idle 25m") in the attention tone: the bell counts
-  // it, so the row must not read like any other idle one.
-  if (idleFor > STUCK_IDLE_S && uncommittedWork(inst))
-    return {
-      state: "idle",
-      reason: "stuck",
-      label: STATE_LABEL.idle + " " + spanWord(idleFor),
-      tone: "attention",
-      inBell: true,
-      restartable: false,
-      hint: "Idle " + spanWord(idleFor) + " with unfinished work — possibly stuck",
-    };
+  const left = idleUncommittedOf(inst, idleFor);
+  if (left)
+    return { state: "idle", label: STATE_LABEL.idle, tone: "neutral", inBell: false, restartable: false, uncommitted: left, hint: idleUncommittedHint(left) };
   return { state: "idle", label: STATE_LABEL.idle, tone: "neutral", inBell: false, restartable: false, hint: bgHint || "Agent is idle — waiting for input" };
 }
 
@@ -693,10 +742,9 @@ export function needsYouAction(
   }
 }
 
-/** The bell row's words for a state that is in the bell: the label, or for a
- * stuck session the hint (its label is just "Idle"). */
+/** The bell row's words for a state that is in the bell: its label. */
 export function attentionReason(ss: SessionState): string {
-  return ss.reason === "stuck" && ss.hint ? ss.hint : ss.label;
+  return ss.label;
 }
 
 // --- An agent that can't launch -------------------------------------------

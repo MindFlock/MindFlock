@@ -16,7 +16,7 @@
  *                made stays out: whoever paused it carries it on)
  *  - halted      a route halted at a stop until you Retry or Skip it
  *  - plan        a plan waiting for Go (the Map's Plan section)
- *  - broken      pre-commit / setup failed, offline, stuck
+ *  - broken      pre-commit / setup failed, offline
  *  - checks      checks failing
  *  - behaviors   a verify that failed or waits on you, unless the session's
  *                own row (its `verify`) or its route already says so — and

@@ -349,16 +349,35 @@ def test_needs_is_the_bell_in_its_order():
     assert ans("what needs my attention", rows=ROWS[:1])["say"] == "Nothing needs you."
 
 
-def test_stuck_is_in_the_bell_after_twenty_idle_minutes_on_dirty_work():
+def test_idle_on_uncommitted_changes_is_noted_but_never_in_the_bell():
+    """20 idle minutes on uncommitted changes is a fact (reason
+    ``uncommitted``), not a request: "what needs me" never reads it."""
     row = {
         "title": "t",
         "activity": "idle",
         "activity_since": NOW - 25 * 60,
-        "diff_stat": {"uncommitted": {"additions": 3, "deletions": 0}},
+        "diff_stat": {"uncommitted": {"files": 1, "additions": 3, "deletions": 0}},
     }
-    assert vr.session_state(row, NOW)["in_bell"] is True
-    assert vr.session_state(dict(row, activity_since=NOW - 60), NOW)["in_bell"] is False
-    assert vr.session_state(dict(row, diff_stat=None), NOW)["in_bell"] is False
+    ss = vr.session_state(row, NOW)
+    assert ss["reason"] == "uncommitted"
+    assert ss["in_bell"] is False
+    assert ss["label"] == "Idle"
+    assert vr.session_state(dict(row, activity_since=NOW - 60), NOW)["reason"] == ""
+    assert vr.session_state(dict(row, diff_stat=None), NOW)["reason"] == ""
+    # Where it says nothing about the session's own work.
+    assert vr.session_state(dict(row, in_place=True), NOW)["reason"] == ""
+    waiting_job = [{"pid": 1, "state": "waiting"}]
+    assert vr.session_state(dict(row, background=waiting_job), NOW)["reason"] == ""
+    stuck_job = [{"pid": 1, "state": "stuck"}]
+    assert (
+        vr.session_state(dict(row, background=stuck_job), NOW)["reason"]
+        == "uncommitted"
+    )
+    flying = {"id": "f1", "state": "running"}
+    assert vr.session_state(dict(row, flight=flying), NOW)["reason"] == ""
+    assert (
+        ans("who needs me", rows=[dict(row, name="t")])["say"] == "Nothing needs you."
+    )
 
 
 def _verify_rows():

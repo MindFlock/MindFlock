@@ -194,6 +194,27 @@
   outline-offset: 1px;
 }
 
+/* Idle on uncommitted changes: "3 files uncommitted", the calm idle chip's
+   look, a button that opens Commit… / Carry on (no amber: nothing waits on
+   you). */
+.inst button.stagechip.chip-uncommitted {
+  cursor: pointer;
+  border: 0;
+  font: inherit;
+  font-size: 10px;
+  line-height: inherit;
+}
+
+.inst button.stagechip.chip-uncommitted:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inst button.stagechip.chip-uncommitted:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* A "needs you" chip is a door to where you act (the bell's answer row, the
    Terminal, a setup re-run, the PR): a button that still reads as the chip. */
 .inst .stagechip.chip-needs {
