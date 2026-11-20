@@ -52,7 +52,7 @@ import {
   onUpdateDone,
   startUpdateHere,
 } from "../lib/updateRestart";
-import { openWhatsNew } from "./whatsNew/WhatsNew";
+import { openWhatsNew } from "./whatsNew/open";
 import { RELEASES } from "../whatsNew/releases";
 import { api } from "../api/client";
 import type { Config } from "../api/types";

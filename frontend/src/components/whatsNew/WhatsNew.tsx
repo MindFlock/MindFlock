@@ -28,7 +28,6 @@ import {
   laterVersion,
   planWhatsNew,
   popupTurn,
-  reopenEntries,
   splitEntries,
   whatsNewTitle,
 } from "../../lib/whatsNew";
@@ -38,14 +37,7 @@ import { isKnownAction, runWhatsNewAction } from "./actions";
 import { loadSeen, saveSeen, useWhatsNew } from "./seen";
 import "./WhatsNew.css";
 
-/** Open What's new by hand: the latest release's entries. Closes whatever
- * dialog it was opened from (Settings → Help), so a "Show me" lands clean. */
-export function openWhatsNew(): void {
-  const entries = reopenEntries(RELEASES, useWhatsNew.getState().running);
-  if (!entries.length) return;
-  useUi.getState().closeDialog();
-  useWhatsNew.getState().open(entries);
-}
+export { openWhatsNew } from "./open";
 
 /** Close it, recording the running version as seen (never lower than the
  * seen one: a downgrade doesn't re-arm a newer release). */

@@ -38,7 +38,7 @@ import { showGroup } from "../lib/showGroup";
 import { approvableRequest, deviceEventNote, updateNote } from "../lib/fleet";
 import { canOfferUpdate, updateEventNote, whatsNewCovers } from "../lib/updates";
 import { startUpdateHere } from "../lib/updateRestart";
-import { openWhatsNew } from "./whatsNew/WhatsNew";
+import { openWhatsNew } from "./whatsNew/open";
 import { RELEASES } from "../whatsNew/releases";
 import type { Config } from "../api/types";
 import { approveJoinRequest } from "../lib/deviceActions";
