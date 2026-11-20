@@ -690,6 +690,11 @@
     if (err && err.name === "TypeError") return UNREACHABLE;
     return (err && err.message) || fallback;
   }
+  // "Couldn't answer: why" — except when nothing answered at all, where the
+  // UNREACHABLE line says it whole and a prefix would only stutter.
+  function failLine(prefix, why) {
+    return why === UNREACHABLE ? why : prefix + ": " + why;
+  }
   function postAction(action, body) {
     return postFor(current, action, body);
   }
@@ -973,7 +978,10 @@
     if (!current) { diffStat.textContent = ""; diffNote("No session selected."); return; }
     var seq = ++diffSeq;
     var title = current;
-    diffStat.textContent = "loading…";
+    diffStat.textContent = "";
+    // Clears the last diff too: a new session or base must not show the old
+    // one under its heading while this loads.
+    diffNote("Loading diff…");
     fetch("/api/instances/" + encodeURIComponent(title) + "/diff?base=" + diffBase)
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) {
@@ -3507,7 +3515,7 @@
     closeSheet(sessionsSheet);
     recentError("");
     recentListEl.innerHTML = "";
-    recentListEl.appendChild(folderNote("loading…"));
+    recentListEl.appendChild(folderNote("Loading…"));
     openSheet(recentSheet);
     var seq = ++recentSeq;
     loadDevices()
@@ -3592,6 +3600,8 @@
   // and comes back listed as <device>::<title>.
   function reopenClosed(ent, btn, device) {
     btn.disabled = true;
+    // The agent can take seconds to boot: say so on the button meanwhile.
+    btn.textContent = "Reopening…";
     recentError("");
     fetch(devicePath(device, "/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen"), {
       method: "POST",
@@ -3615,6 +3625,7 @@
       })
       .catch(function (err) {
         btn.disabled = false;
+        btn.textContent = "Reopen";
         recentError(errText(err, "reopen failed"));
       });
   }
@@ -12324,7 +12335,7 @@
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j || {} }; });
     }).catch(function (err) {
-      return { r: { ok: false, status: 0 }, j: { error: String((err && err.message) || err) } };
+      return { r: { ok: false, status: 0 }, j: { error: errText(err, String(err)) } };
     });
   }
   // One move in a select question, pinned to the step shown; then the step
@@ -12346,7 +12357,7 @@
       if (x.r.ok || moved) voiceDialogAnswered(e.title, d.id);   // the next step (even the same id) is a new sighting
       if (x.r.ok || moved) { askSelRefetch(x.r.ok ? String(d.id) : ""); return; }
       ask.busy = false;
-      askErr("Couldn't answer: " + (x.j.error || "HTTP " + x.r.status));
+      askErr(failLine("Couldn't answer", x.j.error || "HTTP " + x.r.status));
       askRender();
       askSelVoiceFailed(e);
     });
@@ -12423,7 +12434,7 @@
       if (!x.r.ok) {
         if (x.r.status === 409 && x.j.dialog_changed) { askSelRefetch(""); return; }
         ask.busy = false;
-        askErr("Couldn't answer: " + (x.j.error || "HTTP " + x.r.status));
+        askErr(failLine("Couldn't answer", x.j.error || "HTTP " + x.r.status));
         askRender();
         askSelVoiceFailed(e);
         return;
@@ -12452,7 +12463,7 @@
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j || {} }; });
     }, function (err) {
-      return { r: { ok: false, status: 0 }, j: { error: String((err && err.message) || err) } };
+      return { r: { ok: false, status: 0 }, j: { error: errText(err, String(err)) } };
     }).then(function (x) {
       if (ask.entry !== e) return;
       if (x.r.status === 409 && x.j.in_dialog && tries < 4) {
@@ -12461,7 +12472,7 @@
       }
       ask.busy = false;
       if (!x.r.ok) {
-        askErr("Couldn't send: " + (x.j.error || "HTTP " + x.r.status));
+        askErr(failLine("Couldn't send", x.j.error || "HTTP " + x.r.status));
         askRender();
         askSelVoiceFailed(e);
         return;
@@ -12518,7 +12529,7 @@
       });
     }).catch(function (err) {
       ask.busy = false;
-      askErr("Couldn't answer: " + String((err && err.message) || err));
+      askErr(failLine("Couldn't answer", errText(err, String(err))));
       askRender();
     });
   }
@@ -12568,7 +12579,7 @@
       });
     }).catch(function (err) {
       ask.busy = false;
-      askErr("Couldn't send: " + String((err && err.message) || err));
+      askErr(failLine("Couldn't send", errText(err, String(err))));
       askRender();
     });
   }
@@ -13165,7 +13176,7 @@
         if (url === "/api/update/start") waitForNewBuild();
       });
     }).catch(function (err) {
-      showUpdate("Couldn't update: " + err.message, "Update", updAction);
+      showUpdate(failLine("Couldn't update", errText(err, String(err))), "Update", updAction);
     });
   }
   function checkUpdate() {
