@@ -1745,6 +1745,7 @@ function AssignedTickets({
       // QA queue's rows are assigned to whoever wrote the code.
       label={hasOthers ? "Ticket queue" : "Assigned tickets"}
       onRefresh={load}
+      stalled={ticketsQuery.stalled}
       note={note}
       rowId="tk-assigned-row"
       refreshId="tk-tickets-refresh"

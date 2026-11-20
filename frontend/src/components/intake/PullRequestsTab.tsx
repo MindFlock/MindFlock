@@ -182,6 +182,7 @@ export function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }: Ta
       key="work"
       label="Your open pull requests"
       onRefresh={loadOpenPrs}
+      stalled={prsQuery.stalled}
       note={prsNote}
       rowId="gh-open-prs-row"
       refreshId="gh-prs-refresh"

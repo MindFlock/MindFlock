@@ -155,6 +155,7 @@ export function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps
       key="work"
       label="Open issues"
       onRefresh={loadOpenIssues}
+      stalled={issuesQuery.stalled}
       note={issuesNote}
       rowId="gh-open-issues-row"
       refreshId="gh-issues-refresh"

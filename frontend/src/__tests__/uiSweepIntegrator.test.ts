@@ -58,3 +58,13 @@ describe("the account chip is a button, like the cost chip", () => {
     expect(src).toContain("useRef<HTMLButtonElement | null>");
   });
 });
+
+describe("Intake's own tabs say when refreshing has backed off", () => {
+  it.each([
+    ["components/intake/PullRequestsTab.tsx", "prsQuery"],
+    ["components/intake/IssuesTab.tsx", "issuesQuery"],
+    ["components/intake/TicketsTab.tsx", "ticketsQuery"],
+  ])("%s passes its query's stalled to the list", (file, q) => {
+    expect(code(file)).toContain(`stalled={${q}.stalled}`);
+  });
+});
