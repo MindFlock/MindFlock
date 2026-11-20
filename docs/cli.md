@@ -39,6 +39,8 @@ mindflock update            # install the newest version (a release, or a checko
 mindflock update --check    # …only say what would happen and why (exit 1 when an update would run)
 mindflock update --auto on  # …install new versions by themselves (ask: say once per version; off: no checks)
 mindflock restart           # restart this install's server (onto whatever is installed)
+mindflock clean             # list leftover worktrees: size, what would be removed, why the rest is kept (a dry run)
+mindflock clean --collect   # …remove the provably safe ones now
 mindflock slot -- CMD ...   # run a heavy command (tests, builds) once a machine-wide slot is free
 mindflock --version         # print the installed version
 ```
@@ -230,6 +232,44 @@ tailscale mode stays in it) and
 waits until it answers again — use it after installing a new engine underneath a running
 server (install.sh does this for you). `mindflock serve` on a port where an
 older build is still running says so and points here.
+
+### `mindflock clean [--collect | --remove ITEM [--yes]] [--mode auto|ask|off] [--after-days N] [--all] [--json] [--local]`
+
+The worktree garbage collector (docs/web-api.md, *Disk cleanup*). With no
+option it only **lists** — a dry run: every worktree and session clone
+MindFlock made, plus other worktrees of the same repositories (an agent's own
+`.claude/worktrees/…`, one made by hand: listed, never removed), each with its
+state, size, last use and the reason it would go or stays:
+
+```
+STATE     SIZE    USED     ITEM                                  WHY
+remove    1.2G    41d ago  emandel2630/old-fix_18e9c7ee85c92524  merged
+has work  830.0M  20d ago  emandel2630/spike_18ea01f2c4d1a9b0     2 commits in no base branch and on no remote
+recent    2.1G    today    emandel2630/new_18eb3a6f71e0c2d4      used 3 hours ago
+
+MindFlock made 8 of these: 4.1G on disk.
+82 other worktrees of the same repositories (61.0G) are listed, never removed.
+87 in use or not MindFlock's are hidden; --all shows them.
+1 can be removed safely (1.2G): mindflock clean --collect
+Background: ask, after 14 days unused.
+```
+
+- `--collect` removes exactly the items marked `remove` (`POST
+  /api/cleanup/collect`) and prints what went, the merged branches it deleted
+  and anything it skipped at the last re-check.
+- `--remove ITEM` (a path, the name in the list, or an id) removes one item.
+  One that holds work, or isn't MindFlock's, is removed only after you answer
+  `y` (or with `--yes`; with no terminal it refuses): its uncommitted changes
+  are first saved as `changes.patch` in `~/.mindflock/kept-work/<time>_<name>/`
+  and the CLI prints where; an unmerged branch is kept. Something in use is
+  never removed.
+- `--mode` / `--after-days` set `cleanup.mode` / `cleanup.after_days`
+  (docs/configuration.md, *Disk cleanup*).
+
+It talks to the running server when there is one (`--host`/`--port`), which
+knows its live sessions and serializes removals; with none, or with
+`--local`, it does the same work in-process from the files a stopped server
+would use (`state.json`, the recently-closed store, routes, runs, queues).
 
 ### `mindflock uninstall [--purge] [--keep-worktrees] [--dry-run] [--yes]`
 

@@ -75,6 +75,7 @@ export const ASSISTANT_SETTINGS_SCREENS: Record<Exclude<SettingsScreen, "traffic
   orchestration: "Agent orchestration",
   workspace: "Workspace",
   ide: "IDE",
+  cleanup: "Disk cleanup",
   security: "Security",
   appearance: "Appearance",
   devices: "Your devices",

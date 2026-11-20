@@ -65,6 +65,7 @@ import { clearAttention, updateTitleBadge, useTitleBadge } from "../lib/titleBad
 // The theme toggle (TopBar) redraws the favicon through here.
 export { redrawFavicon } from "../lib/titleBadge";
 import { openSettings } from "../lib/openSettings";
+import { cleanupNoticeText } from "../lib/cleanup";
 import { jobPastExpectedNote } from "../lib/jobExpectation";
 import { allowPath } from "../lib/codemapApi";
 import { allowableBlock, baseName, redZoneEventFocus, type RedZoneEventData } from "../lib/mapEntry";
@@ -649,6 +650,18 @@ export function EventToasts() {
             if (c?.managed_by_shell === false) show();
           })
           .catch(() => {});
+      })
+    );
+    // Leftover worktrees worth reclaiming (backend core/worktree_gc_driver,
+    // "Ask me" mode): said once by the server; live only, never on a replay.
+    // A click opens Settings → Disk cleanup, where the person decides.
+    unsubs.push(
+      ev.subscribe("system.cleanup_available", (env) => {
+        if (isReplay(env)) return;
+        notifyOnce("*cleanup", "system.cleanup_available", cleanupNoticeText(env.data), {
+          action: { label: "Review", onClick: () => openSettings("cleanup") },
+          duration: 12000,
+        });
       })
     );
     // The install and its outcome (backend core/update_watch): one quiet

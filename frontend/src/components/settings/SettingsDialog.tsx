@@ -72,6 +72,7 @@ import { Accounts } from "./screens/Accounts";
 import { LocalModel } from "./screens/LocalModel";
 import { AgentOrchestration } from "./screens/AgentOrchestration";
 import { Workspace } from "./screens/Workspace";
+import { Cleanup } from "./screens/Cleanup";
 import { Ide } from "./screens/Ide";
 import { Providers } from "./screens/Providers";
 import { Security } from "./screens/Security";
@@ -122,6 +123,7 @@ const SCREENS = [
   { key: "orchestration", label: "Agent orchestration", group: "Agents", advanced: true, el: (p) => <AgentOrchestration {...p} /> },
   { key: "workspace", label: "Workspace", group: "Code", el: (p) => <Workspace {...p} /> },
   { key: "ide", label: "IDE", group: "Code", advanced: true, el: (p) => <Ide {...p} /> },
+  { key: "cleanup", label: "Disk cleanup", group: "Code", advanced: true, el: (p) => <Cleanup {...p} /> },
   { key: "security", label: "Security", group: "This device", advanced: true, el: (p) => <Security {...p} /> },
   { key: "appearance", label: "Appearance", group: "This device", el: (p) => <Appearance {...p} /> },
   // Other machines and other people. Keys stay "devices" / "mobile" / "peer"

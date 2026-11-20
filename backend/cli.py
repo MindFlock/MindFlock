@@ -903,6 +903,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     d_upd.add_argument("--yes", "-y", action="store_true", help="don't ask first")
 
+    from backend import cli_clean
+
+    cli_clean.add_parser(sub, server_opts)
+
     upd = sub.add_parser(
         "update",
         parents=[server_opts],
@@ -1092,7 +1096,10 @@ _HELP_GROUPS = (
             "open",
         ),
     ),
-    ("This computer", ("update", "restart", "devices", "join", "token", "uninstall")),
+    (
+        "This computer",
+        ("update", "restart", "clean", "devices", "join", "token", "uninstall"),
+    ),
     ("Advanced", ("accounts", "peer", "events", "mcp", "slot")),
 )
 
@@ -4202,6 +4209,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         # works when the only thing in the way is the sign-in page itself
         # (the desktop app runs this to sign in to its own server).
         return _cmd_token()
+    if args.command == "clean":
+        # Prefers a running server, else works from the files: ServerNotFound
+        # is a routing decision here (cli_clean._backend), not an error.
+        from backend import cli_clean
+
+        try:
+            return cli_clean.cmd_clean(args)
+        except client.ClientError as err:
+            print("error: %s" % _api_error_text(err), file=sys.stderr)
+            return 1
     if args.command == "accounts":
         # Not a session command either: it prefers a running server but falls
         # back to the local settings store, so ServerNotFound is a routing

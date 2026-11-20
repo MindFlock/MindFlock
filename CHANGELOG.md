@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Disk cleanup: a garbage collector for leftover worktrees.** Agents leave
+  worktrees behind fast (one machine had 141 folders, 118 GB, most from
+  sessions closed weeks ago). MindFlock now keeps an inventory of every
+  worktree and session clone it made — plus the other worktrees of the same
+  repositories, which it lists but never removes — and classifies each one:
+  in use (a session, sleeping or paused included, one closed recently enough
+  to reopen, a route, run or queue), uncommitted changes, commits that are in
+  no base branch and on no remote, last use and size. Only the provably safe
+  are removed: nothing in use, nothing uncommitted, every commit merged or
+  pushed (squash merges and a squashed `main` count as merged, so does a PR
+  merged at that very commit), unused for 14 days. A worktree goes with plain
+  `git worktree remove`, and its branch only when it is merged and MindFlock
+  made it. Settings → **Disk cleanup** shows the list with the reason for
+  every item kept, one button to remove the safe set, and a per-item Remove
+  that asks first for anything holding work and saves its uncommitted
+  changes as a patch in `~/.mindflock/kept-work/` before it goes. The mode is
+  **Automatic**, **Ask me** (the default: it tells you once when there is a
+  meaningful amount to reclaim) or **Off**. Also from a terminal:
+  `mindflock clean` (a dry-run listing), `--collect`, `--remove ITEM`,
+  `--mode`, `--after-days`. "Unused" is read from the worktree's own HEAD
+  reflog and MindFlock's session records, never from file times a `git
+  status` would move, and a scan never writes to a repository. Sizes say
+  what a removal really frees: a checkout's `.venv` is mostly hard links into
+  uv's cache, so "10 GB on disk" can free under 2 GB, and totals count every
+  shared file once.
+
 ### Changed
 
 - **Recently closed keeps every closed session**, not only the newest 50,

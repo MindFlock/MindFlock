@@ -620,6 +620,22 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["zzz"],
     },
     {
+        # The worktree garbage collector (core.worktree_gc_driver, "Ask me"
+        # mode) found leftover worktrees worth reclaiming that it can remove
+        # without losing anything. Said once; the person decides in Settings.
+        "id": "cleanup_available",
+        "label": "Leftover worktrees can be cleaned up",
+        "description": "Once, when merged and unused worktrees add up to enough disk to be worth reclaiming.",
+        "event": "system.cleanup_available",
+        "old": None,
+        "new": None,
+        "title": "Disk space to reclaim",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 2,
+        "tags": ["broom"],
+    },
+    {
         # A template's SCHEDULED run couldn't start (no folder any more, the
         # repo moved, no free name). It fired with nobody watching — at 21:00
         # or overnight — so without a push the failure waits on a card in the

@@ -167,6 +167,7 @@ def test_event_names_vocabulary_is_complete():
         "system.sessions_held",
         "system.sessions_slept",
         "system.subsessions_closed",
+        "system.cleanup_available",
     }
 
 
