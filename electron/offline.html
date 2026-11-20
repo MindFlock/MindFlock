@@ -66,7 +66,8 @@
       <pre class="log" id="starting-log" hidden></pre>
       <p class="hint" id="starting-hint" hidden>Taking longer than usual?
         Press <code class="logkey">Ctrl+Shift+L</code> for app logs.<br>
-        Server startup log: <code class="logpath">~/.mindflock/desktop-server.log</code></p>
+        Server startup log: <code class="logpath">~/.mindflock/desktop-server.log</code><br>
+        <button class="action quiet" id="starting-open-logs">Open log folder</button></p>
     </section>
 
     <!-- The server we started exited before it ever answered: a crash on boot.
@@ -80,6 +81,7 @@
       <p class="detail" id="failed-detail"></p>
       <button class="action" id="retry-start">Try again</button>
       <button class="action quiet" id="copy-diag">Copy diagnostics</button>
+      <button class="action quiet" id="failed-open-logs">Open log folder</button>
       <p class="hint">Copy diagnostics puts the log tail and the app’s details on
          your clipboard, ready to paste into a bug report.<br>
          Press <code class="logkey">Ctrl+Shift+L</code> for the app’s own log folder.</p>
@@ -147,6 +149,7 @@
          and sessions are kept.</p>
       <p class="detail" id="broken-detail"></p>
       <button class="action" id="do-repair">Repair the engine (about 3 min)</button>
+      <button class="action quiet" id="broken-open-logs">Open log folder</button>
       <p class="hint">Sessions that are still running keep running while it reinstalls.<br>
          Press <code class="logkey">Ctrl+Shift+L</code> for the app’s log folder.</p>
     </section>
@@ -331,6 +334,9 @@
   wireQuiet('inst-copy-diag', 'copy-diagnostics', 'Copied')
   wireQuiet('retry-start', 'retry-start', 'Starting…')
   wireQuiet('xcode-reopen', 'xcode-reopen', 'Opened')
+  wireQuiet('starting-open-logs', 'open-logs', 'Opened')
+  wireQuiet('failed-open-logs', 'open-logs', 'Opened')
+  wireQuiet('broken-open-logs', 'open-logs', 'Opened')
 
   // The logs shortcut is Ctrl+Shift+L, or Cmd+Shift+L on a Mac (main.js
   // takes either modifier); say the one this keyboard has.

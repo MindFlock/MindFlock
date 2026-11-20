@@ -8387,6 +8387,13 @@ def _configured_pr_base(wt: str = "") -> str:
         return ""
 
 
+def _default_pr_base(wt: str, inst) -> str:
+    """The Make-PR target when the dialog picked none: the configured PR base,
+    else the session's own base. Blocking (settings + git): call it through
+    ``asyncio.to_thread`` from a request handler."""
+    return _configured_pr_base(wt) or _session_base_branch(inst)
+
+
 _PR_CACHE: Dict[str, tuple] = {}  # branch -> (expires_epoch, info_or_None, last_good)
 #: How long a previously-seen PR survives lookups that come back empty. Long
 #: enough to ride out a rate limit or a network blip, short enough that a PR which
@@ -9766,9 +9773,15 @@ async def instance_push_branch(
     # a passing run against the current HEAD before pushing. 409 carries the
     # check state; the UI offers "push anyway" which re-POSTs {"force": true}.
     if not (payload or {}).get("force"):
-        cfg = _wt_setup.load_config(wt)
-        if cfg.check_command:
-            st = _wt_setup.check_summary(wt)
+
+        def _check_gate():
+            # A TOML read, a JSON read and a `git rev-parse`: off the loop.
+            if not _wt_setup.load_config(wt).check_command:
+                return False, None
+            return True, _wt_setup.check_summary(wt)
+
+        needs_check, st = await asyncio.to_thread(_check_gate)
+        if needs_check:
             if st is None or st.get("state") != "ok" or st.get("stale"):
                 return JSONResponse(
                     {
@@ -9944,7 +9957,9 @@ async def instance_branches(title: str) -> JSONResponse:
 
     branches = await asyncio.to_thread(_list_branches)
     current = await asyncio.to_thread(_current_branch, wt) or inst.Branch or ""
-    default = _configured_pr_base(wt) or _session_base_branch(inst)
+    # A settings parse plus up to a few git processes: off the event loop, so
+    # every pane's output doesn't wait behind the dialog opening.
+    default = await asyncio.to_thread(_default_pr_base, wt, inst)
     return JSONResponse({"branches": branches, "current": current, "default": default})
 
 
@@ -10022,12 +10037,16 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
     # into a fixed branch (e.g. staging) instead of whatever they were cut from;
     # blank falls through to the per-session base (K1) — the prior behaviour.
     chosen = (payload or {}).get("base")
-    base = (
-        (chosen or "").strip() or _configured_pr_base(wt) or _session_base_branch(inst)
-    )
-    # PR the branch the worktree is *actually* on — the stored inst.Branch can
-    # drift when the worktree is switched, which would PR the wrong branch.
-    branch = _current_branch(wt) or inst.Branch or ""
+
+    def _base_and_branch():
+        b = (chosen or "").strip() or _default_pr_base(wt, inst)
+        # PR the branch the worktree is *actually* on — the stored inst.Branch
+        # can drift when the worktree is switched, which would PR the wrong one.
+        return b, _current_branch(wt) or inst.Branch or ""
+
+    # Up to ~5 git processes plus a settings parse: one hop off the event loop
+    # so every pane's output doesn't wait behind them.
+    base, branch = await asyncio.to_thread(_base_and_branch)
     if not branch or branch == base:
         return JSONResponse(
             {
@@ -10220,7 +10239,7 @@ async def instance_merge_pr(title: str, payload: Optional[dict] = None) -> JSONR
         except OSError:
             pass
         _ORIGIN_SHA_CACHE.pop((wt, branch), None)
-        base = _configured_pr_base(wt) or _session_base_branch(inst)
+        base = _default_pr_base(wt, inst)
         _run_capped(  # best-effort; a failure just leaves the old lag
             ["git", "-C", wt, "fetch", "origin", base],
             stdout=subprocess.DEVNULL,
@@ -11126,6 +11145,58 @@ async def ticket_sources() -> JSONResponse:
         return JSONResponse({"error": str(err)}, status_code=502)
 
 
+def _shown_ticket_draft(raw, sentence: str):
+    """The draft a Retry sent back, checked exactly as a model's answer is.
+
+    The dialog only ever sends back the draft a failed filing handed it, but
+    the route cannot tell that from a hand-built one, so it goes through
+    ``ticket_draft._resolve`` — the same caps, cleaning, rendering and
+    refusals as a fresh draft. The rendered criteria section is cut off the
+    description first: ``_resolve`` renders it again from ``criteria``.
+    """
+    if not isinstance(raw, dict):
+        raise _ticket_draft.TicketDraftError("the draft to file was unreadable")
+    body = str(raw.get("description") or "").split(_ticket_draft.AC_HEADING, 1)[0]
+    criteria = raw.get("criteria")
+    return _ticket_draft._resolve(
+        {
+            "title": raw.get("name"),
+            "description": body,
+            "criteria": criteria if isinstance(criteria, list) else [],
+        },
+        sentence,
+    )
+
+
+async def _file_shown_ticket_draft(source: str, raw, sentence: str) -> dict:
+    """File a draft the dialog already holds on ``source``; the row on success.
+
+    ``ticket_compose.compose`` minus the model turn: the same blocker check,
+    the same refusal to report success without a link, and a failure still
+    hands the draft back so the next Retry is cheap too.
+    """
+    from backend.ticket_ingestion.providers import get_provider
+
+    drafted = _shown_ticket_draft(raw, sentence)
+    src = _ticket_compose._find_source(source)
+    provider = get_provider(src)
+    blocker = provider.create_blocker()
+    if blocker:
+        raise _ticket_compose.ComposeError(blocker, draft=drafted)
+    try:
+        story = await provider.create_ticket(drafted.name, drafted.description)
+    except Exception as err:  # noqa: BLE001 — provider refusal / network
+        raise _ticket_compose.ComposeError(str(err), draft=drafted)
+    if not getattr(story, "app_url", ""):
+        raise _ticket_compose.ComposeError(
+            "The ticket was filed on %s but the tracker did not return a link to "
+            "it — check the board before filing it again."
+            % ((getattr(src, "label", "") or "").strip() or src.provider),
+            draft=drafted,
+        )
+    return _ticket_compose._row(story, src, drafted)
+
+
 @app.post("/api/tickets/compose")
 async def ticket_compose(payload: dict) -> JSONResponse:
     """Draft a ticket from one sentence, file it on one source, return the link.
@@ -11159,19 +11230,27 @@ async def ticket_compose(payload: dict) -> JSONResponse:
             },
             status_code=400,
         )
+    shown = payload.get("draft")
     try:
-        row = await _ticket_compose.compose(
-            source,
-            text,
-            # The flock's own default CLI, read fresh per request and passed in
-            # pick_argv's FIRST slot — passing "" there resolves to claude
-            # unconditionally, which is how a codex-only machine ends up being
-            # told a CLI it never chose is not installed. Same reasoning as
-            # /api/session-plan, which is where this pattern is documented.
-            program=ENGINE.default_program(),
-        )
+        if shown is not None:
+            # The Retry after a failed filing: the dialog sends back the draft
+            # it is showing, and that is what gets filed — no second model turn.
+            row = await _file_shown_ticket_draft(source, shown, text)
+        else:
+            row = await _ticket_compose.compose(
+                source,
+                text,
+                # The flock's own default CLI, read fresh per request and passed
+                # in pick_argv's FIRST slot — passing "" there resolves to claude
+                # unconditionally, which is how a codex-only machine ends up being
+                # told a CLI it never chose is not installed. Same reasoning as
+                # /api/session-plan, which is where this pattern is documented.
+                program=ENGINE.default_program(),
+            )
     except LookupError as err:
         return JSONResponse({"error": str(err)}, status_code=404)
+    except _ticket_draft.TicketDraftError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
     except _ticket_compose.ComposeError as err:
         body: dict = {"error": str(err)}
         if err.draft is not None:

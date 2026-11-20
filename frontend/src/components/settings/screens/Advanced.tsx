@@ -418,6 +418,7 @@ function ShellEngineUpdate() {
   const [info, setInfo] = useState<EngineInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [run, setRun] = useState<EngineRun | null>(null);
+  const [checking, setChecking] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -459,6 +460,18 @@ function ShellEngineUpdate() {
         setInfo((i) => ({ ...(i || {}), autoUpdate: !on }));
         toast(failSentence("Couldn't change automatic updates", err));
       });
+  };
+
+  // "Check again" after a failed check: the shell re-runs a failed check
+  // before answering updateInfo (an older shell just answers what it has).
+  const checkAgain = () => {
+    if (checking || !mfengine.updateInfo) return;
+    setChecking(true);
+    mfengine
+      .updateInfo()
+      .then(setInfo)
+      .catch(() => {})
+      .finally(() => setChecking(false));
   };
 
   const update = () => {
@@ -551,8 +564,17 @@ function ShellEngineUpdate() {
         </>
       ) : info?.checked === false ? (
         <p className="set-hint">
-          Couldn’t check for engine updates right now
-          {info.current ? ` (this engine is ${info.current})` : ""}. Try again in a minute.
+          {checking ? (
+            "Checking…"
+          ) : (
+            <>
+              Couldn’t check for engine updates right now
+              {info.current ? ` (this engine is ${info.current})` : ""}.
+            </>
+          )}{" "}
+          <button type="button" className="test-btn" disabled={checking} onClick={checkAgain}>
+            Check again
+          </button>
         </p>
       ) : (
         <p className="set-hint">
