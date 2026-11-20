@@ -5,7 +5,9 @@
  * the details adds too, "Add and close" (or Esc) leaves. New items are tagged
  * "for <session>" — the session the person was looking at — unless they
  * remove the chip (remembered in api.storage, shared with the window's
- * quick-add). `host.ctx` may prefill {text, details, session}. */
+ * quick-add). `host.ctx` may prefill {text, details, session}; its `onAdded`,
+ * when given, runs after each successful add (the window clears the
+ * quick-add text it handed over only then). */
 
 import { autoGrow, call, el, errText, focusedSession, prioritySwitch, sessionTag } from "./ui.js";
 import { parseDue, toDueString } from "./model.js";
@@ -143,6 +145,15 @@ export function renderAdd(api, host) {
       if (disposed) return;
       const updated = r && Array.isArray(r.updated) && r.updated.length && !(r.added && r.added.length);
       say((updated ? "Already on the list, updated: " : "Added: ") + t);
+      // The window's quick-add box gave up its text to this dialog; it clears
+      // only now that the dialog has added (Escape or ✕ keep it there).
+      if (typeof ctx.onAdded === "function") {
+        try {
+          ctx.onAdded();
+        } catch (err) {
+          api.log.error("onAdded", err);
+        }
+      }
       if (andClose) host.close();
     } catch (err) {
       api.log.error("add", err);

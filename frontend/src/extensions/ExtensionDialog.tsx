@@ -14,8 +14,10 @@ import {
   hostVersion,
   mountExtDialog,
   releaseDialogTarget,
+  retryExtSurface,
   subscribeHost,
 } from "./host";
+import { ExtSurfaceError } from "./ExtPaneBody";
 
 export function ExtensionDialog() {
   const open = useUi((s) => s.openDialog === "extension");
@@ -57,12 +59,11 @@ export function ExtensionDialog() {
             <p className="ext-surface-status muted">Loading {view.label}…</p>
           )}
           {view.status === "error" && (
-            <div className="ext-surface-status ext-surface-error">
-              <p>
-                {view.label} failed: {view.error || "no reason recorded"}
-              </p>
-              <p className="muted">See Settings → Extensions for details.</p>
-            </div>
+            <ExtSurfaceError
+              label={view.label}
+              error={view.error}
+              onRetry={() => retryExtSurface(target, "dialog")}
+            />
           )}
           {/* The adoption target keeps NO React children — the extension's DOM
               is appended imperatively, and React must never reconcile around

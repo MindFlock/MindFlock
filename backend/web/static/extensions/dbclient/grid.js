@@ -315,7 +315,35 @@ export function createGrid(opts = {}) {
 
   // --- header ---------------------------------------------------------------
 
+  /** Where the caret is, when it is in a filter input: every renderHead
+   * replaces the filter row, and the debounced reload rebuilds the header
+   * three times (setData, setSort, setFilters) — losing focus on any of them
+   * makes filters untypeable after the first pause. */
+  function filterFocus() {
+    const active = document.activeElement;
+    if (!active || !thead.contains(active) || !active.classList.contains("dbc-filter-val")) return null;
+    const cells = [...thead.querySelectorAll(".dbc-filter-cell")];
+    return { idx: cells.indexOf(active.closest(".dbc-filter-cell")), pos: active.selectionStart, value: active.value };
+  }
+
+  function restoreFilterFocus(at) {
+    if (!at || at.idx < 0) return;
+    const cell = thead.querySelectorAll(".dbc-filter-cell")[at.idx];
+    const input = cell && cell.querySelector("input.dbc-filter-val");
+    if (!input) return;
+    // Keys typed while the reload was in flight are newer than the filters
+    // it answers (their own debounced reload is already queued): keep them.
+    if (input.value !== at.value && !input.disabled) input.value = at.value;
+    input.focus();
+    try {
+      input.setSelectionRange(at.pos, at.pos);
+    } catch (e) {
+      /* selection is a nicety */
+    }
+  }
+
   function renderHead() {
+    const refocus = filterFocus();
     thead.replaceChildren();
     const tr = el("tr");
     if (o.selectable) {
@@ -354,6 +382,7 @@ export function createGrid(opts = {}) {
     thead.appendChild(tr);
     if (o.filterable && filtersShown) thead.appendChild(renderFilterRow());
     renderCols();
+    restoreFilterFocus(refocus);
   }
 
   function renderFilterRow() {
@@ -648,15 +677,6 @@ export function createGrid(opts = {}) {
   function setData(data) {
     closeEditor(false);
     anchorRow = null; // new rows, no shift+click anchor to extend from
-    // The rebuild below replaces the filter row; if the user is mid-typing in
-    // one of its inputs (the debounced reload path), losing focus after every
-    // keystroke-pause makes filters untypeable — put the caret back.
-    let refocus = null;
-    const active = document.activeElement;
-    if (active && thead.contains(active) && active.classList.contains("dbc-filter-val")) {
-      const cells = [...thead.querySelectorAll(".dbc-filter-cell")];
-      refocus = { idx: cells.indexOf(active.closest(".dbc-filter-cell")), pos: active.selectionStart };
-    }
     columns = normalizeColumns(data.columns);
     pk = Array.isArray(data.pk) ? data.pk.map(String) : [];
     startIndex = typeof data.startIndex === "number" ? data.startIndex : 1;
@@ -688,18 +708,6 @@ export function createGrid(opts = {}) {
     // be measured and every column pinned to the width of its own.
     measureDefaults();
     syncSelectAll();
-    if (refocus && refocus.idx >= 0) {
-      const cell = thead.querySelectorAll(".dbc-filter-cell")[refocus.idx];
-      const input = cell && cell.querySelector("input.dbc-filter-val");
-      if (input) {
-        input.focus();
-        try {
-          input.setSelectionRange(refocus.pos, refocus.pos);
-        } catch (e) {
-          /* selection is a nicety */
-        }
-      }
-    }
     emitChange();
   }
 

@@ -5,7 +5,41 @@
  * when the pane is explicitly closed or its extension is deactivated. */
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { extPaneView, hostVersion, mountExtPane, subscribeHost } from "./host";
+import { openSettings } from "../lib/openSettings";
+import { extPaneView, hostVersion, mountExtPane, retryExtSurface, subscribeHost } from "./host";
+
+/** A failed extension window, pane or dialog: why, a Try again (the host
+ * loads it again in place — a module that failed during a server restart
+ * no longer needs a page reload), and a door to Settings → Extensions. */
+export function ExtSurfaceError({
+  label,
+  error,
+  onRetry,
+}: {
+  label: string;
+  error?: string;
+  onRetry(): void;
+}) {
+  return (
+    <div className="ext-surface-status ext-surface-error">
+      <p>
+        {label} failed: {error || "no reason recorded"}
+      </p>
+      <p>
+        <button type="button" className="test-btn" onClick={onRetry}>
+          Try again
+        </button>
+      </p>
+      <p className="muted">
+        See{" "}
+        <button type="button" className="linklike" onClick={() => openSettings("extensions")}>
+          Settings → Extensions
+        </button>{" "}
+        for details.
+      </p>
+    </div>
+  );
+}
 
 export function ExtPaneBody({ extKey }: { extKey: string }) {
   // Re-render on host changes (activation finishing, renderer errors).
@@ -25,12 +59,7 @@ export function ExtPaneBody({ extKey }: { extKey: string }) {
         <p className="ext-surface-status muted">Loading {view.label}…</p>
       )}
       {view.status === "error" && (
-        <div className="ext-surface-status ext-surface-error">
-          <p>
-            {view.label} failed: {view.error || "no reason recorded"}
-          </p>
-          <p className="muted">See Settings → Extensions for details.</p>
-        </div>
+        <ExtSurfaceError label={view.label} error={view.error} onRetry={() => retryExtSurface(extKey, "pane")} />
       )}
       {/* Adoption target: React renders nothing inside it, ever — the
           extension's keep-alive DOM is appended imperatively. */}

@@ -95,6 +95,10 @@ interface ExtRecord {
   style?: HTMLStyleElement;
   /** Monotonic per-surface counters for host-minted multi refs. */
   refCounters: Map<string, number>;
+  /** "Try again" presses on a failed load: the module URL carries it, so the
+   * browser fetches the module again rather than answering from a failure it
+   * remembered (a load that failed during a server restart). */
+  retries?: number;
 }
 
 const records = new Map<string, ExtRecord>();
@@ -229,8 +233,9 @@ function injectStylesheet(rec: ExtRecord, spec: ExtensionSpec) {
 export function activateExtension(ext: ExtensionInfo): Promise<void> {
   const rec = getRecord(ext);
   if (rec.activation) return rec.activation;
-  // A failed extension stays failed for the life of the page: re-enabling it
-  // from Settings deactivates (deleting this record) and starts fresh.
+  // A failed extension stays failed until asked again: "Try again" on its
+  // window (retryExtSurface) clears the failure, and re-enabling it from
+  // Settings deactivates (deleting this record) and starts fresh.
   if (rec.status === "error") return Promise.resolve();
   rec.status = "loading";
   bump();
@@ -243,7 +248,8 @@ export function activateExtension(ext: ExtensionInfo): Promise<void> {
         );
       }
       if (spec.stylesheet) injectStylesheet(rec, spec);
-      const mod = (await import(/* @vite-ignore */ spec.module)) as {
+      const url = rec.retries ? spec.module + "?retry=" + rec.retries : spec.module;
+      const mod = (await import(/* @vite-ignore */ url)) as {
         default?: ExtensionModule;
       };
       const entry = mod?.default ?? window.mindflockExtensions?.[ext.id];
@@ -634,6 +640,8 @@ export function mountExtPane(key: string, host: HTMLElement): () => void {
   void startRuntime(rec, key, runtime);
   return () => {
     runtime.el.remove();
+    // "Try again" may have swapped in a fresh body since: detach that too.
+    records.get(extId)?.panes.get(key)?.el.remove();
   };
 }
 
@@ -654,6 +662,56 @@ export function mountExtDialog(target: string, host: HTMLElement): () => void {
   return () => {
     runtime.el.remove();
   };
+}
+
+/** "Try again" on a failed extension window (pane `key` or dialog target).
+ *
+ * A failed LOAD (the module didn't import, or activate() threw — e.g. during
+ * a server restart) forgets the failure and loads the module again. A window
+ * whose own renderer failed gets a fresh body in the same place. Either way
+ * the window keeps its grid slot: it is not closed and reopened, so neither
+ * it nor the extension's other windows move or lose what they hold. */
+export function retryExtSurface(key: string, kind: "pane" | "dialog"): void {
+  const { extId } = parseTarget(key);
+  const ext = known.get(extId);
+  const rec = records.get(extId);
+  if (!ext || !rec || rec.activating) return;
+  rec.ext = ext;
+  const runtime = liveRuntime(extId, key, kind);
+  if (!runtime) return;
+  if (runtime.started || runtime.error) {
+    // This window's renderer ran and threw (or its surface was missing): a
+    // fresh body, swapped into the old one's place on screen.
+    const fresh: SurfaceRuntime = {
+      kind: runtime.kind,
+      el: makeSurfaceEl(extId),
+      surfaceId: runtime.surfaceId,
+      ref: runtime.ref,
+      ctx: runtime.ctx,
+      started: false,
+      epoch: ++epochCounter,
+      title: runtime.title,
+    };
+    if (kind === "pane") rec.panes.set(key, fresh);
+    else rec.dialog = { ...fresh, kind: "dialog", target: key };
+    runtime.el.replaceWith(fresh.el);
+    disposeRuntime(extId, runtime);
+  }
+  if (rec.status === "error") {
+    // The load failed: forget it and load again, under a new URL.
+    rec.status = "idle";
+    rec.error = undefined;
+    rec.activation = undefined;
+    rec.retries = (rec.retries || 0) + 1;
+  }
+  void activateExtension(ext);
+  // Every window of the extension still waiting on the load starts with it —
+  // a failed load failed all of them, and one Try again answers for each.
+  const waiting = [...rec.panes.entries(), ...(rec.dialog ? [[rec.dialog.target, rec.dialog] as const] : [])];
+  for (const [k, r] of waiting) {
+    if (!r.started && !r.error && !r.disposed) void startRuntime(rec, k, r);
+  }
+  bump();
 }
 
 /** Run the surface renderer once per instance, at first mount. Everything

@@ -837,9 +837,12 @@ export function WorkListPanel({
   noteId,
   listId,
   toolbarExtra,
+  stalled,
 }: {
   label: string;
-  onRefresh(): void;
+  /** The Refresh button. Return the sweep's promise and the button reads
+   * "Refreshing…", disabled, until it settles. */
+  onRefresh(): void | Promise<unknown>;
   note?: string;
   hint: React.ReactNode;
   children: React.ReactNode;
@@ -849,14 +852,16 @@ export function WorkListPanel({
   listId?: string;
   /** Tickets put their bucket picker here. */
   toolbarExtra?: React.ReactNode;
+  /** The panel's re-polling has backed off (usePanelQuery's `stalled`): the
+   * list is old, and a line under it says so, with Retry. */
+  stalled?: boolean;
 }) {
+  const [refresh, refreshing] = useBusyAction(onRefresh);
   return (
     <div className="set-row" id={rowId}>
       <span className="set-label">{label}</span>
       <div className="pr-open-toolbar">
-        <button type="button" id={refreshId} className="test-btn" onClick={onRefresh}>
-          Refresh
-        </button>
+        <RefreshButton id={refreshId} onClick={refresh} busy={refreshing} />
         {toolbarExtra}
         {note ? (
           <span id={noteId} className="pr-open-note">
@@ -867,7 +872,47 @@ export function WorkListPanel({
       <div id={listId} className="ik-groups">
         {children}
       </div>
+      {stalled ? <StalledRefresh onRetry={refresh} busy={refreshing} /> : null}
       <span className="set-hint">{hint}</span>
+    </div>
+  );
+}
+
+/** Run `action` once at a time: `busy` is true from the click until the
+ * promise it returns settles (a void return is never busy). */
+export function useBusyAction(action: () => void | Promise<unknown>): [() => void, boolean] {
+  const [busy, setBusy] = useState(false);
+  const run = () => {
+    if (busy) return;
+    const p = action();
+    if (!p || typeof (p as Promise<unknown>).then !== "function") return;
+    setBusy(true);
+    void Promise.resolve(p)
+      .catch(() => undefined)
+      .finally(() => setBusy(false));
+  };
+  return [run, busy];
+}
+
+/** A list's Refresh button: "Refreshing…" and disabled while its sweep runs,
+ * so a click shows it was taken and can't be doubled. */
+export function RefreshButton({ id, onClick, busy }: { id?: string; onClick(): void; busy: boolean }) {
+  return (
+    <button type="button" id={id} className="test-btn" onClick={onClick} disabled={busy}>
+      {busy ? "Refreshing…" : "Refresh"}
+    </button>
+  );
+}
+
+/** Under a list whose re-polling has backed off: the rows are the last ones
+ * read, and Retry sweeps now. */
+export function StalledRefresh({ onRetry, busy }: { onRetry(): void; busy: boolean }) {
+  return (
+    <div className="ik-stalled-refresh">
+      Couldn't refresh ·{" "}
+      <button type="button" className="linklike" onClick={onRetry} disabled={busy}>
+        {busy ? "Retrying…" : "Retry"}
+      </button>
     </div>
   );
 }
