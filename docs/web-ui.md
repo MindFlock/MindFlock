@@ -901,7 +901,9 @@ card rather than a browser `alert()` (which the desktop app does not
 implement). Turning a
 feature's bar on is still how you get an at-a-glance dot for PR review and
 issue handling once you've connected them. The bars' labels read
-**GitHub PRs** / **GitHub issues**, like the Intake tabs. There is no
+**GitHub PRs** / **GitHub issues**, like the Intake tabs and Customize, with
+the switch labelled (**Auto-address** / **Auto-start**, like the Tickets bar's
+**Auto-start**) and a dot that turns red when offline or on a network error. There is no
 "pause everything" control: each bar's switch is the one that turns its
 automation off.
 
@@ -3140,7 +3142,8 @@ Authentication section. If the token leaks, regenerate it from Settings →
 ## Finding, renaming & attention
 
 - **Filter** — a filter box above the sidebar list (`/` focuses it, Esc
-  clears). It matches title, alias, branch, and repo, and only narrows the
+  clears). It matches title, alias, branch, and repo, each typed word on its
+  own (*fix bug* finds `fix-login-bug`, as Recently closed does), and only narrows the
   sidebar — the grid is untouched. Customize → *Session list* → **Filter box**
   shows or hides it (shown by default); hidden, `/` still opens it for one
   search.
@@ -3217,14 +3220,15 @@ live cheat-sheet — it is generated from the same table that drives the
 bindings.
 
 `Esc` closes the sheet. It is also the editor, once you ask for it: **Change
-keys** in its header turns the rows rebindable (they highlight on hover) —
-click one, press the new combo (`Esc` cancels the recording), and it takes
+keys** in its header turns the rows rebindable (they highlight on hover, and
+`Tab` reaches each one; the sheet takes focus when it opens) — click one, or
+press `Enter` / `Space` on it, press the new combo (`Esc` cancels the recording), and it takes
 effect immediately; **Done** leaves the mode. The
 row's `+` button adds an *extra* combo instead of replacing (starting from
 the defaults, so an action can answer to several combos). Chord rows rebind
 their second key (the `Ctrl+K` prefix is fixed). A `↺` next to a customized
-shortcut restores that one default; **Restore defaults** in the sheet header
-clears every customization. Overrides are saved per browser/device (in
+shortcut restores that one default and says which; **Restore defaults** in the sheet header
+clears every customization, with **Undo** on its toast. Overrides are saved per browser/device (in
 localStorage), since a Mac laptop and a Windows desktop usually want
 different combos. Combos already in use are refused, bare letter keys are
 refused (they'd fire while you type), and customizing a shortcut retires its
@@ -3242,7 +3246,7 @@ built-in alias.
 | `Ctrl+T` (`Alt+Space` is the browser-safe alias: Chrome reserves Ctrl+T for a new tab) | Talk to the focused session through the top-bar mic — hold it (hold-to-talk) or press once to start and again to stop (click-to-talk), following the mic's push-to-talk mode. Works while a terminal has focus; the keystroke never reaches the terminal (no readline transpose; Option+Space on a Mac types no non-breaking space either). Key-repeat while held is ignored, and letting go of either key — or switching away from the window — ends a hold. The keymap only reports the key: it fires a `mindflock:voice-talk` window event with `detail.phase` `"down"` / `"up"`, and the mic decides what that means. Rebindable like the rest; a rebind applies to the release as well as the press |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
-| `/` | Focus the sidebar session filter (when it's showing) |
+| `/` | Focus the sidebar session filter, or bring it back for one search when Customize hides it |
 | `?` | Keyboard-shortcut cheat-sheet |
 | `Ctrl+R` | Reload the app — only while no terminal is focused; in a terminal it stays shell reverse-i-search |
 | `Ctrl+K C` | Commit… (chord: `Ctrl+K`, then `C`) |
@@ -5843,9 +5847,11 @@ The *Shipped today* log is gone; a session's PR and checks stay on its row.
 
 Sessions started together sit under a team run header — the same header family
 as device groups: `▾ Q4 PAYMENTS → PR (1) 1/6 shipped`. The gold badge is how
-many need you; a click folds the team run, and **⋯** on hover has Pause / Resume,
+many need you; a click (or `Enter` on its fold button, which `Tab` reaches)
+folds the team run, and **⋯** on hover or focus has Pause / Resume,
 Add lines…, the queued lines (**Start now** / **Take out of run**) and Cancel… (an
-inline confirm; sessions and branches are kept). Once the team run has finished,
+inline confirm that starts on **Keep going**; sessions and branches are kept);
+the menu takes the arrow keys and `Esc` returns focus to ⋯. Once the team run has finished,
 the menu has **Copy summary** instead: it copies the team run's summary as
 Markdown (*Copied the summary as Markdown*). The bell's cached copy covers a
 week of finished team runs; an older one is read from the team run's own record
