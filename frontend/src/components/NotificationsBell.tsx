@@ -36,6 +36,11 @@ import { WaitingRow } from "./outbox/WaitingRow";
 import { useNeedsYou } from "../lib/needsYou";
 import { showGroup } from "../lib/showGroup";
 import { approvableRequest, deviceEventNote, updateNote } from "../lib/fleet";
+import { canOfferUpdate, updateEventNote, whatsNewCovers } from "../lib/updates";
+import { startUpdateHere } from "../lib/updateRestart";
+import { openWhatsNew } from "./whatsNew/WhatsNew";
+import { RELEASES } from "../whatsNew/releases";
+import type { Config } from "../api/types";
 import { approveJoinRequest } from "../lib/deviceActions";
 import { PEER_SCREEN, peerEventNote } from "../lib/peer";
 import { peerRowKey, peerSessionName, peerSessionNote, type PeerSessionEventData } from "../lib/peerSessions";
@@ -84,8 +89,13 @@ interface Notif {
   peer?: boolean;
   /** A join request: the row's own Approve button answers it from here. */
   approve?: { id: string; via: string; code: string; host: string } | null;
-  /** An update.available row: named "Updates", opens this Settings screen. */
+  /** An update.* row: named "Updates", opens this Settings screen. */
   settings?: SettingsScreen;
+  /** An update.available row the owner can act on: its Update button
+   * installs this version here (null once pressed). */
+  update?: string | null;
+  /** An update.done row What's new has entries for: its button opens it. */
+  whatsNew?: boolean;
   /** A Verify row: the plan id whose steps a click opens in the Sky. */
   verify?: string;
   /** A Verify row's title words ("Verify failed", "Verify needs you", …). */
@@ -126,6 +136,8 @@ export interface NotifRow {
   peer?: boolean;
   approve?: { id: string; via: string; code: string; host: string } | null;
   settings?: SettingsScreen;
+  update?: string | null;
+  whatsNew?: boolean;
   verify?: string;
   verifyTitle?: string;
   name?: string;
@@ -145,6 +157,12 @@ export const VERIFY_NEEDS_YOU = "Verify needs you";
 /** A Verify row's title: "Verify failed — <session>" (its body says what). */
 export function verifyNotifTitle(row: Pick<NotifRow, "verifyTitle">, name: string): string {
   return (row.verifyTitle || "Verify") + " — " + name;
+}
+
+/** Whether this browser is the owner's (not a guest link): only the owner
+ * gets an update row's Update button. */
+function viewerIsOwner(): boolean {
+  return !queryClient.getQueryData<Config>(["config"])?.guest;
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
@@ -341,11 +359,28 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     }
     // A newer release, and which of your devices are behind it: the click
     // opens where the Update button is (Devices when others are behind).
+    // When only this device is behind and the owner is looking, the row's
+    // Update installs it from here (lib/updateRestart startUpdateHere).
     case "update.available": {
       const n = updateNote(d);
       if (!n) return null;
       const dedupe = "update:" + String(d.latest || "") + ":" + String(d.count ?? "");
-      return { text: n.text, cls: "n-info", settings: n.screen, dedupe };
+      const row: NotifRow = { text: n.text, cls: "n-info", settings: n.screen, dedupe };
+      if (n.screen === "advanced" && canOfferUpdate(d, viewerIsOwner())) row.update = String(d.latest);
+      return row;
+    }
+    // An update finished ("Updated to v0.14.22", with What's new when it has
+    // entries for it) or failed (why, in a sentence). The install's start is
+    // a toast only.
+    case "update.done":
+    case "update.failed": {
+      const n = updateEventNote(env.event, d);
+      if (!n) return null;
+      if (env.event === "update.failed")
+        return { text: n.text, cls: n.cls, settings: "advanced", dedupe: "update-failed:" + n.version + ":" + env.ts };
+      const row: NotifRow = { text: n.text, cls: n.cls, settings: "advanced", dedupe: "update-done:" + n.version };
+      if (whatsNewCovers(RELEASES, n.version, String(d.from_version || ""))) row.whatsNew = true;
+      return row;
     }
     default:
       return null;
@@ -888,6 +923,34 @@ export function NotificationsBell() {
                         }}
                       >
                         Approve
+                      </button>
+                    )}
+                    {n.update && (
+                      <button
+                        type="button"
+                        className="test-btn notif-approve"
+                        data-bell-update={n.update}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const v = n.update!;
+                          setNotifs((prev) => prev.map((x) => (x.update === v ? { ...x, update: null } : x)));
+                          void startUpdateHere(v);
+                        }}
+                      >
+                        Update
+                      </button>
+                    )}
+                    {n.whatsNew && (
+                      <button
+                        type="button"
+                        className="test-btn notif-approve"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpen(false);
+                          openWhatsNew();
+                        }}
+                      >
+                        What’s new
                       </button>
                     )}
                     <span className="notif-time">{relTime(n.ts)}</span>

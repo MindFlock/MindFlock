@@ -1,6 +1,8 @@
-/** Settings → Advanced's desktop-shell update section (electron/main.js
- * `engine:update-info`): which view a shell's answer calls for, and the words
- * for the automatic-updates switch. Pure, so vitest pins them. */
+/** Settings → Advanced's Updates block, the desktop shell's half
+ * (electron/main.js `engine:update-info`): whether the shell runs from source
+ * (it never installs then; lib/updates installPath), and the words for the
+ * shell's own automatic-updates switch, which is drawn only when the server
+ * is too old to hold the setting itself. Pure, so vitest pins them. */
 
 /** What `mfengine.updateInfo()` adds beyond the engine fields. Older shells
  * send neither key. */
@@ -11,9 +13,8 @@ export type ShellUpdateFlags = {
   autoUpdate?: boolean;
 };
 
-/** "source": a git checkout — no app updates to offer, so the engine's own
- * self-update view (which walks an editable checkout through git) is shown
- * with a one-line note. "shell": the desktop shell's own updater. */
+/** "source": a dev run of the shell — no app updates to offer, so the server
+ * installs. "shell": the desktop shell's own updater. */
 export function shellUpdateMode(info: ShellUpdateFlags | null | undefined): "source" | "shell" {
   return info?.source ? "source" : "shell";
 }
@@ -22,10 +23,6 @@ export function shellUpdateMode(info: ShellUpdateFlags | null | undefined): "sou
 export function showAutoUpdateSwitch(info: ShellUpdateFlags | null | undefined): boolean {
   return !info?.source && typeof info?.autoUpdate === "boolean";
 }
-
-export const SOURCE_RUN_NOTE =
-  "This desktop app is running from source (a dev run), so it never updates itself — " +
-  "update the checkout with git. Nothing here offers or installs a release.";
 
 export function autoUpdateHint(on: boolean): string {
   return on
