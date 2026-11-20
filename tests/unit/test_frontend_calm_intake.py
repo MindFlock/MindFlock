@@ -282,6 +282,7 @@ def test_settings_nav_order_and_groups():
         "orchestration",
         "workspace",
         "ide",
+        "cleanup",
         "security",
         "appearance",
         "devices",
@@ -298,7 +299,7 @@ def test_settings_nav_order_and_groups():
         assert not groups[k], k
     for k in ("coding", "providers", "accounts", "localmodel", "orchestration"):
         assert groups[k] == "Agents", k
-    for k in ("workspace", "ide"):
+    for k in ("workspace", "ide", "cleanup"):
         assert groups[k] == "Code", k
     for k in ("security", "appearance"):
         assert groups[k] == "This device", k

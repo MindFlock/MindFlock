@@ -25588,7 +25588,7 @@ function effectiveActivity(inst) {
 	return actShown.get(inst.title || "") || inst.activity || "idle";
 }
 var STUCK_IDLE_S = 1200;
-var STATE_LABEL = {
+var STATE_LABEL$1 = {
 	starting: "Starting",
 	working: "Working",
 	idle: "Idle",
@@ -25849,7 +25849,7 @@ function deriveSessionState(inst, extras) {
 	if (inst.start_failed) return startFailedState(inst.start_failed);
 	if (inst.pending || inst.status === "loading") return {
 		state: "starting",
-		label: STATE_LABEL.starting,
+		label: STATE_LABEL$1.starting,
 		tone: "muted",
 		inBell: false,
 		restartable: false,
@@ -25857,7 +25857,7 @@ function deriveSessionState(inst, extras) {
 	};
 	if (isHeldOffline(inst)) return {
 		state: "offline",
-		label: STATE_LABEL.offline,
+		label: STATE_LABEL$1.offline,
 		tone: "broken",
 		inBell: false,
 		restartable: true,
@@ -25867,7 +25867,7 @@ function deriveSessionState(inst, extras) {
 	if (inst.sleeping) return sleepingState(inst.sleeping, now);
 	if (inst.setup && inst.setup.state === "running") return {
 		state: "starting",
-		label: STATE_LABEL.starting,
+		label: STATE_LABEL$1.starting,
 		tone: "muted",
 		inBell: false,
 		restartable: false,
@@ -25901,7 +25901,7 @@ function deriveSessionState(inst, extras) {
 	};
 	if (act === "working") return {
 		state: "working",
-		label: STATE_LABEL.working,
+		label: STATE_LABEL$1.working,
 		tone: "working",
 		inBell: false,
 		restartable: false,
@@ -25912,7 +25912,7 @@ function deriveSessionState(inst, extras) {
 		const resumeAt = until > now / 1e3 ? until : void 0;
 		return {
 			state: "limit",
-			label: STATE_LABEL.limit + (resumeAt ? ", resumes " + fmtClock(resumeAt) : ""),
+			label: STATE_LABEL$1.limit + (resumeAt ? ", resumes " + fmtClock(resumeAt) : ""),
 			tone: "waiting",
 			inBell: false,
 			resumeAt,
@@ -25932,7 +25932,7 @@ function deriveSessionState(inst, extras) {
 		const revive = inst.auto_revive;
 		return {
 			state: "offline",
-			label: STATE_LABEL.offline,
+			label: STATE_LABEL$1.offline,
 			tone: "broken",
 			inBell: revive?.state !== "pending",
 			restartable: !inst.device,
@@ -25968,7 +25968,7 @@ function deriveSessionState(inst, extras) {
 	if (idleFor > STUCK_IDLE_S && uncommittedWork(inst)) return {
 		state: "idle",
 		reason: "stuck",
-		label: STATE_LABEL.idle + " " + spanWord(idleFor),
+		label: STATE_LABEL$1.idle + " " + spanWord(idleFor),
 		tone: "attention",
 		inBell: true,
 		restartable: false,
@@ -25976,7 +25976,7 @@ function deriveSessionState(inst, extras) {
 	};
 	return {
 		state: "idle",
-		label: STATE_LABEL.idle,
+		label: STATE_LABEL$1.idle,
 		tone: "neutral",
 		inBell: false,
 		restartable: false,
@@ -36117,7 +36117,7 @@ function removeTool(n, here = false) {
 		danger: true
 	};
 }
-function groupItems(n, ctx) {
+function groupItems$1(n, ctx) {
 	const { can } = ctx;
 	const items = [];
 	const hold = ctx.here && ctx.live && FLIGHT_HERE.has(n.state) ? flightHold(n) : null;
@@ -36161,7 +36161,7 @@ function boxItems(n, ctx) {
 		title: "Pick a stop to add at the end of the route"
 	}] : [];
 	if (n.kind === "rung") return [note("Goes as far as — this stop moves as the session ships")];
-	if (n.kind === "group") return groupItems(n, ctx);
+	if (n.kind === "group") return groupItems$1(n, ctx);
 	if (n.kind !== "stop") return can.open ? [{
 		key: "open",
 		label: "Open",
@@ -46798,7 +46798,7 @@ function notifFromEvent(env) {
 				cls: "n-warn"
 			};
 			if (env.new === "offline") return {
-				text: STATE_LABEL.offline,
+				text: STATE_LABEL$1.offline,
 				cls: "n-warn"
 			};
 			return null;
@@ -48839,6 +48839,26 @@ var SETTINGS_SEARCH = [
 			"branch",
 			"base branch",
 			"pr base"
+		]
+	},
+	{
+		key: "cleanup",
+		label: "Disk cleanup",
+		sub: "Leftover worktrees: what takes space, what can go, and why the rest stays",
+		terms: [
+			"cleanup",
+			"clean up",
+			"disk",
+			"disk space",
+			"space",
+			"garbage",
+			"garbage collect",
+			"gc",
+			"old worktrees",
+			"leftover",
+			"prune",
+			"reclaim",
+			"storage"
 		]
 	},
 	{
@@ -59191,6 +59211,7 @@ var ASSISTANT_SETTINGS_SCREENS = {
 	orchestration: "Agent orchestration",
 	workspace: "Workspace",
 	ide: "IDE",
+	cleanup: "Disk cleanup",
 	security: "Security",
 	appearance: "Appearance",
 	devices: "Your devices",
@@ -62085,6 +62106,138 @@ function useTitleBadge() {
 	}, []);
 }
 //#endregion
+//#region src/lib/cleanup.ts
+var CLEANUP_MODES = [
+	{
+		value: "auto",
+		label: "Automatic",
+		hint: "Removes the safe ones by itself every few hours. Anything that holds work is never touched."
+	},
+	{
+		value: "ask",
+		label: "Ask me",
+		hint: "Tells you once when there is a meaningful amount to reclaim. Nothing is removed until you press the button."
+	},
+	{
+		value: "off",
+		label: "Off",
+		hint: "No background scan and no notice. This list still works when you open it."
+	}
+];
+function cleanupModeOf(v) {
+	return v === "auto" || v === "off" ? v : "ask";
+}
+function humanBytes(n) {
+	if (n == null) return "…";
+	let v = Number(n) || 0;
+	for (const unit of [
+		"B",
+		"KB",
+		"MB",
+		"GB",
+		"TB"
+	]) {
+		if (v < 1024 || unit === "TB") return unit === "B" ? v + " B" : v.toFixed(v < 10 ? 1 : 0) + " " + unit;
+		v /= 1024;
+	}
+	return v + " B";
+}
+function usedAgo(ts, now = Date.now() / 1e3) {
+	if (!ts) return "";
+	const d = Math.floor((now - ts) / 86400);
+	if (d < 1) return "used today";
+	return d === 1 ? "used yesterday" : "used " + d + " days ago";
+}
+var STATE_LABEL = {
+	safe: "Will be removed",
+	recent: "Used recently",
+	holds_work: "Holds work",
+	in_use: "In use",
+	not_ours: "Not MindFlock's",
+	missing: "Already gone",
+	unknown: "Couldn't check"
+};
+function whyLine(it) {
+	if (it.safe) {
+		if (it.merged === "pr") return "Its PR merged; nothing uncommitted.";
+		if (it.merged) return "Merged into " + (it.merged_into || "the base branch") + "; nothing uncommitted.";
+		return "Every commit is on a remote; nothing uncommitted. Its branch is kept.";
+	}
+	return it.kept.length ? cap$1(it.kept.join("; ")) + "." : "";
+}
+function cap$1(s) {
+	return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+function needsConfirm(it) {
+	return !it.safe;
+}
+function canRemove(it) {
+	return !it.in_use && !it.kept.includes("locked in git");
+}
+function confirmText(it, keptDir = "~/.mindflock/kept-work") {
+	const parts = [];
+	if (it.kind === "orphan") return "Git no longer knows this folder, so its files can't be checked or saved. They will be deleted.";
+	if (it.tracked_changes || it.untracked_files) parts.push("Its uncommitted changes are saved first as a patch in " + keptDir + ".");
+	if (it.unsaved_commits) parts.push(it.kind === "clone" ? "Its unpushed commits are saved there as a bundle." : it.branch ? "Its branch " + it.branch + " is kept, with its commits." : "Its commits are kept on a mindflock-kept/… branch.");
+	if (!it.ours) parts.push("MindFlock didn't create it.");
+	if (!parts.length) parts.push("Nothing in it is lost: its branch stays.");
+	return parts.join(" ");
+}
+function removedText(it, r) {
+	const bits = ["Removed " + it.name + "."];
+	if (r.saved?.patch) bits.push("Uncommitted changes saved to " + r.saved.patch + ".");
+	if (r.saved?.bundle) bits.push("Unpushed commits saved to " + r.saved.bundle + ".");
+	if (r.saved?.kept_branch) bits.push("Its commits are on branch " + r.saved.kept_branch + ".");
+	if (r.branch_deleted) bits.push("Deleted merged branch " + r.branch_deleted + ".");
+	return bits.join(" ");
+}
+function summaryLine$1(s) {
+	if (!s) return "";
+	const all = s.count + (s.count === 1 ? " item" : " items") + ", " + humanBytes(s.bytes);
+	if (!s.safe_count) return all + ". Nothing is safe to remove right now.";
+	return all + ". " + s.safe_count + " can go safely (" + humanBytes(s.safe_bytes) + ").";
+}
+function groupItems(items) {
+	const by = (states) => items.filter((i) => states.includes(i.state));
+	return [
+		{
+			key: "safe",
+			title: "Will be removed",
+			items: by(["safe"])
+		},
+		{
+			key: "kept",
+			title: "Kept",
+			items: by([
+				"holds_work",
+				"recent",
+				"missing",
+				"unknown"
+			])
+		},
+		{
+			key: "in_use",
+			title: "In use",
+			items: by(["in_use"])
+		},
+		{
+			key: "not_ours",
+			title: "Not MindFlock's (never removed automatically)",
+			items: by(["not_ours"])
+		}
+	].filter((g) => g.items.length);
+}
+function failSentence$1(what, err) {
+	const why = String(err?.message ?? (typeof err === "string" ? err : "")).trim();
+	return why ? what + ": " + why.replace(/\.$/, "") + "." : what + ".";
+}
+function cleanupNoticeText(d) {
+	const detail = String(d?.detail || "");
+	if (detail) return detail;
+	const n = Number(d?.count) || 0;
+	return n + (n === 1 ? " leftover worktree" : " leftover worktrees") + " can be removed safely.";
+}
+//#endregion
 //#region src/lib/codemapApi.ts
 var arr = (v) => Array.isArray(v) ? v : [];
 var num$4 = (v, d = 0) => typeof v === "number" && isFinite(v) ? v : d;
@@ -62720,6 +62873,16 @@ function EventToasts() {
 			api("/api/update/check").then((c) => {
 				if (c?.managed_by_shell === false) show();
 			}).catch(() => {});
+		}));
+		unsubs.push(ev.subscribe("system.cleanup_available", (env) => {
+			if (isReplay(env)) return;
+			notifyOnce("*cleanup", "system.cleanup_available", cleanupNoticeText(env.data), {
+				action: {
+					label: "Review",
+					onClick: () => openSettings("cleanup")
+				},
+				duration: 12e3
+			});
 		}));
 		unsubs.push(installUpdateRecovery(ev));
 		unsubs.push(ev.subscribe("update.installing", (env) => {
@@ -133797,6 +133960,270 @@ function PrReviewRoute() {
 	});
 }
 //#endregion
+//#region src/components/settings/screens/Cleanup.tsx
+function Cleanup({ active }) {
+	const [rep, setRep] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [asking, setAsking] = (0, import_react.useState)(null);
+	const [days, setDays] = (0, import_react.useState)("");
+	const timer = (0, import_react.useRef)(void 0);
+	const load = (0, import_react.useCallback)(async (refresh = false) => {
+		window.clearTimeout(timer.current);
+		try {
+			const r = await api("/api/cleanup" + (refresh ? "?refresh=1" : ""));
+			setRep(r);
+			setDays((d) => d || String(r.settings?.after_days || 14));
+			if (r.scanning) timer.current = window.setTimeout(() => void load(), 2e3);
+		} catch (err) {
+			toast(failSentence$1("Couldn't read the cleanup list", err));
+		}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (active === false) return;
+		load();
+		return () => window.clearTimeout(timer.current);
+	}, [active, load]);
+	const saveSettings = async (patch) => {
+		try {
+			const s = await api("/api/cleanup/settings", { json: patch });
+			setRep((r) => r ? {
+				...r,
+				settings: s
+			} : r);
+			toast("Saved");
+			if (patch.after_days !== void 0) load(true);
+		} catch (err) {
+			toast(failSentence$1("Couldn't save the cleanup setting", err));
+		}
+	};
+	const collect = async () => {
+		setBusy("collect");
+		try {
+			const r = await api("/api/cleanup/collect", { json: {} });
+			const n = r.removed.length;
+			toast(n ? "Removed " + n + (n === 1 ? " worktree" : " worktrees") + ", " + humanBytes(r.freed_bytes) + " freed." : "Nothing was removed: everything left holds work or is in use.");
+		} catch (err) {
+			toast(failSentence$1("Couldn't clean up", err));
+		} finally {
+			setBusy("");
+			load();
+		}
+	};
+	const remove = async (it, confirmed) => {
+		if (needsConfirm(it) && !confirmed) {
+			setAsking(it);
+			return;
+		}
+		setAsking(null);
+		setBusy(it.id);
+		try {
+			const r = await api("/api/cleanup/remove", { json: {
+				id: it.id,
+				confirm: confirmed
+			} });
+			toast(removedText(it, r), { duration: r.saved?.patch || r.saved?.bundle ? 15e3 : void 0 });
+		} catch (err) {
+			toast(failSentence$1("Couldn't remove " + it.name, err));
+		} finally {
+			setBusy("");
+			load();
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CleanupView, {
+		rep,
+		busy,
+		asking,
+		days,
+		onDays: setDays,
+		onSaveDays: () => {
+			const n = parseInt(days, 10);
+			if (n >= 1 && n !== rep?.settings.after_days) saveSettings({ after_days: n });
+		},
+		onMode: (m) => void saveSettings({ mode: m }),
+		onRefresh: () => void load(true),
+		onCollect: () => void collect(),
+		onRemove: (it, ok) => void remove(it, ok),
+		onCancel: () => setAsking(null)
+	});
+}
+function CleanupView(p) {
+	const { rep } = p;
+	const mode = cleanupModeOf(rep?.settings?.mode);
+	const s = rep?.summary;
+	const items = rep?.items || [];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Disk cleanup"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"Agents leave worktrees behind. A worktree is removed only when no session, route or run uses it, nothing in it is uncommitted, every commit is in the base branch or on a remote (squash merges count), and nobody has used it for ",
+				rep?.settings?.after_days || 14,
+				" days. Its branch goes too only when it is merged. Everything else stays, with the reason."
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			id: "cleanup-mode-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					id: "cleanup-mode-label",
+					children: "Clean up"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "upd-mode-choices",
+					role: "radiogroup",
+					"aria-labelledby": "cleanup-mode-label",
+					children: CLEANUP_MODES.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "upd-mode-choice",
+						title: m.hint,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "radio",
+							name: "cleanup-mode",
+							value: m.value,
+							checked: mode === m.value,
+							onChange: () => p.onMode(m.value)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: m.label })]
+					}, m.value))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: CLEANUP_MODES.find((m) => m.value === mode)?.hint
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+				className: "set-label",
+				htmlFor: "cleanup-days",
+				children: "Unused for"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "cleanup-days",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						id: "cleanup-days",
+						type: "number",
+						min: 1,
+						max: 3650,
+						value: p.days,
+						onChange: (e) => p.onDays(e.currentTarget.value),
+						onBlur: p.onSaveDays
+					}),
+					" ",
+					"days before a worktree counts as safe"
+				]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row cleanup-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "cleanup-summary",
+				id: "cleanup-summary",
+				children: [rep?.items == null ? "Looking at your disk…" : summaryLine$1(s), rep?.scanning && rep?.items != null ? " Checking again…" : ""]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "test-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "cleanup-collect",
+					disabled: !s?.safe_count || !!p.busy,
+					onClick: p.onCollect,
+					children: p.busy === "collect" ? "Removing…" : s?.safe_count ? "Remove " + s.safe_count + " safe (" + humanBytes(s.safe_bytes) + ")" : "Nothing safe to remove"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: !!rep?.scanning,
+					onClick: p.onRefresh,
+					children: rep?.scanning ? "Checking…" : "Check again"
+				})]
+			})]
+		}),
+		rep?.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint cleanup-error",
+			children: rep.error
+		}),
+		groupItems(items).map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "cleanup-group",
+			open: g.key === "safe" || g.key === "kept",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
+				g.title,
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cleanup-count",
+					children: g.items.length
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cleanup-size",
+					children: humanBytes(g.items.reduce((a, i) => a + (i.size_bytes || 0), 0))
+				})
+			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cleanup-list",
+				children: g.items.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "cleanup-item cleanup-" + it.state,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "cleanup-line",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cleanup-name",
+									title: it.path,
+									children: it.name
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cleanup-badge",
+									children: STATE_LABEL[it.state] || it.state
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "cleanup-meta",
+									children: [humanBytes(it.size_bytes), it.last_used ? " · " + usedAgo(it.last_used) : ""]
+								}),
+								canRemove(it) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn cleanup-remove",
+									disabled: !!p.busy,
+									onClick: () => p.onRemove(it, false),
+									children: p.busy === it.id ? "Removing…" : "Remove"
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "cleanup-why",
+							children: [
+								it.branch ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: it.branch }) : null,
+								" ",
+								whyLine(it)
+							]
+						}),
+						p.asking?.id === it.id && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+							id: "cleanup-confirm",
+							title: "Remove " + it.name + "?",
+							body: confirmText(it, p.rep?.kept_dir),
+							confirmLabel: "Remove anyway",
+							onConfirm: () => p.onRemove(it, true),
+							onCancel: p.onCancel
+						})
+					]
+				}, it.id))
+			})]
+		}, g.key)),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"Also from a terminal: ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock clean" }),
+				" lists the same, ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock clean --collect" }),
+				" ",
+				"removes the safe set."
+			]
+		})
+	] });
+}
+//#endregion
 //#region src/components/settings/screens/Ide.tsx
 var CUSTOM_IDE = "__custom__";
 function Ide(_) {
@@ -138847,6 +139274,13 @@ var SCREENS = [
 		group: "Code",
 		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Ide, { ...p })
+	},
+	{
+		key: "cleanup",
+		label: "Disk cleanup",
+		group: "Code",
+		advanced: true,
+		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Cleanup, { ...p })
 	},
 	{
 		key: "security",

@@ -6689,7 +6689,7 @@ providers"), **Engine & updates** is `advanced` (was "Advanced").
 In advanced mode the nav is grouped under non-clickable headings
 (`.set-nav-group`) so it scans: **General**, **Connections** and
 **Notifications** first, then **Agents** (Agents, Custom agents, Accounts,
-Local model, Agent orchestration), **Code** (Workspace, IDE), **This device**
+Local model, Agent orchestration), **Code** (Workspace, IDE, Disk cleanup), **This device**
 (Security, Appearance), **Devices and people** (**Your devices**, **Your
 phone**, **Voice**, **People** — the two ways to trust another machine:
 yours, and someone else's, with Voice, the only basic screen in the group,
@@ -6817,6 +6817,31 @@ A few screens got quieter:
   and `MINDFLOCK_WORKSPACE_DIR` is named when it overrides the field. **How
   ticket sessions copy the repo** (worktree or full clone, `engine.mode`)
   moved here from Engine & updates.
+- **Disk cleanup** (key `cleanup`, advanced; `screens/Cleanup.tsx`,
+  `lib/cleanup.ts`) is the worktree garbage collector: what agents left
+  behind, how much space it takes, what would be removed and why the rest is
+  kept (`GET /api/cleanup`, docs/web-api.md *Disk cleanup*). The header line
+  says "*N* items, *X GB*. *M* can go safely (*Y GB*)" with **Remove *M* safe
+  (*Y GB*)** (`#cleanup-collect`, `POST /api/cleanup/collect`, no confirm —
+  safe means nothing can be lost: merged or pushed, nothing uncommitted, no
+  session/route/run on it, unused long enough) and **Check again**. Items sit
+  in folds: **Will be removed**, **Kept** (holds work, used recently, already
+  gone, couldn't check — each with its reasons, e.g. "2 commits in no base
+  branch and on no remote; used 3 days ago"), **In use** and **Not
+  MindFlock's (never removed automatically)**, each row with its branch,
+  size and last use. Every row except one in use or locked has its own
+  **Remove**; a safe one goes at once, anything else first shows the app's
+  own `InlineConfirm` under the row (never `window.confirm`, which the desktop
+  app does not have) saying what happens to the work — "Its uncommitted
+  changes are saved first as a patch in ~/.mindflock/kept-work", "Its branch
+  … is kept, with its commits" — and **Remove anyway** then sends `confirm`;
+  the toast after says where the patch went. **Clean up** is the mode
+  (`cleanup.mode`): **Automatic**, **Ask me** (the default: one toast and
+  bell entry, `system.cleanup_available`, the first time there is a
+  meaningful amount to reclaim, with **Review** opening this screen) or
+  **Off**; **Unused for *N* days** is `cleanup.after_days` (14). The palette
+  finds it under "disk space", "cleanup", "old worktrees", "reclaim". The
+  older **Recently closed → Remove unused worktrees** sweep is unchanged.
 
 **Spacing.** Every screen runs on one rhythm (`--set-rhythm`, 24px, on
 `#settings-panel`): a field's label, control and hint sit 6px apart, the next

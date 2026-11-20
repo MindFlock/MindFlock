@@ -485,6 +485,21 @@ itself). Set it in Settings → Advanced, with `POST /api/update/mode`, or with
 |---|---|---|
 | `mode` | `auto` \| `ask` \| `off` \| `""` | `auto`: a new version is installed as soon as it is found (checked every 30 min) and the server restarts onto it at the first minute nobody types into a terminal, or after 30 min regardless — sessions keep running. A development checkout updates from its own default branch (fast-forward only, nothing uncommitted) and starts at that quiet moment. A failed automatic attempt at a version is reported once and not retried for 6 h. When a desktop app manages the engine it does this itself and the server stands aside. `ask`: one `update.available` per version, only when this device can act on it. `off`: no checks and no announcements (a manual check still works). `""` (never chosen) acts as `ask`; the desktop app migrates its own old "Install updates automatically" switch into it once |
 
+### Disk cleanup (`cleanup`, settings store only)
+
+The `cleanup` group of `~/.mindflock/settings.json` (`CleanupSettings` in
+`backend/config/settings.py`): the worktree garbage collector on THIS machine
+(`backend/web/core/worktree_gc_driver.py`). Machine-local — never synced (what
+is on this disk is this disk's business). Set it in Settings → **Disk
+cleanup**, with `POST /api/cleanup/settings`, or with `mindflock clean --mode
+auto|ask|off --after-days N`. `MINDFLOCK_WORKTREE_GC=0` turns the background
+pass off whatever the mode says.
+
+| Key | Values | Notes |
+|---|---|---|
+| `mode` | `auto` \| `ask` \| `off` \| `""` | `auto`: a background pass (15 min after start, then every 6 h) removes the provably safe leftovers by itself, at most 25 per pass. `ask` (and `""`, never chosen): the pass only looks, and the first time the safe set is worth reclaiming (≥ 2 GB or ≥ 10 items) it says so ONCE (`system.cleanup_available`, the bell's "Leftover worktrees can be cleaned up" rule); it says so again only after something has been collected and a new pile has built up. `off`: no pass, no notice — the Settings list and `mindflock clean` still work on demand |
+| `after_days` | integer 1–3650 (unset = 14) | How long a worktree must sit unused (its folder, git index, HEAD and reflog untouched, and no session closed on it more recently) before it can count as safe. A session closed within this many days keeps its folder, since it can still be reopened |
+
 ### Auth profiles (`[auth_profiles]`, settings store only)
 
 Which identity a session's CLI runs as — a second Claude subscription, an API

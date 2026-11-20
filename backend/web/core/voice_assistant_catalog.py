@@ -132,6 +132,7 @@ SETTINGS_SCREENS: Dict[str, str] = {
     "orchestration": "Agent orchestration",
     "workspace": "Workspace",
     "ide": "IDE",
+    "cleanup": "Disk cleanup",
     "security": "Security",
     "appearance": "Appearance",
     "devices": "Your devices",

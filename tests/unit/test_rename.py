@@ -464,6 +464,8 @@ NOT_SESSION_KEYED = {
     "settings.json": "settings (no per-session keys)",
     "install.json": "install record",
     "update_auto.json": "what the automatic updater tried and reported, keyed by version",
+    "worktree_gc.json": "the worktree garbage collector's notice + last-collection state, no keys",
+    "info.json": "what a kept-work folder (~/.mindflock/kept-work/<time>_<name>/) saved from a removed worktree; one per folder, keyed by nothing",
     "pricing.json": "model prices",
     "recently_closed.json": "a closed session keeps the name it closed under",
     "ntfy_recent.json": "recent phone pushes, keyed by a hash of their words",

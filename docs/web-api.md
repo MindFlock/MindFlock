@@ -2912,6 +2912,34 @@ Detaching a socket never kills the tmux session.
 | POST | `/api/recently-closed/{id}/reopen` | Recreate a session on the preserved worktree (410 if the dir is gone) |
 | POST | `/api/recently-closed/{id}/forget` | Body `{wipe}` — drop the entry, optionally delete the worktree. **409** when a still-running session shares that directory (a copy and its origin keep one worktree); an in-place session's folder is the user's own repo and is never deleted |
 
+## Disk cleanup (the worktree garbage collector)
+
+What agents leave behind — worktrees, session clones, folders git forgot —
+listed with what each holds, and the provably safe ones removed
+(`web/core/worktree_gc.py` decides, `web/core/worktree_gc_driver.py` runs it;
+`web/routes/cleanup.py`). Settings → **Disk cleanup** and `mindflock clean` read
+these. An item is **safe** only when ALL hold: MindFlock made it (it lies under
+`~/.mindflock/worktrees` or the provisioning workspace dir, or a creation record
+names it); no session uses it (this server's, or any server's in `state.json` —
+running, paused, sleeping), no session closed within the age line can still be
+reopened on it, and no unfinished route, team-run task, queued prompt or queued
+launch names it; nothing uncommitted (tracked changes, or untracked files that
+aren't ignored); every commit is in a base branch or on a remote; it is not
+locked; and it has been unused longer than `cleanup.after_days` (14). *Merged*
+covers ancestry, squash/rebase merges and a squashed `main` (`git merge-tree
+--write-tree` gives back the base's own tree — its writes go to a throwaway
+object directory, so a scan never changes your repository), and a PR merged
+at this very HEAD; when git can't tell, the item is kept. Unlike
+`/api/workspaces/prune-worktrees` (Recently closed's sweep, which looks at age
+and uncommitted files only), this keeps work that exists only in local commits.
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/cleanup?refresh=1` | The last report — `{items, summary: {count, bytes, safe_count, safe_bytes, by_state}, scanned_at, scanning, settings: {mode, after_days}, worktrees_root, kept_dir, last_collect}` — never blocking: it starts a fresh scan (git + `du`, off the event loop) when the last is older than 10 min or on `refresh`, and says `scanning: true` until it lands (`items` is `null` before the first). Each item: `{id, path, name, kind: worktree·clone·orphan, repo, branch, head, state: safe·recent·holds_work·in_use·not_ours·missing·unknown, safe, ours, in_use, merged: ""·ancestor·content·pr, merged_into, kept: [reasons], tracked_changes, untracked_files, unsaved_commits, stashes, size_bytes, last_used, session, locked, detached}`. A repository's main checkout, base clones and cache refreshers are never items |
+| POST | `/api/cleanup/collect` | Remove every safe item now, each re-classified immediately before (a session that started on one since keeps it): a worktree with plain `git worktree remove` (never `--force`), a clone with a guarded `rmtree`; the local branch is deleted only when it is merged (not merely pushed) and MindFlock cut it. Also drops the removed folders' Recently-closed rows, Claude trust entries and editor windows, and the empty branch-slug dirs left behind → `{ok, removed: [{path, kind, branch, merged, size_bytes}], skipped: [{path, reason}], branches_deleted, freed_bytes, tidied}`. **Owner only** (**403**) |
+| POST | `/api/cleanup/remove` | Body `{id, confirm}` — one item of the last report, re-classified first. A safe item goes as above. Anything else needs `confirm: true` (**409** `{needs_confirm: true, error}` without it) and its work is saved FIRST in a new folder under `~/.mindflock/kept-work/`: `changes.patch` (tracked + untracked, binary-safe — `git apply --index` it on the branch), `commits.bundle` for a clone's unpushed commits and stash, a `mindflock-kept/<name>-<time>` branch for a detached HEAD's unmerged commits, and `info.json`; an unmerged branch is never deleted; if saving fails nothing is removed. A folder git forgot (`kind: orphan`) can't be saved and is deleted as it is (the confirm says so). Never removed, even confirmed: anything in use, a locked worktree → `{ok, saved: {dir, patch, bundle, kept_branch}, branch_deleted, item}`. **404** when the id isn't in the last report, **422** `{error}` when git refused, **400** without an id. **Owner only** |
+| POST | `/api/cleanup/settings` | Body `{mode?: "auto"\|"ask"\|"off", after_days?: 1..3650}` → `{mode, after_days}` (`cleanup.*` in settings.json). **Owner only**; **400** for any other value; **409** when settings.json can't be read |
+
 ## Remote devices (tailnet)
 
 Multi-device control (gated by the `general.remote_control` setting — Settings →

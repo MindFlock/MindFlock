@@ -446,6 +446,13 @@ EVENT_NAMES = (
     # Recently closed entry the toast's Undo reopens, ``detail`` "Closed 2
     # finished workers of lead: a, b.").
     "system.subsessions_closed",
+    # The worktree garbage collector found a meaningful amount of leftover
+    # worktrees it could remove safely (core.worktree_gc_driver.maybe_notify,
+    # cleanup.mode "ask"): ONE notice, again only after a collection and a new
+    # pile. ``session`` is "", ``new`` the count (data: {"count", "bytes",
+    # "detail"} — ``detail`` is "12 leftover worktrees (31.2 GB) can be removed
+    # safely: … Settings → Disk cleanup.").
+    "system.cleanup_available",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay
