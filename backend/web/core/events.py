@@ -383,12 +383,27 @@ EVENT_NAMES = (
     # "results", "rev", "notify": bool — true when the verdict just became
     # failed or verified, then also "text" for the bell).
     "peer.joint_check",
-    # A newer MindFlock release is out and this device, or another of "Your
-    # devices", runs an older one (core.update_watch; ``session`` is ""). Once
-    # per release and set of devices behind it (data: {"latest", "tag",
+    # A newer MindFlock version is out and this device, or another of "Your
+    # devices", runs an older one (core.update_watch; ``session`` is ""). Only
+    # when updates.mode is "ask" and someone can act on it (a development
+    # checkout that can't update, mode off and mode auto are quiet). Once per
+    # version and set of devices behind it (data: {"latest", "tag",
     # "current", "here", "blocked", "behind": [{"key", "host", "version"}],
-    # "count", "detail"}).
+    # "count", "detail", "auto": false}; a checkout's new commits add "dev":
+    # true and an empty "tag").
     "update.available",
+    # An engine update started installing — clicked, or by itself in mode
+    # auto (core.self_update; data: {"version", "tag" — "" for a development
+    # checkout, "auto": bool}).
+    "update.installing",
+    # The server is back on the new version — once, from the restarted
+    # process (core.update_watch; data: {"version", "from_version", "auto":
+    # bool, "notes_url" — the release page, "" when it isn't a release}).
+    "update.done",
+    # An update attempt failed, was interrupted or was rolled back — once per
+    # attempt (core.update_watch; data: {"version", "error" — one plain
+    # sentence, "auto": bool}). An automatic attempt is not retried for 6 h.
+    "update.failed",
     # A guest link's page selected a session, or came back after a while
     # (core.guests.note_focus): ``session``/``new`` are the title it is on,
     # ``old`` the one before ("" when they had been away), data: {"link",

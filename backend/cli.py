@@ -52,8 +52,9 @@ Installed via ``[project.scripts]``::
     mindflock devices bootstrap   # …one line that installs + joins a brand-new computer
     mindflock devices update      # …update every one of them, one at a time (this one last)
 
-    mindflock update              # update this MindFlock to the newest release and restart
-    mindflock update --check      # …only say whether there is a newer one
+    mindflock update              # update this MindFlock (a release, or a checkout's branch) and restart
+    mindflock update --check      # …only say what would happen and why
+    mindflock update --auto on    # …install new versions by themselves (ask / off)
     mindflock restart             # restart the running server (onto what is installed)
 
     mindflock slot -- CMD ...     # run a heavy command once a machine-wide slot is free
@@ -905,13 +906,16 @@ def _build_parser() -> argparse.ArgumentParser:
     upd = sub.add_parser(
         "update",
         parents=[server_opts],
-        help="update MindFlock to the newest release and restart it",
+        help="update MindFlock to the newest version and restart it",
         description=(
             "Install the newest MindFlock release (or --ref) over this one the "
             "way it was installed — install.json says whether that is uv tool "
-            "or pipx — then restart the running server onto it; sessions keep "
-            "running. With no server running it just installs. A development "
-            "checkout gets the git commands printed instead."
+            "or pipx — then restart the server that runs from this install "
+            "onto it; sessions keep running. With no such server it just "
+            "installs. A development checkout moves its own default branch "
+            "forward (fast-forward only, nothing uncommitted) and refreshes "
+            "the install without removing packages. --auto on|ask|off sets "
+            "whether new versions install by themselves."
         ),
     )
     upd.add_argument(
@@ -924,8 +928,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help=(
-            "only print the installed and newest versions; exit 0 when current, "
-            "1 when behind"
+            "only print what would happen and why; exit 0 when current, "
+            "1 when an update would run"
+        ),
+    )
+    upd.add_argument(
+        "--auto",
+        default=None,
+        choices=("on", "ask", "off"),
+        help=(
+            "how this computer takes new versions: on = install by itself and "
+            "restart when you pause, ask = say once per version, off = no checks"
         ),
     )
     upd.add_argument(

@@ -472,6 +472,19 @@ an absent key reads as `""`.
 |---|---|---|
 | `pr_review_plan` | a saved route's id (`p_xxxxxx`) or name | The route **Run the PR review** flies on an open PR's session (`POST /api/pr-review`, MCP `run_pr_review`, docs/flights.md "Run the PR review on an open PR") when the call names none. `""` (the default) = none: the action then answers 400 `no_plan` unless a `plan` is passed. A name is matched case-insensitively; a route deleted later answers 404 `unknown_plan` |
 
+### Updates (`updates`, settings store only)
+
+The `updates` group of `~/.mindflock/settings.json` (`UpdatesSettings` in
+`backend/config/settings.py`): how THIS machine takes a new MindFlock version.
+Machine-local — never synced to your other devices (each install updates
+itself). Set it in Settings → Advanced, with `POST /api/update/mode`, or with
+`mindflock update --auto on|ask|off`; `GET /api/update/check` reports it as
+`mode` / `mode_set`.
+
+| Key | Values | Notes |
+|---|---|---|
+| `mode` | `auto` \| `ask` \| `off` \| `""` | `auto`: a new version is installed as soon as it is found (checked every 30 min) and the server restarts onto it at the first minute nobody types into a terminal, or after 30 min regardless — sessions keep running. A development checkout updates from its own default branch (fast-forward only, nothing uncommitted) and starts at that quiet moment. A failed automatic attempt at a version is reported once and not retried for 6 h. When a desktop app manages the engine it does this itself and the server stands aside. `ask`: one `update.available` per version, only when this device can act on it. `off`: no checks and no announcements (a manual check still works). `""` (never chosen) acts as `ask`; the desktop app migrates its own old "Install updates automatically" switch into it once |
+
 ### Auth profiles (`[auth_profiles]`, settings store only)
 
 Which identity a session's CLI runs as — a second Claude subscription, an API

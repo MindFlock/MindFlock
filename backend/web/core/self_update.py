@@ -17,11 +17,18 @@ Three things make that safe to do from inside the process being replaced:
     it;
   * progress lives in a **file**, not this process's memory, so a UI polling
     across the restart still learns how the update ended;
-  * a **dev checkout is refused outright**. ``uv tool install --force`` would
-    replace a developer's editable install with a release build, and no button
-    in a settings screen should be able to quietly do that to someone's working
-    tree — see :func:`install_kind`. The screen gets the git commands instead
-    (:func:`editable_update_commands`).
+  * a **dev checkout never gets the installer**. ``uv tool install --force``
+    would replace a developer's editable install with a release build, and no
+    button in a settings screen should be able to quietly do that to someone's
+    working tree — see :func:`install_kind`. A checkout updates from git
+    instead: a fast-forward of its own default branch, through the same
+    script, restart and health check (:mod:`backend.web.core.dev_update`,
+    :func:`start_update`) — and only when that is safe (on the branch,
+    nothing uncommitted, not diverged).
+
+How a person wants new versions is ``updates.mode`` (:func:`update_mode`:
+``auto`` · ``ask`` · ``off``); the automatic path and the announcements live
+in :mod:`backend.web.core.update_watch`.
 
 How the engine was installed comes from ``install.sh``'s ``install.json``
 (:func:`read_install_json`: ``uv-tool`` or ``pipx``), the running package's
@@ -163,7 +170,18 @@ def _read_commit() -> str:
 #: ``uv tool install --force`` rewrites the dist-info on disk while the old
 #: process is still serving, and a commit read later would name code this
 #: process isn't running — the very stale-copy confusion it exists to expose.
-_BOOT_COMMIT = _read_commit()
+def _checkout_head() -> str:
+    """A development checkout's HEAD — what an editable install runs (its
+    dist-info records no commit). "" for any other install."""
+    checkout = install_checkout()
+    if not checkout:
+        return ""
+    from backend.web.core import dev_update
+
+    return dev_update.head(checkout)
+
+
+_BOOT_COMMIT = ""  # set below, once install_checkout() exists
 
 
 def installed_commit() -> str:
@@ -541,6 +559,27 @@ def install_checkout() -> str:
         return ""
 
 
+#: A checkout's commit is read at boot too: a ``git pull`` under a running
+#: server must not make it claim code it hasn't imported.
+_BOOT_COMMIT = _read_commit() or _checkout_head()
+
+
+def install_id() -> str:
+    """A short fingerprint of WHERE this engine is installed (its package
+    directory), for the hello: ``mindflock update`` and ``mindflock restart``
+    find the server that runs from their own install by it, rather than
+    whatever answers on the default port. A hash, so the hello names no path."""
+    try:
+        import hashlib
+
+        import backend
+
+        where = str(Path(str(backend.__file__)).resolve().parent)
+    except Exception:  # noqa: BLE001
+        return ""
+    return hashlib.sha256(where.encode("utf-8", "replace")).hexdigest()[:16]
+
+
 def install_spec(target: str) -> str:
     """The pip requirement for ``target`` (a commit or a tag) on the install
     repo — what ``install.sh`` installs: ``mindflock[web] @ git+<repo>@<t>``."""
@@ -585,19 +624,21 @@ def install_command(
 
 
 def editable_update_commands(ref: str = "", checkout: str = "") -> List[str]:
-    """The git commands that update a development checkout to ``ref`` (the
-    newest release tag, or ``main`` when none is known) — printed, never run:
-    a settings button or a CLI must not move someone's working tree."""
+    """LEGACY: the lines an older Settings screen prints for a development
+    checkout (``editable_commands``). Current clients show nothing — the
+    checkout updates itself (:mod:`backend.web.core.dev_update`) — but what
+    an old screen prints must still be safe: a fast-forward of the branch it
+    is on and a restart. Never ``git checkout <tag>`` (detaches HEAD) and
+    never ``uv sync`` (removes every package the lock doesn't name).
+    ``ref`` is accepted for old callers and ignored."""
     import shlex
 
+    del ref
     checkout = checkout or install_checkout()
-    ref = str(ref or "").strip() or "main"
     out = []
     if checkout:
         out.append("cd %s" % shlex.quote(checkout))
-    out.append("git fetch --tags origin")
-    out.append("git checkout %s" % shlex.quote(ref))
-    out.append("uv sync --group web")
+    out.append("git pull --ff-only")
     out.append("mindflock restart")
     return out
 
@@ -618,15 +659,19 @@ def blocked_reason() -> str:
 
     Answered before anything is spawned so the UI can say what is wrong while
     the button is still on screen, rather than after a detached script has
-    already begun.
+    already begun. For a development checkout it is the checkout's own
+    sentence (:func:`backend.web.core.dev_update.status`: another branch,
+    uncommitted changes, diverged) — "" when a fast-forward can run. Local
+    refs only: no network.
     """
     kind = install_kind()
     if kind == "editable":
-        return (
-            "This is a development checkout (an editable install), so updates "
-            "come from git rather than the installer — `git pull` in the "
-            "checkout, then restart the server."
-        )
+        from backend.web.core import dev_update
+
+        st = dev_update.status()
+        if st is None:
+            return "This development checkout could not be found."
+        return str(st.get("why_not") or "")
     if kind == "other":
         return (
             "This engine was not installed with `uv tool install` or pipx, so "
@@ -637,6 +682,70 @@ def blocked_reason() -> str:
     if shutil.which(tool) is None:
         return "`%s` is not on the server's PATH, so the installer can't run." % tool
     return ""
+
+
+# --------------------------------------------------------------------------- #
+# How a person wants new versions (updates.mode)
+# --------------------------------------------------------------------------- #
+#: ``updates.mode``'s values: install by itself, ask once per version, or
+#: neither check nor announce.
+MODES = ("auto", "ask", "off")
+
+#: What a never-chosen (blank) mode acts as.
+DEFAULT_MODE = "ask"
+
+
+def update_mode() -> Tuple[str, bool]:
+    """``(effective mode, whether it was ever chosen)``. A blank, unknown or
+    unreadable setting is ``("ask", False)``. Never raises."""
+    try:
+        # Local import, like every settings reader that runs in the server.
+        from backend.config.settings import load_settings
+
+        raw = str(load_settings().updates.mode or "")
+    except Exception:  # noqa: BLE001 — an update screen never fails on settings
+        raw = ""
+    if raw in MODES:
+        return raw, True
+    return DEFAULT_MODE, False
+
+
+def set_update_mode(mode: str) -> str:
+    """Store ``updates.mode``. Raises ValueError for anything but
+    :data:`MODES` (and ``settings.SettingsUnreadable`` for a broken file)."""
+    mode = str(mode or "").strip().lower()
+    if mode not in MODES:
+        raise ValueError("mode must be one of: %s" % ", ".join(MODES))
+    from backend.config.settings import update_settings
+
+    update_settings(updates={"mode": mode})
+    return mode
+
+
+#: How recently the desktop app must have talked to this server for it to
+#: count as attached (it checks every 30 minutes).
+SHELL_FRESH_S = 90 * 60
+
+
+def managed_by_shell() -> bool:
+    """Whether a desktop app on this machine drives this engine's updates
+    itself (``updateEverything``: the app has to update too). True only for
+    a release install (``uv-tool``/``pipx`` — the app leaves a development
+    checkout and anything it can't identify alone) whose shell reported its
+    version recently (``X-MindFlock-Shell``, see
+    :func:`backend.web.core.remote.note_shell_version`). The server's own
+    automatic path stands aside then, so the two never install at once."""
+    if install_kind() not in ("uv-tool", "pipx"):
+        return False
+    try:
+        from backend.web.core import remote as _remote
+
+        seen = float(_remote._SHELL.get("at") or 0.0)
+        return bool(_remote._SHELL.get("version")) and (
+            time.time() - seen < SHELL_FRESH_S
+        )
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -685,6 +794,15 @@ async def latest_release(force: bool = False) -> Optional[dict]:
     _release_cache["at"] = now
     _release_cache["value"] = value
     return value
+
+
+def cached_release() -> Optional[dict]:
+    """The last release lookup's answer while it is fresh, else None — no
+    network (``updates.mode == "off"``: nothing is looked up unasked)."""
+    if _release_cache["value"] is not None:
+        if time.time() - float(_release_cache["at"]) < RELEASE_TTL_S:
+            return _release_cache["value"]
+    return None
 
 
 async def _github_release(path: str) -> Optional[dict]:
@@ -911,6 +1029,9 @@ def _script(
     relaunch: str = "",
     method: str = "",
     swap: Optional[List[str]] = None,
+    auto: bool = False,
+    version: str = "",
+    dev: Optional[dict] = None,
 ) -> str:
     """The installer, as a shell script.
 
@@ -943,6 +1064,14 @@ def _script(
     aside instead of letting uv delete files this server, the session host
     and the sessions' MCP servers still map — the in-place rebuild that left a
     half-deleted engine on Windows.
+
+    ``dev`` (a :func:`backend.web.core.dev_update.status`) makes it a
+    development checkout's update instead: the install is a fast-forward to
+    ``commit`` plus a refresh of the editable install, and the rollback moves
+    the branch back to ``prev_commit`` (:mod:`~backend.web.core.dev_update`).
+    ``version`` is what the new build will report when ``ref`` isn't a tag
+    (a checkout's branch); ``auto`` marks an update nobody clicked — both
+    ride every state write, like ``commit``.
     """
     # ``method`` picks the installer (uv tool / pipx — :func:`install_command`,
     # the same line ``mindflock update`` runs); the default is this install's.
@@ -960,19 +1089,34 @@ def _script(
             "from_version": from_version,
             "prev_commit": prev_commit,
             "started_at": started_at,
+            "auto": bool(auto),
+            "dev": bool(dev),
         }
     )[1:-1]
     import shlex
 
     install_line = " ".join(shlex.quote(a) for a in install_argv)
     rollback_line = " ".join(shlex.quote(a) for a in (prev_argv or []))
+    install_block = ['%s >> "$LOG" 2>&1' % install_line, "code=$?", "ERR=''"]
+    rollback_block = ['    %s >> "$LOG" 2>&1' % (rollback_line or "false"), "    rc=$?"]
+    rolled_back = "the new version did not start, so the previous one was put back"
+    if dev:
+        from backend.web.core import dev_update
+
+        refresh = dev_update.refresh_command(str(dev.get("checkout") or ""))
+        install_block = dev_update.install_lines(dev, refresh)
+        rollback_block = ["    " + ln for ln in dev_update.rollback_lines(refresh)]
+        rolled_back = (
+            "the new version did not start, so the checkout was moved back to %s"
+            % (prev_commit[:7] or "where it was")
+        )
     # pipx's rebuild drops injected packages: put the recorded database drivers
     # back. Never fatal — the explorer reinstalls a missing driver on start.
     carry_lines = [
         '%s >> "$LOG" 2>&1 || printf "=== could not carry the database drivers '
         'over; MindFlock reinstalls them when it starts ===\\n" >> "$LOG"'
         % " ".join(shlex.quote(a) for a in argv)
-        for argv in driver_carry_commands(method)
+        for argv in (driver_carry_commands(method) if not dev else [])
     ]
     return "\n".join(
         [
@@ -981,7 +1125,7 @@ def _script(
             "STATE=%s" % _sh_quote(str(state_path())),
             "REF=%s" % _sh_quote(ref),
             "COMMIT=%s" % _sh_quote(commit),
-            "VERSION=%s" % _sh_quote(ref.lstrip("vV")),
+            "VERSION=%s" % _sh_quote(version or ref.lstrip("vV")),
             "FROM=%s" % _sh_quote(from_version),
             "PREV=%s" % _sh_quote(prev_commit),
             "KEEP=%s" % _sh_quote(keep),
@@ -1001,10 +1145,10 @@ def _script(
             ' "$KEEP" "${3:-}" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"',
             "}",
             'hello() { curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null; }',
-            '%s >> "$LOG" 2>&1' % install_line,
-            "code=$?",
+            *install_block,
             'if [ "$code" -ne 0 ]; then',
-            '  put failed "$code"',
+            # ERR is one of the fixed sentences the install lines set.
+            '  if [ -n "$ERR" ]; then put failed "$code" ",\\"error\\":\\"$ERR\\""; else put failed "$code"; fi',
             '  printf "=== failed (exit %s) ===\\n" "$code" >> "$LOG"',
             '  exit "$code"',
             "fi",
@@ -1055,8 +1199,7 @@ def _script(
             "      exit 1",
             "    fi",
             '    printf "=== the server did not come back on %s; putting %s back ===\\n" "$REF" "$PREV" >> "$LOG"',
-            '    %s >> "$LOG" 2>&1' % (rollback_line or "false"),
-            "    rc=$?",
+            *rollback_block,
             '    if [ "$rc" -ne 0 ]; then',
             '      put failed "$rc" \',"error":"the new version did not start, and putting the previous one back failed"\'',
             '      exit "$rc"',
@@ -1065,7 +1208,8 @@ def _script(
             '    if [ -n "$RELAUNCH" ] && ! hello >/dev/null; then',
             '      (eval "$RELAUNCH") >> "$LOG" 2>&1 < /dev/null &',
             "    fi",
-            '    put rolled_back 0 \',"error":"the new version did not start, so the previous one was put back"\'',
+            "    put rolled_back 0 %s"
+            % _sh_quote(',"error":%s' % json.dumps(rolled_back)),
             '    printf "=== rolled back to %s ===\\n" "$PREV" >> "$LOG"',
             "    exit 1 ;;",
             "esac",
@@ -1078,19 +1222,27 @@ def _sh_quote(s: str) -> str:
     return "'" + str(s).replace("'", "'\\''") + "'"
 
 
-def start_update(ref: str) -> dict:
+def start_update(ref: str, *, auto: bool = False) -> dict:
     """Begin the update to ``ref``. Returns ``{"ok": bool, "error": str}``.
 
     Everything that can be checked cheaply is checked here, while there is still
-    a request to answer with: a dev checkout, a missing ``uv``, an install
-    already running, a tag that resolves to nothing. Past that point the script
-    owns the outcome and the state file is the only channel.
+    a request to answer with: a missing ``uv``, an install already running, a
+    tag that resolves to nothing. Past that point the script owns the outcome
+    and the state file is the only channel.
+
+    A development checkout takes :func:`start_dev_update` instead (``ref`` is
+    ignored: a checkout follows its own branch). ``auto`` marks an update
+    nobody clicked (the automatic path); it rides the state file, so the
+    restart waits for a quiet moment and the outcome is reported as such.
+    Emits ``update.installing`` once the installer runs.
     """
+    if install_kind() == "editable":
+        return start_dev_update(auto=auto)
     reason = blocked_reason()
     if reason:
         return {"ok": False, "error": reason}
     if running():
-        return {"ok": False, "error": "an update is already running"}
+        return {"ok": False, "error": "an update is already running", "quiet": True}
     ref = str(ref or "").strip()
     if not ref or any(c.isspace() for c in ref):
         return {"ok": False, "error": "no release to update to"}
@@ -1117,6 +1269,7 @@ def start_update(ref: str) -> dict:
                 health_url=_health_url(),
                 relaunch=_relaunch_command(),
                 swap=swap,
+                auto=auto,
             ),
             encoding="utf-8",
         )
@@ -1134,7 +1287,79 @@ def start_update(ref: str) -> dict:
         # install whose commit isn't recorded, which then can't roll back.
         prev_commit=installed_commit(),
         started_at=started_at,
+        auto=bool(auto),
+        dev=False,
     )
+    return _spawn(script_path, fields)
+
+
+def start_dev_update(*, auto: bool = False) -> dict:
+    """Begin a development checkout's update: fast-forward its default
+    branch to the fetched upstream tip, refresh the install, restart, health
+    check (:mod:`backend.web.core.dev_update`). The same state file, script
+    and restart as a release; ``ref`` in the state is the branch, ``commit``
+    the tip it moves to. Refused, with the checkout's own sentence, when it
+    can't (another branch, uncommitted changes, diverged) or there is nothing
+    new."""
+    from backend.web.core import dev_update
+
+    st = dev_update.status()
+    if st is None:
+        return {"ok": False, "error": "This development checkout could not be found."}
+    if not st["can_update"]:
+        return {"ok": False, "error": st["why_not"]}
+    if running():
+        return {"ok": False, "error": "an update is already running", "quiet": True}
+    if st["behind"] <= 0 or not st["target"]:
+        return {
+            "ok": False,
+            "error": "This development checkout is up to date.",
+            "quiet": True,
+        }
+    started_at = time.time()
+    from_version = installed_version()
+    version = st.get("target_version") or from_version
+    ref = st["branch"]
+    script_path = _state_dir() / "update.sh"
+    try:
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(
+            _script(
+                ref,
+                st["target"],
+                from_version=from_version,
+                prev_commit=st["head"],
+                started_at=started_at,
+                health_url=_health_url(),
+                relaunch=_relaunch_command(),
+                auto=auto,
+                version=version,
+                dev=st,
+            ),
+            encoding="utf-8",
+        )
+        script_path.chmod(0o700)
+    except OSError as err:
+        return {"ok": False, "error": "could not write the installer: %s" % err}
+    fields = dict(
+        state="started",
+        ref=ref,
+        version=version,
+        commit=st["target"],
+        from_version=from_version,
+        prev_commit=st["head"],
+        started_at=started_at,
+        auto=bool(auto),
+        dev=True,
+    )
+    return _spawn(script_path, fields)
+
+
+def _spawn(script_path: Path, fields: dict) -> dict:
+    """Mark the state ``started``, run the installer script detached, and
+    say so on the bus (``update.installing``)."""
+    ref = str(fields.get("ref") or "")
+    commit = str(fields.get("commit") or "")
     write_state(**fields)
     global _PROC
     try:
@@ -1153,7 +1378,14 @@ def start_update(ref: str) -> dict:
             cwd=str(Path.home()),
         )
     except (OSError, subprocess.SubprocessError) as err:
-        write_state(state="failed", ref=ref, error=str(err), finished_at=time.time())
+        write_state(
+            **{
+                **fields,
+                "state": "failed",
+                "error": "the installer could not start",
+                "finished_at": time.time(),
+            }
+        )
         return {"ok": False, "error": "could not start the installer: %s" % err}
     pid = getattr(proc, "pid", None)
     if isinstance(pid, int) and pid > 0:
@@ -1162,7 +1394,25 @@ def start_update(ref: str) -> dict:
         # already have written its own final state).
         if read_state().get("state") == "started":
             write_state(**fields, pid=pid)
+    _emit(
+        "update.installing",
+        {
+            "version": str(fields.get("version") or ""),
+            "tag": ref if is_release_tag(ref) else "",
+            "auto": bool(fields.get("auto")),
+        },
+    )
     return {"ok": True, "ref": ref, "commit": commit}
+
+
+def _emit(event: str, data: dict) -> None:
+    """Publish an ``update.*`` event. Never raises."""
+    try:
+        from backend.web.core import events as _events
+
+        _events.BUS.emit(event, data=data)
+    except Exception:  # noqa: BLE001 — an event never fails an update
+        pass
 
 
 def windows_swap_prefix(state_dir: Optional[Path] = None) -> List[str]:
@@ -1278,6 +1528,50 @@ def _install_terminal_busy() -> bool:
         return False
 
 
+#: An automatic install restarts at the first moment nobody has typed into
+#: any terminal for this long…
+AUTO_IDLE_S = 60
+#: …and in any case once it has waited this long.
+AUTO_RESTART_CAP_S = 30 * 60
+
+
+def last_human_input() -> float:
+    """When a person last typed into any session's terminal (epoch; 0 when
+    never in this process) — the server's ``_HUMAN_INPUT_AT``, which every
+    keystroke through the UI stamps (``core.state_events``). Never raises."""
+    try:
+        srv = sys.modules.get("backend.web.server")
+        stamps = getattr(srv, "_HUMAN_INPUT_AT", None) or {}
+        return max((float(v or 0.0) for v in list(stamps.values())), default=0.0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def quiet_for(seconds: float, since: float, now: Optional[float] = None) -> bool:
+    """Whether nobody has typed for ``seconds`` — or the wait that began at
+    ``since`` reached :data:`AUTO_RESTART_CAP_S`, which ends it regardless."""
+    now = time.time() if now is None else now
+    if since and now - since >= AUTO_RESTART_CAP_S:
+        return True
+    return now - last_human_input() >= seconds
+
+
+def restart_wait(st: Optional[dict] = None) -> str:
+    """Why a finished install is not being restarted onto yet: ``"setup"``
+    (Setup's install terminal is running), ``"typing"`` (an automatic
+    install waits for a quiet moment — :func:`quiet_for`), or ""."""
+    st = read_state() if st is None else st
+    if st.get("state") != "done" or st.get("restarted") or applied(st):
+        return ""
+    if _install_terminal_busy():
+        return "setup"
+    if st.get("auto"):
+        since = float(st.get("finished_at") or st.get("started_at") or 0.0)
+        if not quiet_for(AUTO_IDLE_S, since):
+            return "typing"
+    return ""
+
+
 def restart_pending(st: Optional[dict] = None) -> bool:
     """A finished install this process isn't running yet (it restarts soon —
     the watcher's next tick — or is held while an install terminal runs).
@@ -1307,15 +1601,16 @@ def finish_state() -> Tuple[dict, bool]:
     installer rewrites the state after its health check, and that must not
     read as a second update to restart for.
 
-    Held (False, nothing marked) while Setup's install terminal runs, for
-    every caller alike — the watcher and the ``/api/update/state`` route.
+    Held (False, nothing marked) while Setup's install terminal runs, and
+    for an automatic install while someone is typing (:func:`restart_wait`),
+    for every caller alike — the watcher and the ``/api/update/state`` route.
     """
     st = read_state()
     st["log"] = log_tail()
     if st.get("state") == "done" and not st.get("restarted"):
         restart_now = not applied(st)
-        if restart_now and _install_terminal_busy():
-            return st, False  # held: "restart pending" until it finishes
+        if restart_now and restart_wait(st):
+            return st, False  # held: "restart pending" until it can go
         write_state(
             **{**{k: v for k, v in st.items() if k != "log"}, "restarted": True}
         )

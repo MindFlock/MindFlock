@@ -18,6 +18,8 @@ import pytest
 
 from backend import cli, cli_update, client
 
+_REAL_FIND = cli_update.find_own_server
+
 BASE = "http://127.0.0.1:8765"
 
 
@@ -31,6 +33,8 @@ class Fake:
         self.posts: dict = {}
         self.calls: list = []
         monkeypatch.setattr(client, "discover", lambda host=None, port=None: BASE)
+        # The server of THIS install answers at BASE (no process scan).
+        monkeypatch.setattr(cli_update, "find_own_server", lambda: (BASE, []))
         monkeypatch.setattr(client, "get", self._get)
         monkeypatch.setattr(client, "post", self._post)
         monkeypatch.setattr(cli_update.time, "sleep", lambda s: None)
@@ -51,6 +55,20 @@ class Fake:
     def _post(self, base, path, payload=None, timeout=None):
         self.calls.append(("POST", path, payload))
         return self._answer(self.posts, path, {"ok": True})
+
+
+@pytest.fixture(autouse=True)
+def _no_process_scan(monkeypatch):
+    """ "The server of this install" is whatever ``client.discover`` answers
+    here: no test scans the machine's real processes or probes real ports."""
+
+    def _find():
+        try:
+            return client.discover(), []
+        except client.ServerNotFound:
+            return "", []
+
+    monkeypatch.setattr(cli_update, "find_own_server", _find)
 
 
 @pytest.fixture()
@@ -222,34 +240,170 @@ def test_pipx_installs_the_tag_with_pipx(srv, inst, monkeypatch, capsys):
     assert "MindFlock v9.9.9 is running" in out
 
 
-def test_editable_prints_the_git_commands_and_changes_nothing(
-    srv, inst, monkeypatch, capsys
-):
+def _checkout(monkeypatch, **over):
+    """A development checkout whose status (dev_update.status) is ``over``."""
+    from backend.web.core import dev_update
     from backend.web.core import self_update
 
-    _install_json(inst, method="editable")
+    st = {
+        "checkout": "/home/me/MindFlock",
+        "branch": "main",
+        "default_branch": "main",
+        "dirty": False,
+        "behind": 3,
+        "ahead": 0,
+        "can_update": True,
+        "why_not": "",
+        "remote": "origin",
+        "upstream": "origin/main",
+        "head": "b" * 40,
+        "target": "a" * 40,
+        "target_version": "9.9.9",
+    }
+    st.update(over)
     monkeypatch.setattr(self_update, "_detected_kind", lambda: "editable")
-    monkeypatch.setattr(self_update, "install_checkout", lambda: "/home/me/MindFlock")
+    monkeypatch.setattr(dev_update, "status", lambda *a, **k: dict(st))
+    return st
+
+
+def test_a_checkout_moves_forward_and_restarts_its_own_server(
+    srv, inst, monkeypatch, capsys
+):
+    from backend.web.core import dev_update
+
+    _checkout(monkeypatch)
+    applied = []
+    monkeypatch.setattr(
+        dev_update, "apply_here", lambda st: applied.append(st["target"]) or (True, "")
+    )
     run = Installer(monkeypatch)
+    srv.gets["/api/remote/hello"] = {"version": "9.9.9", "commit": "a" * 40}
     assert cli.main(["update", "-y"]) == 0
     out = capsys.readouterr().out
-    assert "development checkout" in out
-    assert "cd /home/me/MindFlock" in out
-    assert "git fetch --tags origin" in out and "git checkout v9.9.9" in out
-    assert run.argv == [] and not [c for c in srv.calls if c[0] == "POST"]
+    assert applied == ["a" * 40] and run.argv == []  # git, never the installer
+    assert ("POST", "/api/server/restart", {"keep_mode": True}) in srv.calls
+    assert "MindFlock v9.9.9" in out
+    assert "git checkout" not in out and "uv sync" not in out
+
+
+def test_a_checkout_that_cannot_update_says_why_and_changes_nothing(
+    srv, inst, monkeypatch, capsys
+):
+    from backend.web.core import dev_update
+
+    why = (
+        "This is a development checkout on branch foo. Updates apply when it "
+        "is on main with nothing uncommitted."
+    )
+    _checkout(monkeypatch, branch="foo", can_update=False, why_not=why)
+    monkeypatch.setattr(dev_update, "apply_here", lambda st: pytest.fail("moved"))
+    assert cli.main(["update", "-y"]) == 1
+    assert why in capsys.readouterr().out
+    assert not [c for c in srv.calls if c[0] == "POST"]
+    # --check: what would happen, nothing changed, nothing to do = 0.
+    assert cli.main(["update", "--check"]) == 0
+
+
+def test_a_checkout_check_says_what_would_happen(srv, inst, monkeypatch, capsys):
+    from backend.web.core import dev_update
+
+    _checkout(monkeypatch)
+    monkeypatch.setattr(dev_update, "apply_here", lambda st: pytest.fail("moved"))
+    assert cli.main(["update", "--check"]) == 1
+    out = capsys.readouterr().out
+    assert "3 new commits on origin/main (v9.9.9)" in out
+    assert "Updates: ask" in out
+    assert not [c for c in srv.calls if c[0] == "POST"]
+
+
+def test_a_checkout_that_does_not_come_back_is_moved_back(
+    srv, inst, monkeypatch, capsys
+):
+    from backend.web.core import dev_update
+
+    st = _checkout(monkeypatch)
+    monkeypatch.setattr(dev_update, "apply_here", lambda st: (True, ""))
+    moved = []
+    monkeypatch.setattr(
+        dev_update, "move_back", lambda checkout, prev, **k: moved.append(prev) or True
+    )
+    monkeypatch.setattr(cli_update, "wait_for_build", lambda *a, **k: None)
+    assert cli.main(["update", "-y"]) == 1
+    assert moved == [st["head"]]
+    assert "moved the checkout back to bbbbbbb" in capsys.readouterr().err
 
 
 def test_a_dev_checkout_wins_over_a_stale_install_json(srv, inst, monkeypatch, capsys):
     # install.json says uv-tool (an earlier release install), but the package
     # running right now is a checkout: that is what must not be clobbered.
-    from backend.web.core import self_update
+    from backend.web.core import dev_update
 
     _install_json(inst, method="uv-tool")
-    monkeypatch.setattr(self_update, "_detected_kind", lambda: "editable")
+    _checkout(monkeypatch)
+    monkeypatch.setattr(dev_update, "apply_here", lambda st: (True, ""))
     run = Installer(monkeypatch)
+    srv.gets["/api/remote/hello"] = {"version": "9.9.9", "commit": "a" * 40}
     assert cli.main(["update", "-y"]) == 0
-    assert "git checkout v9.9.9" in capsys.readouterr().out
     assert run.argv == []
+
+
+def test_auto_sets_the_mode_through_the_server_of_this_install(
+    srv, inst, monkeypatch, capsys
+):
+    assert cli.main(["update", "--auto", "on"]) == 0
+    assert ("POST", "/api/update/mode", {"mode": "auto"}) in srv.calls
+    assert "automatic" in capsys.readouterr().out
+
+
+def test_auto_with_no_server_writes_the_setting(inst, monkeypatch, capsys):
+    from backend.web.core import self_update
+
+    def _none(host=None, port=None):
+        raise client.ServerNotFound()
+
+    monkeypatch.setattr(client, "discover", _none)
+    assert cli.main(["update", "--auto", "off"]) == 0
+    assert self_update.update_mode() == ("off", True)
+
+
+def test_the_own_server_is_found_by_install_id_not_the_default_port(monkeypatch):
+    from backend.web.core import self_update
+
+    # Undo the autouse stand-in: this is the real finder.
+    monkeypatch.setattr(cli_update, "find_own_server", _REAL_FIND)
+    monkeypatch.setattr(self_update, "install_id", lambda: "mine")
+    monkeypatch.setattr(cli_update, "_local_servers", lambda: [(9000, False)])
+    hellos = {
+        "http://127.0.0.1:8765": {"app": "mindflock", "install_id": "other"},
+        "http://127.0.0.1:9000": {"app": "mindflock", "install_id": "mine"},
+    }
+    monkeypatch.setattr(cli_update, "_hello", lambda base: hellos.get(base))
+    own, others = cli_update.find_own_server()
+    assert own == "http://127.0.0.1:9000"
+    assert others == ["http://127.0.0.1:8765"]
+    # A server too old to say: it counts when it runs this very interpreter.
+    hellos["http://127.0.0.1:9000"] = {"app": "mindflock"}
+    monkeypatch.setattr(cli_update, "_local_servers", lambda: [(9000, True)])
+    assert cli_update.find_own_server()[0] == "http://127.0.0.1:9000"
+    # Nothing of ours: nothing to restart.
+    monkeypatch.setattr(cli_update, "_local_servers", lambda: [(9000, False)])
+    assert cli_update.find_own_server()[0] == ""
+
+
+def test_an_install_leaves_another_installs_server_alone(inst, monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_update, "find_own_server", lambda: ("", ["http://127.0.0.1:9000"])
+    )
+    monkeypatch.setattr(cli_update.time, "sleep", lambda s: None)
+    posts = []
+    monkeypatch.setattr(client, "post", lambda *a, **k: posts.append(a))
+    _install_json(inst)
+    Installer(monkeypatch)
+    assert cli.main(["update", "--ref", "v9.9.9", "-y"]) == 0
+    out = capsys.readouterr().out
+    assert "start it with: mindflock serve" in out
+    assert "127.0.0.1:9000 runs from another install" in out
+    assert posts == []
 
 
 def test_without_install_json_the_method_is_detected(srv, inst, monkeypatch, capsys):

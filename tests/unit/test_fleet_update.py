@@ -38,6 +38,8 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(fleet, "member_device", lambda dev: True)
     monkeypatch.setattr(self_update, "installed_version", lambda: "9.9.9")
     monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    # A release install (the suite's own venv is a checkout).
+    monkeypatch.setattr(self_update, "install_kind", lambda: "uv-tool")
 
     async def _ok(ref):
         return "", 200
@@ -190,7 +192,8 @@ async def test_blocked_offline_old_and_current_members_are_skipped_not_fatal(
     assert steps["old"] == "skipped" and steps["same"] == "current"
     assert steps["rig"] == "done"
     detail = {r["key"]: r["detail"] for r in doc["members"]}
-    assert "dev checkout" in detail["dev"] and detail["gone"] == "offline"
+    assert "development checkout" in detail["dev"] and "git" not in detail["dev"]
+    assert detail["gone"] == "offline"
     assert "too old" in detail["old"]
     # The fleet key never went to the blocked or offline ones.
     assert ("apply", "dev") not in f.log and ("apply", "gone") not in f.log

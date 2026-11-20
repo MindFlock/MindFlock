@@ -331,8 +331,16 @@ FastAPI app `backend.web.server:app`. Key pieces:
   --force` over the tool venv this process is running out of, spawned
   **detached** so it outlives the restart, with progress in a **file**
   (`<config dir>/update.json`) rather than this process's memory so a client
-  polling across the restart still learns the outcome. A dev/editable checkout
-  is **refused**, not attempted. Behind `/api/update/*` and Settings → Advanced.
+  polling across the restart still learns the outcome. A development
+  checkout never gets the installer: **`core/dev_update.py`** fast-forwards
+  its own default branch instead (clean tree, not diverged), refreshes the
+  editable install without removing packages, and moves the branch back with
+  `git reset --keep` when the new code doesn't come up. Behind
+  `/api/update/*` and Settings → Advanced. `updates.mode` (auto · ask · off)
+  says how a machine takes new versions; **`core/update_watch.py`** is the
+  loop that detects them, installs by itself in `auto` (restarting when
+  nobody is typing), announces in `ask`, and reports `update.installing` /
+  `update.done` / `update.failed` once each.
 - **`core/pr_review.py`** — the forced-PR-review path behind Intake → Pull
   requests: lists open PRs into **every** base branch (with why auto-review
   did/didn't take them — a base the repo's card doesn't watch is one of those
