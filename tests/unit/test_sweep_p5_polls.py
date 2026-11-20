@@ -84,7 +84,9 @@ def status_client(monkeypatch, tmp_path, isolate_settings_store):
     addon.ctrl._log_path = tmp_path / "logs" / "ticket-ingestion.log"
     readings: list = []
 
-    def status():
+    def status(local=None):
+        # cached_status reads without the local kinds (local=set()) and adds
+        # them itself; /start and /stop read them directly (local=None).
         readings.append(1)
         return {"running": False, "n": len(readings)}
 
@@ -98,7 +100,8 @@ def test_two_polls_within_the_window_read_once(status_client):
     client, _addon, readings = status_client
     a = client.get("/api/mindflock/status").json()
     b = client.get("/api/mindflock/status").json()
-    assert a == b == {"running": False, "n": 1}
+    quiet = {"tickets_active": False, "pr_active": False, "issues_active": False}
+    assert a == b == {"running": False, "n": 1, **quiet}
     assert len(readings) == 1
 
 
@@ -134,6 +137,17 @@ def test_start_and_stop_clear_the_reading(status_client, monkeypatch):
     assert len(readings) == n + 1
 
 
+def test_a_forced_start_greens_through_a_cached_reading(status_client, monkeypatch):
+    """The pending kinds live in memory and are added on every call: a ticket
+    forced from the UI greens its dot on the next poll, not 2 s later."""
+    client, _addon, readings = status_client
+    assert client.get("/api/mindflock/status").json()["tickets_active"] is False
+    monkeypatch.setattr(ti._pending, "provisioning_kinds", lambda: {"tix"})
+    st = client.get("/api/mindflock/status").json()
+    assert st["tickets_active"] is True and st["pr_active"] is False
+    assert len(readings) == 1  # the same cached reading, the dot added on top
+
+
 def test_a_settings_save_clears_the_reading(status_client):
     client, _addon, readings = status_client
     client.get("/api/mindflock/status")
@@ -147,7 +161,7 @@ def test_a_reading_taken_across_a_start_is_not_kept(status_client, monkeypatch):
     _client, addon, readings = status_client
     ctrl = addon.ctrl
 
-    def slow_status():
+    def slow_status(local=None):
         readings.append(1)
         ctrl.forget_status()  # a start/stop landed mid-reading
         return {"running": False}

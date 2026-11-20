@@ -139,6 +139,32 @@ AUTOMATION_RECHECK = 30.0
 STATUS_CACHE_S = 2.0
 
 
+#: The live-activity fields a start forced from the UI greens, by the kind
+#: core.pending records for it.
+_LOCAL_ACTIVE = (
+    ("tickets_active", "tix"),
+    ("pr_active", "pr"),
+    ("issues_active", "iss"),
+)
+
+
+def _local_kinds() -> set:
+    """The kinds of work this server is bringing in itself right now."""
+    try:
+        return _pending.provisioning_kinds()
+    except Exception:  # noqa: BLE001 — status must never fail on this
+        return set()
+
+
+def _with_local(reading: dict, local: set) -> dict:
+    """A status reading taken without the local kinds, with them added: a copy,
+    so a cached reading is never changed."""
+    out = dict(reading)
+    for field, kind in _LOCAL_ACTIVE:
+        out[field] = bool(reading.get(field)) or kind in local
+    return out
+
+
 def _automation_here() -> bool:
     """Whether THIS device runs the GitHub halves (PR review, issue handling).
     Their settings follow the person to every one of their devices; one
@@ -648,12 +674,12 @@ class TicketIngestionController:
             and hit[1] is doc
             and time.monotonic() - hit[0] < STATUS_CACHE_S
         ):
-            return hit[2]
-        reading = self.status()
+            return _with_local(hit[2], _local_kinds())
+        reading = self.status(local=set())
         with self._status_lock:
             if gen == self._status_gen:
                 self._status_cache = (time.monotonic(), doc, reading)
-        return reading
+        return _with_local(reading, _local_kinds())
 
     def start(self) -> bool:
         self.forget_status()
@@ -903,7 +929,12 @@ class TicketIngestionController:
             return {}
         return raw if isinstance(raw, dict) else {}
 
-    def status(self) -> dict:
+    def status(self, local: "Optional[set]" = None) -> dict:
+        """The pipeline's state for the sidebar bars and Intake. ``local``:
+        the kinds this server is bringing in itself (forced starts, sessions
+        still provisioning); None reads them now. :meth:`cached_status` passes
+        an empty set and adds them on every call, since they live in memory
+        and move faster than the cache."""
         own = self._own_running()
         ext = None if own else self._external_lock_pid()
         running = own or (ext is not None)
@@ -925,10 +956,8 @@ class TicketIngestionController:
             act = {}
         # Work this server is bringing in itself (forced starts + sessions still
         # provisioning) — independent of whether the pipeline runs at all.
-        try:
-            local = _pending.provisioning_kinds()
-        except Exception:  # noqa: BLE001 — status must never fail on this
-            local = set()
+        if local is None:
+            local = _local_kinds()
         # Why the child is gone, when it is ours and it is — plus the live
         # error classes: a skipped source (config, from the beacon), a tracker
         # or GitHub refusing the token (auth) or a connectivity failure
