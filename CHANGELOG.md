@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.22] - 2026-11-19
+
 ### Added
 
 - **Updates take care of themselves.** One setting, Settings → Advanced →
@@ -6708,7 +6710,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.21...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.22...HEAD
+[0.14.22]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.22
 [0.14.21]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.21
 [0.14.20]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.20
 [0.14.19]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.19
