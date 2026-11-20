@@ -4,7 +4,7 @@
  * while no guest is on the row. Styles: `.guest-pill` in SidebarRow.css. */
 
 import { guestName, toggleFollow, useGuestFocus } from "../../lib/guestFocus";
-import { openChatByHand } from "../chat/ChatPanel";
+import { openChatByHand } from "../../lib/chat";
 
 export function GuestPills({ title }: { title: string }) {
   const { focus, following } = useGuestFocus();

@@ -221,6 +221,23 @@ export function openChat(title: string): void {
   void loadChat(title);
 }
 
+/** Chats opened BY HAND (the launcher, a pill) whose card has not mounted
+ * yet: that card puts the cursor in its box. A card that popped up by itself
+ * (someone arrived, someone wrote) never takes focus from what you're typing
+ * in. */
+const handOpened = new Set<string>();
+
+/** Open `title`'s chat because the person asked to: its card takes focus. */
+export function openChatByHand(title: string): void {
+  handOpened.add(title);
+  openChat(title);
+}
+
+/** Whether the card for `title` should take focus as it mounts — once. */
+export function takeHandOpen(title: string): boolean {
+  return handOpened.delete(title);
+}
+
 export function minimizeChat(title: string): void {
   setState(minimizeWindow(state, title));
 }

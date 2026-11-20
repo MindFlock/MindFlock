@@ -44,7 +44,6 @@ const { nextStep } = await import("../lib/stage");
 const { keysAreOurs } = await import("../components/grid/HistoryOverlay");
 const { TermCover } = await import("../components/grid/Pane");
 const { openChatByHand, takeHandOpen } = await import("../components/chat/ChatPanel");
-const { openChat } = await import("../lib/chat");
 
 describe("#3 a worker waiting its turn", () => {
   it("is close code 4410, retried slowly — never 'gone'", () => {
@@ -291,7 +290,12 @@ describe("#32 focus after the ⏩ picker and the chat", () => {
 
   it("puts the cursor in a hand-opened chat once, never in an auto-pop", () => {
     openChatByHand("s1");
-    expect(openChat).toHaveBeenCalledWith("s1");
+    // openChatByHand lives in lib/chat (no stylesheet; see ChatPanel) and
+    // opens the chat through the module's own openChat.
+    const lib = code("lib/chat.ts");
+    const fn = lib.slice(lib.indexOf("export function openChatByHand"), lib.indexOf("export function takeHandOpen"));
+    expect(fn).toContain("handOpened.add(title);");
+    expect(fn).toContain("openChat(title);");
     expect(takeHandOpen("s1")).toBe(true);
     expect(takeHandOpen("s1")).toBe(false);
     expect(takeHandOpen("popped")).toBe(false);

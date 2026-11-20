@@ -15,11 +15,12 @@ import {
   closeChat,
   installChatEvents,
   minimizeChat,
-  openChat,
+  openChatByHand,
   peerChatName,
   pollChats,
   sendChat,
   setPeerRows,
+  takeHandOpen,
   useChat,
   type ChatMe,
   type ChatMessage,
@@ -34,22 +35,10 @@ import { useUi } from "../../state/store";
 import { pollWhileVisible } from "../grid/visiblePoll";
 import "./ChatPanel.css";
 
-/** Chats opened BY HAND (the launcher, a pill) whose card has not mounted
- * yet: that card puts the cursor in its box. A card that popped up by itself
- * (someone arrived, someone wrote) never takes focus from what you're typing
- * in. */
-const handOpened = new Set<string>();
-
-/** Open `title`'s chat because the person asked to: its card takes focus. */
-export function openChatByHand(title: string) {
-  handOpened.add(title);
-  openChat(title);
-}
-
-/** Whether the card for `title` should take focus as it mounts — once. */
-export function takeHandOpen(title: string): boolean {
-  return handOpened.delete(title);
-}
+// openChatByHand / takeHandOpen live in lib/chat (no stylesheet), so a
+// caller outside the chat (the guest pill) can import them without pulling
+// this module's CSS forward in the bundle; re-exported here for its callers.
+export { openChatByHand, takeHandOpen };
 
 export function ChatPanel() {
   const { data: config } = useConfig();
