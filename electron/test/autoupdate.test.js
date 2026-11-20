@@ -147,13 +147,14 @@ test('workingCount: this machine only, null when unreadable', () => {
 })
 
 test('updatedNotice: says once what landed, nothing for a swap that did not', () => {
+  // One plain line, whatever moved and however it was started.
   const app = updatedNotice({ kind: 'app', to: '0.8.1', from: '0.8.0', auto: true }, '0.8.1')
-  assert.equal(app.message, 'Updated MindFlock to 0.8.1 while you were away.')
+  assert.equal(app.message, 'Updated to MindFlock 0.8.1.')
   assert.equal(app.auto, true)
-  assert.equal(updatedNotice({ kind: 'app', to: '0.8.1', auto: false }, '0.8.1').message, 'Updated MindFlock to 0.8.1.')
+  assert.equal(updatedNotice({ kind: 'app', to: '0.8.1', auto: false }, '0.8.1').message, 'Updated to MindFlock 0.8.1.')
   assert.equal(updatedNotice({ kind: 'app', to: '0.8.1' }, '0.8.0'), null)
   const eng = updatedNotice({ kind: 'engine', to: '0.8.1', auto: true }, '0.8.1')
-  assert.match(eng.message, /^Updated the MindFlock engine to 0\.8\.1 while you were away\.$/)
+  assert.equal(eng.message, 'Updated to MindFlock 0.8.1.')
   assert.equal(updatedNotice(null, '0.8.1'), null)
   assert.equal(updatedNotice({ kind: 'app' }, '0.8.1'), null)
 })
@@ -184,9 +185,12 @@ test('a run from source never offers, announces or installs an app update', () =
   assert.match(fn('async function checkEngineVersion'), /if \(SOURCE_RUN\) return/)
   assert.match(fn('async function updateEverything'), /if \(SOURCE_RUN\) \{/)
   assert.match(fn('async function autoUpdateTick'), /if \(autoTicking \|\| SOURCE_RUN\) return/)
-  // The page's update.available OS notification is refused too.
+  // The page's update.available OS notification is refused too — unless the
+  // server knows the update mode (it then only announces what it can install
+  // itself, a development checkout included).
   const notify = mainJs.slice(mainJs.indexOf("ipcMain.handle('notify:show'"))
-  assert.ok(notify.indexOf('if (SOURCE_RUN) return { ok: false }') < notify.indexOf('claimUpdateNotice(version)'))
+  const refuse = notify.indexOf('if (SOURCE_RUN && !serverKnowsMode()) return { ok: false }')
+  assert.ok(refuse > 0 && refuse < notify.indexOf('claimUpdateNotice(version)'))
   // Settings is told, so it can say "update with git".
   assert.match(mainJs, /SOURCE_RUN \? \{ source: true \} : \{ autoUpdate: autoUpdateEnabled\(\) \}/)
 })
@@ -210,7 +214,10 @@ test('an automatic run never opens a browser tab and never installs on quit', ()
 
 test('the switch persists without clobbering the skipped version', () => {
   assert.match(fn('function writeUpdateStore'), /Object\.assign\(\{\}, readUpdateStore\(\), patch \|\| \{\}\)/)
-  assert.match(fn('function autoUpdateEnabled'), /readUpdateStore\(\)\.autoUpdate !== false/)
+  // On = the mode is auto; with an older engine (no mode) the stored switch,
+  // on unless turned off (upd.legacyMode, pinned in update_mode.test.js).
+  assert.match(fn('function autoUpdateEnabled'), /return updateMode\(\) === 'auto'/)
+  assert.match(fn('function updateMode'), /upd\.resolveMode\(serverUpd, readUpdateStore\(\)\)/)
   assert.match(mainJs, /ipcMain\.handle\('update:set-auto'/)
   assert.match(preload, /setAuto: \(on\) => ipcRenderer\.invoke\('update:set-auto', !!on\)/)
 })

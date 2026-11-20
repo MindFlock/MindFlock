@@ -186,7 +186,8 @@ the moved-aside copy. Two seams remain, both short: during step 3 (seconds)
 a hook or MCP server an agent starts finds no engine, and a session-host
 process that lazily imports later gets the new version's module (the same
 as on Linux, where an in-place upgrade replaces files under running
-processes). That is why the desktop app's **automatic** update waits on
+processes). That is why the desktop app's **automatic** update (update
+mode *Automatic*) waits on
 native Windows while any session is working — with no two-hour cap there,
 and also while it can't tell (`upd.autoUpdateVerdict`, `holdWhileWorking`).
 A manual update runs when asked.
