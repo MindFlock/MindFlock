@@ -182,7 +182,7 @@ Four entries left the bar:
   [Team runs on the rail](#team-runs-on-the-rail)).
 - **Prompts** is a sidebar bar, switched on in Customize like the Assistant
   (see [Saved prompts](#saved-prompts)).
-- **Recent** is the **Recently closed (n)** link under the session list (see
+- **Recent** is the **Recently closed** link under the session list (see
   [Recently closed](#recently-closed)).
 - **Command** is the magnifier icon.
 
@@ -797,7 +797,7 @@ see [To-do](#to-do)), the **Prompts** bar (your saved prompts, one click from an
 session — see [Saved prompts](#saved-prompts)), the **Tickets** bar (pipeline on/off switch and state dot;
 it appears once a ticket source is connected), the **Pull requests** and
 **Issues** bars, and one bar per extension. Under the
-list, a **Recently closed (n)** link shows once anything is closed (see
+list, a **Recently closed** link shows once anything is closed (see
 [Recently closed](#recently-closed)). Below: **View** **Auto** · **1** · **2** ·
 **4** · **9** (one button per grid size, the active one filled), the session
 count, **⚙ Customize** (see [Customize](#customize)) and **⌨ Shortcuts**. The command
@@ -1760,7 +1760,7 @@ first, on a strip under the row: *Close session? Its N uncommitted changes
 stay in its folder — reopen it from Recently closed.* **Close session** /
 **Cancel** (focus on Cancel). The Close toast carries an **Undo** button:
 *Closed “<name>”* **Undo** (its tooltip names the shortcut, Ctrl+Shift+T) —
-pressing it reopens exactly that session, and **Recently closed (n)** refreshes
+pressing it reopens exactly that session, and **Recently closed** refreshes
 on the close and on the undo. Only the button reopens; a click on the rest of
 the toast does nothing, and the toast stays up while the pointer is on it or
 the button has focus. (The toast helper takes an optional
@@ -4395,7 +4395,7 @@ One page for closed sessions **and** what they left on disk. "Workspaces on
 disk" used to be a second, near-identical list of the same directories seen from
 the other end, so the two were folded together: *can I have this work back* and
 *can I have this disk back* are the same question about the same directory.
-Opened from the **Recently closed (n)** link under the session list, which
+Opened from the **Recently closed** link under the session list, which
 shows only while there is something to list (it shares the `recently-closed`
 query Verify uses, and refreshes when a session is deleted) or from the
 palette's **Recently closed…**; `Ctrl+Shift+T` / `Ctrl+Z` reopen the last one

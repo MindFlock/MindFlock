@@ -73982,17 +73982,13 @@ function Sidebar({ onOpenChat }) {
 								]
 							})]
 						}),
-						closedCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						closedCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							id: "recent-btn",
 							className: "foot-link recent-link",
 							title: "Reopen closed sessions or clear what they left on disk (Ctrl+Shift+T reopens the last one)",
 							onClick: () => ui.openDialogFor("recent"),
-							children: [
-								"Recently closed (",
-								closedCount,
-								")"
-							]
+							children: "Recently closed"
 						})
 					]
 				}, SESSIONS_KEY);

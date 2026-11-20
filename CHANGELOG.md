@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Recently closed keeps every closed session**, not only the newest 50,
+  until you reopen or forget it. Its link under the session list no longer
+  shows a count.
+
 ## [0.14.22] - 2026-11-19
 
 ### Added

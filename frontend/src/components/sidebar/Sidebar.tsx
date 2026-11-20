@@ -2,7 +2,7 @@
  * 040-sidebar.html): doctor-warn chip, the movable bars (Usage, Tickets, Pull
  * requests, Issues, Verify, Assistant — each hideable in Customize → Sidebar),
  * the addon-bars mount, filter, bulk bar, device-grouped session list with its
- * "Recently closed (n)" link, and the footer (view picker + count + Customize
+ * "Recently closed" link, and the footer (view picker + count + Customize
  * + Shortcuts). */
 
 import { MemoryWaitBar } from "./MemoryWaitBar";
@@ -216,7 +216,7 @@ export function Sidebar({ onOpenChat }: Props) {
   const { data: config } = useConfig();
   const { data: setup } = useSetup();
   const qc = useQueryClient();
-  // "Recently closed (n)" under the list: the same key and endpoint the Verify
+  // "Recently closed" under the list: the same key and endpoint the Verify
   // dialog reads, so a reopen/forget that invalidates one refreshes both.
   const { data: closed } = useQuery({
     queryKey: ["recently-closed"],
@@ -800,7 +800,7 @@ export function Sidebar({ onOpenChat }: Props) {
                   title="Reopen closed sessions or clear what they left on disk (Ctrl+Shift+T reopens the last one)"
                   onClick={() => ui.openDialogFor("recent")}
                 >
-                  Recently closed ({closedCount})
+                  Recently closed
                 </button>
               )}
             </div>
