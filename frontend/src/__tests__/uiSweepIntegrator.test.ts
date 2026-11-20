@@ -76,3 +76,23 @@ describe("the chat pill opens the chat by hand", () => {
     expect(src).not.toMatch(/\bopenChat\(title\)/);
   });
 });
+
+describe("Edit its stops reaches the floating palette too", () => {
+  it("SkyView hands editPlan to the palette, which passes it to the catalog body", () => {
+    const pal = code("components/flights/SkyPalette.tsx");
+    expect(pal).toContain("onEditPlan?(plan: FlightPlan): void;");
+    expect(pal).toContain("onEditPlan={onEditPlan}");
+    const sky = code("components/flights/SkyView.tsx");
+    const at = sky.indexOf("<SkyPalette");
+    expect(sky.slice(at, sky.indexOf("/>", at))).toContain("onEditPlan={(plan) => void editPlan(plan)}");
+  });
+});
+
+describe("a stops-only route's group save says what every save says", () => {
+  it("savedWords, not 'on the shelf'", () => {
+    const src = code("components/flights/useGroundedLine.tsx");
+    expect(src).toContain("toast(savedWords(saved?.name || name, !!plan.id))");
+    expect(src).not.toContain("” on the shelf\"");
+    expect(src).toContain('"Saving the route failed: "');
+  });
+});

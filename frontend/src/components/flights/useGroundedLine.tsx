@@ -17,7 +17,7 @@ import { collapseGroups, drawnCanvas, findNode, firstStepOf, loopSlotAfter, loop
 import { errMsg } from "../../lib/format";
 import { controlFlight, dropGroup, dropStop, moveStop, patchStop, patchStopGroup, saveStop, savePlan, setHalt, stepDone, stepFix, stepRetry, stepSkip, tackOn, tackOnParallel, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
 import { undoAt } from "../../lib/skySelect";
-import { groundedDiagram, isFreeRun, perchWhy } from "../../lib/groundedLines";
+import { groundedDiagram, isFreeRun, perchWhy, savedWords } from "../../lib/groundedLines";
 import { atHaltPoint } from "../../lib/flightDiagram";
 import { canFixStep } from "./FlightStrip";
 import { askOffers, flightAsk, type StopAsk } from "../../lib/stopAsks";
@@ -333,9 +333,10 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
             const plan = shelfPlanFor(name, g.steps, g.plan_id, plans);
             try {
               const saved = await savePlan(plan);
-              toast((plan.id ? "Updated “" : "Saved “") + (saved?.name || name) + "” on the shelf");
+              // The same words as every other save of stops as a route.
+              toast(savedWords(saved?.name || name, !!plan.id));
             } catch (err) {
-              toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+              toast("Saving the route failed: " + errMsg(err), { error: true });
             }
           })
         }
