@@ -68,3 +68,11 @@ describe("Intake's own tabs say when refreshing has backed off", () => {
     expect(code(file)).toContain(`stalled={${q}.stalled}`);
   });
 });
+
+describe("the chat pill opens the chat by hand", () => {
+  it("so its card takes the cursor, like the launcher", () => {
+    const src = code("components/presence/GuestPill.tsx");
+    expect(src).toContain("openChatByHand(title)");
+    expect(src).not.toMatch(/\bopenChat\(title\)/);
+  });
+});
