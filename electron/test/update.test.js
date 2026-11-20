@@ -128,12 +128,15 @@ test('the skew guard never downgrades and never stays silent', () => {
   assert.match(plan, /not downgraded/)
   const check = fn('async function checkEngineVersion')
   assert.match(check, /if \(skew\.appUpdate\) \{ pushUpdateToRenderer\(\); return \}/)
-  assert.match(check, /if \(skewChanged\) pushEngineNotice\(\)/)
+  // With no app release out there is nothing to click: logged, not toasted
+  // (nobody is nagged about what they can't act on).
+  assert.ok(!/if \(skewChanged\) pushEngineNotice\(\)/.test(check))
+  assert.match(fn('function pushEngineNotice'), /const notice = engineNotice && offerEngine\(engineNotice\) \? engineNotice : null/)
   // ...and a skipped app release never hides an engine-behind-latest toast
   assert.match(check, /fall through so that toast is\n/)
   // The app toast shows the reason; the renderer draws the one-liner.
   assert.match(mainJs, /skew: engineSkew && engineSkew\.appUpdate \? engineSkew\.message : ''/)
-  assert.match(mainJs, /if \(info\.kind === 'skew'\) return showSkew\(info\);/)
+  assert.ok(!/showSkew/.test(mainJs))
   assert.ok(!/\(unsigned, no-auto-update\)/.test(mainJs))
 })
 

@@ -182,20 +182,102 @@ function workingCount (rows) {
 
 // The one-line "what happened" notice after an update, or null. `rec` is what
 // main.js persisted before the swap ({ kind, to, from, auto }); `running` is
-// the version now running — an app swap that didn't land says nothing.
+// the version now running — an app swap that didn't land says nothing. One
+// plain line whatever moved (the app, the engine, or both): the person sees
+// MindFlock, not its parts.
 function updatedNotice (rec, running) {
   if (!rec || !rec.to) return null
   if (rec.kind === 'app' && cmpVersion(running, rec.to) < 0) return null
-  const what = rec.kind === 'engine' ? 'the MindFlock engine' : 'MindFlock'
   return {
     version: String(rec.to),
     auto: !!rec.auto,
-    message: 'Updated ' + what + ' to ' + rec.to +
-      (rec.auto ? ' while you were away.' : '.'),
+    message: 'Updated to MindFlock ' + rec.to + '.',
   }
+}
+
+// ---------------------------------------------------------------------------
+// The update mode: ONE setting, kept by the server (`updates.mode`, read from
+// GET /api/update/check as `mode` / `mode_set` / `managed_by_shell`).
+//   auto  install by itself (here: autoUpdateVerdict decides when)
+//   ask   offer it: one toast, one click
+//   off   no checks, no toasts
+const MODES = ['auto', 'ask', 'off']
+function validMode (m) { return MODES.indexOf(m) !== -1 }
+
+// Today's behaviour, before the server knew about a mode: the shell's own
+// `autoUpdate` switch in update-state.json, ON unless turned off.
+function legacyMode (store) {
+  return (store || {}).autoUpdate === false ? 'ask' : 'auto'
+}
+
+// The mode the shell acts on. `server` is the last /api/update/check answer
+// (null while none has come back); `store` is update-state.json.
+//   - the server answered with a mode            -> that mode
+//   - the server answered WITHOUT one (an older  -> exactly today's switch
+//     engine)
+//   - no answer yet (server down / booting)      -> the mode cached from the
+//                                                   last answer, else today's
+function resolveMode (server, store) {
+  const st = store || {}
+  if (server) return validMode(server.mode) ? server.mode : legacyMode(st)
+  return validMode(st.mode) ? st.mode : legacyMode(st)
+}
+
+// The one-time move of the shell's own switch onto the server: the mode to
+// POST, or '' for none. Only while the server says nobody chose a mode yet
+// (`mode_set: false`), and only once (`modeMigrated`). An explicit switch
+// carries over as it was (on -> auto, off -> ask). No switch at all was ON
+// by default in the desktop app, so a shell that manages its engine keeps
+// automatic updates; a server that drives itself (a development checkout
+// under this window) is not switched to auto by a default nobody chose.
+function modeToMigrate (server, store) {
+  const s = server || {}
+  const st = store || {}
+  if (!validMode(s.mode) || s.mode_set !== false || st.modeMigrated) return ''
+  if (st.autoUpdate === true) return 'auto'
+  if (st.autoUpdate === false) return 'ask'
+  return s.managed_by_shell === true ? 'auto' : ''
+}
+
+// What the old "Install updates automatically" switch (update:set-auto) means
+// now that the mode has three values: on -> auto; off -> ask when it was
+// auto, otherwise unchanged (turning auto off must not undo an explicit off).
+function modeForSwitch (on, current) {
+  if (on) return 'auto'
+  return current === 'auto' || !validMode(current) ? 'ask' : current
+}
+
+// Should the shell show its "update available" toast (app or engine) for
+// `version`? `mode` is resolveMode's; `canAuto` whether the automatic path can
+// install it here at all; `tried` the versions auto-attempted this run.
+//   off  -> never
+//   ask  -> yes
+//   auto -> only when it can't install itself (the updater can't swap the app
+//           here) or already tried and didn't finish: then the person is the
+//           only way it lands. Otherwise they hear about it once, after.
+function offerToast (o) {
+  const s = o || {}
+  if (s.mode === 'off') return false
+  if (s.mode !== 'auto') return true
+  if (!s.canAuto) return true
+  return (s.tried || []).map(String).indexOf(String(s.version || '')) !== -1
+}
+
+// The local server's port, from the URL the window loads: the one every local
+// request of the update code (and the launcher's probe) must use. An explicit
+// port wins; a local URL without one is the scheme's default; anything else
+// is the engine's default, 8765.
+function localPort (url) {
+  let u
+  try { u = new URL(String(url)) } catch (e) { return 8765 }
+  if (u.port) return Number(u.port)
+  const local = ['localhost', '127.0.0.1', '[::1]'].indexOf(u.hostname) !== -1
+  if (!local) return 8765
+  return u.protocol === 'https:' ? 443 : 80
 }
 
 module.exports = {
   cmpVersion, versionSkew, skewNotice, runState,
   autoUpdateVerdict, workingCount, updatedNotice, AUTO_IDLE_SEC, AUTO_WORKING_CAP_MS,
+  MODES, resolveMode, legacyMode, modeToMigrate, modeForSwitch, offerToast, localPort,
 }
