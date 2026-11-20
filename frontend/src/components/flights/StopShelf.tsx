@@ -38,7 +38,7 @@
 
 import { useEffect, useRef, useState, type DragEvent, type JSX, type KeyboardEvent, type MouseEvent } from "react";
 import type { FlightPlan, StepKindDef } from "../../lib/flights";
-import { deletePlan, resetPlan } from "../../lib/flightsApi";
+import { deletePlan } from "../../lib/flightsApi";
 import { useClickOrDouble } from "../../lib/clickOrDouble";
 import { NEW_SESSION_MIME } from "../../lib/skyLayout";
 import { checkRename, planDots, savedStopOrder } from "../../lib/groundedLines";
@@ -49,7 +49,7 @@ import { useFlightKinds, useFlightPlans } from "../../state/queries";
 import { InlineConfirm } from "../InlineConfirm";
 import { StopIcon } from "./Bird";
 import { kindName } from "./StopParts";
-import { PlanNameField, StopCatalog } from "./StopCatalog";
+import { PlanNameField, StopCatalog, resetSavedRoute } from "./StopCatalog";
 import { TakeoffDialog } from "./TakeoffDialog";
 import "./StopMenu.css";
 import "./StopShelf.css";
@@ -362,14 +362,7 @@ export function useSavedActions(changeShelf: (next: (p: ShelfPick) => ShelfPick)
     else if (key === "unshelve") changeShelf((p) => toggleShelf(p, { planId: plan.id }));
     else if (key === "takeoff") setTakeoff(plan);
     else if (key === "delete") setDeleting(plan);
-    else if (key === "reset") {
-      try {
-        await resetPlan(plan.id);
-        toast("“" + plan.name + "” is back to its default");
-      } catch (e) {
-        toast("Reset failed: " + errMsg(e), { error: true });
-      }
-    }
+    else if (key === "reset") await resetSavedRoute(plan);
   };
 
   const remove = async () => {
@@ -655,6 +648,15 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
           onClose={() => setCatalog(false)}
           shelf={(d) => onShelf(shelf, d)}
           onShelfToggle={(d) => changeShelf((p) => toggleShelf(p, d))}
+          // The copy lands on the Sky: the catalog makes way for it.
+          onEditPlan={
+            onEditPlan
+              ? (plan) => {
+                  setCatalog(false);
+                  onEditPlan(plan);
+                }
+              : undefined
+          }
         />
       )}
     </section>

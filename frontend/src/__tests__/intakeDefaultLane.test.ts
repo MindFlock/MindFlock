@@ -198,9 +198,11 @@ describe("the editor route", () => {
     const src = code("components/flights/GroundedLine.tsx");
     expect(src).toContain("const run = chainRunFor(flight, head.kind, () => ({");
     expect(src).toContain('...(ed ? [] : [{ key: "fly", label: "Run on a session…"');
-    // Its ⋯ Remove (and Delete) discards: the default stays as it was.
+    // Its ⋯ Remove (and Delete) discards: the default stays as it was, and
+    // Undo brings the editor back (the plain Remove path, edits_default kept).
     expect(src).toContain('{ key: "remove", label: "Discard", danger: true');
-    expect(src).toContain("if (ed) return discard();");
+    expect(src).toContain("onSelect: () => void remove() }");
+    expect(src).not.toContain("discard()");
     // A plain grounded chain still has its ▶.
     const plain = render(flight());
     expect(plain).not.toContain("is-default-editor");
@@ -218,7 +220,8 @@ describe("the editor route", () => {
     expect(src).toContain("action: undoAction(entry,");
     expect(src).toContain("onClick={() => void writeDefault(false)}");
     expect(src).toContain("onClick={() => void writeDefault(true)}");
-    expect(src).toContain("onClick={() => void discard()}");
+    expect(src).toContain('aria-label="Discard this edit"');
+    expect(src).toContain("(Ctrl+Z puts it back)\" onClick={() => void remove()}");
   });
 
   it("its stops edit as any grounded route's — the same hook, not a fork", () => {

@@ -43,7 +43,8 @@
  * steps as the source's own default (`setIntakeDefault`), **Reset to default**
  * (only while the source has its own) puts the source back on our built-in
  * stops — each takes the editor off the board with an Undo toast — and the
- * quiet **×** Discard (also ⋯, Delete) just takes it off. Its stops edit as
+ * quiet **×** Discard (also ⋯, Delete) just takes it off, with an Undo that
+ * brings the editor back as it was. Its stops edit as
  * any grounded chain's. */
 
 import { optimisticDelete } from "../../lib/flightOptimism";
@@ -51,7 +52,7 @@ import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, typ
 import type { Flight, FlightPlan, FlightStep, StepKindDef } from "../../lib/flights";
 import { birdPerch, type DiagramNode } from "../../lib/flightDiagram";
 import { chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
-import { attachGrounded, controlFlight, DEFAULT_SESSION, deleteFlight, getIntakeDefault, renameFlight, savePlan, setIntakeDefault, startGrounded } from "../../lib/flightsApi";
+import { attachGrounded, DEFAULT_SESSION, deleteFlight, getIntakeDefault, renameFlight, savePlan, setIntakeDefault, startGrounded } from "../../lib/flightsApi";
 import {
   ROUTE_EDITS_KEY,
   chainRunFor,
@@ -233,6 +234,8 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   // ⋯, and on the stop it is on Retry / Skip / Done / Carry on (FlightStrip
   // `liveBoxParts`), with the room for them (SkyChain `stopTileBoxes`).
   const cancel = useCancelAsk(running ? flight : null);
+  // ▶ pressed and the server not answered yet.
+  const [starting, setStarting] = useState(false);
   const parts = liveBoxParts(running ? flight : null, true, cancel.ask, { verifyInPlace: true, inTile: true });
   // Whether the source has its own default now (Reset to default only then),
   // and the steps it flies now — Save as default only once these differ.
@@ -323,20 +326,10 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       setBusy(false);
     }
   };
-  /** Discard: the editor leaves the board; the default stays as it was. */
-  const discard = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await optimisticDelete(flight.id, () => deleteFlight(flight.id));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Remove: at once, never asked — a grounded line has nothing in the air.
+  // Remove (an editor's Discard too): at once, never asked — a grounded line
+  // has nothing in the air — with an Undo that makes it again; a discarded
+  // editor comes back an editor, its edits with it (the host's `reground`).
   const remove = async () => {
-    if (ed) return discard();
     if (busy) return;
     if (editing) markRouteEdit(flight.id, "");
     setBusy(true);
@@ -344,7 +337,8 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       if (p.onRemove) await p.onRemove();
       else if (await optimisticDelete(flight.id, () => deleteFlight(flight.id))) {
         const steps = flight.steps;
-        const entry = pushUndo({ label: "Remove “" + name + "”", undo: () => startGrounded({ steps, ...(flight.plan_name ? { name: flight.plan_name } : {}) }) });
+        const edits_default = ed || undefined;
+        const entry = pushUndo({ label: "Remove “" + name + "”", undo: () => startGrounded({ steps, ...(flight.plan_name ? { name: flight.plan_name } : {}), ...(edits_default ? { edits_default } : {}) }) });
         toast("Removed “" + name + "”", { action: undoAction(entry, "Undo: put “" + name + "” back on the Sky") });
       }
     } finally {
@@ -371,7 +365,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     ...(ed ? [] : [{ key: "fly", label: "Run on a session…", title: "Pick a session (or a new one): these stops run in it", onSelect: p.onFlyOn }]),
     ...saveItems,
     ed
-      ? { key: "remove", label: "Discard", danger: true, className: "skl-mi-group", title: "Take this editor off the Sky — the default stops stay as they are", onSelect: () => void discard() }
+      ? { key: "remove", label: "Discard", danger: true, className: "skl-mi-group", title: "Take this editor off the Sky — the default stops stay as they are (Ctrl+Z puts it back)", onSelect: () => void remove() }
       : { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the Sky (Ctrl+Z puts them back)", onSelect: () => void remove() },
   ];
 
@@ -457,15 +451,23 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const chainMenu = useChainMenu(gc, flight.id, { steps: flight.steps, kinds: p.kinds, noSession: !flight.session });
   const onPillDown = pillAimer(graph, gc.onLoopTo);
   // No ▶ on a default-stops editor (it never runs), nor on a chain another starts.
+  // While it starts (it may make a session) the ▶ waits, "Starting…"; ■ asks
+  // "Stop this route?" first, as a session's route does.
   const run = chainRunFor(flight, head.kind, () => ({
     running,
-    label: running ? "Stop this run" : "Run these stops (⋯ Run on a session… to pick where)",
-    onRun: () =>
-      void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => {
-        if (!f) return;
-        toast(f.session ? "Running “" + name + "” in a new session, " + f.session : "Running “" + name + "”");
-      }),
-    onStop: () => void controlFlight(flight.id, "cancel"),
+    starting,
+    label: running ? "Stop this run" : starting ? "Starting…" : "Run these stops (⋯ Run on a session… to pick where)",
+    onRun: () => {
+      if (starting) return;
+      setStarting(true);
+      void attachGrounded(flight.id, { title: DEFAULT_SESSION })
+        .then((f) => {
+          if (!f) return;
+          toast(f.session ? "Running “" + name + "” in a new session, " + f.session : "Running “" + name + "”");
+        })
+        .finally(() => setStarting(false));
+    },
+    onStop: cancel.ask,
   }));
 
   return (
@@ -601,7 +603,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
                 Reset to default
               </button>
             )}
-            <button type="button" className="fl-icon-btn skl-default-discard" disabled={busy} aria-label="Discard this edit" title="Discard — take this editor off the Sky; the default stops stay as they are" onClick={() => void discard()}>
+            <button type="button" className="fl-icon-btn skl-default-discard" disabled={busy} aria-label="Discard this edit" title="Discard — take this editor off the Sky; the default stops stay as they are (Ctrl+Z puts it back)" onClick={() => void remove()}>
               ×
             </button>
           </span>

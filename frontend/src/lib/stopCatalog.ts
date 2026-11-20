@@ -267,14 +267,18 @@ export function gridMove(at: number, key: string, sizes: readonly number[], cols
  * built-in's depth cut (`builtin:ticket@push`) is virtual and can't be edited. */
 export const renamable = (plan: Pick<FlightPlan, "id">): boolean => !/^builtin:[a-z]+@/.test(plan.id);
 
-export type CardMenuKey = "rename" | "takeoff" | "shelf" | "reset" | "delete";
+export type CardMenuKey = "rename" | "edit" | "takeoff" | "shelf" | "reset" | "delete";
 
-/** A saved-stop card's ⋯: Rename (when the server allows it), Takes off…
- * (the shelf chip's, so the palette alone still reaches it), On the shelf
- * (★ when it is, ☆ when not — a toggle), then Reset to default (a built-in) or Delete (yours). */
-export function cardMenu(plan: Pick<FlightPlan, "id" | "builtin">, shelved: boolean): Array<{ key: CardMenuKey; label: string; danger?: boolean }> {
+/** A saved-stop card's ⋯: Rename (when the server allows it), Edit its stops
+ * (`opts.edit`: the host can put an editable copy on the Sky — the shelf
+ * chip's, so a saved route that isn't on the shelf can be edited too), What
+ * starts it… (the shelf chip's, so the palette alone still reaches it), On the
+ * shelf (★ when it is, ☆ when not — a toggle), then Reset to default (a
+ * built-in) or Delete (yours). */
+export function cardMenu(plan: Pick<FlightPlan, "id" | "builtin">, shelved: boolean, opts: { edit?: boolean } = {}): Array<{ key: CardMenuKey; label: string; danger?: boolean }> {
   return [
     ...(renamable(plan) ? [{ key: "rename" as const, label: "Rename" }] : []),
+    ...(opts.edit ? [{ key: "edit" as const, label: "Edit its stops" }] : []),
     { key: "takeoff", label: "What starts it…" },
     { key: "shelf", label: (shelved ? "★" : "☆") + " On the shelf" },
     plan.builtin ? { key: "reset", label: "Reset to default" } : { key: "delete", label: "Delete", danger: true },
