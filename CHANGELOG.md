@@ -85,6 +85,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Usage and Workflow windows say what went wrong.** A failed load shows
   the server's message (or "Couldn't reach MindFlock. Is it still running?")
   with a Retry, instead of always "Could not reach the server."
+- **Removals ask first, or can be undone.** Deleting a custom agent and
+  revoking a guest link ask under the row with Cancel focused, like Stop
+  sharing; removing a keep-out zone shows "Removed keep-out zone X" with Undo.
+- **Ctrl+F reaches more filters.** In Settings it jumps to the search box
+  instead of opening the browser's find bar, and the To-do window's filter
+  answers it too. Ctrl+Enter saves from any field of the template and Schedule
+  editors, as it submits New and Commit.
+- **Customize the pane header from the pane.** A pane's ⋯ has "Customize
+  header…", and the Customize button and palette mention the pane header.
+- **The cost and account chips work from the keyboard.** Tab reaches them and
+  Enter opens them; Escape closes the Usage or Memory list without leaving
+  select mode and puts focus back.
+- **The low-memory notice shows what is using memory.** "See what's using it"
+  opens the Memory list, biggest sessions first.
+- **Getting your sessions back is one paste away.** The "Your sessions aren't
+  gone" notice copies a ready command that renames the backup to state.json.
+- **The desktop window remembers its size** and position, maximized if it was,
+  unless that spot is on a monitor that is no longer connected.
+- **The desktop's startup screens have "Open log folder"**, and Settings →
+  Advanced has "Check again" when it couldn't check for engine updates.
+- **Saves report once, by the control, in more places.** Appearance's switches
+  and minutes, IDE auto-adopt, Agent MCP, the shipping-halts note and a custom
+  agent's binary path show "✓ Saved" instead of a toast, and a switch no longer
+  says "on" before its save answered.
+- **Screens that can't load say so, with Retry.** System logs, Your phone,
+  Shared link, Traffic, Custom agents, IDE and Templates say "Couldn't load …"
+  with a Retry instead of an empty list or nothing; a failed log refresh keeps
+  the last log, and Copy log copies only a real log.
+- **Verify uses your session's name**, and its Start says "Starting…" while it
+  works.
 
 ### Fixed
 
@@ -193,6 +223,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Automatic updates say when a change didn't take.** If turning auto-update
   on or off fails, the switch flips back and says why; if an update can't
   start, Update stops spinning and shows the reason.
+- **Commit keeps your message.** A failed commit is a card that stays, with
+  Edit message to reopen Commit with your text, and closing Commit with Escape,
+  Cancel or a click outside keeps what you wrote for that session.
+- **Assistant instructions can't be wiped by a failed load.** If they don't
+  load, the editor says so with a Retry and Save stays off until they do; a
+  failed restart is reported, and a click outside keeps unsaved edits.
+- **A failed send keeps you in the box** in Ask and in Verify's start form, so
+  you can fix the text and send again.
+- **Make PR and push no longer hold up other panes.** Their git and settings
+  reads run off the server's event loop, so terminal output keeps flowing.
+- **The Map no longer redraws on every hover or poll**, its find box says
+  "Searching…" until results for what you typed arrive (Enter waits for them),
+  and its legend closes on Escape or a click on the map.
+- **Your phone notices a Tailscale sign-in.** Step 1 turns ✓ and the QR shows
+  without leaving Settings → Your phone and coming back.
+- **Retrying a ticket is quick.** If filing fails after the draft was written,
+  Retry files that same draft without writing it again; a failed source list
+  has a Retry.
+- **Intake says when a list can't be read**, and stops asking every 2 seconds
+  when it can't refresh. The Auto-start tab shows "Couldn't list PRs: …" with a
+  Retry instead of "Not set up yet"; after three stale answers in a row a list
+  checks every 15 s and says "Couldn't refresh · Retry". Refresh during a
+  background reload now really fetches a new list, and says "Refreshing…".
+- **An epic's Start switches to "Open lead" at once**, so a second click can't
+  start it twice.
+- **A failed extension window can try again**, with a link to Settings →
+  Extensions, instead of needing a page reload.
+- **Database filters keep the cursor while the table reloads**, and CSV/JSON
+  export can't run twice at once.
+- **To-do keeps your text.** "Details…" no longer loses the quick-add text if
+  you close the dialog without adding.
+- **Hidden windows poll less.** The answer strip and the shared-link, guest-link
+  and device-join checks in Settings rest while the window is hidden.
+- **The phone says what it is doing.** Its Diff tab clears the old diff and says
+  "Loading diff…", Reopen reads "Reopening…", and the ask sheet and update
+  banner say "Couldn't reach MindFlock" instead of "Load failed".
 
 ## [0.14.21] - 2026-11-19
 
