@@ -3996,7 +3996,9 @@ from, one click from going back to it. It is the built-in **To-do extension**
   at once.
 - **Open** opens the **To-do window** — a grid window like a session's
   (it sits in the rail's window list, drags and closes like any other) with the
-  list, priorities, reorder, details per entry and the history. **Add** opens
+  list, priorities, reorder, details per entry and the history. `Ctrl+F` in it
+  jumps to its filter, and **Details…** carries the quick-add text into the Add
+  dialog without clearing it until the item is added. **Add** opens
   the quick-add dialog. Both are also in the command palette (*To-do: Open the
   list*, *To-do: Add an item*), and the voice assistant's *open To-do* opens the
   window.
@@ -4977,7 +4979,9 @@ list says so in its own group. Each row is the epic's name (a link to the
 tracker), its state and how many of your stories are still to do, its labels,
 then a chip — **auto-starts** (in an auto-start state, label OK, auto-start on),
 **lead running**, or the reasons it won't start by itself — and **Start** (one
-lead session per epic, a worker and a PR per story) or **Open lead ›**. With no
+lead session per epic, a worker and a PR per story) or **Open lead ›**, which
+replaces Start as soon as the start answers (a failed one reads *Start failed —
+<epic>*, as tickets do). With no
 epics-capable source at all the panel says epics come from a Shortcut source and
 links to Tickets. The tab's badge counts the epics auto-start would take
 (eligible, no lead yet), read from the same query as the list (`intake/epics.ts`
@@ -5718,7 +5722,9 @@ Opening the Intake dialog **prefetches all three**
 what fills the tab strip's counts, which read the same cached query the tab does
 and therefore can never disagree with the list underneath.
 **Refresh** sends `?fresh=1`, which skips the server's cache and waits for a real
-sweep, so the click means what it says. A force-start row action deliberately
+sweep, so the click means what it says: a poll already in flight is cancelled
+first (otherwise the click would only wait on it), and the button reads
+*Refreshing…*, disabled, until the new list is in. A force-start row action deliberately
 does *not*: it re-lists from the cache a few seconds later, because `has_session`
 is annotated live on every response — even a cached one — so the cheap re-list
 already shows the session it just created.
@@ -5734,6 +5740,11 @@ Two consequences worth knowing:
   fan-outs even if you only glance at the counts — and an integration that isn't
   configured yet will have its `Could not list …` error ready the moment you
   first open that tab.
+- A stale answer brings the panel back for the fresh copy after 2 s; after three
+  stale (or failed) answers in a row it waits 15 s between asks instead, and the
+  list says *Couldn't refresh · Retry* until a fresh answer arrives. The
+  Auto-start tab shows a section's failure (*Couldn't list PRs: …*, with Retry)
+  rather than *Not set up yet* or *Nothing waiting*.
 
 ## Customize
 
