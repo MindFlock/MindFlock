@@ -15,13 +15,23 @@ import type { UsageRowData } from "./usageModel";
 // the outside-click listener can't do it; this module-level latch can.
 let closeCurrent: (() => void) | null = null;
 
+/** Whether Escape should put focus back on the opener: focus is in the pop,
+ * on the opener, or nowhere (the body). Exported for tests. */
+export function escapeRefocus(active: Element | null, pop: Element | null, anchor: Element): boolean {
+  if (!active || active === anchor) return true;
+  if (pop && pop.contains(active)) return true;
+  return active.tagName === "BODY";
+}
+
 export interface UsagePopoverProps {
   anchor: HTMLElement;
   onClose: () => void;
   children: ReactNode;
+  /** An extra class on the pop (one opened over a notice rides above it). */
+  className?: string;
 }
 
-export function UsagePopover({ anchor, onClose, children }: UsagePopoverProps) {
+export function UsagePopover({ anchor, onClose, children, className }: UsagePopoverProps) {
   const popRef = useRef<HTMLDivElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -71,7 +81,14 @@ export function UsagePopover({ anchor, onClose, children }: UsagePopoverProps) {
       onCloseRef.current();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseRef.current();
+      if (e.key !== "Escape") return;
+      // Claimed: the bulk bar's Escape (sidebar/BulkBar) skips a handled
+      // key, so closing this doesn't also end select mode.
+      e.preventDefault();
+      // Focus in the pop (or on the opener, or nowhere) goes back to the
+      // opener; focus somewhere else (a terminal) stays where it is.
+      if (escapeRefocus(document.activeElement, popRef.current, anchor)) anchor.focus();
+      onCloseRef.current();
     };
     const close = () => onCloseRef.current();
     document.addEventListener("click", onDocClick);
@@ -87,7 +104,7 @@ export function UsagePopover({ anchor, onClose, children }: UsagePopoverProps) {
   }, [anchor]);
 
   return createPortal(
-    <div ref={popRef} className="usage-pop" style={{ top: 0, left: 0 }}>
+    <div ref={popRef} className={"usage-pop" + (className ? " " + className : "")} style={{ top: 0, left: 0 }}>
       {children}
     </div>,
     document.body,

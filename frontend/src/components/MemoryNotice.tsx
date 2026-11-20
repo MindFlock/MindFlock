@@ -14,8 +14,10 @@
  * "Hide" lasts until the level gets WORSE (low → critical) or clears and
  * comes back: a hidden "low" must not swallow the "critical" that follows. */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMemory, useSlots } from "../state/queries";
+import { useUi } from "../state/store";
+import { MemoryPopAt, memoryRowShown } from "./usage/OverallMemory";
 import type { MemoryReading, SlotJob, SlotsReading } from "../api/types";
 import { FREE_MEMORY_HINT, SLOW_SESSIONS_LINE } from "../lib/memorySlow";
 
@@ -102,12 +104,18 @@ export function MemoryNotice() {
   const { data, isError } = useMemory();
   // The level the user hid it at; 0 = not hidden.
   const [hiddenAt, setHiddenAt] = useState(0);
+  // "See what's using it" with the sidebar's Memory row off screen: the same
+  // popover, at this button.
+  const seeRef = useRef<HTMLButtonElement | null>(null);
+  const [popHere, setPopHere] = useState(false);
   const rank = RANK[data?.level || "ok"] ?? 0;
   const shown = !!data && !isError && rank > 0 && !(hiddenAt && rank <= hiddenAt);
   // Only while the card is up: the slots are context for low memory.
   const { data: slots } = useSlots(shown);
   // Cleared (or worsened past what was hidden): forget the hide.
   if (hiddenAt && (rank === 0 || rank > hiddenAt)) setHiddenAt(0);
+  // The card went away (hidden, or memory recovered): its popover goes too.
+  if (!shown && popHere) setPopHere(false);
   if (!data || !shown) return null;
   const heavy = slotsLine(slots);
 
@@ -135,10 +143,26 @@ export function MemoryNotice() {
         {critical ? " The system may start killing agents soon." : ""}
       </div>
       <div className="mn-foot">
+        <button
+          type="button"
+          ref={seeRef}
+          className="linklike mn-see"
+          title="Sessions and other processes, biggest first"
+          onClick={(ev) => {
+            // the popover's outside-click close must not see this click
+            ev.stopPropagation();
+            const ui = useUi.getState();
+            if (memoryRowShown(ui.sidebarHidden, document.getElementById("overall-memory"))) ui.askMemoryPop();
+            else setPopHere((o) => !o);
+          }}
+        >
+          See what&apos;s using it
+        </button>
         <button type="button" className="mn-btn" onClick={() => setHiddenAt(rank)}>
           Hide
         </button>
       </div>
+      {popHere && seeRef.current && <MemoryPopAt anchor={seeRef.current} className="mem-pop-over-notice" onClose={() => setPopHere(false)} />}
     </div>
   );
 }

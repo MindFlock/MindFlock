@@ -4,9 +4,13 @@
  * sessions biggest first (a click opens one, as its rail row does), the
  * processes "Outside MindFlock", and a last-hour sparkline. Its own bar
  * key ("memory" in sidebar/barDefs) so Customize hides it like Usage.
- * The model is pure in ./memoryModel. */
+ * The model is pure in ./memoryModel.
+ *
+ * The low-memory notice's "See what's using it" opens the same popover:
+ * through the store (askMemoryPop) on this row when the row is on screen,
+ * else anchored at the notice's own button (MemoryPopAt). */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMemory, useMemoryDetail, useMemoryHistory } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
@@ -69,14 +73,14 @@ function BarRows({ rows, onPick }: { rows: MemoryPopRow[]; onPick?: (title: stri
   );
 }
 
-export function OverallMemory() {
-  const sidebarHidden = useUi((s) => s.sidebarHidden);
+/** The numbers behind the row and its popover: the machine (detail, else the
+ * notice's reading), the reasons, and — while open — the popover's model and
+ * last-hour sparkline. `detailOn` polls /api/memory. */
+function useMemoryPopData(open: boolean, detailOn: boolean) {
   const aliases = useUi((s) => s.aliases);
-  const btnRef = useRef<HTMLButtonElement | null>(null);
-  const [open, setOpen] = useState(false);
-  // /api/memory polls only while the sidebar shows; /api/system/memory is
-  // the memory notice's own query (always on), reused as the fallback.
-  const detailQ = useMemoryDetail(!sidebarHidden);
+  // /api/memory polls only while asked to; /api/system/memory is the memory
+  // notice's own query (always on), reused as the fallback.
+  const detailQ = useMemoryDetail(detailOn);
   const { data: reading } = useMemory();
   const detail = detailQ.isError ? null : detailQ.data ?? null;
   const { data: hist } = useMemoryHistory(open && !!detail);
@@ -92,8 +96,6 @@ export function OverallMemory() {
     () => ({ gate: gateWhy(reading?.gate), reasons: memoryReasons(reading) }),
     [reading],
   );
-  const { head, title, share } = memoryRowText(machine, ctx);
-  const tone = memoryRowTone(machine.level);
   const model = useMemo(
     () => (open ? memoryPopModel(detail, machine, aliases, ctx) : null),
     [open, detail, machine, aliases, ctx],
@@ -102,18 +104,111 @@ export function OverallMemory() {
     () => (open && hist ? sparkPoints(hist.samples, SPARK_W, SPARK_H) : null),
     [open, hist],
   );
+  return { detailQ, machine, ctx, model, spark };
+}
+
+/** Pick a session from the popover: what a rail row's click does
+ * (SidebarRow reselect) — focus it, and on a narrow window close the sidebar
+ * overlay over it. */
+function pickSession(t: string) {
+  selectSession(t);
+  const ui = useUi.getState();
+  if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
+}
+
+/** The popover's inside: the machine, the sparkline, the sessions biggest
+ * first, the processes outside MindFlock. */
+function MemoryPopBody({ model, spark, onPick }: {
+  model: NonNullable<ReturnType<typeof useMemoryPopData>["model"]>;
+  spark: ReturnType<typeof useMemoryPopData>["spark"];
+  onPick: (title: string) => void;
+}) {
+  return (
+    <>
+      <div className={"usage-pop-head" + (model.tone ? " mem-" + model.tone : "")}>This machine</div>
+      <UsagePopTable rows={model.machine} />
+      {spark && (
+        <div className="mem-spark" title={"Memory in use over the last hour — now " + fmtMb(spark.lastUsedMb) + " of " + fmtMb(spark.totalMb)}>
+          <svg
+            viewBox={`0 0 ${SPARK_W} ${SPARK_H}`}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label="Memory in use over the last hour"
+          >
+            <polyline points={spark.points} fill="none" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <span className="mem-spark-cap">last hour</span>
+        </div>
+      )}
+      {model.sessions.length > 0 && (
+        <>
+          <div className="usage-pop-head mem-pop-sec">Sessions</div>
+          <BarRows rows={model.sessions} onPick={onPick} />
+        </>
+      )}
+      {model.others.length > 0 && (
+        <>
+          <div className="usage-pop-head mem-pop-sec">Outside MindFlock</div>
+          <BarRows rows={model.others} />
+        </>
+      )}
+      <UsagePopNote
+        text={
+          model.machineOnly
+            ? "This server reports the machine only — update MindFlock to see what each session holds."
+            : "Each session counts its whole process tree (agent, MCP servers, tests), sampled every 15 s."
+        }
+      />
+    </>
+  );
+}
+
+/** Whether the sidebar's Memory row is on screen to open its popover from:
+ * the sidebar shows, and the row is drawn (Customize can hide the bar). */
+export function memoryRowShown(sidebarHidden: boolean, row: HTMLElement | null): boolean {
+  return !sidebarHidden && !!row && row.offsetParent !== null;
+}
+
+/** The Memory popover anchored somewhere else (the low-memory notice's
+ * button), for when the sidebar's row is not on screen. */
+export function MemoryPopAt({ anchor, className, onClose }: { anchor: HTMLElement; className?: string; onClose: () => void }) {
+  const { model, spark } = useMemoryPopData(true, true);
+  if (!model) return null;
+  return (
+    <UsagePopover anchor={anchor} className={className} onClose={onClose}>
+      <MemoryPopBody
+        model={model}
+        spark={spark}
+        onPick={(t) => {
+          pickSession(t);
+          onClose();
+        }}
+      />
+    </UsagePopover>
+  );
+}
+
+export function OverallMemory() {
+  const sidebarHidden = useUi((s) => s.sidebarHidden);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const { detailQ, machine, ctx, model, spark } = useMemoryPopData(open, !sidebarHidden);
+  const { head, title, share } = memoryRowText(machine, ctx);
+  const tone = memoryRowTone(machine.level);
+
+  // Asked from elsewhere (the low-memory notice): open, with fresh numbers.
+  const ask = useUi((s) => s.memoryPopAsk);
+  const seenAsk = useRef(ask);
+  useEffect(() => {
+    if (ask === seenAsk.current) return;
+    seenAsk.current = ask;
+    setOpen(true);
+    if (!sidebarHidden) void detailQ.refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask]);
 
   // Nothing measured at all (no /proc/meminfo, server down): no row.
   if (machine.totalMb == null) return null;
-
-  const pick = (t: string) => {
-    // What a rail row's click does (SidebarRow reselect): focus it, and on a
-    // narrow window close the sidebar overlay over it.
-    selectSession(t);
-    const ui = useUi.getState();
-    if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
-    setOpen(false);
-  };
 
   return (
     <>
@@ -142,39 +237,13 @@ export function OverallMemory() {
       </button>
       {open && btnRef.current && model && (
         <UsagePopover anchor={btnRef.current} onClose={() => setOpen(false)}>
-          <div className={"usage-pop-head" + (model.tone ? " mem-" + model.tone : "")}>This machine</div>
-          <UsagePopTable rows={model.machine} />
-          {spark && (
-            <div className="mem-spark" title={"Memory in use over the last hour — now " + fmtMb(spark.lastUsedMb) + " of " + fmtMb(spark.totalMb)}>
-              <svg
-                viewBox={`0 0 ${SPARK_W} ${SPARK_H}`}
-                preserveAspectRatio="none"
-                role="img"
-                aria-label="Memory in use over the last hour"
-              >
-                <polyline points={spark.points} fill="none" vectorEffect="non-scaling-stroke" />
-              </svg>
-              <span className="mem-spark-cap">last hour</span>
-            </div>
-          )}
-          {model.sessions.length > 0 && (
-            <>
-              <div className="usage-pop-head mem-pop-sec">Sessions</div>
-              <BarRows rows={model.sessions} onPick={pick} />
-            </>
-          )}
-          {model.others.length > 0 && (
-            <>
-              <div className="usage-pop-head mem-pop-sec">Outside MindFlock</div>
-              <BarRows rows={model.others} />
-            </>
-          )}
-          <UsagePopNote
-            text={
-              model.machineOnly
-                ? "This server reports the machine only — update MindFlock to see what each session holds."
-                : "Each session counts its whole process tree (agent, MCP servers, tests), sampled every 15 s."
-            }
+          <MemoryPopBody
+            model={model}
+            spark={spark}
+            onPick={(t) => {
+              pickSession(t);
+              setOpen(false);
+            }}
           />
         </UsagePopover>
       )}

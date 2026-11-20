@@ -16,7 +16,7 @@
  *   More ▸   the rare ones, folded: Terminal, Diff, Code map, Thread, Browse
  *            history, Copy entire history (pane only), Duplicate, Open in the IDE,
  *            Open preview, Select, Hide window, Move out of a group, Re-run
- *            worktree setup, Copy folder path
+ *            worktree setup, Copy folder path, Customize header… (pane only)
  *   Danger   Close, Delete…
  *
  * A group with nothing in it is left out. A pane passes what its own header
@@ -90,7 +90,9 @@ export interface SessionMenuModel {
 }
 
 export interface SessionMenuOpts {
-  /** Tabs the pane header already shows: their openers are left out. */
+  /** Tabs the pane header already shows: their openers are left out. Only a
+   * pane passes it (an empty list included), so it also marks a pane's menu:
+   * that one ends in "Customize header…". */
   visibleTabs?: string[];
   /** Pane-only: open the history view. */
   onHistory?: () => void;
@@ -408,6 +410,18 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
         copyText(folder).then((ok) => {
           if (ok) toast("Copied path");
         }),
+    },
+    // A pane's own: Customize opened on its Pane header page (what Customize's
+    // intro points at), the way the footer's ⚙ Customize opens it.
+    !!opts.visibleTabs && {
+      key: "customize-header",
+      label: "Customize header…",
+      title: "Choose what a pane's header shows: tabs, chips, the next step",
+      run: () => {
+        const ui = useUi.getState();
+        ui.setCustomizePage("pane");
+        ui.openDialogFor("customize");
+      },
     },
   ]);
 

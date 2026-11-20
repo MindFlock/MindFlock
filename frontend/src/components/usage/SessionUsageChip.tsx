@@ -15,7 +15,7 @@ export interface SessionUsageChipProps {
 }
 
 export function SessionUsageChip({ inst }: SessionUsageChipProps) {
-  const chipRef = useRef<HTMLSpanElement | null>(null);
+  const chipRef = useRef<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
   // Plan-vs-metered picks the cost row's label ("≈ API-equiv. cost" on a
   // subscription); shared 60s-polled query, same cadence as the vanilla cache.
@@ -30,10 +30,14 @@ export function SessionUsageChip({ inst }: SessionUsageChipProps) {
   const head = usageHeadParts(inst);
   return (
     <>
-      <span
+      {/* A button, so Tab reaches it and Enter opens the breakdown
+          (usage.css resets its look to the plain chip). */}
+      <button
+        type="button"
         ref={chipRef}
         className="tok usage-trigger"
         title="Session cost & tokens — click for the breakdown"
+        aria-expanded={open}
         onClick={(ev) => {
           ev.stopPropagation();
           setOpen((o) => !o);
@@ -45,7 +49,7 @@ export function SessionUsageChip({ inst }: SessionUsageChipProps) {
           {head.ctx && <span className="uh-ctx"> · {head.ctx}</span>}
         </span>
         <span className="caret">▾</span>
-      </span>
+      </button>
       {open && chipRef.current && (
         <UsagePopover anchor={chipRef.current} onClose={() => setOpen(false)}>
           <div className="usage-pop-head">

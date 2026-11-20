@@ -22,11 +22,22 @@ function Glyph({ kind }: { kind: string }) {
   );
 }
 
+/** What the list under the box says: "searching" while its rows answer an older query than the one typed (the
+ * debounce, a request in flight) — never "No matches." for a query nobody has asked yet, and Enter waits —
+ * else "error", "empty" or "rows". Exported for tests. */
+export function listState(boxQ: string, ansQ: string, n: number, err: string): "searching" | "error" | "empty" | "rows" {
+  if (boxQ.trim() !== ansQ) return "searching";
+  if (err) return "error";
+  return n ? "rows" : "empty";
+}
+
 export const SearchBox = forwardRef<HTMLInputElement, { title: string; onPick: (it: SearchItem) => void }>(
   function SearchBox({ title, onPick }, ref) {
     const [q, setQ] = useState("");
     const [items, setItems] = useState<SearchItem[]>([]);
     const [err, setErr] = useState("");
+    // the (trimmed) query the shown rows answer
+    const [ansQ, setAnsQ] = useState("");
     const [open, setOpen] = useState(false);
     const [cur, setCur] = useState(0);
     // a narrow toolbar's box shows "Find…", never a clipped "Find file or symbo"
@@ -49,6 +60,7 @@ export const SearchBox = forwardRef<HTMLInputElement, { title: string; onPick: (
           (r) => {
             setItems(r.items);
             setErr(r.err);
+            setAnsQ(r.q);
             setCur(0);
           }
         ),
@@ -56,6 +68,9 @@ export const SearchBox = forwardRef<HTMLInputElement, { title: string; onPick: (
     );
     useEffect(() => () => ctl.dispose(), [ctl]);
     useEffect(() => ctl.set(q), [q, ctl]);
+
+    const state = listState(q, ansQ, items.length, err);
+    const rows = state === "rows" ? items : [];
 
     const pick = (it: SearchItem | undefined) => {
       if (!it) return;
@@ -71,7 +86,7 @@ export const SearchBox = forwardRef<HTMLInputElement, { title: string; onPick: (
           type="search"
           placeholder={short ? "Find…" : "Find file or symbol"}
           aria-label="Find file or symbol"
-          aria-expanded={open && items.length > 0}
+          aria-expanded={open && rows.length > 0}
           aria-controls="cm-search-list"
           role="combobox"
           spellCheck={false}
@@ -86,13 +101,14 @@ export const SearchBox = forwardRef<HTMLInputElement, { title: string; onPick: (
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") {
               e.preventDefault();
-              setCur((c) => Math.min(items.length - 1, c + 1));
+              setCur((c) => Math.max(0, Math.min(rows.length - 1, c + 1)));
             } else if (e.key === "ArrowUp") {
               e.preventDefault();
               setCur((c) => Math.max(0, c - 1));
             } else if (e.key === "Enter") {
               e.preventDefault();
-              pick(items[cur]);
+              // still searching: the rows are an older query's, so Enter waits for this one's
+              pick(rows[cur]);
             } else if (e.key === "Escape") {
               e.preventDefault();
               e.stopPropagation();
@@ -104,9 +120,10 @@ export const SearchBox = forwardRef<HTMLInputElement, { title: string; onPick: (
         <kbd aria-hidden="true">/</kbd>
         {open && q.trim() && (
           <ul className="cm-search-list" id="cm-search-list" role="listbox">
-            {err && <li className="cm-err">{err}</li>}
-            {!err && !items.length && <li className="muted">No matches.</li>}
-            {items.map((it, i) => (
+            {state === "searching" && <li className="muted">Searching…</li>}
+            {state === "error" && <li className="cm-err">{err}</li>}
+            {state === "empty" && <li className="muted">No matches.</li>}
+            {rows.map((it, i) => (
               <li
                 key={it.path + ":" + it.name + ":" + it.line}
                 role="option"
