@@ -25,6 +25,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type KeyboardEvent,
   type MutableRefObject,
   type SetStateAction,
 } from "react";
@@ -436,6 +437,23 @@ export function ScheduleWhen({
 /** A card's Schedule… / Change schedule: the schedule alone, inside the
  * card — days, time, the next-runs line, Save. Edit keeps the whole form.
  * "Stop schedule" (a scheduled one) is what unticking the box was. */
+/** Ctrl/Cmd+Enter saves the editor from any field in it (the Task box
+ * included), as it commits in Commit and submits in New and Prompts. */
+export function isSaveKey(e: { key: string; ctrlKey: boolean; metaKey: boolean; isComposing?: boolean }): boolean {
+  return e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing;
+}
+
+/** The editors' form keydown: Ctrl/Cmd+Enter = Save (once, never while a
+ * save is already running). */
+function saveOnKey(p: { busy: boolean; onSave: () => void }) {
+  return (e: KeyboardEvent<HTMLFormElement>) => {
+    if (!isSaveKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, isComposing: e.nativeEvent.isComposing }))
+      return;
+    e.preventDefault();
+    if (!p.busy) p.onSave();
+  };
+}
+
 export function ScheduleEditor(p: {
   form: WhenFields;
   onForm: (patch: Partial<WhenFields>) => void;
@@ -458,6 +476,7 @@ export function ScheduleEditor(p: {
         e.preventDefault();
         p.onSave();
       }}
+      onKeyDown={saveOnKey(p)}
     >
       <div className="tpl-schedule tpl-sched-only" data-tour="schedule-when">
         <ScheduleWhen
@@ -568,6 +587,7 @@ export function TemplateEditor(p: TemplateEditorProps) {
         e.preventDefault();
         p.onSave();
       }}
+      onKeyDown={saveOnKey(p)}
     >
       <label className="tpl-name-field" data-tour="schedule-name">
         Name

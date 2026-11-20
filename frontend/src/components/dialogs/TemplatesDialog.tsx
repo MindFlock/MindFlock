@@ -427,6 +427,8 @@ interface ViewProps {
    * or a confirming card, so a failed GET used to leave "Loading templates…"
    * up forever. */
   loadError?: string;
+  /** Retry on a failed load (the same button Make PR offers). */
+  onRetryLoad?: () => void;
   onForm: (patch: Partial<TemplateForm>) => void;
   dispatch: (a: TemplatesUiAction) => void;
   onSave: () => void;
@@ -1069,7 +1071,15 @@ export function TemplatesDialogView(p: ViewProps) {
           )}
           {loadError && (
             <p className="error tpl-load-error" role="alert">
-              Could not load templates: {loadError}
+              Couldn't load templates. {loadError}
+              {p.onRetryLoad && (
+                <>
+                  {" "}
+                  <button type="button" className="linklike" id="templates-retry" onClick={p.onRetryLoad}>
+                    Retry
+                  </button>
+                </>
+              )}
             </p>
           )}
           {!loaded && !loadError && templates.length === 0 && <p className="tpl-empty muted">Loading templates…</p>}
@@ -1182,6 +1192,24 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
   const [templates, setList] = useState<Template[]>(() => templatesNow());
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState("");
+  // Bumped per list load (on open, and from Retry), and on close: a late
+  // answer for an earlier one is dropped.
+  const loadSeq = useRef(0);
+  /** Fetch the template list (on open, and from the failed load's Retry). */
+  const loadList = () => {
+    const seq = ++loadSeq.current;
+    setLoadError("");
+    ensureTemplates(true)
+      .then((list) => {
+        if (seq !== loadSeq.current) return;
+        setList(list);
+        setRuns(templateRunsNow());
+        setLoaded(true);
+      })
+      .catch((err) => {
+        if (seq === loadSeq.current) setLoadError(errMsg(err));
+      });
+  };
   const [ui, dispatch] = useReducer(templatesReducer, TEMPLATES_UI_INIT);
   const [form, setForm] = useState<TemplateForm>(() => formFromTemplate(null));
   // What the open editor started from: the form differs from it = unsaved.
@@ -1366,18 +1394,10 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
       .catch(() => {
         if (live) setInstalled(null);
       });
-    ensureTemplates(true)
-      .then((list) => {
-        if (!live) return;
-        setList(list);
-        setRuns(templateRunsNow());
-        setLoaded(true);
-      })
-      .catch((err) => {
-        if (live) setLoadError(errMsg(err));
-      });
+    loadList();
     return () => {
       live = false;
+      loadSeq.current++;
       document.removeEventListener(TEMPLATES_CHANGED, reload);
     };
   }, [open, embedded ? embeddedTarget : null]);
@@ -1623,6 +1643,7 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
         busy={busy}
         loaded={loaded}
         loadError={loadError}
+        onRetryLoad={loadList}
         onForm={(patch) => setForm((f) => ({ ...f, ...patch }))}
         dispatch={(a) => {
           if (needsDiscard(ui, a, dirty)) {
