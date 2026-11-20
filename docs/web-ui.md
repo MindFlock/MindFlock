@@ -979,7 +979,7 @@ pauses; the menus and the pane header only resume) / **Resume session**
 **Find file on map…** (opens its Map; `/` there is the Map's find box)) — each
 named `<verb> — <session>` with the session's rail name, never its raw title —
 then one **Focus:** row per session, named exactly as its rail row and wearing
-its state's word (*Working*, *Question*, *Idle 25m*) in its tone, then extension
+its state's word (*Working*, *Question*, *Idle*) in its tone, then extension
 commands. Type to filter (subsequence match), `↑`/`↓` to select (the list
 scrolls with you; it is a listbox the input points into, for screen readers),
 `Enter` to run, `Esc` to close. Both bindings work from anywhere, including while a
@@ -1176,7 +1176,7 @@ painted red.
 | Working | green | the agent | no | **Working** |
 | Needs you | gold | you | yes | the reason: **Question**, **Pre-commit failed**, **Checks failing**, **Setup failed** — on the rail the chip is a button to where you act: the bell at its row (Question), its **Terminal** tab (Pre-commit failed; Checks failing with no PR yet), a worktree-setup re-run (Setup failed), the PR (Checks failing) |
 | Idle | neutral | nobody | no | **Idle** — the ship-stage chip (`Committed`, `Pushed`, `PR open`) shows beside it |
-| Idle, stuck | gold | you | yes — 20 min idle on uncommitted work | **Idle 25m** — how long, in the gold the bell's rows wear |
+| Idle, uncommitted | neutral | nobody | no — a fact, not a request | 20 min idle on uncommitted changes: the rail's chip reads **3 files uncommitted** (or **+120 −4 uncommitted** from a server that sends no file count), calm, and opens a small menu — **Commit…** (the Commit dialog) and **Carry on** (types *Carry on with your task — you stopped with uncommitted changes…* to the agent). The Sky's frame stays neutral and its bar carries a quiet note, *3 files uncommitted · idle 25m* · **Commit…** · **Carry on** ([below](#idle-on-uncommitted-changes)) |
 | Waiting on limit | blue | nobody | no | **Waiting on limit, resumes HH:MM** when the window is known |
 | Offline | red | you | yes | **Offline** — the chip is a **↻ Restart** button |
 | Verifying | violet, pulsing | the agent | no | **Verifying** — its own agent is checking its work; the tooltip says how far (*Checking its work: 3 of 5 steps done*) |
@@ -2667,16 +2667,16 @@ sessions whose [one state](#one-session-state) is "in the bell" — **Question**
 failing**, **Confirm verified** / **Verify failed** / **Verify blocked** (a
 Confirm verified row carries the person's steps with **Confirm verified** /
 **Not verified…** right there, its name opening the session; a failed or
-blocked one lists what failed, or why), and an **Idle**
-session 20 minutes into uncommitted work — plus a
+blocked one lists what failed, or why) — plus a
 branch ready for its PR, and the `waiting` group of `GET /api/outbox`
 (ask-first approvals, stuck team run lines, budget pauses, a lead's plan or PR),
 and a session whose agent waits on Go for its plan (**Plan ready — review &
 Go**, ranked like an approval; it opens the Map's Plan section).
 The words are the state's own labels, the same ones the row's chip and the
 toast use. It is sorted by urgency: answers first, then approvals and team run
-escalations, then broken (pre-commit, setup, offline, stuck), failing and
-ready. The list scrolls and shows six rows before **+N more**. What each kind
+escalations, then broken (pre-commit, setup, offline), failing and
+ready. A session idle on uncommitted changes is not in it: the row and the
+Sky say it calmly instead ([below](#idle-on-uncommitted-changes)). The list scrolls and shows six rows before **+N more**. What each kind
 of row offers:
 
 - **An agent's question.** Every session on a dialog gets the same answer
@@ -3186,17 +3186,34 @@ Authentication section. If the token leaks, regenerate it from Settings →
   (a red dot), so a backgrounded tab is noticeable; focusing the session, or
   the tab, clears it. The 🔔 bell keeps the durable list, prioritized: waiting
   on your answer, then approvals and team run escalations, then broken
-  (pre-commit / worktree setup / offline / stuck), then checks failing, then
+  (pre-commit / worktree setup / offline), then checks failing, then
   ready to move.
-- **Wedged-session watchdog** — the lowest-noise entry on that list: a session
-  idle for more than **20 minutes** while still holding **uncommitted** changes
-  reads *idle 25m with unfinished work — possibly stuck*, i.e. an agent that
-  stopped in the middle of something with nobody typing. A `committed` branch
-  does **not** count as unfinished work — git considers it done and the header
-  is merely asking you to push — so committing and walking away is not flagged.
-  This rule only started rendering at all once `activity_since` was populated
-  (see [web-api.md](web-api.md#get-apiinstances)); before that it read a field
-  that was always `0` and never fired.
+- <a id="idle-on-uncommitted-changes"></a>**Idle on uncommitted changes** — a
+  session idle for more than **20 minutes** while still holding
+  **uncommitted** changes (`diff_stat.uncommitted`: files, +lines, −lines,
+  untracked files included) says so as what it is: *3 files uncommitted ·
+  idle 25m*. It used to read *Idle 25m with unfinished work — possibly stuck*
+  in the gold of a question, ring the bell and put the Sky frame in its amber
+  "needs you" state — for a session the person had simply left alone, with
+  nothing to press. Now it is calm (`lib/sessionState` `uncommitted`, tone
+  neutral) and **out of the bell** — so out of the toasts, the tab badge, the
+  Needs-you list, the phone's list and voice's *what needs me* too (they all
+  read the bell's set): an agent that finished its turn and a person who
+  walked away look the same from here, and neither is a request. Where it is
+  shown it offers what helps: on the rail the chip (**3 files uncommitted**)
+  opens **Commit…** and **Carry on**; on the Sky the frame keeps its neutral
+  border and the title bar gets a quiet pill — muted words on the theme's
+  surfaces, no glow, no breathing — with the same two actions (the words only
+  at the far zoom, and on another device's row). A `committed` branch says
+  nothing — git considers it done. It is **left out** where "idle and
+  uncommitted" says nothing about the session's own work: a session running
+  **in place** on a person's checkout (the changes may be theirs), one with a
+  **background job** that will wake its agent (running or waiting — a stuck
+  job never wakes it, so that one still counts), and one whose **route is in
+  flight** (the route owns the next step, its own Commit stop included). A
+  paused, sleeping, held or moving session has its own words, and a route
+  paused, halted or waiting on you its own chip, so none reaches it; a
+  finished route's leftovers are the session's own, and are said.
 - **Undo** — reversible actions (close, hide, and their bulk forms; deleting
   a saved prompt) show a toast with an **Undo** button instead of a modal;
   only Delete (worktree and branch gone) still asks first, inline. Deleting a

@@ -117,7 +117,9 @@ describe("the agent", () => {
 
   it("Send a prompt… posts to the session's /send, Stop pauses (the agent stops, the session stays)", () => {
     const src = code("components/flights/useChainMenu.tsx");
-    expect(src).toContain('await api("/api/instances/" + encodeURIComponent(title) + "/send", { method: "POST", json: { text: t, dialog_safe: true } });');
+    // The send itself lives in lib/sendPrompt (the rail's Carry on uses it too).
+    expect(src).toContain("await sendPrompt(title, text)");
+    expect(code("lib/sendPrompt.ts")).toContain('await api("/api/instances/" + encodeURIComponent(title) + "/send", { method: "POST", json: { text: t, dialog_safe: true } });');
     expect(src).toContain("onSelect: () => void pauseSession(row.title)");
     expect(src).toContain("onSelect: () => void resumeSession(row.title)");
     // Electron has no window.prompt: the composer is the app's own.

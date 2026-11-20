@@ -6,13 +6,10 @@
  * transformed one is not fixed), at the pointer. */
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
 import { loopChoices, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
-import { errMsg } from "../../lib/format";
 import { pauseSession, resumeSession } from "../../lib/sessionActions";
-import { toast } from "../../lib/toast";
-import { heldQueuedText, heldWasQueued, isHeldRefusal } from "../../lib/heldOffline";
+import { sendPrompt } from "../../lib/sendPrompt";
 import { windowName } from "../../lib/windowName";
 import { loopable, type ChainGraph } from "../../lib/skyGraph";
 import { menuItemsFor } from "../../lib/stopEditing";
@@ -301,26 +298,6 @@ export function agentMenuItems(row: Pick<Instance, "title" | "status"> | null | 
       ? { key: "agent-resume", label: "Resume", title: "Start the agent again in the same worktree", onSelect: () => void resumeSession(row.title) }
       : { key: "agent-stop", label: "Stop", title: "Stop the agent — the session stays (Resume starts it again)", danger: true, onSelect: () => void pauseSession(row.title) },
   ];
-}
-
-/** Send `text` to a session's agent (POST /api/instances/{title}/send — typed
- * and submitted as if at its terminal). True when it went. */
-export async function sendPrompt(title: string, text: string): Promise<boolean> {
-  const t = text.trim();
-  if (!t) return false;
-  try {
-    await api("/api/instances/" + encodeURIComponent(title) + "/send", { method: "POST", json: { text: t, dialog_safe: true } });
-    toast("Sent to " + windowName(title));
-    return true;
-  } catch (err) {
-    // Held offline after a crash: the server queued it, sent after Start.
-    if (isHeldRefusal(err)) {
-      toast(heldQueuedText(windowName(title), heldWasQueued(err)));
-      return true;
-    }
-    toast("Couldn't send: " + errMsg(err));
-    return false;
-  }
 }
 
 /** A small composer at the pointer: a prompt for one agent (Enter sends,

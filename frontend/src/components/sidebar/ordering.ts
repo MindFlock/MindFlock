@@ -393,8 +393,10 @@ export function verifySnippet(inst: Partial<Instance>): string | undefined {
 }
 
 /** O1: the prioritized "which session needs me" list (bell popover + mobile).
- * 0 waiting on your answer · 1 broken (pre-commit / setup failed, offline,
- * stuck) · 2 checks failing · 3 ready to move.
+ * 0 waiting on your answer · 1 broken (pre-commit / setup failed, offline)
+ * · 2 checks failing · 3 ready to move. Idle on uncommitted changes is not
+ * here: it is a fact the row says (lib/sessionState `uncommitted`), not a
+ * request.
  *
  * Every row but "ready to move" is the session's ONE state (lib/sessionState):
  * the bell lists exactly the states whose `inBell` is true, worded with the
@@ -417,7 +419,7 @@ export function attentionItems(instances: Instance[]): AttentionItem[] {
         title: inst.title,
         reason: attentionReason(ss) + (step ? " at " + step : ""),
         snippet:
-          ss.reason === "question" || ss.reason === "stuck"
+          ss.reason === "question"
             ? (askedQuestion(inst) ?? (inst.last_turn || ""))
             : verifySnippet(inst),
         question: ss.reason === "question" ? askedQuestion(inst) : undefined,

@@ -1050,13 +1050,23 @@
     precommit_failed: "Pre-commit failed",
     checks_failing: "Checks failing",
     setup_failed: "Setup failed",
-    stuck: "Idle",
     verify_confirm: "Confirm verified",
     verify_failed: "Verify failed",
     verify_blocked: "Verify blocked",
   };
-  // Idle this long on uncommitted work and the rail's bell lists it as stuck.
-  var STUCK_IDLE_S = 20 * 60;
+  // Idle this long on uncommitted changes and the row says so — calmly, out
+  // of the bell (sessionState.ts UNCOMMITTED_IDLE_S).
+  var UNCOMMITTED_IDLE_S = 20 * 60;
+  // "3 files uncommitted · idle 25m" (sessionState.ts idleUncommittedText).
+  function uncommittedText(un, idleS) {
+    var files = Number(un.files) || 0;
+    var what = files > 0
+      ? files + (files === 1 ? " file" : " files") + " uncommitted"
+      : "+" + (Number(un.additions) || 0) + " \u2212" + (Number(un.deletions) || 0) + " uncommitted";
+    var span = idleS < 3600 ? Math.max(1, Math.round(idleS / 60)) + "m"
+      : idleS < 86400 ? Math.round(idleS / 3600) + "h" : Math.round(idleS / 86400) + "d";
+    return what + " · idle " + span;
+  }
 
   function fmtClock(epochS) {
     var d = new Date(epochS * 1000);
@@ -1252,7 +1262,12 @@
     var since = Number(inst.activity_since) || 0;
     var idleFor = since > 0 ? Date.now() / 1000 - since : 0;
     var un = inst.diff_stat && inst.diff_stat.uncommitted;
-    var dirty = un && (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
+    var dirty = un && (Number(un.files) || 0) + (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
+    // Where it would say nothing about the session's own work
+    // (sessionState.ts idleUncommittedOf): in place on a person's checkout,
+    // a background job that will wake the agent, a route in flight.
+    var jobWakes = (inst.background || []).some(function (j) { return j && j.state !== "stuck"; });
+    var ownWork = !inst.in_place && !jobWakes && !(inst.flight && inst.flight.state === "running");
     // A paused flight: calm and out of the bell (sessionState.ts).
     if (inst.flight && inst.flight.id && inst.flight.state === "paused")
       return st("idle", { label: "Paused route",
@@ -1261,8 +1276,9 @@
                                 (inst.flight.step && inst.flight.step.title || "its current stop") + " — Carry on is under ⋯" });
     if (verify && verify.state === "passed")
       return st("idle", { label: "Verified", tone: "verified", hint: "Verified" + (verify.detail ? " — " + verify.detail : "") });
-    if (idleFor > STUCK_IDLE_S && dirty)
-      return st("idle", { reason: "stuck", inBell: true, hint: "Idle with unfinished work — possibly stuck" });
+    if (idleFor > UNCOMMITTED_IDLE_S && dirty && ownWork)
+      return st("idle", { uncommitted: true,
+                          hint: uncommittedText(un, idleFor) + " — nothing is waiting on you; commit it, or tell the agent to carry on" });
     return st("idle", { hint: "Agent is idle — waiting for input" });
   }
 
@@ -1320,7 +1336,7 @@
   // A verify checker (`hidden_by: "verify"`; a row without the flag goes by
   // its "verify-" title — dialogs/verifySession.ts isVerifySession) is off
   // the rail and the ask pop-up: only its verify waits on you. Its agent's
-  // own states (offline, stuck, a dialog, a question) were "needs you"
+  // own states (offline, a dialog, a question) were "needs you"
   // about a window nowhere to be seen (sidebar/ordering.ts attentionItems).
   var VERIFY_REASONS = { verify_confirm: true, verify_failed: true, verify_blocked: true };
   function isVerifyChecker(inst) {

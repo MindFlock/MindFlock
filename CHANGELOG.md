@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **"Idle with unfinished work — possibly stuck" is now a calm, useful note.**
+  A session idle 20 minutes on uncommitted changes used to read *Idle 25m*
+  in the gold of a question, ring the bell (toasts, tab badge, the phone's
+  list, voice's "what needs me") and put its Sky frame in the amber "needs
+  you" state — for a session you had simply left alone, with nothing to
+  press. It now says what it is — *3 files uncommitted · idle 25m* — in the
+  neutral idle look, out of the bell everywhere, and offers what helps: the
+  rail's chip (**3 files uncommitted**) opens **Commit…** and **Carry on**
+  (tells the agent to finish, or say what blocks it), and the Sky keeps a
+  calm frame with a quiet pill on its title bar carrying the same two
+  actions. It no longer fires where it says nothing about the session's own
+  work: a session in place on a person's checkout, one whose background job
+  will wake its agent, and one whose route is in flight.
+
 ## [0.14.23] - 2026-11-20
 
 ### Added

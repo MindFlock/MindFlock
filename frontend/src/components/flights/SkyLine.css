@@ -1385,3 +1385,58 @@ button.sky-held-start:disabled {
   cursor: progress;
   opacity: 0.75;
 }
+
+/* Idle on uncommitted changes (SkyLine.tsx `UncommittedNote`): a quiet note
+   on the frame bar — neutral theme surfaces, muted words, no amber, no glow,
+   no breathing — then its two actions as plain link-weight buttons. The
+   frame itself stays as calm as any idle one. */
+.skl-frame-bar .skl-uncommitted {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 1px 4px 1px 8px;
+  border: calc(1px / var(--sky-z, 1)) solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel-2) 85%, transparent);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 15px;
+  white-space: nowrap;
+  cursor: default;
+}
+.skl-frame-bar .skl-uncommitted-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* `button.linklike` (the Sky's link tier) wears the accent ink under `.sky`:
+   here the quieter text colour, as the owed note's link does. */
+.skl-frame-bar button.linklike.skl-uncommitted-act {
+  flex: none;
+  padding: 0 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.skl-frame-bar button.linklike.skl-uncommitted-act:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.skl-frame-bar button.linklike.skl-uncommitted-act:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.skl-frame-bar button.linklike.skl-uncommitted-act:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+/* Far out, the words only (the bar has no room to act on). */
+.skl[data-lod="far"] .skl-uncommitted-act {
+  display: none;
+}

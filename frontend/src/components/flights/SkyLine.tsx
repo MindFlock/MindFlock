@@ -69,11 +69,12 @@ import { renameSession } from "../../lib/renameSession";
 import { useUi } from "../../state/store";
 import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlights } from "../../state/queries";
-import { closeSession, selectSession } from "../../lib/sessionActions";
+import { closeSession, commitSession, selectSession } from "../../lib/sessionActions";
 import { reopenClosed, runningWord, sessionOpen } from "../../lib/skyClose";
 import { nodeById, nodeSession, removableBox, removalNeedsAsk, type ClickMods } from "../../lib/skySelect";
 import { pushUndo } from "../../lib/skyUndo";
-import { deriveSessionState, type SessionState, type SessionTone } from "../../lib/sessionState";
+import { deriveSessionState, idleUncommittedHint, idleUncommittedText, type IdleUncommitted, type SessionState, type SessionTone } from "../../lib/sessionState";
+import { carryOn } from "../../lib/sendPrompt";
 import { HELD_CHIP } from "../../lib/heldOffline";
 import { startSession } from "../../lib/revive";
 import { firstLine } from "../../lib/format";
@@ -193,8 +194,8 @@ export async function closeLine(title: string): Promise<void> {
  *
  * Read from what the line already knows, first match wins: the route halted
  * → `halted`; the session broken (offline, setup failed) → `broken`; a route
- * parked on you, the session's Needs-you state (a question, failing checks,
- * idle on unfinished work) or a behavior waiting on you → `you`; the route
+ * parked on you, the session's Needs-you state (a question, failing checks)
+ * or a behavior waiting on you → `you`; the route
  * running or the agent working → `working`; the route finished (still drawn,
  * or `landed`) → `done`; built and waiting for ▶ Run → `ready`; else `idle`.
  *
@@ -202,7 +203,11 @@ export async function closeLine(title: string): Promise<void> {
  * red, no amber, no breathing — so it never reads as one still running.
  * Paused at a halt point (`haltPoint`: it waits on the person to Carry on)
  * is `you`. A halt point reached on an old server (state `halted`, nothing
- * failed) is `you` too, never red. */
+ * failed) is `you` too, never red.
+ *
+ * Idle on uncommitted changes (lib/sessionState `uncommitted`) is NOT `you`:
+ * its tone is neutral, so the frame stays as calm as any idle one, and the
+ * bar carries a quiet note instead (`UncommittedNote`). */
 export type FrameState = "you" | "halted" | "broken" | "working" | "paused" | "done" | "ready" | "idle";
 export function frameState(s: { flight?: FlightState | null; landed?: boolean; tone?: SessionTone | null; behaviorsYou?: boolean; haltPoint?: boolean }): FrameState {
   const f = s.flight || null;
@@ -412,6 +417,55 @@ export function SkyStateChip({ ss, title, className }: { ss: SessionState; title
     >
       {busy ? "Starting…" : HELD_CHIP}
     </button>
+  );
+}
+
+/** The frame bar's quiet note for a session idle on uncommitted changes
+ * (lib/sessionState `uncommitted`): "3 files uncommitted · idle 25m", then
+ * what you can do — Commit… (the Commit dialog) and Carry on (tells the agent
+ * to finish). Neutral surfaces, no glow, no breathing: a fact, not a request.
+ * A row from another device says the words only (its actions are there). */
+export function UncommittedNote({ title, u, local }: { title: string; u: IdleUncommitted; local: boolean }) {
+  const [busy, setBusy] = useState(false);
+  // The bar drags on the pointer: the note's buttons are their own.
+  const own = {
+    onPointerDown: (e: ReactPointerEvent) => e.stopPropagation(),
+    onDoubleClick: (e: React.MouseEvent) => e.stopPropagation(),
+  };
+  return (
+    <span className="skl-uncommitted" title={idleUncommittedHint(u)} data-no-drag>
+      <span className="skl-uncommitted-text">{idleUncommittedText(u)}</span>
+      {local && (
+        <>
+          <button
+            type="button"
+            className="linklike skl-uncommitted-act"
+            title="Commit these changes (opens the Commit dialog)"
+            {...own}
+            onClick={(e) => {
+              e.stopPropagation();
+              commitSession(title);
+            }}
+          >
+            Commit…
+          </button>
+          <button
+            type="button"
+            className="linklike skl-uncommitted-act"
+            title="Tell the agent to carry on: finish the work, or say what is blocking it"
+            disabled={busy}
+            {...own}
+            onClick={(e) => {
+              e.stopPropagation();
+              setBusy(true);
+              void carryOn(title).finally(() => setBusy(false));
+            }}
+          >
+            {busy ? "Sending…" : "Carry on"}
+          </button>
+        </>
+      )}
+    </span>
   );
 }
 
@@ -834,6 +888,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             Needs you
           </span>
         )}
+        {row && ss.uncommitted && <UncommittedNote title={row.title} u={ss.uncommitted} local={!row.device} />}
         {whereBesideChip(where, ss) && (
           // The chip already says "Needs you: Review": no "needs you at Review" too.
           <span className="skl-where" title={where}>

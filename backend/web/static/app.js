@@ -25587,7 +25587,7 @@ function dropActivity(title) {
 function effectiveActivity(inst) {
 	return actShown.get(inst.title || "") || inst.activity || "idle";
 }
-var STUCK_IDLE_S = 1200;
+var UNCOMMITTED_IDLE_S = 1200;
 var STATE_LABEL$1 = {
 	starting: "Starting",
 	working: "Working",
@@ -25602,7 +25602,6 @@ var REASON_LABEL = {
 	precommit_failed: "Pre-commit failed",
 	checks_failing: "Checks failing",
 	setup_failed: "Setup failed",
-	stuck: "Idle",
 	verify_confirm: "Confirm verified",
 	verify_failed: "Verify failed",
 	verify_blocked: "Verify blocked"
@@ -25616,7 +25615,6 @@ var NOTIFY_RULE = {
 	precommit_failed: "precommit_failed",
 	setup_failed: "setup_failed",
 	checks_failing: "checks_failing",
-	stuck: "",
 	verify_confirm: "verify_needs_you",
 	verify_failed: "verify_failed",
 	verify_blocked: "verify_failed",
@@ -25643,9 +25641,32 @@ function spanWord(secs) {
 	if (secs < 86400) return Math.round(secs / 3600) + "h";
 	return Math.round(secs / 86400) + "d";
 }
-function uncommittedWork(inst) {
+function idleUncommittedOf(inst, idleS) {
+	if (!(idleS > UNCOMMITTED_IDLE_S)) return null;
 	const un = inst.diff_stat?.uncommitted;
-	return (Number(un?.additions) || 0) + (Number(un?.deletions) || 0) > 0;
+	const files = Number(un?.files) || 0;
+	const additions = Number(un?.additions) || 0;
+	const deletions = Number(un?.deletions) || 0;
+	if (files + additions + deletions <= 0) return null;
+	if (inst.in_place) return null;
+	if (backgroundJobs(inst).some((j) => j.state !== "stuck")) return null;
+	if (inst.flight?.state === "running") return null;
+	return {
+		files,
+		additions,
+		deletions,
+		idleS
+	};
+}
+function uncommittedWhat(u) {
+	if (u.files > 0) return u.files + (u.files === 1 ? " file" : " files") + " uncommitted";
+	return "+" + u.additions + " −" + u.deletions + " uncommitted";
+}
+function idleUncommittedText(u) {
+	return uncommittedWhat(u) + " · idle " + spanWord(u.idleS);
+}
+function idleUncommittedHint(u) {
+	return idleUncommittedText(u) + (u.files > 0 ? " (+" + u.additions + " −" + u.deletions + ")" : "") + "\nThe agent stopped with changes nobody has committed. Nothing is waiting on you — Commit… keeps them, Carry on tells the agent to finish.";
 }
 function askedInWords(inst) {
 	const a = inst.asking;
@@ -25964,15 +25985,15 @@ function deriveSessionState(inst, extras) {
 		hint: verifyHint(verify)
 	};
 	const since = Number(inst.activity_since) || 0;
-	const idleFor = since > 0 ? now / 1e3 - since : 0;
-	if (idleFor > STUCK_IDLE_S && uncommittedWork(inst)) return {
+	const left = idleUncommittedOf(inst, since > 0 ? now / 1e3 - since : 0);
+	if (left) return {
 		state: "idle",
-		reason: "stuck",
-		label: STATE_LABEL$1.idle + " " + spanWord(idleFor),
-		tone: "attention",
-		inBell: true,
+		label: STATE_LABEL$1.idle,
+		tone: "neutral",
+		inBell: false,
 		restartable: false,
-		hint: "Idle " + spanWord(idleFor) + " with unfinished work — possibly stuck"
+		uncommitted: left,
+		hint: idleUncommittedHint(left)
 	};
 	return {
 		state: "idle",
@@ -26029,7 +26050,7 @@ function needsYouAction(ss, prUrl) {
 	}
 }
 function attentionReason(ss) {
-	return ss.reason === "stuck" && ss.hint ? ss.hint : ss.label;
+	return ss.label;
 }
 function agentMissing(inst, logins, activity = effectiveActivity(inst)) {
 	if (!logins || !logins.length || inst.device || inst.pending) return null;
@@ -26712,7 +26733,7 @@ function attentionItems(instances) {
 				p: attentionPriority(ss),
 				title: inst.title,
 				reason: attentionReason(ss) + (step ? " at " + step : ""),
-				snippet: ss.reason === "question" || ss.reason === "stuck" ? askedQuestion(inst) ?? (inst.last_turn || "") : verifySnippet(inst),
+				snippet: ss.reason === "question" ? askedQuestion(inst) ?? (inst.last_turn || "") : verifySnippet(inst),
 				question: ss.reason === "question" ? askedQuestion(inst) : void 0
 			});
 		} else if (ss.state === "idle" && inst.stage === "pushed") {
@@ -29972,7 +29993,7 @@ function chipState(inst, ss = deriveSessionState(inst)) {
 	return {
 		label: m.label,
 		cls: "s-" + stage,
-		title: ss.reason === "stuck" && ss.hint ? ss.hint : m.label
+		title: ss.uncommitted && ss.hint ? ss.hint : m.label
 	};
 }
 function checkChip(inst) {
@@ -64906,6 +64927,34 @@ function rowDndProps(key, cbs, draggable = true) {
 	};
 }
 //#endregion
+//#region src/lib/sendPrompt.ts
+async function sendPrompt(title, text) {
+	const t = text.trim();
+	if (!t) return false;
+	try {
+		await api("/api/instances/" + encodeURIComponent(title) + "/send", {
+			method: "POST",
+			json: {
+				text: t,
+				dialog_safe: true
+			}
+		});
+		toast("Sent to " + windowName(title));
+		return true;
+	} catch (err) {
+		if (isHeldRefusal(err)) {
+			toast(heldQueuedText(windowName(title), heldWasQueued(err)));
+			return true;
+		}
+		toast("Couldn't send: " + errMsg(err));
+		return false;
+	}
+}
+var CARRY_ON_PROMPT = "Carry on with your task — you stopped with uncommitted changes. Finish the work, or tell me what is blocking you.";
+function carryOn(title) {
+	return sendPrompt(title, CARRY_ON_PROMPT);
+}
+//#endregion
 //#region src/lib/githubConnect.ts
 var OPEN_CONNECT_GITHUB_EVENT = "mf:open-connect-github";
 function openConnectGitHub() {
@@ -68958,6 +69007,9 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const [jobMenuAt, setJobMenuAt] = (0, import_react.useState)(null);
 	const jobChipRef = (0, import_react.useRef)(null);
 	const jobMenuId = (0, import_react.useId)();
+	const [leftMenuAt, setLeftMenuAt] = (0, import_react.useState)(null);
+	const leftChipRef = (0, import_react.useRef)(null);
+	const leftMenuId = (0, import_react.useId)();
 	const [closeArmed, setCloseArmed] = (0, import_react.useState)(false);
 	const [inUse, setInUse] = (0, import_react.useState)(null);
 	const strip = (0, import_react.useRef)(null);
@@ -69504,6 +69556,32 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							"aria-hidden": "true",
 							children: "Wake"
 						})]
+					}) : ss.uncommitted && !inst.device && !pending && !paused && !missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						ref: leftChipRef,
+						className: "stagechip chip-uncommitted s-idle tone-" + ss.tone,
+						title: ss.hint + "\nClick for Commit… or Carry on",
+						"aria-label": idleUncommittedText(ss.uncommitted) + " — Commit or tell the agent to carry on",
+						"aria-haspopup": "menu",
+						"aria-expanded": !!leftMenuAt,
+						"aria-controls": leftMenuAt ? leftMenuId : void 0,
+						onClick: (e) => act(() => {
+							if (leftMenuAt) return setLeftMenuAt(null);
+							const b = leftChipRef.current?.getBoundingClientRect();
+							if (b) setLeftMenuAt({
+								x: b.left,
+								y: b.bottom + 4,
+								flipY: b.top - 4,
+								align: "start",
+								keyboard: e.detail === 0
+							});
+						}, e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: uncommittedWhat(ss.uncommitted)
+					}) : ss.uncommitted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "stagechip chip-uncommitted s-idle tone-" + ss.tone,
+						title: ss.hint,
+						children: uncommittedWhat(ss.uncommitted)
 					}) : needsAct && !pending && !paused && !missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "stagechip chip-needs " + chip.cls,
@@ -69727,9 +69805,73 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 				stopPid: bg.stopPid,
 				onDone: () => setJobMenuAt(null)
 			})
+		}),
+		leftMenuAt && ss.uncommitted && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMenu, {
+			id: leftMenuId,
+			at: leftMenuAt,
+			label: "Uncommitted changes in " + shown,
+			opener: leftChipRef.current,
+			onClose: (refocus) => {
+				setLeftMenuAt(null);
+				if (refocus) leftChipRef.current?.focus();
+			},
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UncommittedMenu, {
+				title,
+				text: idleUncommittedText(ss.uncommitted),
+				onDone: () => setLeftMenuAt(null)
+			})
 		})
 	] });
 });
+function UncommittedMenu({ title, text, onDone }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "session-menu uncommitted-menu",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sm-head",
+				children: text
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				role: "menuitem",
+				"data-menu": "commit",
+				onClick: () => {
+					onDone();
+					commitSession(title);
+				},
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sm-verb",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sm-label",
+						children: "Commit…"
+					})
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "end-sub",
+					children: "Keep the changes in a commit"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				role: "menuitem",
+				"data-menu": "carry-on",
+				onClick: () => {
+					onDone();
+					carryOn(title);
+				},
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sm-verb",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sm-label",
+						children: "Carry on"
+					})
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "end-sub",
+					children: "Tell the agent to finish, or say what blocks it"
+				})]
+			})
+		]
+	});
+}
 function JobMenu({ title, job, stopPid, onDone }) {
 	const expect = expectOf(job);
 	const [open, setOpen] = (0, import_react.useState)(false);
@@ -102482,28 +102624,6 @@ function agentMenuItems(row, opts) {
 			onSelect: () => void pauseSession(row.title)
 		}
 	];
-}
-async function sendPrompt(title, text) {
-	const t = text.trim();
-	if (!t) return false;
-	try {
-		await api("/api/instances/" + encodeURIComponent(title) + "/send", {
-			method: "POST",
-			json: {
-				text: t,
-				dialog_safe: true
-			}
-		});
-		toast("Sent to " + windowName(title));
-		return true;
-	} catch (err) {
-		if (isHeldRefusal(err)) {
-			toast(heldQueuedText(windowName(title), heldWasQueued(err)));
-			return true;
-		}
-		toast("Couldn't send: " + errMsg(err));
-		return false;
-	}
 }
 function PromptComposer({ title, x, y, onClose }) {
 	const [text, setText] = (0, import_react.useState)("");
@@ -151676,6 +151796,44 @@ function SkyStateChip({ ss, title, className }) {
 		children: busy ? "Starting…" : HELD_CHIP
 	});
 }
+function UncommittedNote({ title, u, local }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const own = {
+		onPointerDown: (e) => e.stopPropagation(),
+		onDoubleClick: (e) => e.stopPropagation()
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "skl-uncommitted",
+		title: idleUncommittedHint(u),
+		"data-no-drag": true,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "skl-uncommitted-text",
+			children: idleUncommittedText(u)
+		}), local && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "linklike skl-uncommitted-act",
+			title: "Commit these changes (opens the Commit dialog)",
+			...own,
+			onClick: (e) => {
+				e.stopPropagation();
+				commitSession(title);
+			},
+			children: "Commit…"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "linklike skl-uncommitted-act",
+			title: "Tell the agent to carry on: finish the work, or say what is blocking it",
+			disabled: busy,
+			...own,
+			onClick: (e) => {
+				e.stopPropagation();
+				setBusy(true);
+				carryOn(title).finally(() => setBusy(false));
+			},
+			children: busy ? "Sending…" : "Carry on"
+		})] })]
+	});
+}
 function hasFlownToFold(d, folded) {
 	return flownCount(folded ? d : collapseFlown(d)) > 0;
 }
@@ -152197,6 +152355,11 @@ function SkyLine(p) {
 						className: "skl-chip fl-box-chip skl-state-chip tone-attention skl-bh-needs",
 						title: "A behavior waits on you — open the Behaviors stop to answer it",
 						children: "Needs you"
+					}),
+					row && ss.uncommitted && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UncommittedNote, {
+						title: row.title,
+						u: ss.uncommitted,
+						local: !row.device
 					}),
 					whereBesideChip(where, ss) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-where",

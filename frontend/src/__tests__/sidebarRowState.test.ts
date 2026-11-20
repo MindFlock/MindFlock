@@ -46,7 +46,7 @@ vi.mock("react", async (orig) => {
 });
 
 const { queryClient } = await import("../state/queries");
-const { SidebarRow } = await import("../components/sidebar/SidebarRow");
+const { SidebarRow, UncommittedMenu } = await import("../components/sidebar/SidebarRow");
 const { deriveSessionState } = await import("../lib/sessionState");
 
 const row = (o: Partial<Instance>): Instance =>
@@ -140,19 +140,38 @@ describe("SidebarRow — dot and chip from the same state", () => {
     expect(chip(render(row({ title: "calm", activity: "idle" })))![1]).toBe("span");
   });
 
-  it("a stuck row says how long, in the attention tone", () => {
+  it("a row idle on uncommitted changes says what it is, calmly, and offers Commit / Carry on", () => {
     const now = Date.now() / 1000;
-    const html = render(
-      row({
-        title: "stuck",
-        activity: "idle",
-        activity_since: now - 25 * 60,
-        diff_stat: { files: 1, additions: 3, deletions: 0, uncommitted: { files: 1, additions: 3, deletions: 0 } } as never,
-      })
-    );
+    const dirty = {
+      activity: "idle",
+      activity_since: now - 25 * 60,
+      diff_stat: { files: 3, additions: 120, deletions: 4, uncommitted: { files: 3, additions: 120, deletions: 4 } } as never,
+    };
+    const html = render(row({ title: "left", ...dirty }));
     const c = chip(html)!;
-    expect(c[3]).toBe("Idle 25m");
-    expect(c[2]).toContain("tone-attention");
+    expect(c[1]).toBe("button");
+    expect(c[3]).toBe("3 files uncommitted");
+    expect(c[2]).toContain("chip-uncommitted");
+    expect(c[2]).toContain("tone-neutral");
+    expect(c[2]).not.toContain("tone-attention");
+    expect(c[2]).not.toContain("chip-needs");
+    expect(dotClass(html)).toContain("tone-neutral");
+    expect(html).toContain('aria-label="3 files uncommitted · idle 25m — Commit or tell the agent to carry on"');
+    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).not.toMatch(/unfinished work|possibly stuck/);
+    // Another device's row: the words only (its actions are on that device).
+    const remote = chip(render(row({ title: "rig::left", device: "rig", ...dirty } as Partial<Instance>)))!;
+    expect(remote[1]).toBe("span");
+    expect(remote[3]).toBe("3 files uncommitted");
+  });
+
+  it("the uncommitted chip's menu is Commit… and Carry on", () => {
+    const html = renderToStaticMarkup(createElement(UncommittedMenu, { title: "left", text: "3 files uncommitted · idle 25m", onDone: () => {} }));
+    expect(html).toContain('<div class="sm-head">3 files uncommitted · idle 25m</div>');
+    expect(html).toContain('data-menu="commit"');
+    expect(html).toContain("Commit…");
+    expect(html).toContain('data-menu="carry-on"');
+    expect(html).toContain("Carry on");
   });
 
   it("a starting row pulses grey", () => {
