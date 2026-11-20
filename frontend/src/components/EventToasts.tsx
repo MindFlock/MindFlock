@@ -38,6 +38,24 @@ import {
   type PeerSessionEventData,
 } from "../lib/peerSessions";
 import { deviceEventNote, updateNote, updateToastWanted } from "../lib/fleet";
+import {
+  canOfferUpdate,
+  doneToastWanted,
+  updateEventNote,
+  whatsNewCovers,
+  type UpdateCheck,
+} from "../lib/updates";
+import {
+  clearUpdateRestart,
+  expectUpdateRestart,
+  installUpdateRecovery,
+  onUpdateDone,
+  startUpdateHere,
+} from "../lib/updateRestart";
+import { openWhatsNew } from "./whatsNew/WhatsNew";
+import { RELEASES } from "../whatsNew/releases";
+import { api } from "../api/client";
+import type { Config } from "../api/types";
 import { desktopNotify, installDesktopNotifyClicks } from "../lib/desktopNotify";
 import { pushFailedNote } from "../lib/onboarding";
 import { reviveSession } from "../lib/revive";
@@ -76,6 +94,30 @@ function notifyOnce(session: string, state: string, msg: string, opts?: ToastOpt
   if (now - (notifyAt.get(key) || 0) < 30000) return;
   notifyAt.set(key, now);
   toast(msg, opts);
+}
+
+/** Whether this browser is the owner's (not a guest link): only the owner
+ * may start an update. Unknown (config not loaded yet) reads as the owner,
+ * like the rest of the page; the server refuses a guest anyway. */
+function viewerIsOwner(): boolean {
+  return !queryClient.getQueryData<Config>(["config"])?.guest;
+}
+
+/** The version whose "Updated" toast this browser already showed. */
+const DONE_TOASTED_KEY = "mf_update_done_toasted";
+function readDoneToasted(): string | null {
+  try {
+    return localStorage.getItem(DONE_TOASTED_KEY);
+  } catch {
+    return null;
+  }
+}
+function writeDoneToasted(v: string): void {
+  try {
+    localStorage.setItem(DONE_TOASTED_KEY, v);
+  } catch {
+    /* storage unavailable: at worst a second page says it too */
+  }
 }
 
 // The name with its rail slot in front — "[3] sitecheck-bot7" — so a toast
@@ -570,24 +612,97 @@ export function EventToasts() {
       );
     }
     // A newer release: one toast per answer, never for a replayed backlog —
-    // the bell keeps the record. In the desktop app only when OTHER devices
-    // are behind: its own update toast covers this device (with its own
-    // button), not the rest of "Your devices". The desktop app also gets an
-    // OS notification while the window isn't focused, which the shell shows
-    // at most once per release — not again when its own update toast
-    // already announced that version (electron/main.js).
+    // the bell keeps the record. When this device is behind and its owner is
+    // looking, the toast's Update installs it right here (lib/updateRestart
+    // startUpdateHere); other devices behind keep the "N of your devices are
+    // behind" pointer at Settings → Your devices. In the desktop app the
+    // shell's own update toast covers this device where the shell drives
+    // (a packaged app): only when the server says no shell manages this
+    // engine (a dev engine) does the in-app toast offer it. The desktop app
+    // also gets an OS notification while the window isn't focused, which the
+    // shell shows at most once per release (electron/main.js).
     unsubs.push(
       ev.subscribe("update.available", (env) => {
         if (isReplay(env)) return;
         const desktop = !!(window as unknown as { mfengine?: unknown }).mfengine;
         if (desktop) desktopNotify(env.event, env.data);
-        if (!updateToastWanted(env.data, desktop)) return;
         const n = updateNote(env.data);
         if (!n) return;
-        notifyOnce("*update:" + String(env.data?.latest || ""), "update.available", n.toast, {
-          onClick: () => openSettings(n.screen),
-          duration: 8000,
-        });
+        const offer = canOfferUpdate(env.data, viewerIsOwner()) && n.screen === "advanced";
+        const show = () => {
+          const latest = String(env.data?.latest || "");
+          notifyOnce(
+            "*update:" + latest,
+            "update.available",
+            offer ? n.text : viewerIsOwner() ? n.toast : n.text,
+            offer
+              ? { action: { label: "Update", onClick: () => void startUpdateHere(latest) }, duration: 10000 }
+              : viewerIsOwner()
+                ? { onClick: () => openSettings(n.screen), duration: 8000 }
+                : { duration: 8000 }
+          );
+        };
+        if (updateToastWanted(env.data, desktop)) return show();
+        // The desktop app, only this device behind: is the shell driving?
+        api<UpdateCheck>("/api/update/check")
+          .then((c) => {
+            if (c?.managed_by_shell === false) show();
+          })
+          .catch(() => {});
+      })
+    );
+    // The install and its outcome (backend core/update_watch): one quiet
+    // toast each, live only — except "Updated", which the page that reloaded
+    // onto the new version sees as a replay and still says once. The bell
+    // keeps done and failed (in the desktop app, where its shell drives, the
+    // shell says "Updated" itself). An install under way makes the restart
+    // expected: the connection card stays calm and the window reloads onto
+    // the new build by itself (lib/updateRestart).
+    unsubs.push(installUpdateRecovery(ev));
+    unsubs.push(
+      ev.subscribe("update.installing", (env) => {
+        const d = env.data || {};
+        expectUpdateRestart(String(d.version || ""), (env.ts || Date.now() / 1000) * 1000);
+        if (isReplay(env)) return;
+        const n = updateEventNote(env.event, d);
+        if (n) toast(n.toast, { duration: 4000 });
+      })
+    );
+    unsubs.push(
+      ev.subscribe("update.failed", (env) => {
+        clearUpdateRestart();
+        if (isReplay(env)) return;
+        const n = updateEventNote(env.event, env.data);
+        if (n)
+          toast(n.toast, {
+            error: true,
+            ...(viewerIsOwner() ? { onClick: () => openSettings("advanced") } : {}),
+          });
+      })
+    );
+    unsubs.push(
+      ev.subscribe("update.done", (env) => {
+        const live = !isReplay(env);
+        if (onUpdateDone(live)) return; // reloading: the new page says it
+        const d = env.data || {};
+        const n = updateEventNote(env.event, d);
+        if (!n) return;
+        const seen = readDoneToasted();
+        if (!doneToastWanted({ version: n.version, replay: !live, ts: env.ts || 0, nowS: Date.now() / 1000, seen }))
+          return;
+        const say = () => {
+          writeDoneToasted(n.version);
+          const news = whatsNewCovers(RELEASES, n.version, String(d.from_version || ""));
+          toast(n.toast, news ? { action: { label: "What's new", onClick: openWhatsNew } } : { duration: 4000 });
+        };
+        // In the desktop app the shell says "Updated" itself after an update
+        // it drove (managed_by_shell: true); the bell row is enough then.
+        if (!(window as unknown as { mfengine?: unknown }).mfengine) return say();
+        api<UpdateCheck>("/api/update/check")
+          .then((c) => {
+            if (c?.managed_by_shell !== true) say();
+          })
+          .catch(say);
       })
     );
     unsubs.push(

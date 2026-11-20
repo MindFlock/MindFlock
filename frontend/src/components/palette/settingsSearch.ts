@@ -258,8 +258,27 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   },
   {
     key: "advanced",
+    label: "Engine & updates → Updates",
+    sub: "Automatic updates, the version you're on, Update now",
+    terms: [
+      "update",
+      "updates",
+      "automatic updates",
+      "auto update",
+      "auto-update",
+      "autoupdate",
+      "version",
+      "upgrade",
+      "new version",
+      "release",
+      "check for updates",
+    ],
+    anchor: "#set-updates",
+  },
+  {
+    key: "advanced",
     label: "Engine & updates",
-    sub: "Version and updates, restart, uninstall",
+    sub: "Updates, restart, uninstall",
     terms: ["engine", "update", "updates", "upgrade", "version", "restart server", "uninstall"],
   },
   {
