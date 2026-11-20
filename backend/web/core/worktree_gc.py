@@ -41,12 +41,18 @@ merged-ness, last use, size on disk.
 Merged is more than "ancestor of the base": this repo's ``main`` has been
 squashed to a single commit, which turns every merged branch into one with
 "commits not in main". A branch also counts as merged when merging it into a
-base would change nothing (``git merge-tree --write-tree`` gives back the
-base's own tree — a squash or rebase merge, and with
-``--allow-unrelated-histories`` the squashed-root case), or when its PR is
-merged at this very HEAD (``Usage.pr_merged``, asked only about an item that
-nothing else keeps). A merge-tree that conflicts or fails answers "not
-merged": when unsure, keep.
+base would change nothing — a squash or rebase merge, and the squashed-root
+case (every file the branch has is in the base as is). Two rungs answer
+that: :func:`merged_into` against each base's tip, and, only for a worktree
+whose unmerged commits are the one thing keeping it, :func:`landed` at the
+commit of the base's history where the work landed (a squash merge whose
+base has since touched the same lines — on a repo with a CHANGELOG, every
+squash-merged branch). Both decide it with reads only (``diff --raw``,
+``ls-tree``, ``cat-file`` and ``git merge-file`` on temp copies; see "the
+read-only merge test"). Last, a branch whose PR is merged at this very HEAD
+(``Usage.pr_merged``, asked only about an item that nothing else keeps).
+A test that conflicts, fails or reads oddly answers "not merged": when
+unsure, keep.
 
 **Safe** = ours, a worktree or clone, not locked, not in use, nothing
 uncommitted, every commit in a base branch or on a remote (a clone: no stash
@@ -168,7 +174,14 @@ def strictly_under(path: str, root: str) -> bool:
 READ_ONLY_ENV = {"GIT_OPTIONAL_LOCKS": "0"}
 
 
-def _git(cwd: str, *args: str, env=None, timeout: float = GIT_TIMEOUT, text=True):
+def _git(
+    cwd: str,
+    *args: str,
+    env=None,
+    timeout: float = GIT_TIMEOUT,
+    text=True,
+    input: Optional[bytes] = None,
+):
     full = dict(READ_ONLY_ENV)
     if env:
         full.update(env)
@@ -178,6 +191,7 @@ def _git(cwd: str, *args: str, env=None, timeout: float = GIT_TIMEOUT, text=True
         timeout=timeout,
         env=full,
         text=text,
+        input=input,
         stdin=subprocess.DEVNULL,
     )
 
@@ -263,9 +277,12 @@ def _count(repo: str, *revs: str) -> Optional[int]:
 
 def merged_into(repo: str, head: str, bases: Sequence[str]) -> str:
     """How ``head`` is already in one of ``bases``: ``"ancestor"`` (every
-    commit reachable), ``"content"`` (merging it would change nothing: a
-    squash or rebase merge, or a squashed history), or ``""`` (not shown to
-    be merged — the answer whenever git can't tell)."""
+    commit reachable), ``"content"`` (merging it into the base's tip would
+    change nothing: a squash or rebase merge the base hasn't touched since,
+    or a squashed history), or ``""`` (not shown to be merged — the answer
+    whenever git can't tell). :func:`landed` goes further back in the base's
+    history; it costs more, so the classifier asks it only when the verdict
+    hangs on it."""
     if not head or not bases:
         return ""
     n = _count(repo, head, "--not", *bases)
@@ -273,38 +290,469 @@ def merged_into(repo: str, head: str, bases: Sequence[str]) -> str:
         return "ancestor"
     if n is None:
         return ""
-    head_tree = _out(repo, "rev-parse", head + "^{tree}")
-    objects = _out(repo, "rev-parse", "--path-format=absolute", "--git-path", "objects")
-    if not objects or not os.path.isdir(objects):
-        return ""
-    # merge-tree --write-tree WRITES the merged trees (and any merged blobs)
-    # into the object store. A scan must leave the person's repository as it
-    # found it, so the writes land in a throwaway object directory and the
-    # real one is only read, as an alternate.
-    with tempfile.TemporaryDirectory(prefix="mindflock-gc-objects-") as scratch:
-        env = {
-            "GIT_OBJECT_DIRECTORY": scratch,
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES": objects,
-        }
+    seen: Set[str] = set()
+    forks: Dict[str, Optional[list]] = {}
+    with _MergeScratch() as scratch:
         for b in bases:
-            base_tree = _out(repo, "rev-parse", b + "^{tree}")
-            if not base_tree:
+            tip = _out(repo, "rev-parse", "--verify", "--quiet", b + "^{commit}")
+            # main and origin/main are often the same commit: one probe each.
+            if not tip or tip in seen:
                 continue
-            if head_tree and head_tree == base_tree:
-                return "content"
-            cp = _git(
-                repo,
-                "merge-tree",
-                "--write-tree",
-                "--allow-unrelated-histories",
-                b,
-                head,
-                env=env,
-            )
-            first = cp.stdout.split("\n", 1)[0].strip() if cp.returncode == 0 else ""
-            if first and first == base_tree:
+            seen.add(tip)
+            fork = _out(repo, "merge-base", tip, head)
+            if fork is None or (fork and not _looks_like_sha(fork)):
+                # No common ancestor — the owner squashes main to a single
+                # "initial commit" now and then. Merging the branch into the
+                # base would change nothing only if every file the branch has
+                # is in the base as is (the base may hold more).
+                if _tree_within(repo, head, tip):
+                    return "content"
+                continue
+            if fork not in forks:
+                forks[fork] = _raw_changes(repo, fork, head)
+            changes = forks[fork]
+            if changes is None:
+                continue
+            if not changes or _contains_changes(repo, changes, tip, scratch):
                 return "content"
     return ""
+
+
+# ----------------------------------------------- the read-only merge test
+#
+# "Merging the branch into commit C changes nothing" is decided per file, with
+# reads only: ``git merge-tree --write-tree`` would answer it in one call, but
+# it writes the merged trees into the object store — and even pointed at a
+# scratch object dir (the real store as an alternate) it still FRESHENS the
+# real store's objects and packs it re-derives (touches their mtimes), so a
+# scan would modify every repository it looks at. Instead: the branch's
+# changes since it forked (``diff --raw fork head``), C's version of each
+# changed path (``ls-tree C -- paths``), and for a path C has in a third
+# version a 3-way ``git merge-file`` of the three blobs in a temp dir outside
+# any repository. C holds the branch's work when every path the branch
+# changed comes out as C's own. A deletion, a mode change, a symlink or a
+# submodule must match exactly; a binary file or a conflict fails. Works on
+# any git (no ``--write-tree``, which needs 2.38).
+
+#: A path's object as ``(mode, type, sha)``.
+_Entry = tuple
+#: Paths merged 3-way per probe at most; more is "can't tell".
+MAX_FILE_MERGES = 40
+#: Paths named to git on a command line at most; past it the whole tree is
+#: listed instead (a pathspec this long only slows git down).
+MAX_PATHSPEC = 500
+
+
+def _literal_env() -> Dict[str, str]:
+    # A path with * ? [ in it must name itself, not a glob.
+    return {"GIT_LITERAL_PATHSPECS": "1"}
+
+
+def _raw_changes(repo: str, a: str, b: str) -> Optional[list]:
+    """``git diff --raw a b`` as ``[(old_mode, new_mode, old_sha, new_sha,
+    status, path)]`` (renames off: a rename is a delete and an add), None on
+    failure or odd output."""
+    cp = _git(
+        repo,
+        "diff",
+        "--raw",
+        "-z",
+        "--no-renames",
+        "--no-abbrev",
+        "--no-textconv",
+        "--no-ext-diff",
+        a,
+        b,
+        timeout=LANDED_TIMEOUT,
+    )
+    if cp.returncode != 0:
+        return None
+    parts = (cp.stdout or "").split("\0")
+    if parts and parts[-1] == "":
+        parts.pop()
+    if len(parts) % 2:
+        return None
+    out = []
+    for meta, path in zip(parts[0::2], parts[1::2]):
+        f = meta.split(" ")
+        if len(f) != 5 or not f[0].startswith(":") or not path:
+            return None
+        om, nm, osha, nsha, st = f[0][1:], f[1], f[2], f[3], f[4][:1]
+        if st not in "AMDT" or not (_is_oid(osha) and _is_oid(nsha)):
+            return None
+        out.append((om, nm, osha, nsha, st, path))
+    return out
+
+
+def _is_oid(s: str) -> bool:
+    return len(s) in (40, 64) and _looks_like_sha(s)
+
+
+def _tree_entries(
+    repo: str, commit: str, paths: Sequence[str]
+) -> Optional[Dict[str, _Entry]]:
+    """``{path: (mode, type, sha)}`` for ``paths`` in ``commit`` (a path it
+    lacks is absent), None on failure or odd output."""
+    args = ["ls-tree", "-r", "-z", "--full-tree", commit]
+    if len(paths) <= MAX_PATHSPEC:
+        args += ["--", *paths]
+    cp = _git(repo, *args, env=_literal_env(), timeout=LANDED_TIMEOUT)
+    if cp.returncode != 0:
+        return None
+    want = set(paths)
+    out: Dict[str, _Entry] = {}
+    for rec in (cp.stdout or "").split("\0"):
+        if not rec:
+            continue
+        meta, tab, path = rec.partition("\t")
+        f = meta.split(" ")
+        if not tab or len(f) != 3 or not _is_oid(f[2]):
+            return None
+        if path in want:
+            out[path] = (f[0], f[1], f[2])
+    return out
+
+
+def _tree_within(repo: str, head: str, base: str) -> bool:
+    """Every path ``head`` has is in ``base`` with the same mode and object
+    (``base`` may hold more): what merging unrelated histories would leave
+    unchanged."""
+    changes = _raw_changes(repo, base, head)
+    return changes is not None and all(c[4] == "D" for c in changes)
+
+
+class _MergeScratch:
+    """One probe's scratch: a temp dir, made on first use, for
+    :func:`_merge_is_noop`'s blobs; the blobs read so far (the branch's side
+    is the same for every candidate); and the probe's deadline."""
+
+    def __init__(self, seconds: Optional[float] = None) -> None:
+        self._tmp: Optional[tempfile.TemporaryDirectory] = None
+        self.blobs: Dict[str, bytes] = {}
+        self.deadline = time.monotonic() + seconds if seconds else None
+
+    def expired(self) -> bool:
+        return self.deadline is not None and time.monotonic() > self.deadline
+
+    def path(self) -> str:
+        if self._tmp is None:
+            self._tmp = tempfile.TemporaryDirectory(prefix="mindflock-gc-merge-")
+        return self._tmp.name
+
+    def __enter__(self) -> "_MergeScratch":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self._tmp is not None:
+            self._tmp.cleanup()
+
+
+def _blobs(repo: str, shas: Iterable[str]) -> Optional[Dict[str, bytes]]:
+    """The contents of ``shas`` (one ``cat-file --batch``), None on failure."""
+    want = sorted(set(shas))
+    if not want:
+        return {}
+    cp = _git(
+        repo,
+        "cat-file",
+        "--batch",
+        text=False,
+        input=("\n".join(want) + "\n").encode(),
+        timeout=LANDED_TIMEOUT,
+    )
+    if cp.returncode != 0:
+        return None
+    data: bytes = cp.stdout or b""
+    out: Dict[str, bytes] = {}
+    pos = 0
+    for sha in want:
+        nl = data.find(b"\n", pos)
+        if nl < 0:
+            return None
+        head = data[pos:nl].split(b" ")
+        if (
+            len(head) != 3
+            or head[0].decode("ascii", "replace") != sha
+            or head[1] != b"blob"
+        ):
+            return None
+        try:
+            size = int(head[2])
+        except ValueError:
+            return None
+        body = data[nl + 1 : nl + 1 + size]
+        if len(body) != size:
+            return None
+        out[sha] = body
+        pos = nl + 1 + size + 1
+    return out
+
+
+def _merge_is_noop(
+    base: bytes, branch: bytes, current: bytes, scratch: _MergeScratch
+) -> bool:
+    """A 3-way merge of ``base`` → ``branch`` into ``current`` is clean and
+    gives back ``current`` itself: every change the branch made to this file
+    is already in it. Runs ``git merge-file`` on temp copies, outside any
+    repository; a conflict, a binary file or a failure is False."""
+    d = scratch.path()
+    names = []
+    for i, body in enumerate((current, base, branch)):
+        p = os.path.join(d, "f%d" % i)
+        with open(p, "wb") as fh:
+            fh.write(body)
+        names.append(p)
+    cp = gitutil.git(
+        ["merge-file", "-p", *names],
+        d,
+        timeout=LANDED_TIMEOUT,
+        env=dict(READ_ONLY_ENV, GIT_CEILING_DIRECTORIES=os.path.dirname(d)),
+        text=False,
+        stdin=subprocess.DEVNULL,
+    )
+    return cp.returncode == 0 and cp.stdout == current
+
+
+def _contains_changes(
+    repo: str, changes: list, commit: str, scratch: _MergeScratch
+) -> bool:
+    """Does ``commit`` already hold every change in ``changes`` (a branch's
+    ``diff --raw`` since it forked)? Reads only; unsure is False."""
+    entries = _tree_entries(repo, commit, [c[5] for c in changes])
+    if entries is None:
+        return False
+    merges = []
+    for om, nm, osha, nsha, st, path in changes:
+        cur = entries.get(path)
+        if st == "D":
+            if cur is not None:
+                return False  # the branch deleted it; the commit still has it
+            continue
+        if cur is None:
+            return False  # the branch has it; the commit doesn't
+        cmode, ctype, csha = cur
+        if csha == nsha and cmode == nm:
+            continue  # the commit has the branch's very version
+        if st != "M" or ctype != "blob" or csha == osha:
+            # Added with other content, a type change, or the commit still
+            # has the version the branch started from: the change isn't in it.
+            return False
+        if om != nm and cmode != nm:
+            return False  # the branch changed the mode; the commit didn't
+        if {"120000", "160000"} & {om, nm, cmode}:
+            return False  # a symlink or submodule must match exactly
+        merges.append((osha, nsha, csha))
+    if not merges:
+        return True
+    if len(merges) > MAX_FILE_MERGES:
+        return False
+    blobs = scratch.blobs
+    got = _blobs(repo, [s for m in merges for s in m if s not in blobs])
+    if got is None:
+        return False
+    blobs.update(got)
+    # Smallest first: a file that fails fails fast.
+    merges.sort(key=lambda m: len(blobs[m[2]]))
+    for osha, nsha, csha in merges:
+        if scratch.expired():
+            return False
+        if not _merge_is_noop(blobs[osha], blobs[nsha], blobs[csha], scratch):
+            return False
+    return True
+
+
+# ------------------------------------------------------- landed (squash/rebase)
+
+#: The landed-work probe compares at most this many of a branch's own
+#: commits; a longer branch is "can't tell", which keeps it.
+LANDED_MAX_COMMITS = 200
+#: Base commits tried as the one the branch landed in, per item, at most.
+LANDED_MAX_TRIES = 8
+#: Base history read when looking for that commit, at most.
+LANDED_MAX_HISTORY = 2000
+#: Ceiling per git call of the probe (it runs on few items, but never long).
+LANDED_TIMEOUT = 15
+#: Wall-clock budget of one item's probe; past it, "can't tell" (keeps it).
+LANDED_BUDGET_S = 10.0
+
+
+def _lines(
+    repo: str, *args: str, env=None, timeout: float = LANDED_TIMEOUT
+) -> Optional[List[str]]:
+    cp = _git(repo, *args, env=env, timeout=timeout)
+    if cp.returncode != 0:
+        return None
+    return [ln for ln in (cp.stdout or "").splitlines() if ln.strip()]
+
+
+def _sha_list(lines: Optional[List[str]]) -> Optional[List[str]]:
+    """``lines`` when every one is a full object name, else None (odd
+    output is "can't tell")."""
+    if lines is None:
+        return None
+    for ln in lines:
+        if not _is_oid(ln):
+            return None
+    return lines
+
+
+def landed(repo: str, head: str, bases: Sequence[str]) -> Optional[dict]:
+    """Is the work of ``head`` already in one of ``bases`` although its
+    commits are not ancestors and the base has moved on since (a squash or
+    rebase merge followed by more commits — the case :func:`merged_into`
+    misses as soon as a later commit touches the same lines, which on a repo
+    with a CHANGELOG is every branch)?
+
+    The rule: there is a commit ``C`` on a base branch's first-parent history
+    since the branch forked such that merging the branch into ``C`` would
+    change nothing — every change the branch makes since it forked is
+    already in ``C``, byte for byte (see the read-only merge test above).
+    Then that work is in the base branch's history and removing the branch
+    loses nothing: the very test :func:`merged_into` makes against the tip,
+    made at the commit the work landed in.
+
+    Which ``C`` to try (at most :data:`LANDED_MAX_TRIES`): the base commits
+    whose patch equals one of the branch's commits (``git rev-list
+    --cherry-mark``: where a rebase merge, or a one-commit squash, put them),
+    newest first, then the commits that touch the most of the files the
+    branch changes (a squash commit touches all of them). Patch equality
+    alone is never the verdict: it ignores whitespace; the merge test
+    doesn't.
+
+    ``{"how": "squash" | "rebase", "base": ref, "at": sha}``, or None — also
+    whenever git fails, answers oddly, or the branch is longer than
+    :data:`LANDED_MAX_COMMITS` or the probe outlasts
+    :data:`LANDED_BUDGET_S` (unsure keeps). Reads only."""
+    if not head or not bases:
+        return None
+    mine = _sha_list(
+        _lines(
+            repo,
+            "rev-list",
+            "--max-count=%d" % (LANDED_MAX_COMMITS + 1),
+            head,
+            "--not",
+            *bases,
+        )
+    )
+    if not mine or len(mine) > LANDED_MAX_COMMITS:
+        return None
+    tries = [LANDED_MAX_TRIES]
+    seen: Set[str] = set()
+    with _MergeScratch(LANDED_BUDGET_S) as scratch:
+        for b in bases:
+            sha = _out(repo, "rev-parse", "--verify", "--quiet", b + "^{commit}")
+            if not sha or sha in seen:
+                continue
+            seen.add(sha)
+            found = _landed_in(repo, sha, head, scratch, len(mine), tries)
+            if found:
+                found["base"] = b
+                return found
+            if tries[0] <= 0 or scratch.expired():
+                break
+    return None
+
+
+def _landed_in(
+    repo: str,
+    base: str,
+    head: str,
+    scratch: _MergeScratch,
+    n_mine: int,
+    tries: List[int],
+) -> Optional[dict]:
+    fork = _out(repo, "merge-base", base, head)
+    if not fork or not _is_oid(fork):
+        # Unrelated histories (a squashed-to-one-commit main): merged_into's
+        # whole-tree test is the only one that applies.
+        return None
+    changes = _raw_changes(repo, fork, head)
+    if not changes:
+        return None  # failed, or it changes nothing (merged_into said so)
+    # Base commits patch-equal to the branch's own (a rebase merge).
+    marked = _lines(
+        repo,
+        "rev-list",
+        "--cherry-mark",
+        "--left-only",
+        "--max-count=%d" % LANDED_MAX_HISTORY,
+        base + "..." + head,
+    )
+    equal = set(
+        _sha_list([ln[1:] for ln in (marked or []) if ln.startswith("=")]) or []
+    )
+    # The base's first-parent commits since the fork that touch the branch's
+    # files, newest first, with how many of those files each touches.
+    files = [c[5] for c in changes]
+    args = [
+        "-c",
+        "core.quotePath=false",
+        "log",
+        "--first-parent",
+        "--no-renames",
+        "--max-count=%d" % LANDED_MAX_HISTORY,
+        "--format=@@%H",
+        "--name-only",
+        fork + ".." + base,
+    ]
+    if len(files) <= MAX_PATHSPEC:
+        args += ["--", *files]
+    log = _lines(repo, *args, env=_literal_env())
+    if log is None:
+        return None
+    want = set(files)
+    score: Dict[str, int] = {}
+    order: List[str] = []
+    cur = ""
+    for ln in log:
+        if ln.startswith("@@"):
+            cur = ln[2:].strip()
+            if not _is_oid(cur):
+                return None
+            score[cur] = 0
+            order.append(cur)
+        elif cur and ln in want:
+            score[cur] += 1
+    order = [c for c in order if score[c]]
+    rank = {c: i for i, c in enumerate(order)}
+    # Patch-equal commits first (newest first), then the rest by how many of
+    # the branch's files they touch. Only the base's first-parent commits
+    # are candidates: the states the base branch itself has been in.
+    picks = [c for c in order if c in equal]
+    picks += sorted(
+        (c for c in order if c not in equal), key=lambda c: (-score[c], rank[c])
+    )
+    for c in picks:
+        if tries[0] <= 0 or scratch.expired():
+            return None
+        tries[0] -= 1
+        if _contains_changes(repo, changes, c, scratch):
+            how = "rebase" if c in equal and n_mine > 1 else "squash"
+            return {"how": how, "at": c}
+    return None
+
+
+def stash_made_on(repo: str, branch: str, head: str) -> Optional[int]:
+    """How many stash entries were made on this branch (their message says
+    "On <branch>:" / "WIP on <branch>:") or right on ``head``; None when the
+    stash can't be read. The stash is the repository's, not the worktree's,
+    so removing the worktree would not drop it — but an entry made on a
+    branch is work that branch's owner meant to come back to, and the landed
+    rung counts it as work."""
+    cp = _git(repo, "stash", "list", "--format=%P%x09%gs", timeout=LANDED_TIMEOUT)
+    if cp.returncode != 0:
+        return None
+    n = 0
+    marks = ("On %s:" % branch, "WIP on %s:" % branch) if branch else ()
+    for ln in (cp.stdout or "").splitlines():
+        if not ln.strip():
+            continue
+        parents, _, subject = ln.partition("\t")
+        first = parents.split(" ", 1)[0]
+        if (head and first == head) or (marks and subject.startswith(marks)):
+            n += 1
+    return n
 
 
 def status_counts(path: str) -> Optional[Dict[str, int]]:
@@ -795,6 +1243,9 @@ def classify(
         stashes=0,
         merged="",
         merged_into="",
+        merged_how="",
+        merged_at="",
+        safe_reason="",
         last_used=0.0,
         size_bytes=None,
         free_bytes=None,
@@ -941,6 +1392,38 @@ def classify(
     if recent:
         kept.append("used " + _ago(now - last))
 
+    # The landed rung: the branch's work is already in a base branch as other
+    # commits (a squash or rebase merge, the base moved on since). Asked only
+    # when unmerged commits are the ONE thing keeping an otherwise
+    # collectable worktree — in use, recent, not ours, locked, nested,
+    # uncommitted or untracked all keep it before this runs — so its cost
+    # (a few git calls, at most LANDED_MAX_TRIES merge tests) is paid only
+    # where the answer can change the verdict.
+    if unsaved_at >= 0 and len(kept) == 1:
+        try:
+            found = landed(repo, head, bases)
+        except Exception:  # noqa: BLE001 — unknown is "not merged"
+            found = None
+        if found:
+            stashed = stash_made_on(repo, item.get("branch") or "", head)
+            if stashed is None:
+                kept.append("couldn't read the stash")
+            elif stashed:
+                kept.append(
+                    _plural(stashed, "stash entry").replace("entrys", "entries")
+                    + " made on it"
+                )
+            else:
+                kept.pop(unsaved_at)
+                item["merged"] = "content"
+                # The branch name, as for the other rungs ("origin/main" ->
+                # "main"): branch_deletable compares it with the branch.
+                item["merged_into"] = found["base"].rsplit("/", 1)[-1]
+                item["merged_how"] = found["how"]
+                item["merged_at"] = found.get("at") or ""
+                item["unsaved_commits"] = 0
+                holds = False
+
     # The PR rung: asked only when unpushed commits are the ONE thing keeping
     # an otherwise collectable worktree (a squash-merged PR whose remote
     # branch was deleted and pruned, with the base moved on since).
@@ -961,7 +1444,26 @@ def classify(
 
     item["safe"] = not kept and ours and kind in (KIND_WORKTREE, KIND_CLONE)
     item["state"] = _state(holds, recent)
+    item["safe_reason"] = safe_reason(item) if item["safe"] else ""
     return item
+
+
+def safe_reason(item: dict) -> str:
+    """Why a safe item may go, in plain words (the listing's WHY column)."""
+    base = item.get("merged_into") or "the base branch"
+    how = item.get("merged")
+    if item.get("kind") == KIND_CLONE:
+        return "every commit is pushed; nothing uncommitted"
+    if how == "ancestor":
+        return "every commit is in %s" % base
+    if how == "content":
+        mh = item.get("merged_how")
+        if mh in ("squash", "rebase"):
+            return "its changes are already in %s (%s-merged)" % (base, mh)
+        return "its changes are already in %s (merging it would change nothing)" % base
+    if how == "pr":
+        return "its PR was merged at this very commit"
+    return "every commit is on a remote; its branch is kept"
 
 
 def inventory(

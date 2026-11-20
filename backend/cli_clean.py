@@ -54,7 +54,8 @@ def add_parser(sub, server_opts) -> None:
             "much space each takes, whether it would be removed and why the "
             "rest is kept. Safe = no session, route or run uses it, nothing "
             "uncommitted, every commit is in the base branch or on a remote "
-            "(squash merges count), unused longer than cleanup.after_days. "
+            "(squash and rebase merges count, also after the base moved on), "
+            "unused longer than cleanup.after_days. "
             "--collect removes exactly that set (a worktree with `git "
             "worktree remove`, its branch only when merged). --remove ITEM "
             "removes one item; one that holds work is removed only after you "
@@ -141,9 +142,9 @@ def render(rep: dict, show_all: bool = False) -> str:
             else path
         )
         why = (
-            "merged"
-            if i.get("safe") and i.get("merged")
-            else ("pushed" if i.get("safe") else "; ".join(i.get("kept") or []))
+            (i.get("safe_reason") or ("merged" if i.get("merged") else "pushed"))
+            if i.get("safe")
+            else "; ".join(i.get("kept") or [])
         )
         rows.append(
             [

@@ -243,7 +243,7 @@ state, size, last use and the reason it would go or stays:
 
 ```
 STATE     SIZE    USED     ITEM                                  WHY
-remove    1.2G    41d ago  emandel2630/old-fix_18e9c7ee85c92524  merged
+remove    1.2G    41d ago  emandel2630/old-fix_18e9c7ee85c92524  its changes are already in main (squash-merged)
 has work  830.0M  20d ago  emandel2630/spike_18ea01f2c4d1a9b0     2 commits in no base branch and on no remote
 recent    2.1G    today    emandel2630/new_18eb3a6f71e0c2d4      used 3 hours ago
 
@@ -253,6 +253,11 @@ MindFlock made 8 of these: 4.1G on disk.
 1 can be removed safely (1.2G): mindflock clean --collect
 Background: ask, after 14 days unused.
 ```
+
+A worktree whose branch was squash- or rebase-merged counts as merged even
+after the base moved on and rewrote the same lines: it is compared with the
+commit of the base the work landed in, byte for byte, without writing to the
+repository (docs/web-api.md, *Disk cleanup*).
 
 - `--collect` removes exactly the items marked `remove` (`POST
   /api/cleanup/collect`) and prints what went, the merged branches it deleted
