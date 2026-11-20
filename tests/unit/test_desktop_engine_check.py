@@ -73,6 +73,11 @@ def test_update_info_says_whether_the_check_succeeded():
 
 def test_settings_does_not_call_a_failed_check_up_to_date():
     tsx = _ADVANCED.read_text(encoding="utf-8")
-    failed = tsx.index("info?.checked === false")
-    assert failed < tsx.index("The engine is up to date")
-    assert "Couldn’t check for engine updates" in tsx
+    # The Updates block: "It's the newest version." only after a check that
+    # answered (the shell's `checked: false` is a failed look, never "current").
+    assert "shellInfo?.checked !== false" in tsx
+    assert "info && checked && !available" in tsx
+    assert tsx.index("info && checked && !available") < tsx.index(
+        "It’s the newest version."
+    )
+    assert "Couldn’t check for a newer version just now." in tsx
