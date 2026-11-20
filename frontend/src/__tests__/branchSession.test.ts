@@ -37,6 +37,7 @@ const { branchSession } = await import("../lib/sessionActions");
 const { queryClient } = await import("../state/queries");
 const { useUi } = await import("../state/store");
 const { ApiError } = await import("../api/client");
+const mc = await import("../lib/memoryConfirm");
 
 const PALETTE_SRC = Object.values(
   import.meta.glob<string>("../components/palette/CommandPalette.tsx", {
@@ -58,6 +59,7 @@ const menuItems = (o: Partial<Instance> = {}) => {
 };
 
 afterEach(() => {
+  vi.restoreAllMocks();
   toast.mockReset();
   errorPop.mockReset();
   instApi.mockReset();
@@ -168,5 +170,32 @@ describe("branchSession", () => {
     const titles = (queryClient.getQueryData<Instance[]>(["instances"]) || []).map((i) => i.title);
     expect(titles).toEqual(["api"]);
     expect(useUi.getState().order).not.toContain("api-branch");
+  });
+
+  describe("while memory is low it asks first, like Duplicate", () => {
+    const lowMemory = () =>
+      new ApiError(409, "memory is low", { memory_confirm: true, level: "low", message: "Memory is low: 3.0 GB free." });
+
+    it("Start anyway resends with start_anyway", async () => {
+      queryClient.setQueryData(["instances"], [row({ title: "api" })]);
+      const ask = vi.spyOn(mc.memoryConfirmDeps, "ask").mockResolvedValue("start");
+      instApi.mockRejectedValueOnce(lowMemory()).mockResolvedValueOnce({ title: "api-branch", carried: false });
+      await branchSession("api");
+      expect(ask).toHaveBeenCalledWith(expect.objectContaining({ level: "low" }), "a branch of api", true);
+      expect(instApi).toHaveBeenNthCalledWith(1, "api", "/branch", { method: "POST" });
+      expect(instApi).toHaveBeenNthCalledWith(2, "api", "/branch", { json: { start_anyway: true } });
+      expect(useUi.getState().focused).toBe("api-branch");
+      expect(errorPop).not.toHaveBeenCalled();
+    });
+
+    it("Cancel starts nothing and raises no error card", async () => {
+      queryClient.setQueryData(["instances"], [row({ title: "api" })]);
+      vi.spyOn(mc.memoryConfirmDeps, "ask").mockResolvedValue("cancel");
+      instApi.mockRejectedValue(lowMemory());
+      await branchSession("api");
+      expect(instApi).toHaveBeenCalledTimes(1);
+      expect(errorPop).not.toHaveBeenCalled();
+      expect(useUi.getState().order).not.toContain("api-branch");
+    });
   });
 });

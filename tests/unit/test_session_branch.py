@@ -149,13 +149,23 @@ def reg(monkeypatch):
     monkeypatch.setattr(server, "_seed_event_snapshot", lambda t: None)
     monkeypatch.setattr(server, "_instance_json", lambda i, **k: {"title": i.Title})
     monkeypatch.setattr(server, "_profile_id_error", lambda p: None)
+    # The launch gate's memory question is test_launch_gate_routes' business:
+    # here memory always reads fine, and starts are recorded, not counted.
+
+    async def _go(payload=None):
+        return None
+
+    monkeypatch.setattr(server, "_person_memory_refusal", _go)
+    noted: list = []
+    monkeypatch.setattr(server._launch_gate, "note_start", noted.append)
+    monkeypatch.setattr(server._launch_gate, "unnote_start", lambda t: True)
 
     def add(title, wt, **kw):
         inst = _Src(title, wt, **kw)
         instances[title] = inst
         return inst
 
-    return SimpleNamespace(instances=instances, events=events, add=add)
+    return SimpleNamespace(instances=instances, events=events, add=add, noted=noted)
 
 
 def _build(inst):
@@ -318,6 +328,21 @@ def test_branch_forks_from_the_tip_and_carries_the_changes(reg, repo):
     # The source is exactly as it was.
     assert _status(repo.wt) == before
     assert _git(repo.wt, "rev-parse", "HEAD") == repo.tip
+
+
+def test_branch_counts_as_a_start_and_hands_on_start_anyway(reg, repo, monkeypatch):
+    seen = []
+
+    async def _refusal(payload=None):
+        seen.append(payload)
+        return None
+
+    monkeypatch.setattr(server, "_person_memory_refusal", _refusal)
+    reg.add("src", repo.wt, path=repo.path)
+    r = client.post("/api/instances/src/branch", json={"start_anyway": True})
+    assert r.status_code == 202, r.text
+    assert seen == [{"start_anyway": True}]
+    assert "src-branch" in reg.noted  # warming from now, like New and Duplicate
 
 
 def test_branch_of_a_clean_session_carries_nothing(reg, repo):
