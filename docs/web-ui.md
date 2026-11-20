@@ -789,7 +789,10 @@ a status line under its name; the parent carries a roll-up of its workers. Above
 assistant's editable agent file, its standing instructions; the chat window's
 head has the same editor under the same word, and so does the palette's
 **Assistant instructions (agent file)…** — "Agent" on its own means the coding
-agent only; the to-do list that used to sit here is the **To-do** bar now —
+agent only. If the file can't be read the editor says *Couldn't load the
+instructions.* with a **Retry**, and Save stays off until it loads, so an empty
+box never overwrites the real file; a failed restart is reported, and a click
+outside never drops unsaved edits. The to-do list that used to sit here is the **To-do** bar now —
 see [To-do](#to-do)), the **Prompts** bar (your saved prompts, one click from any
 session — see [Saved prompts](#saved-prompts)), the **Tickets** bar (pipeline on/off switch and state dot;
 it appears once a ticket source is connected), the **Pull requests** and
@@ -1124,7 +1127,7 @@ The pane shows a single **guided next-step button**:
 
 | Stage | Button | What it does |
 |---|---|---|
-| agent | **Commit…** | Prompts for a message; runs `git commit` in the Terminal tab (pre-commit hooks visible; auto-fix retries up to 5×) |
+| agent | **Commit…** | Prompts for a message; runs `git commit` in the Terminal tab (pre-commit hooks visible; auto-fix retries up to 5×). Closing the dialog without committing (`Esc`, Cancel, a click outside) keeps what you wrote for that session; a failed commit is a card that stays, with **Edit message** to reopen Commit with your text |
 | pre-commit ✗ | **Re-commit** | Restages the hook auto-fixes and retries with the same message |
 | committed | **Push** | `git push --no-verify -u origin HEAD` (hooks already ran) — plain git over your own remote, SSH or HTTPS |
 | pushed | **Open PR** | `gh pr create --base <base> --fill` when `gh` is authenticated; else the GitHub REST API with a token; else opens a prefilled compare URL in your browser |
@@ -1266,8 +1269,10 @@ adds a line for them (*Heavy jobs: fix-auth running · 2 waiting for a slot*).
 It also says the thing a person notices first: *Sessions may be slow to show
 what you type and their new output until memory recovers*, and that putting
 idle agents to sleep or closing sessions frees memory fastest (the wording
-lives in `lib/memorySlow.ts`). **Hide** lasts until the level worsens or
-clears and returns.
+lives in `lib/memorySlow.ts`). **See what's using it** opens the sidebar's
+Memory list (biggest sessions first; with that bar hidden, the same list opens
+above the notice). **Hide** lasts until the level worsens or clears and
+returns.
 
 **A slow server is not a lost one.** Under memory pressure the server itself
 can stall for seconds to minutes (every process waits on the disk), long
@@ -1343,7 +1348,9 @@ the box: **Agent · Terminal · Diff · Queue · Map**, then ⏩
 session's **memory** number once the server sends one (see *The memory
 number* below). Switched
 off until you want them: the **Thread** tab, the guided
-**Commit…** / next-step button, **History**, the cost chip, the diff stats and
+**Commit…** / next-step button, **History**, the cost chip (a button: `Tab`
+reaches it, `Enter` opens the breakdown, `Esc` closes it and returns focus,
+without leaving select mode), the diff stats and
 **−** (hide). (Map joined the default in 0.10 — tucked under ⋯ nobody found
 it; a saved header that hid it keeps it hidden.) Agent can't be switched off. There is no Pause button:
 pausing is the palette's *Pause session*, `mindflock pause` or
@@ -1672,7 +1679,8 @@ window closes it. The items, in groups:
   says the configured editor isn't installed here) · **Open preview ↗** `:port`
   when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
   window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
-  after a failed one · **Copy folder path**
+  after a failed one · **Copy folder path** · on a pane's ⋯ only, **Customize
+  header…** (Customize opened on its Pane header page)
 - then the two ways to leave a session: **✕ Close** and **Delete…**.
 
 Every verb's label, shortcut and when-it-applies rule comes from one table
@@ -2178,7 +2186,9 @@ agents, nests, leaves in a bird's colour and lit wood = changes, gold = could
 break), the toolbar's **Rules** group (⛔ Keep out / ✓ Only here) — then it ends on this
 session's next step ("5 changed — start with ⚠ Could break, then open the
 diff"), or, with none, on getting around (`/`, drag, double-click, ⌂ Whole
-tree, **?** for the legend). The steps are picked from what is on screen when
+tree, **?** for the legend, which `Esc` or a click on the map closes). The
+find box says *Searching…* until the answer for what you typed arrives, and
+`Enter` waits for it. The steps are picked from what is on screen when
 it opens: with nothing changed the birds card says every leaf is grey for now,
 a repo with no roots (no tests, docs or config) skips the roots card, and a
 toolbar card whose target isn't visible (a narrow toolbar) is skipped. The
@@ -2580,7 +2590,8 @@ desktop app doesn't implement).
 session (every repo you have a session on is listed, zones or not; each zone
 shows its kind), holds each repo's **Plan first** switch, and its **Derived
 outputs** (companions for green-scoped agents; the built-in lockfile/snapshot
-set is shown beside them). It is a modal like Intake: `Esc` closes it from
+set is shown beside them). Removing a zone (its ×) shows *Removed keep-out
+zone …* with **Undo**, which adds the same zone back. It is a modal like Intake: `Esc` closes it from
 anywhere, and `Delete` / `Ctrl+W` pressed inside it never close the session
 behind.
 
@@ -3543,7 +3554,10 @@ changes is never dropped by the next click: another card's **Edit** /
 inline *Discard changes to “name”?* row (**Discard** / **Keep editing**; `Esc`
 keeps editing), and a press on the backdrop doesn't close it. Saving under
 another template's name is refused (*A template named “x” already exists —
-pick another name.*). **Edit** opens the
+pick another name.*). `Ctrl+Enter` (`⌘+Enter`) saves from any field of the
+template or Schedule editor, as it submits New and Commit. A list that fails
+to load says *Couldn't load templates.* with the reason and a **Retry**.
+**Edit** opens the
 editor inline in the card — the New form's own parts, laid out the way New
 lays them out (`TemplateEditor.tsx`; `scope="tpl"` ids): **Name**; then the
 New form's Folder row — **Folder** (placeholder *The repo it works in*; a
@@ -6650,10 +6664,26 @@ A few screens got quieter:
   only when no such control is on screen). The same cue marks Intake's fields
   and its *Ignore comments from* lists, the launch flags, scroll speed,
   accounts, per-repo branches and an extension's switch (on its name); a
-  failed save's message carries the server's reason. A number field refuses a value it
+  failed save's message carries the server's reason. Appearance's switches and
+  minute fields, IDE auto-adopt, the Agent MCP switch, *Tell the agent when
+  shipping halts* and a custom agent's binary path use it too, and a switch no
+  longer says "on" before its save has answered.
+- **A screen that can't load says so** — *Couldn't load <what>.* with a
+  **Retry** (System logs, Your phone, Shared link, Traffic, Custom agents,
+  IDE), never an empty list or a switch that reads off. System logs keeps the
+  last good log on screen when a refresh fails, and **Copy log** copies only a
+  real log.
+- **Removals ask first** — deleting a custom agent (*Delete custom agent X?
+  Its file is removed.*) and revoking a guest link (*Revoke this guest link?
+  Whoever has it loses access.*) ask inline with Cancel focused, like Stop
+  sharing and Remove connection.
+- **Your phone follows the Tailscale card**: signing in there turns step 1 ✓
+  and shows the QR without leaving the screen. A number field refuses a value it
   can't take (below 0) with the reason under it — *Enter a number, 0 or more,
   or leave it blank for no limit.* — instead of saving `-2` as "no limit".
-- **Search settings…** heads the nav (`#settings-search`, on the command
+- **Search…** heads the nav (`#settings-search`, placeholder *Search…
+  ( Ctrl+F )*: `Ctrl+F` / `⌘+F` anywhere in Settings jumps to it instead of
+  opening the browser's find bar, as the list dialogs' filters do; on the command
   palette's own index, `palette/settingsSearch.ts`, synonyms included): the
   matches list under the box as you type, each with the same one-line
   subtitle as the palette's rows ("tour" → **General → Tours** *Replay the
