@@ -27815,6 +27815,7 @@ var useUi = create((set, get) => ({
 	barOrder: load$1("mf_barorder", []),
 	paneHeader: asPaneHeaderPref(load$1("mf_paneheader", null)),
 	customizePage: load$1("mf_customize_page", "sidebar") === "pane" ? "pane" : "sidebar",
+	memoryPopAsk: 0,
 	showFilter: load$1("mf_show_filter", true),
 	filterPeek: false,
 	reduceMotion: load$1("mf_reduce_motion", false),
@@ -28119,6 +28120,7 @@ var useUi = create((set, get) => ({
 		save("mf_customize_page", page);
 		set({ customizePage: page });
 	},
+	askMemoryPop: () => set({ memoryPopAsk: get().memoryPopAsk + 1 }),
 	setReduceMotion: (on) => {
 		save("mf_reduce_motion", on);
 		set({ reduceMotion: on });
@@ -29136,46 +29138,66 @@ function patchInstance(title, patch) {
 }
 var PANEL_STALE_MS = 2e4;
 var PANEL_STALE_RETRY_MS = 2e3;
+var PANEL_STALE_STREAK = 3;
+var PANEL_BACKOFF_MS = 15e3;
 var PANEL_GC_MS = 36e5;
 var PANELS = {
 	tickets: "/api/tickets",
 	"github-prs": "/api/github/prs",
 	"github-issues": "/api/github/issues"
 };
+var staleRuns = /* @__PURE__ */ new Map();
+function panelRefetchMs(stale, run) {
+	if (!stale) return false;
+	return run >= PANEL_STALE_STREAK ? PANEL_BACKOFF_MS : PANEL_STALE_RETRY_MS;
+}
+async function fetchPanel(key, fresh = false) {
+	let r;
+	try {
+		r = await api(PANELS[key] + (fresh ? "?fresh=1" : ""));
+	} catch (err) {
+		staleRuns.set(key, (staleRuns.get(key) ?? 0) + 1);
+		throw err;
+	}
+	const stale = !!r?.stale;
+	staleRuns.set(key, stale ? (staleRuns.get(key) ?? 0) + 1 : 0);
+	return r;
+}
+async function sweepPanel(key) {
+	await queryClient.cancelQueries({ queryKey: [key] });
+	return queryClient.fetchQuery({
+		queryKey: [key],
+		queryFn: () => fetchPanel(key, true),
+		staleTime: 0,
+		retry: false
+	}).catch(() => void 0);
+}
 function usePanelQuery(key, opts = {}) {
 	const q = useQuery({
 		queryKey: [key],
-		queryFn: () => api(PANELS[key]),
+		queryFn: () => fetchPanel(key),
 		enabled: opts.enabled ?? true,
 		staleTime: PANEL_STALE_MS,
 		gcTime: PANEL_GC_MS,
 		placeholderData: (prev) => prev,
 		retry: false,
-		refetchInterval: (query) => query.state.data?.stale ? PANEL_STALE_RETRY_MS : false
+		refetchInterval: (query) => panelRefetchMs(query.state.data?.stale, staleRuns.get(key) ?? 0)
 	});
-	const refresh = () => queryClient.fetchQuery({
-		queryKey: [key],
-		queryFn: () => api(PANELS[key] + "?fresh=1"),
-		staleTime: 0,
-		retry: false
-	}).catch(() => void 0);
+	const refresh = () => sweepPanel(key);
+	const stalled = !!q.data?.stale && (staleRuns.get(key) ?? 0) >= PANEL_STALE_STREAK;
 	return {
 		...q,
-		refresh
+		refresh,
+		stalled
 	};
 }
 function refreshPanel(key) {
-	return queryClient.fetchQuery({
-		queryKey: [key],
-		queryFn: () => api(PANELS[key] + "?fresh=1"),
-		staleTime: 0,
-		retry: false
-	}).catch(() => void 0);
+	return sweepPanel(key);
 }
 function prefetchIntakePanels() {
 	for (const key of Object.keys(PANELS)) queryClient.prefetchQuery({
 		queryKey: [key],
-		queryFn: () => api(PANELS[key]),
+		queryFn: () => fetchPanel(key),
 		staleTime: PANEL_STALE_MS,
 		gcTime: PANEL_GC_MS,
 		retry: false
@@ -29192,12 +29214,15 @@ function useEpicsQuery() {
 		retry: false,
 		refetchInterval: EPICS_POLL_MS
 	});
-	const refresh = () => queryClient.fetchQuery({
-		queryKey: ["epics"],
-		queryFn: () => api("/api/epics?refresh=1"),
-		staleTime: 0,
-		retry: false
-	}).catch(() => void 0);
+	const refresh = async () => {
+		await queryClient.cancelQueries({ queryKey: ["epics"] });
+		return queryClient.fetchQuery({
+			queryKey: ["epics"],
+			queryFn: () => api("/api/epics?refresh=1"),
+			staleTime: 0,
+			retry: false
+		}).catch(() => void 0);
+	};
 	return {
 		...q,
 		refresh
@@ -30481,6 +30506,35 @@ function focusTerm(title, kind = "agent") {
 	peekTerm(title, kind)?.term.focus();
 }
 //#endregion
+//#region src/components/settings/savedCue.ts
+var ROW = ".set-row, .notif-channel, .ntfy-field-row, .set-switch-row, .ext-row-head";
+var SHOW_MS = 1600;
+var FRESH_MS = 5e3;
+var touched = null;
+var timers = /* @__PURE__ */ new WeakMap();
+function noteTouched(target) {
+	if (target && typeof target.closest === "function") touched = {
+		el: target,
+		at: Date.now()
+	};
+}
+function cueTarget(el) {
+	const row = el.closest(ROW);
+	if (!row) return null;
+	return row.querySelector(".set-label") || row.querySelector(".prov-name") || row;
+}
+function flashSaved(el) {
+	const source = el ?? (touched && Date.now() - touched.at < FRESH_MS ? touched.el : null);
+	if (!source || !source.isConnected) return false;
+	const target = cueTarget(source);
+	if (!target) return false;
+	target.setAttribute("data-saved", "");
+	const prev = timers.get(target);
+	if (prev) clearTimeout(prev);
+	timers.set(target, setTimeout(() => target.removeAttribute("data-saved"), SHOW_MS));
+	return true;
+}
+//#endregion
 //#region src/lib/theme.ts
 function isLightNow() {
 	try {
@@ -31098,7 +31152,7 @@ function ReduceMotionRow() {
 				checked: reduceMotion,
 				onChange: (e) => {
 					setReduceMotion(e.target.checked);
-					toast(e.target.checked ? "Reduce motion on" : "Reduce motion off");
+					if (!flashSaved(e.target)) toast(e.target.checked ? "Reduce motion on" : "Reduce motion off");
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
@@ -31126,7 +31180,7 @@ function SkyBirdsRow() {
 				checked: on,
 				onChange: (e) => {
 					setOn(e.target.checked);
-					toast(e.target.checked ? "Birds in the Sky on" : "Birds in the Sky off");
+					if (!flashSaved(e.target)) toast(e.target.checked ? "Birds in the Sky on" : "Birds in the Sky off");
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
@@ -31139,11 +31193,12 @@ function TakeABreakRow() {
 	const setEvery = useUi((s) => s.setBreakEveryMin);
 	const [draft, setDraft] = (0, import_react.useState)(String(every));
 	(0, import_react.useEffect)(() => setDraft(String(every)), [every]);
-	const commit = (raw) => {
+	const commit = (el) => {
+		const raw = el.value;
 		const next = clampBreakMinutes(raw === "" ? every : raw);
 		setEvery(next);
 		setDraft(String(next));
-		if (on) toast("Break reminder every " + next + " min");
+		if (!flashSaved(el) && on) toast("Break reminder every " + next + " min");
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row set-switch-row",
@@ -31165,7 +31220,7 @@ function TakeABreakRow() {
 						step: 5,
 						value: draft,
 						onChange: (e) => setDraft(e.target.value),
-						onBlur: (e) => commit(e.target.value),
+						onBlur: (e) => commit(e.target),
 						onKeyDown: (e) => {
 							if (e.key === "Enter") e.target.blur();
 						}
@@ -31181,7 +31236,7 @@ function TakeABreakRow() {
 				checked: on,
 				onChange: (e) => {
 					setOn(e.target.checked);
-					toast(e.target.checked ? "Break reminder on — every " + every + " min" : "Break reminder off");
+					if (!flashSaved(e.target)) toast(e.target.checked ? "Break reminder on — every " + every + " min" : "Break reminder off");
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
@@ -31194,11 +31249,12 @@ function IdleFlockRow() {
 	const setAfter = useUi((s) => s.setIdleFlockAfterMin);
 	const [draft, setDraft] = (0, import_react.useState)(String(after));
 	(0, import_react.useEffect)(() => setDraft(String(after)), [after]);
-	const commit = (raw) => {
+	const commit = (el) => {
+		const raw = el.value;
 		const next = clampIdleMinutes(raw === "" ? after : raw);
 		setAfter(next);
 		setDraft(String(next));
-		if (on) toast("Idle flock after " + next + " min");
+		if (!flashSaved(el) && on) toast("Idle flock after " + next + " min");
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row set-switch-row",
@@ -31220,7 +31276,7 @@ function IdleFlockRow() {
 						step: 5,
 						value: draft,
 						onChange: (e) => setDraft(e.target.value),
-						onBlur: (e) => commit(e.target.value),
+						onBlur: (e) => commit(e.target),
 						onKeyDown: (e) => {
 							if (e.key === "Enter") e.target.blur();
 						}
@@ -31236,7 +31292,7 @@ function IdleFlockRow() {
 				checked: on,
 				onChange: (e) => {
 					setOn(e.target.checked);
-					toast(e.target.checked ? "Idle flock on — after " + after + " min" : "Idle flock off");
+					if (!flashSaved(e.target)) toast(e.target.checked ? "Idle flock on — after " + after + " min" : "Idle flock off");
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
@@ -40752,9 +40808,10 @@ function activateExtension(ext) {
 			const spec = ext.extension;
 			if ((spec.api_version || 1) > HOST_API_VERSION) throw new Error("needs host API level " + spec.api_version + " (this app provides 2)");
 			if (spec.stylesheet) injectStylesheet(rec, spec);
+			const url = rec.retries ? spec.module + "?retry=" + rec.retries : spec.module;
 			const entry = (await __vitePreload(() => import(
 				/* @vite-ignore */
-				spec.module
+				url
 ), []))?.default ?? window.mindflockExtensions?.[ext.id];
 			if (!entry || typeof entry.activate !== "function") throw new Error("module exports no activate()");
 			const apiObj = rec.api ?? (rec.api = makeApi(ext));
@@ -41018,6 +41075,7 @@ function mountExtPane(key, host) {
 	startRuntime(rec, key, runtime);
 	return () => {
 		runtime.el.remove();
+		records.get(extId)?.panes.get(key)?.el.remove();
 	};
 }
 function mountExtDialog(target, host) {
@@ -41033,6 +41091,45 @@ function mountExtDialog(target, host) {
 	return () => {
 		runtime.el.remove();
 	};
+}
+function retryExtSurface(key, kind) {
+	const { extId } = parseTarget(key);
+	const ext = known.get(extId);
+	const rec = records.get(extId);
+	if (!ext || !rec || rec.activating) return;
+	rec.ext = ext;
+	const runtime = liveRuntime(extId, key, kind);
+	if (!runtime) return;
+	if (runtime.started || runtime.error) {
+		const fresh = {
+			kind: runtime.kind,
+			el: makeSurfaceEl(extId),
+			surfaceId: runtime.surfaceId,
+			ref: runtime.ref,
+			ctx: runtime.ctx,
+			started: false,
+			epoch: ++epochCounter,
+			title: runtime.title
+		};
+		if (kind === "pane") rec.panes.set(key, fresh);
+		else rec.dialog = {
+			...fresh,
+			kind: "dialog",
+			target: key
+		};
+		runtime.el.replaceWith(fresh.el);
+		disposeRuntime(extId, runtime);
+	}
+	if (rec.status === "error") {
+		rec.status = "idle";
+		rec.error = void 0;
+		rec.activation = void 0;
+		rec.retries = (rec.retries || 0) + 1;
+	}
+	activateExtension(ext);
+	const waiting = [...rec.panes.entries(), ...rec.dialog ? [[rec.dialog.target, rec.dialog]] : []];
+	for (const [k, r] of waiting) if (!r.started && !r.error && !r.disposed) startRuntime(rec, k, r);
+	bump();
 }
 async function startRuntime(rec, key, runtime) {
 	if (runtime.started || runtime.disposed) return;
@@ -41321,6 +41418,73 @@ function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true
 	return portal ? (0, import_react_dom.createPortal)(shell, document.body) : shell;
 }
 //#endregion
+//#region src/extensions/ExtPaneBody.tsx
+function ExtSurfaceError({ label, error, onRetry }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ext-surface-status ext-surface-error",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				label,
+				" failed: ",
+				error || "no reason recorded"
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				onClick: onRetry,
+				children: "Try again"
+			}) }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "muted",
+				children: [
+					"See",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => openSettings("extensions"),
+						children: "Settings → Extensions"
+					}),
+					" ",
+					"for details."
+				]
+			})
+		]
+	});
+}
+function ExtPaneBody({ extKey }) {
+	(0, import_react.useSyncExternalStore)(subscribeHost, hostVersion);
+	const mountRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const el = mountRef.current;
+		if (!el) return;
+		return mountExtPane(extKey, el);
+	}, [extKey]);
+	const view = extPaneView(extKey);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ext-pane-body",
+		children: [
+			view.status === "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ext-surface-status muted",
+				children: [
+					"Loading ",
+					view.label,
+					"…"
+				]
+			}),
+			view.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtSurfaceError, {
+				label: view.label,
+				error: view.error,
+				onRetry: () => retryExtSurface(extKey, "pane")
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ext-surface-mount",
+				ref: mountRef
+			})
+		]
+	});
+}
+//#endregion
 //#region src/extensions/ExtensionDialog.tsx
 function ExtensionDialog() {
 	const open = useUi((s) => s.openDialog === "extension");
@@ -41364,16 +41528,10 @@ function ExtensionDialog() {
 							"…"
 						]
 					}),
-					view.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "ext-surface-status ext-surface-error",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-							view.label,
-							" failed: ",
-							view.error || "no reason recorded"
-						] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "muted",
-							children: "See Settings → Extensions for details."
-						})]
+					view.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtSurfaceError, {
+						label: view.label,
+						error: view.error,
+						onRetry: () => retryExtSurface(target, "dialog")
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "ext-surface-mount",
@@ -42570,6 +42728,23 @@ var SelectFlows = class {
 };
 var selectFlows = new SelectFlows();
 //#endregion
+//#region src/components/grid/visiblePoll.ts
+function pollWhileVisible(run, ms, doc = typeof document === "undefined" ? void 0 : document) {
+	const tick = () => {
+		if (doc?.hidden) return;
+		run();
+	};
+	const t = setInterval(tick, ms);
+	const onVis = () => {
+		if (!doc?.hidden) run();
+	};
+	doc?.addEventListener("visibilitychange", onVis);
+	return () => {
+		clearInterval(t);
+		doc?.removeEventListener("visibilitychange", onVis);
+	};
+}
+//#endregion
 //#region src/components/AnswerStrip.tsx
 var ANSWER_RECHECK_MS = 3e3;
 var ANSWERED_HOLD_MS = 4e3;
@@ -42799,7 +42974,7 @@ function useAnswerStrip(title, waiting, opts = {}) {
 	(0, import_react.useEffect)(() => {
 		if (!answered || !waiting) return;
 		const ctl = new AbortController();
-		const timer = window.setInterval(() => {
+		const stop = pollWhileVisible(() => {
 			fetchDialog(title, ctl.signal).then((dialog) => !ctl.signal.aborted && dispatch({
 				type: "loaded",
 				dialog
@@ -42807,7 +42982,7 @@ function useAnswerStrip(title, waiting, opts = {}) {
 		}, ANSWER_RECHECK_MS);
 		return () => {
 			ctl.abort();
-			clearInterval(timer);
+			stop();
 		};
 	}, [
 		answered,
@@ -42988,7 +43163,7 @@ function requestSessionVerify(title, notes = "", environment = "") {
 	});
 }
 function verifyStartedMessage(title, r) {
-	const session = r?.session || title;
+	const session = displayName(r?.session || title);
 	if (r?.queued) return "Verify starts when " + session + "'s current turn ends";
 	return "Verifying " + session + " — its agent writes its steps and works them in its terminal";
 }
@@ -43000,7 +43175,7 @@ async function startSessionVerify(title, opts = {}) {
 		if (opts.open !== false) openWalkingSession(title);
 		return true;
 	} catch (err) {
-		errorPop("Couldn't start verifying " + title, errMsg(err));
+		errorPop("Couldn't start verifying " + displayName(title), errMsg(err));
 		return false;
 	}
 }
@@ -50946,7 +51121,7 @@ function buildPaletteActions({ config, host, extensions }) {
 	});
 	acts.push({
 		label: "Customize…",
-		hint: "choose sidebar bars",
+		hint: "choose sidebar bars and the pane header",
 		run: () => ui.openDialogFor("customize")
 	});
 	acts.push({
@@ -63130,6 +63305,529 @@ function ConnBanner() {
 	});
 }
 //#endregion
+//#region src/components/usage/UsagePopover.tsx
+var closeCurrent = null;
+function escapeRefocus(active, pop, anchor) {
+	if (!active || active === anchor) return true;
+	if (pop && pop.contains(active)) return true;
+	return active.tagName === "BODY";
+}
+function UsagePopover({ anchor, onClose, children, className }) {
+	const popRef = (0, import_react.useRef)(null);
+	const onCloseRef = (0, import_react.useRef)(onClose);
+	onCloseRef.current = onClose;
+	(0, import_react.useEffect)(() => {
+		const close = () => onCloseRef.current();
+		if (closeCurrent) closeCurrent();
+		closeCurrent = close;
+		return () => {
+			if (closeCurrent === close) closeCurrent = null;
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		anchor.classList.add("pop-open");
+		return () => anchor.classList.remove("pop-open");
+	}, [anchor]);
+	(0, import_react.useLayoutEffect)(() => {
+		const pop = popRef.current;
+		if (!pop) return;
+		const r = anchor.getBoundingClientRect();
+		let top = r.bottom + 4;
+		const h = pop.offsetHeight;
+		if (top + h > window.innerHeight - 8 && r.top - 4 - h >= 8) top = r.top - 4 - h;
+		pop.style.top = top + "px";
+		let left = r.right - pop.offsetWidth;
+		const maxLeft = window.innerWidth - pop.offsetWidth - 8;
+		if (left > maxLeft) left = maxLeft;
+		if (left < 8) left = 8;
+		pop.style.left = left + "px";
+	});
+	(0, import_react.useEffect)(() => {
+		const onDocClick = (e) => {
+			const t = e.target;
+			if (!t) return;
+			if (popRef.current && popRef.current.contains(t)) return;
+			if (anchor.contains(t)) return;
+			onCloseRef.current();
+		};
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			if (escapeRefocus(document.activeElement, popRef.current, anchor)) anchor.focus();
+			onCloseRef.current();
+		};
+		const close = () => onCloseRef.current();
+		document.addEventListener("click", onDocClick);
+		document.addEventListener("keydown", onKey);
+		window.addEventListener("scroll", close, true);
+		window.addEventListener("resize", close);
+		return () => {
+			document.removeEventListener("click", onDocClick);
+			document.removeEventListener("keydown", onKey);
+			window.removeEventListener("scroll", close, true);
+			window.removeEventListener("resize", close);
+		};
+	}, [anchor]);
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		ref: popRef,
+		className: "usage-pop" + (className ? " " + className : ""),
+		style: {
+			top: 0,
+			left: 0
+		},
+		children
+	}), document.body);
+}
+function UsagePopTable({ rows }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("table", {
+		className: "usage-pop-tbl",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: rows.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: r[0] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+			className: "num" + (r[2] ? " " + r[2] : ""),
+			children: r[1]
+		})] }, i)) })
+	});
+}
+function UsagePopNote({ text }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "usage-pop-note",
+		children: text
+	});
+}
+//#endregion
+//#region src/lib/sessionMemory.ts
+function memoryReading(m) {
+	if (!m || typeof m !== "object") return null;
+	const mb = Number(m.mb);
+	if (!Number.isFinite(mb) || mb <= 0) return null;
+	return m;
+}
+function fmtMb(mb) {
+	const n = Math.max(0, Number(mb) || 0);
+	if (n < 1e3) return Math.round(n) + " MB";
+	const gb = n / 1024;
+	if (gb < 10) return gb.toFixed(1).replace(/\.0$/, "") + " GB";
+	return Math.round(gb) + " GB";
+}
+var WARN_MB = 2048;
+var CRIT_MB = 4096;
+var WARN_SHARE = .1;
+var CRIT_SHARE = .2;
+var PRESSURE_TOP = 3;
+var PRESSURE_MIN_MB = 512;
+function memoryTone(mb, totalMb, level, rank = -1) {
+	const share = totalMb > 0 ? mb / totalMb : 0;
+	if (mb >= CRIT_MB || share >= CRIT_SHARE) return "crit";
+	if ((level === "low" || level === "critical") && rank >= 0 && rank < PRESSURE_TOP && mb >= PRESSURE_MIN_MB) return "crit";
+	if (mb >= WARN_MB || share >= WARN_SHARE) return "warn";
+	return "";
+}
+function memoryRank(rows, title) {
+	return (rows || []).map((r) => ({
+		title: r.title,
+		mb: memoryReading(r.memory)?.mb ?? 0
+	})).filter((r) => r.mb > 0).sort((a, b) => b.mb - a.mb).findIndex((r) => r.title === title);
+}
+function memoryTip(m) {
+	let s = "Memory: " + fmtMb(m.mb);
+	if ((m.peak_mb || 0) > m.mb) s += " (peak " + fmtMb(m.peak_mb) + ")";
+	const parts = [];
+	if (m.agent_mb > 0) parts.push("agent " + fmtMb(m.agent_mb));
+	if (m.mcp_mb > 0) parts.push("MCP servers " + fmtMb(m.mcp_mb));
+	if (m.other_mb > 0) parts.push("other " + fmtMb(m.other_mb) + " (tests, servers…)");
+	if (m.procs > 0) parts.push(m.procs + (m.procs === 1 ? " process" : " processes"));
+	if (parts.length) s += " — " + parts.join(" · ");
+	return s;
+}
+//#endregion
+//#region src/components/usage/memoryModel.ts
+var MIB = 1048576;
+var num$3 = (v) => {
+	const n = typeof v === "number" ? v : NaN;
+	return Number.isFinite(n) ? n : null;
+};
+function asLevel(v) {
+	return v === "ok" || v === "low" || v === "critical" ? v : "unknown";
+}
+function machineFromDetail(sys) {
+	const s = sys || {};
+	const total = num$3(s.total_mb);
+	const avail = num$3(s.available_mb);
+	const out = {
+		totalMb: total && total > 0 ? total : null,
+		usedMb: total && total > 0 && avail != null ? Math.max(0, total - avail) : null,
+		swapTotalMb: num$3(s.swap_total_mb),
+		swapUsedMb: num$3(s.swap_used_mb),
+		level: asLevel(s.level)
+	};
+	const hTotal = num$3(s.host_total_mb);
+	const hAvail = num$3(s.host_available_mb);
+	if (hTotal && hTotal > 0 && hAvail != null) {
+		out.hostTotalMb = hTotal;
+		out.hostUsedMb = Math.max(0, hTotal - hAvail);
+		out.hostLevel = asLevel(s.host_level);
+		if (s.guest_level != null) out.guestLevel = asLevel(s.guest_level);
+	}
+	return out;
+}
+function machineFromReading(r) {
+	if (!r) return {
+		totalMb: null,
+		usedMb: null,
+		swapTotalMb: null,
+		swapUsedMb: null,
+		level: "unknown"
+	};
+	const total = num$3(r.total);
+	const avail = num$3(r.available);
+	const swapTotal = num$3(r.swap_total);
+	const swapFree = num$3(r.swap_free);
+	const totalMb = total && total > 0 ? Math.floor(total / MIB) : null;
+	return {
+		totalMb,
+		usedMb: totalMb != null && avail != null ? Math.max(0, totalMb - Math.floor(avail / MIB)) : null,
+		swapTotalMb: swapTotal != null ? Math.floor(swapTotal / MIB) : null,
+		swapUsedMb: swapTotal != null ? Math.max(0, Math.floor((swapTotal - (swapFree ?? 0)) / MIB)) : null,
+		level: asLevel(r.level)
+	};
+}
+function gb1(mb) {
+	return (Math.max(0, mb) / 1024).toFixed(1).replace(/\.0$/, "");
+}
+function fmtUsedOfTotal(usedMb, totalMb) {
+	if (usedMb == null || totalMb == null || totalMb <= 0) return null;
+	if (usedMb < 1e3 || totalMb < 1e3) return fmtMb(usedMb) + " / " + fmtMb(totalMb);
+	return gb1(usedMb) + " / " + gb1(totalMb) + " GB";
+}
+function memoryRowTone(level) {
+	if (level === "critical") return "crit";
+	if (level === "low") return "warn";
+	return "";
+}
+function levelWords(level, gate) {
+	switch (level) {
+		case "ok": return gate ? gaugeOkWords(gate) : "OK — room to spare";
+		case "low": return "Low — new agents wait";
+		case "critical": return "Critical — close something";
+		default: return "Not measured";
+	}
+}
+function hostIsCause(m) {
+	if (m.hostLevel == null || m.hostLevel !== m.level) return false;
+	if (m.level !== "low" && m.level !== "critical") return false;
+	return m.guestLevel == null || m.guestLevel !== m.level;
+}
+function memoryReasons(r) {
+	let line = (r && Array.isArray(r.why) ? r.why : []).filter((w) => typeof w === "string" && !!w.trim()).map((w) => w.trim()).join("; ");
+	if (!line) {
+		const msg = String(r?.message || "").trim();
+		if (!msg || /GB free of/.test(msg)) return "";
+		line = msg.replace(/^(windows )?memory is (critically low|critical|low):\s*/i, "");
+	}
+	return line ? line[0].toUpperCase() + line.slice(1) : "";
+}
+function memoryRowText(m, ctx = {}) {
+	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
+	const share = m.usedMb != null && m.totalMb ? Math.min(1, m.usedMb / m.totalMb) : null;
+	const head = "Memory " + (pair ?? "—");
+	let title = pair ? "This machine's memory: " + pair + " in use (" + Math.round((share || 0) * 100) + "%)" : "This machine's memory";
+	if (m.level === "low" || m.level === "critical") {
+		title += " — " + (hostIsCause(m) ? "Windows is short of memory: " : "") + levelWords(m.level).toLowerCase();
+		if (ctx.reasons) title += " (" + ctx.reasons[0].toLowerCase() + ctx.reasons.slice(1) + ")";
+	} else if (m.level === "ok" && ctx.gate) title += " — " + gaugeOkWords(ctx.gate).replace(/^OK(, but| —) /, "");
+	return {
+		head,
+		title: title + " — click for what holds it",
+		share
+	};
+}
+function shortCmd(cmd, max = 40) {
+	const t = (cmd || "").replace(/\s+/g, " ").trim().split(" ").map((w) => /^\/\S+\/[^/]+$/.test(w) ? w.slice(w.lastIndexOf("/") + 1) : w).join(" ");
+	return t.length <= max ? t : t.slice(0, max - 1) + "…";
+}
+function memoryPopModel(detail, fallback, aliases = {}, ctx = {}) {
+	const m = detail ? machineFromDetail(detail.system) : fallback;
+	const machine = [];
+	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
+	if (pair) {
+		const pct = Math.round((m.usedMb || 0) / (m.totalMb || 1) * 100);
+		machine.push(["In use", pair + " (" + pct + "%)"]);
+	}
+	if ((m.swapUsedMb || 0) > 0) machine.push(["Swap", fmtMb(m.swapUsedMb || 0) + (m.swapTotalMb ? " of " + fmtMb(m.swapTotalMb) : "")]);
+	const host = fmtUsedOfTotal(m.hostUsedMb ?? null, m.hostTotalMb ?? null);
+	if (host) {
+		const pct = Math.round((m.hostUsedMb || 0) / (m.hostTotalMb || 1) * 100);
+		machine.push(["Windows", host + " (" + pct + "%)"]);
+	}
+	machine.push([
+		"Pressure",
+		(hostIsCause(m) ? "Windows: " : "") + levelWords(m.level, ctx.gate),
+		"wrap"
+	]);
+	if (ctx.reasons && (m.level === "low" || m.level === "critical")) machine.push([
+		"Why",
+		ctx.reasons,
+		"wrap"
+	]);
+	const sess = detail && Array.isArray(detail.sessions) ? detail.sessions.filter((r) => r && r.mb > 0) : [];
+	const oth = detail && Array.isArray(detail.others) ? detail.others.filter((r) => r && r.mb > 0) : [];
+	sess.sort((a, b) => b.mb - a.mb);
+	oth.sort((a, b) => b.mb - a.mb);
+	const top = Math.max(1, ...sess.map((r) => r.mb), ...oth.map((r) => r.mb));
+	const sessions = sess.map((r) => {
+		const parts = [];
+		if ((r.agent_mb || 0) > 0) parts.push("agent " + fmtMb(r.agent_mb || 0));
+		if ((r.mcp_mb || 0) > 0) parts.push("MCP servers " + fmtMb(r.mcp_mb || 0));
+		if ((r.other_mb || 0) > 0) parts.push("other " + fmtMb(r.other_mb || 0));
+		const label = aliases[r.title] || r.title;
+		return {
+			key: "s:" + r.title,
+			title: r.title,
+			label,
+			sub: "",
+			tip: label + ": " + fmtMb(r.mb) + (parts.length ? " — " + parts.join(" · ") : "") + " — click to open it",
+			mb: r.mb,
+			value: fmtMb(r.mb),
+			frac: r.mb / top
+		};
+	});
+	const others = oth.map((r) => {
+		const label = r.server ? "MindFlock server" : r.name || "process " + r.pid;
+		return {
+			key: "p:" + r.pid,
+			title: "",
+			label,
+			sub: shortCmd(r.cmd),
+			tip: label + " (pid " + r.pid + "): " + fmtMb(r.mb) + (r.cmd ? "\n" + r.cmd : ""),
+			mb: r.mb,
+			value: fmtMb(r.mb),
+			frac: r.mb / top
+		};
+	});
+	return {
+		machine,
+		tone: memoryRowTone(m.level),
+		sessions,
+		others,
+		machineOnly: !detail
+	};
+}
+function sparkPoints(samples, w, h, maxPoints = 120) {
+	const pts = [];
+	for (const s of samples || []) {
+		const m = machineFromDetail(s && s.system);
+		if (m.usedMb == null || m.totalMb == null || !Number.isFinite(s.at)) continue;
+		pts.push({
+			at: s.at,
+			used: m.usedMb,
+			total: m.totalMb
+		});
+	}
+	if (pts.length < 2) return null;
+	const step = Math.max(1, Math.ceil(pts.length / maxPoints));
+	const kept = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+	const t0 = kept[0].at;
+	const span = Math.max(1, kept[kept.length - 1].at - t0);
+	const totalMb = Math.max(...kept.map((p) => p.total));
+	const r1 = (n) => Math.round(n * 10) / 10;
+	return {
+		points: kept.map((p) => r1((p.at - t0) / span * w) + "," + r1(h - Math.min(p.used, totalMb) / totalMb * h)).join(" "),
+		lastUsedMb: kept[kept.length - 1].used,
+		totalMb
+	};
+}
+//#endregion
+//#region src/components/usage/OverallMemory.tsx
+var SPARK_W = 200;
+var SPARK_H = 28;
+function BarRows({ rows, onPick }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+		className: "mem-pop-list",
+		children: rows.map((r) => {
+			const inner = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "mem-pop-name",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mem-pop-label",
+						children: r.label
+					}), r.sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mem-pop-sub",
+						children: r.sub
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mem-pop-bar",
+					"aria-hidden": "true",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.max(2, Math.round(r.frac * 100)) + "%" } })
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mem-pop-num",
+					children: r.value
+				})
+			] });
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: onPick && r.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "mem-pop-row mem-pop-pick",
+				title: r.tip,
+				onClick: (ev) => {
+					ev.stopPropagation();
+					onPick(r.title);
+				},
+				children: inner
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mem-pop-row",
+				title: r.tip,
+				children: inner
+			}) }, r.key);
+		})
+	});
+}
+function useMemoryPopData(open, detailOn) {
+	const aliases = useUi((s) => s.aliases);
+	const detailQ = useMemoryDetail(detailOn);
+	const { data: reading } = useMemory();
+	const detail = detailQ.isError ? null : detailQ.data ?? null;
+	const { data: hist } = useMemoryHistory(open && !!detail);
+	const machine = (0, import_react.useMemo)(() => detail ? machineFromDetail(detail.system) : machineFromReading(reading), [detail, reading]);
+	const ctx = (0, import_react.useMemo)(() => ({
+		gate: gateWhy(reading?.gate),
+		reasons: memoryReasons(reading)
+	}), [reading]);
+	return {
+		detailQ,
+		machine,
+		ctx,
+		model: (0, import_react.useMemo)(() => open ? memoryPopModel(detail, machine, aliases, ctx) : null, [
+			open,
+			detail,
+			machine,
+			aliases,
+			ctx
+		]),
+		spark: (0, import_react.useMemo)(() => open && hist ? sparkPoints(hist.samples, SPARK_W, SPARK_H) : null, [open, hist])
+	};
+}
+function pickSession(t) {
+	selectSession(t);
+	const ui = useUi.getState();
+	if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
+}
+function MemoryPopBody({ model, spark, onPick }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "usage-pop-head" + (model.tone ? " mem-" + model.tone : ""),
+			children: "This machine"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: model.machine }),
+		spark && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "mem-spark",
+			title: "Memory in use over the last hour — now " + fmtMb(spark.lastUsedMb) + " of " + fmtMb(spark.totalMb),
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+				viewBox: `0 0 ${SPARK_W} ${SPARK_H}`,
+				preserveAspectRatio: "none",
+				role: "img",
+				"aria-label": "Memory in use over the last hour",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", {
+					points: spark.points,
+					fill: "none",
+					vectorEffect: "non-scaling-stroke"
+				})
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "mem-spark-cap",
+				children: "last hour"
+			})]
+		}),
+		model.sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "usage-pop-head mem-pop-sec",
+			children: "Sessions"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BarRows, {
+			rows: model.sessions,
+			onPick
+		})] }),
+		model.others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "usage-pop-head mem-pop-sec",
+			children: "Outside MindFlock"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BarRows, { rows: model.others })] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopNote, { text: model.machineOnly ? "This server reports the machine only — update MindFlock to see what each session holds." : "Each session counts its whole process tree (agent, MCP servers, tests), sampled every 15 s." })
+	] });
+}
+function memoryRowShown(sidebarHidden, row) {
+	return !sidebarHidden && !!row && row.offsetParent !== null;
+}
+function MemoryPopAt({ anchor, className, onClose }) {
+	const { model, spark } = useMemoryPopData(true, true);
+	if (!model) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopover, {
+		anchor,
+		className,
+		onClose,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryPopBody, {
+			model,
+			spark,
+			onPick: (t) => {
+				pickSession(t);
+				onClose();
+			}
+		})
+	});
+}
+function OverallMemory() {
+	const sidebarHidden = useUi((s) => s.sidebarHidden);
+	const btnRef = (0, import_react.useRef)(null);
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const { detailQ, machine, ctx, model, spark } = useMemoryPopData(open, !sidebarHidden);
+	const { head, title, share } = memoryRowText(machine, ctx);
+	const tone = memoryRowTone(machine.level);
+	const ask = useUi((s) => s.memoryPopAsk);
+	const seenAsk = (0, import_react.useRef)(ask);
+	(0, import_react.useEffect)(() => {
+		if (ask === seenAsk.current) return;
+		seenAsk.current = ask;
+		setOpen(true);
+		if (!sidebarHidden) detailQ.refetch();
+	}, [ask]);
+	if (machine.totalMb == null) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		id: "overall-memory",
+		ref: btnRef,
+		className: "overall-usage overall-memory" + (tone ? " mem-" + tone : ""),
+		type: "button",
+		title,
+		onClick: (ev) => {
+			ev.stopPropagation();
+			setOpen((o) => {
+				if (!o && !sidebarHidden) detailQ.refetch();
+				return !o;
+			});
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "usage-head",
+				children: head
+			}),
+			share != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "mem-meter",
+				"aria-hidden": "true",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.round(share * 100) + "%" } })
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "caret",
+				children: "▾"
+			})
+		]
+	}), open && btnRef.current && model && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopover, {
+		anchor: btnRef.current,
+		onClose: () => setOpen(false),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryPopBody, {
+			model,
+			spark,
+			onPick: (t) => {
+				pickSession(t);
+				setOpen(false);
+			}
+		})
+	})] });
+}
+//#endregion
 //#region src/components/MemoryNotice.tsx
 var GB = 1024 ** 3;
 var RANK$1 = {
@@ -63188,10 +63886,13 @@ function slotsLine(s) {
 function MemoryNotice() {
 	const { data, isError } = useMemory();
 	const [hiddenAt, setHiddenAt] = (0, import_react.useState)(0);
+	const seeRef = (0, import_react.useRef)(null);
+	const [popHere, setPopHere] = (0, import_react.useState)(false);
 	const rank = RANK$1[data?.level || "ok"] ?? 0;
 	const shown = !!data && !isError && rank > 0 && !(hiddenAt && rank <= hiddenAt);
 	const { data: slots } = useSlots(shown);
 	if (hiddenAt && (rank === 0 || rank > hiddenAt)) setHiddenAt(0);
+	if (!shown && popHere) setPopHere(false);
 	if (!data || !shown) return null;
 	const heavy = slotsLine(slots);
 	const critical = data.level === "critical";
@@ -63240,20 +63941,48 @@ function MemoryNotice() {
 					critical ? " The system may start killing agents soon." : ""
 				]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-foot",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					ref: seeRef,
+					className: "linklike mn-see",
+					title: "Sessions and other processes, biggest first",
+					onClick: (ev) => {
+						ev.stopPropagation();
+						const ui = useUi.getState();
+						if (memoryRowShown(ui.sidebarHidden, document.getElementById("overall-memory"))) ui.askMemoryPop();
+						else setPopHere((o) => !o);
+					},
+					children: "See what's using it"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "mn-btn",
 					onClick: () => setHiddenAt(rank),
 					children: "Hide"
-				})
+				})]
+			}),
+			popHere && seeRef.current && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryPopAt, {
+				anchor: seeRef.current,
+				className: "mem-pop-over-notice",
+				onClose: () => setPopHere(false)
 			})
 		]
 	});
 }
 //#endregion
 //#region src/components/StateNotice.tsx
+function restoreCommand(backup) {
+	const win = /^[A-Za-z]:[\\/]/.test(backup) || backup.includes("\\") && !backup.includes("/");
+	const cut = Math.max(backup.lastIndexOf("/"), win ? backup.lastIndexOf("\\") : -1);
+	const dest = (cut >= 0 ? backup.slice(0, cut + 1) : "") + "state.json";
+	if (win) {
+		const q = (x) => "'" + x.replace(/'/g, "''") + "'";
+		return "Move-Item -Force " + q(backup) + " " + q(dest);
+	}
+	const q = (x) => "'" + x.replace(/'/g, "'\\''") + "'";
+	return "mv " + q(backup) + " " + q(dest);
+}
 function StateNotice() {
 	const notice = useDoctor().data?.state_notice;
 	const [dismissed, setDismissed] = (0, import_react.useState)(false);
@@ -63291,7 +64020,15 @@ function StateNotice() {
 							className: "sn-path",
 							children: "state.json"
 						}),
-						" to recover them."
+						" to recover them.",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "sn-copy",
+							title: restoreCommand(notice.backup_path),
+							onClick: () => void copyText(restoreCommand(notice.backup_path)).then((ok) => toast(ok ? "Copied — run it in a terminal after upgrading" : "Copy failed")),
+							children: "Copy the rename command"
+						})
 					] }) : " The original file could not be moved aside, so check ~/.mindflock/state.json before making changes."
 				]
 			}),
@@ -64407,35 +65144,6 @@ var SKIP_PERMS_LABEL = "⚠ Skip permission prompts";
 var SKIP_PERMS_TITLE = "The agent runs commands and edits files without asking you";
 var NOTHING_TO_PUSH = "Nothing to push yet";
 var CONNECT_GITHUB_FOR_PRS = "Connect GitHub to open PRs";
-//#endregion
-//#region src/components/settings/savedCue.ts
-var ROW = ".set-row, .notif-channel, .ntfy-field-row, .set-switch-row, .ext-row-head";
-var SHOW_MS = 1600;
-var FRESH_MS = 5e3;
-var touched = null;
-var timers = /* @__PURE__ */ new WeakMap();
-function noteTouched(target) {
-	if (target && typeof target.closest === "function") touched = {
-		el: target,
-		at: Date.now()
-	};
-}
-function cueTarget(el) {
-	const row = el.closest(ROW);
-	if (!row) return null;
-	return row.querySelector(".set-label") || row.querySelector(".prov-name") || row;
-}
-function flashSaved(el) {
-	const source = el ?? (touched && Date.now() - touched.at < FRESH_MS ? touched.el : null);
-	if (!source || !source.isConnected) return false;
-	const target = cueTarget(source);
-	if (!target) return false;
-	target.setAttribute("data-saved", "");
-	const prev = timers.get(target);
-	if (prev) clearTimeout(prev);
-	timers.set(target, setTimeout(() => target.removeAttribute("data-saved"), SHOW_MS));
-	return true;
-}
 //#endregion
 //#region src/components/intake/autosave.ts
 var AUTOSAVE_MS = 700;
@@ -66075,6 +66783,16 @@ function sessionMenu$1(inst, ctx, opts = {}) {
 			run: () => copyText(folder).then((ok) => {
 				if (ok) toast("Copied path");
 			})
+		},
+		!!opts.visibleTabs && {
+			key: "customize-header",
+			label: "Customize header…",
+			title: "Choose what a pane's header shows: tabs, chips, the next step",
+			run: () => {
+				const ui = useUi.getState();
+				ui.setCustomizePage("pane");
+				ui.openDialogFor("customize");
+			}
 		}
 	]);
 	const danger = keep([{
@@ -66226,17 +66944,23 @@ function VerifyStartForm({ title, repo, onClose }) {
 	(0, import_react.useEffect)(() => {
 		field.current?.focus();
 	}, []);
+	const busyRef = (0, import_react.useRef)(false);
 	const start = async () => {
-		if (busy) return;
+		if (busyRef.current) return;
+		busyRef.current = true;
 		setBusy(true);
+		let ok = false;
 		try {
-			if (await startSessionVerify(title, {
+			ok = await startSessionVerify(title, {
 				notes,
 				environment: where,
 				open: false
-			})) onClose();
+			});
+			if (ok) onClose();
 		} finally {
+			busyRef.current = false;
 			setBusy(false);
+			if (!ok) field.current?.focus();
 		}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
@@ -66263,7 +66987,7 @@ function VerifyStartForm({ title, repo, onClose }) {
 				placeholder: "What should it prove? (optional)",
 				"aria-label": "What should it prove? (optional)",
 				value: notes,
-				disabled: busy,
+				readOnly: busy,
 				onChange: (e) => setNotes(e.target.value),
 				onKeyDown: (e) => {
 					if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -66290,7 +67014,7 @@ function VerifyStartForm({ title, repo, onClose }) {
 				className: "btn-primary pv-form-start",
 				disabled: busy,
 				"aria-busy": busy || void 0,
-				children: "Start"
+				children: busy ? "Starting…" : "Start"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
@@ -68616,6 +69340,7 @@ function GuestLinks() {
 	const [install, setInstall] = (0, import_react.useState)([]);
 	const [understood, setUnderstood] = (0, import_react.useState)(false);
 	const [pickOpen, setPickOpen] = (0, import_react.useState)(false);
+	const [confirmRevoke, setConfirmRevoke] = (0, import_react.useState)(null);
 	const sessions = (0, import_react.useMemo)(() => (instances || []).filter((i) => !i.device && !i.hidden_by && !i.pending && !i.locked && !i.parent), [instances]);
 	const ack = (on) => {
 		setUnderstood(on);
@@ -68642,7 +69367,10 @@ function GuestLinks() {
 	const starting = tunnel?.state === "starting";
 	(0, import_react.useEffect)(() => {
 		if (!starting) return;
-		const t = setInterval(() => void load(), 2e3);
+		const t = setInterval(() => {
+			if (document.hidden) return;
+			load();
+		}, 2e3);
 		return () => clearInterval(t);
 	}, [starting, load]);
 	const needsInstall = !!tunnel && !tunnel.installed && (links?.length || 0) > 0;
@@ -68689,6 +69417,7 @@ function GuestLinks() {
 		setBusy(true);
 		try {
 			await api("/api/guests/" + encodeURIComponent(id), { method: "DELETE" });
+			setConfirmRevoke(null);
 			if (made === id) setMade(null);
 			await load();
 			toast("Guest link revoked");
@@ -68974,10 +69703,19 @@ function GuestLinks() {
 						" ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "test-btn",
-							disabled: busy,
-							onClick: () => void revoke(l.id),
-							children: "Revoke"
+							className: "test-btn peer-danger",
+							disabled: busy || confirmRevoke === l.id,
+							onClick: () => setConfirmRevoke(l.id),
+							children: "Revoke…"
+						}),
+						confirmRevoke === l.id && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+							id: "peer-guests-revoke-confirm",
+							title: "Revoke this guest link?",
+							body: "Whoever has it loses access.",
+							confirmLabel: busy ? "Revoking…" : "Revoke",
+							busy,
+							onConfirm: () => void revoke(l.id),
+							onCancel: () => setConfirmRevoke(null)
 						})
 					]
 				}, l.id))
@@ -69628,476 +70366,6 @@ function ExtensionBar({ extId }) {
 			}, b.command))
 		})]
 	});
-}
-//#endregion
-//#region src/components/usage/UsagePopover.tsx
-var closeCurrent = null;
-function UsagePopover({ anchor, onClose, children }) {
-	const popRef = (0, import_react.useRef)(null);
-	const onCloseRef = (0, import_react.useRef)(onClose);
-	onCloseRef.current = onClose;
-	(0, import_react.useEffect)(() => {
-		const close = () => onCloseRef.current();
-		if (closeCurrent) closeCurrent();
-		closeCurrent = close;
-		return () => {
-			if (closeCurrent === close) closeCurrent = null;
-		};
-	}, []);
-	(0, import_react.useEffect)(() => {
-		anchor.classList.add("pop-open");
-		return () => anchor.classList.remove("pop-open");
-	}, [anchor]);
-	(0, import_react.useLayoutEffect)(() => {
-		const pop = popRef.current;
-		if (!pop) return;
-		const r = anchor.getBoundingClientRect();
-		let top = r.bottom + 4;
-		const h = pop.offsetHeight;
-		if (top + h > window.innerHeight - 8 && r.top - 4 - h >= 8) top = r.top - 4 - h;
-		pop.style.top = top + "px";
-		let left = r.right - pop.offsetWidth;
-		const maxLeft = window.innerWidth - pop.offsetWidth - 8;
-		if (left > maxLeft) left = maxLeft;
-		if (left < 8) left = 8;
-		pop.style.left = left + "px";
-	});
-	(0, import_react.useEffect)(() => {
-		const onDocClick = (e) => {
-			const t = e.target;
-			if (!t) return;
-			if (popRef.current && popRef.current.contains(t)) return;
-			if (anchor.contains(t)) return;
-			onCloseRef.current();
-		};
-		const onKey = (e) => {
-			if (e.key === "Escape") onCloseRef.current();
-		};
-		const close = () => onCloseRef.current();
-		document.addEventListener("click", onDocClick);
-		document.addEventListener("keydown", onKey);
-		window.addEventListener("scroll", close, true);
-		window.addEventListener("resize", close);
-		return () => {
-			document.removeEventListener("click", onDocClick);
-			document.removeEventListener("keydown", onKey);
-			window.removeEventListener("scroll", close, true);
-			window.removeEventListener("resize", close);
-		};
-	}, [anchor]);
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		ref: popRef,
-		className: "usage-pop",
-		style: {
-			top: 0,
-			left: 0
-		},
-		children
-	}), document.body);
-}
-function UsagePopTable({ rows }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("table", {
-		className: "usage-pop-tbl",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: rows.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: r[0] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
-			className: "num" + (r[2] ? " " + r[2] : ""),
-			children: r[1]
-		})] }, i)) })
-	});
-}
-function UsagePopNote({ text }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "usage-pop-note",
-		children: text
-	});
-}
-//#endregion
-//#region src/lib/sessionMemory.ts
-function memoryReading(m) {
-	if (!m || typeof m !== "object") return null;
-	const mb = Number(m.mb);
-	if (!Number.isFinite(mb) || mb <= 0) return null;
-	return m;
-}
-function fmtMb(mb) {
-	const n = Math.max(0, Number(mb) || 0);
-	if (n < 1e3) return Math.round(n) + " MB";
-	const gb = n / 1024;
-	if (gb < 10) return gb.toFixed(1).replace(/\.0$/, "") + " GB";
-	return Math.round(gb) + " GB";
-}
-var WARN_MB = 2048;
-var CRIT_MB = 4096;
-var WARN_SHARE = .1;
-var CRIT_SHARE = .2;
-var PRESSURE_TOP = 3;
-var PRESSURE_MIN_MB = 512;
-function memoryTone(mb, totalMb, level, rank = -1) {
-	const share = totalMb > 0 ? mb / totalMb : 0;
-	if (mb >= CRIT_MB || share >= CRIT_SHARE) return "crit";
-	if ((level === "low" || level === "critical") && rank >= 0 && rank < PRESSURE_TOP && mb >= PRESSURE_MIN_MB) return "crit";
-	if (mb >= WARN_MB || share >= WARN_SHARE) return "warn";
-	return "";
-}
-function memoryRank(rows, title) {
-	return (rows || []).map((r) => ({
-		title: r.title,
-		mb: memoryReading(r.memory)?.mb ?? 0
-	})).filter((r) => r.mb > 0).sort((a, b) => b.mb - a.mb).findIndex((r) => r.title === title);
-}
-function memoryTip(m) {
-	let s = "Memory: " + fmtMb(m.mb);
-	if ((m.peak_mb || 0) > m.mb) s += " (peak " + fmtMb(m.peak_mb) + ")";
-	const parts = [];
-	if (m.agent_mb > 0) parts.push("agent " + fmtMb(m.agent_mb));
-	if (m.mcp_mb > 0) parts.push("MCP servers " + fmtMb(m.mcp_mb));
-	if (m.other_mb > 0) parts.push("other " + fmtMb(m.other_mb) + " (tests, servers…)");
-	if (m.procs > 0) parts.push(m.procs + (m.procs === 1 ? " process" : " processes"));
-	if (parts.length) s += " — " + parts.join(" · ");
-	return s;
-}
-//#endregion
-//#region src/components/usage/memoryModel.ts
-var MIB = 1048576;
-var num$3 = (v) => {
-	const n = typeof v === "number" ? v : NaN;
-	return Number.isFinite(n) ? n : null;
-};
-function asLevel(v) {
-	return v === "ok" || v === "low" || v === "critical" ? v : "unknown";
-}
-function machineFromDetail(sys) {
-	const s = sys || {};
-	const total = num$3(s.total_mb);
-	const avail = num$3(s.available_mb);
-	const out = {
-		totalMb: total && total > 0 ? total : null,
-		usedMb: total && total > 0 && avail != null ? Math.max(0, total - avail) : null,
-		swapTotalMb: num$3(s.swap_total_mb),
-		swapUsedMb: num$3(s.swap_used_mb),
-		level: asLevel(s.level)
-	};
-	const hTotal = num$3(s.host_total_mb);
-	const hAvail = num$3(s.host_available_mb);
-	if (hTotal && hTotal > 0 && hAvail != null) {
-		out.hostTotalMb = hTotal;
-		out.hostUsedMb = Math.max(0, hTotal - hAvail);
-		out.hostLevel = asLevel(s.host_level);
-		if (s.guest_level != null) out.guestLevel = asLevel(s.guest_level);
-	}
-	return out;
-}
-function machineFromReading(r) {
-	if (!r) return {
-		totalMb: null,
-		usedMb: null,
-		swapTotalMb: null,
-		swapUsedMb: null,
-		level: "unknown"
-	};
-	const total = num$3(r.total);
-	const avail = num$3(r.available);
-	const swapTotal = num$3(r.swap_total);
-	const swapFree = num$3(r.swap_free);
-	const totalMb = total && total > 0 ? Math.floor(total / MIB) : null;
-	return {
-		totalMb,
-		usedMb: totalMb != null && avail != null ? Math.max(0, totalMb - Math.floor(avail / MIB)) : null,
-		swapTotalMb: swapTotal != null ? Math.floor(swapTotal / MIB) : null,
-		swapUsedMb: swapTotal != null ? Math.max(0, Math.floor((swapTotal - (swapFree ?? 0)) / MIB)) : null,
-		level: asLevel(r.level)
-	};
-}
-function gb1(mb) {
-	return (Math.max(0, mb) / 1024).toFixed(1).replace(/\.0$/, "");
-}
-function fmtUsedOfTotal(usedMb, totalMb) {
-	if (usedMb == null || totalMb == null || totalMb <= 0) return null;
-	if (usedMb < 1e3 || totalMb < 1e3) return fmtMb(usedMb) + " / " + fmtMb(totalMb);
-	return gb1(usedMb) + " / " + gb1(totalMb) + " GB";
-}
-function memoryRowTone(level) {
-	if (level === "critical") return "crit";
-	if (level === "low") return "warn";
-	return "";
-}
-function levelWords(level, gate) {
-	switch (level) {
-		case "ok": return gate ? gaugeOkWords(gate) : "OK — room to spare";
-		case "low": return "Low — new agents wait";
-		case "critical": return "Critical — close something";
-		default: return "Not measured";
-	}
-}
-function hostIsCause(m) {
-	if (m.hostLevel == null || m.hostLevel !== m.level) return false;
-	if (m.level !== "low" && m.level !== "critical") return false;
-	return m.guestLevel == null || m.guestLevel !== m.level;
-}
-function memoryReasons(r) {
-	let line = (r && Array.isArray(r.why) ? r.why : []).filter((w) => typeof w === "string" && !!w.trim()).map((w) => w.trim()).join("; ");
-	if (!line) {
-		const msg = String(r?.message || "").trim();
-		if (!msg || /GB free of/.test(msg)) return "";
-		line = msg.replace(/^(windows )?memory is (critically low|critical|low):\s*/i, "");
-	}
-	return line ? line[0].toUpperCase() + line.slice(1) : "";
-}
-function memoryRowText(m, ctx = {}) {
-	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
-	const share = m.usedMb != null && m.totalMb ? Math.min(1, m.usedMb / m.totalMb) : null;
-	const head = "Memory " + (pair ?? "—");
-	let title = pair ? "This machine's memory: " + pair + " in use (" + Math.round((share || 0) * 100) + "%)" : "This machine's memory";
-	if (m.level === "low" || m.level === "critical") {
-		title += " — " + (hostIsCause(m) ? "Windows is short of memory: " : "") + levelWords(m.level).toLowerCase();
-		if (ctx.reasons) title += " (" + ctx.reasons[0].toLowerCase() + ctx.reasons.slice(1) + ")";
-	} else if (m.level === "ok" && ctx.gate) title += " — " + gaugeOkWords(ctx.gate).replace(/^OK(, but| —) /, "");
-	return {
-		head,
-		title: title + " — click for what holds it",
-		share
-	};
-}
-function shortCmd(cmd, max = 40) {
-	const t = (cmd || "").replace(/\s+/g, " ").trim().split(" ").map((w) => /^\/\S+\/[^/]+$/.test(w) ? w.slice(w.lastIndexOf("/") + 1) : w).join(" ");
-	return t.length <= max ? t : t.slice(0, max - 1) + "…";
-}
-function memoryPopModel(detail, fallback, aliases = {}, ctx = {}) {
-	const m = detail ? machineFromDetail(detail.system) : fallback;
-	const machine = [];
-	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
-	if (pair) {
-		const pct = Math.round((m.usedMb || 0) / (m.totalMb || 1) * 100);
-		machine.push(["In use", pair + " (" + pct + "%)"]);
-	}
-	if ((m.swapUsedMb || 0) > 0) machine.push(["Swap", fmtMb(m.swapUsedMb || 0) + (m.swapTotalMb ? " of " + fmtMb(m.swapTotalMb) : "")]);
-	const host = fmtUsedOfTotal(m.hostUsedMb ?? null, m.hostTotalMb ?? null);
-	if (host) {
-		const pct = Math.round((m.hostUsedMb || 0) / (m.hostTotalMb || 1) * 100);
-		machine.push(["Windows", host + " (" + pct + "%)"]);
-	}
-	machine.push([
-		"Pressure",
-		(hostIsCause(m) ? "Windows: " : "") + levelWords(m.level, ctx.gate),
-		"wrap"
-	]);
-	if (ctx.reasons && (m.level === "low" || m.level === "critical")) machine.push([
-		"Why",
-		ctx.reasons,
-		"wrap"
-	]);
-	const sess = detail && Array.isArray(detail.sessions) ? detail.sessions.filter((r) => r && r.mb > 0) : [];
-	const oth = detail && Array.isArray(detail.others) ? detail.others.filter((r) => r && r.mb > 0) : [];
-	sess.sort((a, b) => b.mb - a.mb);
-	oth.sort((a, b) => b.mb - a.mb);
-	const top = Math.max(1, ...sess.map((r) => r.mb), ...oth.map((r) => r.mb));
-	const sessions = sess.map((r) => {
-		const parts = [];
-		if ((r.agent_mb || 0) > 0) parts.push("agent " + fmtMb(r.agent_mb || 0));
-		if ((r.mcp_mb || 0) > 0) parts.push("MCP servers " + fmtMb(r.mcp_mb || 0));
-		if ((r.other_mb || 0) > 0) parts.push("other " + fmtMb(r.other_mb || 0));
-		const label = aliases[r.title] || r.title;
-		return {
-			key: "s:" + r.title,
-			title: r.title,
-			label,
-			sub: "",
-			tip: label + ": " + fmtMb(r.mb) + (parts.length ? " — " + parts.join(" · ") : "") + " — click to open it",
-			mb: r.mb,
-			value: fmtMb(r.mb),
-			frac: r.mb / top
-		};
-	});
-	const others = oth.map((r) => {
-		const label = r.server ? "MindFlock server" : r.name || "process " + r.pid;
-		return {
-			key: "p:" + r.pid,
-			title: "",
-			label,
-			sub: shortCmd(r.cmd),
-			tip: label + " (pid " + r.pid + "): " + fmtMb(r.mb) + (r.cmd ? "\n" + r.cmd : ""),
-			mb: r.mb,
-			value: fmtMb(r.mb),
-			frac: r.mb / top
-		};
-	});
-	return {
-		machine,
-		tone: memoryRowTone(m.level),
-		sessions,
-		others,
-		machineOnly: !detail
-	};
-}
-function sparkPoints(samples, w, h, maxPoints = 120) {
-	const pts = [];
-	for (const s of samples || []) {
-		const m = machineFromDetail(s && s.system);
-		if (m.usedMb == null || m.totalMb == null || !Number.isFinite(s.at)) continue;
-		pts.push({
-			at: s.at,
-			used: m.usedMb,
-			total: m.totalMb
-		});
-	}
-	if (pts.length < 2) return null;
-	const step = Math.max(1, Math.ceil(pts.length / maxPoints));
-	const kept = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
-	const t0 = kept[0].at;
-	const span = Math.max(1, kept[kept.length - 1].at - t0);
-	const totalMb = Math.max(...kept.map((p) => p.total));
-	const r1 = (n) => Math.round(n * 10) / 10;
-	return {
-		points: kept.map((p) => r1((p.at - t0) / span * w) + "," + r1(h - Math.min(p.used, totalMb) / totalMb * h)).join(" "),
-		lastUsedMb: kept[kept.length - 1].used,
-		totalMb
-	};
-}
-//#endregion
-//#region src/components/usage/OverallMemory.tsx
-var SPARK_W = 200;
-var SPARK_H = 28;
-function BarRows({ rows, onPick }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-		className: "mem-pop-list",
-		children: rows.map((r) => {
-			const inner = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "mem-pop-name",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "mem-pop-label",
-						children: r.label
-					}), r.sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "mem-pop-sub",
-						children: r.sub
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mem-pop-bar",
-					"aria-hidden": "true",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.max(2, Math.round(r.frac * 100)) + "%" } })
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mem-pop-num",
-					children: r.value
-				})
-			] });
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: onPick && r.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "mem-pop-row mem-pop-pick",
-				title: r.tip,
-				onClick: (ev) => {
-					ev.stopPropagation();
-					onPick(r.title);
-				},
-				children: inner
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "mem-pop-row",
-				title: r.tip,
-				children: inner
-			}) }, r.key);
-		})
-	});
-}
-function OverallMemory() {
-	const sidebarHidden = useUi((s) => s.sidebarHidden);
-	const aliases = useUi((s) => s.aliases);
-	const btnRef = (0, import_react.useRef)(null);
-	const [open, setOpen] = (0, import_react.useState)(false);
-	const detailQ = useMemoryDetail(!sidebarHidden);
-	const { data: reading } = useMemory();
-	const detail = detailQ.isError ? null : detailQ.data ?? null;
-	const { data: hist } = useMemoryHistory(open && !!detail);
-	const machine = (0, import_react.useMemo)(() => detail ? machineFromDetail(detail.system) : machineFromReading(reading), [detail, reading]);
-	const ctx = (0, import_react.useMemo)(() => ({
-		gate: gateWhy(reading?.gate),
-		reasons: memoryReasons(reading)
-	}), [reading]);
-	const { head, title, share } = memoryRowText(machine, ctx);
-	const tone = memoryRowTone(machine.level);
-	const model = (0, import_react.useMemo)(() => open ? memoryPopModel(detail, machine, aliases, ctx) : null, [
-		open,
-		detail,
-		machine,
-		aliases,
-		ctx
-	]);
-	const spark = (0, import_react.useMemo)(() => open && hist ? sparkPoints(hist.samples, SPARK_W, SPARK_H) : null, [open, hist]);
-	if (machine.totalMb == null) return null;
-	const pick = (t) => {
-		selectSession(t);
-		const ui = useUi.getState();
-		if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
-		setOpen(false);
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-		id: "overall-memory",
-		ref: btnRef,
-		className: "overall-usage overall-memory" + (tone ? " mem-" + tone : ""),
-		type: "button",
-		title,
-		onClick: (ev) => {
-			ev.stopPropagation();
-			setOpen((o) => {
-				if (!o && !sidebarHidden) detailQ.refetch();
-				return !o;
-			});
-		},
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "usage-head",
-				children: head
-			}),
-			share != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "mem-meter",
-				"aria-hidden": "true",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.round(share * 100) + "%" } })
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "caret",
-				children: "▾"
-			})
-		]
-	}), open && btnRef.current && model && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(UsagePopover, {
-		anchor: btnRef.current,
-		onClose: () => setOpen(false),
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "usage-pop-head" + (model.tone ? " mem-" + model.tone : ""),
-				children: "This machine"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: model.machine }),
-			spark && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "mem-spark",
-				title: "Memory in use over the last hour — now " + fmtMb(spark.lastUsedMb) + " of " + fmtMb(spark.totalMb),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-					viewBox: `0 0 ${SPARK_W} ${SPARK_H}`,
-					preserveAspectRatio: "none",
-					role: "img",
-					"aria-label": "Memory in use over the last hour",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", {
-						points: spark.points,
-						fill: "none",
-						vectorEffect: "non-scaling-stroke"
-					})
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mem-spark-cap",
-					children: "last hour"
-				})]
-			}),
-			model.sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "usage-pop-head mem-pop-sec",
-				children: "Sessions"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BarRows, {
-				rows: model.sessions,
-				onPick: pick
-			})] }),
-			model.others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "usage-pop-head mem-pop-sec",
-				children: "Outside MindFlock"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BarRows, { rows: model.others })] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopNote, { text: model.machineOnly ? "This server reports the machine only — update MindFlock to see what each session holds." : "Each session counts its whole process tree (agent, MCP servers, tests), sampled every 15 s." })
-		]
-	})] });
 }
 //#endregion
 //#region src/components/usage/usageModel.ts
@@ -71128,7 +71396,7 @@ function FooterCustomize() {
 			id: "foot-customize-btn",
 			type: "button",
 			className: "foot-link",
-			title: "Choose which bars the sidebar shows — Prompts, Assistant, Tickets…",
+			title: "Choose which bars the sidebar shows (Prompts, Assistant, Tickets…) and what each pane's header holds",
 			onClick: () => openDialogFor("customize"),
 			children: "⚙ Customize"
 		})
@@ -74021,23 +74289,6 @@ function stepMatch(cur, dir, n) {
 	if (n <= 0) return -1;
 	if (cur < 0) return dir === 1 ? 0 : n - 1;
 	return (cur + dir + n) % n;
-}
-//#endregion
-//#region src/components/grid/visiblePoll.ts
-function pollWhileVisible(run, ms, doc = typeof document === "undefined" ? void 0 : document) {
-	const tick = () => {
-		if (doc?.hidden) return;
-		run();
-	};
-	const t = setInterval(tick, ms);
-	const onVis = () => {
-		if (!doc?.hidden) run();
-	};
-	doc?.addEventListener("visibilitychange", onVis);
-	return () => {
-		clearInterval(t);
-		doc?.removeEventListener("visibilitychange", onVis);
-	};
 }
 //#endregion
 //#region src/components/grid/HistoryOverlay.tsx
@@ -89500,7 +89751,10 @@ function helperWhere(M, S) {
 function BirdIndex(p) {
 	const [legend, setLegend] = (0, import_react.useState)(false);
 	const [railOpen, setRailOpen] = (0, import_react.useState)(false);
-	(0, import_react.useEffect)(() => setRailOpen(false), [p.closeSeq]);
+	(0, import_react.useEffect)(() => {
+		setRailOpen(false);
+		setLegend(false);
+	}, [p.closeSeq]);
 	const [, bump] = (0, import_react.useState)(0);
 	const tops = p.agents.filter((A) => !A.ag.parent);
 	const subsOf = (A) => p.agents.filter((S) => S.ag.parent === A.ag.key);
@@ -89528,9 +89782,24 @@ function BirdIndex(p) {
 		exKey,
 		p
 	]);
+	const legendKey = (e) => {
+		if (e.key !== "Escape") return;
+		e.preventDefault();
+		e.stopPropagation();
+		const back = e.currentTarget.parentElement?.querySelector(".ct-left .ct-bix-q[aria-label^='Legend']");
+		setLegend(false);
+		back?.focus();
+	};
+	const legendBtnKey = (e) => {
+		if (e.key !== "Escape" || !legend) return;
+		e.preventDefault();
+		e.stopPropagation();
+		setLegend(false);
+	};
 	const legendCard = legend && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ct-bix-legend",
 		"data-hud": "pop",
+		onKeyDown: legendKey,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LegendCard, {
 			open: true,
 			onToggle: () => setLegend(false),
@@ -89549,6 +89818,7 @@ function BirdIndex(p) {
 					"aria-label": "Legend: how to read the map",
 					title: "How to read the map",
 					onClick: () => setLegend(!legend),
+					onKeyDown: legendBtnKey,
 					children: "?"
 				}),
 				p.size !== "wide" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -89616,6 +89886,7 @@ function BirdIndex(p) {
 						"aria-label": "Legend: how to read the map",
 						title: "How to read the map",
 						onClick: () => setLegend(!legend),
+						onKeyDown: legendBtnKey,
 						children: "?"
 					})]
 				}),
@@ -90224,6 +90495,19 @@ function boxOnScreen(B, c, W, H) {
 //#region src/components/grid/codemap/treeCtl.ts
 var FOLLOW_Z = 2.6;
 var MAX_Z = 12;
+function hudSig(rects, insets, cardInset, cardBot) {
+	const r = (n) => Math.round(n * 10) / 10;
+	const parts = rects.map((q) => q.map(r).join(","));
+	parts.push([
+		insets.top,
+		insets.bot,
+		insets.left,
+		insets.right,
+		cardInset,
+		cardBot
+	].map(r).join(","));
+	return parts.join(";");
+}
 var MEMORY = /* @__PURE__ */ new Map();
 var TreeCtl = class {
 	host;
@@ -90250,6 +90534,8 @@ var TreeCtl = class {
 	};
 	cardInset = 0;
 	cardBot = 0;
+	hudFor = null;
+	hudLast = "";
 	zoomedIn = false;
 	active = false;
 	dirty = true;
@@ -90458,9 +90744,13 @@ var TreeCtl = class {
 		this.kick();
 	}
 	setHud(rects, insets) {
+		const sig = hudSig(rects, insets, this.cardInset, this.cardBot);
+		if (this.v && this.v === this.hudFor && sig === this.hudLast) return;
 		const whole = this.atWhole();
 		this.insets = insets;
 		if (!this.v) return;
+		this.hudFor = this.v;
+		this.hudLast = sig;
 		this.v.hudRects = rects;
 		this.v.free = {
 			x0: insets.left,
@@ -91428,13 +91718,32 @@ function CodeTree(p) {
 		c.setHud(rects, insets);
 	};
 	(0, import_react.useLayoutEffect)(measure);
+	const measureRef = (0, import_react.useRef)(measure);
+	measureRef.current = measure;
+	const roRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		const st = stageRef.current;
-		if (!st || typeof ResizeObserver === "undefined") return;
-		const ro = new ResizeObserver(() => measure());
+		if (!st || !ctl || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => measureRef.current());
 		ro.observe(st);
-		for (const el of Array.from(st.querySelectorAll("[data-hud]"))) ro.observe(el);
-		return () => ro.disconnect();
+		const seen = new Set(st.querySelectorAll("[data-hud]"));
+		for (const el of seen) ro.observe(el);
+		roRef.current = {
+			ro,
+			seen
+		};
+		return () => {
+			ro.disconnect();
+			roRef.current = null;
+		};
+	}, [ctl]);
+	(0, import_react.useLayoutEffect)(() => {
+		const st = stageRef.current, o = roRef.current;
+		if (!st || !o) return;
+		const now = new Set(st.querySelectorAll("[data-hud]"));
+		for (const el of o.seen) if (!now.has(el)) o.ro.unobserve(el);
+		for (const el of now) if (!o.seen.has(el)) o.ro.observe(el);
+		o.seen = now;
 	});
 	const showMini = !narrow && !!ctl && ctl.zoomedIn;
 	(0, import_react.useEffect)(() => {
@@ -91476,9 +91785,9 @@ function CodeTree(p) {
 		p.title
 	]);
 	const shutRail = () => {
-		const st = stageRef.current, pop = st ? st.querySelector(".ct-bix-pop") : null;
-		if (!st || !pop) return false;
-		const back = pop.contains(document.activeElement) ? st.querySelector(".ct-bix-rail .ct-bix-q") : null;
+		const st = stageRef.current, pop = st ? st.querySelector(".ct-bix-pop") : null, leg = st ? st.querySelector(".ct-bix-legend") : null;
+		if (!st || !pop && !leg) return false;
+		const back = leg && leg.contains(document.activeElement) ? st.querySelector(".ct-left .ct-bix-q[aria-label^='Legend']") : pop && pop.contains(document.activeElement) ? st.querySelector(".ct-bix-rail .ct-bix-q") : null;
 		setRailShut((x) => x + 1);
 		back?.focus();
 		return true;
@@ -91930,10 +92239,16 @@ function Glyph({ kind }) {
 		children: KIND_GLYPH[kind] || "?"
 	});
 }
+function listState(boxQ, ansQ, n, err) {
+	if (boxQ.trim() !== ansQ) return "searching";
+	if (err) return "error";
+	return n ? "rows" : "empty";
+}
 var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick }, ref) {
 	const [q, setQ] = (0, import_react.useState)("");
 	const [items, setItems] = (0, import_react.useState)([]);
 	const [err, setErr] = (0, import_react.useState)("");
+	const [ansQ, setAnsQ] = (0, import_react.useState)("");
 	const [open, setOpen] = (0, import_react.useState)(false);
 	const [cur, setCur] = (0, import_react.useState)(0);
 	const wrap = (0, import_react.useRef)(null);
@@ -91948,10 +92263,13 @@ var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick 
 	const ctl = (0, import_react.useMemo)(() => searchController((t) => searchCode(title, t), (r) => {
 		setItems(r.items);
 		setErr(r.err);
+		setAnsQ(r.q);
 		setCur(0);
 	}), [title]);
 	(0, import_react.useEffect)(() => () => ctl.dispose(), [ctl]);
 	(0, import_react.useEffect)(() => ctl.set(q), [q, ctl]);
+	const state = listState(q, ansQ, items.length, err);
+	const rows = state === "rows" ? items : [];
 	const pick = (it) => {
 		if (!it) return;
 		onPick(it);
@@ -91967,7 +92285,7 @@ var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick 
 				type: "search",
 				placeholder: short ? "Find…" : "Find file or symbol",
 				"aria-label": "Find file or symbol",
-				"aria-expanded": open && items.length > 0,
+				"aria-expanded": open && rows.length > 0,
 				"aria-controls": "cm-search-list",
 				role: "combobox",
 				spellCheck: false,
@@ -91982,13 +92300,13 @@ var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick 
 				onKeyDown: (e) => {
 					if (e.key === "ArrowDown") {
 						e.preventDefault();
-						setCur((c) => Math.min(items.length - 1, c + 1));
+						setCur((c) => Math.max(0, Math.min(rows.length - 1, c + 1)));
 					} else if (e.key === "ArrowUp") {
 						e.preventDefault();
 						setCur((c) => Math.max(0, c - 1));
 					} else if (e.key === "Enter") {
 						e.preventDefault();
-						pick(items[cur]);
+						pick(rows[cur]);
 					} else if (e.key === "Escape") {
 						e.preventDefault();
 						e.stopPropagation();
@@ -92006,15 +92324,19 @@ var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick 
 				id: "cm-search-list",
 				role: "listbox",
 				children: [
-					err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+					state === "searching" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "muted",
+						children: "Searching…"
+					}),
+					state === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 						className: "cm-err",
 						children: err
 					}),
-					!err && !items.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+					state === "empty" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 						className: "muted",
 						children: "No matches."
 					}),
-					items.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					rows.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 						role: "option",
 						"aria-selected": i === cur,
 						className: i === cur ? "cur" : "",
@@ -95001,10 +95323,12 @@ function SessionUsageChip({ inst }) {
 	const usage = asUsageWindows(usageData);
 	const pl = provLabel(inst.provider);
 	const head = usageHeadParts(inst);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
 		ref: chipRef,
 		className: "tok usage-trigger",
 		title: "Session cost & tokens — click for the breakdown",
+		"aria-expanded": open,
 		onClick: (ev) => {
 			ev.stopPropagation();
 			setOpen((o) => !o);
@@ -95129,10 +95453,12 @@ function AccountChip({ inst }) {
 			setModels(null);
 		}
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
 		ref: chipRef,
 		className: "tok usage-trigger acct-chip",
 		title: "Account this agent runs as — click to swap",
+		"aria-expanded": open,
 		onClick: (ev) => {
 			ev.stopPropagation();
 			if (!busy) setOpen((o) => !o);
@@ -107907,46 +108233,6 @@ function BudgetLock({ title, budget }) {
 	});
 }
 //#endregion
-//#region src/extensions/ExtPaneBody.tsx
-function ExtPaneBody({ extKey }) {
-	(0, import_react.useSyncExternalStore)(subscribeHost, hostVersion);
-	const mountRef = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		const el = mountRef.current;
-		if (!el) return;
-		return mountExtPane(extKey, el);
-	}, [extKey]);
-	const view = extPaneView(extKey);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ext-pane-body",
-		children: [
-			view.status === "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "ext-surface-status muted",
-				children: [
-					"Loading ",
-					view.label,
-					"…"
-				]
-			}),
-			view.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ext-surface-status ext-surface-error",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-					view.label,
-					" failed: ",
-					view.error || "no reason recorded"
-				] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "muted",
-					children: "See Settings → Extensions for details."
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ext-surface-mount",
-				ref: mountRef
-			})
-		]
-	});
-}
-//#endregion
 //#region src/components/grid/SpecialPane.tsx
 function SpecialPane({ desc, drag }) {
 	const title = sentinel(desc.kind, (desc.kind === "ext" ? desc.extKey : desc.session) || "");
@@ -110850,6 +111136,21 @@ function ScheduleWhen({ form, onForm, tz, cronPreview, runs, focusTime }) {
 		})
 	] });
 }
+function isSaveKey(e) {
+	return e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing;
+}
+function saveOnKey(p) {
+	return (e) => {
+		if (!isSaveKey({
+			key: e.key,
+			ctrlKey: e.ctrlKey,
+			metaKey: e.metaKey,
+			isComposing: e.nativeEvent.isComposing
+		})) return;
+		e.preventDefault();
+		if (!p.busy) p.onSave();
+	};
+}
 function ScheduleEditor(p) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 		className: "tpl-editor tpl-sched-editor",
@@ -110857,6 +111158,7 @@ function ScheduleEditor(p) {
 			e.preventDefault();
 			p.onSave();
 		},
+		onKeyDown: saveOnKey(p),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "tpl-schedule tpl-sched-only",
 			"data-tour": "schedule-when",
@@ -110955,6 +111257,7 @@ function TemplateEditor(p) {
 			e.preventDefault();
 			p.onSave();
 		},
+		onKeyDown: saveOnKey(p),
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "tpl-name-field",
@@ -112377,7 +112680,17 @@ function TemplatesDialogView(p) {
 					loadError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "error tpl-load-error",
 						role: "alert",
-						children: ["Could not load templates: ", loadError]
+						children: [
+							"Couldn't load templates. ",
+							loadError,
+							p.onRetryLoad && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike",
+								id: "templates-retry",
+								onClick: p.onRetryLoad,
+								children: "Retry"
+							})] })
+						]
 					}),
 					!loaded && !loadError && templates.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "tpl-empty muted",
@@ -112510,6 +112823,19 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 	const [templates, setList] = (0, import_react.useState)(() => templatesNow());
 	const [loaded, setLoaded] = (0, import_react.useState)(false);
 	const [loadError, setLoadError] = (0, import_react.useState)("");
+	const loadSeq = (0, import_react.useRef)(0);
+	const loadList = () => {
+		const seq = ++loadSeq.current;
+		setLoadError("");
+		ensureTemplates(true).then((list) => {
+			if (seq !== loadSeq.current) return;
+			setList(list);
+			setRuns(templateRunsNow());
+			setLoaded(true);
+		}).catch((err) => {
+			if (seq === loadSeq.current) setLoadError(errMsg(err));
+		});
+	};
 	const [ui, dispatch] = (0, import_react.useReducer)(templatesReducer, TEMPLATES_UI_INIT);
 	const [form, setForm] = (0, import_react.useState)(() => formFromTemplate(null));
 	const [seed, setSeed] = (0, import_react.useState)(null);
@@ -112651,16 +112977,10 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 		}).catch(() => {
 			if (live) setInstalled(null);
 		});
-		ensureTemplates(true).then((list) => {
-			if (!live) return;
-			setList(list);
-			setRuns(templateRunsNow());
-			setLoaded(true);
-		}).catch((err) => {
-			if (live) setLoadError(errMsg(err));
-		});
+		loadList();
 		return () => {
 			live = false;
+			loadSeq.current++;
 			document.removeEventListener(TEMPLATES_CHANGED, reload);
 		};
 	}, [open, embedded ? embeddedTarget : null]);
@@ -112887,6 +113207,7 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 		busy,
 		loaded,
 		loadError,
+		onRetryLoad: loadList,
 		onForm: (patch) => setForm((f) => ({
 			...f,
 			...patch
@@ -113093,6 +113414,14 @@ function useFileDropTextarea(opts) {
 var MIN_BRIEF = 6;
 var MAX_BRIEF = 2e3;
 var SLOW_MS = 8e3;
+function composeBody(source, brief, draft) {
+	const body = {
+		source,
+		text: brief.trim()
+	};
+	if (draft) body.draft = draft;
+	return body;
+}
 function NewTicketPane() {
 	const closeDialog = useUi((s) => s.closeDialog);
 	const openDialogFor = useUi((s) => s.openDialogFor);
@@ -113109,8 +113438,10 @@ function NewTicketPane() {
 	const [filed, setFiled] = (0, import_react.useState)(null);
 	const briefRef = (0, import_react.useRef)(null);
 	const slowTimer = (0, import_react.useRef)(null);
+	const [sourcesTry, setSourcesTry] = (0, import_react.useState)(0);
 	(0, import_react.useEffect)(() => {
 		let live = true;
+		setSourcesError("");
 		api("/api/tickets/sources").then((p) => {
 			if (!live) return;
 			const rows = p.sources || [];
@@ -113121,7 +113452,7 @@ function NewTicketPane() {
 		return () => {
 			live = false;
 		};
-	}, []);
+	}, [sourcesTry]);
 	(0, import_react.useEffect)(() => {
 		briefRef.current?.focus();
 	}, []);
@@ -113133,15 +113464,12 @@ function NewTicketPane() {
 	const file = (0, import_react.useCallback)(async () => {
 		if (!ready) return;
 		setError("");
-		setDraft(null);
 		setFiling(true);
 		setSlow(false);
 		slowTimer.current = window.setTimeout(() => setSlow(true), SLOW_MS);
 		try {
-			const row = await api("/api/tickets/compose", { json: {
-				source,
-				text: brief.trim()
-			} });
+			const row = await api("/api/tickets/compose", { json: composeBody(source, brief, draft) });
+			setDraft(null);
 			setFiled(row);
 		} catch (err) {
 			setError(errMsg(err));
@@ -113155,6 +113483,7 @@ function NewTicketPane() {
 		}
 	}, [
 		brief,
+		draft,
 		ready,
 		source
 	]);
@@ -113199,6 +113528,7 @@ function NewTicketPane() {
 						onClick: () => {
 							setFiled(null);
 							setBrief("");
+							setDraft(null);
 							window.setTimeout(() => briefRef.current?.focus(), 0);
 						},
 						children: "File another"
@@ -113252,6 +113582,7 @@ function NewTicketPane() {
 				onChange: (e) => {
 					setBrief(e.target.value);
 					if (error) setError("");
+					if (draft) setDraft(null);
 				},
 				onKeyDown: (e) => {
 					if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -113265,9 +113596,18 @@ function NewTicketPane() {
 				className: "nt-help",
 				children: "MindFlock writes the ticket — a title, a description and acceptance criteria — and files it. There is no form: the tracker already has one, and it is one click away for anything this cannot say."
 			}),
-			sourcesError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			sourcesError ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "error",
-				children: sourcesError
+				children: [
+					sourcesError,
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => setSourcesTry((n) => n + 1),
+						children: "Retry"
+					})
+				]
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "nt-source-row",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
@@ -113334,7 +113674,7 @@ function NewTicketPane() {
 					type: "button",
 					disabled: !ready,
 					onClick: file,
-					children: filing ? slow ? "Still writing…" : "Filing…" : "Create ticket"
+					children: filing ? slow && !draft ? "Still writing…" : "Filing…" : draft ? "Retry" : "Create ticket"
 				})]
 			})
 		]
@@ -117822,7 +118162,8 @@ function ViewMenu({ id, label, title, children }) {
 		})]
 	});
 }
-function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshId, noteId, listId, toolbarExtra }) {
+function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshId, noteId, listId, toolbarExtra, stalled }) {
+	const [refresh, refreshing] = useBusyAction(onRefresh);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row",
 		id: rowId,
@@ -117834,12 +118175,10 @@ function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshI
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pr-open-toolbar",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RefreshButton, {
 						id: refreshId,
-						className: "test-btn",
-						onClick: onRefresh,
-						children: "Refresh"
+						onClick: refresh,
+						busy: refreshing
 					}),
 					toolbarExtra,
 					note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -117854,9 +118193,50 @@ function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshI
 				className: "ik-groups",
 				children
 			}),
+			stalled ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StalledRefresh, {
+				onRetry: refresh,
+				busy: refreshing
+			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
 				children: hint
+			})
+		]
+	});
+}
+function useBusyAction(action) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const run = () => {
+		if (busy) return;
+		const p = action();
+		if (!p || typeof p.then !== "function") return;
+		setBusy(true);
+		Promise.resolve(p).catch(() => void 0).finally(() => setBusy(false));
+	};
+	return [run, busy];
+}
+function RefreshButton({ id, onClick, busy }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		id,
+		className: "test-btn",
+		onClick,
+		disabled: busy,
+		children: busy ? "Refreshing…" : "Refresh"
+	});
+}
+function StalledRefresh({ onRetry, busy }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-stalled-refresh",
+		children: [
+			"Couldn't refresh ·",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike",
+				onClick: onRetry,
+				disabled: busy,
+				children: busy ? "Retrying…" : "Retry"
 			})
 		]
 	});
@@ -121404,6 +121784,7 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: hasOthers ? "Ticket queue" : "Assigned tickets",
 		onRefresh: load,
+		stalled: ticketsQuery.stalled,
 		note,
 		rowId: "tk-assigned-row",
 		refreshId: "tk-tickets-refresh",
@@ -122346,6 +122727,17 @@ function EpicItem({ e, busy, onStart }) {
 		]
 	});
 }
+function markEpicStarted(data, source, id, title) {
+	if (!data?.epics) return data;
+	return {
+		...data,
+		epics: data.epics.map((e) => e.source === source && e.id === id ? {
+			...e,
+			has_session: true,
+			title: title || e.title
+		} : e)
+	};
+}
 function EpicsTab({ gotoTab }) {
 	const q = useEpicsQuery();
 	const [busy, setBusy] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
@@ -122369,9 +122761,10 @@ function EpicsTab({ gotoTab }) {
 				id: e.id
 			} });
 			toast("Started " + (r.title || e.title) + " — its lead will run " + (r.stories ?? "your") + " stor" + (r.stories === 1 ? "y" : "ies"));
+			queryClient.setQueryData(["epics"], (d) => markEpicStarted(d, e.source, e.id, r.title));
 			q.refresh();
 		} catch (err) {
-			errorPop("Couldn't start the epic", err instanceof ApiError ? err.message : String(err));
+			errorPop("Start failed — " + e.name, err instanceof ApiError ? err.message : String(err));
 		} finally {
 			setBusy((b) => {
 				const next = new Set(b);
@@ -122389,7 +122782,7 @@ function EpicsTab({ gotoTab }) {
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: "Assigned epics",
-		onRefresh: () => void q.refresh(),
+		onRefresh: q.refresh,
 		note,
 		rowId: "ep-assigned-row",
 		refreshId: "ep-epics-refresh",
@@ -122546,6 +122939,7 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const workList = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: "Your open pull requests",
 		onRefresh: loadOpenPrs,
+		stalled: prsQuery.stalled,
 		note: prsNote,
 		rowId: "gh-open-prs-row",
 		refreshId: "gh-prs-refresh",
@@ -122865,6 +123259,7 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const workList = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: "Open issues",
 		onRefresh: loadOpenIssues,
+		stalled: issuesQuery.stalled,
 		note: issuesNote,
 		rowId: "gh-open-issues-row",
 		refreshId: "gh-issues-refresh",
@@ -123222,6 +123617,7 @@ function StalledNote({ s }) {
 }
 function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 	const groups = byGroup(s.items);
+	const [retry, retrying] = useBusyAction(() => s.onRetry?.());
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ik-queue-section",
 		children: [
@@ -123237,7 +123633,7 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 						children: s.items.length
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateChip, {
-						state: s.broken ? "broken" : s.state,
+						state: s.broken || s.error ? "broken" : s.state,
 						device: s.runsOn
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -123256,13 +123652,22 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 			s.broken ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pr-open-note",
 				children: s.broken
+			}) : s.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-note ik-queue-error",
+				children: [s.error, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: retry,
+					disabled: retrying,
+					children: retrying ? "Retrying…" : "Retry"
+				})]
 			}) : s.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pr-open-note",
 				children: s.note
 			}) : null,
 			s.items.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "ik-queue-empty",
-				children: s.broken ? "" : s.state === "unset" ? "Not set up yet — set it up on the " + s.label + " tab." : "Nothing waiting."
+				children: s.broken || s.error ? "" : s.state === "unset" ? "Not set up yet — set it up on the " + s.label + " tab." : "Nothing waiting."
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [s.state !== "on" && !s.broken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StalledNote, { s }), groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ik-queue-group",
 				children: [groups.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -123292,7 +123697,11 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 						onStart: ({ agent, depth, effort }) => onStart(item, agent, depth, effort)
 					}, item.key);
 				})]
-			}, g.group))] })
+			}, g.group))] }),
+			s.stalled && !s.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StalledRefresh, {
+				onRetry: retry,
+				busy: retrying
+			}) : null
 		]
 	});
 }
@@ -123362,8 +123771,8 @@ function QueueTab({ gotoTab }) {
 	};
 	const total = collectQueued(payloads).length;
 	const filter = useListFilter("ik-queue-filter", "Filter by item, title, source, or state…  ( Ctrl+F )");
-	const noteFor = (q, what) => panelNote({
-		error: q.error ? "Could not list " + what + ": " + (q.error.message || "error") : "",
+	const errorFor = (q, what) => q.error ? "Couldn't list " + what + ": " + (q.error.message || "error") : "";
+	const noteFor = (q) => panelNote({
 		fetching: q.isFetching,
 		loaded: !!q.data
 	});
@@ -123392,7 +123801,10 @@ function QueueTab({ gotoTab }) {
 				...i,
 				group: nameOfSource(i.target.source)
 			} : i),
-			note: noteFor(ticketsQ, "tickets")
+			note: noteFor(ticketsQ),
+			error: errorFor(ticketsQ, "tickets"),
+			stalled: ticketsQ.stalled,
+			onRetry: ticketsQ.refresh
 		},
 		{
 			kind: "prs",
@@ -123408,7 +123820,10 @@ function QueueTab({ gotoTab }) {
 			switchName: "PR review comments",
 			runsOn,
 			items: queuedOf("prs", payloads),
-			note: noteFor(prsQ, "PRs")
+			note: noteFor(prsQ),
+			error: errorFor(prsQ, "PRs"),
+			stalled: prsQ.stalled,
+			onRetry: prsQ.refresh
 		},
 		{
 			kind: "issues",
@@ -123424,7 +123839,10 @@ function QueueTab({ gotoTab }) {
 			switchName: "New issues",
 			runsOn,
 			items: queuedOf("issues", payloads),
-			note: noteFor(issuesQ, "issues")
+			note: noteFor(issuesQ),
+			error: errorFor(issuesQ, "issues"),
+			stalled: issuesQ.stalled,
+			onRetry: issuesQ.refresh
 		}
 	];
 	const shownSections = filter.active ? sections.map((sec) => ({
@@ -123433,11 +123851,11 @@ function QueueTab({ gotoTab }) {
 	})).filter((sec) => sec.items.length) : sections;
 	const shownTotal = shownSections.reduce((n, sec) => n + sec.items.length, 0);
 	const autoTotal = sections.filter((sec) => sec.state === "on").reduce((n, sec) => n + sec.items.length, 0);
-	const refreshAll = () => {
-		ticketsQ.refresh();
-		prsQ.refresh();
-		issuesQ.refresh();
-	};
+	const [refreshAll, refreshing] = useBusyAction(() => Promise.all([
+		ticketsQ.refresh(),
+		prsQ.refresh(),
+		issuesQ.refresh()
+	]));
 	const held = status?.held_for_slot;
 	const sched = useScheduledTemplates();
 	const nextSched = nextScheduledText(sched.templates, sched.status);
@@ -123485,12 +123903,10 @@ function QueueTab({ gotoTab }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "pr-open-toolbar",
 					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RefreshButton, {
 							id: "ik-queue-refresh",
 							onClick: refreshAll,
-							children: "Refresh"
+							busy: refreshing
 						}),
 						total ? filter.control : null,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -123823,6 +124239,10 @@ function IntakeDialog({ embedded = false, target: embeddedTarget = null } = {}) 
 //#endregion
 //#region src/components/settings/SettingsSearch.tsx
 var HIT_MS = 2e3;
+var SEARCH_PLACEHOLDER = "Search…  ( Ctrl+F )";
+function isFindKey(e) {
+	return (e.key === "f" || e.key === "F") && (e.ctrlKey || e.metaKey) && !e.altKey;
+}
 function highlight(selector) {
 	let tries = 0;
 	const look = () => {
@@ -123841,6 +124261,18 @@ function SettingsSearch({ onPick }) {
 	const [cursor, setCursor] = (0, import_react.useState)(0);
 	const query = q.trim();
 	const hits = query ? searchSettings(query, 8) : [];
+	const inputRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (!isFindKey(e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			inputRef.current?.focus();
+			inputRef.current?.select();
+		};
+		document.addEventListener("keydown", onKey, true);
+		return () => document.removeEventListener("keydown", onKey, true);
+	}, []);
 	const pick = (e) => {
 		setQ("");
 		setCursor(0);
@@ -123853,10 +124285,12 @@ function SettingsSearch({ onPick }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-search",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			ref: inputRef,
 			type: "search",
 			id: "settings-search",
 			className: "set-search-input",
-			placeholder: "Search settings…",
+			placeholder: SEARCH_PLACEHOLDER,
+			"aria-keyshortcuts": "Control+F Meta+F",
 			"aria-label": "Search settings",
 			"aria-controls": "settings-search-results",
 			autoComplete: "off",
@@ -124618,10 +125052,20 @@ function TailscaleCardView({ health, login, busy, onSignIn }) {
 		]
 	});
 }
-function TailscaleCard({ active = true }) {
+function runningFlippedOn(prev, next) {
+	return !!prev && !prev.running && !!next?.running;
+}
+function TailscaleCard({ active = true, onHealth }) {
 	const [health, setHealth] = (0, import_react.useState)(null);
 	const [login, setLogin] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const prevHealth = (0, import_react.useRef)(null);
+	const onHealthRef = (0, import_react.useRef)(onHealth);
+	onHealthRef.current = onHealth;
+	(0, import_react.useEffect)(() => {
+		if (runningFlippedOn(prevHealth.current, health) && health) onHealthRef.current?.(health);
+		prevHealth.current = health;
+	}, [health]);
 	const load = (0, import_react.useCallback)(async (refresh = false) => {
 		try {
 			setHealth(await api("/api/tailscale/health" + (refresh ? "?refresh=1" : "")));
@@ -124782,7 +125226,7 @@ function Mobile(p) {
 			setData(await api("/api/mobile"));
 			setError("");
 		} catch {
-			setError("Could not load the phone URLs.");
+			setError("Couldn't load the phone links.");
 		}
 	}, [caps]);
 	(0, import_react.useEffect)(() => {
@@ -124818,9 +125262,15 @@ function Mobile(p) {
 							children: one.line
 						}),
 						one.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyBox, { text: one.fix }),
-						one.state !== "ok" && (one.card ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active }) : one.state === "fail" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+						one.state !== "ok" && (one.card ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, {
+							active: p.active,
+							onHealth: () => void load()
+						}) : one.state === "fail" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 							className: "mobile-ts-details",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "More about Tailscale on this computer" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active })]
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "More about Tailscale on this computer" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, {
+								active: p.active,
+								onHealth: () => void load()
+							})]
 						}) : null)
 					]
 				}),
@@ -124840,9 +125290,20 @@ function Mobile(p) {
 							onClick: () => p.gotoScreen("devices"),
 							children: "Turn on Make reachable…"
 						})]
-					}) : three === "ok" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Your other devices on Tailscale can reach MindFlock." }) : error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "error",
-						children: error
+					}) : three === "ok" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Your other devices on Tailscale can reach MindFlock." }) : error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "set-hint",
+						id: "mobile-load-state",
+						role: "alert",
+						children: [
+							error,
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike",
+								onClick: () => void load(),
+								children: "Retry"
+							})
+						]
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: caps ? "Checking…" : "Waits for Tailscale on this computer (1)." })
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
@@ -131956,10 +132417,7 @@ function AgentMcpRows() {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				type: "checkbox",
 				checked: on,
-				onChange: (e) => {
-					s.saveField("general", "agent_mcp", e.target.checked);
-					toast(e.target.checked ? "Agent MCP on — from each session's next launch" : "Agent MCP off — from each session's next launch");
-				}
+				onChange: (e) => void s.saveField("general", "agent_mcp", e.target.checked)
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -132464,10 +132922,7 @@ function FailureNotesRow() {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				type: "checkbox",
 				checked: on,
-				onChange: (e) => {
-					s.saveField("repository", "fasttrack_failure_notes", e.target.checked);
-					toast(e.target.checked ? "MindFlock will tell the agent what failed" : "Failure notes off");
-				}
+				onChange: (e) => void s.saveField("repository", "fasttrack_failure_notes", e.target.checked)
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
 	});
@@ -132528,30 +132983,37 @@ function Ide(_) {
 	const [value, setValue] = (0, import_react.useState)(CUSTOM_IDE);
 	const [customVisible, setCustomVisible] = (0, import_react.useState)(false);
 	const [autoAdopt, setAutoAdopt] = (0, import_react.useState)(false);
-	(0, import_react.useEffect)(() => {
-		(async () => {
-			try {
-				const data = await api("/api/ides");
-				const list = data.ides || [];
-				setIdes(list);
-				const cur = (data.current || "").trim();
-				if (cur && list.some((i) => i.command === cur)) {
-					setValue(cur);
-					setCustomVisible(false);
-				} else {
-					setValue(CUSTOM_IDE);
-					setCustomVisible(true);
-				}
-			} catch {
-				setIdes([]);
+	const [loadFailed, setLoadFailed] = (0, import_react.useState)(false);
+	const load = (0, import_react.useCallback)(async () => {
+		let failed = false;
+		try {
+			const data = await api("/api/ides");
+			const list = data.ides || [];
+			setIdes(list);
+			const cur = (data.current || "").trim();
+			if (cur && list.some((i) => i.command === cur)) {
+				setValue(cur);
+				setCustomVisible(false);
+			} else {
+				setValue(CUSTOM_IDE);
 				setCustomVisible(true);
 			}
-			try {
-				const a = await api("/api/cursor/autoadopt");
-				setAutoAdopt(!!a?.enabled);
-			} catch {}
-		})();
+		} catch {
+			failed = true;
+			setIdes([]);
+			setCustomVisible(true);
+		}
+		try {
+			const a = await api("/api/cursor/autoadopt");
+			setAutoAdopt(!!a?.enabled);
+		} catch {
+			failed = true;
+		}
+		setLoadFailed(failed);
 	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+	}, [load]);
 	const pick = (0, import_react.useCallback)((v) => {
 		setValue(v);
 		if (v === CUSTOM_IDE) {
@@ -132565,6 +133027,21 @@ function Ide(_) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
 			children: "IDE"
+		}),
+		loadFailed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			id: "ide-load-state",
+			role: "alert",
+			children: [
+				"Couldn't load IDE settings.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => void load(),
+					children: "Retry"
+				})
+			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "set-row",
@@ -132627,15 +133104,16 @@ function Ide(_) {
 					id: "cursor-auto",
 					checked: autoAdopt,
 					onChange: async (e) => {
-						const want = e.target.checked;
+						const el = e.target;
+						const want = el.checked;
 						setAutoAdopt(want);
 						try {
 							const r = await api("/api/cursor/autoadopt", { json: { enabled: want } });
 							setAutoAdopt(!!r?.enabled);
-							toast(r?.enabled ? "IDE auto-adopt on" : "IDE auto-adopt off");
-						} catch {
+							if (!flashSaved(el)) toast(r?.enabled ? "IDE auto-adopt on" : "IDE auto-adopt off");
+						} catch (err) {
 							setAutoAdopt(!want);
-							toast("Auto-adopt toggle failed");
+							toast("Couldn't turn IDE auto-adopt " + (want ? "on" : "off") + ": " + (err.message || "unknown error"));
 						}
 					}
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
@@ -132681,7 +133159,7 @@ function BinaryPathField({ row, onSaved }) {
 	const [value, setValue] = (0, import_react.useState)(row.binaryPath);
 	const [warning, setWarning] = (0, import_react.useState)("");
 	(0, import_react.useEffect)(() => setValue(row.binaryPath), [row.binaryPath]);
-	const save = async () => {
+	const save = async (el) => {
 		const path = value.trim();
 		if (path === row.binaryPath) return;
 		try {
@@ -132690,7 +133168,7 @@ function BinaryPathField({ row, onSaved }) {
 				json: { path }
 			});
 			setWarning(r?.warning || "");
-			toast((path ? "Binary path saved for " : "Binary path cleared for ") + agentName(row.name));
+			if (!flashSaved(el)) toast((path ? "Binary path saved for " : "Binary path cleared for ") + agentName(row.name));
 			if (r?.status) onSaved(r.status);
 			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
@@ -132714,7 +133192,7 @@ function BinaryPathField({ row, onSaved }) {
 				placeholder: row.installed ? "on PATH — set to use another build" : "/full/path/to/" + row.name,
 				value,
 				onChange: (e) => setValue(e.target.value),
-				onBlur: () => void save(),
+				onBlur: (e) => void save(e.target),
 				onKeyDown: (e) => {
 					if (e.key === "Enter") e.target.blur();
 				}
@@ -132739,8 +133217,12 @@ function Providers({ gotoScreen }) {
 	const [editing, setEditing] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
 	const [warning, setWarning] = (0, import_react.useState)("");
+	const [loadFailed, setLoadFailed] = (0, import_react.useState)(false);
+	const [confirmDel, setConfirmDel] = (0, import_react.useState)(null);
+	const [delBusy, setDelBusy] = (0, import_react.useState)(false);
 	const load = (0, import_react.useCallback)(async () => {
 		const [s, m] = await Promise.allSettled([api("/api/providers/status"), api("/api/providers/manage")]);
+		setLoadFailed(s.status === "rejected" && m.status === "rejected");
 		const statusList = s.status === "fulfilled" ? s.value?.providers || [] : [];
 		setStatuses(statusList);
 		setLoadErrors(s.status === "fulfilled" ? s.value?.errors || [] : []);
@@ -132759,16 +133241,20 @@ function Providers({ gotoScreen }) {
 		load();
 	}, [load]);
 	const del = async (name) => {
+		setDelBusy(true);
 		try {
 			await api("/api/providers/" + encodeURIComponent(name), { method: "DELETE" });
-			toast("Removed " + agentName(name));
+			toast("Deleted " + agentName(name));
+			setConfirmDel(null);
 			if (editing === name) cancelEdit();
 			load();
 			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
 			refreshProviders();
 		} catch (err) {
-			toast("Delete failed: " + (err.message || name));
+			toast("Couldn't delete " + agentName(name) + ": " + (err.message || "unknown error"));
+		} finally {
+			setDelBusy(false);
 		}
 	};
 	const edit = (p) => {
@@ -133007,6 +133493,21 @@ function Providers({ gotoScreen }) {
 				]
 			})]
 		}),
+		loadFailed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			id: "prov-load-state",
+			role: "alert",
+			children: [
+				"Couldn't load agents.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => void load(),
+					children: "Retry"
+				})
+			]
+		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "prov-conn-list",
 			children: rows.map((row) => {
@@ -133079,9 +133580,19 @@ function Providers({ gotoScreen }) {
 								children: "Edit"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								onClick: () => del(row.name),
+								onClick: () => setConfirmDel(row.name),
+								disabled: confirmDel === row.name,
 								children: "Delete"
 							})]
+						}),
+						mgr?.editable && confirmDel === row.name && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+							id: "prov-delete-confirm",
+							title: "Delete custom agent " + agentName(row.name) + "?",
+							body: "Its file is removed.",
+							confirmLabel: delBusy ? "Deleting…" : "Delete",
+							busy: delBusy,
+							onConfirm: () => void del(row.name),
+							onCancel: () => setConfirmDel(null)
 						})
 					]
 				}, row.name);
@@ -133583,13 +134094,13 @@ function AdminLink({ href, children }) {
 var DEFAULT_SHARED_NAME = "mindflock";
 function SharedLinkCard({ active, revision = 0 }) {
 	const [data, setData] = (0, import_react.useState)(null);
-	const [error, setError] = (0, import_react.useState)("");
+	const [loadFailed, setLoadFailed] = (0, import_react.useState)(false);
 	const load = (0, import_react.useCallback)(async () => {
 		try {
 			setData(await api("/api/mobile"));
-			setError("");
+			setLoadFailed(false);
 		} catch {
-			setError("Could not load the shared link.");
+			setLoadFailed(true);
 		}
 	}, []);
 	(0, import_react.useEffect)(() => {
@@ -133599,19 +134110,30 @@ function SharedLinkCard({ active, revision = 0 }) {
 		revision,
 		load
 	]);
-	if (error) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "error",
-		children: error
+	const failedLine = loadFailed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "set-hint",
+		id: "shared-link-load-state",
+		role: "alert",
+		children: [
+			"Couldn't load the shared link.",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike",
+				onClick: () => void load(),
+				children: "Retry"
+			})
+		]
 	});
-	if (!data) return null;
+	if (!data) return failedLine || null;
 	const shared = data.shared || {};
 	const sharedQr = data.qr_svg && shared.url && data.qr_target?.startsWith(shared.url) ? data.qr_svg : void 0;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedLink, {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [failedLine, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedLink, {
 		shared,
 		qrSvg: sharedQr,
 		onChanged: load,
 		onData: setData
-	});
+	})] });
 }
 function SharedLink({ shared, qrSvg, onChanged, onData }) {
 	const [name, setName] = (0, import_react.useState)(shared.name || DEFAULT_SHARED_NAME);
@@ -133644,7 +134166,10 @@ function SharedLink({ shared, qrSvg, onChanged, onData }) {
 	const on = !!shared.enabled;
 	(0, import_react.useEffect)(() => {
 		if (!on) return;
-		const t = window.setInterval(onChanged, 6e4);
+		const t = window.setInterval(() => {
+			if (document.hidden) return;
+			onChanged();
+		}, 6e4);
 		return () => window.clearInterval(t);
 	}, [on, onChanged]);
 	const others = shared.devices || [];
@@ -134409,6 +134934,7 @@ function Devices(p) {
 	(0, import_react.useEffect)(() => {
 		if (joinState !== "waiting" && joinState !== "joining") return;
 		const t = setInterval(async () => {
+			if (document.hidden) return;
 			try {
 				const j = await api("/api/fleet/request");
 				setSt((prev) => prev ? {
@@ -135618,10 +136144,16 @@ function Doctor(_) {
 function shellShowItem() {
 	return window.mfshell?.showItem;
 }
+function logViewText(text, exists, failed) {
+	if (text === null) return failed ? "" : "Loading…";
+	return text || (exists ? "(log is empty)" : "(no log file yet)");
+}
 function SystemLogs({ onOpenSysLogsPane }) {
 	const [sources, setSources] = (0, import_react.useState)([]);
 	const [selected, setSelected] = (0, import_react.useState)("server");
-	const [text, setText] = (0, import_react.useState)("Loading…");
+	const [text, setText] = (0, import_react.useState)(null);
+	const [exists, setExists] = (0, import_react.useState)(false);
+	const [loadFailed, setLoadFailed] = (0, import_react.useState)(false);
 	const [meta, setMeta] = (0, import_react.useState)("");
 	const [path, setPath] = (0, import_react.useState)("");
 	const [follow, setFollow] = (0, import_react.useState)(false);
@@ -135656,13 +136188,15 @@ function SystemLogs({ onOpenSysLogsPane }) {
 		try {
 			d = await api("/api/logs?name=" + encodeURIComponent(selected || "server"));
 		} catch {
-			setText("Could not load logs.");
+			setLoadFailed(true);
 			return;
 		}
+		setLoadFailed(false);
 		setSources(d.sources || []);
 		const view = viewRef.current;
 		const atBottom = view ? view.scrollTop + view.clientHeight >= view.scrollHeight - 4 : true;
-		setText(d.text || (d.exists ? "(log is empty)" : "(no log file yet)"));
+		setText(d.text || "");
+		setExists(!!d.exists);
 		if (atBottom && view) requestAnimationFrame(() => view.scrollTop = view.scrollHeight);
 		const src = (d.sources || []).find((s) => s.name === d.selected);
 		const kb = Math.round((d.size || 0) / 1024);
@@ -135699,7 +136233,10 @@ function SystemLogs({ onOpenSysLogsPane }) {
 					id: "logs-source",
 					title: "Which log to view",
 					value: selected,
-					onChange: (e) => setSelected(e.target.value),
+					onChange: (e) => {
+						setText(null);
+						setSelected(e.target.value);
+					},
 					children: sources.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: s.name,
 						children: s.label
@@ -135717,6 +136254,7 @@ function SystemLogs({ onOpenSysLogsPane }) {
 					id: "logs-copy",
 					className: "test-btn",
 					title: "Copy everything shown here (the last 256 KB) to the clipboard",
+					disabled: !text,
 					onClick: copyLog,
 					children: "Copy log"
 				}),
@@ -135757,11 +136295,26 @@ function SystemLogs({ onOpenSysLogsPane }) {
 			onClick: revealPath,
 			children: path
 		}),
+		loadFailed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			id: "logs-load-state",
+			role: "alert",
+			children: [
+				"Couldn't load the log.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => void load(),
+					children: "Retry"
+				})
+			]
+		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
 			id: "logs-view",
 			className: "logs-view",
 			ref: viewRef,
-			children: text
+			children: logViewText(text, exists, loadFailed)
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FirstStartReport, {})
 	] });
@@ -136099,6 +136652,7 @@ function ShellEngineUpdate() {
 	const [info, setInfo] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [run, setRun] = (0, import_react.useState)(null);
+	const [checking, setChecking] = (0, import_react.useState)(false);
 	const timer = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (!mfengine?.updateInfo) return;
@@ -136131,6 +136685,11 @@ function ShellEngineUpdate() {
 			}));
 			toast(failSentence("Couldn't change automatic updates", err));
 		});
+	};
+	const checkAgain = () => {
+		if (checking || !mfengine.updateInfo) return;
+		setChecking(true);
+		mfengine.updateInfo().then(setInfo).catch(() => {}).finally(() => setChecking(false));
 	};
 	const update = () => {
 		if (busy || !mfengine.install) return;
@@ -136229,9 +136788,19 @@ function ShellEngineUpdate() {
 		] }) : info?.checked === false ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
 			children: [
-				"Couldn’t check for engine updates right now",
-				info.current ? ` (this engine is ${info.current})` : "",
-				". Try again in a minute."
+				checking ? "Checking…" : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					"Couldn’t check for engine updates right now",
+					info.current ? ` (this engine is ${info.current})` : "",
+					"."
+				] }),
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: checking,
+					onClick: checkAgain,
+					children: "Check again"
+				})
 			]
 		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
@@ -137147,9 +137716,20 @@ function Traffic(_) {
 			className: "set-hint",
 			children: "Loading…"
 		}),
-		q.isError && !data && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		q.isError && !data && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
-			children: "Could not load traffic data. Check your connection and retry."
+			id: "traffic-load-state",
+			role: "alert",
+			children: [
+				"Couldn't load traffic data.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => void q.refetch(),
+					children: "Retry"
+				})
+			]
 		}),
 		data && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			(data.errors.github || data.errors.clicks) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -138599,6 +139179,10 @@ function CommitDialog() {
 		};
 	}, [open, target]);
 	if (!open) return null;
+	function dismiss() {
+		if (target) rememberCommitMessage(target, msg);
+		closeDialog();
+	}
 	const submitLabel = {
 		leave: "Commit",
 		commit: "Commit",
@@ -138652,14 +139236,14 @@ function CommitDialog() {
 			await commit(false);
 		} catch (err) {
 			const rz = redZoneBreaches(err);
-			if (rz) warnZones(title, rz, () => void commit(true).then(() => void freshStage(title), (e) => toast("Commit failed: " + errMsg(e), { duration: 7e3 })));
-			else toast("Commit failed: " + errMsg(err), { duration: 7e3 });
+			if (rz) warnZones(title, rz, () => void commit(true).then(() => void freshStage(title), (e) => commitFailed(title, e)));
+			else commitFailed(title, err);
 		}
 		freshStage(title);
 	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "commit-dialog",
-		onClose: closeDialog,
+		onClose: dismiss,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "commit-form",
 			onSubmit: (e) => {
@@ -138735,7 +139319,7 @@ function CommitDialog() {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						id: "commit-cancel",
-						onClick: closeDialog,
+						onClick: dismiss,
 						children: "Cancel"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "submit",
@@ -138752,6 +139336,18 @@ function CommitDialog() {
 			]
 		})
 	});
+}
+function rememberCommitMessage(title, text) {
+	if (text.trim()) lastCommitMsg.set(title, text);
+	else lastCommitMsg.delete(title);
+}
+function commitFailed(title, err) {
+	errorPop("Commit failed", errMsg(err), [{
+		label: "Edit message",
+		primary: true,
+		title: "Open Commit again with your message",
+		run: () => commitSession(title)
+	}]);
 }
 function warnZones(title, breaches, proceed) {
 	const n = breaches.length;
@@ -139796,6 +140392,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 	const selField = (0, import_react.useRef)(null);
 	const [hasText, setHasText] = (0, import_react.useState)(false);
 	const [sending, setSending] = (0, import_react.useState)(false);
+	const sendingRef = (0, import_react.useRef)(false);
 	const [note, setNote] = (0, import_react.useState)("");
 	const later = (0, import_react.useCallback)(() => {
 		if (item.kind === "question") dismissQuestion(title).catch((err) => toast("Couldn't put it off: " + errMsg(err)));
@@ -139818,6 +140415,11 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 			ok: false,
 			line: "Nothing to send yet"
 		};
+		if (sendingRef.current) return {
+			ok: false,
+			line: "Still sending"
+		};
+		sendingRef.current = true;
 		setSending(true);
 		setNote("");
 		try {
@@ -139835,11 +140437,13 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 				forceActivity(title, "clarify");
 				refreshInstances();
 			}
+			field.current?.focus();
 			return {
 				ok: false,
 				line: f.line
 			};
 		} finally {
+			sendingRef.current = false;
 			setSending(false);
 		}
 	}, [
@@ -140112,7 +140716,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 				placeholder: "Your answer…",
 				"aria-labelledby": "ask-question",
 				spellCheck: true,
-				disabled: sending,
+				readOnly: sending,
 				onInput: (e) => setHasText(!!e.currentTarget.value.trim()),
 				onKeyDown: (e) => {
 					if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
@@ -142737,24 +143341,51 @@ function TodoReminder() {
 }
 //#endregion
 //#region src/components/dialogs/AssistantAgentDialog.tsx
+function assistantSaveStatus(restart, restartError) {
+	if (!restart) return "Saved. Applies the next time the assistant starts.";
+	if (restartError !== null) return "Saved, but the assistant didn't restart: " + restartError;
+	return "Saved and the assistant restarted. Reopen Chat to talk to it.";
+}
 function AssistantAgentDialog() {
 	const open = useUi((s) => s.openDialog === "assistant-agent");
 	const closeDialog = useUi((s) => s.closeDialog);
 	const [text, setText] = (0, import_react.useState)("");
+	const [saved, setSaved] = (0, import_react.useState)("");
+	const [load, setLoad] = (0, import_react.useState)("loading");
+	const [loadError, setLoadError] = (0, import_react.useState)("");
+	const [saving, setSaving] = (0, import_react.useState)(false);
 	const [status, setStatus] = (0, import_react.useState)("");
 	const [agent, setAgent] = (0, import_react.useState)("");
 	const agentChoices = useAgentChoices();
 	const taRef = (0, import_react.useRef)(null);
+	const typed = (0, import_react.useRef)(false);
+	const loadSeq = (0, import_react.useRef)(0);
+	const loadInstructions = async () => {
+		const seq = ++loadSeq.current;
+		setLoad("loading");
+		setLoadError("");
+		try {
+			const r = await api("/api/assistant/instructions");
+			if (seq !== loadSeq.current) return;
+			const file = r?.text || "";
+			setSaved(file);
+			if (!typed.current) setText(file);
+			setLoad("ok");
+		} catch (err) {
+			if (seq !== loadSeq.current) return;
+			setLoadError(errMsg(err));
+			setLoad("failed");
+		}
+	};
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		setStatus("");
+		setSaving(false);
+		typed.current = false;
+		setText("");
+		setSaved("");
 		(async () => {
-			try {
-				const r = await api("/api/assistant/instructions");
-				setText(r?.text || "");
-			} catch {
-				setText("");
-			}
+			await loadInstructions();
 			try {
 				const st = await api("/api/settings");
 				setAgent(String(st?.settings?.coding_cli?.assistant_provider || ""));
@@ -142765,25 +143396,36 @@ function AssistantAgentDialog() {
 		})();
 	}, [open]);
 	if (!open) return null;
+	const dirty = text !== saved;
+	const canSave = load === "ok" && !saving;
 	const save = async (restart) => {
+		if (!canSave) return;
+		setSaving(true);
 		setStatus("Saving…");
 		try {
 			await api("/api/assistant/instructions", {
 				method: "PUT",
 				json: { text }
 			});
+			setSaved(text);
+			let restartError = null;
 			if (restart) try {
 				await api("/api/assistant/restart", { method: "POST" });
-			} catch {}
-			setStatus(restart ? "Saved — assistant restarted; reopen Chat to talk to it." : "Saved — applies the next time the assistant starts.");
-			toast(restart ? "Instructions saved & assistant restarted" : "Instructions saved");
+			} catch (err) {
+				restartError = errMsg(err);
+			}
+			setStatus(assistantSaveStatus(restart, restartError));
+			if (restartError === null) toast(restart ? "Instructions saved & assistant restarted" : "Instructions saved");
 		} catch (err) {
-			setStatus("Save failed: " + (err.message || ""));
+			setStatus("Save failed: " + errMsg(err));
+		} finally {
+			setSaving(false);
 		}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "assistant-agent-dialog",
 		onClose: closeDialog,
+		closeOnBackdrop: !dirty,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "assistant-agent-panel",
 			children: [
@@ -142829,7 +143471,26 @@ function AssistantAgentDialog() {
 					spellCheck: false,
 					placeholder: "e.g. Always answer concisely. Prefer bullet points. I work in Pacific time. Call me Ethan.",
 					value: text,
-					onChange: (e) => setText(e.target.value)
+					onChange: (e) => {
+						typed.current = true;
+						setText(e.target.value);
+					}
+				}),
+				load === "failed" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					id: "assistant-agent-load-failed",
+					role: "alert",
+					children: [
+						"Couldn't load the instructions. ",
+						loadError,
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => void loadInstructions(),
+							children: "Retry"
+						})
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "modal-actions",
@@ -142843,13 +143504,15 @@ function AssistantAgentDialog() {
 							type: "button",
 							id: "assistant-agent-restart",
 							className: "test-btn",
-							onClick: () => save(true),
+							disabled: !canSave,
+							onClick: () => void save(true),
 							children: "Save & restart"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							id: "assistant-agent-save",
-							onClick: () => save(false),
+							disabled: !canSave,
+							onClick: () => void save(false),
 							children: "Save"
 						})
 					]
@@ -143008,6 +143671,9 @@ function RedZonesDialog() {
 		})
 	});
 }
+function removedZoneLine(z) {
+	return "Removed keep-out zone " + (z.name || z.pattern);
+}
 function RepoCard({ row, onRepos }) {
 	const [pattern, setPattern] = (0, import_react.useState)("");
 	const [name, setName] = (0, import_react.useState)("");
@@ -143070,19 +143736,30 @@ function RepoCard({ row, onRepos }) {
 			setBusy("");
 		}
 	};
-	const add = async () => {
-		const p = pattern.trim();
+	const add = async (undo) => {
+		const p = undo ? undo.pattern : pattern.trim();
 		if (!p) return;
 		if (await call("add", () => api("/api/red-zones", { json: {
 			repo_id: row.id,
 			pattern: p,
-			name: name.trim(),
-			note: "",
+			name: undo ? undo.name : name.trim(),
+			note: undo ? undo.note : "",
 			label: row.label
-		} }))) {
+		} })) && !undo) {
 			setPattern("");
 			setName("");
 		}
+	};
+	const removed = async (z, took) => {
+		if (!await took) return;
+		toast(removedZoneLine(z), { action: {
+			label: "Undo",
+			onClick: () => void add({
+				pattern: z.pattern,
+				name: z.name || "",
+				note: z.note || ""
+			})
+		} });
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "rzd-repo",
@@ -143167,7 +143844,7 @@ function RepoCard({ row, onRepos }) {
 						"aria-label": "Remove red zone " + (z.name || z.pattern),
 						title: "Remove this red zone",
 						disabled: busy === "del:" + z.id,
-						onClick: () => void call("del:" + z.id, () => api("/api/red-zones/" + encodeURIComponent(z.id), { method: "DELETE" })),
+						onClick: () => void removed(z, call("del:" + z.id, () => api("/api/red-zones/" + encodeURIComponent(z.id), { method: "DELETE" }))),
 						children: "×"
 					})
 				] }, z.id))

@@ -20449,6 +20449,11 @@ p.set-hint {
   overflow-wrap: anywhere;
   user-select: all;
 }
+
+/* A guest link's Revoke asks on its own line under the link. */
+.peer-guest-links .set-confirm {
+  margin-top: 6px;
+}
 }
 
 /* 050 */
@@ -22416,6 +22421,25 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   color: var(--text);
 }
 
+/* The cost chip is a <button> (Tab reaches it, Enter opens it): drop the
+   browser's button look so it reads exactly like the plain chip. */
+.pane-head button.tok.usage-trigger {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+}
+
+.pane-head button.tok.usage-trigger:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 /* Shared click-to-expand usage dropdown (body-mounted, fixed-positioned). */
 .usage-pop {
   position: fixed;
@@ -22429,6 +22453,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   padding: 8px 10px;
   font-size: 12px;
   color: var(--text);
+}
+
+/* The Memory popover opened from the low-memory notice (MemoryNotice) when
+   the sidebar's Memory row is off screen: above the notice it rises from. */
+.usage-pop.mem-pop-over-notice {
+  z-index: 4000;
 }
 
 .usage-pop.hidden {
@@ -36590,6 +36620,22 @@ body.conn-lost #cs-errors {
 #state-notice .sn-btn:hover {
   border-color: var(--accent);
 }
+
+/* "Copy the rename command": small, inline after the sentence it acts on. */
+#state-notice .sn-copy {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#state-notice .sn-copy:hover {
+  border-color: var(--accent);
+}
 }
 
 /* 200 */
@@ -36915,6 +36961,25 @@ body.conn-lost #cs-errors {
   margin-top: 8px;
   display: flex;
   justify-content: flex-end;
+}
+
+/* "See what's using it": a link on the left, Hide stays on the right. */
+#memory-notice .mn-see {
+  margin-right: auto;
+  align-self: center;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+#memory-notice .mn-see:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 #memory-notice .mn-btn {
@@ -40205,6 +40270,20 @@ button.linklike {
 .vf-env-acts {
   display: flex;
   justify-content: flex-end;
+}
+
+/* Under a list whose re-polling has backed off (the server can't get a new one
+   yet): the rows are the last ones read, and Retry sweeps now. Quiet, like the
+   toolbar note: the rows above are still good to act on. */
+.ik-stalled-refresh {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+/* An Auto-start section whose list couldn't be read: the reason, then Retry. */
+.ik-queue-error .linklike {
+  margin-left: 6px;
 }
 }
 
