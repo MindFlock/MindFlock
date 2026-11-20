@@ -11171,30 +11171,12 @@ def _shown_ticket_draft(raw, sentence: str):
 async def _file_shown_ticket_draft(source: str, raw, sentence: str) -> dict:
     """File a draft the dialog already holds on ``source``; the row on success.
 
-    ``ticket_compose.compose`` minus the model turn: the same blocker check,
-    the same refusal to report success without a link, and a failure still
-    hands the draft back so the next Retry is cheap too.
+    ``ticket_compose.compose`` with the draft handed in, so no model turn: the
+    same blocker check, the same refusal to report success without a link, and
+    a failure still hands the draft back so the next Retry is cheap too.
     """
-    from backend.ticket_ingestion.providers import get_provider
-
     drafted = _shown_ticket_draft(raw, sentence)
-    src = _ticket_compose._find_source(source)
-    provider = get_provider(src)
-    blocker = provider.create_blocker()
-    if blocker:
-        raise _ticket_compose.ComposeError(blocker, draft=drafted)
-    try:
-        story = await provider.create_ticket(drafted.name, drafted.description)
-    except Exception as err:  # noqa: BLE001 — provider refusal / network
-        raise _ticket_compose.ComposeError(str(err), draft=drafted)
-    if not getattr(story, "app_url", ""):
-        raise _ticket_compose.ComposeError(
-            "The ticket was filed on %s but the tracker did not return a link to "
-            "it — check the board before filing it again."
-            % ((getattr(src, "label", "") or "").strip() or src.provider),
-            draft=drafted,
-        )
-    return _ticket_compose._row(story, src, drafted)
+    return await _ticket_compose.compose(source, sentence, drafted=drafted)
 
 
 @app.post("/api/tickets/compose")

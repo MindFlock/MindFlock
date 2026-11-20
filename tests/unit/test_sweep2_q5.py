@@ -310,3 +310,18 @@ def test_fail_line_says_unreachable_whole_and_prefixes_everything_else():
         "Couldn't send: busy",
         "Couldn't update: HTTP 500",
     ]
+
+
+def test_the_draft_retry_files_through_compose_itself():
+    """One filing path: the Retry hands its draft to ticket_compose.compose
+    (drafted=...), which skips the model turn, rather than a copy of compose's
+    filing steps in the server."""
+    import inspect
+
+    from backend.web import server
+    from backend.web.core import ticket_compose
+
+    src = inspect.getsource(server._file_shown_ticket_draft)
+    assert "_ticket_compose.compose(source, sentence, drafted=drafted)" in src
+    assert "create_ticket" not in src
+    assert "drafted" in inspect.signature(ticket_compose.compose).parameters
