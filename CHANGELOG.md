@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Disk cleanup recognises squash- and rebase-merged work after the base
+  moved on.** A worktree whose branch landed through a squash or rebase merge
+  was kept for good as "N commits in no base branch and on no remote" as soon
+  as a later commit on the base touched the same lines — on a repo with a
+  CHANGELOG, every squash-merged branch. When unmerged commits are the only
+  thing keeping a worktree, cleanup now looks for the commit of the base the
+  work landed in (patch-equal commits first, then those touching the most of
+  the branch's files; bounded tries, commits and time) and counts it merged
+  when that commit already holds every change the branch makes, byte for
+  byte. Anything else — one more commit, a reworded line, a stash made on the
+  branch, uncommitted or untracked files, odd git output — keeps it. The
+  listing says why in plain words ("its changes are already in main
+  (squash-merged)"). The merge test is now read-only (`diff --raw`, `ls-tree`
+  and `git merge-file` on temp copies): `git merge-tree --write-tree`, even
+  with a scratch object dir, touched the mtimes of the inspected
+  repository's own objects and packs.
+
 ## [0.14.23] - 2026-11-20
 
 ### Added
