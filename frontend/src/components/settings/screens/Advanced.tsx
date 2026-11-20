@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingField, useSettings } from "../useSettings";
 import { useServerRestart } from "../useServerRestart";
 import { api } from "../../../api/client";
+import { toast } from "../../../lib/toast";
 import type { ScreenProps } from "../SettingsDialog";
 import { SetInIntake } from "./SetInIntake";
 import {
@@ -393,6 +394,13 @@ type EngineInfo = ShellUpdateFlags & {
   /** The engine has run ahead of this app (one line, nothing to click). */
   skew?: string;
 };
+/** "<what failed>: <reason>." — the reason a rejected shell call carried,
+ * or just "<what failed>." when it carried none. */
+export function failSentence(what: string, err: unknown): string {
+  const why = String((err as { message?: unknown } | null)?.message ?? (typeof err === "string" ? err : "")).trim();
+  return why ? what + ": " + why.replace(/\.$/, "") + "." : what + ".";
+}
+
 type EngineRun = { state?: string; step?: string; message?: string; code?: number | null; lines?: string[] };
 function ShellEngineUpdate() {
   const mfengine = (
@@ -410,6 +418,7 @@ function ShellEngineUpdate() {
   const [info, setInfo] = useState<EngineInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [run, setRun] = useState<EngineRun | null>(null);
+  const [checking, setChecking] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -445,14 +454,38 @@ function ShellEngineUpdate() {
     mfupdate
       ?.setAuto?.(on)
       .then((r) => setInfo((i) => ({ ...(i || {}), autoUpdate: r?.autoUpdate !== false })))
-      .catch(() => {});
+      .catch((err: unknown) => {
+        // The switch must not claim a change that didn't happen: flip it back
+        // and say why.
+        setInfo((i) => ({ ...(i || {}), autoUpdate: !on }));
+        toast(failSentence("Couldn't change automatic updates", err));
+      });
+  };
+
+  // "Check again" after a failed check: the shell re-runs a failed check
+  // before answering updateInfo (an older shell just answers what it has).
+  const checkAgain = () => {
+    if (checking || !mfengine.updateInfo) return;
+    setChecking(true);
+    mfengine
+      .updateInfo()
+      .then(setInfo)
+      .catch(() => {})
+      .finally(() => setChecking(false));
   };
 
   const update = () => {
     if (busy || !mfengine.install) return;
     setBusy(true);
     setRun(null);
-    mfengine.install().catch(() => {});
+    mfengine.install().catch((err: unknown) => {
+      // The run never started (or died before the shell recorded it): stop
+      // the state poll and say so, instead of sitting on "Updating…".
+      if (timer.current) clearInterval(timer.current);
+      timer.current = null;
+      setBusy(false);
+      setRun({ state: "failed", message: failSentence("The update didn't start", err) });
+    });
     if (timer.current) clearInterval(timer.current);
     timer.current = setInterval(async () => {
       try {
@@ -531,8 +564,17 @@ function ShellEngineUpdate() {
         </>
       ) : info?.checked === false ? (
         <p className="set-hint">
-          Couldn’t check for engine updates right now
-          {info.current ? ` (this engine is ${info.current})` : ""}. Try again in a minute.
+          {checking ? (
+            "Checking…"
+          ) : (
+            <>
+              Couldn’t check for engine updates right now
+              {info.current ? ` (this engine is ${info.current})` : ""}.
+            </>
+          )}{" "}
+          <button type="button" className="test-btn" disabled={checking} onClick={checkAgain}>
+            Check again
+          </button>
         </p>
       ) : (
         <p className="set-hint">

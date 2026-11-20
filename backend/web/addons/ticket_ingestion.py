@@ -15,6 +15,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -130,6 +131,38 @@ def _pid_alive(pid) -> bool:
 #: event here (a device removed elsewhere), and the pipeline is wired with it
 #: at boot.
 AUTOMATION_RECHECK = 30.0
+
+#: How long GET /api/mindflock/status reuses one reading. Every open window
+#: polls it every 4 s, and each reading re-reads the lock files, the activity
+#: beacon, a 64 KB log tail and the automation mark; a start or stop through
+#: the controller clears it, so a switch never reads stale.
+STATUS_CACHE_S = 2.0
+
+
+#: The live-activity fields a start forced from the UI greens, by the kind
+#: core.pending records for it.
+_LOCAL_ACTIVE = (
+    ("tickets_active", "tix"),
+    ("pr_active", "pr"),
+    ("issues_active", "iss"),
+)
+
+
+def _local_kinds() -> set:
+    """The kinds of work this server is bringing in itself right now."""
+    try:
+        return _pending.provisioning_kinds()
+    except Exception:  # noqa: BLE001 — status must never fail on this
+        return set()
+
+
+def _with_local(reading: dict, local: set) -> dict:
+    """A status reading taken without the local kinds, with them added: a copy,
+    so a cached reading is never changed."""
+    out = dict(reading)
+    for field, kind in _LOCAL_ACTIVE:
+        out[field] = bool(reading.get(field)) or kind in local
+    return out
 
 
 def _automation_here() -> bool:
@@ -408,6 +441,12 @@ class TicketIngestionController:
         #: When this server first noticed its own child gone (the child's
         #: exit time, near enough — Popen doesn't record one).
         self._exited_at: Optional[float] = None
+        #: (monotonic time, settings doc, reading) for :meth:`cached_status`;
+        #: the generation moves on every :meth:`forget_status`, so a reading
+        #: taken across a start/stop is never stored as fresh.
+        self._status_cache: "Optional[tuple[float, object, dict]]" = None
+        self._status_gen = 0
+        self._status_lock = threading.Lock()
 
     def _own_running(self) -> bool:
         if self._proc is None:
@@ -613,7 +652,50 @@ class TicketIngestionController:
             return None
         return raw if isinstance(raw, dict) else None
 
+    def forget_status(self) -> None:
+        """Drop the cached status: the pipeline's state is about to change
+        (or just did)."""
+        with self._status_lock:
+            self._status_gen += 1
+            self._status_cache = None
+
+    def cached_status(self) -> dict:
+        """:meth:`status`, reused for :data:`STATUS_CACHE_S` seconds — and only
+        while the settings are the same ones (a save loads a new object), so
+        a switch flipped in Intake reads right on the next poll."""
+        from backend.config import settings as _s
+
+        doc = _s.load_settings()
+        with self._status_lock:
+            hit = self._status_cache
+            gen = self._status_gen
+        if (
+            hit is not None
+            and hit[1] is doc
+            and time.monotonic() - hit[0] < STATUS_CACHE_S
+        ):
+            return _with_local(hit[2], _local_kinds())
+        reading = self.status(local=set())
+        with self._status_lock:
+            if gen == self._status_gen:
+                self._status_cache = (time.monotonic(), doc, reading)
+        return _with_local(reading, _local_kinds())
+
     def start(self) -> bool:
+        self.forget_status()
+        try:
+            return self._start()
+        finally:
+            self.forget_status()
+
+    def stop(self) -> bool:
+        self.forget_status()
+        try:
+            return self._stop()
+        finally:
+            self.forget_status()
+
+    def _start(self) -> bool:
         if self.is_running():
             return False
         # Under pytest, never spawn into a real checkout: the child only dies
@@ -658,7 +740,7 @@ class TicketIngestionController:
         self._started_at = time.time()
         return True
 
-    def stop(self) -> bool:
+    def _stop(self) -> bool:
         # Our own child first (we can wait on it).
         if self._own_running():
             proc = self._proc
@@ -847,7 +929,12 @@ class TicketIngestionController:
             return {}
         return raw if isinstance(raw, dict) else {}
 
-    def status(self) -> dict:
+    def status(self, local: "Optional[set]" = None) -> dict:
+        """The pipeline's state for the sidebar bars and Intake. ``local``:
+        the kinds this server is bringing in itself (forced starts, sessions
+        still provisioning); None reads them now. :meth:`cached_status` passes
+        an empty set and adds them on every call, since they live in memory
+        and move faster than the cache."""
         own = self._own_running()
         ext = None if own else self._external_lock_pid()
         running = own or (ext is not None)
@@ -869,10 +956,8 @@ class TicketIngestionController:
             act = {}
         # Work this server is bringing in itself (forced starts + sessions still
         # provisioning) — independent of whether the pipeline runs at all.
-        try:
-            local = _pending.provisioning_kinds()
-        except Exception:  # noqa: BLE001 — status must never fail on this
-            local = set()
+        if local is None:
+            local = _local_kinds()
         # Why the child is gone, when it is ours and it is — plus the live
         # error classes: a skipped source (config, from the beacon), a tracker
         # or GitHub refusing the token (auth) or a connectivity failure
@@ -1137,7 +1222,8 @@ class TicketIngestionAddon(Addon):
 
         @router.get("/status")
         def mindflock_status() -> JSONResponse:
-            return JSONResponse(ctrl.status())
+            # Cached briefly (STATUS_CACHE_S): every window polls this.
+            return JSONResponse(ctrl.cached_status())
 
         @router.post("/start")
         async def mindflock_start() -> JSONResponse:
@@ -1156,6 +1242,7 @@ class TicketIngestionAddon(Addon):
             # Record BEFORE acting: the (re)started pipeline reads the toggle
             # at boot, so it must already say "on".
             _record_desired_running(True)
+            ctrl.forget_status()
             try:
                 if ctrl._own_running():
                     # Already on and running -> idempotent no-op (don't bounce
@@ -1175,6 +1262,7 @@ class TicketIngestionAddon(Addon):
             still on, the process keeps running — it is bounced into a
             tickets-off mode instead of being stopped."""
             _record_desired_running(False)
+            ctrl.forget_status()
             try:
                 if ctrl._own_running() and (
                     _pr_review_enabled() or _issue_handling_enabled()

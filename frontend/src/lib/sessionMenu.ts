@@ -16,7 +16,7 @@
  *   More ▸   the rare ones, folded: Terminal, Diff, Code map, Thread, Browse
  *            history, Copy entire history (pane only), Duplicate, Open in the IDE,
  *            Open preview, Select, Hide window, Move out of a group, Re-run
- *            worktree setup, Copy folder path
+ *            worktree setup, Copy folder path, Customize header… (pane only)
  *   Danger   Close, Delete…
  *
  * A group with nothing in it is left out. A pane passes what its own header
@@ -30,7 +30,7 @@ import type { Instance } from "../api/types";
 import { instApi } from "../api/client";
 import { isMovingRow, refreshInstances } from "../state/queries";
 import { displayName, useUi } from "../state/store";
-import { PR_FALLBACK_HINT, cleanupMissing, deleteConfirmText, deleteSession, openMoveSession, selectSession } from "./sessionActions";
+import { PR_FALLBACK_HINT, cleanupMissing, deleteConfirmText, deleteMenuTitle, deleteSession, openMoveSession, selectSession } from "./sessionActions";
 import { api } from "../api/client";
 import { CONNECT_GITHUB_FOR_PRS, NOTHING_TO_PUSH } from "./vocab";
 import { actionLabel, actionNote, sessionAction, type ActionCtx, type SessionActionId } from "./sessionActionTable";
@@ -90,7 +90,9 @@ export interface SessionMenuModel {
 }
 
 export interface SessionMenuOpts {
-  /** Tabs the pane header already shows: their openers are left out. */
+  /** Tabs the pane header already shows: their openers are left out. Only a
+   * pane passes it (an empty list included), so it also marks a pane's menu:
+   * that one ends in "Customize header…". */
   visibleTabs?: string[];
   /** Pane-only: open the history view. */
   onHistory?: () => void;
@@ -409,6 +411,18 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
           if (ok) toast("Copied path");
         }),
     },
+    // A pane's own: Customize opened on its Pane header page (what Customize's
+    // intro points at), the way the footer's ⚙ Customize opens it.
+    !!opts.visibleTabs && {
+      key: "customize-header",
+      label: "Customize header…",
+      title: "Choose what a pane's header shows: tabs, chips, the next step",
+      run: () => {
+        const ui = useUi.getState();
+        ui.setCustomizePage("pane");
+        ui.openDialogFor("customize");
+      },
+    },
   ]);
 
   const danger = keep([
@@ -425,7 +439,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       label: sessionAction("delete").short!,
       danger: true,
       confirm: deleteConfirmText(inst),
-      title: "Deletes its folder and branch, uncommitted changes included (asks first)",
+      title: deleteMenuTitle(inst),
       // Already asked (the strip): the answer may name the sessions holding
       // its folder, which the menu shows under the row.
       run: () => deleteSession(title, true),

@@ -53,6 +53,25 @@
   color: var(--text);
 }
 
+/* The cost chip is a <button> (Tab reaches it, Enter opens it): drop the
+   browser's button look so it reads exactly like the plain chip. */
+.pane-head button.tok.usage-trigger {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+}
+
+.pane-head button.tok.usage-trigger:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 /* Shared click-to-expand usage dropdown (body-mounted, fixed-positioned). */
 .usage-pop {
   position: fixed;
@@ -66,6 +85,12 @@
   padding: 8px 10px;
   font-size: 12px;
   color: var(--text);
+}
+
+/* The Memory popover opened from the low-memory notice (MemoryNotice) when
+   the sidebar's Memory row is off screen: above the notice it rises from. */
+.usage-pop.mem-pop-over-notice {
+  z-index: 4000;
 }
 
 .usage-pop.hidden {

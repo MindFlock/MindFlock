@@ -14,7 +14,7 @@
 // localStorage). Notification permission is requested lazily — only when the
 // user first turns it on. The event → notification rules come from
 // GET /api/notify/config; a shown notification carries the session title and
-// clicking it focuses this tab.
+// clicking it focuses this tab and opens that session.
 
 const STORE_KEY = "mindflock.notify.enabled";
 // At most one notification per (session, RULE) per 5s — keyed by rule id, not
@@ -24,6 +24,9 @@ const STORE_KEY = "mindflock.notify.enabled";
 // swallow the rest, and since the same key is the Notification `tag`, a later
 // rule's popup also replaced a still-visible earlier one.
 const DEDUPE_MS = 5000;
+// The rules failed to load (the server still booting, a blip): try again on
+// the next event, and on a timer this often, until they arrive.
+const RULES_RETRY_MS = 30000;
 
 function isEnabled() {
   try {
@@ -41,6 +44,8 @@ function setEnabled(on) {
   }
 }
 
+// The rules, or null when they could not be read — so a failed fetch is told
+// apart from a server with no rules, and never wipes rules already loaded.
 async function fetchRules(apiBase) {
   try {
     const r = await fetch((apiBase || "/api/notify") + "/config");
@@ -48,7 +53,7 @@ async function fetchRules(apiBase) {
     return (await r.json()).rules || [];
   } catch (e) {
     console.warn("notify addon: config fetch failed", e);
-    return [];
+    return null;
   }
 }
 
@@ -168,7 +173,33 @@ window.mindflockAddons.notify = {
       DESKTOP_OWNED.has(env.event) || (env.event === "session.activity_changed" && env.new === "clarify");
     const lastShown = new Map(); // "session|event" -> ts of last notification
     let rules = [];
+    let rulesLoaded = false;
+    let rulesLoading = null;
+    let retryTimer = null;
     let subscribed = false;
+
+    // Load the rules once at a time. Until a fetch succeeds, keep trying every
+    // RULES_RETRY_MS while notifications are on — start() used to keep the
+    // empty list from a failed first fetch, so the toggle read On and nothing
+    // ever popped until a reload.
+    function loadRules() {
+      if (!rulesLoading) {
+        rulesLoading = fetchRules(ctx.descriptor && ctx.descriptor.api_base).then((got) => {
+          rulesLoading = null;
+          if (got) {
+            rules = got;
+            rulesLoaded = true;
+          } else if (!retryTimer && isEnabled()) {
+            retryTimer = setTimeout(() => {
+              retryTimer = null;
+              if (!rulesLoaded && isEnabled()) loadRules();
+            }, RULES_RETRY_MS);
+          }
+          return rules;
+        });
+      }
+      return rulesLoading;
+    }
 
     function onEvent(env) {
       if (!isEnabled() || Notification.permission !== "granted") return;
@@ -181,6 +212,20 @@ window.mindflockAddons.notify = {
       // The desktop app raises its own OS notification for these
       // (frontend/src/lib/desktopNotify.ts) — don't pop a second one.
       if (window.mfnotify && desktopOwned(env)) return;
+      // Looking at the app: the in-app toast says it, and an OS popup beside
+      // it is a second copy (the desktop path skips the same way).
+      if (typeof document !== "undefined" && typeof document.hasFocus === "function" && document.hasFocus()) return;
+      // No rules yet: fetch them now and judge this event by them.
+      if (!rulesLoaded) {
+        loadRules().then(() => {
+          if (rulesLoaded) show(env);
+        });
+        return;
+      }
+      show(env);
+    }
+
+    function show(env) {
       for (const rule of rules) {
         if (rule.enabled === false) continue;  // user muted this rule
         if (!ruleMatches(rule, env)) continue;
@@ -200,6 +245,15 @@ window.mindflockAddons.notify = {
             } catch (e) {
               /* some platforms refuse programmatic focus */
             }
+            // Open the session it is about, through the app's own selector
+            // (window.mindflock.openSession, lib/windowName.ts) — feature-
+            // detected: an older bundle only focuses the tab.
+            try {
+              const open = window.mindflock && window.mindflock.openSession;
+              if (typeof open === "function" && env.session) open(env.session);
+            } catch (e) {
+              /* the bridge is optional by construction */
+            }
             n.close();
           };
         } catch (e) {
@@ -209,9 +263,7 @@ window.mindflockAddons.notify = {
     }
 
     async function start() {
-      if (!rules.length) {
-        rules = await fetchRules(ctx.descriptor && ctx.descriptor.api_base);
-      }
+      if (!rulesLoaded) await loadRules();
       if (!subscribed) {
         ctx.events.subscribe("*", onEvent);
         subscribed = true;
@@ -259,7 +311,11 @@ window.mindflockAddons.notify = {
     // Re-pull the rules (with their enabled/muted state) so a per-rule toggle
     // in Settings takes effect immediately, without a page reload.
     async function refreshRules() {
-      rules = await fetchRules(ctx.descriptor && ctx.descriptor.api_base);
+      const got = await fetchRules(ctx.descriptor && ctx.descriptor.api_base);
+      if (got) {
+        rules = got;
+        rulesLoaded = true;
+      }
     }
 
     // Public API so app.js (the bell dropdown + Settings → Notifications) can

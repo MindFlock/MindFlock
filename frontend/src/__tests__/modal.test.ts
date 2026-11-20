@@ -33,6 +33,7 @@ vi.mock("../state/store", () => ({
 vi.mock("../lib/windowName", () => ({ windowName: () => "s1", nameTakenBy: () => "" }));
 vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 vi.mock("../lib/renameSession", () => ({ renameSession: vi.fn() }));
+vi.mock("../lib/sessionActions", () => ({ MAX_TITLE_LEN: 120 }));
 
 const { Modal, backdropPress, modalEscape, pushModal } = await import("../components/Modal");
 const { RenameDialog } = await import("../components/dialogs/RenameDialog");

@@ -17,8 +17,21 @@ import {
 
 export const SECRET_MASK = "•••set";
 
+/** Whether `settings` holds the real document yet: "loading" until the first
+ * read lands, "error" when it failed with nothing to show. */
+export type SettingsStatus = "ready" | "loading" | "error";
+
+/** The model's status from its query: any document at all (even one a later
+ * refresh failed to update) is real values; none is loading, or failed. */
+export function settingsStatus(q: { data?: unknown; isError?: boolean; isFetching?: boolean }): SettingsStatus {
+  if (q.data !== undefined) return "ready";
+  return q.isError && !q.isFetching ? "error" : "loading";
+}
+
 export interface SettingsModel {
   settings: Json;
+  /** Absent means ready (a hand-built model in a test or a sub-screen). */
+  status?: SettingsStatus;
   reload(): Promise<void>;
   /** Persist one field; re-applies the server's echo. Resolves false when the
    * save failed (already toasted) so a caller never reports success for it. */
@@ -44,7 +57,9 @@ export interface SettingsModel {
 const EMPTY_SETTINGS: Json = {};
 
 export function useSettingsModel(open: boolean): SettingsModel {
-  const settings = useSettingsDoc(open).data ?? EMPTY_SETTINGS;
+  const doc = useSettingsDoc(open);
+  const settings = doc.data ?? EMPTY_SETTINGS;
+  const status = settingsStatus(doc);
 
   const reload = useCallback(async () => {
     try {
@@ -114,7 +129,7 @@ export function useSettingsModel(open: boolean): SettingsModel {
     [settings]
   );
 
-  return { settings, reload, saveField, saveGroup, saveGroups, get };
+  return { settings, status, reload, saveField, saveGroup, saveGroups, get };
 }
 
 export const SettingsCtx = createContext<SettingsModel | null>(null);
@@ -169,8 +184,11 @@ export function SettingField(props: {
       if (why) return;
     }
     if (value === display && !isSecret) return;
-    s.saveField(props.group, props.field, value);
-    if (isSecret) setValue("");
+    // A secret (an API key) clears only once it is saved: a failed save keeps
+    // it in the box to try again instead of making the person paste it anew.
+    void s.saveField(props.group, props.field, value).then((ok) => {
+      if (ok && isSecret) setValue((cur) => (cur === value ? "" : cur));
+    });
   };
 
   if (props.options) {

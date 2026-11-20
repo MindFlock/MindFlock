@@ -43,6 +43,36 @@ let nextId = 1;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 
+/** What had focus when the window opened (else the anchor): the window takes
+ * focus while it is up, so closing it drops focus to the page — and a dialog
+ * whose keys sit on its own element (New's Escape, Enter, Ctrl+Enter) would
+ * stop answering the keyboard until clicked. */
+let returnTo: HTMLElement | null = null;
+
+function focusedNow(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  const a = document.activeElement as HTMLElement | null;
+  return a && a !== document.body ? a : null;
+}
+
+/** Give focus back after the window closed by the user's hand ("Use this
+ * folder", Enter, ✕, Escape) — after the close has rendered, only when focus
+ * fell to the page (an owner that focused something itself keeps it), and
+ * only to an element still in the document. */
+function restoreFocus(first: HTMLElement | null, anchor: HTMLElement | null | undefined): void {
+  if (typeof document === "undefined") return;
+  setTimeout(() => {
+    const now = document.activeElement;
+    if (now && now !== document.body && (now as HTMLElement).isConnected !== false) return;
+    for (const el of [first, anchor]) {
+      if (el && el.isConnected && typeof el.focus === "function") {
+        el.focus({ preventScroll: true });
+        return;
+      }
+    }
+  }, 0);
+}
+
 export function getFolderPicker(): FolderPickerRequest | null {
   return current;
 }
@@ -51,6 +81,9 @@ export function getFolderPicker(): FolderPickerRequest | null {
 export function openFolderPicker(req: Omit<FolderPickerRequest, "id">): number {
   const prev = current;
   const id = nextId++;
+  // A re-target keeps the first field's return point only when nothing
+  // outside the window has focus now (the window itself had it).
+  returnTo = focusedNow() ?? (prev ? returnTo : null);
   current = { ...req, id };
   emit();
   // After the swap, so a cancel that closes its own browse (and so calls
@@ -68,6 +101,9 @@ export function closeFolderPicker(id?: number, notify = true): void {
   current = null;
   emit();
   if (notify) r.onCancel?.();
+  // An owner closing its own browse (notify false) is moving on itself.
+  if (notify) restoreFocus(returnTo, r.anchor);
+  returnTo = null;
 }
 
 /** "Use this folder". */
@@ -77,6 +113,8 @@ export function pickFolder(path: string): void {
   current = null;
   emit();
   r.onPick(path);
+  restoreFocus(returnTo, r.anchor);
+  returnTo = null;
 }
 
 function subscribe(l: () => void) {

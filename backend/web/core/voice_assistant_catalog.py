@@ -169,6 +169,7 @@ SESSION_ACTIONS: Dict[str, str] = {
     "branch": "Branch the session",
     "hide": "Hide",
     "map": "Code map",
+    "diff": "Open the diff",
     "pause": "Pause",
     "resume": "Resume",
     "close": "Close",

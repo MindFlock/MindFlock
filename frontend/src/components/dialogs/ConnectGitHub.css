@@ -116,3 +116,23 @@
 .gh-connected-row .setup-primary:hover {
   filter: brightness(1.1);
 }
+
+/* The status read failed: the sentence and its Retry, the reason under it. */
+.gh-load-failed p {
+  margin: 0;
+}
+.gh-load-failed .gh-load-reason {
+  margin-top: 4px;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+/* Cancel a pending device-flow code: quiet, at the end of the code row. */
+.gh-device .gh-device-cancel {
+  color: var(--muted);
+}
+
+/* "Not connected yet…" after the gh window closed early: its own line. */
+.gh-cli-alt .gh-cli-note {
+  flex-basis: 100%;
+}

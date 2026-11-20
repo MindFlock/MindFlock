@@ -9,7 +9,8 @@
  *
  * So there is no title field, no description field and no way to hand-write a
  * ticket. The backend matches — ``POST /api/tickets/compose`` takes a source
- * and a sentence, and no route anywhere accepts ticket fields.
+ * and a sentence. Its one other field is ``draft``: the draft a failed filing
+ * handed back, sent again by Retry so the retry skips the model turn.
  *
  * The wait is the interesting design problem: filing runs a model turn (~10-25s)
  * and then a write to somebody else's API, so the button is held for that whole
@@ -56,8 +57,9 @@ interface FiledTicket {
 }
 
 /** What the model wrote, handed back when the FILING failed rather than the
- * drafting. Shown so a retry is one button rather than another model turn. */
-interface Draft {
+ * drafting. Shown, and sent back by Retry, so a retry is one button rather
+ * than another model turn. */
+export interface Draft {
   name: string;
   description: string;
   criteria?: string[];
@@ -77,6 +79,22 @@ const MAX_BRIEF = 2000;
  * ~10-25s, and a button that has said "Filing…" without changing for half a
  * minute reads as a hang long before it actually is one. */
 const SLOW_MS = 8000;
+
+/** The compose request. With a draft in hand (a filing failed after the model
+ * turn) it goes back with the sentence, and the server files that draft as-is
+ * instead of drafting again. */
+export function composeBody(
+  source: string,
+  brief: string,
+  draft: Draft | null
+): { source: string; text: string; draft?: Draft } {
+  const body: { source: string; text: string; draft?: Draft } = {
+    source,
+    text: brief.trim(),
+  };
+  if (draft) body.draft = draft;
+  return body;
+}
 
 export function NewTicketPane() {
   const closeDialog = useUi((s) => s.closeDialog);
@@ -101,9 +119,12 @@ export function NewTicketPane() {
   const [filed, setFiled] = useState<FiledTicket | null>(null);
   const briefRef = useRef<HTMLTextAreaElement | null>(null);
   const slowTimer = useRef<number | null>(null);
+  // Bumped by the source list's Retry to fetch it again.
+  const [sourcesTry, setSourcesTry] = useState(0);
 
   useEffect(() => {
     let live = true;
+    setSourcesError("");
     api<SourcesPayload>("/api/tickets/sources")
       .then((p) => {
         if (!live) return;
@@ -120,7 +141,7 @@ export function NewTicketPane() {
     return () => {
       live = false;
     };
-  }, []);
+  }, [sourcesTry]);
 
   // The box is the only thing on this pane, so it takes focus on arrival —
   // switching to this tab and typing has to work without a click.
@@ -141,14 +162,16 @@ export function NewTicketPane() {
   const file = useCallback(async () => {
     if (!ready) return;
     setError("");
-    setDraft(null);
     setFiling(true);
     setSlow(false);
     slowTimer.current = window.setTimeout(() => setSlow(true), SLOW_MS);
     try {
+      // A draft on screen goes back with the request: the server files it
+      // as-is, so the retry costs a write, not another model turn.
       const row = await api<FiledTicket>("/api/tickets/compose", {
-        json: { source, text: brief.trim() },
+        json: composeBody(source, brief, draft),
       });
+      setDraft(null);
       setFiled(row);
     } catch (err) {
       setError(errMsg(err));
@@ -163,7 +186,7 @@ export function NewTicketPane() {
       setSlow(false);
       setFiling(false);
     }
-  }, [brief, ready, source]);
+  }, [brief, draft, ready, source]);
 
   // --- filed: the link, which is the whole deliverable --------------------
   if (filed) {
@@ -196,6 +219,7 @@ export function NewTicketPane() {
             onClick={() => {
               setFiled(null);
               setBrief("");
+              setDraft(null);
               // Focus lands back in the box on the next paint, after the box
               // exists again.
               window.setTimeout(() => briefRef.current?.focus(), 0);
@@ -257,6 +281,8 @@ export function NewTicketPane() {
         onChange={(e) => {
           setBrief(e.target.value);
           if (error) setError("");
+          // A changed sentence asks for a new draft, so the old one goes.
+          if (draft) setDraft(null);
         }}
         onKeyDown={(e) => {
           // Enter is a newline here: this is a brief, not a name field, and the
@@ -276,7 +302,16 @@ export function NewTicketPane() {
       </p>
 
       {sourcesError ? (
-        <p className="error">{sourcesError}</p>
+        <p className="error">
+          {sourcesError}{" "}
+          <button
+            type="button"
+            className="linklike"
+            onClick={() => setSourcesTry((n) => n + 1)}
+          >
+            Retry
+          </button>
+        </p>
       ) : (
         <div className="nt-source-row">
           <label className="nt-label" htmlFor="nt-source">
@@ -327,7 +362,13 @@ export function NewTicketPane() {
           Cancel
         </button>
         <button type="button" disabled={!ready} onClick={file}>
-          {filing ? (slow ? "Still writing…" : "Filing…") : "Create ticket"}
+          {filing
+            ? slow && !draft
+              ? "Still writing…"
+              : "Filing…"
+            : draft
+              ? "Retry"
+              : "Create ticket"}
         </button>
       </div>
     </div>

@@ -24177,9 +24177,27 @@ function fullPathHint() {
 	return windowsServer ? "a full path like C:\\Users\\you\\project" : "a full path starting with / or ~";
 }
 //#endregion
+//#region src/lib/agentNames.ts
+var AGENT_NAMES = {
+	claude: "Claude Code",
+	codex: "Codex",
+	aider: "Aider",
+	antigravity: "Antigravity",
+	opencode: "OpenCode",
+	cline: "Cline",
+	goose: "Goose",
+	copilot: "GitHub Copilot"
+};
+function agentName(provider) {
+	return AGENT_NAMES[provider] || (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Agent");
+}
+//#endregion
 //#region src/lib/format.ts
 function errMsg(err) {
-	return err?.message || "error";
+	const msg = err?.message;
+	if (typeof msg === "string" && msg) return msg;
+	if (typeof err === "string" && err) return err;
+	return "Something went wrong, and MindFlock got no reason why.";
 }
 function fmtTokens(n) {
 	n = n || 0;
@@ -24195,14 +24213,9 @@ function fmtUsd(u) {
 	if (u < 1e3) return "$" + u.toFixed(1);
 	return "$" + (u / 1e3).toFixed(1) + "k";
 }
-var PROV_LABELS = {
-	claude: "Claude",
-	codex: "Codex",
-	aider: "Aider"
-};
 function provLabel(name) {
 	if (!name) return "";
-	return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
+	return agentName(name).replace(/ Code$/, "");
 }
 function relTime(ts, opts = {}) {
 	const suffix = opts.suffix ?? " ago";
@@ -24831,7 +24844,13 @@ async function request(path, opts) {
 		};
 		init.body = JSON.stringify(opts.json);
 	}
-	const r = await fetch(path, init);
+	let r;
+	try {
+		r = await fetch(path, init);
+	} catch (err) {
+		if (err?.name === "AbortError") throw err;
+		throw new ApiError(0, UNREACHABLE, null);
+	}
 	if (r.status === 401) {
 		location.reload();
 		throw new ApiError(401, "unauthorized", null);
@@ -24842,12 +24861,24 @@ async function request(path, opts) {
 		let msg = statusSentence(r.status);
 		if (body && typeof body === "object") {
 			const b = body;
+			const listed = validationSentence(b.detail);
 			if (typeof b.detail === "string" && b.detail) msg = b.detail;
+			else if (listed) msg = listed;
 			else if (typeof b.error === "string" && b.error) msg = b.error;
 		}
 		throw new ApiError(r.status, msg, body);
 	}
 	return text;
+}
+var UNREACHABLE = "Couldn't reach MindFlock. Is it still running?";
+function validationSentence(detail) {
+	if (!Array.isArray(detail) || !detail.length) return "";
+	const first = detail[0];
+	const msg = typeof first?.msg === "string" ? first.msg.trim() : "";
+	if (!msg) return "";
+	const loc = Array.isArray(first?.loc) ? first.loc : [];
+	const field = loc.length > 1 ? loc[loc.length - 1] : "";
+	return typeof field === "string" && field ? field + ": " + msg : msg;
 }
 function statusSentence(status) {
 	if (status === 404) return "MindFlock couldn't find that — it may have just been removed.";
@@ -25056,7 +25087,8 @@ function errorPop(title, detail, actions) {
 function confirmPop(title, detail, actions, cancel = "Cancel") {
 	pop("confirm", title, detail, cancel ? [...actions, {
 		label: cancel,
-		run: () => {}
+		run: () => {},
+		cancel: true
 	}] : actions);
 }
 function pop(kind, title, detail, actions) {
@@ -25088,7 +25120,7 @@ function pop(kind, title, detail, actions) {
 		for (const a of actions) {
 			const b = document.createElement("button");
 			b.type = "button";
-			b.className = "cs-error-act" + (a.primary ? " primary" : "");
+			b.className = actClass(a);
 			b.textContent = a.label;
 			if (a.title) b.title = a.title;
 			b.onclick = () => {
@@ -25099,8 +25131,29 @@ function pop(kind, title, detail, actions) {
 		}
 		card.appendChild(row);
 	}
+	card.addEventListener("keydown", (e) => {
+		if (e.key !== "Escape") return;
+		e.preventDefault();
+		e.stopPropagation();
+		card.remove();
+		const no = (actions || []).find((a) => a.cancel);
+		if (no) no.run();
+	});
 	box.appendChild(card);
 	while (box.children.length > MAX_CARDS) box.removeChild(box.children[0]);
+	if (kind === "confirm") {
+		const buttons = Array.from(card.querySelectorAll(".cs-error-act"));
+		const at = focusIndex(actions || []);
+		if (at >= 0) buttons[at]?.focus();
+	}
+}
+function actClass(a) {
+	return "cs-error-act" + (a.primary ? " primary" : "") + (a.danger ? " danger" : "") + (a.cancel ? " cancel" : "");
+}
+function focusIndex(actions) {
+	const no = actions.findIndex((a) => a.cancel);
+	if (no >= 0) return no;
+	return actions.findIndex((a) => a.primary);
 }
 //#endregion
 //#region src/components/dialogs/verifySession.ts
@@ -25296,21 +25349,6 @@ function backgroundHint(inst, now = nowS()) {
 	if (running) return jobChipText(running, now).title;
 	const chip = backgroundChip(inst, now);
 	return chip ? chip.title.replace(/ — click to .*$/, "") : "";
-}
-//#endregion
-//#region src/lib/agentNames.ts
-var AGENT_NAMES = {
-	claude: "Claude Code",
-	codex: "Codex",
-	aider: "Aider",
-	antigravity: "Antigravity",
-	opencode: "OpenCode",
-	cline: "Cline",
-	goose: "Goose",
-	copilot: "GitHub Copilot"
-};
-function agentName(provider) {
-	return AGENT_NAMES[provider] || (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Agent");
 }
 //#endregion
 //#region src/lib/heldOffline.ts
@@ -26451,6 +26489,16 @@ function shipLine(row, opts = {}) {
 	return line(head, rest, "rep-lane", state);
 }
 //#endregion
+//#region src/lib/rowSearch.ts
+function searchTokens(query) {
+	return query.toLowerCase().split(/\s+/).filter(Boolean);
+}
+function matchesTokens(fields, tokens) {
+	if (!tokens.length) return true;
+	const hay = fields.filter(Boolean).join(" ").toLowerCase();
+	return tokens.every((t) => hay.includes(t));
+}
+//#endregion
 //#region src/components/sidebar/ordering.ts
 var VERIFY_REASONS = /* @__PURE__ */ new Set([
 	"verify_confirm",
@@ -26630,13 +26678,15 @@ function placeNewRunMembers(saved, live) {
 	}
 	return order;
 }
-function matchesFilter(inst, filter, aliases) {
-	if (!filter) return true;
-	return [
+function matchesFilter(inst, raw, aliases) {
+	return matchesTokens([
 		inst.title,
 		aliases[inst.title],
 		inst.branch
-	].filter(Boolean).join(" ").toLowerCase().indexOf(filter) >= 0;
+	], searchTokens(raw || ""));
+}
+function matchesWindowFilter(title, raw) {
+	return matchesTokens([title], searchTokens(raw || ""));
 }
 function askedQuestion(inst) {
 	const a = inst.asking;
@@ -26888,11 +26938,11 @@ var SIDEBAR_BARS = [
 	},
 	{
 		key: "pr-review",
-		label: "Pull requests"
+		label: "GitHub PRs"
 	},
 	{
 		key: "issue-handling",
-		label: "Issues"
+		label: "GitHub issues"
 	},
 	{
 		key: "assistant",
@@ -27755,6 +27805,7 @@ var useUi = create((set, get) => ({
 	railOrder: [],
 	mru: load$1("cs_mru", []),
 	filter: "",
+	ending: {},
 	hidden: new Set(load$1("mf_hidden", [])),
 	verifyPanes: [],
 	extPanes: [],
@@ -27772,6 +27823,7 @@ var useUi = create((set, get) => ({
 	barOrder: load$1("mf_barorder", []),
 	paneHeader: asPaneHeaderPref(load$1("mf_paneheader", null)),
 	customizePage: load$1("mf_customize_page", "sidebar") === "pane" ? "pane" : "sidebar",
+	memoryPopAsk: 0,
 	showFilter: load$1("mf_show_filter", true),
 	filterPeek: false,
 	reduceMotion: load$1("mf_reduce_motion", false),
@@ -27885,7 +27937,14 @@ var useUi = create((set, get) => ({
 		save("cs_order", order);
 		set({ order });
 	},
-	setFilter: (filter) => set({ filter: filter.toLowerCase() }),
+	setFilter: (filter) => set({ filter: filter.trim() ? filter : "" }),
+	setEnding: (title, kind) => {
+		const { [title]: _was, ...rest } = get().ending;
+		set({ ending: kind ? {
+			...rest,
+			[title]: kind
+		} : rest });
+	},
 	setHidden: (title, hidden) => {
 		const next = new Set(get().hidden);
 		if (hidden) next.add(title);
@@ -28069,6 +28128,7 @@ var useUi = create((set, get) => ({
 		save("mf_customize_page", page);
 		set({ customizePage: page });
 	},
+	askMemoryPop: () => set({ memoryPopAsk: get().memoryPopAsk + 1 }),
 	setReduceMotion: (on) => {
 		save("mf_reduce_motion", on);
 		set({ reduceMotion: on });
@@ -28330,2869 +28390,6 @@ function rememberNewSessionChoice(repo, choice, kv = lsKV()) {
 	} catch {}
 }
 //#endregion
-//#region src/lib/windowName.ts
-function snapshot$2() {
-	const w = globalThis;
-	try {
-		const list = w.mindflock?.sessions?.();
-		return Array.isArray(list) ? list : [];
-	} catch {
-		return [];
-	}
-}
-function windowName(title) {
-	const raw = String(title || "");
-	if (!raw) return "";
-	const alias = useUi.getState().aliases[raw];
-	if (alias) return alias;
-	const inst = snapshot$2().find((i) => i && (i.title === raw || i.display_title === raw));
-	if (!inst) return raw;
-	return sessionLabel(inst.display_title || inst.title || raw, inst.branch || "").text || raw;
-}
-function slotNumber(title) {
-	const raw = String(title || "");
-	if (!raw) return "";
-	try {
-		const ui = useUi.getState();
-		const rail = ui.railOrder;
-		if (rail.length) {
-			let idx = rail.indexOf(raw);
-			if (idx < 0) {
-				const inst = snapshot$2().find((i) => i && i.display_title === raw);
-				if (inst) idx = rail.indexOf(inst.title);
-			}
-			return idx >= 0 && idx < 9 ? String(idx + 1) : "";
-		}
-		const { rows } = orderedInstances(snapshot$2().filter((i) => i && !isVerifySession(i)), ui.order);
-		const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
-		const local = filtered.filter((i) => !i.device);
-		const remote = filtered.filter((i) => i.device);
-		const idx = [...local, ...remote].findIndex((i) => i.title === raw || i.display_title === raw);
-		return idx >= 0 && idx < 9 ? String(idx + 1) : "";
-	} catch {
-		return "";
-	}
-}
-function nameTakenBy(title, name) {
-	const n = String(name || "").trim();
-	if (!n) return "";
-	for (const i of snapshot$2()) {
-		const t = i?.title;
-		if (!t || t === title || i.device) continue;
-		if (n === t || n === windowName(t)) return t;
-	}
-	return "";
-}
-function publishWindowName() {
-	const w = globalThis;
-	w.mindflock = w.mindflock || {};
-	w.mindflock.displayName = windowName;
-	w.mindflock.slotNumber = slotNumber;
-}
-//#endregion
-//#region src/lib/verifyStop.ts
-var WHERE_BRANCH = "branch";
-var READY_MINUTES_MAX = 1440;
-var ENV_NAME_MAX = 40;
-var ENV_REACH_MAX = 500;
-var VERIFY_NOTES_MAX = 2e3;
-var READY = [
-	"now",
-	"on_branch",
-	"after_prev"
-];
-var WHO = [
-	"both",
-	"agent",
-	"you"
-];
-var int = (v, d) => {
-	const n = Number(v);
-	return v !== "" && v !== null && v !== void 0 && Number.isFinite(n) ? Math.trunc(n) : d;
-};
-function verifyConfig(c) {
-	const cfg = c || {};
-	const legacy = cfg.wait_live === true || cfg.wait_live === "true";
-	const where = String(cfg.where ?? "").trim() || (legacy ? "live" : WHERE_BRANCH);
-	const rawReady = String(cfg.ready ?? "");
-	const ready = READY.includes(rawReady) ? rawReady : legacy ? "on_branch" : "now";
-	const rawWho = String(cfg.who ?? "");
-	const who = WHO.includes(rawWho) ? rawWho : "both";
-	return {
-		where,
-		ready: where === WHERE_BRANCH && ready === "on_branch" ? "now" : ready,
-		ready_minutes: Math.min(READY_MINUTES_MAX, Math.max(0, int(cfg.ready_minutes, 0))),
-		who,
-		notes: String(cfg.notes ?? ""),
-		post_to_pr: cfg.post_to_pr === true || cfg.post_to_pr === "true"
-	};
-}
-function withVerifyChoice(c, patch) {
-	const next = {
-		...verifyConfig(c),
-		...patch
-	};
-	if (next.where === WHERE_BRANCH && next.ready === "on_branch") next.ready = "now";
-	const out = {
-		...c || {},
-		...next
-	};
-	delete out.wait_live;
-	return out;
-}
-function readyChoices(where) {
-	const all = [
-		{
-			value: "now",
-			label: "Right away"
-		},
-		{
-			value: "on_branch",
-			label: "When it reaches the environment's branch"
-		},
-		{
-			value: "after_prev",
-			label: "Minutes after the stop before"
-		}
-	];
-	return where === WHERE_BRANCH ? all.filter((o) => o.value !== "on_branch") : all;
-}
-function showsReadyMinutes(ready) {
-	return ready === "on_branch" || ready === "after_prev";
-}
-var READY_MINUTES_HINT = "0 = the environment's deploy time";
-var WHO_CHOICES = [
-	{
-		value: "both",
-		label: "Agent, then me",
-		explain: "The agent does its steps; the route waits on you for the ones only a person can do."
-	},
-	{
-		value: "agent",
-		label: "Agent only",
-		explain: "The agent attempts every step itself and shows its evidence; the route waits on you only if something ends blocked or failed."
-	},
-	{
-		value: "you",
-		label: "Agent, then my sign-off",
-		explain: "The agent verifies, then the route always waits for you to confirm."
-	}
-];
-var VERIFY_FACE_WHO = {
-	both: "agent, then you",
-	agent: "agent only",
-	you: "agent, then your sign-off"
-};
-var FIX_ROUNDS = 2;
-function verifyWhenWords(v, envs = known$1) {
-	const onBranch = v.where === WHERE_BRANCH;
-	const mins = Math.max(0, v.ready_minutes || 0);
-	if (v.ready === "on_branch" && !onBranch) {
-		const b = envBranch(v.where, envs);
-		return "once the work reaches " + (b ? b : v.where + "'s branch") + (mins > 0 ? " and " + durationWords(mins) + " more" : " and " + v.where + "'s deploy time has passed");
-	}
-	if (v.ready === "after_prev") {
-		if (mins > 0) return durationWords(mins) + " after the stop before";
-		return onBranch ? "as soon as the route gets here" : v.where + "'s deploy time after the stop before";
-	}
-	return "as soon as the route gets here";
-}
-function durationWords(minutes) {
-	const m = Math.max(0, Math.trunc(minutes));
-	if (m < 60) return m + " min";
-	const h = Math.floor(m / 60);
-	const r = m % 60;
-	return h + " h" + (r ? " " + r + " min" : "");
-}
-var VERIFY_ON_FAIL = {
-	halt: "the route halts here, red, with the failed steps — you Retry, Skip or Let the agent fix it",
-	agent: "the failed steps and their evidence go back to the session's agent, then it verifies again (up to 2 rounds, then the route halts)",
-	skip: "the route goes on as if this stop was not there",
-	you: "the route waits on you, amber, showing the failed steps"
-};
-function verifySentence(c, onFail = "halt", envs = known$1) {
-	const v = verifyConfig(c);
-	const where = v.where === WHERE_BRANCH ? "this branch" : v.where;
-	const atEnd = String(c?.ask ?? "") === "end";
-	const who = v.who === "agent" ? "it does every step itself, a person's too, and goes on without you when they pass" : v.who === "you" ? atEnd ? "the route carries on and asks for your sign-off at the end" : "then the route waits for your sign-off, even when every step passes" : atEnd ? "the route carries on and asks you for the steps only a person can do at the end" : "you confirm the steps only a person can do";
-	const fail = onFail === "agent" ? "a failure goes back to the agent, up to 2 rounds" : onFail === "skip" ? "a failure is ignored and the route goes on" : onFail === "you" ? "a failure waits on you" : "a failure halts the route";
-	return "Its agent verifies on " + where + " " + verifyWhenWords(v, envs) + "; " + who + "; " + fail + (v.post_to_pr ? "; the results go on the PR" : "") + ".";
-}
-var known$1 = null;
-function rememberEnvironments(r) {
-	known$1 = r && typeof r === "object" ? {
-		repos: r.repos || {},
-		names: r.names || []
-	} : null;
-}
-function envBranch(name, envs = known$1) {
-	const branches = /* @__PURE__ */ new Set();
-	for (const list of Object.values(envs?.repos || {})) for (const e of list || []) if (e.name === name && e.branch) branches.add(e.branch);
-	return branches.size === 1 ? [...branches][0] : "";
-}
-function verifyFace(c, envs = known$1) {
-	const v = verifyConfig(c);
-	return "Verify on " + (v.where === WHERE_BRANCH ? "this branch" : v.where) + " · " + VERIFY_FACE_WHO[v.who] + " · " + readyWords(v, envs);
-}
-function readyWords(v, envs = known$1) {
-	const onBranch = v.where === WHERE_BRANCH;
-	if (v.ready === "on_branch" && !onBranch) return "once on " + (envBranch(v.where, envs) || v.where) + (v.ready_minutes > 0 ? " + " + v.ready_minutes + " min" : "");
-	if (v.ready === "after_prev") {
-		if (v.ready_minutes > 0) return v.ready_minutes + " min after the stop before";
-		return onBranch ? "after the stop before" : "after the deploy time";
-	}
-	return "right away";
-}
-function whereOptions(envs, current = "") {
-	const out = [{
-		value: WHERE_BRANCH,
-		label: "This branch's code",
-		title: "A fresh checkout of this branch — no deployment"
-	}];
-	const names = [];
-	for (const n of envs?.names || []) if (n && n !== WHERE_BRANCH && !names.includes(n)) names.push(n);
-	for (const list of Object.values(envs?.repos || {})) for (const e of list || []) if (e.name && e.name !== WHERE_BRANCH && !names.includes(e.name)) names.push(e.name);
-	for (const n of names) out.push({
-		value: n,
-		label: n,
-		title: envTitle(n, envs) || void 0
-	});
-	const cur = current.trim();
-	if (cur && !out.some((o) => o.value === cur)) out.push({
-		value: cur,
-		label: cur,
-		title: "Not an environment of any watched repo yet",
-		custom: true
-	});
-	return out;
-}
-function envTitle(name, envs) {
-	const lines = [];
-	for (const [repo, list] of Object.entries(envs?.repos || {})) {
-		const e = (list || []).find((x) => x.name === name);
-		if (!e) continue;
-		const bits = [
-			e.reach?.trim() ? clip$7(e.reach.trim(), 60) : "",
-			e.branch ? "deploys from " + e.branch : "",
-			e.deploy_minutes ? e.deploy_minutes + " min to deploy" : ""
-		].filter(Boolean);
-		lines.push(repo + (bits.length ? ": " + bits.join(" · ") : ""));
-	}
-	return lines.join("\n");
-}
-var clip$7 = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
-var ENV_NAME_RE = /^[a-z0-9_-]+$/;
-function envNameError(name, others = []) {
-	const n = name.trim();
-	if (!n) return "Give it a name";
-	if (n.length > ENV_NAME_MAX) return "At most 40 characters";
-	if (!ENV_NAME_RE.test(n)) return "Lowercase letters, digits, - and _ only";
-	if (n === WHERE_BRANCH) return "“branch” means this branch's own code — pick another name";
-	if (others.includes(n)) return "Another environment has this name";
-	return "";
-}
-function envRowErrors(rows) {
-	return rows.map((r, i) => envNameError(r.name, rows.filter((_, j) => j !== i).map((x) => x.name.trim())));
-}
-function envsOf(block) {
-	const list = block && typeof block === "object" ? block.environments : null;
-	if (!Array.isArray(list)) return [];
-	return list.filter((e) => !!e && typeof e === "object").map((e) => ({
-		name: String(e.name ?? ""),
-		reach: String(e.reach ?? ""),
-		branch: String(e.branch ?? ""),
-		deploy_minutes: Math.min(READY_MINUTES_MAX, Math.max(0, int(e.deploy_minutes, 0)))
-	}));
-}
-var isBlankEnv = (r) => !r.name.trim() && !r.reach.trim() && !r.branch.trim() && !int(r.deploy_minutes, 0);
-function envsToSave(rows) {
-	const kept = rows.filter((r) => !isBlankEnv(r));
-	if (envRowErrors(kept).some(Boolean)) return null;
-	return kept.map((r) => ({
-		name: r.name.trim(),
-		reach: r.reach.trim().slice(0, ENV_REACH_MAX),
-		branch: r.branch.trim(),
-		deploy_minutes: Math.min(READY_MINUTES_MAX, Math.max(0, int(r.deploy_minutes, 0)))
-	}));
-}
-//#endregion
-//#region src/state/queries.ts
-var queryClient = new QueryClient({ defaultOptions: { queries: {
-	retry: 1,
-	refetchOnWindowFocus: false,
-	staleTime: 2e3
-} } });
-var POLL_VISIBLE_MS = 4e3;
-var POLL_HIDDEN_MS = 3e4;
-function pollInterval() {
-	return document.hidden ? POLL_HIDDEN_MS : POLL_VISIBLE_MS;
-}
-function useInstances() {
-	(0, import_react.useEffect)(bridgeSessionSetEvents, []);
-	return useQuery({
-		queryKey: ["instances"],
-		queryFn: async () => {
-			const fetched = normalizeFlightRows(splitLockedRows(await api("/api/instances")));
-			window.mindflock?.__setSessions?.(fetched);
-			noteGateRows(fetched);
-			return mergePending(withMoving(fetched, Date.now()), queryClient.getQueryData(["instances"]), Date.now());
-		},
-		refetchInterval: pollInterval,
-		refetchIntervalInBackground: true,
-		placeholderData: (prev) => prev
-	});
-}
-function useConfig() {
-	return useQuery({
-		queryKey: ["config"],
-		queryFn: () => api("/api/config").then((c) => {
-			noteServerHome(c?.home);
-			return c;
-		}),
-		staleTime: 6e4
-	});
-}
-function refreshConfig() {
-	return queryClient.invalidateQueries({ queryKey: ["config"] });
-}
-var PROVIDERS_STALE_MS = 3e5;
-function providersQuery() {
-	return {
-		queryKey: ["providers"],
-		queryFn: () => api("/api/providers"),
-		staleTime: PROVIDERS_STALE_MS
-	};
-}
-function refreshProviders() {
-	return queryClient.invalidateQueries({ queryKey: ["providers"] });
-}
-function useProviderEfforts() {
-	return useQuery({
-		...providersQuery(),
-		select: (d) => {
-			const out = {};
-			for (const p of d?.providers || []) if (p?.name && p.effort) out[p.name] = p.effort;
-			return out;
-		}
-	});
-}
-function useAgentChoices$1() {
-	return useQuery({
-		...providersQuery(),
-		select: (d) => ({
-			names: (d?.providers || []).map((x) => x.name || "").filter(Boolean),
-			fallback: d?.default || ""
-		})
-	});
-}
-var EXTENSIONS_STALE_MS = 3e5;
-function extensionsQuery() {
-	return {
-		queryKey: ["addons"],
-		queryFn: () => api("/api/addons"),
-		staleTime: EXTENSIONS_STALE_MS
-	};
-}
-function extensionsOf(d) {
-	return (d?.addons || []).filter((a) => a && a.id && a.extension).map((a) => ({
-		id: String(a.id),
-		label: a.label || String(a.id),
-		enabled: a.enabled !== false,
-		origin: a.origin === "user" ? "user" : "builtin",
-		extension: a.extension
-	}));
-}
-function extensionsNow() {
-	return extensionsOf(queryClient.getQueryData(["addons"]));
-}
-function useExtensions() {
-	return useQuery({
-		...extensionsQuery(),
-		select: (d) => extensionsOf(d)
-	});
-}
-function refreshExtensions() {
-	return queryClient.invalidateQueries({ queryKey: ["addons"] });
-}
-function useAssistantActivity() {
-	return useQuery({
-		queryKey: ["assistant-state"],
-		queryFn: () => api("/api/assistant/state"),
-		refetchInterval: pollInterval,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useDoctor(opts = {}) {
-	return useQuery({
-		queryKey: ["doctor"],
-		queryFn: () => api("/api/doctor"),
-		enabled: opts.enabled ?? true,
-		refetchInterval: opts.refetchInterval ?? false,
-		refetchIntervalInBackground: false
-	});
-}
-async function reprobeDoctor(refresh = true) {
-	const d = await api("/api/doctor" + (refresh ? "?refresh=1" : ""));
-	queryClient.setQueryData(["doctor"], d);
-	return d;
-}
-function useMindflockStatus() {
-	return useQuery({
-		queryKey: ["mindflock-status"],
-		queryFn: () => api("/api/mindflock/status"),
-		refetchInterval: 4e3,
-		retry: false
-	});
-}
-function refreshMemory() {
-	return queryClient.invalidateQueries({ queryKey: ["system-memory"] });
-}
-var memoryBridged = false;
-function bridgeMemoryEvents() {
-	const ev = window.mindflock?.events;
-	if (memoryBridged || !ev) return;
-	memoryBridged = true;
-	const bump = () => {
-		refreshMemory();
-		queryClient.invalidateQueries({ queryKey: ["memory-detail"] });
-	};
-	for (const name of ["system.memory_changed", "system.sessions_slept"]) ev.subscribe(name, bump);
-	ev.onStatus((status) => {
-		if (status === "connected") refreshMemory();
-	});
-}
-function gateRowsKey(rows) {
-	const bits = [];
-	for (const r of rows || []) {
-		const w = r.waiting_for_memory;
-		if (w) bits.push("w:" + r.title + ":" + (w.why || "") + ":" + w.position);
-		if (r.start_failed) bits.push("f:" + r.title + ":" + r.start_failed.at);
-	}
-	return bits.sort().join("|");
-}
-var lastGateRows = null;
-function noteGateRows(rows) {
-	const key = gateRowsKey(rows);
-	const was = lastGateRows;
-	lastGateRows = key;
-	if (was !== null && was !== key) refreshMemory();
-}
-function useMemory() {
-	(0, import_react.useEffect)(bridgeMemoryEvents, []);
-	return useQuery({
-		queryKey: ["system-memory"],
-		queryFn: () => api("/api/system/memory"),
-		refetchInterval: (q) => q.state.data?.gate?.holding ? 5e3 : 15e3,
-		retry: false
-	});
-}
-function useMemoryDetail(enabled) {
-	return useQuery({
-		queryKey: ["memory-detail"],
-		queryFn: () => api("/api/memory"),
-		refetchInterval: 15e3,
-		refetchIntervalInBackground: false,
-		retry: false,
-		enabled
-	});
-}
-function useMemoryHistory(enabled) {
-	return useQuery({
-		queryKey: ["memory-history", 60],
-		queryFn: () => api("/api/memory/history?minutes=60"),
-		refetchInterval: 6e4,
-		refetchIntervalInBackground: false,
-		retry: false,
-		enabled
-	});
-}
-function useSlots(enabled) {
-	return useQuery({
-		queryKey: ["system-slots"],
-		queryFn: () => api("/api/system/slots"),
-		refetchInterval: 15e3,
-		retry: false,
-		enabled
-	});
-}
-function refreshMindflockStatus() {
-	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
-}
-function usePeerLinks() {
-	return useQuery({
-		queryKey: ["peer-links"],
-		queryFn: () => api("/api/peer"),
-		refetchInterval: 1e4,
-		retry: false
-	});
-}
-function useDevices() {
-	return useQuery({
-		queryKey: ["devices"],
-		queryFn: () => api("/api/devices"),
-		refetchInterval: 3e4,
-		placeholderData: (prev) => prev
-	});
-}
-function refreshUsage() {
-	return queryClient.invalidateQueries({ queryKey: ["usage"] });
-}
-var usageBridged = false;
-var usageRefreshedAt = null;
-var usageTrailing = null;
-function nudgeUsageNow() {
-	const decision = nudgeUsage(Date.now(), usageRefreshedAt, usageTrailing != null);
-	if (decision.action === "skip") return;
-	if (decision.action === "refresh") {
-		usageRefreshedAt = Date.now();
-		refreshUsage();
-		return;
-	}
-	usageTrailing = setTimeout(() => {
-		usageTrailing = null;
-		usageRefreshedAt = Date.now();
-		refreshUsage();
-	}, decision.delayMs);
-}
-function bridgeUsageEvents() {
-	if (usageBridged) return;
-	const ev = window.mindflock?.events;
-	if (!ev) return;
-	usageBridged = true;
-	ev.subscribe("session.activity_changed", (env) => {
-		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
-		nudgeUsageNow();
-	});
-	ev.subscribe("session.usage_restored", () => nudgeUsageNow());
-	ev.onStatus((status) => {
-		if (status === "connected") nudgeUsageNow();
-	});
-}
-function useUsage(enabled = true) {
-	(0, import_react.useEffect)(bridgeUsageEvents, []);
-	return useQuery({
-		queryKey: ["usage"],
-		queryFn: () => api("/api/usage"),
-		refetchInterval: 3e4,
-		refetchOnWindowFocus: true,
-		enabled,
-		placeholderData: (prev) => prev
-	});
-}
-function useAuthProfiles() {
-	return useQuery({
-		queryKey: ["auth-profiles"],
-		queryFn: () => api("/api/settings/auth-profiles"),
-		staleTime: 3e4,
-		placeholderData: (prev) => prev
-	});
-}
-function refreshAuthProfiles() {
-	return queryClient.invalidateQueries({ queryKey: ["auth-profiles"] });
-}
-function refreshInstances() {
-	return queryClient.invalidateQueries({ queryKey: ["instances"] });
-}
-var PENDING_TTL_MS = 2e4;
-var pend = (r) => r;
-var isPendingRow = (r) => pend(r).pending_create === true;
-function numberedFrom(t, base) {
-	return t === base || t.startsWith(base + "-") && /^\d+$/.test(t.slice(base.length + 1));
-}
-function mergePending(fetched, cached, now, ttl = PENDING_TTL_MS) {
-	const waiting = (cached || []).filter(isPendingRow);
-	if (!waiting.length) return fetched;
-	const listed = new Set(fetched.map((r) => r.title));
-	const known = new Set((cached || []).filter((r) => !isPendingRow(r)).map((r) => r.title));
-	const fresh = fetched.map((r) => r.title).filter((t) => !known.has(t) && !waiting.some((w) => w.title === t));
-	const claimed = /* @__PURE__ */ new Set();
-	const keep = waiting.filter((r) => {
-		if (listed.has(r.title)) return false;
-		const at = pend(r).pending_at;
-		if (typeof at !== "number" || now - at > ttl) return false;
-		const base = pend(r).pending_base;
-		const hit = base ? fresh.find((t) => !claimed.has(t) && numberedFrom(t, base)) : void 0;
-		if (hit) {
-			claimed.add(hit);
-			return false;
-		}
-		return true;
-	});
-	return keep.length ? [...fetched, ...keep] : fetched;
-}
-function notePendingCreated(rows, title, data, now) {
-	if (!title) return rows;
-	const same = rows.findIndex((r) => r.title === title);
-	if (same >= 0) {
-		if (!isPendingRow(rows[same]) || !pend(rows[same]).pending_base) return rows;
-		const next = rows.slice();
-		next[same] = {
-			...rows[same],
-			pending_base: void 0
-		};
-		return next;
-	}
-	const i = rows.findIndex((r) => isPendingRow(r) && !!pend(r).pending_base && numberedFrom(title, pend(r).pending_base));
-	if (i >= 0) {
-		const next = rows.slice();
-		next[i] = {
-			...rows[i],
-			title,
-			pending_base: void 0,
-			pending_at: now
-		};
-		return next;
-	}
-	const row = {
-		title,
-		status: "loading",
-		pending_create: true,
-		pending_at: now
-	};
-	if (typeof data.parent === "string" && data.parent) row.parent = data.parent;
-	if (typeof data.program === "string" && data.program) row.program = data.program;
-	return [...rows, row];
-}
-function landPendingRow(rows, guess, real, now) {
-	const t = real.title;
-	if (!t) return rows;
-	const listed = rows.some((r) => r.title === t && !isPendingRow(r));
-	const out = [];
-	let placed = listed;
-	for (const r of rows) {
-		if (!isPendingRow(r) || r.title !== guess && r.title !== t) {
-			out.push(r);
-			continue;
-		}
-		if (placed) continue;
-		out.push({
-			...r,
-			...real,
-			pending_create: true,
-			pending_at: now,
-			pending_base: void 0
-		});
-		placed = true;
-	}
-	return placed ? out : [...out, {
-		...real,
-		pending_create: true,
-		pending_at: now
-	}];
-}
-function dropPendingRow(rows, title) {
-	return rows.some((r) => isPendingRow(r) && r.title === title) ? rows.filter((r) => !(isPendingRow(r) && r.title === title)) : rows;
-}
-var MOVE_TTL_MS = 6e4;
-var isMovingRow = (r) => r.moving === true;
-var movingSince = /* @__PURE__ */ new Map();
-function withMoving(rows, now, since = movingSince, ttl = MOVE_TTL_MS) {
-	for (const [t, at] of since) if (now - at > ttl) since.delete(t);
-	if (!since.size) return rows;
-	return rows.map((r) => since.has(r.title) && !isMovingRow(r) ? {
-		...r,
-		moving: true
-	} : r);
-}
-function markMoving(title, now = Date.now()) {
-	movingSince.set(title, now);
-	queryClient.setQueryData(["instances"], (rows) => rows ? withMoving(rows, now) : rows);
-	setTimeout(() => {
-		if (movingSince.get(title) === now) clearMoving(title);
-	}, MOVE_TTL_MS);
-}
-function clearMoving(title) {
-	movingSince.delete(title);
-	queryClient.setQueryData(["instances"], (rows) => rows && rows.some((r) => r.title === title && isMovingRow(r)) ? rows.map((r) => r.title === title && isMovingRow(r) ? {
-		...r,
-		moving: void 0
-	} : r) : rows);
-}
-function movedToastText(name, to) {
-	return to ? `Moved “${name}” to ${to}` : `Moved “${name}”`;
-}
-function movedTitle(env) {
-	return String(env?.session || (env?.data)?.title || "");
-}
-function onSessionMoved(env, replay = false) {
-	const title = movedTitle(env);
-	if (!title) return;
-	clearMoving(title);
-	refreshInstances();
-	if (!replay) toast(movedToastText(windowName(title), String(env.data?.to || "")), { duration: 5e3 });
-}
-function onSessionMoveFailed(env, replay = false) {
-	const title = movedTitle(env);
-	if (!title) return;
-	clearMoving(title);
-	refreshInstances();
-	if (!replay) errorPop(`Moving “${windowName(title)}” failed`, String(env.data?.error || "no reason recorded"));
-}
-var instancesTimer = null;
-function refreshInstancesSoon() {
-	if (instancesTimer) clearTimeout(instancesTimer);
-	instancesTimer = setTimeout(() => {
-		instancesTimer = null;
-		refreshInstances();
-	}, 150);
-}
-var sessionSetBridged = false;
-function bridgeSessionSetEvents() {
-	const ev = window.mindflock?.events;
-	if (sessionSetBridged || !ev) return;
-	sessionSetBridged = true;
-	const replay = (env) => typeof ev.isReplay === "function" && ev.isReplay(env);
-	ev.subscribe("session.created", (env) => {
-		const title = String(env?.session || "");
-		if (title && !replay(env) && !isVerifySession(title)) queryClient.setQueryData(["instances"], (rows) => rows ? notePendingCreated(rows, title, env.data || {}, Date.now()) : rows);
-		refreshInstancesSoon();
-	});
-	ev.subscribe("session.create_failed", (env) => {
-		const title = String(env?.session || "");
-		if (title) queryClient.setQueryData(["instances"], (rows) => rows ? dropPendingRow(rows, title) : rows);
-		refreshInstancesSoon();
-	});
-	ev.subscribe("session.moved", (env) => onSessionMoved(env, replay(env)));
-	ev.subscribe("session.move_failed", (env) => onSessionMoveFailed(env, replay(env)));
-	for (const name of ["session.deleted", "session.renamed"]) ev.subscribe(name, refreshInstancesSoon);
-}
-function refreshRecentlyClosed() {
-	return queryClient.invalidateQueries({ queryKey: ["recently-closed"] });
-}
-function useTraffic(enabled, days = 90) {
-	return useQuery({
-		queryKey: ["traffic", days],
-		queryFn: () => api("/api/traffic?days=" + days),
-		enabled,
-		staleTime: 6e4,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function refreshTraffic(days = 90) {
-	return queryClient.fetchQuery({
-		queryKey: ["traffic", days],
-		queryFn: () => api("/api/traffic?days=" + days + "&refresh=1"),
-		staleTime: 0,
-		retry: false
-	});
-}
-function patchInstance(title, patch) {
-	queryClient.setQueryData(["instances"], (rows) => rows?.map((r) => r.title === title ? {
-		...r,
-		...patch
-	} : r));
-}
-var PANEL_STALE_MS = 2e4;
-var PANEL_STALE_RETRY_MS = 2e3;
-var PANEL_GC_MS = 36e5;
-var PANELS = {
-	tickets: "/api/tickets",
-	"github-prs": "/api/github/prs",
-	"github-issues": "/api/github/issues"
-};
-function usePanelQuery(key, opts = {}) {
-	const q = useQuery({
-		queryKey: [key],
-		queryFn: () => api(PANELS[key]),
-		enabled: opts.enabled ?? true,
-		staleTime: PANEL_STALE_MS,
-		gcTime: PANEL_GC_MS,
-		placeholderData: (prev) => prev,
-		retry: false,
-		refetchInterval: (query) => query.state.data?.stale ? PANEL_STALE_RETRY_MS : false
-	});
-	const refresh = () => queryClient.fetchQuery({
-		queryKey: [key],
-		queryFn: () => api(PANELS[key] + "?fresh=1"),
-		staleTime: 0,
-		retry: false
-	}).catch(() => void 0);
-	return {
-		...q,
-		refresh
-	};
-}
-function refreshPanel(key) {
-	return queryClient.fetchQuery({
-		queryKey: [key],
-		queryFn: () => api(PANELS[key] + "?fresh=1"),
-		staleTime: 0,
-		retry: false
-	}).catch(() => void 0);
-}
-function prefetchIntakePanels() {
-	for (const key of Object.keys(PANELS)) queryClient.prefetchQuery({
-		queryKey: [key],
-		queryFn: () => api(PANELS[key]),
-		staleTime: PANEL_STALE_MS,
-		gcTime: PANEL_GC_MS,
-		retry: false
-	});
-}
-var EPICS_POLL_MS = 6e4;
-function useEpicsQuery() {
-	const q = useQuery({
-		queryKey: ["epics"],
-		queryFn: () => api("/api/epics"),
-		staleTime: 3e4,
-		gcTime: PANEL_GC_MS,
-		placeholderData: (prev) => prev,
-		retry: false,
-		refetchInterval: EPICS_POLL_MS
-	});
-	const refresh = () => queryClient.fetchQuery({
-		queryKey: ["epics"],
-		queryFn: () => api("/api/epics?refresh=1"),
-		staleTime: 0,
-		retry: false
-	}).catch(() => void 0);
-	return {
-		...q,
-		refresh
-	};
-}
-var SETTINGS_STALE_MS = 3e4;
-function useSettingsDoc(enabled) {
-	return useQuery({
-		queryKey: ["settings"],
-		queryFn: async () => (await api("/api/settings"))?.settings || {},
-		staleTime: SETTINGS_STALE_MS,
-		enabled,
-		placeholderData: (prev) => prev
-	});
-}
-function putSettingsDoc(settings) {
-	queryClient.setQueryData(["settings"], settings);
-}
-function fetchSettingsDoc() {
-	return queryClient.fetchQuery({
-		queryKey: ["settings"],
-		queryFn: async () => (await api("/api/settings"))?.settings || {},
-		staleTime: 0
-	});
-}
-function useTicketingCatalog(enabled) {
-	return useQuery({
-		queryKey: ["ticketing-catalog"],
-		queryFn: async () => (await api("/api/settings/providers/ticketing"))?.providers || [],
-		staleTime: Infinity,
-		enabled
-	});
-}
-function useTicketingSources(enabled) {
-	return useQuery({
-		queryKey: ["ticketing-sources"],
-		queryFn: async () => (await api("/api/settings/ticketing/sources"))?.sources || [],
-		staleTime: SETTINGS_STALE_MS,
-		enabled,
-		placeholderData: (prev) => prev
-	});
-}
-function putTicketingSources(sources) {
-	queryClient.setQueryData(["ticketing-sources"], sources);
-}
-function prefetchIntakeMeta() {
-	queryClient.prefetchQuery({
-		queryKey: ["settings"],
-		queryFn: async () => (await api("/api/settings"))?.settings || {},
-		staleTime: SETTINGS_STALE_MS
-	});
-	queryClient.prefetchQuery({
-		queryKey: ["ticketing-sources"],
-		queryFn: async () => (await api("/api/settings/ticketing/sources"))?.sources || [],
-		staleTime: SETTINGS_STALE_MS
-	});
-	queryClient.prefetchQuery({
-		queryKey: ["ticketing-catalog"],
-		queryFn: async () => (await api("/api/settings/providers/ticketing"))?.providers || [],
-		staleTime: Infinity
-	});
-	queryClient.prefetchQuery(providersQuery());
-}
-var PANEL_WARM_MS = 24e4;
-function useIntakeWarm(enabled) {
-	(0, import_react.useEffect)(() => {
-		prefetchIntakeMeta();
-	}, []);
-	(0, import_react.useEffect)(() => {
-		if (!enabled) return;
-		const warm = () => {
-			if (!document.hidden) prefetchIntakePanels();
-		};
-		warm();
-		const timer = window.setInterval(warm, PANEL_WARM_MS);
-		document.addEventListener("visibilitychange", warm);
-		return () => {
-			window.clearInterval(timer);
-			document.removeEventListener("visibilitychange", warm);
-		};
-	}, [enabled]);
-}
-var TEST_PLANS_POLL_MS = 1e4;
-var testPlansBridged = false;
-function bridgeTestPlanEvents() {
-	const ev = window.mindflock?.events;
-	if (testPlansBridged || !ev) return;
-	testPlansBridged = true;
-	const bump = (env) => {
-		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
-		refreshTestPlans();
-	};
-	ev.subscribe("session.test_plan_ready", bump);
-	const say = (env, text) => {
-		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
-		refreshTestPlans();
-		toast(text(env?.data || {}));
-	};
-	ev.subscribe("session.test_plan_ready", (env) => say(env, (d) => {
-		const n = Number(d.steps) || 0;
-		return (d.refreshed ? "Rewrote the behaviors for " : "New behaviors for ") + String(d.plan || "a session") + " — " + n + (n === 1 ? " behavior" : " behaviors");
-	}));
-	ev.subscribe("session.test_plan_due", (env) => say(env, (d) => String(d.title || d.plan || "A change") + " shipped to " + String(d.live_branch || "the live branch") + " — its behaviors are ready on its route in the Sky"));
-	ev.subscribe("session.test_plan_failed", (env) => say(env, (d) => "Couldn't write the behaviors for " + String(d.plan || "a session") + ": " + String(d.error || "no reason recorded")));
-	ev.subscribe("session.create_failed", (env) => {
-		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
-		const session = String(env?.session || "");
-		if (!isVerifySession(session) && !session.startsWith("fix-")) return;
-		refreshTestPlans();
-		const data = env?.data || {};
-		errorPop(isVerifySession(session) ? "Verify couldn't start." : "The session to fix it couldn't start", String(data.error || "no reason recorded"));
-	});
-	ev.subscribe("session.test_plan_gave_up", (env) => say(env, (d) => "Gave up on the verify run for " + String(d.title || d.plan || "these behaviors") + " — " + String(d.run_session || "the session") + " never wrote its answers. Press Check now to try again."));
-	ev.subscribe("session.test_plan_checked", (env) => say(env, checkedToastText));
-}
-function checkedToastText(d) {
-	const failed = Number(d.failed) || 0;
-	const mine = Number(d.needs_you) || 0;
-	const bits = [failed ? failed + (failed === 1 ? " behavior failed" : " behaviors failed") : "", mine ? mine + (mine === 1 ? " behavior needs you" : " behaviors need you") : ""].filter(Boolean);
-	return String(d.title || d.plan || "The behaviors") + (d.before_merge === true ? " checked on the branch" : " checked") + (bits.length ? " — " + bits.join(", ") : " — every behavior verified");
-}
-function useGithubConnected(enabled = true) {
-	return useQuery({
-		...githubStatusQuery(enabled),
-		select: (r) => !!r.connected
-	});
-}
-function githubStatusQuery(enabled) {
-	return {
-		queryKey: ["github-status"],
-		queryFn: async () => await api("/api/github/status") || {},
-		enabled,
-		staleTime: 6e4,
-		retry: false
-	};
-}
-function useGithubStatus(enabled = true) {
-	return useQuery(githubStatusQuery(enabled));
-}
-function refreshGithubStatus() {
-	return queryClient.invalidateQueries({ queryKey: ["github-status"] });
-}
-function useTestPlans(enabled = true) {
-	(0, import_react.useEffect)(bridgeTestPlanEvents, []);
-	return useQuery({
-		queryKey: ["test-plans"],
-		queryFn: () => api("/api/test-plans"),
-		enabled,
-		refetchInterval: TEST_PLANS_POLL_MS,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useCachedLiveBranch() {
-	return useQuery({
-		queryKey: ["test-plans"],
-		queryFn: () => api("/api/test-plans"),
-		enabled: false
-	}).data?.live_branch || "";
-}
-function useVerifyEnvironments(enabled = true) {
-	return useQuery({
-		queryKey: ["test-plan-environments"],
-		queryFn: async () => {
-			const r = await api("/api/test-plans/environments");
-			const ok = r && typeof r === "object" && Array.isArray(r.names) ? r : null;
-			rememberEnvironments(ok);
-			if (!ok) throw new Error("no environments list");
-			return ok;
-		},
-		enabled,
-		staleTime: 6e4,
-		retry: false
-	}, queryClient);
-}
-function refreshTestPlans() {
-	return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
-}
-var FLIGHTS_LIVE_MS = 5e3;
-var FLIGHTS_IDLE_MS = 3e4;
-var FLIGHTS_MISSING_MS = 12e4;
-var routeMissing = (e) => !!e && typeof e === "object" && "status" in e && (e.status === 404 || e.status === 405);
-async function orNull(p) {
-	try {
-		return await p;
-	} catch (e) {
-		if (routeMissing(e)) return null;
-		throw e;
-	}
-}
-var flightsBridged = false;
-function bridgeFlightEvents() {
-	const ev = window.mindflock?.events;
-	if (flightsBridged || !ev) return;
-	flightsBridged = true;
-	const bump = () => {
-		queryClient.invalidateQueries({ queryKey: ["flights"] });
-		queryClient.invalidateQueries({ queryKey: ["instances"] });
-	};
-	for (const name of [
-		"flight.changed",
-		"flight.needs_you",
-		"flight.finished"
-	]) ev.subscribe(name, bump);
-}
-function useFlights(enabled = true) {
-	(0, import_react.useEffect)(bridgeFlightEvents, []);
-	return useQuery({
-		queryKey: ["flights"],
-		queryFn: () => orNull(api("/api/flights").then((d) => d?.flights || [])),
-		enabled,
-		refetchInterval: (q) => q.state.data === null ? FLIGHTS_MISSING_MS : (q.state.data || []).some((f) => f.state === "running" || f.state === "waiting_you") && !document.hidden ? FLIGHTS_LIVE_MS : FLIGHTS_IDLE_MS,
-		refetchIntervalInBackground: true,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useFlightPlans(enabled = true) {
-	(0, import_react.useEffect)(bridgeFlightEvents, []);
-	return useQuery({
-		queryKey: ["flight-plans"],
-		queryFn: () => orNull(api("/api/flights/plans").then((d) => d?.plans || [])),
-		enabled,
-		staleTime: 3e4,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useFlightKinds(enabled = true) {
-	return useQuery({
-		queryKey: ["flight-kinds"],
-		queryFn: () => orNull(api("/api/flights/kinds").then((d) => d?.kinds || [])),
-		enabled,
-		staleTime: 6e5,
-		retry: false
-	});
-}
-//#endregion
-//#region src/lib/clipboard.ts
-function copyText(text) {
-	if (!text) return Promise.resolve(false);
-	if (window.mfclip?.writeText) try {
-		window.mfclip.writeText(text);
-		return Promise.resolve(true);
-	} catch {}
-	if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).then(() => true, () => fallbackCopy(text));
-	return Promise.resolve(fallbackCopy(text));
-}
-var clipBridgeBroken = false;
-function readClipboardText() {
-	if (window.mfclip?.readText) try {
-		const v = window.mfclip.readText();
-		clipBridgeBroken = false;
-		return Promise.resolve(v);
-	} catch {
-		clipBridgeBroken = true;
-	}
-	if (navigator.clipboard?.readText) return navigator.clipboard.readText().catch(() => "");
-	return Promise.resolve("");
-}
-function readClipboardImage() {
-	if (window.mfclip?.readImagePNG) try {
-		const b64 = window.mfclip.readImagePNG();
-		if (!b64) return Promise.resolve(null);
-		const bin = atob(b64);
-		const buf = new Uint8Array(bin.length);
-		for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-		return Promise.resolve(new Blob([buf], { type: "image/png" }));
-	} catch {
-		clipBridgeBroken = true;
-		return Promise.resolve(null);
-	}
-	if (navigator.clipboard?.read) return navigator.clipboard.read().then((items) => {
-		for (const it of items) {
-			const t = (it.types || []).find((x) => x.startsWith("image/"));
-			if (t) return it.getType(t);
-		}
-		return null;
-	}, () => null);
-	return Promise.resolve(null);
-}
-async function pasteClipboard(term, session) {
-	const text = await readClipboardText();
-	if (text) {
-		term.paste(text);
-		toast("Pasted " + text.length + " chars");
-		return;
-	}
-	const img = await readClipboardImage();
-	if (!img) {
-		toast(clipBridgeBroken ? "Clipboard is unavailable in this desktop-app build — update/rebuild the app to fix paste (Ctrl+Shift+V may still work)" : "Clipboard is empty", clipBridgeBroken ? { duration: 6e3 } : void 0);
-		return;
-	}
-	try {
-		const r = await api("/api/paste-image" + (session ? "?session=" + encodeURIComponent(session) : ""), {
-			method: "POST",
-			headers: { "Content-Type": img.type || "image/png" },
-			body: img
-		});
-		term.paste(r.path);
-		toast("Pasted image → " + r.path);
-	} catch (err) {
-		toast("Image paste failed: " + (err?.message || "error"));
-	}
-}
-async function uploadFileToWorkspace(blob, session, name) {
-	let q = session ? "?session=" + encodeURIComponent(session) : "";
-	if (name) q += (q ? "&" : "?") + "name=" + encodeURIComponent(name);
-	return (await api("/api/paste-image" + q, {
-		method: "POST",
-		headers: { "Content-Type": blob.type || "application/octet-stream" },
-		body: blob
-	})).path;
-}
-async function uploadFilesAsPathText(files, session) {
-	const list = Array.from(files || []);
-	if (!list.length) return "";
-	toast("Uploading " + (list.length === 1 ? list[0].name || "file" : list.length + " files") + "…");
-	const paths = [];
-	for (const f of list) try {
-		paths.push(await uploadFileToWorkspace(f, session, f.name));
-	} catch (err) {
-		toast("Upload failed: " + (f.name || "file") + " — " + (err?.message || "error"));
-	}
-	if (!paths.length) return "";
-	toast(paths.length === 1 ? "File → " + paths[0] : paths.length + " files → workspace");
-	return paths.map((p) => /\s/.test(p) ? "\"" + p + "\"" : p).join(" ");
-}
-async function pasteFilesAsPaths(files, term, session) {
-	const text = await uploadFilesAsPathText(files, session);
-	if (text) term.paste(text + " ");
-}
-var dtHasFiles = (dt) => !!dt && Array.from(dt.types || []).indexOf("Files") !== -1;
-function attachFileDrop(host, term, session) {
-	const onPaste = (ev) => {
-		const cd = ev.clipboardData;
-		if (!cd) return;
-		ev.preventDefault();
-		ev.stopPropagation();
-		const files = Array.from(cd.files || []);
-		const text = cd.getData("text/plain");
-		const onlyImages = files.length > 0 && files.every((f) => (f.type || "").startsWith("image/"));
-		if (files.length && !(text && onlyImages)) pasteFilesAsPaths(files, term, session);
-		else if (text) {
-			term.paste(text);
-			toast("Pasted " + text.length + " chars");
-		} else pasteClipboard(term, session);
-	};
-	const onDragOver = (ev) => {
-		if (!dtHasFiles(ev.dataTransfer)) return;
-		ev.preventDefault();
-		ev.stopPropagation();
-		ev.dataTransfer.dropEffect = "copy";
-		host.classList.add("file-drop");
-	};
-	const onDragLeave = (ev) => {
-		if (!host.contains(ev.relatedTarget)) host.classList.remove("file-drop");
-	};
-	const onDrop = (ev) => {
-		if (!dtHasFiles(ev.dataTransfer)) return;
-		ev.preventDefault();
-		ev.stopPropagation();
-		host.classList.remove("file-drop");
-		pasteFilesAsPaths(ev.dataTransfer.files, term, session);
-	};
-	host.addEventListener("paste", onPaste, true);
-	host.addEventListener("dragover", onDragOver);
-	host.addEventListener("dragleave", onDragLeave);
-	host.addEventListener("drop", onDrop);
-	return () => {
-		host.removeEventListener("paste", onPaste, true);
-		host.removeEventListener("dragover", onDragOver);
-		host.removeEventListener("dragleave", onDragLeave);
-		host.removeEventListener("drop", onDrop);
-		host.classList.remove("file-drop");
-	};
-}
-function installGlobalDropGuards() {
-	window.addEventListener("dragover", (ev) => {
-		if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
-	});
-	window.addEventListener("drop", (ev) => {
-		if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
-	});
-}
-function fallbackCopy(text) {
-	try {
-		const ta = document.createElement("textarea");
-		ta.value = text;
-		ta.style.position = "fixed";
-		ta.style.top = "-1000px";
-		ta.style.opacity = "0";
-		document.body.appendChild(ta);
-		ta.focus();
-		ta.select();
-		const ok = document.execCommand("copy");
-		document.body.removeChild(ta);
-		return ok;
-	} catch {
-		return false;
-	}
-}
-//#endregion
-//#region src/lib/claudeCopy.ts
-var BULLET = /^(\s*)(?:[-*•]|\d{1,3}[.)])\s+/;
-var MESSAGE = /^\s*[⏺●❯](?:\s|$)/;
-var MARKER = /^\s*[⏺●❯⎿](?:\s|$)/;
-var CHROME = /^\s*[─-▟⏵]/;
-var DIFF_LINE = /^\s*\d+\s+[-+ ]\s/;
-var CODE_END = /(?:[;{}[(\\]|=>)$/;
-var CODE_START = /^(?:[)}\]]|\/\/|#|\.\w)/;
-function cpWidth(cp) {
-	if (cp >= 4352 && cp <= 4447 || cp >= 11904 && cp <= 42191 && cp !== 12351 || cp >= 44032 && cp <= 55203 || cp >= 63744 && cp <= 64255 || cp >= 65072 && cp <= 65103 || cp >= 65280 && cp <= 65376 || cp >= 65504 && cp <= 65510 || cp >= 127744 && cp <= 129791 || cp >= 131072 && cp <= 262141) return 2;
-	return 1;
-}
-function displayWidth(s) {
-	let w = 0;
-	for (const ch of s) w += cpWidth(ch.codePointAt(0) || 0);
-	return w;
-}
-function indentOf(row) {
-	return row.length - row.trimStart().length;
-}
-function textIndent(row) {
-	const m = BULLET.exec(row);
-	return m ? m[0].length : indentOf(row);
-}
-function unmark(row) {
-	return row.replace(/^(\s*)[⏺●❯⎿](?:\s|$)/, (_m, lead) => lead + "  ");
-}
-function cleanClaudeSelection(text, cols, startCol = 0) {
-	if (!text || cols <= 0) return text;
-	const raw = text.replace(/\r/g, "").split("\n").map((r) => r.replace(/\s+$/, ""));
-	const rows = raw.map(unmark);
-	const widths = rows.map((r, i) => displayWidth(r) + (i === 0 ? startCol : 0));
-	const usable = Math.max(cols, ...widths) - 1;
-	const lines = [];
-	const flush = /* @__PURE__ */ new Set();
-	let cur = "";
-	let curRow = 0;
-	let contIndent = 0;
-	const joins = (i) => {
-		const prev = rows[curRow];
-		const row = rows[i];
-		if (!cur.trim() || !row.trim()) return false;
-		if (MARKER.test(raw[i]) || BULLET.test(row) || DIFF_LINE.test(row)) return false;
-		if (CHROME.test(row) || CHROME.test(prev)) return false;
-		if (cur.endsWith("…")) return false;
-		const ind = indentOf(row);
-		if (ind !== contIndent && ind !== 0) return false;
-		const next = row.trim();
-		const fw = displayWidth(next.split(/\s+/, 1)[0]);
-		if (fw >= usable - contIndent) return false;
-		if (CODE_END.test(prev) || CODE_START.test(next)) return false;
-		const last = [...prev].pop() || "";
-		const full = widths[curRow] >= usable || widths[curRow] === usable - 1 && displayWidth(last) === 2;
-		if (!prev.trim().includes(" ") && !full) return false;
-		return widths[curRow] + 1 + fw > usable;
-	};
-	rows.forEach((row, i) => {
-		if (i > 0 && joins(i)) {
-			const next = row.trim();
-			const firstWord = next.split(/\s+/, 1)[0];
-			const midToken = displayWidth(cur.slice(cur.lastIndexOf(" ") + 1).trimStart()) + displayWidth(firstWord) > usable - contIndent;
-			cur += (midToken ? "" : " ") + next;
-			curRow = i;
-			return;
-		}
-		if (i > 0) lines.push(cur);
-		if (MESSAGE.test(raw[i])) flush.add(lines.length);
-		cur = row;
-		curRow = i;
-		contIndent = i === 0 && startCol > 0 && rows.length > 1 ? indentOf(rows[1]) : textIndent(row);
-	});
-	lines.push(cur);
-	const indents = (startCol > 0 ? lines.slice(1) : lines).filter((l) => l.trim() && !CHROME.test(l)).map(indentOf);
-	const common = indents.length ? Math.min(...indents) : 0;
-	return lines.map((l, i) => {
-		if (!l.trim()) return "";
-		if (flush.has(i) || i === 0 && startCol > 0) return l.trimStart();
-		return l.slice(Math.min(common, indentOf(l)));
-	}).join("\n");
-}
-//#endregion
-//#region src/lib/agentCopy.ts
-function runsClaudeCode(session) {
-	if (!session) return false;
-	try {
-		const inst = (queryClient.getQueryData(["instances"]) || []).find((i) => i.title === session);
-		return `${inst?.provider || ""} ${inst?.program || ""}`.toLowerCase().includes("claude");
-	} catch {
-		return false;
-	}
-}
-function agentCopyText(text, session, cols, startCol = 0) {
-	return text && runsClaudeCode(session) ? cleanClaudeSelection(text, cols, startCol) : text;
-}
-//#endregion
-//#region src/lib/wsTerm.ts
-var NOT_YET = 4404;
-var NOT_READY = 4409;
-var PAUSED_CLOSE = 4423;
-var HELD_CLOSE = 4424;
-var RETRY_MS$1 = [
-	700,
-	1500,
-	3e3
-];
-var RETRY_MAX_MS = 3e3;
-var RETRY_LIMIT = 100;
-function retryAfter(code, attempts, reconnect) {
-	if (!reconnect || attempts >= RETRY_LIMIT || code === PAUSED_CLOSE || code === HELD_CLOSE) return null;
-	if (code === NOT_YET || code === NOT_READY) return RETRY_MS$1[attempts] ?? RETRY_MAX_MS;
-	if (code === 1006 || code === 1001 || attempts === 0) return RETRY_MS$1[attempts] ?? RETRY_MAX_MS;
-	return null;
-}
-function isStarting(code) {
-	return code === NOT_YET || code === NOT_READY;
-}
-var NOTICE_MS = 3e3;
-function showTermNotice(host, text) {
-	let el = host.querySelector(":scope > .term-notice");
-	if (!el) {
-		el = document.createElement("div");
-		el.className = "term-notice";
-		el.setAttribute("role", "status");
-		if (getComputedStyle(host).position === "static") host.style.position = "relative";
-		host.appendChild(el);
-	}
-	el.textContent = text;
-	el.classList.remove("gone");
-	const prev = el._t;
-	if (prev) clearTimeout(prev);
-	el._t = setTimeout(() => el.classList.add("gone"), NOTICE_MS);
-}
-function controlNotice(frame) {
-	if (!frame || typeof frame !== "object") return null;
-	const j = frame;
-	if (j.type === "readonly") return { notice: typeof j.message === "string" ? j.message : "" };
-	if (j.type === "driver") return { notice: null };
-	return null;
-}
-function repaintTerm(term, fit) {
-	if (!term) return false;
-	try {
-		fit?.();
-	} catch {}
-	try {
-		const rows = term.rows;
-		if (!(rows > 0)) return false;
-		term.refresh(0, rows - 1);
-		return true;
-	} catch {
-		return false;
-	}
-}
-function isShown(el) {
-	return !!el && el.clientWidth > 0 && el.clientHeight > 0 && el.offsetParent !== null;
-}
-var tracked = /* @__PURE__ */ new Set();
-function trackRepaint(r) {
-	tracked.add(r);
-	return () => {
-		tracked.delete(r);
-	};
-}
-function repaintShown(items = tracked) {
-	let n = 0;
-	for (const r of items) try {
-		if (!r.shown()) continue;
-		r.repaint();
-		n++;
-	} catch {}
-	return n;
-}
-var REPAINT_EVENT = "mindflock:repaint";
-var REPAINT_SETTLE_MS = 300;
-function installRepaintTriggers(win, doc, run = () => {
-	repaintShown();
-}, schedule = {
-	frame: (fn) => requestAnimationFrame(() => fn()),
-	later: (fn, ms) => setTimeout(fn, ms),
-	cancel: (t) => clearTimeout(t)
-}) {
-	let queued = false;
-	let settle;
-	const trigger = () => {
-		if (doc.hidden) return;
-		if (!queued) {
-			queued = true;
-			schedule.frame(() => {
-				queued = false;
-				run();
-			});
-		}
-		if (settle !== void 0) schedule.cancel(settle);
-		settle = schedule.later(() => {
-			settle = void 0;
-			run();
-		}, REPAINT_SETTLE_MS);
-	};
-	const winEvents = [
-		"focus",
-		"pageshow",
-		REPAINT_EVENT
-	];
-	for (const e of winEvents) win.addEventListener(e, trigger);
-	doc.addEventListener("visibilitychange", trigger);
-	return () => {
-		for (const e of winEvents) win.removeEventListener(e, trigger);
-		doc.removeEventListener("visibilitychange", trigger);
-		if (settle !== void 0) schedule.cancel(settle);
-	};
-}
-function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
-	const [state, setState] = (0, import_react.useState)("connecting");
-	(0, import_react.useEffect)(() => {
-		const host = hostRef.current;
-		if (!host) return;
-		const term = new Dl({
-			cursorBlink: interactive,
-			fontSize: 12,
-			theme: termTheme(),
-			disableStdin: !interactive,
-			fontFamily: "ui-monospace, \"Cascadia Code\", Menlo, Consolas, monospace",
-			scrollback: 2e4,
-			macOptionClickForcesSelection: true
-		});
-		const fit = new o();
-		term.loadAddon(fit);
-		term.open(host);
-		const detachFiles = interactive ? attachFileDrop(host, term) : void 0;
-		if (interactive) host.title = "Drop or paste a file to hand over its path";
-		let ws = null;
-		let timer;
-		let dead = false;
-		let attempts = 0;
-		let said = false;
-		const doFit = (sendResize) => {
-			try {
-				fit.fit();
-			} catch {
-				return;
-			}
-			if (!sendResize || !ws || ws.readyState !== WebSocket.OPEN) return;
-			const size = term.cols + "x" + term.rows;
-			if (sentSize === size) return;
-			sentSize = size;
-			ws.send(JSON.stringify({
-				type: "resize",
-				cols: term.cols,
-				rows: term.rows
-			}));
-		};
-		let sentSize = "";
-		const connect = () => {
-			if (dead) return;
-			const proto = location.protocol === "https:" ? "wss" : "ws";
-			const sock = new WebSocket(proto + "://" + location.host + wsPath);
-			ws = sock;
-			sentSize = "";
-			sock.binaryType = "arraybuffer";
-			sock.onopen = () => {
-				if (dead) return;
-				attempts = 0;
-				setState("streaming");
-				doFit(true);
-			};
-			sock.onmessage = (ev) => {
-				if (typeof ev.data === "string") try {
-					const j = JSON.parse(ev.data);
-					if (j.type === "error") {
-						term.write("\r\n[error] " + j.message + "\r\n");
-						return;
-					}
-					const ctl = controlNotice(j);
-					if (ctl) {
-						if (ctl.notice) showTermNotice(host, ctl.notice);
-						return;
-					}
-				} catch {
-					term.write(ev.data);
-				}
-				else term.write(new Uint8Array(ev.data));
-			};
-			sock.onclose = (ev) => {
-				if (dead) return;
-				const wait = retryAfter(ev.code, attempts, reconnect);
-				if (wait === null) {
-					setState(ev.code === PAUSED_CLOSE ? "paused" : ev.code === HELD_CLOSE ? "held" : "disconnected");
-					return;
-				}
-				const transient = isStarting(ev.code);
-				if (!said) {
-					said = true;
-					term.write("\r\n\x1B[2mWaiting for the session to start — this takes a moment the first time in a repository.\x1B[0m\r\n");
-				}
-				setState(transient ? "starting" : "reconnecting");
-				timer = setTimeout(connect, wait);
-				attempts++;
-			};
-			sock.onerror = () => {};
-		};
-		if (interactive) term.onData((d) => {
-			if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
-		});
-		const obs = new ResizeObserver(() => {
-			doFit(true);
-			repaintTerm(term);
-		});
-		obs.observe(host);
-		const t = setTimeout(() => doFit(true), 50);
-		const untrack = trackRepaint({
-			shown: () => isShown(host),
-			repaint: () => repaintTerm(term)
-		});
-		connect();
-		return () => {
-			dead = true;
-			untrack();
-			clearTimeout(t);
-			if (timer) clearTimeout(timer);
-			obs.disconnect();
-			detachFiles?.();
-			try {
-				ws?.close();
-			} catch {}
-			term.dispose();
-		};
-	}, [
-		hostRef,
-		wsPath,
-		interactive,
-		reconnect
-	]);
-	return state;
-}
-//#endregion
-//#region src/lib/terminals.ts
-function cssVar(name, fallback) {
-	try {
-		return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
-	} catch {
-		return fallback;
-	}
-}
-function termTheme() {
-	const light = document.documentElement.classList.contains("light");
-	return {
-		background: cssVar("--term-bg", light ? "#ffffff" : "#0f1117"),
-		foreground: cssVar("--term-fg", light ? "#1f2430" : "#d7dae3"),
-		cursor: cssVar("--accent", "#7d56f4"),
-		selectionBackground: light ? "#b9c0d466" : "#3a415466"
-	};
-}
-function rethemeAll() {
-	const theme = termTheme();
-	for (const entry of registry.values()) for (const h of [entry.agent, entry.shell]) if (h) h.term.options.theme = theme;
-}
-var MOUSE_MODES = [
-	1e3,
-	1001,
-	1002,
-	1003,
-	1004,
-	1005,
-	1006,
-	1015,
-	1016
-];
-function disableAppMouseReporting(term) {
-	try {
-		const parser = term.parser;
-		if (!parser?.registerCsiHandler) return;
-		const swallow = (params) => {
-			if (!params || !params.length) return false;
-			for (const raw of params) {
-				const p = typeof raw === "number" ? raw : raw[0];
-				if (MOUSE_MODES.indexOf(p) === -1) return false;
-			}
-			return true;
-		};
-		parser.registerCsiHandler({
-			prefix: "?",
-			final: "h"
-		}, swallow);
-		parser.registerCsiHandler({
-			prefix: "?",
-			final: "l"
-		}, swallow);
-	} catch {}
-}
-function attachCopyOnSelect(host, term, opts) {
-	disableAppMouseReporting(term);
-	try {
-		term.loadAddon(new L((_ev, uri) => window.open(uri, "_blank")));
-	} catch {}
-	host.title = "Drag to select · release to copy · Ctrl+V / right-click pastes (text or image) · wheel scrolls · Ctrl+Shift+C";
-	const interactive = !term.options.disableStdin;
-	const session = opts.session;
-	if (interactive) {
-		host.title += " · drop / paste files to upload";
-		attachFileDrop(host, term, session);
-	}
-	let captured = "";
-	let capturedCol = 0;
-	const startCol = () => term.getSelectionPosition()?.start.x ?? 0;
-	term.onSelectionChange(() => {
-		const s = term.getSelection();
-		if (s && s.trim()) {
-			captured = s;
-			capturedCol = startCol();
-		}
-	});
-	const forClipboard = (text, col) => opts.agent ? agentCopyText(text, session, term.cols, col) : text;
-	host.addEventListener("copy", (ev) => {
-		const live = term.getSelection();
-		if (!opts.agent || !live || !live.trim() || !ev.clipboardData) return;
-		ev.clipboardData.setData("text/plain", forClipboard(live, startCol()));
-		ev.preventDefault();
-		ev.stopPropagation();
-	}, true);
-	function doCopy() {
-		const live = term.getSelection();
-		const isLive = !!(live && live.trim());
-		const sel = forClipboard(isLive ? live : captured, isLive ? startCol() : capturedCol);
-		if (sel && sel.trim()) {
-			copyText(sel).then((ok) => {
-				if (ok) toast("Copied " + sel.length + " chars");
-			});
-			return true;
-		}
-		return false;
-	}
-	host.addEventListener("mousedown", (e) => {
-		if (e.button === 0) captured = "";
-	});
-	host.addEventListener("mouseup", (e) => {
-		if (e.button === 0) setTimeout(doCopy, 0);
-	});
-	host.addEventListener("contextmenu", (e) => {
-		if (term.options.disableStdin) {
-			if (doCopy()) e.preventDefault();
-			return;
-		}
-		e.preventDefault();
-		pasteClipboard(term, session);
-	});
-	term.attachCustomKeyEventHandler((ev) => {
-		const mod = ev.ctrlKey || ev.metaKey;
-		if (ev.type === "keydown" && mod && ev.shiftKey && (ev.key === "C" || ev.key === "c")) {
-			if (doCopy()) {
-				ev.preventDefault();
-				return false;
-			}
-		}
-		if (ev.type === "keydown" && mod && !ev.shiftKey && !ev.altKey && (ev.key === "v" || ev.key === "V") && !term.options.disableStdin) return false;
-		if (mod && !ev.altKey) {
-			const c = ev.code;
-			if (c === "Equal" || c === "Minus" || c === "Digit0" || c === "NumpadAdd" || c === "NumpadSubtract" || c === "Numpad0") return false;
-		}
-		return true;
-	});
-}
-var wheelDamping = 1;
-function setWheelDamping(speed) {
-	wheelDamping = speed / Math.max(1, Math.round(speed));
-}
-function attachWheelScroll(host, term, getWs) {
-	function cellHeight() {
-		return host.getBoundingClientRect().height / (term.rows || 24) || 16;
-	}
-	function sendWheel(clientX, clientY, up, count) {
-		const ws = getWs();
-		if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-		const rect = host.getBoundingClientRect();
-		const cols = term.cols || 80, rows = term.rows || 24;
-		const cellW = rect.width / cols || 8, cellH = rect.height / rows || 16;
-		const col = Math.max(1, Math.min(cols, Math.floor((clientX - rect.left) / cellW) + 1));
-		const row = Math.max(1, Math.min(rows, Math.floor((clientY - rect.top) / cellH) + 1));
-		const btn = up ? 64 : 65;
-		let seq = "";
-		for (let i = 0; i < count; i++) seq += "\x1B[<" + btn + ";" + col + ";" + row + "M";
-		ws.send(seq);
-		return true;
-	}
-	let wheelAcc = 0, wheelAt = 0;
-	host.addEventListener("wheel", (ev) => {
-		if (!ev.deltaY) return;
-		const ws = getWs();
-		if (!ws || ws.readyState !== WebSocket.OPEN) return;
-		const raw = ev.deltaMode === 1 ? ev.deltaY : ev.deltaY / cellHeight();
-		const now = ev.timeStamp || performance.now();
-		if (now - wheelAt > 250 || wheelAcc && Math.sign(wheelAcc) !== Math.sign(raw)) wheelAcc = 0;
-		wheelAt = now;
-		wheelAcc += raw * wheelDamping;
-		const lines = Math.min(8, Math.floor(Math.abs(wheelAcc)));
-		if (lines) {
-			const up = wheelAcc < 0;
-			wheelAcc += up ? lines : -lines;
-			sendWheel(ev.clientX, ev.clientY, up, lines);
-		}
-		ev.preventDefault();
-		ev.stopPropagation();
-	}, {
-		capture: true,
-		passive: false
-	});
-	host.style.touchAction = "none";
-	let touchLast = null;
-	let touchScrolling = false;
-	host.addEventListener("touchstart", (ev) => {
-		if (ev.touches.length !== 1) {
-			touchLast = null;
-			return;
-		}
-		touchLast = {
-			x: ev.touches[0].clientX,
-			y: ev.touches[0].clientY
-		};
-		touchScrolling = false;
-	}, {
-		capture: true,
-		passive: true
-	});
-	host.addEventListener("touchmove", (ev) => {
-		if (!touchLast || ev.touches.length !== 1) return;
-		const t = ev.touches[0];
-		const dy = t.clientY - touchLast.y, dx = t.clientX - touchLast.x;
-		if (!touchScrolling) {
-			if (Math.abs(dy) < 8 || Math.abs(dy) <= Math.abs(dx)) return;
-			touchScrolling = true;
-		}
-		const lines = Math.floor(Math.abs(dy) * 3 / cellHeight());
-		if (lines > 0) {
-			if (!sendWheel(t.clientX, t.clientY, dy > 0, Math.min(24, lines))) return;
-			touchLast = {
-				x: t.clientX,
-				y: t.clientY
-			};
-		}
-		ev.preventDefault();
-		ev.stopPropagation();
-	}, {
-		capture: true,
-		passive: false
-	});
-	host.addEventListener("touchend", () => {
-		touchLast = null;
-		touchScrolling = false;
-	}, {
-		capture: true,
-		passive: true
-	});
-}
-var DRAG_EDGE_ZONE = 18;
-function dragEdgeAt(y, r, zone = DRAG_EDGE_ZONE) {
-	if (y < r.top + zone) return "top";
-	if (y > r.bottom - zone) return "bottom";
-	return null;
-}
-function attachDragHistoryGesture(host, fire) {
-	const HOLD_MS = 220;
-	host.addEventListener("mousedown", (down) => {
-		if (down.button !== 0) return;
-		let timer;
-		const onMove = (ev) => {
-			const edge = dragEdgeAt(ev.clientY, host.getBoundingClientRect());
-			if (edge && timer === void 0) timer = setTimeout(() => {
-				cleanup();
-				fire(edge);
-			}, HOLD_MS);
-			else if (!edge && timer !== void 0) {
-				clearTimeout(timer);
-				timer = void 0;
-			}
-		};
-		const cleanup = () => {
-			if (timer !== void 0) clearTimeout(timer);
-			window.removeEventListener("mousemove", onMove, true);
-			window.removeEventListener("mouseup", cleanup, true);
-		};
-		window.addEventListener("mousemove", onMove, true);
-		window.addEventListener("mouseup", cleanup, true);
-	});
-}
-var typedAt = /* @__PURE__ */ new Map();
-function lastTypedAt(title) {
-	return typedAt.get(title) || 0;
-}
-function makeTerm(title, wsPath, interactive) {
-	const container = document.createElement("div");
-	container.className = "term-container";
-	const term = new Dl({
-		cursorBlink: interactive,
-		fontSize: 13,
-		theme: termTheme(),
-		disableStdin: !interactive,
-		fontFamily: "ui-monospace, \"Cascadia Code\", Menlo, Consolas, monospace",
-		scrollback: 2e3,
-		macOptionClickForcesSelection: true
-	});
-	const fit = new o();
-	term.loadAddon(fit);
-	term.open(container);
-	attachCopyOnSelect(container, term, {
-		session: title,
-		agent: wsPath === "/terminal"
-	});
-	container.addEventListener("focusin", () => handle.resync());
-	attachDragHistoryGesture(container, (edge) => {
-		let ctx;
-		try {
-			const buf = term.buffer.active;
-			const rows = term.rows || 24;
-			const screen = [];
-			for (let r = 0; r < rows; r++) screen.push(buf.getLine(buf.viewportY + r)?.translateToString(true) ?? "");
-			const p = term.getSelectionPosition();
-			const side = edge === "bottom" ? p?.start : p?.end;
-			ctx = {
-				screen,
-				rows,
-				row: side ? Math.max(0, Math.min(rows - 1, side.y - buf.viewportY)) : edge === "bottom" ? 0 : rows - 1,
-				col: side?.x ?? 0
-			};
-		} catch {}
-		handle.onHistoryDrag?.(term.getSelection() || "", edge, ctx);
-	});
-	let topRowAt = 0;
-	let topRowTimer;
-	const emitTopRow = () => {
-		if (!handle.onTopRow) return;
-		try {
-			const buf = term.buffer.active;
-			handle.onTopRow(buf.getLine(buf.viewportY)?.translateToString(true) ?? "");
-		} catch {}
-	};
-	const agent = wsPath === "/terminal";
-	term.onRender(() => {
-		if (agent) try {
-			const buf = term.buffer.active;
-			const top = buf.getLine(buf.viewportY)?.translateToString(true) ?? "";
-			container.classList.toggle("tui-pinned-row", /^\s*[❯>]\s+\S/.test(top));
-		} catch {}
-		const now = performance.now();
-		clearTimeout(topRowTimer);
-		if (now - topRowAt > 150) {
-			topRowAt = now;
-			emitTopRow();
-		} else topRowTimer = setTimeout(() => {
-			topRowAt = performance.now();
-			emitTopRow();
-		}, 160);
-	});
-	let ws = null;
-	let sentSize = "";
-	let closed = false;
-	let booted = false;
-	let reconnectAttempt = 0;
-	let reconnectTimer;
-	let state = "connecting";
-	const handle = {
-		term,
-		container,
-		get state() {
-			return state;
-		},
-		get booted() {
-			return booted;
-		},
-		_setState(s) {
-			state = s;
-			handle.onState?.(s);
-			notifyTermStates();
-		},
-		send(data) {
-			if (ws && ws.readyState === WebSocket.OPEN) {
-				ws.send(data);
-				return true;
-			}
-			return false;
-		},
-		resync() {
-			sentSize = "";
-			handle.doFit();
-		},
-		doFit() {
-			if (!container.clientWidth || !container.clientHeight || container.offsetParent === null) return;
-			try {
-				fit.fit();
-			} catch {
-				return;
-			}
-			if (!ws || ws.readyState !== WebSocket.OPEN) return;
-			const size = term.cols + "x" + term.rows;
-			if (sentSize === size) return;
-			sentSize = size;
-			ws.send(JSON.stringify({
-				type: "resize",
-				cols: term.cols,
-				rows: term.rows
-			}));
-		},
-		connect() {
-			const proto = location.protocol === "https:" ? "wss" : "ws";
-			const path = "/api/instances/" + encodeURIComponent(title) + wsPath;
-			const sock = new WebSocket(proto + "://" + location.host + path);
-			sock.binaryType = "arraybuffer";
-			ws = sock;
-			sentSize = "";
-			sock.onopen = () => {
-				reconnectAttempt = 0;
-				handle._setState("connected");
-				handle.doFit();
-			};
-			sock.onmessage = (ev) => {
-				let control = false;
-				if (typeof ev.data === "string") try {
-					const t = JSON.parse(ev.data)?.type;
-					control = t === "driver" || t === "readonly";
-				} catch {
-					control = false;
-				}
-				if (!booted && !control) {
-					booted = true;
-					handle.onBoot?.();
-				}
-				if (typeof ev.data === "string") try {
-					const j = JSON.parse(ev.data);
-					if (j.type === "error") {
-						term.write("\r\n[error] " + j.message + "\r\n");
-						return;
-					}
-					const ctl = controlNotice(j);
-					if (ctl) {
-						if (ctl.notice) showTermNotice(container, ctl.notice);
-						return;
-					}
-				} catch {
-					term.write(ev.data);
-				}
-				else term.write(new Uint8Array(ev.data));
-			};
-			sock.onclose = (ev) => {
-				handle._setState("disconnected");
-				if (closed) return;
-				const action = closeAction(ev?.code);
-				if (action !== "retry") {
-					closed = true;
-					handle._setState(action);
-					if (!booted) {
-						booted = true;
-						handle.onBoot?.();
-					}
-					return;
-				}
-				const n = reconnectAttempt += 1;
-				const delay = Math.min(2500, 400 * Math.pow(2, n - 1));
-				reconnectTimer = setTimeout(() => {
-					if (!closed) handle.connect();
-				}, delay);
-			};
-			sock.onerror = () => handle._setState("error");
-		},
-		dispose() {
-			closed = true;
-			if (reconnectTimer) clearTimeout(reconnectTimer);
-			try {
-				ws?.close();
-			} catch {}
-			try {
-				term.dispose();
-			} catch {}
-			container.remove();
-		}
-	};
-	if (interactive) {
-		term.onData((data) => {
-			typedAt.set(title, Date.now());
-			if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
-		});
-		attachWheelScroll(container, term, () => ws);
-	}
-	return handle;
-}
-function closeAction(code) {
-	if (code === 4404 || code === 4409) return "gone";
-	if (code === PAUSED_CLOSE) return "paused";
-	if (code === HELD_CLOSE) return "held";
-	return "retry";
-}
-var registry = /* @__PURE__ */ new Map();
-var termStateListeners = /* @__PURE__ */ new Set();
-function subscribeTermStates(cb) {
-	termStateListeners.add(cb);
-	return () => {
-		termStateListeners.delete(cb);
-	};
-}
-function notifyTermStates() {
-	for (const cb of termStateListeners) cb();
-}
-function getTerm(title, kind) {
-	let entry = registry.get(title);
-	if (!entry) {
-		entry = {};
-		registry.set(title, entry);
-	}
-	let h = entry[kind];
-	if (h && (h.state === "paused" || h.state === "held")) {
-		h.dispose();
-		h = void 0;
-	}
-	if (!h) {
-		h = makeTerm(title, kind === "agent" ? "/terminal" : "/shell", true);
-		h.connect();
-		entry[kind] = h;
-	}
-	return h;
-}
-function peekTerm(title, kind) {
-	return registry.get(title)?.[kind];
-}
-function releaseTerm(title, kind) {
-	const entry = registry.get(title);
-	const h = entry?.[kind];
-	if (!entry || !h) return;
-	h.onState = void 0;
-	h.onBoot = void 0;
-	h.dispose();
-	delete entry[kind];
-	if (!entry.agent && !entry.shell) registry.delete(title);
-	notifyTermStates();
-}
-function releaseTerms(title) {
-	const entry = registry.get(title);
-	if (!entry) return;
-	entry.agent?.dispose();
-	entry.shell?.dispose();
-	registry.delete(title);
-	notifyTermStates();
-}
-function resyncAll() {
-	for (const entry of registry.values()) {
-		entry.agent?.resync();
-		entry.shell?.resync();
-	}
-}
-if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => {
-	if (!document.hidden) resyncAll();
-});
-function freezeTerm(title, kind) {
-	const h = peekTerm(title, kind);
-	const el = h?.term.element;
-	const host = h?.container.parentElement;
-	if (!h || !el || !host) return () => {};
-	const snap = el.cloneNode(true);
-	const er = el.getBoundingClientRect();
-	const hr = host.getBoundingClientRect();
-	Object.assign(snap.style, {
-		position: "absolute",
-		left: `${er.left - hr.left}px`,
-		top: `${er.top - hr.top}px`,
-		width: `${er.width}px`,
-		height: `${er.height}px`,
-		zIndex: "3",
-		pointerEvents: "none"
-	});
-	snap.setAttribute("aria-hidden", "true");
-	snap.querySelectorAll("textarea").forEach((t) => t.remove());
-	if (h.container.classList.contains("tui-pinned-row")) {
-		const first = snap.querySelector(".xterm-rows > div");
-		if (first) first.style.visibility = "hidden";
-	}
-	host.appendChild(snap);
-	return () => {
-		h.term.write("", () => requestAnimationFrame(() => snap.remove()));
-	};
-}
-function focusTerm(title, kind = "agent") {
-	peekTerm(title, kind)?.term.focus();
-}
-//#endregion
-//#region src/lib/theme.ts
-function isLightNow() {
-	try {
-		return document.documentElement.classList.contains("light");
-	} catch {
-		return false;
-	}
-}
-function setTheme(light) {
-	try {
-		document.documentElement.classList.toggle("light", light);
-	} catch {}
-	try {
-		localStorage.setItem("cs_theme", light ? "light" : "dark");
-	} catch {}
-	notePrefWrite("cs_theme");
-	useUi.setState({ themeLight: light });
-	try {
-		document.dispatchEvent(new Event(THEME_CHANGED));
-	} catch {}
-}
-//#endregion
-//#region src/components/InfoTip.tsx
-var import_react_dom = require_react_dom();
-var TIP_CLOSED = {
-	hover: false,
-	focus: false,
-	pinned: false
-};
-var tipOpen = (s) => s.hover || s.focus || s.pinned;
-function tipReduce(s, e) {
-	switch (e) {
-		case "enter": return s.hover ? s : {
-			...s,
-			hover: true
-		};
-		case "leave": return s.hover ? {
-			...s,
-			hover: false
-		} : s;
-		case "focus": return s.focus ? s : {
-			...s,
-			focus: true
-		};
-		case "blur": return s.focus || s.pinned ? {
-			...s,
-			focus: false,
-			pinned: false
-		} : s;
-		case "tap":
-		case "activate": return tipOpen(s) ? TIP_CLOSED : {
-			...s,
-			pinned: true
-		};
-		case "escape":
-		case "outside": return tipOpen(s) ? TIP_CLOSED : s;
-	}
-}
-var TIP_OPEN_MS = 90;
-var TIP_CLOSE_MS = 100;
-function placeTip(anchor, size, view, gap = 8, margin = 8) {
-	const below = anchor.bottom + gap;
-	const above = anchor.top - gap - size.h;
-	const fitsBelow = below + size.h <= view.h - margin;
-	const fitsAbove = above >= margin;
-	let side;
-	if (fitsBelow) side = "below";
-	else if (fitsAbove) side = "above";
-	else side = anchor.top > view.h - anchor.bottom ? "above" : "below";
-	const maxTop = Math.max(margin, view.h - margin - size.h);
-	const top = Math.min(maxTop, Math.max(margin, side === "below" ? below : above));
-	const cx = (anchor.left + anchor.right) / 2;
-	const maxLeft = Math.max(margin, view.w - margin - size.w);
-	const left = Math.min(maxLeft, Math.max(margin, cx - size.w / 2));
-	const arrowX = Math.min(Math.max(12, cx - left), Math.max(12, size.w - 12));
-	return {
-		top: Math.round(top),
-		left: Math.round(left),
-		side,
-		arrowX: Math.round(arrowX)
-	};
-}
-function InfoTip({ children, label = "More info", id, className }) {
-	const autoId = (0, import_react.useId)();
-	const tipId = (id || "infotip" + autoId.replace(/[^a-zA-Z0-9_-]/g, "")) + "-tip";
-	const [state, dispatch] = (0, import_react.useReducer)(tipReduce, TIP_CLOSED);
-	const open = tipOpen(state);
-	const btnRef = (0, import_react.useRef)(null);
-	const bubbleRef = (0, import_react.useRef)(null);
-	const timer = (0, import_react.useRef)(void 0);
-	const pressed = (0, import_react.useRef)(false);
-	const lastPointer = (0, import_react.useRef)("");
-	const [place, setPlace] = (0, import_react.useState)(null);
-	const later = (0, import_react.useCallback)((e, ms) => {
-		window.clearTimeout(timer.current);
-		timer.current = window.setTimeout(() => dispatch(e), ms);
-	}, []);
-	const now = (0, import_react.useCallback)((e) => {
-		window.clearTimeout(timer.current);
-		dispatch(e);
-	}, []);
-	(0, import_react.useEffect)(() => () => window.clearTimeout(timer.current), []);
-	const enter = (e) => {
-		if (e.pointerType === "touch") return;
-		if (state.hover) window.clearTimeout(timer.current);
-		else later("enter", TIP_OPEN_MS);
-	};
-	const leave = (e) => {
-		if (e.pointerType === "touch") return;
-		later("leave", TIP_CLOSE_MS);
-	};
-	(0, import_react.useLayoutEffect)(() => {
-		if (!open) {
-			setPlace(null);
-			return;
-		}
-		const measure = () => {
-			const a = btnRef.current;
-			const b = bubbleRef.current;
-			if (!a || !b) return;
-			const r = a.getBoundingClientRect();
-			setPlace(placeTip(r, {
-				w: b.offsetWidth,
-				h: b.offsetHeight
-			}, {
-				w: window.innerWidth,
-				h: window.innerHeight
-			}));
-		};
-		measure();
-		let raf = 0;
-		const again = () => {
-			cancelAnimationFrame(raf);
-			raf = requestAnimationFrame(measure);
-		};
-		window.addEventListener("scroll", again, true);
-		window.addEventListener("resize", again);
-		return () => {
-			cancelAnimationFrame(raf);
-			window.removeEventListener("scroll", again, true);
-			window.removeEventListener("resize", again);
-		};
-	}, [open]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key !== "Escape") return;
-			e.preventDefault();
-			e.stopPropagation();
-			now("escape");
-		};
-		const onDown = (e) => {
-			const t = e.target;
-			if (t && (btnRef.current?.contains(t) || bubbleRef.current?.contains(t))) return;
-			now("outside");
-		};
-		window.addEventListener("keydown", onKey, true);
-		document.addEventListener("pointerdown", onDown, true);
-		return () => {
-			window.removeEventListener("keydown", onKey, true);
-			document.removeEventListener("pointerdown", onDown, true);
-		};
-	}, [open, now]);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			ref: btnRef,
-			id,
-			className: "infotip-btn" + (open ? " open" : "") + (className ? " " + className : ""),
-			"aria-label": label,
-			"aria-describedby": tipId,
-			"aria-expanded": open,
-			onPointerEnter: enter,
-			onPointerLeave: leave,
-			onPointerDown: (e) => {
-				pressed.current = true;
-				lastPointer.current = e.pointerType;
-			},
-			onFocus: () => {
-				if (pressed.current) pressed.current = false;
-				else now("focus");
-			},
-			onBlur: (e) => {
-				pressed.current = false;
-				if (bubbleRef.current && e.relatedTarget && bubbleRef.current.contains(e.relatedTarget)) return;
-				now("blur");
-			},
-			onClick: (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-				if (e.detail === 0) now("activate");
-				else if (lastPointer.current === "touch") now("tap");
-				else if (!state.hover) now("enter");
-				lastPointer.current = "";
-			},
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-				viewBox: "0 0 16 16",
-				width: "14",
-				height: "14",
-				"aria-hidden": "true",
-				focusable: "false",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-						cx: "8",
-						cy: "8",
-						r: "6.75",
-						fill: "none",
-						stroke: "currentColor",
-						strokeWidth: "1.4"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-						cx: "8",
-						cy: "5",
-						r: "0.95",
-						fill: "currentColor"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-						d: "M8 7.4v4.2",
-						stroke: "currentColor",
-						strokeWidth: "1.5",
-						strokeLinecap: "round"
-					})
-				]
-			})
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			id: tipId,
-			role: "tooltip",
-			className: "infotip-sr",
-			children
-		}),
-		open && typeof document !== "undefined" && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			ref: bubbleRef,
-			className: "infotip",
-			"data-side": place?.side || "below",
-			"aria-hidden": "true",
-			style: {
-				top: place ? place.top : -9999,
-				left: place ? place.left : -9999,
-				visibility: place ? void 0 : "hidden",
-				["--infotip-arrow-x"]: (place?.arrowX ?? 16) + "px"
-			},
-			onPointerEnter: enter,
-			onPointerLeave: leave,
-			children
-		}), document.body)
-	] });
-}
-//#endregion
-//#region src/components/settings/screens/Appearance.tsx
-var SURFACES = [
-	[
-		"",
-		"Swallow (default)",
-		"#0f1117",
-		"#1e222e"
-	],
-	[
-		"raven",
-		"Raven",
-		"#000000",
-		"#141419"
-	],
-	[
-		"heron",
-		"Heron",
-		"#16181b",
-		"#292d33"
-	],
-	[
-		"cardinal",
-		"Cardinal",
-		"#d51322",
-		"#16060a",
-		"#3d060d"
-	],
-	[
-		"macaw",
-		"Scarlet Macaw",
-		"#1554e0",
-		"#06773a",
-		"#43060a"
-	],
-	[
-		"pheasant",
-		"Golden Pheasant",
-		"#f5b800",
-		"#05361f",
-		"#3f070c"
-	],
-	[
-		"oriole",
-		"Oriole",
-		"#ff7a12",
-		"#140c03",
-		"#421d03"
-	],
-	[
-		"lorikeet",
-		"Rainbow Lorikeet",
-		"#4b1fd6",
-		"#256e0a",
-		"#4f1c05"
-	],
-	[
-		"roller",
-		"Lilac-breasted Roller",
-		"#9b6ef0",
-		"#00736b",
-		"#3a2412"
-	],
-	[
-		"goldfinch",
-		"Goldfinch",
-		"#f2e00d",
-		"#131300",
-		"#33350d"
-	],
-	[
-		"toucan",
-		"Toco Toucan",
-		"#ffb01f",
-		"#08080a",
-		"#181820"
-	],
-	[
-		"quetzal",
-		"Quetzal",
-		"#00a35c",
-		"#4a0512",
-		"#033524"
-	],
-	[
-		"greenjay",
-		"Green Jay",
-		"#1440d6",
-		"#d6b800",
-		"#103a0e"
-	],
-	[
-		"gouldian",
-		"Gouldian Finch",
-		"#00c2b2",
-		"#52157a",
-		"#0e3a19"
-	],
-	[
-		"mallard",
-		"Mallard",
-		"#0d9c62",
-		"#5e330f",
-		"#22262e"
-	],
-	[
-		"kingfisher",
-		"Kingfisher",
-		"#00a8d6",
-		"#5e2404",
-		"#06323f"
-	],
-	[
-		"peacock",
-		"Peacock",
-		"#0a9cb8",
-		"#141f8f",
-		"#05383f"
-	],
-	[
-		"bluejay",
-		"Bluejay",
-		"#1266e6",
-		"#0a0e1c",
-		"#071a44"
-	],
-	[
-		"bunting",
-		"Indigo Bunting",
-		"#3b2ff0",
-		"#08061f",
-		"#150f52"
-	],
-	[
-		"violetear",
-		"Violetear",
-		"#7c2ff0",
-		"#0e0420",
-		"#220c40"
-	],
-	[
-		"mandarin",
-		"Mandarin Duck",
-		"#12a85e",
-		"#f2820f",
-		"#3a1445"
-	],
-	[
-		"flamingo",
-		"Flamingo",
-		"#ff2d8a",
-		"#180110",
-		"#420527"
-	]
-];
-function swatchGradient(tones) {
-	const step = 100 / tones.length;
-	return `linear-gradient(135deg,${tones.map((c, i) => `${c} ${(i * step).toFixed(1)}% ${((i + 1) * step).toFixed(1)}%`).join(",")})`;
-}
-var ACCENTS = [
-	[
-		"",
-		"Violetear (default)",
-		"#7d56f4"
-	],
-	[
-		"cardinal",
-		"Cardinal",
-		"#e5484d"
-	],
-	[
-		"oriole",
-		"Oriole",
-		"#f07b3c"
-	],
-	[
-		"goldfinch",
-		"Goldfinch",
-		"#f0cf28"
-	],
-	[
-		"quetzal",
-		"Quetzal",
-		"#44b556"
-	],
-	[
-		"bluejay",
-		"Bluejay",
-		"#3d8bfd"
-	],
-	[
-		"bunting",
-		"Indigo Bunting",
-		"#4f46e5"
-	],
-	[
-		"flamingo",
-		"Flamingo",
-		"#f2559b"
-	],
-	[
-		"pheasant",
-		"Golden Pheasant",
-		"linear-gradient(135deg,#f0d78a,#b8860b)"
-	],
-	[
-		"heron",
-		"Heron",
-		"linear-gradient(135deg,#e2e7ef,#8d95a3)"
-	]
-];
-var DIMS = {
-	accent: {
-		field: "accent",
-		attr: "data-accent",
-		lsKey: "cs_accent"
-	},
-	surface: {
-		field: "surface",
-		attr: "data-surface",
-		lsKey: "cs_surface"
-	}
-};
-function applyStoredAppearance() {
-	for (const dim of Object.values(DIMS)) {
-		let saved = "";
-		try {
-			saved = localStorage.getItem(dim.lsKey) || "";
-		} catch {}
-		if (saved) document.documentElement.setAttribute(dim.attr, saved);
-		else document.documentElement.removeAttribute(dim.attr);
-	}
-}
-function storedAccent() {
-	try {
-		return localStorage.getItem(DIMS.accent.lsKey) || "";
-	} catch {
-		return "";
-	}
-}
-function adoptAccent(name) {
-	const dim = DIMS.accent;
-	if (name) document.documentElement.setAttribute(dim.attr, name);
-	else document.documentElement.removeAttribute(dim.attr);
-	try {
-		if (name) localStorage.setItem(dim.lsKey, name);
-		else localStorage.removeItem(dim.lsKey);
-	} catch {}
-	rethemeAll();
-}
-function current$2(dim) {
-	return document.documentElement.getAttribute(dim.attr) || "";
-}
-function apply$1(dim, name) {
-	if (name) document.documentElement.setAttribute(dim.attr, name);
-	else document.documentElement.removeAttribute(dim.attr);
-	try {
-		if (name) localStorage.setItem(dim.lsKey, name);
-		else localStorage.removeItem(dim.lsKey);
-	} catch {}
-	api("/api/settings", { json: { ui: { [dim.field]: name } } }).catch((e) => toast("Couldn't save the " + dim.field + " for your other devices — " + (e?.message || "the server refused it"), { duration: 8e3 }));
-	rethemeAll();
-}
-function Appearance(_) {
-	const themeLight = useUi((s) => s.themeLight);
-	const [accent, setAccent] = (0, import_react.useState)(() => current$2(DIMS.accent));
-	const [surface, setSurface] = (0, import_react.useState)(() => current$2(DIMS.surface));
-	const surfaceSwatch = ([name, label, ...tones]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-		type: "button",
-		className: "accent-swatch surface-swatch" + (surface === name ? " active" : ""),
-		"data-surface-choice": name,
-		onClick: () => {
-			setSurface(name);
-			apply$1(DIMS.surface, name);
-		},
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "sw-dot",
-			style: { background: swatchGradient(tones) }
-		}), label]
-	}, name || "default");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "Mode"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "Every theme below has both. The moon in the top bar switches too."
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			id: "mode-swatches",
-			className: "accent-swatches",
-			role: "radiogroup",
-			"aria-label": "Light or dark",
-			children: [[false, "Dark"], [true, "Light"]].map(([isLight, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				role: "radio",
-				"aria-checked": themeLight === isLight,
-				className: "accent-swatch" + (themeLight === isLight ? " active" : ""),
-				"data-mode-choice": isLight ? "light" : "dark",
-				onClick: () => setTheme(isLight),
-				children: label
-			}, label))
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "Theme"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			id: "surface-swatches",
-			className: "accent-swatches",
-			children: SURFACES.map(surfaceSwatch)
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "Accent"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "Highlights, buttons and the terminal cursor. Mix with any theme."
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			id: "accent-swatches",
-			className: "accent-swatches",
-			children: ACCENTS.map(([name, label, color]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				type: "button",
-				className: "accent-swatch" + (accent === name ? " active" : ""),
-				"data-accent-choice": name,
-				onClick: () => {
-					setAccent(name);
-					apply$1(DIMS.accent, name);
-				},
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sw-dot",
-					style: { background: color }
-				}), label]
-			}, name || "default"))
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "Comfort"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReduceMotionRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyBirdsRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeABreakRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IdleFlockRow, {})
-	] });
-}
-function ReduceMotionRow() {
-	const reduceMotion = useUi((s) => s.reduceMotion);
-	const setReduceMotion = useUi((s) => s.setReduceMotion);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row set-switch-row",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "notif-rule-text",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Reduce motion"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "set-hint notif-rule-desc",
-				children: ["Hide a running agent's scrolling output behind a still panel.", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, { children: "Clicking, scrolling or typing in that window brings the live output back; the panel returns after 10 seconds with no input. Only the Agent tab is covered." })]
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "ca-switch",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "checkbox",
-				checked: reduceMotion,
-				onChange: (e) => {
-					setReduceMotion(e.target.checked);
-					toast(e.target.checked ? "Reduce motion on" : "Reduce motion off");
-				}
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-		})]
-	});
-}
-function SkyBirdsRow() {
-	const on = useUi((s) => s.skyBirds);
-	const setOn = useUi((s) => s.setSkyBirds);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row set-switch-row",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "notif-rule-text",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Birds in the Sky"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint notif-rule-desc",
-				children: "A flock drifting across the Sky's background. Off by default; the birds on your routes always stay."
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "ca-switch",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "checkbox",
-				"aria-label": "Birds in the Sky",
-				checked: on,
-				onChange: (e) => {
-					setOn(e.target.checked);
-					toast(e.target.checked ? "Birds in the Sky on" : "Birds in the Sky off");
-				}
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-		})]
-	});
-}
-function TakeABreakRow() {
-	const on = useUi((s) => s.breakReminder);
-	const every = useUi((s) => s.breakEveryMin);
-	const setOn = useUi((s) => s.setBreakReminder);
-	const setEvery = useUi((s) => s.setBreakEveryMin);
-	const [draft, setDraft] = (0, import_react.useState)(String(every));
-	(0, import_react.useEffect)(() => setDraft(String(every)), [every]);
-	const commit = (raw) => {
-		const next = clampBreakMinutes(raw === "" ? every : raw);
-		setEvery(next);
-		setDraft(String(next));
-		if (on) toast("Break reminder every " + next + " min");
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row set-switch-row",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "notif-rule-text",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Take a break"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "set-hint notif-rule-desc break-every",
-				children: [
-					"Reminder to take a break every",
-					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "number",
-						"aria-label": "Minutes between break reminders",
-						min: BREAK_MIN_MINUTES,
-						max: BREAK_MAX_MINUTES,
-						step: 5,
-						value: draft,
-						onChange: (e) => setDraft(e.target.value),
-						onBlur: (e) => commit(e.target.value),
-						onKeyDown: (e) => {
-							if (e.key === "Enter") e.target.blur();
-						}
-					}),
-					" ",
-					"minutes."
-				]
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "ca-switch",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "checkbox",
-				checked: on,
-				onChange: (e) => {
-					setOn(e.target.checked);
-					toast(e.target.checked ? "Break reminder on — every " + every + " min" : "Break reminder off");
-				}
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-		})]
-	});
-}
-function IdleFlockRow() {
-	const on = useUi((s) => s.idleFlock);
-	const after = useUi((s) => s.idleFlockAfterMin);
-	const setOn = useUi((s) => s.setIdleFlock);
-	const setAfter = useUi((s) => s.setIdleFlockAfterMin);
-	const [draft, setDraft] = (0, import_react.useState)(String(after));
-	(0, import_react.useEffect)(() => setDraft(String(after)), [after]);
-	const commit = (raw) => {
-		const next = clampIdleMinutes(raw === "" ? after : raw);
-		setAfter(next);
-		setDraft(String(next));
-		if (on) toast("Idle flock after " + next + " min");
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row set-switch-row",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "notif-rule-text",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Idle flock"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "set-hint notif-rule-desc break-every",
-				children: [
-					"Fly the flock over your grid after",
-					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "number",
-						"aria-label": "Minutes idle before the flock appears",
-						min: IDLE_MIN_MINUTES,
-						max: IDLE_MAX_MINUTES,
-						step: 5,
-						value: draft,
-						onChange: (e) => setDraft(e.target.value),
-						onBlur: (e) => commit(e.target.value),
-						onKeyDown: (e) => {
-							if (e.key === "Enter") e.target.blur();
-						}
-					}),
-					" ",
-					"minutes of no input. The first touch sends them home."
-				]
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "ca-switch",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "checkbox",
-				checked: on,
-				onChange: (e) => {
-					setOn(e.target.checked);
-					toast(e.target.checked ? "Idle flock on — after " + after + " min" : "Idle flock off");
-				}
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-		})]
-	});
-}
-//#endregion
 //#region src/lib/memoryConfirm.ts
 function memoryConfirmOf(e) {
 	const err = e;
@@ -31373,6 +28570,174 @@ function freshStage(title) {
 	});
 	inflight$1.set(title, p);
 	return p;
+}
+//#endregion
+//#region src/lib/clipboard.ts
+function copyText(text) {
+	if (!text) return Promise.resolve(false);
+	if (window.mfclip?.writeText) try {
+		window.mfclip.writeText(text);
+		return Promise.resolve(true);
+	} catch {}
+	if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).then(() => true, () => fallbackCopy(text));
+	return Promise.resolve(fallbackCopy(text));
+}
+var clipBridgeBroken = false;
+function readClipboardText() {
+	if (window.mfclip?.readText) try {
+		const v = window.mfclip.readText();
+		clipBridgeBroken = false;
+		return Promise.resolve(v);
+	} catch {
+		clipBridgeBroken = true;
+	}
+	if (navigator.clipboard?.readText) return navigator.clipboard.readText().catch(() => "");
+	return Promise.resolve("");
+}
+function readClipboardImage() {
+	if (window.mfclip?.readImagePNG) try {
+		const b64 = window.mfclip.readImagePNG();
+		if (!b64) return Promise.resolve(null);
+		const bin = atob(b64);
+		const buf = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+		return Promise.resolve(new Blob([buf], { type: "image/png" }));
+	} catch {
+		clipBridgeBroken = true;
+		return Promise.resolve(null);
+	}
+	if (navigator.clipboard?.read) return navigator.clipboard.read().then((items) => {
+		for (const it of items) {
+			const t = (it.types || []).find((x) => x.startsWith("image/"));
+			if (t) return it.getType(t);
+		}
+		return null;
+	}, () => null);
+	return Promise.resolve(null);
+}
+async function pasteClipboard(term, session, canSend) {
+	if (canSend && !canSend()) return;
+	const text = await readClipboardText();
+	if (text) {
+		term.paste(text);
+		toast("Pasted " + text.length + " chars");
+		return;
+	}
+	const img = await readClipboardImage();
+	if (!img) {
+		toast(clipBridgeBroken ? "Clipboard is unavailable in this desktop-app build — update/rebuild the app to fix paste (Ctrl+Shift+V may still work)" : "Clipboard is empty", clipBridgeBroken ? { duration: 6e3 } : void 0);
+		return;
+	}
+	try {
+		const r = await api("/api/paste-image" + (session ? "?session=" + encodeURIComponent(session) : ""), {
+			method: "POST",
+			headers: { "Content-Type": img.type || "image/png" },
+			body: img
+		});
+		term.paste(r.path);
+		toast("Pasted image → " + r.path);
+	} catch (err) {
+		toast("Image paste failed: " + (err?.message || "error"));
+	}
+}
+async function uploadFileToWorkspace(blob, session, name) {
+	let q = session ? "?session=" + encodeURIComponent(session) : "";
+	if (name) q += (q ? "&" : "?") + "name=" + encodeURIComponent(name);
+	return (await api("/api/paste-image" + q, {
+		method: "POST",
+		headers: { "Content-Type": blob.type || "application/octet-stream" },
+		body: blob
+	})).path;
+}
+async function uploadFilesAsPathText(files, session) {
+	const list = Array.from(files || []);
+	if (!list.length) return "";
+	toast("Uploading " + (list.length === 1 ? list[0].name || "file" : list.length + " files") + "…");
+	const paths = [];
+	for (const f of list) try {
+		paths.push(await uploadFileToWorkspace(f, session, f.name));
+	} catch (err) {
+		toast("Upload failed: " + (f.name || "file") + " — " + (err?.message || "error"));
+	}
+	if (!paths.length) return "";
+	toast(paths.length === 1 ? "File → " + paths[0] : paths.length + " files → workspace");
+	return paths.map((p) => /\s/.test(p) ? "\"" + p + "\"" : p).join(" ");
+}
+async function pasteFilesAsPaths(files, term, session, canSend) {
+	if (canSend && !canSend()) return;
+	const text = await uploadFilesAsPathText(files, session);
+	if (text) term.paste(text + " ");
+}
+var dtHasFiles = (dt) => !!dt && Array.from(dt.types || []).indexOf("Files") !== -1;
+function attachFileDrop(host, term, session, canSend) {
+	const onPaste = (ev) => {
+		const cd = ev.clipboardData;
+		if (!cd) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		const files = Array.from(cd.files || []);
+		const text = cd.getData("text/plain");
+		const onlyImages = files.length > 0 && files.every((f) => (f.type || "").startsWith("image/"));
+		if (files.length && !(text && onlyImages)) pasteFilesAsPaths(files, term, session, canSend);
+		else if (text) {
+			if (canSend && !canSend()) return;
+			term.paste(text);
+			toast("Pasted " + text.length + " chars");
+		} else pasteClipboard(term, session, canSend);
+	};
+	const onDragOver = (ev) => {
+		if (!dtHasFiles(ev.dataTransfer)) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		ev.dataTransfer.dropEffect = "copy";
+		host.classList.add("file-drop");
+	};
+	const onDragLeave = (ev) => {
+		if (!host.contains(ev.relatedTarget)) host.classList.remove("file-drop");
+	};
+	const onDrop = (ev) => {
+		if (!dtHasFiles(ev.dataTransfer)) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		host.classList.remove("file-drop");
+		pasteFilesAsPaths(ev.dataTransfer.files, term, session, canSend);
+	};
+	host.addEventListener("paste", onPaste, true);
+	host.addEventListener("dragover", onDragOver);
+	host.addEventListener("dragleave", onDragLeave);
+	host.addEventListener("drop", onDrop);
+	return () => {
+		host.removeEventListener("paste", onPaste, true);
+		host.removeEventListener("dragover", onDragOver);
+		host.removeEventListener("dragleave", onDragLeave);
+		host.removeEventListener("drop", onDrop);
+		host.classList.remove("file-drop");
+	};
+}
+function installGlobalDropGuards() {
+	window.addEventListener("dragover", (ev) => {
+		if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
+	});
+	window.addEventListener("drop", (ev) => {
+		if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
+	});
+}
+function fallbackCopy(text) {
+	try {
+		const ta = document.createElement("textarea");
+		ta.value = text;
+		ta.style.position = "fixed";
+		ta.style.top = "-1000px";
+		ta.style.opacity = "0";
+		document.body.appendChild(ta);
+		ta.focus();
+		ta.select();
+		const ok = document.execCommand("copy");
+		document.body.removeChild(ta);
+		return ok;
+	} catch {
+		return false;
+	}
 }
 //#endregion
 //#region src/lib/runs.ts
@@ -32293,7 +29658,7 @@ var ANSWER = {
 function stepsCount(n) {
 	return n + (n === 1 ? " step" : " steps");
 }
-function clip$6(text, max = 70) {
+function clip$7(text, max = 70) {
 	const t = String(text || "").trim().replace(/\s+/g, " ").replace(/[.]$/, "");
 	if (t.length <= max) return t;
 	const cut = t.slice(0, max);
@@ -32381,7 +29746,7 @@ function said(plan) {
 		const open = openHumanSteps(plan).length;
 		return {
 			tone: "bad",
-			sentence: kept + (first ? "Failed: “" + clip$6(first.text) + "”" : "A step failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open ? " " + stepsCount(open) + " still " + (open === 1 ? "needs" : "need") + " you." : ""),
+			sentence: kept + (first ? "Failed: “" + clip$7(first.text) + "”" : "A step failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open ? " " + stepsCount(open) + " still " + (open === 1 ? "needs" : "need") + " you." : ""),
 			action: FAILED
 		};
 	}
@@ -32872,12 +30237,20 @@ function nextStep$1(inst) {
 			};
 			{
 				const ms = inst.merge_state;
-				if (ms && !ms.can_merge) return {
-					label: "Merge blocked",
-					disabled: true,
-					title: "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n") + (inst.pr_url ? "\n\nOpen the PR to resolve it." : ""),
-					run: () => {}
-				};
+				if (ms && !ms.can_merge) {
+					const why = "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n");
+					return inst.pr_url ? {
+						label: "Merge blocked ↗",
+						hint: true,
+						title: why + "\n\nOpens the PR to resolve it.",
+						run: () => window.open(inst.pr_url, "_blank")
+					} : {
+						label: "Merge blocked",
+						disabled: true,
+						title: why,
+						run: () => {}
+					};
+				}
 			}
 			return {
 				label: "Merge",
@@ -32950,6 +30323,975 @@ function withVerifyVerdict(menu, inst, plan = cachedPlanFor(inst)) {
 			})
 		})
 	};
+}
+//#endregion
+//#region src/lib/claudeCopy.ts
+var BULLET = /^(\s*)(?:[-*•]|\d{1,3}[.)])\s+/;
+var MESSAGE = /^\s*[⏺●❯](?:\s|$)/;
+var MARKER = /^\s*[⏺●❯⎿](?:\s|$)/;
+var CHROME = /^\s*[─-▟⏵]/;
+var DIFF_LINE = /^\s*\d+\s+[-+ ]\s/;
+var CODE_END = /(?:[;{}[(\\]|=>)$/;
+var CODE_START = /^(?:[)}\]]|\/\/|#|\.\w)/;
+function cpWidth(cp) {
+	if (cp >= 4352 && cp <= 4447 || cp >= 11904 && cp <= 42191 && cp !== 12351 || cp >= 44032 && cp <= 55203 || cp >= 63744 && cp <= 64255 || cp >= 65072 && cp <= 65103 || cp >= 65280 && cp <= 65376 || cp >= 65504 && cp <= 65510 || cp >= 127744 && cp <= 129791 || cp >= 131072 && cp <= 262141) return 2;
+	return 1;
+}
+function displayWidth(s) {
+	let w = 0;
+	for (const ch of s) w += cpWidth(ch.codePointAt(0) || 0);
+	return w;
+}
+function indentOf(row) {
+	return row.length - row.trimStart().length;
+}
+function textIndent(row) {
+	const m = BULLET.exec(row);
+	return m ? m[0].length : indentOf(row);
+}
+function unmark(row) {
+	return row.replace(/^(\s*)[⏺●❯⎿](?:\s|$)/, (_m, lead) => lead + "  ");
+}
+function cleanClaudeSelection(text, cols, startCol = 0) {
+	if (!text || cols <= 0) return text;
+	const raw = text.replace(/\r/g, "").split("\n").map((r) => r.replace(/\s+$/, ""));
+	const rows = raw.map(unmark);
+	const widths = rows.map((r, i) => displayWidth(r) + (i === 0 ? startCol : 0));
+	const usable = Math.max(cols, ...widths) - 1;
+	const lines = [];
+	const flush = /* @__PURE__ */ new Set();
+	let cur = "";
+	let curRow = 0;
+	let contIndent = 0;
+	const joins = (i) => {
+		const prev = rows[curRow];
+		const row = rows[i];
+		if (!cur.trim() || !row.trim()) return false;
+		if (MARKER.test(raw[i]) || BULLET.test(row) || DIFF_LINE.test(row)) return false;
+		if (CHROME.test(row) || CHROME.test(prev)) return false;
+		if (cur.endsWith("…")) return false;
+		const ind = indentOf(row);
+		if (ind !== contIndent && ind !== 0) return false;
+		const next = row.trim();
+		const fw = displayWidth(next.split(/\s+/, 1)[0]);
+		if (fw >= usable - contIndent) return false;
+		if (CODE_END.test(prev) || CODE_START.test(next)) return false;
+		const last = [...prev].pop() || "";
+		const full = widths[curRow] >= usable || widths[curRow] === usable - 1 && displayWidth(last) === 2;
+		if (!prev.trim().includes(" ") && !full) return false;
+		return widths[curRow] + 1 + fw > usable;
+	};
+	rows.forEach((row, i) => {
+		if (i > 0 && joins(i)) {
+			const next = row.trim();
+			const firstWord = next.split(/\s+/, 1)[0];
+			const midToken = displayWidth(cur.slice(cur.lastIndexOf(" ") + 1).trimStart()) + displayWidth(firstWord) > usable - contIndent;
+			cur += (midToken ? "" : " ") + next;
+			curRow = i;
+			return;
+		}
+		if (i > 0) lines.push(cur);
+		if (MESSAGE.test(raw[i])) flush.add(lines.length);
+		cur = row;
+		curRow = i;
+		contIndent = i === 0 && startCol > 0 && rows.length > 1 ? indentOf(rows[1]) : textIndent(row);
+	});
+	lines.push(cur);
+	const indents = (startCol > 0 ? lines.slice(1) : lines).filter((l) => l.trim() && !CHROME.test(l)).map(indentOf);
+	const common = indents.length ? Math.min(...indents) : 0;
+	return lines.map((l, i) => {
+		if (!l.trim()) return "";
+		if (flush.has(i) || i === 0 && startCol > 0) return l.trimStart();
+		return l.slice(Math.min(common, indentOf(l)));
+	}).join("\n");
+}
+//#endregion
+//#region src/lib/agentCopy.ts
+function runsClaudeCode(session) {
+	if (!session) return false;
+	try {
+		const inst = (queryClient.getQueryData(["instances"]) || []).find((i) => i.title === session);
+		return `${inst?.provider || ""} ${inst?.program || ""}`.toLowerCase().includes("claude");
+	} catch {
+		return false;
+	}
+}
+function agentCopyText(text, session, cols, startCol = 0) {
+	return text && runsClaudeCode(session) ? cleanClaudeSelection(text, cols, startCol) : text;
+}
+//#endregion
+//#region src/lib/wsTerm.ts
+var NOT_YET = 4404;
+var NOT_READY = 4409;
+var PAUSED_CLOSE = 4423;
+var HELD_CLOSE = 4424;
+var RETRY_MS$1 = [
+	700,
+	1500,
+	3e3
+];
+var RETRY_MAX_MS = 3e3;
+var RETRY_LIMIT = 100;
+function retryAfter(code, attempts, reconnect) {
+	if (!reconnect || attempts >= RETRY_LIMIT || code === PAUSED_CLOSE || code === HELD_CLOSE) return null;
+	if (code === NOT_YET || code === NOT_READY) return RETRY_MS$1[attempts] ?? RETRY_MAX_MS;
+	if (code === 1006 || code === 1001 || attempts === 0) return RETRY_MS$1[attempts] ?? RETRY_MAX_MS;
+	return null;
+}
+function isStarting(code) {
+	return code === NOT_YET || code === NOT_READY;
+}
+var NOTICE_MS = 3e3;
+function showTermNotice(host, text) {
+	let el = host.querySelector(":scope > .term-notice");
+	if (!el) {
+		el = document.createElement("div");
+		el.className = "term-notice";
+		el.setAttribute("role", "status");
+		if (getComputedStyle(host).position === "static") host.style.position = "relative";
+		host.appendChild(el);
+	}
+	el.textContent = text;
+	el.classList.remove("gone");
+	const prev = el._t;
+	if (prev) clearTimeout(prev);
+	el._t = setTimeout(() => el.classList.add("gone"), NOTICE_MS);
+}
+function controlNotice(frame) {
+	if (!frame || typeof frame !== "object") return null;
+	const j = frame;
+	if (j.type === "readonly") return { notice: typeof j.message === "string" ? j.message : "" };
+	if (j.type === "driver") return { notice: null };
+	return null;
+}
+function repaintTerm(term, fit) {
+	if (!term) return false;
+	try {
+		fit?.();
+	} catch {}
+	try {
+		const rows = term.rows;
+		if (!(rows > 0)) return false;
+		term.refresh(0, rows - 1);
+		return true;
+	} catch {
+		return false;
+	}
+}
+function isShown(el) {
+	return !!el && el.clientWidth > 0 && el.clientHeight > 0 && el.offsetParent !== null;
+}
+var tracked = /* @__PURE__ */ new Set();
+function trackRepaint(r) {
+	tracked.add(r);
+	return () => {
+		tracked.delete(r);
+	};
+}
+function repaintShown(items = tracked) {
+	let n = 0;
+	for (const r of items) try {
+		if (!r.shown()) continue;
+		r.repaint();
+		n++;
+	} catch {}
+	return n;
+}
+var REPAINT_EVENT = "mindflock:repaint";
+var REPAINT_SETTLE_MS = 300;
+function installRepaintTriggers(win, doc, run = () => {
+	repaintShown();
+}, schedule = {
+	frame: (fn) => requestAnimationFrame(() => fn()),
+	later: (fn, ms) => setTimeout(fn, ms),
+	cancel: (t) => clearTimeout(t)
+}) {
+	let queued = false;
+	let settle;
+	const trigger = () => {
+		if (doc.hidden) return;
+		if (!queued) {
+			queued = true;
+			schedule.frame(() => {
+				queued = false;
+				run();
+			});
+		}
+		if (settle !== void 0) schedule.cancel(settle);
+		settle = schedule.later(() => {
+			settle = void 0;
+			run();
+		}, REPAINT_SETTLE_MS);
+	};
+	const winEvents = [
+		"focus",
+		"pageshow",
+		REPAINT_EVENT
+	];
+	for (const e of winEvents) win.addEventListener(e, trigger);
+	doc.addEventListener("visibilitychange", trigger);
+	return () => {
+		for (const e of winEvents) win.removeEventListener(e, trigger);
+		doc.removeEventListener("visibilitychange", trigger);
+		if (settle !== void 0) schedule.cancel(settle);
+	};
+}
+function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
+	const [state, setState] = (0, import_react.useState)("connecting");
+	(0, import_react.useEffect)(() => {
+		const host = hostRef.current;
+		if (!host) return;
+		const term = new Dl({
+			cursorBlink: interactive,
+			fontSize: 12,
+			theme: termTheme(),
+			disableStdin: !interactive,
+			fontFamily: "ui-monospace, \"Cascadia Code\", Menlo, Consolas, monospace",
+			scrollback: 2e4,
+			macOptionClickForcesSelection: true
+		});
+		const fit = new o();
+		term.loadAddon(fit);
+		term.open(host);
+		const detachFiles = interactive ? attachFileDrop(host, term) : void 0;
+		if (interactive) host.title = "Drop or paste a file to hand over its path";
+		let ws = null;
+		let timer;
+		let dead = false;
+		let attempts = 0;
+		let said = false;
+		const doFit = (sendResize) => {
+			try {
+				fit.fit();
+			} catch {
+				return;
+			}
+			if (!sendResize || !ws || ws.readyState !== WebSocket.OPEN) return;
+			const size = term.cols + "x" + term.rows;
+			if (sentSize === size) return;
+			sentSize = size;
+			ws.send(JSON.stringify({
+				type: "resize",
+				cols: term.cols,
+				rows: term.rows
+			}));
+		};
+		let sentSize = "";
+		const connect = () => {
+			if (dead) return;
+			const proto = location.protocol === "https:" ? "wss" : "ws";
+			const sock = new WebSocket(proto + "://" + location.host + wsPath);
+			ws = sock;
+			sentSize = "";
+			sock.binaryType = "arraybuffer";
+			sock.onopen = () => {
+				if (dead) return;
+				attempts = 0;
+				setState("streaming");
+				doFit(true);
+			};
+			sock.onmessage = (ev) => {
+				if (typeof ev.data === "string") try {
+					const j = JSON.parse(ev.data);
+					if (j.type === "error") {
+						term.write("\r\n[error] " + j.message + "\r\n");
+						return;
+					}
+					const ctl = controlNotice(j);
+					if (ctl) {
+						if (ctl.notice) showTermNotice(host, ctl.notice);
+						return;
+					}
+				} catch {
+					term.write(ev.data);
+				}
+				else term.write(new Uint8Array(ev.data));
+			};
+			sock.onclose = (ev) => {
+				if (dead) return;
+				const wait = retryAfter(ev.code, attempts, reconnect);
+				if (wait === null) {
+					setState(ev.code === PAUSED_CLOSE ? "paused" : ev.code === HELD_CLOSE ? "held" : "disconnected");
+					return;
+				}
+				const transient = isStarting(ev.code);
+				if (!said) {
+					said = true;
+					term.write("\r\n\x1B[2mWaiting for the session to start — this takes a moment the first time in a repository.\x1B[0m\r\n");
+				}
+				setState(transient ? "starting" : "reconnecting");
+				timer = setTimeout(connect, wait);
+				attempts++;
+			};
+			sock.onerror = () => {};
+		};
+		if (interactive) term.onData((d) => {
+			if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
+		});
+		const obs = new ResizeObserver(() => {
+			doFit(true);
+			repaintTerm(term);
+		});
+		obs.observe(host);
+		const t = setTimeout(() => doFit(true), 50);
+		const untrack = trackRepaint({
+			shown: () => isShown(host),
+			repaint: () => repaintTerm(term)
+		});
+		connect();
+		return () => {
+			dead = true;
+			untrack();
+			clearTimeout(t);
+			if (timer) clearTimeout(timer);
+			obs.disconnect();
+			detachFiles?.();
+			try {
+				ws?.close();
+			} catch {}
+			term.dispose();
+		};
+	}, [
+		hostRef,
+		wsPath,
+		interactive,
+		reconnect
+	]);
+	return state;
+}
+//#endregion
+//#region src/lib/terminals.ts
+function cssVar(name, fallback) {
+	try {
+		return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+	} catch {
+		return fallback;
+	}
+}
+function termTheme() {
+	const light = document.documentElement.classList.contains("light");
+	return {
+		background: cssVar("--term-bg", light ? "#ffffff" : "#0f1117"),
+		foreground: cssVar("--term-fg", light ? "#1f2430" : "#d7dae3"),
+		cursor: cssVar("--accent", "#7d56f4"),
+		selectionBackground: light ? "#b9c0d466" : "#3a415466"
+	};
+}
+function rethemeAll() {
+	const theme = termTheme();
+	for (const entry of registry.values()) for (const h of [entry.agent, entry.shell]) if (h) h.term.options.theme = theme;
+}
+var MOUSE_MODES = [
+	1e3,
+	1001,
+	1002,
+	1003,
+	1004,
+	1005,
+	1006,
+	1015,
+	1016
+];
+function disableAppMouseReporting(term) {
+	try {
+		const parser = term.parser;
+		if (!parser?.registerCsiHandler) return;
+		const swallow = (params) => {
+			if (!params || !params.length) return false;
+			for (const raw of params) {
+				const p = typeof raw === "number" ? raw : raw[0];
+				if (MOUSE_MODES.indexOf(p) === -1) return false;
+			}
+			return true;
+		};
+		parser.registerCsiHandler({
+			prefix: "?",
+			final: "h"
+		}, swallow);
+		parser.registerCsiHandler({
+			prefix: "?",
+			final: "l"
+		}, swallow);
+	} catch {}
+}
+function attachCopyOnSelect(host, term, opts) {
+	disableAppMouseReporting(term);
+	try {
+		term.loadAddon(new L((_ev, uri) => window.open(uri, "_blank")));
+	} catch {}
+	host.title = "Drag to select · release to copy · Ctrl+V / right-click pastes (text or image) · wheel scrolls · Ctrl+Shift+C";
+	const interactive = !term.options.disableStdin;
+	const session = opts.session;
+	if (interactive) {
+		host.title += " · drop / paste files to upload";
+		attachFileDrop(host, term, session, opts.canSend);
+	}
+	let captured = "";
+	let capturedCol = 0;
+	const startCol = () => term.getSelectionPosition()?.start.x ?? 0;
+	term.onSelectionChange(() => {
+		const s = term.getSelection();
+		if (s && s.trim()) {
+			captured = s;
+			capturedCol = startCol();
+		}
+	});
+	const forClipboard = (text, col) => opts.agent ? agentCopyText(text, session, term.cols, col) : text;
+	host.addEventListener("copy", (ev) => {
+		const live = term.getSelection();
+		if (!opts.agent || !live || !live.trim() || !ev.clipboardData) return;
+		ev.clipboardData.setData("text/plain", forClipboard(live, startCol()));
+		ev.preventDefault();
+		ev.stopPropagation();
+	}, true);
+	function doCopy() {
+		const live = term.getSelection();
+		const isLive = !!(live && live.trim());
+		const sel = forClipboard(isLive ? live : captured, isLive ? startCol() : capturedCol);
+		if (sel && sel.trim()) {
+			copyText(sel).then((ok) => {
+				if (ok) toast("Copied " + sel.length + " chars");
+			});
+			return true;
+		}
+		return false;
+	}
+	host.addEventListener("mousedown", (e) => {
+		if (e.button === 0) captured = "";
+	});
+	host.addEventListener("mouseup", (e) => {
+		if (e.button === 0) setTimeout(doCopy, 0);
+	});
+	host.addEventListener("contextmenu", (e) => {
+		if (term.options.disableStdin) {
+			if (doCopy()) e.preventDefault();
+			return;
+		}
+		e.preventDefault();
+		pasteClipboard(term, session, opts.canSend);
+	});
+	term.attachCustomKeyEventHandler((ev) => {
+		const mod = ev.ctrlKey || ev.metaKey;
+		if (ev.type === "keydown" && mod && ev.shiftKey && (ev.key === "C" || ev.key === "c")) {
+			if (doCopy()) {
+				ev.preventDefault();
+				return false;
+			}
+		}
+		if (ev.type === "keydown" && mod && !ev.shiftKey && !ev.altKey && (ev.key === "v" || ev.key === "V") && !term.options.disableStdin) return false;
+		if (mod && !ev.altKey) {
+			const c = ev.code;
+			if (c === "Equal" || c === "Minus" || c === "Digit0" || c === "NumpadAdd" || c === "NumpadSubtract" || c === "Numpad0") return false;
+		}
+		return true;
+	});
+}
+var wheelDamping = 1;
+function setWheelDamping(speed) {
+	wheelDamping = speed / Math.max(1, Math.round(speed));
+}
+function attachWheelScroll(host, term, getWs) {
+	function cellHeight() {
+		return host.getBoundingClientRect().height / (term.rows || 24) || 16;
+	}
+	function sendWheel(clientX, clientY, up, count) {
+		const ws = getWs();
+		if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+		const rect = host.getBoundingClientRect();
+		const cols = term.cols || 80, rows = term.rows || 24;
+		const cellW = rect.width / cols || 8, cellH = rect.height / rows || 16;
+		const col = Math.max(1, Math.min(cols, Math.floor((clientX - rect.left) / cellW) + 1));
+		const row = Math.max(1, Math.min(rows, Math.floor((clientY - rect.top) / cellH) + 1));
+		const btn = up ? 64 : 65;
+		let seq = "";
+		for (let i = 0; i < count; i++) seq += "\x1B[<" + btn + ";" + col + ";" + row + "M";
+		ws.send(seq);
+		return true;
+	}
+	let wheelAcc = 0, wheelAt = 0;
+	host.addEventListener("wheel", (ev) => {
+		if (!ev.deltaY) return;
+		const ws = getWs();
+		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		const raw = ev.deltaMode === 1 ? ev.deltaY : ev.deltaY / cellHeight();
+		const now = ev.timeStamp || performance.now();
+		if (now - wheelAt > 250 || wheelAcc && Math.sign(wheelAcc) !== Math.sign(raw)) wheelAcc = 0;
+		wheelAt = now;
+		wheelAcc += raw * wheelDamping;
+		const lines = Math.min(8, Math.floor(Math.abs(wheelAcc)));
+		if (lines) {
+			const up = wheelAcc < 0;
+			wheelAcc += up ? lines : -lines;
+			sendWheel(ev.clientX, ev.clientY, up, lines);
+		}
+		ev.preventDefault();
+		ev.stopPropagation();
+	}, {
+		capture: true,
+		passive: false
+	});
+	host.style.touchAction = "none";
+	let touchLast = null;
+	let touchScrolling = false;
+	host.addEventListener("touchstart", (ev) => {
+		if (ev.touches.length !== 1) {
+			touchLast = null;
+			return;
+		}
+		touchLast = {
+			x: ev.touches[0].clientX,
+			y: ev.touches[0].clientY
+		};
+		touchScrolling = false;
+	}, {
+		capture: true,
+		passive: true
+	});
+	host.addEventListener("touchmove", (ev) => {
+		if (!touchLast || ev.touches.length !== 1) return;
+		const t = ev.touches[0];
+		const dy = t.clientY - touchLast.y, dx = t.clientX - touchLast.x;
+		if (!touchScrolling) {
+			if (Math.abs(dy) < 8 || Math.abs(dy) <= Math.abs(dx)) return;
+			touchScrolling = true;
+		}
+		const lines = Math.floor(Math.abs(dy) * 3 / cellHeight());
+		if (lines > 0) {
+			if (!sendWheel(t.clientX, t.clientY, dy > 0, Math.min(24, lines))) return;
+			touchLast = {
+				x: t.clientX,
+				y: t.clientY
+			};
+		}
+		ev.preventDefault();
+		ev.stopPropagation();
+	}, {
+		capture: true,
+		passive: false
+	});
+	host.addEventListener("touchend", () => {
+		touchLast = null;
+		touchScrolling = false;
+	}, {
+		capture: true,
+		passive: true
+	});
+}
+var DRAG_EDGE_ZONE = 18;
+function dragEdgeAt(y, r, zone = DRAG_EDGE_ZONE) {
+	if (y < r.top + zone) return "top";
+	if (y > r.bottom - zone) return "bottom";
+	return null;
+}
+function attachDragHistoryGesture(host, fire) {
+	const HOLD_MS = 220;
+	host.addEventListener("mousedown", (down) => {
+		if (down.button !== 0) return;
+		let timer;
+		const onMove = (ev) => {
+			const edge = dragEdgeAt(ev.clientY, host.getBoundingClientRect());
+			if (edge && timer === void 0) timer = setTimeout(() => {
+				cleanup();
+				fire(edge);
+			}, HOLD_MS);
+			else if (!edge && timer !== void 0) {
+				clearTimeout(timer);
+				timer = void 0;
+			}
+		};
+		const cleanup = () => {
+			if (timer !== void 0) clearTimeout(timer);
+			window.removeEventListener("mousemove", onMove, true);
+			window.removeEventListener("mouseup", cleanup, true);
+		};
+		window.addEventListener("mousemove", onMove, true);
+		window.addEventListener("mouseup", cleanup, true);
+	});
+}
+var typedAt = /* @__PURE__ */ new Map();
+function lastTypedAt(title) {
+	return typedAt.get(title) || 0;
+}
+function makeTerm(title, wsPath, interactive) {
+	const container = document.createElement("div");
+	container.className = "term-container";
+	const term = new Dl({
+		cursorBlink: interactive,
+		fontSize: 13,
+		theme: termTheme(),
+		disableStdin: !interactive,
+		fontFamily: "ui-monospace, \"Cascadia Code\", Menlo, Consolas, monospace",
+		scrollback: 2e3,
+		macOptionClickForcesSelection: true
+	});
+	const fit = new o();
+	term.loadAddon(fit);
+	term.open(container);
+	attachCopyOnSelect(container, term, {
+		session: title,
+		agent: wsPath === "/terminal",
+		canSend: () => canSend()
+	});
+	container.addEventListener("focusin", () => handle.resync());
+	attachDragHistoryGesture(container, (edge) => {
+		let ctx;
+		try {
+			const buf = term.buffer.active;
+			const rows = term.rows || 24;
+			const screen = [];
+			for (let r = 0; r < rows; r++) screen.push(buf.getLine(buf.viewportY + r)?.translateToString(true) ?? "");
+			const p = term.getSelectionPosition();
+			const side = edge === "bottom" ? p?.start : p?.end;
+			ctx = {
+				screen,
+				rows,
+				row: side ? Math.max(0, Math.min(rows - 1, side.y - buf.viewportY)) : edge === "bottom" ? 0 : rows - 1,
+				col: side?.x ?? 0
+			};
+		} catch {}
+		handle.onHistoryDrag?.(term.getSelection() || "", edge, ctx);
+	});
+	let topRowAt = 0;
+	let topRowTimer;
+	const emitTopRow = () => {
+		if (!handle.onTopRow) return;
+		try {
+			const buf = term.buffer.active;
+			handle.onTopRow(buf.getLine(buf.viewportY)?.translateToString(true) ?? "");
+		} catch {}
+	};
+	const agent = wsPath === "/terminal";
+	term.onRender(() => {
+		if (agent) try {
+			const buf = term.buffer.active;
+			const top = buf.getLine(buf.viewportY)?.translateToString(true) ?? "";
+			container.classList.toggle("tui-pinned-row", /^\s*[❯>]\s+\S/.test(top));
+		} catch {}
+		const now = performance.now();
+		clearTimeout(topRowTimer);
+		if (now - topRowAt > 150) {
+			topRowAt = now;
+			emitTopRow();
+		} else topRowTimer = setTimeout(() => {
+			topRowAt = performance.now();
+			emitTopRow();
+		}, 160);
+	});
+	let ws = null;
+	let sentSize = "";
+	let closed = false;
+	let booted = false;
+	let disposed = false;
+	let reconnectAttempt = 0;
+	let reconnectTimer;
+	let state = "connecting";
+	let errorRuns = 0;
+	let lastError = "";
+	let downSince = Date.now();
+	let notSentAt = 0;
+	const canSend = () => {
+		if (ws && ws.readyState === WebSocket.OPEN) return true;
+		const now = Date.now();
+		if (now - notSentAt > NOT_SENT_THROTTLE_MS) {
+			notSentAt = now;
+			showTermNotice(container, notSentLine(state));
+		}
+		return false;
+	};
+	const handle = {
+		term,
+		container,
+		get state() {
+			return state;
+		},
+		get booted() {
+			return booted;
+		},
+		get error() {
+			return lastError;
+		},
+		get downSince() {
+			return downSince;
+		},
+		_setState(s) {
+			state = s;
+			handle.onState?.(s);
+			notifyTermStates();
+		},
+		send(data) {
+			if (ws && ws.readyState === WebSocket.OPEN) {
+				ws.send(data);
+				return true;
+			}
+			return false;
+		},
+		resync() {
+			sentSize = "";
+			handle.doFit();
+		},
+		doFit() {
+			if (!container.clientWidth || !container.clientHeight || container.offsetParent === null) return;
+			try {
+				fit.fit();
+			} catch {
+				return;
+			}
+			if (!ws || ws.readyState !== WebSocket.OPEN) return;
+			const size = term.cols + "x" + term.rows;
+			if (sentSize === size) return;
+			sentSize = size;
+			ws.send(JSON.stringify({
+				type: "resize",
+				cols: term.cols,
+				rows: term.rows
+			}));
+		},
+		connect() {
+			const proto = location.protocol === "https:" ? "wss" : "ws";
+			const path = "/api/instances/" + encodeURIComponent(title) + wsPath;
+			const sock = new WebSocket(proto + "://" + location.host + path);
+			sock.binaryType = "arraybuffer";
+			ws = sock;
+			sentSize = "";
+			let attached = false;
+			let errorHere = "";
+			const markAttached = () => {
+				if (attached) return;
+				attached = true;
+				reconnectAttempt = 0;
+				errorRuns = 0;
+				lastError = "";
+				handle._setState("connected");
+			};
+			sock.onopen = () => {
+				downSince = 0;
+				handle.doFit();
+			};
+			sock.onmessage = (ev) => {
+				let control = false;
+				if (typeof ev.data === "string") try {
+					const t = JSON.parse(ev.data)?.type;
+					control = t === "driver" || t === "readonly";
+				} catch {
+					control = false;
+				}
+				if (!booted && !control) {
+					booted = true;
+					handle.onBoot?.();
+				}
+				if (typeof ev.data === "string") try {
+					const j = JSON.parse(ev.data);
+					if (j.type === "error") {
+						errorHere = String(j.message ?? "");
+						return;
+					}
+					const ctl = controlNotice(j);
+					if (ctl) {
+						if (ctl.notice) showTermNotice(container, ctl.notice);
+						return;
+					}
+				} catch {
+					markAttached();
+					term.write(ev.data);
+				}
+				else {
+					markAttached();
+					term.write(new Uint8Array(ev.data));
+				}
+			};
+			sock.onclose = (ev) => {
+				if (!downSince) downSince = Date.now();
+				const code = closed ? void 0 : ev?.code;
+				if (closeAction(code) !== "waiting") handle._setState("disconnected");
+				if (closed) return;
+				if (closeAction(code) === "waiting") {
+					handle._setState("waiting");
+					reconnectTimer = setTimeout(() => {
+						if (!closed) handle.connect();
+					}, WAITING_RETRY_MS);
+					return;
+				}
+				if (errorHere && errorHere !== lastError) term.write("\r\n[error] " + errorHere + "\r\n");
+				if (errorHere) lastError = errorHere;
+				const action = closeAction(ev?.code);
+				if (action !== "retry") {
+					closed = true;
+					handle._setState(action);
+					if (!booted) {
+						booted = true;
+						handle.onBoot?.();
+					}
+					return;
+				}
+				if (errorHere && !attached) {
+					errorRuns += 1;
+					if (errorRuns >= ERROR_RETRY_LIMIT) {
+						closed = true;
+						handle._setState("failed");
+						return;
+					}
+				}
+				const n = reconnectAttempt += 1;
+				const delay = Math.min(2500, 400 * Math.pow(2, n - 1));
+				reconnectTimer = setTimeout(() => {
+					if (!closed) handle.connect();
+				}, delay);
+			};
+			sock.onerror = () => handle._setState("error");
+		},
+		retry() {
+			if (disposed) return;
+			if (reconnectTimer) clearTimeout(reconnectTimer);
+			closed = false;
+			errorRuns = 0;
+			lastError = "";
+			reconnectAttempt = 0;
+			if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+			if (state === "failed") {
+				downSince = Date.now();
+				handle._setState("disconnected");
+			}
+			handle.connect();
+		},
+		dispose() {
+			disposed = true;
+			closed = true;
+			if (reconnectTimer) clearTimeout(reconnectTimer);
+			try {
+				ws?.close();
+			} catch {}
+			try {
+				term.dispose();
+			} catch {}
+			container.remove();
+		}
+	};
+	if (interactive) {
+		term.onData((data) => {
+			typedAt.set(title, Date.now());
+			if (canSend()) ws.send(data);
+		});
+		attachWheelScroll(container, term, () => ws);
+	}
+	return handle;
+}
+var WAITING_CLOSE = 4410;
+var WAITING_RETRY_MS = 5e3;
+var ERROR_RETRY_LIMIT = 5;
+var UNREACHABLE_MS = 1e4;
+var NOT_SENT_THROTTLE_MS = 1500;
+function notSentLine(state) {
+	if (state === "waiting") return "Waiting its turn — that wasn't sent";
+	if (state === "failed" || state === "gone") return "Not connected — that wasn't sent";
+	return "Reconnecting — that wasn't sent";
+}
+function termCover(state, booted, downFor) {
+	if (state === "waiting") return "waiting";
+	if (state === "failed") return "failed";
+	if (state === "connected") return booted ? "none" : "loading";
+	if (state === "connecting" || state === "disconnected" || state === "error") {
+		if (downFor >= UNREACHABLE_MS) return "unreachable";
+		return booted ? "reconnecting" : "loading";
+	}
+	return "none";
+}
+function closeAction(code) {
+	if (code === 4404 || code === 4409) return "gone";
+	if (code === WAITING_CLOSE) return "waiting";
+	if (code === PAUSED_CLOSE) return "paused";
+	if (code === HELD_CLOSE) return "held";
+	return "retry";
+}
+var registry = /* @__PURE__ */ new Map();
+var termStateListeners = /* @__PURE__ */ new Set();
+function subscribeTermStates(cb) {
+	termStateListeners.add(cb);
+	return () => {
+		termStateListeners.delete(cb);
+	};
+}
+function notifyTermStates() {
+	for (const cb of termStateListeners) cb();
+}
+function getTerm(title, kind) {
+	let entry = registry.get(title);
+	if (!entry) {
+		entry = {};
+		registry.set(title, entry);
+	}
+	let h = entry[kind];
+	if (h && (h.state === "paused" || h.state === "held")) {
+		h.dispose();
+		h = void 0;
+	}
+	if (!h) {
+		h = makeTerm(title, kind === "agent" ? "/terminal" : "/shell", true);
+		h.connect();
+		entry[kind] = h;
+	}
+	return h;
+}
+function peekTerm(title, kind) {
+	return registry.get(title)?.[kind];
+}
+function releaseTerm(title, kind) {
+	const entry = registry.get(title);
+	const h = entry?.[kind];
+	if (!entry || !h) return;
+	h.onState = void 0;
+	h.onBoot = void 0;
+	h.dispose();
+	delete entry[kind];
+	if (!entry.agent && !entry.shell) registry.delete(title);
+	notifyTermStates();
+}
+function releaseTerms(title) {
+	const entry = registry.get(title);
+	if (!entry) return;
+	entry.agent?.dispose();
+	entry.shell?.dispose();
+	registry.delete(title);
+	notifyTermStates();
+}
+function resyncAll() {
+	for (const entry of registry.values()) {
+		entry.agent?.resync();
+		entry.shell?.resync();
+	}
+}
+if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => {
+	if (!document.hidden) resyncAll();
+});
+function freezeTerm(title, kind) {
+	const h = peekTerm(title, kind);
+	const el = h?.term.element;
+	const host = h?.container.parentElement;
+	if (!h || !el || !host) return () => {};
+	const snap = el.cloneNode(true);
+	const er = el.getBoundingClientRect();
+	const hr = host.getBoundingClientRect();
+	Object.assign(snap.style, {
+		position: "absolute",
+		left: `${er.left - hr.left}px`,
+		top: `${er.top - hr.top}px`,
+		width: `${er.width}px`,
+		height: `${er.height}px`,
+		zIndex: "3",
+		pointerEvents: "none"
+	});
+	snap.setAttribute("aria-hidden", "true");
+	snap.querySelectorAll("textarea").forEach((t) => t.remove());
+	if (h.container.classList.contains("tui-pinned-row")) {
+		const first = snap.querySelector(".xterm-rows > div");
+		if (first) first.style.visibility = "hidden";
+	}
+	host.appendChild(snap);
+	return () => {
+		h.term.write("", () => requestAnimationFrame(() => snap.remove()));
+	};
+}
+function focusTerm(title, kind = "agent") {
+	peekTerm(title, kind)?.term.focus();
 }
 //#endregion
 //#region src/lib/sessionActions.ts
@@ -33059,8 +31401,22 @@ function forgetLocally(title) {
 	if (ui.focused === title) ui.setFocused(null);
 	releaseTerms(title);
 }
+var MAX_TITLE_LEN = 120;
+async function whileEnding(title, kind, work) {
+	const ui = useUi.getState();
+	if (ui.ending[title]) return void 0;
+	ui.setEnding(title, kind);
+	try {
+		return await work();
+	} finally {
+		useUi.getState().setEnding(title, null);
+	}
+}
 async function closeSession(title) {
 	if (!title) return;
+	await whileEnding(title, "closing", () => closeNow(title));
+}
+async function closeNow(title) {
 	let r = null;
 	try {
 		r = await instApi(title, "/close", { method: "POST" });
@@ -33069,7 +31425,7 @@ async function closeSession(title) {
 		return;
 	}
 	forgetLocally(title);
-	closeUndo.push(title);
+	rememberClosed(title);
 	const kept = keptRunningText(r);
 	toast(closedToastText(displayName(title), kept), {
 		action: {
@@ -33083,6 +31439,9 @@ async function closeSession(title) {
 	refreshRecentlyClosed();
 	await refreshInstances();
 }
+function rememberClosed(title) {
+	if (title) closeUndo.push(title);
+}
 function closedToastText(name, kept) {
 	return "Closed “" + name + "”" + (kept ? " · " + kept : "");
 }
@@ -33091,18 +31450,32 @@ function deleteConfirmText(inst) {
 	if (inst?.in_place) return "Removes this session. Its folder and branch stay as they are; Close keeps the session to reopen.";
 	return "Deletes the folder and branch" + (inst?.branch ? " “" + inst.branch + "”" : "") + ", including uncommitted changes. This can't be undone — use Close to keep it.";
 }
+function deleteMenuTitle(inst) {
+	return inst?.in_place ? "Removes it from MindFlock; its folder and branch stay (asks first)" : "Deletes its folder and branch, uncommitted changes included (asks first)";
+}
+function deleteManyConfirmText(insts) {
+	if (insts.length <= 1) return deleteConfirmText(insts[0]);
+	const inPlace = insts.filter((i) => i.in_place).length;
+	if (inPlace === insts.length) return "Removes these sessions. Their folders and branches stay as they are; Close keeps them to reopen.";
+	return "Deletes their folders and branches, including uncommitted changes" + (inPlace ? " (the " + inPlace + " working in place keep theirs)" : "") + ". This can't be undone — use Close to keep them.";
+}
 async function deleteSession(title, confirmed = false) {
 	if (!title) return null;
 	if (!confirmed) {
 		confirmPop("Delete " + displayName(title) + "?", deleteConfirmText(instances$2().find((i) => i.title === title)), [{
 			label: "Delete",
 			primary: true,
+			danger: true,
 			run: () => void deleteSession(title, true).then((r) => {
 				if (r && r !== "done") errorPop("Can't delete " + displayName(title), folderInUseText(r.inUse));
 			})
 		}]);
 		return null;
 	}
+	return await whileEnding(title, "deleting", () => deleteNow(title)) ?? null;
+}
+async function deleteNow(title) {
+	const inPlace = !!instances$2().find((i) => i.title === title)?.in_place;
 	let r = null;
 	try {
 		r = await instApi(title, "/cleanup", { method: "POST" });
@@ -33114,15 +31487,83 @@ async function deleteSession(title, confirmed = false) {
 	}
 	forgetLocally(title);
 	const kept = keptRunningText(r);
-	toast("Deleted " + displayName(title) + " — worktree and branch removed" + (kept ? " · " + kept : ""), kept ? { duration: 5e3 } : void 0);
+	toast(deletedToastText(displayName(title), inPlace, kept), kept ? { duration: 5e3 } : void 0);
 	await refreshInstances();
 	return "done";
+}
+function deletedToastText(name, inPlace, kept) {
+	return "Deleted " + name + (inPlace ? " — its folder and branch were kept" : " — worktree and branch removed") + (kept ? " · " + kept : "");
 }
 var closedWhen = (x) => {
 	const n = typeof x.closed_at === "number" ? x.closed_at : Date.parse(x.closed_at);
 	return isNaN(n) ? 0 : n;
 };
 var undoBusy = false;
+function newestEntries(list, titles) {
+	const out = [];
+	for (const t of titles) {
+		const ent = list.filter((e) => e.title === t).sort((a, b) => closedWhen(b) - closedWhen(a))[0];
+		if (ent) out.push(ent);
+	}
+	return out;
+}
+function reopenedManyText(reopened, failed) {
+	const head = reopened === 1 ? "Reopened 1 session" : "Reopened " + reopened + " sessions";
+	return failed ? head + " · " + failed + " could not be reopened" : head;
+}
+async function reopenEntry(ent) {
+	const guess = addPendingSession(ent.title || "session", "", true);
+	try {
+		const inst = await api("/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen", { method: "POST" });
+		landPendingSession(guess, inst);
+		return inst;
+	} catch (err) {
+		failPendingSession(guess);
+		throw err;
+	}
+}
+async function reopenClosed$1(titles) {
+	if (!titles.length || undoBusy) return;
+	undoBusy = true;
+	try {
+		let list;
+		try {
+			const data = await api("/api/recently-closed");
+			list = Array.isArray(data) ? data : [];
+		} catch (err) {
+			errorPop("Reopen failed", errMsg(err));
+			return;
+		}
+		const ents = newestEntries(list, titles);
+		for (const t of titles) {
+			const at = closeUndo.lastIndexOf(t);
+			if (at >= 0) closeUndo.splice(at, 1);
+		}
+		let ok = 0;
+		let failed = titles.length - ents.length;
+		const errs = [];
+		await Promise.all(ents.map(async (ent) => {
+			if (!ent.exists) {
+				failed++;
+				errs.push(displayName(ent.title) + " — its worktree is gone");
+				return;
+			}
+			try {
+				await reopenEntry(ent);
+				ok++;
+			} catch (err) {
+				failed++;
+				errs.push(displayName(ent.title) + " — " + errMsg(err));
+			}
+		}));
+		refreshRecentlyClosed();
+		await refreshInstances();
+		toast(reopenedManyText(ok, failed), failed ? { duration: 5e3 } : void 0);
+		if (errs.length) errorPop("Reopen failed for " + errs.length + " session(s)", errs.join("; "));
+	} finally {
+		undoBusy = false;
+	}
+}
 async function undoLastClose() {
 	if (undoBusy) return;
 	undoBusy = true;
@@ -33153,16 +31594,13 @@ async function undoLastClose() {
 			toast("Can’t reopen “" + (ent.title ? displayName(ent.title) : "session") + "” — its worktree is gone", { duration: 5e3 });
 			return;
 		}
-		const guess = addPendingSession(ent.title || "session", "", true);
 		try {
-			const inst = await api("/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen", { method: "POST" });
-			landPendingSession(guess, inst);
+			const inst = await reopenEntry(ent);
 			refreshRecentlyClosed();
 			await refreshInstances();
 			if (inst?.title) selectSession(inst.title);
 			toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
 		} catch (err) {
-			failPendingSession(guess);
 			errorPop("Reopen failed", errMsg(err));
 		}
 	} finally {
@@ -33175,6 +31613,7 @@ async function cleanupMissing(title, confirmed = false) {
 		confirmPop("Delete “" + displayName(title) + "”?", "Its workspace folder no longer exists — this removes the dead session.", [{
 			label: "Delete",
 			primary: true,
+			danger: true,
 			run: () => void cleanupMissing(title, true)
 		}]);
 		return;
@@ -33269,7 +31708,7 @@ async function copySession(title) {
 	const guess = addPendingSession(copyTitle(displayName(title), /* @__PURE__ */ new Set([...titles, ...titles.map((t) => displayName(t))])));
 	placeAfter(guess, title);
 	try {
-		const inst = await withMemoryConfirm(displayName(title) + "'s copy", (anyway) => instApi(title, "/copy", anyway ? { json: { start_anyway: true } } : { method: "POST" }));
+		const inst = await withMemoryConfirm("a duplicate of " + displayName(title), (anyway) => instApi(title, "/copy", anyway ? { json: { start_anyway: true } } : { method: "POST" }));
 		if (inst?.title) clearStaleAlias(inst.title);
 		landPendingSession(guess, inst);
 		await refreshInstances();
@@ -33280,7 +31719,7 @@ async function copySession(title) {
 		}
 	} catch (err) {
 		failPendingSession(guess);
-		if (!isMemoryCancel(err)) errorPop("Copy failed", errMsg(err));
+		if (!isMemoryCancel(err)) errorPop("Duplicate failed", errMsg(err));
 	}
 }
 async function branchSession(title) {
@@ -33288,7 +31727,7 @@ async function branchSession(title) {
 	const guess = addPendingSession(title + "-branch");
 	placeAfter(guess, title);
 	try {
-		const inst = await instApi(title, "/branch", { method: "POST" });
+		const inst = await withMemoryConfirm("a branch of " + displayName(title), (anyway) => instApi(title, "/branch", anyway ? { json: { start_anyway: true } } : { method: "POST" }));
 		if (inst?.title) clearStaleAlias(inst.title);
 		landPendingSession(guess, inst);
 		await refreshInstances();
@@ -33300,7 +31739,7 @@ async function branchSession(title) {
 		}
 	} catch (err) {
 		failPendingSession(guess);
-		errorPop("Branch failed", errMsg(err));
+		if (!isMemoryCancel(err)) errorPop("Branch failed", errMsg(err));
 	}
 }
 function openMoveSession(title) {
@@ -33547,8 +31986,12 @@ function hideSession(title) {
 	}
 	ui.setHidden(title, true);
 	if (ui.focused === title) ui.setFocused(null);
-	toast("Hid " + (ui.aliases[title] || title) + " — click to undo", {
-		onClick: () => useUi.getState().setHidden(title, false),
+	toast("Hid " + (ui.aliases[title] || title), {
+		action: {
+			label: "Undo",
+			onClick: () => useUi.getState().setHidden(title, false),
+			ariaLabel: "Undo hiding “" + (ui.aliases[title] || title) + "”"
+		},
 		duration: 5e3
 	});
 }
@@ -33569,6 +32012,1883 @@ async function resumeSession(title) {
 		if (!isMemoryCancel(err)) errorPop("Resume failed", errMsg(err));
 	}
 	await refreshInstances();
+}
+//#endregion
+//#region src/lib/windowName.ts
+function snapshot$2() {
+	const w = globalThis;
+	try {
+		const list = w.mindflock?.sessions?.();
+		return Array.isArray(list) ? list : [];
+	} catch {
+		return [];
+	}
+}
+function windowName(title) {
+	const raw = String(title || "");
+	if (!raw) return "";
+	const alias = useUi.getState().aliases[raw];
+	if (alias) return alias;
+	const inst = snapshot$2().find((i) => i && (i.title === raw || i.display_title === raw));
+	if (!inst) return raw;
+	return sessionLabel(inst.display_title || inst.title || raw, inst.branch || "").text || raw;
+}
+function slotNumber(title) {
+	const raw = String(title || "");
+	if (!raw) return "";
+	try {
+		const ui = useUi.getState();
+		const rail = ui.railOrder;
+		if (rail.length) {
+			let idx = rail.indexOf(raw);
+			if (idx < 0) {
+				const inst = snapshot$2().find((i) => i && i.display_title === raw);
+				if (inst) idx = rail.indexOf(inst.title);
+			}
+			return idx >= 0 && idx < 9 ? String(idx + 1) : "";
+		}
+		const { rows } = orderedInstances(snapshot$2().filter((i) => i && !isVerifySession(i)), ui.order);
+		const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
+		const local = filtered.filter((i) => !i.device);
+		const remote = filtered.filter((i) => i.device);
+		const idx = [...local, ...remote].findIndex((i) => i.title === raw || i.display_title === raw);
+		return idx >= 0 && idx < 9 ? String(idx + 1) : "";
+	} catch {
+		return "";
+	}
+}
+function nameTakenBy(title, name) {
+	const n = String(name || "").trim();
+	if (!n) return "";
+	for (const i of snapshot$2()) {
+		const t = i?.title;
+		if (!t || t === title || i.device) continue;
+		if (n === t || n === windowName(t)) return t;
+	}
+	return "";
+}
+function publishWindowName() {
+	const w = globalThis;
+	w.mindflock = w.mindflock || {};
+	w.mindflock.displayName = windowName;
+	w.mindflock.slotNumber = slotNumber;
+	w.mindflock.openSession = openSession$1;
+}
+function openSession$1(title) {
+	if (!title) return;
+	selectSession(title, { noKeyboard: true });
+}
+//#endregion
+//#region src/lib/verifyStop.ts
+var WHERE_BRANCH = "branch";
+var READY_MINUTES_MAX = 1440;
+var ENV_NAME_MAX = 40;
+var ENV_REACH_MAX = 500;
+var VERIFY_NOTES_MAX = 2e3;
+var READY = [
+	"now",
+	"on_branch",
+	"after_prev"
+];
+var WHO = [
+	"both",
+	"agent",
+	"you"
+];
+var int = (v, d) => {
+	const n = Number(v);
+	return v !== "" && v !== null && v !== void 0 && Number.isFinite(n) ? Math.trunc(n) : d;
+};
+function verifyConfig(c) {
+	const cfg = c || {};
+	const legacy = cfg.wait_live === true || cfg.wait_live === "true";
+	const where = String(cfg.where ?? "").trim() || (legacy ? "live" : WHERE_BRANCH);
+	const rawReady = String(cfg.ready ?? "");
+	const ready = READY.includes(rawReady) ? rawReady : legacy ? "on_branch" : "now";
+	const rawWho = String(cfg.who ?? "");
+	const who = WHO.includes(rawWho) ? rawWho : "both";
+	return {
+		where,
+		ready: where === WHERE_BRANCH && ready === "on_branch" ? "now" : ready,
+		ready_minutes: Math.min(READY_MINUTES_MAX, Math.max(0, int(cfg.ready_minutes, 0))),
+		who,
+		notes: String(cfg.notes ?? ""),
+		post_to_pr: cfg.post_to_pr === true || cfg.post_to_pr === "true"
+	};
+}
+function withVerifyChoice(c, patch) {
+	const next = {
+		...verifyConfig(c),
+		...patch
+	};
+	if (next.where === WHERE_BRANCH && next.ready === "on_branch") next.ready = "now";
+	const out = {
+		...c || {},
+		...next
+	};
+	delete out.wait_live;
+	return out;
+}
+function readyChoices(where) {
+	const all = [
+		{
+			value: "now",
+			label: "Right away"
+		},
+		{
+			value: "on_branch",
+			label: "When it reaches the environment's branch"
+		},
+		{
+			value: "after_prev",
+			label: "Minutes after the stop before"
+		}
+	];
+	return where === WHERE_BRANCH ? all.filter((o) => o.value !== "on_branch") : all;
+}
+function showsReadyMinutes(ready) {
+	return ready === "on_branch" || ready === "after_prev";
+}
+var READY_MINUTES_HINT = "0 = the environment's deploy time";
+var WHO_CHOICES = [
+	{
+		value: "both",
+		label: "Agent, then me",
+		explain: "The agent does its steps; the route waits on you for the ones only a person can do."
+	},
+	{
+		value: "agent",
+		label: "Agent only",
+		explain: "The agent attempts every step itself and shows its evidence; the route waits on you only if something ends blocked or failed."
+	},
+	{
+		value: "you",
+		label: "Agent, then my sign-off",
+		explain: "The agent verifies, then the route always waits for you to confirm."
+	}
+];
+var VERIFY_FACE_WHO = {
+	both: "agent, then you",
+	agent: "agent only",
+	you: "agent, then your sign-off"
+};
+var FIX_ROUNDS = 2;
+function verifyWhenWords(v, envs = known$1) {
+	const onBranch = v.where === WHERE_BRANCH;
+	const mins = Math.max(0, v.ready_minutes || 0);
+	if (v.ready === "on_branch" && !onBranch) {
+		const b = envBranch(v.where, envs);
+		return "once the work reaches " + (b ? b : v.where + "'s branch") + (mins > 0 ? " and " + durationWords(mins) + " more" : " and " + v.where + "'s deploy time has passed");
+	}
+	if (v.ready === "after_prev") {
+		if (mins > 0) return durationWords(mins) + " after the stop before";
+		return onBranch ? "as soon as the route gets here" : v.where + "'s deploy time after the stop before";
+	}
+	return "as soon as the route gets here";
+}
+function durationWords(minutes) {
+	const m = Math.max(0, Math.trunc(minutes));
+	if (m < 60) return m + " min";
+	const h = Math.floor(m / 60);
+	const r = m % 60;
+	return h + " h" + (r ? " " + r + " min" : "");
+}
+var VERIFY_ON_FAIL = {
+	halt: "the route halts here, red, with the failed steps — you Retry, Skip or Let the agent fix it",
+	agent: "the failed steps and their evidence go back to the session's agent, then it verifies again (up to 2 rounds, then the route halts)",
+	skip: "the route goes on as if this stop was not there",
+	you: "the route waits on you, amber, showing the failed steps"
+};
+function verifySentence(c, onFail = "halt", envs = known$1) {
+	const v = verifyConfig(c);
+	const where = v.where === WHERE_BRANCH ? "this branch" : v.where;
+	const atEnd = String(c?.ask ?? "") === "end";
+	const who = v.who === "agent" ? "it does every step itself, a person's too, and goes on without you when they pass" : v.who === "you" ? atEnd ? "the route carries on and asks for your sign-off at the end" : "then the route waits for your sign-off, even when every step passes" : atEnd ? "the route carries on and asks you for the steps only a person can do at the end" : "you confirm the steps only a person can do";
+	const fail = onFail === "agent" ? "a failure goes back to the agent, up to 2 rounds" : onFail === "skip" ? "a failure is ignored and the route goes on" : onFail === "you" ? "a failure waits on you" : "a failure halts the route";
+	return "Its agent verifies on " + where + " " + verifyWhenWords(v, envs) + "; " + who + "; " + fail + (v.post_to_pr ? "; the results go on the PR" : "") + ".";
+}
+var known$1 = null;
+function rememberEnvironments(r) {
+	known$1 = r && typeof r === "object" ? {
+		repos: r.repos || {},
+		names: r.names || []
+	} : null;
+}
+function envBranch(name, envs = known$1) {
+	const branches = /* @__PURE__ */ new Set();
+	for (const list of Object.values(envs?.repos || {})) for (const e of list || []) if (e.name === name && e.branch) branches.add(e.branch);
+	return branches.size === 1 ? [...branches][0] : "";
+}
+function verifyFace(c, envs = known$1) {
+	const v = verifyConfig(c);
+	return "Verify on " + (v.where === WHERE_BRANCH ? "this branch" : v.where) + " · " + VERIFY_FACE_WHO[v.who] + " · " + readyWords(v, envs);
+}
+function readyWords(v, envs = known$1) {
+	const onBranch = v.where === WHERE_BRANCH;
+	if (v.ready === "on_branch" && !onBranch) return "once on " + (envBranch(v.where, envs) || v.where) + (v.ready_minutes > 0 ? " + " + v.ready_minutes + " min" : "");
+	if (v.ready === "after_prev") {
+		if (v.ready_minutes > 0) return v.ready_minutes + " min after the stop before";
+		return onBranch ? "after the stop before" : "after the deploy time";
+	}
+	return "right away";
+}
+function whereOptions(envs, current = "") {
+	const out = [{
+		value: WHERE_BRANCH,
+		label: "This branch's code",
+		title: "A fresh checkout of this branch — no deployment"
+	}];
+	const names = [];
+	for (const n of envs?.names || []) if (n && n !== WHERE_BRANCH && !names.includes(n)) names.push(n);
+	for (const list of Object.values(envs?.repos || {})) for (const e of list || []) if (e.name && e.name !== WHERE_BRANCH && !names.includes(e.name)) names.push(e.name);
+	for (const n of names) out.push({
+		value: n,
+		label: n,
+		title: envTitle(n, envs) || void 0
+	});
+	const cur = current.trim();
+	if (cur && !out.some((o) => o.value === cur)) out.push({
+		value: cur,
+		label: cur,
+		title: "Not an environment of any watched repo yet",
+		custom: true
+	});
+	return out;
+}
+function envTitle(name, envs) {
+	const lines = [];
+	for (const [repo, list] of Object.entries(envs?.repos || {})) {
+		const e = (list || []).find((x) => x.name === name);
+		if (!e) continue;
+		const bits = [
+			e.reach?.trim() ? clip$6(e.reach.trim(), 60) : "",
+			e.branch ? "deploys from " + e.branch : "",
+			e.deploy_minutes ? e.deploy_minutes + " min to deploy" : ""
+		].filter(Boolean);
+		lines.push(repo + (bits.length ? ": " + bits.join(" · ") : ""));
+	}
+	return lines.join("\n");
+}
+var clip$6 = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+var ENV_NAME_RE = /^[a-z0-9_-]+$/;
+function envNameError(name, others = []) {
+	const n = name.trim();
+	if (!n) return "Give it a name";
+	if (n.length > ENV_NAME_MAX) return "At most 40 characters";
+	if (!ENV_NAME_RE.test(n)) return "Lowercase letters, digits, - and _ only";
+	if (n === WHERE_BRANCH) return "“branch” means this branch's own code — pick another name";
+	if (others.includes(n)) return "Another environment has this name";
+	return "";
+}
+function envRowErrors(rows) {
+	return rows.map((r, i) => envNameError(r.name, rows.filter((_, j) => j !== i).map((x) => x.name.trim())));
+}
+function envsOf(block) {
+	const list = block && typeof block === "object" ? block.environments : null;
+	if (!Array.isArray(list)) return [];
+	return list.filter((e) => !!e && typeof e === "object").map((e) => ({
+		name: String(e.name ?? ""),
+		reach: String(e.reach ?? ""),
+		branch: String(e.branch ?? ""),
+		deploy_minutes: Math.min(READY_MINUTES_MAX, Math.max(0, int(e.deploy_minutes, 0)))
+	}));
+}
+var isBlankEnv = (r) => !r.name.trim() && !r.reach.trim() && !r.branch.trim() && !int(r.deploy_minutes, 0);
+function envsToSave(rows) {
+	const kept = rows.filter((r) => !isBlankEnv(r));
+	if (envRowErrors(kept).some(Boolean)) return null;
+	return kept.map((r) => ({
+		name: r.name.trim(),
+		reach: r.reach.trim().slice(0, ENV_REACH_MAX),
+		branch: r.branch.trim(),
+		deploy_minutes: Math.min(READY_MINUTES_MAX, Math.max(0, int(r.deploy_minutes, 0)))
+	}));
+}
+//#endregion
+//#region src/state/queries.ts
+var queryClient = new QueryClient({ defaultOptions: { queries: {
+	retry: 1,
+	refetchOnWindowFocus: false,
+	staleTime: 2e3
+} } });
+var POLL_VISIBLE_MS = 4e3;
+var POLL_HIDDEN_MS = 3e4;
+function pollInterval() {
+	return document.hidden ? POLL_HIDDEN_MS : POLL_VISIBLE_MS;
+}
+function useInstances() {
+	(0, import_react.useEffect)(bridgeSessionSetEvents, []);
+	return useQuery({
+		queryKey: ["instances"],
+		queryFn: async () => {
+			const fetched = normalizeFlightRows(splitLockedRows(await api("/api/instances")));
+			window.mindflock?.__setSessions?.(fetched);
+			noteGateRows(fetched);
+			return mergePending(withMoving(fetched, Date.now()), queryClient.getQueryData(["instances"]), Date.now());
+		},
+		refetchInterval: pollInterval,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev
+	});
+}
+function useConfig() {
+	return useQuery({
+		queryKey: ["config"],
+		queryFn: () => api("/api/config").then((c) => {
+			noteServerHome(c?.home);
+			return c;
+		}),
+		staleTime: 6e4
+	});
+}
+function refreshConfig() {
+	return queryClient.invalidateQueries({ queryKey: ["config"] });
+}
+var PROVIDERS_STALE_MS = 3e5;
+function providersQuery() {
+	return {
+		queryKey: ["providers"],
+		queryFn: () => api("/api/providers"),
+		staleTime: PROVIDERS_STALE_MS
+	};
+}
+function refreshProviders() {
+	return queryClient.invalidateQueries({ queryKey: ["providers"] });
+}
+function useProviderEfforts() {
+	return useQuery({
+		...providersQuery(),
+		select: (d) => {
+			const out = {};
+			for (const p of d?.providers || []) if (p?.name && p.effort) out[p.name] = p.effort;
+			return out;
+		}
+	});
+}
+function useAgentChoices$1() {
+	return useQuery({
+		...providersQuery(),
+		select: (d) => ({
+			names: (d?.providers || []).map((x) => x.name || "").filter(Boolean),
+			fallback: d?.default || ""
+		})
+	});
+}
+var EXTENSIONS_STALE_MS = 3e5;
+function extensionsQuery() {
+	return {
+		queryKey: ["addons"],
+		queryFn: () => api("/api/addons"),
+		staleTime: EXTENSIONS_STALE_MS
+	};
+}
+function extensionsOf(d) {
+	return (d?.addons || []).filter((a) => a && a.id && a.extension).map((a) => ({
+		id: String(a.id),
+		label: a.label || String(a.id),
+		enabled: a.enabled !== false,
+		origin: a.origin === "user" ? "user" : "builtin",
+		extension: a.extension
+	}));
+}
+function extensionsNow() {
+	return extensionsOf(queryClient.getQueryData(["addons"]));
+}
+function useExtensions() {
+	return useQuery({
+		...extensionsQuery(),
+		select: (d) => extensionsOf(d)
+	});
+}
+function refreshExtensions() {
+	return queryClient.invalidateQueries({ queryKey: ["addons"] });
+}
+function useAssistantActivity() {
+	return useQuery({
+		queryKey: ["assistant-state"],
+		queryFn: () => api("/api/assistant/state"),
+		refetchInterval: pollInterval,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useDoctor(opts = {}) {
+	return useQuery({
+		queryKey: ["doctor"],
+		queryFn: () => api("/api/doctor"),
+		enabled: opts.enabled ?? true,
+		refetchInterval: opts.refetchInterval ?? false,
+		refetchIntervalInBackground: false
+	});
+}
+async function reprobeDoctor(refresh = true) {
+	const d = await api("/api/doctor" + (refresh ? "?refresh=1" : ""));
+	queryClient.setQueryData(["doctor"], d);
+	return d;
+}
+function useMindflockStatus() {
+	return useQuery({
+		queryKey: ["mindflock-status"],
+		queryFn: () => api("/api/mindflock/status"),
+		refetchInterval: 4e3,
+		retry: false
+	});
+}
+function refreshMemory() {
+	return queryClient.invalidateQueries({ queryKey: ["system-memory"] });
+}
+var memoryBridged = false;
+function bridgeMemoryEvents() {
+	const ev = window.mindflock?.events;
+	if (memoryBridged || !ev) return;
+	memoryBridged = true;
+	const bump = () => {
+		refreshMemory();
+		queryClient.invalidateQueries({ queryKey: ["memory-detail"] });
+	};
+	for (const name of ["system.memory_changed", "system.sessions_slept"]) ev.subscribe(name, bump);
+	ev.onStatus((status) => {
+		if (status === "connected") refreshMemory();
+	});
+}
+function gateRowsKey(rows) {
+	const bits = [];
+	for (const r of rows || []) {
+		const w = r.waiting_for_memory;
+		if (w) bits.push("w:" + r.title + ":" + (w.why || "") + ":" + w.position);
+		if (r.start_failed) bits.push("f:" + r.title + ":" + r.start_failed.at);
+	}
+	return bits.sort().join("|");
+}
+var lastGateRows = null;
+function noteGateRows(rows) {
+	const key = gateRowsKey(rows);
+	const was = lastGateRows;
+	lastGateRows = key;
+	if (was !== null && was !== key) refreshMemory();
+}
+function useMemory() {
+	(0, import_react.useEffect)(bridgeMemoryEvents, []);
+	return useQuery({
+		queryKey: ["system-memory"],
+		queryFn: () => api("/api/system/memory"),
+		refetchInterval: (q) => q.state.data?.gate?.holding ? 5e3 : 15e3,
+		retry: false
+	});
+}
+function useMemoryDetail(enabled) {
+	return useQuery({
+		queryKey: ["memory-detail"],
+		queryFn: () => api("/api/memory"),
+		refetchInterval: 15e3,
+		refetchIntervalInBackground: false,
+		retry: false,
+		enabled
+	});
+}
+function useMemoryHistory(enabled) {
+	return useQuery({
+		queryKey: ["memory-history", 60],
+		queryFn: () => api("/api/memory/history?minutes=60"),
+		refetchInterval: 6e4,
+		refetchIntervalInBackground: false,
+		retry: false,
+		enabled
+	});
+}
+function useSlots(enabled) {
+	return useQuery({
+		queryKey: ["system-slots"],
+		queryFn: () => api("/api/system/slots"),
+		refetchInterval: 15e3,
+		retry: false,
+		enabled
+	});
+}
+function refreshMindflockStatus() {
+	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
+}
+function usePeerLinks() {
+	return useQuery({
+		queryKey: ["peer-links"],
+		queryFn: () => api("/api/peer"),
+		refetchInterval: 1e4,
+		retry: false
+	});
+}
+function useDevices() {
+	return useQuery({
+		queryKey: ["devices"],
+		queryFn: () => api("/api/devices"),
+		refetchInterval: 3e4,
+		placeholderData: (prev) => prev
+	});
+}
+function refreshUsage() {
+	return queryClient.invalidateQueries({ queryKey: ["usage"] });
+}
+var usageBridged = false;
+var usageRefreshedAt = null;
+var usageTrailing = null;
+function nudgeUsageNow() {
+	const decision = nudgeUsage(Date.now(), usageRefreshedAt, usageTrailing != null);
+	if (decision.action === "skip") return;
+	if (decision.action === "refresh") {
+		usageRefreshedAt = Date.now();
+		refreshUsage();
+		return;
+	}
+	usageTrailing = setTimeout(() => {
+		usageTrailing = null;
+		usageRefreshedAt = Date.now();
+		refreshUsage();
+	}, decision.delayMs);
+}
+function bridgeUsageEvents() {
+	if (usageBridged) return;
+	const ev = window.mindflock?.events;
+	if (!ev) return;
+	usageBridged = true;
+	ev.subscribe("session.activity_changed", (env) => {
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		nudgeUsageNow();
+	});
+	ev.subscribe("session.usage_restored", () => nudgeUsageNow());
+	ev.onStatus((status) => {
+		if (status === "connected") nudgeUsageNow();
+	});
+}
+function useUsage(enabled = true) {
+	(0, import_react.useEffect)(bridgeUsageEvents, []);
+	return useQuery({
+		queryKey: ["usage"],
+		queryFn: () => api("/api/usage"),
+		refetchInterval: 3e4,
+		refetchOnWindowFocus: true,
+		enabled,
+		placeholderData: (prev) => prev
+	});
+}
+function useAuthProfiles() {
+	return useQuery({
+		queryKey: ["auth-profiles"],
+		queryFn: () => api("/api/settings/auth-profiles"),
+		staleTime: 3e4,
+		placeholderData: (prev) => prev
+	});
+}
+function refreshAuthProfiles() {
+	return queryClient.invalidateQueries({ queryKey: ["auth-profiles"] });
+}
+function refreshInstances() {
+	return queryClient.invalidateQueries({ queryKey: ["instances"] });
+}
+var PENDING_TTL_MS = 2e4;
+var pend = (r) => r;
+var isPendingRow = (r) => pend(r).pending_create === true;
+function numberedFrom(t, base) {
+	return t === base || t.startsWith(base + "-") && /^\d+$/.test(t.slice(base.length + 1));
+}
+function mergePending(fetched, cached, now, ttl = PENDING_TTL_MS) {
+	const waiting = (cached || []).filter(isPendingRow);
+	if (!waiting.length) return fetched;
+	const listed = new Set(fetched.map((r) => r.title));
+	const known = new Set((cached || []).filter((r) => !isPendingRow(r)).map((r) => r.title));
+	const fresh = fetched.map((r) => r.title).filter((t) => !known.has(t) && !waiting.some((w) => w.title === t));
+	const claimed = /* @__PURE__ */ new Set();
+	const keep = waiting.filter((r) => {
+		if (listed.has(r.title)) return false;
+		const at = pend(r).pending_at;
+		if (typeof at !== "number" || now - at > ttl) return false;
+		const base = pend(r).pending_base;
+		const hit = base ? fresh.find((t) => !claimed.has(t) && numberedFrom(t, base)) : void 0;
+		if (hit) {
+			claimed.add(hit);
+			return false;
+		}
+		return true;
+	});
+	return keep.length ? [...fetched, ...keep] : fetched;
+}
+function notePendingCreated(rows, title, data, now) {
+	if (!title) return rows;
+	const same = rows.findIndex((r) => r.title === title);
+	if (same >= 0) {
+		if (!isPendingRow(rows[same]) || !pend(rows[same]).pending_base) return rows;
+		const next = rows.slice();
+		next[same] = {
+			...rows[same],
+			pending_base: void 0
+		};
+		return next;
+	}
+	const i = rows.findIndex((r) => isPendingRow(r) && !!pend(r).pending_base && numberedFrom(title, pend(r).pending_base));
+	if (i >= 0) {
+		const next = rows.slice();
+		next[i] = {
+			...rows[i],
+			title,
+			pending_base: void 0,
+			pending_at: now
+		};
+		return next;
+	}
+	const row = {
+		title,
+		status: "loading",
+		pending_create: true,
+		pending_at: now
+	};
+	if (typeof data.parent === "string" && data.parent) row.parent = data.parent;
+	if (typeof data.program === "string" && data.program) row.program = data.program;
+	return [...rows, row];
+}
+function landPendingRow(rows, guess, real, now) {
+	const t = real.title;
+	if (!t) return rows;
+	const listed = rows.some((r) => r.title === t && !isPendingRow(r));
+	const out = [];
+	let placed = listed;
+	for (const r of rows) {
+		if (!isPendingRow(r) || r.title !== guess && r.title !== t) {
+			out.push(r);
+			continue;
+		}
+		if (placed) continue;
+		out.push({
+			...r,
+			...real,
+			pending_create: true,
+			pending_at: now,
+			pending_base: void 0
+		});
+		placed = true;
+	}
+	return placed ? out : [...out, {
+		...real,
+		pending_create: true,
+		pending_at: now
+	}];
+}
+function dropPendingRow(rows, title) {
+	return rows.some((r) => isPendingRow(r) && r.title === title) ? rows.filter((r) => !(isPendingRow(r) && r.title === title)) : rows;
+}
+var MOVE_TTL_MS = 6e4;
+var isMovingRow = (r) => r.moving === true;
+var movingSince = /* @__PURE__ */ new Map();
+function withMoving(rows, now, since = movingSince, ttl = MOVE_TTL_MS) {
+	for (const [t, at] of since) if (now - at > ttl) since.delete(t);
+	if (!since.size) return rows;
+	return rows.map((r) => since.has(r.title) && !isMovingRow(r) ? {
+		...r,
+		moving: true
+	} : r);
+}
+function markMoving(title, now = Date.now()) {
+	movingSince.set(title, now);
+	queryClient.setQueryData(["instances"], (rows) => rows ? withMoving(rows, now) : rows);
+	setTimeout(() => {
+		if (movingSince.get(title) === now) clearMoving(title);
+	}, MOVE_TTL_MS);
+}
+function clearMoving(title) {
+	movingSince.delete(title);
+	queryClient.setQueryData(["instances"], (rows) => rows && rows.some((r) => r.title === title && isMovingRow(r)) ? rows.map((r) => r.title === title && isMovingRow(r) ? {
+		...r,
+		moving: void 0
+	} : r) : rows);
+}
+function movedToastText(name, to) {
+	return to ? `Moved “${name}” to ${to}` : `Moved “${name}”`;
+}
+function movedTitle(env) {
+	return String(env?.session || (env?.data)?.title || "");
+}
+function onSessionMoved(env, replay = false) {
+	const title = movedTitle(env);
+	if (!title) return;
+	clearMoving(title);
+	refreshInstances();
+	if (!replay) toast(movedToastText(windowName(title), String(env.data?.to || "")), { duration: 5e3 });
+}
+function onSessionMoveFailed(env, replay = false) {
+	const title = movedTitle(env);
+	if (!title) return;
+	clearMoving(title);
+	refreshInstances();
+	if (!replay) errorPop(`Moving “${windowName(title)}” failed`, String(env.data?.error || "no reason recorded"));
+}
+var instancesTimer = null;
+function refreshInstancesSoon() {
+	if (instancesTimer) clearTimeout(instancesTimer);
+	instancesTimer = setTimeout(() => {
+		instancesTimer = null;
+		refreshInstances();
+	}, 150);
+}
+var sessionSetBridged = false;
+function bridgeSessionSetEvents() {
+	const ev = window.mindflock?.events;
+	if (sessionSetBridged || !ev) return;
+	sessionSetBridged = true;
+	const replay = (env) => typeof ev.isReplay === "function" && ev.isReplay(env);
+	ev.subscribe("session.created", (env) => {
+		const title = String(env?.session || "");
+		if (title && !replay(env) && !isVerifySession(title)) queryClient.setQueryData(["instances"], (rows) => rows ? notePendingCreated(rows, title, env.data || {}, Date.now()) : rows);
+		refreshInstancesSoon();
+	});
+	ev.subscribe("session.create_failed", (env) => {
+		const title = String(env?.session || "");
+		if (title) queryClient.setQueryData(["instances"], (rows) => rows ? dropPendingRow(rows, title) : rows);
+		refreshInstancesSoon();
+	});
+	ev.subscribe("session.moved", (env) => onSessionMoved(env, replay(env)));
+	ev.subscribe("session.move_failed", (env) => onSessionMoveFailed(env, replay(env)));
+	for (const name of ["session.deleted", "session.renamed"]) ev.subscribe(name, refreshInstancesSoon);
+}
+function refreshRecentlyClosed() {
+	return queryClient.invalidateQueries({ queryKey: ["recently-closed"] });
+}
+function useTraffic(enabled, days = 90) {
+	return useQuery({
+		queryKey: ["traffic", days],
+		queryFn: () => api("/api/traffic?days=" + days),
+		enabled,
+		staleTime: 6e4,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function refreshTraffic(days = 90) {
+	return queryClient.fetchQuery({
+		queryKey: ["traffic", days],
+		queryFn: () => api("/api/traffic?days=" + days + "&refresh=1"),
+		staleTime: 0,
+		retry: false
+	});
+}
+function patchInstance(title, patch) {
+	queryClient.setQueryData(["instances"], (rows) => rows?.map((r) => r.title === title ? {
+		...r,
+		...patch
+	} : r));
+}
+var PANEL_STALE_MS = 2e4;
+var PANEL_STALE_RETRY_MS = 2e3;
+var PANEL_STALE_STREAK = 3;
+var PANEL_BACKOFF_MS = 15e3;
+var PANEL_GC_MS = 36e5;
+var PANELS = {
+	tickets: "/api/tickets",
+	"github-prs": "/api/github/prs",
+	"github-issues": "/api/github/issues"
+};
+var staleRuns = /* @__PURE__ */ new Map();
+function panelRefetchMs(stale, run) {
+	if (!stale) return false;
+	return run >= PANEL_STALE_STREAK ? PANEL_BACKOFF_MS : PANEL_STALE_RETRY_MS;
+}
+async function fetchPanel(key, fresh = false) {
+	let r;
+	try {
+		r = await api(PANELS[key] + (fresh ? "?fresh=1" : ""));
+	} catch (err) {
+		staleRuns.set(key, (staleRuns.get(key) ?? 0) + 1);
+		throw err;
+	}
+	const stale = !!r?.stale;
+	staleRuns.set(key, stale ? (staleRuns.get(key) ?? 0) + 1 : 0);
+	return r;
+}
+async function sweepPanel(key) {
+	await queryClient.cancelQueries({ queryKey: [key] });
+	return queryClient.fetchQuery({
+		queryKey: [key],
+		queryFn: () => fetchPanel(key, true),
+		staleTime: 0,
+		retry: false
+	}).catch(() => void 0);
+}
+function usePanelQuery(key, opts = {}) {
+	const q = useQuery({
+		queryKey: [key],
+		queryFn: () => fetchPanel(key),
+		enabled: opts.enabled ?? true,
+		staleTime: PANEL_STALE_MS,
+		gcTime: PANEL_GC_MS,
+		placeholderData: (prev) => prev,
+		retry: false,
+		refetchInterval: (query) => panelRefetchMs(query.state.data?.stale, staleRuns.get(key) ?? 0)
+	});
+	const refresh = () => sweepPanel(key);
+	const stalled = !!q.data?.stale && (staleRuns.get(key) ?? 0) >= PANEL_STALE_STREAK;
+	return {
+		...q,
+		refresh,
+		stalled
+	};
+}
+function refreshPanel(key) {
+	return sweepPanel(key);
+}
+function prefetchIntakePanels() {
+	for (const key of Object.keys(PANELS)) queryClient.prefetchQuery({
+		queryKey: [key],
+		queryFn: () => fetchPanel(key),
+		staleTime: PANEL_STALE_MS,
+		gcTime: PANEL_GC_MS,
+		retry: false
+	});
+}
+var EPICS_POLL_MS = 6e4;
+function useEpicsQuery() {
+	const q = useQuery({
+		queryKey: ["epics"],
+		queryFn: () => api("/api/epics"),
+		staleTime: 3e4,
+		gcTime: PANEL_GC_MS,
+		placeholderData: (prev) => prev,
+		retry: false,
+		refetchInterval: EPICS_POLL_MS
+	});
+	const refresh = async () => {
+		await queryClient.cancelQueries({ queryKey: ["epics"] });
+		return queryClient.fetchQuery({
+			queryKey: ["epics"],
+			queryFn: () => api("/api/epics?refresh=1"),
+			staleTime: 0,
+			retry: false
+		}).catch(() => void 0);
+	};
+	return {
+		...q,
+		refresh
+	};
+}
+var SETTINGS_STALE_MS = 3e4;
+function useSettingsDoc(enabled) {
+	return useQuery({
+		queryKey: ["settings"],
+		queryFn: async () => (await api("/api/settings"))?.settings || {},
+		staleTime: SETTINGS_STALE_MS,
+		enabled,
+		placeholderData: (prev) => prev
+	});
+}
+function putSettingsDoc(settings) {
+	queryClient.setQueryData(["settings"], settings);
+}
+function fetchSettingsDoc() {
+	return queryClient.fetchQuery({
+		queryKey: ["settings"],
+		queryFn: async () => (await api("/api/settings"))?.settings || {},
+		staleTime: 0
+	});
+}
+function useTicketingCatalog(enabled) {
+	return useQuery({
+		queryKey: ["ticketing-catalog"],
+		queryFn: async () => (await api("/api/settings/providers/ticketing"))?.providers || [],
+		staleTime: Infinity,
+		enabled
+	});
+}
+function useTicketingSources(enabled) {
+	return useQuery({
+		queryKey: ["ticketing-sources"],
+		queryFn: async () => (await api("/api/settings/ticketing/sources"))?.sources || [],
+		staleTime: SETTINGS_STALE_MS,
+		enabled,
+		placeholderData: (prev) => prev
+	});
+}
+function putTicketingSources(sources) {
+	queryClient.setQueryData(["ticketing-sources"], sources);
+}
+function prefetchIntakeMeta() {
+	queryClient.prefetchQuery({
+		queryKey: ["settings"],
+		queryFn: async () => (await api("/api/settings"))?.settings || {},
+		staleTime: SETTINGS_STALE_MS
+	});
+	queryClient.prefetchQuery({
+		queryKey: ["ticketing-sources"],
+		queryFn: async () => (await api("/api/settings/ticketing/sources"))?.sources || [],
+		staleTime: SETTINGS_STALE_MS
+	});
+	queryClient.prefetchQuery({
+		queryKey: ["ticketing-catalog"],
+		queryFn: async () => (await api("/api/settings/providers/ticketing"))?.providers || [],
+		staleTime: Infinity
+	});
+	queryClient.prefetchQuery(providersQuery());
+}
+var PANEL_WARM_MS = 24e4;
+function useIntakeWarm(enabled) {
+	(0, import_react.useEffect)(() => {
+		prefetchIntakeMeta();
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!enabled) return;
+		const warm = () => {
+			if (!document.hidden) prefetchIntakePanels();
+		};
+		warm();
+		const timer = window.setInterval(warm, PANEL_WARM_MS);
+		document.addEventListener("visibilitychange", warm);
+		return () => {
+			window.clearInterval(timer);
+			document.removeEventListener("visibilitychange", warm);
+		};
+	}, [enabled]);
+}
+var TEST_PLANS_POLL_MS = 1e4;
+var testPlansBridged = false;
+function bridgeTestPlanEvents() {
+	const ev = window.mindflock?.events;
+	if (testPlansBridged || !ev) return;
+	testPlansBridged = true;
+	const bump = (env) => {
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		refreshTestPlans();
+	};
+	ev.subscribe("session.test_plan_ready", bump);
+	const say = (env, text) => {
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		refreshTestPlans();
+		toast(text(env?.data || {}));
+	};
+	ev.subscribe("session.test_plan_ready", (env) => say(env, (d) => {
+		const n = Number(d.steps) || 0;
+		return (d.refreshed ? "Rewrote the behaviors for " : "New behaviors for ") + String(d.plan || "a session") + " — " + n + (n === 1 ? " behavior" : " behaviors");
+	}));
+	ev.subscribe("session.test_plan_due", (env) => say(env, (d) => String(d.title || d.plan || "A change") + " shipped to " + String(d.live_branch || "the live branch") + " — its behaviors are ready on its route in the Sky"));
+	ev.subscribe("session.test_plan_failed", (env) => say(env, (d) => "Couldn't write the behaviors for " + String(d.plan || "a session") + ": " + String(d.error || "no reason recorded")));
+	ev.subscribe("session.create_failed", (env) => {
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		const session = String(env?.session || "");
+		if (!isVerifySession(session) && !session.startsWith("fix-")) return;
+		refreshTestPlans();
+		const data = env?.data || {};
+		errorPop(isVerifySession(session) ? "Verify couldn't start." : "The session to fix it couldn't start", String(data.error || "no reason recorded"));
+	});
+	ev.subscribe("session.test_plan_gave_up", (env) => say(env, (d) => "Gave up on the verify run for " + String(d.title || d.plan || "these behaviors") + " — " + String(d.run_session || "the session") + " never wrote its answers. Press Check now to try again."));
+	ev.subscribe("session.test_plan_checked", (env) => say(env, checkedToastText));
+}
+function checkedToastText(d) {
+	const failed = Number(d.failed) || 0;
+	const mine = Number(d.needs_you) || 0;
+	const bits = [failed ? failed + (failed === 1 ? " behavior failed" : " behaviors failed") : "", mine ? mine + (mine === 1 ? " behavior needs you" : " behaviors need you") : ""].filter(Boolean);
+	return String(d.title || d.plan || "The behaviors") + (d.before_merge === true ? " checked on the branch" : " checked") + (bits.length ? " — " + bits.join(", ") : " — every behavior verified");
+}
+function useGithubConnected(enabled = true) {
+	return useQuery({
+		...githubStatusQuery(enabled),
+		select: (r) => !!r.connected
+	});
+}
+function githubStatusQuery(enabled) {
+	return {
+		queryKey: ["github-status"],
+		queryFn: async () => await api("/api/github/status") || {},
+		enabled,
+		staleTime: 6e4,
+		retry: false
+	};
+}
+function useGithubStatus(enabled = true) {
+	return useQuery(githubStatusQuery(enabled));
+}
+function refreshGithubStatus() {
+	return queryClient.invalidateQueries({ queryKey: ["github-status"] });
+}
+function useTestPlans(enabled = true) {
+	(0, import_react.useEffect)(bridgeTestPlanEvents, []);
+	return useQuery({
+		queryKey: ["test-plans"],
+		queryFn: () => api("/api/test-plans"),
+		enabled,
+		refetchInterval: TEST_PLANS_POLL_MS,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useCachedLiveBranch() {
+	return useQuery({
+		queryKey: ["test-plans"],
+		queryFn: () => api("/api/test-plans"),
+		enabled: false
+	}).data?.live_branch || "";
+}
+function useVerifyEnvironments(enabled = true) {
+	return useQuery({
+		queryKey: ["test-plan-environments"],
+		queryFn: async () => {
+			const r = await api("/api/test-plans/environments");
+			const ok = r && typeof r === "object" && Array.isArray(r.names) ? r : null;
+			rememberEnvironments(ok);
+			if (!ok) throw new Error("no environments list");
+			return ok;
+		},
+		enabled,
+		staleTime: 6e4,
+		retry: false
+	}, queryClient);
+}
+function refreshTestPlans() {
+	return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
+}
+var FLIGHTS_LIVE_MS = 5e3;
+var FLIGHTS_IDLE_MS = 3e4;
+var FLIGHTS_MISSING_MS = 12e4;
+var routeMissing = (e) => !!e && typeof e === "object" && "status" in e && (e.status === 404 || e.status === 405);
+async function orNull(p) {
+	try {
+		return await p;
+	} catch (e) {
+		if (routeMissing(e)) return null;
+		throw e;
+	}
+}
+var flightsBridged = false;
+function bridgeFlightEvents() {
+	const ev = window.mindflock?.events;
+	if (flightsBridged || !ev) return;
+	flightsBridged = true;
+	const bump = () => {
+		queryClient.invalidateQueries({ queryKey: ["flights"] });
+		queryClient.invalidateQueries({ queryKey: ["instances"] });
+	};
+	for (const name of [
+		"flight.changed",
+		"flight.needs_you",
+		"flight.finished"
+	]) ev.subscribe(name, bump);
+}
+function useFlights(enabled = true) {
+	(0, import_react.useEffect)(bridgeFlightEvents, []);
+	return useQuery({
+		queryKey: ["flights"],
+		queryFn: () => orNull(api("/api/flights").then((d) => d?.flights || [])),
+		enabled,
+		refetchInterval: (q) => q.state.data === null ? FLIGHTS_MISSING_MS : (q.state.data || []).some((f) => f.state === "running" || f.state === "waiting_you") && !document.hidden ? FLIGHTS_LIVE_MS : FLIGHTS_IDLE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useFlightPlans(enabled = true) {
+	(0, import_react.useEffect)(bridgeFlightEvents, []);
+	return useQuery({
+		queryKey: ["flight-plans"],
+		queryFn: () => orNull(api("/api/flights/plans").then((d) => d?.plans || [])),
+		enabled,
+		staleTime: 3e4,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useFlightKinds(enabled = true) {
+	return useQuery({
+		queryKey: ["flight-kinds"],
+		queryFn: () => orNull(api("/api/flights/kinds").then((d) => d?.kinds || [])),
+		enabled,
+		staleTime: 6e5,
+		retry: false
+	});
+}
+//#endregion
+//#region src/components/settings/savedCue.ts
+var ROW = ".set-row, .notif-channel, .ntfy-field-row, .set-switch-row, .ext-row-head";
+var SHOW_MS = 1600;
+var FRESH_MS = 5e3;
+var touched = null;
+var timers = /* @__PURE__ */ new WeakMap();
+function noteTouched(target) {
+	if (target && typeof target.closest === "function") touched = {
+		el: target,
+		at: Date.now()
+	};
+}
+function cueTarget(el) {
+	const row = el.closest(ROW);
+	if (!row) return null;
+	return row.querySelector(".set-label") || row.querySelector(".prov-name") || row;
+}
+function flashSaved(el) {
+	const source = el ?? (touched && Date.now() - touched.at < FRESH_MS ? touched.el : null);
+	if (!source || !source.isConnected) return false;
+	const target = cueTarget(source);
+	if (!target) return false;
+	target.setAttribute("data-saved", "");
+	const prev = timers.get(target);
+	if (prev) clearTimeout(prev);
+	timers.set(target, setTimeout(() => target.removeAttribute("data-saved"), SHOW_MS));
+	return true;
+}
+//#endregion
+//#region src/lib/theme.ts
+function isLightNow() {
+	try {
+		return document.documentElement.classList.contains("light");
+	} catch {
+		return false;
+	}
+}
+function setTheme(light) {
+	try {
+		document.documentElement.classList.toggle("light", light);
+	} catch {}
+	try {
+		localStorage.setItem("cs_theme", light ? "light" : "dark");
+	} catch {}
+	notePrefWrite("cs_theme");
+	useUi.setState({ themeLight: light });
+	try {
+		document.dispatchEvent(new Event(THEME_CHANGED));
+	} catch {}
+}
+//#endregion
+//#region src/components/InfoTip.tsx
+var import_react_dom = require_react_dom();
+var TIP_CLOSED = {
+	hover: false,
+	focus: false,
+	pinned: false
+};
+var tipOpen = (s) => s.hover || s.focus || s.pinned;
+function tipReduce(s, e) {
+	switch (e) {
+		case "enter": return s.hover ? s : {
+			...s,
+			hover: true
+		};
+		case "leave": return s.hover ? {
+			...s,
+			hover: false
+		} : s;
+		case "focus": return s.focus ? s : {
+			...s,
+			focus: true
+		};
+		case "blur": return s.focus || s.pinned ? {
+			...s,
+			focus: false,
+			pinned: false
+		} : s;
+		case "tap":
+		case "activate": return tipOpen(s) ? TIP_CLOSED : {
+			...s,
+			pinned: true
+		};
+		case "escape":
+		case "outside": return tipOpen(s) ? TIP_CLOSED : s;
+	}
+}
+var TIP_OPEN_MS = 90;
+var TIP_CLOSE_MS = 100;
+function placeTip(anchor, size, view, gap = 8, margin = 8) {
+	const below = anchor.bottom + gap;
+	const above = anchor.top - gap - size.h;
+	const fitsBelow = below + size.h <= view.h - margin;
+	const fitsAbove = above >= margin;
+	let side;
+	if (fitsBelow) side = "below";
+	else if (fitsAbove) side = "above";
+	else side = anchor.top > view.h - anchor.bottom ? "above" : "below";
+	const maxTop = Math.max(margin, view.h - margin - size.h);
+	const top = Math.min(maxTop, Math.max(margin, side === "below" ? below : above));
+	const cx = (anchor.left + anchor.right) / 2;
+	const maxLeft = Math.max(margin, view.w - margin - size.w);
+	const left = Math.min(maxLeft, Math.max(margin, cx - size.w / 2));
+	const arrowX = Math.min(Math.max(12, cx - left), Math.max(12, size.w - 12));
+	return {
+		top: Math.round(top),
+		left: Math.round(left),
+		side,
+		arrowX: Math.round(arrowX)
+	};
+}
+function InfoTip({ children, label = "More info", id, className }) {
+	const autoId = (0, import_react.useId)();
+	const tipId = (id || "infotip" + autoId.replace(/[^a-zA-Z0-9_-]/g, "")) + "-tip";
+	const [state, dispatch] = (0, import_react.useReducer)(tipReduce, TIP_CLOSED);
+	const open = tipOpen(state);
+	const btnRef = (0, import_react.useRef)(null);
+	const bubbleRef = (0, import_react.useRef)(null);
+	const timer = (0, import_react.useRef)(void 0);
+	const pressed = (0, import_react.useRef)(false);
+	const lastPointer = (0, import_react.useRef)("");
+	const [place, setPlace] = (0, import_react.useState)(null);
+	const later = (0, import_react.useCallback)((e, ms) => {
+		window.clearTimeout(timer.current);
+		timer.current = window.setTimeout(() => dispatch(e), ms);
+	}, []);
+	const now = (0, import_react.useCallback)((e) => {
+		window.clearTimeout(timer.current);
+		dispatch(e);
+	}, []);
+	(0, import_react.useEffect)(() => () => window.clearTimeout(timer.current), []);
+	const enter = (e) => {
+		if (e.pointerType === "touch") return;
+		if (state.hover) window.clearTimeout(timer.current);
+		else later("enter", TIP_OPEN_MS);
+	};
+	const leave = (e) => {
+		if (e.pointerType === "touch") return;
+		later("leave", TIP_CLOSE_MS);
+	};
+	(0, import_react.useLayoutEffect)(() => {
+		if (!open) {
+			setPlace(null);
+			return;
+		}
+		const measure = () => {
+			const a = btnRef.current;
+			const b = bubbleRef.current;
+			if (!a || !b) return;
+			const r = a.getBoundingClientRect();
+			setPlace(placeTip(r, {
+				w: b.offsetWidth,
+				h: b.offsetHeight
+			}, {
+				w: window.innerWidth,
+				h: window.innerHeight
+			}));
+		};
+		measure();
+		let raf = 0;
+		const again = () => {
+			cancelAnimationFrame(raf);
+			raf = requestAnimationFrame(measure);
+		};
+		window.addEventListener("scroll", again, true);
+		window.addEventListener("resize", again);
+		return () => {
+			cancelAnimationFrame(raf);
+			window.removeEventListener("scroll", again, true);
+			window.removeEventListener("resize", again);
+		};
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			e.stopPropagation();
+			now("escape");
+		};
+		const onDown = (e) => {
+			const t = e.target;
+			if (t && (btnRef.current?.contains(t) || bubbleRef.current?.contains(t))) return;
+			now("outside");
+		};
+		window.addEventListener("keydown", onKey, true);
+		document.addEventListener("pointerdown", onDown, true);
+		return () => {
+			window.removeEventListener("keydown", onKey, true);
+			document.removeEventListener("pointerdown", onDown, true);
+		};
+	}, [open, now]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			ref: btnRef,
+			id,
+			className: "infotip-btn" + (open ? " open" : "") + (className ? " " + className : ""),
+			"aria-label": label,
+			"aria-describedby": tipId,
+			"aria-expanded": open,
+			onPointerEnter: enter,
+			onPointerLeave: leave,
+			onPointerDown: (e) => {
+				pressed.current = true;
+				lastPointer.current = e.pointerType;
+			},
+			onFocus: () => {
+				if (pressed.current) pressed.current = false;
+				else now("focus");
+			},
+			onBlur: (e) => {
+				pressed.current = false;
+				if (bubbleRef.current && e.relatedTarget && bubbleRef.current.contains(e.relatedTarget)) return;
+				now("blur");
+			},
+			onClick: (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				if (e.detail === 0) now("activate");
+				else if (lastPointer.current === "touch") now("tap");
+				else if (!state.hover) now("enter");
+				lastPointer.current = "";
+			},
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				viewBox: "0 0 16 16",
+				width: "14",
+				height: "14",
+				"aria-hidden": "true",
+				focusable: "false",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+						cx: "8",
+						cy: "8",
+						r: "6.75",
+						fill: "none",
+						stroke: "currentColor",
+						strokeWidth: "1.4"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+						cx: "8",
+						cy: "5",
+						r: "0.95",
+						fill: "currentColor"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+						d: "M8 7.4v4.2",
+						stroke: "currentColor",
+						strokeWidth: "1.5",
+						strokeLinecap: "round"
+					})
+				]
+			})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			id: tipId,
+			role: "tooltip",
+			className: "infotip-sr",
+			children
+		}),
+		open && typeof document !== "undefined" && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			ref: bubbleRef,
+			className: "infotip",
+			"data-side": place?.side || "below",
+			"aria-hidden": "true",
+			style: {
+				top: place ? place.top : -9999,
+				left: place ? place.left : -9999,
+				visibility: place ? void 0 : "hidden",
+				["--infotip-arrow-x"]: (place?.arrowX ?? 16) + "px"
+			},
+			onPointerEnter: enter,
+			onPointerLeave: leave,
+			children
+		}), document.body)
+	] });
+}
+//#endregion
+//#region src/components/settings/screens/Appearance.tsx
+var SURFACES = [
+	[
+		"",
+		"Swallow (default)",
+		"#0f1117",
+		"#1e222e"
+	],
+	[
+		"raven",
+		"Raven",
+		"#000000",
+		"#141419"
+	],
+	[
+		"heron",
+		"Heron",
+		"#16181b",
+		"#292d33"
+	],
+	[
+		"cardinal",
+		"Cardinal",
+		"#d51322",
+		"#16060a",
+		"#3d060d"
+	],
+	[
+		"macaw",
+		"Scarlet Macaw",
+		"#1554e0",
+		"#06773a",
+		"#43060a"
+	],
+	[
+		"pheasant",
+		"Golden Pheasant",
+		"#f5b800",
+		"#05361f",
+		"#3f070c"
+	],
+	[
+		"oriole",
+		"Oriole",
+		"#ff7a12",
+		"#140c03",
+		"#421d03"
+	],
+	[
+		"lorikeet",
+		"Rainbow Lorikeet",
+		"#4b1fd6",
+		"#256e0a",
+		"#4f1c05"
+	],
+	[
+		"roller",
+		"Lilac-breasted Roller",
+		"#9b6ef0",
+		"#00736b",
+		"#3a2412"
+	],
+	[
+		"goldfinch",
+		"Goldfinch",
+		"#f2e00d",
+		"#131300",
+		"#33350d"
+	],
+	[
+		"toucan",
+		"Toco Toucan",
+		"#ffb01f",
+		"#08080a",
+		"#181820"
+	],
+	[
+		"quetzal",
+		"Quetzal",
+		"#00a35c",
+		"#4a0512",
+		"#033524"
+	],
+	[
+		"greenjay",
+		"Green Jay",
+		"#1440d6",
+		"#d6b800",
+		"#103a0e"
+	],
+	[
+		"gouldian",
+		"Gouldian Finch",
+		"#00c2b2",
+		"#52157a",
+		"#0e3a19"
+	],
+	[
+		"mallard",
+		"Mallard",
+		"#0d9c62",
+		"#5e330f",
+		"#22262e"
+	],
+	[
+		"kingfisher",
+		"Kingfisher",
+		"#00a8d6",
+		"#5e2404",
+		"#06323f"
+	],
+	[
+		"peacock",
+		"Peacock",
+		"#0a9cb8",
+		"#141f8f",
+		"#05383f"
+	],
+	[
+		"bluejay",
+		"Bluejay",
+		"#1266e6",
+		"#0a0e1c",
+		"#071a44"
+	],
+	[
+		"bunting",
+		"Indigo Bunting",
+		"#3b2ff0",
+		"#08061f",
+		"#150f52"
+	],
+	[
+		"violetear",
+		"Violetear",
+		"#7c2ff0",
+		"#0e0420",
+		"#220c40"
+	],
+	[
+		"mandarin",
+		"Mandarin Duck",
+		"#12a85e",
+		"#f2820f",
+		"#3a1445"
+	],
+	[
+		"flamingo",
+		"Flamingo",
+		"#ff2d8a",
+		"#180110",
+		"#420527"
+	]
+];
+function swatchGradient(tones) {
+	const step = 100 / tones.length;
+	return `linear-gradient(135deg,${tones.map((c, i) => `${c} ${(i * step).toFixed(1)}% ${((i + 1) * step).toFixed(1)}%`).join(",")})`;
+}
+var ACCENTS = [
+	[
+		"",
+		"Violetear (default)",
+		"#7d56f4"
+	],
+	[
+		"cardinal",
+		"Cardinal",
+		"#e5484d"
+	],
+	[
+		"oriole",
+		"Oriole",
+		"#f07b3c"
+	],
+	[
+		"goldfinch",
+		"Goldfinch",
+		"#f0cf28"
+	],
+	[
+		"quetzal",
+		"Quetzal",
+		"#44b556"
+	],
+	[
+		"bluejay",
+		"Bluejay",
+		"#3d8bfd"
+	],
+	[
+		"bunting",
+		"Indigo Bunting",
+		"#4f46e5"
+	],
+	[
+		"flamingo",
+		"Flamingo",
+		"#f2559b"
+	],
+	[
+		"pheasant",
+		"Golden Pheasant",
+		"linear-gradient(135deg,#f0d78a,#b8860b)"
+	],
+	[
+		"heron",
+		"Heron",
+		"linear-gradient(135deg,#e2e7ef,#8d95a3)"
+	]
+];
+var DIMS = {
+	accent: {
+		field: "accent",
+		attr: "data-accent",
+		lsKey: "cs_accent"
+	},
+	surface: {
+		field: "surface",
+		attr: "data-surface",
+		lsKey: "cs_surface"
+	}
+};
+function applyStoredAppearance() {
+	for (const dim of Object.values(DIMS)) {
+		let saved = "";
+		try {
+			saved = localStorage.getItem(dim.lsKey) || "";
+		} catch {}
+		if (saved) document.documentElement.setAttribute(dim.attr, saved);
+		else document.documentElement.removeAttribute(dim.attr);
+	}
+}
+function storedAccent() {
+	try {
+		return localStorage.getItem(DIMS.accent.lsKey) || "";
+	} catch {
+		return "";
+	}
+}
+function adoptAccent(name) {
+	const dim = DIMS.accent;
+	if (name) document.documentElement.setAttribute(dim.attr, name);
+	else document.documentElement.removeAttribute(dim.attr);
+	try {
+		if (name) localStorage.setItem(dim.lsKey, name);
+		else localStorage.removeItem(dim.lsKey);
+	} catch {}
+	rethemeAll();
+}
+function current$2(dim) {
+	return document.documentElement.getAttribute(dim.attr) || "";
+}
+function apply$1(dim, name) {
+	if (name) document.documentElement.setAttribute(dim.attr, name);
+	else document.documentElement.removeAttribute(dim.attr);
+	try {
+		if (name) localStorage.setItem(dim.lsKey, name);
+		else localStorage.removeItem(dim.lsKey);
+	} catch {}
+	api("/api/settings", { json: { ui: { [dim.field]: name } } }).catch((e) => toast("Couldn't save the " + dim.field + " for your other devices — " + (e?.message || "the server refused it"), { duration: 8e3 }));
+	rethemeAll();
+}
+function Appearance(_) {
+	const themeLight = useUi((s) => s.themeLight);
+	const [accent, setAccent] = (0, import_react.useState)(() => current$2(DIMS.accent));
+	const [surface, setSurface] = (0, import_react.useState)(() => current$2(DIMS.surface));
+	const surfaceSwatch = ([name, label, ...tones]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
+		className: "accent-swatch surface-swatch" + (surface === name ? " active" : ""),
+		"data-surface-choice": name,
+		onClick: () => {
+			setSurface(name);
+			apply$1(DIMS.surface, name);
+		},
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "sw-dot",
+			style: { background: swatchGradient(tones) }
+		}), label]
+	}, name || "default");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Mode"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Every theme below has both. The moon in the top bar switches too."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			id: "mode-swatches",
+			className: "accent-swatches",
+			role: "radiogroup",
+			"aria-label": "Light or dark",
+			children: [[false, "Dark"], [true, "Light"]].map(([isLight, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				role: "radio",
+				"aria-checked": themeLight === isLight,
+				className: "accent-swatch" + (themeLight === isLight ? " active" : ""),
+				"data-mode-choice": isLight ? "light" : "dark",
+				onClick: () => setTheme(isLight),
+				children: label
+			}, label))
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Theme"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			id: "surface-swatches",
+			className: "accent-swatches",
+			children: SURFACES.map(surfaceSwatch)
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Accent"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Highlights, buttons and the terminal cursor. Mix with any theme."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			id: "accent-swatches",
+			className: "accent-swatches",
+			children: ACCENTS.map(([name, label, color]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "accent-swatch" + (accent === name ? " active" : ""),
+				"data-accent-choice": name,
+				onClick: () => {
+					setAccent(name);
+					apply$1(DIMS.accent, name);
+				},
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sw-dot",
+					style: { background: color }
+				}), label]
+			}, name || "default"))
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Comfort"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReduceMotionRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyBirdsRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeABreakRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IdleFlockRow, {})
+	] });
+}
+function ReduceMotionRow() {
+	const reduceMotion = useUi((s) => s.reduceMotion);
+	const setReduceMotion = useUi((s) => s.setReduceMotion);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Reduce motion"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint notif-rule-desc",
+				children: ["Hide a running agent's scrolling output behind a still panel.", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, { children: "Clicking, scrolling or typing in that window brings the live output back; the panel returns after 10 seconds with no input. Only the Agent tab is covered." })]
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: reduceMotion,
+				onChange: (e) => {
+					setReduceMotion(e.target.checked);
+					if (!flashSaved(e.target)) toast(e.target.checked ? "Reduce motion on" : "Reduce motion off");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
+}
+function SkyBirdsRow() {
+	const on = useUi((s) => s.skyBirds);
+	const setOn = useUi((s) => s.setSkyBirds);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Birds in the Sky"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint notif-rule-desc",
+				children: "A flock drifting across the Sky's background. Off by default; the birds on your routes always stay."
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				"aria-label": "Birds in the Sky",
+				checked: on,
+				onChange: (e) => {
+					setOn(e.target.checked);
+					if (!flashSaved(e.target)) toast(e.target.checked ? "Birds in the Sky on" : "Birds in the Sky off");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
+}
+function TakeABreakRow() {
+	const on = useUi((s) => s.breakReminder);
+	const every = useUi((s) => s.breakEveryMin);
+	const setOn = useUi((s) => s.setBreakReminder);
+	const setEvery = useUi((s) => s.setBreakEveryMin);
+	const [draft, setDraft] = (0, import_react.useState)(String(every));
+	(0, import_react.useEffect)(() => setDraft(String(every)), [every]);
+	const commit = (el) => {
+		const raw = el.value;
+		const next = clampBreakMinutes(raw === "" ? every : raw);
+		setEvery(next);
+		setDraft(String(next));
+		if (!flashSaved(el) && on) toast("Break reminder every " + next + " min");
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Take a break"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint notif-rule-desc break-every",
+				children: [
+					"Reminder to take a break every",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "number",
+						"aria-label": "Minutes between break reminders",
+						min: BREAK_MIN_MINUTES,
+						max: BREAK_MAX_MINUTES,
+						step: 5,
+						value: draft,
+						onChange: (e) => setDraft(e.target.value),
+						onBlur: (e) => commit(e.target),
+						onKeyDown: (e) => {
+							if (e.key === "Enter") e.target.blur();
+						}
+					}),
+					" ",
+					"minutes."
+				]
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: on,
+				onChange: (e) => {
+					setOn(e.target.checked);
+					if (!flashSaved(e.target)) toast(e.target.checked ? "Break reminder on — every " + every + " min" : "Break reminder off");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
+}
+function IdleFlockRow() {
+	const on = useUi((s) => s.idleFlock);
+	const after = useUi((s) => s.idleFlockAfterMin);
+	const setOn = useUi((s) => s.setIdleFlock);
+	const setAfter = useUi((s) => s.setIdleFlockAfterMin);
+	const [draft, setDraft] = (0, import_react.useState)(String(after));
+	(0, import_react.useEffect)(() => setDraft(String(after)), [after]);
+	const commit = (el) => {
+		const raw = el.value;
+		const next = clampIdleMinutes(raw === "" ? after : raw);
+		setAfter(next);
+		setDraft(String(next));
+		if (!flashSaved(el) && on) toast("Idle flock after " + next + " min");
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Idle flock"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint notif-rule-desc break-every",
+				children: [
+					"Fly the flock over your grid after",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "number",
+						"aria-label": "Minutes idle before the flock appears",
+						min: IDLE_MIN_MINUTES,
+						max: IDLE_MAX_MINUTES,
+						step: 5,
+						value: draft,
+						onChange: (e) => setDraft(e.target.value),
+						onBlur: (e) => commit(e.target),
+						onKeyDown: (e) => {
+							if (e.key === "Enter") e.target.blur();
+						}
+					}),
+					" ",
+					"minutes of no input. The first touch sends them home."
+				]
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: on,
+				onChange: (e) => {
+					setOn(e.target.checked);
+					if (!flashSaved(e.target)) toast(e.target.checked ? "Idle flock on — after " + after + " min" : "Idle flock off");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
 }
 //#endregion
 //#region src/lib/playbooks.ts
@@ -33905,6 +34225,8 @@ var SESSION_ACTIONS = {
 	},
 	queue: {
 		label: "Queue prompt…",
+		keys: "Ctrl+K Q",
+		chord: "q",
 		note: "runs when idle",
 		enabled: () => true,
 		run: (t) => focusQueueInput(t)
@@ -33994,6 +34316,14 @@ var SESSION_ACTIONS = {
 		enabled: git,
 		run: (t) => useUi.getState().openMap(t)
 	},
+	diff: {
+		label: "Diff",
+		keys: "Ctrl+K G",
+		chord: "g",
+		note: "what this session changed",
+		enabled: git,
+		run: (t) => useUi.getState().openDiff(t)
+	},
 	pause: {
 		label: "Pause session",
 		note: "stops the agent; keeps it in the sidebar to resume",
@@ -34045,6 +34375,8 @@ var CHORD_ACTIONS = [
 	"branch",
 	"hide",
 	"map",
+	"diff",
+	"queue",
 	"message",
 	"fastTrack",
 	"thread"
@@ -34052,7 +34384,7 @@ var CHORD_ACTIONS = [
 function chordDesc(id) {
 	if (id === "ide") return "Open in your code editor";
 	if (id === "hide") return "Hide / show window";
-	if (id === "thread") return "Thread — " + actionNote(id, {});
+	if (id === "thread" || id === "diff") return sessionAction(id).label + " — " + actionNote(id, {});
 	if (id === "flock") return "Workers on every prompt";
 	const l = sessionAction(id).label;
 	return typeof l === "string" ? l : id;
@@ -38446,6 +38778,14 @@ function resetAllOverrides() {
 	_saveKeyOv();
 	_notify();
 }
+function keyOverridesSnapshot() {
+	return JSON.parse(JSON.stringify(_keyOv));
+}
+function restoreKeyOverrides(saved) {
+	_keyOv = JSON.parse(JSON.stringify(saved));
+	_saveKeyOv();
+	_notify();
+}
 function hasOverrides() {
 	return !!Object.keys(_keyOv.keys).length || !!Object.keys(_keyOv.chords).length;
 }
@@ -38471,6 +38811,9 @@ var CHORDS = {
 };
 function chordKeyFor(id) {
 	return String(_keyOv.chords[id] || id).toLowerCase();
+}
+function chordLabel(id) {
+	return "Ctrl+K " + chordKeyFor(id).toUpperCase();
 }
 function chordShadowedBy(id) {
 	if (_keyOv.chords[id]) return null;
@@ -38625,7 +38968,7 @@ var KEYMAP = [
 		holdable: true,
 		help: [
 			"Navigation",
-			"Ctrl+T",
+			"Ctrl+T / Alt+Space",
 			"Talk to the focused session — hold or press, per the mic's push-to-talk mode"
 		],
 		run: (_e, phase) => voiceTalk(phase || "down")
@@ -38692,8 +39035,7 @@ var KEYMAP = [
 		when: () => {
 			if (isEditingTarget(document.activeElement)) return false;
 			if (document.activeElement?.closest?.(".cm-root")) return false;
-			const box = document.getElementById("sidebar-search");
-			return !!box && !box.classList.contains("hidden");
+			return true;
 		},
 		run: () => _host?.focusFilter()
 	},
@@ -40586,9 +40928,10 @@ function activateExtension(ext) {
 			const spec = ext.extension;
 			if ((spec.api_version || 1) > HOST_API_VERSION) throw new Error("needs host API level " + spec.api_version + " (this app provides 2)");
 			if (spec.stylesheet) injectStylesheet(rec, spec);
+			const url = rec.retries ? spec.module + "?retry=" + rec.retries : spec.module;
 			const entry = (await __vitePreload(() => import(
 				/* @vite-ignore */
-				spec.module
+				url
 ), []))?.default ?? window.mindflockExtensions?.[ext.id];
 			if (!entry || typeof entry.activate !== "function") throw new Error("module exports no activate()");
 			const apiObj = rec.api ?? (rec.api = makeApi(ext));
@@ -40852,6 +41195,7 @@ function mountExtPane(key, host) {
 	startRuntime(rec, key, runtime);
 	return () => {
 		runtime.el.remove();
+		records.get(extId)?.panes.get(key)?.el.remove();
 	};
 }
 function mountExtDialog(target, host) {
@@ -40867,6 +41211,45 @@ function mountExtDialog(target, host) {
 	return () => {
 		runtime.el.remove();
 	};
+}
+function retryExtSurface(key, kind) {
+	const { extId } = parseTarget(key);
+	const ext = known.get(extId);
+	const rec = records.get(extId);
+	if (!ext || !rec || rec.activating) return;
+	rec.ext = ext;
+	const runtime = liveRuntime(extId, key, kind);
+	if (!runtime) return;
+	if (runtime.started || runtime.error) {
+		const fresh = {
+			kind: runtime.kind,
+			el: makeSurfaceEl(extId),
+			surfaceId: runtime.surfaceId,
+			ref: runtime.ref,
+			ctx: runtime.ctx,
+			started: false,
+			epoch: ++epochCounter,
+			title: runtime.title
+		};
+		if (kind === "pane") rec.panes.set(key, fresh);
+		else rec.dialog = {
+			...fresh,
+			kind: "dialog",
+			target: key
+		};
+		runtime.el.replaceWith(fresh.el);
+		disposeRuntime(extId, runtime);
+	}
+	if (rec.status === "error") {
+		rec.status = "idle";
+		rec.error = void 0;
+		rec.activation = void 0;
+		rec.retries = (rec.retries || 0) + 1;
+	}
+	activateExtension(ext);
+	const waiting = [...rec.panes.entries(), ...rec.dialog ? [[rec.dialog.target, rec.dialog]] : []];
+	for (const [k, r] of waiting) if (!r.started && !r.error && !r.disposed) startRuntime(rec, k, r);
+	bump();
 }
 async function startRuntime(rec, key, runtime) {
 	if (runtime.started || runtime.disposed) return;
@@ -41095,7 +41478,9 @@ function backdropPress(onClose) {
 }
 function modalEscape(token, e, p) {
 	if (e.key !== "Escape" || e.defaultPrevented) return false;
-	if (stack$1[stack$1.length - 1] !== token) return false;
+	let top = stack$1.length - 1;
+	while (top >= 0 && stack$1[top].passive?.()) top--;
+	if (stack$1[top] !== token) return false;
 	const spent = p.onEscape?.(e) === true;
 	if (!spent && p.closeOnEscape === false) return false;
 	e.preventDefault();
@@ -41110,7 +41495,7 @@ function pushModal(token) {
 		if (i >= 0) stack$1.splice(i, 1);
 	};
 }
-function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true, escapeCapture = false, portal = false, className, children, ...rest }) {
+function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true, escapeCapture = false, portal = false, keepFocus = false, className, children, ...rest }) {
 	const ref = (0, import_react.useRef)(null);
 	const props = (0, import_react.useRef)({
 		onClose,
@@ -41125,7 +41510,7 @@ function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true
 		escapeCapture
 	};
 	(0, import_react.useEffect)(() => {
-		const token = {};
+		const token = keepFocus ? { passive: () => !(ref.current && ref.current.contains(document.activeElement)) } : {};
 		const pop = pushModal(token);
 		window.dispatchEvent(new CustomEvent(MODAL_OPEN_EVENT));
 		const onKey = (e) => {
@@ -41134,7 +41519,7 @@ function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true
 		window.addEventListener("keydown", onKey, escapeCapture);
 		const node = ref.current;
 		const prev = document.activeElement;
-		if (node && !node.contains(prev)) node.focus({ preventScroll: true });
+		if (node && !keepFocus && !node.contains(prev)) node.focus({ preventScroll: true });
 		return () => {
 			window.removeEventListener("keydown", onKey, escapeCapture);
 			pop();
@@ -41151,6 +41536,73 @@ function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true
 		children
 	});
 	return portal ? (0, import_react_dom.createPortal)(shell, document.body) : shell;
+}
+//#endregion
+//#region src/extensions/ExtPaneBody.tsx
+function ExtSurfaceError({ label, error, onRetry }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ext-surface-status ext-surface-error",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				label,
+				" failed: ",
+				error || "no reason recorded"
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				onClick: onRetry,
+				children: "Try again"
+			}) }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "muted",
+				children: [
+					"See",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => openSettings("extensions"),
+						children: "Settings → Extensions"
+					}),
+					" ",
+					"for details."
+				]
+			})
+		]
+	});
+}
+function ExtPaneBody({ extKey }) {
+	(0, import_react.useSyncExternalStore)(subscribeHost, hostVersion);
+	const mountRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const el = mountRef.current;
+		if (!el) return;
+		return mountExtPane(extKey, el);
+	}, [extKey]);
+	const view = extPaneView(extKey);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ext-pane-body",
+		children: [
+			view.status === "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ext-surface-status muted",
+				children: [
+					"Loading ",
+					view.label,
+					"…"
+				]
+			}),
+			view.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtSurfaceError, {
+				label: view.label,
+				error: view.error,
+				onRetry: () => retryExtSurface(extKey, "pane")
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ext-surface-mount",
+				ref: mountRef
+			})
+		]
+	});
 }
 //#endregion
 //#region src/extensions/ExtensionDialog.tsx
@@ -41196,16 +41648,10 @@ function ExtensionDialog() {
 							"…"
 						]
 					}),
-					view.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "ext-surface-status ext-surface-error",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-							view.label,
-							" failed: ",
-							view.error || "no reason recorded"
-						] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "muted",
-							children: "See Settings → Extensions for details."
-						})]
+					view.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtSurfaceError, {
+						label: view.label,
+						error: view.error,
+						onRetry: () => retryExtSurface(target, "dialog")
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "ext-surface-mount",
@@ -41215,6 +41661,48 @@ function ExtensionDialog() {
 			})]
 		})
 	});
+}
+//#endregion
+//#region node_modules/zustand/esm/vanilla/shallow.mjs
+var isIterable = (obj) => Symbol.iterator in obj;
+var hasIterableEntries = (value) => "entries" in value;
+var compareEntries = (valueA, valueB) => {
+	const mapA = valueA instanceof Map ? valueA : new Map(valueA.entries());
+	const mapB = valueB instanceof Map ? valueB : new Map(valueB.entries());
+	if (mapA.size !== mapB.size) return false;
+	for (const [key, value] of mapA) if (!mapB.has(key) || !Object.is(value, mapB.get(key))) return false;
+	return true;
+};
+var compareIterables = (valueA, valueB) => {
+	const iteratorA = valueA[Symbol.iterator]();
+	const iteratorB = valueB[Symbol.iterator]();
+	let nextA = iteratorA.next();
+	let nextB = iteratorB.next();
+	while (!nextA.done && !nextB.done) {
+		if (!Object.is(nextA.value, nextB.value)) return false;
+		nextA = iteratorA.next();
+		nextB = iteratorB.next();
+	}
+	return !!nextA.done && !!nextB.done;
+};
+function shallow(valueA, valueB) {
+	if (Object.is(valueA, valueB)) return true;
+	if (typeof valueA !== "object" || valueA === null || typeof valueB !== "object" || valueB === null) return false;
+	if (Object.getPrototypeOf(valueA) !== Object.getPrototypeOf(valueB)) return false;
+	if (isIterable(valueA) && isIterable(valueB)) {
+		if (hasIterableEntries(valueA) && hasIterableEntries(valueB)) return compareEntries(valueA, valueB);
+		return compareIterables(valueA, valueB);
+	}
+	return compareEntries({ entries: () => Object.entries(valueA) }, { entries: () => Object.entries(valueB) });
+}
+//#endregion
+//#region node_modules/zustand/esm/react/shallow.mjs
+function useShallow(selector) {
+	const prev = import_react.useRef(void 0);
+	return (state) => {
+		const next = selector(state);
+		return shallow(prev.current, next) ? prev.current : prev.current = next;
+	};
 }
 //#endregion
 //#region src/components/flights/Bird.tsx
@@ -42360,6 +42848,23 @@ var SelectFlows = class {
 };
 var selectFlows = new SelectFlows();
 //#endregion
+//#region src/components/grid/visiblePoll.ts
+function pollWhileVisible(run, ms, doc = typeof document === "undefined" ? void 0 : document) {
+	const tick = () => {
+		if (doc?.hidden) return;
+		run();
+	};
+	const t = setInterval(tick, ms);
+	const onVis = () => {
+		if (!doc?.hidden) run();
+	};
+	doc?.addEventListener("visibilitychange", onVis);
+	return () => {
+		clearInterval(t);
+		doc?.removeEventListener("visibilitychange", onVis);
+	};
+}
+//#endregion
 //#region src/components/AnswerStrip.tsx
 var ANSWER_RECHECK_MS = 3e3;
 var ANSWERED_HOLD_MS = 4e3;
@@ -42589,7 +43094,7 @@ function useAnswerStrip(title, waiting, opts = {}) {
 	(0, import_react.useEffect)(() => {
 		if (!answered || !waiting) return;
 		const ctl = new AbortController();
-		const timer = window.setInterval(() => {
+		const stop = pollWhileVisible(() => {
 			fetchDialog(title, ctl.signal).then((dialog) => !ctl.signal.aborted && dispatch({
 				type: "loaded",
 				dialog
@@ -42597,7 +43102,7 @@ function useAnswerStrip(title, waiting, opts = {}) {
 		}, ANSWER_RECHECK_MS);
 		return () => {
 			ctl.abort();
-			clearInterval(timer);
+			stop();
 		};
 	}, [
 		answered,
@@ -42778,7 +43283,7 @@ function requestSessionVerify(title, notes = "", environment = "") {
 	});
 }
 function verifyStartedMessage(title, r) {
-	const session = r?.session || title;
+	const session = displayName(r?.session || title);
 	if (r?.queued) return "Verify starts when " + session + "'s current turn ends";
 	return "Verifying " + session + " — its agent writes its steps and works them in its terminal";
 }
@@ -42790,7 +43295,7 @@ async function startSessionVerify(title, opts = {}) {
 		if (opts.open !== false) openWalkingSession(title);
 		return true;
 	} catch (err) {
-		errorPop("Couldn't start verifying " + title, errMsg(err));
+		errorPop("Couldn't start verifying " + displayName(title), errMsg(err));
 		return false;
 	}
 }
@@ -43224,6 +43729,40 @@ function VerifyConfirm({ verify, session, hideSteps }) {
 	});
 }
 //#endregion
+//#region src/components/InlineConfirm.tsx
+function InlineConfirm(props) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-confirm",
+		role: "alertdialog",
+		"aria-label": props.title,
+		id: props.id,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-confirm-text",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: props.title }),
+				" ",
+				props.body
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-confirm-actions",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn set-confirm-yes",
+				disabled: props.busy,
+				onClick: props.onConfirm,
+				children: props.confirmLabel
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				autoFocus: true,
+				disabled: props.busy,
+				onClick: props.onCancel,
+				children: props.cancelLabel ?? "Cancel"
+			})]
+		})]
+	});
+}
+//#endregion
 //#region src/lib/flightsApi.ts
 var enc$1 = encodeURIComponent;
 var flightPath = (id, rest = "") => "/api/flights/" + enc$1(id) + rest;
@@ -43233,6 +43772,9 @@ async function fetchFlights(all = false) {
 }
 function refreshFlights() {
 	queryClient.invalidateQueries({ queryKey: ["flight-plans"] });
+	return refreshFlightsOnly();
+}
+function refreshFlightsOnly() {
 	return queryClient.invalidateQueries({ queryKey: ["flights"] });
 }
 async function flightAction(what, path, body = {}, done = "") {
@@ -43244,8 +43786,7 @@ async function flightAction(what, path, body = {}, done = "") {
 		errorPop(what + " failed", errMsg(err));
 		return false;
 	} finally {
-		refreshFlights();
-		refreshInstances();
+		refreshFlightsOnly();
 	}
 }
 function isAnswerBehaviors(err) {
@@ -43276,8 +43817,7 @@ async function stepDone(flightId, stepId, note = "") {
 		} else errorPop("Done failed", errMsg(err));
 		return false;
 	} finally {
-		refreshFlights();
-		refreshInstances();
+		refreshFlightsOnly();
 	}
 }
 function stepFix(flightId, stepId) {
@@ -44290,14 +44830,23 @@ async function skipPausedStop(fl, full) {
 	return await stepSkip(fl.id, fl.step.id) && !!full && skipCarriesOn(full) && controlFlight(fl.id, "resume");
 }
 function StopRouteButton({ id, busy, run }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: "test-btn",
 		disabled: busy,
 		title: "Its session is closed — end this route",
-		onClick: () => void run(() => flightAction("Stop the route", flightPath(id, "/cancel"), {}, "Route stopped")),
+		onClick: () => setAsking(true),
 		children: "Stop the route"
-	});
+	}), asking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+		title: "Stop this route?",
+		body: "It stops where it is. Its session, branch and work are kept.",
+		confirmLabel: "Stop the route",
+		cancelLabel: "Keep it running",
+		busy,
+		onCancel: () => setAsking(false),
+		onConfirm: () => void run(() => flightAction("Stop the route", flightPath(id, "/cancel"), {}, "Route stopped")).finally(() => setAsking(false))
+	})] });
 }
 function RouteMain({ w, row, shown, full, gone }) {
 	if (gone && full) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
@@ -45481,6 +46030,7 @@ function installPeerRowMemory(qc) {
 //#region src/components/NotificationsBell.tsx
 var NOTIF_CAP = 100;
 var NOTIF_SEEN_KEY = "mf_notif_seen_ts";
+var NOTIF_CLEARED_KEY = "mf_notif_cleared_ts";
 var NEEDS_SHOWN = 6;
 function BellGlyph({ size = 15 }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
@@ -45726,6 +46276,25 @@ function rowKey(e) {
 	e.preventDefault();
 	e.currentTarget.click();
 }
+function loadClearedTs() {
+	try {
+		return parseFloat(localStorage.getItem(NOTIF_CLEARED_KEY) || "0") || 0;
+	} catch {
+		return 0;
+	}
+}
+function saveClearedTs(rows, prev) {
+	const mark = rows.reduce((m, n) => Math.max(m, n.ts), prev);
+	try {
+		localStorage.setItem(NOTIF_CLEARED_KEY, String(mark));
+	} catch {}
+	return mark;
+}
+var BELL_FIRST_ITEM = ".notif-attn [tabindex=\"0\"], .notif-attn button, .notif-list .notif-item, .notif-pop button";
+function refocusBellOnEscape(active, pop, btn, body) {
+	if (!active || active === body || active === btn) return true;
+	return !!pop && pop.contains(active);
+}
 function NotificationsBell() {
 	const { data: instances = [] } = useInstances();
 	const { data: runs } = useRuns();
@@ -45743,6 +46312,7 @@ function NotificationsBell() {
 	const btnRef = (0, import_react.useRef)(null);
 	const popRef = (0, import_react.useRef)(null);
 	const openedAt = (0, import_react.useRef)(0);
+	const clearedTs = (0, import_react.useRef)(loadClearedTs());
 	useNotifyConfig();
 	(0, import_react.useEffect)(() => {
 		const bus = window.mindflock?.events;
@@ -45752,12 +46322,14 @@ function NotificationsBell() {
 			if (!n) return;
 			if (n.rule && !ruleOn(n.rule)) return;
 			const seq = typeof env.seq === "number" ? env.seq : 0;
+			const ts = env.ts || Date.now() / 1e3;
+			if (ts <= clearedTs.current) return;
 			setNotifs((prev) => {
 				if (seq && prev.some((x) => x.seq === seq)) return prev;
 				if (n.dedupe && prev.some((x) => x.dedupe === n.dedupe)) return prev;
 				const next = [...prev, {
 					seq,
-					ts: env.ts || Date.now() / 1e3,
+					ts,
 					session: env.session || "",
 					...n
 				}].sort((a, b) => a.ts - b.ts);
@@ -45774,7 +46346,11 @@ function NotificationsBell() {
 			setOpen(false);
 		};
 		const onKey = (e) => {
-			if (e.key === "Escape" && !e.defaultPrevented) setOpen(false);
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			const back = refocusBellOnEscape(document.activeElement, popRef.current, btnRef.current, document.body);
+			setOpen(false);
+			if (back) btnRef.current?.focus();
 		};
 		document.addEventListener("click", onClick);
 		document.addEventListener("keydown", onKey);
@@ -45828,6 +46404,10 @@ function NotificationsBell() {
 			document.removeEventListener("mf-close-bell", onClose);
 		};
 	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		popRef.current?.querySelector(BELL_FIRST_ITEM)?.focus({ preventScroll: true });
+	}, [open]);
 	(0, import_react.useEffect)(() => {
 		if (!open || !flash) return;
 		(popRef.current?.querySelector("[data-needs=\"" + CSS.escape(flash) + "\"]"))?.scrollIntoView({ block: "nearest" });
@@ -45890,7 +46470,10 @@ function NotificationsBell() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						className: "notif-clear",
 						type: "button",
-						onClick: () => setNotifs([]),
+						onClick: () => {
+							clearedTs.current = saveClearedTs(notifs, clearedTs.current);
+							setNotifs([]);
+						},
 						children: "Clear"
 					})
 				]
@@ -49588,9 +50171,13 @@ var WORDS = {
 			" while it does. Double-click it to see and change each of its stops."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"To change a saved route, drag it onto the sky, edit its stops there, then ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
-			". Right-click its chip on the shelf to rename, reset or delete it, or to pick what starts it."
+			"To change a saved route, right-click its chip on the shelf (or open its ⋯ in ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "All stops…" }),
+			") and pick ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Edit its stops" }),
+			": a copy opens on the sky; change its stops, then ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save" }),
+			" writes them back (routes already running keep their own copy). The same menu renames, resets or deletes it, or picks what starts it."
 		] })
 	] }),
 	bird: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -49632,7 +50219,7 @@ var WORDS = {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Delete" }),
 			") takes a stop off at once, with ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Undo" }),
-			" in the toast. Removing the stop the route is on stops its work and pauses the route right before the next stop; Carry on goes into it."
+			" in the toast. Removing the stop the route is on asks first, then stops its work and pauses the route right before the next stop; Carry on goes into it. A finished route's stop asks too: removing it clears the whole finished route."
 		] })
 	] }),
 	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -49649,7 +50236,7 @@ var WORDS = {
 			" chip on it (a new session is made and the stops run there), or with its ⋯ → ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Run on a session…" }),
 			". The same ⋯ offers ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save as a route…" }),
 			" and ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
 			"."
@@ -49678,7 +50265,7 @@ var WORDS = {
 		" (it asks first: a session's route closes its session, a route with no session goes); and for stops of one route, ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Group into a stop" }),
 		" and ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save as a route…" }),
 		"."
 	] })] }),
 	keys: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
@@ -50530,6 +51117,7 @@ var PALETTE_ACTIONS = [
 	"commit",
 	"push",
 	"pr",
+	"viewPr",
 	"ide",
 	"duplicate",
 	"branch",
@@ -50539,6 +51127,7 @@ var PALETTE_ACTIONS = [
 	"close",
 	"delete",
 	"map",
+	"diff",
 	"merge"
 ];
 var ACTION_KEYWORDS = {
@@ -50566,6 +51155,9 @@ var TOP = {
 	tour: 7,
 	shortcuts: 8
 };
+function copyPathOf(inst) {
+	return inst?.folder || inst?.path || "";
+}
 function buildPaletteActions({ config, host, extensions }) {
 	const ui = useUi.getState();
 	const caps = config?.caps ?? {
@@ -50653,7 +51245,7 @@ function buildPaletteActions({ config, host, extensions }) {
 	});
 	acts.push({
 		label: "Customize…",
-		hint: "choose sidebar bars",
+		hint: "choose sidebar bars and the pane header",
 		run: () => ui.openDialogFor("customize")
 	});
 	acts.push({
@@ -50680,6 +51272,12 @@ function buildPaletteActions({ config, host, extensions }) {
 			run: () => void runTemplateNow(tpl.name)
 		});
 	}
+	acts.push({
+		label: "Reopen last closed session",
+		hint: "Ctrl+Shift+T",
+		keywords: "undo close restore reopen recently closed",
+		run: () => void undoLastClose()
+	});
 	acts.push({
 		label: "Recently closed…",
 		hint: "reopen or delete closed sessions",
@@ -50790,6 +51388,15 @@ function buildPaletteActions({ config, host, extensions }) {
 				run: () => useUi.getState().openMap(t, { section: "search" })
 			});
 		}
+		const folder = copyPathOf(c.inst);
+		if (folder) acts.push({
+			label: `Copy folder path — ${name}`,
+			hint: folder,
+			keywords: "copy path folder directory worktree clipboard",
+			run: () => void copyText(folder).then((ok) => {
+				if (ok) toast("Copied path");
+			})
+		});
 	}
 	const needs = needsYouNow();
 	for (const inst of rows) {
@@ -61927,12 +62534,16 @@ function ShortcutsSheet() {
 	const [capturing, setCapturing] = (0, import_react.useState)(null);
 	const [editing, setEditing] = (0, import_react.useState)(false);
 	const [, setVersion] = (0, import_react.useState)(keymapVersion());
+	const cardRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => subscribeKeymap(() => setVersion(keymapVersion())), []);
 	(0, import_react.useEffect)(() => {
 		if (!open) {
 			setCapturing(null);
 			setEditing(false);
 		}
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (open) cardRef.current?.focus();
 	}, [open]);
 	(0, import_react.useEffect)(() => {
 		if (!open || capturing) return;
@@ -62018,6 +62629,10 @@ function ShortcutsSheet() {
 		},
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "shortcuts-card",
+			ref: cardRef,
+			tabIndex: -1,
+			role: "dialog",
+			"aria-label": "Keyboard shortcuts",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "shortcuts-head",
@@ -62040,9 +62655,13 @@ function ShortcutsSheet() {
 							title: "Forget every custom binding and go back to the defaults",
 							onClick: () => {
 								setCapturing(null);
+								const saved = keyOverridesSnapshot();
 								resetAllOverrides();
 								setVersion(keymapVersion());
-								toast("Shortcuts restored to defaults");
+								toast("Restored the default shortcuts", { action: {
+									label: "Undo",
+									onClick: () => restoreKeyOverrides(saved)
+								} });
 							},
 							children: "Restore defaults"
 						}),
@@ -62101,6 +62720,16 @@ function ShortcutsSheet() {
 									meta,
 									mode: "set"
 								}) : void 0,
+								role: meta ? "button" : void 0,
+								tabIndex: meta ? 0 : void 0,
+								onKeyDown: meta ? (e) => {
+									if (e.target !== e.currentTarget || e.key !== "Enter" && e.key !== " ") return;
+									e.preventDefault();
+									setCapturing({
+										meta,
+										mode: "set"
+									});
+								} : void 0,
 								children: [
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 										className: "shortcut-keys",
@@ -62144,6 +62773,7 @@ function ShortcutsSheet() {
 												if (meta.kind === "chord") resetChordOverride(meta.id);
 												else resetKeyOverride(meta.id);
 												setVersion(keymapVersion());
+												toast("Restored the default for " + (meta.kind === "chord" ? CHORDS[meta.id].desc : desc));
 											},
 											children: "↺"
 										})]
@@ -62228,7 +62858,13 @@ function fitTopBar({ room, fixed, brand, items, more }) {
 	};
 }
 function TopBar() {
-	const ui = useUi();
+	const ui = useUi(useShallow((s) => ({
+		narrow: s.narrow,
+		view: s.view,
+		sidebarHidden: s.sidebarHidden,
+		toggleSidebar: s.toggleSidebar,
+		openDialogFor: s.openDialogFor
+	})));
 	const light = useUi((s) => s.themeLight);
 	const version = engineVersion(useDoctor().data?.version);
 	useTestPlans();
@@ -62678,10 +63314,29 @@ function useNow(ms) {
 	return Date.now();
 }
 //#endregion
+//#region src/lib/memorySlow.ts
+var SLOW_SESSIONS_LINE = "Sessions may be slow to show what you type and their new output until memory recovers.";
+var FREE_MEMORY_HINT = "Putting idle agents to sleep or closing sessions frees memory fastest.";
+function memoryIsShort(level) {
+	return level === "low" || level === "critical";
+}
+function memoryConnText(level, pollFailing) {
+	if (!memoryIsShort(level)) return null;
+	return {
+		head: "MindFlock is slow to respond: memory is " + (level === "critical" ? "critically low" : "low"),
+		text: pollFailing ? "The server is slow to answer because this computer is short of memory. It usually catches up on its own. " + FREE_MEMORY_HINT : "Live updates are lagging because this computer is short of memory, and sessions may be slow to respond. " + FREE_MEMORY_HINT
+	};
+}
+//#endregion
 //#region src/components/ConnBanner.tsx
+var SLOW_MAX_MS = 3e5;
+function pollFailText(err) {
+	const status = err instanceof ApiError ? err.status : 0;
+	return status > 0 ? "The server is reachable but answering with errors (HTTP " + status + "). It may recover on its own; if not, check the server logs." : "The server isn’t answering — it may have stopped or be restarting. Reconnecting automatically.";
+}
 function ConnBanner() {
 	const [pollFails, setPollFails] = (0, import_react.useState)(0);
-	const [lastErr, setLastErr] = (0, import_react.useState)("");
+	const [lastErr, setLastErr] = (0, import_react.useState)(null);
 	const [evtDropped, setEvtDropped] = (0, import_react.useState)(false);
 	const [diag, setDiag] = (0, import_react.useState)(null);
 	const [lostAt, setLostAt] = (0, import_react.useState)(0);
@@ -62696,7 +63351,7 @@ function ConnBanner() {
 				if (action?.type === "success") setPollFails(0);
 				else if (action?.type === "error") {
 					setPollFails((n) => n + 1);
-					setLastErr(action.error?.message || "");
+					setLastErr(action.error ?? null);
 				}
 			}
 		});
@@ -62735,14 +63390,25 @@ function ConnBanner() {
 	}, [lost, pollFails]);
 	if (!lost) return null;
 	let text;
+	let head = "⚠ Connection to MindFlock lost";
 	let fixLabel;
-	if (diag && pollFails >= 2 && diag.state === "wsl-down") {
+	const memLevel = queryClient.getQueryData(["system-memory"])?.level;
+	const slow = !!diag && [
+		"wsl-down",
+		"wsl-missing",
+		"not-installed",
+		"starting"
+	].includes(diag.state || "") || lostAt && now - lostAt > SLOW_MAX_MS ? null : memoryConnText(memLevel, pollFails >= 2);
+	if (slow && !(lastErr instanceof ApiError && lastErr.status > 0)) {
+		head = slow.head;
+		text = slow.text;
+	} else if (diag && pollFails >= 2 && diag.state === "wsl-down") {
 		text = "WSL (" + (diag.distro || "Ubuntu") + ") isn’t responding, so the server can’t run. Restarting WSL usually fixes this.";
 		fixLabel = "Restart WSL";
 	} else if (diag && pollFails >= 2 && diag.state === "wsl-missing") text = "WSL isn’t installed on this computer. Run “wsl --install” in PowerShell, restart, then reopen MindFlock.";
 	else if (diag && pollFails >= 2 && diag.state === "not-installed") text = "WSL is up, but MindFlock isn’t installed in it anymore. Reinstall it to continue.";
 	else if (diag && pollFails >= 2 && diag.state === "starting") text = "The server is starting back up — this connects on its own, usually within a few seconds.";
-	else if (pollFails >= 2) text = /^HTTP \d/.test(lastErr) ? "The server is reachable but answering with errors (" + lastErr + "). It may recover on its own; if not, check the server logs." : "The server isn’t answering — it may have stopped or be restarting. Reconnecting automatically.";
+	else if (pollFails >= 2) text = pollFailText(lastErr);
 	else text = "The live update stream dropped — the page may lag a few seconds behind. Reconnecting automatically.";
 	const s = Math.max(0, Math.round((now - lostAt) / 1e3));
 	const elapsed = "Retrying… (" + (s < 90 ? s + "s" : Math.floor(s / 60) + "m " + s % 60 + "s") + ")";
@@ -62753,7 +63419,7 @@ function ConnBanner() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "conn-head",
-				children: "⚠ Connection to MindFlock lost"
+				children: head
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "conn-detail",
@@ -62784,6 +63450,529 @@ function ConnBanner() {
 			})
 		]
 	});
+}
+//#endregion
+//#region src/components/usage/UsagePopover.tsx
+var closeCurrent = null;
+function escapeRefocus(active, pop, anchor) {
+	if (!active || active === anchor) return true;
+	if (pop && pop.contains(active)) return true;
+	return active.tagName === "BODY";
+}
+function UsagePopover({ anchor, onClose, children, className }) {
+	const popRef = (0, import_react.useRef)(null);
+	const onCloseRef = (0, import_react.useRef)(onClose);
+	onCloseRef.current = onClose;
+	(0, import_react.useEffect)(() => {
+		const close = () => onCloseRef.current();
+		if (closeCurrent) closeCurrent();
+		closeCurrent = close;
+		return () => {
+			if (closeCurrent === close) closeCurrent = null;
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		anchor.classList.add("pop-open");
+		return () => anchor.classList.remove("pop-open");
+	}, [anchor]);
+	(0, import_react.useLayoutEffect)(() => {
+		const pop = popRef.current;
+		if (!pop) return;
+		const r = anchor.getBoundingClientRect();
+		let top = r.bottom + 4;
+		const h = pop.offsetHeight;
+		if (top + h > window.innerHeight - 8 && r.top - 4 - h >= 8) top = r.top - 4 - h;
+		pop.style.top = top + "px";
+		let left = r.right - pop.offsetWidth;
+		const maxLeft = window.innerWidth - pop.offsetWidth - 8;
+		if (left > maxLeft) left = maxLeft;
+		if (left < 8) left = 8;
+		pop.style.left = left + "px";
+	});
+	(0, import_react.useEffect)(() => {
+		const onDocClick = (e) => {
+			const t = e.target;
+			if (!t) return;
+			if (popRef.current && popRef.current.contains(t)) return;
+			if (anchor.contains(t)) return;
+			onCloseRef.current();
+		};
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			if (escapeRefocus(document.activeElement, popRef.current, anchor)) anchor.focus();
+			onCloseRef.current();
+		};
+		const close = () => onCloseRef.current();
+		document.addEventListener("click", onDocClick);
+		document.addEventListener("keydown", onKey);
+		window.addEventListener("scroll", close, true);
+		window.addEventListener("resize", close);
+		return () => {
+			document.removeEventListener("click", onDocClick);
+			document.removeEventListener("keydown", onKey);
+			window.removeEventListener("scroll", close, true);
+			window.removeEventListener("resize", close);
+		};
+	}, [anchor]);
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		ref: popRef,
+		className: "usage-pop" + (className ? " " + className : ""),
+		style: {
+			top: 0,
+			left: 0
+		},
+		children
+	}), document.body);
+}
+function UsagePopTable({ rows }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("table", {
+		className: "usage-pop-tbl",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: rows.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: r[0] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+			className: "num" + (r[2] ? " " + r[2] : ""),
+			children: r[1]
+		})] }, i)) })
+	});
+}
+function UsagePopNote({ text }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "usage-pop-note",
+		children: text
+	});
+}
+//#endregion
+//#region src/lib/sessionMemory.ts
+function memoryReading(m) {
+	if (!m || typeof m !== "object") return null;
+	const mb = Number(m.mb);
+	if (!Number.isFinite(mb) || mb <= 0) return null;
+	return m;
+}
+function fmtMb(mb) {
+	const n = Math.max(0, Number(mb) || 0);
+	if (n < 1e3) return Math.round(n) + " MB";
+	const gb = n / 1024;
+	if (gb < 10) return gb.toFixed(1).replace(/\.0$/, "") + " GB";
+	return Math.round(gb) + " GB";
+}
+var WARN_MB = 2048;
+var CRIT_MB = 4096;
+var WARN_SHARE = .1;
+var CRIT_SHARE = .2;
+var PRESSURE_TOP = 3;
+var PRESSURE_MIN_MB = 512;
+function memoryTone(mb, totalMb, level, rank = -1) {
+	const share = totalMb > 0 ? mb / totalMb : 0;
+	if (mb >= CRIT_MB || share >= CRIT_SHARE) return "crit";
+	if ((level === "low" || level === "critical") && rank >= 0 && rank < PRESSURE_TOP && mb >= PRESSURE_MIN_MB) return "crit";
+	if (mb >= WARN_MB || share >= WARN_SHARE) return "warn";
+	return "";
+}
+function memoryRank(rows, title) {
+	return (rows || []).map((r) => ({
+		title: r.title,
+		mb: memoryReading(r.memory)?.mb ?? 0
+	})).filter((r) => r.mb > 0).sort((a, b) => b.mb - a.mb).findIndex((r) => r.title === title);
+}
+function memoryTip(m) {
+	let s = "Memory: " + fmtMb(m.mb);
+	if ((m.peak_mb || 0) > m.mb) s += " (peak " + fmtMb(m.peak_mb) + ")";
+	const parts = [];
+	if (m.agent_mb > 0) parts.push("agent " + fmtMb(m.agent_mb));
+	if (m.mcp_mb > 0) parts.push("MCP servers " + fmtMb(m.mcp_mb));
+	if (m.other_mb > 0) parts.push("other " + fmtMb(m.other_mb) + " (tests, servers…)");
+	if (m.procs > 0) parts.push(m.procs + (m.procs === 1 ? " process" : " processes"));
+	if (parts.length) s += " — " + parts.join(" · ");
+	return s;
+}
+//#endregion
+//#region src/components/usage/memoryModel.ts
+var MIB = 1048576;
+var num$3 = (v) => {
+	const n = typeof v === "number" ? v : NaN;
+	return Number.isFinite(n) ? n : null;
+};
+function asLevel(v) {
+	return v === "ok" || v === "low" || v === "critical" ? v : "unknown";
+}
+function machineFromDetail(sys) {
+	const s = sys || {};
+	const total = num$3(s.total_mb);
+	const avail = num$3(s.available_mb);
+	const out = {
+		totalMb: total && total > 0 ? total : null,
+		usedMb: total && total > 0 && avail != null ? Math.max(0, total - avail) : null,
+		swapTotalMb: num$3(s.swap_total_mb),
+		swapUsedMb: num$3(s.swap_used_mb),
+		level: asLevel(s.level)
+	};
+	const hTotal = num$3(s.host_total_mb);
+	const hAvail = num$3(s.host_available_mb);
+	if (hTotal && hTotal > 0 && hAvail != null) {
+		out.hostTotalMb = hTotal;
+		out.hostUsedMb = Math.max(0, hTotal - hAvail);
+		out.hostLevel = asLevel(s.host_level);
+		if (s.guest_level != null) out.guestLevel = asLevel(s.guest_level);
+	}
+	return out;
+}
+function machineFromReading(r) {
+	if (!r) return {
+		totalMb: null,
+		usedMb: null,
+		swapTotalMb: null,
+		swapUsedMb: null,
+		level: "unknown"
+	};
+	const total = num$3(r.total);
+	const avail = num$3(r.available);
+	const swapTotal = num$3(r.swap_total);
+	const swapFree = num$3(r.swap_free);
+	const totalMb = total && total > 0 ? Math.floor(total / MIB) : null;
+	return {
+		totalMb,
+		usedMb: totalMb != null && avail != null ? Math.max(0, totalMb - Math.floor(avail / MIB)) : null,
+		swapTotalMb: swapTotal != null ? Math.floor(swapTotal / MIB) : null,
+		swapUsedMb: swapTotal != null ? Math.max(0, Math.floor((swapTotal - (swapFree ?? 0)) / MIB)) : null,
+		level: asLevel(r.level)
+	};
+}
+function gb1(mb) {
+	return (Math.max(0, mb) / 1024).toFixed(1).replace(/\.0$/, "");
+}
+function fmtUsedOfTotal(usedMb, totalMb) {
+	if (usedMb == null || totalMb == null || totalMb <= 0) return null;
+	if (usedMb < 1e3 || totalMb < 1e3) return fmtMb(usedMb) + " / " + fmtMb(totalMb);
+	return gb1(usedMb) + " / " + gb1(totalMb) + " GB";
+}
+function memoryRowTone(level) {
+	if (level === "critical") return "crit";
+	if (level === "low") return "warn";
+	return "";
+}
+function levelWords(level, gate) {
+	switch (level) {
+		case "ok": return gate ? gaugeOkWords(gate) : "OK — room to spare";
+		case "low": return "Low — new agents wait";
+		case "critical": return "Critical — close something";
+		default: return "Not measured";
+	}
+}
+function hostIsCause(m) {
+	if (m.hostLevel == null || m.hostLevel !== m.level) return false;
+	if (m.level !== "low" && m.level !== "critical") return false;
+	return m.guestLevel == null || m.guestLevel !== m.level;
+}
+function memoryReasons(r) {
+	let line = (r && Array.isArray(r.why) ? r.why : []).filter((w) => typeof w === "string" && !!w.trim()).map((w) => w.trim()).join("; ");
+	if (!line) {
+		const msg = String(r?.message || "").trim();
+		if (!msg || /GB free of/.test(msg)) return "";
+		line = msg.replace(/^(windows )?memory is (critically low|critical|low):\s*/i, "");
+	}
+	return line ? line[0].toUpperCase() + line.slice(1) : "";
+}
+function memoryRowText(m, ctx = {}) {
+	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
+	const share = m.usedMb != null && m.totalMb ? Math.min(1, m.usedMb / m.totalMb) : null;
+	const head = "Memory " + (pair ?? "—");
+	let title = pair ? "This machine's memory: " + pair + " in use (" + Math.round((share || 0) * 100) + "%)" : "This machine's memory";
+	if (m.level === "low" || m.level === "critical") {
+		title += " — " + (hostIsCause(m) ? "Windows is short of memory: " : "") + levelWords(m.level).toLowerCase();
+		if (ctx.reasons) title += " (" + ctx.reasons[0].toLowerCase() + ctx.reasons.slice(1) + ")";
+	} else if (m.level === "ok" && ctx.gate) title += " — " + gaugeOkWords(ctx.gate).replace(/^OK(, but| —) /, "");
+	return {
+		head,
+		title: title + " — click for what holds it",
+		share
+	};
+}
+function shortCmd(cmd, max = 40) {
+	const t = (cmd || "").replace(/\s+/g, " ").trim().split(" ").map((w) => /^\/\S+\/[^/]+$/.test(w) ? w.slice(w.lastIndexOf("/") + 1) : w).join(" ");
+	return t.length <= max ? t : t.slice(0, max - 1) + "…";
+}
+function memoryPopModel(detail, fallback, aliases = {}, ctx = {}) {
+	const m = detail ? machineFromDetail(detail.system) : fallback;
+	const machine = [];
+	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
+	if (pair) {
+		const pct = Math.round((m.usedMb || 0) / (m.totalMb || 1) * 100);
+		machine.push(["In use", pair + " (" + pct + "%)"]);
+	}
+	if ((m.swapUsedMb || 0) > 0) machine.push(["Swap", fmtMb(m.swapUsedMb || 0) + (m.swapTotalMb ? " of " + fmtMb(m.swapTotalMb) : "")]);
+	const host = fmtUsedOfTotal(m.hostUsedMb ?? null, m.hostTotalMb ?? null);
+	if (host) {
+		const pct = Math.round((m.hostUsedMb || 0) / (m.hostTotalMb || 1) * 100);
+		machine.push(["Windows", host + " (" + pct + "%)"]);
+	}
+	machine.push([
+		"Pressure",
+		(hostIsCause(m) ? "Windows: " : "") + levelWords(m.level, ctx.gate),
+		"wrap"
+	]);
+	if (ctx.reasons && (m.level === "low" || m.level === "critical")) machine.push([
+		"Why",
+		ctx.reasons,
+		"wrap"
+	]);
+	const sess = detail && Array.isArray(detail.sessions) ? detail.sessions.filter((r) => r && r.mb > 0) : [];
+	const oth = detail && Array.isArray(detail.others) ? detail.others.filter((r) => r && r.mb > 0) : [];
+	sess.sort((a, b) => b.mb - a.mb);
+	oth.sort((a, b) => b.mb - a.mb);
+	const top = Math.max(1, ...sess.map((r) => r.mb), ...oth.map((r) => r.mb));
+	const sessions = sess.map((r) => {
+		const parts = [];
+		if ((r.agent_mb || 0) > 0) parts.push("agent " + fmtMb(r.agent_mb || 0));
+		if ((r.mcp_mb || 0) > 0) parts.push("MCP servers " + fmtMb(r.mcp_mb || 0));
+		if ((r.other_mb || 0) > 0) parts.push("other " + fmtMb(r.other_mb || 0));
+		const label = aliases[r.title] || r.title;
+		return {
+			key: "s:" + r.title,
+			title: r.title,
+			label,
+			sub: "",
+			tip: label + ": " + fmtMb(r.mb) + (parts.length ? " — " + parts.join(" · ") : "") + " — click to open it",
+			mb: r.mb,
+			value: fmtMb(r.mb),
+			frac: r.mb / top
+		};
+	});
+	const others = oth.map((r) => {
+		const label = r.server ? "MindFlock server" : r.name || "process " + r.pid;
+		return {
+			key: "p:" + r.pid,
+			title: "",
+			label,
+			sub: shortCmd(r.cmd),
+			tip: label + " (pid " + r.pid + "): " + fmtMb(r.mb) + (r.cmd ? "\n" + r.cmd : ""),
+			mb: r.mb,
+			value: fmtMb(r.mb),
+			frac: r.mb / top
+		};
+	});
+	return {
+		machine,
+		tone: memoryRowTone(m.level),
+		sessions,
+		others,
+		machineOnly: !detail
+	};
+}
+function sparkPoints(samples, w, h, maxPoints = 120) {
+	const pts = [];
+	for (const s of samples || []) {
+		const m = machineFromDetail(s && s.system);
+		if (m.usedMb == null || m.totalMb == null || !Number.isFinite(s.at)) continue;
+		pts.push({
+			at: s.at,
+			used: m.usedMb,
+			total: m.totalMb
+		});
+	}
+	if (pts.length < 2) return null;
+	const step = Math.max(1, Math.ceil(pts.length / maxPoints));
+	const kept = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+	const t0 = kept[0].at;
+	const span = Math.max(1, kept[kept.length - 1].at - t0);
+	const totalMb = Math.max(...kept.map((p) => p.total));
+	const r1 = (n) => Math.round(n * 10) / 10;
+	return {
+		points: kept.map((p) => r1((p.at - t0) / span * w) + "," + r1(h - Math.min(p.used, totalMb) / totalMb * h)).join(" "),
+		lastUsedMb: kept[kept.length - 1].used,
+		totalMb
+	};
+}
+//#endregion
+//#region src/components/usage/OverallMemory.tsx
+var SPARK_W = 200;
+var SPARK_H = 28;
+function BarRows({ rows, onPick }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+		className: "mem-pop-list",
+		children: rows.map((r) => {
+			const inner = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "mem-pop-name",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mem-pop-label",
+						children: r.label
+					}), r.sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mem-pop-sub",
+						children: r.sub
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mem-pop-bar",
+					"aria-hidden": "true",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.max(2, Math.round(r.frac * 100)) + "%" } })
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mem-pop-num",
+					children: r.value
+				})
+			] });
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: onPick && r.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "mem-pop-row mem-pop-pick",
+				title: r.tip,
+				onClick: (ev) => {
+					ev.stopPropagation();
+					onPick(r.title);
+				},
+				children: inner
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mem-pop-row",
+				title: r.tip,
+				children: inner
+			}) }, r.key);
+		})
+	});
+}
+function useMemoryPopData(open, detailOn) {
+	const aliases = useUi((s) => s.aliases);
+	const detailQ = useMemoryDetail(detailOn);
+	const { data: reading } = useMemory();
+	const detail = detailQ.isError ? null : detailQ.data ?? null;
+	const { data: hist } = useMemoryHistory(open && !!detail);
+	const machine = (0, import_react.useMemo)(() => detail ? machineFromDetail(detail.system) : machineFromReading(reading), [detail, reading]);
+	const ctx = (0, import_react.useMemo)(() => ({
+		gate: gateWhy(reading?.gate),
+		reasons: memoryReasons(reading)
+	}), [reading]);
+	return {
+		detailQ,
+		machine,
+		ctx,
+		model: (0, import_react.useMemo)(() => open ? memoryPopModel(detail, machine, aliases, ctx) : null, [
+			open,
+			detail,
+			machine,
+			aliases,
+			ctx
+		]),
+		spark: (0, import_react.useMemo)(() => open && hist ? sparkPoints(hist.samples, SPARK_W, SPARK_H) : null, [open, hist])
+	};
+}
+function pickSession(t) {
+	selectSession(t);
+	const ui = useUi.getState();
+	if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
+}
+function MemoryPopBody({ model, spark, onPick }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "usage-pop-head" + (model.tone ? " mem-" + model.tone : ""),
+			children: "This machine"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: model.machine }),
+		spark && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "mem-spark",
+			title: "Memory in use over the last hour — now " + fmtMb(spark.lastUsedMb) + " of " + fmtMb(spark.totalMb),
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+				viewBox: `0 0 ${SPARK_W} ${SPARK_H}`,
+				preserveAspectRatio: "none",
+				role: "img",
+				"aria-label": "Memory in use over the last hour",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", {
+					points: spark.points,
+					fill: "none",
+					vectorEffect: "non-scaling-stroke"
+				})
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "mem-spark-cap",
+				children: "last hour"
+			})]
+		}),
+		model.sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "usage-pop-head mem-pop-sec",
+			children: "Sessions"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BarRows, {
+			rows: model.sessions,
+			onPick
+		})] }),
+		model.others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "usage-pop-head mem-pop-sec",
+			children: "Outside MindFlock"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BarRows, { rows: model.others })] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopNote, { text: model.machineOnly ? "This server reports the machine only — update MindFlock to see what each session holds." : "Each session counts its whole process tree (agent, MCP servers, tests), sampled every 15 s." })
+	] });
+}
+function memoryRowShown(sidebarHidden, row) {
+	return !sidebarHidden && !!row && row.offsetParent !== null;
+}
+function MemoryPopAt({ anchor, className, onClose }) {
+	const { model, spark } = useMemoryPopData(true, true);
+	if (!model) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopover, {
+		anchor,
+		className,
+		onClose,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryPopBody, {
+			model,
+			spark,
+			onPick: (t) => {
+				pickSession(t);
+				onClose();
+			}
+		})
+	});
+}
+function OverallMemory() {
+	const sidebarHidden = useUi((s) => s.sidebarHidden);
+	const btnRef = (0, import_react.useRef)(null);
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const { detailQ, machine, ctx, model, spark } = useMemoryPopData(open, !sidebarHidden);
+	const { head, title, share } = memoryRowText(machine, ctx);
+	const tone = memoryRowTone(machine.level);
+	const ask = useUi((s) => s.memoryPopAsk);
+	const seenAsk = (0, import_react.useRef)(ask);
+	(0, import_react.useEffect)(() => {
+		if (ask === seenAsk.current) return;
+		seenAsk.current = ask;
+		setOpen(true);
+		if (!sidebarHidden) detailQ.refetch();
+	}, [ask]);
+	if (machine.totalMb == null) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		id: "overall-memory",
+		ref: btnRef,
+		className: "overall-usage overall-memory" + (tone ? " mem-" + tone : ""),
+		type: "button",
+		title,
+		onClick: (ev) => {
+			ev.stopPropagation();
+			setOpen((o) => {
+				if (!o && !sidebarHidden) detailQ.refetch();
+				return !o;
+			});
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "usage-head",
+				children: head
+			}),
+			share != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "mem-meter",
+				"aria-hidden": "true",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.round(share * 100) + "%" } })
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "caret",
+				children: "▾"
+			})
+		]
+	}), open && btnRef.current && model && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopover, {
+		anchor: btnRef.current,
+		onClose: () => setOpen(false),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryPopBody, {
+			model,
+			spark,
+			onPick: (t) => {
+				pickSession(t);
+				setOpen(false);
+			}
+		})
+	})] });
 }
 //#endregion
 //#region src/components/MemoryNotice.tsx
@@ -62844,10 +64033,13 @@ function slotsLine(s) {
 function MemoryNotice() {
 	const { data, isError } = useMemory();
 	const [hiddenAt, setHiddenAt] = (0, import_react.useState)(0);
+	const seeRef = (0, import_react.useRef)(null);
+	const [popHere, setPopHere] = (0, import_react.useState)(false);
 	const rank = RANK$1[data?.level || "ok"] ?? 0;
 	const shown = !!data && !isError && rank > 0 && !(hiddenAt && rank <= hiddenAt);
 	const { data: slots } = useSlots(shown);
 	if (hiddenAt && (rank === 0 || rank > hiddenAt)) setHiddenAt(0);
+	if (!shown && popHere) setPopHere(false);
 	if (!data || !shown) return null;
 	const heavy = slotsLine(slots);
 	const critical = data.level === "critical";
@@ -62884,24 +64076,60 @@ function MemoryNotice() {
 				className: "mn-detail mn-slots",
 				children: heavy
 			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mn-detail mn-slow",
+				children: SLOW_SESSIONS_LINE
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-detail mn-what",
-				children: ["Agents that start by themselves (a worker an agent spawns, a queued prompt, a restart) wait until it recovers, one at a time; a start of yours asks first. Putting idle agents to sleep or closing sessions frees memory fastest", critical ? " — the system may start killing agents soon." : "."]
+				children: [
+					"Agents that start by themselves (a worker an agent spawns, a queued prompt, a restart) wait until it recovers, one at a time; a start of yours asks first. ",
+					FREE_MEMORY_HINT,
+					critical ? " The system may start killing agents soon." : ""
+				]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-foot",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					ref: seeRef,
+					className: "linklike mn-see",
+					title: "Sessions and other processes, biggest first",
+					onClick: (ev) => {
+						ev.stopPropagation();
+						const ui = useUi.getState();
+						if (memoryRowShown(ui.sidebarHidden, document.getElementById("overall-memory"))) ui.askMemoryPop();
+						else setPopHere((o) => !o);
+					},
+					children: "See what's using it"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "mn-btn",
 					onClick: () => setHiddenAt(rank),
 					children: "Hide"
-				})
+				})]
+			}),
+			popHere && seeRef.current && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryPopAt, {
+				anchor: seeRef.current,
+				className: "mem-pop-over-notice",
+				onClose: () => setPopHere(false)
 			})
 		]
 	});
 }
 //#endregion
 //#region src/components/StateNotice.tsx
+function restoreCommand(backup) {
+	const win = /^[A-Za-z]:[\\/]/.test(backup) || backup.includes("\\") && !backup.includes("/");
+	const cut = Math.max(backup.lastIndexOf("/"), win ? backup.lastIndexOf("\\") : -1);
+	const dest = (cut >= 0 ? backup.slice(0, cut + 1) : "") + "state.json";
+	if (win) {
+		const q = (x) => "'" + x.replace(/'/g, "''") + "'";
+		return "Move-Item -Force " + q(backup) + " " + q(dest);
+	}
+	const q = (x) => "'" + x.replace(/'/g, "'\\''") + "'";
+	return "mv " + q(backup) + " " + q(dest);
+}
 function StateNotice() {
 	const notice = useDoctor().data?.state_notice;
 	const [dismissed, setDismissed] = (0, import_react.useState)(false);
@@ -62939,7 +64167,15 @@ function StateNotice() {
 							className: "sn-path",
 							children: "state.json"
 						}),
-						" to recover them."
+						" to recover them.",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "sn-copy",
+							title: restoreCommand(notice.backup_path),
+							onClick: () => void copyText(restoreCommand(notice.backup_path)).then((ok) => toast(ok ? "Copied — run it in a terminal after upgrading" : "Copy failed")),
+							children: "Copy the rename command"
+						})
 					] }) : " The original file could not be moved aside, so check ~/.mindflock/state.json before making changes."
 				]
 			}),
@@ -63121,6 +64357,11 @@ var useInstallWindow = create((set) => ({
 	set: (open) => set({ open })
 }));
 var INSTALL_SLOW_S = 90;
+var TERM_CLOSE_GRACE_MS = 3e3;
+function terminalFailed(state, exit, sawRun, closedForMs) {
+	if (state !== "disconnected" || exit !== null) return false;
+	return !sawRun || closedForMs >= TERM_CLOSE_GRACE_MS;
+}
 function fmtElapsed(secs) {
 	const s = Math.max(0, Math.floor(secs));
 	return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
@@ -63201,6 +64442,10 @@ function InstallWindow({ steps, onClose, onDone, onSignIn }) {
 	const [planned] = (0, import_react.useState)(() => steps || []);
 	const doneRef = (0, import_react.useRef)(onDone);
 	doneRef.current = onDone;
+	const [closedAt, setClosedAt] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		setClosedAt(state === "disconnected" ? Date.now() : null);
+	}, [state]);
 	(0, import_react.useEffect)(() => {
 		let live = true;
 		let fired = false;
@@ -63236,8 +64481,9 @@ function InstallWindow({ steps, onClose, onDone, onSignIn }) {
 	};
 	const secs = exit === null ? elapsedSince(run, seenAt.current, now) : 0;
 	const slow = exit === null && secs >= INSTALL_SLOW_S;
+	const noTerm = terminalFailed(state, exit, run !== null, closedAt === null ? 0 : now - closedAt);
 	const agent = installedAgent(planned);
-	const status = exit === 0 ? installedMessage(planned) : exit !== null ? "✗ some steps failed — scroll up to see which" : state === "streaming" ? installProgress(planned, secs) : state;
+	const status = exit === 0 ? installedMessage(planned) : exit !== null ? "✗ some steps failed — scroll up to see which" : noTerm ? run ? "The terminal closed." : "Couldn't open the terminal." : state === "streaming" ? installProgress(planned, secs) : termStateText(state);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "install-dialog",
 		role: "dialog",
@@ -63283,9 +64529,9 @@ function InstallWindow({ steps, onClose, onDone, onSignIn }) {
 						children: "Done"
 					})
 				}),
-				(slow || exit !== null && exit !== 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualFallback, {
+				(slow || noTerm || exit !== null && exit !== 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualFallback, {
 					cmds,
-					lead: slow ? "Taking a while — it may be stuck on the network. It keeps trying; or run this in your own terminal:" : "Didn't finish. Run this in your own terminal instead:"
+					lead: noTerm ? "Run this in your own terminal instead:" : slow ? "Taking a while — it may be stuck on the network. It keeps trying; or run this in your own terminal:" : "Didn't finish. Run this in your own terminal instead:"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "prov-login-term login-term-dark",
@@ -63791,7 +65037,10 @@ function Connections({ gotoScreen }) {
 	(0, import_react.useEffect)(() => {
 		alive.current = true;
 		load(true);
-		const timer = window.setInterval(() => void load(false), REFRESH_MS);
+		const timer = window.setInterval(() => {
+			if (document.hidden) return;
+			load(false);
+		}, REFRESH_MS);
 		const onChanged = () => void load(true);
 		window.addEventListener(CONNECTIONS_CHANGED_EVENT, onChanged);
 		return () => {
@@ -63922,6 +65171,16 @@ function signInSteps(provider) {
 	];
 	return ["Answer " + agentDisplayName(provider) + "'s prompts in the terminal below.", "If it shows a link, open it in your browser and sign in."];
 }
+function termStateText(state) {
+	switch (state) {
+		case "streaming": return "";
+		case "connecting": return "Opening the terminal…";
+		case "starting": return "Starting…";
+		case "reconnecting": return "Reconnecting…";
+		case "disconnected": return "The terminal closed.";
+		default: return "";
+	}
+}
 var SIGNIN_POLL_MS = 3e3;
 function SignInWindow({ provider, profile, onClose }) {
 	const hostRef = (0, import_react.useRef)(null);
@@ -63954,7 +65213,7 @@ function SignInWindow({ provider, profile, onClose }) {
 		} catch {}
 		closeRef.current();
 	};
-	const status = signedIn ? "✓ Signed in. You can close this window." : state === "streaming" ? "" : state;
+	const status = signedIn ? "✓ Signed in. You can close this window." : state === "disconnected" ? "The terminal closed. If you didn't finish, close this and try again." : termStateText(state);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "signin-dialog",
 		role: "dialog",
@@ -64032,35 +65291,6 @@ var SKIP_PERMS_LABEL = "⚠ Skip permission prompts";
 var SKIP_PERMS_TITLE = "The agent runs commands and edits files without asking you";
 var NOTHING_TO_PUSH = "Nothing to push yet";
 var CONNECT_GITHUB_FOR_PRS = "Connect GitHub to open PRs";
-//#endregion
-//#region src/components/settings/savedCue.ts
-var ROW = ".set-row, .notif-channel, .ntfy-field-row, .set-switch-row";
-var SHOW_MS = 1600;
-var FRESH_MS = 5e3;
-var touched = null;
-var timers = /* @__PURE__ */ new WeakMap();
-function noteTouched(target) {
-	if (target && typeof target.closest === "function") touched = {
-		el: target,
-		at: Date.now()
-	};
-}
-function cueTarget(el) {
-	const row = el.closest(ROW);
-	if (!row) return null;
-	return row.querySelector(".set-label") || row;
-}
-function flashSaved(el) {
-	const source = el ?? (touched && Date.now() - touched.at < FRESH_MS ? touched.el : null);
-	if (!source || !source.isConnected) return false;
-	const target = cueTarget(source);
-	if (!target) return false;
-	target.setAttribute("data-saved", "");
-	const prev = timers.get(target);
-	if (prev) clearTimeout(prev);
-	timers.set(target, setTimeout(() => target.removeAttribute("data-saved"), SHOW_MS));
-	return true;
-}
 //#endregion
 //#region src/components/intake/autosave.ts
 var AUTOSAVE_MS = 700;
@@ -64266,45 +65496,17 @@ function FlagChips({ provider, value, onChange }) {
 	});
 }
 //#endregion
-//#region src/components/InlineConfirm.tsx
-function InlineConfirm(props) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-confirm",
-		role: "alertdialog",
-		"aria-label": props.title,
-		id: props.id,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-confirm-text",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: props.title }),
-				" ",
-				props.body
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-confirm-actions",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn set-confirm-yes",
-				disabled: props.busy,
-				onClick: props.onConfirm,
-				children: props.confirmLabel
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				autoFocus: true,
-				disabled: props.busy,
-				onClick: props.onCancel,
-				children: props.cancelLabel ?? "Cancel"
-			})]
-		})]
-	});
-}
-//#endregion
 //#region src/components/settings/useSettings.tsx
 var SECRET_MASK = "•••set";
+function settingsStatus(q) {
+	if (q.data !== void 0) return "ready";
+	return q.isError && !q.isFetching ? "error" : "loading";
+}
 var EMPTY_SETTINGS = {};
 function useSettingsModel(open) {
-	const settings = useSettingsDoc(open).data ?? EMPTY_SETTINGS;
+	const doc = useSettingsDoc(open);
+	const settings = doc.data ?? EMPTY_SETTINGS;
+	const status = settingsStatus(doc);
 	const reload = (0, import_react.useCallback)(async () => {
 		try {
 			await fetchSettingsDoc();
@@ -64338,6 +65540,7 @@ function useSettingsModel(open) {
 	}, [reload]);
 	return {
 		settings,
+		status,
 		reload,
 		saveField,
 		saveGroup: (0, import_react.useCallback)((group, patch, okMsg) => saveGroups({ [group]: patch }, okMsg), [saveGroups]),
@@ -64378,8 +65581,9 @@ function SettingField(props) {
 			if (why) return;
 		}
 		if (value === display && !isSecret) return;
-		s.saveField(props.group, props.field, value);
-		if (isSecret) setValue("");
+		s.saveField(props.group, props.field, value).then((ok) => {
+			if (ok && isSecret) setValue((cur) => cur === value ? "" : cur);
+		});
 	};
 	if (props.options) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
 		"data-group": props.group,
@@ -64470,11 +65674,15 @@ var shared = null;
 function loadAgentRows(refresh = false) {
 	const now = Date.now();
 	if (!refresh && shared && now - shared.at < SHARE_MS) return shared.rows;
-	const rows = api("/api/connections" + (refresh ? "?refresh=1" : "")).then((d) => (d?.connections || []).filter((c) => c.kind === "agent")).catch(() => []);
-	shared = {
+	const rows = api("/api/connections" + (refresh ? "?refresh=1" : "")).then((d) => (d?.connections || []).filter((c) => c.kind === "agent"));
+	const mine = {
 		at: now,
 		rows
 	};
+	shared = mine;
+	rows.catch(() => {
+		if (shared === mine) shared = null;
+	});
 	return rows;
 }
 function agentRowFor(rows, provider) {
@@ -64484,13 +65692,20 @@ function agentRowFor(rows, provider) {
 }
 function AgentCard({ provider, here, gotoScreen, onChanged, tourNext = false }) {
 	const [row, setRow] = (0, import_react.useState)(void 0);
+	const [failed, setFailed] = (0, import_react.useState)(false);
 	const [result, setResult] = (0, import_react.useState)();
 	const [testing, setTesting] = (0, import_react.useState)(false);
 	const openDialogFor = useUi((st) => st.openDialogFor);
 	const closeDialog = useUi((st) => st.closeDialog);
 	const load = (0, import_react.useCallback)(async (refresh = false) => {
-		const rows = await loadAgentRows(refresh);
-		setRow(agentRowFor(rows, provider));
+		try {
+			const rows = await loadAgentRows(refresh);
+			setFailed(false);
+			setRow(agentRowFor(rows, provider));
+		} catch {
+			setFailed(true);
+			setRow(null);
+		}
 	}, [provider]);
 	(0, import_react.useEffect)(() => {
 		setResult(void 0);
@@ -64504,6 +65719,15 @@ function AgentCard({ provider, here, gotoScreen, onChanged, tourNext = false }) 
 		window.addEventListener(CONNECTIONS_CHANGED_EVENT, on);
 		return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
 	}, [load]);
+	if (failed) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentCardError, {
+		provider,
+		tourNext,
+		onRetry: () => void load(true),
+		onSignedIn: () => {
+			load(true);
+			onChanged?.();
+		}
+	});
 	if (row === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "agent-card agent-card-loading",
 		"aria-busy": "true",
@@ -64549,6 +65773,34 @@ function AgentCard({ provider, here, gotoScreen, onChanged, tourNext = false }) 
 				onChanged?.();
 			}
 		})
+	});
+}
+function AgentCardError({ provider, tourNext = false, onRetry, onSignedIn }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "agent-card agent-card-error",
+		"data-provider": provider,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "set-hint agent-card-failed",
+			children: [
+				"Couldn't check ",
+				agentName(provider || "claude"),
+				".",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike agent-card-retry",
+					onClick: (e) => {
+						e.stopPropagation();
+						onRetry();
+					},
+					children: "Retry"
+				})
+			]
+		}), provider ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
+			provider,
+			onDone: onSignedIn,
+			dataTour: tourNext ? "setup-next" : void 0
+		}) : null]
 	});
 }
 //#endregion
@@ -64625,7 +65877,7 @@ function CodingCli({ gotoScreen }) {
 		setFlags(flagsMap.current[name] || "");
 		s.saveField("coding_cli", "default_provider", name).then((ok) => ok && setDefaultSaved((n) => n + 1));
 	};
-	const saveFlags = (0, import_react.useCallback)(async (value) => {
+	const saveFlags = (0, import_react.useCallback)(async (value, from) => {
 		const prov = selected.trim();
 		if (!prov) return;
 		const val = value.trim();
@@ -64633,9 +65885,9 @@ function CodingCli({ gotoScreen }) {
 		else delete flagsMap.current[prov];
 		try {
 			await api("/api/settings", { json: { coding_cli: { default_launch_args: flagsMap.current } } });
-			toast("Saved launch flags");
-		} catch {
-			toast("Save failed: launch flags");
+			if (!flashSaved(from ?? document.getElementById("default-launch-args-input"))) toast("Saved launch flags");
+		} catch (err) {
+			toast("Save failed: " + (err?.message || "launch flags"));
 		}
 	}, [selected]);
 	const others = providers.filter((p) => p.name !== selected);
@@ -64734,7 +65986,7 @@ function CodingCli({ gotoScreen }) {
 					placeholder: flagsPlaceholder(selected),
 					value: flags,
 					onChange: (e) => setFlags(e.target.value),
-					onBlur: () => saveFlags(flags),
+					onBlur: (e) => saveFlags(flags, e.currentTarget),
 					onKeyDown: (e) => {
 						if (e.key === "Enter") e.target.blur();
 					}
@@ -64995,6 +66247,15 @@ function useBlockedPoll(b) {
 		return () => window.clearInterval(t);
 	}, [signedOut]);
 }
+function readsSignedIn(status, provider) {
+	const row = (status?.logins || []).find((l) => l.name === provider);
+	return !!row && row.logged_in !== false;
+}
+async function reviveIfSignedIn(title, provider) {
+	await refreshSetup(true);
+	if (!readsSignedIn(queryClient.getQueryData(SETUP_KEY), provider)) return false;
+	return reviveSession(title);
+}
 function useSignInThenRestart(title, b) {
 	const [open, setOpen] = (0, import_react.useState)(false);
 	return {
@@ -65004,7 +66265,7 @@ function useSignInThenRestart(title, b) {
 			onClose: () => {
 				setOpen(false);
 				notifyConnectionsChanged();
-				refreshSetup(true).then(() => reviveSession(title));
+				reviveIfSignedIn(title, b.name);
 			}
 		}) : null
 	};
@@ -65119,7 +66380,28 @@ async function expectBackgroundJob(title, jobId, secs) {
 }
 //#endregion
 //#region src/components/sidebar/SessionMenu.tsx
-function SessionMenu({ model, onDone, onInUse }) {
+function endingLabel(kind) {
+	return kind === "closing" ? "Closing…" : "Deleting…";
+}
+function withEnding(model, kind) {
+	if (!kind) return model;
+	const off = (it) => it.key === "close" || it.key === "delete" ? {
+		...it,
+		disabled: true,
+		confirm: void 0,
+		note: endingLabel(kind),
+		title: endingLabel(kind)
+	} : it;
+	return {
+		...model,
+		groups: model.groups.map((g) => g.id === "danger" ? {
+			...g,
+			items: g.items.map(off)
+		} : g)
+	};
+}
+function SessionMenu({ model: given, onDone, onInUse, ending }) {
+	const model = withEnding(given, ending);
 	const [moreOpen, setMoreOpen] = (0, import_react.useState)(false);
 	const [deleteArmed, setDeleteArmed] = (0, import_react.useState)(false);
 	const moreRef = (0, import_react.useRef)(null);
@@ -65648,6 +66930,16 @@ function sessionMenu$1(inst, ctx, opts = {}) {
 			run: () => copyText(folder).then((ok) => {
 				if (ok) toast("Copied path");
 			})
+		},
+		!!opts.visibleTabs && {
+			key: "customize-header",
+			label: "Customize header…",
+			title: "Choose what a pane's header shows: tabs, chips, the next step",
+			run: () => {
+				const ui = useUi.getState();
+				ui.setCustomizePage("pane");
+				ui.openDialogFor("customize");
+			}
 		}
 	]);
 	const danger = keep([{
@@ -65662,7 +66954,7 @@ function sessionMenu$1(inst, ctx, opts = {}) {
 		label: sessionAction("delete").short,
 		danger: true,
 		confirm: deleteConfirmText(inst),
-		title: "Deletes its folder and branch, uncommitted changes included (asks first)",
+		title: deleteMenuTitle(inst),
 		run: () => deleteSession(title, true)
 	}]);
 	return {
@@ -65799,17 +67091,23 @@ function VerifyStartForm({ title, repo, onClose }) {
 	(0, import_react.useEffect)(() => {
 		field.current?.focus();
 	}, []);
+	const busyRef = (0, import_react.useRef)(false);
 	const start = async () => {
-		if (busy) return;
+		if (busyRef.current) return;
+		busyRef.current = true;
 		setBusy(true);
+		let ok = false;
 		try {
-			if (await startSessionVerify(title, {
+			ok = await startSessionVerify(title, {
 				notes,
 				environment: where,
 				open: false
-			})) onClose();
+			});
+			if (ok) onClose();
 		} finally {
+			busyRef.current = false;
 			setBusy(false);
+			if (!ok) field.current?.focus();
 		}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
@@ -65836,7 +67134,7 @@ function VerifyStartForm({ title, repo, onClose }) {
 				placeholder: "What should it prove? (optional)",
 				"aria-label": "What should it prove? (optional)",
 				value: notes,
-				disabled: busy,
+				readOnly: busy,
 				onChange: (e) => setNotes(e.target.value),
 				onKeyDown: (e) => {
 					if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -65863,7 +67161,7 @@ function VerifyStartForm({ title, repo, onClose }) {
 				className: "btn-primary pv-form-start",
 				disabled: busy,
 				"aria-busy": busy || void 0,
-				children: "Start"
+				children: busy ? "Starting…" : "Start"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
@@ -66358,6 +67656,14 @@ function openChat(title) {
 	setState(openWindow(state, title, "open"));
 	loadChat(title);
 }
+var handOpened = /* @__PURE__ */ new Set();
+function openChatByHand(title) {
+	handOpened.add(title);
+	openChat(title);
+}
+function takeHandOpen(title) {
+	return handOpened.delete(title);
+}
 function minimizeChat(title) {
 	setState(minimizeWindow(state, title));
 }
@@ -66486,7 +67792,7 @@ function GuestPills({ title }) {
 			"aria-label": "Open the chat for this session",
 			onClick: (e) => {
 				e.stopPropagation();
-				openChat(title);
+				openChatByHand(title);
 			},
 			onDoubleClick: (e) => e.stopPropagation(),
 			children: "💬"
@@ -67027,6 +68333,21 @@ function closeGuarded(now) {
 	lastCloseClick = now;
 	return false;
 }
+function inlineRenameVerdict(raw, shown, takenBy) {
+	const name = raw.trim();
+	if (!name || name === shown) return { kind: "keep" };
+	if (takenBy(name)) return {
+		kind: "taken",
+		name
+	};
+	return {
+		kind: "rename",
+		name
+	};
+}
+function renameTakenText(name) {
+	return "Another session is already named “" + name + "”.";
+}
 function railRowKey(e) {
 	if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null;
 	switch (e.key) {
@@ -67059,6 +68380,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const strip = (0, import_react.useRef)(null);
 	const [editing, setEditing] = (0, import_react.useState)(false);
 	const cancelled = (0, import_react.useRef)(false);
+	const [renameTaken, setRenameTaken] = (0, import_react.useState)("");
 	const editEndedAt = (0, import_react.useRef)(0);
 	const { data: config } = useConfig();
 	const focused = useUi((s) => s.focused);
@@ -67067,6 +68389,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const alias = aliases[inst.title];
 	const picking = useUi((s) => s.bulkMode);
 	const picked = useUi((s) => s.bulkSelected.has(inst.title));
+	const ending = useUi((s) => s.ending[inst.title]);
 	const title = inst.title;
 	const missing = !!inst.workspace_missing;
 	const paused = inst.status === "paused";
@@ -67160,7 +68483,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const failText = ss.startFailed && inst.start_failed ? startFailedHint(inst.start_failed).split("\n")[0] : "";
 	const orphan = orphanLine(inst);
 	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !orphan && !!task;
-	const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
+	const subline = editing ? !!renameTaken : !!(ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
 	useNow(wline?.state === "working" || ship?.state === "working" ? 3e4 : false);
 	useNow(wait ? 3e4 : false);
 	useNow(backgroundJobs(inst).some((j) => expectOf(j)) ? 6e4 : false);
@@ -67219,6 +68542,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const startRename = () => {
 		if (pending || picking || theirs) return;
 		cancelled.current = false;
+		setRenameTaken("");
 		setEditing(true);
 	};
 	const reselect = () => {
@@ -67227,18 +68551,23 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
 	};
 	const commitRename = (raw) => {
-		setEditing(false);
-		editEndedAt.current = Date.now();
 		if (cancelled.current) {
 			cancelled.current = false;
+			setRenameTaken("");
+			setEditing(false);
+			editEndedAt.current = Date.now();
 			return;
 		}
-		const next = raw.trim();
-		if (!next || next === shown) return;
-		if (nameTakenBy(title, next)) {
-			toast(`Another session is already named “${next}”`);
+		const verdict = inlineRenameVerdict(raw, shown, (n) => nameTakenBy(title, n));
+		if (verdict.kind === "taken") {
+			setRenameTaken(verdict.name);
 			return;
 		}
+		setRenameTaken("");
+		setEditing(false);
+		editEndedAt.current = Date.now();
+		if (verdict.kind === "keep") return;
+		const next = verdict.name;
 		renameSession(title, next, { plain: label.text });
 	};
 	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (offlinePeer ? " peer-gone" : "") + (picked ? " bulk-picked" : "") + (menuAt ? " menu-open" : "") + (dropCue ? ` drop-${dropCue}` : "");
@@ -67330,6 +68659,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 								className: "title title-edit",
 								type: "text",
+								maxLength: MAX_TITLE_LEN,
 								defaultValue: shown,
 								autoFocus: true,
 								autoComplete: "off",
@@ -67338,6 +68668,9 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 								onMouseDown: (e) => e.stopPropagation(),
 								onClick: (e) => e.stopPropagation(),
 								onDoubleClick: (e) => e.stopPropagation(),
+								"aria-invalid": !!renameTaken,
+								"aria-describedby": renameTaken ? "rename-taken-" + idx : void 0,
+								onChange: () => renameTaken && setRenameTaken(""),
 								onBlur: (e) => commitRename(e.currentTarget.value),
 								onKeyDown: (e) => {
 									if (e.key === "Enter") {
@@ -67347,6 +68680,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 										e.preventDefault();
 										cancelled.current = true;
 										editEndedAt.current = Date.now();
+										setRenameTaken("");
 										setEditing(false);
 									}
 								}
@@ -67367,6 +68701,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 									picking ? "" : "Ctrl+click or Shift+click to select several"
 								].filter(Boolean).join("\n"),
 								children: /(-\d+|\(\d+\))$/.test(shown) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: shown }) : shown
+							}),
+							editing && renameTaken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lineage rename-taken",
+								id: "rename-taken-" + idx,
+								role: "alert",
+								children: renameTakenText(renameTaken)
 							}),
 							!editing && ship && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "lineage ship-line " + ship.cls + (shipOpensBell ? " opens-bell" : ""),
@@ -67480,7 +68820,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							})
 						]
 					}),
-					ss.waiting && !inst.device ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					ending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "stagechip chip-ending",
+						role: "status",
+						children: endingLabel(ending)
+					}) : ss.waiting && !inst.device ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: "stagechip chip-restart chip-waitmem " + chip.cls,
 						title: chip.title,
@@ -67682,9 +69026,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 					!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						className: "kill" + (missing ? " cleanup" : ""),
 						"aria-label": missing ? "Delete session" : "Close session",
-						title: missing ? "Delete — its workspace is gone; this removes the session" : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)",
+						disabled: !!ending,
+						title: ending ? endingLabel(ending) : missing ? "Delete — its workspace is gone; this removes the session" : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)",
 						onClick: (e) => act(() => {
 							if (closeGuarded(Date.now())) return;
+							if (ending) return;
 							if (missing) return cleanupMissing(title);
 							if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
 							setCloseArmed(false);
@@ -67778,6 +69124,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 					},
 					picked
 				}),
+				ending,
 				onInUse: setInUse,
 				onDone: () => closeMenu()
 			})
@@ -68148,6 +69495,7 @@ function GuestLinks() {
 	const [install, setInstall] = (0, import_react.useState)([]);
 	const [understood, setUnderstood] = (0, import_react.useState)(false);
 	const [pickOpen, setPickOpen] = (0, import_react.useState)(false);
+	const [confirmRevoke, setConfirmRevoke] = (0, import_react.useState)(null);
 	const sessions = (0, import_react.useMemo)(() => (instances || []).filter((i) => !i.device && !i.hidden_by && !i.pending && !i.locked && !i.parent), [instances]);
 	const ack = (on) => {
 		setUnderstood(on);
@@ -68174,7 +69522,10 @@ function GuestLinks() {
 	const starting = tunnel?.state === "starting";
 	(0, import_react.useEffect)(() => {
 		if (!starting) return;
-		const t = setInterval(() => void load(), 2e3);
+		const t = setInterval(() => {
+			if (document.hidden) return;
+			load();
+		}, 2e3);
 		return () => clearInterval(t);
 	}, [starting, load]);
 	const needsInstall = !!tunnel && !tunnel.installed && (links?.length || 0) > 0;
@@ -68221,6 +69572,7 @@ function GuestLinks() {
 		setBusy(true);
 		try {
 			await api("/api/guests/" + encodeURIComponent(id), { method: "DELETE" });
+			setConfirmRevoke(null);
 			if (made === id) setMade(null);
 			await load();
 			toast("Guest link revoked");
@@ -68506,10 +69858,19 @@ function GuestLinks() {
 						" ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "test-btn",
-							disabled: busy,
-							onClick: () => void revoke(l.id),
-							children: "Revoke"
+							className: "test-btn peer-danger",
+							disabled: busy || confirmRevoke === l.id,
+							onClick: () => setConfirmRevoke(l.id),
+							children: "Revoke…"
+						}),
+						confirmRevoke === l.id && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+							id: "peer-guests-revoke-confirm",
+							title: "Revoke this guest link?",
+							body: "Whoever has it loses access.",
+							confirmLabel: busy ? "Revoking…" : "Revoke",
+							busy,
+							onConfirm: () => void revoke(l.id),
+							onCancel: () => setConfirmRevoke(null)
 						})
 					]
 				}, l.id))
@@ -68543,10 +69904,10 @@ function GuestBar() {
 			feedGuestFocus(r.links || []);
 		}).catch(() => {});
 		tick();
-		const t = setInterval(() => void tick(), POLL_MS$4);
+		const stop = pollWhileVisible(() => void tick(), POLL_MS$4);
 		return () => {
 			live = false;
-			clearInterval(t);
+			stop();
 		};
 	}, [owner]);
 	if (!(owner && (links.length > 0 || tunnel?.state === "up" || tunnel?.state === "starting"))) return null;
@@ -68558,7 +69919,7 @@ function GuestBar() {
 			setTunnel(null);
 			toast(killedText(r.revoked || 0));
 		} catch (e) {
-			toast(e instanceof Error ? e.message : String(e));
+			errorPop("Kill guest links failed", errMsg(e));
 		} finally {
 			setBusy(false);
 		}
@@ -68598,7 +69959,7 @@ function SessionFilter() {
 			"aria-label": "Filter sessions",
 			value: filter,
 			autoFocus: peek,
-			onChange: (e) => setFilter(e.target.value.trim()),
+			onChange: (e) => setFilter(e.target.value),
 			onBlur: (e) => {
 				if (peek && !e.target.value.trim()) setFilterPeek(false);
 			},
@@ -68681,6 +70042,19 @@ function SidebarResizer() {
 }
 //#endregion
 //#region src/components/sidebar/BulkBar.tsx
+function bulkEscape(ask) {
+	return ask ? "cancel-ask" : "leave";
+}
+function shortReason$1(msg, max = 80) {
+	const line = firstLine$1(msg) || "error";
+	return line.length > max ? line.slice(0, max - 1).trimEnd() + "…" : line;
+}
+function bulkFailText(failed) {
+	return failed.map((f) => f.name + " — " + shortReason$1(f.why)).join("; ");
+}
+function bulkEndText(verb, done, total, keptText) {
+	return `${verb} ${done}/${total} session(s)` + (keptText ? " · " + keptText : "");
+}
 function BulkBar() {
 	const { data: instances = [] } = useInstances();
 	const bulkMode = useUi((s) => s.bulkMode);
@@ -68695,17 +70069,18 @@ function BulkBar() {
 			if (useUi.getState().openDialog) return;
 			e.preventDefault();
 			setAsk(null);
-			useUi.getState().setBulkMode(false);
+			if (bulkEscape(ask) === "leave") useUi.getState().setBulkMode(false);
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [bulkMode]);
+	}, [bulkMode, ask]);
 	if (!bulkMode) return null;
 	const rows = instances.filter((i) => !i.pending);
 	const live = new Set(rows.map((i) => i.title));
 	const selected = rows.filter((i) => bulkSelected.has(i.title)).map((i) => i.title);
 	const n = selected.length;
-	const anyMissing = rows.some((i) => selected.includes(i.title) && i.workspace_missing);
+	const missingN = rows.filter((i) => selected.includes(i.title) && i.workspace_missing).length;
+	const anyMissing = missingN > 0;
 	const finish = (titles) => {
 		const s = useUi.getState();
 		s.setBulk(titles, false);
@@ -68745,15 +70120,31 @@ function BulkBar() {
 			} catch (err) {
 				const h = folderInUse(err);
 				if (h) inUse.push(...h.filter((x) => !inUse.includes(x)));
-				else failed.push(t);
+				else failed.push({
+					name: displayName(t),
+					why: errMsg(err)
+				});
 			}
 		}));
 		setBusy(false);
 		finish(done);
 		setHeld(inUse);
 		const keptText = keptRunningText({ children: new Array(kept).fill("") });
-		toast(`${verb} ${done.length}/${titles.length} session(s)` + (keptText ? " · " + keptText : ""), { duration: keptText ? 5e3 : void 0 });
-		if (failed.length) errorPop(`${verb === "Closed" ? "Close" : "Delete"} failed for ${failed.length} session(s)`, failed.map((t) => displayName(t)).join(", "));
+		const text = bulkEndText(verb, done.length, titles.length, keptText);
+		if (kind === "close" && done.length) {
+			for (const t of done) rememberClosed(t);
+			const closed = done.slice();
+			toast(text, {
+				action: {
+					label: "Undo",
+					onClick: () => void reopenClosed$1(closed),
+					ariaLabel: `Undo closing ${closed.length} session(s)`
+				},
+				title: "Reopen them — click to Undo (Ctrl+Shift+T reopens one at a time)",
+				duration: 7e3
+			});
+		} else toast(text, { duration: keptText ? 5e3 : void 0 });
+		if (failed.length) errorPop(`${verb === "Closed" ? "Close" : "Delete"} failed for ${failed.length} session(s)`, bulkFailText(failed));
 		await refreshInstances();
 	};
 	const hide = () => {
@@ -68764,10 +70155,14 @@ function BulkBar() {
 			if (s.focused === t) s.setFocused(null);
 		}
 		s.clearBulk();
-		toast(`Hid ${hid.length} session(s) — click to undo`, {
-			onClick: () => {
-				const st = useUi.getState();
-				for (const t of hid) st.setHidden(t, false);
+		toast(`Hid ${hid.length} session(s)`, {
+			action: {
+				label: "Undo",
+				onClick: () => {
+					const st = useUi.getState();
+					for (const t of hid) st.setHidden(t, false);
+				},
+				ariaLabel: `Undo hiding ${hid.length} session(s)`
 			},
 			duration: 5e3
 		});
@@ -68807,12 +70202,12 @@ function BulkBar() {
 				"aria-label": ask === "close" ? "Close selected?" : "Delete selected?",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "bulk-q",
-					children: ask === "close" ? `Close ${n} session(s)? Keeps their worktrees — reopen from Recently closed.` : `Delete ${n} session(s)? Removes their worktrees and branches.`
+					children: ask === "close" ? `Close ${n} session(s)? Keeps their worktrees — reopen from Recently closed.` : ask === "cleanmissing" ? `Delete ${missingN} session(s) whose folder is gone? This removes the dead sessions.` : `Delete ${n} session(s)? ` + deleteManyConfirmText(rows.filter((i) => selected.includes(i.title)))
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "bulk-acts",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: ask === "delete" ? "danger" : void 0,
+						className: ask === "close" ? void 0 : "danger",
 						disabled: busy,
 						onClick: () => void run(ask),
 						children: ask === "close" ? "Close" : "Delete"
@@ -68842,10 +70237,10 @@ function BulkBar() {
 					}),
 					anyMissing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						title: "Remove selected sessions whose workspace is gone",
+						title: "Remove selected sessions whose workspace is gone (asks first)",
 						disabled: busy,
-						onClick: () => void run("cleanmissing"),
-						children: "Delete missing"
+						onClick: () => setAsk("cleanmissing"),
+						children: "Delete missing…"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -69126,476 +70521,6 @@ function ExtensionBar({ extId }) {
 			}, b.command))
 		})]
 	});
-}
-//#endregion
-//#region src/components/usage/UsagePopover.tsx
-var closeCurrent = null;
-function UsagePopover({ anchor, onClose, children }) {
-	const popRef = (0, import_react.useRef)(null);
-	const onCloseRef = (0, import_react.useRef)(onClose);
-	onCloseRef.current = onClose;
-	(0, import_react.useEffect)(() => {
-		const close = () => onCloseRef.current();
-		if (closeCurrent) closeCurrent();
-		closeCurrent = close;
-		return () => {
-			if (closeCurrent === close) closeCurrent = null;
-		};
-	}, []);
-	(0, import_react.useEffect)(() => {
-		anchor.classList.add("pop-open");
-		return () => anchor.classList.remove("pop-open");
-	}, [anchor]);
-	(0, import_react.useLayoutEffect)(() => {
-		const pop = popRef.current;
-		if (!pop) return;
-		const r = anchor.getBoundingClientRect();
-		let top = r.bottom + 4;
-		const h = pop.offsetHeight;
-		if (top + h > window.innerHeight - 8 && r.top - 4 - h >= 8) top = r.top - 4 - h;
-		pop.style.top = top + "px";
-		let left = r.right - pop.offsetWidth;
-		const maxLeft = window.innerWidth - pop.offsetWidth - 8;
-		if (left > maxLeft) left = maxLeft;
-		if (left < 8) left = 8;
-		pop.style.left = left + "px";
-	});
-	(0, import_react.useEffect)(() => {
-		const onDocClick = (e) => {
-			const t = e.target;
-			if (!t) return;
-			if (popRef.current && popRef.current.contains(t)) return;
-			if (anchor.contains(t)) return;
-			onCloseRef.current();
-		};
-		const onKey = (e) => {
-			if (e.key === "Escape") onCloseRef.current();
-		};
-		const close = () => onCloseRef.current();
-		document.addEventListener("click", onDocClick);
-		document.addEventListener("keydown", onKey);
-		window.addEventListener("scroll", close, true);
-		window.addEventListener("resize", close);
-		return () => {
-			document.removeEventListener("click", onDocClick);
-			document.removeEventListener("keydown", onKey);
-			window.removeEventListener("scroll", close, true);
-			window.removeEventListener("resize", close);
-		};
-	}, [anchor]);
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		ref: popRef,
-		className: "usage-pop",
-		style: {
-			top: 0,
-			left: 0
-		},
-		children
-	}), document.body);
-}
-function UsagePopTable({ rows }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("table", {
-		className: "usage-pop-tbl",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: rows.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: r[0] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
-			className: "num" + (r[2] ? " " + r[2] : ""),
-			children: r[1]
-		})] }, i)) })
-	});
-}
-function UsagePopNote({ text }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "usage-pop-note",
-		children: text
-	});
-}
-//#endregion
-//#region src/lib/sessionMemory.ts
-function memoryReading(m) {
-	if (!m || typeof m !== "object") return null;
-	const mb = Number(m.mb);
-	if (!Number.isFinite(mb) || mb <= 0) return null;
-	return m;
-}
-function fmtMb(mb) {
-	const n = Math.max(0, Number(mb) || 0);
-	if (n < 1e3) return Math.round(n) + " MB";
-	const gb = n / 1024;
-	if (gb < 10) return gb.toFixed(1).replace(/\.0$/, "") + " GB";
-	return Math.round(gb) + " GB";
-}
-var WARN_MB = 2048;
-var CRIT_MB = 4096;
-var WARN_SHARE = .1;
-var CRIT_SHARE = .2;
-var PRESSURE_TOP = 3;
-var PRESSURE_MIN_MB = 512;
-function memoryTone(mb, totalMb, level, rank = -1) {
-	const share = totalMb > 0 ? mb / totalMb : 0;
-	if (mb >= CRIT_MB || share >= CRIT_SHARE) return "crit";
-	if ((level === "low" || level === "critical") && rank >= 0 && rank < PRESSURE_TOP && mb >= PRESSURE_MIN_MB) return "crit";
-	if (mb >= WARN_MB || share >= WARN_SHARE) return "warn";
-	return "";
-}
-function memoryRank(rows, title) {
-	return (rows || []).map((r) => ({
-		title: r.title,
-		mb: memoryReading(r.memory)?.mb ?? 0
-	})).filter((r) => r.mb > 0).sort((a, b) => b.mb - a.mb).findIndex((r) => r.title === title);
-}
-function memoryTip(m) {
-	let s = "Memory: " + fmtMb(m.mb);
-	if ((m.peak_mb || 0) > m.mb) s += " (peak " + fmtMb(m.peak_mb) + ")";
-	const parts = [];
-	if (m.agent_mb > 0) parts.push("agent " + fmtMb(m.agent_mb));
-	if (m.mcp_mb > 0) parts.push("MCP servers " + fmtMb(m.mcp_mb));
-	if (m.other_mb > 0) parts.push("other " + fmtMb(m.other_mb) + " (tests, servers…)");
-	if (m.procs > 0) parts.push(m.procs + (m.procs === 1 ? " process" : " processes"));
-	if (parts.length) s += " — " + parts.join(" · ");
-	return s;
-}
-//#endregion
-//#region src/components/usage/memoryModel.ts
-var MIB = 1048576;
-var num$3 = (v) => {
-	const n = typeof v === "number" ? v : NaN;
-	return Number.isFinite(n) ? n : null;
-};
-function asLevel(v) {
-	return v === "ok" || v === "low" || v === "critical" ? v : "unknown";
-}
-function machineFromDetail(sys) {
-	const s = sys || {};
-	const total = num$3(s.total_mb);
-	const avail = num$3(s.available_mb);
-	const out = {
-		totalMb: total && total > 0 ? total : null,
-		usedMb: total && total > 0 && avail != null ? Math.max(0, total - avail) : null,
-		swapTotalMb: num$3(s.swap_total_mb),
-		swapUsedMb: num$3(s.swap_used_mb),
-		level: asLevel(s.level)
-	};
-	const hTotal = num$3(s.host_total_mb);
-	const hAvail = num$3(s.host_available_mb);
-	if (hTotal && hTotal > 0 && hAvail != null) {
-		out.hostTotalMb = hTotal;
-		out.hostUsedMb = Math.max(0, hTotal - hAvail);
-		out.hostLevel = asLevel(s.host_level);
-		if (s.guest_level != null) out.guestLevel = asLevel(s.guest_level);
-	}
-	return out;
-}
-function machineFromReading(r) {
-	if (!r) return {
-		totalMb: null,
-		usedMb: null,
-		swapTotalMb: null,
-		swapUsedMb: null,
-		level: "unknown"
-	};
-	const total = num$3(r.total);
-	const avail = num$3(r.available);
-	const swapTotal = num$3(r.swap_total);
-	const swapFree = num$3(r.swap_free);
-	const totalMb = total && total > 0 ? Math.floor(total / MIB) : null;
-	return {
-		totalMb,
-		usedMb: totalMb != null && avail != null ? Math.max(0, totalMb - Math.floor(avail / MIB)) : null,
-		swapTotalMb: swapTotal != null ? Math.floor(swapTotal / MIB) : null,
-		swapUsedMb: swapTotal != null ? Math.max(0, Math.floor((swapTotal - (swapFree ?? 0)) / MIB)) : null,
-		level: asLevel(r.level)
-	};
-}
-function gb1(mb) {
-	return (Math.max(0, mb) / 1024).toFixed(1).replace(/\.0$/, "");
-}
-function fmtUsedOfTotal(usedMb, totalMb) {
-	if (usedMb == null || totalMb == null || totalMb <= 0) return null;
-	if (usedMb < 1e3 || totalMb < 1e3) return fmtMb(usedMb) + " / " + fmtMb(totalMb);
-	return gb1(usedMb) + " / " + gb1(totalMb) + " GB";
-}
-function memoryRowTone(level) {
-	if (level === "critical") return "crit";
-	if (level === "low") return "warn";
-	return "";
-}
-function levelWords(level, gate) {
-	switch (level) {
-		case "ok": return gate ? gaugeOkWords(gate) : "OK — room to spare";
-		case "low": return "Low — new agents wait";
-		case "critical": return "Critical — close something";
-		default: return "Not measured";
-	}
-}
-function hostIsCause(m) {
-	if (m.hostLevel == null || m.hostLevel !== m.level) return false;
-	if (m.level !== "low" && m.level !== "critical") return false;
-	return m.guestLevel == null || m.guestLevel !== m.level;
-}
-function memoryReasons(r) {
-	let line = (r && Array.isArray(r.why) ? r.why : []).filter((w) => typeof w === "string" && !!w.trim()).map((w) => w.trim()).join("; ");
-	if (!line) {
-		const msg = String(r?.message || "").trim();
-		if (!msg || /GB free of/.test(msg)) return "";
-		line = msg.replace(/^(windows )?memory is (critically low|critical|low):\s*/i, "");
-	}
-	return line ? line[0].toUpperCase() + line.slice(1) : "";
-}
-function memoryRowText(m, ctx = {}) {
-	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
-	const share = m.usedMb != null && m.totalMb ? Math.min(1, m.usedMb / m.totalMb) : null;
-	const head = "Memory " + (pair ?? "—");
-	let title = pair ? "This machine's memory: " + pair + " in use (" + Math.round((share || 0) * 100) + "%)" : "This machine's memory";
-	if (m.level === "low" || m.level === "critical") {
-		title += " — " + (hostIsCause(m) ? "Windows is short of memory: " : "") + levelWords(m.level).toLowerCase();
-		if (ctx.reasons) title += " (" + ctx.reasons[0].toLowerCase() + ctx.reasons.slice(1) + ")";
-	} else if (m.level === "ok" && ctx.gate) title += " — " + gaugeOkWords(ctx.gate).replace(/^OK(, but| —) /, "");
-	return {
-		head,
-		title: title + " — click for what holds it",
-		share
-	};
-}
-function shortCmd(cmd, max = 40) {
-	const t = (cmd || "").replace(/\s+/g, " ").trim().split(" ").map((w) => /^\/\S+\/[^/]+$/.test(w) ? w.slice(w.lastIndexOf("/") + 1) : w).join(" ");
-	return t.length <= max ? t : t.slice(0, max - 1) + "…";
-}
-function memoryPopModel(detail, fallback, aliases = {}, ctx = {}) {
-	const m = detail ? machineFromDetail(detail.system) : fallback;
-	const machine = [];
-	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
-	if (pair) {
-		const pct = Math.round((m.usedMb || 0) / (m.totalMb || 1) * 100);
-		machine.push(["In use", pair + " (" + pct + "%)"]);
-	}
-	if ((m.swapUsedMb || 0) > 0) machine.push(["Swap", fmtMb(m.swapUsedMb || 0) + (m.swapTotalMb ? " of " + fmtMb(m.swapTotalMb) : "")]);
-	const host = fmtUsedOfTotal(m.hostUsedMb ?? null, m.hostTotalMb ?? null);
-	if (host) {
-		const pct = Math.round((m.hostUsedMb || 0) / (m.hostTotalMb || 1) * 100);
-		machine.push(["Windows", host + " (" + pct + "%)"]);
-	}
-	machine.push([
-		"Pressure",
-		(hostIsCause(m) ? "Windows: " : "") + levelWords(m.level, ctx.gate),
-		"wrap"
-	]);
-	if (ctx.reasons && (m.level === "low" || m.level === "critical")) machine.push([
-		"Why",
-		ctx.reasons,
-		"wrap"
-	]);
-	const sess = detail && Array.isArray(detail.sessions) ? detail.sessions.filter((r) => r && r.mb > 0) : [];
-	const oth = detail && Array.isArray(detail.others) ? detail.others.filter((r) => r && r.mb > 0) : [];
-	sess.sort((a, b) => b.mb - a.mb);
-	oth.sort((a, b) => b.mb - a.mb);
-	const top = Math.max(1, ...sess.map((r) => r.mb), ...oth.map((r) => r.mb));
-	const sessions = sess.map((r) => {
-		const parts = [];
-		if ((r.agent_mb || 0) > 0) parts.push("agent " + fmtMb(r.agent_mb || 0));
-		if ((r.mcp_mb || 0) > 0) parts.push("MCP servers " + fmtMb(r.mcp_mb || 0));
-		if ((r.other_mb || 0) > 0) parts.push("other " + fmtMb(r.other_mb || 0));
-		const label = aliases[r.title] || r.title;
-		return {
-			key: "s:" + r.title,
-			title: r.title,
-			label,
-			sub: "",
-			tip: label + ": " + fmtMb(r.mb) + (parts.length ? " — " + parts.join(" · ") : "") + " — click to open it",
-			mb: r.mb,
-			value: fmtMb(r.mb),
-			frac: r.mb / top
-		};
-	});
-	const others = oth.map((r) => {
-		const label = r.server ? "MindFlock server" : r.name || "process " + r.pid;
-		return {
-			key: "p:" + r.pid,
-			title: "",
-			label,
-			sub: shortCmd(r.cmd),
-			tip: label + " (pid " + r.pid + "): " + fmtMb(r.mb) + (r.cmd ? "\n" + r.cmd : ""),
-			mb: r.mb,
-			value: fmtMb(r.mb),
-			frac: r.mb / top
-		};
-	});
-	return {
-		machine,
-		tone: memoryRowTone(m.level),
-		sessions,
-		others,
-		machineOnly: !detail
-	};
-}
-function sparkPoints(samples, w, h, maxPoints = 120) {
-	const pts = [];
-	for (const s of samples || []) {
-		const m = machineFromDetail(s && s.system);
-		if (m.usedMb == null || m.totalMb == null || !Number.isFinite(s.at)) continue;
-		pts.push({
-			at: s.at,
-			used: m.usedMb,
-			total: m.totalMb
-		});
-	}
-	if (pts.length < 2) return null;
-	const step = Math.max(1, Math.ceil(pts.length / maxPoints));
-	const kept = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
-	const t0 = kept[0].at;
-	const span = Math.max(1, kept[kept.length - 1].at - t0);
-	const totalMb = Math.max(...kept.map((p) => p.total));
-	const r1 = (n) => Math.round(n * 10) / 10;
-	return {
-		points: kept.map((p) => r1((p.at - t0) / span * w) + "," + r1(h - Math.min(p.used, totalMb) / totalMb * h)).join(" "),
-		lastUsedMb: kept[kept.length - 1].used,
-		totalMb
-	};
-}
-//#endregion
-//#region src/components/usage/OverallMemory.tsx
-var SPARK_W = 200;
-var SPARK_H = 28;
-function BarRows({ rows, onPick }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-		className: "mem-pop-list",
-		children: rows.map((r) => {
-			const inner = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "mem-pop-name",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "mem-pop-label",
-						children: r.label
-					}), r.sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "mem-pop-sub",
-						children: r.sub
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mem-pop-bar",
-					"aria-hidden": "true",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.max(2, Math.round(r.frac * 100)) + "%" } })
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mem-pop-num",
-					children: r.value
-				})
-			] });
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: onPick && r.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "mem-pop-row mem-pop-pick",
-				title: r.tip,
-				onClick: (ev) => {
-					ev.stopPropagation();
-					onPick(r.title);
-				},
-				children: inner
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "mem-pop-row",
-				title: r.tip,
-				children: inner
-			}) }, r.key);
-		})
-	});
-}
-function OverallMemory() {
-	const sidebarHidden = useUi((s) => s.sidebarHidden);
-	const aliases = useUi((s) => s.aliases);
-	const btnRef = (0, import_react.useRef)(null);
-	const [open, setOpen] = (0, import_react.useState)(false);
-	const detailQ = useMemoryDetail(!sidebarHidden);
-	const { data: reading } = useMemory();
-	const detail = detailQ.isError ? null : detailQ.data ?? null;
-	const { data: hist } = useMemoryHistory(open && !!detail);
-	const machine = (0, import_react.useMemo)(() => detail ? machineFromDetail(detail.system) : machineFromReading(reading), [detail, reading]);
-	const ctx = (0, import_react.useMemo)(() => ({
-		gate: gateWhy(reading?.gate),
-		reasons: memoryReasons(reading)
-	}), [reading]);
-	const { head, title, share } = memoryRowText(machine, ctx);
-	const tone = memoryRowTone(machine.level);
-	const model = (0, import_react.useMemo)(() => open ? memoryPopModel(detail, machine, aliases, ctx) : null, [
-		open,
-		detail,
-		machine,
-		aliases,
-		ctx
-	]);
-	const spark = (0, import_react.useMemo)(() => open && hist ? sparkPoints(hist.samples, SPARK_W, SPARK_H) : null, [open, hist]);
-	if (machine.totalMb == null) return null;
-	const pick = (t) => {
-		selectSession(t);
-		const ui = useUi.getState();
-		if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
-		setOpen(false);
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-		id: "overall-memory",
-		ref: btnRef,
-		className: "overall-usage overall-memory" + (tone ? " mem-" + tone : ""),
-		type: "button",
-		title,
-		onClick: (ev) => {
-			ev.stopPropagation();
-			setOpen((o) => {
-				if (!o && !sidebarHidden) detailQ.refetch();
-				return !o;
-			});
-		},
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "usage-head",
-				children: head
-			}),
-			share != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "mem-meter",
-				"aria-hidden": "true",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.round(share * 100) + "%" } })
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "caret",
-				children: "▾"
-			})
-		]
-	}), open && btnRef.current && model && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(UsagePopover, {
-		anchor: btnRef.current,
-		onClose: () => setOpen(false),
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "usage-pop-head" + (model.tone ? " mem-" + model.tone : ""),
-				children: "This machine"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: model.machine }),
-			spark && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "mem-spark",
-				title: "Memory in use over the last hour — now " + fmtMb(spark.lastUsedMb) + " of " + fmtMb(spark.totalMb),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-					viewBox: `0 0 ${SPARK_W} ${SPARK_H}`,
-					preserveAspectRatio: "none",
-					role: "img",
-					"aria-label": "Memory in use over the last hour",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", {
-						points: spark.points,
-						fill: "none",
-						vectorEffect: "non-scaling-stroke"
-					})
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mem-spark-cap",
-					children: "last hour"
-				})]
-			}),
-			model.sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "usage-pop-head mem-pop-sec",
-				children: "Sessions"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BarRows, {
-				rows: model.sessions,
-				onPick: pick
-			})] }),
-			model.others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "usage-pop-head mem-pop-sec",
-				children: "Outside MindFlock"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BarRows, { rows: model.others })] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopNote, { text: model.machineOnly ? "This server reports the machine only — update MindFlock to see what each session holds." : "Each session counts its whole process tree (agent, MCP servers, tests), sampled every 15 s." })
-		]
-	})] });
 }
 //#endregion
 //#region src/components/usage/usageModel.ts
@@ -70008,7 +70933,7 @@ function OverallUsage() {
 }
 //#endregion
 //#region src/components/sidebar/AutomationBar.tsx
-function subscribeOnline(cb) {
+function subscribeOnline$1(cb) {
 	window.addEventListener("online", cb);
 	window.addEventListener("offline", cb);
 	return () => {
@@ -70022,7 +70947,7 @@ function AutomationBar() {
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [optimistic, setOptimistic] = (0, import_react.useState)(null);
 	const { data: status, refetch } = useMindflockStatus();
-	const online = (0, import_react.useSyncExternalStore)(subscribeOnline, () => navigator.onLine);
+	const online = (0, import_react.useSyncExternalStore)(subscribeOnline$1, () => navigator.onLine);
 	if (config?.caps && !config.caps.ticketing) return null;
 	if (!status || !status.available) return null;
 	const running = !!status.running;
@@ -70085,6 +71010,14 @@ function AutomationBar() {
 }
 //#endregion
 //#region src/components/sidebar/useGithubToggleBar.ts
+function subscribeOnline(cb) {
+	window.addEventListener("online", cb);
+	window.addEventListener("offline", cb);
+	return () => {
+		window.removeEventListener("online", cb);
+		window.removeEventListener("offline", cb);
+	};
+}
 function useGithubToggleBar(opts) {
 	const { settingKey, reposKey, defaultOn, activeFlag, toggleLabel } = opts;
 	const { data: config } = useConfig();
@@ -70100,6 +71033,7 @@ function useGithubToggleBar(opts) {
 		retry: false
 	});
 	const { data: ingestion } = useMindflockStatus();
+	const online = (0, import_react.useSyncExternalStore)(subscribeOnline, () => navigator.onLine);
 	(0, import_react.useEffect)(() => {
 		if (openDialog === null) refetch();
 	}, [openDialog, refetch]);
@@ -70112,6 +71046,7 @@ function useGithubToggleBar(opts) {
 	const running = !!ingestion?.running;
 	const active = running && !!ingestion?.[activeFlag];
 	const starting = on && !running;
+	const netIssue = !online || !!ingestion?.net_error;
 	const toggle = async (enable) => {
 		if (busy) return;
 		setBusy(true);
@@ -70135,6 +71070,9 @@ function useGithubToggleBar(opts) {
 		active,
 		starting,
 		busy,
+		netIssue,
+		online,
+		toggleLabel,
 		toggle
 	};
 }
@@ -70142,7 +71080,7 @@ function useGithubToggleBar(opts) {
 //#region src/components/sidebar/GitIssueBar.tsx
 function GitIssueBar() {
 	const openDialogFor = useUi((s) => s.openDialogFor);
-	const { visible, repos, on, active, starting, busy, toggle } = useGithubToggleBar({
+	const { visible, repos, on, active, starting, busy, netIssue, online, toggleLabel, toggle } = useGithubToggleBar({
 		settingKey: "issues_enabled",
 		reposKey: "issue_repos",
 		defaultOn: false,
@@ -70156,8 +71094,8 @@ function GitIssueBar() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				id: "git-issue-dot",
-				className: "dc-dot " + (active ? "on" : !on ? "off" : "idle"),
-				title: active ? "An issue is starting right now" : on ? starting ? "Switched on — the pipeline is starting" : "Waiting for a newly opened issue — turns green while one is being handled" : void 0
+				className: "dc-dot " + (netIssue ? "dc-error" : active ? "on" : !on ? "off" : "idle"),
+				title: active ? "An issue is starting right now" : netIssue ? online ? "Connection problems — see Settings → System logs" : "No network connection" : on ? starting ? "Switched on — the pipeline is starting" : "Waiting for a newly opened issue — turns green while one is being handled" : void 0
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				id: "git-issue-repos-btn",
@@ -70167,19 +71105,23 @@ function GitIssueBar() {
 				onClick: () => openDialogFor("intake", "issues"),
 				children: "GitHub issues"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "dc-actions",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dc-sw-label",
+					children: "Auto-start"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "dc-switch",
 					title: "Auto-start new issues — the same switch as Intake → GitHub issues (your repositories are kept either way)",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "checkbox",
 						id: "git-issue-toggle",
 						checked: on,
+						"aria-label": toggleLabel,
 						disabled: busy,
 						onChange: (e) => toggle(e.target.checked)
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
-				})
+				})]
 			})
 		]
 	});
@@ -70188,7 +71130,7 @@ function GitIssueBar() {
 //#region src/components/sidebar/PrReviewBar.tsx
 function PrReviewBar() {
 	const openDialogFor = useUi((s) => s.openDialogFor);
-	const { visible, repos, on, active, starting, busy, toggle } = useGithubToggleBar({
+	const { visible, repos, on, active, starting, busy, netIssue, online, toggleLabel, toggle } = useGithubToggleBar({
 		settingKey: "enabled",
 		reposKey: "repos",
 		defaultOn: true,
@@ -70202,8 +71144,8 @@ function PrReviewBar() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				id: "pr-review-dot",
-				className: "dc-dot " + (active ? "on" : !on ? "off" : "idle"),
-				title: active ? "A session is addressing a PR's comments right now" : on ? starting ? "Switched on — starting" : "Waiting for review comments on your PRs — turns green while one is being handled" : void 0
+				className: "dc-dot " + (netIssue ? "dc-error" : active ? "on" : !on ? "off" : "idle"),
+				title: active ? "A session is addressing a PR's comments right now" : netIssue ? online ? "Connection problems — see Settings → System logs" : "No network connection" : on ? starting ? "Switched on — starting" : "Waiting for review comments on your PRs — turns green while one is being handled" : void 0
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				id: "pr-review-prs-btn",
@@ -70213,19 +71155,23 @@ function PrReviewBar() {
 				onClick: () => openDialogFor("intake", "prs"),
 				children: "GitHub PRs"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "dc-actions",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dc-sw-label",
+					children: "Auto-address"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "dc-switch",
 					title: "Auto-address review comments — the same switch as Intake → GitHub PRs (your repositories are kept either way)",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "checkbox",
 						id: "pr-review-toggle",
 						checked: on,
+						"aria-label": toggleLabel,
 						disabled: busy,
 						onChange: (e) => toggle(e.target.checked)
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
-				})
+				})]
 			})
 		]
 	});
@@ -70626,7 +71572,7 @@ function FooterCustomize() {
 			id: "foot-customize-btn",
 			type: "button",
 			className: "foot-link",
-			title: "Choose which bars the sidebar shows — Prompts, Assistant, Tickets…",
+			title: "Choose which bars the sidebar shows (Prompts, Assistant, Tickets…) and what each pane's header holds",
 			onClick: () => openDialogFor("customize"),
 			children: "⚙ Customize"
 		})
@@ -70667,21 +71613,29 @@ function RunGroupHeader({ group, repoPath }) {
 		title: groupTitle(group, why),
 		onClick: () => toggle(group.id),
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dev-caret",
-				children: group.collapsed ? "▸" : "▾"
-			}),
-			group.done && !group.cancelled && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "rg-done",
-				children: "✓"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dev-name",
-				children: group.name
-			}),
-			group.lane && !group.done && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "rg-lane",
-				children: group.lane
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "dev-toggle",
+				"aria-expanded": !group.collapsed,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "dev-caret",
+						"aria-hidden": "true",
+						children: group.collapsed ? "▸" : "▾"
+					}),
+					group.done && !group.cancelled && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rg-done",
+						children: "✓"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "dev-name",
+						children: group.name
+					}),
+					group.lane && !group.done && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rg-lane",
+						children: group.lane
+					})
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rg-sp" }),
 			group.needs > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -70718,6 +71672,7 @@ function RunGroupHeader({ group, repoPath }) {
 				title: "Pause, add tasks, start the next one, cancel…",
 				"aria-label": "Actions for " + group.name,
 				"aria-haspopup": "menu",
+				"aria-expanded": !!menu,
 				onClick: (e) => {
 					e.stopPropagation();
 					setMenu(menu ? null : more.current.getBoundingClientRect());
@@ -70728,7 +71683,10 @@ function RunGroupHeader({ group, repoPath }) {
 				group,
 				at: menu,
 				repoPath,
-				onClose: () => setMenu(null)
+				onClose: (refocus) => {
+					setMenu(null);
+					if (refocus) more.current?.focus();
+				}
 			}), document.body)
 		]
 	});
@@ -70750,8 +71708,15 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 		const onKey = (e) => {
 			if (e.key === "Escape") {
 				e.stopPropagation();
-				onClose();
+				onClose(true);
+				return;
 			}
+			if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+			if (!ref.current || document.activeElement?.tagName === "TEXTAREA") return;
+			const items = menuItems(ref.current);
+			if (!items.length) return;
+			e.preventDefault();
+			items[stepMenu(items.length, items.indexOf(document.activeElement), e.key === "ArrowDown" ? 1 : -1)].focus();
 		};
 		document.addEventListener("mousedown", onDown);
 		document.addEventListener("keydown", onKey, true);
@@ -70760,6 +71725,14 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 			document.removeEventListener("keydown", onKey, true);
 		};
 	}, [onClose]);
+	const lastMode = (0, import_react.useRef)(mode);
+	(0, import_react.useEffect)(() => {
+		const prev = lastMode.current;
+		lastMode.current = mode;
+		const root = ref.current;
+		if (mode || !root) return;
+		((prev === "cancel" ? root.querySelector(".rg-danger-item") : prev === "add" ? root.querySelector(".rg-add-item") : null) || menuItems(root)[0] || root).focus();
+	}, [mode]);
 	const id = group.id;
 	const go = async (fn) => {
 		setBusy(true);
@@ -70808,6 +71781,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 		ref,
 		className: "rg-menu",
 		role: "menu",
+		tabIndex: -1,
 		style: {
 			top: at.bottom + 4 + "px",
 			left: left + "px"
@@ -70860,6 +71834,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				role: "menuitem",
+				className: "rg-add-item",
 				disabled: busy,
 				onClick: () => setMode("add"),
 				children: "Add tasks…"
@@ -70877,6 +71852,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
+						role: "menuitem",
 						disabled: busy,
 						title: "Start it now, past the at-a-time limit (once)",
 						onClick: () => go(() => runAction$1("Start now", taskPath(id, t.id, "start-now"), {}, "Starting " + queuedTitle(t))),
@@ -70884,6 +71860,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
+						role: "menuitem",
 						disabled: busy,
 						title: "Take it out of the team run — it never starts",
 						onClick: () => go(() => runAction$1("Take out of run", taskPath(id, t.id, "skip"), {}, "Took " + queuedTitle(t) + " out of the team run")),
@@ -70919,6 +71896,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 						children: "Cancel team run"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
+						autoFocus: true,
 						onClick: () => setMode(""),
 						children: "Keep going"
 					})]
@@ -70933,6 +71911,13 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 			}))
 		]
 	});
+}
+function menuItems(root) {
+	return Array.from(root.querySelectorAll("[role=\"menuitem\"]")).filter((el) => !el.disabled);
+}
+function stepMenu(count, at, dir) {
+	if (at < 0) return dir === 1 ? 0 : count - 1;
+	return (at + dir + count) % count;
 }
 function QueuedRow({ task, pos, groupName }) {
 	const title = queuedTitle(task);
@@ -71154,12 +72139,42 @@ function useDoctorAutoShow() {
 function plainDetail(text) {
 	return (text || "").replace(/`([^`]*)`/g, "$1");
 }
+function isCommand(fix) {
+	return /^(git|gh|ssh-keygen|ssh-add|sudo|brew|winget|xcode-select|curl|npm|npx|pipx?|uv|apt|apt-get|dnf|pacman|zypper|tailscale|wsl|powershell|mindflock)\s/.test((fix || "").trim());
+}
+function fixCommand(fix) {
+	const text = plainDetail(fix).trim();
+	if (!isCommand(text)) return null;
+	return text.replace(/\s+\((?:or|until)\b.*$/, "").trim();
+}
 function GitIdentityForm({ fix, onSaved }) {
 	const [name, setName] = (0, import_react.useState)("");
 	const [email, setEmail] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)("");
 	const ready = !!name.trim() && !!email.trim();
+	const save = () => {
+		if (busy || !ready) return;
+		setBusy(true);
+		setError("");
+		api("/api/github/identity", { json: {
+			name: name.trim(),
+			email: email.trim()
+		} }).then(() => {
+			setBusy(false);
+			toast("git now knows who you are");
+			onSaved();
+		}, (err) => {
+			setBusy(false);
+			setError(err.message || "couldn't save");
+		});
+	};
+	const onKeyDown = (e) => {
+		if (e.key !== "Enter") return;
+		e.preventDefault();
+		e.stopPropagation();
+		save();
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 		className: "doctor-identity",
 		children: [
@@ -71172,6 +72187,7 @@ function GitIdentityForm({ fix, onSaved }) {
 						"aria-label": "Your name for commits",
 						value: name,
 						onChange: (e) => setName(e.target.value),
+						onKeyDown,
 						onClick: (e) => e.stopPropagation()
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -71181,6 +72197,7 @@ function GitIdentityForm({ fix, onSaved }) {
 						type: "email",
 						value: email,
 						onChange: (e) => setEmail(e.target.value),
+						onKeyDown,
 						onClick: (e) => e.stopPropagation()
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -71190,19 +72207,7 @@ function GitIdentityForm({ fix, onSaved }) {
 						title: ready ? void 0 : "Fill in both your name and email",
 						onClick: (e) => {
 							e.stopPropagation();
-							setBusy(true);
-							setError("");
-							api("/api/github/identity", { json: {
-								name: name.trim(),
-								email: email.trim()
-							} }).then(() => {
-								setBusy(false);
-								toast("git now knows who you are");
-								onSaved();
-							}, (err) => {
-								setBusy(false);
-								setError(err.message || "couldn't save");
-							});
+							save();
 						},
 						children: busy ? "Saving…" : "Save"
 					})
@@ -71222,6 +72227,18 @@ function GitIdentityForm({ fix, onSaved }) {
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Or in a terminal" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: plainDetail(fix) })]
 			}) : null
 		]
+	});
+}
+function CopyFix({ command }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn doctor-fix-copy",
+		"aria-label": "Copy " + command,
+		onClick: (e) => {
+			e.stopPropagation();
+			copyText(command).then((ok) => toast(ok ? "Copied — paste it into a terminal" : "Copy failed"));
+		},
+		children: "Copy"
 	});
 }
 function CheckRow({ c, onSignedIn }) {
@@ -71249,7 +72266,8 @@ function CheckRow({ c, onSignedIn }) {
 						children: [
 							" ",
 							"fix: ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: plainDetail(c.fix) })
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: plainDetail(c.fix) }),
+							fixCommand(c.fix) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyFix, { command: fixCommand(c.fix) })
 						]
 					}),
 					signInTarget(c) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
@@ -71262,30 +72280,41 @@ function CheckRow({ c, onSignedIn }) {
 		]
 	});
 }
-function DoctorList({ reprobeKey, onChange, essential = false, fallback, tourNext = false }) {
+function DoctorList({ reprobeKey, onChange, onChecking, essential = false, fallback, tourNext = false }) {
 	const [installed, setInstalled] = (0, import_react.useState)(0);
 	const reprobe = (reprobeKey || 0) > 0 || installed > 0;
 	const query = useDoctor({ enabled: !reprobe });
 	const [reprobeError, setReprobeError] = (0, import_react.useState)("");
+	const [probing, setProbing] = (0, import_react.useState)(false);
+	const checkingRef = (0, import_react.useRef)(onChecking);
+	checkingRef.current = onChecking;
 	(0, import_react.useEffect)(() => {
 		if (!reprobe) return;
 		let live = true;
+		setProbing(true);
+		checkingRef.current?.(true);
 		reprobeDoctor().then(() => {
 			if (!live) return;
 			setReprobeError("");
 			onChange?.();
 		}, (e) => {
-			if (live) setReprobeError(e.message);
+			if (live) setReprobeError(e.message || "failed");
+		}).finally(() => {
+			if (!live) return;
+			setProbing(false);
+			checkingRef.current?.(false);
 		});
 		return () => {
 			live = false;
+			checkingRef.current?.(false);
 		};
 	}, [reprobeKey, installed]);
 	const doctor = query.data ?? (essential ? fallback : null) ?? null;
 	const error = reprobe ? reprobeError : query.error ? query.error.message : "";
-	if (error) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-		className: "error",
-		children: ["doctor failed: ", error]
+	if (error && !doctor?.checks?.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "error doctor-failed",
+		title: error,
+		children: "Couldn't run the checks. Try again."
 	});
 	if (!doctor && essential) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorSkeleton, {});
 	if (!doctor) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -71294,9 +72323,19 @@ function DoctorList({ reprobeKey, onChange, essential = false, fallback, tourNex
 	});
 	if (!doctor.checks || !doctor.checks.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "muted",
-		children: "doctor unavailable"
+		children: "No checks to show yet. Try again."
 	});
 	const bump = () => setInstalled((n) => n + 1);
+	const note = error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "muted doctor-recheck-failed",
+		role: "status",
+		title: error,
+		children: "Couldn't re-check. Try again."
+	}) : probing && !essential ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "muted doctor-checking",
+		role: "status",
+		children: "Checking…"
+	}) : null;
 	const all = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 		className: "doctor-list",
 		children: doctor.checks.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckRow, {
@@ -71304,10 +72343,14 @@ function DoctorList({ reprobeKey, onChange, essential = false, fallback, tourNex
 			onSignedIn: bump
 		}, c.id || i))
 	});
-	if (!essential) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
-		steps: doctor.install?.steps,
-		onDone: bump
-	}), all] });
+	if (!essential) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+			steps: doctor.install?.steps,
+			onDone: bump
+		}),
+		all,
+		note
+	] });
 	const steps = doctor.install?.steps;
 	const problems = stepProblems(doctor.checks);
 	const required = requiredChecks(doctor.checks);
@@ -71342,7 +72385,8 @@ function DoctorList({ reprobeKey, onChange, essential = false, fallback, tourNex
 					onSignedIn: bump
 				}, c.id || i))
 			})]
-		})
+		}),
+		note
 	] });
 }
 function DoctorSkeleton() {
@@ -71504,6 +72548,7 @@ function SetupChecklist$1() {
 	const focused = useUi((st) => st.focused);
 	const installOpen = useInstallWindow((st) => st.open);
 	const [reprobeKey, setReprobeKey] = (0, import_react.useState)(0);
+	const [checking, setChecking] = (0, import_react.useState)(false);
 	const steps = orderedSteps(status);
 	const by = new Map(steps.map((s) => [s.id, s]));
 	const step = (id) => by.get(id);
@@ -71544,8 +72589,21 @@ function SetupChecklist$1() {
 		"data-setup-next": status?.summary.next || "",
 		children: [
 			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "error",
-				children: ["setup status failed: ", error.message]
+				className: "error setup-load-failed",
+				title: error.message,
+				children: [
+					"Couldn't load setup.",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike setup-retry",
+						onClick: (e) => {
+							e.stopPropagation();
+							refreshSetup();
+						},
+						children: "Retry"
+					})
+				]
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "muted setup-progress",
 				children: progressLine(status)
@@ -71573,6 +72631,7 @@ function SetupChecklist$1() {
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, {
 									essential: true,
 									reprobeKey,
+									onChecking: setChecking,
 									onChange: () => void refreshSetup()
 								})
 							})]
@@ -71589,6 +72648,7 @@ function SetupChecklist$1() {
 									fallback: status?.doctor,
 									tourNext: tools.id === next,
 									reprobeKey,
+									onChecking: setChecking,
 									onChange: () => void refreshSetup()
 								})
 							}),
@@ -71597,11 +72657,13 @@ function SetupChecklist$1() {
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "linklike setup-recheck",
+									disabled: checking,
+									"aria-busy": checking || void 0,
 									onClick: (e) => {
 										e.stopPropagation();
-										setReprobeKey((k) => k + 1);
+										if (!checking) setReprobeKey((k) => k + 1);
 									},
-									children: "Re-check"
+									children: checking ? "Checking…" : "Re-check"
 								})
 							})
 						]
@@ -71609,7 +72671,10 @@ function SetupChecklist$1() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Step, {
 						step: agent,
 						next,
-						children: [!status ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						children: [!status && error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "muted setup-hint setup-agent-unknown",
+							children: "Couldn't check your agent — Retry above."
+						}) : !status ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "muted setup-hint",
 							children: "Checking…"
 						}) : !defaultInstalled ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -72003,7 +73068,11 @@ var VIEW_MODES = [
 	"9"
 ];
 function ViewRow({ calm }) {
-	const ui = useUi();
+	const ui = useUi(useShallow((s) => ({
+		view: s.view,
+		viewMode: s.viewMode,
+		setViewMode: s.setViewMode
+	})));
 	const perch = needsYouBadge(useNeedsYou());
 	(0, import_react.useSyncExternalStore)(subscribeKeymap, keymapVersion, keymapVersion);
 	const k = usableShortcuts("view");
@@ -72079,7 +73148,34 @@ function Sidebar({ onOpenChat }) {
 	instancesRef.current = instances;
 	(0, import_react.useEffect)(() => installPeerFocus(() => instancesRef.current), []);
 	const { data: devices } = useDevices();
-	const ui = useUi();
+	const ui = useUi(useShallow((s) => ({
+		aliases: s.aliases,
+		barOrder: s.barOrder,
+		barsExplicit: s.barsExplicit,
+		collapsedDevices: s.collapsedDevices,
+		collapsedFamilies: s.collapsedFamilies,
+		collapsedRuns: s.collapsedRuns,
+		extPanes: s.extPanes,
+		filter: s.filter,
+		filterPeek: s.filterPeek,
+		focused: s.focused,
+		gridRows: s.gridRows,
+		hidden: s.hidden,
+		hiddenBars: s.hiddenBars,
+		mru: s.mru,
+		narrow: s.narrow,
+		openDialogFor: s.openDialogFor,
+		order: s.order,
+		railPulse: s.railPulse,
+		setBarOrder: s.setBarOrder,
+		setOrder: s.setOrder,
+		showFilter: s.showFilter,
+		specialOpen: s.specialOpen,
+		toggleDeviceCollapsed: s.toggleDeviceCollapsed,
+		toggleRunCollapsed: s.toggleRunCollapsed,
+		verifyPanes: s.verifyPanes,
+		viewMode: s.viewMode
+	})));
 	const doctorWarn = useDoctorWarn();
 	const { data: config } = useConfig();
 	const { data: setup } = useSetup();
@@ -72150,7 +73246,7 @@ function Sidebar({ onOpenChat }) {
 		ui.verifyPanes,
 		ui.extPanes
 	]);
-	const winFiltered = (0, import_react.useMemo)(() => windows.filter((w) => !ui.filter || w.title.toLowerCase().includes(ui.filter)), [windows, ui.filter]);
+	const winFiltered = (0, import_react.useMemo)(() => windows.filter((w) => matchesWindowFilter(w.title, ui.filter)), [windows, ui.filter]);
 	const railKeys = (0, import_react.useMemo)(() => {
 		const parentOf = new Map(allRows.map((i) => [i.title, i.parent || ""]));
 		return keepFamiliesTogether(orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], order), (k) => parentOf.get(k));
@@ -72470,7 +73566,7 @@ function Sidebar({ onOpenChat }) {
 								className: "filter-empty muted",
 								children: [
 									"No sessions match “",
-									ui.filter,
+									ui.filter.trim(),
 									"”"
 								]
 							})]
@@ -72998,14 +74094,27 @@ function setDiffBase(b) {
 var diffCache = /* @__PURE__ */ new Map();
 var DIFF_CACHE_MAX = 24;
 var focusDone = /* @__PURE__ */ new Map();
-function DiffTab({ title, active, stamp = "" }) {
+function diffForKey(shown, key) {
+	if (shown && shown.key === key) return {
+		payload: shown.payload,
+		error: shown.error,
+		switching: false
+	};
+	return {
+		payload: null,
+		error: "",
+		switching: !!(shown && (shown.payload || shown.error))
+	};
+}
+var DiffTab = (0, import_react.memo)(DiffTabImpl);
+function DiffTabImpl({ title, active, stamp = "" }) {
 	const [picked, setPicked] = (0, import_react.useState)(pickedDiffMode());
 	const [width, setWidth] = (0, import_react.useState)(0);
 	const mode = diffModeFor(picked, width);
 	const [base, setBase] = (0, import_react.useState)(getDiffBase());
 	const [file, setFile] = (0, import_react.useState)(null);
-	const [payload, setPayload] = (0, import_react.useState)(null);
-	const [error, setError] = (0, import_react.useState)("");
+	const [shown, setShown] = (0, import_react.useState)(null);
+	const reqSeq = (0, import_react.useRef)(0);
 	const [collapsed, setCollapsed] = (0, import_react.useState)(/* @__PURE__ */ new Set());
 	const [reloading, setReloading] = (0, import_react.useState)(false);
 	const [rootEl, setRootEl] = (0, import_react.useState)(null);
@@ -73027,23 +74136,40 @@ function DiffTab({ title, active, stamp = "" }) {
 		focusDone.set(title, focus.seq);
 		setFile(focus.path || null);
 	}, [focus, title]);
+	const reqKey = title + "\0" + base + "\0" + (file || "");
 	const load = (0, import_react.useCallback)(async () => {
-		const key = title + "\0" + base + "\0" + (file || "");
+		const key = reqKey;
+		const seq = ++reqSeq.current;
 		const cached = diffCache.get(key);
-		if (cached) setPayload(cached);
+		if (cached) setShown({
+			key,
+			payload: cached,
+			error: ""
+		});
 		let d;
 		try {
 			d = file ? await instApi(title, `/file-diff?path=${encodeURIComponent(file)}&base=${base}`) : await instApi(title, `/diff?base=${base}`);
 		} catch (err) {
-			if (!cached) setError(err.message);
+			if (seq !== reqSeq.current) return;
+			const msg = err.message;
+			if (!cached) setShown((s) => ({
+				key,
+				payload: s?.key === key ? s.payload : null,
+				error: msg
+			}));
 			return;
 		}
-		setError("");
+		if (seq !== reqSeq.current) return;
 		diffCache.delete(key);
 		diffCache.set(key, d);
 		while (diffCache.size > DIFF_CACHE_MAX) diffCache.delete(diffCache.keys().next().value);
-		setPayload(d);
+		setShown({
+			key,
+			payload: d,
+			error: ""
+		});
 	}, [
+		reqKey,
 		title,
 		base,
 		file
@@ -73064,21 +74190,14 @@ function DiffTab({ title, active, stamp = "" }) {
 		setPicked(m);
 	};
 	const showOnMap = (path) => useUi.getState().openMap(title, { path });
+	const { payload, error, switching } = diffForKey(shown, reqKey);
+	const segments = (0, import_react.useMemo)(() => payload?.content ? splitDiffByFile(payload.content) : [], [payload?.content]);
 	if (!active && !payload) return null;
-	if (error && !payload) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pane-diff-inner",
-		ref: setRootEl,
-		children: ["Error: ", error]
-	});
-	if (!payload) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	const failure = diffFailure(payload, error);
+	if (!payload && !failure && !switching) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "diff-loading muted",
 		ref: setRootEl,
 		children: "Loading diff…"
-	});
-	if (payload.error) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pane-diff-inner",
-		ref: setRootEl,
-		children: ["Error: ", payload.error]
 	});
 	const reloadButton = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		className: "diff-reload",
@@ -73126,6 +74245,57 @@ function DiffTab({ title, active, stamp = "" }) {
 			children: "Unified"
 		})]
 	})] });
+	if (!payload && !failure) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pane-diff-inner",
+		ref: setRootEl,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "diff-toolbar",
+			children: [
+				file && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					className: "diff-back",
+					type: "button",
+					onClick: () => setFile(null),
+					children: "← All files"
+				}),
+				reloadButton,
+				modeButtons
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "diff-loading muted",
+			children: "Loading diff…"
+		})]
+	});
+	if (failure || !payload) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pane-diff-inner",
+		ref: setRootEl,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "diff-toolbar",
+			children: [
+				file && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					className: "diff-back",
+					type: "button",
+					onClick: () => setFile(null),
+					children: "← All files"
+				}),
+				reloadButton,
+				modeButtons
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "diff-empty diff-error",
+			role: "alert",
+			style: { padding: "12px 14px" },
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: "Couldn't load the diff" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "muted",
+				style: {
+					fontSize: "12px",
+					marginTop: "4px",
+					whiteSpace: "pre-wrap",
+					wordBreak: "break-word"
+				},
+				children: failure
+			})]
+		})]
+	});
 	if (file) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pane-diff-inner",
 		ref: setRootEl,
@@ -73158,7 +74328,6 @@ function DiffTab({ title, active, stamp = "" }) {
 			children: "No changes in this file"
 		})]
 	});
-	const segments = payload.content ? splitDiffByFile(payload.content) : [];
 	const anyOpen = segments.some((s) => !collapsed.has(s.file));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pane-diff-inner",
@@ -73233,6 +74402,10 @@ function DiffTab({ title, active, stamp = "" }) {
 		}, seg.file))]
 	});
 }
+function diffFailure(payload, error) {
+	if (payload?.error) return payload.error;
+	return !payload ? error : "";
+}
 function MapButton({ path, onClick }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		type: "button",
@@ -73246,9 +74419,9 @@ function MapButton({ path, onClick }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "map" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Map" })]
 	});
 }
-function OneDiff({ content, mode }) {
+var OneDiff = (0, import_react.memo)(function OneDiff({ content, mode }) {
 	return mode === "split" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitDiff, { content }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UnifiedDiff, { content });
-}
+});
 function UnifiedDiff({ content }) {
 	const lines = unifiedBody(parseUnifiedDiff(content));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
@@ -73500,6 +74673,11 @@ function syncFindHighlights() {
 var histCache = /* @__PURE__ */ new Map();
 var HIST_CACHE_MAX = 8;
 var fetchHistory = fetchPaneHistory;
+function keysAreOurs(active, overlayEl) {
+	if (!active || active.tagName === "BODY") return true;
+	if (!overlayEl) return false;
+	return (overlayEl.closest(".pane") || overlayEl.parentElement || overlayEl).contains(active);
+}
 function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGhost, initialPos, initialFind, onClose }) {
 	const forClipboard = (text) => historyForClipboard(text, title, pane);
 	const [text, setText] = (0, import_react.useState)(null);
@@ -73543,14 +74721,13 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 		el.scrollTop = want === "top" ? 0 : want === "bottom" ? el.scrollHeight : want.fromTop;
 	}, [text]);
 	(0, import_react.useEffect)(() => {
-		const id = setInterval(() => {
+		return pollWhileVisible(() => {
 			if (pressAt.current) return;
 			if (findQueryRef.current) return;
 			const sel = window.getSelection?.();
 			if (sel && !sel.isCollapsed && sel.toString().trim()) return;
 			load();
 		}, 3e3);
-		return () => clearInterval(id);
 	}, [load]);
 	const buttonDown = (0, import_react.useRef)(dragSelection != null);
 	const suppressElementCopy = (0, import_react.useRef)(false);
@@ -73750,6 +74927,7 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 	stepRef.current = step;
 	(0, import_react.useEffect)(() => {
 		const onKey = (e) => {
+			if (!keysAreOurs(document.activeElement, scrollRef.current)) return;
 			if (e.key === "Escape") {
 				e.preventDefault();
 				e.stopPropagation();
@@ -74568,13 +75746,19 @@ function QueueTab$1({ title, active }) {
 	const draggingRef = (0, import_react.useRef)(false);
 	const [inserting, setInserting] = (0, import_react.useState)(null);
 	const [fileHover, setFileHover] = (0, import_react.useState)(false);
+	const [sending, setSending] = (0, import_react.useState)(false);
+	const sendingRef = (0, import_react.useRef)(false);
+	const [loadFailed, setLoadFailed] = (0, import_react.useState)(false);
 	const reload = (0, import_react.useCallback)(async () => {
 		if (draggingRef.current) return;
 		try {
 			const st = await qApi(title, "/queue");
 			queueCache.set(title, st);
 			setState((prev) => JSON.stringify(prev) === JSON.stringify(st) ? prev : st);
-		} catch {}
+			setLoadFailed(false);
+		} catch {
+			setLoadFailed(true);
+		}
 	}, [title]);
 	const mutate = (0, import_react.useCallback)(async (path, opts) => {
 		try {
@@ -74596,7 +75780,20 @@ function QueueTab$1({ title, active }) {
 		}, 15e3);
 		return () => clearInterval(t);
 	}, [active, reload]);
-	if (!state) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	if (!state) return loadFailed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "queue-loading muted",
+		role: "alert",
+		children: [
+			"Couldn't load the queue.",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "queue-retry",
+				onClick: () => void reload(),
+				children: "Retry"
+			})
+		]
+	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "queue-loading muted",
 		children: "Loading…"
 	});
@@ -74621,7 +75818,20 @@ function QueueTab$1({ title, active }) {
 		const nextMs = lastSent ? lastSent + loopInterval * 6e4 - Date.now() : 0;
 		statusText = nextMs > 0 ? `${items.length} queued · loops every ${loopInterval} min · next send in ${fmtDurationShort(nextMs)}` : `${items.length} queued · loops every ${loopInterval} min · sends when idle`;
 	} else statusText = loop ? items.length + " queued · next sends when idle, then re-queues (loop)" : items.length + " queued · next sends automatically when idle";
-	const send = async () => {
+	const once = async (go) => {
+		if (sendingRef.current) return;
+		sendingRef.current = true;
+		setSending(true);
+		try {
+			await go();
+		} finally {
+			sendingRef.current = false;
+			setSending(false);
+		}
+	};
+	const send = () => once(sendText);
+	const add = () => once(addText);
+	const sendText = async () => {
 		const text = draft.trim();
 		if (!text) return;
 		try {
@@ -74639,7 +75849,7 @@ function QueueTab$1({ title, active }) {
 			toast("Send failed: " + (err.message || ""));
 		}
 	};
-	const add = async () => {
+	const addText = async () => {
 		const text = draft.trim();
 		if (!text) return;
 		try {
@@ -74778,12 +75988,14 @@ function QueueTab$1({ title, active }) {
 					className: "queue-add primary",
 					type: "button",
 					title: "Add to queue (Alt+Enter)",
+					disabled: sending,
 					onClick: add,
 					children: "Add to queue"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "queue-send",
 					type: "button",
 					title: "Send now (Ctrl+Enter)",
+					disabled: sending,
 					onClick: send,
 					children: "Send now"
 				})]
@@ -76411,6 +77623,10 @@ onSessionRenamed((from, to) => {
 	renameMapKey(toKeys, from, to, { values: true });
 });
 var nameOf = (t) => displayName(t);
+function threadLoadNote(hasData, loadErr) {
+	if (!loadErr) return null;
+	return hasData ? "stale" : "failed";
+}
 function Spans({ text }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: codeSpans(text).map((s, i) => s.code ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: s.text }, i) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: s.text }, i)) });
 }
@@ -76618,6 +77834,7 @@ function ThreadTab({ title, active }) {
 	const summary = headerSummary(workers, finished.length);
 	const progress = progressOf(workers, finished);
 	const entries = logEntries(data?.items ?? [], filter);
+	const loadNote = threadLoadNote(!!data, loadErr);
 	const hasWorkers = workers.length > 0 || finished.length > 0;
 	const selfMember = data?.members.find((m) => m.role === "self");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -76831,9 +78048,38 @@ function ThreadTab({ title, active }) {
 						entries.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "thread-log",
 							children: entries.map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogCard, { entry: e }, e.key))
+						}) : loadNote === "failed" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "thread-empty",
+							role: "alert",
+							children: [
+								"Couldn't load the thread: ",
+								loadErr,
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "th-retry",
+									onClick: () => void reload(),
+									children: "Retry"
+								})
+							]
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "thread-empty",
-							children: loadErr ? "Couldn't load the thread: " + loadErr : !data ? "Loading…" : filter === "reports" ? "No reports yet." : "Nothing between sessions yet — spawns, messages and reports show up here."
+							children: !data ? "Loading…" : filter === "reports" ? "No reports yet." : "Nothing between sessions yet — spawns, messages and reports show up here."
+						}),
+						loadNote === "stale" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "th-stale",
+							role: "status",
+							title: loadErr,
+							children: [
+								"thread may be out of date ·",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "th-retry",
+									onClick: () => void reload(),
+									children: "Retry"
+								})
+							]
 						})
 					]
 				})
@@ -76865,6 +78111,9 @@ function ThreadTab({ title, active }) {
 						if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
 							e.preventDefault();
 							send("now");
+						} else if (composerKey(e) === "add") {
+							e.preventDefault();
+							send("idle");
 						}
 					}
 				}),
@@ -76873,13 +78122,13 @@ function ThreadTab({ title, active }) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "th-hint",
-							children: plan.later.length ? (plan.later.length === 1 ? nameOf(plan.later[0]) + " is on a prompt" : plan.later.length + " are on a prompt") + " — queued for when it's free · Ctrl+Enter" : "Typed in as you, like the Queue tab · Ctrl+Enter sends now"
+							children: plan.later.length ? (plan.later.length === 1 ? nameOf(plan.later[0]) + " is on a prompt" : plan.later.length + " are on a prompt") + " — queued for when it's free · Ctrl+Enter · Alt+Enter when idle" : "Typed in as you, like the Queue tab · Ctrl+Enter sends now · Alt+Enter when idle"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "th-btn th-idle",
 							disabled: sending || !draft.trim(),
-							title: "Queue it — it runs when the session is next idle (the Queue tab's queue)",
+							title: "Queue it — it runs when the session is next idle (the Queue tab's queue) (Alt+Enter)",
 							onClick: () => void send("idle"),
 							children: "When idle"
 						}),
@@ -88720,7 +89969,10 @@ function helperWhere(M, S) {
 function BirdIndex(p) {
 	const [legend, setLegend] = (0, import_react.useState)(false);
 	const [railOpen, setRailOpen] = (0, import_react.useState)(false);
-	(0, import_react.useEffect)(() => setRailOpen(false), [p.closeSeq]);
+	(0, import_react.useEffect)(() => {
+		setRailOpen(false);
+		setLegend(false);
+	}, [p.closeSeq]);
 	const [, bump] = (0, import_react.useState)(0);
 	const tops = p.agents.filter((A) => !A.ag.parent);
 	const subsOf = (A) => p.agents.filter((S) => S.ag.parent === A.ag.key);
@@ -88748,9 +90000,24 @@ function BirdIndex(p) {
 		exKey,
 		p
 	]);
+	const legendKey = (e) => {
+		if (e.key !== "Escape") return;
+		e.preventDefault();
+		e.stopPropagation();
+		const back = e.currentTarget.parentElement?.querySelector(".ct-left .ct-bix-q[aria-label^='Legend']");
+		setLegend(false);
+		back?.focus();
+	};
+	const legendBtnKey = (e) => {
+		if (e.key !== "Escape" || !legend) return;
+		e.preventDefault();
+		e.stopPropagation();
+		setLegend(false);
+	};
 	const legendCard = legend && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ct-bix-legend",
 		"data-hud": "pop",
+		onKeyDown: legendKey,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LegendCard, {
 			open: true,
 			onToggle: () => setLegend(false),
@@ -88769,6 +90036,7 @@ function BirdIndex(p) {
 					"aria-label": "Legend: how to read the map",
 					title: "How to read the map",
 					onClick: () => setLegend(!legend),
+					onKeyDown: legendBtnKey,
 					children: "?"
 				}),
 				p.size !== "wide" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -88836,6 +90104,7 @@ function BirdIndex(p) {
 						"aria-label": "Legend: how to read the map",
 						title: "How to read the map",
 						onClick: () => setLegend(!legend),
+						onKeyDown: legendBtnKey,
 						children: "?"
 					})]
 				}),
@@ -89444,6 +90713,19 @@ function boxOnScreen(B, c, W, H) {
 //#region src/components/grid/codemap/treeCtl.ts
 var FOLLOW_Z = 2.6;
 var MAX_Z = 12;
+function hudSig(rects, insets, cardInset, cardBot) {
+	const r = (n) => Math.round(n * 10) / 10;
+	const parts = rects.map((q) => q.map(r).join(","));
+	parts.push([
+		insets.top,
+		insets.bot,
+		insets.left,
+		insets.right,
+		cardInset,
+		cardBot
+	].map(r).join(","));
+	return parts.join(";");
+}
 var MEMORY = /* @__PURE__ */ new Map();
 var TreeCtl = class {
 	host;
@@ -89470,6 +90752,8 @@ var TreeCtl = class {
 	};
 	cardInset = 0;
 	cardBot = 0;
+	hudFor = null;
+	hudLast = "";
 	zoomedIn = false;
 	active = false;
 	dirty = true;
@@ -89678,9 +90962,13 @@ var TreeCtl = class {
 		this.kick();
 	}
 	setHud(rects, insets) {
+		const sig = hudSig(rects, insets, this.cardInset, this.cardBot);
+		if (this.v && this.v === this.hudFor && sig === this.hudLast) return;
 		const whole = this.atWhole();
 		this.insets = insets;
 		if (!this.v) return;
+		this.hudFor = this.v;
+		this.hudLast = sig;
 		this.v.hudRects = rects;
 		this.v.free = {
 			x0: insets.left,
@@ -90648,13 +91936,32 @@ function CodeTree(p) {
 		c.setHud(rects, insets);
 	};
 	(0, import_react.useLayoutEffect)(measure);
+	const measureRef = (0, import_react.useRef)(measure);
+	measureRef.current = measure;
+	const roRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		const st = stageRef.current;
-		if (!st || typeof ResizeObserver === "undefined") return;
-		const ro = new ResizeObserver(() => measure());
+		if (!st || !ctl || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => measureRef.current());
 		ro.observe(st);
-		for (const el of Array.from(st.querySelectorAll("[data-hud]"))) ro.observe(el);
-		return () => ro.disconnect();
+		const seen = new Set(st.querySelectorAll("[data-hud]"));
+		for (const el of seen) ro.observe(el);
+		roRef.current = {
+			ro,
+			seen
+		};
+		return () => {
+			ro.disconnect();
+			roRef.current = null;
+		};
+	}, [ctl]);
+	(0, import_react.useLayoutEffect)(() => {
+		const st = stageRef.current, o = roRef.current;
+		if (!st || !o) return;
+		const now = new Set(st.querySelectorAll("[data-hud]"));
+		for (const el of o.seen) if (!now.has(el)) o.ro.unobserve(el);
+		for (const el of now) if (!o.seen.has(el)) o.ro.observe(el);
+		o.seen = now;
 	});
 	const showMini = !narrow && !!ctl && ctl.zoomedIn;
 	(0, import_react.useEffect)(() => {
@@ -90696,9 +92003,9 @@ function CodeTree(p) {
 		p.title
 	]);
 	const shutRail = () => {
-		const st = stageRef.current, pop = st ? st.querySelector(".ct-bix-pop") : null;
-		if (!st || !pop) return false;
-		const back = pop.contains(document.activeElement) ? st.querySelector(".ct-bix-rail .ct-bix-q") : null;
+		const st = stageRef.current, pop = st ? st.querySelector(".ct-bix-pop") : null, leg = st ? st.querySelector(".ct-bix-legend") : null;
+		if (!st || !pop && !leg) return false;
+		const back = leg && leg.contains(document.activeElement) ? st.querySelector(".ct-left .ct-bix-q[aria-label^='Legend']") : pop && pop.contains(document.activeElement) ? st.querySelector(".ct-bix-rail .ct-bix-q") : null;
 		setRailShut((x) => x + 1);
 		back?.focus();
 		return true;
@@ -91150,10 +92457,16 @@ function Glyph({ kind }) {
 		children: KIND_GLYPH[kind] || "?"
 	});
 }
+function listState(boxQ, ansQ, n, err) {
+	if (boxQ.trim() !== ansQ) return "searching";
+	if (err) return "error";
+	return n ? "rows" : "empty";
+}
 var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick }, ref) {
 	const [q, setQ] = (0, import_react.useState)("");
 	const [items, setItems] = (0, import_react.useState)([]);
 	const [err, setErr] = (0, import_react.useState)("");
+	const [ansQ, setAnsQ] = (0, import_react.useState)("");
 	const [open, setOpen] = (0, import_react.useState)(false);
 	const [cur, setCur] = (0, import_react.useState)(0);
 	const wrap = (0, import_react.useRef)(null);
@@ -91168,10 +92481,13 @@ var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick 
 	const ctl = (0, import_react.useMemo)(() => searchController((t) => searchCode(title, t), (r) => {
 		setItems(r.items);
 		setErr(r.err);
+		setAnsQ(r.q);
 		setCur(0);
 	}), [title]);
 	(0, import_react.useEffect)(() => () => ctl.dispose(), [ctl]);
 	(0, import_react.useEffect)(() => ctl.set(q), [q, ctl]);
+	const state = listState(q, ansQ, items.length, err);
+	const rows = state === "rows" ? items : [];
 	const pick = (it) => {
 		if (!it) return;
 		onPick(it);
@@ -91187,7 +92503,7 @@ var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick 
 				type: "search",
 				placeholder: short ? "Find…" : "Find file or symbol",
 				"aria-label": "Find file or symbol",
-				"aria-expanded": open && items.length > 0,
+				"aria-expanded": open && rows.length > 0,
 				"aria-controls": "cm-search-list",
 				role: "combobox",
 				spellCheck: false,
@@ -91202,13 +92518,13 @@ var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick 
 				onKeyDown: (e) => {
 					if (e.key === "ArrowDown") {
 						e.preventDefault();
-						setCur((c) => Math.min(items.length - 1, c + 1));
+						setCur((c) => Math.max(0, Math.min(rows.length - 1, c + 1)));
 					} else if (e.key === "ArrowUp") {
 						e.preventDefault();
 						setCur((c) => Math.max(0, c - 1));
 					} else if (e.key === "Enter") {
 						e.preventDefault();
-						pick(items[cur]);
+						pick(rows[cur]);
 					} else if (e.key === "Escape") {
 						e.preventDefault();
 						e.stopPropagation();
@@ -91226,15 +92542,19 @@ var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick 
 				id: "cm-search-list",
 				role: "listbox",
 				children: [
-					err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+					state === "searching" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "muted",
+						children: "Searching…"
+					}),
+					state === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 						className: "cm-err",
 						children: err
 					}),
-					!err && !items.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+					state === "empty" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 						className: "muted",
 						children: "No matches."
 					}),
-					items.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					rows.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 						role: "option",
 						"aria-selected": i === cur,
 						className: i === cur ? "cur" : "",
@@ -94221,10 +95541,12 @@ function SessionUsageChip({ inst }) {
 	const usage = asUsageWindows(usageData);
 	const pl = provLabel(inst.provider);
 	const head = usageHeadParts(inst);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
 		ref: chipRef,
 		className: "tok usage-trigger",
 		title: "Session cost & tokens — click for the breakdown",
+		"aria-expanded": open,
 		onClick: (ev) => {
 			ev.stopPropagation();
 			setOpen((o) => !o);
@@ -94349,10 +95671,12 @@ function AccountChip({ inst }) {
 			setModels(null);
 		}
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
 		ref: chipRef,
 		className: "tok usage-trigger acct-chip",
 		title: "Account this agent runs as — click to swap",
+		"aria-expanded": open,
 		onClick: (ev) => {
 			ev.stopPropagation();
 			if (!busy) setOpen((o) => !o);
@@ -94501,7 +95825,7 @@ function FastTrackMenu({ title, anchor, onClose }) {
 	const close = (refocus = false) => onCloseRef.current(refocus);
 	const whyOf = (e) => e.kind === "ask" ? model.ask.why : e.kind === "lane" ? model.lock : "";
 	const keyOf = (e) => e.kind === "ask" ? "A" : e.kind === "stops" ? "E" : e.kind === "sky" ? "S" : model.items.find((i) => i.lane === e.lane)?.key || "";
-	const activate = (e) => {
+	const activate = (e, byKey = false) => {
 		if (!e) return;
 		const why = whyOf(e);
 		if (why) {
@@ -94516,7 +95840,7 @@ function FastTrackMenu({ title, anchor, onClose }) {
 			return;
 		}
 		if (!inst) return;
-		close();
+		close(byKey);
 		const cur = model.current;
 		if (e.kind === "ask") pickFastTrack(title, name, cur.lane, !model.ask.on);
 		else pickFastTrack(title, name, e.lane, cur.askFirst);
@@ -94536,7 +95860,7 @@ function FastTrackMenu({ title, anchor, onClose }) {
 			setSel((i) => (i - 1 + entries.length) % entries.length);
 		} else if (k === "Enter" || k === " ") {
 			handled();
-			activate(entries[sel]);
+			activate(entries[sel], true);
 		} else if (k === "Escape") {
 			handled();
 			close(true);
@@ -94545,7 +95869,7 @@ function FastTrackMenu({ title, anchor, onClose }) {
 			if (i >= 0) {
 				handled();
 				setSel(i);
-				activate(entries[i]);
+				activate(entries[i], true);
 			}
 		}
 	};
@@ -97425,6 +98749,7 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 	const items = youItems(step);
 	const [ticked, setTicked] = (0, import_react.useState)({});
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const cancel = useCancelAsk(flight);
 	const haltPoint = atHaltPoint(flight);
 	const paused = haltPoint || flight.state === "paused";
 	const failedReason = step ? String(flight.step_states?.[step.id]?.detail?.failed_reason ?? "").trim() : "";
@@ -97558,16 +98883,16 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 						className: "test-btn fl-btn",
 						disabled: busy,
 						title: "Its session is closed — end this route",
-						onClick: () => void run(() => flightAction("Stop the route", flightPath(flight.id, "/cancel"), {}, "Route stopped")),
+						onClick: cancel.ask,
 						children: "Stop the route"
 					})
 				]
-			})
+			}),
+			cancel.node
 		]
 	});
 }
 function FlightMenu({ flight, onCancelAsk, openSession = true }) {
-	const live = isLive(flight);
 	const rows = useInstances().data;
 	const items = [];
 	if (openSession && flight.session) items.push({
@@ -97575,7 +98900,20 @@ function FlightMenu({ flight, onCancelAsk, openSession = true }) {
 		label: "Open session",
 		onSelect: () => openFlightSession(flight.session)
 	});
-	if (live) {
+	items.push(...routeMenuItems(flight, onCancelAsk, sessionGone(flight, rows)));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		onClick: stop,
+		className: "fl-menu",
+		"data-no-drag": true,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
+			label: "Route actions",
+			items
+		})
+	});
+}
+function routeMenuItems(flight, onCancelAsk, gone = false) {
+	const items = [];
+	if (isLive(flight)) {
 		items.push(flight.state === "halted" || flight.state === "paused" ? {
 			key: "resume",
 			label: "Carry on",
@@ -97595,16 +98933,8 @@ function FlightMenu({ flight, onCancelAsk, openSession = true }) {
 			onSelect: onCancelAsk
 		});
 	}
-	items.push(...flyAgainItems(flight, sessionGone(flight, rows)));
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		onClick: stop,
-		className: "fl-menu",
-		"data-no-drag": true,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
-			label: "Route actions",
-			items
-		})
-	});
+	items.push(...flyAgainItems(flight, gone));
+	return items;
 }
 function flyAgainItems(flight, gone = false) {
 	if (!canFlyAgain(flight)) return [];
@@ -99203,6 +100533,9 @@ function TileIcon({ kind, size = 28 }) {
 }
 //#endregion
 //#region src/components/flights/SkyChain.tsx
+function isMenuKey(e) {
+	return e.key === "ContextMenu" || e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+}
 function agentTitle(provider, program) {
 	const p = String(provider || "").trim();
 	const shell = (s) => /^(bash|zsh|sh|fish|dash|ksh)$/.test(s.trim().split(/\s+/)[0]?.split("/").pop() || "");
@@ -99532,6 +100865,14 @@ function SkyChain(p) {
 		} else if ((e.key === "Delete" || e.key === "Backspace") && n.id !== HEAD_ID && isStopish(n.node) && p.onRemove) {
 			e.preventDefault();
 			p.onRemove(n.node);
+		} else if (isMenuKey(e) && p.onMenu) {
+			e.preventDefault();
+			e.stopPropagation();
+			const r = e.currentTarget.getBoundingClientRect();
+			p.onMenu(n.node, {
+				clientX: r.left,
+				clientY: r.bottom
+			});
 		}
 	};
 	const portDown = (e, n, side) => {
@@ -99888,12 +101229,14 @@ function SkyChain(p) {
 				const r = p.run;
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: "sky-run fl-icon-btn" + (r.running ? " is-running" : ""),
+					className: "sky-run fl-icon-btn" + (r.running ? " is-running" : "") + (r.starting ? " is-starting" : ""),
 					style: {
 						left: at.x - 24,
 						top: at.y
 					},
 					"data-no-drag": true,
+					disabled: !r.running && !!r.starting,
+					"aria-busy": r.starting || void 0,
 					"aria-label": r.label,
 					title: r.label,
 					onPointerDown: (e) => e.stopPropagation(),
@@ -102121,13 +103464,13 @@ function SkySelectionBar(p) {
 		if (!flight || !idx.length) return;
 		const plan = planFromSteps(name.trim() || NEW_STOPS, idx.map((i) => flight.steps[i]));
 		try {
-			toast("Saved “" + (await savePlan({
+			toast(savedWords$1((await savePlan({
 				...plan,
 				id: "",
 				updated: 0
-			})).name + "” on the shelf");
+			})).name, false));
 		} catch (err) {
-			toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+			toast("Saving the route failed: " + errMsg(err), { error: true });
 		}
 	});
 	const removeNow = () => one ? removeStops() : removeLines();
@@ -102177,9 +103520,9 @@ function SkySelectionBar(p) {
 							type: "button",
 							className: "test-btn fl-btn",
 							disabled: busy || !idx.length,
-							title: "Keep these stops on the shelf as a saved route",
+							title: "Keep these stops on the shelf as a saved route — you name it",
 							onClick: () => p.setAsk("save"),
-							children: "Save to the shelf"
+							children: "Save as a route…"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -102826,11 +104169,15 @@ function gridMove(at, key, sizes, cols) {
 	return at;
 }
 var renamable = (plan) => !/^builtin:[a-z]+@/.test(plan.id);
-function cardMenu(plan, shelved) {
+function cardMenu(plan, shelved, opts = {}) {
 	return [
 		...renamable(plan) ? [{
 			key: "rename",
 			label: "Rename"
+		}] : [],
+		...opts.edit ? [{
+			key: "edit",
+			label: "Edit its stops"
 		}] : [],
 		{
 			key: "takeoff",
@@ -104310,6 +105657,7 @@ function StepDialog(p) {
 					onConfirm: p.onClose,
 					onCancel: () => setAsking(false)
 				}),
+				p.confirm,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "modal-actions stop-dialog-actions",
 					children: [
@@ -104448,6 +105796,7 @@ function GroupDialog(p) {
 						}, s.id);
 					})
 				}),
+				p.confirm,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "modal-actions stop-dialog-actions",
 					children: [
@@ -104473,9 +105822,9 @@ function GroupDialog(p) {
 									type: "button",
 									className: "test-btn",
 									disabled: p.busy || !next,
-									title: "Keep these stops on the shelf as a saved route, to drag onto any route",
+									title: "Keep these stops as a saved route under the name above, to drag onto any route",
 									onClick: () => void p.onSaveShelf(next),
-									children: "Save to the shelf"
+									children: "Save as a route"
 								})
 							]
 						}),
@@ -104587,6 +105936,17 @@ function usePromoteStops(flight) {
 function removedToast(title, wasHere, next) {
 	if (!wasHere) return "Removed “" + title + "” from the route";
 	return "Removed “" + title + "” — the route is paused " + (next ? "before “" + next + "”" : "at the end");
+}
+function removeAskWords(kind, name) {
+	return kind === "clear" ? {
+		title: "Clear the finished route?",
+		body: "Its record goes.",
+		confirm: "Clear"
+	} : {
+		title: "Remove “" + name + "”?",
+		body: "The route is at it right now: it pauses before what follows. Undo puts it back.",
+		confirm: "Remove"
+	};
 }
 function shelfPlanFor(name, steps, planId, plans) {
 	const was = planId ? plans.find((p) => p.id === planId) : void 0;
@@ -104901,31 +106261,49 @@ function useSessionLine(title, src, opts) {
 		return n.step && n.index !== void 0 ? removeStop(n.step, n.index) : false;
 	};
 	const [removeAsk, setRemoveAsk] = (0, import_react.useState)(null);
-	const requestRemove = (n) => {
-		if (opts.askRunning && removalNeedsAsk({
+	const requestRemove = (n, from = {}) => {
+		const asks = !!from.inDialog || !!opts.askRunning;
+		const kind = !flight && landedId ? "clear" : asks && removalNeedsAsk({
 			kind: "stops",
 			indexes: nodeIndexes(n),
 			flight
-		})) setRemoveAsk(n);
-		else removeNode(n);
+		}) ? "remove" : "";
+		if (kind && asks) setRemoveAsk({
+			kind,
+			n,
+			inDialog: !!from.inDialog,
+			then: from.then
+		});
+		else act(async () => {
+			if (await removeNode(n)) from.then?.();
+		});
 	};
-	const askName = removeAsk ? (removeAsk.kind === "group" ? removeAsk.group?.name : removeAsk.step?.title) || "this stop" : "";
-	const removeAskNode = removeAsk ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "skl-close-confirm skl-remove-confirm",
-		"data-no-drag": true,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-			title: "Remove “" + askName + "”?",
-			body: "The route is at it right now: it pauses before what follows. Undo puts it back.",
-			confirmLabel: "Remove",
+	const dialogId = dialog?.id || "";
+	(0, import_react.useEffect)(() => {
+		setRemoveAsk((a) => a?.inDialog ? null : a);
+	}, [dialogId]);
+	const askNode = (a) => {
+		const words = removeAskWords(a.kind, (a.n.kind === "group" ? a.n.group?.name : a.n.step?.title) || "this stop");
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+			title: words.title,
+			body: words.body,
+			confirmLabel: words.confirm,
 			busy,
 			onConfirm: () => {
-				const n = removeAsk;
 				setRemoveAsk(null);
-				act(() => removeNode(n));
+				act(async () => {
+					if (await removeNode(a.n)) a.then?.();
+				});
 			},
 			onCancel: () => setRemoveAsk(null)
-		})
+		});
+	};
+	const removeAskNode = removeAsk && !removeAsk.inDialog ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "skl-close-confirm skl-remove-confirm",
+		"data-no-drag": true,
+		children: askNode(removeAsk)
 	}) : null;
+	const dialogAsk = removeAsk?.inDialog ? askNode(removeAsk) : null;
 	const joinDef = kindOf.get("join");
 	const splitAt = open?.step?.kind === "split" && open.index !== void 0 ? open.index : -1;
 	const offerJoin = !!flight && !!joinDef && splitAt >= 0 && flight.steps[splitAt + 1]?.kind !== "join";
@@ -105031,7 +106409,7 @@ function useSessionLine(title, src, opts) {
 			else if (n.session && n.session !== title) opts.onSession(n.session);
 		},
 		onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : void 0,
-		onRemove: flight ? (n) => requestRemove(own(n)) : landedId ? () => void clearLanded() : void 0,
+		onRemove: flight || landedId ? (n) => requestRemove(own(n)) : void 0,
 		onMove: flight ? (from, to) => {
 			const step = flight.steps[from];
 			const n = stops.find((s) => s.index === from);
@@ -105125,23 +106503,22 @@ function useSessionLine(title, src, opts) {
 				id: s.id,
 				back: open.id
 			}),
-			onRemoveSub: flight ? (s) => void act(() => removeNode(s)) : void 0,
+			onRemoveSub: flight ? (s) => requestRemove(s, { inDialog: true }) : void 0,
+			confirm: dialogAsk,
 			onUngroup: flight ? () => void act(async () => {
 				if (await ungroupStops(flight.id, g.id)) setDialog(null);
 			}) : void 0,
 			onSaveShelf: (name) => act(async () => {
 				const plan = shelfPlanFor(name, g.steps, g.plan_id, plans);
 				try {
-					const saved = await savePlan(plan);
-					toast((plan.id ? "Updated “" : "Saved “") + (saved?.name || name) + "” on the shelf");
+					toast(savedWords$1((await savePlan(plan))?.name || name, !!plan.id));
 				} catch (err) {
-					toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+					toast("Saving the route failed: " + errMsg(err), { error: true });
 				}
 			}),
-			onRemove: flight ? () => void act(async () => {
-				if (await removeGroup(open)) setDialog(null);
-			}) : landedId ? () => void act(async () => {
-				if (await clearLanded()) setDialog(null);
+			onRemove: flight || landedId ? () => requestRemove(open, {
+				inDialog: true,
+				then: () => setDialog(null)
 			}) : void 0
 		}, open.id);
 	} else if (open && open.kind === "stop") {
@@ -105184,9 +106561,11 @@ function useSessionLine(title, src, opts) {
 				tackOn(flight.id, open.step, at < end ? at : void 0);
 				close();
 			} : void 0,
-			onRemove: (flight || landedId) && open.step ? () => void act(async () => {
-				if (await removeNode(open)) close();
+			onRemove: (flight || landedId) && open.step ? () => requestRemove(open, {
+				inDialog: true,
+				then: close
 			}) : void 0,
+			confirm: dialogAsk,
 			onToggleHalt: here && open.step && !flown ? () => toggleHalt(open) : void 0,
 			primary: h.primary,
 			onDone: h.done ? () => actClose(() => stepDone(flight.id, open.step.id)) : void 0,
@@ -105643,6 +107022,50 @@ function WorkersMenu({ title, anchor, keys, onClose }) {
 	}), document.body);
 }
 //#endregion
+//#region src/components/grid/paneFamily.ts
+function derivePaneFamily(title, rows) {
+	const { parent, children } = familyOf(title, rows);
+	return {
+		parent,
+		children,
+		memRank: memoryRank(rows.filter((r) => !r.device && !isPeerRow(r)), title)
+	};
+}
+function samePaneFamily(a, b) {
+	if (a === b) return true;
+	if (a.parent !== b.parent || a.memRank !== b.memRank) return false;
+	if (a.children.length !== b.children.length) return false;
+	return a.children.every((c, i) => c === b.children[i]);
+}
+function familySnapshot(title, read) {
+	let lastRows = null;
+	let last = null;
+	return () => {
+		const rows = read();
+		if (last && rows === lastRows) return last;
+		const next = derivePaneFamily(title, rows ?? []);
+		lastRows = rows;
+		if (last && samePaneFamily(last, next)) return last;
+		last = next;
+		return next;
+	};
+}
+var readRows = () => queryClient.getQueryData(["instances"]);
+function subscribeInstances(cb) {
+	return queryClient.getQueryCache().subscribe((event) => {
+		if (event.query.queryKey[0] === "instances") cb();
+	});
+}
+function usePaneFamily(title) {
+	const ref = (0, import_react.useRef)(null);
+	if (!ref.current || ref.current.title !== title) ref.current = {
+		title,
+		get: familySnapshot(title, readRows)
+	};
+	const get = (0, import_react.useCallback)(() => ref.current.get(), []);
+	return (0, import_react.useSyncExternalStore)(subscribeInstances, get, get);
+}
+//#endregion
 //#region src/components/grid/Pane.tsx
 var GIT_TABS = /* @__PURE__ */ new Set(["diff", "map"]);
 var MAP_PREFETCH_MS = 1500;
@@ -105693,19 +107116,19 @@ function queueRelTime(ms) {
 	const h = Math.floor(m / 60);
 	return h + "h " + (m - h * 60) + "m";
 }
-function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
+function PaneImpl({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const title = inst.title;
 	const held = (0, import_react.useSyncExternalStore)(subscribeHolds, () => !embedded && (embedHolds.get(title) || 0) > 0, () => false);
 	(0, import_react.useLayoutEffect)(() => embedded ? holdTerms(title) : void 0, [embedded, title]);
 	const { data: config } = useConfig();
+	(0, import_react.useSyncExternalStore)(subscribeKeymap, keymapVersion, keymapVersion);
 	const focused = useUi((s) => s.focused === title);
 	const alias = useUi((s) => s.aliases[title]);
 	const lastTab = useUi((s) => s.lastTab[title]);
 	const setLastTab = useUi((s) => s.setLastTab);
 	const reduceMotion = useUi((s) => s.reduceMotion);
-	const { data: allRows } = useInstances();
+	const family = usePaneFamily(title);
 	const { data: sysMem } = useMemory();
-	const family = familyOf(title, allRows ?? []);
 	const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
 	const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
 	const threadShown = threadTabShown(!!family.parent || family.children.length > 0 || inst.run?.role === "lead", threadOpened || lastTab === "thread");
@@ -105744,6 +107167,8 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const [booted, setBooted] = (0, import_react.useState)(false);
 	const [wsState, setWsState] = (0, import_react.useState)("connecting");
 	const [shellStarted, setShellStarted] = (0, import_react.useState)(savedTab === "shell");
+	const [shellState, setShellState] = (0, import_react.useState)("connecting");
+	const [shellBooted, setShellBooted] = (0, import_react.useState)(false);
 	const heldRow = !paused && isHeldOffline(inst);
 	const [started, setStarted] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
@@ -105814,6 +107239,11 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			handle.onBoot = () => setBooted(true);
 			setWsState(handle.state);
 			if (handle.booted) setBooted(true);
+		} else {
+			handle.onState = (s) => setShellState(s);
+			handle.onBoot = () => setShellBooted(true);
+			setShellState(handle.state);
+			if (handle.booted) setShellBooted(true);
 		}
 		requestAnimationFrame(() => repaintTerm(handle.term, () => handle.doFit()));
 	}, [
@@ -106071,7 +107501,15 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			setFit(next);
 		}
 	}, []);
-	(0, import_react.useLayoutEffect)(measureFit);
+	const measuredSig = (0, import_react.useRef)(null);
+	(0, import_react.useLayoutEffect)(() => {
+		const el = headRef.current;
+		if (!el) return;
+		const sig = headMeasureSig(el);
+		if (sig === measuredSig.current) return;
+		measuredSig.current = sig;
+		measureFit();
+	});
 	(0, import_react.useEffect)(() => {
 		const el = headRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
@@ -106227,7 +107665,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const hasDiffStat = !!(ds && (ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0);
 	const mem = memoryReading(inst.memory);
 	const memLocal = !theirs && !inst.device;
-	const memTone = mem ? memoryTone(mem.mb, memLocal ? (sysMem?.total || 0) / 1048576 : 0, memLocal ? sysMem?.level : void 0, memLocal ? memoryRank((allRows ?? []).filter((r) => !r.device && !isPeerRow(r)), title) : -1) : "";
+	const memTone = mem ? memoryTone(mem.mb, memLocal ? (sysMem?.total || 0) / 1048576 : 0, memLocal ? sysMem?.level : void 0, memLocal ? family.memRank : -1) : "";
 	const act = effectiveActivity(inst);
 	const quiet = !!ns && !ns.hint && !ns.disabled && (act === "working" || act === "clarify" || act === "limit");
 	const items = headerItems(paneHeader, {
@@ -106283,6 +107721,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		canResume ? 1 : 0,
 		deviceName
 	].join("|");
+	const chordTip = (letter) => " (" + chordLabel(letter) + ")";
 	const tabEls = {
 		agent: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			"data-tab": "agent",
@@ -106319,7 +107758,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			role: "tab",
 			"aria-selected": tab === "diff",
 			className: tab === "diff" ? "active" : "",
-			title: "Diff — what this session changed",
+			title: "Diff — what this session changed" + chordTip("g"),
 			onClick: (e) => {
 				e.stopPropagation();
 				showTab("diff");
@@ -106334,7 +107773,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			role: "tab",
 			"aria-selected": tab === "map",
 			className: "map-tab" + (tab === "map" ? " active" : ""),
-			title: "Code map — the worktree as a tree: agents, zones, plan, blast radius" + (mapBadge ? "\n" + mapBadge.title : ""),
+			title: "Code map — the worktree as a tree: agents, zones, plan, blast radius" + chordTip("m") + (mapBadge ? "\n" + mapBadge.title : ""),
 			"aria-label": mapBadge ? "Map, " + mapBadge.title : void 0,
 			onClick: (e) => {
 				e.stopPropagation();
@@ -106358,7 +107797,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			role: "tab",
 			"aria-selected": tab === "queue",
 			className: "queue-tab" + (tab === "queue" ? " active" : "") + (pending > 0 && q?.enabled === false ? " q-paused" : "") + (q?.loop ? " q-loop" : "") + (holding ? " q-limited" : ""),
-			title: holding ? q?.wait_for_limit !== false ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)` : `Usage limit reached · queue stopped (${pending} queued)` : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits",
+			title: holding ? q?.wait_for_limit !== false ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)` : `Usage limit reached · queue stopped (${pending} queued)` : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits" + chordTip("q"),
 			onClick: (e) => {
 				e.stopPropagation();
 				showTab("queue");
@@ -106403,7 +107842,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			role: "tab",
 			"aria-selected": tab === "thread",
 			className: "thread-tab" + (tab === "thread" ? " active" : ""),
-			title: "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" + (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") + (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : ""),
+			title: "Thread — this session's workers, what they reported and what passed between them; write to any of them as you" + chordTip("t") + (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") + (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : ""),
 			onClick: (e) => {
 				e.stopPropagation();
 				showTab("thread");
@@ -106750,14 +108189,22 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 									"aria-hidden": "true"
 								}) : null
 							]
-						}) : null, !booted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "term-loading",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "spinner" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Loading session…" })]
+						}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TermCover, {
+							title,
+							kind: "agent",
+							state: wsState,
+							booted
 						})]
 					}, "agent-term"),
 					shellStarted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : ""),
-						ref: adopt("shell")
+						ref: adopt("shell"),
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TermCover, {
+							title,
+							kind: "shell",
+							state: shellState,
+							booted: shellBooted
+						})
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : "") }),
 					caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "pane-diff" + (tab !== "diff" ? " hidden" : ""),
@@ -106847,6 +108294,15 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		]
 	});
 }
+var Pane = (0, import_react.memo)(PaneImpl);
+function headMeasureSig(head) {
+	return [
+		head.dataset.fitKey || "",
+		head.classList.contains("head-icons") ? "i" : "w",
+		head.childElementCount,
+		head.textContent || ""
+	].join("");
+}
 function headNeed(head) {
 	const cs = getComputedStyle(head);
 	const px = (v) => parseFloat(v) || 0;
@@ -106870,6 +108326,94 @@ function textWidth(text, font) {
 	if (!measureCtx) return text.length * 7;
 	measureCtx.font = font;
 	return measureCtx.measureText(text).width;
+}
+function TermCover({ title, kind, state, booted }) {
+	const [, redraw] = (0, import_react.useState)(0);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const h = peekTerm(title, kind);
+	const since = h?.downSince || 0;
+	const downFor = since ? Date.now() - since : 0;
+	const cover = termCover(state, booted, downFor);
+	(0, import_react.useEffect)(() => {
+		if (cover !== "loading" && cover !== "reconnecting") return;
+		if (!since) return;
+		const t = setTimeout(() => redraw((n) => n + 1), Math.max(0, UNREACHABLE_MS - downFor) + 50);
+		return () => clearTimeout(t);
+	}, [
+		cover,
+		since,
+		downFor
+	]);
+	const retry = (e) => {
+		e.stopPropagation();
+		peekTerm(title, kind)?.retry();
+	};
+	if (cover === "none") return null;
+	if (cover === "reconnecting") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "term-reconnecting",
+		role: "status",
+		children: "Reconnecting…"
+	});
+	if (cover === "loading") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "term-loading",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "spinner" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: kind === "shell" ? "Loading shell…" : "Loading session…" })]
+	});
+	if (cover === "waiting") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "term-loading term-cover",
+		role: "status",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "term-cover-head",
+				children: "Waiting its turn"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Its agent starts when the workers before it finish." }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				disabled: busy,
+				title: "Start this worker's agent now, before its turn",
+				onClick: (e) => {
+					e.stopPropagation();
+					setBusy(true);
+					startSession(title).then((r) => {
+						setBusy(false);
+						if (r) peekTerm(title, kind)?.retry();
+					});
+				},
+				children: busy ? "Starting…" : "▶ Start now"
+			})
+		]
+	});
+	if (cover === "failed") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "term-loading term-cover",
+		role: "alert",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "term-cover-head",
+				children: kind === "shell" ? "The shell didn't start" : "The session didn't attach"
+			}),
+			h?.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "term-cover-error",
+				children: h.error
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				onClick: retry,
+				children: "Retry"
+			})
+		]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "term-loading term-cover",
+		role: "status",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "term-cover-head",
+			children: "Can't reach the session — retrying"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			onClick: retry,
+			children: "Retry"
+		})]
+	});
 }
 function RunningCover({ paneRef }) {
 	const [revealed, setRevealed] = (0, import_react.useState)(false);
@@ -107056,46 +108600,6 @@ function BudgetLock({ title, budget }) {
 				})
 			]
 		})
-	});
-}
-//#endregion
-//#region src/extensions/ExtPaneBody.tsx
-function ExtPaneBody({ extKey }) {
-	(0, import_react.useSyncExternalStore)(subscribeHost, hostVersion);
-	const mountRef = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		const el = mountRef.current;
-		if (!el) return;
-		return mountExtPane(extKey, el);
-	}, [extKey]);
-	const view = extPaneView(extKey);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ext-pane-body",
-		children: [
-			view.status === "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "ext-surface-status muted",
-				children: [
-					"Loading ",
-					view.label,
-					"…"
-				]
-			}),
-			view.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ext-surface-status ext-surface-error",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-					view.label,
-					" failed: ",
-					view.error || "no reason recorded"
-				] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "muted",
-					children: "See Settings → Extensions for details."
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ext-surface-mount",
-				ref: mountRef
-			})
-		]
 	});
 }
 //#endregion
@@ -107457,7 +108961,15 @@ function sentinelRef(p) {
 function TerminalGrid({ specialPanes }) {
 	const { data: instances, isSuccess } = useInstances();
 	const { data: config } = useConfig();
-	const ui = useUi();
+	const ui = useUi(useShallow((s) => ({
+		hidden: s.hidden,
+		viewMode: s.viewMode,
+		narrow: s.narrow,
+		mru: s.mru,
+		order: s.order,
+		gridRows: s.gridRows,
+		setGridRows: s.setGridRows
+	})));
 	const [drag, setDrag] = (0, import_react.useState)(null);
 	const workable = (0, import_react.useMemo)(() => (instances || []).filter((i) => !isVerifySession(i)), [instances]);
 	const specialByKey = (0, import_react.useMemo)(() => new Map(specialPanes.map((p) => [sentinel(p.kind, sentinelRef(p)), p])), [specialPanes]);
@@ -107611,12 +109123,30 @@ var current = null;
 var nextId = 1;
 var listeners = /* @__PURE__ */ new Set();
 var emit = () => listeners.forEach((l) => l());
+var returnTo = null;
+function focusedNow() {
+	if (typeof document === "undefined") return null;
+	const a = document.activeElement;
+	return a && a !== document.body ? a : null;
+}
+function restoreFocus(first, anchor) {
+	if (typeof document === "undefined") return;
+	setTimeout(() => {
+		const now = document.activeElement;
+		if (now && now !== document.body && now.isConnected !== false) return;
+		for (const el of [first, anchor]) if (el && el.isConnected && typeof el.focus === "function") {
+			el.focus({ preventScroll: true });
+			return;
+		}
+	}, 0);
+}
 function getFolderPicker() {
 	return current;
 }
 function openFolderPicker(req) {
 	const prev = current;
 	const id = nextId++;
+	returnTo = focusedNow() ?? (prev ? returnTo : null);
 	current = {
 		...req,
 		id
@@ -107631,6 +109161,8 @@ function closeFolderPicker(id, notify = true) {
 	current = null;
 	emit();
 	if (notify) r.onCancel?.();
+	if (notify) restoreFocus(returnTo, r.anchor);
+	returnTo = null;
 }
 function pickFolder(path) {
 	if (!current) return;
@@ -107638,6 +109170,8 @@ function pickFolder(path) {
 	current = null;
 	emit();
 	r.onPick(path);
+	restoreFocus(returnTo, r.anchor);
+	returnTo = null;
 }
 function subscribe(l) {
 	listeners.add(l);
@@ -108518,7 +110052,10 @@ function otherSessionsLine(titles, worktree) {
 function agentMissingReason(agent, installed) {
 	if (!installed || !agent) return "";
 	if (installed[agent] !== false) return "";
-	return agentName(agent) + " isn't installed on this device. Install it in one click from Get set up (step ①; a custom agent: Settings → Custom agents), or pick another agent.";
+	return agentName(agent) + " isn't installed on this device. Install it in one click from Setup (step ①; a custom agent: Settings → Custom agents), or pick another agent.";
+}
+function agentSignedOutLine(agent) {
+	return agentName(agent) + " isn't signed in yet — a session would stop at its sign-in screen.";
 }
 function preferInstalled(agent, names, installed) {
 	if (!installed || installed[agent] !== false) return agent;
@@ -109337,6 +110874,9 @@ function ModeText({ title, desc }) {
 		})]
 	});
 }
+function nameClashText(title) {
+	return "A session called “" + title + "” already exists — give this one another name under More options, or clear it to name it from the task.";
+}
 var WORKTREE_HINT = "Its own branch, so several sessions can run at once";
 function WorktreeText() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
@@ -109538,15 +111078,11 @@ function WorksIn({ inPlace, setInPlace, setProvision, provisionOn, laneNeedsWork
 				],
 				muted: name.renumbered ? "“" + name.renumbered + "” is taken, so this one is numbered" : ""
 			}) : null),
-			name?.clash && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			name?.clash && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "nf-opt-sub nf-git-nudge",
 				id: "new-name-clash",
 				role: "status",
-				children: [
-					"A session called “",
-					name.title,
-					"” already exists — give this one another name under More options, or clear it to name it from the task."
-				]
+				children: nameClashText(name.title)
 			}),
 			othersLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "nf-opt-sub nf-branch-line nf-others",
@@ -109992,6 +111528,21 @@ function ScheduleWhen({ form, onForm, tz, cronPreview, runs, focusTime }) {
 		})
 	] });
 }
+function isSaveKey(e) {
+	return e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing;
+}
+function saveOnKey(p) {
+	return (e) => {
+		if (!isSaveKey({
+			key: e.key,
+			ctrlKey: e.ctrlKey,
+			metaKey: e.metaKey,
+			isComposing: e.nativeEvent.isComposing
+		})) return;
+		e.preventDefault();
+		if (!p.busy) p.onSave();
+	};
+}
 function ScheduleEditor(p) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 		className: "tpl-editor tpl-sched-editor",
@@ -109999,6 +111550,7 @@ function ScheduleEditor(p) {
 			e.preventDefault();
 			p.onSave();
 		},
+		onKeyDown: saveOnKey(p),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "tpl-schedule tpl-sched-only",
 			"data-tour": "schedule-when",
@@ -110097,6 +111649,7 @@ function TemplateEditor(p) {
 			e.preventDefault();
 			p.onSave();
 		},
+		onKeyDown: saveOnKey(p),
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "tpl-name-field",
@@ -111273,9 +112826,10 @@ function TemplatesDialogView(p) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "tpl-btn",
+							className: "tpl-btn tpl-confirm-no",
+							autoFocus: true,
 							onClick: () => p.dispatch({ t: "cancel" }),
-							children: "Keep"
+							children: "Cancel"
 						})
 					]
 				}),
@@ -111518,7 +113072,17 @@ function TemplatesDialogView(p) {
 					loadError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "error tpl-load-error",
 						role: "alert",
-						children: ["Could not load templates: ", loadError]
+						children: [
+							"Couldn't load templates. ",
+							loadError,
+							p.onRetryLoad && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike",
+								id: "templates-retry",
+								onClick: p.onRetryLoad,
+								children: "Retry"
+							})] })
+						]
 					}),
 					!loaded && !loadError && templates.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "tpl-empty muted",
@@ -111651,6 +113215,19 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 	const [templates, setList] = (0, import_react.useState)(() => templatesNow());
 	const [loaded, setLoaded] = (0, import_react.useState)(false);
 	const [loadError, setLoadError] = (0, import_react.useState)("");
+	const loadSeq = (0, import_react.useRef)(0);
+	const loadList = () => {
+		const seq = ++loadSeq.current;
+		setLoadError("");
+		ensureTemplates(true).then((list) => {
+			if (seq !== loadSeq.current) return;
+			setList(list);
+			setRuns(templateRunsNow());
+			setLoaded(true);
+		}).catch((err) => {
+			if (seq === loadSeq.current) setLoadError(errMsg(err));
+		});
+	};
 	const [ui, dispatch] = (0, import_react.useReducer)(templatesReducer, TEMPLATES_UI_INIT);
 	const [form, setForm] = (0, import_react.useState)(() => formFromTemplate(null));
 	const [seed, setSeed] = (0, import_react.useState)(null);
@@ -111792,16 +113369,10 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 		}).catch(() => {
 			if (live) setInstalled(null);
 		});
-		ensureTemplates(true).then((list) => {
-			if (!live) return;
-			setList(list);
-			setRuns(templateRunsNow());
-			setLoaded(true);
-		}).catch((err) => {
-			if (live) setLoadError(errMsg(err));
-		});
+		loadList();
 		return () => {
 			live = false;
+			loadSeq.current++;
 			document.removeEventListener(TEMPLATES_CHANGED, reload);
 		};
 	}, [open, embedded ? embeddedTarget : null]);
@@ -112028,6 +113599,7 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 		busy,
 		loaded,
 		loadError,
+		onRetryLoad: loadList,
 		onForm: (patch) => setForm((f) => ({
 			...f,
 			...patch
@@ -112234,6 +113806,14 @@ function useFileDropTextarea(opts) {
 var MIN_BRIEF = 6;
 var MAX_BRIEF = 2e3;
 var SLOW_MS = 8e3;
+function composeBody(source, brief, draft) {
+	const body = {
+		source,
+		text: brief.trim()
+	};
+	if (draft) body.draft = draft;
+	return body;
+}
 function NewTicketPane() {
 	const closeDialog = useUi((s) => s.closeDialog);
 	const openDialogFor = useUi((s) => s.openDialogFor);
@@ -112250,8 +113830,10 @@ function NewTicketPane() {
 	const [filed, setFiled] = (0, import_react.useState)(null);
 	const briefRef = (0, import_react.useRef)(null);
 	const slowTimer = (0, import_react.useRef)(null);
+	const [sourcesTry, setSourcesTry] = (0, import_react.useState)(0);
 	(0, import_react.useEffect)(() => {
 		let live = true;
+		setSourcesError("");
 		api("/api/tickets/sources").then((p) => {
 			if (!live) return;
 			const rows = p.sources || [];
@@ -112262,7 +113844,7 @@ function NewTicketPane() {
 		return () => {
 			live = false;
 		};
-	}, []);
+	}, [sourcesTry]);
 	(0, import_react.useEffect)(() => {
 		briefRef.current?.focus();
 	}, []);
@@ -112274,15 +113856,12 @@ function NewTicketPane() {
 	const file = (0, import_react.useCallback)(async () => {
 		if (!ready) return;
 		setError("");
-		setDraft(null);
 		setFiling(true);
 		setSlow(false);
 		slowTimer.current = window.setTimeout(() => setSlow(true), SLOW_MS);
 		try {
-			const row = await api("/api/tickets/compose", { json: {
-				source,
-				text: brief.trim()
-			} });
+			const row = await api("/api/tickets/compose", { json: composeBody(source, brief, draft) });
+			setDraft(null);
 			setFiled(row);
 		} catch (err) {
 			setError(errMsg(err));
@@ -112296,6 +113875,7 @@ function NewTicketPane() {
 		}
 	}, [
 		brief,
+		draft,
 		ready,
 		source
 	]);
@@ -112340,6 +113920,7 @@ function NewTicketPane() {
 						onClick: () => {
 							setFiled(null);
 							setBrief("");
+							setDraft(null);
 							window.setTimeout(() => briefRef.current?.focus(), 0);
 						},
 						children: "File another"
@@ -112393,6 +113974,7 @@ function NewTicketPane() {
 				onChange: (e) => {
 					setBrief(e.target.value);
 					if (error) setError("");
+					if (draft) setDraft(null);
 				},
 				onKeyDown: (e) => {
 					if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -112406,9 +113988,18 @@ function NewTicketPane() {
 				className: "nt-help",
 				children: "MindFlock writes the ticket — a title, a description and acceptance criteria — and files it. There is no form: the tracker already has one, and it is one click away for anything this cannot say."
 			}),
-			sourcesError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			sourcesError ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "error",
-				children: sourcesError
+				children: [
+					sourcesError,
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => setSourcesTry((n) => n + 1),
+						children: "Retry"
+					})
+				]
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "nt-source-row",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
@@ -112475,7 +114066,7 @@ function NewTicketPane() {
 					type: "button",
 					disabled: !ready,
 					onClick: file,
-					children: filing ? slow ? "Still writing…" : "Filing…" : "Create ticket"
+					children: filing ? slow && !draft ? "Still writing…" : "Filing…" : draft ? "Retry" : "Create ticket"
 				})]
 			})
 		]
@@ -112817,8 +114408,7 @@ function useRunDraft(o) {
 	const [name, setNameRaw] = (0, import_react.useState)("");
 	const nameTouched = (0, import_react.useRef)(false);
 	const [starting, setStarting] = (0, import_react.useState)(false);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
+	const reset = (0, import_react.useCallback)(() => {
 		setPreview(null);
 		setLaneChoice(null);
 		setAskFirst(false);
@@ -112827,7 +114417,7 @@ function useRunDraft(o) {
 		setNameRaw("");
 		nameTouched.current = false;
 		setStarting(false);
-	}, [open]);
+	}, []);
 	const ask = (0, import_react.useCallback)(async (t, repo) => api("/api/runs/preview", { json: {
 		text: t,
 		repo_path: repo,
@@ -113005,7 +114595,8 @@ function useRunDraft(o) {
 			setNameRaw(n);
 		},
 		starting,
-		start
+		start,
+		reset
 	};
 }
 function RunItems({ rows, onRemove }) {
@@ -113718,6 +115309,10 @@ function useDescribeFocus({ open, page, focusFolderNext, focusOpeningNext, opene
 	}, [open, page]);
 }
 function DescribeSection({ batch, describe, setDescribe, describing, describeRef, runMode, runDescribe, cancelDescribe, draft, planNoteShown, planError, setPlanError, describeFailed, fillFormInstead, newFolderRow, runBrowse, setRunBrowse, repoPath, folderDo, suggestions, device, homePath, onClear, agentNote, startsIn, agentLabel, describeSince, startInstead, onEnterStart }) {
+	const browseFrom = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		browseFrom.current = runBrowse ? repoPath : null;
+	}, [runBrowse]);
 	useFolderPickerWhile(runBrowse, () => ({
 		title: runMode ? "Pick the folder the tasks start in" : "Pick the folder it runs in",
 		device,
@@ -113733,9 +115328,18 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 				t: "user-set",
 				path: p
 			});
+			browseFrom.current = null;
 			setRunBrowse(false);
 		},
-		onCancel: () => setRunBrowse(false)
+		onCancel: () => {
+			const from = browseFrom.current;
+			browseFrom.current = null;
+			if (from !== null && from !== repoPath) folderDo({
+				t: "user-set",
+				path: from
+			});
+			setRunBrowse(false);
+		}
 	}));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "new-describe",
@@ -114144,6 +115748,18 @@ function LaunchFold({ launchOpen, setLaunchOpen, launchArgs, setLaunchArgs, prog
 	});
 }
 //#endregion
+//#region src/components/dialogs/newSession/folderErrors.ts
+function osErrorText(msg) {
+	return msg.replace(/^could not create folder:\s*/i, "").replace(/^\[Errno \d+\]\s*/i, "").replace(/:\s*'[^']*'\s*$/, "").trim();
+}
+function folderErrorText(msg, from) {
+	if (/permission denied/i.test(msg)) return from === "list" ? "You don't have permission to open that folder." : "You don't have permission to create a folder there — pick another place.";
+	if (/not a directory/i.test(msg)) return from === "field" ? "The folder it would go in doesn't exist either — use Browse… to pick a place." : from === "browser" ? "The folder it would go in doesn't exist anymore — pick another place." : "That folder doesn't exist anymore — pick another one.";
+	if (/already exists/i.test(msg)) return from === "field" ? "Something is already there — pick it with Browse…." : "Something called that is already here — give it another name.";
+	if (/must not contain a path/i.test(msg)) return "Use a single folder name, without / or \\.";
+	return (from === "list" ? "Couldn't open it: " : "Couldn't create it: ") + osErrorText(msg);
+}
+//#endregion
 //#region src/components/dialogs/NewSessionDialog.tsx
 function NewSessionDialog() {
 	const open = useUi((s) => s.openDialog === "new-session");
@@ -114233,6 +115849,7 @@ function NewSessionDialog() {
 	const loadCleanup = (0, import_react.useRef)(null);
 	const loadDone = (0, import_react.useRef)(false);
 	const [signedOut, setSignedOut] = (0, import_react.useState)({});
+	const [signInFor, setSignInFor] = (0, import_react.useState)("");
 	const [folder, folderDo] = (0, import_react.useReducer)(folderReducer, FOLDER_INIT);
 	const repoPath = folder.path;
 	const browserOpen = folder.browsing;
@@ -114386,6 +116003,7 @@ function NewSessionDialog() {
 		setProfileModel("");
 		setProfileModels({});
 		setSavedPresets(loadUserPresets());
+		draft.reset();
 		loadedDevice.current = deviceRef.current;
 		loadCleanup.current?.();
 		loadCleanup.current = loadFor(deviceRef.current);
@@ -114717,7 +116335,7 @@ function NewSessionDialog() {
 	const folderMissing = folderCheck?.asked === folderPath && !!folderCheck?.missing;
 	const missingLabel = homeRelative(folderCheck?.asked === folderPath && folderCheck?.resolved || folderPath, homePath);
 	const askFolder = newFolderAsk && !newFolderOk ? newFolderAsk : folderMissing ? missingLabel : "";
-	const startBlocked = askFolder && !runMode ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists." : "";
+	const startBlocked = runMode ? "" : askFolder ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists." : planned.clash ? nameClashText(planned.title) : agentMissing ? "Can't start yet — pick an agent that's installed." : "";
 	const createFolder = async () => {
 		const full = folderCheck?.asked === folderPath && folderCheck?.resolved || folderPath;
 		const { parent, name } = splitPath(full.trim());
@@ -114741,8 +116359,7 @@ function NewSessionDialog() {
 			setPlanError("");
 			(page === 2 ? repoRef.current : describeRef.current)?.focus({ preventScroll: true });
 		} catch (err) {
-			const msg = errMsg(err);
-			setMkError(/not a directory/i.test(msg) ? "The folder it would go in doesn't exist either — use Browse… to pick a place." : /already exists/i.test(msg) ? "Something is already there — pick it with Browse…." : "Couldn't create it: " + msg);
+			setMkError(folderErrorText(errMsg(err), "field"));
 		} finally {
 			setMkBusy(false);
 		}
@@ -114924,17 +116541,33 @@ function NewSessionDialog() {
 		id: "new-agent-signin",
 		role: "status",
 		children: [
-			canonAgent(program),
-			" isn't signed in yet — a session would stop at its sign-in screen.",
+			agentSignedOutLine(canonAgent(program)),
 			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "linklike",
+				id: "new-agent-signin-btn",
+				onClick: () => setSignInFor(canonAgent(program)),
+				children: "Sign in…"
+			})
+		]
+	});
+	const missingNote = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "nf-git-nudge nf-agent-missing",
+		id: "new-agent-missing",
+		role: "status",
+		children: [
+			agentMissing,
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike",
+				id: "new-agent-open-setup",
 				onClick: () => {
 					closeDialog();
-					openSettings("coding");
+					useUi.getState().openDialogFor("setup");
 				},
-				children: "Sign in…"
+				children: "Open Setup"
 			})
 		]
 	});
@@ -114970,7 +116603,7 @@ function NewSessionDialog() {
 		device,
 		homePath,
 		onClear: draftTyped ? clearDraft : void 0,
-		agentNote: agentSignedOut ? signedOutNote : null,
+		agentNote: agentMissing ? missingNote : agentSignedOut ? signedOutNote : null,
 		startsIn,
 		agentLabel: agentName(canonAgent(program)),
 		describeSince,
@@ -114995,7 +116628,7 @@ function NewSessionDialog() {
 			setPage(2);
 		}
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "new-dialog",
 		className: "modal top-dialog",
 		ref: rootRef,
@@ -115017,7 +116650,7 @@ function NewSessionDialog() {
 				else submit();
 			}
 		},
-		children: shownTab === "ticket" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		children: [shownTab === "ticket" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "new-ticket-form",
 			className: "ta-drop",
 			ref: dropZoneRef,
@@ -115122,12 +116755,7 @@ function NewSessionDialog() {
 								foldMissing: true
 							})]
 						}),
-						agentMissing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "nf-git-nudge nf-agent-missing",
-							id: "new-agent-missing",
-							role: "status",
-							children: agentMissing
-						}),
+						agentMissing && missingNote,
 						agentSignedOut && signedOutNote,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModelRow, {
 							selectedProfile,
@@ -115214,6 +116842,7 @@ function NewSessionDialog() {
 										id: "new-title",
 										ref: titleRef,
 										autoComplete: "off",
+										maxLength: MAX_TITLE_LEN,
 										placeholder: planned.from === "none" ? "named from the task" : planned.title,
 										value: title,
 										onChange: (e) => setTitle(e.target.value)
@@ -115241,11 +116870,26 @@ function NewSessionDialog() {
 														disabled: !!why
 													};
 												})
-											}), !prOk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+											}), !prOk && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 												className: "nf-opt-help muted",
 												id: "new-ft-github",
 												title: prWhy,
-												children: "Open PR and Merge when green need GitHub — connect it in Settings → Connections."
+												children: [
+													"Open PR and Merge when green need GitHub — connect it in",
+													" ",
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														className: "linklike",
+														id: "new-ft-github-connect",
+														title: "Open Settings → Connections (what you typed here stays)",
+														onClick: () => {
+															closeDialog();
+															openSettings("connections");
+														},
+														children: "Settings → Connections"
+													}),
+													"."
+												]
 											})]
 										})]
 									}),
@@ -115396,7 +117040,18 @@ function NewSessionDialog() {
 					startBlocked
 				})
 			]
-		})
+		}), signInFor && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "nf-signin-host",
+			onKeyDown: (e) => e.stopPropagation(),
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SignInWindow, {
+				provider: signInFor,
+				onClose: () => {
+					setSignInFor("");
+					notifyConnectionsChanged();
+					refreshAgentState();
+				}
+			})
+		})]
 	});
 }
 function NewHead({ tab, tabs, onTab, onClose }) {
@@ -115858,7 +117513,7 @@ function WaitingChip({ w, block, onFly }) {
 				disabled: busy,
 				title: "Run on " + w.item.reference + " · " + block.flyway.name,
 				onClick: () => void fly(),
-				children: busy ? "…" : "Run"
+				children: busy ? "Starting…" : "Run"
 			})]
 		}), error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "error fl-error sky-lane-error",
@@ -116312,16 +117967,6 @@ function shortReason(reason, budget = CHIP_BUDGET) {
 		short: (text[budget] === " " || lastSpace <= budget * .5 ? window : window.slice(0, lastSpace)).replace(/[\s,;:.]+$/, "") + "…",
 		clipped: true
 	};
-}
-//#endregion
-//#region src/lib/rowSearch.ts
-function searchTokens(query) {
-	return query.toLowerCase().split(/\s+/).filter(Boolean);
-}
-function matchesTokens(fields, tokens) {
-	if (!tokens.length) return true;
-	const hay = fields.filter(Boolean).join(" ").toLowerCase();
-	return tokens.every((t) => hay.includes(t));
 }
 //#endregion
 //#region src/components/dialogs/DialogFilter.tsx
@@ -116928,7 +118573,8 @@ function ViewMenu({ id, label, title, children }) {
 		})]
 	});
 }
-function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshId, noteId, listId, toolbarExtra }) {
+function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshId, noteId, listId, toolbarExtra, stalled }) {
+	const [refresh, refreshing] = useBusyAction(onRefresh);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row",
 		id: rowId,
@@ -116940,12 +118586,10 @@ function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshI
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pr-open-toolbar",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RefreshButton, {
 						id: refreshId,
-						className: "test-btn",
-						onClick: onRefresh,
-						children: "Refresh"
+						onClick: refresh,
+						busy: refreshing
 					}),
 					toolbarExtra,
 					note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -116960,9 +118604,50 @@ function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshI
 				className: "ik-groups",
 				children
 			}),
+			stalled ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StalledRefresh, {
+				onRetry: refresh,
+				busy: refreshing
+			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
 				children: hint
+			})
+		]
+	});
+}
+function useBusyAction(action) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const run = () => {
+		if (busy) return;
+		const p = action();
+		if (!p || typeof p.then !== "function") return;
+		setBusy(true);
+		Promise.resolve(p).catch(() => void 0).finally(() => setBusy(false));
+	};
+	return [run, busy];
+}
+function RefreshButton({ id, onClick, busy }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		id,
+		className: "test-btn",
+		onClick,
+		disabled: busy,
+		children: busy ? "Refreshing…" : "Refresh"
+	});
+}
+function StalledRefresh({ onRetry, busy }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-stalled-refresh",
+		children: [
+			"Couldn't refresh ·",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike",
+				onClick: onRetry,
+				disabled: busy,
+				children: busy ? "Retrying…" : "Retry"
 			})
 		]
 	});
@@ -119310,9 +120995,19 @@ function TicketSessionOptions() {
 								label: "Full clone — a standalone copy"
 							}]
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "set-hint",
-							children: "A worktree shares your repo's history; a clone is fully separate. Where they live is Settings › Workspace."
+							children: [
+								"A worktree shares your repo's history; a clone is fully separate. Where they live is",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "linklike",
+									onClick: () => openSettings("workspace"),
+									children: "Settings › Workspace"
+								}),
+								"."
+							]
 						})
 					]
 				}),
@@ -120500,6 +122195,7 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: hasOthers ? "Ticket queue" : "Assigned tickets",
 		onRefresh: load,
+		stalled: ticketsQuery.stalled,
 		note,
 		rowId: "tk-assigned-row",
 		refreshId: "tk-tickets-refresh",
@@ -120995,11 +122691,22 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 						"."
 					]
 				}) : null,
-				ownGithubToken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				ownGithubToken && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "set-hint tk-own-token",
 					role: "note",
 					"data-tk-notice": "own-token",
-					children: "This source still has its own token — move it to Settings → Connections → GitHub → Connect (read as a fallback this release, ignored from the next)"
+					children: [
+						"This source still has its own token — move it to",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => openSettings("connections"),
+							children: "Settings → Connections → GitHub → Connect"
+						}),
+						" ",
+						"(read as a fallback this release, ignored from the next)"
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "tk-fields",
@@ -121431,6 +123138,17 @@ function EpicItem({ e, busy, onStart }) {
 		]
 	});
 }
+function markEpicStarted(data, source, id, title) {
+	if (!data?.epics) return data;
+	return {
+		...data,
+		epics: data.epics.map((e) => e.source === source && e.id === id ? {
+			...e,
+			has_session: true,
+			title: title || e.title
+		} : e)
+	};
+}
 function EpicsTab({ gotoTab }) {
 	const q = useEpicsQuery();
 	const [busy, setBusy] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
@@ -121454,9 +123172,10 @@ function EpicsTab({ gotoTab }) {
 				id: e.id
 			} });
 			toast("Started " + (r.title || e.title) + " — its lead will run " + (r.stories ?? "your") + " stor" + (r.stories === 1 ? "y" : "ies"));
+			queryClient.setQueryData(["epics"], (d) => markEpicStarted(d, e.source, e.id, r.title));
 			q.refresh();
 		} catch (err) {
-			errorPop("Couldn't start the epic", err instanceof ApiError ? err.message : String(err));
+			errorPop("Start failed — " + e.name, err instanceof ApiError ? err.message : String(err));
 		} finally {
 			setBusy((b) => {
 				const next = new Set(b);
@@ -121474,7 +123193,7 @@ function EpicsTab({ gotoTab }) {
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: "Assigned epics",
-		onRefresh: () => void q.refresh(),
+		onRefresh: q.refresh,
 		note,
 		rowId: "ep-assigned-row",
 		refreshId: "ep-epics-refresh",
@@ -121594,7 +123313,11 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		fetching: prsQuery.isFetching,
 		loaded: !!prs
 	}) || (prsQuery.data?.login_error ? "GitHub login unknown — force review may still work" : "");
-	const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
+	const saveGithub = async (patch, fieldId) => {
+		if (await s.saveGroup("github", patch)) {
+			if (!flashSaved(document.getElementById(fieldId))) toast("Saved");
+		}
+	};
 	const n = repos.length;
 	const shownPrs = (prs || []).filter((p) => prMatches(p, filter.tokens));
 	const byRepo = /* @__PURE__ */ new Map();
@@ -121627,6 +123350,7 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const workList = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: "Your open pull requests",
 		onRefresh: loadOpenPrs,
+		stalled: prsQuery.stalled,
 		note: prsNote,
 		rowId: "gh-open-prs-row",
 		refreshId: "gh-prs-refresh",
@@ -121871,7 +123595,7 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 								id: "gh-skip-authors",
 								stored: String(skipAuthors),
 								placeholder: "dependabot, renovate",
-								onSave: (list) => void saveGithub({ skip_authors: list }, "Saved")
+								onSave: (list) => void saveGithub({ skip_authors: list }, "gh-skip-authors")
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-hint",
@@ -121910,7 +123634,11 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		fetching: issuesQuery.isFetching,
 		loaded: !!issues
 	});
-	const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
+	const saveGithub = async (patch, fieldId) => {
+		if (await s.saveGroup("github", patch)) {
+			if (!flashSaved(document.getElementById(fieldId))) toast("Saved");
+		}
+	};
 	const n = repos.length;
 	const shown = (issues || []).filter((i) => issueMatches(i, filter.tokens));
 	const byRepo = /* @__PURE__ */ new Map();
@@ -121942,6 +123670,7 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const workList = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: "Open issues",
 		onRefresh: loadOpenIssues,
+		stalled: issuesQuery.stalled,
 		note: issuesNote,
 		rowId: "gh-open-issues-row",
 		refreshId: "gh-issues-refresh",
@@ -122159,7 +123888,7 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 								id: "gh-issue-skip-authors",
 								stored: String(skipAuthors),
 								placeholder: "dependabot, renovate",
-								onSave: (list) => void saveGithub({ issue_skip_authors: list }, "Saved")
+								onSave: (list) => void saveGithub({ issue_skip_authors: list }, "gh-issue-skip-authors")
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-hint",
@@ -122274,15 +124003,32 @@ function stalledText(s, many) {
 	if (s.state === "unset") return "Not set up — auto-start isn't available for " + s.label + " here yet. You can still start " + any + " with Start.";
 	return they + " won't start on " + (many ? "their" : "its") + " own: " + s.switchName + " is off (above). You can still start " + any + " here, with Start.";
 }
+var DEVICES_LINK = "Settings → Your devices";
+function splitAtLink(text, link) {
+	const at = text.indexOf(link);
+	return at < 0 ? null : [text.slice(0, at), text.slice(at + link.length)];
+}
 function StalledNote({ s }) {
+	const text = stalledText(s, s.items.length !== 1);
+	const cut = splitAtLink(text, DEVICES_LINK);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ik-queue-stalled",
 		"data-runs-on": s.state === "elsewhere" ? s.runsOn || "" : void 0,
-		children: stalledText(s, s.items.length !== 1)
+		children: cut ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			cut[0],
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike",
+				onClick: () => openSettings("devices"),
+				children: DEVICES_LINK
+			}),
+			cut[1]
+		] }) : text
 	});
 }
 function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 	const groups = byGroup(s.items);
+	const [retry, retrying] = useBusyAction(() => s.onRetry?.());
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ik-queue-section",
 		children: [
@@ -122298,7 +124044,7 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 						children: s.items.length
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateChip, {
-						state: s.broken ? "broken" : s.state,
+						state: s.broken || s.error ? "broken" : s.state,
 						device: s.runsOn
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -122317,13 +124063,22 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 			s.broken ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pr-open-note",
 				children: s.broken
+			}) : s.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-note ik-queue-error",
+				children: [s.error, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: retry,
+					disabled: retrying,
+					children: retrying ? "Retrying…" : "Retry"
+				})]
 			}) : s.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pr-open-note",
 				children: s.note
 			}) : null,
 			s.items.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "ik-queue-empty",
-				children: s.broken ? "" : s.state === "unset" ? "Not set up yet — set it up on the " + s.label + " tab." : "Nothing waiting."
+				children: s.broken || s.error ? "" : s.state === "unset" ? "Not set up yet — set it up on the " + s.label + " tab." : "Nothing waiting."
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [s.state !== "on" && !s.broken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StalledNote, { s }), groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ik-queue-group",
 				children: [groups.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -122353,7 +124108,11 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 						onStart: ({ agent, depth, effort }) => onStart(item, agent, depth, effort)
 					}, item.key);
 				})]
-			}, g.group))] })
+			}, g.group))] }),
+			s.stalled && !s.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StalledRefresh, {
+				onRetry: retry,
+				busy: retrying
+			}) : null
 		]
 	});
 }
@@ -122423,8 +124182,8 @@ function QueueTab({ gotoTab }) {
 	};
 	const total = collectQueued(payloads).length;
 	const filter = useListFilter("ik-queue-filter", "Filter by item, title, source, or state…  ( Ctrl+F )");
-	const noteFor = (q, what) => panelNote({
-		error: q.error ? "Could not list " + what + ": " + (q.error.message || "error") : "",
+	const errorFor = (q, what) => q.error ? "Couldn't list " + what + ": " + (q.error.message || "error") : "";
+	const noteFor = (q) => panelNote({
 		fetching: q.isFetching,
 		loaded: !!q.data
 	});
@@ -122453,7 +124212,10 @@ function QueueTab({ gotoTab }) {
 				...i,
 				group: nameOfSource(i.target.source)
 			} : i),
-			note: noteFor(ticketsQ, "tickets")
+			note: noteFor(ticketsQ),
+			error: errorFor(ticketsQ, "tickets"),
+			stalled: ticketsQ.stalled,
+			onRetry: ticketsQ.refresh
 		},
 		{
 			kind: "prs",
@@ -122469,7 +124231,10 @@ function QueueTab({ gotoTab }) {
 			switchName: "PR review comments",
 			runsOn,
 			items: queuedOf("prs", payloads),
-			note: noteFor(prsQ, "PRs")
+			note: noteFor(prsQ),
+			error: errorFor(prsQ, "PRs"),
+			stalled: prsQ.stalled,
+			onRetry: prsQ.refresh
 		},
 		{
 			kind: "issues",
@@ -122485,7 +124250,10 @@ function QueueTab({ gotoTab }) {
 			switchName: "New issues",
 			runsOn,
 			items: queuedOf("issues", payloads),
-			note: noteFor(issuesQ, "issues")
+			note: noteFor(issuesQ),
+			error: errorFor(issuesQ, "issues"),
+			stalled: issuesQ.stalled,
+			onRetry: issuesQ.refresh
 		}
 	];
 	const shownSections = filter.active ? sections.map((sec) => ({
@@ -122494,11 +124262,11 @@ function QueueTab({ gotoTab }) {
 	})).filter((sec) => sec.items.length) : sections;
 	const shownTotal = shownSections.reduce((n, sec) => n + sec.items.length, 0);
 	const autoTotal = sections.filter((sec) => sec.state === "on").reduce((n, sec) => n + sec.items.length, 0);
-	const refreshAll = () => {
-		ticketsQ.refresh();
-		prsQ.refresh();
-		issuesQ.refresh();
-	};
+	const [refreshAll, refreshing] = useBusyAction(() => Promise.all([
+		ticketsQ.refresh(),
+		prsQ.refresh(),
+		issuesQ.refresh()
+	]));
 	const held = status?.held_for_slot;
 	const sched = useScheduledTemplates();
 	const nextSched = nextScheduledText(sched.templates, sched.status);
@@ -122546,12 +124314,10 @@ function QueueTab({ gotoTab }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "pr-open-toolbar",
 					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RefreshButton, {
 							id: "ik-queue-refresh",
 							onClick: refreshAll,
-							children: "Refresh"
+							busy: refreshing
 						}),
 						total ? filter.control : null,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -122853,6 +124619,8 @@ function IntakeDialog({ embedded = false, target: embeddedTarget = null } = {}) 
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				id: "intake-body",
+				onChangeCapture: (e) => noteTouched(e.target),
+				onBlurCapture: (e) => noteTouched(e.target),
 				children: TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
 					className: "ik-panel" + (tab === t.key ? " active" : ""),
 					"data-intake-tab": t.key,
@@ -122882,6 +124650,10 @@ function IntakeDialog({ embedded = false, target: embeddedTarget = null } = {}) 
 //#endregion
 //#region src/components/settings/SettingsSearch.tsx
 var HIT_MS = 2e3;
+var SEARCH_PLACEHOLDER = "Search…  ( Ctrl+F )";
+function isFindKey(e) {
+	return (e.key === "f" || e.key === "F") && (e.ctrlKey || e.metaKey) && !e.altKey;
+}
 function highlight(selector) {
 	let tries = 0;
 	const look = () => {
@@ -122900,6 +124672,18 @@ function SettingsSearch({ onPick }) {
 	const [cursor, setCursor] = (0, import_react.useState)(0);
 	const query = q.trim();
 	const hits = query ? searchSettings(query, 8) : [];
+	const inputRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (!isFindKey(e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			inputRef.current?.focus();
+			inputRef.current?.select();
+		};
+		document.addEventListener("keydown", onKey, true);
+		return () => document.removeEventListener("keydown", onKey, true);
+	}, []);
 	const pick = (e) => {
 		setQ("");
 		setCursor(0);
@@ -122912,10 +124696,12 @@ function SettingsSearch({ onPick }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-search",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			ref: inputRef,
 			type: "search",
 			id: "settings-search",
 			className: "set-search-input",
-			placeholder: "Search settings…",
+			placeholder: SEARCH_PLACEHOLDER,
+			"aria-keyshortcuts": "Control+F Meta+F",
 			"aria-label": "Search settings",
 			"aria-controls": "settings-search-results",
 			autoComplete: "off",
@@ -123443,9 +125229,10 @@ function ScrollSpeedRow() {
 				setPos(Math.round(s.speed * 3));
 				setWheelDamping(s.speed);
 			}
-			toast("Terminal scroll speed: " + fmt(s?.speed ?? want) + " lines");
-		} catch {
-			toast("Scroll speed change failed");
+			if (!flashSaved(document.getElementById("scroll-speed"))) toast("Terminal scroll speed: " + fmt(s?.speed ?? want) + " lines");
+		} catch (err) {
+			const why = err?.message;
+			toast("Scroll speed change failed" + (why ? ": " + why : ""));
 		}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -123676,10 +125463,20 @@ function TailscaleCardView({ health, login, busy, onSignIn }) {
 		]
 	});
 }
-function TailscaleCard({ active = true }) {
+function runningFlippedOn(prev, next) {
+	return !!prev && !prev.running && !!next?.running;
+}
+function TailscaleCard({ active = true, onHealth }) {
 	const [health, setHealth] = (0, import_react.useState)(null);
 	const [login, setLogin] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const prevHealth = (0, import_react.useRef)(null);
+	const onHealthRef = (0, import_react.useRef)(onHealth);
+	onHealthRef.current = onHealth;
+	(0, import_react.useEffect)(() => {
+		if (runningFlippedOn(prevHealth.current, health) && health) onHealthRef.current?.(health);
+		prevHealth.current = health;
+	}, [health]);
 	const load = (0, import_react.useCallback)(async (refresh = false) => {
 		try {
 			setHealth(await api("/api/tailscale/health" + (refresh ? "?refresh=1" : "")));
@@ -123840,7 +125637,7 @@ function Mobile(p) {
 			setData(await api("/api/mobile"));
 			setError("");
 		} catch {
-			setError("Could not load the phone URLs.");
+			setError("Couldn't load the phone links.");
 		}
 	}, [caps]);
 	(0, import_react.useEffect)(() => {
@@ -123876,9 +125673,15 @@ function Mobile(p) {
 							children: one.line
 						}),
 						one.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyBox, { text: one.fix }),
-						one.state !== "ok" && (one.card ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active }) : one.state === "fail" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+						one.state !== "ok" && (one.card ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, {
+							active: p.active,
+							onHealth: () => void load()
+						}) : one.state === "fail" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 							className: "mobile-ts-details",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "More about Tailscale on this computer" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active })]
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "More about Tailscale on this computer" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, {
+								active: p.active,
+								onHealth: () => void load()
+							})]
 						}) : null)
 					]
 				}),
@@ -123898,9 +125701,20 @@ function Mobile(p) {
 							onClick: () => p.gotoScreen("devices"),
 							children: "Turn on Make reachable…"
 						})]
-					}) : three === "ok" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Your other devices on Tailscale can reach MindFlock." }) : error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "error",
-						children: error
+					}) : three === "ok" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Your other devices on Tailscale can reach MindFlock." }) : error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "set-hint",
+						id: "mobile-load-state",
+						role: "alert",
+						children: [
+							error,
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike",
+								onClick: () => void load(),
+								children: "Retry"
+							})
+						]
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: caps ? "Checking…" : "Waits for Tailscale on this computer (1)." })
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
@@ -129487,7 +131301,7 @@ function Ntfy({ onChange, setup = 0 } = {}) {
 	const save = (0, import_react.useCallback)(async (patch, from) => {
 		try {
 			apply(await api("/api/notify/ntfy", { json: patch }));
-			if (from) flashSaved(from);
+			if (!from || !flashSaved(from)) toast("Saved");
 		} catch (err) {
 			toast(err.message || "Couldn't save the ntfy settings");
 			load();
@@ -129499,7 +131313,7 @@ function Ntfy({ onChange, setup = 0 } = {}) {
 		setupSeen.current = setup;
 		if (view.topic || !view.suggested_topic) return;
 		setTopic(view.suggested_topic);
-		save({ topic: view.suggested_topic });
+		save({ topic: view.suggested_topic }, document.getElementById("ntfy-topic"));
 	}, [
 		setup,
 		view,
@@ -129981,7 +131795,7 @@ function Accounts(_) {
 		setDefaultId(data?.default_profile || "");
 		setEnvPinned(data?.default_profile_env || "");
 	}, [data]);
-	const save = async (next, nextDefault, force) => {
+	const save = async (next, nextDefault, force, from) => {
 		setError("");
 		setPendingForce(null);
 		try {
@@ -129996,7 +131810,7 @@ function Accounts(_) {
 			setDefaultId(r.default_profile || "");
 			setEnvPinned(r.default_profile_env || "");
 			refreshAuthProfiles();
-			toast("Accounts saved");
+			if (!(from && flashSaved(from))) toast("Accounts saved");
 		} catch (err) {
 			const msg = err.message || "";
 			if (/still in use by/.test(msg)) {
@@ -130010,10 +131824,10 @@ function Accounts(_) {
 			setError(msg);
 		}
 	};
-	const patch = (id, p) => save(profiles.map((x) => x.id === id ? {
+	const patch = (id, p, from) => save(profiles.map((x) => x.id === id ? {
 		...x,
 		...p
-	} : x));
+	} : x), void 0, void 0, from);
 	const addDraft = () => {
 		const id = accountId(draft.id, draft.label || "");
 		if (!ID_RE.test(id)) {
@@ -130084,7 +131898,7 @@ function Accounts(_) {
 					id: "acct-default",
 					value: defaultId,
 					disabled: !!envPinned,
-					onChange: (e) => save(profiles, e.target.value),
+					onChange: (e) => save(profiles, e.target.value, void 0, e.target),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: "",
 						children: "Each CLI's own login (no profile)"
@@ -130179,7 +131993,7 @@ function Accounts(_) {
 								placeholder: p.api_key === SECRET_MASK ? "•••set (saved)" : "paste a key",
 								defaultValue: "",
 								onBlur: (e) => {
-									if (e.target.value.trim()) patch(p.id, { api_key: e.target.value.trim() });
+									if (e.target.value.trim()) patch(p.id, { api_key: e.target.value.trim() }, e.target);
 								}
 							})]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -130191,7 +132005,7 @@ function Accounts(_) {
 								}),
 								models.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 									value: p.model || "",
-									onChange: (e) => patch(p.id, { model: e.target.value }),
+									onChange: (e) => patch(p.id, { model: e.target.value }, e.target),
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 											value: "",
@@ -130212,7 +132026,7 @@ function Accounts(_) {
 									placeholder: p.kind === "openrouter" ? "anthropic/claude-sonnet-4.5" : "model id",
 									defaultValue: p.model || "",
 									onBlur: (e) => {
-										if (e.target.value !== (p.model || "")) patch(p.id, { model: e.target.value.trim() });
+										if (e.target.value !== (p.model || "")) patch(p.id, { model: e.target.value.trim() }, e.target);
 									}
 								}),
 								p.kind === "openrouter" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -131014,10 +132828,7 @@ function AgentMcpRows() {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				type: "checkbox",
 				checked: on,
-				onChange: (e) => {
-					s.saveField("general", "agent_mcp", e.target.checked);
-					toast(e.target.checked ? "Agent MCP on — from each session's next launch" : "Agent MCP off — from each session's next launch");
-				}
+				onChange: (e) => void s.saveField("general", "agent_mcp", e.target.checked)
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -131088,7 +132899,9 @@ function RepoBranches() {
 	const save = (next) => {
 		const map = mapFrom(next);
 		if (JSON.stringify(map) === storedKey) return;
-		s.saveGroups({ repository: { repo_branches: map } }, "Saved per-repo branches");
+		s.saveGroups({ repository: { repo_branches: map } }).then((ok) => {
+			if (ok && !flashSaved(document.getElementById("workspace-repo-branches"))) toast("Saved per-repo branches");
+		});
 	};
 	const edit = (i, patch) => setRows((prev) => prev.map((r, j) => j === i ? {
 		...r,
@@ -131520,10 +133333,7 @@ function FailureNotesRow() {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				type: "checkbox",
 				checked: on,
-				onChange: (e) => {
-					s.saveField("repository", "fasttrack_failure_notes", e.target.checked);
-					toast(e.target.checked ? "MindFlock will tell the agent what failed" : "Failure notes off");
-				}
+				onChange: (e) => void s.saveField("repository", "fasttrack_failure_notes", e.target.checked)
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
 	});
@@ -131584,30 +133394,37 @@ function Ide(_) {
 	const [value, setValue] = (0, import_react.useState)(CUSTOM_IDE);
 	const [customVisible, setCustomVisible] = (0, import_react.useState)(false);
 	const [autoAdopt, setAutoAdopt] = (0, import_react.useState)(false);
-	(0, import_react.useEffect)(() => {
-		(async () => {
-			try {
-				const data = await api("/api/ides");
-				const list = data.ides || [];
-				setIdes(list);
-				const cur = (data.current || "").trim();
-				if (cur && list.some((i) => i.command === cur)) {
-					setValue(cur);
-					setCustomVisible(false);
-				} else {
-					setValue(CUSTOM_IDE);
-					setCustomVisible(true);
-				}
-			} catch {
-				setIdes([]);
+	const [loadFailed, setLoadFailed] = (0, import_react.useState)(false);
+	const load = (0, import_react.useCallback)(async () => {
+		let failed = false;
+		try {
+			const data = await api("/api/ides");
+			const list = data.ides || [];
+			setIdes(list);
+			const cur = (data.current || "").trim();
+			if (cur && list.some((i) => i.command === cur)) {
+				setValue(cur);
+				setCustomVisible(false);
+			} else {
+				setValue(CUSTOM_IDE);
 				setCustomVisible(true);
 			}
-			try {
-				const a = await api("/api/cursor/autoadopt");
-				setAutoAdopt(!!a?.enabled);
-			} catch {}
-		})();
+		} catch {
+			failed = true;
+			setIdes([]);
+			setCustomVisible(true);
+		}
+		try {
+			const a = await api("/api/cursor/autoadopt");
+			setAutoAdopt(!!a?.enabled);
+		} catch {
+			failed = true;
+		}
+		setLoadFailed(failed);
 	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+	}, [load]);
 	const pick = (0, import_react.useCallback)((v) => {
 		setValue(v);
 		if (v === CUSTOM_IDE) {
@@ -131621,6 +133438,21 @@ function Ide(_) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
 			children: "IDE"
+		}),
+		loadFailed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			id: "ide-load-state",
+			role: "alert",
+			children: [
+				"Couldn't load IDE settings.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => void load(),
+					children: "Retry"
+				})
+			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "set-row",
@@ -131683,15 +133515,16 @@ function Ide(_) {
 					id: "cursor-auto",
 					checked: autoAdopt,
 					onChange: async (e) => {
-						const want = e.target.checked;
+						const el = e.target;
+						const want = el.checked;
 						setAutoAdopt(want);
 						try {
 							const r = await api("/api/cursor/autoadopt", { json: { enabled: want } });
 							setAutoAdopt(!!r?.enabled);
-							toast(r?.enabled ? "IDE auto-adopt on" : "IDE auto-adopt off");
-						} catch {
+							if (!flashSaved(el)) toast(r?.enabled ? "IDE auto-adopt on" : "IDE auto-adopt off");
+						} catch (err) {
 							setAutoAdopt(!want);
-							toast("Auto-adopt toggle failed");
+							toast("Couldn't turn IDE auto-adopt " + (want ? "on" : "off") + ": " + (err.message || "unknown error"));
 						}
 					}
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
@@ -131737,7 +133570,7 @@ function BinaryPathField({ row, onSaved }) {
 	const [value, setValue] = (0, import_react.useState)(row.binaryPath);
 	const [warning, setWarning] = (0, import_react.useState)("");
 	(0, import_react.useEffect)(() => setValue(row.binaryPath), [row.binaryPath]);
-	const save = async () => {
+	const save = async (el) => {
 		const path = value.trim();
 		if (path === row.binaryPath) return;
 		try {
@@ -131746,7 +133579,7 @@ function BinaryPathField({ row, onSaved }) {
 				json: { path }
 			});
 			setWarning(r?.warning || "");
-			toast((path ? "Binary path saved for " : "Binary path cleared for ") + agentName(row.name));
+			if (!flashSaved(el)) toast((path ? "Binary path saved for " : "Binary path cleared for ") + agentName(row.name));
 			if (r?.status) onSaved(r.status);
 			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
@@ -131770,7 +133603,7 @@ function BinaryPathField({ row, onSaved }) {
 				placeholder: row.installed ? "on PATH — set to use another build" : "/full/path/to/" + row.name,
 				value,
 				onChange: (e) => setValue(e.target.value),
-				onBlur: () => void save(),
+				onBlur: (e) => void save(e.target),
 				onKeyDown: (e) => {
 					if (e.key === "Enter") e.target.blur();
 				}
@@ -131795,8 +133628,12 @@ function Providers({ gotoScreen }) {
 	const [editing, setEditing] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
 	const [warning, setWarning] = (0, import_react.useState)("");
+	const [loadFailed, setLoadFailed] = (0, import_react.useState)(false);
+	const [confirmDel, setConfirmDel] = (0, import_react.useState)(null);
+	const [delBusy, setDelBusy] = (0, import_react.useState)(false);
 	const load = (0, import_react.useCallback)(async () => {
 		const [s, m] = await Promise.allSettled([api("/api/providers/status"), api("/api/providers/manage")]);
+		setLoadFailed(s.status === "rejected" && m.status === "rejected");
 		const statusList = s.status === "fulfilled" ? s.value?.providers || [] : [];
 		setStatuses(statusList);
 		setLoadErrors(s.status === "fulfilled" ? s.value?.errors || [] : []);
@@ -131815,16 +133652,20 @@ function Providers({ gotoScreen }) {
 		load();
 	}, [load]);
 	const del = async (name) => {
+		setDelBusy(true);
 		try {
 			await api("/api/providers/" + encodeURIComponent(name), { method: "DELETE" });
-			toast("Removed " + agentName(name));
+			toast("Deleted " + agentName(name));
+			setConfirmDel(null);
 			if (editing === name) cancelEdit();
 			load();
 			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
 			refreshProviders();
 		} catch (err) {
-			toast("Delete failed: " + (err.message || name));
+			toast("Couldn't delete " + agentName(name) + ": " + (err.message || "unknown error"));
+		} finally {
+			setDelBusy(false);
 		}
 	};
 	const edit = (p) => {
@@ -132063,6 +133904,21 @@ function Providers({ gotoScreen }) {
 				]
 			})]
 		}),
+		loadFailed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			id: "prov-load-state",
+			role: "alert",
+			children: [
+				"Couldn't load agents.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => void load(),
+					children: "Retry"
+				})
+			]
+		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "prov-conn-list",
 			children: rows.map((row) => {
@@ -132135,9 +133991,19 @@ function Providers({ gotoScreen }) {
 								children: "Edit"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								onClick: () => del(row.name),
+								onClick: () => setConfirmDel(row.name),
+								disabled: confirmDel === row.name,
 								children: "Delete"
 							})]
+						}),
+						mgr?.editable && confirmDel === row.name && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+							id: "prov-delete-confirm",
+							title: "Delete custom agent " + agentName(row.name) + "?",
+							body: "Its file is removed.",
+							confirmLabel: delBusy ? "Deleting…" : "Delete",
+							busy: delBusy,
+							onConfirm: () => void del(row.name),
+							onCancel: () => setConfirmDel(null)
 						})
 					]
 				}, row.name);
@@ -132639,13 +134505,13 @@ function AdminLink({ href, children }) {
 var DEFAULT_SHARED_NAME = "mindflock";
 function SharedLinkCard({ active, revision = 0 }) {
 	const [data, setData] = (0, import_react.useState)(null);
-	const [error, setError] = (0, import_react.useState)("");
+	const [loadFailed, setLoadFailed] = (0, import_react.useState)(false);
 	const load = (0, import_react.useCallback)(async () => {
 		try {
 			setData(await api("/api/mobile"));
-			setError("");
+			setLoadFailed(false);
 		} catch {
-			setError("Could not load the shared link.");
+			setLoadFailed(true);
 		}
 	}, []);
 	(0, import_react.useEffect)(() => {
@@ -132655,19 +134521,30 @@ function SharedLinkCard({ active, revision = 0 }) {
 		revision,
 		load
 	]);
-	if (error) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "error",
-		children: error
+	const failedLine = loadFailed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "set-hint",
+		id: "shared-link-load-state",
+		role: "alert",
+		children: [
+			"Couldn't load the shared link.",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike",
+				onClick: () => void load(),
+				children: "Retry"
+			})
+		]
 	});
-	if (!data) return null;
+	if (!data) return failedLine || null;
 	const shared = data.shared || {};
 	const sharedQr = data.qr_svg && shared.url && data.qr_target?.startsWith(shared.url) ? data.qr_svg : void 0;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedLink, {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [failedLine, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedLink, {
 		shared,
 		qrSvg: sharedQr,
 		onChanged: load,
 		onData: setData
-	});
+	})] });
 }
 function SharedLink({ shared, qrSvg, onChanged, onData }) {
 	const [name, setName] = (0, import_react.useState)(shared.name || DEFAULT_SHARED_NAME);
@@ -132700,7 +134577,10 @@ function SharedLink({ shared, qrSvg, onChanged, onData }) {
 	const on = !!shared.enabled;
 	(0, import_react.useEffect)(() => {
 		if (!on) return;
-		const t = window.setInterval(onChanged, 6e4);
+		const t = window.setInterval(() => {
+			if (document.hidden) return;
+			onChanged();
+		}, 6e4);
 		return () => window.clearInterval(t);
 	}, [on, onChanged]);
 	const others = shared.devices || [];
@@ -133465,6 +135345,7 @@ function Devices(p) {
 	(0, import_react.useEffect)(() => {
 		if (joinState !== "waiting" && joinState !== "joining") return;
 		const t = setInterval(async () => {
+			if (document.hidden) return;
 			try {
 				const j = await api("/api/fleet/request");
 				setSt((prev) => prev ? {
@@ -134637,6 +136518,7 @@ function SettingsSyncRows(props) {
 //#region src/components/settings/screens/Doctor.tsx
 function Doctor(_) {
 	const [reprobeKey, setReprobeKey] = (0, import_react.useState)(0);
+	const [checking, setChecking] = (0, import_react.useState)(false);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -134644,7 +136526,10 @@ function Doctor(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "settings-doctor",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, { reprobeKey })
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, {
+				reprobeKey,
+				onChecking: setChecking
+			})
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row",
@@ -134654,8 +136539,9 @@ function Doctor(_) {
 					type: "button",
 					id: "settings-doctor-recheck",
 					className: "test-btn",
+					disabled: checking,
 					onClick: () => setReprobeKey((k) => k + 1),
-					children: "Re-check"
+					children: checking ? "Checking…" : "Re-check"
 				})
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
@@ -134669,10 +136555,16 @@ function Doctor(_) {
 function shellShowItem() {
 	return window.mfshell?.showItem;
 }
+function logViewText(text, exists, failed) {
+	if (text === null) return failed ? "" : "Loading…";
+	return text || (exists ? "(log is empty)" : "(no log file yet)");
+}
 function SystemLogs({ onOpenSysLogsPane }) {
 	const [sources, setSources] = (0, import_react.useState)([]);
 	const [selected, setSelected] = (0, import_react.useState)("server");
-	const [text, setText] = (0, import_react.useState)("Loading…");
+	const [text, setText] = (0, import_react.useState)(null);
+	const [exists, setExists] = (0, import_react.useState)(false);
+	const [loadFailed, setLoadFailed] = (0, import_react.useState)(false);
 	const [meta, setMeta] = (0, import_react.useState)("");
 	const [path, setPath] = (0, import_react.useState)("");
 	const [follow, setFollow] = (0, import_react.useState)(false);
@@ -134707,13 +136599,15 @@ function SystemLogs({ onOpenSysLogsPane }) {
 		try {
 			d = await api("/api/logs?name=" + encodeURIComponent(selected || "server"));
 		} catch {
-			setText("Could not load logs.");
+			setLoadFailed(true);
 			return;
 		}
+		setLoadFailed(false);
 		setSources(d.sources || []);
 		const view = viewRef.current;
 		const atBottom = view ? view.scrollTop + view.clientHeight >= view.scrollHeight - 4 : true;
-		setText(d.text || (d.exists ? "(log is empty)" : "(no log file yet)"));
+		setText(d.text || "");
+		setExists(!!d.exists);
 		if (atBottom && view) requestAnimationFrame(() => view.scrollTop = view.scrollHeight);
 		const src = (d.sources || []).find((s) => s.name === d.selected);
 		const kb = Math.round((d.size || 0) / 1024);
@@ -134750,7 +136644,10 @@ function SystemLogs({ onOpenSysLogsPane }) {
 					id: "logs-source",
 					title: "Which log to view",
 					value: selected,
-					onChange: (e) => setSelected(e.target.value),
+					onChange: (e) => {
+						setText(null);
+						setSelected(e.target.value);
+					},
 					children: sources.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: s.name,
 						children: s.label
@@ -134768,6 +136665,7 @@ function SystemLogs({ onOpenSysLogsPane }) {
 					id: "logs-copy",
 					className: "test-btn",
 					title: "Copy everything shown here (the last 256 KB) to the clipboard",
+					disabled: !text,
 					onClick: copyLog,
 					children: "Copy log"
 				}),
@@ -134808,11 +136706,26 @@ function SystemLogs({ onOpenSysLogsPane }) {
 			onClick: revealPath,
 			children: path
 		}),
+		loadFailed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			id: "logs-load-state",
+			role: "alert",
+			children: [
+				"Couldn't load the log.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => void load(),
+					children: "Retry"
+				})
+			]
+		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
 			id: "logs-view",
 			className: "logs-view",
 			ref: viewRef,
-			children: text
+			children: logViewText(text, exists, loadFailed)
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FirstStartReport, {})
 	] });
@@ -135140,12 +137053,17 @@ function ServerEngineUpdate() {
 		})
 	] });
 }
+function failSentence(what, err) {
+	const why = String(err?.message ?? (typeof err === "string" ? err : "")).trim();
+	return why ? what + ": " + why.replace(/\.$/, "") + "." : what + ".";
+}
 function ShellEngineUpdate() {
 	const mfengine = window.mfengine;
 	const mfupdate = window.mfupdate;
 	const [info, setInfo] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [run, setRun] = (0, import_react.useState)(null);
+	const [checking, setChecking] = (0, import_react.useState)(false);
 	const timer = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (!mfengine?.updateInfo) return;
@@ -135171,13 +137089,32 @@ function ShellEngineUpdate() {
 		mfupdate?.setAuto?.(on).then((r) => setInfo((i) => ({
 			...i || {},
 			autoUpdate: r?.autoUpdate !== false
-		}))).catch(() => {});
+		}))).catch((err) => {
+			setInfo((i) => ({
+				...i || {},
+				autoUpdate: !on
+			}));
+			toast(failSentence("Couldn't change automatic updates", err));
+		});
+	};
+	const checkAgain = () => {
+		if (checking || !mfengine.updateInfo) return;
+		setChecking(true);
+		mfengine.updateInfo().then(setInfo).catch(() => {}).finally(() => setChecking(false));
 	};
 	const update = () => {
 		if (busy || !mfengine.install) return;
 		setBusy(true);
 		setRun(null);
-		mfengine.install().catch(() => {});
+		mfengine.install().catch((err) => {
+			if (timer.current) clearInterval(timer.current);
+			timer.current = null;
+			setBusy(false);
+			setRun({
+				state: "failed",
+				message: failSentence("The update didn't start", err)
+			});
+		});
 		if (timer.current) clearInterval(timer.current);
 		timer.current = setInterval(async () => {
 			try {
@@ -135262,9 +137199,19 @@ function ShellEngineUpdate() {
 		] }) : info?.checked === false ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
 			children: [
-				"Couldn’t check for engine updates right now",
-				info.current ? ` (this engine is ${info.current})` : "",
-				". Try again in a minute."
+				checking ? "Checking…" : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					"Couldn’t check for engine updates right now",
+					info.current ? ` (this engine is ${info.current})` : "",
+					"."
+				] }),
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: checking,
+					onClick: checkAgain,
+					children: "Check again"
+				})
 			]
 		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
@@ -135326,6 +137273,11 @@ function readLoadFailures(raw) {
 		error: String(f.error || "")
 	}));
 }
+function openCustomize() {
+	const ui = useUi.getState();
+	ui.setCustomizePage("sidebar");
+	ui.openDialogFor("customize");
+}
 function Extensions(_) {
 	const s = useSettings();
 	const { data: extensions, isLoading, isError } = useExtensions();
@@ -135339,10 +137291,12 @@ function Extensions(_) {
 			live = false;
 		};
 	}, []);
-	const setEnabled = async (ext, on) => {
+	const setEnabled = async (ext, on, from) => {
 		const cur = disabled ?? (extensions || []).filter((e) => !e.enabled).map((e) => e.id);
 		const next = on ? cur.filter((id) => id !== ext.id) : cur.includes(ext.id) ? cur : [...cur, ext.id];
-		await s.saveGroup("extensions", { disabled: next }, (on ? "Enabled " : "Disabled ") + ext.label);
+		if (await s.saveGroup("extensions", { disabled: next })) {
+			if (!flashSaved(from)) toast((on ? "Enabled " : "Disabled ") + ext.label);
+		}
 		refreshExtensions();
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -135350,9 +137304,19 @@ function Extensions(_) {
 			className: "set-section-title",
 			children: "Extensions"
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
-			children: "Each extension adds one sidebar bar whose buttons run its commands, and opens its own dialogs and grid windows. Its bar drags and hides like the built-in ones (footer Customize); its commands are in the command palette."
+			children: [
+				"Each extension adds one sidebar bar whose buttons run its commands, and opens its own dialogs and grid windows. Its bar drags and hides like the built-in ones (",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					id: "ext-open-customize",
+					onClick: openCustomize,
+					children: "Customize"
+				}),
+				"); its commands are in the command palette."
+			]
 		}),
 		isLoading && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
@@ -135399,7 +137363,7 @@ function Extensions(_) {
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 										type: "checkbox",
 										checked: on,
-										onChange: (e) => void setEnabled(ext, e.target.checked)
+										onChange: (e) => void setEnabled(ext, e.target.checked, e.target)
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 								})
 							]
@@ -136163,9 +138127,20 @@ function Traffic(_) {
 			className: "set-hint",
 			children: "Loading…"
 		}),
-		q.isError && !data && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		q.isError && !data && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
-			children: "Could not load traffic data. Check your connection and retry."
+			id: "traffic-load-state",
+			role: "alert",
+			children: [
+				"Couldn't load traffic data.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => void q.refetch(),
+					children: "Retry"
+				})
+			]
 		}),
 		data && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			(data.errors.github || data.errors.clicks) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -136692,16 +138667,39 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 									onChange: changeMode
 								})
 							]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							id: "settings-screens",
 							onChangeCapture: (e) => noteTouched(e.target),
 							onBlurCapture: (e) => noteTouched(e.target),
-							children: screens.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
-								className: "set-screen" + (screen === s.key ? " active" : ""),
-								"data-screen": s.key,
-								"data-caps-need": s.key === "workspace" ? "git" : void 0,
-								children: screen === s.key && s.el(props)
-							}, s.key))
+							children: [
+								model.status === "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "set-hint",
+									id: "settings-load-state",
+									role: "status",
+									children: "Loading settings…"
+								}),
+								model.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "set-hint",
+									id: "settings-load-state",
+									role: "alert",
+									children: [
+										"Couldn't read settings.",
+										" ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "linklike",
+											onClick: () => void model.reload(),
+											children: "Retry"
+										})
+									]
+								}),
+								model.status === "ready" && screens.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
+									className: "set-screen" + (screen === s.key ? " active" : ""),
+									"data-screen": s.key,
+									"data-caps-need": s.key === "workspace" ? "git" : void 0,
+									children: screen === s.key && s.el(props)
+								}, s.key))
+							]
 						})]
 					})]
 				})
@@ -137175,13 +139173,28 @@ var PAGES = [{
 	label: "Pane header",
 	intro: "Choose the tabs and buttons along the top of every session window. The rest stay in its ⋯ menu."
 }];
+function resetLayout(page, get = useUi.getState) {
+	const ui = get();
+	if (page === "pane") {
+		const prev = ui.paneHeader;
+		ui.setPaneHeader(null);
+		return () => get().setPaneHeader(prev);
+	}
+	const hidden = new Set(ui.hiddenBars);
+	const { barsExplicit, barOrder, showFilter } = ui;
+	ui.resetSidebarBars();
+	return () => {
+		get().setBarOrder(barOrder);
+		get().setShowFilter(showFilter);
+		if (!barsExplicit) return;
+		for (const k of /* @__PURE__ */ new Set([...hidden, ...get().hiddenBars])) if (hidden.has(k) !== get().hiddenBars.has(k)) get().toggleBarHidden(k);
+	};
+}
 function CustomizeDialog() {
 	const open = useUi((s) => s.openDialog === "customize");
 	const closeDialog = useUi((s) => s.closeDialog);
 	const page = useUi((s) => s.customizePage);
 	const setPage = useUi((s) => s.setCustomizePage);
-	const resetSidebarBars = useUi((s) => s.resetSidebarBars);
-	const setPaneHeader = useUi((s) => s.setPaneHeader);
 	const paneCustomized = useUi((s) => s.paneHeader !== null);
 	const barsCustomized = useUi((s) => s.barsExplicit || s.barOrder.length > 0 || !s.showFilter);
 	if (!open) return null;
@@ -137234,7 +139247,14 @@ function CustomizeDialog() {
 						className: "linklike",
 						disabled: !canReset,
 						title: canReset ? "Back to what a fresh install shows" : "Already the default",
-						onClick: () => cur.id === "pane" ? setPaneHeader(null) : resetSidebarBars(),
+						onClick: () => {
+							const undo = resetLayout(cur.id);
+							toast(cur.id === "pane" ? "Pane header reset to default" : "Sidebar reset to default", { action: {
+								label: "Undo",
+								ariaLabel: "Undo the reset",
+								onClick: undo
+							} });
+						},
 						children: "Reset to default"
 					})]
 				}),
@@ -137251,6 +139271,12 @@ function CustomizeDialog() {
 }
 //#endregion
 //#region src/components/dialogs/PromptsDialog.tsx
+function restorePreset(current, preset, at) {
+	if (current.some((q) => q.name === preset.name)) return current;
+	const list = current.slice();
+	list.splice(Math.max(0, Math.min(at, list.length)), 0, preset);
+	return list;
+}
 function PromptsPanel({ onUse } = {}) {
 	const closeDialog = useUi((s) => s.closeDialog);
 	const focused = useUi((s) => s.focused);
@@ -137359,9 +139385,24 @@ function PromptsPanel({ onUse } = {}) {
 						onClick: (e) => {
 							e.stopPropagation();
 							setPop(null);
-							const list = loadUserPresets().filter((q) => q.name !== p.name);
+							const before = loadUserPresets();
+							const at = before.findIndex((q) => q.name === p.name);
+							const gone = at >= 0 ? before[at] : p;
+							const list = before.filter((q) => q.name !== p.name);
 							saveUserPresets(list);
 							setSaved(list);
+							toast("Deleted “" + p.name + "”", {
+								action: {
+									label: "Undo",
+									onClick: () => {
+										const back = restorePreset(loadUserPresets(), gone, at);
+										saveUserPresets(back);
+										setSaved(back);
+									},
+									ariaLabel: "Undo deleting “" + p.name + "”"
+								},
+								duration: 6e3
+							});
 						},
 						children: "✕"
 					})
@@ -137549,6 +139590,10 @@ function CommitDialog() {
 		};
 	}, [open, target]);
 	if (!open) return null;
+	function dismiss() {
+		if (target) rememberCommitMessage(target, msg);
+		closeDialog();
+	}
 	const submitLabel = {
 		leave: "Commit",
 		commit: "Commit",
@@ -137578,6 +139623,7 @@ function CommitDialog() {
 		}
 	}
 	async function submitCommit() {
+		if (writing) return;
 		const title = target;
 		const m = msg.trim();
 		if (!m) {
@@ -137601,14 +139647,14 @@ function CommitDialog() {
 			await commit(false);
 		} catch (err) {
 			const rz = redZoneBreaches(err);
-			if (rz) warnZones(title, rz, () => void commit(true).then(() => void freshStage(title), (e) => toast("Commit failed: " + errMsg(e), { duration: 7e3 })));
-			else toast("Commit failed: " + errMsg(err), { duration: 7e3 });
+			if (rz) warnZones(title, rz, () => void commit(true).then(() => void freshStage(title), (e) => commitFailed(title, e)));
+			else commitFailed(title, err);
 		}
 		freshStage(title);
 	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "commit-dialog",
-		onClose: closeDialog,
+		onClose: dismiss,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "commit-form",
 			onSubmit: (e) => {
@@ -137684,10 +139730,12 @@ function CommitDialog() {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						id: "commit-cancel",
-						onClick: closeDialog,
+						onClick: dismiss,
 						children: "Cancel"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "submit",
+						disabled: writing,
+						title: writing ? "Wait for the message being written" : void 0,
 						children: submitLabel
 					})]
 				}),
@@ -137699,6 +139747,18 @@ function CommitDialog() {
 			]
 		})
 	});
+}
+function rememberCommitMessage(title, text) {
+	if (text.trim()) lastCommitMsg.set(title, text);
+	else lastCommitMsg.delete(title);
+}
+function commitFailed(title, err) {
+	errorPop("Commit failed", errMsg(err), [{
+		label: "Edit message",
+		primary: true,
+		title: "Open Commit again with your message",
+		run: () => commitSession(title)
+	}]);
 }
 function warnZones(title, breaches, proceed) {
 	const n = breaches.length;
@@ -137958,8 +140018,10 @@ function SessionTab({ base, name }) {
 	const [err, setErr] = (0, import_react.useState)("");
 	(0, import_react.useEffect)(() => {
 		let live = true;
-		let timer;
+		let busy = false;
 		const tick = async () => {
+			if (busy) return;
+			busy = true;
 			try {
 				const s = await api(base + "/their-screen");
 				if (!live) return;
@@ -137967,13 +140029,15 @@ function SessionTab({ base, name }) {
 				setErr("");
 			} catch (e) {
 				if (live) setErr(errMsg(e));
+			} finally {
+				busy = false;
 			}
-			if (live) timer = setTimeout(() => void tick(), SCREEN_POLL_MS);
 		};
 		tick();
+		const stop = pollWhileVisible(() => void tick(), SCREEN_POLL_MS);
 		return () => {
 			live = false;
-			if (timer) clearTimeout(timer);
+			stop();
 		};
 	}, [base]);
 	const lines = (0, import_react.useMemo)(() => ansiLines(screen?.text || ""), [screen?.text]);
@@ -138199,32 +140263,43 @@ function MakePrDialog() {
 	const [value, setValue] = (0, import_react.useState)("");
 	const [info, setInfo] = (0, import_react.useState)(null);
 	const [loading, setLoading] = (0, import_react.useState)(false);
+	const [listFailed, setListFailed] = (0, import_react.useState)(false);
+	const loadSeq = (0, import_react.useRef)(0);
 	const [showList, setShowList] = (0, import_react.useState)(false);
 	const [active, setActive] = (0, import_react.useState)(0);
 	const inputRef = (0, import_react.useRef)(null);
 	const repo = (0, import_react.useMemo)(() => {
 		return (queryClient.getQueryData(["instances"]) || []).find((i) => i.title === target) || null;
 	}, [target])?.repo || "";
+	function loadBranches(title) {
+		const seq = ++loadSeq.current;
+		const alive = () => seq === loadSeq.current;
+		setLoading(true);
+		setListFailed(false);
+		instApi(title, "/branches").then((data) => {
+			if (!alive()) return;
+			setInfo(data);
+			setValue((prev) => prev || data.default || "");
+		}).catch(() => {
+			if (!alive()) return;
+			setInfo({
+				branches: [],
+				current: "",
+				default: ""
+			});
+			setListFailed(true);
+		}).finally(() => alive() && setLoading(false));
+	}
 	(0, import_react.useEffect)(() => {
 		if (!open || !target) return;
-		let alive = true;
 		setInfo(null);
 		setShowList(false);
 		setActive(0);
 		setValue(repo ? prBaseByRepo[repo] || "" : "");
-		setLoading(true);
-		instApi(target, "/branches").then((data) => {
-			if (!alive) return;
-			setInfo(data);
-			setValue((prev) => prev || data.default || "");
-		}).catch(() => alive && setInfo({
-			branches: [],
-			current: "",
-			default: ""
-		})).finally(() => alive && setLoading(false));
+		loadBranches(target);
 		setTimeout(() => inputRef.current?.focus(), 0);
 		return () => {
-			alive = false;
+			loadSeq.current++;
 		};
 	}, [
 		open,
@@ -138335,6 +140410,21 @@ function MakePrDialog() {
 						})]
 					})
 				] }),
+				listFailed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					id: "make-pr-branches-failed",
+					role: "alert",
+					children: [
+						"Couldn't load the branch list. You can still type a branch name.",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => loadBranches(target),
+							children: "Retry"
+						})
+					]
+				}),
 				risk && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "set-hint",
 					id: "make-pr-risk",
@@ -138717,6 +140807,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 	const selField = (0, import_react.useRef)(null);
 	const [hasText, setHasText] = (0, import_react.useState)(false);
 	const [sending, setSending] = (0, import_react.useState)(false);
+	const sendingRef = (0, import_react.useRef)(false);
 	const [note, setNote] = (0, import_react.useState)("");
 	const later = (0, import_react.useCallback)(() => {
 		if (item.kind === "question") dismissQuestion(title).catch((err) => toast("Couldn't put it off: " + errMsg(err)));
@@ -138739,6 +140830,11 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 			ok: false,
 			line: "Nothing to send yet"
 		};
+		if (sendingRef.current) return {
+			ok: false,
+			line: "Still sending"
+		};
+		sendingRef.current = true;
 		setSending(true);
 		setNote("");
 		try {
@@ -138756,11 +140852,13 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 				forceActivity(title, "clarify");
 				refreshInstances();
 			}
+			field.current?.focus();
 			return {
 				ok: false,
 				line: f.line
 			};
 		} finally {
+			sendingRef.current = false;
 			setSending(false);
 		}
 	}, [
@@ -139033,7 +141131,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 				placeholder: "Your answer…",
 				"aria-labelledby": "ask-question",
 				spellCheck: true,
-				disabled: sending,
+				readOnly: sending,
 				onInput: (e) => setHasText(!!e.currentTarget.value.trim()),
 				onKeyDown: (e) => {
 					if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
@@ -139387,8 +141485,7 @@ function ChatPanel() {
 	const any = state.windows.length > 0;
 	(0, import_react.useEffect)(() => {
 		if (!any) return;
-		const t = setInterval(pollChats, CHAT_POLL_MS);
-		return () => clearInterval(t);
+		return pollWhileVisible(pollChats, CHAT_POLL_MS);
 	}, [any]);
 	const peopleOn = (title) => Object.values(focus).filter((f) => f.title === title);
 	const withWhom = (title) => {
@@ -139411,7 +141508,7 @@ function ChatPanel() {
 			type: "button",
 			className: "chat-launcher",
 			title: "Chat with the people on " + windowName(focused),
-			onClick: () => openChat(focused),
+			onClick: () => openChatByHand(focused),
 			children: "💬 Chat"
 		})]
 	});
@@ -139422,7 +141519,7 @@ function ChatPill({ w }) {
 		className: "chat-pill" + (w.unread ? " unread" : ""),
 		"data-chat": w.title,
 		title: w.unread ? `${w.unread} new — open the chat` : "Open the chat",
-		onClick: () => openChat(w.title),
+		onClick: () => openChatByHand(w.title),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "chat-pill-name",
 			children: ["💬 ", windowName(w.title)]
@@ -139442,6 +141539,9 @@ function ChatCard({ title, messages, me, people, onClose }) {
 		const el = listRef.current;
 		if (el) el.scrollTop = el.scrollHeight;
 	}, [messages.length]);
+	(0, import_react.useEffect)(() => {
+		if (takeHandOpen(title)) inputRef.current?.focus();
+	}, [title]);
 	const send = async () => {
 		if (busy || !draft.trim()) return;
 		setBusy(true);
@@ -139459,6 +141559,7 @@ function ChatCard({ title, messages, me, people, onClose }) {
 		} else if (e.key === "Escape") {
 			e.preventDefault();
 			minimizeChat(title);
+			setTimeout(() => focusTerm(title), 0);
 		}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
@@ -139582,6 +141683,7 @@ function RenameDialog() {
 					type: "text",
 					id: "rename-input",
 					ref: inputRef,
+					maxLength: MAX_TITLE_LEN,
 					autoComplete: "off",
 					spellCheck: false,
 					"aria-invalid": !!taken,
@@ -140197,6 +142299,9 @@ function reasonText(e) {
 	}
 	return reason.charAt(0).toUpperCase() + reason.slice(1) + ".";
 }
+function reopenedText(title) {
+	return "Reopened " + (title ? displayName(title) : "session");
+}
 function deletable(e) {
 	return e.exists && !e.in_place && !!e.path && !e.active_session;
 }
@@ -140646,6 +142751,7 @@ function RecentDialog() {
 													await refreshInstances();
 													refreshRecentlyClosed();
 													if (inst?.title) selectSession(inst.title);
+													toast(reopenedText(inst?.title || e.title || ""));
 												} catch (err) {
 													errorPop("Reopen failed", err.message);
 													load();
@@ -140712,9 +142818,15 @@ function pushTargetLine(t) {
 	if (!t?.name) return "Checks your project's repo once a session has opened one — no token needed.";
 	return "Checks " + t.name + (t.remote ? " → " + t.remote : " (it has no remote called origin yet)");
 }
-function isCommand(fix) {
-	return /^(git|gh|ssh-keygen|ssh-add)\s/.test((fix || "").trim());
+function githubSourceWords(source) {
+	const s = (source || "").trim();
+	if (!s || s === "none") return "";
+	if (s === "settings") return "your saved token";
+	if (s === "gh-cli") return "gh's sign-in";
+	if (s.startsWith("env:") && s.length > 4) return "the " + s.slice(4) + " variable";
+	return s;
 }
+var GH_NOT_CONNECTED = "Not connected yet. Finish the steps in the terminal, or paste a token.";
 function connectLayout(st) {
 	const device = primaryGithubMethod(st) === "device";
 	const gh = (st?.methods || []).includes("gh") || !!st?.gh?.installed;
@@ -140819,6 +142931,7 @@ function ConnectGitHub({ onChange, onDone }) {
 	const [push, setPush] = (0, import_react.useState)(null);
 	const [test, setTest] = (0, import_react.useState)(null);
 	const [tokenResult, setTokenResult] = (0, import_react.useState)(null);
+	const [ghNote, setGhNote] = (0, import_react.useState)("");
 	const changeRef = (0, import_react.useRef)(onChange);
 	changeRef.current = onChange;
 	const load = (0, import_react.useCallback)(async () => {
@@ -140868,9 +142981,31 @@ function ConnectGitHub({ onChange, onDone }) {
 			setBusy("");
 		}
 	};
-	if (err) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-		className: "error",
-		children: ["GitHub status failed: ", err]
+	if (err) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "gh-load-failed",
+		id: "gh-load-failed",
+		role: "alert",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "error",
+			children: [
+				"Couldn't check GitHub.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike gh-retry",
+					id: "gh-retry",
+					disabled: busy === "retry",
+					onClick: (e) => {
+						e.stopPropagation();
+						run("retry", load);
+					},
+					children: busy === "retry" ? "Retrying…" : "Retry"
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "muted gh-load-reason",
+			children: err
+		})]
 	});
 	if (!st) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "muted",
@@ -140909,6 +143044,24 @@ function ConnectGitHub({ onChange, onDone }) {
 			setTest(describeConnectionTest(await api("/api/settings/test/github", { method: "POST" })));
 		} catch {}
 	});
+	const saveIdentity = () => {
+		if (busy || !name.trim() || !email.trim()) return;
+		return run("identity", async () => {
+			await api("/api/github/identity", { json: {
+				name: name.trim(),
+				email: email.trim()
+			} });
+			toast("git now knows who you are");
+			await load();
+			changeRef.current?.();
+		});
+	};
+	const identityKeyDown = (e) => {
+		if (e.key !== "Enter") return;
+		e.preventDefault();
+		e.stopPropagation();
+		saveIdentity();
+	};
 	const tokenSteps = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
 		className: "gh-steps",
 		id: "gh-token-steps",
@@ -141023,9 +143176,9 @@ function ConnectGitHub({ onChange, onDone }) {
 					children: [
 						"✓ Connected",
 						st.login ? " as @" + st.login : "",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						githubSourceWords(st.source) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "muted",
-							children: [" · ", st.source === "gh-cli" ? "via gh" : st.source]
+							children: [" · via ", githubSourceWords(st.source)]
 						}),
 						st.user_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "error",
@@ -141074,6 +143227,23 @@ function ConnectGitHub({ onChange, onDone }) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "muted",
 							children: "waiting for you to approve…"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike gh-device-cancel",
+							id: "gh-device-cancel",
+							disabled: !!busy,
+							onClick: (e) => {
+								e.stopPropagation();
+								run("cancel", async () => {
+									try {
+										await api("/api/github/device", { method: "DELETE" });
+									} finally {
+										setFlow(null);
+									}
+								});
+							},
+							children: "Cancel"
 						})
 					]
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -141106,20 +143276,30 @@ function ConnectGitHub({ onChange, onDone }) {
 					onClick: (e) => e.stopPropagation(),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Other ways to connect" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "setup-actions gh-cli-alt",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "gh-cli-signin",
-							className: "test-btn",
-							disabled: !!busy,
-							onClick: (e) => {
-								e.stopPropagation();
-								setGhOpen(true);
-							},
-							children: "Sign in with the GitHub CLI"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "a terminal asks one question, then opens GitHub in your browser"
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "gh-cli-signin",
+								className: "test-btn",
+								disabled: !!busy,
+								onClick: (e) => {
+									e.stopPropagation();
+									setGhNote("");
+									setGhOpen(true);
+								},
+								children: "Sign in with the GitHub CLI"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "a terminal asks one question, then opens GitHub in your browser"
+							}),
+							ghNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "test-result bad gh-cli-note",
+								id: "gh-cli-note",
+								role: "status",
+								children: ghNote
+							})
+						]
 					})]
 				}),
 				layout.tokenFolded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -141146,15 +143326,20 @@ function ConnectGitHub({ onChange, onDone }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 								className: "gh-ident-name",
 								placeholder: "Your Name",
+								"aria-label": "Your name for commits",
 								value: name,
 								onChange: (e) => setName(e.target.value),
+								onKeyDown: identityKeyDown,
 								onClick: (e) => e.stopPropagation()
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 								className: "gh-ident-email",
 								placeholder: "you@example.com",
+								"aria-label": "Your email for commits",
+								type: "email",
 								value: email,
 								onChange: (e) => setEmail(e.target.value),
+								onKeyDown: identityKeyDown,
 								onClick: (e) => e.stopPropagation()
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -141164,15 +143349,7 @@ function ConnectGitHub({ onChange, onDone }) {
 								title: !name.trim() || !email.trim() ? "Fill in both your name and email" : void 0,
 								onClick: (e) => {
 									e.stopPropagation();
-									run("identity", async () => {
-										await api("/api/github/identity", { json: {
-											name: name.trim(),
-											email: email.trim()
-										} });
-										toast("git now knows who you are");
-										await load();
-										changeRef.current?.();
-									});
+									saveIdentity();
 								},
 								children: "Use these"
 							})
@@ -141283,6 +143460,7 @@ function ConnectGitHub({ onChange, onDone }) {
 						const r = await api("/api/github/import-gh", { method: "POST" });
 						await connected(r.login);
 					} catch {
+						setGhNote(GH_NOT_CONNECTED);
 						await load();
 					}
 				});
@@ -141487,6 +143665,7 @@ function TodoReminder() {
 		id: "todo-reminder",
 		role: "dialog",
 		"aria-label": "Reminder",
+		keepFocus: true,
 		onClose: () => setHiddenUntil(Date.now() + CLOSE_HIDE_MS),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "todo-reminder",
@@ -141581,24 +143760,51 @@ function TodoReminder() {
 }
 //#endregion
 //#region src/components/dialogs/AssistantAgentDialog.tsx
+function assistantSaveStatus(restart, restartError) {
+	if (!restart) return "Saved. Applies the next time the assistant starts.";
+	if (restartError !== null) return "Saved, but the assistant didn't restart: " + restartError;
+	return "Saved and the assistant restarted. Reopen Chat to talk to it.";
+}
 function AssistantAgentDialog() {
 	const open = useUi((s) => s.openDialog === "assistant-agent");
 	const closeDialog = useUi((s) => s.closeDialog);
 	const [text, setText] = (0, import_react.useState)("");
+	const [saved, setSaved] = (0, import_react.useState)("");
+	const [load, setLoad] = (0, import_react.useState)("loading");
+	const [loadError, setLoadError] = (0, import_react.useState)("");
+	const [saving, setSaving] = (0, import_react.useState)(false);
 	const [status, setStatus] = (0, import_react.useState)("");
 	const [agent, setAgent] = (0, import_react.useState)("");
 	const agentChoices = useAgentChoices();
 	const taRef = (0, import_react.useRef)(null);
+	const typed = (0, import_react.useRef)(false);
+	const loadSeq = (0, import_react.useRef)(0);
+	const loadInstructions = async () => {
+		const seq = ++loadSeq.current;
+		setLoad("loading");
+		setLoadError("");
+		try {
+			const r = await api("/api/assistant/instructions");
+			if (seq !== loadSeq.current) return;
+			const file = r?.text || "";
+			setSaved(file);
+			if (!typed.current) setText(file);
+			setLoad("ok");
+		} catch (err) {
+			if (seq !== loadSeq.current) return;
+			setLoadError(errMsg(err));
+			setLoad("failed");
+		}
+	};
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		setStatus("");
+		setSaving(false);
+		typed.current = false;
+		setText("");
+		setSaved("");
 		(async () => {
-			try {
-				const r = await api("/api/assistant/instructions");
-				setText(r?.text || "");
-			} catch {
-				setText("");
-			}
+			await loadInstructions();
 			try {
 				const st = await api("/api/settings");
 				setAgent(String(st?.settings?.coding_cli?.assistant_provider || ""));
@@ -141609,25 +143815,36 @@ function AssistantAgentDialog() {
 		})();
 	}, [open]);
 	if (!open) return null;
+	const dirty = text !== saved;
+	const canSave = load === "ok" && !saving;
 	const save = async (restart) => {
+		if (!canSave) return;
+		setSaving(true);
 		setStatus("Saving…");
 		try {
 			await api("/api/assistant/instructions", {
 				method: "PUT",
 				json: { text }
 			});
+			setSaved(text);
+			let restartError = null;
 			if (restart) try {
 				await api("/api/assistant/restart", { method: "POST" });
-			} catch {}
-			setStatus(restart ? "Saved — assistant restarted; reopen Chat to talk to it." : "Saved — applies the next time the assistant starts.");
-			toast(restart ? "Instructions saved & assistant restarted" : "Instructions saved");
+			} catch (err) {
+				restartError = errMsg(err);
+			}
+			setStatus(assistantSaveStatus(restart, restartError));
+			if (restartError === null) toast(restart ? "Instructions saved & assistant restarted" : "Instructions saved");
 		} catch (err) {
-			setStatus("Save failed: " + (err.message || ""));
+			setStatus("Save failed: " + errMsg(err));
+		} finally {
+			setSaving(false);
 		}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "assistant-agent-dialog",
 		onClose: closeDialog,
+		closeOnBackdrop: !dirty,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "assistant-agent-panel",
 			children: [
@@ -141673,7 +143890,26 @@ function AssistantAgentDialog() {
 					spellCheck: false,
 					placeholder: "e.g. Always answer concisely. Prefer bullet points. I work in Pacific time. Call me Ethan.",
 					value: text,
-					onChange: (e) => setText(e.target.value)
+					onChange: (e) => {
+						typed.current = true;
+						setText(e.target.value);
+					}
+				}),
+				load === "failed" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					id: "assistant-agent-load-failed",
+					role: "alert",
+					children: [
+						"Couldn't load the instructions. ",
+						loadError,
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => void loadInstructions(),
+							children: "Retry"
+						})
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "modal-actions",
@@ -141687,13 +143923,15 @@ function AssistantAgentDialog() {
 							type: "button",
 							id: "assistant-agent-restart",
 							className: "test-btn",
-							onClick: () => save(true),
+							disabled: !canSave,
+							onClick: () => void save(true),
 							children: "Save & restart"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							id: "assistant-agent-save",
-							onClick: () => save(false),
+							disabled: !canSave,
+							onClick: () => void save(false),
 							children: "Save"
 						})
 					]
@@ -141852,6 +144090,9 @@ function RedZonesDialog() {
 		})
 	});
 }
+function removedZoneLine(z) {
+	return "Removed keep-out zone " + (z.name || z.pattern);
+}
 function RepoCard({ row, onRepos }) {
 	const [pattern, setPattern] = (0, import_react.useState)("");
 	const [name, setName] = (0, import_react.useState)("");
@@ -141914,19 +144155,30 @@ function RepoCard({ row, onRepos }) {
 			setBusy("");
 		}
 	};
-	const add = async () => {
-		const p = pattern.trim();
+	const add = async (undo) => {
+		const p = undo ? undo.pattern : pattern.trim();
 		if (!p) return;
 		if (await call("add", () => api("/api/red-zones", { json: {
 			repo_id: row.id,
 			pattern: p,
-			name: name.trim(),
-			note: "",
+			name: undo ? undo.name : name.trim(),
+			note: undo ? undo.note : "",
 			label: row.label
-		} }))) {
+		} })) && !undo) {
 			setPattern("");
 			setName("");
 		}
+	};
+	const removed = async (z, took) => {
+		if (!await took) return;
+		toast(removedZoneLine(z), { action: {
+			label: "Undo",
+			onClick: () => void add({
+				pattern: z.pattern,
+				name: z.name || "",
+				note: z.note || ""
+			})
+		} });
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "rzd-repo",
@@ -142011,7 +144263,7 @@ function RepoCard({ row, onRepos }) {
 						"aria-label": "Remove red zone " + (z.name || z.pattern),
 						title: "Remove this red zone",
 						disabled: busy === "del:" + z.id,
-						onClick: () => void call("del:" + z.id, () => api("/api/red-zones/" + encodeURIComponent(z.id), { method: "DELETE" })),
+						onClick: () => void removed(z, call("del:" + z.id, () => api("/api/red-zones/" + encodeURIComponent(z.id), { method: "DELETE" }))),
 						children: "×"
 					})
 				] }, z.id))
@@ -142722,7 +144974,7 @@ function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick, f
 		} catch (err) {
 			if (quiet) return false;
 			leaving.current = null;
-			setError(err.message);
+			setError(folderErrorText(err.message, "list"));
 			return false;
 		}
 	}, [device]);
@@ -142768,7 +145020,7 @@ function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick, f
 			setNewFolder(null);
 			onPick(r.path);
 		} catch (err) {
-			setError(err.message);
+			setError(folderErrorText(err.message, "browser"));
 		} finally {
 			setMaking(false);
 		}
@@ -142845,38 +145097,45 @@ function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick, f
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "rb-list",
 				ref: listRef,
-				children: [data && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "rb-item rb-use" + (data.is_git ? " is-git" : "") + (selected === data.path ? " rb-sel" : ""),
-					title: "Use " + data.path + " and close the browser",
-					onClick: () => onPick(data.path),
-					children: (data.is_git ? "✓ use this repo — " : "use this folder — ") + leafName(data.path)
-				}), (data?.entries || []).map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "rb-item" + (e.is_git ? " is-git" : "") + (selected === e.path ? " rb-sel" : ""),
-					"aria-pressed": selected === e.path,
-					title: e.path,
-					"data-path": e.path,
-					onClick: () => onSelect(e.path),
-					onDoubleClick: () => {
-						onSelect(e.path);
-						load(e.path);
-					},
-					onKeyDown: (ev) => {
-						if (ev.key === "ArrowRight") {
-							ev.preventDefault();
+				children: [
+					!data && !error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "rb-loading",
+						children: "Loading…"
+					}),
+					data && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "rb-item rb-use" + (data.is_git ? " is-git" : "") + (selected === data.path ? " rb-sel" : ""),
+						title: "Use " + data.path + " and close the browser",
+						onClick: () => onPick(data.path),
+						children: (data.is_git ? "✓ use this repo — " : "use this folder — ") + leafName(data.path)
+					}),
+					(data?.entries || []).map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "rb-item" + (e.is_git ? " is-git" : "") + (selected === e.path ? " rb-sel" : ""),
+						"aria-pressed": selected === e.path,
+						title: e.path,
+						"data-path": e.path,
+						onClick: () => onSelect(e.path),
+						onDoubleClick: () => {
 							onSelect(e.path);
-							keyLoad(e.path);
-						} else if (ev.key === "ArrowLeft" && data?.parent) {
-							ev.preventDefault();
-							keyLoad(data.parent);
-						}
-					},
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "rb-name",
-						children: (e.is_git ? "📦 " : "📁 ") + e.name
-					})
-				}, e.path))]
+							load(e.path);
+						},
+						onKeyDown: (ev) => {
+							if (ev.key === "ArrowRight") {
+								ev.preventDefault();
+								onSelect(e.path);
+								keyLoad(e.path);
+							} else if (ev.key === "ArrowLeft" && data?.parent) {
+								ev.preventDefault();
+								keyLoad(data.parent);
+							}
+						},
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rb-name",
+							children: (e.is_git ? "📦 " : "📁 ") + e.name
+						})
+					}, e.path))
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "rb-hint",
@@ -144854,8 +147113,28 @@ function reveal(list, el) {
 	if (r.top < l.top) list.scrollTop -= (l.top - r.top) / scale;
 	else if (r.bottom > l.bottom) list.scrollTop += (r.bottom - l.bottom) / scale;
 }
+async function resetSavedRoute(plan) {
+	const before = {
+		...plan,
+		steps: plan.steps.map((s) => ({
+			...s,
+			config: { ...s.config }
+		}))
+	};
+	try {
+		await resetPlan(plan.id);
+	} catch (e) {
+		toast("Reset failed: " + errMsg(e), { error: true });
+		return;
+	}
+	toast("“" + plan.name + "” is back to its default", { action: {
+		label: "Undo",
+		ariaLabel: "Undo: put back your version of “" + plan.name + "”",
+		onClick: () => void savePlan(before).then(() => toast("“" + plan.name + "” is back as you had it"), (e) => toast("Undo failed: " + errMsg(e), { error: true }))
+	} });
+}
 var inner = (t) => !!t.closest?.("button, input, summary, .vf-menu, .set-confirm");
-function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfToggle, compact = false, idPrefix = "sky-catalog", listClass = "", head, lead, autoFocus = false, onDrag, escRef }) {
+function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfToggle, compact = false, idPrefix = "sky-catalog", listClass = "", head, lead, autoFocus = false, onDrag, escRef, onEditPlan }) {
 	const [query, setQuery] = (0, import_react.useState)("");
 	const [active, setActive] = (0, import_react.useState)(0);
 	const [renaming, setRenaming] = (0, import_react.useState)("");
@@ -144922,14 +147201,7 @@ function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfTog
 		if (onDrag) setTimeout(() => onDrag(true, false), 0);
 	};
 	const onDragEnd = (e) => onDrag?.(false, !!e.dataTransfer && e.dataTransfer.dropEffect !== "none");
-	const reset = async (plan) => {
-		try {
-			await resetPlan(plan.id);
-			toast("“" + plan.name + "” is back to its default");
-		} catch (e) {
-			toast("Reset failed: " + errMsg(e), { error: true });
-		}
-	};
+	const reset = (plan) => resetSavedRoute(plan);
 	const remove = async (plan) => {
 		setBusy(true);
 		try {
@@ -145012,12 +147284,13 @@ function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfTog
 						plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
 							label: "“" + plan.name + "” — rename, delete, shelf",
 							boundaryId: listId,
-							items: cardMenu(plan, shelf ? shelf(c.drop) : false).filter((it) => it.key !== "shelf" || onShelfToggle).map((it) => ({
+							items: cardMenu(plan, shelf ? shelf(c.drop) : false, { edit: !!onEditPlan }).filter((it) => it.key !== "shelf" || onShelfToggle).map((it) => ({
 								key: it.key,
 								label: it.label,
 								danger: it.danger,
 								onSelect: () => {
 									if (it.key === "rename") setRenaming(plan.id);
+									else if (it.key === "edit") onEditPlan?.(plan);
 									else if (it.key === "takeoff") setTakeoff(plan);
 									else if (it.key === "shelf") onShelfToggle?.(c.drop);
 									else if (it.key === "reset") reset(plan);
@@ -145480,12 +147753,7 @@ function useSavedActions(changeShelf, opts = {}) {
 		else if (key === "unshelve") changeShelf((p) => toggleShelf(p, { planId: plan.id }));
 		else if (key === "takeoff") setTakeoff(plan);
 		else if (key === "delete") setDeleting(plan);
-		else if (key === "reset") try {
-			await resetPlan(plan.id);
-			toast("“" + plan.name + "” is back to its default");
-		} catch (e) {
-			toast("Reset failed: " + errMsg(e), { error: true });
-		}
+		else if (key === "reset") await resetSavedRoute(plan);
 	};
 	const remove = async () => {
 		if (!deleting) return;
@@ -145785,7 +148053,11 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPl
 				place,
 				onClose: () => setCatalog(false),
 				shelf: (d) => onShelf(shelf, d),
-				onShelfToggle: (d) => changeShelf((p) => toggleShelf(p, d))
+				onShelfToggle: (d) => changeShelf((p) => toggleShelf(p, d)),
+				onEditPlan: onEditPlan ? (plan) => {
+					setCatalog(false);
+					onEditPlan(plan);
+				} : void 0
 			})
 		]
 	});
@@ -145847,7 +148119,7 @@ function SessionCard({ onSession }) {
 		})]
 	});
 }
-function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onResize, onMeasure, onPlace, onDock, onSession, onClose, focusFilter = false }) {
+function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onResize, onMeasure, onPlace, onDock, onSession, onClose, focusFilter = false, onEditPlan }) {
 	const kinds = useFlightKinds().data;
 	const plans = useFlightPlans().data;
 	const [shelf, changeShelf] = useShelfPick();
@@ -145939,6 +148211,7 @@ function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onR
 			idPrefix: "sky-palette",
 			listClass: "sky-palette-body",
 			autoFocus: focusFilter,
+			onEditPlan,
 			shelf: (d) => onShelf(shelf, d),
 			onShelfToggle: (d) => changeShelf((p) => toggleShelf(p, d)),
 			lead: (q) => catalogMatch(q, "Session", "A new agent session") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionCard, { onSession }, "session") : null,
@@ -146932,6 +149205,11 @@ function flyBlocked(repo) {
 	if (isNameQuery(repo)) return "Type " + fullPathHint() + " (Browse… fills one in)";
 	return "";
 }
+var promptDraft = "";
+var newBlockDraft = () => promptDraft;
+function keepNewBlockDraft(text) {
+	promptDraft = text.trim() ? text : "";
+}
 function cardKey(e, onCancel) {
 	if (e.key !== "Escape") return;
 	e.preventDefault();
@@ -147004,7 +149282,8 @@ function blockBody(c) {
 }
 function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, attach, onPending, onFailed, hidden }) {
 	const [repo, setRepo] = (0, import_react.useState)("");
-	const [prompt, setPrompt] = (0, import_react.useState)("");
+	const [prompt, setPrompt] = (0, import_react.useState)(newBlockDraft);
+	(0, import_react.useEffect)(() => keepNewBlockDraft(prompt), [prompt]);
 	const [plan, setPlan] = (0, import_react.useState)("");
 	const [picked, setPicked] = (0, import_react.useState)(null);
 	const [suggestions, setSuggestions] = (0, import_react.useState)([]);
@@ -147168,6 +149447,7 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 		let title = "";
 		try {
 			title = await postInstance(body, device);
+			keepNewBlockDraft("");
 			if (!device) rememberNewSessionChoice(String(body.repo_path || ""), {
 				template: shown.template,
 				program: String(body.program || ""),
@@ -147220,7 +149500,7 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 						type: "button",
 						className: "sky-new-close",
 						"aria-label": "Cancel the new session",
-						title: "Cancel (Esc)",
+						title: "Cancel (Esc) — a prompt you typed is kept for next time",
 						onClick: onCancel,
 						children: "×"
 					})
@@ -148569,6 +150849,16 @@ function SkyStateChip({ ss, title, className }) {
 		children: busy ? "Starting…" : HELD_CHIP
 	});
 }
+function hasFlownToFold(d, folded) {
+	return flownCount(folded ? d : collapseFlown(d)) > 0;
+}
+function lineRouteItems(flight, onCancelAsk, rows) {
+	if (!flight) return [];
+	return routeMenuItems(flight, onCancelAsk, sessionGone(flight, rows)).map((it, i) => i === 0 ? {
+		...it,
+		className: [it.className, "skl-mi-group"].filter(Boolean).join(" ")
+	} : it);
+}
 function SkyLine(p) {
 	const flights = useFlights().data;
 	const kinds = useFlightKinds().data;
@@ -148592,17 +150882,7 @@ function SkyLine(p) {
 	useUi((s) => s.aliases[p.title]);
 	const name = windowName(p.title);
 	const { foldFlown, setFoldFlown } = line;
-	const folds = flownCount((0, import_react.useMemo)(() => sessionDiagram(p.rows, p.title, {
-		flights,
-		kinds,
-		family: true,
-		foldFlown: true
-	}), [
-		p.rows,
-		p.title,
-		flights,
-		kinds
-	])) > 0;
+	const folds = (0, import_react.useMemo)(() => hasFlownToFold(line.diagram, foldFlown), [line.diagram, foldFlown]);
 	const [kids, setKids] = (0, import_react.useState)({});
 	const rootRef = (0, import_react.useRef)(null);
 	const wrapRef = (0, import_react.useRef)(null);
@@ -148897,6 +151177,7 @@ function SkyLine(p) {
 			title: "Keep this route's stops on the shelf as a saved route — you name it",
 			onSelect: () => setSavingAs(line.flight?.plan_name && line.flight.plan_name !== "Stops" ? line.flight.plan_name : name)
 		}] : [],
+		...lineRouteItems(line.flight || line.landed, line.cancel.ask, p.rows),
 		{
 			key: "close",
 			label: "Close session",
@@ -149487,10 +151768,9 @@ function useGroundedLine(flight, src) {
 			onSaveShelf: (name) => act(async () => {
 				const plan = shelfPlanFor(name, g.steps, g.plan_id, plans);
 				try {
-					const saved = await savePlan(plan);
-					toast((plan.id ? "Updated “" : "Saved “") + (saved?.name || name) + "” on the shelf");
+					toast(savedWords$1((await savePlan(plan))?.name || name, !!plan.id));
 				} catch (err) {
-					toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+					toast("Saving the route failed: " + errMsg(err), { error: true });
 				}
 			}),
 			onRemove: () => void act(async () => {
@@ -149638,6 +151918,7 @@ function GroundedLine(p) {
 	const lod = lodFor(p.zoom || 1);
 	const running = isFreeRun(flight);
 	const cancel = useCancelAsk(running ? flight : null);
+	const [starting, setStarting] = (0, import_react.useState)(false);
 	const parts = liveBoxParts(running ? flight : null, true, cancel.ask, {
 		verifyInPlace: true,
 		inTile: true
@@ -149730,17 +152011,7 @@ function GroundedLine(p) {
 			setBusy(false);
 		}
 	};
-	const discard = async () => {
-		if (busy) return;
-		setBusy(true);
-		try {
-			await optimisticDelete(flight.id, () => deleteFlight(flight.id));
-		} finally {
-			setBusy(false);
-		}
-	};
 	const remove = async () => {
-		if (ed) return discard();
 		if (busy) return;
 		if (editing) markRouteEdit(flight.id, "");
 		setBusy(true);
@@ -149748,11 +152019,13 @@ function GroundedLine(p) {
 			if (p.onRemove) await p.onRemove();
 			else if (await optimisticDelete(flight.id, () => deleteFlight(flight.id))) {
 				const steps = flight.steps;
+				const edits_default = ed || void 0;
 				const entry = pushUndo({
 					label: "Remove “" + name + "”",
 					undo: () => startGrounded({
 						steps,
-						...flight.plan_name ? { name: flight.plan_name } : {}
+						...flight.plan_name ? { name: flight.plan_name } : {},
+						...edits_default ? { edits_default } : {}
 					})
 				});
 				toast("Removed “" + name + "”", { action: undoAction(entry, "Undo: put “" + name + "” back on the Sky") });
@@ -149800,8 +152073,8 @@ function GroundedLine(p) {
 			label: "Discard",
 			danger: true,
 			className: "skl-mi-group",
-			title: "Take this editor off the Sky — the default stops stay as they are",
-			onSelect: () => void discard()
+			title: "Take this editor off the Sky — the default stops stay as they are (Ctrl+Z puts it back)",
+			onSelect: () => void remove()
 		} : {
 			key: "remove",
 			label: "Remove",
@@ -149903,12 +152176,17 @@ function GroundedLine(p) {
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const run = chainRunFor(flight, head.kind, () => ({
 		running,
-		label: running ? "Stop this run" : "Run these stops (⋯ Run on a session… to pick where)",
-		onRun: () => void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => {
-			if (!f) return;
-			toast(f.session ? "Running “" + name + "” in a new session, " + f.session : "Running “" + name + "”");
-		}),
-		onStop: () => void controlFlight(flight.id, "cancel")
+		starting,
+		label: running ? "Stop this run" : starting ? "Starting…" : "Run these stops (⋯ Run on a session… to pick where)",
+		onRun: () => {
+			if (starting) return;
+			setStarting(true);
+			attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => {
+				if (!f) return;
+				toast(f.session ? "Running “" + name + "” in a new session, " + f.session : "Running “" + name + "”");
+			}).finally(() => setStarting(false));
+		},
+		onStop: cancel.ask
 	}));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
@@ -150037,8 +152315,8 @@ function GroundedLine(p) {
 								className: "fl-icon-btn skl-default-discard",
 								disabled: busy,
 								"aria-label": "Discard this edit",
-								title: "Discard — take this editor off the Sky; the default stops stay as they are",
-								onClick: () => void discard(),
+								title: "Discard — take this editor off the Sky; the default stops stay as they are (Ctrl+Z puts it back)",
+								onClick: () => void remove(),
 								children: "×"
 							})
 						]
@@ -150756,6 +153034,18 @@ var SKY_SHORTCUT_GROUPS = [
 			{
 				keys: ["Ctrl", "Y"],
 				what: "Switch between the grid and the sky"
+			},
+			{
+				keys: [
+					"Ctrl",
+					"K",
+					"N"
+				],
+				what: "Next session that needs you (K first, then N)"
+			},
+			{
+				keys: ["Alt", "V"],
+				what: "Next Verify that needs you"
 			}
 		]
 	},
@@ -151347,9 +153637,10 @@ function skyEmptyShows(o) {
 	return o.blank && o.waiting === 0;
 }
 var SKY_EMPTY_TITLE = "Nothing in the Sky yet";
+var ADD_TICKET_SOURCE = "Add a ticket source";
 function SkyEmpty({ blank, className, children, newSession = false }) {
 	const { waiting } = useWaiting(false);
-	const open = (d) => useUi.getState().openDialogFor(d);
+	const open = (d, target) => useUi.getState().openDialogFor(d, target);
 	if (!skyEmptyShows({
 		blank,
 		waiting: waiting.length
@@ -151396,8 +153687,8 @@ function SkyEmpty({ blank, className, children, newSession = false }) {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn sky-empty-intake",
-					onClick: () => open("intake"),
-					children: "Connect a source in Intake"
+					onClick: () => open("intake", "tickets"),
+					children: ADD_TICKET_SOURCE
 				})]
 			})
 		]
@@ -151497,10 +153788,15 @@ var NO_KINDS = [];
 var NO_ROWS = [];
 var NO_PLANS = [];
 var memo = null;
+var SKY_FLIGHTS_UNREACHABLE = "Can't reach the server — routes may be out of date.";
+function skyFlightsNote(q) {
+	return q.isError ? SKY_FLIGHTS_UNREACHABLE : "";
+}
 function SkyView() {
 	const instQ = useInstances();
 	const flightsQ = useFlights();
 	const flights = flightsQ.data;
+	const flightsNote = skyFlightsNote(flightsQ);
 	const kinds = useFlightKinds().data || NO_KINDS;
 	const rows = (0, import_react.useMemo)(() => withLiveFlights(instQ.data || NO_ROWS, flights, kinds), [
 		instQ.data,
@@ -153770,6 +156066,12 @@ function SkyView() {
 				onClick: tidy,
 				children: "Tidy"
 			}),
+			flightsNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-note error sky-flights-note",
+				role: "status",
+				title: flightsNote,
+				children: flightsNote
+			}),
 			!narrow && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WeatherWord, {}),
 			!narrow && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "sky-zoom",
@@ -154152,6 +156454,7 @@ function SkyView() {
 			onDock: () => setPaletteMode("shelf"),
 			onClose: () => setPaletteMode("shelf"),
 			focusFilter: !!catalogOpen || filterFocus,
+			onEditPlan: (plan) => void editPlan(plan),
 			onSession: newHere
 		})
 	});
@@ -154683,7 +156986,9 @@ var GUEST_FOCUS_HEARTBEAT_MS = 3e4;
 function App() {
 	const { data: config } = useConfig();
 	const { data: instances } = useInstances();
-	const ui = useUi();
+	const focused = useUi((s) => s.focused);
+	const sidebarHidden = useUi((s) => s.sidebarHidden);
+	const sidebarWidth = useUi((s) => s.sidebarWidth);
 	useDoctorAutoShow();
 	useIntakeWarm(!!config?.caps?.ticketing);
 	(0, import_react.useEffect)(() => {
@@ -154696,7 +157001,7 @@ function App() {
 		if (isGuest === null) return;
 		installAliasSync(isGuest);
 	}, [isGuest]);
-	const focusedTitle = ui.focused || "";
+	const focusedTitle = focused || "";
 	const guestNamed = !!config?.guest?.name;
 	(0, import_react.useEffect)(() => {
 		if (!isGuest || !guestNamed || !focusedTitle) return;
@@ -154716,10 +157021,10 @@ function App() {
 		document.body.classList.toggle("no-ticketing", caps ? !caps.ticketing : false);
 	}, [config?.caps]);
 	(0, import_react.useEffect)(() => {
-		document.body.classList.toggle("sidebar-collapsed", ui.sidebarHidden);
+		document.body.classList.toggle("sidebar-collapsed", sidebarHidden);
 		const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 60);
 		return () => clearTimeout(t);
-	}, [ui.sidebarHidden]);
+	}, [sidebarHidden]);
 	(0, import_react.useEffect)(() => {
 		if (typeof window === "undefined" || !window.matchMedia) return;
 		const mq = window.matchMedia("(max-width: 760px)");
@@ -154733,11 +157038,11 @@ function App() {
 	}, []);
 	(0, import_react.useEffect)(() => {
 		const s = useUi.getState();
-		if (s.narrow && !s.sidebarHidden && ui.focused) s.toggleSidebar();
-	}, [ui.focused]);
+		if (s.narrow && !s.sidebarHidden && focused) s.toggleSidebar();
+	}, [focused]);
 	(0, import_react.useEffect)(() => {
-		document.body.style.setProperty("--sidebar-w", ui.sidebarWidth + "px");
-	}, [ui.sidebarWidth]);
+		document.body.style.setProperty("--sidebar-w", sidebarWidth + "px");
+	}, [sidebarWidth]);
 	(0, import_react.useEffect)(() => {
 		for (const inst of instances || []) {
 			noteActivity(inst);

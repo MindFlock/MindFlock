@@ -6,6 +6,8 @@
 
 import { useEffect, useState } from "react";
 import { useSettings } from "../useSettings";
+import { flashSaved } from "../savedCue";
+import { toast } from "../../../lib/toast";
 import { mapFrom, normalizeRepo, rowsFrom, type RepoBranchRow } from "../../../lib/repoBranches";
 
 export function RepoBranches() {
@@ -24,7 +26,10 @@ export function RepoBranches() {
   const save = (next: RepoBranchRow[]) => {
     const map = mapFrom(next);
     if (JSON.stringify(map) === storedKey) return;
-    void s.saveGroups({ repository: { repo_branches: map } }, "Saved per-repo branches");
+    // "Saved" by the section's own label, like every other Settings field.
+    void s.saveGroups({ repository: { repo_branches: map } }).then((ok) => {
+      if (ok && !flashSaved(document.getElementById("workspace-repo-branches"))) toast("Saved per-repo branches");
+    });
   };
   const edit = (i: number, patch: Partial<RepoBranchRow>) =>
     setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));

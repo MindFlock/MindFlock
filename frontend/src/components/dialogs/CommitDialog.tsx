@@ -9,11 +9,10 @@ import { instApi } from "../../api/client";
 import { freshStage } from "../../lib/stageWatch";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
-import { commitNow, redZoneBreaches, selectSession, type RedZoneBreachHit } from "../../lib/sessionActions";
+import { commitNow, commitSession, redZoneBreaches, selectSession, type RedZoneBreachHit } from "../../lib/sessionActions";
 import { errorPop } from "../../lib/errorPop";
 import { breachFocus } from "../../lib/mapEntry";
 import { pickFastTrack, type Lane } from "../../lib/laneActions";
-import { toast } from "../../lib/toast";
 import { FastTrackChoice } from "./FastTrackChoice";
 import { Modal } from "../Modal";
 import { onSessionRenamed, renameMapKey } from "../../lib/renameSession";
@@ -85,6 +84,14 @@ export function CommitDialog() {
 
   if (!open) return null;
 
+  /** Put the dialog away without committing: what is in the box is kept for
+   * this session, so Escape, Cancel or a stray backdrop click never cost a
+   * written message. */
+  function dismiss() {
+    if (target) rememberCommitMessage(target, msg);
+    closeDialog();
+  }
+
   // The button says what the press will actually do, so the chosen rung is never
   // a hidden setting.
   const submitLabel =
@@ -134,6 +141,9 @@ export function CommitDialog() {
   }
 
   async function submitCommit() {
+    // ✨ is still writing: committing now would take the half-typed hint and
+    // drop the message being written (Ctrl+Enter reaches here too).
+    if (writing) return;
     const title = target;
     const m = msg.trim();
     if (!m) {
@@ -174,12 +184,11 @@ export function CommitDialog() {
         warnZones(title, rz, () =>
           void commit(true).then(
             () => void freshStage(title),
-            (e) => toast("Commit failed: " + errMsg(e), { duration: 7000 })
+            (e) => commitFailed(title, e)
           )
         );
       } else {
-        // A toast, never a native alert dialog: the desktop app has none.
-        toast("Commit failed: " + errMsg(err), { duration: 7000 });
+        commitFailed(title, err);
       }
     }
     // One fresh read so the pill flips to "pre-commit" the moment the hooks start
@@ -193,7 +202,7 @@ export function CommitDialog() {
   return (
     // Backdrop press and Escape dismiss (the Modal shell): reaching for Cancel
     // to put away a dialog you're already looking away from is a wasted trip.
-    <Modal id="commit-dialog" onClose={closeDialog}>
+    <Modal id="commit-dialog" onClose={dismiss}>
       <form
         id="commit-form"
         onSubmit={(e) => {
@@ -272,10 +281,16 @@ export function CommitDialog() {
           </div>
         </div>
         <div className="modal-actions">
-          <button type="button" id="commit-cancel" onClick={closeDialog}>
+          <button type="button" id="commit-cancel" onClick={dismiss}>
             Cancel
           </button>
-          <button type="submit">{submitLabel}</button>
+          <button
+            type="submit"
+            disabled={writing}
+            title={writing ? "Wait for the message being written" : undefined}
+          >
+            {submitLabel}
+          </button>
         </div>
         <p id="commit-error" className="error">
           {error}
@@ -283,6 +298,32 @@ export function CommitDialog() {
       </form>
     </Modal>
   );
+}
+
+/** Keep the box's text for this session (the next open pre-fills it). An
+ * emptied box forgets, so the worktree's pending message can fill it again. */
+export function rememberCommitMessage(title: string, text: string): void {
+  if (text.trim()) lastCommitMsg.set(title, text);
+  else lastCommitMsg.delete(title);
+}
+
+/** The text the Commit dialog will pre-fill for this session. */
+export function rememberedCommitMessage(title: string): string {
+  return lastCommitMsg.get(title) || "";
+}
+
+/** A failed commit: a card that stays (like Push, Open PR, Merge and Move),
+ * never a toast that is gone before the hook output is read. The message was
+ * kept on submit, so "Edit message" reopens Commit with it in the box. */
+export function commitFailed(title: string, err: unknown): void {
+  errorPop("Commit failed", errMsg(err), [
+    {
+      label: "Edit message",
+      primary: true,
+      title: "Open Commit again with your message",
+      run: () => commitSession(title),
+    },
+  ]);
 }
 
 /** The commit warning a person's own window gets when the commit would take

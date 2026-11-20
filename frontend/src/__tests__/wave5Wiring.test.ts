@@ -257,9 +257,10 @@ describe("the commit dialog", () => {
     // The dialog renders through the shared Modal shell, which owns the rule:
     // mousedown rather than click, and only when the backdrop is the event's
     // own target, so a selection that started in the textarea and overshot
-    // cannot discard the message.
+    // cannot discard the message. Closing keeps the box's text for the
+    // session (dismiss), so even a real backdrop press loses nothing.
     expect(squash(code("components/dialogs/CommitDialog.tsx"))).toContain(
-      '<Modal id="commit-dialog" onClose={closeDialog}>'
+      '<Modal id="commit-dialog" onClose={dismiss}>'
     );
     const modal = code("components/Modal.tsx");
     expect(modal).toContain("onMouseDown={closeOnBackdrop ? backdropPress(onClose) : undefined}");

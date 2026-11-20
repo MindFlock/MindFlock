@@ -107,12 +107,12 @@ describe("TemplatesDialogView — the markup", () => {
     expect((html.match(/>Edit</g) || []).length).toBe(2);
     expect(html).not.toContain("tpl-confirm");
   });
-  it("draws the inline confirm row on the card that asked, with Delete and Keep", () => {
+  it("draws the inline confirm row on the card that asked, with Delete and Cancel", () => {
     const html = view({ ui: { editing: null, confirming: "docs", error: "" } });
     const card = html.slice(html.indexOf('data-name="docs"'));
     expect(card).toContain("tpl-confirm");
     expect(card).toContain("Delete “docs”?");
-    expect(card).toContain(">Keep<");
+    expect(card).toContain(">Cancel<");
     expect(card).toContain("tpl-confirm-yes");
     const other = html.slice(html.indexOf('data-name="fix-tests"'), html.indexOf('data-name="docs"'));
     expect(other).not.toContain("tpl-confirm");
@@ -143,7 +143,7 @@ describe("TemplatesDialogView — the markup", () => {
   });
   it("shows a failed load at list level instead of loading forever", () => {
     const html = view({ templates: [], loaded: false, loadError: "HTTP 500" });
-    expect(html).toContain("Could not load templates: HTTP 500");
+    expect(html).toContain("Couldn&#x27;t load templates. HTTP 500");
     expect(html).toContain('role="alert"');
     expect(html).not.toContain("Loading templates…");
     // Not hidden behind the editor or a confirming card, which is all ui.error reaches.

@@ -456,10 +456,19 @@ const NO_PLANS: FlightPlan[] = [];
  * view it was fitted for (the same view back: no refit). */
 let memo: { cam: SkyCamera; key: string; one: string; auto: boolean } | null = null;
 
+/** The toolbar's line while the routes can't be read (the drawer's own
+ * words): the lines may be drawing an older copy, or no routes at all. "" =
+ * nothing to say. */
+export const SKY_FLIGHTS_UNREACHABLE = "Can't reach the server — routes may be out of date.";
+export function skyFlightsNote(q: { isError?: boolean }): string {
+  return q.isError ? SKY_FLIGHTS_UNREACHABLE : "";
+}
+
 export function SkyView() {
   const instQ = useInstances();
   const flightsQ = useFlights();
   const flights = flightsQ.data;
+  const flightsNote = skyFlightsNote(flightsQ);
   // Stable while loading: a new [] each render would remake every chain.
   const kinds = useFlightKinds().data || NO_KINDS;
   // A chain just built on a session draws from the flights list until the
@@ -2616,6 +2625,11 @@ export function SkyView() {
           Tidy
         </button>
       )}
+      {flightsNote && (
+        <span className="fl-note error sky-flights-note" role="status" title={flightsNote}>
+          {flightsNote}
+        </span>
+      )}
       {/* The weather word (docs/flights.md "As built: round 15 weather"):
           "☁ usage 87 %" / "☾ quiet hours", nothing in clear weather. */}
       {!narrow && <WeatherWord />}
@@ -2971,6 +2985,7 @@ export function SkyView() {
         onDock={() => setPaletteMode("shelf")}
         onClose={() => setPaletteMode("shelf")}
         focusFilter={!!catalogOpen || filterFocus}
+        onEditPlan={(plan) => void editPlan(plan)}
         onSession={newHere}
       />
     </div>

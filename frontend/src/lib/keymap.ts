@@ -286,7 +286,7 @@ export function skyBoxFocused(el: Element | null = typeof document !== "undefine
 // means "the defaults below"; a bare object (the pre-array format) is
 // normalized to a one-combo array.
 
-interface KeyOverrides {
+export interface KeyOverrides {
   keys: Record<string, Combo[]>;
   chords: Record<string, string>;
 }
@@ -394,6 +394,17 @@ export function resetAllOverrides() {
   _saveKeyOv();
   _notify();
 }
+/** A copy of every custom key and chord — what the sheet's Restore defaults
+ * keeps so its Undo can put them back. */
+export function keyOverridesSnapshot(): KeyOverrides {
+  return JSON.parse(JSON.stringify(_keyOv));
+}
+/** Put a snapshot back (the Undo after Restore defaults). */
+export function restoreKeyOverrides(saved: KeyOverrides) {
+  _keyOv = JSON.parse(JSON.stringify(saved));
+  _saveKeyOv();
+  _notify();
+}
 export function hasOverrides(): boolean {
   return !!Object.keys(_keyOv.keys).length || !!Object.keys(_keyOv.chords).length;
 }
@@ -455,6 +466,11 @@ export const CHORDS: Record<string, ChordEntry> = {
  * action's default letter (which doubles as its stable id). */
 export function chordKeyFor(id: string): string {
   return String(_keyOv.chords[id] || id).toLowerCase();
+}
+
+/** A chord as a tooltip says it, under the user's rebinding: "Ctrl+K M". */
+export function chordLabel(id: string): string {
+  return "Ctrl+K " + chordKeyFor(id).toUpperCase();
 }
 
 /** The chord whose user-chosen key took `id`'s DEFAULT letter, or null.
@@ -630,7 +646,7 @@ export const KEYMAP: KeymapEntry[] = [
     mod: true,
     id: "talk",
     holdable: true,
-    help: ["Navigation", "Ctrl+T", "Talk to the focused session — hold or press, per the mic's push-to-talk mode"],
+    help: ["Navigation", "Ctrl+T / Alt+Space", "Talk to the focused session — hold or press, per the mic's push-to-talk mode"],
     run: (_e, phase) => voiceTalk(phase || "down"),
   },
   {
@@ -679,8 +695,9 @@ export const KEYMAP: KeymapEntry[] = [
       if (isEditingTarget(document.activeElement)) return false;
       // Inside a Map tab, `/` is that map's find box (CodeMapTab handles it).
       if ((document.activeElement as HTMLElement | null)?.closest?.(".cm-root")) return false;
-      const box = document.getElementById("sidebar-search");
-      return !!box && !box.classList.contains("hidden");
+      // No check for the box itself: when Customize hides it (or the calm
+      // first hour does), the host's focusFilter brings it back focused.
+      return true;
     },
     run: () => _host?.focusFilter(),
   },

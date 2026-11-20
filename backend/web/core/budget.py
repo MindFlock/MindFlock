@@ -192,3 +192,25 @@ def _budget_locked(title: str) -> bool:
     except Exception:  # noqa: BLE001
         return False
     return cost >= limit
+
+
+def _budget_cost_stale(title: str) -> bool:
+    """Whether :func:`_budget_locked` would have to price ``title``'s
+    transcripts right now: a budget is set and the session's cost is not in
+    the ~20 s token cache. The terminal's input path asks this on every
+    keystroke and, when True, runs the lock check in a thread so the pricing
+    never stalls the event loop. Cheap (no file reads); never raises."""
+    srv = _server()
+    try:
+        if srv._effective_budget(title) <= 0:
+            return False
+        inst = srv.ENGINE.instances.get(title)
+        if inst is None or not inst.Started():
+            return False
+        wt = inst.GetWorktreePath()
+        if not wt:
+            return False
+        hit = srv._TOKENS_CACHE.get((title, wt))
+        return not (hit and hit[0] > time.time())
+    except Exception:  # noqa: BLE001
+        return True

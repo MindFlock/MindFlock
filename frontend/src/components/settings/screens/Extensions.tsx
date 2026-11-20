@@ -17,6 +17,9 @@ import { extActivationError, hostVersion, subscribeHost } from "../../../extensi
 import type { ExtensionInfo } from "../../../extensions/types";
 import { refreshExtensions, useExtensions } from "../../../state/queries";
 import { useSettings } from "../useSettings";
+import { useUi } from "../../../state/store";
+import { flashSaved } from "../savedCue";
+import { toast } from "../../../lib/toast";
 import type { ScreenProps } from "../SettingsDialog";
 
 /** The stored disabled list, or undefined when the settings document has no
@@ -40,6 +43,13 @@ export function readLoadFailures(raw: unknown): ExtensionLoadFailure[] {
     }));
 }
 
+/** The footer's "Customize" door, on the sidebar page where the bars are. */
+export function openCustomize(): void {
+  const ui = useUi.getState();
+  ui.setCustomizePage("sidebar");
+  ui.openDialogFor("customize");
+}
+
 export function Extensions(_: ScreenProps) {
   const s = useSettings();
   const { data: extensions, isLoading, isError } = useExtensions();
@@ -58,14 +68,14 @@ export function Extensions(_: ScreenProps) {
     };
   }, []);
 
-  const setEnabled = async (ext: ExtensionInfo, on: boolean) => {
+  const setEnabled = async (ext: ExtensionInfo, on: boolean, from?: Element | null) => {
     const cur = disabled ?? (extensions || []).filter((e) => !e.enabled).map((e) => e.id);
     const next = on ? cur.filter((id) => id !== ext.id) : cur.includes(ext.id) ? cur : [...cur, ext.id];
-    await s.saveGroup(
-      "extensions",
-      { disabled: next },
-      (on ? "Enabled " : "Disabled ") + ext.label
-    );
+    // "Saved" by the switch, like every other Settings switch; the toast only
+    // when the switch is gone from the screen.
+    if (await s.saveGroup("extensions", { disabled: next })) {
+      if (!flashSaved(from)) toast((on ? "Enabled " : "Disabled ") + ext.label);
+    }
     // The manifest's `enabled` flips server-side; refetching is what makes the
     // sidebar bar, the palette and the host (via App.tsx) see it.
     void refreshExtensions();
@@ -76,8 +86,11 @@ export function Extensions(_: ScreenProps) {
       <h3 className="set-section-title">Extensions</h3>
       <p className="set-hint">
         Each extension adds one sidebar bar whose buttons run its commands, and opens its own
-        dialogs and grid windows. Its bar drags and hides like the built-in ones (footer
-        Customize); its commands are in the command palette.
+        dialogs and grid windows. Its bar drags and hides like the built-in ones (
+        <button type="button" className="linklike" id="ext-open-customize" onClick={openCustomize}>
+          Customize
+        </button>
+        ); its commands are in the command palette.
       </p>
 
       {isLoading && <p className="set-hint">Loading…</p>}
@@ -101,7 +114,7 @@ export function Extensions(_: ScreenProps) {
                   {!on && <span className="prov-badge">disabled</span>}
                   {/* label wraps only the switch, so clicking the row text no longer flips it */}
                   <label className="ca-switch" title={on ? "Disable this extension" : "Enable this extension"}>
-                    <input type="checkbox" checked={on} onChange={(e) => void setEnabled(ext, e.target.checked)} />
+                    <input type="checkbox" checked={on} onChange={(e) => void setEnabled(ext, e.target.checked, e.target)} />
                     <span className="ca-slider" />
                   </label>
                 </div>

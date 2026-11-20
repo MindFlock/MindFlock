@@ -1018,12 +1018,19 @@ export type InstalledMap = Record<string, boolean>;
 export function agentMissingReason(agent: string, installed: InstalledMap | null): string {
   if (!installed || !agent) return "";
   if (installed[agent] !== false) return "";
-  // Get set up's step ① installs it in one click (pick it there); Settings →
-  // Agents only shows the command to copy.
+  // Setup's step ① installs it in one click (pick it there); Settings →
+  // Agents only shows the command to copy. The note under the Agent field
+  // carries an "Open Setup" button beside this sentence.
   return (
     agentName(agent) +
-    " isn't installed on this device. Install it in one click from Get set up (step ①; a custom agent: Settings → Custom agents), or pick another agent."
+    " isn't installed on this device. Install it in one click from Setup (step ①; a custom agent: Settings → Custom agents), or pick another agent."
   );
+}
+
+/** The note under the Agent field for an agent installed here but known not
+ * signed in: its name as people read it ("Claude Code"), never the raw id. */
+export function agentSignedOutLine(agent: string): string {
+  return agentName(agent) + " isn't signed in yet — a session would stop at its sign-in screen.";
 }
 
 /** The agent the form should start on: the configured default, unless that

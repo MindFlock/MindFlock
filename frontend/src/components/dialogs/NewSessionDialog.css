@@ -1097,6 +1097,14 @@
   color: var(--muted);
 }
 
+/* What #rb-list shows until the first listing lands. */
+.rb-loading {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .muted {
   color: var(--muted);
 }
@@ -2505,4 +2513,11 @@
 
 .nf-skip-perms {
   margin-top: 4px;
+}
+
+/* The agent sign-in window opened from the "isn't signed in yet" note is
+   portalled; its React host is an empty wrapper that must not take a slot in
+   the dialog's layout. */
+.nf-signin-host {
+  display: contents;
 }

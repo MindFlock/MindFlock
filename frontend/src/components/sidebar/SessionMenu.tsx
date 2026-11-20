@@ -6,18 +6,42 @@
 
 import { useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import type { MenuItem, SessionMenuModel } from "../../lib/sessionMenu";
+import type { EndingKind } from "../../state/store";
+
+/** "Closing…" / "Deleting…": what a row says while its end is in flight. */
+export function endingLabel(kind: EndingKind): string {
+  return kind === "closing" ? "Closing…" : "Deleting…";
+}
+
+/** The menu while the session's Close or Delete is in flight: both ends
+ * greyed, saying so, so a second try never hits a session already going. */
+export function withEnding(model: SessionMenuModel, kind: EndingKind | undefined): SessionMenuModel {
+  if (!kind) return model;
+  const off = (it: MenuItem): MenuItem =>
+    it.key === "close" || it.key === "delete"
+      ? { ...it, disabled: true, confirm: undefined, note: endingLabel(kind), title: endingLabel(kind) }
+      : it;
+  return {
+    ...model,
+    groups: model.groups.map((g) => (g.id === "danger" ? { ...g, items: g.items.map(off) } : g)),
+  };
+}
 
 export function SessionMenu({
-  model,
+  model: given,
   onDone,
   onInUse,
+  ending,
 }: {
   model: SessionMenuModel;
+  /** The session's Close / Delete in flight: both ends greyed, saying so. */
+  ending?: EndingKind;
   /** After an item ran (the popover closes; the accordion folds). */
   onDone?: () => void;
   /** A Delete refused because other sessions hold the folder. */
   onInUse?: (titles: string[]) => void;
 }) {
+  const model = withEnding(given, ending);
   const [moreOpen, setMoreOpen] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const moreRef = useRef<HTMLDivElement | null>(null);

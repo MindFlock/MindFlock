@@ -789,11 +789,14 @@ a status line under its name; the parent carries a roll-up of its workers. Above
 assistant's editable agent file, its standing instructions; the chat window's
 head has the same editor under the same word, and so does the palette's
 **Assistant instructions (agent file)…** — "Agent" on its own means the coding
-agent only; the to-do list that used to sit here is the **To-do** bar now —
+agent only. If the file can't be read the editor says *Couldn't load the
+instructions.* with a **Retry**, and Save stays off until it loads, so an empty
+box never overwrites the real file; a failed restart is reported, and a click
+outside never drops unsaved edits. The to-do list that used to sit here is the **To-do** bar now —
 see [To-do](#to-do)), the **Prompts** bar (your saved prompts, one click from any
 session — see [Saved prompts](#saved-prompts)), the **Tickets** bar (pipeline on/off switch and state dot;
 it appears once a ticket source is connected), the **Pull requests** and
-**Issues** bars, the opt-in **Verify** bar, and one bar per extension. Under the
+**Issues** bars, and one bar per extension. Under the
 list, a **Recently closed (n)** link shows once anything is closed (see
 [Recently closed](#recently-closed)). Below: **View** **Auto** · **1** · **2** ·
 **4** · **9** (one button per grid size, the active one filled), the session
@@ -895,10 +898,12 @@ the top bar whether or not its bar is showing. Each switch's tooltip names the
 Intake switch it mirrors (**Tickets**, **PR review comments**, **New issues** on
 Intake's Auto-start tab), and a switch that fails says why in a bottom-right
 card rather than a browser `alert()` (which the desktop app does not
-implement). The **Verify** bar's label opens Verify the same way. Turning a
+implement). Turning a
 feature's bar on is still how you get an at-a-glance dot for PR review and
 issue handling once you've connected them. The bars' labels read
-**GitHub PRs** / **GitHub issues**, like the Intake tabs. There is no
+**GitHub PRs** / **GitHub issues**, like the Intake tabs and Customize, with
+the switch labelled (**Auto-address** / **Auto-start**, like the Tickets bar's
+**Auto-start**) and a dot that turns red when offline or on a network error. There is no
 "pause everything" control: each bar's switch is the one that turns its
 automation off.
 
@@ -952,7 +957,7 @@ Schedule*, the name it had, kept so the word still finds it), **New scheduled te
 ticked; *schedule a session* still finds it), one **Run template:
 <name>** (*fresh session, task sent*) per template that has a folder,
 **Assistant instructions (agent file)…**,
-**Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
+**Reopen last closed session** (`Ctrl+Shift+T`), **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
 **Settings → …** rows for what you typed (`palette/settingsSearch.ts`: one
 entry per screen plus a few controls, matched on the words people use —
 "github", "notification", "worktree", "parallel", "phone", "token", "theme"
@@ -1042,7 +1047,10 @@ the API (including the friendly 400 in this case) surface as toasts.
   under 700px reads Unified (Split's four columns crush the code there). The
   open tab reloads when the session's diff stats move, and on **↻**. Each
   file header has a **Map** button (*Show <file> on the map*); the Map's file
-  card **Open diff** opens this tab on that file.
+  card **Open diff** opens this tab on that file. Switching baseline or file
+  shows *Loading diff…* until that diff arrives (never the previous one under
+  the new heading), and a slower earlier answer is dropped. `Ctrl+K G` opens
+  this tab; each tab's tooltip names its chord.
 
 Terminals keep tmux mouse scrolling (speed configurable in settings);
 **Shift+drag** (Alt+drag on macOS) selects text and auto-copies it.
@@ -1072,6 +1080,19 @@ under `~/.mindflock/pastes`, the same bucket the phone UI uses. Either way the
 agent receives an absolute path, so the experience on the CLI side is
 identical. Both directories are transient: each new upload prunes its own
 directory back to the newest few files.
+
+### A terminal that isn't attached says so
+
+A pane whose socket drops shows *Reconnecting…* over its last screen, and after
+about 10 s *Can't reach the session — retrying* with **Retry**; typing or
+pasting meanwhile shows *Reconnecting — that wasn't sent* (no "Pasted" toast,
+no upload). A worker still waiting its turn shows *Waiting its turn* with
+**Start now** (the server closes its socket with 4410) and attaches by itself
+when its turn comes. An error that repeats (a shell that can't start, an
+attach that keeps failing) is written once and stops after 5 tries with
+**Retry**; the Shell tab has a loading cover like the Agent tab. With a pane's
+history view open, `Esc` and `Ctrl+F` still belong to whatever dialog has
+focus.
 
 ### Terminals repaint when the window comes back
 
@@ -1121,7 +1142,7 @@ The pane shows a single **guided next-step button**:
 
 | Stage | Button | What it does |
 |---|---|---|
-| agent | **Commit…** | Prompts for a message; runs `git commit` in the Terminal tab (pre-commit hooks visible; auto-fix retries up to 5×) |
+| agent | **Commit…** | Prompts for a message; runs `git commit` in the Terminal tab (pre-commit hooks visible; auto-fix retries up to 5×). Closing the dialog without committing (`Esc`, Cancel, a click outside) keeps what you wrote for that session; a failed commit is a card that stays, with **Edit message** to reopen Commit with your text |
 | pre-commit ✗ | **Re-commit** | Restages the hook auto-fixes and retries with the same message |
 | committed | **Push** | `git push --no-verify -u origin HEAD` (hooks already ran) — plain git over your own remote, SSH or HTTPS |
 | pushed | **Open PR** | `gh pr create --base <base> --fill` when `gh` is authenticated; else the GitHub REST API with a token; else opens a prefilled compare URL in your browser |
@@ -1260,7 +1281,24 @@ share of the last minute spent stalled) and what MindFlock is holding back
 (agent spawns, team-run lines, restarts). While it is up it also polls
 `GET /api/system/slots` and, when heavy commands are using `mindflock slot`,
 adds a line for them (*Heavy jobs: fix-auth running · 2 waiting for a slot*).
-**Hide** lasts until the level worsens or clears and returns.
+It also says the thing a person notices first: *Sessions may be slow to show
+what you type and their new output until memory recovers*, and that putting
+idle agents to sleep or closing sessions frees memory fastest (the wording
+lives in `lib/memorySlow.ts`). **See what's using it** opens the sidebar's
+Memory list (biggest sessions first; with that bar hidden, the same list opens
+above the notice). **Hide** lasts until the level worsens or clears and
+returns.
+
+**A slow server is not a lost one.** Under memory pressure the server itself
+can stall for seconds to minutes (every process waits on the disk), long
+enough for the connection-lost card to appear. While the last memory reading
+was low or critical, the card says so instead of *may have stopped*: its
+header reads *MindFlock is slow to respond: memory is low* (or *critically
+low*) and its text says the server usually catches up on its own and what
+frees memory. WSL's own diagnoses (WSL down, not installed, starting) and an
+HTTP error keep their wording, and after 5 minutes without an answer the card
+goes back to the plain *isn't answering* text: the OOM killer can take the
+server too.
 
 **After a server restart, sessions stay offline until you start them.** By
 default the sessions whose agents died with the server are held offline
@@ -1325,7 +1363,9 @@ the box: **Agent · Terminal · Diff · Queue · Map**, then ⏩
 session's **memory** number once the server sends one (see *The memory
 number* below). Switched
 off until you want them: the **Thread** tab, the guided
-**Commit…** / next-step button, **History**, the cost chip, the diff stats and
+**Commit…** / next-step button, **History**, the cost chip (a button: `Tab`
+reaches it, `Enter` opens the breakdown, `Esc` closes it and returns focus,
+without leaving select mode), the diff stats and
 **−** (hide). (Map joined the default in 0.10 — tucked under ⋯ nobody found
 it; a saved header that hid it keeps it hidden.) Agent can't be switched off. There is no Pause button:
 pausing is the palette's *Pause session*, `mindflock pause` or
@@ -1654,7 +1694,8 @@ window closes it. The items, in groups:
   says the configured editor isn't installed here) · **Open preview ↗** `:port`
   when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
   window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
-  after a failed one · **Copy folder path**
+  after a failed one · **Copy folder path** · on a pane's ⋯ only, **Customize
+  header…** (Customize opened on its Pane header page)
 - then the two ways to leave a session: **✕ Close** and **Delete…**.
 
 Every verb's label, shortcut and when-it-applies rule comes from one table
@@ -1678,7 +1719,8 @@ come along as a copy**: edits, deletions and untracked files (`.gitignore`d
 ones stay behind) appear in the new worktree as uncommitted changes, nothing
 staged; the source's files, index and branch are not touched. The new session
 runs the same agent CLI with the source's own launch flags, auth profile and
-model; like Duplicate it starts a fresh conversation, with no parent. Its
+model; like Duplicate it starts a fresh conversation, with no parent, and like
+New and Duplicate it asks *Start anyway?* while memory is low. Its
 recorded base is the source's branch, so its diff shows only what happens on
 the branch and **Open PR** targets the source's branch. It lands right under
 its source and takes focus; the toast says whether uncommitted changes came
@@ -1758,6 +1800,10 @@ button), because a merge cannot be undone from MindFlock. Questions like these
 yet; a *failure* (push refused, delete failed, pause did not take) is a red
 card that stays until dismissed, and a *success* is a one-line toast. None of
 them is a browser `confirm()` / `alert()`, which do nothing in the desktop app.
+A question card takes the keyboard when it opens: focus lands on **Cancel**
+(so `Enter` never destroys), `Esc` answers Cancel and stops there, and a
+**Delete** answer is drawn red like the row menu's strip. A failure card never
+takes focus, since it can arrive while you are typing into a terminal.
 
 **A status line that needs you is a door.** When a fast-tracked row's line
 ends **— open the bell** (an escalation or a failure) or **· ready — approve in
@@ -2128,8 +2174,12 @@ In the **Thread** tab's composer, **Send now** (`Ctrl+Enter`) asks the server
 to type it in: when the agent turns out to be on a prompt or at the usage
 limit, it is queued for when the agent is free instead (the toast says
 "queued"), never typed into the dialog. **Let name decide** queues a prompt
-naming the worker by its session title, not its alias. Delete and `Ctrl+W`
-never close the session while the keyboard is anywhere in the Thread tab.
+naming the worker by its session title, not its alias. `Alt+Enter` is
+**When idle** (queue it for when the agent is free), as in the Queue tab.
+Delete and `Ctrl+W` never close the session while the keyboard is anywhere in
+the Thread tab. A thread that fails to load says so with a **Retry**; a refresh
+that fails while messages are showing keeps them and says *thread may be out
+of date · Retry*, as the Map does.
 
 ## Code map (Map tab): the Code Tree, zones and the plan loop
 
@@ -2152,7 +2202,9 @@ agents, nests, leaves in a bird's colour and lit wood = changes, gold = could
 break), the toolbar's **Rules** group (⛔ Keep out / ✓ Only here) — then it ends on this
 session's next step ("5 changed — start with ⚠ Could break, then open the
 diff"), or, with none, on getting around (`/`, drag, double-click, ⌂ Whole
-tree, **?** for the legend). The steps are picked from what is on screen when
+tree, **?** for the legend, which `Esc` or a click on the map closes). The
+find box says *Searching…* until the answer for what you typed arrives, and
+`Enter` waits for it. The steps are picked from what is on screen when
 it opens: with nothing changed the birds card says every leaf is grey for now,
 a repo with no roots (no tests, docs or config) skips the roots card, and a
 toolbar card whose target isn't visible (a narrow toolbar) is skipped. The
@@ -2554,7 +2606,8 @@ desktop app doesn't implement).
 session (every repo you have a session on is listed, zones or not; each zone
 shows its kind), holds each repo's **Plan first** switch, and its **Derived
 outputs** (companions for green-scoped agents; the built-in lockfile/snapshot
-set is shown beside them). It is a modal like Intake: `Esc` closes it from
+set is shown beside them). Removing a zone (its ×) shows *Removed keep-out
+zone …* with **Undo**, which adds the same zone back. It is a modal like Intake: `Esc` closes it from
 anywhere, and `Delete` / `Ctrl+W` pressed inside it never close the session
 behind.
 
@@ -2604,7 +2657,9 @@ edit" notification rule is off by default, the other two are on.
 
 **The bell is the one place for everything that needs you.** Its panel (*Notifications —
 what needs you, and what happened while you were away*, about 400px wide) has
-two lists: **Needs you** on top, then the history feed.
+two lists: **Needs you** on top, then the history feed. Opening it puts focus
+on its first row; `Esc` closes only the panel (select mode, if on, stays on)
+and gives focus back to the bell.
 
 **Needs you** merges two sources into one list, one row per session: the
 sessions whose [one state](#one-session-state) is "in the bell" — **Question**,
@@ -3066,7 +3121,9 @@ their worktrees and branches). Close and Delete ask first on an inline strip
 app. Actions fan out over the per-session endpoints and tolerate individual
 failures: the toast counts what landed (*Closed 2/3 session(s)*, plus *N worker
 sessions kept running* when workers stayed up), failures are named on a
-bottom-right card, and a folder another live session holds is reported in the
+bottom-right card. A bulk Close's toast carries an **Undo** that reopens every
+session it closed, and each one also goes on the `Ctrl+Shift+T` stack, as a
+single Close does; a bulk Hide's toast has the same **Undo** button, and a folder another live session holds is reported in the
 strip (*Folder in use by …. Close those first.*). **✕** or **Esc** leaves select
 mode and drops the picks.
 
@@ -3085,7 +3142,8 @@ Authentication section. If the token leaks, regenerate it from Settings →
 ## Finding, renaming & attention
 
 - **Filter** — a filter box above the sidebar list (`/` focuses it, Esc
-  clears). It matches title, alias, branch, and repo, and only narrows the
+  clears). It matches title, alias, branch, and repo, each typed word on its
+  own (*fix bug* finds `fix-login-bug`, as Recently closed does), and only narrows the
   sidebar — the grid is untouched. Customize → *Session list* → **Filter box**
   shows or hides it (shown by default); hidden, `/` still opens it for one
   search.
@@ -3139,9 +3197,15 @@ Authentication section. If the token leaks, regenerate it from Settings →
   This rule only started rendering at all once `activity_since` was populated
   (see [web-api.md](web-api.md#get-apiinstances)); before that it read a field
   that was always `0` and never fired.
-- **Undo** — reversible actions (hide, bulk hide) show a *click to undo* toast
-  instead of a modal; only Delete (worktree and branch gone) still asks first,
-  inline.
+- **Undo** — reversible actions (close, hide, and their bulk forms; deleting
+  a saved prompt) show a toast with an **Undo** button instead of a modal;
+  only Delete (worktree and branch gone) still asks first, inline. Deleting a
+  session that works in place says its folder and branch were kept, in the
+  toast and in the menu's tooltip.
+- **Rename refuses a taken name without losing it** — the rail's inline
+  rename stays open with what you typed and says *Another session is already
+  named "…"* under the box (typing clears it, `Esc` leaves), as the Rename
+  dialog does; both stop at 120 characters.
 - **Hidden sessions stick** — a session you hide stays hidden across reloads
   (persisted per browser); showing it again clears that. Expanded action menus
   are transient (a reload starts them collapsed).
@@ -3156,14 +3220,15 @@ live cheat-sheet — it is generated from the same table that drives the
 bindings.
 
 `Esc` closes the sheet. It is also the editor, once you ask for it: **Change
-keys** in its header turns the rows rebindable (they highlight on hover) —
-click one, press the new combo (`Esc` cancels the recording), and it takes
+keys** in its header turns the rows rebindable (they highlight on hover, and
+`Tab` reaches each one; the sheet takes focus when it opens) — click one, or
+press `Enter` / `Space` on it, press the new combo (`Esc` cancels the recording), and it takes
 effect immediately; **Done** leaves the mode. The
 row's `+` button adds an *extra* combo instead of replacing (starting from
 the defaults, so an action can answer to several combos). Chord rows rebind
 their second key (the `Ctrl+K` prefix is fixed). A `↺` next to a customized
-shortcut restores that one default; **Restore defaults** in the sheet header
-clears every customization. Overrides are saved per browser/device (in
+shortcut restores that one default and says which; **Restore defaults** in the sheet header
+clears every customization, with **Undo** on its toast. Overrides are saved per browser/device (in
 localStorage), since a Mac laptop and a Windows desktop usually want
 different combos. Combos already in use are refused, bare letter keys are
 refused (they'd fire while you type), and customizing a shortcut retires its
@@ -3181,7 +3246,7 @@ built-in alias.
 | `Ctrl+T` (`Alt+Space` is the browser-safe alias: Chrome reserves Ctrl+T for a new tab) | Talk to the focused session through the top-bar mic — hold it (hold-to-talk) or press once to start and again to stop (click-to-talk), following the mic's push-to-talk mode. Works while a terminal has focus; the keystroke never reaches the terminal (no readline transpose; Option+Space on a Mac types no non-breaking space either). Key-repeat while held is ignored, and letting go of either key — or switching away from the window — ends a hold. The keymap only reports the key: it fires a `mindflock:voice-talk` window event with `detail.phase` `"down"` / `"up"`, and the mic decides what that means. Rebindable like the rest; a rebind applies to the release as well as the press |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
-| `/` | Focus the sidebar session filter (when it's showing) |
+| `/` | Focus the sidebar session filter, or bring it back for one search when Customize hides it |
 | `?` | Keyboard-shortcut cheat-sheet |
 | `Ctrl+R` | Reload the app — only while no terminal is focused; in a terminal it stays shell reverse-i-search |
 | `Ctrl+K C` | Commit… (chord: `Ctrl+K`, then `C`) |
@@ -3192,6 +3257,8 @@ built-in alias.
 | `Ctrl+K B` | Branch session — a new worktree on a new branch from the focused session, with its uncommitted changes ([more](#branch-session)) |
 | `Ctrl+K H` | Hide/show window |
 | `Ctrl+K M` | Code map — open the focused session's Map tab |
+| `Ctrl+K G` | Diff — open the focused session's Diff tab (G, as D is Duplicate) |
+| `Ctrl+K Q` | Queue prompt — the focused session's Queue tab, its box focused |
 | `Ctrl+K S` | Message… — the Thread composer, addressed to the focused session |
 | `Ctrl+K F` | Fast-track — the focused pane's ⏩ picker |
 | `Ctrl+K T` | Thread — the focused session's workers and messages |
@@ -3267,7 +3334,13 @@ and the full form behind it (**More options**, which carries what you typed
 into the Task, or **Let the agent pick the folder…** to have the model fill it
 in). The dialog is a `role="dialog"` with `aria-modal`. The form has **← Back** to the sentence. The caret starts in the sentence
 box; after a refused create the dialog reopens on the form with the caret in
-**Name**, since the form is what needs fixing.
+**Name**, since the form is what needs fixing, and **Goes as far as** and **Ask
+me before it ships** keep what you picked (only a fresh New resets them).
+Closing the folder picker (Use this folder, `Enter`, ✕ or `Esc`) puts focus
+back where it was, so the dialog's keys work without a click; `Esc` in the
+Describe page's **Runs in → Browse…** puts back the folder you started from.
+When the chosen agent isn't installed, page 1 says so with **Open Setup** and
+Start stays off on both pages.
 
 **What you type is never thrown away.** Closing New — or a trip to Intake,
 Settings or anywhere else — keeps the sentence, the form and the page you were
@@ -3320,13 +3393,15 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
   unknown answer never blocks; the chosen agent always shows). The default never starts on a missing agent
   when another is installed. Picking a missing one shows *<Agent> isn't
-  installed on this device. Install it in one click from Get set up (step ①;
+  installed on this device. Install it in one click from Setup (step ①;
   a custom agent: Settings → Custom agents), or pick another agent.* under
-  the field, and **Start** (on either page)
+  the field, with an **Open Setup** button, and **Start** (on either page)
   refuses — a session would otherwise sit "Idle" on *command not found*. An
-  installed agent `GET /api/setup` knows is NOT signed in gets *<agent> isn't
-  signed in yet — a session would stop at its sign-in screen.* **Sign in…**
-  (Settings → Agents) — under the field and on page 1. A note, not a block.
+  installed agent `GET /api/setup` knows is NOT signed in gets *<Agent> isn't
+  signed in yet — a session would stop at its sign-in screen.* (the agent's
+  display name) with **Sign in…**, which opens the sign-in window over the
+  dialog, so the draft stays, and re-reads the agent's state when it closes —
+  under the field and on page 1. A note, not a block.
 - **Task** — what the agent starts on (blank starts it idle), always on the
   form — two rows to start, growing with its text up to 220 px, then
   scrolling — with **Insert saved text…** (built-ins first, then yours; it
@@ -3367,16 +3442,16 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   it is a repo.
 - **More options** — only what a first session may want: **Name** (*optional;
   empty names it from the task* — the placeholder is the name it will get),
-  **Fast-track** (*Off / Commit / Push / Open PR / Merge when green*; without
+  **Goes as far as** (*Agent only / Commit / Push / Open PR / Merge when green*; without
   GitHub connected **Open PR** and **Merge when green** are greyed with the
   session menu's own sentence, *MindFlock can’t open or merge the PR for you
   yet — …*) and **Save as template…**. Its summary names anything in it that
-  isn't the default (*named x · Fast-track: Commit · from main · flags*), else
-  *name, Fast-track, save as template*. Inside it, one more fold,
+  isn't the default (*named x · goes as far as Commit · from main · flags*), else
+  *name, how far it goes, save as template*. Inside it, one more fold,
   **Advanced**, holds what a first-hour session can't use yet, its summary
-  naming only what is in it: **Ask me before it ships** (*(needs Fast-track)*
-  while it is Off), **Auto-split** (*Lets the agent break a big task into up to
-  3 parallel sessions — you approve the split first.*), **Provision the
+  naming only what is in it: **Ask me before it ships** (*(needs Commit or
+  further)* while it is Agent only), **Let it split into up to N workers**
+  (*you approve the split first*), **Provision the
   worktree** (*also run the repo's setup and warm test caches* — with the
   workspace strategy), **Base branch** (only while there is a branch to pick;
   *Loading branches…* until the list lands), **Plan first** (*— the agent
@@ -3503,7 +3578,10 @@ changes is never dropped by the next click: another card's **Edit** /
 inline *Discard changes to “name”?* row (**Discard** / **Keep editing**; `Esc`
 keeps editing), and a press on the backdrop doesn't close it. Saving under
 another template's name is refused (*A template named “x” already exists —
-pick another name.*). **Edit** opens the
+pick another name.*). `Ctrl+Enter` (`⌘+Enter`) saves from any field of the
+template or Schedule editor, as it submits New and Commit. A list that fails
+to load says *Couldn't load templates.* with the reason and a **Retry**.
+**Edit** opens the
 editor inline in the card — the New form's own parts, laid out the way New
 lays them out (`TemplateEditor.tsx`; `scope="tpl"` ids): **Name**; then the
 New form's Folder row — **Folder** (placeholder *The repo it works in*; a
@@ -3610,7 +3688,9 @@ title bar (it stays wholly on screen, and at ~420 px it is as wide as the
 screen less a margin); its corner resizes it; it reopens where it was left and
 at the size it was left, per browser (`localStorage` `mf_folder_picker_rect`,
 never a synced pref). Inside is the folder browser New always had (📦 repos /
-📁 folders, *Click selects · double-click or → opens · ← up*, **+ Folder**),
+📁 folders — 📦 only for a folder holding its own `.git`, checked with one
+lookup per row, not a git process — *Click selects · double-click or → opens ·
+← up*, **+ Folder**; *Loading…* until the first list arrives),
 the folder you are in on the top line and the chosen one in the footer beside
 **Use this folder** (Enter; Enter on a row takes that row; ↑/↓ walk the rows).
 **✕** or Escape closes it without a pick — Escape goes to the picker before the
@@ -3659,14 +3739,15 @@ declare a plan the Map shows (Claude): for any other agent the checkbox is
 disabled with "needs an agent with plan support — Claude", since that agent would
 wait on a Go the UI can't send.
 
-**Auto-split into up to N sessions if it's worth it** sits under More
-options, below **Fast-track to** (`#new-split-row`), off by default, with a
+**Let it split into up to N workers if it's worth it** sits under More
+options, below **Goes as far as** (`#new-split-row`), off by default, with a
 − / + stepper for N (2 up to the server's `caps.team_runs.max_pieces`,
 `MINDFLOCK_MAX_CHILDREN`; default 3). On a server that doesn't take splits
 (`caps.team_runs.split` false) it is not shown at all, rather than shown
 disabled. The form's **Prompt** is the task, however many lines it holds —
 line breaks never split anything — and an empty Prompt is refused with
-"Auto-split needs a task". Ticked, a sentence under the box says what will
+*Splitting into workers needs a task — write it in the Task below, or untick
+“Let it split”.* Ticked, a sentence under the box says what will
 happen, **Create** starts an optional split run (`POST /api/runs`, `split: true,
 split_optional: true, max_pieces: N`, the Name as the team run's name), and the
 account, Plan first, launch flags and git options do not apply
@@ -3743,6 +3824,10 @@ Linear and Asana.
 If the drafting succeeds and the *filing* fails — an expired token, an archived
 project — the drafted ticket is shown rather than thrown away. It is the
 expensive half and, at that moment, the only copy of that text anywhere.
+**Retry** files that same draft (the dialog sends it back as `draft`, and
+`ticket_compose.compose(drafted=…)` skips the model turn), so it takes seconds,
+not another drafting; editing the sentence drops the draft and drafts afresh.
+A source list that fails to load has a **Retry** too.
 
 One failure sentence is worth reading before you retry: *“the ticket was filed
 on X but the tracker did not return a link to it — check the board before filing
@@ -3807,10 +3892,10 @@ box, which goes read-only rather than disabled so the caret and the selection
 survive the wait. Start on the form is held while a turn is reading.
 
 **One prompt, however many lines; batches come from Intake.** The box is a
-textarea and stays ONE prompt however many lines it holds — **Fast-track to**
-(Off / Commit / Push / Open PR / Merge when green, starting **Off** unless
-you pick), **Ask me before it ships** and **Auto-split** sit on the form with
-the rest of the details, and anything but Off is armed on the new session as
+textarea and stays ONE prompt however many lines it holds — **Goes as far as**
+(Agent only / Commit / Push / Open PR / Merge when green, starting on **Agent
+only** unless you pick), **Ask me before it ships** and **Let it split** sit on the form with
+the rest of the details, and anything but Agent only is armed on the new session as
 soon as its worktree exists. Only Intake's **Start together…** opens New as a
 **batch** — its ticked tickets in the box, one
 session per line or ticket — and only a batch shows choices on page 1: the
@@ -3938,7 +4023,9 @@ from, one click from going back to it. It is the built-in **To-do extension**
   at once.
 - **Open** opens the **To-do window** — a grid window like a session's
   (it sits in the rail's window list, drags and closes like any other) with the
-  list, priorities, reorder, details per entry and the history. **Add** opens
+  list, priorities, reorder, details per entry and the history. `Ctrl+F` in it
+  jumps to its filter, and **Details…** carries the quick-add text into the Add
+  dialog without clearing it until the item is added. **Add** opens
   the quick-add dialog. Both are also in the command palette (*To-do: Open the
   list*, *To-do: Add an item*), and the voice assistant's *open To-do* opens the
   window.
@@ -3979,7 +4066,9 @@ go** starts the Welcome [tour](#tours) over the checklist. It counts as seen
     install plan covers shows inside *All checks* only). *All checks (N)*
     lists only checks that can block ①–③ (each doctor row's `required`);
     phone, Tailscale, MTU and sudo fixes never show in Setup — they belong to
-    Settings → Your phone and Settings → Doctor. Before any payload arrives
+    Settings → Your phone and Settings → Doctor. A row's *fix:* that is a
+    command has a **Copy** button beside it, as the install window and Connect
+    GitHub do. Before any payload arrives
     the step shows a skeleton of the install row, then the setup payload's own
     doctor result, never an empty card. **Re-check**. ② **Sign in to your
     agent** (the default agent's **agent card** — the same card Settings →
@@ -4241,7 +4330,9 @@ remote. The dialog has ONE primary path (`connectLayout`):
 - **Device flow configured** (an OAuth App client id: the build's constant,
   `github.oauth_client_id` or `$MINDFLOCK_GITHUB_CLIENT_ID`): one **Sign in
   with GitHub** button (a code to type at github.com/login/device); the token
-  steps are folded under *Or paste a token*.
+  steps are folded under *Or paste a token*. A pending code has a quiet
+  **Cancel** (`DELETE /api/github/device`), so reopening the dialog no longer
+  brings an abandoned code back.
 - **Not configured**: the three numbered token steps ARE the path — **Make a
   token on GitHub** (a pre-filled classic-token page: `repo`, `read:org`) →
   paste it → **Save & test** (GitHub checks it before it is saved). When gh
@@ -4251,13 +4342,19 @@ remote. The dialog has ONE primary path (`connectLayout`):
   what the terminal asks, in order (*Authenticate Git with your GitHub
   credentials?* → Enter; the one-time code → Enter opens GitHub; approve), and
   says *✓ Connected as @…* + **Done** once GitHub reports the sign-in (gh's
-  token is copied in when the window closes).
+  token is copied in when the window closes). Closing it before the sign-in
+  finished says *Not connected yet. Finish the steps in the terminal, or paste
+  a token.*
 
-After *✓ Connected as @…* a **Done** button closes the dialog, back to the
+When the status can't be read the dialog says *Couldn't check GitHub.* with the
+reason under it and a **Retry**. *✓ Connected as @…* names where the sign-in
+comes from in words (*your saved token*, *the GITHUB_TOKEN variable*, *gh's
+sign-in*). After it a **Done** button closes the dialog, back to the
 Setup checklist with ④ ticked. *Your name and email for commits* (in the
 dialog's step-heading style) shows when git has none — pre-filled from the
 account with its private `@users.noreply.github.com` address; **Use these**
-writes the global git config, nothing writes it on its own. **Check I can
+writes the global git config (`Enter` in either box does the same, as in
+Setup), nothing writes it on its own. **Check I can
 push** says what it will ask before the click (*Checks repo → <origin URL>*,
 from `push_target` on `GET /api/github/status`), asks that origin for real (a
 `push --dry-run` with prompts off), and on a failure names the repo and the
@@ -4302,7 +4399,7 @@ Opened from the **Recently closed (n)** link under the session list, which
 shows only while there is something to list (it shares the `recently-closed`
 query Verify uses, and refreshes when a session is deleted) or from the
 palette's **Recently closed…**; `Ctrl+Shift+T` / `Ctrl+Z` reopen the last one
-without it. Rows come from `GET /api/recent`. Forget, Delete, **Delete unused worktrees** and its
+without it. **Reopen** here says *Reopened <name>*, as `Ctrl+Shift+T` does. Rows come from `GET /api/recent`. Forget, Delete, **Delete unused worktrees** and its
 follow-up confirm in a bar under the header, and failures show in a
 bottom-right card — never a browser `confirm()` or `alert()`, which the desktop
 app does not implement.
@@ -4566,7 +4663,7 @@ hidden the step has no target and centres its card) · a line's bar (drag it, �
 or carries on, drag jumps) · a stop's hover toolbar · a stop's dialog · the
 shelf (default blocks, saved stops, All blocks…) · a grounded line (drop a
 block on empty sky, attach the Session chip) · selection (marquee, Group into
-a stop, Save to the shelf) · the Drag / Click tools (V / H / Space) · Delete
+a stop, Save as a route…) · the Drag / Click tools (V / H / Space) · Delete
 · the intake lane · zoom and Fit (0 / 1 / + / −) · the ?. A selector list
 matches in document order and the top bar comes first, so no step falls back
 to the toggle (it would always win): each target is the element's
@@ -4695,7 +4792,9 @@ clouds and night tint show either way.
 **Lines.** Each session is a line (`SkyLine`): a title bar — the bird, the
 name, its state chip, a 📌 when you placed it by hand, a size control and a ⋯
 (**Open the box** · **Open in the grid** · **Show only this line** · the size
-· **Tidy this line** · **Fly a flyway…** · **Close session**) — then its
+· **Tidy this line** · **Fly a flyway…**; on a line with a route, that
+route's **Pause** or **Carry on**, **Stop the route** (asks first) and **Fly
+again**, the same items as the pane strip's ⋯; **Close session**) — then its
 session diagram on the flyway canvas (`sessionDiagram`: the session box, its
 workers branching below, the fast-track's rungs or the flight's stops, and the
 trailing **+ Tack on a stop**), then, opened, its session box as the real
@@ -4789,17 +4888,35 @@ above (details in docs/flights.md "Flow polish"):
   the same remedies, and a place in the Needs you view.
 - **The Needs you drawer** says why each route waits, shows *Loading…* on its
   first read and *Can't reach the server — this list may be out of date.* on
-  an error (*Nothing needs you.* only after a read that worked); pressing a
+  an error (*Nothing needs you.* only after a read that worked), and while the
+  routes can't be read the Sky's toolbar says *Can't reach the server — routes
+  may be out of date.* whether the drawer is open or not; pressing a
   route flies the camera to it (switching to All when the view doesn't draw
   it). One Verify is one row.
 - **Saving routes.** A session's route menu has **Save as a route…**; a route
   with no session asks for its name in an inline field (checked like a rename,
   never `window.prompt`); a line from a saved route offers **Save to “<name>”**
-  and **Save as a new route…**; a saved route's menu has **Edit its stops**,
+  and **Save as a new route…**; the selection bar and the group dialog say
+  **Save as a route** too; a saved route's menu (on the shelf, and its ⋯ in
+  **All stops…**, docked or floating) has **Edit its stops**,
   which places an editable copy on the Sky under a bar *Editing “<name>”* with
   **Save** (it writes back, then takes the copy off). Every save's toast ends
   *— routes already running keep their own copy*. With no saved routes the
-  shelf says what a route is and offers **Start a route**.
+  shelf says what a route is and offers **Start a route**. **Reset to
+  default** on a built-in saved route has **Undo** on its toast, which saves
+  your version back.
+- **Removals ask, or undo.** Removing the stop a route is at asks *Remove
+  “X”? The route is at it right now…* wherever you remove it from (the tile's
+  Delete / ⋯ / 🗑, the stop dialog's **Remove**, a group's Remove, a sub-step's
+  🗑); removing a stop of a finished route asks *Clear the finished route? Its
+  record goes.*; ■ on a route with no session asks *Stop this route?*; and
+  discarding a default-stops edit has **Undo**. ▶ on a route with no session
+  reads *Starting…* and can't be pressed again until the run begins.
+- **The keyboard reaches a stop's menu**: with a stop focused, the Menu key or
+  `Shift+F10` opens it (Jump here, the halt point, Loop back to…, Run in
+  parallel). A prompt typed in the Sky's New session card survives `Esc` or a
+  click away and is there the next time the card opens, until a session is
+  created from it.
 - **The stop dialog** (`StopDialog.tsx`) of a stop that is halted, waiting on
   you or on a paused route leads with the state chip, the reason in plain
   words and what the stop asks of you, then the **remedies**, the one that
@@ -4905,7 +5022,9 @@ list says so in its own group. Each row is the epic's name (a link to the
 tracker), its state and how many of your stories are still to do, its labels,
 then a chip — **auto-starts** (in an auto-start state, label OK, auto-start on),
 **lead running**, or the reasons it won't start by itself — and **Start** (one
-lead session per epic, a worker and a PR per story) or **Open lead ›**. With no
+lead session per epic, a worker and a PR per story) or **Open lead ›**, which
+replaces Start as soon as the start answers (a failed one reads *Start failed —
+<epic>*, as tickets do). With no
 epics-capable source at all the panel says epics come from a Shortcut source and
 links to Tickets. The tab's badge counts the epics auto-start would take
 (eligible, no lead yet), read from the same query as the list (`intake/epics.ts`
@@ -5646,7 +5765,9 @@ Opening the Intake dialog **prefetches all three**
 what fills the tab strip's counts, which read the same cached query the tab does
 and therefore can never disagree with the list underneath.
 **Refresh** sends `?fresh=1`, which skips the server's cache and waits for a real
-sweep, so the click means what it says. A force-start row action deliberately
+sweep, so the click means what it says: a poll already in flight is cancelled
+first (otherwise the click would only wait on it), and the button reads
+*Refreshing…*, disabled, until the new list is in. A force-start row action deliberately
 does *not*: it re-lists from the cache a few seconds later, because `has_session`
 is annotated live on every response — even a cached one — so the cheap re-list
 already shows the session it just created.
@@ -5662,6 +5783,11 @@ Two consequences worth knowing:
   fan-outs even if you only glance at the counts — and an integration that isn't
   configured yet will have its `Could not list …` error ready the moment you
   first open that tab.
+- A stale answer brings the panel back for the fresh copy after 2 s; after three
+  stale (or failed) answers in a row it waits 15 s between asks instead, and the
+  list says *Couldn't refresh · Retry* until a fresh answer arrives. The
+  Auto-start tab shows a section's failure (*Couldn't list PRs: …*, with Retry)
+  rather than *Not set up yet* or *Nothing waiting*.
 
 ## Customize
 
@@ -5737,9 +5863,11 @@ The *Shipped today* log is gone; a session's PR and checks stay on its row.
 
 Sessions started together sit under a team run header — the same header family
 as device groups: `▾ Q4 PAYMENTS → PR (1) 1/6 shipped`. The gold badge is how
-many need you; a click folds the team run, and **⋯** on hover has Pause / Resume,
+many need you; a click (or `Enter` on its fold button, which `Tab` reaches)
+folds the team run, and **⋯** on hover or focus has Pause / Resume,
 Add lines…, the queued lines (**Start now** / **Take out of run**) and Cancel… (an
-inline confirm; sessions and branches are kept). Once the team run has finished,
+inline confirm that starts on **Keep going**; sessions and branches are kept);
+the menu takes the arrow keys and `Esc` returns focus to ⋯. Once the team run has finished,
 the menu has **Copy summary** instead: it copies the team run's summary as
 Markdown (*Copied the summary as Markdown*). The bell's cached copy covers a
 week of finished team runs; an older one is read from the team run's own record
@@ -6593,10 +6721,29 @@ A few screens got quieter:
 - **Every save says "✓ Saved" right by the control** — text fields, numbers,
   selects and toggles alike (`savedCue.ts`: the screens pane notes the control
   last changed or left, and the save marks its label for a moment; a toast
-  only when no such control is on screen). A number field refuses a value it
+  only when no such control is on screen). The same cue marks Intake's fields
+  and its *Ignore comments from* lists, the launch flags, scroll speed,
+  accounts, per-repo branches and an extension's switch (on its name); a
+  failed save's message carries the server's reason. Appearance's switches and
+  minute fields, IDE auto-adopt, the Agent MCP switch, *Tell the agent when
+  shipping halts* and a custom agent's binary path use it too, and a switch no
+  longer says "on" before its save has answered.
+- **A screen that can't load says so** — *Couldn't load <what>.* with a
+  **Retry** (System logs, Your phone, Shared link, Traffic, Custom agents,
+  IDE), never an empty list or a switch that reads off. System logs keeps the
+  last good log on screen when a refresh fails, and **Copy log** copies only a
+  real log.
+- **Removals ask first** — deleting a custom agent (*Delete custom agent X?
+  Its file is removed.*) and revoking a guest link (*Revoke this guest link?
+  Whoever has it loses access.*) ask inline with Cancel focused, like Stop
+  sharing and Remove connection.
+- **Your phone follows the Tailscale card**: signing in there turns step 1 ✓
+  and shows the QR without leaving the screen. A number field refuses a value it
   can't take (below 0) with the reason under it — *Enter a number, 0 or more,
   or leave it blank for no limit.* — instead of saving `-2` as "no limit".
-- **Search settings…** heads the nav (`#settings-search`, on the command
+- **Search…** heads the nav (`#settings-search`, placeholder *Search…
+  ( Ctrl+F )*: `Ctrl+F` / `⌘+F` anywhere in Settings jumps to it instead of
+  opening the browser's find bar, as the list dialogs' filters do; on the command
   palette's own index, `palette/settingsSearch.ts`, synonyms included): the
   matches list under the box as you type, each with the same one-line
   subtitle as the palette's rows ("tour" → **General → Tours** *Replay the
@@ -8105,6 +8252,12 @@ is already serving. The copy of that banner written to the server log
 (the Settings → System logs pane, `GET /api/logs`) is redacted — no token, no
 QR; the full banner appears only on the operator's console.
 
+**Loading and losing the server** — until the first session list arrives
+the picker reads *Loading sessions…* (not *no sessions*). Only a good answer
+replaces the list: a sign-in lapse, a server error or no answer keeps the last
+list and the open terminal, and two failed polls in a row put *Couldn't reach
+MindFlock. Is it still running?* on the status line until one succeeds.
+
 **Sessions and their actions** — the picker is a button that opens a
 **Sessions** sheet, attention first; each row reads like the rail's: a tone dot,
 the name, the state word, the rail's zone chip (⛔ / ! / **plan · n** / 🛡 / ✓,
@@ -8163,7 +8316,8 @@ on**), merged newest first. With more than one device each other device's rows
 name it in the sub line (*branch · Mac-mini · 3h ago*; this device's stay
 unnamed). A device that fails, or takes longer than 8 s, costs only its own
 rows and one quiet line (*couldn't reach Mac-mini*); a stale answer from an
-earlier opening is dropped. **Reopen** on another device's row posts
+earlier opening is dropped. **Reopen** reads *Reopening…* until the session
+is back (and *Reopen* again if it fails). **Reopen** on another device's row posts
 `/api/devices/<device>/fwd/api/recently-closed/<id>/reopen`, so the session
 comes back on the device it was closed on and is selected as
 `<device>::<title>` once it is listed. With no second device the sheet is the
@@ -8193,7 +8347,9 @@ phone can *approve* work and not just unblock it. It reads the same
 `GET /api/instances/<title>/diff` the desktop Diff tab does, with the same two
 baselines behind one button: **All changes** (`base=fork` — everything vs the
 branch's fork point, matching the header badge) and **Uncommitted**
-(`base=head`), persisted per browser under the same `mf_diffbase` key. Unified
+(`base=head`), persisted per browser under the same `mf_diffbase` key.
+Switching session or baseline clears the old diff and says *Loading diff…*
+until the new one arrives. Unified
 only — a split view needs width a phone hasn't got — colorized like the desktop
 (`@@` cyan, `+` green, `-` red), with each file's name lifted out of its
 `diff --git` line into a header that sticks while its hunks scroll past. Long
@@ -8218,7 +8374,12 @@ PR?*). **Push** honors the O3 soft gate like the desktop `pushSession` flow: a
 re-pushes the same session with `{force: true}`. A red-zone `409`
 (`red_zone_breaches`) on Push / PR / Merge is explained on the same sheet in the
 desktop's words; the override itself is desktop-only for now. After a PR opens
-the phone resets the stage (`POST /reset-stage`), as the desktop does.
+the phone resets the stage (`POST /reset-stage`), as the desktop does. One git
+request runs at a time: the bar is off until the server answers, so a double
+tap can't push twice. A failure (git's own message) stays on the status line
+until your next action rather than fading after a moment, a request that got
+no answer says *Couldn't reach MindFlock. Is it still running?* instead of the
+browser's *Load failed*, and a failed commit keeps its message in the box.
 
 **New session (`+`)** — the `+` in the top bar (and the "No sessions yet" line,
 which is itself the button) opens a bottom sheet that starts a session from the
@@ -9346,7 +9507,8 @@ SPA provides one. A module that fails to load is skipped with a console warning.
 The hand-wired built-ins (MindFlock, Assistant, Settings, Doctor) are
 `builtin_ui: true` with `module: null`; the **notify** addon
 (`static/addons/notify.js`, desktop notifications on clarify / PR close /
-budget exceeded — rules are data-driven from `GET /api/notify/config`, and the
+budget exceeded; none while the app has focus, a click opens the session, and
+rules that failed to load at boot are fetched again — rules are data-driven from `GET /api/notify/config`, and the
 same rules drive the server-side ntfy push in `web/core/ntfy.py`) is the
 reference for this generic path — the full contract lives in
 [docs/extensions.md](extensions.md). `slots.js` also feeds the provider list

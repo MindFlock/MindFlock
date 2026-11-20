@@ -27,6 +27,7 @@ import { copyPaneHistory, fetchPaneHistory, historyForClipboard } from "../../li
 import { type DragScreenCtx } from "../../lib/terminals";
 import { FIND_MAX, findAll, pickStart, stepMatch } from "../../lib/textFind";
 import { toast } from "../../lib/toast";
+import { pollWhileVisible } from "./visiblePoll";
 
 /** Caret under a viewport point, across the two DOM APIs. */
 function caretAt(x: number, y: number): { node: Node; offset: number } | null {
@@ -278,6 +279,18 @@ const HIST_CACHE_MAX = 8;
  * (shared with the pane header's copy button: lib/paneHistory). */
 const fetchHistory = fetchPaneHistory;
 
+/** Whether the overlay's document-level keys (Escape, Ctrl+F, F3, Ctrl+↑/↓)
+ * are for it: focus is inside the pane that holds `overlayEl` (or the
+ * overlay itself, outside a pane), or nothing has focus (`active` is the
+ * body / null). Focus in a dialog, the sidebar or another pane is not. Pure
+ * over its two elements, for the node tests. */
+export function keysAreOurs(active: Element | null, overlayEl: Element | null): boolean {
+  if (!active || active.tagName === "BODY") return true;
+  if (!overlayEl) return false;
+  const home = overlayEl.closest(".pane") || overlayEl.parentElement || overlayEl;
+  return home.contains(active);
+}
+
 export function HistoryOverlay({
   title,
   pane,
@@ -374,9 +387,10 @@ export function HistoryOverlay({
   // Live tail: re-capture every few seconds while open, so the page never
   // goes stale — scrolling to the bottom always reaches the present. Skipped
   // while the reader is mid-press or has text selected (a refresh would
-  // shift the text under their highlight).
+  // shift the text under their highlight). Rests while the page is hidden
+  // (each tick re-captures the whole scrollback) and catches up when shown.
   useEffect(() => {
-    const id = setInterval(() => {
+    return pollWhileVisible(() => {
       if (pressAt.current) return;
       // Same reason while searching: a refresh that trims the top of the
       // history shifts every hit, and the one being read jumps away.
@@ -385,7 +399,6 @@ export function HistoryOverlay({
       if (sel && !sel.isCollapsed && sel.toString().trim()) return;
       load();
     }, 3000);
-    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
 
@@ -638,6 +651,10 @@ export function HistoryOverlay({
   // neither the focused xterm nor the global keymap sees the keystrokes.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Only while focus is in THIS pane (or nowhere — on the body): Escape
+      // in a dialog closes the dialog, Ctrl+F in Settings is its own search
+      // (the guard PaneFindBar uses).
+      if (!keysAreOurs(document.activeElement, scrollRef.current)) return;
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();

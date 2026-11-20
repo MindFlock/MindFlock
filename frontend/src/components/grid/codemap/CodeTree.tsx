@@ -178,14 +178,33 @@ export function CodeTree(p: CodeTreeProps) {
     c.cardBot = Math.max(0, sheet - bot);
     c.setHud(rects, insets);
   };
+  // every render re-reads the panels (cheap); the controller only redraws when they moved (setHud skips the same)
   useLayoutEffect(measure);
+  // one observer per tree, not one per render: the stage, plus whichever [data-hud] panels are up right now
+  const measureRef = useRef(measure);
+  measureRef.current = measure;
+  const roRef = useRef<{ ro: ResizeObserver; seen: Set<Element> } | null>(null);
   useEffect(() => {
     const st = stageRef.current;
-    if (!st || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => measure());
+    if (!st || !ctl || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => measureRef.current());
     ro.observe(st);
-    for (const el of Array.from(st.querySelectorAll<HTMLElement>("[data-hud]"))) ro.observe(el);
-    return () => ro.disconnect();
+    const seen = new Set<Element>(st.querySelectorAll("[data-hud]"));
+    for (const el of seen) ro.observe(el);
+    roRef.current = { ro, seen };
+    return () => {
+      ro.disconnect();
+      roRef.current = null;
+    };
+  }, [ctl]);
+  useLayoutEffect(() => {
+    const st = stageRef.current,
+      o = roRef.current;
+    if (!st || !o) return;
+    const now = new Set<Element>(st.querySelectorAll("[data-hud]"));
+    for (const el of o.seen) if (!now.has(el)) o.ro.unobserve(el);
+    for (const el of now) if (!o.seen.has(el)) o.ro.observe(el);
+    o.seen = now;
   });
   const showMini = !narrow && !!ctl && ctl.zoomedIn;
   useEffect(() => {
@@ -219,12 +238,19 @@ export function CodeTree(p: CodeTreeProps) {
   const v = ctl ? ctl.v : null;
   const rows = useMemo(() => (M ? activityRows(M, p.agents, p.feed, p.zones, p.title) : []), [M, p.agents, p.feed, p.zones, p.title]);
 
-  /** Close the expanded agents column if it is open (focus inside it goes back to its » button). */
+  /** Close the expanded agents column and the legend if either is open (focus inside one goes back to the button
+   * that opened it: » for the column, ? for the legend). */
   const shutRail = (): boolean => {
     const st = stageRef.current,
-      pop = st ? st.querySelector(".ct-bix-pop") : null;
-    if (!st || !pop) return false;
-    const back = pop.contains(document.activeElement) ? st.querySelector<HTMLElement>(".ct-bix-rail .ct-bix-q") : null;
+      pop = st ? st.querySelector(".ct-bix-pop") : null,
+      leg = st ? st.querySelector(".ct-bix-legend") : null;
+    if (!st || (!pop && !leg)) return false;
+    const back =
+      leg && leg.contains(document.activeElement)
+        ? st.querySelector<HTMLElement>(".ct-left .ct-bix-q[aria-label^='Legend']")
+        : pop && pop.contains(document.activeElement)
+          ? st.querySelector<HTMLElement>(".ct-bix-rail .ct-bix-q")
+          : null;
     setRailShut((x) => x + 1);
     back?.focus();
     return true;

@@ -808,9 +808,19 @@ def _one_loop_pass(monkeypatch, sources):
 
     monkeypatch.setattr(E, "_sources", lambda: sources)
     monkeypatch.setattr(E, "auto_start_once", fake_once)
-    monkeypatch.setattr(E, "asyncio", types.SimpleNamespace(sleep=stop))
+    sources_threads = []
+
+    async def to_thread(fn, *a):
+        # The loop reads the sources off the event loop (a config parse).
+        sources_threads.append(fn)
+        return await asyncio.to_thread(fn, *a)
+
+    monkeypatch.setattr(
+        E, "asyncio", types.SimpleNamespace(sleep=stop, to_thread=to_thread)
+    )
     with pytest.raises(_StopLoop):
         asyncio.run(E.run_loop())
+    assert sources_threads == [E._sources]
     return calls
 
 

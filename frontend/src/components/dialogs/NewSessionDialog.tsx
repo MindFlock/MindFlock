@@ -60,8 +60,10 @@ import {
   type Template,
 } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
-import { openSettings } from "../../lib/openSettings";
+import { SignInWindow } from "./AgentSignIn";
+import { notifyConnectionsChanged } from "../settings/screens/Connections";
 import { toast } from "../../lib/toast";
+import { openSettings } from "../../lib/openSettings";
 import { errMsg } from "../../lib/format";
 import { TemplatesDialog } from "./TemplatesDialog";
 import { useFileDropTextarea } from "../../lib/fileDropTextarea";
@@ -77,7 +79,7 @@ import {
   askFirstApplies,
 } from "../../lib/laneActions";
 import { FAST_TRACK_LEVELS } from "../../lib/vocab";
-import { PR_FALLBACK_HINT, hasPrSupport } from "../../lib/sessionActions";
+import { MAX_TITLE_LEN, PR_FALLBACK_HINT, hasPrSupport } from "../../lib/sessionActions";
 import { agentName } from "../../lib/agentNames";
 import { splitGate } from "../../lib/playbooks";
 import {
@@ -113,6 +115,7 @@ import {
   rememberedProfileVerdict,
   worktreeClampReason,
   agentMissingReason,
+  agentSignedOutLine,
   hasTypedDraft,
   newSessionResume,
   openingMode,
@@ -141,10 +144,11 @@ import {
   type FolderCheck,
 } from "./newSession/FolderPicker";
 import { AgentFields, ModelRow, accountSetter } from "./newSession/AgentAccount";
-import { GitOptions, WorksIn, useBaseBranches } from "./newSession/WorkspaceFold";
+import { GitOptions, WorksIn, nameClashText, useBaseBranches } from "./newSession/WorkspaceFold";
 import { PlanFirstRow, TaskField } from "./newSession/PromptFold";
 import { LaunchFold } from "./newSession/LaunchFold";
 import { FooterActions, SaveTemplateRow } from "./newSession/FooterActions";
+import { folderErrorText } from "./newSession/folderErrors";
 import { TourButton } from "../onboarding/TourButton";
 import { useAutoTour } from "../onboarding/useAutoTour";
 
@@ -398,6 +402,8 @@ export function NewSessionDialog() {
   const loadDone = useRef(false);
   /** Agents installed here but known NOT signed in (GET /api/setup). */
   const [signedOut, setSignedOut] = useState<Record<string, boolean>>({});
+  /** The agent whose sign-in window is open over the dialog ("" = none). */
+  const [signInFor, setSignInFor] = useState("");
   // The Folder field and the browser's visibility travel together: see
   // folderReducer for the two orderings that forced them into one value. These
   // aliases keep the form's many readers reading a plain value, while every
@@ -680,6 +686,10 @@ export function NewSessionDialog() {
     // rotated OpenRouter key must not keep offering the old key's catalog.
     setProfileModels({});
     setSavedPresets(loadUserPresets());
+    // How far it goes and "Ask me before it ships" start over here and only
+    // here: a refused create's reopen and a kept draft keep both, so Start
+    // again never silently drops the Open PR the user chose.
+    draft.reset();
     loadedDevice.current = deviceRef.current;
     loadCleanup.current?.();
     loadCleanup.current = loadFor(deviceRef.current);
@@ -1235,10 +1245,19 @@ export function NewSessionDialog() {
   );
   /** A plan's proposed folder still waiting to be made reads the same way. */
   const askFolder = newFolderAsk && !newFolderOk ? newFolderAsk : folderMissing ? missingLabel : "";
-  const startBlocked =
-    askFolder && !runMode
-      ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists."
-      : "";
+  // A typed name another session has: the server would refuse it, after the
+  // dialog closed — so Start stays off, with the clash line as the reason.
+  const startBlocked = runMode
+    ? ""
+    : askFolder
+    ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists."
+    : planned.clash
+    ? nameClashText(planned.title)
+    : agentMissing
+    ? // The why (and Open Setup) is the note under the box on page 1 and
+      // under the Agent field on the form; this is what the off Start says.
+      "Can't start yet — pick an agent that's installed."
+    : "";
   const createFolder = async () => {
     const full = (folderCheck?.asked === folderPath && folderCheck?.resolved) || folderPath;
     // Cut where the SERVER's OS cuts: `C:\Users\me\app` → `C:\Users\me` +
@@ -1262,14 +1281,7 @@ export function NewSessionDialog() {
       // page 1's sentence box.
       (page === 2 ? repoRef.current : describeRef.current)?.focus({ preventScroll: true });
     } catch (err) {
-      const msg = errMsg(err);
-      setMkError(
-        /not a directory/i.test(msg)
-          ? "The folder it would go in doesn't exist either — use Browse… to pick a place."
-          : /already exists/i.test(msg)
-          ? "Something is already there — pick it with Browse…."
-          : "Couldn't create it: " + msg
-      );
+      setMkError(folderErrorText(errMsg(err), "field"));
     } finally {
       setMkBusy(false);
     }
@@ -1478,19 +1490,36 @@ export function NewSessionDialog() {
   });
 
   /** The agent would stop at its own sign-in: said before Create, with the
-   * way to fix it. */
+   * way to fix it. Sign in… opens the sign-in window OVER the dialog (as the
+   * pane's AgentBlocked banner does), so the form and its draft stay put;
+   * closing it re-reads which agents are signed in. */
   const signedOutNote = (
     <p className="nf-git-nudge nf-agent-missing" id="new-agent-signin" role="status">
-      {canonAgent(program)} isn't signed in yet — a session would stop at its sign-in screen.{" "}
+      {agentSignedOutLine(canonAgent(program))}{" "}
       <button
         type="button"
         className="linklike"
-        onClick={() => {
-          closeDialog();
-          openSettings("coding");
-        }}
+        id="new-agent-signin-btn"
+        onClick={() => setSignInFor(canonAgent(program))}
       >
         Sign in…
+      </button>
+    </p>
+  );
+  /** Not installed: the sentence names Setup, and this opens it. */
+  const missingNote = (
+    <p className="nf-git-nudge nf-agent-missing" id="new-agent-missing" role="status">
+      {agentMissing}{" "}
+      <button
+        type="button"
+        className="linklike"
+        id="new-agent-open-setup"
+        onClick={() => {
+          closeDialog();
+          useUi.getState().openDialogFor("setup");
+        }}
+      >
+        Open Setup
       </button>
     </p>
   );
@@ -1540,7 +1569,9 @@ export function NewSessionDialog() {
     device,
     homePath,
     onClear: draftTyped ? clearDraft : undefined,
-    agentNote: agentSignedOut ? signedOutNote : null,
+    // Page 1 says why Start is off when the agent isn't installed, as the
+    // form does — not only after a press lands on page 2.
+    agentNote: agentMissing ? missingNote : agentSignedOut ? signedOutNote : null,
     startsIn,
     agentLabel: agentName(canonAgent(program)),
     describeSince,
@@ -1724,11 +1755,7 @@ export function NewSessionDialog() {
                   foldMissing
                 />
               </div>
-              {agentMissing && (
-                <p className="nf-git-nudge nf-agent-missing" id="new-agent-missing" role="status">
-                  {agentMissing}
-                </p>
-              )}
+              {agentMissing && missingNote}
               {agentSignedOut && signedOutNote}
 
               <ModelRow
@@ -1825,6 +1852,7 @@ export function NewSessionDialog() {
                       id="new-title"
                       ref={titleRef}
                       autoComplete="off"
+                      maxLength={MAX_TITLE_LEN}
                       placeholder={planned.from === "none" ? "named from the task" : planned.title}
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
@@ -1851,7 +1879,22 @@ export function NewSessionDialog() {
                         />
                         {!prOk && (
                           <p className="nf-opt-help muted" id="new-ft-github" title={prWhy}>
-                            Open PR and Merge when green need GitHub — connect it in Settings → Connections.
+                            Open PR and Merge when green need GitHub — connect it in{" "}
+                            <button
+                              type="button"
+                              className="linklike"
+                              id="new-ft-github-connect"
+                              title="Open Settings → Connections (what you typed here stays)"
+                              onClick={() => {
+                                // The draft survives the close (openingMode keeps
+                                // anything typed), as Agent → Manage relies on.
+                                closeDialog();
+                                openSettings("connections");
+                              }}
+                            >
+                              Settings → Connections
+                            </button>
+                            .
                           </p>
                         )}
                       </div>
@@ -2002,6 +2045,20 @@ export function NewSessionDialog() {
           startBlocked={startBlocked}
         />
       </form>
+      )}
+      {/* Portalled over the dialog. Its keys stop here: the dialog's own
+          Escape / Ctrl+Enter must not see what is typed into the login. */}
+      {signInFor && (
+        <div className="nf-signin-host" onKeyDown={(e) => e.stopPropagation()}>
+          <SignInWindow
+            provider={signInFor}
+            onClose={() => {
+              setSignInFor("");
+              notifyConnectionsChanged();
+              refreshAgentState();
+            }}
+          />
+        </div>
       )}
     </div>
   );

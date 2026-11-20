@@ -305,14 +305,32 @@ export function renderBoard(api, host, opts) {
       draw();
       status.textContent = "updated " + fmtClock(data.now);
     } catch (err) {
+      if (disposed) return;
       api.log.error("summary failed", err);
-      status.textContent = "could not load";
-      if (!data) body.replaceChildren(el("p", { class: "muted", text: "Could not reach the server." }));
+      // The server's own reason when it answered; the app's request layer
+      // already words a network failure, this is the fallback for a bare one.
+      const why = (err && err.message) || "Couldn't reach MindFlock. Is it still running?";
+      status.textContent = "couldn't load";
+      if (!data)
+        body.replaceChildren(
+          el(
+            "div",
+            { class: "uo-load-error" },
+            el("p", { class: "muted", text: "Couldn't load usage. " + why }),
+            el("button", { class: "uo-btn", type: "button", text: "Retry", onClick: () => load(true) })
+          )
+        );
+      else status.textContent = "couldn't refresh: " + why;
     }
   }
 
   function schedule() {
-    timer = setInterval(() => load(false), REFRESH_MS);
+    // A hidden window skips its tick: nobody is looking, and the next visible
+    // tick (or Refresh) catches up.
+    timer = setInterval(() => {
+      if (document.hidden) return;
+      load(false);
+    }, REFRESH_MS);
   }
 
   load(false);

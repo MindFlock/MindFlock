@@ -13,7 +13,9 @@
  * (or one no longer on screen) → `false`, and the caller falls back to a
  * toast. */
 
-const ROW = ".set-row, .notif-channel, .ntfy-field-row, .set-switch-row";
+// `.ext-row-head`: Settings → Extensions' rows (an extension's name and its
+// switch), marked on the name.
+const ROW = ".set-row, .notif-channel, .ntfy-field-row, .set-switch-row, .ext-row-head";
 const SHOW_MS = 1600;
 /** A control touched longer ago than this is not what a save is about. */
 const FRESH_MS = 5000;
@@ -28,11 +30,12 @@ export function noteTouched(target: EventTarget | null): void {
   }
 }
 
-/** The label to mark for `el`: its row's `.set-label`, else the row. */
+/** The label to mark for `el`: its row's `.set-label` (an extension row's
+ * `.prov-name`), else the row. */
 function cueTarget(el: Element): Element | null {
   const row = el.closest(ROW);
   if (!row) return null;
-  return row.querySelector(".set-label") || row;
+  return row.querySelector(".set-label") || row.querySelector(".prov-name") || row;
 }
 
 /** Show "✓ Saved" by `el` (default: the last touched control). */

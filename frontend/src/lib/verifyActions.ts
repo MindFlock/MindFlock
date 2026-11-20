@@ -37,7 +37,7 @@ import type {
 } from "../api/types";
 import { planName } from "../components/dialogs/verify";
 import { queryClient, refreshInstances, refreshTestPlans } from "../state/queries";
-import { useUi } from "../state/store";
+import { displayName, useUi } from "../state/store";
 import { selectSession } from "./sessionActions";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
@@ -135,7 +135,8 @@ export function requestSessionVerify(title: string, notes = "", environment = ""
  * QUEUED: the session's agent is mid-turn, so nothing has started yet — say
  * when it will, never that it is writing its steps. */
 export function verifyStartedMessage(title: string, r: Partial<SessionVerifyStarted> | null | undefined): string {
-  const session = r?.session || title;
+  // The name the person gave it, like the git actions' messages.
+  const session = displayName(r?.session || title);
   if (r?.queued) return "Verify starts when " + session + "'s current turn ends";
   return "Verifying " + session + " — its agent writes its steps and works them in its terminal";
 }
@@ -155,7 +156,7 @@ export async function startSessionVerify(
     if (opts.open !== false) openWalkingSession(title);
     return true;
   } catch (err) {
-    errorPop("Couldn't start verifying " + title, errMsg(err));
+    errorPop("Couldn't start verifying " + displayName(title), errMsg(err));
     return false;
   }
 }

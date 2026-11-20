@@ -7,11 +7,11 @@
  * session. Terminals are adopted from lib/terminals' registry so they never
  * remount with the pane. */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { instApi } from "../../api/client";
-import { refreshInstances, useConfig, useInstances, useMemory } from "../../state/queries";
-import { fmtMb, memoryRank, memoryReading, memoryTip, memoryTone, type MemoryTone } from "../../lib/sessionMemory";
+import { refreshInstances, useConfig, useMemory } from "../../state/queries";
+import { fmtMb, memoryReading, memoryTip, memoryTone, type MemoryTone } from "../../lib/sessionMemory";
 import { useUi } from "../../state/store";
 import { fmtUsd, displayBranch, firstLine } from "../../lib/format";
 import { chipState, fastTrackStep, liveStep, nextStep, resetStep, withVerifyVerdict } from "../../lib/stage";
@@ -23,9 +23,12 @@ import {
   getTerm,
   peekTerm,
   releaseTerm,
+  termCover,
+  UNREACHABLE_MS,
   type DragScreenCtx,
   type TermHandle,
 } from "../../lib/terminals";
+import { startSession } from "../../lib/revive";
 import { isShown, repaintTerm, trackRepaint } from "../../lib/wsTerm";
 import { toast } from "../../lib/toast";
 import { copyPaneHistory } from "../../lib/paneHistory";
@@ -64,7 +67,7 @@ import { flightDrives, rowWaitsOnYou } from "../../lib/flights";
 import { useSetup } from "../setup/useSetup";
 import { VerdictChip } from "../dialogs/VerdictChip";
 import { JointVerdictChip } from "../settings/screens/peer/JointCheck";
-import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
+import { newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
 import {
   TITLE_ROOM_PX,
@@ -80,7 +83,7 @@ import { mapHasState, mapTabBadge } from "../../lib/mapEntry";
 import { TabIcon } from "./TabIcon";
 import { hereWords, isPeerRow, peerPaneStrip } from "../../lib/peerSessions";
 import { guestName, isPeerFocus, useGuestFocus } from "../../lib/guestFocus";
-import { shortcutLabels } from "../../lib/keymap";
+import { chordLabel, keymapVersion, shortcutLabels, subscribeKeymap } from "../../lib/keymap";
 import {
   ASK_WORKERS_KEYS,
   FLOCK_KEYS,
@@ -92,6 +95,7 @@ import {
   useWorkersMenu,
 } from "../../lib/workersRequest";
 import { WorkersMenu } from "./WorkersMenu";
+import { usePaneFamily } from "./paneFamily";
 
 /** "thread" is the Thread tab (the session's workers and what was said
  * between them), opened by its own button or store.threadOpen. */
@@ -152,7 +156,7 @@ function queueRelTime(ms: number): string {
   return h + "h " + (m - h * 60) + "m";
 }
 
-export function Pane({
+function PaneImpl({
   inst,
   drag = NO_DRAG,
   dragging = false,
@@ -175,6 +179,9 @@ export function Pane({
   );
   useLayoutEffect(() => (embedded ? holdTerms(title) : undefined), [embedded, title]);
   const { data: config } = useConfig();
+  // The tooltips name live shortcuts (chords, Workers…): a rebinding redraws
+  // the pane, which is memoized and would otherwise keep the old keys.
+  useSyncExternalStore(subscribeKeymap, keymapVersion, keymapVersion);
   const focused = useUi((s) => s.focused === title);
   const alias = useUi((s) => s.aliases[title]);
   const lastTab = useUi((s) => s.lastTab[title]);
@@ -184,11 +191,12 @@ export function Pane({
   // one opened on purpose (Ctrl+K T / S, the palette — threadOpen addressed
   // its composer here). Its badge counts workers that need YOUR answer plus
   // reports newer than the last time you looked.
-  const { data: allRows } = useInstances();
+  // Read off the instances cache, not useInstances(): the pane re-renders
+  // only when its family (or its memory rank) changes, not on every poll.
+  const family = usePaneFamily(title);
   // The machine's RAM and pressure level (the same poll as the rail's memory
   // line) — what colours the memory chip.
   const { data: sysMem } = useMemory();
-  const family = familyOf(title, allRows ?? []);
   const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
   const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
   // A group's lead always has one: its plan and its one PR live there, from
@@ -254,6 +262,9 @@ export function Pane({
   const [booted, setBooted] = useState(false);
   const [wsState, setWsState] = useState("connecting");
   const [shellStarted, setShellStarted] = useState(savedTab === "shell");
+  // The shell terminal's own state and first bytes, for its cover (TermCover).
+  const [shellState, setShellState] = useState("connecting");
+  const [shellBooted, setShellBooted] = useState(false);
   // Held offline after a crash (lib/heldOffline, backend core/held.py): the
   // row says so, or the agent socket was refused with 4424 ("held"). Like
   // Paused, the Agent tab is a placeholder (HeldBody) and NO agent socket is
@@ -388,6 +399,11 @@ export function Pane({
         // Re-adopting an already-booted terminal (pane remounted by a grid
         // move) never fires onBoot again — sync the cover off its flag.
         if (handle.booted) setBooted(true);
+      } else {
+        handle.onState = (s) => setShellState(s);
+        handle.onBoot = () => setShellBooted(true);
+        setShellState(handle.state);
+        if (handle.booted) setShellBooted(true);
       }
       // Fit AND repaint: an adopted container was detached (a grid move, the
       // trip to the sky and back), and its rows are not drawn again until
@@ -708,7 +724,19 @@ export function Pane({
       setFit(next);
     }
   }, []);
-  useLayoutEffect(measureFit);
+  // Before paint, but only when what the header holds has changed: its fit
+  // key, its words↔icons state or its text (a cost ticking up). Measuring
+  // runs getComputedStyle over every header child, and this used to run on
+  // every render of every pane. Resizes are the ResizeObserver's below.
+  const measuredSig = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const el = headRef.current;
+    if (!el) return;
+    const sig = headMeasureSig(el);
+    if (sig === measuredSig.current) return;
+    measuredSig.current = sig;
+    measureFit();
+  });
   useEffect(() => {
     const el = headRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -868,7 +896,7 @@ export function Pane({
         mem.mb,
         memLocal ? (sysMem?.total || 0) / 1048576 : 0,
         memLocal ? sysMem?.level : undefined,
-        memLocal ? memoryRank((allRows ?? []).filter((r) => !r.device && !isPeerRow(r)), title) : -1,
+        memLocal ? family.memRank : -1,
       )
     : "";
   // The guided button only wears the accent when pressing it is the thing to
@@ -951,8 +979,8 @@ export function Pane({
   // here, next to ⋯, so the way back is never a menu away.
   const canResume = sessionAction("resume").enabled(menuCtx);
   // What makes the header's width change: the words↔icons fit re-measures
-  // when this does (the cost ticking up doesn't count — words re-measure on
-  // every render anyway).
+  // when this does (the cost ticking up doesn't count here — a text change
+  // re-measures on its own, headMeasureSig).
   const fitKeyNow = [
     items.tabs.join(","),
     items.buttons.join(","),
@@ -968,6 +996,8 @@ export function Pane({
     deviceName,
   ].join("|");
 
+  // Each tab with a Ctrl+K chord names it, under the user's rebinding.
+  const chordTip = (letter: string) => " (" + chordLabel(letter) + ")";
   const tabEls: Record<PaneTabId, ReactNode> = {
     agent: (
       <button
@@ -1004,7 +1034,7 @@ export function Pane({
         role="tab"
         aria-selected={tab === "diff"}
         className={tab === "diff" ? "active" : ""}
-        title="Diff — what this session changed"
+        title={"Diff — what this session changed" + chordTip("g")}
         onClick={(e) => { e.stopPropagation(); showTab("diff"); }}
       >
         <TabIcon name="diff" />
@@ -1018,7 +1048,7 @@ export function Pane({
         role="tab"
         aria-selected={tab === "map"}
         className={"map-tab" + (tab === "map" ? " active" : "")}
-        title={"Code map — the worktree as a tree: agents, zones, plan, blast radius" + (mapBadge ? "\n" + mapBadge.title : "")}
+        title={"Code map — the worktree as a tree: agents, zones, plan, blast radius" + chordTip("m") + (mapBadge ? "\n" + mapBadge.title : "")}
         aria-label={mapBadge ? "Map, " + mapBadge.title : undefined}
         onClick={(e) => { e.stopPropagation(); showTab("map"); }}
       >
@@ -1045,11 +1075,11 @@ export function Pane({
           (holding ? " q-limited" : "")
         }
         title={
-          holding
+          (holding
             ? q?.wait_for_limit !== false
               ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)`
               : `Usage limit reached · queue stopped (${pending} queued)`
-            : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits"
+            : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits" + chordTip("q"))
         }
         onClick={(e) => { e.stopPropagation(); showTab("queue"); }}
       >
@@ -1092,7 +1122,7 @@ export function Pane({
         aria-selected={tab === "thread"}
         className={"thread-tab" + (tab === "thread" ? " active" : "")}
         title={
-          "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" +
+          "Thread — this session's workers, what they reported and what passed between them; write to any of them as you" + chordTip("t") +
           (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") +
           (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : "")
         }
@@ -1505,16 +1535,13 @@ export function Pane({
               {ghost ? <div className="ghost-row-mask" aria-hidden="true" /> : null}
             </div>
           ) : null}
-          {!booted && (
-            <div className="term-loading">
-              <div className="spinner" />
-              <p>Loading session…</p>
-            </div>
-          )}
+          <TermCover title={title} kind="agent" state={wsState} booted={booted} />
         </div>
         )}
         {shellStarted ? (
-          <div className={"pane-term shell-term" + (tab !== "shell" ? " hidden" : "")} ref={adopt("shell")} />
+          <div className={"pane-term shell-term" + (tab !== "shell" ? " hidden" : "")} ref={adopt("shell")}>
+            <TermCover title={title} kind="shell" state={shellState} booted={shellBooted} />
+          </div>
         ) : (
           <div className={"pane-term shell-term" + (tab !== "shell" ? " hidden" : "")} />
         )}
@@ -1611,6 +1638,30 @@ export function Pane({
   );
 }
 
+/** Memoized: the grid hands each pane the same row object while that row is
+ * unchanged (the instances query keeps identity), the same drag context and
+ * the same flag, so a store write or a poll that does not touch this session
+ * no longer re-renders every pane. Everything else a pane shows it subscribes
+ * to itself (useUi field selectors, usePaneFamily, its tab queries). */
+export const Pane = memo(PaneImpl);
+
+/** What decides whether the header needs measuring again: its data-fit-key,
+ * whether it is drawn as icons, how many children it has and its text. Cheap
+ * to read (no layout); equal signatures mean the last measurement holds. */
+export function headMeasureSig(head: {
+  dataset: { fitKey?: string };
+  classList: { contains(c: string): boolean };
+  childElementCount: number;
+  textContent: string | null;
+}): string {
+  return [
+    head.dataset.fitKey || "",
+    head.classList.contains("head-icons") ? "i" : "w",
+    head.childElementCount,
+    head.textContent || "",
+  ].join("\u0001");
+}
+
 /** The width a pane header's items take as they are drawn now, with the
  * session's name at its reserved room (TITLE_ROOM_PX, or its own width when
  * shorter): every in-flow child's box and margins, the gaps between them and
@@ -1643,6 +1694,98 @@ function textWidth(text: string, font: string): number {
   if (!measureCtx) return text.length * 7;
   measureCtx.font = font;
   return measureCtx.measureText(text).width;
+}
+
+/** What a pane draws over one of its terminals (lib/terminals termCover):
+ * "Loading session…" before the first bytes; a "Reconnecting…" line over the
+ * old screen while the socket is down; after UNREACHABLE_MS down, "Can't reach
+ * the session — retrying" with Retry; an ordered worker before its turn,
+ * "Waiting its turn" with Start now; and when the server's errors ran out
+ * the retries, the error with Retry. The terminal keeps its own socket — the
+ * buttons only ask it (or the session) to go now. */
+export function TermCover({
+  title,
+  kind,
+  state,
+  booted,
+}: {
+  title: string;
+  kind: "agent" | "shell";
+  state: string;
+  booted: boolean;
+}) {
+  const [, redraw] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const h = peekTerm(title, kind);
+  const since = h?.downSince || 0;
+  const downFor = since ? Date.now() - since : 0;
+  const cover = termCover(state, booted, downFor);
+  // Redraw when the outage crosses UNREACHABLE_MS (nothing else would).
+  useEffect(() => {
+    if (cover !== "loading" && cover !== "reconnecting") return;
+    if (!since) return;
+    const t = setTimeout(() => redraw((n) => n + 1), Math.max(0, UNREACHABLE_MS - downFor) + 50);
+    return () => clearTimeout(t);
+  }, [cover, since, downFor]);
+  const retry = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    peekTerm(title, kind)?.retry();
+  };
+  if (cover === "none") return null;
+  if (cover === "reconnecting")
+    return (
+      <div className="term-reconnecting" role="status">
+        Reconnecting…
+      </div>
+    );
+  if (cover === "loading")
+    return (
+      <div className="term-loading">
+        <div className="spinner" />
+        <p>{kind === "shell" ? "Loading shell…" : "Loading session…"}</p>
+      </div>
+    );
+  if (cover === "waiting")
+    return (
+      <div className="term-loading term-cover" role="status">
+        <p className="term-cover-head">Waiting its turn</p>
+        <p>Its agent starts when the workers before it finish.</p>
+        <button
+          type="button"
+          disabled={busy}
+          title="Start this worker's agent now, before its turn"
+          onClick={(e) => {
+            e.stopPropagation();
+            setBusy(true);
+            void startSession(title).then((r) => {
+              setBusy(false);
+              // Taken: attach now rather than at the next 5 s check.
+              if (r) peekTerm(title, kind)?.retry();
+            });
+          }}
+        >
+          {busy ? "Starting…" : "▶ Start now"}
+        </button>
+      </div>
+    );
+  if (cover === "failed")
+    return (
+      <div className="term-loading term-cover" role="alert">
+        <p className="term-cover-head">{kind === "shell" ? "The shell didn't start" : "The session didn't attach"}</p>
+        {h?.error ? <p className="term-cover-error">{h.error}</p> : null}
+        <button type="button" onClick={retry}>
+          Retry
+        </button>
+      </div>
+    );
+  return (
+    <div className="term-loading term-cover" role="status">
+      <p className="term-cover-head">Can't reach the session — retrying</p>
+      <button type="button" onClick={retry}>
+        Retry
+      </button>
+    </div>
+  );
 }
 
 /** Reduce-motion cover (Settings → General): while the agent is running, an

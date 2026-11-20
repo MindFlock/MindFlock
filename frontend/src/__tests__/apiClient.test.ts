@@ -4,7 +4,7 @@
  * without running their body through JSON.parse. */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, apiText } from "../api/client";
+import { ApiError, UNREACHABLE, api, apiText } from "../api/client";
 
 const g = globalThis as unknown as { fetch: unknown; location: unknown };
 const realFetch = g.fetch;
@@ -65,6 +65,55 @@ describe("api", () => {
     const init = (f.mock.calls[0] as unknown as [string, RequestInit])[1];
     expect(init.method).toBe("POST");
     expect(init.body).toBe('{"a":1}');
+  });
+});
+
+describe("a server that never answered", () => {
+  it("reads as a sentence with status 0, never the browser's 'Failed to fetch'", async () => {
+    g.fetch = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    const err = (await api("/api/settings", { json: { a: 1 } }).catch((e: unknown) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(0);
+    expect(err.message).toBe(UNREACHABLE);
+    expect(UNREACHABLE).toBe("Couldn't reach MindFlock. Is it still running?");
+    await expect(apiText("/h")).rejects.toMatchObject({ status: 0, message: UNREACHABLE });
+  });
+
+  it("a cancelled request is passed through untouched", async () => {
+    const abort = Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
+    g.fetch = vi.fn(async () => {
+      throw abort;
+    });
+    await expect(api("/h")).rejects.toBe(abort);
+  });
+});
+
+describe("a 422 from FastAPI's validation", () => {
+  it("names the first problem and its field, not 'error 422'", async () => {
+    serve(
+      422,
+      JSON.stringify({
+        detail: [
+          { loc: ["body", "title"], msg: "Field required", type: "missing" },
+          { loc: ["body", "prompt"], msg: "Field required", type: "missing" },
+        ],
+      })
+    );
+    await expect(api("/p", { json: {} })).rejects.toMatchObject({ status: 422, message: "title: Field required" });
+  });
+
+  it("a problem with no field (the whole body) is the message alone", async () => {
+    serve(422, JSON.stringify({ detail: [{ loc: ["body"], msg: "Input should be a valid dictionary" }] }));
+    await expect(api("/p")).rejects.toMatchObject({ message: "Input should be a valid dictionary" });
+  });
+
+  it("an unreadable list falls back to the error field, then the status sentence", async () => {
+    serve(422, JSON.stringify({ detail: [{}], error: "bad plan" }));
+    await expect(api("/p")).rejects.toMatchObject({ message: "bad plan" });
+    serve(422, JSON.stringify({ detail: [] }));
+    await expect(api("/p")).rejects.toMatchObject({ message: "MindFlock couldn't do that (error 422)." });
   });
 });
 

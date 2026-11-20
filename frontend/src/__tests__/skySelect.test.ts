@@ -238,13 +238,13 @@ describe("the bar", () => {
     expect(render({ selection: before, flightOf: () => flying, ask: "remove" })).not.toContain('role="alertdialog"');
   });
 
-  it("stops: Group into a stop, Save to the shelf, Remove; Group off with a hint when they aren't side by side", () => {
+  it("stops: Group into a stop, Save as a route…, Remove; Group off with a hint when they aren't side by side", () => {
     const flight = { id: "f1", state: "grounded", cursor: 0, steps: STEPS, step_states: {} } as unknown as Flight;
     const sel = { lines: new Set<string>(), stops: new Map([["flight:f1", new Set(["stop:s1", "stop:s5"])]]) };
     const html = render({ selection: sel, flightOf: () => flight });
     expect(html).toContain('aria-label="2 stops selected"');
     expect(html).toMatch(/disabled=""[^>]*title="Pick stops that sit next to each other"[^>]*>Group into a stop<\/button>/);
-    expect(html).toContain(">Save to the shelf</button>");
+    expect(html).toContain(">Save as a route…</button>");
     expect(html).toContain(">Remove</button>");
     const asking = render({ selection: sel, flightOf: () => flight, ask: "save" });
     expect(asking).toContain('placeholder="' + NEW_STOPS + '"');

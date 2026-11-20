@@ -78,6 +78,7 @@ import { startSavedRoute } from "../../lib/routeStart";
 import { pushUndo, takeUndo, undoAction } from "../../lib/skyUndo";
 import { removalNeedsAsk, undoAt } from "../../lib/skySelect";
 import { InlineConfirm } from "../InlineConfirm";
+import { savedWords } from "../../lib/groundedLines";
 import { errMsg } from "../../lib/format";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { canFixStep, currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
@@ -216,7 +217,26 @@ export function removedToast(title: string, wasHere: boolean, next: string | nul
   return "Removed “" + title + "” — the route is paused " + (next ? "before “" + next + "”" : "at the end");
 }
 
-/** The saved stop a group's "Save to the shelf" writes: the plan it came
+/** A removal waiting on its question: `remove` — the route is at that stop
+ * right now; `clear` — a finished route's stop, which clears the whole route
+ * (its record goes, nothing to undo into). */
+export interface RemoveAsk {
+  kind: "remove" | "clear";
+  n: DiagramNode;
+  /** Asked inside the stop dialog (drawn there), not on the line. */
+  inDialog: boolean;
+  /** Once it went (the dialog closes). */
+  then?: () => void;
+}
+
+/** The question's words for a `RemoveAsk`. */
+export function removeAskWords(kind: RemoveAsk["kind"], name: string): { title: string; body: string; confirm: string } {
+  return kind === "clear"
+    ? { title: "Clear the finished route?", body: "Its record goes.", confirm: "Clear" }
+    : { title: "Remove “" + name + "”?", body: "The route is at it right now: it pauses before what follows. Undo puts it back.", confirm: "Remove" };
+}
+
+/** The saved stop a group's "Save as a route" writes: the plan it came
  * from (`group.plan_id`, when the shelf still has it — updated in place),
  * else a new one. */
 export function shelfPlanFor(name: string, steps: readonly FlightStep[], planId: string, plans: readonly FlightPlan[]): FlightPlan {
@@ -564,7 +584,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   // A flight that LANDED stays drawn on the line (lib/flightDiagram
   // landedFlightOf) but its stops are read-only: removing one of them clears
   // that finished chain off the session (the owner couldn't delete a finished
-  // Commit). Its record goes; there is nothing to undo into.
+  // Commit). Its record goes; there is nothing to undo into, so it asks first
+  // (`requestRemove`).
   const landedId = !flight && line.mode === "flight" && line.flightId ? line.flightId : "";
   const clearLanded = async (): Promise<boolean> => {
     if (!landedId) return false;
@@ -579,31 +600,52 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     return n.step && n.index !== undefined ? removeStop(n.step, n.index) : false;
   };
 
-  // Delete / the ⋯ / 🗑 on the sky: at once, unless the flight is in the air
-  // at this very stop — then the line asks first (lib/skySelect
-  // `removalNeedsAsk`).
-  const [removeAsk, setRemoveAsk] = useState<DiagramNode | null>(null);
-  const requestRemove = (n: DiagramNode) => {
-    if (opts.askRunning && removalNeedsAsk({ kind: "stops", indexes: nodeIndexes(n), flight })) setRemoveAsk(n);
-    else void removeNode(n);
+  // Delete / the ⋯ / 🗑 on the sky, and the stop dialog's Remove / 🗑: at
+  // once, unless the flight is in the air at this very stop (lib/skySelect
+  // `removalNeedsAsk`) or it would clear a finished route — then it asks
+  // first: on the line, or inside the dialog it came from (`inDialog`; `then`
+  // runs once it went, e.g. the dialog closes).
+  const [removeAsk, setRemoveAsk] = useState<RemoveAsk | null>(null);
+  const requestRemove = (n: DiagramNode, from: { inDialog?: boolean; then?: () => void } = {}) => {
+    // Only where the question can show: the dialog, or a host that draws `removeAsk`.
+    const asks = !!from.inDialog || !!opts.askRunning;
+    const kind = !flight && landedId ? "clear" : asks && removalNeedsAsk({ kind: "stops", indexes: nodeIndexes(n), flight }) ? "remove" : "";
+    if (kind && asks) setRemoveAsk({ kind, n, inDialog: !!from.inDialog, then: from.then });
+    else
+      void act(async () => {
+        if (await removeNode(n)) from.then?.();
+      });
   };
-  const askName = removeAsk ? (removeAsk.kind === "group" ? removeAsk.group?.name : removeAsk.step?.title) || "this stop" : "";
-  const removeAskNode: ReactNode = removeAsk ? (
-    <div className="skl-close-confirm skl-remove-confirm" data-no-drag>
+  // A question asked in the dialog goes with it.
+  const dialogId = dialog?.id || "";
+  useEffect(() => {
+    setRemoveAsk((a) => (a?.inDialog ? null : a));
+  }, [dialogId]);
+  const askNode = (a: RemoveAsk): ReactNode => {
+    const words = removeAskWords(a.kind, (a.n.kind === "group" ? a.n.group?.name : a.n.step?.title) || "this stop");
+    return (
       <InlineConfirm
-        title={"Remove “" + askName + "”?"}
-        body={"The route is at it right now: it pauses before what follows. Undo puts it back."}
-        confirmLabel="Remove"
+        title={words.title}
+        body={words.body}
+        confirmLabel={words.confirm}
         busy={busy}
         onConfirm={() => {
-          const n = removeAsk;
           setRemoveAsk(null);
-          void act(() => removeNode(n));
+          void act(async () => {
+            if (await removeNode(a.n)) a.then?.();
+          });
         }}
         onCancel={() => setRemoveAsk(null)}
       />
-    </div>
-  ) : null;
+    );
+  };
+  const removeAskNode: ReactNode =
+    removeAsk && !removeAsk.inDialog ? (
+      <div className="skl-close-confirm skl-remove-confirm" data-no-drag>
+        {askNode(removeAsk)}
+      </div>
+    ) : null;
+  const dialogAsk: ReactNode = removeAsk?.inDialog ? askNode(removeAsk) : null;
 
   // "+ Join" on a Split: a Join right after it, one click.
   const joinDef = kindOf.get("join");
@@ -725,7 +767,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     },
     onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : undefined,
     // A landed chain's tiles come off too: that clears the finished chain.
-    onRemove: flight ? (n) => requestRemove(own(n)) : landedId ? () => void clearLanded() : undefined,
+    onRemove: flight || landedId ? (n) => requestRemove(own(n)) : undefined,
     // Indexes among the line's stops are the flight's (drawnCanvas maps the
     // canvas's places onto them).
     onMove: flight
@@ -839,7 +881,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
             : undefined
         }
         onOpenSub={(s) => setDialog({ id: s.id, back: open.id })}
-        onRemoveSub={flight ? (s) => void act(() => removeNode(s)) : undefined}
+        onRemoveSub={flight ? (s) => requestRemove(s, { inDialog: true }) : undefined}
+        confirm={dialogAsk}
         onUngroup={
           flight
             ? () =>
@@ -853,25 +896,13 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
             const plan = shelfPlanFor(name, g.steps, g.plan_id, plans);
             try {
               const saved = await savePlan(plan);
-              toast((plan.id ? "Updated “" : "Saved “") + (saved?.name || name) + "” on the shelf");
+              toast(savedWords(saved?.name || name, !!plan.id));
             } catch (err) {
-              toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+              toast("Saving the route failed: " + errMsg(err), { error: true });
             }
           })
         }
-        onRemove={
-          flight
-            ? () =>
-                void act(async () => {
-                  if (await removeGroup(open)) setDialog(null);
-                })
-            : landedId
-              ? () =>
-                  void act(async () => {
-                    if (await clearLanded()) setDialog(null);
-                  })
-              : undefined
-        }
+        onRemove={flight || landedId ? () => requestRemove(open, { inDialog: true, then: () => setDialog(null) }) : undefined}
       />
     );
   } else if (open && open.kind === "stop") {
@@ -930,14 +961,11 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         }
         onRemove={
           // A finished chain's stop (its loop pill too) comes off as on the
-          // canvas: that clears the finished chain (removeNode / clearLanded).
-          (flight || landedId) && open.step
-            ? () =>
-                void act(async () => {
-                  if (await removeNode(open)) close();
-                })
-            : undefined
+          // canvas: that clears the finished chain (removeNode / clearLanded),
+          // asked first, as the stop the route is at is.
+          (flight || landedId) && open.step ? () => requestRemove(open, { inDialog: true, then: close }) : undefined
         }
+        confirm={dialogAsk}
         onToggleHalt={here && open.step && !flown ? () => toggleHalt(open) : undefined}
         primary={h.primary}
         onDone={h.done ? () => actClose(() => stepDone(flight!.id, open.step!.id)) : undefined}

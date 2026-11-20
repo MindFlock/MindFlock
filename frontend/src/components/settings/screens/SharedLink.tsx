@@ -92,27 +92,41 @@ const DEFAULT_SHARED_NAME = "mindflock";
  * the link — Host here, Match my other devices). */
 export function SharedLinkCard({ active, revision = 0 }: { active: boolean; revision?: number }) {
   const [data, setData] = useState<SharedPayload | null>(null);
-  const [error, setError] = useState("");
+  const [loadFailed, setLoadFailed] = useState(false);
   const load = useCallback(async () => {
     try {
       setData(await api<SharedPayload>("/api/mobile"));
-      setError("");
+      setLoadFailed(false);
     } catch {
-      setError("Could not load the shared link.");
+      setLoadFailed(true);
     }
   }, []);
   useEffect(() => {
     if (active) void load();
   }, [active, revision, load]);
 
-  if (error) return <p className="error">{error}</p>;
-  if (!data) return null;
+  // A failed read says so with a Retry; a failed refresh keeps the card it
+  // already had under that line instead of blanking it.
+  const failedLine = loadFailed && (
+    <p className="set-hint" id="shared-link-load-state" role="alert">
+      Couldn't load the shared link.{" "}
+      <button type="button" className="linklike" onClick={() => void load()}>
+        Retry
+      </button>
+    </p>
+  );
+  if (!data) return failedLine || null;
   const shared = data.shared || {};
   // The QR encodes the shared link once this device advertises it — then it
   // is also the one to test with (the checklist's last step shows it).
   const sharedQr =
     data.qr_svg && shared.url && data.qr_target?.startsWith(shared.url) ? data.qr_svg : undefined;
-  return <SharedLink shared={shared} qrSvg={sharedQr} onChanged={load} onData={setData} />;
+  return (
+    <>
+      {failedLine}
+      <SharedLink shared={shared} qrSvg={sharedQr} onChanged={load} onData={setData} />
+    </>
+  );
 }
 
 /** One phone URL for every device: each device that turns this on (with the
@@ -164,7 +178,10 @@ export function SharedLink({
   // at the same pace so a pending approval turns green without a click.
   useEffect(() => {
     if (!on) return;
-    const t = window.setInterval(onChanged, 60_000);
+    const t = window.setInterval(() => {
+      if (document.hidden) return; // a hidden window has no one to show it to
+      onChanged();
+    }, 60_000);
     return () => window.clearInterval(t);
   }, [on, onChanged]);
 

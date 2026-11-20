@@ -131,7 +131,9 @@ describe("drop / paste a file onto a terminal", () => {
     expect(WS_TERM).toContain("attachFileDrop(host, term)");
     expect(WS_TERM).not.toContain("attachFileDrop(host, term,");
     // The ";" pins the call site: the helper's signature names `session` too.
-    expect(TERMINALS).toContain("attachFileDrop(host, term, session);");
+    // (The session terminal's socket check rides along: nothing is uploaded
+    // while it isn't open.)
+    expect(TERMINALS).toContain("attachFileDrop(host, term, session, opts.canSend);");
     // Session terminals APPEND to an existing title; useWsTerm overwrites its
     // own. Pinned so a future unification of the two is a deliberate edit.
     expect(TERMINALS).toContain('host.title += " · drop / paste files to upload"');
@@ -197,8 +199,9 @@ describe("keyboard shortcut cheat-sheet", () => {
 
 describe("undo toasts, favicon dot, no maximize", () => {
   it("offers Undo on a single hide and on a bulk hide", () => {
-    expect(normCode("lib/sessionActions.ts")).toContain("— click to undo");
-    expect(normCode("components/sidebar/BulkBar.tsx")).toContain("— click to undo");
+    // A real Undo button, like Close's — never the whole toast as the target.
+    expect(normCode("lib/sessionActions.ts")).toContain('toast("Hid " + (ui.aliases[title] || title), { action: { label: "Undo",');
+    expect(normCode("components/sidebar/BulkBar.tsx")).toContain('toast(`Hid ${hid.length} session(s)`, { action: { label: "Undo",');
   });
 
   it("dots the favicon off the same clarify count that badges the title", () => {
@@ -291,7 +294,10 @@ describe("queue panel, hidden sessions, keyed sidebar, polling", () => {
     expect(
       // (It also notes when you last typed there — the ask pop-up's "you are
       // already answering it" rule, lib/ask.ts.)
-      has(TERMINALS, "term.onData((data) => { typedAt.set(title, Date.now()); if (ws && ws.readyState === WebSocket.OPEN) ws.send(data); });")
+      // canSend() reads the CURRENT `ws` (and says "Reconnecting — that wasn't
+      // sent" over the pane when it isn't open).
+      has(TERMINALS, "term.onData((data) => { typedAt.set(title, Date.now()); if (canSend()) ws!.send(data); });") &&
+        has(TERMINALS, "const canSend = (): boolean => { if (ws && ws.readyState === WebSocket.OPEN) return true;")
     ).toBe(true);
   });
 

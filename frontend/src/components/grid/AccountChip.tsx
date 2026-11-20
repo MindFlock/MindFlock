@@ -19,7 +19,7 @@ import { refreshInstances, useAuthProfiles } from "../../state/queries";
 import { UsagePopover } from "../usage/UsagePopover";
 
 export function AccountChip({ inst }: { inst: Instance }) {
-  const chipRef = useRef<HTMLSpanElement | null>(null);
+  const chipRef = useRef<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [models, setModels] = useState<string[] | null>(null);
@@ -102,10 +102,14 @@ export function AccountChip({ inst }: { inst: Instance }) {
 
   return (
     <>
-      <span
+      {/* A button, like the cost chip beside it: Tab reaches it and Enter
+          opens the account list (usage.css resets its look). */}
+      <button
+        type="button"
         ref={chipRef}
         className="tok usage-trigger acct-chip"
         title="Account this agent runs as — click to swap"
+        aria-expanded={open}
         onClick={(ev) => {
           ev.stopPropagation();
           if (!busy) setOpen((o) => !o);
@@ -113,7 +117,7 @@ export function AccountChip({ inst }: { inst: Instance }) {
       >
         <span className="usage-head">{busy ? "swapping…" : "@" + label}</span>
         <span className="caret">▾</span>
-      </span>
+      </button>
       {open && chipRef.current && (
         <UsagePopover anchor={chipRef.current} onClose={() => setOpen(false)}>
           <div className="usage-pop-head">Run this session as</div>

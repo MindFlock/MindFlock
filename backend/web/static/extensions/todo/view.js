@@ -120,7 +120,7 @@ export function renderList(api, host) {
   const filter = el("input", {
     class: "mfx-todo-filter-input",
     type: "search",
-    placeholder: "Filter",
+    placeholder: "Filter  ( Ctrl+F )",
     "aria-label": "Filter by text, details or session",
     onInput: () => {
       q = filter.value;
@@ -178,9 +178,14 @@ export function renderList(api, host) {
     text: "Details…",
     title: "Add with details, priority and a due time",
     onClick: () => {
+      // The quick-add text moves into the dialog but stays in this box until
+      // the dialog actually adds: Escape or ✕ there must not lose it.
+      const moved = addInput.value;
+      const onAdded = () => {
+        if (!disposed && addInput.value === moved) addInput.value = "";
+      };
       try {
-        api.ui.openDialog("add", undefined, { text: addInput.value.trim() });
-        addInput.value = "";
+        api.ui.openDialog("add", undefined, { text: moved.trim(), onAdded });
       } catch (err) {
         api.log.error("open add dialog", err);
       }
@@ -1321,6 +1326,14 @@ export function renderList(api, host) {
 
   function onKey(e) {
     if (disposed || e.defaultPrevented) return;
+    // Ctrl/Cmd+F focuses the filter, as on Intake's lists — from a text box
+    // too, so it comes before the text-entry return below.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "f" || e.key === "F")) {
+      e.preventDefault();
+      filter.focus();
+      filter.select();
+      return;
+    }
     const t = e.target;
     if (isTextEntry(t)) return;
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
@@ -1430,7 +1443,10 @@ export function renderList(api, host) {
   draw(true);
   void load();
 
+  // A hidden window skips its tick: nobody is looking, and the events
+  // stream and the next visible tick catch it up.
   const tick = setInterval(() => {
+    if (document.hidden) return;
     void load();
     if (tab === "history") scheduleHistory(0);
   }, REFRESH_MS);

@@ -144,8 +144,8 @@ def test_recently_closed_asks_in_one_inline_bar():
 def test_bar_labels_are_the_intake_tab_names():
     defs = _code("components/sidebar/barDefs.ts")
     assert '{ key: "ingestion", label: "Tickets" }' in defs
-    assert '{ key: "pr-review", label: "Pull requests" }' in defs
-    assert '{ key: "issue-handling", label: "Issues" }' in defs
+    assert '{ key: "pr-review", label: "GitHub PRs" }' in defs
+    assert '{ key: "issue-handling", label: "GitHub issues" }' in defs
     for old in ("Ticket Ingestion", "PR Review", "Issue Handling"):
         assert old not in defs, old
     # The owner's out-of-the-box set is unchanged.

@@ -812,7 +812,31 @@ _TOOL_HOOK_EVENTS = (
 # nothing and the caller falls back. MINDFLOCK_DISABLE_AGENTS_JSON=1 turns it off.
 # --------------------------------------------------------------------------- #
 _AGENTS_JSON_TTL = 2.0
+# While memory reads low or critical (backend.memory_pressure), the map is
+# served for this long instead. Each probe starts a node process: 0.2 s, 220 ms
+# of CPU and 167 MB peak RSS measured on the owner's box (2026-11-19), paged
+# back in from swap every time when memory is short. The instances tick asks
+# every 4 s, so the probe runs every other tick (8 s, not 4 s): the live state,
+# its "blocked on you" included, can read up to ~4 s later than at normal
+# memory. The Notification hook's marker and the web layer's dialog watch
+# still see a prompt on their own cadence.
+_AGENTS_JSON_TTL_LOW = 6.0
 _AGENTS_JSON_TIMEOUT = 8.0
+
+
+def _agents_json_ttl() -> float:
+    """:data:`_AGENTS_JSON_TTL`, or :data:`_AGENTS_JSON_TTL_LOW` while memory
+    reads low (the level is cached ~2 s; unknown is not low). Never raises."""
+    try:
+        from backend import memory_pressure
+
+        if memory_pressure.is_low():
+            return _AGENTS_JSON_TTL_LOW
+    except Exception:  # noqa: BLE001
+        pass
+    return _AGENTS_JSON_TTL
+
+
 # Keep serving the last SUCCESSFUL live map through a transient probe failure
 # (slow/timing-out binary, a single non-zero exit) rather than blanking every
 # session's live signal to marker-fallback on one hiccup — mirrors the
@@ -882,7 +906,7 @@ def _agents_state_map() -> dict:
 
     now = time.time()
     with _agents_lock:
-        if now - _agents_cache["at"] <= _AGENTS_JSON_TTL:
+        if now - _agents_cache["at"] <= _agents_json_ttl():
             return _agents_cache["map"]
         # A probe is already outstanding (it may run up to the 8s timeout, well
         # past the 2s TTL): serve the stale cached map rather than spawning

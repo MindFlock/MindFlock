@@ -149,9 +149,31 @@ describe("copySession placement", () => {
     await copySession("beta");
 
     // Said on an error card, not alert() (a silent no-op in the desktop app).
-    expect(errorPop).toHaveBeenCalledWith("Copy failed", "nope");
+    // Called "Duplicate", as the menu, the palette and the docs call it.
+    expect(errorPop).toHaveBeenCalledWith("Duplicate failed", "nope");
 
     // The pending row is dropped, and no ghost title is left in the order.
     expect(order()).not.toContain("beta-2");
+  });
+});
+
+describe("copySession wording", () => {
+  beforeEach(() => {
+    instApi.mockReset();
+    errorPop.mockReset();
+    useUi.getState().setOrder([]);
+    rows(["beta"]);
+  });
+
+  it("the low-memory question names 'a duplicate of' the source", async () => {
+    const mc = await import("../lib/memoryConfirm");
+    const ask = vi.spyOn(mc.memoryConfirmDeps, "ask").mockResolvedValue("cancel");
+    instApi.mockRejectedValue(
+      Object.assign(new Error("memory is low"), { status: 409, body: { memory_confirm: true, level: "low", message: "m" } })
+    );
+    await copySession("beta");
+    expect(ask).toHaveBeenCalledWith(expect.anything(), "a duplicate of beta", true);
+    expect(errorPop).not.toHaveBeenCalled();
+    ask.mockRestore();
   });
 });

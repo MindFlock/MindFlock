@@ -13,7 +13,6 @@
  *   machine instead of once per window (SharedMcpServers). */
 
 import { useEffect, useState } from "react";
-import { toast } from "../../../lib/toast";
 import {
   ASK_WORKERS_KEYS,
   DEFAULT_WORKERS_MODEL,
@@ -287,14 +286,10 @@ function AgentMcpRows() {
           <input
             type="checkbox"
             checked={on}
-            onChange={(e) => {
-              s.saveField("general", "agent_mcp", e.target.checked);
-              toast(
-                e.target.checked
-                  ? "Agent MCP on — from each session's next launch"
-                  : "Agent MCP off — from each session's next launch"
-              );
-            }}
+            // saveField marks "✓ Saved" by the switch once the save lands (a
+            // failed save says so instead); the hint above already says when
+            // it applies, so no second toast claiming success up front.
+            onChange={(e) => void s.saveField("general", "agent_mcp", e.target.checked)}
           />
           <span className="ca-slider" />
         </label>

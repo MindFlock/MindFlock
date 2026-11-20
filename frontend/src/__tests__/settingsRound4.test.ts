@@ -128,7 +128,7 @@ describe("phone alerts (ntfy)", () => {
     expect(n()).toContain("setSetupTick((n) => n + 1);");
     expect(n()).toContain("<Ntfy onChange={(v) => setPhoneOn(!!v.enabled)} setup={setupTick} />");
     expect(n()).toContain("if (view.topic || !view.suggested_topic) return;");
-    expect(n()).toContain("void save({ topic: view.suggested_topic });");
+    expect(n()).toContain('void save({ topic: view.suggested_topic }, document.getElementById("ntfy-topic"));');
   });
   it("never shows the unsaved random name as the topic's grey text", () => {
     expect(code("components/settings/screens/Notifications.tsx")).not.toContain("placeholder={view.suggested_topic");
@@ -148,7 +148,8 @@ describe("Search settings…", () => {
   it("renders a search box on the palette's index", () => {
     const html = renderToStaticMarkup(createElement(SettingsSearch, { onPick: () => undefined }));
     expect(html).toContain('id="settings-search"');
-    expect(html).toContain('placeholder="Search settings…"');
+    expect(html).toContain('placeholder="Search…  ( Ctrl+F )"');
+    expect(html).toContain('aria-label="Search settings"');
     const f = src("components/settings/SettingsSearch.tsx");
     expect(f).toContain('from "../palette/settingsSearch"');
     expect(f).toContain("searchSettings(query, 8)");

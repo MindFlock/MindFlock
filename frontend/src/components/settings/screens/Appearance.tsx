@@ -17,6 +17,7 @@ import {
 } from "../../../lib/breakTimer";
 import { rethemeAll } from "../../../lib/terminals";
 import { toast } from "../../../lib/toast";
+import { flashSaved } from "../savedCue";
 import { setTheme } from "../../../lib/theme";
 import { useUi } from "../../../state/store";
 import type { ScreenProps } from "../SettingsDialog";
@@ -261,7 +262,7 @@ function ReduceMotionRow() {
           checked={reduceMotion}
           onChange={(e) => {
             setReduceMotion(e.target.checked);
-            toast(e.target.checked ? "Reduce motion on" : "Reduce motion off");
+            if (!flashSaved(e.target)) toast(e.target.checked ? "Reduce motion on" : "Reduce motion off");
           }}
         />
         <span className="ca-slider" />
@@ -289,7 +290,7 @@ function SkyBirdsRow() {
           checked={on}
           onChange={(e) => {
             setOn(e.target.checked);
-            toast(e.target.checked ? "Birds in the Sky on" : "Birds in the Sky off");
+            if (!flashSaved(e.target)) toast(e.target.checked ? "Birds in the Sky on" : "Birds in the Sky off");
           }}
         />
         <span className="ca-slider" />
@@ -317,11 +318,12 @@ function TakeABreakRow() {
   const [draft, setDraft] = useState(String(every));
   useEffect(() => setDraft(String(every)), [every]);
 
-  const commit = (raw: string) => {
+  const commit = (el: HTMLInputElement) => {
+    const raw = el.value;
     const next = clampBreakMinutes(raw === "" ? every : raw);
     setEvery(next);
     setDraft(String(next));
-    if (on) toast("Break reminder every " + next + " min");
+    if (!flashSaved(el) && on) toast("Break reminder every " + next + " min");
   };
 
   return (
@@ -338,7 +340,7 @@ function TakeABreakRow() {
             step={5}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={(e) => commit(e.target.value)}
+            onBlur={(e) => commit(e.target)}
             onKeyDown={(e) => {
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
             }}
@@ -353,11 +355,9 @@ function TakeABreakRow() {
           checked={on}
           onChange={(e) => {
             setOn(e.target.checked);
-            toast(
-              e.target.checked
-                ? "Break reminder on — every " + every + " min"
-                : "Break reminder off"
-            );
+            if (!flashSaved(e.target)) {
+              toast(e.target.checked ? "Break reminder on — every " + every + " min" : "Break reminder off");
+            }
           }}
         />
         <span className="ca-slider" />
@@ -383,11 +383,12 @@ function IdleFlockRow() {
   const [draft, setDraft] = useState(String(after));
   useEffect(() => setDraft(String(after)), [after]);
 
-  const commit = (raw: string) => {
+  const commit = (el: HTMLInputElement) => {
+    const raw = el.value;
     const next = clampIdleMinutes(raw === "" ? after : raw);
     setAfter(next);
     setDraft(String(next));
-    if (on) toast("Idle flock after " + next + " min");
+    if (!flashSaved(el) && on) toast("Idle flock after " + next + " min");
   };
 
   return (
@@ -404,7 +405,7 @@ function IdleFlockRow() {
             step={5}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={(e) => commit(e.target.value)}
+            onBlur={(e) => commit(e.target)}
             onKeyDown={(e) => {
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
             }}
@@ -419,9 +420,9 @@ function IdleFlockRow() {
           checked={on}
           onChange={(e) => {
             setOn(e.target.checked);
-            toast(
-              e.target.checked ? "Idle flock on — after " + after + " min" : "Idle flock off"
-            );
+            if (!flashSaved(e.target)) {
+              toast(e.target.checked ? "Idle flock on — after " + after + " min" : "Idle flock off");
+            }
           }}
         />
         <span className="ca-slider" />

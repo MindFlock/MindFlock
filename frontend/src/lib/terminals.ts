@@ -31,6 +31,16 @@ export interface TermHandle {
   /** Send raw data straight to the PTY (voice dictation etc.); false when
    * the socket isn't open. */
   send(data: string): boolean;
+  /** Try again now: after the error retries ran out ("failed"), from a
+   * "Can't reach" cover, or once a waiting worker was started early. A
+   * socket already open or opening is left alone. */
+  retry(): void;
+  /** The last "[error] …" the server sent, for the "failed" cover. */
+  readonly error: string;
+  /** When this terminal lost its socket (or, before the first attach, when
+   * it was made); 0 while a socket is open. The pane's cover turns into
+   * "Can't reach the session" after UNREACHABLE_MS of it. */
+  readonly downSince: number;
   /** Re-assert this viewport's size to tmux even if unchanged on this
    * connection. Sessions run `window-size latest`, so ANOTHER attached
    * client (a second browser, a phone, a stale tab) can yank the window to
@@ -46,7 +56,15 @@ export interface TermHandle {
    * placeholder, and getTerm builds a fresh terminal once it is resumed.
    * "held" = the same for a session held offline after a crash (close code
    * 4424): the pane shows its Held placeholder (Start), never a retry.
-   * "connecting" is only the pre-first-open state; reconnects stay
+   * "waiting" = an ordered worker whose turn hasn't come (close code 4410):
+   * it checks again every WAITING_RETRY_MS, and the pane covers it with
+   * "Waiting its turn" and Start now.
+   * "failed" = the server answered ERROR_RETRY_LIMIT attempts in a row with
+   * an error (the shell couldn't start, the attach failed or timed out):
+   * no more tries until the pane's Retry.
+   * "connected" means attached: set by the first PTY bytes, not the open
+   * (the server accepts every socket before it decides).
+   * "connecting" is only the pre-first-attach state; reconnects stay
    * "disconnected" so status UIs keep signalling a real outage. */
   readonly state: string;
   onState?: (state: string) => void;
@@ -144,7 +162,7 @@ function disableAppMouseReporting(term: Terminal) {
 export function attachCopyOnSelect(
   host: HTMLElement,
   term: Terminal,
-  opts: { session?: string; agent?: boolean }
+  opts: { session?: string; agent?: boolean; canSend?: () => boolean }
 ) {
   disableAppMouseReporting(term);
   try {
@@ -160,7 +178,7 @@ export function attachCopyOnSelect(
     host.title += " · drop / paste files to upload";
     // The same wiring the assistant window gets (clipboard.attachFileDrop): one
     // gesture, one implementation, so the two cannot drift apart again.
-    attachFileDrop(host, term, session);
+    attachFileDrop(host, term, session, opts.canSend);
   }
   // Capture the selection continuously (a TUI repaint can wipe the highlight
   // right after mouse-up) and copy the captured value on release/right-click.
@@ -215,7 +233,7 @@ export function attachCopyOnSelect(
       return;
     }
     e.preventDefault();
-    pasteClipboard(term, session);
+    pasteClipboard(term, session, opts.canSend);
   });
   term.attachCustomKeyEventHandler((ev) => {
     const mod = ev.ctrlKey || ev.metaKey;
@@ -455,7 +473,11 @@ function makeTerm(
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(container);
-  attachCopyOnSelect(container, term, { session: title, agent: wsPath === "/terminal" });
+  attachCopyOnSelect(container, term, {
+    session: title,
+    agent: wsPath === "/terminal",
+    canSend: () => canSend(),
+  });
   // Clicking into a terminal makes this client the one in use — claim the
   // tmux window size for it (see resync).
   container.addEventListener("focusin", () => handle.resync());
@@ -532,9 +554,28 @@ function makeTerm(
   let sentSize = "";
   let closed = false;
   let booted = false;
+  let disposed = false;
   let reconnectAttempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let state = "connecting";
+  // Consecutive attempts the server ended with an error; the last error line
+  // written into the terminal (never written twice in a row).
+  let errorRuns = 0;
+  let lastError = "";
+  let downSince = Date.now();
+  let notSentAt = 0;
+  // Input to a socket that isn't open is dropped: say so over the pane
+  // (throttled — a held key or a paste is many onData calls), never a
+  // "Pasted" toast for text that went nowhere.
+  const canSend = (): boolean => {
+    if (ws && ws.readyState === WebSocket.OPEN) return true;
+    const now = Date.now();
+    if (now - notSentAt > NOT_SENT_THROTTLE_MS) {
+      notSentAt = now;
+      showTermNotice(container, notSentLine(state));
+    }
+    return false;
+  };
 
   const handle: TermHandle & { _setState(s: string): void } = {
     term,
@@ -544,6 +585,12 @@ function makeTerm(
     },
     get booted() {
       return booted;
+    },
+    get error() {
+      return lastError;
+    },
+    get downSince() {
+      return downSince;
     },
     _setState(s: string) {
       state = s;
@@ -586,9 +633,20 @@ function makeTerm(
       sock.binaryType = "arraybuffer";
       ws = sock;
       sentSize = ""; // fresh attach (PTY spawns 24x80) always gets one real size
-      sock.onopen = () => {
+      // This socket's own story: did it attach (PTY bytes came), and what
+      // error did the server send before closing it.
+      let attached = false;
+      let errorHere = "";
+      const markAttached = () => {
+        if (attached) return;
+        attached = true;
         reconnectAttempt = 0;
+        errorRuns = 0;
+        lastError = "";
         handle._setState("connected");
+      };
+      sock.onopen = () => {
+        downSince = 0;
         handle.doFit();
       };
       sock.onmessage = (ev) => {
@@ -611,7 +669,10 @@ function makeTerm(
           try {
             const j = JSON.parse(ev.data);
             if (j.type === "error") {
-              term.write("\r\n[error] " + j.message + "\r\n");
+              // Written when the socket closes, and only if it isn't the
+              // line already on screen: a retry loop adds no new lines, and a
+              // waiting worker's refusal is the pane's cover, not a line.
+              errorHere = String(j.message ?? "");
               return;
             }
             // Another person drives (core.ownership): say so over the pane.
@@ -621,15 +682,31 @@ function makeTerm(
               return;
             }
           } catch {
+            markAttached();
             term.write(ev.data);
           }
         } else {
+          markAttached();
           term.write(new Uint8Array(ev.data));
         }
       };
       sock.onclose = (ev) => {
-        handle._setState("disconnected");
+        if (!downSince) downSince = Date.now();
+        const code = closed ? undefined : ev?.code;
+        // A waiting worker stays "waiting" across its slow re-checks (no
+        // "disconnected" flash under the cover each time).
+        if (closeAction(code) !== "waiting") handle._setState("disconnected");
         if (closed) return;
+        if (closeAction(code) === "waiting") {
+          handle._setState("waiting");
+          reconnectTimer = setTimeout(() => {
+            if (!closed) handle.connect();
+          }, WAITING_RETRY_MS);
+          return;
+        }
+        if (errorHere && errorHere !== lastError)
+          term.write("\r\n[error] " + errorHere + "\r\n");
+        if (errorHere) lastError = errorHere;
         // 4404 = instance gone, 4409 = workspace gone, 4423 = paused, 4424 =
         // held offline after a crash -> stop retrying. Paused and held are
         // never retried: a reconnect is exactly what used to relaunch the
@@ -644,6 +721,17 @@ function makeTerm(
           }
           return;
         }
+        // The server said no with an error (4500 "failed to start shell",
+        // a failed attach, an attach timeout): give it a few tries, then stop
+        // and let the pane offer Retry instead of an endless loop.
+        if (errorHere && !attached) {
+          errorRuns += 1;
+          if (errorRuns >= ERROR_RETRY_LIMIT) {
+            closed = true;
+            handle._setState("failed");
+            return;
+          }
+        }
         // Backoff: probe fast first (0.4s), ease out to the 2.5s cap — on a
         // restore the backend may need a beat to relaunch the agent.
         const n = (reconnectAttempt += 1);
@@ -654,7 +742,22 @@ function makeTerm(
       };
       sock.onerror = () => handle._setState("error");
     },
+    retry() {
+      if (disposed) return;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      closed = false;
+      errorRuns = 0;
+      lastError = "";
+      reconnectAttempt = 0;
+      if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+      if (state === "failed") {
+        downSince = Date.now();
+        handle._setState("disconnected");
+      }
+      handle.connect();
+    },
     dispose() {
+      disposed = true;
       closed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       try {
@@ -674,22 +777,73 @@ function makeTerm(
   if (interactive) {
     term.onData((data) => {
       typedAt.set(title, Date.now());
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
+      if (canSend()) ws!.send(data);
     });
     attachWheelScroll(container, term, () => ws);
   }
   return handle;
 }
 
+/** Close code the server sends when an ordered worker is waiting its turn
+ * (backend agent_sessions.WAITING_TURN_REFUSED): its agent starts when the
+ * workers before it finish, or on a person's Start. Not final — the pane
+ * checks again every WAITING_RETRY_MS and attaches once it is running. */
+export const WAITING_CLOSE = 4410;
+
+/** How often a waiting worker's pane checks whether its turn came, in ms. */
+export const WAITING_RETRY_MS = 5000;
+
+/** Attempts in a row the server may end with an error before the terminal
+ * stops and the pane offers Retry. */
+export const ERROR_RETRY_LIMIT = 5;
+
+/** How long a terminal may be without a socket before its cover says it
+ * can't reach the session (it keeps retrying underneath), in ms. */
+export const UNREACHABLE_MS = 10_000;
+
+/** At most one "that wasn't sent" notice per this long, in ms. */
+const NOT_SENT_THROTTLE_MS = 1500;
+
+/** The notice over a terminal when typed or pasted input was dropped because
+ * its socket isn't open, by the terminal's state. Pure, for the node tests. */
+export function notSentLine(state: string): string {
+  if (state === "waiting") return "Waiting its turn — that wasn't sent";
+  if (state === "failed" || state === "gone") return "Not connected — that wasn't sent";
+  return "Reconnecting — that wasn't sent";
+}
+
+/** What a pane draws over a terminal: nothing; the loading spinner (no
+ * bytes yet); a "Reconnecting…" line over the old screen; the "Can't reach
+ * the session" cover with Retry (down for UNREACHABLE_MS, still retrying);
+ * the "Waiting its turn" cover with Start now; or the "failed" cover with
+ * the error and Retry. Paused, held and gone have the pane's own
+ * placeholders. Pure, for the node tests. */
+export type TermCoverKind = "none" | "loading" | "reconnecting" | "unreachable" | "waiting" | "failed";
+
+export function termCover(state: string, booted: boolean, downFor: number): TermCoverKind {
+  if (state === "waiting") return "waiting";
+  if (state === "failed") return "failed";
+  if (state === "connected") return booted ? "none" : "loading";
+  if (state === "connecting" || state === "disconnected" || state === "error") {
+    if (downFor >= UNREACHABLE_MS) return "unreachable";
+    return booted ? "reconnecting" : "loading";
+  }
+  return "none";
+}
+
 /** What a terminal does when its socket closes with `code`: stop for good
  * ("gone": 4404 instance gone, 4409 workspace gone), stop because the session
  * is paused ("paused": 4423 — the server will not relaunch a paused agent, and
  * Resume is the way back), stop because it is held offline after a crash
- * ("held": 4424 — nothing starts it by itself; the pane's Start does), or
+ * ("held": 4424 — nothing starts it by itself; the pane's Start does), check
+ * again slowly ("waiting": 4410 — an ordered worker before its turn), or
  * reconnect with backoff ("retry": anything else, e.g. a server restart or
  * the agent rebooting). Pure, for the node tests. */
-export function closeAction(code: number | undefined): "gone" | "paused" | "held" | "retry" {
+export function closeAction(
+  code: number | undefined
+): "gone" | "paused" | "held" | "waiting" | "retry" {
   if (code === 4404 || code === 4409) return "gone";
+  if (code === WAITING_CLOSE) return "waiting";
   if (code === PAUSED_CLOSE) return "paused";
   if (code === HELD_CLOSE) return "held";
   return "retry";

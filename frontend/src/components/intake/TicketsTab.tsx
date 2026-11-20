@@ -34,6 +34,7 @@ import {
 import { toast } from "../../lib/toast";
 import { errorPop } from "../../lib/errorPop";
 import { useUi } from "../../state/store";
+import { openSettings } from "../../lib/openSettings";
 import { startTogetherText } from "../../lib/runStart";
 import { canPick, startablePicks } from "./picks";
 import {
@@ -1744,6 +1745,7 @@ function AssignedTickets({
       // QA queue's rows are assigned to whoever wrote the code.
       label={hasOthers ? "Ticket queue" : "Assigned tickets"}
       onRefresh={load}
+      stalled={ticketsQuery.stalled}
       note={note}
       rowId="tk-assigned-row"
       refreshId="tk-tickets-refresh"
@@ -2552,8 +2554,11 @@ function TicketSourceEditor({
           ) : null}
           {ownGithubToken && (
             <p className="set-hint tk-own-token" role="note" data-tk-notice="own-token">
-              This source still has its own token — move it to Settings → Connections → GitHub →
-              Connect (read as a fallback this release, ignored from the next)
+              This source still has its own token — move it to{" "}
+              <button type="button" className="linklike" onClick={() => openSettings("connections")}>
+                Settings → Connections → GitHub → Connect
+              </button>{" "}
+              (read as a fallback this release, ignored from the next)
             </p>
           )}
           <div className="tk-fields">{credFields.map(renderField)}</div>

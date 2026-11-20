@@ -737,7 +737,10 @@ function diagnosticsText() {
 //   retry-start       failed-to-start → respawn the server now (no cooldown)
 //   copy-diagnostics  put diagnosticsText() on the clipboard
 //   brew-install      needs-homebrew → run Homebrew's installer, then continue
-//   brew-skip         needs-homebrew → continue the engine install without it
+//   brew-skip         needs-homebrew, or Homebrew's installer running in
+//                     Terminal → continue the engine install without it
+//   xcode-reopen      waiting on Apple's developer tools → open its installer again
+//   open-logs         the app's own log folder (what Ctrl+Shift+L opens)
 ipcMain.handle('diag:action', (_e, name) => {
   switch (String(name || '')) {
     case 'retry-start':
@@ -757,10 +760,23 @@ ipcMain.handle('diag:action', (_e, name) => {
       return { ok: installHomebrew() }
     case 'brew-skip':
       return { ok: skipHomebrew() }
+    case 'xcode-reopen':
+      return { ok: reopenXcodeInstaller() }
+    case 'open-logs':
+      return openLogFolder().then((err) => ({ ok: !err }))
     default:
       return { ok: false, error: 'unknown action' }
   }
 })
+
+// The app's own log folder in Finder/Explorer: Ctrl+Shift+L, and the offline
+// page's "Open log folder". Resolves '' when it opened, else the reason.
+function openLogFolder() {
+  let dir = ''
+  try { dir = logger.paths().dir } catch (e) { /* no log dir */ }
+  if (!dir) return Promise.resolve('no log folder')
+  return shell.openPath(dir).catch((e) => String((e && e.message) || e || 'failed'))
+}
 
 // Reveal a file in Finder/Explorer (Settings → System logs "open in Finder").
 // showItemInFolder opens the containing folder with the file selected.
@@ -962,12 +978,32 @@ function installHomebrew() {
   return true
 }
 
+// Also while Homebrew's installer runs in Terminal ('homebrew-run'): closing
+// that window early otherwise left the page waiting out the full 30 minutes.
 function skipHomebrew() {
-  if (install.state !== 'running' || install.waiting !== 'homebrew') return false
+  if (install.state !== 'running') return false
+  if (install.waiting !== 'homebrew' && install.waiting !== 'homebrew-run') return false
+  if (installPoll) { try { installPoll.stop() } catch (e) {}; installPoll = null }
   brewSkipped = true
   install.waiting = ''
   installLog('Continuing without Homebrew (tmux can be installed later from Setup).')
   darwinPreflight()
+  return true
+}
+
+// The trigger for Apple's Command Line Tools installer window.
+function openXcodeInstaller() {
+  try {
+    spawn('xcode-select', ['--install'], { stdio: 'ignore', detached: true }).unref()
+  } catch (e) { installLog('could not open it: run  xcode-select --install') }
+}
+
+// The page's "Open Apple's installer again", for a window closed by mistake:
+// the same trigger, and the wait already running carries on.
+function reopenXcodeInstaller() {
+  if (install.state !== 'running' || install.waiting !== 'xcode') return false
+  installLog('Opening Apple’s installer again.')
+  openXcodeInstaller()
   return true
 }
 
@@ -992,9 +1028,7 @@ function darwinPreflight() {
     // press. The install stays 'running' throughout.
     installLog('Apple is installing developer tools (git) — finish its window.')
     installLog('MindFlock will continue on its own when it’s done.')
-    try {
-      spawn('xcode-select', ['--install'], { stdio: 'ignore', detached: true }).unref()
-    } catch (e) { installLog('could not open it: run  xcode-select --install') }
+    openXcodeInstaller()
     install.waiting = 'xcode'
     installPoll = fl.pollUntil(hasXcodeCLT, { intervalMs: XCODE_POLL_MS, timeoutMs: XCODE_WAIT_MS })
     installPoll.then((ok) => {
@@ -2269,16 +2303,28 @@ ipcMain.handle('engine:get', () => (pendingUpdate() ? null : (engineNotice || en
 // What Settings → Advanced polls to show/hide its engine-update control.
 // `checked` is false when the last check couldn't read the engine's version
 // or the latest release (offline, server booting) -- not "up to date".
-ipcMain.handle('engine:update-info', () => Object.assign(
-  engineNotice
-    ? { available: true, checked: true, current: engineNotice.current, latest: engineNotice.latest }
-    : { available: false, checked: engineCheck.checked, current: engineCheck.current },
-  // The app-update toast is the one button when the app is behind too.
-  { appUpdate: !!pendingUpdate(), skew: engineSkew ? engineSkew.message : '' },
-  // A run from source: Settings says "update with git" instead of a button.
-  // Otherwise the automatic-updates switch (on unless turned off).
-  SOURCE_RUN ? { source: true } : { autoUpdate: autoUpdateEnabled() }
-))
+//
+// A failed last check is run again before answering (bounded: the local
+// probe and the GitHub read each time out), so Settings' "Check again" really
+// checks instead of re-reading the same failure until the 6-hour tick.
+ipcMain.handle('engine:update-info', async () => {
+  if (!SOURCE_RUN && !engineNotice && !engineCheck.checked) {
+    try { await checkEngineVersion() } catch (e) { /* stays "couldn't check" */ }
+  }
+  return engineUpdateInfo()
+})
+function engineUpdateInfo() {
+  return Object.assign(
+    engineNotice
+      ? { available: true, checked: true, current: engineNotice.current, latest: engineNotice.latest }
+      : { available: false, checked: engineCheck.checked, current: engineCheck.current },
+    // The app-update toast is the one button when the app is behind too.
+    { appUpdate: !!pendingUpdate(), skew: engineSkew ? engineSkew.message : '' },
+    // A run from source: Settings says "update with git" instead of a button.
+    // Otherwise the automatic-updates switch (on unless turned off).
+    SOURCE_RUN ? { source: true } : { autoUpdate: autoUpdateEnabled() }
+  )
+}
 // The engine toast and Settings → Advanced: the SAME run as the app toast's
 // Update (engine first, then the app if one is downloaded), so an engine-only
 // click still stops the old server, starts the new one and reports it.
@@ -2622,12 +2668,57 @@ function scheduleRepaint() {
   }, 120)
 }
 
+// The window's size and place across launches: saved on close to a small
+// JSON in userData (the dev build has its own userData, so its window keeps
+// its own), restored only when the saved rectangle still lands on a display
+// that is connected now — a window saved on an unplugged monitor would open
+// off-screen. Anything unreadable falls back to the 1280×820 default.
+const WINDOW_DEFAULT = { width: 1280, height: 820 }
+const WINDOW_MIN = { width: 900, height: 600 }
+const windowStatePath = () => path.join(app.getPath('userData'), 'window-state.json')
+
+// Pure: the saved { bounds, maximized } and screen.getAllDisplays() in, the
+// BrowserWindow size/position options out ({} = the defaults stand).
+function restorableBounds(saved, displays) {
+  const b = saved && saved.bounds
+  if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite)) return {}
+  const w = Math.max(WINDOW_MIN.width, Math.round(b.width))
+  const h = Math.max(WINDOW_MIN.height, Math.round(b.height))
+  // Enough of it on one display to grab the title strip: 64px each way.
+  const onScreen = (displays || []).some((d) => {
+    const a = d && (d.workArea || d.bounds)
+    if (!a) return false
+    const ix = Math.min(b.x + w, a.x + a.width) - Math.max(b.x, a.x)
+    const iy = Math.min(b.y + h, a.y + a.height) - Math.max(b.y, a.y)
+    return ix >= 64 && iy >= 64
+  })
+  return onScreen ? { x: Math.round(b.x), y: Math.round(b.y), width: w, height: h } : {}
+}
+
+function readWindowState() {
+  try { return JSON.parse(fs.readFileSync(windowStatePath(), 'utf8')) } catch (e) { return null }
+}
+
+function saveWindowState() {
+  if (!win || win.isDestroyed()) return
+  try {
+    fs.writeFileSync(windowStatePath(), JSON.stringify({
+      // Normal bounds: a maximized window's restore size, not the screen's.
+      bounds: win.getNormalBounds(),
+      maximized: win.isMaximized(),
+    }))
+  } catch (e) { /* best effort — the next launch opens at the default */ }
+}
+
 function createWindow() {
+  const saved = readWindowState()
+  let place = {}
+  try { place = restorableBounds(saved, require('electron').screen.getAllDisplays()) } catch (e) { /* defaults */ }
   win = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 900,
-    minHeight: 600,
+    ...WINDOW_DEFAULT,
+    ...place,
+    minWidth: WINDOW_MIN.width,
+    minHeight: WINDOW_MIN.height,
     // Custom title strip on every platform; native drag/resize still work.
     // macOS is the exception: `frame:false` there ALSO removes the traffic
     // lights, so the shell drew its own – □ ✕ on the right — the Windows
@@ -2714,8 +2805,7 @@ function createWindow() {
 
     // Ctrl+Shift+L opens the logs folder (support hook).
     if (input.shift && (input.key === 'L' || input.key === 'l')) {
-      const dir = logger.paths().dir
-      if (dir) shell.openPath(dir).catch(() => {})
+      openLogFolder()
       return
     }
 
@@ -2845,6 +2935,10 @@ function createWindow() {
   win.on('enter-full-screen', sendFullScreen)
   win.on('leave-full-screen', sendFullScreen)
 
+  // Restored maximized when it was closed maximized (the restore size is
+  // still the saved one, so un-maximizing lands where it was).
+  if (saved && saved.maximized) win.maximize()
+  win.on('close', saveWindowState)
   win.on('closed', () => { win = null })
 
   // Repaint on the way back: the fix for panes that went blank WHITE until a

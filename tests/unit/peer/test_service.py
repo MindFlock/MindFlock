@@ -466,3 +466,35 @@ def test_a_message_that_waited_is_delivered_when_a_share_is_bound(
     assert [m["text"] for m in msgs] == ["start with tests"]
     assert msgs[0]["from"].startswith("peer:")
     assert msgs[0]["data"]["peer_msg_id"] == "early1"
+
+
+def test_status_remembers_the_sandbox_self_test(engine, monkeypatch):
+    """GET /api/peer is polled every 10 s by every open window, and on Linux
+    ``sandbox.available()`` forks a bwrap self-test: status reuses the last
+    answer (a working sandbox for minutes, a missing one for a minute)."""
+    from backend.peer import sandbox
+
+    calls = []
+    answer = {"v": (True, "/usr/bin/bwrap")}
+    monkeypatch.setattr(sandbox, "available", lambda: (calls.append(1), answer["v"])[1])
+    svc = make_service(enabled=False)
+    import time as _time
+
+    base = _time.monotonic()
+    for _ in range(5):
+        assert svc._sandbox_available(now=base) == (True, "/usr/bin/bwrap")
+    assert svc.status()["sandbox"]["available"] is True
+    assert len(calls) == 1
+    # Past the working answer's TTL it is asked again.
+    answer["v"] = (False, "bwrap missing")
+    assert svc._sandbox_available(now=base + svc.SANDBOX_OK_TTL_S + 1) == (
+        False,
+        "bwrap missing",
+    )
+    assert len(calls) == 2
+    # A missing sandbox is re-checked sooner (installing bwrap shows up).
+    t = base + svc.SANDBOX_OK_TTL_S + 1
+    svc._sandbox_available(now=t + svc.SANDBOX_NO_TTL_S - 1)
+    assert len(calls) == 2
+    svc._sandbox_available(now=t + svc.SANDBOX_NO_TTL_S + 1)
+    assert len(calls) == 3

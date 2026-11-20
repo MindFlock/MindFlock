@@ -22,6 +22,10 @@
  *  - Focus: on open, if the dialog didn't focus something inside itself, the
  *    shell takes focus (so keys stop going to the terminal behind it); on
  *    close, focus goes back to where it was unless something else took it.
+ *    `keepFocus` opts out (a reminder that pops up on its own must not take
+ *    the keys from someone typing to an agent): the shell leaves focus where
+ *    it is, and answers Escape only while focus is inside it. Until then
+ *    Escape goes to the modal under it, as if this one weren't stacked.
  *  - Announces itself (`MODAL_OPEN_EVENT`) on open: in a phone-narrow window
  *    the sidebar is a drawer drawn OVER the page (z-index 60), and a dialog
  *    opened from it (the Setup chip, Shortcuts, a row's Rename) opened under
@@ -46,11 +50,18 @@ export interface ModalProps extends Omit<HTMLAttributes<HTMLDivElement>, "onMous
   escapeCapture?: boolean;
   /** Render into document.body instead of in place. */
   portal?: boolean;
+  /** Default false. True: don't take focus on open, and answer Escape only
+   * once focus is inside (see the header). */
+  keepFocus?: boolean;
   children?: ReactNode;
 }
 
+/** A stack entry. `passive()` true = skip it for Escape right now (a
+ * `keepFocus` modal the person hasn't clicked into). */
+type ModalToken = { passive?: () => boolean };
+
 /** Open modals, oldest first — only the last one answers Escape. */
-const stack: object[] = [];
+const stack: ModalToken[] = [];
 
 /** Fired on window when any modal opens (see the header: the narrow
  * sidebar drawer closes on it, so a dialog is never drawn under it). */
@@ -72,7 +83,9 @@ export function modalEscape(
   p: Pick<ModalProps, "onClose" | "onEscape" | "closeOnEscape" | "escapeCapture">
 ): boolean {
   if (e.key !== "Escape" || e.defaultPrevented) return false;
-  if (stack[stack.length - 1] !== token) return false;
+  let top = stack.length - 1;
+  while (top >= 0 && stack[top].passive?.()) top--;
+  if (stack[top] !== token) return false;
   const spent = p.onEscape?.(e) === true;
   if (!spent && p.closeOnEscape === false) return false;
   e.preventDefault();
@@ -82,7 +95,7 @@ export function modalEscape(
 }
 
 /** Push/pop helpers so the test can drive the stack without a DOM. */
-export function pushModal(token: object): () => void {
+export function pushModal(token: ModalToken): () => void {
   stack.push(token);
   return () => {
     const i = stack.lastIndexOf(token);
@@ -97,6 +110,7 @@ export function Modal({
   closeOnEscape = true,
   escapeCapture = false,
   portal = false,
+  keepFocus = false,
   className,
   children,
   ...rest
@@ -107,7 +121,9 @@ export function Modal({
   props.current = { onClose, onEscape, closeOnEscape, escapeCapture };
 
   useEffect(() => {
-    const token = {};
+    const token: ModalToken = keepFocus
+      ? { passive: () => !(ref.current && ref.current.contains(document.activeElement)) }
+      : {};
     const pop = pushModal(token);
     window.dispatchEvent(new CustomEvent(MODAL_OPEN_EVENT));
     const onKey = (e: KeyboardEvent) => {
@@ -121,7 +137,7 @@ export function Modal({
     // Dialogs that focus an input from a setTimeout run after this and win.
     const node = ref.current;
     const prev = document.activeElement as HTMLElement | null;
-    if (node && !node.contains(prev)) node.focus({ preventScroll: true });
+    if (node && !keepFocus && !node.contains(prev)) node.focus({ preventScroll: true });
 
     return () => {
       window.removeEventListener("keydown", onKey, escapeCapture);

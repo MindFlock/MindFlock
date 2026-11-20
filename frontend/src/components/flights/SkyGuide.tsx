@@ -297,7 +297,7 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
       <p>A <b>stop</b> moves the work, checks the work, or asks you: <b>Agent</b> gives the session's agent a prompt and waits for its turn to settle, <b>Wait for me</b> holds the route until you press Done (it shows under <b>Needs you</b> meanwhile), <b>Ship</b> commits, pushes, opens or merges the PR, <b>Verify</b> has the session's own agent check its work — it comes up with its steps, runs them and shows evidence for each, and the route waits on you for what only a person can confirm, <b>Wait</b> waits a while or until a time of day, <b>Loop</b> sends the route back to an earlier stop, a number of times, every so often. <b>All stops…</b> on the shelf lists the rest, each with what it does.</p>
       <p>Open a stop and its form reads back what the route will do there, in one sentence, as you change it; each option says what it does, its default and its range. <b>If it fails</b> picks what a failure does: <b>Halt</b> stops the route there, red, for you to Retry or Skip; <b>Let the agent fix it</b> hands the failure to the agent and runs the stop again (up to {FIX_ROUNDS} rounds, then it halts); <b>Skip</b> goes on as if the stop was not there; <b>Ask me</b> waits on you, showing the failure.</p>
       <p>A <b>saved route</b> is a named route kept on the shelf — <i>Ticket to merge</i>, say — that you drag on whole. On the sky it arrives as a <b>group</b>: one stop with its stops inside, run one by one, reading <i>2 of 3</i> while it does. Double-click it to see and change each of its stops.</p>
-      <p>To change a saved route, drag it onto the sky, edit its stops there, then <b>Save to the shelf</b>. Right-click its chip on the shelf to rename, reset or delete it, or to pick what starts it.</p>
+      <p>To change a saved route, right-click its chip on the shelf (or open its ⋯ in <b>All stops…</b>) and pick <b>Edit its stops</b>: a copy opens on the sky; change its stops, then <b>Save</b> writes them back (routes already running keep their own copy). The same menu renames, resets or deletes it, or picks what starts it.</p>
     </>
   ),
   bird: (
@@ -311,20 +311,20 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
     <>
       <p><b>⏸ Pause</b> (on the current stop, or a click on the bird) pauses the route where it is. <b>Add halt point</b> on a stop ahead makes it a halt point: the route pauses when it reaches that stop, before doing it, and the stop wears a pause badge; <b>Remove halt point</b> takes it off. <b>▶ Carry on</b> goes on from a pause.</p>
       <p>A <b>halted</b> route is different: a stop failed and its <b>If it fails</b> said Halt. It turns red and waits for <b>Retry</b>, <b>Skip</b> or <b>Let the agent fix it</b>.</p>
-      <p><b>Remove</b> (🗑, the menu, or <kbd>Delete</kbd>) takes a stop off at once, with <b>Undo</b> in the toast. Removing the stop the route is on stops its work and pauses the route right before the next stop; Carry on goes into it.</p>
+      <p><b>Remove</b> (🗑, the menu, or <kbd>Delete</kbd>) takes a stop off at once, with <b>Undo</b> in the toast. Removing the stop the route is on asks first, then stops its work and pauses the route right before the next stop; Carry on goes into it. A finished route's stop asks too: removing it clears the whole finished route.</p>
     </>
   ),
   grounded: (
     <>
       <p>Drop a stop or a saved route on empty sky and it waits there as a route of its own, with <b>no session</b>: no outline and no agent, just its stops and an empty socket on the first one — <i>wire a session's out port here to run it</i>. Nothing runs until it has a session.</p>
-      <p>Give it one by wiring an agent's out port (or its +) to that socket, by dragging the route into a session's outline, by dropping the shelf's <b>Session</b> chip on it (a new session is made and the stops run there), or with its ⋯ → <b>Run on a session…</b>. The same ⋯ offers <b>Save to the shelf</b> and <b>Remove</b>.</p>
+      <p>Give it one by wiring an agent's out port (or its +) to that socket, by dragging the route into a session's outline, by dropping the shelf's <b>Session</b> chip on it (a new session is made and the stops run there), or with its ⋯ → <b>Run on a session…</b>. The same ⋯ offers <b>Save as a route…</b> and <b>Remove</b>.</p>
       <p>One route can <b>start another</b>: hold <kbd>Shift</kbd> while you drop a wire from a stop onto a route with no session, and a <b>Start a route</b> stop goes in there. The other route then shows a trigger stop — <i>When &lt;route&gt; reaches &lt;stop&gt;</i> — and a dashed wire in the first session's colour; when the first route gets there, the other one takes off on a new session (or the one its dialog names), and the wire follows it there.</p>
     </>
   ),
   select: (
     <>
       <p>Drag across empty sky to draw a marquee — everything it touches is selected, routes and stops both (in the Pan tool, Shift+drag). <kbd>Ctrl+A</kbd> selects every route; <kbd>Esc</kbd> clears.</p>
-      <p>The selection bar then offers: drag any selected route's bar and they all move; <b>Remove…</b> (it asks first: a session's route closes its session, a route with no session goes); and for stops of one route, <b>Group into a stop</b> and <b>Save to the shelf</b>.</p>
+      <p>The selection bar then offers: drag any selected route's bar and they all move; <b>Remove…</b> (it asks first: a session's route closes its session, a route with no session goes); and for stops of one route, <b>Group into a stop</b> and <b>Save as a route…</b>.</p>
     </>
   ),
   keys: (

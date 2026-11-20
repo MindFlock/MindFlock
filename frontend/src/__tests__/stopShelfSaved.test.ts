@@ -135,7 +135,7 @@ describe("a saved stop's menu", () => {
     const src = code("components/flights/StopShelf.tsx");
     expect(src).toContain("onContextMenu: menuAt,");
     expect(src).toContain('if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;');
-    expect(src).toContain("await resetPlan(plan.id);");
+    expect(src).toContain('else if (key === "reset") await resetSavedRoute(plan);');
     expect(src).toContain("await deletePlan(deleting.id);");
     expect(code("components/flights/StopCatalog.tsx")).toContain("await savePlan({ ...plan, name: c.name });");
     expect(src).toContain("<InlineConfirm");

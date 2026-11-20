@@ -21,7 +21,7 @@ export function SessionFilter() {
         aria-label="Filter sessions"
         value={filter}
         autoFocus={peek}
-        onChange={(e) => setFilter(e.target.value.trim())}
+        onChange={(e) => setFilter(e.target.value)}
         onBlur={(e) => {
           if (peek && !e.target.value.trim()) setFilterPeek(false);
         }}

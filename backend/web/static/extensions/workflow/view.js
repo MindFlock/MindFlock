@@ -538,14 +538,32 @@ export function renderBoard(api, host, opts) {
       }
       status.textContent = "updated " + fmtWhen(data.now).split(" ").pop();
     } catch (err) {
+      if (disposed) return;
       api.log.error("summary failed", err);
-      status.textContent = "could not load";
-      if (!data) body.replaceChildren(el("p", { class: "muted", text: "Could not reach the server." }));
+      // The server's own reason when it answered; the app's request layer
+      // already words a network failure, this is the fallback for a bare one.
+      const why = (err && err.message) || "Couldn't reach MindFlock. Is it still running?";
+      status.textContent = "couldn't load";
+      if (!data)
+        body.replaceChildren(
+          el(
+            "div",
+            { class: "wf-load-error" },
+            el("p", { class: "muted", text: "Couldn't load workflow. " + why }),
+            el("button", { class: "wf-btn", type: "button", text: "Retry", onClick: () => load(true) })
+          )
+        );
+      else status.textContent = "couldn't refresh: " + why;
     }
   }
 
   load(false);
-  timer = setInterval(() => load(false), REFRESH_MS);
+  // A hidden window skips its tick (and with it every open item's timeline
+  // re-fetch): nobody is looking, and the next visible tick catches up.
+  timer = setInterval(() => {
+    if (document.hidden) return;
+    load(false);
+  }, REFRESH_MS);
   if (api.events && typeof api.events.subscribe === "function") {
     let pending = null;
     const soon = () => {

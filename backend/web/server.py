@@ -332,6 +332,7 @@ from backend.web.core.cursor_windows import (
 from backend.web.core.agent_sessions import (
     HELD_REFUSED,
     PAUSED_REFUSED,
+    WAITING_TURN_REFUSED,
     _ensure_agent_session,
     _ensure_shell_session,
     _kill_agent_session,
@@ -354,6 +355,7 @@ from backend.web.core.recently_closed import (
     _save_recently_closed,
 )
 from backend.web.core.repo_picker import (
+    _has_git_dir,
     check_repo,
     search_repos,
     suggest_repos,
@@ -378,6 +380,7 @@ from backend.web.core.workspaces import (
 )
 from backend.web.core.budget import (
     _BUDGET_FIRED,
+    _budget_cost_stale,
     _budget_locked,
     _budget_overrides,
     _budget_overrides_path,
@@ -1026,6 +1029,13 @@ async def lifespan(app: FastAPI):
     # the ticks' own pool. Off under pytest (ENGINE is the real state there).
     if _memory_watch.enabled():
         _register_task(_memory_watch.run_loop(sys.modules[__name__]))
+    # Activity markers of sessions long gone (core.marker_sweep): the reply
+    # watch rescans that directory on every hook write. Rare, bounded, on the
+    # ticks' pool. Off under pytest (ENGINE is the real state there).
+    from backend.web.core import marker_sweep as _marker_sweep
+
+    if _marker_sweep.enabled():
+        _register_task(_marker_sweep.run_loop(sys.modules[__name__]))
     # Windows' own memory (backend.host_memory): inside WSL, one PowerShell
     # loop feeds memory_pressure so the gate and the shield see a short host,
     # not just the VM. A no-op elsewhere; off under pytest.
@@ -1504,6 +1514,7 @@ def _forget_probes(title: str) -> None:
     with _PROBE_CACHE_LOCK:
         for k in [k for k in _PROBE_CACHE if k[1] == title]:
             _PROBE_CACHE.pop(k, None)
+    _STAGE_LOW_MEMO.pop(title, None)
     _forget_tokens(title)
 
 
@@ -1539,6 +1550,59 @@ def _session_stage_fresh(inst) -> dict:
     the distinction is worth a second function.
     """
     return _probe_seed("stage", inst, _session_stage(inst))
+
+
+# ---- The stage probe while memory is low ---------------------------------- #
+# The instances tick recomputes every session's stage each 4 s: ~10 git
+# children per session (rev-parse, status, rev-list, symbolic-ref, remote),
+# measured at 63 subprocesses and ~600 ms of child CPU per tick for 6 live
+# sessions on the owner's box (2026-11-19). While memory reads low or critical
+# (``_memory_low``), a session nobody has open in a terminal and nobody typed
+# into for :data:`_STAGE_HANDS_ON_S` reuses its stage for up to
+# :data:`_STAGE_LOW_TTL`: the stage pill (committed / pushed / PR) of a session
+# in the background can lag 20 s. The activity probe (tmux, what needs-input
+# rides on) is NOT stretched, nor the tick, and normal memory takes the
+# original path unchanged.
+_STAGE_LOW_TTL = 20.0
+_STAGE_HANDS_ON_S = 60.0
+#: title -> (computed monotonic, weakref(inst), stage dict); written only
+#: while memory reads low.
+_STAGE_LOW_MEMO: Dict[str, tuple] = {}
+
+
+def _session_watched(title: str) -> bool:
+    """Whether a person has ``title`` in front of them: a terminal pane open
+    on it (core.ownership), or input from them in the last
+    :data:`_STAGE_HANDS_ON_S`. Unknown reads as watched."""
+    try:
+        if _ownership.terminals(title) > 0:
+            return True
+    except Exception:  # noqa: BLE001
+        return True
+    return time.time() - float(_HUMAN_INPUT_AT.get(title, 0.0) or 0.0) <= (
+        _STAGE_HANDS_ON_S
+    )
+
+
+def _session_stage_for_tick(inst) -> dict:
+    """The publisher's stage: :func:`_session_stage_fresh`, except that while
+    memory reads low an unwatched session reuses one computed in the last
+    :data:`_STAGE_LOW_TTL` (see the block comment above)."""
+    if not _memory_low():
+        return _session_stage_fresh(inst)
+    title = getattr(inst, "Title", "") or ""
+    if not _session_watched(title):
+        hit = _STAGE_LOW_MEMO.get(title)
+        if hit and time.monotonic() - hit[0] < _STAGE_LOW_TTL and hit[1]() is inst:
+            # Donate the reused stage to the 2.5 s memo too, so any other
+            # reader of the memo serves it instead of recomputing it.
+            return _probe_seed("stage", inst, hit[2])
+    value = _session_stage_fresh(inst)
+    try:
+        _STAGE_LOW_MEMO[title] = (time.monotonic(), weakref.ref(inst), value)
+    except TypeError:  # non-weakref-able stand-in (tests): don't memoize
+        pass
+    return value
 
 
 def _agent_activity_cached(inst, title: str) -> str:
@@ -1723,12 +1787,23 @@ def _tick_state_changes() -> None:
             pass
 
 
+def _events_tick_redundant() -> bool:
+    """Whether the always-on instances tick published within the last
+    :data:`_EVENTS_TICK_INTERVAL`. It emits the same *_changed events for
+    every session, so a pass of this ticker then would only rerun the probes
+    (the memo is not phase-locked to the publisher, so it often missed)."""
+    return time.time() - _SNAPSHOT_AT < _EVENTS_TICK_INTERVAL
+
+
 async def _events_state_tick_loop() -> None:
     """Drive *_changed events while /api/events has clients; ends itself once
-    the last client disconnects (restarted by the next connect)."""
+    the last client disconnects (restarted by the next connect). A pass is
+    skipped while the instances tick's snapshot is fresh: this loop only
+    covers for a publisher that is stalled or slow."""
     while _EVENTS_WS_CLIENTS > 0:
         try:
-            await _in_bg_pool(_tick_state_changes)
+            if not _events_tick_redundant():
+                await _in_bg_pool(_tick_state_changes)
         except Exception:  # noqa: BLE001
             pass
         await asyncio.sleep(_EVENTS_TICK_INTERVAL)
@@ -1930,7 +2005,8 @@ def _session_snapshot(i, queues: dict) -> dict:
     d = _instance_json(i)
     # The publisher COMPUTES the stage and donates it to the memo; it must not
     # serve one the other 4s ticker filled up to 2.5s ago (see _probe_seed).
-    d.update(_session_stage_fresh(i))
+    # While memory reads low an unwatched session's may be up to 20 s old.
+    d.update(_session_stage_for_tick(i))
     # Mergeability, ONLY at the PR rung: it is two network round trips, and every
     # other stage is indifferent to it. None = "could not find out", which the UI
     # must treat as "leave the button alone", never as "cannot merge".
@@ -2598,17 +2674,32 @@ def _reply_titles(names) -> list:
     return out
 
 
+#: The reply watch's own thread. Its poll stats the marker directory 20
+#: times a second and rescans it (one entry per session ever seen: 1,673 on
+#: the owner's box, 2026-11-19) whenever any hook writes a marker. Run on the
+#: event loop, that scan was what the loop was doing in 4 of the stalls
+#: logs/stacks.log recorded under memory pressure (11-04, 11-10, 11-17):
+#: with the directory's pages evicted, every keystroke and pane frame waited
+#: on it. One thread, not the ticks' pool: a reply must not queue behind a
+#: slow tick, and one poller owns the ReplyWatch (it is not thread-safe).
+_WATCH_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="mf-reply-watch"
+)
+
+
 async def _reply_watch_loop() -> None:
     """Republish a session the moment its Stop hook files the reply
-    (core.state_events.ReplyWatch; started by the lifespan)."""
+    (core.state_events.ReplyWatch; started by the lifespan). The poll runs
+    on :data:`_WATCH_POOL`, never the event loop."""
     if not _reply_watch_loop_enabled():
         return
     from backend.providers import activity_markers as _am
 
     watch = _ReplyWatch(_am.marker_dir)
+    loop = asyncio.get_running_loop()
     while True:
         try:
-            names = watch.poll()
+            names = await loop.run_in_executor(_WATCH_POOL, watch.poll)
             if names:
                 for title in _reply_titles(names):
                     await asyncio.to_thread(_republish_reply, title)
@@ -4488,8 +4579,12 @@ def mkdir(payload: dict) -> JSONResponse:
 def browse(path: str = "", hidden: bool = False) -> JSONResponse:
     """List immediate subdirectories of ``path`` (default: home) for the picker.
 
-    Each entry flags whether it is itself a git repo. Dotfolders are hidden
-    unless ``hidden=1`` (Tab completion of a name that starts with a dot).
+    Each entry flags whether it is itself a git repo: one stat for a ``.git``
+    entry (a folder holding one), never a git process per row — inside a repo
+    ``git rev-parse`` answered true for every subfolder, and this runs on every
+    move and every Tab completion. ``is_git`` for ``path`` itself is the real
+    git answer. Dotfolders are hidden unless ``hidden=1`` (Tab completion of a
+    name that starts with a dot).
     """
     raw = path.strip() if path else ""
     base = os.path.realpath(os.path.expanduser(raw)) if raw else os.path.expanduser("~")
@@ -4504,7 +4599,7 @@ def browse(path: str = "", hidden: bool = False) -> JSONResponse:
             full = os.path.join(base, name)
             if not os.path.isdir(full):
                 continue
-            entries.append({"name": name, "path": full, "is_git": _is_git_repo(full)})
+            entries.append({"name": name, "path": full, "is_git": _has_git_dir(full)})
     except PermissionError:
         return JSONResponse({"error": "permission denied: %s" % base}, status_code=400)
     parent = os.path.dirname(base)
@@ -5090,10 +5185,24 @@ async def delete_instance(title: str) -> JSONResponse:
     is GC'd. **409** ``{"error": "folder in use", "sessions": [...]}`` — and
     nothing changes — when another live session (a copy made by Duplicate
     session) works in the same folder. → ``{ok, title, wiped, children}``."""
-    inst, err = _inst_or_404(title)
-    if err is not None:
-        return err
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return _session_gone(title)
     return await _end_session_response(title, wipe=True)
+
+
+#: What a person reads when they close/delete a session that is gone already
+#: (the web client shows ``detail`` over ``error``). ``error`` keeps the
+#: ``instance not found`` text the MCP tools and the CLI match on.
+SESSION_GONE_DETAIL = "That session is already gone."
+
+
+def _session_gone(title: str) -> JSONResponse:
+    """The 404 for ending a session that is not there any more."""
+    return JSONResponse(
+        {"error": "instance not found: %s" % title, "detail": SESSION_GONE_DETAIL},
+        status_code=404,
+    )
 
 
 async def _end_session_response(title: str, *, wipe: bool, scrub: bool = False):
@@ -5106,9 +5215,7 @@ async def _end_session_response(title: str, *, wipe: bool, scrub: bool = False):
     except _session_end.FolderInUse as err:
         return JSONResponse(err.to_json(), status_code=409)
     except _session_end.SessionNotFound:
-        return JSONResponse(
-            {"error": "instance not found: %s" % title}, status_code=404
-        )
+        return _session_gone(title)
     return JSONResponse({"ok": True, **result})
 
 
@@ -8300,6 +8407,13 @@ def _configured_pr_base(wt: str = "") -> str:
         return ""
 
 
+def _default_pr_base(wt: str, inst) -> str:
+    """The Make-PR target when the dialog picked none: the configured PR base,
+    else the session's own base. Blocking (settings + git): call it through
+    ``asyncio.to_thread`` from a request handler."""
+    return _configured_pr_base(wt) or _session_base_branch(inst)
+
+
 _PR_CACHE: Dict[str, tuple] = {}  # branch -> (expires_epoch, info_or_None, last_good)
 #: How long a previously-seen PR survives lookups that come back empty. Long
 #: enough to ride out a rate limit or a network blip, short enough that a PR which
@@ -8581,9 +8695,9 @@ async def instance_cleanup(title: str) -> JSONResponse:
     → ``{ok, title, wiped, children}``. In-place sessions run in the user's
     OWN repo — it is never deleted.
     """
-    inst, err = _inst_or_404(title)
-    if err is not None:
-        return err
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return _session_gone(title)
     peer_err = _peer_guard.refusal(inst, "cleanup (unshare the folder instead)")
     if peer_err is not None:
         return peer_err
@@ -8601,9 +8715,9 @@ async def close_instance(title: str) -> JSONResponse:
     fresh agent pointed at the same worktree; its children keep running under
     its own parent and are reported. → ``{ok, title, wiped: false, children}``.
     """
-    inst, err = _inst_or_404(title)
-    if err is not None:
-        return err
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return _session_gone(title)
     return await _end_session_response(title, wipe=False)
 
 
@@ -8736,13 +8850,16 @@ async def branch_instance(title: str, request: Request) -> JSONResponse:
     a remote ``device::title`` row or a relayed request, a shared-folder
     session, one still starting, a folder that isn't a git repo ("Branch needs
     a git repository — <folder> isn't one") or has no commit, a clone-strategy
-    workspace, or changes git can't snapshot. **404** unknown session. See
-    :mod:`core.session_branch`.
+    workspace, or changes git can't snapshot. **404** unknown session. A
+    person's start: while memory is low it is **409** ``{"memory_confirm":
+    true}`` until resent with ``{"start_anyway": true}`` (core.launch_gate).
+    See :mod:`core.session_branch`.
     """
     return await _session_branch.branch(
         title,
         person=_auth.request_person(request),
         relayed=bool(request.headers.get(_remote.REMOTE_HEADER)),
+        payload=await _body_dict(request),
     )
 
 
@@ -9679,9 +9796,15 @@ async def instance_push_branch(
     # a passing run against the current HEAD before pushing. 409 carries the
     # check state; the UI offers "push anyway" which re-POSTs {"force": true}.
     if not (payload or {}).get("force"):
-        cfg = _wt_setup.load_config(wt)
-        if cfg.check_command:
-            st = _wt_setup.check_summary(wt)
+
+        def _check_gate():
+            # A TOML read, a JSON read and a `git rev-parse`: off the loop.
+            if not _wt_setup.load_config(wt).check_command:
+                return False, None
+            return True, _wt_setup.check_summary(wt)
+
+        needs_check, st = await asyncio.to_thread(_check_gate)
+        if needs_check:
             if st is None or st.get("state") != "ok" or st.get("stale"):
                 return JSONResponse(
                     {
@@ -9857,7 +9980,9 @@ async def instance_branches(title: str) -> JSONResponse:
 
     branches = await asyncio.to_thread(_list_branches)
     current = await asyncio.to_thread(_current_branch, wt) or inst.Branch or ""
-    default = _configured_pr_base(wt) or _session_base_branch(inst)
+    # A settings parse plus up to a few git processes: off the event loop, so
+    # every pane's output doesn't wait behind the dialog opening.
+    default = await asyncio.to_thread(_default_pr_base, wt, inst)
     return JSONResponse({"branches": branches, "current": current, "default": default})
 
 
@@ -9935,12 +10060,16 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
     # into a fixed branch (e.g. staging) instead of whatever they were cut from;
     # blank falls through to the per-session base (K1) — the prior behaviour.
     chosen = (payload or {}).get("base")
-    base = (
-        (chosen or "").strip() or _configured_pr_base(wt) or _session_base_branch(inst)
-    )
-    # PR the branch the worktree is *actually* on — the stored inst.Branch can
-    # drift when the worktree is switched, which would PR the wrong branch.
-    branch = _current_branch(wt) or inst.Branch or ""
+
+    def _base_and_branch():
+        b = (chosen or "").strip() or _default_pr_base(wt, inst)
+        # PR the branch the worktree is *actually* on — the stored inst.Branch
+        # can drift when the worktree is switched, which would PR the wrong one.
+        return b, _current_branch(wt) or inst.Branch or ""
+
+    # Up to ~5 git processes plus a settings parse: one hop off the event loop
+    # so every pane's output doesn't wait behind them.
+    base, branch = await asyncio.to_thread(_base_and_branch)
     if not branch or branch == base:
         return JSONResponse(
             {
@@ -10133,7 +10262,7 @@ async def instance_merge_pr(title: str, payload: Optional[dict] = None) -> JSONR
         except OSError:
             pass
         _ORIGIN_SHA_CACHE.pop((wt, branch), None)
-        base = _configured_pr_base(wt) or _session_base_branch(inst)
+        base = _default_pr_base(wt, inst)
         _run_capped(  # best-effort; a failure just leaves the old lag
             ["git", "-C", wt, "fetch", "origin", base],
             stdout=subprocess.DEVNULL,
@@ -11039,6 +11168,40 @@ async def ticket_sources() -> JSONResponse:
         return JSONResponse({"error": str(err)}, status_code=502)
 
 
+def _shown_ticket_draft(raw, sentence: str):
+    """The draft a Retry sent back, checked exactly as a model's answer is.
+
+    The dialog only ever sends back the draft a failed filing handed it, but
+    the route cannot tell that from a hand-built one, so it goes through
+    ``ticket_draft._resolve`` — the same caps, cleaning, rendering and
+    refusals as a fresh draft. The rendered criteria section is cut off the
+    description first: ``_resolve`` renders it again from ``criteria``.
+    """
+    if not isinstance(raw, dict):
+        raise _ticket_draft.TicketDraftError("the draft to file was unreadable")
+    body = str(raw.get("description") or "").split(_ticket_draft.AC_HEADING, 1)[0]
+    criteria = raw.get("criteria")
+    return _ticket_draft._resolve(
+        {
+            "title": raw.get("name"),
+            "description": body,
+            "criteria": criteria if isinstance(criteria, list) else [],
+        },
+        sentence,
+    )
+
+
+async def _file_shown_ticket_draft(source: str, raw, sentence: str) -> dict:
+    """File a draft the dialog already holds on ``source``; the row on success.
+
+    ``ticket_compose.compose`` with the draft handed in, so no model turn: the
+    same blocker check, the same refusal to report success without a link, and
+    a failure still hands the draft back so the next Retry is cheap too.
+    """
+    drafted = _shown_ticket_draft(raw, sentence)
+    return await _ticket_compose.compose(source, sentence, drafted=drafted)
+
+
 @app.post("/api/tickets/compose")
 async def ticket_compose(payload: dict) -> JSONResponse:
     """Draft a ticket from one sentence, file it on one source, return the link.
@@ -11072,19 +11235,27 @@ async def ticket_compose(payload: dict) -> JSONResponse:
             },
             status_code=400,
         )
+    shown = payload.get("draft")
     try:
-        row = await _ticket_compose.compose(
-            source,
-            text,
-            # The flock's own default CLI, read fresh per request and passed in
-            # pick_argv's FIRST slot — passing "" there resolves to claude
-            # unconditionally, which is how a codex-only machine ends up being
-            # told a CLI it never chose is not installed. Same reasoning as
-            # /api/session-plan, which is where this pattern is documented.
-            program=ENGINE.default_program(),
-        )
+        if shown is not None:
+            # The Retry after a failed filing: the dialog sends back the draft
+            # it is showing, and that is what gets filed — no second model turn.
+            row = await _file_shown_ticket_draft(source, shown, text)
+        else:
+            row = await _ticket_compose.compose(
+                source,
+                text,
+                # The flock's own default CLI, read fresh per request and passed
+                # in pick_argv's FIRST slot — passing "" there resolves to claude
+                # unconditionally, which is how a codex-only machine ends up being
+                # told a CLI it never chose is not installed. Same reasoning as
+                # /api/session-plan, which is where this pattern is documented.
+                program=ENGINE.default_program(),
+            )
     except LookupError as err:
         return JSONResponse({"error": str(err)}, status_code=404)
+    except _ticket_draft.TicketDraftError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
     except _ticket_compose.ComposeError as err:
         body: dict = {"error": str(err)}
         if err.draft is not None:
@@ -14780,10 +14951,13 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # does not reconnect. (Its agent still alive somehow → just attached.)
     # A session HELD OFFLINE after a crash (core.held) closes with 4424 the
     # same way: the pane shows its Start placeholder and never retries.
+    # An ordered worker still WAITING ITS TURN closes with 4410 ("waiting its
+    # turn"), which the pane reads as waiting rather than gone.
     name, err = await asyncio.to_thread(ensure_terminal_session, inst, title)
     if err is not None:
         paused = err == PAUSED_REFUSED
         held = err == HELD_REFUSED
+        waiting = err == WAITING_TURN_REFUSED
         frame = {"type": "error", "message": err}
         if paused:
             frame["paused"] = True
@@ -14791,7 +14965,10 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
             frame["held"] = True
             frame.update(_held.row_fields(title))
         await ws.send_text(json.dumps(frame))
-        await ws.close(code=4423 if paused else 4424 if held else 4409)
+        if waiting:
+            await ws.close(code=4410, reason="waiting its turn")
+        else:
+            await ws.close(code=4423 if paused else 4424 if held else 4409)
         return
     # tmux mouse stays ON (wheel scroll / copy-mode). Browser selection is via
     # Shift+drag (xterm.js shouldForceSelection), copied by copy-on-select.
@@ -14888,6 +15065,15 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
             out_q.put_nowait(json.dumps({"type": "readonly", "message": notice}))
         return ok
 
+    async def over_budget() -> bool:
+        # Every input frame asks; with a budget set and the cost out of the
+        # ~20 s token cache, the check prices the transcripts, so it runs in a
+        # thread then and never stalls the event loop. Awaited in line, so the
+        # keystrokes still land in order.
+        if _budget_cost_stale(title):
+            return await asyncio.to_thread(_budget_locked, title)
+        return _budget_locked(title)
+
     try:
         while True:
             msg = await ws.receive()
@@ -14902,7 +15088,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                 # Budget lock: drop keystrokes once the session is over its
                 # ceiling (authoritative — the UI overlay is just the visible
                 # half). Resize control frames (text/JSON) still pass below.
-                if _budget_locked(title) or not driving(b):
+                if await over_budget() or not driving(b):
                     continue
                 into_pane(b)
                 continue
@@ -14913,7 +15099,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                     j = json.loads(t)
                 except (ValueError, TypeError):
                     note_presence(t)
-                    if _budget_locked(title) or not driving(t):
+                    if await over_budget() or not driving(t):
                         continue
                     into_pane(t.encode("utf-8"))
                     continue
@@ -14929,7 +15115,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                     # "{}"). Stamp before the budget gate, same as the other
                     # two input branches — presence is about the person.
                     note_presence(t)
-                    if not _budget_locked(title) and driving(t):
+                    if not await over_budget() and driving(t):
                         into_pane(t.encode("utf-8"))
     except WebSocketDisconnect:
         pass

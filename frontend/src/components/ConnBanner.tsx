@@ -4,8 +4,11 @@
  * desktop shell's one-click WSL restart with a two-step arm. */
 
 import { useEffect, useRef, useState } from "react";
+import { ApiError } from "../api/client";
 import { queryClient } from "../state/queries";
 import { useNow } from "../lib/useNow";
+import { memoryConnText } from "../lib/memorySlow";
+import type { MemoryReading } from "../api/types";
 
 declare global {
   interface Window {
@@ -16,9 +19,27 @@ declare global {
   }
 }
 
+/** How long a lost connection is put down to low memory before the card
+ * says the server may have stopped (the longest stall logged under memory
+ * pressure was 281 s, 2026-11-10). */
+const SLOW_MAX_MS = 5 * 60_000;
+
+/** The sentence for a failing instances poll, from the last error's HTTP
+ * status (ApiError.status): a status means the server answered, with an
+ * error; 0 (or no ApiError at all) means it never answered. Never from the
+ * message text — client.ts words every failure as a sentence. */
+export function pollFailText(err: unknown): string {
+  const status = err instanceof ApiError ? err.status : 0;
+  return status > 0
+    ? "The server is reachable but answering with errors (HTTP " +
+        status +
+        "). It may recover on its own; if not, check the server logs."
+    : "The server isn’t answering — it may have stopped or be restarting. Reconnecting automatically.";
+}
+
 export function ConnBanner() {
   const [pollFails, setPollFails] = useState(0);
-  const [lastErr, setLastErr] = useState("");
+  const [lastErr, setLastErr] = useState<unknown>(null);
   const [evtDropped, setEvtDropped] = useState(false);
   const [diag, setDiag] = useState<{ state?: string; distro?: string } | null>(null);
   const [lostAt, setLostAt] = useState(0);
@@ -36,7 +57,7 @@ export function ConnBanner() {
           setPollFails(0);
         } else if (action?.type === "error") {
           setPollFails((n) => n + 1);
-          setLastErr(action.error?.message || "");
+          setLastErr(action.error ?? null);
         }
       }
     });
@@ -89,8 +110,20 @@ export function ConnBanner() {
   if (!lost) return null;
 
   let text: string;
+  let head = "⚠ Connection to MindFlock lost";
   let fixLabel: string | undefined;
-  if (diag && pollFails >= 2 && diag.state === "wsl-down") {
+  // The last memory reading before things went quiet: a server stalled on
+  // memory is slow, not stopped (lib/memorySlow). WSL's own states win, and
+  // past SLOW_MAX_MS of silence the server may really be gone (the OOM killer
+  // takes processes too), so the plain wording comes back.
+  const memLevel = queryClient.getQueryData<MemoryReading>(["system-memory"])?.level;
+  const wslState = !!diag && ["wsl-down", "wsl-missing", "not-installed", "starting"].includes(diag.state || "");
+  const slow =
+    wslState || (lostAt && now - lostAt > SLOW_MAX_MS) ? null : memoryConnText(memLevel, pollFails >= 2);
+  if (slow && !(lastErr instanceof ApiError && lastErr.status > 0)) {
+    head = slow.head;
+    text = slow.text;
+  } else if (diag && pollFails >= 2 && diag.state === "wsl-down") {
     text =
       "WSL (" +
       (diag.distro || "Ubuntu") +
@@ -104,11 +137,7 @@ export function ConnBanner() {
   } else if (diag && pollFails >= 2 && diag.state === "starting") {
     text = "The server is starting back up — this connects on its own, usually within a few seconds.";
   } else if (pollFails >= 2) {
-    text = /^HTTP \d/.test(lastErr)
-      ? "The server is reachable but answering with errors (" +
-        lastErr +
-        "). It may recover on its own; if not, check the server logs."
-      : "The server isn’t answering — it may have stopped or be restarting. Reconnecting automatically.";
+    text = pollFailText(lastErr);
   } else {
     text =
       "The live update stream dropped — the page may lag a few seconds behind. Reconnecting automatically.";
@@ -121,7 +150,7 @@ export function ConnBanner() {
 
   return (
     <div id="conn-banner" role="alert">
-      <div className="conn-head">⚠ Connection to MindFlock lost</div>
+      <div className="conn-head">{head}</div>
       <div className="conn-detail" id="conn-detail">{text}</div>
       <div className="conn-foot">
         <span id="conn-elapsed">{elapsed}</span>

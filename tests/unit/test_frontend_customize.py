@@ -259,7 +259,7 @@ def test_the_palette_lists_commands_before_focus_rows():
         '  "merge",\n',
         'label: "Verify — next that needs you"',
         'label: "Show the Behaviors board"',
-        'label: "Customize…", hint: "choose sidebar bars"',
+        'label: "Customize…", hint: "choose sidebar bars and the pane header"',
     ):
         assert label in src, label
     for gone in (

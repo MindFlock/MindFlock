@@ -13,6 +13,7 @@ import { takeAccountsIntent } from "../../setup/accountsIntent";
 import { api } from "../../../api/client";
 import type { AuthProfile, AuthProfilesResponse } from "../../../api/types";
 import { toast } from "../../../lib/toast";
+import { flashSaved } from "../savedCue";
 import { agentName } from "../../../lib/agentNames";
 import { refreshAuthProfiles, useAuthProfiles } from "../../../state/queries";
 import { AgentSignIn } from "../../dialogs/AgentSignIn";
@@ -100,7 +101,9 @@ export function Accounts(_: ScreenProps) {
     setEnvPinned(data?.default_profile_env || "");
   }, [data]);
 
-  const save = async (next: AuthProfile[], nextDefault?: string, force?: boolean) => {
+  /** `from`: the control the save is about, for the inline "Saved" cue by its
+   * row; a button outside a row (Make default, Remove, Add) gets the toast. */
+  const save = async (next: AuthProfile[], nextDefault?: string, force?: boolean, from?: Element | null) => {
     setError("");
     setPendingForce(null);
     try {
@@ -115,7 +118,7 @@ export function Accounts(_: ScreenProps) {
       setDefaultId(r.default_profile || "");
       setEnvPinned(r.default_profile_env || "");
       void refreshAuthProfiles();
-      toast("Accounts saved");
+      if (!(from && flashSaved(from))) toast("Accounts saved");
     } catch (err) {
       // 409: sessions are still pinned to an account being removed. They would
       // silently fall back to the CLI's own login, so the server refuses until
@@ -135,8 +138,13 @@ export function Accounts(_: ScreenProps) {
     }
   };
 
-  const patch = (id: string, p: Partial<AuthProfile>) =>
-    save(profiles.map((x) => (x.id === id ? { ...x, ...p } : x)));
+  const patch = (id: string, p: Partial<AuthProfile>, from?: Element | null) =>
+    save(
+      profiles.map((x) => (x.id === id ? { ...x, ...p } : x)),
+      undefined,
+      undefined,
+      from
+    );
 
   const addDraft = () => {
     const id = accountId(draft.id, draft.label || "");
@@ -199,7 +207,7 @@ export function Accounts(_: ScreenProps) {
           id="acct-default"
           value={defaultId}
           disabled={!!envPinned}
-          onChange={(e) => save(profiles, e.target.value)}
+          onChange={(e) => save(profiles, e.target.value, undefined, e.target)}
         >
           <option value="">Each CLI's own login (no profile)</option>
           {profiles.map((p) => (
@@ -277,7 +285,7 @@ export function Accounts(_: ScreenProps) {
                       placeholder={p.api_key === SECRET_MASK ? "•••set (saved)" : "paste a key"}
                       defaultValue=""
                       onBlur={(e) => {
-                        if (e.target.value.trim()) patch(p.id, { api_key: e.target.value.trim() });
+                        if (e.target.value.trim()) patch(p.id, { api_key: e.target.value.trim() }, e.target);
                       }}
                     />
                   </label>
@@ -286,7 +294,7 @@ export function Accounts(_: ScreenProps) {
                     {models.length ? (
                       <select
                         value={p.model || ""}
-                        onChange={(e) => patch(p.id, { model: e.target.value })}
+                        onChange={(e) => patch(p.id, { model: e.target.value }, e.target)}
                       >
                         <option value="">CLI's own default</option>
                         {/* A stored pin missing from the fetched catalog must
@@ -310,7 +318,7 @@ export function Accounts(_: ScreenProps) {
                         defaultValue={p.model || ""}
                         onBlur={(e) => {
                           if (e.target.value !== (p.model || ""))
-                            patch(p.id, { model: e.target.value.trim() });
+                            patch(p.id, { model: e.target.value.trim() }, e.target);
                         }}
                       />
                     )}

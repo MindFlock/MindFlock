@@ -65,8 +65,9 @@
       <p class="logcap" id="starting-cap" hidden>Server log (<span class="logpath"></span>):</p>
       <pre class="log" id="starting-log" hidden></pre>
       <p class="hint" id="starting-hint" hidden>Taking longer than usual?
-        Press <code>Ctrl+Shift+L</code> for app logs.<br>
-        Server startup log: <code class="logpath">~/.mindflock/desktop-server.log</code></p>
+        Press <code class="logkey">Ctrl+Shift+L</code> for app logs.<br>
+        Server startup log: <code class="logpath">~/.mindflock/desktop-server.log</code><br>
+        <button class="action quiet" id="starting-open-logs">Open log folder</button></p>
     </section>
 
     <!-- The server we started exited before it ever answered: a crash on boot.
@@ -80,9 +81,10 @@
       <p class="detail" id="failed-detail"></p>
       <button class="action" id="retry-start">Try again</button>
       <button class="action quiet" id="copy-diag">Copy diagnostics</button>
+      <button class="action quiet" id="failed-open-logs">Open log folder</button>
       <p class="hint">Copy diagnostics puts the log tail and the app’s details on
          your clipboard, ready to paste into a bug report.<br>
-         Press <code>Ctrl+Shift+L</code> for the app’s own log folder.</p>
+         Press <code class="logkey">Ctrl+Shift+L</code> for the app’s own log folder.</p>
     </section>
 
     <!-- wsl.exe errored or hung: offer the fix, don't make them type anything. -->
@@ -147,8 +149,9 @@
          and sessions are kept.</p>
       <p class="detail" id="broken-detail"></p>
       <button class="action" id="do-repair">Repair the engine (about 3 min)</button>
+      <button class="action quiet" id="broken-open-logs">Open log folder</button>
       <p class="hint">Sessions that are still running keep running while it reinstalls.<br>
-         Press <code>Ctrl+Shift+L</code> for the app’s log folder.</p>
+         Press <code class="logkey">Ctrl+Shift+L</code> for the app’s log folder.</p>
     </section>
 
     <!-- macOS without Homebrew. tmux comes from Homebrew, so offer to install it
@@ -173,6 +176,10 @@
          MindFlock starts on its own when it’s done.</p>
       <pre class="log" id="inst-log"></pre>
       <button class="action" id="do-retry" hidden>Try again</button>
+      <!-- Ways out of a wait: Homebrew's Terminal window closed early, or
+           Apple's installer window closed by mistake. -->
+      <button class="action quiet" id="inst-brew-skip" hidden>Skip for now</button>
+      <button class="action quiet" id="xcode-reopen" hidden>Open Apple’s installer again</button>
       <button class="action quiet" id="inst-copy-diag" hidden>Copy diagnostics</button>
       <p class="hint" id="inst-manual" hidden></p>
     </section>
@@ -272,6 +279,8 @@
         : 'This takes a few minutes. You can leave this window open — MindFlock starts on its own when it’s done.'
     renderLog(inst.lines)
     document.getElementById('do-retry').hidden = !failed
+    document.getElementById('inst-brew-skip').hidden = waiting !== 'homebrew-run'
+    document.getElementById('xcode-reopen').hidden = waiting !== 'xcode'
     document.getElementById('inst-copy-diag').hidden = !failed
     var manual = document.getElementById('inst-manual')
     manual.hidden = !failed
@@ -301,6 +310,7 @@
   wire('do-repair', function () { return window.mfdiag.install() })
   wire('brew-install', function () { return window.mfdiag.action('brew-install') })
   wire('brew-skip', function () { return window.mfdiag.action('brew-skip') })
+  wire('inst-brew-skip', function () { return window.mfdiag.action('brew-skip') })
 
   // Buttons that stay on their own screen: flip the label while the action
   // runs, then let the next poll redraw. Electron has no alert(), so the
@@ -323,25 +333,54 @@
   wireQuiet('copy-diag', 'copy-diagnostics', 'Copied')
   wireQuiet('inst-copy-diag', 'copy-diagnostics', 'Copied')
   wireQuiet('retry-start', 'retry-start', 'Starting…')
+  wireQuiet('xcode-reopen', 'xcode-reopen', 'Opened')
+  wireQuiet('starting-open-logs', 'open-logs', 'Opened')
+  wireQuiet('failed-open-logs', 'open-logs', 'Opened')
+  wireQuiet('broken-open-logs', 'open-logs', 'Opened')
 
+  // The logs shortcut is Ctrl+Shift+L, or Cmd+Shift+L on a Mac (main.js
+  // takes either modifier); say the one this keyboard has.
+  var isMac = (window.mfshell && window.mfshell.platform === 'darwin')
+    || /Mac/.test((navigator && navigator.platform) || '')
+  if (isMac) setAll('.logkey', 'Cmd+Shift+L')
+
+  // Restart WSL is a two-step confirm (--shutdown closes other WSL work).
+  // The armed question stands down by itself after RESTART_ARM_MS, and the
+  // button says how the restart went before it reads "Restart WSL" again.
+  var RESTART_ARM_MS = 5000
+  var RESTART_RESULT_MS = 2500
   var restarting = false
   var armed = false
+  var disarmTimer = null
   var btn = document.getElementById('restart-wsl')
+  var btnLabel = btn.textContent
+  function disarm() {
+    armed = false
+    if (disarmTimer) { clearTimeout(disarmTimer); disarmTimer = null }
+    if (!restarting) btn.textContent = btnLabel
+  }
   btn.addEventListener('click', function () {
     if (restarting) return
-    if (!armed) {   // two-step confirm: --shutdown closes other WSL work
+    if (!armed) {
       armed = true
       btn.textContent = 'Restart WSL now? (closes other WSL apps)'
+      disarmTimer = setTimeout(disarm, RESTART_ARM_MS)
       return
     }
+    disarm()
     restarting = true
     btn.disabled = true
     btn.textContent = 'Restarting WSL…'
     Promise.resolve(window.mfdiag && window.mfdiag.restartWsl())
-      .catch(function () {})
-      .then(function () {
-        restarting = false; armed = false
-        btn.disabled = false; btn.textContent = 'Restart WSL'
+      .then(function (r) { return !!r && r.ok !== false })
+      .catch(function () { return false })
+      .then(function (ok) {
+        btn.textContent = ok ? 'Restarted' : 'Didn’t work'
+        setTimeout(function () {
+          restarting = false
+          btn.disabled = false; btn.textContent = btnLabel
+          tick()
+        }, RESTART_RESULT_MS)
       })
   })
 

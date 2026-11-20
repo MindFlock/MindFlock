@@ -1978,3 +1978,53 @@ def test_lone_session_history_excludes_sibling_threads(fake_home):
         workdir, a_start, None, False, threads={"a-conv-1"}, other_threads={"b-conv-1"}
     )
     assert out["out"] == 11
+
+
+def test_agents_json_is_asked_half_as_often_while_memory_is_low(
+    live_agents, monkeypatch
+):
+    """Each probe starts a 167 MB node process: while memory reads low the
+    live map is served for 6 s (every other 4 s tick), at normal memory for
+    2 s exactly as before."""
+    import subprocess
+    import time
+    from types import SimpleNamespace
+
+    from backend import memory_pressure
+
+    calls = []
+
+    def fake_run(*a, **k):
+        calls.append(1)
+        return SimpleNamespace(returncode=0, stdout=b"[]")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(time, "time", lambda: clock["t"])
+
+    def tick(low):
+        monkeypatch.setattr(memory_pressure, "is_low", lambda **k: low)
+        claude_mod._agents_state_map()
+        clock["t"] += 4.0
+
+    for _ in range(4):
+        tick(False)
+    assert len(calls) == 4  # normal memory: every 4 s tick probes (TTL 2 s)
+    assert claude_mod._agents_json_ttl() == claude_mod._AGENTS_JSON_TTL == 2.0
+    calls.clear()
+    for _ in range(4):
+        tick(True)
+    assert len(calls) == 2  # low: every other tick
+    assert claude_mod._agents_json_ttl() == claude_mod._AGENTS_JSON_TTL_LOW
+    # Never later than the TTL plus one tick: a prompt shows within ~8 s.
+    assert claude_mod._AGENTS_JSON_TTL_LOW <= 6.0
+
+
+def test_agents_json_ttl_survives_a_broken_memory_reading(monkeypatch):
+    from backend import memory_pressure
+
+    def boom(**k):
+        raise RuntimeError("no /proc")
+
+    monkeypatch.setattr(memory_pressure, "is_low", boom)
+    assert claude_mod._agents_json_ttl() == claude_mod._AGENTS_JSON_TTL

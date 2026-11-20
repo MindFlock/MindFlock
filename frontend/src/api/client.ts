@@ -23,7 +23,16 @@ async function request(path: string, opts?: RequestInit & { json?: unknown }): P
     init.headers = { "Content-Type": "application/json", ...(init.headers || {}) };
     init.body = JSON.stringify(opts.json);
   }
-  const r = await fetch(path, init);
+  let r: Response;
+  try {
+    r = await fetch(path, init);
+  } catch (err) {
+    // A cancelled request stays what it was: callers tell it apart by name.
+    if ((err as Error)?.name === "AbortError") throw err;
+    // The browser's own "Failed to fetch" / "NetworkError…" names no reason a
+    // person can act on: the server is down or restarting.
+    throw new ApiError(0, UNREACHABLE, null);
+  }
   if (r.status === 401) {
     location.reload();
     throw new ApiError(401, "unauthorized", null);
@@ -37,12 +46,30 @@ async function request(path: string, opts?: RequestInit & { json?: unknown }): P
     let msg = statusSentence(r.status);
     if (body && typeof body === "object") {
       const b = body as Json;
+      const listed = validationSentence(b.detail);
       if (typeof b.detail === "string" && b.detail) msg = b.detail;
+      else if (listed) msg = listed;
       else if (typeof b.error === "string" && b.error) msg = b.error;
     }
     throw new ApiError(r.status, msg, body);
   }
   return text;
+}
+
+/** What a request says when the server never answered (status 0). */
+export const UNREACHABLE = "Couldn't reach MindFlock. Is it still running?";
+
+/** FastAPI's 422 puts a list in `detail`: [{loc: ["body", "title"], msg}].
+ * The first entry's message, with the field it is about when there is one;
+ * "" when `detail` is not that list. */
+function validationSentence(detail: unknown): string {
+  if (!Array.isArray(detail) || !detail.length) return "";
+  const first = detail[0] as { loc?: unknown; msg?: unknown } | null;
+  const msg = typeof first?.msg === "string" ? first.msg.trim() : "";
+  if (!msg) return "";
+  const loc = Array.isArray(first?.loc) ? first.loc : [];
+  const field = loc.length > 1 ? loc[loc.length - 1] : "";
+  return typeof field === "string" && field ? field + ": " + msg : msg;
 }
 
 /** What a failed request says when the server sent no reason of its own. */

@@ -4,7 +4,7 @@
  *
  * Lines: Move (a hint — dragging any selected line's bar moves them all),
  * Tidy these, Remove (a session's line closes its session, a grounded line is
- * deleted), Clear. Stops of one line: Group into a stop and Save to the shelf
+ * deleted), Clear. Stops of one line: Group into a stop and Save as a route…
  * (both ask a name inline), Remove, Clear. Remove goes at once with ONE Undo
  * for the lot (the toast and Ctrl+Z, lib/skyUndo); it asks inline only when
  * the selection holds something running — a session whose agent works or
@@ -23,7 +23,7 @@ import type { Flight, FlightStep, IntakeSourceRef, StepKindDef } from "../../lib
 import { isLive, planFromSteps } from "../../lib/flights";
 import { flightStops } from "../../lib/flightDiagram";
 import { deleteFlight, dropGroup, dropStop, groupStops, moveStop, savePlan, startGrounded, tackOn, tackOnNew, tackOnSteps } from "../../lib/flightsApi";
-import { groundedIdOf, isGroundedKey } from "../../lib/groundedLines";
+import { groundedIdOf, isGroundedKey, savedWords } from "../../lib/groundedLines";
 import { closeSession } from "../../lib/sessionActions";
 import { INTAKE_KEY, type Pos } from "../../lib/skyLayout";
 import { blockMove, consecutive, dropBefore, inOrder, moveFirstOpen, removalNeedsAsk, selectedIndexes, sessionRuns, stepIndexesOf, stopSelection, stopsRun, undoFirstOpen, undoMoves, type SkySelection, type StepMove } from "../../lib/skySelect";
@@ -309,9 +309,9 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
       const plan = planFromSteps(name.trim() || NEW_STOPS, idx.map((i) => flight.steps[i]));
       try {
         const saved = await savePlan({ ...plan, id: "", updated: 0 });
-        toast("Saved “" + saved.name + "” on the shelf");
+        toast(savedWords(saved.name, false));
       } catch (err) {
-        toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+        toast("Saving the route failed: " + errMsg(err), { error: true });
       }
     });
 
@@ -356,8 +356,8 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
             <button type="button" className="test-btn fl-btn" disabled={busy || !!hint} title={hint || "Make these one group: a stop with these stops inside"} onClick={() => p.setAsk("group")}>
               Group into a stop
             </button>
-            <button type="button" className="test-btn fl-btn" disabled={busy || !idx.length} title="Keep these stops on the shelf as a saved route" onClick={() => p.setAsk("save")}>
-              Save to the shelf
+            <button type="button" className="test-btn fl-btn" disabled={busy || !idx.length} title="Keep these stops on the shelf as a saved route — you name it" onClick={() => p.setAsk("save")}>
+              Save as a route…
             </button>
             <button type="button" className="test-btn fl-btn sky-selbar-danger" disabled={busy || !flight} title="Take these stops off the route" onClick={askRemove}>
               Remove

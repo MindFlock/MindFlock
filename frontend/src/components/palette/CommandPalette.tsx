@@ -9,7 +9,9 @@ import { useUi } from "../../state/store";
 import { Modal } from "../Modal";
 import { runCommand } from "../../extensions/host";
 import type { KeymapHost } from "../../lib/keymap";
-import { instances, selectSession } from "../../lib/sessionActions";
+import { instances, selectSession, undoLastClose } from "../../lib/sessionActions";
+import { copyText } from "../../lib/clipboard";
+import { toast } from "../../lib/toast";
 import {
   actionCtx,
   actionHint,
@@ -53,6 +55,7 @@ const PALETTE_ACTIONS: SessionActionId[] = [
   "commit",
   "push",
   "pr",
+  "viewPr",
   "ide",
   "duplicate",
   "branch",
@@ -62,6 +65,7 @@ const PALETTE_ACTIONS: SessionActionId[] = [
   "close",
   "delete",
   "map",
+  "diff",
   "merge",
 ];
 
@@ -89,6 +93,12 @@ const TOP = {
   tour: 7,
   shortcuts: 8,
 };
+
+/** The folder a session's "Copy folder path" copies (the row menu's rule):
+ * its folder, else its path; "" when it has neither. */
+export function copyPathOf(inst: { folder?: string; path?: string } | undefined | null): string {
+  return inst?.folder || inst?.path || "";
+}
 
 /** What builds the palette's rows: the store, the config and extensions
  * caches, the keymap host. */
@@ -182,7 +192,7 @@ export function buildPaletteActions({ config, host, extensions }: PaletteSources
     },
   });
   // Customize and its tabs: the extras you opt into.
-  acts.push({ label: "Customize…", hint: "choose sidebar bars", run: () => ui.openDialogFor("customize") });
+  acts.push({ label: "Customize…", hint: "choose sidebar bars and the pane header", run: () => ui.openDialogFor("customize") });
   acts.push({
     label: "Select sessions…",
     hint: "close, hide or delete several at once · Ctrl+click a row",
@@ -207,6 +217,12 @@ export function buildPaletteActions({ config, host, extensions }: PaletteSources
       run: () => void runTemplateNow(tpl.name),
     });
   }
+  acts.push({
+    label: "Reopen last closed session",
+    hint: "Ctrl+Shift+T",
+    keywords: "undo close restore reopen recently closed",
+    run: () => void undoLastClose(),
+  });
   acts.push({ label: "Recently closed…", hint: "reopen or delete closed sessions", run: () => ui.openDialogFor("recent") });
   acts.push({ label: "Assistant instructions (agent file)…", run: () => ui.openDialogFor("assistant-agent") });
   if (caps.git)
@@ -305,6 +321,18 @@ export function buildPaletteActions({ config, host, extensions }: PaletteSources
           run: () => useUi.getState().openMap(t, { section: "search" }),
         });
     }
+    // The row menu's Copy folder path, for the focused session.
+    const folder = copyPathOf(c.inst);
+    if (folder)
+      acts.push({
+        label: `Copy folder path — ${name}`,
+        hint: folder,
+        keywords: "copy path folder directory worktree clipboard",
+        run: () =>
+          void copyText(folder).then((ok) => {
+            if (ok) toast("Copied path");
+          }),
+      });
   }
 
   // --- Focus rows: every session under the name its rail row shows, with

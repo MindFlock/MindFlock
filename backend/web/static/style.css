@@ -2672,6 +2672,26 @@ button.assist-chip:hover {
 .gh-connected-row .setup-primary:hover {
   filter: brightness(1.1);
 }
+
+/* The status read failed: the sentence and its Retry, the reason under it. */
+.gh-load-failed p {
+  margin: 0;
+}
+.gh-load-failed .gh-load-reason {
+  margin-top: 4px;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+/* Cancel a pending device-flow code: quiet, at the end of the code row. */
+.gh-device .gh-device-cancel {
+  color: var(--muted);
+}
+
+/* "Not connected yet…" after the gh window closed early: its own line. */
+.gh-cli-alt .gh-cli-note {
+  flex-basis: 100%;
+}
 /* Settings → Connections dashboard (Connections.tsx). The base row/pill
    styles live in ticketingConnections.css; this adds the groups, the
    three-state pills, the action column, the fix line and the Test result. */
@@ -3481,6 +3501,15 @@ button.assist-chip:hover {
   display: block;
   margin-top: 4px;
   word-break: break-word;
+}
+
+/* A doctor fix that is a command gets the same Copy as Connect GitHub's push
+   fix and the install window. */
+.doctor-check .doctor-fix-copy {
+  margin-left: 6px;
+  padding: 1px 8px;
+  font-size: 11px;
+  vertical-align: baseline;
 }
 /* Getting-started hint callout. Uses the accent tint so it reads as a friendly
    nudge, not a warning. Inline in the layout flow — see Hint.tsx. */
@@ -7385,6 +7414,17 @@ body.view-switch #sky-view {
 
 .sky-toolbar > * {
   flex: none;
+}
+
+/* "Can't reach the server": one line that gives way before the controls. */
+.sky-toolbar > .sky-flights-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.85em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The toolbar's controls are the app's button tiers (docs/flights.md "As
@@ -20409,6 +20449,11 @@ p.set-hint {
   overflow-wrap: anywhere;
   user-select: all;
 }
+
+/* A guest link's Revoke asks on its own line under the link. */
+.peer-guest-links .set-confirm {
+  margin-top: 6px;
+}
 }
 
 /* 050 */
@@ -22309,6 +22354,13 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
     background: rgba(var(--accent-rgb), 0.2);
   }
 }
+
+/* A refused inline rename (another session has the name): the reason under
+   the box, in red, while the typed text stays in it. */
+.inst .lineage.rename-taken {
+  color: var(--red);
+  white-space: normal;
+}
 }
 
 /* 080 */
@@ -22369,6 +22421,25 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   color: var(--text);
 }
 
+/* The cost chip is a <button> (Tab reaches it, Enter opens it): drop the
+   browser's button look so it reads exactly like the plain chip. */
+.pane-head button.tok.usage-trigger {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+}
+
+.pane-head button.tok.usage-trigger:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 /* Shared click-to-expand usage dropdown (body-mounted, fixed-positioned). */
 .usage-pop {
   position: fixed;
@@ -22382,6 +22453,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   padding: 8px 10px;
   font-size: 12px;
   color: var(--text);
+}
+
+/* The Memory popover opened from the low-memory notice (MemoryNotice) when
+   the sidebar's Memory row is off screen: above the notice it rises from. */
+.usage-pop.mem-pop-over-notice {
+  z-index: 4000;
 }
 
 .usage-pop.hidden {
@@ -24454,6 +24531,11 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   color: var(--text);
 }
 
+/* Focused on open so Tab starts inside the sheet; the card itself needs no ring. */
+.shortcuts-card:focus {
+  outline: none;
+}
+
 .shortcuts-head {
   display: flex;
   align-items: center;
@@ -24554,12 +24636,15 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   cursor: pointer;
 }
 
-.shortcut-row.rebindable:hover {
+.shortcut-row.rebindable:hover,
+.shortcut-row.rebindable:focus-visible {
   background: rgba(var(--accent-rgb), 0.10);
   border-color: var(--accent);
+  outline: none;
 }
 
-.shortcut-row.rebindable:hover .shortcut-desc {
+.shortcut-row.rebindable:hover .shortcut-desc,
+.shortcut-row.rebindable:focus-visible .shortcut-desc {
   color: var(--text);
 }
 
@@ -24604,6 +24689,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 }
 
 .shortcut-row:hover .shortcut-add,
+.shortcut-row:focus-visible .shortcut-add,
 .shortcut-add:focus-visible {
   opacity: 1;
 }
@@ -25114,7 +25200,8 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
    entirely on the window — connection health is self-evident from the sidebar
    dot (which turns red via .dot.disconnected when a session's agent WS drops).
    The socket handlers still write text/`.state-bad` here for the offscreen
-   element, but it never renders in the header. */
+   element, but it never renders in the header: a dropped socket is said over
+   the terminal itself instead (Pane.tsx TermCover, .term-reconnecting). */
 .pane-head .state {
   display: none;
 }
@@ -26108,6 +26195,63 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .term-notice.gone {
   opacity: 0;
+}
+
+/* A terminal whose socket dropped (Pane.tsx TermCover): one line over the
+   old screen, so a stale screen never reads as live. Above the bottom
+   .term-notice line, below the pinned prompt. */
+.term-reconnecting {
+  position: absolute;
+  bottom: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 3px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  pointer-events: none;
+}
+
+/* The cover's words and button: waiting its turn (Start now), can't reach
+   the session, or an error that ran out the retries (Retry). */
+.term-cover {
+  padding: 24px;
+  text-align: center;
+}
+
+.term-cover .term-cover-head {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.term-cover .term-cover-error {
+  max-width: 420px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.term-cover button {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.term-cover button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.term-cover button:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 /* The header's ⋯ (PaneMoreMenu): the folded tabs and controls. Fixed, not
@@ -31399,6 +31543,25 @@ button.ct-chip:hover {
   font-size: 12.5px;
 }
 
+/* A failed load's Retry, and the "may be out of date" note a failed refresh
+   leaves under messages already shown (the Map's cm-note-stale wording). */
+.th-stale {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.th-retry {
+  font: inherit;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+}
+.th-retry:hover {
+  text-decoration: underline;
+}
+
 /* --- the composer ------------------------------------------------------------ */
 .thread-compose {
   flex: none;
@@ -33203,6 +33366,14 @@ button.ct-chip:hover {
   color: var(--muted);
 }
 
+/* What #rb-list shows until the first listing lands. */
+.rb-loading {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .muted {
   color: var(--muted);
 }
@@ -34611,6 +34782,13 @@ button.ct-chip:hover {
 
 .nf-skip-perms {
   margin-top: 4px;
+}
+
+/* The agent sign-in window opened from the "isn't signed in yet" note is
+   portalled; its React host is an empty wrapper that must not take a slot in
+   the dialog's layout. */
+.nf-signin-host {
+  display: contents;
 }
 }
 
@@ -36356,6 +36534,25 @@ body.conn-lost #cs-errors {
 #cs-errors .cs-confirm .cs-error-act.primary:hover {
   background: rgba(120, 160, 255, 0.12);
 }
+
+/* A destructive answer (Delete) is red on either card, like the row menu's
+   confirm strip, so a question's Delete never reads as the safe default. */
+#cs-errors .cs-error-act.danger,
+#cs-errors .cs-confirm .cs-error-act.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+#cs-errors .cs-error-act.danger:hover,
+#cs-errors .cs-confirm .cs-error-act.danger:hover {
+  background: rgba(222, 97, 62, 0.12);
+}
+
+/* Cards take focus on open (Cancel first): show where it is. */
+#cs-errors .cs-error-act:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 }
 
 /* 200 */
@@ -36496,6 +36693,22 @@ body.conn-lost #cs-errors {
 }
 
 #state-notice .sn-btn:hover {
+  border-color: var(--accent);
+}
+
+/* "Copy the rename command": small, inline after the sentence it acts on. */
+#state-notice .sn-copy {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#state-notice .sn-copy:hover {
   border-color: var(--accent);
 }
 }
@@ -36823,6 +37036,25 @@ body.conn-lost #cs-errors {
   margin-top: 8px;
   display: flex;
   justify-content: flex-end;
+}
+
+/* "See what's using it": a link on the left, Hide stays on the right. */
+#memory-notice .mn-see {
+  margin-right: auto;
+  align-self: center;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+#memory-notice .mn-see:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 #memory-notice .mn-btn {
@@ -40114,6 +40346,20 @@ button.linklike {
   display: flex;
   justify-content: flex-end;
 }
+
+/* Under a list whose re-polling has backed off (the server can't get a new one
+   yet): the rows are the last ones read, and Retry sweeps now. Quiet, like the
+   toolbar note: the rows above are still good to act on. */
+.ik-stalled-refresh {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+/* An Auto-start section whose list couldn't be read: the reason, then Retry. */
+.ik-queue-error .linklike {
+  margin-left: 6px;
+}
 }
 
 /* 255 — after
@@ -43392,6 +43638,13 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   flex: 0 1 auto;
 }
 
+/* The fold toggle (caret, name, lane) is a real button; it sizes to its
+   content so .rg-sp, not the button, takes the slack before the badges. */
+.run-group-head .dev-toggle {
+  flex: 0 1 auto;
+  gap: 4px;
+}
+
 .run-group-head .rg-lane {
   flex: none;
   white-space: nowrap;
@@ -43465,6 +43718,7 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 }
 
 .run-group-head:hover .rg-more,
+.run-group-head:focus-within .rg-more,
 .run-group-head .rg-more:focus-visible {
   display: inline-block;
 }

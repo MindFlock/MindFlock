@@ -144,8 +144,12 @@ async def join_page() -> FileResponse:
 async def peer_status(request: Request) -> JSONResponse:
     """Peer-link status: sandbox availability, this instance's identity
     fingerprint, the listen address, links (no keys) and active invites (id and
-    expiry only — never the code, so never its ``url`` either)."""
-    return await _peer_call(request, lambda: _service().status())
+    expiry only — never the code, so never its ``url`` either). Built in a
+    worker thread: every open window's rail polls this every 10 s, and it
+    reads the link store and settings from disk (and, at most every few
+    minutes, runs the sandbox self-test) — never on the event loop that
+    carries every terminal's keystrokes."""
+    return await _peer_call(request, lambda: asyncio.to_thread(_service().status))
 
 
 @router.post("/api/peer/enable")

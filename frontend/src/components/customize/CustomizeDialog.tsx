@@ -7,12 +7,16 @@
  * Each page has one line saying what it changes and its own "Reset to
  * default". Opened from the sidebar footer's ⚙ Customize and the palette.
  *
+ * "Reset to default" offers Undo (the app's undo toast), which puts back the
+ * layout from just before the reset.
+ *
  * Esc closes the dialog unless something inside claimed it first
  * (`defaultPrevented`) — the Modal shell's listener sits on window, which a
  * keydown reaches after every document listener, so a child's claim is always
  * made before it reads it. */
 
 import { useUi } from "../../state/store";
+import { toast } from "../../lib/toast";
 import { Modal } from "../Modal";
 import { SidebarBarsPicker } from "./SidebarBarsPicker";
 import { PaneHeaderPicker } from "./PaneHeaderPicker";
@@ -30,13 +34,37 @@ const PAGES = [
   },
 ];
 
+type UiState = ReturnType<typeof useUi.getState>;
+
+/** Reset one Customize page to its defaults and hand back the undo: it
+ * restores exactly what that page showed just before. A sidebar whose bars
+ * were the defaults stays on the defaults (so the calm first hour can still
+ * extend them); a chosen set is re-applied bar by bar. */
+export function resetLayout(page: "pane" | "sidebar", get: () => UiState = useUi.getState): () => void {
+  const ui = get();
+  if (page === "pane") {
+    const prev = ui.paneHeader;
+    ui.setPaneHeader(null);
+    return () => get().setPaneHeader(prev);
+  }
+  const hidden = new Set(ui.hiddenBars);
+  const { barsExplicit, barOrder, showFilter } = ui;
+  ui.resetSidebarBars();
+  return () => {
+    get().setBarOrder(barOrder);
+    get().setShowFilter(showFilter);
+    if (!barsExplicit) return;
+    for (const k of new Set([...hidden, ...get().hiddenBars])) {
+      if (hidden.has(k) !== get().hiddenBars.has(k)) get().toggleBarHidden(k);
+    }
+  };
+}
+
 export function CustomizeDialog() {
   const open = useUi((s) => s.openDialog === "customize");
   const closeDialog = useUi((s) => s.closeDialog);
   const page = useUi((s) => s.customizePage);
   const setPage = useUi((s) => s.setCustomizePage);
-  const resetSidebarBars = useUi((s) => s.resetSidebarBars);
-  const setPaneHeader = useUi((s) => s.setPaneHeader);
   const paneCustomized = useUi((s) => s.paneHeader !== null);
   const barsCustomized = useUi((s) => s.barsExplicit || s.barOrder.length > 0 || !s.showFilter);
 
@@ -83,7 +111,12 @@ export function CustomizeDialog() {
             className="linklike"
             disabled={!canReset}
             title={canReset ? "Back to what a fresh install shows" : "Already the default"}
-            onClick={() => (cur.id === "pane" ? setPaneHeader(null) : resetSidebarBars())}
+            onClick={() => {
+              const undo = resetLayout(cur.id);
+              toast(cur.id === "pane" ? "Pane header reset to default" : "Sidebar reset to default", {
+                action: { label: "Undo", ariaLabel: "Undo the reset", onClick: undo },
+              });
+            }}
           >
             Reset to default
           </button>

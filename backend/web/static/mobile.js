@@ -66,6 +66,15 @@
   var tab = "agent";            // "agent" | "shell"
   var ctrlActive = false;       // sticky Ctrl modifier
   var instances = [];
+  // The session list's reachability. `listLoaded` flips on the first good
+  // answer from /api/instances (until then the header says "Loading
+  // sessions…", not "no sessions"); `pollFails` counts failed polls in a row,
+  // and two of them put UNREACHABLE where the status line is. A failed poll
+  // (server down, a 401, a 5xx, any non-list body) KEEPS the last list: it is
+  // never read as "no sessions", which would drop the open terminal.
+  var listLoaded = false;
+  var pollFails = 0;
+  var UNREACHABLE = "Couldn't reach MindFlock. Is it still running?";
   // Title whose terminal we are deliberately NOT attaching to yet because the
   // server is still provisioning it (status "loading"), or because it is
   // PAUSED and this is its agent tab (the server refuses that socket with
@@ -166,10 +175,10 @@
         setStatus(PAUSED_LINE);
         return;
       }
-      setStatus("reconnecting…");
+      setStatus(pollFails >= 2 ? UNREACHABLE : "reconnecting…");
       setTimeout(function () { if (!closedByUs && sock === ws) connect(); }, 2500);
     };
-    sock.onerror = function () { setStatus("connection error"); };
+    sock.onerror = function () { setStatus(pollFails >= 2 ? UNREACHABLE : "connection error"); };
   }
 
   // Switch the displayed session (or tab) without leaking the old terminal.
@@ -579,7 +588,8 @@
   // the way the rail paints a row's dot and chip (sessionState.ts).
   function updateDot() {
     var inst = currentInst();
-    pickerTitleEl.textContent = current ? nameOf(current) : (instances.length ? "Sessions" : "no sessions");
+    pickerTitleEl.textContent = current ? nameOf(current)
+      : instances.length ? "Sessions" : listLoaded ? "no sessions" : "Loading sessions…";
     if (!inst) {
       dotEl.className = "dot tone-muted";
       stateChipEl.classList.add("hidden");
@@ -637,8 +647,18 @@
     actionsEl.querySelectorAll(".act").forEach(function (btn) {
       var act = btn.dataset.act;
       btn.classList.toggle("is-next", act === next);
-      btn.disabled = !inst;
+      btn.disabled = !inst || gitBusy;
     });
+  }
+
+  // One git request at a time: a Push, PR, Merge or Commit turns the action
+  // bar off until the server answers, so a second tap can't send it twice.
+  var gitBusy = false;
+  function gitInFlight(p) {
+    gitBusy = true;
+    updateActions();
+    function settle() { gitBusy = false; updateActions(); }
+    return p.then(function (v) { settle(); return v; }, function (e) { settle(); throw e; });
   }
 
   // POST an action endpoint, resolving the parsed JSON and rejecting with the
@@ -656,7 +676,24 @@
         if (!r.ok) throw apiError((j && j.error) || "request failed (" + r.status + ")", r.status, j);
         return j;
       });
-    });
+    }, function () { throw unreachableError(); });
+  }
+  // fetch() rejects only when nothing answered, and with the browser's own
+  // words ("Load failed" on iOS, "Failed to fetch" in Chrome): said instead
+  // the way the desktop says it.
+  function unreachableError() {
+    return apiError(UNREACHABLE, 0);
+  }
+  // An error's line for the status bar. A bare fetch() that got no answer
+  // rejects with a TypeError carrying the browser's words; say UNREACHABLE.
+  function errText(err, fallback) {
+    if (err && err.name === "TypeError") return UNREACHABLE;
+    return (err && err.message) || fallback;
+  }
+  // "Couldn't answer: why" — except when nothing answered at all, where the
+  // UNREACHABLE line says it whole and a prefix would only stutter.
+  function failLine(prefix, why) {
+    return why === UNREACHABLE ? why : prefix + ": " + why;
   }
   function postAction(action, body) {
     return postFor(current, action, body);
@@ -700,11 +737,11 @@
   // asked about, not whichever one is on screen by then.
   function doPush(force, title, overrideRz) {
     title = title || current;
-    if (!title) return;
+    if (!title || gitBusy) return;
     flashStatus("pushing…");
     var pushBody = force ? { force: true } : {};
     if (overrideRz) pushBody.override_red_zones = true;
-    postFor(title, "push-branch", pushBody)
+    gitInFlight(postFor(title, "push-branch", pushBody))
       .then(function () { flashStatus("pushed"); setTimeout(poll, 800); })
       .catch(function (err) {
         var rz = redZoneBreaches(err);
@@ -724,7 +761,9 @@
             function () { doPush(true, title, overrideRz); });
           return;
         }
-        flashStatus("push failed: " + err.message);
+        // An error stays up until the next action: 2.5 s is too short to
+        // read git's message on a phone.
+        setStatus("push failed: " + err.message);
       });
   }
 
@@ -737,16 +776,16 @@
 
   function doMakePr(title, overrideRz) {
     title = title || current;
-    if (!title) return;
+    if (!title || gitBusy) return;
     flashStatus("opening PR…");
-    postFor(title, "make-pr", overrideRz ? { override_red_zones: true } : {})
+    gitInFlight(postFor(title, "make-pr", overrideRz ? { override_red_zones: true } : {}))
       .then(function (j) {
         if (j && j.ok === false) {
           if (j.compare_url) {
             window.open(j.compare_url, "_blank");
-            flashStatus("opened GitHub’s compare page — " + (j.message || PR_REMEDY));
+            setStatus("opened GitHub’s compare page — " + (j.message || PR_REMEDY));
           } else {
-            flashStatus(j.message || PR_REMEDY);
+            setStatus(j.message || PR_REMEDY);
           }
           setTimeout(poll, 800);
           return;
@@ -767,14 +806,14 @@
           explainRedZone(title, "Open PR", rz, function () { doMakePr(title, true); });
           return;
         }
-        flashStatus("Open PR failed: " + err.message);
+        setStatus("Open PR failed: " + err.message);
       });
   }
 
   // Asked first on the ask sheet — a merge can't be undone from MindFlock.
   function doMerge(confirmed, title, overrideRz) {
     title = title || current;
-    if (!title) return;
+    if (!title || gitBusy) return;
     if (!confirmed) {
       askSheet(
         "Merge this PR?",
@@ -784,14 +823,14 @@
       return;
     }
     flashStatus("merging…");
-    postFor(title, "merge-pr", overrideRz ? { override_red_zones: true } : {})
+    gitInFlight(postFor(title, "merge-pr", overrideRz ? { override_red_zones: true } : {}))
       .then(function (j) {
         if (j && j.ok === false) {
           if (j.pr_url) {
             window.open(j.pr_url, "_blank");
-            flashStatus("opened the PR to merge on GitHub — " + (j.message || PR_REMEDY));
+            setStatus("opened the PR to merge on GitHub — " + (j.message || PR_REMEDY));
           } else {
-            flashStatus(j.message || PR_REMEDY);
+            setStatus(j.message || PR_REMEDY);
           }
         } else {
           flashStatus("merged");
@@ -805,7 +844,7 @@
           explainRedZone(title, "Merge", rz, function () { doMerge(true, title, true); });
           return;
         }
-        flashStatus("merge failed: " + err.message);
+        setStatus("merge failed: " + err.message);
       });
   }
 
@@ -820,8 +859,10 @@
   function submitCommit() {
     var msg = commitText.value.trim();
     if (!msg) { commitText.focus(); return; }
+    if (gitBusy) return;
     closeCommitSheet();
-    commitText.value = "";
+    // The box keeps the message until the server takes the commit (doCommit):
+    // a failed commit no longer loses it.
     // Watch the pre-commit hooks run: flip to the shell tab (same as the
     // desktop CommitDialog switching to the terminal before submitting).
     switchTab("shell");
@@ -833,8 +874,12 @@
   // the desktop's commit card — never a block.
   function doCommit(msg, proceed) {
     var body = proceed ? { message: msg, proceed_anyway: true } : { message: msg };
-    postAction("commit", body)
-      .then(function () { flashStatus("commit started — watch the shell"); setTimeout(poll, 800); })
+    gitInFlight(postAction("commit", body))
+      .then(function () {
+        if (commitText.value.trim() === msg) commitText.value = "";
+        flashStatus("commit started — watch the shell");
+        setTimeout(poll, 800);
+      })
       .catch(function (err) {
         if (err && err.status === 409 && err.body && err.body.zone_warning) {
           var hits = err.body.red_zone_breaches || [];
@@ -848,7 +893,7 @@
             function () { doCommit(msg, true); });
           return;
         }
-        flashStatus("commit failed: " + err.message);
+        setStatus("commit failed: " + err.message);
       });
   }
 
@@ -933,7 +978,10 @@
     if (!current) { diffStat.textContent = ""; diffNote("No session selected."); return; }
     var seq = ++diffSeq;
     var title = current;
-    diffStat.textContent = "loading…";
+    diffStat.textContent = "";
+    // Clears the last diff too: a new session or base must not show the old
+    // one under its heading while this loads.
+    diffNote("Loading diff…");
     fetch("/api/instances/" + encodeURIComponent(title) + "/diff?base=" + diffBase)
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) {
@@ -956,7 +1004,7 @@
       .catch(function (err) {
         if (seq !== diffSeq) return;
         diffStat.textContent = "";
-        diffNote((err && err.message) || "could not load the diff");
+        diffNote(errText(err, "could not load the diff"));
       });
   }
 
@@ -1543,13 +1591,31 @@
     return null;
   }
 
+  // One failed poll is a blip; the second in a row says so where the status
+  // line is (the desktop's words), and keeps saying it until a poll answers.
+  function pollFailed() {
+    pollFails += 1;
+    if (pollFails >= 2) setStatus(UNREACHABLE);
+  }
+  function pollAnswered() {
+    if (pollFails >= 2 && statusEl.textContent === UNREACHABLE) setStatus("");
+    pollFails = 0;
+    listLoaded = true;
+  }
+
   function poll() {
     return fetch("/api/instances")
-      .then(function (r) { return r.json(); })
+      // Only a 2xx list replaces `instances`: a 401, a 5xx or an error body
+      // used to become [] here, and renderPicker then closed the open
+      // terminal to show "No sessions yet".
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
       .then(function (list) {
+        if (!Array.isArray(list)) { pollFailed(); return; }
+        pollAnswered();
         // A guest link's crossed-out rows (`locked`, backend.web.core.guests)
         // have no terminal to open: the phone lists only what it can show.
-        instances = (Array.isArray(list) ? list : []).filter(function (i) { return !i.locked; });
+        instances = list.filter(function (i) { return !i.locked; });
         voiceDialogRows(instances);
         // Re-render when the title set OR any attention state changes, so
         // markers move without a session being added/removed.
@@ -1656,7 +1722,7 @@
           setTimeout(function () { setStatus(""); }, 4000);
         });
       })
-      .catch(function () { setStatus("Couldn't reach MindFlock"); })
+      .catch(function () { setStatus(UNREACHABLE); })
       .then(function () {
         approveBusy = false;
         if (r.id === approveWanted) approveWanted = "";
@@ -1858,7 +1924,7 @@
         flashStatus(verb === "done" ? "done — the route carries on" : "skipped — the route carries on");
         setTimeout(poll, 600);
       })
-      .catch(function (err) { flashStatus((verb === "done" ? "Done" : "Skip") + " failed: " + err.message); })
+      .catch(function (err) { setStatus((verb === "done" ? "Done" : "Skip") + " failed: " + errText(err, "error")); })
       .then(function () {
         flightBusy = false;
         flightKey = "";
@@ -2061,7 +2127,7 @@
           hidePlanCard();
         }
       })
-      .catch(function (err) { flashStatus((err && err.message) || "Couldn't reach MindFlock"); })
+      .catch(function (err) { setStatus(errText(err, UNREACHABLE)); })
       .then(function () {
         planBusy = false;
         planKey = "";
@@ -2230,7 +2296,7 @@
         flashStatus((file.name || "image") + " → " + j.path);
       })
       .catch(function (err) {
-        flashStatus("file paste failed: " + ((err && err.message) || "error"));
+        setStatus("file paste failed: " + errText(err, "error"));
       });
   }
   // Capture phase so this wins over xterm's own paste handling when the
@@ -2651,7 +2717,7 @@
       .catch(function (err) {
         if (seq !== planSeq) return;
         planDone(seq);
-        loadFolders(((err && err.message) || "couldn't read that") +
+        loadFolders(errText(err, "couldn't read that") +
                     " — pick the folder yourself.", 1);
       });
   }
@@ -2856,7 +2922,7 @@
           newError("Not started yet: memory is low.");
           return;
         }
-        newError((err && err.message) || "could not start the session");
+        newError(errText(err, "could not start the session"));
       });
   }
 
@@ -3449,7 +3515,7 @@
     closeSheet(sessionsSheet);
     recentError("");
     recentListEl.innerHTML = "";
-    recentListEl.appendChild(folderNote("loading…"));
+    recentListEl.appendChild(folderNote("Loading…"));
     openSheet(recentSheet);
     var seq = ++recentSeq;
     loadDevices()
@@ -3475,7 +3541,7 @@
     if (answers.length === 1) {
       // One source: exactly today's sheet, error and all.
       if (answers[0].err) {
-        recentError((answers[0].err && answers[0].err.message) || "couldn't read the list");
+        recentError(errText(answers[0].err, "couldn't read the list"));
         return;
       }
     }
@@ -3534,6 +3600,8 @@
   // and comes back listed as <device>::<title>.
   function reopenClosed(ent, btn, device) {
     btn.disabled = true;
+    // The agent can take seconds to boot: say so on the button meanwhile.
+    btn.textContent = "Reopening…";
     recentError("");
     fetch(devicePath(device, "/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen"), {
       method: "POST",
@@ -3557,7 +3625,8 @@
       })
       .catch(function (err) {
         btn.disabled = false;
-        recentError((err && err.message) || "reopen failed");
+        btn.textContent = "Reopen";
+        recentError(errText(err, "reopen failed"));
       });
   }
 
@@ -3598,7 +3667,7 @@
   // ask sheet).
   actionsEl.querySelectorAll(".act").forEach(function (b) {
     b.addEventListener("click", function () {
-      if (b.disabled || !current) return;
+      if (b.disabled || gitBusy || !current) return;
       switch (b.dataset.act) {
         case "commit": openCommitSheet(); break;
         case "push": doPush(false, current); break;
@@ -12266,7 +12335,7 @@
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j || {} }; });
     }).catch(function (err) {
-      return { r: { ok: false, status: 0 }, j: { error: String((err && err.message) || err) } };
+      return { r: { ok: false, status: 0 }, j: { error: errText(err, String(err)) } };
     });
   }
   // One move in a select question, pinned to the step shown; then the step
@@ -12288,7 +12357,7 @@
       if (x.r.ok || moved) voiceDialogAnswered(e.title, d.id);   // the next step (even the same id) is a new sighting
       if (x.r.ok || moved) { askSelRefetch(x.r.ok ? String(d.id) : ""); return; }
       ask.busy = false;
-      askErr("Couldn't answer: " + (x.j.error || "HTTP " + x.r.status));
+      askErr(failLine("Couldn't answer", x.j.error || "HTTP " + x.r.status));
       askRender();
       askSelVoiceFailed(e);
     });
@@ -12365,7 +12434,7 @@
       if (!x.r.ok) {
         if (x.r.status === 409 && x.j.dialog_changed) { askSelRefetch(""); return; }
         ask.busy = false;
-        askErr("Couldn't answer: " + (x.j.error || "HTTP " + x.r.status));
+        askErr(failLine("Couldn't answer", x.j.error || "HTTP " + x.r.status));
         askRender();
         askSelVoiceFailed(e);
         return;
@@ -12394,7 +12463,7 @@
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j || {} }; });
     }, function (err) {
-      return { r: { ok: false, status: 0 }, j: { error: String((err && err.message) || err) } };
+      return { r: { ok: false, status: 0 }, j: { error: errText(err, String(err)) } };
     }).then(function (x) {
       if (ask.entry !== e) return;
       if (x.r.status === 409 && x.j.in_dialog && tries < 4) {
@@ -12403,7 +12472,7 @@
       }
       ask.busy = false;
       if (!x.r.ok) {
-        askErr("Couldn't send: " + (x.j.error || "HTTP " + x.r.status));
+        askErr(failLine("Couldn't send", x.j.error || "HTTP " + x.r.status));
         askRender();
         askSelVoiceFailed(e);
         return;
@@ -12460,7 +12529,7 @@
       });
     }).catch(function (err) {
       ask.busy = false;
-      askErr("Couldn't answer: " + String((err && err.message) || err));
+      askErr(failLine("Couldn't answer", errText(err, String(err))));
       askRender();
     });
   }
@@ -12510,7 +12579,7 @@
       });
     }).catch(function (err) {
       ask.busy = false;
-      askErr("Couldn't send: " + String((err && err.message) || err));
+      askErr(failLine("Couldn't send", errText(err, String(err))));
       askRender();
     });
   }
@@ -13107,7 +13176,7 @@
         if (url === "/api/update/start") waitForNewBuild();
       });
     }).catch(function (err) {
-      showUpdate("Couldn't update: " + err.message, "Update", updAction);
+      showUpdate(failLine("Couldn't update", errText(err, String(err))), "Update", updAction);
     });
   }
   function checkUpdate() {

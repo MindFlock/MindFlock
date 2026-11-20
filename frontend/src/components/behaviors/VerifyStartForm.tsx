@@ -116,14 +116,22 @@ export function VerifyStartForm({ title, repo, onClose }: VerifyStartFormProps):
   useEffect(() => {
     field.current?.focus();
   }, []);
+  // The same latch for `start` itself: Enter in the box reaches it while the
+  // Start button is disabled.
+  const busyRef = useRef(false);
   const start = async () => {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
+    let ok = false;
     try {
-      const ok = await startSessionVerify(title, { notes, environment: where, open: false });
+      ok = await startSessionVerify(title, { notes, environment: where, open: false });
       if (ok) onClose();
     } finally {
+      busyRef.current = false;
       setBusy(false);
+      // Back in the box after a refusal, so a fix and Enter is all it takes.
+      if (!ok) field.current?.focus();
     }
   };
   return (
@@ -152,7 +160,8 @@ export function VerifyStartForm({ title, repo, onClose }: VerifyStartFormProps):
         placeholder="What should it prove? (optional)"
         aria-label="What should it prove? (optional)"
         value={notes}
-        disabled={busy}
+        // readOnly, not disabled: a disabled box drops focus to the page.
+        readOnly={busy}
         onChange={(e) => setNotes(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -174,7 +183,7 @@ export function VerifyStartForm({ title, repo, onClose }: VerifyStartFormProps):
         </label>
       ) : null}
       <button type="submit" className="btn-primary pv-form-start" disabled={busy} aria-busy={busy || undefined}>
-        Start
+        {busy ? "Starting…" : "Start"}
       </button>
       <button type="button" className="test-btn pv-form-cancel" disabled={busy} onClick={onClose}>
         Cancel

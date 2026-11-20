@@ -40,6 +40,7 @@ import { errMsg } from "../lib/format";
 import { answerFresh, fetchDialog } from "../lib/flockActions";
 import { openAsk } from "../lib/ask";
 import { isSelect, selectStage } from "../lib/askSelect";
+import { pollWhileVisible } from "./grid/visiblePoll";
 
 export type AnswerVariant = "rail" | "bell" | "thread";
 
@@ -396,12 +397,13 @@ export function useAnswerStrip(
     return () => ctl.abort();
   }, [title, waiting, activity]);
 
-  // Answered but still in clarify: watch for the NEXT prompt.
+  // Answered but still in clarify: watch for the NEXT prompt — only while
+  // the page shows (a hidden window skips its ticks and looks once on return).
   const answered = state.phase === "answered";
   useEffect(() => {
     if (!answered || !waiting) return;
     const ctl = new AbortController();
-    const timer = window.setInterval(() => {
+    const stop = pollWhileVisible(() => {
       fetchDialog(title, ctl.signal).then(
         (dialog) => !ctl.signal.aborted && dispatch({ type: "loaded", dialog }),
         () => {}
@@ -409,7 +411,7 @@ export function useAnswerStrip(
     }, ANSWER_RECHECK_MS);
     return () => {
       ctl.abort();
-      clearInterval(timer);
+      stop();
     };
   }, [answered, waiting, title]);
 

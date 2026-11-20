@@ -27,6 +27,9 @@ import { matchesFilter, orderedInstances } from "../components/sidebar/ordering"
 import type { Instance } from "../api/types";
 import { sessionLabel } from "./sessionLabel";
 import { useUi } from "../state/store";
+// A cycle (sessionActions names windows through this module), safe because
+// neither side calls the other while loading: openSession runs on a click.
+import { selectSession } from "./sessionActions";
 
 /** A row in the `/api/instances` snapshot, as much of it as naming needs. */
 interface Named {
@@ -131,11 +134,21 @@ export function nameTakenBy(title: string, name: string): string {
   return "";
 }
 
-/** Publish on the extension API, next to `mf.toast`. `core/events.js` creates
+/** Publish on the extension API, next to `mf.toast` — the name and slot a
+ * notification shows, and what clicking it opens. `core/events.js` creates
  * `window.mindflock` before the bundle runs, so this only ever adds a key. */
 export function publishWindowName() {
   const w = globalThis as unknown as { mindflock?: Record<string, unknown> };
   w.mindflock = w.mindflock || {};
   w.mindflock.displayName = windowName;
   w.mindflock.slotNumber = slotNumber;
+  w.mindflock.openSession = openSession;
+}
+
+/** Bring a session up, by the raw title an event carries: what a click on
+ * the notify addon's browser notification does (the desktop app's own
+ * notification click does the same — lib/desktopNotify openNotifyTarget). */
+export function openSession(title: string): void {
+  if (!title) return;
+  selectSession(title, { noKeyboard: true });
 }

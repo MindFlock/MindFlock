@@ -7,6 +7,321 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The app says why it is slow when memory is low.** The memory notice now
+  says sessions may be slow to show what you type and their output until
+  memory recovers. When the server stops answering while memory was low, the
+  connection card says *MindFlock is slow to respond: memory is low* and what
+  frees memory, instead of *the server may have stopped*.
+- **Errors read as sentences.** When the server can't be reached, toasts say
+  "Couldn't reach MindFlock. Is it still running?" instead of "Failed to
+  fetch". A rejected form field names the field and the problem instead of
+  "error 422". Closing or deleting a session that is already gone says so,
+  a taken name says "Another session is already named …", the folder browser
+  says "You don't have permission to create a folder there" instead of raw
+  server text, and a setup check that crashes says it couldn't run. Agent
+  names in the usage chip match the rest of the app (OpenCode, GitHub
+  Copilot).
+- **Setup recovers from a failed read.** A failed status read says "Couldn't
+  load setup" with Retry, and step 2 no longer says "Checking…" forever. A
+  failed re-check keeps the last result and the Install button; Re-check
+  shows "Checking…" and can't be clicked again while it runs (in Settings →
+  Doctor too). When agent status can't be read, the agent card says so and
+  still offers Sign in. The install and sign-in windows describe the
+  terminal in plain words, and the install window shows the run-it-yourself
+  commands as soon as its terminal is gone. Enter saves the git name and
+  email form.
+- **A session row says "Closing…" or "Deleting…"** while that runs, and its
+  close and delete stay off until it finishes.
+- **Bulk bar.** Escape closes an open question before leaving select mode,
+  "Delete missing…" asks first, the Delete question says uncommitted changes
+  are lost (and that in-place sessions keep their folder), and failures say
+  why each one failed.
+- **Customize: Reset to default offers Undo.**
+- **Settings waits for its data.** It shows "Loading settings…" or "Couldn't
+  read settings" with a Retry instead of empty fields and off switches.
+- **Undo is a button everywhere.** Closing several sessions at once now has
+  an Undo that reopens them all (and Ctrl+Shift+T reopens them one by one),
+  Hide's toast has an Undo button like Close's, and deleting a saved prompt
+  can be undone. Reopen in Recently closed says "Reopened X", and the template
+  delete question says Cancel and focuses it, like every other question.
+- **Ctrl+K G opens Diff and Ctrl+K Q opens Queue.** Both are in the `?` sheet
+  and can be rebound, and each pane tab's tooltip names its shortcut. The
+  palette also lists Diff, View PR, Reopen last closed session and Copy folder
+  path.
+- **Alt+Enter in the Thread composer means When idle**, as it does in the
+  Queue tab; the hint and the button say so.
+- **Questions on the corner card answer the keyboard.** Delete and Merge from
+  the palette or a pane focus Cancel, Escape closes the question, and Delete is
+  red like the row menu's. An error card never takes focus, so it can't catch
+  what you're typing.
+- **The bell takes the keyboard.** Opening it focuses its first row, and
+  Escape closes only the bell (select mode stays on) and returns focus to it.
+- **A Sky line's ⋯ has its route's controls**: Pause or Carry on, Stop the
+  route and Fly again, as in the pane strip's ⋯. The Sky's `?` sheet lists
+  Ctrl+K N (next session that needs you) and Alt+V (next Verify).
+- **Connect GitHub no longer dead-ends.** If it can't check GitHub it says so
+  with a Retry, a pending sign-in code has Cancel, and closing the gh terminal
+  early says "Not connected yet". The Connected line says where the sign-in
+  comes from ("your saved token", "the GITHUB_TOKEN variable"), and the name
+  and email boxes save on Enter, as in Setup.
+- **The New dialog fixes a signed-out agent in place.** "Claude Code isn't
+  signed in yet" opens the sign-in window over the dialog, so your draft
+  stays. A missing agent's note says Setup and has an Open Setup button.
+- **Setup's fix commands have a Copy button**, like the install window and
+  Connect GitHub.
+- **The Mac first launch has a way out of the Homebrew and Xcode waits.**
+  "Skip for now" works while Homebrew installs in Terminal, and the developer
+  tools wait has "Open Apple's installer again", instead of waiting out 30
+  minutes.
+- **"Saved" appears next to what you changed, in Intake too.** Intake fields,
+  the Ignore-comments lists, launch flags, scroll speed, accounts, per-repo
+  branches and an extension's switch show the small "✓ Saved" by the control
+  instead of a toast, and a failed save says the server's reason.
+- **"Settings → …" in Intake is a link.** The pointers to Connections,
+  Workspace and Your devices open that screen, and "Customize" in Settings →
+  Extensions opens Customize.
+- **The Usage and Workflow windows say what went wrong.** A failed load shows
+  the server's message (or "Couldn't reach MindFlock. Is it still running?")
+  with a Retry, instead of always "Could not reach the server."
+- **Removals ask first, or can be undone.** Deleting a custom agent and
+  revoking a guest link ask under the row with Cancel focused, like Stop
+  sharing; removing a keep-out zone shows "Removed keep-out zone X" with Undo.
+- **Ctrl+F reaches more filters.** In Settings it jumps to the search box
+  instead of opening the browser's find bar, and the To-do window's filter
+  answers it too. Ctrl+Enter saves from any field of the template and Schedule
+  editors, as it submits New and Commit.
+- **Customize the pane header from the pane.** A pane's ⋯ has "Customize
+  header…", and the Customize button and palette mention the pane header.
+- **The cost and account chips work from the keyboard.** Tab reaches them and
+  Enter opens them; Escape closes the Usage or Memory list without leaving
+  select mode and puts focus back.
+- **The low-memory notice shows what is using memory.** "See what's using it"
+  opens the Memory list, biggest sessions first.
+- **Getting your sessions back is one paste away.** The "Your sessions aren't
+  gone" notice copies a ready command that renames the backup to state.json.
+- **The desktop window remembers its size** and position, maximized if it was,
+  unless that spot is on a monitor that is no longer connected.
+- **The desktop's startup screens have "Open log folder"**, and Settings →
+  Advanced has "Check again" when it couldn't check for engine updates.
+- **Saves report once, by the control, in more places.** Appearance's switches
+  and minutes, IDE auto-adopt, Agent MCP, the shipping-halts note and a custom
+  agent's binary path show "✓ Saved" instead of a toast, and a switch no longer
+  says "on" before its save answered.
+- **Screens that can't load say so, with Retry.** System logs, Your phone,
+  Shared link, Traffic, Custom agents, IDE and Templates say "Couldn't load …"
+  with a Retry instead of an empty list or nothing; a failed log refresh keeps
+  the last log, and Copy log copies only a real log.
+- **Verify uses your session's name**, and its Start says "Starting…" while it
+  works.
+- **A refused start keeps how far it goes.** When New can't create a session,
+  or you come back to a draft from Intake or Settings, "Goes as far as" and "Ask
+  me before it ships" are still what you picked.
+- **New says up front when the agent isn't installed.** The first page shows
+  the note with Open Setup, and Start stays off on both pages until it is.
+- **The New dialog keeps the keyboard after picking a folder**, and Escape in
+  Runs in → Browse… puts back the folder you started from. The GitHub hint
+  under "Goes as far as" links to Settings → Connections.
+- **Branch session asks when memory is low**, like New and Duplicate. A failed
+  Duplicate says "Duplicate failed".
+- **The sidebar filter matches each word**, as Recently closed does ("fix bug"
+  finds fix-login-bug), and `/` brings back a hidden filter box.
+- **The `?` sheet works from the keyboard.** It takes focus, Tab reaches each
+  shortcut in Change keys, and Enter or Space records a new key. Restore
+  defaults has Undo, ↺ says which default it restored, and Talk lists
+  "Ctrl+T / Alt+Space".
+- **The GitHub PRs and issues bars match the Tickets bar**: a labelled switch,
+  a dot that turns red when offline, and the same names in Customize.
+- **Team-run headers work from the keyboard**: Tab reaches the fold and the ⋯
+  menu, which takes the arrow keys, and Cancel… starts on Keep going.
+- **Focus goes back where it belongs.** A keyboard pick in the ⏩ picker and
+  Escape in a chat return to the terminal; a chat you open yourself puts the
+  cursor in its box.
+- **Merge blocked opens the PR**, where the blockers are resolved.
+- **The Sky: removals ask, resets undo.** Removing the stop a route is at asks
+  wherever you remove it from, removing a stop of a finished route asks before
+  its record goes, ■ on a route with no session asks first, and Discard on a
+  default-stops edit and Reset to default on a saved route have Undo.
+- **The Sky from the keyboard and the catalog.** The Menu key or Shift+F10
+  opens a focused stop's menu, and a saved route's ⋯ in All stops… offers Edit
+  its stops. Every save of stops as a route is called "Save as a route" and
+  says the same thing.
+- **Browser notifications are quieter.** No popup while you're looking at the
+  app, a click opens the session it is about, and they start working by
+  themselves if the server was still starting.
+
+### Fixed
+
+- **Typing into a session no longer writes a file on every keystroke.**
+  While a session's last reply ended in a question, each keystroke rewrote
+  and fsynced `asking.json` on the server's event loop, the same loop that
+  carries every pane's output: 200 keystrokes cost 2.5 s (9 ms median, up to
+  0.5 s each) at normal load, and seconds each when memory was short. It is
+  now written once per question (200 keystrokes: 14 ms).
+- **Less of the server's work blocks every session when memory is short.**
+  The server's own stall log (`logs/stacks.log`) showed the event loop held
+  up to 5 minutes at a time under memory pressure. Moved off the loop: the
+  reply watch's scan of the activity-marker directory (four of the logged
+  stalls), the sidebar's peer-link status (`GET /api/peer`, polled every 10 s
+  by every window; its bwrap sandbox self-test, 10-120 ms each, is now
+  remembered for 10 minutes) and the epic auto-start loop's config parse.
+- **The sidebar's change counts back off while memory is low.** Each
+  session's +/- figures are re-checked with `git status` and friends (about
+  260 ms of git per session); while memory reads low or critical that happens
+  every 60 s instead of every 10 s.
+- **Session status costs half as much while memory is low.** The 4 s status
+  tick ran about 10 git commands per session for its stage pill (committed,
+  pushed, PR) whatever the memory level. While memory reads low, a session
+  you don't have open and haven't typed into for a minute reuses its stage
+  for up to 20 s; the one in front of you is checked every tick as before.
+  Claude's live session list (`claude agents --json`, a 167 MB node process
+  per call) is asked every 8 s instead of every 4 s. Measured on 6 live
+  sessions: 60 to 32 subprocesses and 614 to 287 ms of git/tmux CPU per tick.
+  A prompt waiting on you shows up at most about 4 s later than at normal
+  memory; at normal memory nothing changed.
+- **Old activity markers are cleaned up.** The activity-marker folder kept a
+  file for every session ever run (1,693 on the owner's machine, 1,512 of
+  them from sessions long gone), and the reply watch rescans it on every
+  hook write. A sweep now removes the files of sessions that are neither in
+  MindFlock's state nor a live tmux session and that are over 7 days old: at
+  most 500 per pass, two minutes after start and then every 6 hours, off the
+  event loop. It removes nothing when tmux can't be asked.
+- **The sidebar filter keeps spaces.** Typing "fix bug" no longer becomes
+  "fixbug"; the box shows what you typed and matching ignores case.
+- **A name another session already has keeps Start off** in the New dialog,
+  with the reason shown, instead of failing after the dialog closes. Session
+  names stop at 120 characters, the server's limit.
+- **Closing the "Sign in…" window relaunches a blocked session only once the
+  agent is signed in.**
+- **The Diff tab no longer dead-ends on an error.** Its toolbar stays
+  (refresh, All changes / Uncommitted, All files) and it says "Couldn't load
+  the diff" with git's message underneath.
+- **A prompt can't be sent twice from the Queue tab.** Send now and Add to
+  queue are off while a send is in flight. A queue that fails to load says
+  so, with a Retry.
+- **Commit is off while "Write it" is writing the message**, so the
+  generated text is not lost.
+- **An API key stays in its box if saving it fails.**
+- **Open PR says when the branch list can't be loaded**, with a Retry; you
+  can still type a branch name.
+- **A to-do reminder no longer takes keyboard focus** when it pops up, so it
+  can't swallow what you're typing to an agent.
+- **The connection banner tells "answering with errors" apart from "not
+  answering" again.**
+- **Clearing the notification bell stays cleared after a reload.**
+- **Empty Sky: "Add a ticket source" opens Intake on Tickets**, like the
+  setup checklist.
+- **Desktop app, offline page:** it shows Cmd+Shift+L on a Mac, and "Restart
+  WSL now?" stands down after 5 seconds and says whether it worked.
+- **Typing, switching tabs and polls no longer redraw every pane.** The top
+  bar, the sidebar and the grid redraw only for what they show, a pane only
+  when its own session or family changes, and a pane header measures itself
+  only when its contents change rather than on every redraw.
+- **Route buttons answer faster.** Skip, Retry, Jump, Pause and Done refetch
+  only the routes, not the saved routes and the session list twice over, and
+  each Sky line builds its diagram once per poll instead of twice.
+- **The Diff tab shows what you asked for.** Switching to Uncommitted or to one
+  file says "Loading diff…" instead of leaving the old diff under the new
+  heading, a slow earlier load can't replace a newer one, and a hidden Diff
+  tab no longer re-parses its diff.
+- **Hidden windows stop polling.** The full-history view, chat windows,
+  Settings → Connections and the Usage, Workflow and To-do windows rest while
+  the window is hidden; history and chat catch up when you come back.
+- **The phone page and the ticket status cost the server less.** The fleet
+  status (asked every 4 s by the phone) reads its rollout file off the
+  server's event loop, and the ticket pipeline's status is reused for 2 seconds; starting,
+  stopping or changing a setting refreshes it at once.
+- **The Thread tab offers Retry.** A failed load has a Retry button, and a
+  failed refresh says "thread may be out of date · Retry", as the Map does.
+- **The Sky says when it can't load routes.** Its toolbar shows "Can't reach
+  the server — routes may be out of date." instead of quietly drawing an old
+  copy.
+- **Stopping a closed session's route asks first** on its strip and in the
+  outbox, like every other Stop the route.
+- **Deleting an in-place session says what really happened.** The toast and
+  the menu's tooltip say its folder and branch were kept.
+- **Rename refuses a taken name without losing it.** The rail's rename box
+  stays open with your text and says another session has that name, and the
+  Rename dialog stops at 120 characters like the rest.
+- **The phone keeps your sessions when the server hiccups.** A sign-in lapse
+  or server error no longer empties the list and closes the terminal you were
+  reading. The header says "Loading sessions…" until the list arrives, and
+  "Couldn't reach MindFlock. Is it still running?" while it can't be reached.
+- **Phone git actions are easier to read and harder to double-tap.** A failed
+  push, PR, merge or commit stays on screen until your next action, a lost
+  connection says "Couldn't reach MindFlock" instead of "Load failed", the
+  action bar waits for each request, and a failed commit keeps your message.
+- **The Database window asks before dropping unsaved edits, in the desktop
+  app too.** Clicking another table shows a "Discard N unsaved changes?" bar;
+  before, the click silently did nothing in the desktop app.
+- **Automatic updates say when a change didn't take.** If turning auto-update
+  on or off fails, the switch flips back and says why; if an update can't
+  start, Update stops spinning and shows the reason.
+- **Commit keeps your message.** A failed commit is a card that stays, with
+  Edit message to reopen Commit with your text, and closing Commit with Escape,
+  Cancel or a click outside keeps what you wrote for that session.
+- **Assistant instructions can't be wiped by a failed load.** If they don't
+  load, the editor says so with a Retry and Save stays off until they do; a
+  failed restart is reported, and a click outside keeps unsaved edits.
+- **A failed send keeps you in the box** in Ask and in Verify's start form, so
+  you can fix the text and send again.
+- **Make PR and push no longer hold up other panes.** Their git and settings
+  reads run off the server's event loop, so terminal output keeps flowing.
+- **The Map no longer redraws on every hover or poll**, its find box says
+  "Searching…" until results for what you typed arrive (Enter waits for them),
+  and its legend closes on Escape or a click on the map.
+- **Your phone notices a Tailscale sign-in.** Step 1 turns ✓ and the QR shows
+  without leaving Settings → Your phone and coming back.
+- **Retrying a ticket is quick.** If filing fails after the draft was written,
+  Retry files that same draft without writing it again; a failed source list
+  has a Retry.
+- **Intake says when a list can't be read**, and stops asking every 2 seconds
+  when it can't refresh. The Auto-start tab shows "Couldn't list PRs: …" with a
+  Retry instead of "Not set up yet"; after three stale answers in a row a list
+  checks every 15 s and says "Couldn't refresh · Retry". Refresh during a
+  background reload now really fetches a new list, and says "Refreshing…".
+- **An epic's Start switches to "Open lead" at once**, so a second click can't
+  start it twice.
+- **A failed extension window can try again**, with a link to Settings →
+  Extensions, instead of needing a page reload.
+- **Database filters keep the cursor while the table reloads**, and CSV/JSON
+  export can't run twice at once.
+- **To-do keeps your text.** "Details…" no longer loses the quick-add text if
+  you close the dialog without adding.
+- **Hidden windows poll less.** The answer strip and the shared-link, guest-link
+  and device-join checks in Settings rest while the window is hidden.
+- **The phone says what it is doing.** Its Diff tab clears the old diff and says
+  "Loading diff…", Reopen reads "Reopening…", and the ask sheet and update
+  banner say "Couldn't reach MindFlock" instead of "Load failed".
+- **The live events feed no longer re-checks every session.** With a window
+  open, a second 4 s loop re-ran each session's git status checks on top of the
+  regular status update, also while memory was low; it now runs only when that
+  update is late.
+- **Starting a session, typing with a budget set, and browsing folders no
+  longer stall the app.** New sessions read their ports file and repo settings
+  off the server's event loop, a keystroke prices transcripts in the background
+  when the cost isn't cached, and the folder browser checks each folder with one
+  lookup instead of a git process (only folders with their own .git get the repo
+  icon) and says "Loading…" until its list arrives.
+- **A waiting worker's pane comes alive on its own.** Opening a worker before
+  its turn shows "Waiting its turn" with Start now, and the pane attaches as
+  soon as the worker starts.
+- **A pane says when it is reconnecting.** A dropped terminal shows
+  "Reconnecting…", and after about 10 seconds "Can't reach the session —
+  retrying" with Retry. Typing or pasting meanwhile says it wasn't sent instead
+  of "Pasted".
+- **Terminal errors stop repeating.** A shell that can't start or an attach
+  that keeps failing stops after a few tries and shows the error once, with
+  Retry; the Shell tab has a loading cover.
+- **The history view leaves dialogs alone.** With a pane's history open,
+  Escape and Ctrl+F in Settings or New act on the dialog again.
+- **Esc no longer loses a prompt on the Sky.** A prompt typed in the Sky's New
+  session card is still there the next time you open it, and ▶ on a route with
+  no session says "Starting…" until the run begins.
+- **The peer viewer and the guest bar rest while the window is hidden.** A
+  failed Kill of guest links shows an error card.
+
 ## [0.14.21] - 2026-11-19
 
 ### Added

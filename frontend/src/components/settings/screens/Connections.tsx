@@ -526,7 +526,11 @@ export function Connections({ gotoScreen }: ScreenProps) {
   useEffect(() => {
     alive.current = true;
     void load(true);
-    const timer = window.setInterval(() => void load(false), REFRESH_MS);
+    // A hidden window skips its tick, like Devices and System logs do.
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      void load(false);
+    }, REFRESH_MS);
     const onChanged = () => void load(true);
     window.addEventListener(CONNECTIONS_CHANGED_EVENT, onChanged);
     return () => {

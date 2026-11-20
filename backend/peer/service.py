@@ -1751,14 +1751,36 @@ class PeerService:
             out.append(v)
         return out
 
-    def status(self) -> dict:
-        s = self.settings()
+    #: How long :meth:`_sandbox_available` trusts its last answer: a working
+    #: sandbox for minutes, a missing one briefly (installing bwrap shows up
+    #: on the next look within a minute).
+    SANDBOX_OK_TTL_S = 600.0
+    SANDBOX_NO_TTL_S = 60.0
+
+    def _sandbox_available(self, now: Optional[float] = None) -> tuple:
+        """``sandbox.available()``, remembered: on Linux it runs a ``bwrap``
+        self-test (a fork + namespace setup, 10-120 ms measured at normal
+        load, seconds under memory pressure), and ``GET /api/peer`` is polled
+        every 10 s by every open window's rail."""
+        now = time.monotonic() if now is None else now
+        memo = getattr(self, "_sandbox_memo", None)
+        if memo is not None:
+            at, ok, reason = memo
+            ttl = self.SANDBOX_OK_TTL_S if ok else self.SANDBOX_NO_TTL_S
+            if now - at < ttl:
+                return ok, reason
         try:
             from backend.peer import sandbox
 
             ok, reason = sandbox.available()
         except Exception as err:  # noqa: BLE001
             ok, reason = False, str(err)
+        self._sandbox_memo = (now, ok, reason)
+        return ok, reason
+
+    def status(self) -> dict:
+        s = self.settings()
+        ok, reason = self._sandbox_available()
         out = {
             "enabled": bool(s.get("enabled")),
             "display_name": s.get("display_name") or "",

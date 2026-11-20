@@ -39,13 +39,13 @@ import { EXPECT_PRESETS, expectOf, formatSpan, parseDuration } from "../../lib/j
 import { sessionLabel } from "../../lib/sessionLabel";
 import { useNow } from "../../lib/useNow";
 import {
+  MAX_TITLE_LEN,
   cleanupMissing,
   folderInUseText,
   ideSession,
   rerunSetup,
   selectSession,
 } from "../../lib/sessionActions";
-import { toast } from "../../lib/toast";
 import { nameTakenBy } from "../../lib/windowName";
 import { renameSession } from "../../lib/renameSession";
 import { peekTerm, subscribeTermStates } from "../../lib/terminals";
@@ -67,7 +67,7 @@ import { AnswerStrip, type AnswerStripHandle } from "../AnswerStrip";
 import { leadChip, leadLine, railExtraChips } from "../../lib/splitRun";
 import { RUN_DONE_STATES, type RunInfo } from "../../lib/runs";
 import type { RunDTO } from "../../api/types";
-import { SessionMenu } from "./SessionMenu";
+import { SessionMenu, endingLabel } from "./SessionMenu";
 import { RowMenu, type RowMenuOpen } from "./RowMenu";
 import { MidName } from "./MidName";
 import { TaskLine, taskLineOf } from "./TaskLine";
@@ -165,6 +165,24 @@ export function closeGuarded(now: number): boolean {
   return false;
 }
 
+/** What committing an inline rename does: keep the name (blank or unchanged),
+ * refuse it (another session has it — the edit stays open), or rename. */
+export function inlineRenameVerdict(
+  raw: string,
+  shown: string,
+  takenBy: (name: string) => string
+): { kind: "keep" } | { kind: "taken"; name: string } | { kind: "rename"; name: string } {
+  const name = raw.trim();
+  if (!name || name === shown) return { kind: "keep" };
+  if (takenBy(name)) return { kind: "taken", name };
+  return { kind: "rename", name };
+}
+
+/** The reason under a refused inline rename: the Rename dialog's words. */
+export function renameTakenText(name: string): string {
+  return "Another session is already named “" + name + "”.";
+}
+
 /** What a key pressed on a rail row itself (not a control inside it) does:
  * ↑/↓ (and Home/End) move between rows, Enter selects, F2 renames. Null for
  * any other key, or one with a modifier held. */
@@ -244,6 +262,9 @@ export const SidebarRow = memo(function SidebarRow({
   // Escape must abandon the edit; unmounting the focused input can still run
   // the blur handler, so the cancel is flagged rather than inferred.
   const cancelled = useRef(false);
+  // The name an inline rename was refused for (another session has it): the
+  // edit stays open with the typed text, and says why under it.
+  const [renameTaken, setRenameTaken] = useState("");
   // When a click ends an edit, that same click also reaches the row — without
   // this the dismiss would immediately re-arm the rename.
   const editEndedAt = useRef(0);
@@ -257,6 +278,8 @@ export const SidebarRow = memo(function SidebarRow({
   const alias = aliases[inst.title];
   const picking = useUi((s) => s.bulkMode);
   const picked = useUi((s) => s.bulkSelected.has(inst.title));
+  // Its Close / Delete in flight (lib/sessionActions whileEnding).
+  const ending = useUi((s) => s.ending[inst.title]);
 
   const title = inst.title;
   const missing = !!inst.workspace_missing;
@@ -413,7 +436,10 @@ export const SidebarRow = memo(function SidebarRow({
   // A worker adrift: its parent closed with its work unmerged (lib/autoClose).
   const orphan = orphanLine(inst);
   const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !orphan && !!task;
-  const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
+  // Editing, the only sub-line is a refused rename's reason.
+  const subline = editing
+    ? !!renameTaken
+    : !!(ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
   useNow(wline?.state === "working" || ship?.state === "working" ? 30_000 : false);
@@ -497,6 +523,7 @@ export const SidebarRow = memo(function SidebarRow({
   const startRename = () => {
     if (pending || picking || theirs) return;
     cancelled.current = false;
+    setRenameTaken("");
     setEditing(true);
   };
 
@@ -510,21 +537,27 @@ export const SidebarRow = memo(function SidebarRow({
   };
 
   const commitRename = (raw: string) => {
-    setEditing(false);
-    editEndedAt.current = Date.now();
     if (cancelled.current) {
       cancelled.current = false;
+      setRenameTaken("");
+      setEditing(false);
+      editEndedAt.current = Date.now();
       return;
     }
-    const next = raw.trim();
-    // Blank or unchanged keeps the name. A rename is the session's name
-    // everywhere, so a name another session has is refused, not shared.
-    if (!next || next === shown) return;
-    const taken = nameTakenBy(title, next);
-    if (taken) {
-      toast(`Another session is already named “${next}”`);
+    // A rename is the session's name everywhere, so a name another session
+    // has is refused, not shared. The edit stays open with what was typed
+    // and the reason under it (as the Rename dialog does); Escape leaves.
+    const verdict = inlineRenameVerdict(raw, shown, (n) => nameTakenBy(title, n));
+    if (verdict.kind === "taken") {
+      setRenameTaken(verdict.name);
       return;
     }
+    setRenameTaken("");
+    setEditing(false);
+    editEndedAt.current = Date.now();
+    // Blank or unchanged keeps the name.
+    if (verdict.kind === "keep") return;
+    const next = verdict.name;
     // The session itself is renamed (its title, on the server); typed back
     // to what the row shows by itself, an old rename (alias) is just dropped.
     void renameSession(title, next, { plain: label.text });
@@ -650,6 +683,7 @@ export const SidebarRow = memo(function SidebarRow({
               <input
                 className="title title-edit"
                 type="text"
+                maxLength={MAX_TITLE_LEN}
                 defaultValue={shown}
                 autoFocus
                 autoComplete="off"
@@ -658,6 +692,9 @@ export const SidebarRow = memo(function SidebarRow({
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => e.stopPropagation()}
+                aria-invalid={!!renameTaken}
+                aria-describedby={renameTaken ? "rename-taken-" + idx : undefined}
+                onChange={() => renameTaken && setRenameTaken("")}
                 onBlur={(e) => commitRename(e.currentTarget.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
@@ -667,6 +704,7 @@ export const SidebarRow = memo(function SidebarRow({
                     e.preventDefault();
                     cancelled.current = true;
                     editEndedAt.current = Date.now();
+                    setRenameTaken("");
                     setEditing(false);
                   }
                 }}
@@ -700,6 +738,11 @@ export const SidebarRow = memo(function SidebarRow({
                     "fix-typo-readme" to "fi…eadme"); middle-truncated only
                     when a "-2" / "(3)" suffix is what tells two rows apart. */}
                 {/(-\d+|\(\d+\))$/.test(shown) ? <MidName text={shown} /> : shown}
+              </span>
+            )}
+            {editing && renameTaken && (
+              <span className="lineage rename-taken" id={"rename-taken-" + idx} role="alert">
+                {renameTakenText(renameTaken)}
               </span>
             )}
             {!editing && ship && (
@@ -836,7 +879,13 @@ export const SidebarRow = memo(function SidebarRow({
               </span>
             )}
           </span>
-          {ss.waiting && !inst.device ? (
+          {ending ? (
+            // Close / Delete in flight (Delete can take seconds): say so, and
+            // the row's ends stay off until it settles.
+            <span className="stagechip chip-ending" role="status">
+              {endingLabel(ending)}
+            </span>
+          ) : ss.waiting && !inst.device ? (
             // Waiting in the launch gate (lib/launchGate): it starts by itself
             // once the gate allows; the chip's remedy is Start anyway, and
             // Stop waiting beside it takes it out of the queue.
@@ -1079,8 +1128,11 @@ export const SidebarRow = memo(function SidebarRow({
             <button
               className={"kill" + (missing ? " cleanup" : "")}
               aria-label={missing ? "Delete session" : "Close session"}
+              disabled={!!ending}
               title={
-                missing
+                ending
+                  ? endingLabel(ending)
+                  : missing
                   ? "Delete — its workspace is gone; this removes the session"
                   : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)"
               }
@@ -1090,6 +1142,7 @@ export const SidebarRow = memo(function SidebarRow({
                   // second ✕ inside the guard is the same double-click, not a
                   // second close.
                   if (closeGuarded(Date.now())) return;
+                  if (ending) return;
                   if (missing) return cleanupMissing(title);
                   // Uncommitted work: say so before the agent stops.
                   if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
@@ -1181,6 +1234,7 @@ export const SidebarRow = memo(function SidebarRow({
               },
               picked,
             })}
+            ending={ending}
             onInUse={setInUse}
             onDone={() => closeMenu()}
           />

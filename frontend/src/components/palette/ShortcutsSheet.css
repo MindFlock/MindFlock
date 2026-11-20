@@ -26,6 +26,11 @@
   color: var(--text);
 }
 
+/* Focused on open so Tab starts inside the sheet; the card itself needs no ring. */
+.shortcuts-card:focus {
+  outline: none;
+}
+
 .shortcuts-head {
   display: flex;
   align-items: center;
@@ -126,12 +131,15 @@
   cursor: pointer;
 }
 
-.shortcut-row.rebindable:hover {
+.shortcut-row.rebindable:hover,
+.shortcut-row.rebindable:focus-visible {
   background: rgba(var(--accent-rgb), 0.10);
   border-color: var(--accent);
+  outline: none;
 }
 
-.shortcut-row.rebindable:hover .shortcut-desc {
+.shortcut-row.rebindable:hover .shortcut-desc,
+.shortcut-row.rebindable:focus-visible .shortcut-desc {
   color: var(--text);
 }
 
@@ -176,6 +184,7 @@
 }
 
 .shortcut-row:hover .shortcut-add,
+.shortcut-row:focus-visible .shortcut-add,
 .shortcut-add:focus-visible {
   opacity: 1;
 }

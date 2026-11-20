@@ -144,7 +144,7 @@ export function Mobile(p: ScreenProps) {
       setData(await api<MobilePayload>("/api/mobile"));
       setError("");
     } catch {
-      setError("Could not load the phone URLs.");
+      setError("Couldn't load the phone links.");
     }
   }, [caps]);
 
@@ -171,11 +171,11 @@ export function Mobile(p: ScreenProps) {
               the one fix. */}
           {one.state !== "ok" &&
             (one.card ? (
-              <TailscaleCard active={p.active} />
+              <TailscaleCard active={p.active} onHealth={() => void load()} />
             ) : one.state === "fail" ? (
               <details className="mobile-ts-details">
                 <summary>More about Tailscale on this computer</summary>
-                <TailscaleCard active={p.active} />
+                <TailscaleCard active={p.active} onHealth={() => void load()} />
               </details>
             ) : null)}
         </Row>
@@ -194,7 +194,12 @@ export function Mobile(p: ScreenProps) {
           ) : three === "ok" ? (
             <p>Your other devices on Tailscale can reach MindFlock.</p>
           ) : error ? (
-            <p className="error">{error}</p>
+            <p className="set-hint" id="mobile-load-state" role="alert">
+              {error}{" "}
+              <button type="button" className="linklike" onClick={() => void load()}>
+                Retry
+              </button>
+            </p>
           ) : (
             <p>{caps ? "Checking…" : "Waits for Tailscale on this computer (1)."}</p>
           )}

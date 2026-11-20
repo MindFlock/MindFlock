@@ -68,14 +68,23 @@ export async function fetchFlightKinds(): Promise<StepKindDef[]> {
 /** After anything that moves a flight or a plan. */
 export function refreshFlights() {
   void queryClient.invalidateQueries({ queryKey: ["flight-plans"] });
+  return refreshFlightsOnly();
+}
+
+/** After a step or control action (Done, Skip, Retry, Jump, Pause, a stop
+ * added or moved): the flight moved, the saved routes did not. The rows
+ * follow on the server's `flight.changed` event, so they are not refetched
+ * here as well. */
+export function refreshFlightsOnly() {
   return queryClient.invalidateQueries({ queryKey: ["flights"] });
 }
 
 // --- Acting on a flight ---------------------------------------------------------
 
-/** POST, refetch the flights and the rows, and say so; a failure opens the
- * error card (the server's sentence carries the remedy). Resolves true when
- * it went through. */
+/** POST, refetch the flights, and say so; a failure opens the error card
+ * (the server's sentence carries the remedy). Resolves true when it went
+ * through. Saved routes and the rows are left alone (see
+ * `refreshFlightsOnly`): nothing posted through here edits a saved route. */
 export async function flightAction(what: string, path: string, body: unknown = {}, done = ""): Promise<boolean> {
   try {
     await api(path, { json: body });
@@ -85,8 +94,7 @@ export async function flightAction(what: string, path: string, body: unknown = {
     errorPop(what + " failed", errMsg(err));
     return false;
   } finally {
-    void refreshFlights();
-    void refreshInstances();
+    void refreshFlightsOnly();
   }
 }
 
@@ -127,8 +135,7 @@ export async function stepDone(flightId: string, stepId: string, note = ""): Pro
     } else errorPop("Done failed", errMsg(err));
     return false;
   } finally {
-    void refreshFlights();
-    void refreshInstances();
+    void refreshFlightsOnly();
   }
 }
 

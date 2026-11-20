@@ -149,8 +149,17 @@ def _row(story, src, draft: _ticket_draft.Draft) -> dict:
     }
 
 
-async def compose(source: str, text: str, *, program: str = "") -> dict:
+async def compose(
+    source: str,
+    text: str,
+    *,
+    program: str = "",
+    drafted: "Optional[_ticket_draft.Draft]" = None,
+) -> dict:
     """Draft a ticket from ``text`` and file it on ``source``. Returns the row.
+
+    ``drafted``: a draft already written (the dialog's Retry after a failed
+    filing sends back the one it shows): filed as it is, with no model turn.
 
     The blocker is checked BEFORE the model runs, so a source that was never
     going to accept a ticket costs a round trip rather than a draft. Everything
@@ -171,17 +180,18 @@ async def compose(source: str, text: str, *, program: str = "") -> dict:
     # picker.
     blocker = provider.create_blocker()
     if blocker:
-        raise ComposeError(blocker)
+        raise ComposeError(blocker, draft=drafted)
 
     def _draft() -> _ticket_draft.Draft:
         return _ticket_draft.draft(text, program=program)
 
-    try:
-        # Threaded: the one-shot blocks for the whole model turn, and this is an
-        # async route on the same loop that serves the grid's websockets.
-        drafted = await asyncio.to_thread(_draft)
-    except _ticket_draft.TicketDraftError as err:
-        raise ComposeError(str(err))
+    if drafted is None:
+        try:
+            # Threaded: the one-shot blocks for the whole model turn, and this is
+            # an async route on the same loop that serves the grid's websockets.
+            drafted = await asyncio.to_thread(_draft)
+        except _ticket_draft.TicketDraftError as err:
+            raise ComposeError(str(err))
 
     try:
         story = await provider.create_ticket(drafted.name, drafted.description)

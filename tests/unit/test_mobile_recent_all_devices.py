@@ -97,6 +97,7 @@ def _sheet(js: str) -> str:
     return (
         _HARNESS
         + _var(js, "recentSeq")
+        + _var(js, "UNREACHABLE")
         + "var RECENT_DEVICE_MS = 30;\n"
         + "".join(
             _whole(js, n)
@@ -108,6 +109,7 @@ def _sheet(js: str) -> str:
                 "folderNote",
                 "closedMs",
                 "agoWord",
+                "errText",
                 "recentError",
                 "recentFetch",
                 "openRecentSheet",

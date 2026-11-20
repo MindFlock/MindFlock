@@ -36,6 +36,7 @@ import { toast } from "../../../../lib/toast";
 import { refreshConfig, reprobeDoctor, useConfig, useInstances } from "../../../../state/queries";
 import { displayName } from "../../../../state/store";
 import { InstallMissing, type InstallStep } from "../../../dialogs/InstallTerminal";
+import { InlineConfirm } from "../../../InlineConfirm";
 import { Modal } from "../../../Modal";
 import { errText } from "./useAct";
 
@@ -85,6 +86,8 @@ export function GuestLinks() {
   // this machine, not to a web page. Ticking it opens the picker.
   const [understood, setUnderstood] = useState(false);
   const [pickOpen, setPickOpen] = useState(false);
+  /** The guest link whose Revoke is asking "are you sure?" inline. */
+  const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
 
   // Sessions a link can name: this device's own ROOT sessions (not another
   // device's rows, not a verify run, not one still being created, and not a
@@ -121,7 +124,10 @@ export function GuestLinks() {
   const starting = tunnel?.state === "starting";
   useEffect(() => {
     if (!starting) return;
-    const t = setInterval(() => void load(), 2000);
+    const t = setInterval(() => {
+      if (document.hidden) return;
+      void load();
+    }, 2000);
     return () => clearInterval(t);
   }, [starting, load]);
   // cloudflared missing: the doctor's install plan (the same one-shot
@@ -181,6 +187,7 @@ export function GuestLinks() {
     setBusy(true);
     try {
       await api("/api/guests/" + encodeURIComponent(id), { method: "DELETE" });
+      setConfirmRevoke(null);
       if (made === id) setMade(null);
       await load();
       toast("Guest link revoked");
@@ -444,9 +451,27 @@ export function GuestLinks() {
               <button type="button" className="test-btn" disabled={busy} onClick={() => copy(l)}>
                 Copy
               </button>{" "}
-              <button type="button" className="test-btn" disabled={busy} onClick={() => void revoke(l.id)}>
-                Revoke
+              <button
+                type="button"
+                className="test-btn peer-danger"
+                disabled={busy || confirmRevoke === l.id}
+                onClick={() => setConfirmRevoke(l.id)}
+              >
+                Revoke…
               </button>
+              {/* Revoking cuts the guest off at once: ask first, like Stop
+                  sharing and Remove connection do. */}
+              {confirmRevoke === l.id && (
+                <InlineConfirm
+                  id="peer-guests-revoke-confirm"
+                  title="Revoke this guest link?"
+                  body="Whoever has it loses access."
+                  confirmLabel={busy ? "Revoking…" : "Revoke"}
+                  busy={busy}
+                  onConfirm={() => void revoke(l.id)}
+                  onCancel={() => setConfirmRevoke(null)}
+                />
+              )}
             </li>
           ))}
         </ul>

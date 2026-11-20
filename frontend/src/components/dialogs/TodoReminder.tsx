@@ -106,7 +106,16 @@ export function TodoReminder() {
   const choices = snoozeChoices();
 
   return (
-    <Modal id="todo-reminder" role="dialog" aria-label="Reminder" onClose={() => setHiddenUntil(Date.now() + CLOSE_HIDE_MS)}>
+    // keepFocus: the reminder pops up on its own, maybe mid-sentence to an
+    // agent, so it must not take the keys. Escape and its buttons work once
+    // the person clicks into it.
+    <Modal
+      id="todo-reminder"
+      role="dialog"
+      aria-label="Reminder"
+      keepFocus
+      onClose={() => setHiddenUntil(Date.now() + CLOSE_HIDE_MS)}
+    >
       <div className="todo-reminder">
         <div className="tr-head">
           <h2>⏰ {due.length === 1 ? "Reminder" : due.length + " reminders"}</h2>

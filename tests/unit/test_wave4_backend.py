@@ -24,6 +24,7 @@ import asyncio
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -494,6 +495,28 @@ def test_diff_stat_is_cached_about_ten_seconds(tmp_path):
     # Expired cache -> recomputed.
     server._DIFF_STAT_CACHE.clear()
     assert server._session_diff_stat(inst)["additions"] == 1
+
+
+def test_diff_stat_backs_off_while_memory_is_low(tmp_path, monkeypatch):
+    """Each re-check forks rev-parse + merge-base + a full ``git status`` per
+    session; while memory reads low the entry lasts a minute, not 10 s."""
+    from backend.web.core import snapshot as snap
+
+    src, wt = _worktree_session(tmp_path)
+    inst = _FakeInst(str(wt), base_branch="main")
+    server._DIFF_STAT_CACHE.clear()
+    monkeypatch.setattr(server, "_memory_low", lambda: False)
+    t0 = time.time()
+    server._session_diff_stat(inst)
+    ok_until = server._DIFF_STAT_CACHE[str(wt)][0]
+    assert ok_until - t0 == pytest.approx(snap._DIFF_STAT_TTL, abs=2)
+    server._DIFF_STAT_CACHE.clear()
+    monkeypatch.setattr(server, "_memory_low", lambda: True)
+    t0 = time.time()
+    server._session_diff_stat(inst)
+    low_until = server._DIFF_STAT_CACHE[str(wt)][0]
+    assert low_until - t0 == pytest.approx(snap._DIFF_STAT_TTL_LOW, abs=2)
+    assert snap._DIFF_STAT_TTL_LOW > snap._DIFF_STAT_TTL
 
 
 def test_diff_stat_fingerprint_skips_recompute_when_state_unchanged(

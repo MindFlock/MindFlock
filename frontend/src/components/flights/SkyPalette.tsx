@@ -21,6 +21,7 @@ import { useClickOrDouble } from "../../lib/clickOrDouble";
 import { savedStopOrder } from "../../lib/groundedLines";
 import { catalogMatch, onShelf, toggleShelf, type CatalogDrop } from "../../lib/stopCatalog";
 import { useFlightKinds, useFlightPlans } from "../../state/queries";
+import type { FlightPlan } from "../../lib/flights";
 import { OverflowMenu } from "../OverflowMenu";
 import { StopIcon } from "./Bird";
 import { StopCatalogBody } from "./StopCatalog";
@@ -74,6 +75,8 @@ export interface SkyPaletteProps {
   onClose?(): void;
   /** Opened by "All blocks…": the filter takes the focus on mount. */
   focusFilter?: boolean;
+  /** A saved route's ⋯ → "Edit its stops" (the host opens it on the sky). */
+  onEditPlan?(plan: FlightPlan): void;
 }
 
 /** A press on the head that is the head's own (not one of its buttons). */
@@ -112,7 +115,7 @@ function SessionCard({ onSession }: { onSession?(): void }) {
   );
 }
 
-export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onResize, onMeasure, onPlace, onDock, onSession, onClose, focusFilter = false }: SkyPaletteProps): JSX.Element {
+export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onResize, onMeasure, onPlace, onDock, onSession, onClose, focusFilter = false, onEditPlan }: SkyPaletteProps): JSX.Element {
   const kinds = useFlightKinds().data;
   const plans = useFlightPlans().data;
   const [shelf, changeShelf] = useShelfPick();
@@ -196,6 +199,7 @@ export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = tr
         idPrefix="sky-palette"
         listClass="sky-palette-body"
         autoFocus={focusFilter}
+        onEditPlan={onEditPlan}
         shelf={(d: CatalogDrop) => onShelf(shelf, d)}
         onShelfToggle={(d: CatalogDrop) => changeShelf((p) => toggleShelf(p, d))}
         lead={(q) => (catalogMatch(q, "Session", "A new agent session") ? <SessionCard key="session" onSession={onSession} /> : null)}

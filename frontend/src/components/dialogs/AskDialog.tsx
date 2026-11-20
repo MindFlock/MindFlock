@@ -492,6 +492,9 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
   const selField = useRef<HTMLTextAreaElement | null>(null);
   const [hasText, setHasText] = useState(false);
   const [sending, setSending] = useState(false);
+  // The same latch for `send` itself: Enter and a spoken "over" reach it
+  // without the button's disabled state.
+  const sendingRef = useRef(false);
   const [note, setNote] = useState("");
 
   const later = useCallback(() => {
@@ -513,6 +516,8 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
     async (say = false): Promise<{ ok: boolean; line: string }> => {
       const text = (field.current?.value || "").trim();
       if (!text) return { ok: false, line: "Nothing to send yet" };
+      if (sendingRef.current) return { ok: false, line: "Still sending" };
+      sendingRef.current = true;
       setSending(true);
       setNote("");
       try {
@@ -529,8 +534,11 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
           forceActivity(title, "clarify");
           void refreshInstances();
         }
+        // Back in the box, so the answer can be fixed and sent again at once.
+        field.current?.focus();
         return { ok: false, line: f.line };
       } finally {
+        sendingRef.current = false;
         setSending(false);
       }
     },
@@ -771,7 +779,9 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
           placeholder="Your answer…"
           aria-labelledby="ask-question"
           spellCheck
-          disabled={sending}
+          // readOnly, not disabled: a disabled box drops focus to the page, and
+          // after a failed send you would have to click back in.
+          readOnly={sending}
           onInput={(e) => setHasText(!!e.currentTarget.value.trim())}
           onKeyDown={(e) => {
             if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;

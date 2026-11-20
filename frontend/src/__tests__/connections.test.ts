@@ -168,7 +168,10 @@ describe("actions and fixes", () => {
 describe("refresh", () => {
   it("re-reads every 30 s and on mf:connections-changed", () => {
     expect(CONNECTIONS_CHANGED_EVENT).toBe("mf:connections-changed");
-    expect(connsSrc).toContain("window.setInterval(() => void load(false), REFRESH_MS)");
+    // A hidden window skips its tick (UI sweep P5 #17).
+    expect(connsSrc).toMatch(
+      /window\.setInterval\(\(\) => \{\s*if \(document\.hidden\) return;\s*void load\(false\);\s*\}, REFRESH_MS\)/
+    );
     expect(connsSrc).toContain("export const REFRESH_MS = 30_000;");
     expect(connsSrc).toContain("window.addEventListener(CONNECTIONS_CHANGED_EVENT, onChanged)");
   });

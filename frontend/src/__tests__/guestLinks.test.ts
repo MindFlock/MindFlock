@@ -150,7 +150,8 @@ describe("the wiring", () => {
 
   it("the link's public address comes from the tunnel and the block polls while it starts", () => {
     expect(GUESTS).toMatch(/tunnel\?\.state === "starting"/);
-    expect(GUESTS).toMatch(/setInterval\(\(\) => void load\(\), 2000\)/);
+    // Skips its ticks while the window is hidden (UI sweep 2, #30).
+    expect(GUESTS).toMatch(/setInterval\(\(\) => \{\s*if \(document\.hidden\) return;\s*void load\(\);\s*\}, 2000\)/);
     expect(GUESTS).toContain("<InstallMissing steps={install}");
   });
 

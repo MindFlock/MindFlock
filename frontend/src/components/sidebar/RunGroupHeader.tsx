@@ -52,10 +52,18 @@ export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?
       title={groupTitle(group, why)}
       onClick={() => toggle(group.id)}
     >
-      <span className="dev-caret">{group.collapsed ? "▸" : "▾"}</span>
-      {group.done && !group.cancelled && <span className="rg-done">✓</span>}
-      <span className="dev-name">{group.name}</span>
-      {group.lane && !group.done && <span className="rg-lane">{group.lane}</span>}
+      {/* The fold toggle is a real button, like the device header's, so Tab
+          reaches it and a screen reader hears whether the group is open. It
+          has no handler of its own: its click (Enter and Space included)
+          bubbles to the header's, so the whole header still folds. */}
+      <button type="button" className="dev-toggle" aria-expanded={!group.collapsed}>
+        <span className="dev-caret" aria-hidden="true">
+          {group.collapsed ? "▸" : "▾"}
+        </span>
+        {group.done && !group.cancelled && <span className="rg-done">✓</span>}
+        <span className="dev-name">{group.name}</span>
+        {group.lane && !group.done && <span className="rg-lane">{group.lane}</span>}
+      </button>
       <span className="rg-sp" />
       {group.needs > 0 && (
         <span className="dev-badge rg-needs" title={group.needs + (group.needs === 1 ? " needs you" : " need you")}>
@@ -82,6 +90,7 @@ export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?
         title="Pause, add tasks, start the next one, cancel…"
         aria-label={"Actions for " + group.name}
         aria-haspopup="menu"
+        aria-expanded={!!menu}
         onClick={(e) => {
           e.stopPropagation();
           setMenu(menu ? null : more.current!.getBoundingClientRect());
@@ -91,7 +100,16 @@ export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?
       </button>
       {menu &&
         createPortal(
-          <RunGroupMenu group={group} at={menu} repoPath={repoPath} onClose={() => setMenu(null)} />,
+          <RunGroupMenu
+            group={group}
+            at={menu}
+            repoPath={repoPath}
+            onClose={(refocus) => {
+              setMenu(null);
+              // Esc hands the focus back to the ⋯ that opened the menu.
+              if (refocus) more.current?.focus();
+            }}
+          />,
           document.body
         )}
     </li>
@@ -107,7 +125,7 @@ function RunGroupMenu({
   group: RunGroup;
   at: DOMRect;
   repoPath?: string;
-  onClose(): void;
+  onClose(refocus?: boolean): void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [mode, setMode] = useState<"" | "add" | "cancel">("");
@@ -127,8 +145,17 @@ function RunGroupMenu({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onClose(true);
+        return;
       }
+      // ↑ / ↓ move between the items, like the top bar's ⋯ menu. Not while
+      // typing tasks: the arrows belong to the text box then.
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      if (!ref.current || (document.activeElement as HTMLElement | null)?.tagName === "TEXTAREA") return;
+      const items = menuItems(ref.current);
+      if (!items.length) return;
+      e.preventDefault();
+      items[stepMenu(items.length, items.indexOf(document.activeElement as HTMLElement), e.key === "ArrowDown" ? 1 : -1)].focus();
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey, true);
@@ -137,6 +164,23 @@ function RunGroupMenu({
       document.removeEventListener("keydown", onKey, true);
     };
   }, [onClose]);
+  // The keyboard lands in the menu: on its first item when it opens, and back
+  // on "Add tasks…" / "Cancel…" when their inline row is left with Back or
+  // Keep going. An inline row focuses its own field or safe answer.
+  const lastMode = useRef(mode);
+  useEffect(() => {
+    const prev = lastMode.current;
+    lastMode.current = mode;
+    const root = ref.current;
+    if (mode || !root) return;
+    const back =
+      prev === "cancel"
+        ? root.querySelector<HTMLElement>(".rg-danger-item")
+        : prev === "add"
+          ? root.querySelector<HTMLElement>(".rg-add-item")
+          : null;
+    (back || menuItems(root)[0] || root).focus();
+  }, [mode]);
   const id = group.id;
   const go = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -186,6 +230,7 @@ function RunGroupMenu({
       ref={ref}
       className="rg-menu"
       role="menu"
+      tabIndex={-1}
       style={{ top: at.bottom + 4 + "px", left: left + "px" }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -234,7 +279,7 @@ function RunGroupMenu({
             </div>
           </div>
         ) : (
-          <button type="button" role="menuitem" disabled={busy} onClick={() => setMode("add")}>
+          <button type="button" role="menuitem" className="rg-add-item" disabled={busy} onClick={() => setMode("add")}>
             Add tasks…
           </button>
         ))}
@@ -248,6 +293,7 @@ function RunGroupMenu({
               </span>
               <button
                 type="button"
+                role="menuitem"
                 disabled={busy}
                 title="Start it now, past the at-a-time limit (once)"
                 onClick={() => go(() => runAct("Start now", taskPath(id, t.id, "start-now"), {}, "Starting " + queuedTitle(t)))}
@@ -256,6 +302,7 @@ function RunGroupMenu({
               </button>
               <button
                 type="button"
+                role="menuitem"
                 disabled={busy}
                 title="Take it out of the team run — it never starts"
                 onClick={() => go(() => runAct("Take out of run", taskPath(id, t.id, "skip"), {}, "Took " + queuedTitle(t) + " out of the team run"))}
@@ -302,7 +349,7 @@ function RunGroupMenu({
               >
                 Cancel team run
               </button>
-              <button type="button" onClick={() => setMode("")}>
+              <button type="button" autoFocus onClick={() => setMode("")}>
                 Keep going
               </button>
             </div>
@@ -314,6 +361,20 @@ function RunGroupMenu({
         ))}
     </div>
   );
+}
+
+/** The menu's items the arrow keys walk, in order; disabled ones skipped. */
+function menuItems(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).filter(
+    (el) => !(el as HTMLButtonElement).disabled
+  );
+}
+
+/** The index ↑ / ↓ moves to among `count` items from `at` (-1: none focused
+ * yet, so ↓ lands on the first and ↑ on the last), wrapping at both ends. */
+export function stepMenu(count: number, at: number, dir: 1 | -1): number {
+  if (at < 0) return dir === 1 ? 0 : count - 1;
+  return (at + dir + count) % count;
 }
 
 /** A task still waiting for a slot: dim, hollow dot, no number, no ✕ (Take out of run

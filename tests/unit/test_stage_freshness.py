@@ -64,8 +64,13 @@ def test_snapshot_publisher_uses_the_fresh_variant():
     import inspect
 
     src = inspect.getsource(server._session_snapshot)
-    assert "_session_stage_fresh(i)" in src
+    assert "_session_stage_for_tick(i)" in src
     assert "_session_stage_cached(i)" not in src
+    # …which is the fresh variant whenever memory is not low (and, while it
+    # is, for any session a person has open; tests/unit/test_low_memory_probes).
+    tick = inspect.getsource(server._session_stage_for_tick)
+    assert "if not _memory_low():\n        return _session_stage_fresh(inst)" in tick
+    assert "_session_stage_cached" not in tick
 
 
 def test_state_ticker_still_rides_the_memo():

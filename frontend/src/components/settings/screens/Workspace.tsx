@@ -273,10 +273,9 @@ function FailureNotesRow() {
         <input
           type="checkbox"
           checked={on}
-          onChange={(e) => {
-            s.saveField("repository", "fasttrack_failure_notes", e.target.checked);
-            toast(e.target.checked ? "MindFlock will tell the agent what failed" : "Failure notes off");
-          }}
+          // saveField reports the save by the switch ("✓ Saved") or says it
+          // failed; a toast up front claimed success before the answer came.
+          onChange={(e) => void s.saveField("repository", "fasttrack_failure_notes", e.target.checked)}
         />
         <span className="ca-slider" />
       </label>

@@ -15,6 +15,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { useShallow } from "zustand/react/shallow";
 import { useUi } from "../state/store";
 import { useDoctor, useTestPlans } from "../state/queries";
 import { needsYouBadge, useNeedsYou } from "../lib/needsYou";
@@ -86,7 +87,17 @@ export function fitTopBar({ room, fixed, brand, items, more }: BarWidths): BarFi
 }
 
 export function TopBar() {
-  const ui = useUi();
+  // Only the fields the bar reads: a bare useUi() re-rendered it on every
+  // store write (a filter keystroke, a tab switch, a Thread "seen" mark).
+  const ui = useUi(
+    useShallow((s) => ({
+      narrow: s.narrow,
+      view: s.view,
+      sidebarHidden: s.sidebarHidden,
+      toggleSidebar: s.toggleSidebar,
+      openDialogFor: s.openDialogFor,
+    }))
+  );
   // In the store, not local state: Settings → Appearance → Mode drives the
   // same value (lib/theme.ts), so the moon and the Mode buttons always agree.
   const light = useUi((s) => s.themeLight);

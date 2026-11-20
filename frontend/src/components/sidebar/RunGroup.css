@@ -19,6 +19,13 @@
   flex: 0 1 auto;
 }
 
+/* The fold toggle (caret, name, lane) is a real button; it sizes to its
+   content so .rg-sp, not the button, takes the slack before the badges. */
+.run-group-head .dev-toggle {
+  flex: 0 1 auto;
+  gap: 4px;
+}
+
 .run-group-head .rg-lane {
   flex: none;
   white-space: nowrap;
@@ -92,6 +99,7 @@
 }
 
 .run-group-head:hover .rg-more,
+.run-group-head:focus-within .rg-more,
 .run-group-head .rg-more:focus-visible {
   display: inline-block;
 }

@@ -312,23 +312,23 @@ def test_mobile_js_nextact_stage_mapping():
 
 
 def test_mobile_js_updateactions_gates_on_instance():
-    # No selected instance -> every button disabled; only the recommended action
-    # gets the is-next highlight.
+    # No selected instance (or a git request still running) -> every button
+    # disabled; only the recommended action gets the is-next highlight.
     js = client.get("/mobile.js").text
     assert 'btn.classList.toggle("is-next", act === next);' in js
-    assert "btn.disabled = !inst;" in js
+    assert "btn.disabled = !inst || gitBusy;" in js
 
 
 def test_mobile_js_dopush_soft_gate_override():
     # O3 soft gate: if the server rejects with the "checks haven't passed"
     # message, ask on the inline sheet then retry with force for the SAME
-    # session — exactly the desktop pushSession flow. Any other error just
-    # flashes status.
+    # session — exactly the desktop pushSession flow. Any other error stays
+    # on the status line until the next action.
     js = client.get("/mobile.js").text
     assert 'err.message === "checks haven\'t passed for this commit"' in js
     assert '"Push anyway",' in js
     assert "doPush(true, title, overrideRz);" in js
-    assert 'flashStatus("push failed: " + err.message)' in js
+    assert 'setStatus("push failed: " + err.message)' in js
 
 
 def test_mobile_js_submit_commit_behavior():

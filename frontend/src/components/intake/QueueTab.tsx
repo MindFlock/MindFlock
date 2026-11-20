@@ -23,6 +23,7 @@
  */
 
 import { api } from "../../api/client";
+import { openSettings } from "../../lib/openSettings";
 import {
   refreshInstances,
   useMindflockStatus,
@@ -33,7 +34,15 @@ import { sourceDisplayName } from "./TicketsTab";
 import type { TicketingSource } from "../../api/types";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
-import { WorkItemRow, ageText, panelNote, useListFilter } from "./kit";
+import {
+  RefreshButton,
+  StalledRefresh,
+  WorkItemRow,
+  ageText,
+  panelNote,
+  useBusyAction,
+  useListFilter,
+} from "./kit";
 import type { RepoOverrides } from "./RepoSources";
 import { queuedMatches } from "./search";
 import { ScheduledTemplates, nextScheduledText, useScheduledTemplates } from "./ScheduledTemplates";
@@ -85,6 +94,13 @@ interface Section {
   runsOn?: string;
   items: QueuedItem[];
   note: string;
+  /** The list couldn't be read ("Couldn't list PRs: 401 …"): said in the
+   * section with a Retry, never "Not set up yet" or "Nothing waiting". */
+  error?: string;
+  /** Re-polling has backed off: the rows are old ("Couldn't refresh"). */
+  stalled?: boolean;
+  /** The list's own Refresh (a ?fresh=1 sweep). */
+  onRetry?(): Promise<unknown>;
 }
 
 /** The chip beside a section heading — one vocabulary for all three kinds. */
@@ -136,10 +152,32 @@ export function stalledText(
   );
 }
 
+/** The screen a stalled sentence points at, drawn as a link in it. */
+export const DEVICES_LINK = "Settings → Your devices";
+
+/** `text` cut around the first `link` in it: [before, after], or null when
+ * the sentence doesn't name it. */
+export function splitAtLink(text: string, link: string): [string, string] | null {
+  const at = text.indexOf(link);
+  return at < 0 ? null : [text.slice(0, at), text.slice(at + link.length)];
+}
+
 function StalledNote({ s }: { s: Section }) {
+  const text = stalledText(s, s.items.length !== 1);
+  const cut = splitAtLink(text, DEVICES_LINK);
   return (
     <div className="ik-queue-stalled" data-runs-on={s.state === "elsewhere" ? s.runsOn || "" : undefined}>
-      {stalledText(s, s.items.length !== 1)}
+      {cut ? (
+        <>
+          {cut[0]}
+          <button type="button" className="linklike" onClick={() => openSettings("devices")}>
+            {DEVICES_LINK}
+          </button>
+          {cut[1]}
+        </>
+      ) : (
+        text
+      )}
     </div>
   );
 }
@@ -166,12 +204,13 @@ function SectionBlock({
   ): Promise<{ message: string; title?: string }>;
 }) {
   const groups = byGroup(s.items);
+  const [retry, retrying] = useBusyAction(() => s.onRetry?.());
   return (
     <div className="ik-queue-section">
       <div className="ik-queue-head">
         <span className="ik-queue-kind">{s.label}</span>
         <span className="ik-tab-count">{s.items.length}</span>
-        <StateChip state={s.broken ? "broken" : s.state} device={s.runsOn} />
+        <StateChip state={s.broken || s.error ? "broken" : s.state} device={s.runsOn} />
         <button
           type="button"
           className="test-btn ik-queue-goto"
@@ -183,6 +222,13 @@ function SectionBlock({
       </div>
       {s.broken ? (
         <div className="pr-open-note">{s.broken}</div>
+      ) : s.error ? (
+        <div className="pr-open-note ik-queue-error">
+          {s.error}
+          <button type="button" className="linklike" onClick={retry} disabled={retrying}>
+            {retrying ? "Retrying…" : "Retry"}
+          </button>
+        </div>
       ) : s.note ? (
         <div className="pr-open-note">{s.note}</div>
       ) : null}
@@ -191,7 +237,7 @@ function SectionBlock({
         // empty list: three kinds are always on screen here, and three empty
         // boxes make a quiet queue look like a broken one.
         <div className="ik-queue-empty">
-          {s.broken
+          {s.broken || s.error
             ? ""
             : s.state === "unset"
               ? "Not set up yet — set it up on the " + s.label + " tab."
@@ -244,6 +290,7 @@ function SectionBlock({
           ))}
         </>
       )}
+      {s.stalled && !s.error ? <StalledRefresh onRetry={retry} busy={retrying} /> : null}
     </div>
   );
 }
@@ -348,12 +395,14 @@ export function QueueTab({ gotoTab }: TabProps) {
     "Filter by item, title, source, or state…  ( Ctrl+F )",
   );
 
-  const noteFor = (q: { error: Error | null; isFetching: boolean; data: unknown }, what: string) =>
-    panelNote({
-      error: q.error ? "Could not list " + what + ": " + (q.error.message || "error") : "",
-      fetching: q.isFetching,
-      loaded: !!q.data,
-    });
+  // A list that can't be read says so in its section, with Retry — panelNote
+  // leaves an error out of the progress note (the other tabs show it in their
+  // list body), so it is carried separately here: before, a failed PR listing
+  // read "Not set up yet" or "Nothing waiting".
+  const errorFor = (q: { error: Error | null }, what: string) =>
+    q.error ? "Couldn't list " + what + ": " + (q.error.message || "error") : "";
+  const noteFor = (q: { isFetching: boolean; data: unknown }) =>
+    panelNote({ fetching: q.isFetching, loaded: !!q.data });
 
   // Ticket sources that are saved but couldn't be listed: the section says
   // so by name ("Shortcut can't connect"), rather than "not set up" — which
@@ -394,7 +443,10 @@ export function QueueTab({ gotoTab }: TabProps) {
       items: queuedOf("tickets", payloads).map((i) =>
         i.target.kind === "tickets" ? { ...i, group: nameOfSource(i.target.source) } : i
       ),
-      note: noteFor(ticketsQ, "tickets"),
+      note: noteFor(ticketsQ),
+      error: errorFor(ticketsQ, "tickets"),
+      stalled: ticketsQ.stalled,
+      onRetry: ticketsQ.refresh,
     },
     {
       kind: "prs",
@@ -416,7 +468,10 @@ export function QueueTab({ gotoTab }: TabProps) {
       switchName: "PR review comments",
       runsOn,
       items: queuedOf("prs", payloads),
-      note: noteFor(prsQ, "PRs"),
+      note: noteFor(prsQ),
+      error: errorFor(prsQ, "PRs"),
+      stalled: prsQ.stalled,
+      onRetry: prsQ.refresh,
     },
     {
       kind: "issues",
@@ -432,7 +487,10 @@ export function QueueTab({ gotoTab }: TabProps) {
       switchName: "New issues",
       runsOn,
       items: queuedOf("issues", payloads),
-      note: noteFor(issuesQ, "issues"),
+      note: noteFor(issuesQ),
+      error: errorFor(issuesQ, "issues"),
+      stalled: issuesQ.stalled,
+      onRetry: issuesQ.refresh,
     },
   ];
 
@@ -457,11 +515,9 @@ export function QueueTab({ gotoTab }: TabProps) {
     .filter((sec) => sec.state === "on")
     .reduce((n, sec) => n + sec.items.length, 0);
 
-  const refreshAll = () => {
-    ticketsQ.refresh();
-    prsQ.refresh();
-    issuesQ.refresh();
-  };
+  const [refreshAll, refreshing] = useBusyAction(() =>
+    Promise.all([ticketsQ.refresh(), prsQ.refresh(), issuesQ.refresh()])
+  );
 
   const held = status?.held_for_slot;
   // Scheduled templates start on their own too: the count says so.
@@ -489,9 +545,7 @@ export function QueueTab({ gotoTab }: TabProps) {
       <div className="set-row" id="ik-queue-row">
         <span className="set-label">Starts automatically</span>
         <div className="pr-open-toolbar">
-          <button type="button" className="test-btn" id="ik-queue-refresh" onClick={refreshAll}>
-            Refresh
-          </button>
+          <RefreshButton id="ik-queue-refresh" onClick={refreshAll} busy={refreshing} />
           {total ? filter.control : null}
           <span className="pr-open-note">
             {total === 0

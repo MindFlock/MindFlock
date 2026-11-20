@@ -531,8 +531,9 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the Sky", 
   it("a stop: Undo on the toast and on Ctrl+Z is the same entry; the stop a running flight is at asks first, on the sky only", () => {
     expect(hook.match(/const entry = pushUndo\(\{/g)?.length).toBe(2);
     expect(hook.match(/onClick: \(\) => \{\s*if \(takeUndo\(entry\)\) void entry\.undo\(\);\s*\}/g)?.length).toBe(2);
-    expect(hook).toContain('if (opts.askRunning && removalNeedsAsk({ kind: "stops", indexes: nodeIndexes(n), flight })) setRemoveAsk(n);');
-    expect(hook).toContain("onRemove: flight ? (n) => requestRemove(own(n)) : landedId ? () => void clearLanded() : undefined,");
+    expect(hook).toContain("const asks = !!from.inDialog || !!opts.askRunning;");
+    expect(hook).toContain('asks && removalNeedsAsk({ kind: "stops", indexes: nodeIndexes(n), flight }) ? "remove"');
+    expect(hook).toContain("onRemove: flight || landedId ? (n) => requestRemove(own(n)) : undefined,");
     expect(line).toContain("askRunning: true");
     // Delete from the sky reaches the stop the flight is at (not editable), which then asks.
     expect(line).toContain("nodeIndexes(n).includes(line.flight.cursor);");

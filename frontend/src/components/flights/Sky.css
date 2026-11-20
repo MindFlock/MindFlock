@@ -87,6 +87,17 @@ body.view-switch #sky-view {
   flex: none;
 }
 
+/* "Can't reach the server": one line that gives way before the controls. */
+.sky-toolbar > .sky-flights-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.85em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* The toolbar's controls are the app's button tiers (docs/flights.md "As
    built: round 11 style"), all var(--fl-ctl-h) tall with the tiers' radius:
 

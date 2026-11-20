@@ -11,7 +11,9 @@
  *                        default)
  *   not signed in, live  chip "Sign in" → focuses the session: its own terminal
  *                        is already showing the agent's sign-in questions
- *   not signed in, gone  chip "Sign in" → the sign-in window, then Restart
+ *   not signed in, gone  chip "Sign in" → the sign-in window, then Restart —
+ *                        only once the login reads as signed in; a window
+ *                        closed without signing in leaves the banner up
  *
  * While a "not signed in" banner is up it re-reads the Setup payload, so the
  * row and pane clear by themselves once the sign-in lands. */
@@ -25,7 +27,9 @@ import type { AgentBlock } from "../../lib/sessionState";
 import { SignInWindow } from "../dialogs/AgentSignIn";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
 import { openAgentSettings } from "../settings/screens/CodingCli";
-import { refreshSetup, useSetup } from "./useSetup";
+import { queryClient } from "../../state/queries";
+import type { SetupStatus } from "../../api/types";
+import { SETUP_KEY, refreshSetup, useSetup } from "./useSetup";
 
 /** How often a signed-out session's banner re-checks the login. */
 export const BLOCKED_POLL_MS = 8000;
@@ -73,6 +77,24 @@ function useBlockedPoll(b: AgentBlock | null) {
   }, [signedOut]);
 }
 
+/** Whether `provider` reads as signed in on a Setup payload — the reading
+ * `agentBlocked` blocks on: only a probe that found nothing (`false`) is
+ * signed out; "can't tell" (`null`) never blocks. */
+export function readsSignedIn(status: Pick<SetupStatus, "logins"> | null | undefined, provider: string): boolean {
+  const row = (status?.logins || []).find((l) => l.name === provider);
+  return !!row && row.logged_in !== false;
+}
+
+/** After the sign-in window closed: re-read the login, and relaunch the
+ * session only when it now reads as signed in. Closing the window without
+ * signing in leaves the banner as it was — relaunching then just made the
+ * agent quit again. Resolves to whether it relaunched. */
+export async function reviveIfSignedIn(title: string, provider: string): Promise<boolean> {
+  await refreshSetup(true);
+  if (!readsSignedIn(queryClient.getQueryData<SetupStatus>(SETUP_KEY), provider)) return false;
+  return reviveSession(title);
+}
+
 /** Sign in, then relaunch the session's agent (it quit at launch). */
 function useSignInThenRestart(title: string, b: AgentBlock) {
   const [open, setOpen] = useState(false);
@@ -82,7 +104,7 @@ function useSignInThenRestart(title: string, b: AgentBlock) {
       onClose={() => {
         setOpen(false);
         notifyConnectionsChanged();
-        void refreshSetup(true).then(() => reviveSession(title));
+        void reviveIfSignedIn(title, b.name);
       }}
     />
   ) : null;

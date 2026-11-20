@@ -11,7 +11,7 @@ import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
 import { landPendingRow, markMoving, patchInstance, queryClient, refreshInstances, refreshRecentlyClosed } from "../state/queries";
 import { freshStage } from "./stageWatch";
-import { displayName, effectiveViewMode, setSessionSelector, useUi, windowKey } from "../state/store";
+import { displayName, effectiveViewMode, setSessionSelector, useUi, windowKey, type EndingKind } from "../state/store";
 import { toast } from "./toast";
 import { errMsg } from "./format";
 import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
@@ -252,11 +252,39 @@ function forgetLocally(title: string) {
   releaseTerms(title);
 }
 
+/** Longest session name the server takes (backend/web/core/rename.py
+ * MAX_TITLE_LEN): the New dialog's Name box and the rail's rename box stop
+ * there rather than let the server refuse it. */
+export const MAX_TITLE_LEN = 120;
+
+/** Run `work` with the row marked "Closing…" / "Deleting…" (store `ending`),
+ * cleared once it settles. Resolves to undefined, without running `work`,
+ * when an end is already in flight for that session: a second click must not
+ * fire a second request at a session the first one is removing. */
+export async function whileEnding<T>(
+  title: string,
+  kind: EndingKind,
+  work: () => Promise<T>
+): Promise<T | undefined> {
+  const ui = useUi.getState();
+  if (ui.ending[title]) return undefined;
+  ui.setEnding(title, kind);
+  try {
+    return await work();
+  } finally {
+    useUi.getState().setEnding(title, null);
+  }
+}
+
 /** Close: stop the agent and move the session to Recently closed (its
  * worktree is kept); reopen it from there. Not Pause, which leaves the
  * session in the sidebar. */
 export async function closeSession(title: string) {
   if (!title) return;
+  await whileEnding(title, "closing", () => closeNow(title));
+}
+
+async function closeNow(title: string) {
   let r: EndResult | null = null;
   try {
     r = await instApi<EndResult>(title, "/close", { method: "POST" });
@@ -265,7 +293,7 @@ export async function closeSession(title: string) {
     return;
   }
   forgetLocally(title);
-  closeUndo.push(title);
+  rememberClosed(title);
   const kept = keptRunningText(r);
   // The toast carries the Undo: its button reopens exactly this session (the
   // same path as Ctrl+Shift+T), and it stays up long enough to be pressed.
@@ -276,6 +304,12 @@ export async function closeSession(title: string) {
   });
   void refreshRecentlyClosed();
   await refreshInstances();
+}
+
+/** Record a session as closed this run, so Ctrl+Shift+T (and an Undo) can
+ * reopen exactly it. Every Close calls it, single or bulk. */
+export function rememberClosed(title: string) {
+  if (title) closeUndo.push(title);
 }
 
 /** The Close toast's words: what closed and where it lives afterwards. Its
@@ -301,6 +335,29 @@ export function deleteConfirmText(inst: { branch?: string; in_place?: boolean } 
   );
 }
 
+/** The row menu's Delete tooltip. A session working in place keeps its
+ * folder and branch, so it must not promise to remove them. */
+export function deleteMenuTitle(inst: { in_place?: boolean } | undefined): string {
+  return inst?.in_place
+    ? "Removes it from MindFlock; its folder and branch stay (asks first)"
+    : "Deletes its folder and branch, uncommitted changes included (asks first)";
+}
+
+/** The bulk bar's Delete question for several sessions: the single-row
+ * wording (deleteConfirmText) said for all of them, including that sessions
+ * working in place keep their folder and branch. */
+export function deleteManyConfirmText(insts: Array<{ branch?: string; in_place?: boolean }>): string {
+  if (insts.length <= 1) return deleteConfirmText(insts[0]);
+  const inPlace = insts.filter((i) => i.in_place).length;
+  if (inPlace === insts.length)
+    return "Removes these sessions. Their folders and branches stay as they are; Close keeps them to reopen.";
+  return (
+    "Deletes their folders and branches, including uncommitted changes" +
+    (inPlace ? " (the " + inPlace + " working in place keep theirs)" : "") +
+    ". This can't be undone — use Close to keep them."
+  );
+}
+
 /** Delete: remove the worktree and the branch. Asks first unless `confirmed`
  * — the row's menu asks on its own inline strip and passes true; the palette
  * and the pane go through the neutral corner card here.
@@ -321,6 +378,7 @@ export async function deleteSession(
         {
           label: "Delete",
           primary: true,
+          danger: true,
           run: () =>
             void deleteSession(title, true).then((r) => {
               if (r && r !== "done") errorPop("Can't delete " + displayName(title), folderInUseText(r.inUse));
@@ -330,6 +388,12 @@ export async function deleteSession(
     );
     return null;
   }
+  return (await whileEnding(title, "deleting", () => deleteNow(title))) ?? null;
+}
+
+async function deleteNow(title: string): Promise<"done" | { inUse: string[] } | null> {
+  // Read before the delete: the row is gone afterwards.
+  const inPlace = !!instances().find((i) => i.title === title)?.in_place;
   let r: EndResult | null = null;
   try {
     r = await instApi<EndResult>(title, "/cleanup", { method: "POST" });
@@ -341,15 +405,23 @@ export async function deleteSession(
   }
   forgetLocally(title);
   const kept = keptRunningText(r);
-  toast(
-    "Deleted " + displayName(title) + " — worktree and branch removed" + (kept ? " · " + kept : ""),
-    kept ? { duration: 5000 } : undefined
-  );
+  toast(deletedToastText(displayName(title), inPlace, kept), kept ? { duration: 5000 } : undefined);
   await refreshInstances();
   return "done";
 }
 
-interface ClosedEntry {
+/** The Delete toast's words. A session working in place keeps its folder and
+ * branch (deleteConfirmText says so before), so it must not say they went. */
+export function deletedToastText(name: string, inPlace: boolean, kept?: string | null): string {
+  return (
+    "Deleted " +
+    name +
+    (inPlace ? " — its folder and branch were kept" : " — worktree and branch removed") +
+    (kept ? " · " + kept : "")
+  );
+}
+
+export interface ClosedEntry {
   id: string;
   title: string;
   closed_at: number | string;
@@ -362,6 +434,89 @@ const closedWhen = (x: ClosedEntry) => {
 };
 
 let undoBusy = false;
+
+/** The newest Recently closed entry for each of `titles` (a title closed
+ * twice has two entries; the latest is the one just closed). Titles with no
+ * entry are left out. */
+export function newestEntries(list: ClosedEntry[], titles: string[]): ClosedEntry[] {
+  const out: ClosedEntry[] = [];
+  for (const t of titles) {
+    const ent = list.filter((e) => e.title === t).sort((a, b) => closedWhen(b) - closedWhen(a))[0];
+    if (ent) out.push(ent);
+  }
+  return out;
+}
+
+/** The toast after reopening several at once: "Reopened 3 sessions", plus
+ * what could not come back. */
+export function reopenedManyText(reopened: number, failed: number): string {
+  const head = reopened === 1 ? "Reopened 1 session" : "Reopened " + reopened + " sessions";
+  return failed ? head + " · " + failed + " could not be reopened" : head;
+}
+
+/** Reopen one Recently closed entry, its row drawn at once as a create's
+ * (the server may number the title). Throws what the server answered; the
+ * pending row is dropped first. */
+async function reopenEntry(ent: ClosedEntry): Promise<Instance> {
+  const guess = addPendingSession(ent.title || "session", "", true);
+  try {
+    const inst = await api<Instance>("/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen", {
+      method: "POST",
+    });
+    landPendingSession(guess, inst);
+    return inst;
+  } catch (err) {
+    failPendingSession(guess);
+    throw err;
+  }
+}
+
+/** Undo for a bulk Close: reopen every one of `titles` from Recently closed,
+ * and take them off the Ctrl+Shift+T stack (they are back). */
+export async function reopenClosed(titles: string[]) {
+  if (!titles.length || undoBusy) return;
+  undoBusy = true;
+  try {
+    let list: ClosedEntry[];
+    try {
+      const data = await api<ClosedEntry[]>("/api/recently-closed");
+      list = Array.isArray(data) ? data : [];
+    } catch (err) {
+      errorPop("Reopen failed", errMsg(err));
+      return;
+    }
+    const ents = newestEntries(list, titles);
+    for (const t of titles) {
+      const at = closeUndo.lastIndexOf(t);
+      if (at >= 0) closeUndo.splice(at, 1);
+    }
+    let ok = 0;
+    let failed = titles.length - ents.length;
+    const errs: string[] = [];
+    await Promise.all(
+      ents.map(async (ent) => {
+        if (!ent.exists) {
+          failed++;
+          errs.push(displayName(ent.title) + " — its worktree is gone");
+          return;
+        }
+        try {
+          await reopenEntry(ent);
+          ok++;
+        } catch (err) {
+          failed++;
+          errs.push(displayName(ent.title) + " — " + errMsg(err));
+        }
+      })
+    );
+    void refreshRecentlyClosed();
+    await refreshInstances();
+    toast(reopenedManyText(ok, failed), failed ? { duration: 5000 } : undefined);
+    if (errs.length) errorPop("Reopen failed for " + errs.length + " session(s)", errs.join("; "));
+  } finally {
+    undoBusy = false;
+  }
+}
 
 /** Ctrl+Shift+T: reopen exactly the session you last closed; fall back to the
  * newest reopenable entry. A gone worktree is reported, not skipped over. */
@@ -399,20 +554,13 @@ export async function undoLastClose() {
       });
       return;
     }
-    // Its box at once, as a create's (the server may number the title).
-    const guess = addPendingSession(ent.title || "session", "", true);
     try {
-      const inst = await api<Instance>(
-        "/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen",
-        { method: "POST" }
-      );
-      landPendingSession(guess, inst);
+      const inst = await reopenEntry(ent);
       void refreshRecentlyClosed();
       await refreshInstances();
       if (inst?.title) selectSession(inst.title);
       toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
     } catch (err) {
-      failPendingSession(guess);
       errorPop("Reopen failed", errMsg(err));
     }
   } finally {
@@ -429,7 +577,7 @@ export async function cleanupMissing(title: string, confirmed = false) {
     confirmPop(
       "Delete “" + displayName(title) + "”?",
       "Its workspace folder no longer exists — this removes the dead session.",
-      [{ label: "Delete", primary: true, run: () => void cleanupMissing(title, true) }]
+      [{ label: "Delete", primary: true, danger: true, run: () => void cleanupMissing(title, true) }]
     );
     return;
   }
@@ -598,7 +746,7 @@ export async function copySession(title: string) {
   try {
     // A person's start: while memory is low the server asks first
     // (lib/memoryConfirm), and Start anyway resends it.
-    const inst = await withMemoryConfirm(displayName(title) + "'s copy", (anyway) =>
+    const inst = await withMemoryConfirm("a duplicate of " + displayName(title), (anyway) =>
       instApi<Instance>(title, "/copy", anyway ? { json: { start_anyway: true } } : { method: "POST" })
     );
     // The server picks the real title (_copy_title), which can differ from
@@ -615,7 +763,7 @@ export async function copySession(title: string) {
     }
   } catch (err) {
     failPendingSession(guess);
-    if (!isMemoryCancel(err)) errorPop("Copy failed", errMsg(err));
+    if (!isMemoryCancel(err)) errorPop("Duplicate failed", errMsg(err));
   }
 }
 
@@ -637,7 +785,11 @@ export async function branchSession(title: string) {
   const guess = addPendingSession(title + "-branch");
   placeAfter(guess, title);
   try {
-    const inst = await instApi<BranchResult>(title, "/branch", { method: "POST" });
+    // A person's start, like Duplicate: while memory is low the server asks
+    // first (lib/memoryConfirm), and Start anyway resends it.
+    const inst = await withMemoryConfirm("a branch of " + displayName(title), (anyway) =>
+      instApi<BranchResult>(title, "/branch", anyway ? { json: { start_anyway: true } } : { method: "POST" })
+    );
     if (inst?.title) clearStaleAlias(inst.title);
     landPendingSession(guess, inst);
     await refreshInstances();
@@ -653,7 +805,7 @@ export async function branchSession(title: string) {
     }
   } catch (err) {
     failPendingSession(guess);
-    errorPop("Branch failed", errMsg(err));
+    if (!isMemoryCancel(err)) errorPop("Branch failed", errMsg(err));
   }
 }
 
@@ -1068,8 +1220,12 @@ export function hideSession(title: string) {
   }
   ui.setHidden(title, true);
   if (ui.focused === title) ui.setFocused(null);
-  toast("Hid " + (ui.aliases[title] || title) + " — click to undo", {
-    onClick: () => useUi.getState().setHidden(title, false),
+  toast("Hid " + (ui.aliases[title] || title), {
+    action: {
+      label: "Undo",
+      onClick: () => useUi.getState().setHidden(title, false),
+      ariaLabel: "Undo hiding “" + (ui.aliases[title] || title) + "”",
+    },
     duration: 5000,
   });
 }

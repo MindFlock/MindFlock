@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { deviceApi } from "../../../lib/devices";
 import { focusRowIndex, leafName } from "../newSession";
 import { seedChain } from "../../../lib/folderPicker";
+import { folderErrorText } from "./folderErrors";
 
 /** Folder browser popover (port of loadBrowse, section 16), on Finder's rules:
  * a single click SELECTS a row and a double click opens it. It used to be the
@@ -73,7 +74,7 @@ export function FolderBrowser({
       // focus) on screen, so it must also drop any pending handoff rather than
       // leave it to fire on somebody else's navigation.
       leaving.current = null;
-      setError((err as Error).message);
+      setError(folderErrorText((err as Error).message, "list"));
       return false;
     }
   }, [device]);
@@ -160,7 +161,7 @@ export function FolderBrowser({
       // (already exists, permission denied, a slash in the name) is one the
       // user fixes by editing what they typed, and clearing the box would make
       // them type it again to find out.
-      setError((err as Error).message);
+      setError(folderErrorText((err as Error).message, "browser"));
     } finally {
       setMaking(false);
     }
@@ -247,6 +248,10 @@ export function FolderBrowser({
         </div>
       )}
       <div id="rb-list" ref={listRef}>
+        {/* The first listing can take a moment (a slow disk, another device):
+            say so instead of showing an empty list. Later moves keep the old
+            rows until the new ones land. */}
+        {!data && !error && <p className="rb-loading">Loading…</p>}
         {data && (
           /* Names the folder it means. Child rows are selectable now, so "use
              this folder" on its own would be ambiguous about which folder — the

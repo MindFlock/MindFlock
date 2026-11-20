@@ -1020,43 +1020,53 @@ export function renderExplorer(shared, host) {
   }
 
   /** Repainting the panel disposes the embedded table view, edits and all —
-   * so leaving a dirty embed needs a yes first. window.confirm (not the async
-   * confirm bar): the callers are synchronous click handlers and the row they
-   * clicked must not change selection when the answer is no. */
-  function confirmDiscardEmbed() {
+   * so leaving a dirty embed needs a yes first. Asked on the extension's own
+   * confirm bar (the browser's confirm() does nothing in the desktop app):
+   * the clicked row's navigation is held as `then` and runs only on
+   * "Discard", so a "no" leaves the selection exactly where it was. A clean
+   * embed runs `then` now. */
+  function confirmDiscardEmbed(then) {
     const dirty = embedded && embedded.dirtyCount ? embedded.dirtyCount() : 0;
-    if (!dirty) return true;
+    if (!dirty) return then();
     const name = (explorerState.selected && explorerState.selected.name) || "this table";
-    return window.confirm(
-      "Discard " + dirty + " unsaved change" + (dirty === 1 ? "" : "s") + " in " + name + "?"
-    );
+    confirmBar(confirmSlot, {
+      danger: true,
+      title: "Discard " + dirty + " unsaved change" + (dirty === 1 ? "" : "s") + " in " + name + "?",
+      body: "Save them first to keep them.",
+      confirmLabel: "Discard",
+      cancelLabel: "Keep editing",
+    }).then((yes) => {
+      if (yes && !disposed) then();
+    });
   }
 
   function select(n) {
     if (explorerState.selected && explorerState.selected.key === n.key && !form) return;
-    if (!confirmDiscardEmbed()) return;
-    explorerState.selected = {
-      key: n.key,
-      kind: n.kind,
-      connId: n.connId,
-      engine: n.engine,
-      database: n.database,
-      schema: n.schema,
-      table: n.table,
-      name: n.name,
-      tableKind: n.tableKind,
-    };
-    form = null;
-    renderTree();
-    renderMain();
+    confirmDiscardEmbed(() => {
+      explorerState.selected = {
+        key: n.key,
+        kind: n.kind,
+        connId: n.connId,
+        engine: n.engine,
+        database: n.database,
+        schema: n.schema,
+        table: n.table,
+        name: n.name,
+        tableKind: n.tableKind,
+      };
+      form = null;
+      renderTree();
+      renderMain();
+    });
   }
 
   function selectConn(conn) {
-    if (!confirmDiscardEmbed()) return;
-    explorerState.selected = { key: nodeKey(conn.id), kind: "conn", connId: conn.id, engine: conn.engine, name: conn.name || conn.id };
-    form = null;
-    renderTree();
-    renderMain();
+    confirmDiscardEmbed(() => {
+      explorerState.selected = { key: nodeKey(conn.id), kind: "conn", connId: conn.id, engine: conn.engine, name: conn.name || conn.id };
+      form = null;
+      renderTree();
+      renderMain();
+    });
   }
 
   // --- right panel ------------------------------------------------------------
@@ -1206,7 +1216,10 @@ export function renderExplorer(shared, host) {
   // --- connection form ------------------------------------------------------
 
   function startForm(existing) {
-    if (!confirmDiscardEmbed()) return;
+    confirmDiscardEmbed(() => openForm(existing));
+  }
+
+  function openForm(existing) {
     if (existing) {
       form = {
         isNew: false,
