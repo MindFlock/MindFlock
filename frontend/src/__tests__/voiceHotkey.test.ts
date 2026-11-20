@@ -119,7 +119,8 @@ describe("the talk action", () => {
     expect(talk).toBeTruthy();
     expect(talk.holdable).toBe(true);
     expect(talk.help?.[0]).toBe("Navigation");
-    expect(talk.help?.[1]).toBe("Ctrl+T");
+    // The sheet names the browser-safe alias too: a tab keeps Ctrl+T.
+    expect(talk.help?.[1]).toBe("Ctrl+T / Alt+Space");
     expect(talk.help?.[2]).toMatch(/^Talk to the focused session/);
     const alias = KEYMAP.find((e) => e.aliasOf === "talk")!;
     expect(alias.holdable).toBe(true);
