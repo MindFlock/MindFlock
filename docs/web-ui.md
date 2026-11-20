@@ -796,7 +796,7 @@ outside never drops unsaved edits. The to-do list that used to sit here is the *
 see [To-do](#to-do)), the **Prompts** bar (your saved prompts, one click from any
 session — see [Saved prompts](#saved-prompts)), the **Tickets** bar (pipeline on/off switch and state dot;
 it appears once a ticket source is connected), the **Pull requests** and
-**Issues** bars, the opt-in **Verify** bar, and one bar per extension. Under the
+**Issues** bars, and one bar per extension. Under the
 list, a **Recently closed (n)** link shows once anything is closed (see
 [Recently closed](#recently-closed)). Below: **View** **Auto** · **1** · **2** ·
 **4** · **9** (one button per grid size, the active one filled), the session
@@ -898,7 +898,7 @@ the top bar whether or not its bar is showing. Each switch's tooltip names the
 Intake switch it mirrors (**Tickets**, **PR review comments**, **New issues** on
 Intake's Auto-start tab), and a switch that fails says why in a bottom-right
 card rather than a browser `alert()` (which the desktop app does not
-implement). The **Verify** bar's label opens Verify the same way. Turning a
+implement). Turning a
 feature's bar on is still how you get an at-a-glance dot for PR review and
 issue handling once you've connected them. The bars' labels read
 **GitHub PRs** / **GitHub issues**, like the Intake tabs. There is no
@@ -1078,6 +1078,19 @@ under `~/.mindflock/pastes`, the same bucket the phone UI uses. Either way the
 agent receives an absolute path, so the experience on the CLI side is
 identical. Both directories are transient: each new upload prunes its own
 directory back to the newest few files.
+
+### A terminal that isn't attached says so
+
+A pane whose socket drops shows *Reconnecting…* over its last screen, and after
+about 10 s *Can't reach the session — retrying* with **Retry**; typing or
+pasting meanwhile shows *Reconnecting — that wasn't sent* (no "Pasted" toast,
+no upload). A worker still waiting its turn shows *Waiting its turn* with
+**Start now** (the server closes its socket with 4410) and attaches by itself
+when its turn comes. An error that repeats (a shell that can't start, an
+attach that keeps failing) is written once and stops after 5 tries with
+**Retry**; the Shell tab has a loading cover like the Agent tab. With a pane's
+history view open, `Esc` and `Ctrl+F` still belong to whatever dialog has
+focus.
 
 ### Terminals repaint when the window comes back
 
@@ -3316,7 +3329,13 @@ and the full form behind it (**More options**, which carries what you typed
 into the Task, or **Let the agent pick the folder…** to have the model fill it
 in). The dialog is a `role="dialog"` with `aria-modal`. The form has **← Back** to the sentence. The caret starts in the sentence
 box; after a refused create the dialog reopens on the form with the caret in
-**Name**, since the form is what needs fixing.
+**Name**, since the form is what needs fixing, and **Goes as far as** and **Ask
+me before it ships** keep what you picked (only a fresh New resets them).
+Closing the folder picker (Use this folder, `Enter`, ✕ or `Esc`) puts focus
+back where it was, so the dialog's keys work without a click; `Esc` in the
+Describe page's **Runs in → Browse…** puts back the folder you started from.
+When the chosen agent isn't installed, page 1 says so with **Open Setup** and
+Start stays off on both pages.
 
 **What you type is never thrown away.** Closing New — or a trip to Intake,
 Settings or anywhere else — keeps the sentence, the form and the page you were
@@ -3418,16 +3437,16 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   it is a repo.
 - **More options** — only what a first session may want: **Name** (*optional;
   empty names it from the task* — the placeholder is the name it will get),
-  **Fast-track** (*Off / Commit / Push / Open PR / Merge when green*; without
+  **Goes as far as** (*Agent only / Commit / Push / Open PR / Merge when green*; without
   GitHub connected **Open PR** and **Merge when green** are greyed with the
   session menu's own sentence, *MindFlock can’t open or merge the PR for you
   yet — …*) and **Save as template…**. Its summary names anything in it that
-  isn't the default (*named x · Fast-track: Commit · from main · flags*), else
-  *name, Fast-track, save as template*. Inside it, one more fold,
+  isn't the default (*named x · goes as far as Commit · from main · flags*), else
+  *name, how far it goes, save as template*. Inside it, one more fold,
   **Advanced**, holds what a first-hour session can't use yet, its summary
-  naming only what is in it: **Ask me before it ships** (*(needs Fast-track)*
-  while it is Off), **Auto-split** (*Lets the agent break a big task into up to
-  3 parallel sessions — you approve the split first.*), **Provision the
+  naming only what is in it: **Ask me before it ships** (*(needs Commit or
+  further)* while it is Agent only), **Let it split into up to N workers**
+  (*you approve the split first*), **Provision the
   worktree** (*also run the repo's setup and warm test caches* — with the
   workspace strategy), **Base branch** (only while there is a branch to pick;
   *Loading branches…* until the list lands), **Plan first** (*— the agent
@@ -3713,14 +3732,15 @@ declare a plan the Map shows (Claude): for any other agent the checkbox is
 disabled with "needs an agent with plan support — Claude", since that agent would
 wait on a Go the UI can't send.
 
-**Auto-split into up to N sessions if it's worth it** sits under More
-options, below **Fast-track to** (`#new-split-row`), off by default, with a
+**Let it split into up to N workers if it's worth it** sits under More
+options, below **Goes as far as** (`#new-split-row`), off by default, with a
 − / + stepper for N (2 up to the server's `caps.team_runs.max_pieces`,
 `MINDFLOCK_MAX_CHILDREN`; default 3). On a server that doesn't take splits
 (`caps.team_runs.split` false) it is not shown at all, rather than shown
 disabled. The form's **Prompt** is the task, however many lines it holds —
 line breaks never split anything — and an empty Prompt is refused with
-"Auto-split needs a task". Ticked, a sentence under the box says what will
+*Splitting into workers needs a task — write it in the Task below, or untick
+“Let it split”.* Ticked, a sentence under the box says what will
 happen, **Create** starts an optional split run (`POST /api/runs`, `split: true,
 split_optional: true, max_pieces: N`, the Name as the team run's name), and the
 account, Plan first, launch flags and git options do not apply
@@ -3865,10 +3885,10 @@ box, which goes read-only rather than disabled so the caret and the selection
 survive the wait. Start on the form is held while a turn is reading.
 
 **One prompt, however many lines; batches come from Intake.** The box is a
-textarea and stays ONE prompt however many lines it holds — **Fast-track to**
-(Off / Commit / Push / Open PR / Merge when green, starting **Off** unless
-you pick), **Ask me before it ships** and **Auto-split** sit on the form with
-the rest of the details, and anything but Off is armed on the new session as
+textarea and stays ONE prompt however many lines it holds — **Goes as far as**
+(Agent only / Commit / Push / Open PR / Merge when green, starting on **Agent
+only** unless you pick), **Ask me before it ships** and **Let it split** sit on the form with
+the rest of the details, and anything but Agent only is armed on the new session as
 soon as its worktree exists. Only Intake's **Start together…** opens New as a
 **batch** — its ticked tickets in the box, one
 session per line or ticket — and only a batch shows choices on page 1: the
@@ -9462,7 +9482,8 @@ SPA provides one. A module that fails to load is skipped with a console warning.
 The hand-wired built-ins (MindFlock, Assistant, Settings, Doctor) are
 `builtin_ui: true` with `module: null`; the **notify** addon
 (`static/addons/notify.js`, desktop notifications on clarify / PR close /
-budget exceeded — rules are data-driven from `GET /api/notify/config`, and the
+budget exceeded; none while the app has focus, a click opens the session, and
+rules that failed to load at boot are fetched again — rules are data-driven from `GET /api/notify/config`, and the
 same rules drive the server-side ntfy push in `web/core/ntfy.py`) is the
 reference for this generic path — the full contract lives in
 [docs/extensions.md](extensions.md). `slots.js` also feeds the provider list
