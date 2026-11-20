@@ -49,3 +49,12 @@ describe("an extension's switch gets the inline Saved cue", () => {
     expect(head.slice(0, head.indexOf("</div>"))).toContain("setEnabled(ext, e.target.checked, e.target)");
   });
 });
+
+describe("the account chip is a button, like the cost chip", () => {
+  it("Tab reaches it and Enter opens the account list", () => {
+    const src = code("components/grid/AccountChip.tsx");
+    expect(src).toMatch(/<button\s+type="button"\s+ref=\{chipRef\}\s+className="tok usage-trigger acct-chip"/);
+    expect(src).toContain("aria-expanded={open}");
+    expect(src).toContain("useRef<HTMLButtonElement | null>");
+  });
+});
