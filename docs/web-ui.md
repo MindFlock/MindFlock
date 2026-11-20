@@ -3797,6 +3797,10 @@ Linear and Asana.
 If the drafting succeeds and the *filing* fails — an expired token, an archived
 project — the drafted ticket is shown rather than thrown away. It is the
 expensive half and, at that moment, the only copy of that text anywhere.
+**Retry** files that same draft (the dialog sends it back as `draft`, and
+`ticket_compose.compose(drafted=…)` skips the model turn), so it takes seconds,
+not another drafting; editing the sentence drops the draft and drafts afresh.
+A source list that fails to load has a **Retry** too.
 
 One failure sentence is worth reading before you retry: *“the ticket was filed
 on X but the tracker did not return a link to it — check the board before filing
@@ -8256,7 +8260,8 @@ on**), merged newest first. With more than one device each other device's rows
 name it in the sub line (*branch · Mac-mini · 3h ago*; this device's stay
 unnamed). A device that fails, or takes longer than 8 s, costs only its own
 rows and one quiet line (*couldn't reach Mac-mini*); a stale answer from an
-earlier opening is dropped. **Reopen** on another device's row posts
+earlier opening is dropped. **Reopen** reads *Reopening…* until the session
+is back (and *Reopen* again if it fails). **Reopen** on another device's row posts
 `/api/devices/<device>/fwd/api/recently-closed/<id>/reopen`, so the session
 comes back on the device it was closed on and is selected as
 `<device>::<title>` once it is listed. With no second device the sheet is the
@@ -8286,7 +8291,9 @@ phone can *approve* work and not just unblock it. It reads the same
 `GET /api/instances/<title>/diff` the desktop Diff tab does, with the same two
 baselines behind one button: **All changes** (`base=fork` — everything vs the
 branch's fork point, matching the header badge) and **Uncommitted**
-(`base=head`), persisted per browser under the same `mf_diffbase` key. Unified
+(`base=head`), persisted per browser under the same `mf_diffbase` key.
+Switching session or baseline clears the old diff and says *Loading diff…*
+until the new one arrives. Unified
 only — a split view needs width a phone hasn't got — colorized like the desktop
 (`@@` cyan, `+` green, `-` red), with each file's name lifted out of its
 `diff --git` line into a header that sticks while its hunks scroll past. Long
