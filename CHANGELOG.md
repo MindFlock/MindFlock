@@ -115,6 +115,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the last log, and Copy log copies only a real log.
 - **Verify uses your session's name**, and its Start says "Starting…" while it
   works.
+- **A refused start keeps how far it goes.** When New can't create a session,
+  or you come back to a draft from Intake or Settings, "Goes as far as" and "Ask
+  me before it ships" are still what you picked.
+- **New says up front when the agent isn't installed.** The first page shows
+  the note with Open Setup, and Start stays off on both pages until it is.
+- **The New dialog keeps the keyboard after picking a folder**, and Escape in
+  Runs in → Browse… puts back the folder you started from. The GitHub hint
+  under "Goes as far as" links to Settings → Connections.
+- **Branch session asks when memory is low**, like New and Duplicate. A failed
+  Duplicate says "Duplicate failed".
+- **The sidebar filter matches each word**, as Recently closed does ("fix bug"
+  finds fix-login-bug), and `/` brings back a hidden filter box.
+- **The `?` sheet works from the keyboard.** It takes focus, Tab reaches each
+  shortcut in Change keys, and Enter or Space records a new key. Restore
+  defaults has Undo, ↺ says which default it restored, and Talk lists
+  "Ctrl+T / Alt+Space".
+- **The GitHub PRs and issues bars match the Tickets bar**: a labelled switch,
+  a dot that turns red when offline, and the same names in Customize.
+- **Team-run headers work from the keyboard**: Tab reaches the fold and the ⋯
+  menu, which takes the arrow keys, and Cancel… starts on Keep going.
+- **Focus goes back where it belongs.** A keyboard pick in the ⏩ picker and
+  Escape in a chat return to the terminal; a chat you open yourself puts the
+  cursor in its box.
+- **Merge blocked opens the PR**, where the blockers are resolved.
+- **The Sky: removals ask, resets undo.** Removing the stop a route is at asks
+  wherever you remove it from, removing a stop of a finished route asks before
+  its record goes, ■ on a route with no session asks first, and Discard on a
+  default-stops edit and Reset to default on a saved route have Undo.
+- **The Sky from the keyboard and the catalog.** The Menu key or Shift+F10
+  opens a focused stop's menu, and a saved route's ⋯ in All stops… offers Edit
+  its stops. Every save of stops as a route is called "Save as a route" and
+  says the same thing.
+- **Browser notifications are quieter.** No popup while you're looking at the
+  app, a click opens the session it is about, and they start working by
+  themselves if the server was still starting.
 
 ### Fixed
 
@@ -259,6 +294,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The phone says what it is doing.** Its Diff tab clears the old diff and says
   "Loading diff…", Reopen reads "Reopening…", and the ask sheet and update
   banner say "Couldn't reach MindFlock" instead of "Load failed".
+- **The live events feed no longer re-checks every session.** With a window
+  open, a second 4 s loop re-ran each session's git status checks on top of the
+  regular status update, also while memory was low; it now runs only when that
+  update is late.
+- **Starting a session, typing with a budget set, and browsing folders no
+  longer stall the app.** New sessions read their ports file and repo settings
+  off the server's event loop, a keystroke prices transcripts in the background
+  when the cost isn't cached, and the folder browser checks each folder with one
+  lookup instead of a git process (only folders with their own .git get the repo
+  icon) and says "Loading…" until its list arrives.
+- **A waiting worker's pane comes alive on its own.** Opening a worker before
+  its turn shows "Waiting its turn" with Start now, and the pane attaches as
+  soon as the worker starts.
+- **A pane says when it is reconnecting.** A dropped terminal shows
+  "Reconnecting…", and after about 10 seconds "Can't reach the session —
+  retrying" with Retry. Typing or pasting meanwhile says it wasn't sent instead
+  of "Pasted".
+- **Terminal errors stop repeating.** A shell that can't start or an attach
+  that keeps failing stops after a few tries and shows the error once, with
+  Retry; the Shell tab has a loading cover.
+- **The history view leaves dialogs alone.** With a pane's history open,
+  Escape and Ctrl+F in Settings or New act on the dialog again.
+- **Esc no longer loses a prompt on the Sky.** A prompt typed in the Sky's New
+  session card is still there the next time you open it, and ▶ on a route with
+  no session says "Starting…" until the run begins.
+- **The peer viewer and the guest bar rest while the window is hidden.** A
+  failed Kill of guest links shows an error card.
 
 ## [0.14.21] - 2026-11-19
 
