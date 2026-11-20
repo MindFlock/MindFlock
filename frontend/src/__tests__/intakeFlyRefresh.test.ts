@@ -25,29 +25,38 @@ const lane = (target: Record<string, unknown>, reference = "sc-1") =>
   ({ item: { key: "k", kind: target.kind, reference, title: "t", target } }) as unknown as Parameters<typeof flyLaneItem>[0];
 const FLYWAY = { flyway: { id: "", name: "", own: false } };
 const paths = () => api.mock.calls.map((c) => c[0] as string);
+/* The re-read is fire-and-forget, and a fresh sweep first cancels any poll in
+ * flight (queries.ts sweepPanel awaits cancelQueries), so its request goes out
+ * a tick after the start returns. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
 
 beforeEach(() => api.mockClear());
 
 describe("a start from the Sky re-reads the waiting list it came from", () => {
   it("the lane's Run: tickets, PRs, issues", async () => {
     await flyLaneItem(lane({ kind: "tickets", source: "sc", id: "1" }), FLYWAY);
+    await settle();
     expect(paths()).toContain("/api/tickets?fresh=1");
     api.mockClear();
     await flyLaneItem(lane({ kind: "prs", repo: "acme/app", number: 4 }), FLYWAY);
+    await settle();
     expect(paths()).toContain("/api/github/prs?fresh=1");
     api.mockClear();
     await flyLaneItem(lane({ kind: "issues", repo: "acme/app", number: 5 }), FLYWAY);
+    await settle();
     expect(paths()).toContain("/api/github/issues?fresh=1");
   });
 
   it("the drawer's Fly", async () => {
     await flyWaiting({ kind: "issues", repo: "acme/app", number: 5 }, "", {}, "x");
+    await settle();
     expect(paths()).toContain("/api/github/issues?fresh=1");
   });
 
   it("a refused start re-reads nothing and still throws", async () => {
     api.mockImplementationOnce(() => Promise.reject(new Error("session sc-1 already exists")));
     await expect(flyLaneItem(lane({ kind: "tickets", source: "sc", id: "1" }), FLYWAY)).rejects.toThrow("already exists");
+    await settle();
     expect(paths().filter((p) => p.includes("fresh=1"))).toEqual([]);
   });
 });
