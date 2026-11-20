@@ -11,7 +11,7 @@
  * the Mac app instead of the headless formula, and on WSL with only Windows
  * Tailscale, why that isn't enough and the two ways out. */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
 import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
@@ -270,11 +270,34 @@ export function TailscaleCardView({
   );
 }
 
-/** The live card: loads health when shown, polls while a sign-in is pending. */
-export function TailscaleCard({ active = true }: { active?: boolean }) {
+/** Did this health answer turn the device on? True only on a real flip — a
+ *  known not-running answer followed by a running one — so a card that opens
+ *  on an already-running device doesn't report it as news. */
+export function runningFlippedOn(prev: TailscaleHealth | null, next: TailscaleHealth | null): boolean {
+  return !!prev && !prev.running && !!next?.running;
+}
+
+/** The live card: loads health when shown, polls while a sign-in is pending.
+ *  `onHealth` hears the moment the device starts running (a finished sign-in),
+ *  so a screen around the card (Your phone) can re-read its own steps. */
+export function TailscaleCard({
+  active = true,
+  onHealth,
+}: {
+  active?: boolean;
+  onHealth?: (health: TailscaleHealth) => void;
+}) {
   const [health, setHealth] = useState<TailscaleHealth | null>(null);
   const [login, setLogin] = useState<LoginResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const prevHealth = useRef<TailscaleHealth | null>(null);
+  const onHealthRef = useRef(onHealth);
+  onHealthRef.current = onHealth;
+
+  useEffect(() => {
+    if (runningFlippedOn(prevHealth.current, health) && health) onHealthRef.current?.(health);
+    prevHealth.current = health;
+  }, [health]);
 
   const load = useCallback(async (refresh = false) => {
     try {

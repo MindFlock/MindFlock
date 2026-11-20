@@ -243,6 +243,7 @@ export function Devices(p: ScreenProps) {
   useEffect(() => {
     if (joinState !== "waiting" && joinState !== "joining") return;
     const t = setInterval(async () => {
+      if (document.hidden) return; // the screen poll catches up when shown
       try {
         const j = await api<FleetJoin>("/api/fleet/request");
         setSt((prev) => (prev ? { ...prev, join: j } : prev));

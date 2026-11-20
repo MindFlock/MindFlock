@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import { refreshConfig } from "../../../state/queries";
 import { toast } from "../../../lib/toast";
+import { flashSaved } from "../savedCue";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { SetInIntake } from "./SetInIntake";
@@ -26,34 +27,41 @@ export function Ide(_: ScreenProps) {
   const [value, setValue] = useState(CUSTOM_IDE);
   const [customVisible, setCustomVisible] = useState(false);
   const [autoAdopt, setAutoAdopt] = useState(false);
+  /** A read failed: the list (or the switch) on screen isn't the real one. */
+  const [loadFailed, setLoadFailed] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await api<{ ides?: IdeEntry[]; current?: string }>("/api/ides");
-        const list = data.ides || [];
-        setIdes(list);
-        const cur = (data.current || "").trim();
-        if (cur && list.some((i) => i.command === cur)) {
-          setValue(cur);
-          setCustomVisible(false);
-        } else {
-          setValue(CUSTOM_IDE);
-          setCustomVisible(true);
-        }
-      } catch {
-        // No registry — fall back to the custom input only.
-        setIdes([]);
+  const load = useCallback(async () => {
+    let failed = false;
+    try {
+      const data = await api<{ ides?: IdeEntry[]; current?: string }>("/api/ides");
+      const list = data.ides || [];
+      setIdes(list);
+      const cur = (data.current || "").trim();
+      if (cur && list.some((i) => i.command === cur)) {
+        setValue(cur);
+        setCustomVisible(false);
+      } else {
+        setValue(CUSTOM_IDE);
         setCustomVisible(true);
       }
-      try {
-        const a = await api<{ enabled?: boolean }>("/api/cursor/autoadopt");
-        setAutoAdopt(!!a?.enabled);
-      } catch {
-        /* leave as-is */
-      }
-    })();
+    } catch {
+      // No registry — fall back to the custom input only.
+      failed = true;
+      setIdes([]);
+      setCustomVisible(true);
+    }
+    try {
+      const a = await api<{ enabled?: boolean }>("/api/cursor/autoadopt");
+      setAutoAdopt(!!a?.enabled);
+    } catch {
+      failed = true; // the switch keeps its last value, which may not be real
+    }
+    setLoadFailed(failed);
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const pick = useCallback(
     (v: string) => {
@@ -71,6 +79,14 @@ export function Ide(_: ScreenProps) {
   return (
     <>
       <h3 className="set-section-title">IDE</h3>
+      {loadFailed && (
+        <p className="set-hint" id="ide-load-state" role="alert">
+          Couldn't load IDE settings.{" "}
+          <button type="button" className="linklike" onClick={() => void load()}>
+            Retry
+          </button>
+        </p>
+      )}
       <label className="set-row">
         <span className="set-label">Editor</span>
         <select
@@ -111,17 +127,20 @@ export function Ide(_: ScreenProps) {
             id="cursor-auto"
             checked={autoAdopt}
             onChange={async (e) => {
-              const want = e.target.checked;
+              const el = e.target;
+              const want = el.checked;
               setAutoAdopt(want);
               try {
                 const r = await api<{ enabled?: boolean }>("/api/cursor/autoadopt", {
                   json: { enabled: want },
                 });
                 setAutoAdopt(!!r?.enabled);
-                toast(r?.enabled ? "IDE auto-adopt on" : "IDE auto-adopt off");
-              } catch {
+                if (!flashSaved(el)) toast(r?.enabled ? "IDE auto-adopt on" : "IDE auto-adopt off");
+              } catch (err) {
                 setAutoAdopt(!want); // revert on failure
-                toast("Auto-adopt toggle failed");
+                toast(
+                  "Couldn't turn IDE auto-adopt " + (want ? "on" : "off") + ": " + ((err as Error).message || "unknown error")
+                );
               }
             }}
           />

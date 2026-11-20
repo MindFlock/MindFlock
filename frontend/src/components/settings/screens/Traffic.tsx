@@ -698,7 +698,12 @@ export function Traffic(_: ScreenProps) {
 
       {q.isLoading && !data && <p className="set-hint">Loading…</p>}
       {q.isError && !data && (
-        <p className="set-hint">Could not load traffic data. Check your connection and retry.</p>
+        <p className="set-hint" id="traffic-load-state" role="alert">
+          Couldn't load traffic data.{" "}
+          <button type="button" className="linklike" onClick={() => void q.refetch()}>
+            Retry
+          </button>
+        </p>
       )}
 
       {data && (

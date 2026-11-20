@@ -1223,3 +1223,8 @@
   overflow-wrap: anywhere;
   user-select: all;
 }
+
+/* A guest link's Revoke asks on its own line under the link. */
+.peer-guest-links .set-confirm {
+  margin-top: 6px;
+}
