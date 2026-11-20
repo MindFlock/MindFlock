@@ -27,8 +27,8 @@ describe("SIDEBAR_BARS labels", () => {
   it("names each automation bar after the Intake tab it opens", () => {
     const label = (key: string) => SIDEBAR_BARS.find((b) => b.key === key)?.label;
     expect(label("ingestion")).toBe("Tickets");
-    expect(label("pr-review")).toBe("Pull requests");
-    expect(label("issue-handling")).toBe("Issues");
+    expect(label("pr-review")).toBe("GitHub PRs");
+    expect(label("issue-handling")).toBe("GitHub issues");
     // The rest keep their names.
     expect(label("usage")).toBe("Usage");
     // Verify is a stop on the route now, not a bar.

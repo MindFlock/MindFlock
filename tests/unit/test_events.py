@@ -603,6 +603,39 @@ def test_events_ws_tick_streams_changes_without_http_poll(monkeypatch, tmp_path)
         server._EVENT_SNAPSHOT.clear()
 
 
+def _run_events_ticker(monkeypatch, snapshot_at):
+    """Run _events_state_tick_loop for a few short intervals with one client
+    'connected' and the instances tick's last publish at ``snapshot_at``;
+    → how many passes ran."""
+    from backend.web import server
+
+    passes = []
+    monkeypatch.setattr(server, "_tick_state_changes", lambda: passes.append(1))
+    monkeypatch.setattr(server, "_EVENTS_TICK_INTERVAL", 0.02)
+    monkeypatch.setattr(server, "_SNAPSHOT_AT", snapshot_at)
+    monkeypatch.setattr(server, "_EVENTS_WS_CLIENTS", 1)
+
+    async def run():
+        task = asyncio.create_task(server._events_state_tick_loop())
+        await asyncio.sleep(0.15)
+        server._EVENTS_WS_CLIENTS = 0
+        await asyncio.wait_for(task, 2)
+
+    asyncio.run(run())
+    return len(passes)
+
+
+def test_events_ticker_skips_while_the_instances_tick_is_fresh(monkeypatch):
+    # The always-on instances tick emits the same *_changed events for every
+    # session: while its snapshot is fresher than one ticker interval, a pass
+    # here would only rerun the git/tmux probes.
+    assert _run_events_ticker(monkeypatch, time.time() + 60) == 0
+
+
+def test_events_ticker_covers_for_a_stalled_publisher(monkeypatch):
+    assert _run_events_ticker(monkeypatch, 0.0) >= 2
+
+
 def test_events_ws_tick_no_duplicates_with_concurrent_http_poll(monkeypatch, tmp_path):
     # Tick running + an /api/instances-style computation racing it: each
     # transition arrives at the WS exactly once (shared snapshot dedupe).

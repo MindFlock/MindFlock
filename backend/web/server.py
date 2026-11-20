@@ -332,6 +332,7 @@ from backend.web.core.cursor_windows import (
 from backend.web.core.agent_sessions import (
     HELD_REFUSED,
     PAUSED_REFUSED,
+    WAITING_TURN_REFUSED,
     _ensure_agent_session,
     _ensure_shell_session,
     _kill_agent_session,
@@ -354,6 +355,7 @@ from backend.web.core.recently_closed import (
     _save_recently_closed,
 )
 from backend.web.core.repo_picker import (
+    _has_git_dir,
     check_repo,
     search_repos,
     suggest_repos,
@@ -378,6 +380,7 @@ from backend.web.core.workspaces import (
 )
 from backend.web.core.budget import (
     _BUDGET_FIRED,
+    _budget_cost_stale,
     _budget_locked,
     _budget_overrides,
     _budget_overrides_path,
@@ -1591,7 +1594,9 @@ def _session_stage_for_tick(inst) -> dict:
     if not _session_watched(title):
         hit = _STAGE_LOW_MEMO.get(title)
         if hit and time.monotonic() - hit[0] < _STAGE_LOW_TTL and hit[1]() is inst:
-            return hit[2]
+            # Donate the reused stage to the 2.5 s memo too, so any other
+            # reader of the memo serves it instead of recomputing it.
+            return _probe_seed("stage", inst, hit[2])
     value = _session_stage_fresh(inst)
     try:
         _STAGE_LOW_MEMO[title] = (time.monotonic(), weakref.ref(inst), value)
@@ -1782,12 +1787,23 @@ def _tick_state_changes() -> None:
             pass
 
 
+def _events_tick_redundant() -> bool:
+    """Whether the always-on instances tick published within the last
+    :data:`_EVENTS_TICK_INTERVAL`. It emits the same *_changed events for
+    every session, so a pass of this ticker then would only rerun the probes
+    (the memo is not phase-locked to the publisher, so it often missed)."""
+    return time.time() - _SNAPSHOT_AT < _EVENTS_TICK_INTERVAL
+
+
 async def _events_state_tick_loop() -> None:
     """Drive *_changed events while /api/events has clients; ends itself once
-    the last client disconnects (restarted by the next connect)."""
+    the last client disconnects (restarted by the next connect). A pass is
+    skipped while the instances tick's snapshot is fresh: this loop only
+    covers for a publisher that is stalled or slow."""
     while _EVENTS_WS_CLIENTS > 0:
         try:
-            await _in_bg_pool(_tick_state_changes)
+            if not _events_tick_redundant():
+                await _in_bg_pool(_tick_state_changes)
         except Exception:  # noqa: BLE001
             pass
         await asyncio.sleep(_EVENTS_TICK_INTERVAL)
@@ -4646,8 +4662,12 @@ def mkdir(payload: dict) -> JSONResponse:
 def browse(path: str = "", hidden: bool = False) -> JSONResponse:
     """List immediate subdirectories of ``path`` (default: home) for the picker.
 
-    Each entry flags whether it is itself a git repo. Dotfolders are hidden
-    unless ``hidden=1`` (Tab completion of a name that starts with a dot).
+    Each entry flags whether it is itself a git repo: one stat for a ``.git``
+    entry (a folder holding one), never a git process per row — inside a repo
+    ``git rev-parse`` answered true for every subfolder, and this runs on every
+    move and every Tab completion. ``is_git`` for ``path`` itself is the real
+    git answer. Dotfolders are hidden unless ``hidden=1`` (Tab completion of a
+    name that starts with a dot).
     """
     raw = path.strip() if path else ""
     base = os.path.realpath(os.path.expanduser(raw)) if raw else os.path.expanduser("~")
@@ -4662,7 +4682,7 @@ def browse(path: str = "", hidden: bool = False) -> JSONResponse:
             full = os.path.join(base, name)
             if not os.path.isdir(full):
                 continue
-            entries.append({"name": name, "path": full, "is_git": _is_git_repo(full)})
+            entries.append({"name": name, "path": full, "is_git": _has_git_dir(full)})
     except PermissionError:
         return JSONResponse({"error": "permission denied: %s" % base}, status_code=400)
     parent = os.path.dirname(base)
@@ -8913,13 +8933,16 @@ async def branch_instance(title: str, request: Request) -> JSONResponse:
     a remote ``device::title`` row or a relayed request, a shared-folder
     session, one still starting, a folder that isn't a git repo ("Branch needs
     a git repository — <folder> isn't one") or has no commit, a clone-strategy
-    workspace, or changes git can't snapshot. **404** unknown session. See
-    :mod:`core.session_branch`.
+    workspace, or changes git can't snapshot. **404** unknown session. A
+    person's start: while memory is low it is **409** ``{"memory_confirm":
+    true}`` until resent with ``{"start_anyway": true}`` (core.launch_gate).
+    See :mod:`core.session_branch`.
     """
     return await _session_branch.branch(
         title,
         person=_auth.request_person(request),
         relayed=bool(request.headers.get(_remote.REMOTE_HEADER)),
+        payload=await _body_dict(request),
     )
 
 
@@ -15011,10 +15034,13 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # does not reconnect. (Its agent still alive somehow → just attached.)
     # A session HELD OFFLINE after a crash (core.held) closes with 4424 the
     # same way: the pane shows its Start placeholder and never retries.
+    # An ordered worker still WAITING ITS TURN closes with 4410 ("waiting its
+    # turn"), which the pane reads as waiting rather than gone.
     name, err = await asyncio.to_thread(ensure_terminal_session, inst, title)
     if err is not None:
         paused = err == PAUSED_REFUSED
         held = err == HELD_REFUSED
+        waiting = err == WAITING_TURN_REFUSED
         frame = {"type": "error", "message": err}
         if paused:
             frame["paused"] = True
@@ -15022,7 +15048,10 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
             frame["held"] = True
             frame.update(_held.row_fields(title))
         await ws.send_text(json.dumps(frame))
-        await ws.close(code=4423 if paused else 4424 if held else 4409)
+        if waiting:
+            await ws.close(code=4410, reason="waiting its turn")
+        else:
+            await ws.close(code=4423 if paused else 4424 if held else 4409)
         return
     # tmux mouse stays ON (wheel scroll / copy-mode). Browser selection is via
     # Shift+drag (xterm.js shouldForceSelection), copied by copy-on-select.
@@ -15119,6 +15148,15 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
             out_q.put_nowait(json.dumps({"type": "readonly", "message": notice}))
         return ok
 
+    async def over_budget() -> bool:
+        # Every input frame asks; with a budget set and the cost out of the
+        # ~20 s token cache, the check prices the transcripts, so it runs in a
+        # thread then and never stalls the event loop. Awaited in line, so the
+        # keystrokes still land in order.
+        if _budget_cost_stale(title):
+            return await asyncio.to_thread(_budget_locked, title)
+        return _budget_locked(title)
+
     try:
         while True:
             msg = await ws.receive()
@@ -15133,7 +15171,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                 # Budget lock: drop keystrokes once the session is over its
                 # ceiling (authoritative — the UI overlay is just the visible
                 # half). Resize control frames (text/JSON) still pass below.
-                if _budget_locked(title) or not driving(b):
+                if await over_budget() or not driving(b):
                     continue
                 into_pane(b)
                 continue
@@ -15144,7 +15182,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                     j = json.loads(t)
                 except (ValueError, TypeError):
                     note_presence(t)
-                    if _budget_locked(title) or not driving(t):
+                    if await over_budget() or not driving(t):
                         continue
                     into_pane(t.encode("utf-8"))
                     continue
@@ -15160,7 +15198,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                     # "{}"). Stamp before the budget gate, same as the other
                     # two input branches — presence is about the person.
                     note_presence(t)
-                    if not _budget_locked(title) and driving(t):
+                    if not await over_budget() and driving(t):
                         into_pane(t.encode("utf-8"))
     except WebSocketDisconnect:
         pass

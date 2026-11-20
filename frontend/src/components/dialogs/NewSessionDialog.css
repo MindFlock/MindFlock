@@ -1097,6 +1097,14 @@
   color: var(--muted);
 }
 
+/* What #rb-list shows until the first listing lands. */
+.rb-loading {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .muted {
   color: var(--muted);
 }

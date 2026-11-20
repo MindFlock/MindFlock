@@ -15,7 +15,7 @@ import { useGithubToggleBar } from "./useGithubToggleBar";
 export function PrReviewBar() {
   const openDialogFor = useUi((s) => s.openDialogFor);
   // Absent => on (the default once repos exist); explicit false => off.
-  const { visible, repos, on, active, starting, busy, toggle } = useGithubToggleBar({
+  const { visible, repos, on, active, starting, busy, netIssue, online, toggleLabel, toggle } = useGithubToggleBar({
     settingKey: "enabled",
     reposKey: "repos",
     defaultOn: true,
@@ -36,15 +36,20 @@ export function PrReviewBar() {
         id="pr-review-dot"
         // `active` outranks the switch: a review forced from Intake is
         // genuinely in flight even with automated review switched off.
-        className={"dc-dot " + (active ? "on" : !on ? "off" : "idle")}
+        // Red on a network problem, like the Tickets bar's dot.
+        className={"dc-dot " + (netIssue ? "dc-error" : active ? "on" : !on ? "off" : "idle")}
         title={
           active
             ? "A session is addressing a PR's comments right now"
-            : on
-              ? starting
-                ? "Switched on — starting"
-                : "Waiting for review comments on your PRs — turns green while one is being handled"
-              : undefined
+            : netIssue
+              ? online
+                ? "Connection problems — see Settings → System logs"
+                : "No network connection"
+              : on
+                ? starting
+                  ? "Switched on — starting"
+                  : "Waiting for review comments on your PRs — turns green while one is being handled"
+                : undefined
         }
       />
       <button
@@ -57,6 +62,7 @@ export function PrReviewBar() {
         GitHub PRs
       </button>
       <span className="dc-actions">
+        <span className="dc-sw-label">Auto-address</span>
         <label
           className="dc-switch"
           title="Auto-address review comments — the same switch as Intake → GitHub PRs (your repositories are kept either way)"
@@ -65,6 +71,7 @@ export function PrReviewBar() {
             type="checkbox"
             id="pr-review-toggle"
             checked={on}
+            aria-label={toggleLabel}
             disabled={busy}
             onChange={(e) => toggle(e.target.checked)}
           />

@@ -84,6 +84,9 @@ export interface RunDraft {
   name: string;
   setName(n: string): void;
   starting: boolean;
+  /** Back to the defaults (Off unless picked, ask-first unticked, one PR per
+   * line): New's resetForm, the openings that keep nothing. */
+  reset(): void;
   /** Start them: preview first if the reading is stale, refuse with the reason
    * (returned) when a row can't start, else POST /api/runs. */
   start(o: {
@@ -144,9 +147,12 @@ export function useRunDraft(o: {
   const nameTouched = useRef(false);
   const [starting, setStarting] = useState(false);
 
-  // Every opening starts clean — the dialog component never unmounts.
-  useEffect(() => {
-    if (!open) return;
+  // A fresh opening starts clean (the dialog component never unmounts), but
+  // only one the dialog chose to start fresh: New calls this from its own
+  // resetForm. An opening that keeps the draft (a refused create's reopen, a
+  // trip to Intake or Settings with something typed) keeps how far it goes
+  // and "Ask me before it ships" with it.
+  const reset = useCallback(() => {
     setPreview(null);
     setLaneChoice(null);
     setAskFirst(false);
@@ -155,7 +161,7 @@ export function useRunDraft(o: {
     setNameRaw("");
     nameTouched.current = false;
     setStarting(false);
-  }, [open]);
+  }, []);
 
   const ask = useCallback(
     async (t: string, repo: string): Promise<PreviewResponse> =>
@@ -310,6 +316,7 @@ export function useRunDraft(o: {
     },
     starting,
     start,
+    reset,
   };
 }
 

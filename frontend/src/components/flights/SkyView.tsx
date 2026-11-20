@@ -2985,6 +2985,7 @@ export function SkyView() {
         onDock={() => setPaletteMode("shelf")}
         onClose={() => setPaletteMode("shelf")}
         focusFilter={!!catalogOpen || filterFocus}
+        onEditPlan={(plan) => void editPlan(plan)}
         onSession={newHere}
       />
     </div>

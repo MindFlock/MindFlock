@@ -85,7 +85,7 @@ def test_session_actions_ask_on_inline_cards():
     )
     for what in (
         'errorPop("Close failed"',
-        'errorPop("Copy failed"',
+        'errorPop("Duplicate failed"',
         'errorPop(ideName() + " failed"',
     ):
         assert what in src, what

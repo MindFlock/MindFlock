@@ -47,14 +47,16 @@ describe("the sidebar filter keeps what was typed", () => {
     expect(matchesFilter(row, "fix bug", { s1: "Fix bug in login" })).toBe(true);
     expect(matchesFilter(row, " FIX-BUG ", {})).toBe(true);
     expect(matchesFilter(row, "   ", {})).toBe(true);
-    expect(matchesFilter(row, "fix bug", {})).toBe(false);
+    // Each word on its own, like Recently closed: "fix bug" finds me/fix-bug.
+    expect(matchesFilter(row, "fix bug", {})).toBe(true);
+    expect(matchesFilter(row, "fix login", {})).toBe(false);
   });
 
   it("the box hands its text over untrimmed; open windows match the same way", () => {
     const box = normCode("components/sidebar/SessionFilter.tsx");
     expect(has(box, "onChange={(e) => setFilter(e.target.value)}")).toBe(true);
     expect(box).not.toContain("setFilter(e.target.value.trim())");
-    expect(has(normCode("components/sidebar/Sidebar.tsx"), "const q = filterQuery(ui.filter);")).toBe(true);
+    expect(has(normCode("components/sidebar/Sidebar.tsx"), "windows.filter((w) => matchesWindowFilter(w.title, ui.filter))")).toBe(true);
   });
 });
 

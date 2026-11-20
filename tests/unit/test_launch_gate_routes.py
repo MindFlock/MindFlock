@@ -1,6 +1,6 @@
 """Every agent-start path asks the launch gate (core.launch_gate).
 
-A person's start (Start, Wake, Duplicate, Resume, Start all) gets a 409
+A person's start (Start, Wake, Duplicate, Branch, Resume, Start all) gets a 409
 ``memory_confirm`` while memory is low and goes with ``start_anyway``.
 Automatic starts (a queued prompt relaunching its agent, a mailbox wake)
 wait in the gate's queue, which the gate's own routes start or cancel.
@@ -139,6 +139,17 @@ def test_duplicate_and_resume_ask_first(instances, monkeypatch):
     assert r.status_code == 409 and r.json()["error"] == "source workspace not ready"
     r = client.post("/api/instances/s1/resume")
     assert r.status_code == 409 and r.json()["memory_confirm"] is True
+
+
+def test_branch_asks_first(instances, monkeypatch):
+    _memory(monkeypatch, "low")
+    instances.rows["s1"] = _Inst()
+    r = client.post("/api/instances/s1/branch")
+    assert r.status_code == 409 and r.json()["memory_confirm"] is True
+    assert r.json()["level"] == "low"
+    # Past the gate, the branch route goes on to its own checks.
+    r = client.post("/api/instances/s1/branch", json={"start_anyway": True})
+    assert r.status_code == 409 and r.json()["error"] == "source workspace not ready"
 
 
 @pytest.mark.parametrize("body", [None, {"titles": ["a"]}])

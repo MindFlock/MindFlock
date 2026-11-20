@@ -63,6 +63,7 @@ import { runTemplateNow } from "../../lib/templateRun";
 import { SignInWindow } from "./AgentSignIn";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
 import { toast } from "../../lib/toast";
+import { openSettings } from "../../lib/openSettings";
 import { errMsg } from "../../lib/format";
 import { TemplatesDialog } from "./TemplatesDialog";
 import { useFileDropTextarea } from "../../lib/fileDropTextarea";
@@ -685,6 +686,10 @@ export function NewSessionDialog() {
     // rotated OpenRouter key must not keep offering the old key's catalog.
     setProfileModels({});
     setSavedPresets(loadUserPresets());
+    // How far it goes and "Ask me before it ships" start over here and only
+    // here: a refused create's reopen and a kept draft keep both, so Start
+    // again never silently drops the Open PR the user chose.
+    draft.reset();
     loadedDevice.current = deviceRef.current;
     loadCleanup.current?.();
     loadCleanup.current = loadFor(deviceRef.current);
@@ -1248,6 +1253,10 @@ export function NewSessionDialog() {
     ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists."
     : planned.clash
     ? nameClashText(planned.title)
+    : agentMissing
+    ? // The why (and Open Setup) is the note under the box on page 1 and
+      // under the Agent field on the form; this is what the off Start says.
+      "Can't start yet — pick an agent that's installed."
     : "";
   const createFolder = async () => {
     const full = (folderCheck?.asked === folderPath && folderCheck?.resolved) || folderPath;
@@ -1560,7 +1569,9 @@ export function NewSessionDialog() {
     device,
     homePath,
     onClear: draftTyped ? clearDraft : undefined,
-    agentNote: agentSignedOut ? signedOutNote : null,
+    // Page 1 says why Start is off when the agent isn't installed, as the
+    // form does — not only after a press lands on page 2.
+    agentNote: agentMissing ? missingNote : agentSignedOut ? signedOutNote : null,
     startsIn,
     agentLabel: agentName(canonAgent(program)),
     describeSince,
@@ -1868,7 +1879,22 @@ export function NewSessionDialog() {
                         />
                         {!prOk && (
                           <p className="nf-opt-help muted" id="new-ft-github" title={prWhy}>
-                            Open PR and Merge when green need GitHub — connect it in Settings → Connections.
+                            Open PR and Merge when green need GitHub — connect it in{" "}
+                            <button
+                              type="button"
+                              className="linklike"
+                              id="new-ft-github-connect"
+                              title="Open Settings → Connections (what you typed here stays)"
+                              onClick={() => {
+                                // The draft survives the close (openingMode keeps
+                                // anything typed), as Agent → Manage relies on.
+                                closeDialog();
+                                openSettings("connections");
+                              }}
+                            >
+                              Settings → Connections
+                            </button>
+                            .
                           </p>
                         )}
                       </div>

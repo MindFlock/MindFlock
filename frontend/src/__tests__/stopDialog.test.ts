@@ -139,8 +139,8 @@ describe("a group's dialog", () => {
     expect(html).toContain('aria-label="Remove “Open the PR”"');
   });
 
-  it("Remove · Ungroup · Save to the shelf, then Cancel · Save (the rename)", () => {
-    expect(buttons(html).filter((b) => /^[A-Z]/.test(b))).toEqual(["Remove", "Ungroup", "Save to the shelf", "Cancel", "Save"]);
+  it("Remove · Ungroup · Save as a route, then Cancel · Save (the rename)", () => {
+    expect(buttons(html).filter((b) => /^[A-Z]/.test(b))).toEqual(["Remove", "Ungroup", "Save as a route", "Cancel", "Save"]);
   });
 
   it("without a rename to make (nothing ahead can change): Close", () => {
@@ -154,7 +154,8 @@ describe("the session line's wiring", () => {
 
   it("a finished route's stop dialog (a loop pill's too) still offers Remove: it clears that route", () => {
     expect(src).toContain("(flight || landedId) && open.step");
-    expect(src).toContain("if (await clearLanded()) setDialog(null);");
+    // Asked first, inside the dialog (it clears the whole route).
+    expect(src).toContain("onRemove={flight || landedId ? () => requestRemove(open, { inDialog: true, then: () => setDialog(null) }) : undefined}");
     expect(src).toContain('"Remove clears the finished route."');
     expect(src).toContain("if (!flight && landedId) return clearLanded();");
   });

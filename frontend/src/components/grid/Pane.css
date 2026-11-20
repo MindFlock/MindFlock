@@ -246,7 +246,8 @@
    entirely on the window — connection health is self-evident from the sidebar
    dot (which turns red via .dot.disconnected when a session's agent WS drops).
    The socket handlers still write text/`.state-bad` here for the offscreen
-   element, but it never renders in the header. */
+   element, but it never renders in the header: a dropped socket is said over
+   the terminal itself instead (Pane.tsx TermCover, .term-reconnecting). */
 .pane-head .state {
   display: none;
 }
@@ -1240,6 +1241,63 @@
 
 .term-notice.gone {
   opacity: 0;
+}
+
+/* A terminal whose socket dropped (Pane.tsx TermCover): one line over the
+   old screen, so a stale screen never reads as live. Above the bottom
+   .term-notice line, below the pinned prompt. */
+.term-reconnecting {
+  position: absolute;
+  bottom: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 3px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  pointer-events: none;
+}
+
+/* The cover's words and button: waiting its turn (Start now), can't reach
+   the session, or an error that ran out the retries (Retry). */
+.term-cover {
+  padding: 24px;
+  text-align: center;
+}
+
+.term-cover .term-cover-head {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.term-cover .term-cover-error {
+  max-width: 420px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.term-cover button {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.term-cover button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.term-cover button:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 /* The header's ⋯ (PaneMoreMenu): the folded tabs and controls. Fixed, not

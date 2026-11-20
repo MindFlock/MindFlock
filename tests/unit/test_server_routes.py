@@ -286,11 +286,33 @@ def test_browse_lists_subdirs_and_hides_dotfolders(tmp_path, monkeypatch):
 
 
 def test_browse_flags_git_repos(tmp_path, monkeypatch):
-    (tmp_path / "repo").mkdir()
-    monkeypatch.setattr(server, "_is_git_repo", lambda p: os.path.basename(p) == "repo")
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    (tmp_path / "wt").mkdir()
+    (tmp_path / "wt" / ".git").write_text("gitdir: /elsewhere\n")  # a worktree
+    (tmp_path / "plain").mkdir()
+    monkeypatch.setattr(server, "_is_git_repo", lambda p: False)
     r = client.get("/api/browse", params={"path": str(tmp_path)})
-    entry = next(e for e in r.json()["entries"] if e["name"] == "repo")
-    assert entry["is_git"] is True
+    flags = {e["name"]: e["is_git"] for e in r.json()["entries"]}
+    assert flags == {"plain": False, "repo": True, "wt": True}
+
+
+def test_browse_runs_no_git_per_entry(tmp_path, monkeypatch):
+    """One stat per row, not a git process: inside a repo every subfolder
+    answered true to ``git rev-parse``, and this runs on every move and Tab."""
+    for name in ("a", "b", "c"):
+        (tmp_path / name).mkdir()
+    asked = []
+
+    def _is_git(p):
+        asked.append(p)
+        return True  # the browsed folder is inside a repo
+
+    monkeypatch.setattr(server, "_is_git_repo", _is_git)
+    r = client.get("/api/browse", params={"path": str(tmp_path)})
+    body = r.json()
+    assert asked == [str(tmp_path)]  # the folder itself only
+    assert body["is_git"] is True
+    assert [e["is_git"] for e in body["entries"]] == [False, False, False]
 
 
 # --------------------------------------------------------------------------- #

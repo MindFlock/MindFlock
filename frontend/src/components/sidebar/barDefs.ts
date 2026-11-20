@@ -22,8 +22,8 @@ export const SIDEBAR_BARS: BarDef[] = [
   // The machine's memory, Usage's twin (OverallMemory) — right under it.
   { key: "memory", label: "Memory" },
   { key: "ingestion", label: "Tickets" },
-  { key: "pr-review", label: "Pull requests" },
-  { key: "issue-handling", label: "Issues" },
+  { key: "pr-review", label: "GitHub PRs" },
+  { key: "issue-handling", label: "GitHub issues" },
   // (The Verify bar is gone: Verify is a stop on the route now. A saved order
   // or hidden list that still names "verify" is fine — unknown keys drop.)
   { key: "assistant", label: "Assistant" },

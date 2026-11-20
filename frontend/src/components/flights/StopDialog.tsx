@@ -21,7 +21,7 @@
  *    route reached mid-edit keeps the draft on screen (`SAVE_LOST`).
  *  - A GROUP (a stop with sub-steps): its name (renamed with Save), its
  *    sub-steps — the kind's icon, the title, the state, ✎ opens that
- *    sub-step's own dialog, 🗑 removes it — and Ungroup, Save to the shelf,
+ *    sub-step's own dialog, 🗑 removes it — and Ungroup, Save as a route,
  *    Remove (the whole group).
  *
  * Esc and a press on the backdrop close it (Modal). No window.confirm /
@@ -78,6 +78,9 @@ export interface StopDialogProps {
   verifySession?: string;
   /** More under the form (a Split's hint, its "+ Join"). */
   extra?: ReactNode;
+  /** A question the host asks before Remove / 🗑 goes through (the route is
+   * at that stop, or it clears a finished route): drawn over the actions. */
+  confirm?: ReactNode;
   /** The line's steps in flight order: a `dynamic: "stops_before"` field
    * (a Loop's "Repeat from") lists the stops before this one. */
   lineSteps?: readonly FlightStep[] | null;
@@ -126,7 +129,8 @@ export interface StopDialogProps {
   /** A halted Verify stop: Let the agent fix it. */
   onFix?(): void;
   onSkip?(): void;
-  /** Group: rename it (Save), its rows' ✎ and 🗑, Ungroup, Save to the shelf. */
+  /** Group: rename it (Save), its rows' ✎ and 🗑, Ungroup, Save as a route
+   * (under the name in its field). */
   onRename?(name: string): void | Promise<unknown>;
   onOpenSub?(n: DiagramNode): void;
   onRemoveSub?(n: DiagramNode): void;
@@ -449,6 +453,7 @@ function StepDialog(p: StopDialogProps) {
             onCancel={() => setAsking(false)}
           />
         )}
+        {p.confirm}
         <div className="modal-actions stop-dialog-actions">
           <span className="stop-dialog-side">
             {p.onRemove && (
@@ -542,6 +547,7 @@ function GroupDialog(p: StopDialogProps) {
             );
           })}
         </ol>
+        {p.confirm}
         <div className="modal-actions stop-dialog-actions">
           <span className="stop-dialog-side">
             {p.onRemove && (
@@ -555,8 +561,8 @@ function GroupDialog(p: StopDialogProps) {
               </button>
             )}
             {p.onSaveShelf && (
-              <button type="button" className="test-btn" disabled={p.busy || !next} title="Keep these stops on the shelf as a saved route, to drag onto any route" onClick={() => void p.onSaveShelf!(next)}>
-                Save to the shelf
+              <button type="button" className="test-btn" disabled={p.busy || !next} title="Keep these stops as a saved route under the name above, to drag onto any route" onClick={() => void p.onSaveShelf!(next)}>
+                Save as a route
               </button>
             )}
           </span>

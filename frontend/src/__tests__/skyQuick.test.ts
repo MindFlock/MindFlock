@@ -68,7 +68,7 @@ describe("a landed route's blocks come off", () => {
   it("removing one clears the finished route (Delete and the menu's Remove)", async () => {
     const src = (await import("../components/flights/useSessionLine.tsx?raw")).default;
     expect(src).toContain("if (!flight && landedId) return clearLanded();");
-    expect(src).toContain("landedId ? () => void clearLanded() : undefined");
+    expect(src).toContain("onRemove: flight || landedId ? (n) => requestRemove(own(n)) : undefined,");
     const sky = (await import("../components/flights/SkyLine.tsx?raw")).default;
     expect(sky).toContain("useChainMenu(gc, line.flight?.id || line.landedId");
   });

@@ -15,11 +15,12 @@ import {
   closeChat,
   installChatEvents,
   minimizeChat,
-  openChat,
+  openChatByHand,
   peerChatName,
   pollChats,
   sendChat,
   setPeerRows,
+  takeHandOpen,
   useChat,
   type ChatMe,
   type ChatMessage,
@@ -28,10 +29,16 @@ import {
 import { guestName, useGuestFocus } from "../../lib/guestFocus";
 import { isPeerRow } from "../../lib/peerSessions";
 import { windowName } from "../../lib/windowName";
+import { focusTerm } from "../../lib/terminals";
 import { useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { pollWhileVisible } from "../grid/visiblePoll";
 import "./ChatPanel.css";
+
+// openChatByHand / takeHandOpen live in lib/chat (no stylesheet), so a
+// caller outside the chat (the guest pill) can import them without pulling
+// this module's CSS forward in the bundle; re-exported here for its callers.
+export { openChatByHand, takeHandOpen };
 
 export function ChatPanel() {
   const { data: config } = useConfig();
@@ -107,7 +114,7 @@ export function ChatPanel() {
           type="button"
           className="chat-launcher"
           title={"Chat with the people on " + windowName(focused)}
-          onClick={() => openChat(focused)}
+          onClick={() => openChatByHand(focused)}
         >
           💬 Chat
         </button>
@@ -123,7 +130,7 @@ function ChatPill({ w }: { w: ChatWindow }) {
       className={"chat-pill" + (w.unread ? " unread" : "")}
       data-chat={w.title}
       title={w.unread ? `${w.unread} new — open the chat` : "Open the chat"}
-      onClick={() => openChat(w.title)}
+      onClick={() => openChatByHand(w.title)}
     >
       <span className="chat-pill-name">💬 {windowName(w.title)}</span>
       {w.unread > 0 && <span className="chat-unread">{w.unread}</span>}
@@ -155,6 +162,11 @@ function ChatCard({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length]);
 
+  // Opened by hand: the cursor goes in the box (an auto-pop never moves it).
+  useEffect(() => {
+    if (takeHandOpen(title)) inputRef.current?.focus();
+  }, [title]);
+
   const send = async () => {
     if (busy || !draft.trim()) return;
     setBusy(true);
@@ -172,6 +184,8 @@ function ChatCard({
     } else if (e.key === "Escape") {
       e.preventDefault();
       minimizeChat(title);
+      // The keyboard goes back to the session's terminal, not the body.
+      setTimeout(() => focusTerm(title), 0);
     }
   };
 
