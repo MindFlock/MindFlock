@@ -260,6 +260,9 @@ export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "
  * person paused it. A Verify stop parked on you answers its verify instead
  * (`VerifyStopActions`). `inTile` (a stop on the Sky): its text is the
  * tile's own line under its name, not a paragraph here. */
+/** A route parked on you whose session was closed under it. */
+export const GONE_LINE = "Its session is closed, so no agent can fix this: Retry or Skip it, or Stop the route to end it.";
+
 export function YouStepActions({
   flight,
   compact = false,
@@ -334,6 +337,9 @@ export function YouStepActions({
   return (
     <div className={"fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : "")} onClick={stop} data-no-drag>
       {!compact && !inTile && text && (!halted || handed) && <p className="fl-you-text">{text}</p>}
+      {/* Said, not only in a tooltip: with its session closed there is no
+          agent to fix it, and Stop the route is the way out. */}
+      {gone && !inTile && <p className="fl-you-text muted">{GONE_LINE}</p>}
       {!halted && items.length > 0 && (
         <ul className="fl-you-items">
           {items.map((it, i) => (
@@ -475,7 +481,7 @@ export function flyAgainItems(flight: Flight, gone = false): MenuItem[] {
   if (!canFlyAgain(flight)) return [];
   return [
     { key: "again", label: flyAgainLabel(flight), title: flyAgainTitle(flight, gone), onSelect: () => void flyAgain(flight.id) },
-    { key: "again-pick", label: "Fly again from another stop…", title: "Pick the stop it flies again from", onSelect: () => pickAgainStop(flight) },
+    { key: "again-pick", label: "Run again from another stop…", title: "Pick the stop it runs again from", onSelect: () => pickAgainStop(flight) },
   ];
 }
 

@@ -76,11 +76,11 @@ import { pushUndo } from "../../lib/skyUndo";
 import { deriveSessionState, idleUncommittedHint, idleUncommittedText, type IdleUncommitted, type SessionState, type SessionTone } from "../../lib/sessionState";
 import { carryOn } from "../../lib/sendPrompt";
 import { HELD_CHIP } from "../../lib/heldOffline";
-import { startSession } from "../../lib/revive";
+import { reviveSession, startSession } from "../../lib/revive";
 import { firstLine } from "../../lib/format";
 import { atHaltPoint, birdPerch, collapseFlown, drawnIndexes, flownCount, lineWhere, whereBesideChip, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { NODE_W, TILE, chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
-import { ageOf, ageWord, fmtDuration, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
+import { ageOf, ageWord, fmtDuration, routeClock, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
 import type { Flight, FlightPlan, FlightRow, FlightState, StepKindDef } from "../../lib/flights";
 import { sessionGone } from "../../lib/flights";
 import { routeMenuItems } from "./FlightStrip";
@@ -388,11 +388,37 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
   );
 }
 
+/** An offline agent's chip on the Sky, its remedy in it (the rail says
+ * "Offline ↻ Restart"). */
+export const OFFLINE_RESTART_CHIP = "Offline · Restart";
+
 /** The agent tile's state chip. A session held offline after a crash
  * (lib/heldOffline) says its remedy — "Offline · Start" — and pressing it
  * starts the agent (the rail chip's Start); every other state is a label. */
 export function SkyStateChip({ ss, title, className }: { ss: SessionState; title: string; className: string }) {
   const [busy, setBusy] = useState(false);
+  // Offline carries its remedy, as on the rail's chip: "Offline · Restart"
+  // relaunches the agent (resuming its conversation). A plain "Offline" on
+  // the Sky left nothing to press.
+  if (!ss.held && ss.state === "offline" && ss.restartable)
+    return (
+      <button
+        type="button"
+        className={className + " sky-held-start"}
+        title={ss.hint}
+        aria-label="Offline — restart the agent"
+        disabled={busy}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          setBusy(true);
+          void reviveSession(title).finally(() => setBusy(false));
+        }}
+      >
+        {busy ? "Restarting…" : OFFLINE_RESTART_CHIP}
+      </button>
+    );
   if (!ss.held)
     return (
       <span className={className} title={ss.hint}>
@@ -538,6 +564,10 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
 
   const row = line.row;
   const ss = deriveSessionState(row || {});
+  // The agent tile's chip: what the AGENT is doing (Working, Idle, Question…).
+  // Where the route waits is the bar's and the stop's to say, not the agent's
+  // (lib/flightDiagram `sessionBox` reads the head the same way).
+  const agentSs = row ? deriveSessionState({ ...row, flight: null }) : ss;
   // Round 21: the frame's state (its border), from the route and the session.
   const frame = row
     ? frameState({
@@ -769,6 +799,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const segments = useMemo(() => segmentsFor(line.flight), [line.flight]);
   const age = ageOf(row?.activity_since);
   const still = ageWord(row?.activity_since);
+  // Where the route is, beside the chip, and for how long (lib/lineTime).
+  const clock = row ? routeClock(line.flight || line.landed) : null;
+  const barWhere = whereBesideChip(where, ss);
 
   // The session's card opens IN its tile's place (the owner: "open up like in
   // its box, so it is clear where the session is"): the card sits where the
@@ -889,10 +922,16 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           </span>
         )}
         {row && ss.uncommitted && <UncommittedNote title={row.title} u={ss.uncommitted} local={!row.device} />}
-        {whereBesideChip(where, ss) && (
+        {barWhere && (
           // The chip already says "Needs you: Review": no "needs you at Review" too.
           <span className="skl-where" title={where}>
-            {whereBesideChip(where, ss)}
+            {barWhere}
+          </span>
+        )}
+        {clock && (
+          // How long it has been so ("for 12 min"): never cut off by a long where.
+          <span className="skl-where skl-clock" title={clock.title}>
+            {barWhere ? "· " + clock.text : clock.text}
           </span>
         )}
         {line.flight && <OwedNote note={owedNoteOf(line.flight)} groups={owedGroups(line.flight.owed)} place="above" />}
@@ -968,7 +1007,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
             renderHead={() => (
               row ? (
-                <SkyStateChip ss={ss} title={row.title} className={"sky-head-chip fl-box-chip tone-" + ss.tone} />
+                <SkyStateChip ss={agentSs} title={row.title} className={"sky-head-chip fl-box-chip tone-" + agentSs.tone} />
               ) : (
                 <span className={"sky-head-chip fl-box-chip tone-" + ss.tone} title={ss.hint}>
                   {ss.label}

@@ -4818,6 +4818,19 @@ trailing **+ Tack on a stop**), then, opened, its session box as the real
 pane. A new session appears in place on the next poll; a closed one's line
 fades away.
 
+**Reading a line at a glance** (2026-11-20). The bar says the session's
+state (its chip), then where the route is — "at Verify · 2 of 4 steps done",
+never the chip's word twice ("Halted · at CI checks · failed: …", "Paused
+route · before Open PR · your halt point") — then for how long ("for 12
+min", hover for the clock time; nothing in the first minute), or "route
+finished 15 min ago" on a route that landed (`lib/lineTime` `routeClock`).
+The agent tile's chip is the **agent's** own state (Working, Idle, Question,
+Offline…): where the route waits is drawn on that stop (the bird, its
+buttons) and said on the bar, never on the agent. A stop that waits on you
+and is not a Wait for me says what it waits for ("2 steps for you to check,
+then confirm"), its settings moving to its tooltip. The pane's Route strip
+reads the same way.
+
 **Sizes.** A line is **compact**, **normal** or **wide** (its bar's size
 control cycles them) — bigger shows more of each box's text — and an opened
 box has its own width and height. The auto-layout places lines at the size
@@ -4946,22 +4959,55 @@ above (details in docs/flights.md "Flow polish"):
   it stays open after Save, and unsaved edits are saved before Retry, Carry on
   or Fix). A refused value shows the server's sentence at the top of the form,
   labelled with the field; a Command stop with an empty command says *Needs a
-  command* as you type, and an empty Agent prompt hints *Empty = the agent
-  carries on with its task*. Esc, the backdrop and Cancel ask *Discard your
+  command* as you type; an empty Agent prompt is fine, and the read-back
+  sentence says what it does (*The session's agent carries on with its
+  task…*). Esc, the backdrop and Cancel ask *Discard your
   changes?* (**Keep editing**) when the draft changed; if the route reaches
   the stop while you edit, the dialog says *The route reached this stop — your
   changes can't be saved now* and keeps your text on screen, read-only.
 - **Stop options** carry a hint each — what it does, its default and its
   range (number fields are clamped to it) — and "If it fails" explains the
-  pick under it ("Let the agent fix it" tries up to 2 rounds). The form opens
-  on one **read-back sentence** of what the route will do at the stop (its
-  halt point, "Only when", "If it fails"; a Verify stop's own sentence, e.g.
+  pick under it ("Let the agent fix it" tries up to 2 rounds). A Wait and a
+  Wait for me cannot fail, so they offer no "If it fails". The form opens
+  on one **read-back sentence** of what the route will do at the stop: first
+  what the stop does with its settings (*Commits, pushes and opens the pull
+  request.*, *Waits up to 60 min for the PR's CI checks to pass.*, *Waits 10
+  min, then goes on.* — lib/stopEditing `stopDoes`, for Agent, Ship, CI
+  checks, Wait, Wait for me, Command and Notify), then its halt point, "Only
+  when" and "If it fails"; a Verify stop's own sentence, e.g.
   *Its agent verifies on this branch as soon as the route gets here; you
   confirm the steps only a person can do*), which follows your edits. A Verify
   stop's Who reads Agent, then me / Agent only / Agent, then my sign-off, and
   Where is a pick from the repo's environments. Menus use one name per action:
   Pause, Carry on, Add halt point, Remove halt point, Add a stop, Jump here,
   and the Verify stop's **Open Verify**.
+
+**One vocabulary, honest menus** (2026-11-20). The right-click menu of the
+stop the route is at says **Edit** on a stop that failed (its dialog saves
+new settings; Retry runs them) and no longer ends "it can't change now"
+there; its Remove reads "Remove — pauses before the next stop"; Skip and Done
+say "the route goes on". A halt point reads "before <stop>" everywhere: the
+Sky's bar, the bell's row ("Paused before Push — Carry on"), the session's
+hint and the phone. The zoom bar's **1**, **Fit** and **100%** have
+screen-reader names (Fit the focused route, Fit all routes, Zoom to 100%).
+The refusals a stop's dialog can show say "stop" (*a Command stop needs a
+command*, *Until is a time of day, like 18:00*).
+
+**When a route stops** (2026-11-20). An offline agent's chip on the Sky (the
+bar and the agent tile) is **Offline · Restart**, as on the rail, and its
+Needs-you row says why and offers **Restart**. A route parked on you whose
+session was closed says so under its stop — *Its session is closed, so no
+agent can fix this: Retry or Skip it, or Stop the route to end it* — not
+only in a tooltip. A failed stop's dialog says the failure once (*It failed:
+test_export_empty*, not *CI checks failed: …* under the CI checks name), and
+a pause says whose it is (*Paused by you*, or *Paused: stop removed*).
+
+**Building a route** (2026-11-20). The shelf says "Click to add · drag to
+place" beside its chips (it no longer says "Stops" three times). The
+catalog's compact cards (All stops…) show two lines of what each stop does.
+Right-click on empty sky opens **Add a stop…** wholly in view: low on the sky
+it opens upward, above the shelf, and at the right edge leftward
+(lib/skyLayout `menuSpot`).
 
 **The phone.** Below 600px wide there is no pan or zoom: the toolbar, the
 drawer, then the lines as a plain list, each line's canvas running top to
@@ -5956,11 +6002,12 @@ The backend is docs/flights.md "Round 21".
   at Push** (focused), **Start from the beginning**, **Start at another
   stop…**. **Start at…** beside "Run these stops" lists the route's stops
   ("3. Push · Ship"); a later stop flies now.
-- **Fly again** on an ended route: "Fly again from Push" and "Fly again from
-  another stop…" on a finished, cancelled or halted route's ⋯ menu, on the
-  Finished list's cards and on the Route tab's head; right-click a stop of a
-  finished route for "Fly again from here". The toast says which session took
-  it ("Reopened sc-42 and flying again from Push").
+- **Run again** on an ended route (called "Fly again" until 2026-11-20; the
+  vocabulary says Run): "Run again from Push" and "Run again from another
+  stop…" on a finished, cancelled or halted route's ⋯ menu, on the Finished
+  list's cards and on the Route tab's head; right-click a stop of a finished
+  route for "Run again from here". The toast says which session took it
+  ("Reopened sc-42 and running again from Push").
 - **The stop editor** gets the new fields from `/api/flights/kinds`: a review
   stop's **Fix rounds** and **Findings still open after the last round**, a
   Verify stop's **When it needs you**.

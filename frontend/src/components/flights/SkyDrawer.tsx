@@ -28,6 +28,8 @@ import { perchWhy } from "../../lib/groundedLines";
 import { isFailing, planName } from "../dialogs/verify";
 import { useNeedsYou, type NeedsYouRow } from "../../lib/needsYou";
 import { openAsk } from "../../lib/ask";
+import { deriveSessionState } from "../../lib/sessionState";
+import { reviveSession, startSession } from "../../lib/revive";
 import { AnswerStrip } from "../AnswerStrip";
 import { WaitingRow as OutboxWaitingRow } from "../outbox/WaitingRow";
 import { FlightCard, YouStepActions, flightHeadline, sessionGone } from "./FlightStrip";
@@ -236,7 +238,11 @@ function NeedsLine({ row, onFocus }: { row: NeedsYouRow; onFocus(title: string):
     );
   }
   const a = row.attn;
-  const what = row.plan ? "Plan ready — review & Go" : a?.reason || "";
+  // An offline agent: its remedy right here, as on the rail ("Restart"; a
+  // session held offline after a crash says "Start"), not a bare "Offline".
+  const ss = inst ? deriveSessionState(inst) : null;
+  const revive = row.kind === "broken" && ss?.state === "offline" && (ss.restartable || ss.held) ? (ss.held ? "start" : "restart") : "";
+  const what = row.plan ? "Plan ready — review & Go" : revive && ss ? ss.hint : a?.reason || "";
   return (
     <div className={"sky-perch sky-needs-" + row.kind} data-needs={row.key}>
       {row.title ? (
@@ -258,8 +264,30 @@ function NeedsLine({ row, onFocus }: { row: NeedsYouRow; onFocus(title: string):
         <button type="button" className="btn-primary fl-btn" onClick={() => useUi.getState().openMap(row.title, { section: "plan" })}>
           Review the plan
         </button>
+      ) : revive ? (
+        <ReviveButton title={row.title} start={revive === "start"} />
       ) : null}
     </div>
+  );
+}
+
+/** The drawer's Restart (or Start) for an offline agent. */
+function ReviveButton({ title, start }: { title: string; start: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const word = start ? "Start" : "Restart";
+  return (
+    <button
+      type="button"
+      className="btn-primary fl-btn"
+      disabled={busy}
+      title={start ? "Start the agent — it was held offline after a crash" : "Relaunch the agent, resuming its conversation"}
+      onClick={() => {
+        setBusy(true);
+        void (start ? startSession(title) : reviveSession(title)).finally(() => setBusy(false));
+      }}
+    >
+      {busy ? (start ? "Starting…" : "Restarting…") : word}
+    </button>
   );
 }
 

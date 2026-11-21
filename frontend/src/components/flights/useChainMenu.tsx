@@ -109,7 +109,7 @@ export const AGAIN_HERE_KEY = "again-here";
  * menu with "Fly again from here": a new run of the route from that stop. */
 export function withAgainItem(items: readonly SkyMenuItem[], n: Pick<DiagramNode, "step" | "title">, ended: Flight | null | undefined): SkyMenuItem[] {
   if (!ended || !canFlyAgain(ended) || !n.step || !ended.steps.some((s) => s.id === n.step!.id)) return [...items];
-  return [{ key: AGAIN_HERE_KEY as SkyMenuItem["key"], label: "Fly again from here", title: "Fly “" + ended.plan_name + "” again from “" + n.title + "”" }, ...items];
+  return [{ key: AGAIN_HERE_KEY as SkyMenuItem["key"], label: "Run again from here", title: "Run “" + ended.plan_name + "” again from “" + n.title + "”" }, ...items];
 }
 
 export function useChainMenu(

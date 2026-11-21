@@ -48,7 +48,7 @@ import type { AutopilotRun, Instance } from "../api/types";
 import { verifyStopFace, type BehaviorTone } from "./behaviors";
 import { verifyFace } from "./verifyStop";
 import { LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
-import { deriveSessionState } from "./sessionState";
+import { PAUSED_FLIGHT_LABEL, deriveSessionState } from "./sessionState";
 import { windowName } from "./windowName";
 import { riskOf, type RiskTag } from "./stopRisk";
 import { stopSentence } from "./stopEditing";
@@ -872,8 +872,12 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
     const summary = stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s));
     // A stop at work says what it is doing right now (the server's note: "the
     // agent is working", "3 new review comments for the agent"), not its
-    // settings — those stay in its tooltip (`summary`).
-    const note = live && state === "current" && !looping && !fix?.active ? liveNote(rec?.note) : "";
+    // settings — those stay in its tooltip (`summary`). So does a stop that
+    // waits on you and is not a Wait for me (whose own text says what it
+    // asks): what it waits for ("2 steps for you to check, then confirm"),
+    // never "Verify on this branch · agent only · right away".
+    const waitsOnYou = state === "perched" && stepActor(s, kinds) !== "you";
+    const note = live && (state === "current" || waitsOnYou) && !looping && !fix?.active ? liveNote(rec?.note) : "";
     // A failure handed to you (`on_fail: you`) waits amber: why, on the tile.
     const handed = state === "perched" ? String(rec?.detail?.failed_reason ?? "").trim() : "";
     // The tooltip: the settings a live note stands in for, then the stop's
@@ -997,7 +1001,12 @@ function miniDots(row: Instance): string {
 }
 
 function sessionBox(row: Instance, kind: "parent" | "session" | "child", rowAt: DiagramRow): DiagramNode {
-  const ss = deriveSessionState(row);
+  // The line's own head is its AGENT: its chip says what the agent is doing
+  // (Working, Idle, Question…), never where the route waits — that is drawn
+  // on the stop itself (the bird, its buttons) and said on the frame's bar.
+  // An agent tile reading "Halted" or "Wait for me: Approve the merge" sent
+  // people to the agent for something a stop further on wanted.
+  const ss = deriveSessionState(kind === "session" ? { ...row, flight: null } : row);
   return {
     id: kind + ":" + row.title,
     kind,
@@ -1547,21 +1556,53 @@ export function lineWhere(d: Diagram): string {
     b = { nodeId: parked.id, tone: STOP_TONE[parked.state]! };
   }
   if (!b) return "";
-  const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
+  // A halt point stops the route BEFORE its stop runs: "paused before Push ·
+  // your halt point", not "paused at Push" (which reads as Push half done).
+  const haltPoint = b.tone === "paused" && n.state === "paused" && !!n.step?.halt;
+  const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : haltPoint ? "paused before " : b.tone === "paused" ? "paused at " : "at ";
   // A stop with an ask (lib/stopAsks) says it on its own tile, its line
   // under its name and its buttons: the bar says only where it is.
-  const tail = n.ask ? "" : n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
+  const tail = n.ask
+    ? ""
+    : n.join && n.join.waiting > 0
+      ? joinLabel(n.join)
+      : b.tone === "halted" && n.reason
+        ? reasonAfterTitle(n.title, n.reason)
+        : haltPoint
+          ? "your halt point"
+          : n.kind === "stop" || n.kind === "group"
+            ? n.sub
+            : "";
   // "needs you at" already says whose stop it is: no "Wait for me:" after it.
   const title = b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title;
   return head + title + (tail ? " · " + tail : "");
 }
 
-/** The frame bar's where-line beside its session chip: "" when the chip
- * already says the route waits on you at that stop ("Needs you: Review" /
- * "Wait for me: Your checks" next to "needs you at Review"), else `where`. */
+/** A failure reason without the stop's own name in front, for a line that
+ * already names the stop: "CI checks failed: 2 of 14 red" on "CI checks" is
+ * "failed: 2 of 14 red" (`capital` gives "Failed: …", for a line of its
+ * own). A reason that doesn't start with the name is kept as it is. */
+export function reasonAfterTitle(title: string, reason: string, capital = false): string {
+  const r = String(reason || "").trim();
+  const t = String(title || "").trim();
+  if (!t || !r.toLowerCase().startsWith(t.toLowerCase() + " ")) return r;
+  const rest = r.slice(t.length).trim();
+  if (!rest) return r;
+  return (capital ? rest[0].toUpperCase() : rest[0].toLowerCase()) + rest.slice(1);
+}
+
+/** The frame bar's where-line beside its session chip, never saying the
+ * chip's word twice: "" when the chip already says the route waits on you
+ * at that stop ("Needs you: Review" / "Wait for me: Your checks" next to
+ * "needs you at Review"); "at CI checks · …" beside a Halted chip (not
+ * "Halted · halted at CI checks"); "at Push" / "before Push · your halt
+ * point" beside a Paused route chip; else `where`. */
 export function whereBesideChip(where: string, chip: { reason?: string; label?: string } | null | undefined): string {
-  if (!where || chip?.reason !== "flight_you") return where;
-  return /^needs you at /i.test(where) ? "" : where;
+  if (!where) return where;
+  if (chip?.reason === "flight_you") return /^needs you at /i.test(where) ? "" : where;
+  if (chip?.reason === "flight_halted") return where.replace(/^halted (?=at )/i, "");
+  if (chip?.label === PAUSED_FLIGHT_LABEL) return where.replace(/^paused (?=at |before )/i, "");
+  return where;
 }
 
 /** How many stops a line's `flown` pill folds (0: none). The canvas speaks

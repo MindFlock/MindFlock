@@ -161,12 +161,16 @@ describe("a box's right-click menu", () => {
 
   it("the flight's current stop: its own parts, its dialog (read-only), and that it can't change", () => {
     expect(keys(node({ state: "perched" }))).toEqual(["done", "skip", "edit", "note"]);
-    expect(keys(node({ state: "halted" }))).toEqual(["retry", "fix", "skip", "edit", "note"]);
+    // A failed stop can change (Save, then Retry): Edit, and no "can't change" note.
+    expect(keys(node({ state: "halted" }))).toEqual(["retry", "fix", "skip", "edit"]);
+    expect(menuItemsFor(node({ state: "halted" }), all).find((i) => i.key === "edit")).toMatchObject({ label: "Edit", title: "Open this stop — change its settings, then Retry runs them (Enter)" });
+    // The route goes on, in words — not "the bird flies on".
+    expect(menuItemsFor(node({ state: "halted" }), all).find((i) => i.key === "skip")!.title).toBe("Skip this stop — the route goes on without it");
     expect(keys(node({ state: "current" }))).toEqual(["skip", "edit", "note"]);
     expect(menuItemsFor(node({ state: "current" }), all).find((i) => i.key === "edit")!.label).toBe("Details");
     expect(menuItemsFor(node({ state: "current" }), all).at(-1)!.label).toBe("The route is here — it can't change now");
     // Where the flight is: Remove halts it there.
-    expect(menuItemsFor(node({ state: "current" }), { ...all, here: true }).find((i) => i.key === "remove")).toMatchObject({ label: "Remove — the route pauses here", danger: true });
+    expect(menuItemsFor(node({ state: "current" }), { ...all, here: true }).find((i) => i.key === "remove")).toMatchObject({ label: "Remove — pauses before the next stop", danger: true });
     // No flight to act on: its dialog and the note.
     expect(keys(node({ state: "perched" }), { ...all, live: false })).toEqual(["edit", "note"]);
   });
@@ -286,11 +290,11 @@ describe("halt points", () => {
       "Skip",
       "Remove halt point",
       "Details",
-      "Remove — the route pauses here",
+      "Remove — pauses before the next stop",
       "The route is here — it can't change now",
     ]);
     // Halted by a failure: Retry, not Carry on.
-    expect(keys(node({ state: "halted", step: push }), here)).toEqual(["retry", "fix", "skip", "halt", "edit", "remove", "note"]);
+    expect(keys(node({ state: "halted", step: push }), here)).toEqual(["retry", "fix", "skip", "halt", "edit", "remove"]);
     // Not the current stop: no Pause (as before), no Remove.
     expect(keys(node({ state: "perched", step: push }))).toEqual(["done", "skip", "edit", "note"]);
     // Never in the UI: "breakpoint", or the old "Halt now" / "Carry on past here".
@@ -348,7 +352,7 @@ describe("halt points", () => {
       expect(cur).toContain('aria-label="Add halt point — “Push”"');
       // The current stop's own toolbar never edits it — it can only come off.
       expect(cur).not.toContain("Edit “Push”");
-      expect(cur).toMatch(/aria-label="Remove “Push” — the route pauses here" title="Remove this stop — the route pauses right before the stop that followed it">🗑</);
+      expect(cur).toMatch(/aria-label="Remove “Push” — pauses before the next stop" title="Remove this stop — the route pauses right before the stop that followed it">🗑</);
       // A stop that has flown: 🗑 alone.
       const flown = boxOf(html, "stop:s1");
       expect(flown).toContain('aria-label="Remove “Work the ticket” from the route"');
@@ -361,7 +365,7 @@ describe("halt points", () => {
       const html = render({ diagram: flightDiagram(flight({ cursor: 1 }), KINDS), ...rest });
       expect(html).not.toContain("Add halt point");
       // Remove alone.
-      expect(boxOf(html, "stop:s2")).toContain("Remove “Push” — the route pauses here");
+      expect(boxOf(html, "stop:s2")).toContain("Remove “Push” — pauses before the next stop");
       expect(boxOf(html, "stop:s2")).not.toContain("Pause");
       const bare = render({ diagram: flightDiagram(flight({ cursor: 1 }), KINDS), onSelect: () => {} });
       expect(boxOf(bare, "stop:s2")).not.toContain("fl-tools");

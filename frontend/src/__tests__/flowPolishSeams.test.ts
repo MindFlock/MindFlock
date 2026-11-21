@@ -89,7 +89,7 @@ describe("the bell's row for a route paused at a halt point", () => {
       createElement(QueryClientProvider, { client }, createElement(WaitingRow, { w, shown: (t: string) => t } as never))
     );
     expect(html).toContain("ob-flight_paused");
-    expect(html).toContain('<span class="pr-open-chip" title="Paused at Push — Carry on">Paused at Push</span>');
+    expect(html).toContain('<span class="pr-open-chip" title="Paused before Push — Carry on">Paused before Push</span>');
     expect(html).toMatch(/<button[^>]*>Carry on<\/button>/);
     expect(html).toMatch(/<button[^>]*>Skip<\/button>/);
     expect(html).not.toContain("pr-open-chip bad");
@@ -147,7 +147,7 @@ describe("a refusal under its own field (StopForm errors)", () => {
 describe("this round's classes have styles", () => {
   it("the stop dialog's parked-stop pieces, the paused frame, the save-route field", async () => {
     const dialog = (await import("../components/flights/StopDialog.css?raw")).default;
-    for (const c of [".stop-dialog-remedies", ".stop-dialog-settings > summary", ".stop-dialog-asks", ".stop-dialog-error", ".stop-dialog-lost", ".stop-dialog-save-hint", ".stop-dialog-hint"]) expect(dialog, c).toContain(c);
+    for (const c of [".stop-dialog-remedies", ".stop-dialog-settings > summary", ".stop-dialog-asks", ".stop-dialog-error", ".stop-dialog-lost", ".stop-dialog-save-hint"]) expect(dialog, c).toContain(c);
     expect(dialog).toMatch(/\.stop-dialog-settings > summary \{[^}]*cursor: pointer/);
     expect(dialog).toMatch(/\.stop-dialog-error,\s*\.stop-dialog-lost \{[^}]*color: var\(--fl-ink-red, var\(--red\)\)/);
     const line = (await import("../components/flights/SkyLine.css?raw")).default;

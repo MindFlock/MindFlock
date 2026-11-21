@@ -99,3 +99,85 @@ export function ageWord(activitySince: number | null | undefined, now = Date.now
   const days = Math.floor((now / 1000 - (Number(activitySince) || 0)) / 86400);
   return days + (days === 1 ? " day" : " days") + " still";
 }
+
+// --- The route's clock on the frame bar -----------------------------------
+
+type ClockFlight = Pick<Flight, "state" | "steps" | "cursor" | "step_states" | "history" | "finished">;
+
+/** When the route came to the state it is in now (epoch seconds; 0 when it
+ * can't be told): a stop at work or waiting on you since its record's
+ * `since`; halted since the failure that halted it; paused since the pause
+ * (by you, or at a halt point); a finished route at `finished`. Ready and
+ * stops-only routes have no clock. */
+export function stateSince(f: ClockFlight | null | undefined): number {
+  if (!f) return 0;
+  const cur = f.steps?.[f.cursor];
+  const rec = cur ? f.step_states?.[cur.id] : undefined;
+  const hist = f.history || [];
+  const lastOf = (events: readonly string[]): number => {
+    for (let i = hist.length - 1; i >= 0; i--) {
+      const h = hist[i];
+      if (events.includes(h.event) && (!cur || !h.step || h.step === cur.id)) return Number(h.at) || 0;
+    }
+    return 0;
+  };
+  switch (f.state) {
+    case "running":
+    case "waiting_you":
+      return Number(rec?.since) || 0;
+    case "halted":
+      return lastOf(["failed", "halted"]) || Number(rec?.since) || 0;
+    case "paused":
+      return lastOf(["paused", "halted_at"]);
+    case "done":
+    case "cancelled":
+      return Number(f.finished) || 0;
+    default:
+      return 0;
+  }
+}
+
+/** 2020-01-01: a `since` before it is a placeholder, not a time. */
+const CLOCK_FLOOR_S = 1_577_836_800;
+
+const CLOCK_TITLE: Partial<Record<Flight["state"], string>> = {
+  running: "At this stop since ",
+  waiting_you: "Waiting on you since ",
+  halted: "Halted since ",
+  paused: "Paused since ",
+  done: "Finished at ",
+  cancelled: "Stopped at ",
+};
+
+function clockAt(epochS: number, now: number): string {
+  const d = new Date(epochS * 1000);
+  const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  // Not today: the day too.
+  return new Date(now).toDateString() === d.toDateString() ? hm : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + hm;
+}
+
+/** How long the route has been where it is, for the frame bar after the
+ * where-line: "for 12 min" (at a stop, waiting on you, halted, paused — the
+ * minute it got there says nothing yet), "route finished 15 min ago" for a
+ * route that landed; its `title` the clock time ("Waiting on you since
+ * 14:02"). Null when there is nothing to say. `now` in ms. */
+export function routeClock(f: ClockFlight | null | undefined, now = Date.now()): { text: string; title: string } | null {
+  const since = stateSince(f);
+  // No time, or one that can't be a real clock (an old record's placeholder):
+  // nothing rather than "for 20000 d".
+  if (!f || since < CLOCK_FLOOR_S || since * 1000 > now + 60_000) return null;
+  const secs = Math.max(0, now / 1000 - since);
+  const title = (CLOCK_TITLE[f.state] || "Since ") + clockAt(since, now);
+  if (f.state === "done" || f.state === "cancelled") {
+    const word = f.state === "done" ? "route finished " : "route stopped ";
+    return { text: word + (secs < 60 ? "just now" : fmtDuration(secs) + " ago"), title };
+  }
+  if (secs < 60) return null;
+  return { text: "for " + fmtDuration(secs), title };
+}
+
+/** The bar's one line: where the route is, then its clock ("at Verify · 2 of
+ * 4 steps done · for 4 min"); either may be empty. */
+export function withClock(where: string, clock: { text: string } | null | undefined): string {
+  return [where, clock?.text || ""].filter(Boolean).join(" · ");
+}

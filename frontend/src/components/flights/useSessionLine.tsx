@@ -47,7 +47,7 @@ import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { optimistic, optimisticDelete, stopToOpen, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightStartOn, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
-import { LOOP_AGENT, atHaltPoint, drawnCanvas, findNode, firstStepOf, loopBackTo, loopChoices, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
+import { LOOP_AGENT, atHaltPoint, drawnCanvas, findNode, firstStepOf, loopBackTo, loopChoices, loopSlotAfter, loopStepTo, reasonAfterTitle, receiptOf, sessionDiagram, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
 import {
   dropGroup,
   deleteFlight,
@@ -302,9 +302,13 @@ export function hereStop(flight: Flight | null | undefined, n: DiagramNode): Her
   if (n.state === "perched" && Array.isArray(d.items)) out.asks = (d.items as unknown[]).map(String).filter(Boolean);
   out.primary = out.retry ? "retry" : out.resume ? "resume" : out.done ? "done" : undefined;
   const reason = cap(String(n.reason || failedReason || rec?.note || "").trim());
+  // The dialog names the stop above this line: "It failed: test_export_empty",
+  // not "It failed: CI checks failed: test_export_empty".
+  const failure = reasonAfterTitle(n.title, reason).replace(/^failed:\s*/i, "");
   if (haltPoint) out.why = "Paused at its halt point — nothing has run yet. Carry on runs it.";
-  else if (flight.state === "paused") out.why = "Paused" + (flight.reason ? ": " + flight.reason : "") + " — Carry on picks it up again.";
-  else if (failed) out.why = reason ? "It failed: " + reason : "It failed — the route waits here.";
+  // A pause with no reason is a person's (Pause); any other says its reason.
+  else if (flight.state === "paused") out.why = (flight.reason ? "Paused: " + flight.reason : "Paused by you") + " — Carry on picks it up again.";
+  else if (failed) out.why = failure ? "It failed: " + failure : "It failed — the route waits here.";
   else if (n.state === "perched") out.why = reason || (n.step.kind === "verify" ? "The check waits for you." : "It waits for you — press Done when you have done it.");
   else out.why = "It is running — its settings can't change while it runs.";
   return out;

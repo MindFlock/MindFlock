@@ -685,7 +685,7 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       restartable: false,
       hint:
         "Route “" + inst.flight.plan_name + "” " +
-        ((inst.flight as { reason?: string }).reason === "halt point" ? "reached its halt point at " : "is paused at ") +
+        ((inst.flight as { reason?: string }).reason === "halt point" ? "reached its halt point before " : "is paused at ") +
         (inst.flight.step?.title || "its current stop") +
         " — Carry on from its strip or its stop on the Sky",
     };

@@ -54,7 +54,9 @@ describe("the stops row", () => {
   it("Stops: Session, then the default kinds in their order, the perch gold and named Perch", () => {
     const html = render(createElement(StopShelf, { onTack() {} }));
     expect(html).toContain('aria-label="Stops"');
-    expect(html).toContain('<strong>Stops</strong> <span class="sky-stops-hint">— drag onto the sky or a route</span>');
+    // "Stops" once (the chips' label, and the fold handle), not three times.
+    expect(html).toContain('<span class="sky-stops-hint">Click to add · drag to place</span>');
+    expect(html).not.toContain("<strong>Stops</strong>");
     expect(kindsIn(html)).toEqual(["agent", "you", "ship", "verify", "wait"]);
     // The five kinds and the Session chip (All blocks… opens a list, it doesn't drag).
     expect(html.match(/draggable="true"/g)).toHaveLength(6);

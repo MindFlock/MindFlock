@@ -116,13 +116,14 @@ function elsewhere(inst: Pick<Instance, "title" | "device">): boolean {
 }
 
 /** The waiting kind of a route paused at a halt point: in the bell under
- * Wait for me ("Paused at <stop> — Carry on"). */
+ * Wait for me ("Paused before <stop> — Carry on"). */
 export const FLIGHT_PAUSED = "flight_paused";
 
-/** "Paused at Push — Carry on": a route that reached its halt point. */
+/** "Paused before Push — Carry on": a route that reached its halt point —
+ * it stops BEFORE that stop runs (the Sky's bar says "before Push"). */
 export function pausedAtLine(stepTitle: string | null | undefined): string {
   const t = String(stepTitle || "").trim();
-  return "Paused at " + (t || "its halt point") + " — Carry on";
+  return t ? "Paused before " + t + " — Carry on" : "Paused at its halt point — Carry on";
 }
 
 function pausedRow(title: string, f: { id: string; plan_name: string; step?: { id: string; title: string } | null }): FlightWaiting {

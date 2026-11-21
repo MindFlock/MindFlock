@@ -28,6 +28,7 @@ import { STOP_MIME, type FlightStep, type OnFail } from "./flights";
 import { FLYWAY_MIME } from "./skyLayout";
 import { FIX_ROUNDS, VERIFY_ON_FAIL } from "./verifyStop";
 import { askOffers } from "./stopAsks";
+import { fmtDuration } from "./lineTime";
 
 // --- Gaps on the line -------------------------------------------------------------
 
@@ -217,7 +218,7 @@ export function removeTool(n: DiagramNode, here = false): StopMenuItem {
     const k = n.group?.total || 0;
     return { key: "remove", label: "Remove", title: "Remove this group and its " + k + (k === 1 ? " stop" : " stops") + " from the route", danger: true };
   }
-  if (here) return { key: "remove", label: "Remove — the route pauses here", title: "Remove this stop — the route pauses right before the stop that followed it", danger: true };
+  if (here) return { key: "remove", label: "Remove — pauses before the next stop", title: "Remove this stop — the route pauses right before the stop that followed it", danger: true };
   if (flownState(n.state)) return { key: "remove", label: "Remove from the route", title: "Take this finished stop off the route", danger: true };
   return { key: "remove", label: "Remove", title: "Take this stop off the route (Delete)", danger: true };
 }
@@ -304,7 +305,7 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
       items.push(
         verify
           ? { key: "behaviors", label: "Open Verify", title: "Check the steps only you can do, then Confirm verified or Not verified… — the route goes on once you answer" }
-          : { key: "done", label: "Done", title: "Mark this stop done — the bird flies on" }
+          : { key: "done", label: "Done", title: "Mark this stop done — the route goes on" }
       );
     if (n.state === "halted") items.push({ key: "retry", label: "Retry", title: "Run this stop again" });
     // Any halted stop (round 21; the server's op_fix takes every kind).
@@ -314,12 +315,21 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
         label: "Let the agent fix it",
         title: verify ? "Hand the failed steps and their evidence to the agent — it verifies again after its fix" : "Hand the failure to the agent — this stop runs again after its fix",
       });
-    items.push({ key: "skip", label: "Skip", title: "Skip this stop — the bird flies on to the next" });
+    items.push({ key: "skip", label: "Skip", title: "Skip this stop — the route goes on without it" });
   }
   if (can.halt && canHalt(n, !!ctx.here)) items.push(haltToggle(n));
-  if (can.edit) items.push({ key: "edit", label: "Details", title: "Open this stop (the route is here: read-only)" });
+  // A stop that failed CAN change: its dialog saves new settings and Retry
+  // runs them (useSessionLine `hereStop` editNow "retry") — so it says Edit,
+  // and no "can't change" note contradicts the dialog.
+  const editableNow = !!ctx.live && n.state === "halted";
+  if (can.edit)
+    items.push(
+      editableNow
+        ? { key: "edit", label: "Edit", title: "Open this stop — change its settings, then Retry runs them (Enter)" }
+        : { key: "edit", label: "Details", title: "Open this stop (the route is here: read-only)" }
+    );
   if (can.remove && ctx.live && ctx.here) items.push(removeTool(n, true));
-  items.push(note("The route is here — it can't change now"));
+  if (!editableNow) items.push(note("The route is here — it can't change now"));
   return items;
 }
 
@@ -518,6 +528,63 @@ export function onFailHint(k: OnFail, kind = ""): string {
 
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/** Kinds that cannot fail, so "If it fails" is no choice on them: a Wait
+ * for me only waits for your Done (the server forces its on_fail to halt,
+ * core/flights.py "a you step cannot fail"), a Wait only counts down
+ * (`_judge_wait` is done or waiting, never failed). */
+export const NEVER_FAILS: ReadonlySet<string> = new Set(["you", "wait"]);
+export const canFail = (kind: string): boolean => !NEVER_FAILS.has(kind);
+
+/** What a stop will DO with its settings, in one sentence — the read-back's
+ * first part, so the dialog says what happens before what happens if it
+ * fails: "Commits, pushes and opens the pull request.", "Waits up to 60 min
+ * for the PR's CI checks to pass." "" for a kind without one (its own
+ * summary under its name says it). */
+export function stopDoes(step: Pick<FlightStep, "kind" | "config">): string {
+  const c = (step.config || {}) as Record<string, unknown>;
+  const n = (v: unknown, d: number) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
+  // In the field's own unit (minutes) until it is clearer in hours.
+  const mins = (m: number) => (m < 120 ? m + " min" : fmtDuration(m * 60));
+  const quote = (v: unknown, max = 60) => {
+    const t = String(v ?? "").replace(/\s+/g, " ").trim();
+    return t.length > max ? t.slice(0, max - 1) + "…" : t;
+  };
+  switch (step.kind) {
+    case "agent": {
+      const p = quote(c.prompt);
+      const who = c.fresh ? "A new session in this repo" : "The session's agent";
+      return (p ? who + " is sent “" + p + "”" : c.fresh ? who + " starts on the route's task" : "The session's agent carries on with its task") + "; the stop is done once its turn has settled" + (c.join === false ? "." : ", and every worker it started has finished.");
+    }
+    case "ship": {
+      const lane = String(c.lane ?? "push").trim().toLowerCase();
+      const does: Record<string, string> = {
+        commit: "Commits the work.",
+        push: "Commits the work and pushes the branch.",
+        pr: "Commits, pushes and opens the pull request.",
+        merge: "Commits, pushes, opens the pull request and merges it once CI is green.",
+      };
+      const said = does[lane] || "";
+      return said && c.ask_first && lane !== "commit" ? said + " It asks you first, before anything leaves this machine." : said;
+    }
+    case "checks":
+      return "Waits up to " + mins(n(c.timeout_minutes, 60)) + " for the PR's CI checks to pass.";
+    case "wait": {
+      const until = String(c.until ?? "").trim();
+      return until ? "Waits until " + until + ", then goes on." : "Waits " + fmtDuration(n(c.seconds, 600)) + ", then goes on.";
+    }
+    case "you":
+      return "Waits until you press Done (or Skip).";
+    case "command": {
+      const cmd = quote(c.command, 50);
+      return cmd ? "Runs `" + cmd + "` in the session's folder, for up to " + mins(n(c.timeout_minutes, 30)) + "." : "Runs a shell command — none is set yet.";
+    }
+    case "notify":
+      return "Sends a notification to your phone and the bell, and goes straight on.";
+    default:
+      return "";
+  }
+}
+
 /** The parts of a stop that change how the route treats it, read back as one
  * sentence: its halt point, its "Only when" and what a failure does — "The
  * route pauses here first (a halt point). It runs only when weekday —
@@ -533,6 +600,7 @@ export function stopSentence(step: Pick<FlightStep, "kind" | "halt" | "when" | "
     out.push(body);
     return out.join(" ");
   }
+  if (!canFail(step.kind)) return out.join(" ");
   const k = (step.on_fail || fallback) as OnFail;
   out.push(
     "If it fails, " +

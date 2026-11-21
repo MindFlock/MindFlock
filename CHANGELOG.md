@@ -9,6 +9,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The menu of the stop a route is at no longer says a failed stop can't
+  change.** It offers **Edit** (save new settings, then Retry runs them)
+  instead of a read-only "Details" and "The route is here — it can't change
+  now"; its Remove reads "Remove — pauses before the next stop"; Skip and Done
+  say "the route goes on" rather than "the bird flies on".
+- **A halt point says "before" everywhere.** The bell's row reads "Paused
+  before Push — Carry on" (it said "Paused at Push", as if Push had run), and
+  so do the session's hint, the phone and its spoken summary — matching the
+  Sky's bar.
+- **Plain words in a stop's refusals.** "a command step needs a command",
+  "until is a time like 18:00", "wait at least one second" and "a split step
+  needs at least one prompt" now say "a Command stop needs a command", "Until
+  is a time of day, like 18:00", "a Wait stop waits at least one second" and
+  "a Split stop needs at least one prompt".
+- **`mindflock flight again` and the MCP's `control_flight` say "run an ended
+  route again"** (stopped, halted or finished), as the app does, not "fly" and
+  "landed".
+- **The Sky's zoom buttons have names for screen readers** — "Fit the focused
+  route" for **1**, "Fit all routes", "Zoom to 100%".
+
+- **"Fly again" is now "Run again".** An ended route's ⋯ offers "Run again
+  from Push" and "Run again from another stop…", a finished stop's menu "Run
+  again from here", and the toast says "Running again on …" — the word the
+  rest of the app uses for starting a route.
+- **An offline agent can be restarted from the Sky.** Its chip on the route's
+  bar and on the agent reads "Offline · Restart" and relaunches it; its row in
+  Needs you says why and has a Restart button. Before, the Sky showed a plain
+  "Offline" with nothing to press.
+- **A route whose session was closed says so in Needs you.** Its row reads
+  "Its session is closed, so no agent can fix this: Retry or Skip it, or Stop
+  the route to end it." (it was only a tooltip on the name).
+- **A failed stop's dialog says the failure once.** "It failed: CI checks
+  failed: test_export_empty" under the CI checks name now reads "It failed:
+  test_export_empty"; a pause you made says "Paused by you".
+
+- **A stop's dialog says what the stop will do.** Its first line used to say
+  only what happens on a failure ("If it fails, the route halts, red."). It
+  now starts with what the stop does with your settings: "Commits, pushes and
+  opens the pull request.", "Waits up to 60 min for the PR's CI checks to
+  pass.", "The session's agent carries on with its task; the stop is done once
+  its turn has settled…" (Agent, Ship, CI checks, Wait, Wait for me, Command,
+  Notify). The separate "Prompt: Empty = …" note under the form is gone; the
+  sentence says it.
+- **Wait and Wait for me stops no longer offer "If it fails".** Neither can
+  fail, so the four failure choices and "If it fails, the route halts" were
+  noise on them.
+- **All stops… shows two lines of what each stop does.** The floating
+  catalog cut every description to a few words ("Give the session's
+  agent…").
+- **The Stops shelf says what to do with its chips.** "Click to add · drag to
+  place" replaces the "Stops — drag onto the sky or a route" heading, so the
+  shelf no longer says "Stops" three times.
+
+- **The Sky says how long a route has been where it is.** A route's bar now
+  ends with "for 12 min" (at a stop, waiting on you, halted or paused; hover
+  for the clock time), and a route that finished says "route finished 15 min
+  ago" instead of only the agent's Idle. The pane's Route strip says the same.
+- **A route's bar no longer says its state twice.** "Halted · halted at CI
+  checks · CI checks failed: …" reads "Halted · at CI checks · failed: …";
+  "Paused route · paused at Open PR" reads "Paused route · at Open PR"; and a
+  route stopped by a halt point says "before Open PR · your halt point", since
+  that stop has not run yet.
+- **The agent tile on the Sky shows what the agent is doing.** It used to
+  wear the route's state, so a failed CI check painted the agent red
+  "Halted" and a Wait for me stop put a long amber "Wait for me: …" pill
+  (spilling out of the tile) on the agent. The stop that waits carries that,
+  with its buttons; the agent tile says Working, Idle, Question and so on.
+- **A stop that waits on you says what for.** A Verify stop (or any stop
+  other than Wait for me) waiting on you shows the server's reason on its
+  tile and the route's bar, "2 steps for you to check, then confirm", instead
+  of its settings ("Verify on this branch · agent only · right away").
+
 - **Disk cleanup judges worktrees against fresh base branches.** A base ref
   nobody fetched for a day (a base clone's `origin/staging` was 25 hours old)
   made every PR merged since look unmerged. Before it classifies, cleanup now
@@ -40,6 +112,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   totals are `null` while unmeasured, never a per-item sum. Settings → Disk
   cleanup shows that list at once, says "Measuring sizes… n/m" meanwhile, and
   a fold's "frees" reads "…" until its sizes are known (not "0 B").
+
+### Fixed
+
+- **Right-click "Add a stop…" low on the Sky opened under the shelf.** It now
+  opens upward (or leftward at the right edge), always wholly in view.
 
 ## [0.14.24] - 2026-11-20
 

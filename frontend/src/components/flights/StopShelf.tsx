@@ -54,6 +54,9 @@ import { TakeoffDialog } from "./TakeoffDialog";
 import "./StopMenu.css";
 import "./StopShelf.css";
 
+/** The shelf's one line of help, beside its chips. */
+export const SHELF_HINT = "Click to add · drag to place";
+
 /** What the Session chip's drag carries. */
 export function sessionDragData(): Array<[string, string]> {
   return [
@@ -559,7 +562,9 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
       {!folded && (
         <div className="sky-stops" role="group" aria-label="Stops">
           <span className="sky-stops-head">
-            <strong>Stops</strong> <span className="sky-stops-hint">— drag onto the sky or a route</span>
+            {/* The fold handle and the chips' own label already say "Stops":
+                this says what to do with them. */}
+            <span className="sky-stops-hint">{SHELF_HINT}</span>
           </span>
           {kinds !== undefined && !kinds?.length ? (
             <p className="sky-stops-empty muted">The stop list didn't load — this server may be too old for the Sky.</p>

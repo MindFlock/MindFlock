@@ -205,7 +205,7 @@ describe("#26 a Sky line's ⋯ has the route's controls", () => {
   it("an ended route: Fly again, and its pick", () => {
     const done = flight({ state: "done", cursor: 3, step_states: { s1: rec("done"), s2: rec("done"), s3: rec("done") } });
     const items = lineRouteItems(done, () => {}, []);
-    expect(labels(items)).toContain("Fly again from another stop…");
+    expect(labels(items)).toContain("Run again from another stop…");
     expect(labels(items)).not.toContain("Pause");
     expect(items[0].className).toContain("skl-mi-group");
   });

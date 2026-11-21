@@ -127,15 +127,15 @@ describe("Fly again on an ended route", () => {
   });
 
   it("says where it flies again from: the first stop it had not finished", () => {
-    expect(RS.flyAgainLabel(flight())).toBe("Fly again from Push");
+    expect(RS.flyAgainLabel(flight())).toBe("Run again from Push");
     // A skipped stop at the cursor was passed: the next one.
     const skipped = flight({ step_states: { s1: { state: "done" }, s2: { state: "done" }, s3: { state: "skipped" }, s4: { state: "pending" } } as unknown as Flight["step_states"] });
     expect(RS.reachedIndex(skipped)).toBe(3);
-    expect(RS.flyAgainLabel(skipped)).toBe("Fly again from CI green");
+    expect(RS.flyAgainLabel(skipped)).toBe("Run again from CI green");
     // A route that got past every stop starts over.
     const done = flight({ state: "done", cursor: 4, step_states: Object.fromEntries(STEPS.map((s) => [s.id, { state: "done" }])) as unknown as Flight["step_states"] });
     expect(RS.againStop(done)).toBeNull();
-    expect(RS.flyAgainLabel(done)).toBe("Fly again");
+    expect(RS.flyAgainLabel(done)).toBe("Run again");
   });
 
   it("is the primary action on a cancelled or halted route, not on a finished one", () => {
@@ -145,24 +145,24 @@ describe("Fly again on an ended route", () => {
   });
 
   it("the route's ⋯ offers it twice: from where it stopped, and from another stop", () => {
-    expect(flyAgainItems(flight()).map((i) => i.label)).toEqual(["Fly again from Push", "Fly again from another stop…"]);
+    expect(flyAgainItems(flight()).map((i) => i.label)).toEqual(["Run again from Push", "Run again from another stop…"]);
     expect(flyAgainItems(flight({ state: "running" }))).toEqual([]);
   });
 
   it("a stop of a route that ended leads its menu with Fly again from here", () => {
     const n = { step: STEPS[1], title: "Commit" };
-    expect(withAgainItem([], n, flight())[0]).toMatchObject({ key: AGAIN_HERE_KEY, label: "Fly again from here" });
+    expect(withAgainItem([], n, flight())[0]).toMatchObject({ key: AGAIN_HERE_KEY, label: "Run again from here" });
     expect(withAgainItem([], n, flight({ state: "running" }))).toEqual([]);
     expect(withAgainItem([], { step: step("zz", "ship", "x"), title: "x" }, flight())).toEqual([]);
     expect(withAgainItem([], n, null)).toEqual([]);
   });
 
   it("toasts one sentence by how the server found its session", () => {
-    expect(API.againText("same", "Push", "sc-42")).toBe("Flying again from Push");
-    expect(API.againText("branch", "Push", "sc-7")).toBe("Flying again on sc-7, which holds its branch");
-    expect(API.againText("reopened", "Push", "sc-42")).toBe("Reopened sc-42 and flying again from Push");
+    expect(API.againText("same", "Push", "sc-42")).toBe("Running again from Push");
+    expect(API.againText("branch", "Push", "sc-7")).toBe("Running again on sc-7, which holds its branch");
+    expect(API.againText("reopened", "Push", "sc-42")).toBe("Reopened sc-42 and running again from Push");
     expect(API.againText("restored", "Push", "sc-42")).toBe("Reopened sc-42: its route carried on as it was");
-    expect(API.againText("chosen", "Push", "sc-7")).toBe("Flying again on sc-7 from Push");
+    expect(API.againText("chosen", "Push", "sc-7")).toBe("Running again on sc-7 from Push");
   });
 });
 
@@ -182,7 +182,7 @@ describe("a route's own stops (not the checks perches it added itself)", () => {
     const states = Object.fromEntries(STEPS.map((s) => [s.id, { state: "done" }]));
     const f = flight({ state: "cancelled", steps: [...STEPS, perch], cursor: 4, owed_perch: "p9", step_states: { ...states, p9: { state: "perched" } } as unknown as Flight["step_states"] });
     expect(RS.carryIndex(f)).toBe(4);
-    expect(RS.flyAgainLabel(f)).toBe("Fly again");
+    expect(RS.flyAgainLabel(f)).toBe("Run again");
   });
 
   it("standing on a perch it added mid-route = the next own stop", () => {
@@ -192,13 +192,13 @@ describe("a route's own stops (not the checks perches it added itself)", () => {
       owed_added: ["p5"],
       step_states: { s1: { state: "done" }, s2: { state: "done" }, s3: { state: "done" }, p5: { state: "perched" }, s4: { state: "pending" } } as unknown as Flight["step_states"],
     });
-    expect(RS.flyAgainLabel(f)).toBe("Fly again from CI green");
+    expect(RS.flyAgainLabel(f)).toBe("Run again from CI green");
   });
 
   it("never past a Verify stop whose check it still owed: the earliest of those", () => {
     const f = flight({ cursor: 3, step_states: { s1: { state: "done" }, s2: { state: "done" }, s3: { state: "done" }, s4: { state: "pending" } } as unknown as Flight["step_states"], owed: [{ step: "s2", title: "Commit", plan: "", items: ["a"] }] });
     expect(RS.carryIndex(f)).toBe(1);
-    expect(RS.flyAgainLabel(f)).toBe("Fly again from Commit");
+    expect(RS.flyAgainLabel(f)).toBe("Run again from Commit");
   });
 
   it("a route whose only stops are its own perches can't fly again", () => {
@@ -208,8 +208,8 @@ describe("a route's own stops (not the checks perches it added itself)", () => {
 
 describe("what Fly again says it will do", () => {
   it("its session alive: a new run there; gone: the branch's session or a reopen", () => {
-    expect(RS.flyAgainTitle(flight(), false)).toBe("Fly this route again on sc-42 from “Push” — a new run of its stops");
-    expect(RS.flyAgainTitle(flight(), true)).toBe("sc-42 is gone: it flies again from “Push” on the session that holds its branch, or reopens sc-42 from Recently closed");
+    expect(RS.flyAgainTitle(flight(), false)).toBe("Run this route again on sc-42 from “Push” — a new run of its stops");
+    expect(RS.flyAgainTitle(flight(), true)).toBe("sc-42 is gone: it runs again from “Push” on the session that holds its branch, or reopens sc-42 from Recently closed");
     expect(sessionGone(flight(), [{ title: "sc-42" }])).toBe(false);
     expect(sessionGone(flight(), [{ title: "other" }])).toBe(true);
     expect(sessionGone(flight(), undefined)).toBe(false);
@@ -313,7 +313,7 @@ describe("what it posts", () => {
     const r = await API.flyAgain("f_ab12cd");
     expect(calls[0]).toEqual(["/api/flights/f_ab12cd/again", {}]);
     expect(r?.flight.id).toBe("f_new");
-    expect(toast).toHaveBeenCalledWith("Flying again from Push");
+    expect(toast).toHaveBeenCalledWith("Running again from Push");
     await API.flyAgain("f_ab12cd", "s2");
     expect(calls.find((c) => c[0].endsWith("/again") && (c[1] as { at?: string }).at)).toEqual(["/api/flights/f_ab12cd/again", { at: "s2" }]);
   });
@@ -321,7 +321,7 @@ describe("what it posts", () => {
   it("a refused Fly again shows the server's sentence as it comes", async () => {
     failWith = { status: 409, body: { error: "in_flight", detail: "this route is still going (running) — Carry on or Retry it instead", field: "" } };
     expect(await API.flyAgain("f_ab12cd")).toBeNull();
-    expect(errorPop).toHaveBeenCalledWith("Flying it again failed", "this route is still going (running) — Carry on or Retry it instead");
+    expect(errorPop).toHaveBeenCalledWith("Running it again failed", "this route is still going (running) — Carry on or Retry it instead");
   });
 
   it("the start toast says where a route started past its first stop", () => {
@@ -403,7 +403,7 @@ describe("starting a saved route on a session", () => {
     RS.pickAgainStop(flight());
     const lines = routeMenuLines(RS.useRouteStartMenu.getState().open!, KINDS);
     expect(lines.map((l) => l.label)).toEqual([
-      "Fly “Ship it” again from…",
+      "Run “Ship it” again from…",
       "1. Build it · Agent — the beginning",
       "2. Commit · Ship",
       "3. Push · Ship — where it stopped",

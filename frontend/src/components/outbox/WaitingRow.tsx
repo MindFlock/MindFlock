@@ -705,7 +705,7 @@ function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
 }
 
 /** A route paused at a halt point a person set (docs/vocabulary.md "Halt
- * point"): a calm chip ("Paused at <stop>"), Carry on — the stop runs — or
+ * point"): a calm chip ("Paused before <stop>"), Carry on — the stop runs — or
  * Skip — the route goes on without it — right here, with Open ↗ to go look
  * first. */
 function FlightPausedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {

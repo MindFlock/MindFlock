@@ -22,6 +22,7 @@
 import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { birdPerch, lineWhere, whereBesideChip, type DiagramNode } from "../../lib/flightDiagram";
+import { routeClock, withClock } from "../../lib/lineTime";
 import { deriveSessionState } from "../../lib/sessionState";
 import { chainColor, chainGraph, wireIntent, HEAD_ID, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { windowName } from "../../lib/windowName";
@@ -48,7 +49,9 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
   const where = row ? lineWhere(line.diagram) : "";
   // The chip already says "Needs you: Review": no "needs you at Review" too.
-  const shownWhere = whereBesideChip(where, ss);
+  // Then how long it has been so ("for 12 min", lib/lineTime) — as on the Sky.
+  const clock = row ? routeClock(line.flight || line.landed) : null;
+  const shownWhere = withClock(whereBesideChip(where, ss), clock);
   // While ready, ReadyHead says so; the sub never repeats it.
   const agent = agentTitle(row?.provider || row?.program, row?.program);
   const headSub = agentDoing(row);
@@ -258,7 +261,7 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
             </span>
           )}
           {shownWhere && (
-            <span className="fl-chain-frame-where" title={shownWhere}>
+            <span className="fl-chain-frame-where" title={[shownWhere, clock?.title].filter(Boolean).join(" — ")}>
               {shownWhere}
             </span>
           )}

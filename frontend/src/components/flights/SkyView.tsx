@@ -231,6 +231,8 @@ import {
   clearRightColumn,
   groundedLanding,
   GROUNDED_HIDDEN_LINE,
+  menuSpot,
+  QUICK_ADD_SIZE,
 } from "../../lib/skyLayout";
 import {
   MARQUEE_MIN,
@@ -1752,7 +1754,11 @@ export function SkyView() {
     if (!ground(e.target)) return;
     e.preventDefault();
     const r = vpRef.current!.getBoundingClientRect();
-    setGroundMenu({ x: e.clientX - r.left, y: e.clientY - r.top, at: planeAt(e.clientX, e.clientY) });
+    // Wholly in view, above the shelf: low on the sky it opens upward.
+    const shelf = document.querySelector(".sky-shelf")?.getBoundingClientRect();
+    const bottom = shelf && shelf.top > r.top && shelf.top < r.bottom ? shelf.top : r.bottom;
+    const spot = menuSpot(e.clientX - r.left, e.clientY - r.top, QUICK_ADD_SIZE, { w: r.width, h: bottom - r.top });
+    setGroundMenu({ x: spot.x, y: spot.y, at: planeAt(e.clientX, e.clientY) });
   };
   useEffect(() => {
     if (!groundMenu) return;
@@ -2652,18 +2658,19 @@ export function SkyView() {
           <button type="button" className="sky-zoom-btn" aria-label="Zoom in" title="Zoom in (+)" disabled={cam.z >= ZOOM_MAX - 0.001} onClick={() => zoomBy(1.2)}>
             +
           </button>
-          <button type="button" className="sky-zoom-btn sky-fit-one" title="Fit the focused route — the grid's 1 (1)" disabled={!focusLine && !oneLine} onClick={() => fitFocused()}>
+          <button type="button" className="sky-zoom-btn sky-fit-one" aria-label="Fit the focused route" title="Fit the focused route — the grid's 1 (1)" disabled={!focusLine && !oneLine} onClick={() => fitFocused()}>
             1
           </button>
           <button
             type="button"
             className="sky-zoom-btn sky-fit"
+            aria-label="Fit all routes"
             title="Fit all: every route and note in the window, however small (0, Shift+1)"
             onClick={() => fitAll()}
           >
             Fit
           </button>
-          <button type="button" className="sky-zoom-btn sky-zoom-100" title="Back to 100% (Shift+0)" onClick={() => zoomTo(1)}>
+          <button type="button" className="sky-zoom-btn sky-zoom-100" aria-label="Zoom to 100%" title="Back to 100% (Shift+0)" onClick={() => zoomTo(1)}>
             100%
           </button>
         </span>

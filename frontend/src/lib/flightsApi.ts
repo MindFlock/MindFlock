@@ -364,11 +364,11 @@ export function againBody(at = "", title = ""): { at?: string; title?: string } 
  * where the new run starts, `session` its session's shown name. */
 export function againText(how: AgainResult["how"], stop: string, session: string): string {
   const from = stop ? " from " + stop : "";
-  if (how === "branch") return "Flying again on " + session + ", which holds its branch";
-  if (how === "reopened") return "Reopened " + session + " and flying again" + from;
+  if (how === "branch") return "Running again on " + session + ", which holds its branch";
+  if (how === "reopened") return "Reopened " + session + " and running again" + from;
   if (how === "restored") return "Reopened " + session + ": its route carried on as it was";
-  if (how === "chosen") return "Flying again on " + session + from;
-  return "Flying again" + from;
+  if (how === "chosen") return "Running again on " + session + from;
+  return "Running again" + from;
 }
 
 /** Fly an ended route again (`at` / `title` as `againBody`): on success the
@@ -383,7 +383,7 @@ export async function flyAgain(flightId: string, at = "", title = ""): Promise<A
     if (d.session) void openWhenReady(d.session);
     return d;
   } catch (err) {
-    errorPop("Flying it again failed", refusalOf(err).detail);
+    errorPop("Running it again failed", refusalOf(err).detail);
     return null;
   } finally {
     void refreshFlights();

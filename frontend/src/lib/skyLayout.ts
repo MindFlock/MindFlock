@@ -996,3 +996,20 @@ export function withLiveFlights<R extends Pick<Instance, "title" | "flight">>(ro
   });
   return out ?? rows;
 }
+
+/** The right-click "Add a stop…" box's size (Sky.css `.sky-quick-add`). */
+export const QUICK_ADD_SIZE = { w: 280, h: 380 };
+
+/** Where a pop-up opened at a pointer (`x`, `y` in the viewport's own px)
+ * sits so it is wholly inside the room it has (`room` px wide and tall —
+ * the viewport down to the shelf): beside the pointer when it fits, else
+ * flipped left of / above it, else held against the edge. A click low on the
+ * sky used to open a list that ran under the shelf. */
+export function menuSpot(x: number, y: number, size: { w: number; h: number }, room: { w: number; h: number }, margin = 8): { x: number; y: number } {
+  const fit = (at: number, len: number, max: number) => {
+    if (at + len + margin <= max) return Math.max(margin, at);
+    if (at - len >= margin) return at - len;
+    return Math.max(margin, max - len - margin);
+  };
+  return { x: fit(x, size.w, room.w), y: fit(y, size.h, room.h) };
+}

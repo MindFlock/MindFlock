@@ -462,7 +462,7 @@ def test_save_dry_run_runs_the_strict_check():
         {"name": "x", "steps": [{"kind": "command"}], "dry_run": True}, _ctx(clock)
     )
     assert out["ok"] is False
-    assert any("a command step needs a command" in p for p in out["problems"])
+    assert any("a Command stop needs a command" in p for p in out["problems"])
 
 
 # --------------------------------------------------------------------------- #

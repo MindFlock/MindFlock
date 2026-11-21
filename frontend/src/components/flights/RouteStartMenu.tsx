@@ -52,14 +52,14 @@ export function routeMenuLines(open: RouteStartOpen, kinds?: readonly StepKindDe
     const k = carryIndex(f);
     const at = k < own.length ? k : 0;
     return [
-      { key: "note", label: "Fly “" + f.plan_name + "” again from…", note: true },
+      { key: "note", label: "Run “" + f.plan_name + "” again from…", note: true },
       ...stopChoices(own, kinds).map((c, i) => {
         const mark = i === k ? "where it stopped" : i === 0 ? "the beginning" : "";
         return {
           key: "stop:" + c.id,
           label: stopLine(c, mark),
           stop: { choice: c, mark },
-          title: i === k ? "Fly it again from where it stopped" : "Fly it again from “" + c.title + "”",
+          title: i === k ? "Run it again from where it stopped" : "Run it again from “" + c.title + "”",
           kind: c.kind,
           primary: i === at,
           run: () => void flyAgain(f.id, i === k ? "" : c.id),
@@ -186,7 +186,7 @@ export function RouteStartMenu() {
       set(null);
     }
   };
-  const label = open.mode === "again" ? "Fly “" + open.flight.plan_name + "” again from…" : "Where “" + open.plan.name + "” starts";
+  const label = open.mode === "again" ? "Run “" + open.flight.plan_name + "” again from…" : "Where “" + open.plan.name + "” starts";
 
   return createPortal(
     <div className="fl-routestart-host" style={{ position: "fixed", left: 0, top: 0, width: 0, height: 0, zIndex: 85 }}>

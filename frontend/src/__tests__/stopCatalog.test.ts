@@ -402,11 +402,11 @@ describe("StopCatalogBody (round 14: the palette's body)", () => {
     expect(src).toMatch(/if \(r\.top < l\.top\) list\.scrollTop -= \(l\.top - r\.top\) \/ scale;/);
   });
 
-  it("the compact cards: a denser grid, one line, a saved stop across two columns, the ★ shown on the hovered / picked card", () => {
+  it("the compact cards: a denser grid, two lines of what it does, a saved stop across two columns, the ★ shown on the hovered / picked card", () => {
     const css = cssOf("components/flights/StopCatalog.css");
     expect(css).toMatch(/\.sky-catalog-list\.compact \.sky-catalog-grid \{\s*grid-template-columns: repeat\(auto-fill, minmax\(132px, 1fr\)\);/);
     expect(css).toMatch(/\.sky-catalog-list\.compact \.sky-catalog-plan \{\s*grid-column: span 2;/);
-    expect(css).toMatch(/\.sky-catalog-list\.compact \.sky-catalog-summary \{[^}]*-webkit-line-clamp: 1;/);
+    expect(css).toMatch(/\.sky-catalog-list\.compact \.sky-catalog-summary \{[^}]*-webkit-line-clamp: 2;/);
     expect(css).toMatch(/\.sky-catalog-list\.compact \.sky-catalog-shelf:not\(\.on\) \{\s*opacity: 0;/);
   });
 });

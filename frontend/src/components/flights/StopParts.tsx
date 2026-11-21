@@ -16,7 +16,7 @@ import { queryClient } from "../../state/queries";
 import { groundedFlights } from "../../lib/groundedLines";
 import { windowName } from "../../lib/windowName";
 import { stopSummary } from "../../lib/flightDiagram";
-import { FIELD_RANGE, clampField, fieldHint, onFailHint, stopSentence } from "../../lib/stopEditing";
+import { FIELD_RANGE, canFail, clampField, fieldHint, onFailHint, stopDoes, stopSentence } from "../../lib/stopEditing";
 import { catalogMatch } from "../../lib/stopCatalog";
 import { describeSteps } from "../../lib/flightsApi";
 import { WHEN_COMBINE, WHEN_GRAMMAR, WHEN_MAX, checkWhen, skippedNote, whenChecker, whenError, type WhenCheck } from "../../lib/whenHelp";
@@ -663,7 +663,7 @@ export function StopForm({
           change: a Verify stop's whole check (lib/verifyStop.ts), any
           other's halt point, Only when and If it fails. */}
       <p className={"fl-form-note fl-stop-sentence fl-fld-wide" + (verify ? " vf-sentence" : " muted")} role="status" aria-label="What the route does here">
-        {verify ? stopSentence(step, fallback, verifySentence(step.config, onFail)) : stopSentence(step, fallback)}
+        {verify ? stopSentence(step, fallback, verifySentence(step.config, onFail)) : [stopDoes(step), stopSentence(step, fallback)].filter(Boolean).join(" ")}
       </p>
       <FlField label="Title" wide={false} hint={errHint("title")}>
         <TextField label="Stop title" value={step.title} onChange={(t) => !readOnly && onChange({ title: t })} />
@@ -691,28 +691,31 @@ export function StopForm({
         )
       )}
       <WhenField value={step.when || ""} readOnly={readOnly} error={errors?.when} onChange={(w) => onChange({ when: w || undefined })} hint="Empty: always runs. When false, the stop is skipped and the route goes on. ⓘ lists the conditions." />
-      <FlField
-        label="If it fails"
-        wide
-        hint={
-          errHint("on_fail") ?? <span className="fl-onfail-hint" data-on-fail={onFail}>
-            {onFailHint(onFail, step.kind)}
-            {(onFail !== fallback || !!def?.default_on_fail) && <span className="muted">{" Default for " + kindName(def, step.kind) + ": " + ON_FAIL_LABEL[fallback] + "."}</span>}
-          </span>
-        }
-      >
-        <Seg
+      {/* A Wait for me or a Wait cannot fail: no choice to offer. */}
+      {canFail(step.kind) && (
+        <FlField
           label="If it fails"
-          value={onFail}
-          options={(Object.keys(ON_FAIL_LABEL) as OnFail[]).map((k) => ({
-            v: k,
-            label: ON_FAIL_LABEL[k],
-            title: k === fallback ? "The default for this kind of stop" : undefined,
-            disabled: readOnly,
-          }))}
-          onChange={(k) => !readOnly && onChange({ on_fail: k })}
-        />
-      </FlField>
+          wide
+          hint={
+            errHint("on_fail") ?? <span className="fl-onfail-hint" data-on-fail={onFail}>
+              {onFailHint(onFail, step.kind)}
+              {(onFail !== fallback || !!def?.default_on_fail) && <span className="muted">{" Default for " + kindName(def, step.kind) + ": " + ON_FAIL_LABEL[fallback] + "."}</span>}
+            </span>
+          }
+        >
+          <Seg
+            label="If it fails"
+            value={onFail}
+            options={(Object.keys(ON_FAIL_LABEL) as OnFail[]).map((k) => ({
+              v: k,
+              label: ON_FAIL_LABEL[k],
+              title: k === fallback ? "The default for this kind of stop" : undefined,
+              disabled: readOnly,
+            }))}
+            onChange={(k) => !readOnly && onChange({ on_fail: k })}
+          />
+        </FlField>
+      )}
     </div>
   );
 }

@@ -101,7 +101,7 @@ describe("hereStop: what the current stop's dialog offers", () => {
 
   it("a person's pause mid-stop: Carry on primary, the settings stay read-only", () => {
     const h = hereStop(flight({ state: "paused", reason: "" }, test, rec("running")), node({ state: "paused" }));
-    expect(h).toMatchObject({ resume: true, retry: false, editNow: "", primary: "resume", why: "Paused — Carry on picks it up again." });
+    expect(h).toMatchObject({ resume: true, retry: false, editNow: "", primary: "resume", why: "Paused by you — Carry on picks it up again." });
   });
 
   it("a running stop: nothing to do, and why it can't change", () => {
@@ -247,8 +247,10 @@ describe("validation as you type", () => {
     expect(SD.clientCheck({ kind: "agent", config: { prompt: "" } })).toBeNull();
     const agent: FlightStep = { id: "s2", kind: "agent", title: "Work", config: { prompt: "" }, on_fail: "halt" };
     const html = render({ node: node({ state: "pending", editable: true }, agent), def: AGENT, onSave: noop });
-    expect(html).toContain("Prompt: " + SD.AGENT_EMPTY_HINT);
-    expect(SD.AGENT_EMPTY_HINT).toBe("Empty = the agent carries on with its task");
+    // The read-back at the top says what an empty prompt does (lib/stopEditing
+    // `stopDoes`), so no second note sits under the form.
+    expect(html).toContain("The session&#x27;s agent carries on with its task; the stop is done once its turn has settled");
+    expect(html).not.toContain("stop-dialog-hint");
     expect(html).not.toContain('role="alert"');
   });
 

@@ -99,6 +99,11 @@ Flights button as tabs of a Flights dialog; round 8 retired it — see
   default) shows one session's route only: with no session at all, placing a
   stop moves the view to All; otherwise a toast says where it went, with
   **Show all**.
+- **Know what a stop will do.** Open a stop (double-click) and its first
+  line says it with your settings — "Commits, pushes and opens the pull
+  request.", "Waits up to 60 min for the PR's CI checks to pass." — then its
+  halt point, "Only when" and what a failure does. A Wait and a Wait for me
+  cannot fail and offer no "If it fails".
 - **Run it.** A route on a session runs its stops in order; the bird shows
   where the work is, and a stop with a ✓ is done.
 - **Wait for me** stops the route until you press **Done** (or **Skip**) on
@@ -120,6 +125,16 @@ Flights button as tabs of a Flights dialog; round 8 retired it — see
   or "Paused". A stop's dialog shows the reason first, then the remedies (the
   one that usually works first), then its settings folded under **Its
   settings**.
+- **Read a line at a glance.** Its bar says the session's state, where the
+  route is and for how long: "Working · at Verify · 2 of 4 steps done · for 4
+  min", "Halted · at CI checks · failed: test_export_empty · for 3 h",
+  "Paused route · before Open PR · your halt point", "route finished 15 min
+  ago". The agent tile shows only what the agent is doing; the stop that
+  waits shows why, with its buttons.
+- **When the agent itself is down** (Offline), the route waits at its stop;
+  the chip on the Sky says **Offline · Restart** — press it. A route whose
+  session was closed says so in Needs you, with Retry, Skip and **Stop the
+  route**. A route that ended offers **Run again** in its ⋯.
 - **Edit the stop the route is on** when it failed, or when the route is
   paused before it with nothing run yet: Save, then Retry or Carry on runs it
   with the new settings ([Flow polish](#flow-polish-2026-11-10-as-built)).
@@ -1355,7 +1370,7 @@ column and `flight_status` has `owed`.
   there is no resume point. A stop id still starts at that stop. History:
   "carried on where route f_ab12cd stopped (its session was deleted), at
   Push".
-- **Fly again**: `POST /api/flights/{id}/again {at?, title?}` → 202 `{flight,
+- **Run again** (on screen; "Fly again" before 2026-11-20): `POST /api/flights/{id}/again {at?, title?}` → 202 `{flight,
   from, session, how}` starts a new flight with an ended route's stops, at the
   stop it had reached (`at` names another; a route that finished starts at
   stop 1). The session: `title` when given (`how: "chosen"`), its own
@@ -1388,7 +1403,7 @@ column and `flight_status` has `owed`.
 See docs/web-ui.md: a waiting review stop offers **Give it another round**
 and **Carry on**; owed checks show on the route while it flies and are
 settled on one perch; starting a route on a session offers **Start at…**
-and carries on at the resume point; an ended route offers **Fly again**.
+and carries on at the resume point; an ended route offers **Run again**.
 
 ## Where it lives
 

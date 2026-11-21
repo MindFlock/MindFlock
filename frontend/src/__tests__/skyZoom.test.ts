@@ -156,7 +156,7 @@ describe("room on the screen", () => {
     expect(sheet).toMatch(/\.sky-toolbar \{[^}]*flex-wrap: nowrap;[^}]*max-height: 36px;/);
     expect(sheet).toMatch(/\.sky \{[^}]*container: sky \/ inline-size;/);
     expect(sheet).toMatch(/@container sky \(max-width: 860px\) \{\s*\.sky-zoom-100,\s*\.sky-toolbar > \.tour-btn \{\s*display: none;/);
-    expect(code("components/flights/SkyView.tsx")).toContain('className="sky-zoom-btn sky-zoom-100" title="Back to 100% (Shift+0)"');
+    expect(code("components/flights/SkyView.tsx")).toContain('className="sky-zoom-btn sky-zoom-100" aria-label="Zoom to 100%" title="Back to 100% (Shift+0)"');
   });
 
   it("every line sits at its placed spot (its slot is translated there), so the gap and Tidy show", () => {
