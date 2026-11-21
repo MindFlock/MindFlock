@@ -42,7 +42,7 @@
   padding: 0 3px;
   border-radius: 8px;
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
   font-size: 9px;
   line-height: 15px;
   text-align: center;

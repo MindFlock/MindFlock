@@ -38,6 +38,14 @@ body {
   height: 100%;
 }
 
+/* xterm 6 paints the theme background on its scrollable element, but the
+   viewport behind it keeps xterm.css's #000 — and the few pixels between the
+   last whole row and the pane's edge showed it: a black strip under every
+   terminal in a light theme. The viewport takes the theme's canvas instead. */
+.term-container .xterm .xterm-viewport {
+  background-color: var(--term-bg);
+}
+
 /* An inline spinner for a button that is mid-request ("Writing…"). The pane
    overlays' .spinner is a 28px block for an empty pane; this one is sized in
    `em` so it rides the button's own text, and borrows `currentColor` so it

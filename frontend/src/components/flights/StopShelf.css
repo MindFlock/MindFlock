@@ -223,7 +223,7 @@
 }
 
 .sky-stop-chip.sky-session-chip .sky-stop-icon {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
 }
 

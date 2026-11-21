@@ -546,7 +546,7 @@
 }
 
 .pane-head .tabs button.active {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
 }
 
@@ -565,7 +565,7 @@
 
 .pane-head .actions .nextstep {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border: none;
   cursor: pointer;
   flex: none;
@@ -728,7 +728,7 @@
 
 .pane-head .actions .nextstep.nextstep-fast:hover {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   filter: none;
 }
 
@@ -737,7 +737,7 @@
    The control stays put and stays clickable — clicking turns it back off. */
 .pane-head .actions .nextstep.nextstep-fast.is-on {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-color: var(--accent);
 }
 
@@ -751,7 +751,7 @@
 
 .pane-head .actions .nextstep.nextstep-fast.nextstep-fast-halted:hover {
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 /* Workers (the raven): opens the Workers… picker — split now, ask once, on
@@ -789,7 +789,7 @@
 
 .pane-head .actions .nextstep.nextstep-flock.is-on {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-color: var(--accent);
 }
 
@@ -1387,7 +1387,7 @@
   border: 1px solid var(--accent);
   border-radius: 6px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font: inherit;
   cursor: pointer;
 }

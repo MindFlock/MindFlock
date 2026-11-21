@@ -12,6 +12,9 @@
   --accent: #7d56f4;
   --accent-rgb: 125, 86, 244;
   --accent-deep: #5b3fc0;
+  /* Text on an accent fill (a primary button, the active tab); theme.css
+     swaps it to near-black for the accents too bright for white. */
+  --accent-ink: #ffffff;
   --term-bg: #0f1117;
   --term-fg: #d7dae3;
   /* Session-state tones — the rail's six (frontend/src/styles/tokens.css),
@@ -19,8 +22,8 @@
   --tone-muted: #8a90a2;
   --tone-working: #51bd73;
   --tone-attention: #ffd700;
-  --tone-neutral: #a3abbe;
-  --tone-waiting: #4ea8de;
+  --tone-neutral: #a8acb3;
+  --tone-waiting: #3fa0e8;
   --tone-broken: #de613e;
   /* Verify's two (sessionState.ts tone "verifying" / "verified"): the
      desktop's violet while the agent checks its own work, and a calm green —
@@ -194,7 +197,7 @@ html, body {
   font-family: inherit;
   white-space: nowrap;
 }
-.tab.active { background: var(--accent); color: #fff; }
+.tab.active { background: var(--accent); color: var(--accent-ink); }
 
 /* The one control on this bar that isn't about the selected session: it has to
    be usable when there is no session at all. Painted like #picker and .tab
@@ -243,7 +246,7 @@ html, body {
    "next step" button. */
 .act.is-next {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-color: var(--accent);
 }
 .act.is-next:active { background: rgba(var(--accent-rgb), 0.75); }
@@ -460,7 +463,7 @@ html, body {
   font-size: 14px;
   font-family: inherit;
 }
-#commit-ok { background: var(--accent); color: #fff; border-color: var(--accent); }
+#commit-ok { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 #commit-ok:active { background: rgba(var(--accent-rgb), 0.75); }
 
 /* --- new-session sheet (three screens in one .sheet-box) --- */
@@ -594,7 +597,7 @@ html, body {
 }
 #new-go, #new-start {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-color: var(--accent);
 }
 #new-go:active, #new-start:active { background: rgba(var(--accent-rgb), 0.75); }
@@ -749,7 +752,7 @@ html, body {
 #send {
   flex: 0 0 auto;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border: 0;
   border-radius: 7px;
   padding: 10px 14px;
@@ -786,7 +789,7 @@ html, body {
   user-select: none;
 }
 .key:active { background: var(--border); }
-.key.sticky.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.key.sticky.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 
 /* "Pick the folder myself" — the way out of a slow plan read. A plain link-ish
    button under the box, so it never competes with Continue. */
@@ -822,7 +825,7 @@ html, body {
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--accent);
-  color: var(--bg);
+  color: var(--accent-ink);
 }
 #upd-btn[disabled] { opacity: 0.6; }
 
@@ -993,7 +996,7 @@ html, body {
 .act-primary .act-label { color: var(--accent); font-weight: 600; }
 #ask-ok, #sessions-new {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-color: var(--accent);
 }
 #ask-ok:active, #sessions-new:active { background: rgba(var(--accent-rgb), 0.75); }
@@ -1127,7 +1130,7 @@ html, body {
   padding: 14px;
   font-size: 16px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border: 0;
   border-radius: 9px;
   font-family: inherit;
@@ -1226,7 +1229,7 @@ html, body {
 .voice-tut-list li:last-child { border-bottom: 0; }
 .voice-tut-list b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 #voice-tut-foot { margin-top: 8px; }
-#voice-tut-ok { background: var(--accent); color: #fff; border-color: var(--accent); }
+#voice-tut-ok { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .voice-diag {
   font-size: 12px;
   color: var(--muted);
@@ -1404,7 +1407,7 @@ html, body {
 .asking-sel-acts { display: flex; gap: 8px; margin-left: auto; min-width: 0; }
 .asking-sel-acts .asking-act-primary { flex: 1 1 auto; }
 #asking-sel-next { margin-left: auto; min-width: 96px; }
-#asking-sel-next, .asking-sel .asking-act-primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+#asking-sel-next, .asking-sel .asking-act-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
 #asking-sel-next:active, .asking-sel .asking-act-primary:active { background: rgba(var(--accent-rgb), 0.75); }
 .asking-sel button[disabled] { opacity: 0.5; }
 /* The answer field with Send beside it, like the compose row. */
@@ -1434,7 +1437,7 @@ html, body {
   padding: 13px;
   font-size: 15px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border: 0;
   border-radius: 9px;
   font-family: inherit;
@@ -1452,7 +1455,7 @@ html, body {
 #asking-send[disabled] { opacity: 0.5; }
 #asking-send, #asking-open.primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-color: var(--accent);
 }
 #asking-send:active, #asking-open.primary:active { background: rgba(var(--accent-rgb), 0.75); }

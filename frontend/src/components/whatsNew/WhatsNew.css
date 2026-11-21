@@ -184,7 +184,7 @@
   border: 1px solid var(--accent);
   border-radius: 7px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font: inherit;
   font-size: 13px;
   font-weight: 600;

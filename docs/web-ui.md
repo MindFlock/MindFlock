@@ -7832,6 +7832,84 @@ Theme (dark/light), sidebar visibility, view mode, pane order/layout, diff mode,
 last-used tab, and saved prompts are persisted in `localStorage` (`cs_*` /
 `mindflock.*` keys).
 
+### Themes (Settings → Appearance)
+
+A look is three independent choices: **Mode** (dark / light, also the moon in
+the top bar), a **Theme** (the surface set — `html[data-surface]`) and an
+**Accent** (`html[data-accent]`). The palettes live in
+`backend/web/static/theme.css`, shared with the phone page (which is dark only
+and paints the window palette, ignoring the region hues); the defaults —
+Swallow and Violetear — are `styles/tokens.css`. The choice is saved as
+`ui.surface` / `ui.accent` (every device) and cached in `cs_surface` /
+`cs_accent` for the pre-paint `<head>` script.
+
+**The sets.** Six quiet ones, a single neutral throughout: **Swallow**
+(default), **Raven** (true black), **Heron** (graphite), **Owl** (low glare —
+a dusk-grey page and text a step down from white, for long evenings), **Wren**
+(warm paper — cream pages and brown-black ink by day, sepia by night) and
+**Magpie** (high contrast — pure black/white, secondary text ≥ 9:1, borders
+you can see). Then nineteen birds, round the colour wheel: Cardinal, Scarlet
+Macaw, Golden Pheasant, Oriole, Rainbow Lorikeet, Lilac-breasted Roller,
+Goldfinch, Toco Toucan, Quetzal, Green Jay, Gouldian Finch, Mallard,
+Kingfisher, Peacock, Bluejay, Indigo Bunting, Violetear, Mandarin Duck,
+Flamingo. A bird paints its top bar and sidebar with region tokens
+(`--topbar-*`, `--sidebar-*`; `styles/regions.css` rebinds `--panel` & co. on
+each region).
+
+**Readability first.** The birds used to wear full plumage — lemon and amber
+top bars, a yellow or orange sidebar, saturated hairlines round every pane —
+and only Bluejay and the standard look were comfortable. Every coloured set is
+now built on one OKLCH lightness ladder (Bluejay's): a dark, low-chroma window
+(L .19–.27) and a near-black sidebar; by day a near-white window with a faint
+tint. The bird's colour lives in the **top bar** — a mid-dark band with
+near-white text, the same in both modes, or for the yellow birds (Goldfinch,
+Toucan, Pheasant) a quiet bar with one bright hairline under it — and in the
+hairlines, the accent and the tint. Never in a large bright surface.
+
+**The numbers are a test.** `src/__tests__/themeContrast.test.ts` resolves
+every set × mode × accent the way the browser cascades it
+(`__tests__/themePalette.ts` replays tokens.css + theme.css and resolves
+`var()` / `color-mix()`), and holds:
+
+- text ≥ 7:1 and secondary text ≥ 4.5:1 on every surface it sits on (the
+  window's three, the sidebar's two; the top bar's text ≥ 4.5:1);
+- the session-state tones ≥ 3:1 on every window and sidebar surface, their
+  chip ink ≥ 4.5:1, and working / needs-you / waiting / failed / idle at least
+  ΔE 12 apart; the status inks (`--green`, `--red`, `--gold`, the Sky's
+  `--fl-ink-*`) ≥ 4.5:1 as text;
+- each accent ≥ 3:1 as a ring on `--bg` / `--panel`, its button text
+  (`--accent-ink`) ≥ 4.5:1, and its text twin (`--accent-deep` by day, the
+  Sky's `--fl-ink-accent`) ≥ 4.5:1;
+- the terminal: foreground ≥ 7:1 and every ANSI colour ≥ 4.5:1 on the set's
+  terminal background — `lib/termPalette.ts` holds a dark and a light palette
+  (xterm's own yellow was 1.3:1 on a light canvas; the phone's `mobile.js`
+  carries the dark copy, pinned by a test);
+- calm: dark large surfaces (`--bg`, `--panel`, `--sidebar-bg`, `--term-bg`)
+  L ≤ 0.30 and chroma ≤ 0.09, light ones L ≥ 0.90 and chroma ≤ 0.03; a dark
+  top bar no lighter than L 0.60 (a light-mode bar is that band or a pale
+  strip), and no dark-mode hairline above L 0.72.
+
+A new set has to pass it; a failure names the look, the pair and both hexes.
+
+**Ink follows the fill.** Text on an accent fill (a primary button, the active
+tab) is `var(--accent-ink)` — white on the deep accents, near-black on the
+bright ones (Goldfinch, Oriole, Quetzal, Pheasant, Heron), where white was
+1.4–2.5:1. The same goes for `--red-ink` / `--green-ink` on a failure badge or a
+merged chip. A test refuses a fixed `#fff` over any of those fills. The
+light-mode accent blocks deepen an accent that would vanish as a ring on a
+white page.
+
+**The swatch is the theme.** Each surface swatch is a tiny window
+(`ThemePreview`: top bar, sidebar with the working / needs-you / failed /
+waiting dots, a line of text, a line of secondary text, an accent button). It
+names no colours: the element carries `class="theme-preview"`,
+`data-surface` and `data-mode`, which tokens.css and every theme.css block also
+match, so it is painted by the real palette in the current mode, wearing the
+current accent. An accent swatch's dot names its own accent
+(`data-accent-preview`). A preset key is never retired outright — a stored
+name must keep resolving, so an old key stays as an extra selector on the
+block that replaced it.
+
 ## Token / cost usage
 
 Each pane's usage trigger opens a per-session popup (input/output/cache tokens,

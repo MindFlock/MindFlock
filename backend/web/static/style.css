@@ -1821,7 +1821,7 @@ button.assist-chip:hover {
 .assist-confirm .assist-yes {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .assist-confirm button:focus-visible,
@@ -2537,7 +2537,7 @@ button.assist-chip:hover {
   border: 1px solid var(--accent);
   border-radius: 7px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -2661,7 +2661,7 @@ button.assist-chip:hover {
 .gh-connected-row .setup-primary {
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font-weight: 600;
   padding: 5px 12px;
   border-radius: 6px;
@@ -2820,7 +2820,7 @@ button.assist-chip:hover {
 #signin-close.signin-done {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* The agent card's one next action, when it is Install: the same button
@@ -3124,7 +3124,7 @@ button.assist-chip:hover {
 .setup-checklist .setup-step.is-next .agent-card .conn-actions button:not(.linklike) {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font-weight: 600;
 }
 
@@ -3564,7 +3564,7 @@ button.assist-chip:hover {
   margin-top: 6px;
   padding: 3px 10px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border: 0;
   border-radius: 6px;
   font-size: 11px;
@@ -3740,7 +3740,7 @@ button.assist-chip:hover {
 .coach-btn.on {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .coach-btn:disabled {
@@ -4288,8 +4288,9 @@ button.assist-chip:hover {
   --fl-ink-red: #e8795a;
   --fl-ink-muted: #a0a6b8;
   /* The accent as TEXT: the raw accent reads 3.4–4:1 on the dark panels, so
-     dark mode lightens it (≈6.7:1) and light mode takes the deep twin. */
-  --fl-ink-accent: color-mix(in srgb, var(--accent) 62%, #fff);
+     dark mode lightens it (≥4.5:1 on every surface set's panels, Owl's
+     lighter dusk included) and light mode takes the deep twin. */
+  --fl-ink-accent: color-mix(in srgb, var(--accent) 55%, #fff);
   /* The app's button tiers (docs/flights.md "As built: round 11 style"):
      .btn-primary / .test-btn's radius, and the Sky toolbar's control height. */
   --fl-btn-radius: 6px;
@@ -4781,7 +4782,7 @@ button.assist-chip:hover {
   border-radius: 15px;
   border-width: 2px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font-size: 16px;
   font-weight: 600;
   white-space: nowrap;
@@ -4798,7 +4799,7 @@ button.assist-chip:hover {
 
 .fl-gap-add:hover {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* Touch has no hover: the gaps' + always show there. */
@@ -5092,7 +5093,7 @@ button.assist-chip:hover {
 .fl-form .rt-seg button.on,
 .fl-seg-host .rt-seg button.on {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* A switch chip. */
@@ -7041,7 +7042,7 @@ button.assist-chip:hover {
 .sky-chain .sky-run:hover,
 .sky-chain .sky-run:focus-visible {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--accent-ink);
   outline: none;
 }
 
@@ -7099,7 +7100,7 @@ button.assist-chip:hover {
   height: 20px;
   border-radius: 50%;
   background: var(--accent);
-  color: var(--bg);
+  color: var(--accent-ink);
   font-size: 13px;
   line-height: 20px;
   text-align: center;
@@ -9158,7 +9159,7 @@ details.fl-group-waiting > summary {
 .modal-actions button.btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .modal-actions button:disabled {
@@ -12386,13 +12387,13 @@ details.fl-group-waiting > summary {
 #memory-confirm .mc-start {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 #memory-confirm .mc-danger {
   background: var(--red);
   border-color: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 /* The session chat's floating windows (ChatPanel.tsx). Above the grid and
    the sidebar, under the folder picker (900) and every notice/toast. */
@@ -12514,7 +12515,7 @@ details.fl-group-waiting > summary {
 .chat-msg.mine .chat-text {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--accent-ink);
 }
 
 .chat-error {
@@ -12579,7 +12580,7 @@ details.fl-group-waiting > summary {
   padding: 0 5px;
   border-radius: 999px;
   background: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--accent-ink);
   font-size: 11px;
   line-height: 18px;
   text-align: center;
@@ -12973,7 +12974,7 @@ details.fl-group-waiting > summary {
 
 .wt-btn.primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .wt-btn.primary:hover {
@@ -14632,7 +14633,7 @@ details.fl-group-waiting > summary {
 }
 
 .sky-stop-chip.sky-session-chip .sky-stop-icon {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
 }
 
@@ -17969,8 +17970,13 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
  * mobile.html — overrides the same names per html[data-accent] / [data-surface].
  *
  * :root and .light have EQUAL specificity (0,1,0), so .light must stay after
- * :root for the light palette to win. */
-:root {
+ * :root for the light palette to win.
+ *
+ * `.theme-preview` is a swatch in Settings → Appearance: a tiny window that
+ * re-declares the whole palette on itself (data-mode picks dark or light), so
+ * theme.css can paint it with the real set rather than a copy of its hexes. */
+:root,
+.theme-preview {
   /* Tell the browser to render native control internals (time-picker clock
      icon, number spinners, checkboxes, scrollbars) dark; .light flips it.
      Without this the native clock glyph sat near-invisible on the dark bg. */
@@ -17987,8 +17993,19 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
      per accent theme (Settings → Appearance). */
   --accent-rgb: 125, 86, 244;
   --accent-deep: #5b3fc0;
+  /* Text ON an accent fill (a primary button, the active tab). White on the
+     default violet; theme.css swaps it to near-black for an accent too bright
+     to carry white (Goldfinch, Quetzal, Heron…). Never hard-code #fff there. */
+  --accent-ink: #ffffff;
   --green: #51bd73;
-  --red: #de613e;
+  /* Read as text (failed, an error line) on every dark panel, so a step
+     lighter than --tone-broken's fill red; Owl's dusk panels set the floor. */
+  --red: #f67653;
+  /* The text on a --green / --red FILL (a merged chip, a failure-count
+     badge): white could not sit on either bright tone in the dark (2.4:1 and
+     3.6:1), so it is near-black here and white by day. */
+  --green-ink: #0b1a10;
+  --red-ink: #1a0a05;
   --gold: #ffd700;
   /* Gold companions, and the reason they exist: --gold is tuned to be READ
      — as caution text, as a status dot — so it has to contrast with the page,
@@ -18009,17 +18026,19 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
      (blue — a usage limit that auto-resumes; it is NOT red) and broken (red —
      offline). `-ink` is the text that goes over the tone as a fill. */
   --tone-muted: #8a90a2;
-  --tone-muted-ink: #ffffff;
+  --tone-muted-ink: #0f1117;
   --tone-working: #51bd73;
   --tone-working-ink: #0b1a10;
   --tone-attention: #ffd700;
   --tone-attention-ink: #1a1a1a;
-  --tone-neutral: #a3abbe;
+  --tone-neutral: #a8acb3;
   --tone-neutral-ink: #0f1117;
-  --tone-waiting: #4ea8de;
-  --tone-waiting-ink: #ffffff;
+  /* Waiting (blue) and idle (grey) sit side by side in the rail, so they
+     stay well apart by eye (ΔE ≥ 12), not just by label. */
+  --tone-waiting: #3fa0e8;
+  --tone-waiting-ink: #0b1622;
   --tone-broken: #de613e;
-  --tone-broken-ink: #ffffff;
+  --tone-broken-ink: #1a0a05;
   /* Terminal canvas colors — read by app.js termTheme() so xterm follows the
      surface theme (theme.css html[data-surface=…] blocks override these). */
   --term-bg: #0f1117;
@@ -18059,8 +18078,10 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
 /* Light mode. `.light` is set on <html> early (in index.html) and toggled by
    the header button. Swapping these variables recolors nearly the whole UI; the
    handful of hard-coded colors that don't survive the swap are patched in
-   theme-light.css. The xterm terminal intentionally stays dark. */
-.light {
+   theme-light.css. The terminal follows too: --term-bg / --term-fg here, and a
+   light ANSI palette (lib/termPalette.ts) so coloured output stays legible. */
+.light,
+.theme-preview[data-mode="light"] {
   color-scheme: light;
   --bg: #f4f5f8;
   --panel: #ffffff;
@@ -18071,25 +18092,33 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
   --accent: #7d56f4;
   --accent-rgb: 125, 86, 244;
   --accent-deep: #5b3fc0;
-  --green: #2e9e54;
-  --red: #d6451f;
-  --gold: #9a7400;
+  /* --green / --red / --gold are read as TEXT (pushed, failed, caution), so on
+     a light page they hold 4.5:1 even on --panel-2; the old #2e9e54 green was
+     3.4:1 on white. */
+  --green: #1a7039;
+  --red: #b53316;
+  --green-ink: #ffffff;
+  --red-ink: #ffffff;
+  --gold: #806000;
   /* A clean amber rather than the dark --gold above: this one is only ever a
      background, so it must be light enough for --gold-ink to sit on it (about
      9:1 here) instead of contrasting with the page. */
   --gold-fill: #f0b429;
   --gold-ink: #1a1a1a;
-  --tone-muted: #8a90a2;
+  /* The tones by day hold 3:1 against every light surface they sit on (a
+     dot, a ring, a chip edge) — the bright amber they replaced was 1.6:1 on
+     white, a needs-you dot you could miss. Chips still read: ink ≥ 4.5:1. */
+  --tone-muted: #6a6f81;
   --tone-muted-ink: #ffffff;
-  --tone-working: #2e9e54;
+  --tone-working: #1c7f43;
   --tone-working-ink: #ffffff;
-  --tone-attention: #f0b429;
-  --tone-attention-ink: #1a1a1a;
-  --tone-neutral: #6b7385;
+  --tone-attention: #a57900;
+  --tone-attention-ink: #141414;
+  --tone-neutral: #70747c;
   --tone-neutral-ink: #ffffff;
-  --tone-waiting: #1d6fa5;
+  --tone-waiting: #1a6db8;
   --tone-waiting-ink: #ffffff;
-  --tone-broken: #d6451f;
+  --tone-broken: #c73c15;
   --tone-broken-ink: #ffffff;
   --term-bg: #ffffff;
   --term-fg: #1b2030;
@@ -18135,6 +18164,14 @@ body {
 .term-container {
   width: 100%;
   height: 100%;
+}
+
+/* xterm 6 paints the theme background on its scrollable element, but the
+   viewport behind it keeps xterm.css's #000 — and the few pixels between the
+   last whole row and the pane's edge showed it: a black strip under every
+   terminal in a light theme. The viewport takes the theme's canvas instead. */
+.term-container .xterm .xterm-viewport {
+  background-color: var(--term-bg);
 }
 
 /* An inline spinner for a button that is mid-request ("Writing…"). The pane
@@ -18383,13 +18420,13 @@ body #mf-winctl {
      whole failure. Same red-and-white as the bell so the two read as one idea
      ("this wants you") rather than two vocabularies of urgency. */
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 /* A checklist FAILED: the count is red, not the usual accent. */
 #topbar .tb-count.is-failing {
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 /* Flock mark before the sidebar toggle. The PNG is used as a pure-alpha mask
@@ -18676,7 +18713,7 @@ body.sidebar-resizing * {
 
 #new-btn {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border: none;
   border-radius: 6px;
   padding: 6px 10px;
@@ -19029,7 +19066,7 @@ body.narrow .sidebar-resizer {
 #view-modes .vt.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 #view-modes .vt-icon {
@@ -19049,12 +19086,12 @@ body.narrow .sidebar-resizer {
   text-align: center;
   font-variant-numeric: tabular-nums;
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 #view-modes .vt-count.is-failing {
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 @container view-row (max-width: 319px) {
@@ -19671,7 +19708,7 @@ p.set-hint {
   border-radius: 6px;
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font-weight: 600;
   font-family: inherit;
 }
@@ -19880,7 +19917,7 @@ p.set-hint {
   cursor: pointer;
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-radius: 7px;
   padding: 8px 14px;
   font-size: 13px;
@@ -20030,7 +20067,7 @@ p.set-hint {
   cursor: pointer;
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-radius: 7px;
   padding: 6px 12px;
   font-size: 13px;
@@ -20129,7 +20166,7 @@ p.set-hint {
 .prov-form button {
   background: var(--accent);
   border: none;
-  color: #fff;
+  color: var(--accent-ink);
   border-radius: 7px;
   padding: 8px;
   cursor: pointer;
@@ -20264,7 +20301,7 @@ p.set-hint {
 .prov-conn-actions .prov-login-btn {
   background: var(--accent);
   border: none;
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* Provider-login terminal modal. */
@@ -20928,7 +20965,7 @@ p.set-hint {
   padding: 0 4px;
   border-radius: 7px;
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
   font-size: 9px;
   font-weight: 700;
   line-height: 14px;
@@ -21135,7 +21172,7 @@ p.set-hint {
 #addon-bars .addon-toggle.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 #addon-bars .addon-toggle:disabled {
@@ -22197,7 +22234,7 @@ p.set-hint {
 #view-modes .vm.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 
@@ -22527,7 +22564,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .inst .guest-pill.following {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--accent-ink);
 }
 .guest-note {
   margin: 4px 8px 2px;
@@ -22758,7 +22795,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .usage-periods .usage-period.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* Provider / Combined tabs at the top of the overall-usage pop. Same pill look
@@ -22791,7 +22828,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .usage-tabs .usage-tab.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 
@@ -23155,7 +23192,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .queue-actions button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .queue-actions button.primary:hover {
@@ -23400,7 +23437,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .queue-item-edit-btns .qi-save {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .queue-item-edit-btns button:hover {
@@ -23494,7 +23531,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   padding: 0 3px;
   border-radius: 8px;
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
   font-size: 9px;
   line-height: 15px;
   text-align: center;
@@ -24082,7 +24119,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .mic-pop .mic-seg-opt input:checked + span {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .mic-pop .mic-seg-opt input:focus-visible + span {
@@ -25716,7 +25753,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 }
 
 .pane-head .tabs button.active {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
 }
 
@@ -25735,7 +25772,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .pane-head .actions .nextstep {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border: none;
   cursor: pointer;
   flex: none;
@@ -25898,7 +25935,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .pane-head .actions .nextstep.nextstep-fast:hover {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   filter: none;
 }
 
@@ -25907,7 +25944,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
    The control stays put and stays clickable — clicking turns it back off. */
 .pane-head .actions .nextstep.nextstep-fast.is-on {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-color: var(--accent);
 }
 
@@ -25921,7 +25958,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .pane-head .actions .nextstep.nextstep-fast.nextstep-fast-halted:hover {
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 /* Workers (the raven): opens the Workers… picker — split now, ask once, on
@@ -25959,7 +25996,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .pane-head .actions .nextstep.nextstep-flock.is-on {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-color: var(--accent);
 }
 
@@ -26557,7 +26594,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   border: 1px solid var(--accent);
   border-radius: 6px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font: inherit;
   cursor: pointer;
 }
@@ -26724,7 +26761,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 }
 
 .stagechip.s-interrupt {
-  color: #fff;
+  color: var(--red-ink);
   background: var(--red);
 }
 
@@ -26744,7 +26781,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 }
 
 .stagechip.s-merged {
-  color: #fff;
+  color: var(--green-ink);
   background: var(--green);
 }
 
@@ -26829,7 +26866,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 }
 
 .diff-modes button.active {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -27651,7 +27688,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 }
 
 .cm-add button.cm-add-go {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
   font-weight: 600;
@@ -29065,7 +29102,7 @@ button.ct-chip:hover {
 }
 
 .cm-actions button.cm-primary {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
   font-weight: 600;
@@ -30905,7 +30942,7 @@ button.ct-chip:hover {
 /* Open: the accent fill, so the picker below reads as hanging from it. */
 .pane-head .actions .nextstep.nextstep-fast.open {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-color: var(--accent);
 }
 
@@ -31000,7 +31037,7 @@ button.ct-chip:hover {
 
 .pb-menu .pb-item.sel {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .pb-menu .pb-name {
@@ -31451,7 +31488,7 @@ button.ct-chip:hover {
 .thread-root .th-btn.primary {
   background: var(--accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .thread-root .th-btn.primary:hover:not(:disabled) {
@@ -33637,7 +33674,7 @@ button.ct-chip:hover {
 .modal-actions button[type=submit] {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* Page 1's ONE primary is Start: it is what Enter does, so the accent and the
@@ -33651,7 +33688,7 @@ button.ct-chip:hover {
   white-space: nowrap;
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 #new-describe-start:hover:not(:disabled) {
@@ -34045,7 +34082,7 @@ button.ct-chip:hover {
 
 :is(#new-form, #commit-form, .tpl-editor) .rt-seg button.on {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 :is(#new-form, .tpl-editor) label.check.rt-ask {
@@ -34463,7 +34500,7 @@ button.ct-chip:hover {
 .tpl-row-actions button.tpl-save {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .tpl-row-actions button:disabled {
@@ -36389,7 +36426,7 @@ button.ct-chip:hover {
   padding: 7px 16px;
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .sch-empty .tpl-run:hover {
@@ -37380,7 +37417,7 @@ body.conn-lost #cs-errors {
 .setup-actions .setup-new {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font-weight: 600;
 }
 
@@ -37803,7 +37840,7 @@ button.linklike {
 
 .palette-item.selected {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .palette-item .palette-label {
@@ -38463,7 +38500,7 @@ button.linklike {
 }
 
 .ik-tab.active .ik-tab-count {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -39178,7 +39215,7 @@ button.linklike {
 .ik-merge .ik-merge-go.armed {
   background: var(--red);
   border-color: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 .ik-merge .ik-merge-go:disabled {
@@ -39228,7 +39265,7 @@ button.linklike {
   border-radius: 6px;
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   cursor: pointer;
 }
 
@@ -39897,7 +39934,7 @@ button.linklike {
 .ik-arm.armed {
   background: var(--red);
   border-color: var(--red);
-  color: #fff;
+  color: var(--red-ink);
   font-weight: 600;
 }
 
@@ -40042,7 +40079,7 @@ button.linklike {
 .ik-step.done .ik-step-num {
   background: var(--green);
   border-color: var(--green);
-  color: #fff;
+  color: var(--green-ink);
 }
 .ik-step.cur {
   color: var(--text);
@@ -40051,7 +40088,7 @@ button.linklike {
 .ik-step.cur .ik-step-num {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 .ik-kinds {
   display: grid;
@@ -40387,7 +40424,7 @@ button.linklike {
 .ik-setup-step.done .ik-step-num {
   background: var(--green);
   border-color: var(--green);
-  color: #fff;
+  color: var(--green-ink);
 }
 .ik-setup-done {
   color: var(--muted);
@@ -40430,7 +40467,7 @@ button.linklike {
 .ik-edit-step.cur .ik-step-num {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 .ik-edit-step .ik-source-pill {
   font-weight: 400;
@@ -42746,7 +42783,7 @@ span.pr-open-ref.ob-ref {
 
 .customize-tabs button.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 #customize-close {
@@ -44149,13 +44186,13 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 .rg-inline-acts .rg-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .rg-inline-acts .rg-danger {
   background: var(--red);
   border-color: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 /* A group asked for by name (a bell history row, a run toast — lib/revealGroup.ts):
@@ -44174,9 +44211,10 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 /* ---------------------------------------------------------------------------
  * Appearance picker (Settings → Appearance). The theme palettes themselves
  * live in theme.css (shared with the mobile page); these are just the picker
- * widgets. .accent-swatch = accent presets; .surface-swatch = surface sets
- * (backgrounds/panels/borders/text), previewed by a banded dot — two tones for a
- * single-hue set, three for a multi-color one (top bar / sidebar / window).
+ * widgets. .accent-swatch = accent presets (a dot); .surface-swatch = surface
+ * sets, each previewed by a .theme-preview: a tiny window that theme.css
+ * paints with the set's real variables (top bar / sidebar / window, text,
+ * secondary text, an accent button and four session-state dots).
  * --------------------------------------------------------------------------- */
 .accent-swatches {
   display: flex;
@@ -44220,10 +44258,125 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   border: 1px solid rgba(128, 128, 128, 0.35);
 }
 
-/* Surface swatches share the accent-swatch chrome; a rounded square rather than
-   a circle, so the diagonal bands of the preview read as areas of a window. */
-.surface-swatch .sw-dot {
+/* Surface swatches are cards: the preview window above, the name below. */
+.surface-swatch {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 116px;
+  padding: 6px 6px 8px;
+  text-align: left;
+}
+
+.surface-swatch .sw-label {
+  padding: 0 2px;
+  line-height: 1.25;
+}
+
+/* The preview. Every colour comes from the element's own custom properties,
+   which tokens.css + theme.css declare on .theme-preview[data-surface][data-mode]
+   — so this sheet only lays the window out; it never names a colour. The
+   cascade inherits nothing from the page: a dark preview on a light page is
+   dark. */
+.theme-preview {
+  display: grid;
+  grid-template-columns: 26% 1fr;
+  grid-template-rows: 9px 1fr;
+  height: 54px;
   border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.theme-preview .tp-bar {
+  grid-column: 1 / -1;
+  background: var(--topbar-bg);
+  border-bottom: 1px solid var(--topbar-border);
+}
+
+.theme-preview .tp-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+}
+
+.theme-preview .tp-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.theme-preview .tp-dot.tone-working {
+  background: var(--tone-working);
+}
+
+.theme-preview .tp-dot.tone-attention {
+  background: var(--tone-attention);
+}
+
+.theme-preview .tp-dot.tone-broken {
+  background: var(--tone-broken);
+}
+
+.theme-preview .tp-dot.tone-waiting {
+  background: var(--tone-waiting);
+}
+
+.theme-preview .tp-win {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 7px;
+  background: var(--panel);
+}
+
+.theme-preview .tp-text {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+}
+
+.theme-preview .tp-muted {
+  width: 70%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--muted);
+}
+
+.theme-preview .tp-btn {
+  width: 34px;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--accent);
+  position: relative;
+}
+
+/* The button's label, as a short bar in the accent's own ink. */
+.theme-preview .tp-btn::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 4px;
+  height: 1px;
+  background: var(--accent-ink);
+}
+
+/* An accent swatch's dot is a .theme-preview too (for its variables), not a
+   window: no grid, just the accent. */
+.accent-swatch .sw-dot.theme-preview {
+  display: inline-block;
+  height: 16px;
+  background: var(--accent);
+  border-color: rgba(128, 128, 128, 0.35);
 }
 }
 
@@ -44777,7 +44930,7 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 .break-btn.primary {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font-weight: 600;
 }
 
@@ -45339,7 +45492,7 @@ button.infotip-btn:focus-visible {
   cursor: pointer;
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .fpw-use:hover:not(:disabled) {

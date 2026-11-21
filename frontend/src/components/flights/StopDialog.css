@@ -167,7 +167,7 @@
 .modal-actions button.btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .modal-actions button:disabled {

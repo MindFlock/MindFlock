@@ -19,6 +19,7 @@ import { toast } from "./toast";
 import { attachFileDrop, copyText, pasteClipboard } from "./clipboard";
 import { agentCopyText } from "./agentCopy";
 import { controlNotice, HELD_CLOSE, PAUSED_CLOSE, showTermNotice } from "./wsTerm";
+import { ansiPalette, SELECTION_DARK, SELECTION_LIGHT } from "./termPalette";
 
 export type TermKind = "agent" | "shell";
 
@@ -120,7 +121,8 @@ export function termTheme() {
     background: cssVar("--term-bg", light ? "#ffffff" : "#0f1117"),
     foreground: cssVar("--term-fg", light ? "#1f2430" : "#d7dae3"),
     cursor: cssVar("--accent", "#7d56f4"),
-    selectionBackground: light ? "#b9c0d466" : "#3a415466",
+    selectionBackground: light ? SELECTION_LIGHT : SELECTION_DARK,
+    ...ansiPalette(light),
   };
 }
 

@@ -107,7 +107,7 @@
 .setup-checklist .setup-step.is-next .agent-card .conn-actions button:not(.linklike) {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font-weight: 600;
 }
 

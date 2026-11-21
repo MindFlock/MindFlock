@@ -142,7 +142,7 @@
 
 .wt-btn.primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .wt-btn.primary:hover {

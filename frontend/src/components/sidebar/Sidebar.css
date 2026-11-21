@@ -71,7 +71,7 @@ body.sidebar-resizing * {
 
 #new-btn {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border: none;
   border-radius: 6px;
   padding: 6px 10px;
@@ -424,7 +424,7 @@ body.narrow .sidebar-resizer {
 #view-modes .vt.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 #view-modes .vt-icon {
@@ -444,12 +444,12 @@ body.narrow .sidebar-resizer {
   text-align: center;
   font-variant-numeric: tabular-nums;
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 #view-modes .vt-count.is-failing {
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 @container view-row (max-width: 319px) {

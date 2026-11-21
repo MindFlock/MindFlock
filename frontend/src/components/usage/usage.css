@@ -174,7 +174,7 @@
 .usage-periods .usage-period.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* Provider / Combined tabs at the top of the overall-usage pop. Same pill look
@@ -207,7 +207,7 @@
 .usage-tabs .usage-tab.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 

@@ -314,13 +314,13 @@
 .rg-inline-acts .rg-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .rg-inline-acts .rg-danger {
   background: var(--red);
   border-color: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 /* A group asked for by name (a bell history row, a run toast — lib/revealGroup.ts):

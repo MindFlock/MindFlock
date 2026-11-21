@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Every theme is now as easy to read as Bluejay.** The coloured themes were
+  painted at full plumage — lemon and amber top bars, a yellow or orange
+  sidebar, saturated hairlines round every pane — and several were too bright
+  to work in. Each is rebuilt on one lightness ladder (Bluejay's): a dark,
+  low-colour window and sidebar, a near-white one by day, and the bird's colour
+  in the top bar, the hairlines and the accent. Body text in the coloured
+  themes is now 12.6:1 or better (it was as low as 4.6:1 on Lorikeet's sidebar),
+  secondary text 5.0:1 or better everywhere (was 3.5:1), and no large surface is
+  bright or saturated. Bluejay itself barely moves (its bar's secondary text 3.9 → 4.7:1;
+  its light page is calmer).
+- **State colours hold up in light mode and on every sidebar.** The needs-you
+  amber was 1.6:1 on a light page and the working green 2.9:1; on Green Jay's
+  and Mandarin's sidebars the state dots all but vanished (1.0–1.9:1). Every
+  tone is now 3:1 or more on every surface it sits on, waiting (blue) and idle
+  (grey) are further apart, and the text on a tone chip is 4.5:1 or more.
+- **Buttons in the bright accents are readable.** Text on an accent button is
+  near-black on Goldfinch, Oriole, Quetzal, Pheasant and Heron (white was
+  1.4–2.5:1), and the Cardinal, Bluejay, Flamingo and Indigo Bunting accents
+  are a shade deeper or lighter so their white text clears 4.5:1 and their
+  focus ring shows on every panel. Failure badges and merged chips get the same
+  care in dark mode.
+- **The terminal has its own colours.** Coloured output (diffs, test results,
+  warnings) uses a palette made for the theme's background: every ANSI colour
+  is 4.5:1 or more, in light mode too, where xterm's yellow was 1.3:1. The
+  phone's terminal uses the dark set.
+- **Theme swatches show the theme.** Settings → Appearance draws each theme as
+  a tiny window — its bar, sidebar, text, an accent button and the working,
+  needs-you, failed and waiting colours — painted by the theme itself, in the
+  mode you are in.
+
+### Added
+
+- **Three quiet themes:** **Owl** (low glare — a dusk-grey page and gentler text),
+  **Wren** (warm paper by day, sepia by night) and **Magpie** (high contrast —
+  black and white, strong borders, secondary text 9:1 or better).
+- **A contrast test for every theme** (`themeContrast.test.ts`): every theme ×
+  light/dark × accent is measured — text, secondary text, state colours,
+  accents, the terminal, brightness — so a new or edited theme cannot regress.
+
 ## [0.14.25] - 2026-11-20
 
 ### Changed

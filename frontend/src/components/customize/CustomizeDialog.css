@@ -87,7 +87,7 @@
 
 .customize-tabs button.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 #customize-close {

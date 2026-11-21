@@ -31,6 +31,14 @@
       foreground: cssVar("--term-fg", "#d7dae3"),
       cursor: cssVar("--accent", "#7d56f4"),
       selectionBackground: "#33384a",
+      // The desktop's dark ANSI palette (frontend/src/lib/termPalette.ts
+      // ANSI_DARK — a vitest pins the copy): every colour ≥ 4.5:1 on each
+      // surface set's terminal background. xterm's own blue was 3.9:1.
+      black: "#484f58", red: "#ff7b72", green: "#56d364", yellow: "#e3b341",
+      blue: "#58a6ff", magenta: "#d2a8ff", cyan: "#39c5cf", white: "#c9d1d9",
+      brightBlack: "#8b949e", brightRed: "#ffa198", brightGreen: "#7ee787",
+      brightYellow: "#f2cc60", brightBlue: "#a5d6ff", brightMagenta: "#e2c5ff",
+      brightCyan: "#7fe3eb", brightWhite: "#f0f6fc",
     };
   }
 
