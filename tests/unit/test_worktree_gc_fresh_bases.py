@@ -7,6 +7,7 @@ else (tests/conftest.py)."""
 
 from __future__ import annotations
 
+import re
 import os
 import subprocess
 import time
@@ -136,10 +137,13 @@ def test_without_fetch_the_reason_says_the_base_may_be_stale(fenv):
     t = time.time() - DAY
     os.utime(fh, (t, t))
     (why,) = the_item(fenv, fetch=False)["kept"]
-    assert (
-        "(origin/main was last fetched 31 days ago and not refreshed (--no-fetch)"
-        in why
-    )
+    # "now" is about 31 days after that fetch; which side of the day boundary
+    # the age lands on depends on how long the scan took, so either is right.
+    assert re.search(
+        r"\(origin/main was last fetched 3[01] days ago and not refreshed "
+        r"\(--no-fetch\)",
+        why,
+    ), why
 
 
 def test_a_failed_fetch_keeps_it_never_crashes_and_says_so(fenv):
