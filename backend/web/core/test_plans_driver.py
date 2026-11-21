@@ -1848,19 +1848,25 @@ def _prepare_verify_checkout(repo_root: str, title: str, ref: str) -> dict:
             owner = live.get(path)
             if owner:
                 return fail("%s is in use by session %s" % (path, owner))
-            if os.path.lexists(path):
-                # Only this function makes a "<title>_checkout" directory, and no
-                # live session is in it (above): a dead run's leftover.
-                _checkout_git(["worktree", "remove", "--force", path], repo, unbare)
-                if os.path.lexists(path) and path.endswith(_CHECKOUT_SUFFIX):
-                    import shutil
+            # One worktree change at a time per repository (a session's
+            # Start may be adding its own worktree there right now).
+            from backend.session.git.repo_lock import worktree_lock
 
-                    shutil.rmtree(path, ignore_errors=True)
-            _checkout_git(["worktree", "prune"], repo, unbare)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            res = _checkout_git(
-                ["worktree", "add", "--detach", path, sha], repo, unbare, 300
-            )
+            with worktree_lock(repo):
+                if os.path.lexists(path):
+                    # Only this function makes a "<title>_checkout" directory,
+                    # and no live session is in it (above): a dead run's
+                    # leftover.
+                    _checkout_git(["worktree", "remove", "--force", path], repo, unbare)
+                    if os.path.lexists(path) and path.endswith(_CHECKOUT_SUFFIX):
+                        import shutil
+
+                        shutil.rmtree(path, ignore_errors=True)
+                _checkout_git(["worktree", "prune"], repo, unbare)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                res = _checkout_git(
+                    ["worktree", "add", "--detach", path, sha], repo, unbare, 300
+                )
             if res.returncode != 0:
                 return fail(
                     "git worktree add %s failed: %s" % (sha[:12], _git_err(res))

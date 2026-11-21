@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Workers spawned in one batch are no longer lost.** Their starts ran
+  `git worktree add` in the same repository at the same moment, and git can
+  fail that (`fatal: failed to read .git/worktrees/<sibling>/commondir`: one
+  add reads a sibling's half-written admin folder). Worktree add/remove/prune
+  now run one at a time per repository (an in-process lock plus a `flock` on
+  `<git common dir>/mindflock-worktree.lock`, so the ticket pipeline's process
+  waits too).
+- **A spawned worker whose start fails always says so.** One the launch gate
+  let through at once used to drop its row, tell its orchestrator nothing and
+  forget the reason after ten minutes. It now stays as a failed-start row like
+  a queued one: `wait_for_session` answers `failed_to_start` with the error,
+  the orchestrator's mailbox gets "worker X could not start: …", and
+  `spawn_session`'s ready wait raises with the reason at once instead of
+  waiting out 45 s. The server logs one line per spawn it answers.
+- **"Now using usage credits" is not a usage limit.** When Claude Code rolls
+  from the plan onto paid credits it prints that notice under (or on the same
+  line as) its "You've hit your limit" banner; the session read as `limit`, so
+  `wait_for_session` answered `usage_limit` and a worker's task could sit held.
+  The newest notice on the pane now decides: a credits notice ("Now using
+  usage credits", "You're now using extra usage") after the banner is open;
+  spent credits ("You've hit your extra usage limit", "Out of usage credits")
+  or a limit banner printed after the notice is a limit again. Providers name
+  their own notice (`usage_credits_patterns()`, TOML `[usage]
+  credits_patterns`).
+- **A `limit` reading whose window is open delivers the queued task**, also
+  with "Wait out usage limits" off: the queue checks the window (credits
+  notice, meter, reset time) before switching itself off.
+
 ## [0.14.25] - 2026-11-20
 
 ### Changed

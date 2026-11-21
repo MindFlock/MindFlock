@@ -1125,6 +1125,30 @@ class TestSpawn:
             box.spawn_session({"prompt": "p"}, _ctx(clock, on_sleep=drop))
         assert "orch-w1" not in box.policy.spawned_by_me
 
+    def test_a_failed_start_row_is_an_error_at_once(self):
+        """The server keeps a spawn whose Start failed as a ``start_failed``
+        row (status still "loading"), so nothing a batch spawned vanishes:
+        the ready wait reports its reason on the next poll instead of
+        waiting the full ready window out."""
+        clock = FakeClock()
+        box, api, _ = make_box(_tree(), clock=clock)
+
+        def fail(now):
+            for r in api.rows:
+                if r["title"] == "orch-w1":
+                    r["pending"] = True
+                    r["start_failed"] = {
+                        "error": "git command failed: fatal: failed to read "
+                        ".git/worktrees/orch-w2_1/commondir",
+                        "at": 1.0,
+                    }
+
+        ctx = _ctx(clock, on_sleep=fail)
+        with pytest.raises(ToolError, match="failed to start: git command failed"):
+            box.spawn_session({"prompt": "p"}, ctx)
+        assert len(ctx.slept) == 1
+        assert "orch-w1" not in box.policy.spawned_by_me
+
     def test_no_wait_ready(self):
         box, api, clock = make_box(_tree())
         out = box.spawn_session({"prompt": "p", "wait_ready": False}, _ctx(clock))

@@ -691,6 +691,25 @@ How the worker is created:
   why (`GET /api/create_failures`) and the error carries that reason:
   `session 'x' failed to start: <reason>` (see
   [Troubleshooting](#troubleshooting)).
+- **A spawned worker whose start fails never vanishes.** Whether it waited in
+  the launch gate's queue or was let through at once, its row stays as a
+  failed start (`start_failed`: error, prompt preview) for ten minutes or until
+  dismissed, `wait_for_session` answers `failed_to_start` with the error, the
+  server records the failure (`GET /api/create_failures`, `session.create_failed`
+  event), and one line goes to your mailbox: "worker X could not start: …".
+  The ready wait above raises at once on such a row:
+  `session 'x' failed to start: <reason>; … spawn_session it again with the
+  same task`. (A worker let through at once used to only drop its row.)
+- **Spawning several workers in one batch is safe.** Their Starts make their
+  worktrees in the same repository; the engine runs `git worktree add` (and
+  remove/prune) one at a time per repository
+  (`backend/session/git/repo_lock.py`: an in-process lock plus a `flock` on
+  `<git common dir>/mindflock-worktree.lock` for the ticket pipeline's
+  process). Two `worktree add` runs at once could fail with `fatal: failed to
+  read .git/worktrees/<sibling>/commondir`, which is how a batch used to lose
+  workers. The server logs one line per spawn it answers (`spawn <title>
+  (parent <p>, admitted|gate): creating | queued (<why>, position <n>) |
+  refused <status>: <error>`).
 - A worker still loading after 45 s is not an error: `ready: false`, and
   `wait_for_session` will wait for it.
 - **A gated start queues the worker; it does not fail.** When the server's
@@ -776,7 +795,8 @@ message. The `reason`s:
   `read_output(view="screen")`, then `answer_prompt`, or ask your user. Within
   60 s of a dispatch, a `clarify` or `limit` reading that started before it
   is ignored: it is the dialog you just answered, not a new one.
-- `failed_to_start`: its queued create failed (the row's `start_failed`, or,
+- `failed_to_start`: its create failed, queued or let through at once (the
+  row's `start_failed`, or,
   for a title no longer listed, a failure in
   [`GET /api/create_failures`](web-api.md#get-apicreate_failures), kept 10
   minutes). The result is `{reason: "failed_to_start", report: null, error,

@@ -374,12 +374,13 @@ def test_credits_enabled_open_every_window(h):
 
 
 def test_credits_banner_on_the_pane_clears_a_hold(h):
+    """The provider's verdict says the newest notice is a credits one (its
+    own patterns: test_usage_limits): the hold goes, whatever the meter."""
     clock, state, refresh = h
     state["v"] = {"limited": True, "reset_at": clock["t"] + 7200}
     assert refresh() == pytest.approx(1000.0 + 7200)
-    server.subprocess.run = lambda *a, **k: types.SimpleNamespace(
-        returncode=0, stdout=b"\n   Now using usage credits\n"
-    )
+    state["v"] = {"limited": False, "reset_at": None, "credits": True}
+    state["live"] = {"percent_used": 100.0, "end": clock["t"] + 3600}
     assert refresh() == 0.0
     assert server._LIMIT_STATE.get("t") is None
 

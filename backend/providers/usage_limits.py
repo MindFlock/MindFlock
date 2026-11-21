@@ -22,6 +22,15 @@ import re
 import time
 from typing import Optional, Sequence
 
+#: The paid credits THEMSELVES spent ("You've hit your extra usage limit",
+#: "Out of usage credits"): a real wall again, even with credits on. Part of
+#: both limit sets below.
+CREDITS_SPENT_PATTERNS: tuple = (
+    r"(?:hit|reached) your (?:extra[\s-]usage|usage credits?)(?: limit)?",
+    r"out of (?:extra[\s-]usage|usage credits)",
+    r"used (?:all|up)(?: of)? your (?:extra[\s-]usage|usage credits)",
+)
+
 #: Phrases specific enough that seeing one means the CLI is usage/rate limited.
 DEFAULT_LIMIT_PATTERNS: tuple = (
     r"usage limit reached",
@@ -36,7 +45,7 @@ DEFAULT_LIMIT_PATTERNS: tuple = (
     r"(?:5|five)[\s-]hour limit reached",
     r"weekly limit reached",
     r"reached your weekly limit",
-)
+) + CREDITS_SPENT_PATTERNS
 
 #: High-precision subset for classifying the agent's *activity state* (the red
 #: "limit" pill and the queue's escape-and-resume routing). These are the CLI's
@@ -58,35 +67,70 @@ LIMIT_SCREEN_PATTERNS: tuple = (
     r"(?:5|five)[\s-]hour limit reached",
     r"weekly limit reached",
     r"reached your weekly limit",
-)
+) + CREDITS_SPENT_PATTERNS
 
 
-#: The CLI's "the plan window is spent but extra-usage credits carry on"
-#: banners. Seeing one means the window is OPEN for sending (billed to
-#: credits), whatever the plan meter says — the opposite of a limit screen.
+#: The CLI's "the plan window is spent but paid credits carry on" notices
+#: (Claude Code: "Now using usage credits", "You're now using extra usage").
+#: Seeing one means the window is OPEN for sending (billed to credits),
+#: whatever the plan meter says — the opposite of a limit screen. A provider
+#: names its own (``BaseProvider.usage_credits_patterns``, TOML ``[usage]
+#: credits_patterns``); these are the shared default.
 CREDITS_OPEN_PATTERNS: tuple = (
     r"now using usage credits",
     r"using (?:extra[\s-])?usage credits",
+    r"(?:now|you'?re now) using extra[\s-]usage",
     r"extra usage (?:is )?(?:on|enabled|active)",
 )
 
 
-def is_credits_banner(text: str) -> bool:
-    """True when ``text`` shows the CLI running on extra-usage credits: the
-    plan's window is spent, yet prompts still go through (and are billed)."""
+def _last_match(text: str, patterns: Sequence[str]) -> int:
+    """The END offset of the last match of any of ``patterns`` in ``text``,
+    or -1 when none matches."""
+    last = -1
+    for p in patterns or ():
+        for m in re.finditer(p, text, re.I):
+            last = max(last, m.end())
+    return last
+
+
+def _credits_latest(
+    text: str, limit_patterns: Sequence[str], credits_patterns: Sequence[str]
+) -> tuple:
+    """``(limited, credits)`` from the LATEST notice on the pane: a terminal
+    keeps old lines, so a limit banner printed just before the CLI rolled
+    onto credits is still there above the credits notice. Whichever ends
+    last describes now; a credits notice on the banner's own line ("5-hour
+    limit reached ∙ now using usage credits") ends after it, so it wins too."""
+    lim = _last_match(text, limit_patterns)
+    cred = _last_match(text, credits_patterns)
+    if cred >= 0 and cred >= lim:
+        return False, True
+    return lim >= 0, False
+
+
+def is_credits_banner(
+    text: str, patterns: Sequence[str] = CREDITS_OPEN_PATTERNS
+) -> bool:
+    """True when ``text`` shows the CLI running on paid credits: the plan's
+    window is spent, yet prompts still go through (and are billed)."""
     if not text:
         return False
-    return any(re.search(p, text, re.I) for p in CREDITS_OPEN_PATTERNS)
+    return any(re.search(p, text, re.I) for p in patterns or ())
 
 
-def is_limit_screen(text: str) -> bool:
-    """True when ``text`` shows a CLI usage-limit SCREEN (high precision).
+def is_limit_screen(
+    text: str, credits_patterns: Sequence[str] = CREDITS_OPEN_PATTERNS
+) -> bool:
+    """True when ``text`` shows a CLI usage-limit SCREEN (high precision) and
+    no credits notice came after it (:func:`_credits_latest`).
 
     Used for activity-state classification — see :data:`LIMIT_SCREEN_PATTERNS`
     for why this is stricter than :func:`detect_limit`."""
     if not text:
         return False
-    return any(re.search(p, text, re.I) for p in LIMIT_SCREEN_PATTERNS)
+    limited, _credits = _credits_latest(text, LIMIT_SCREEN_PATTERNS, credits_patterns)
+    return limited
 
 
 # "resets in 2h 30m" / "try again in 45 minutes" / "resets in 2 days"
@@ -202,12 +246,18 @@ def detect_limit(
     text: str,
     patterns: Sequence[str] = DEFAULT_LIMIT_PATTERNS,
     now: Optional[float] = None,
+    credits_patterns: Sequence[str] = CREDITS_OPEN_PATTERNS,
 ) -> dict:
-    """``{"limited": bool, "reset_at": float|None}`` for the agent pane ``text``."""
+    """``{"limited": bool, "reset_at": float|None, "credits": bool}`` for the
+    agent pane ``text``. ``credits``: the newest notice says the CLI runs on
+    paid credits — the window is OPEN (``limited`` False), whatever the plan
+    meter reads. A limit banner printed after it (the credits spent) is a
+    limit again."""
     if not text:
-        return {"limited": False, "reset_at": None}
+        return {"limited": False, "reset_at": None, "credits": False}
     if now is None:
         now = time.time()
-    if not any(re.search(p, text, re.I) for p in (patterns or ())):
-        return {"limited": False, "reset_at": None}
-    return {"limited": True, "reset_at": _parse_reset_at(text, now)}
+    limited, credits = _credits_latest(text, patterns, credits_patterns)
+    if not limited:
+        return {"limited": False, "reset_at": None, "credits": credits}
+    return {"limited": True, "reset_at": _parse_reset_at(text, now), "credits": False}
