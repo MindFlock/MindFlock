@@ -1881,6 +1881,15 @@ let autoUpdater = null
 let appUpd = { state: 'off', version: '', percent: 0, error: '' }
 // The click's progress, polled by the toast. state: idle | running | failed
 let updateRun = { state: 'idle', step: '', message: '' }
+// How long a check may stay unanswered ('idle') before the run stops waiting.
+const APP_CHECK_SILENT_MS = 90 * 1000
+// How long the app may still be running after quitAndInstall before the swap
+// counts as failed. Windows/Linux quit within a second or two when it works.
+// macOS takes longer: with autoInstallOnAppQuit off, Squirrel.Mac only fetches,
+// unpacks and signature-checks the bundle once quitAndInstall is called.
+const SWAP_STALL_MS = (process.platform === 'darwin' ? 180 : 30) * 1000
+// Set while a quitAndInstall is in flight: { engineUpdated }.
+let swapPending = null
 
 function initAutoUpdater() {
   if (!app.isPackaged || DEV || process.env.MINDFLOCK_DISABLE_AUTOUPDATE === '1') return
@@ -1930,12 +1939,22 @@ function initAutoUpdater() {
     appUpd = { state: 'error', version: appUpd.version, percent: 0, error: String(err && err.message || err).slice(0, 300) }
     console.log('[mindflock] app auto-update failed — falling back to the download page:', appUpd.error)
     pushUpdateToRenderer()
+    // The swap itself failed (macOS: Squirrel refusing the signature, which
+    // it only checks now; Linux: the AppImage couldn't be replaced): say so
+    // now instead of at the stall timeout.
+    if (swapPending) setTimeout(() => { swapStalled().catch(() => {}) }, 1000)
   })
 }
 
 function checkAppUpdate() {
   if (!autoUpdater || appUpd.state === 'downloading' || appUpd.state === 'ready') return
-  autoUpdater.checkForUpdates().catch(() => {})   // 'error' event carries the reason
+  // The 'error' event carries the reason. The background download is a promise
+  // of its own (autoDownload): caught here too, or every failed download
+  // (offline, cut off, a checksum mismatch) lands in main.log as a FATAL
+  // unhandledRejection. electron/test/update_sim.test.js.
+  autoUpdater.checkForUpdates()
+    .then((r) => { if (r && r.downloadPromise) r.downloadPromise.catch(() => {}) })
+    .catch(() => {})
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
@@ -2021,11 +2040,27 @@ async function updateEverything(opts) {
     const appNewer = want.app && (
       (updateAvailable && cmpVersion(updateAvailable.version, app.getVersion()) > 0)
       || (appUpd.version && cmpVersion(appUpd.version, app.getVersion()) > 0))
+    // A download that failed earlier (offline, cut off, the release's assets
+    // still uploading) gets one fresh try on this click before the run falls
+    // back to the download page. A real "can't swap here" (macOS refusing the
+    // signature) just fails again and falls back as before.
+    if (appNewer && autoUpdater && appUpd.state === 'error' && !want.auto) {
+      console.log('[mindflock] retrying the app download that failed:', appUpd.error)
+      appUpd = { state: 'idle', version: appUpd.version, percent: 0, error: '' }
+    }
     if (appNewer && autoUpdater && (appUpd.state === 'downloading' || appUpd.state === 'idle')) {
       if (appUpd.state === 'idle') checkAppUpdate()
       updateRun.step = 'download'
       const deadline = Date.now() + 20 * 60 * 1000
+      // 'idle' that never moves: the updater answered nothing at all (a Linux
+      // build not run as an AppImage — no APPIMAGE — is silent). Don't sit
+      // out the 20-minute download deadline for an event that isn't coming.
+      const idleDeadline = Date.now() + APP_CHECK_SILENT_MS
       while ((appUpd.state === 'downloading' || appUpd.state === 'idle') && Date.now() < deadline) {
+        if (appUpd.state === 'idle' && Date.now() > idleDeadline) {
+          appUpd = Object.assign({}, appUpd, { state: 'error', error: 'the app updater did not answer' })
+          break
+        }
         updateRun.message = 'Downloading MindFlock ' + (appUpd.version || target)
           + (appUpd.percent ? ' — ' + appUpd.percent + '%' : '') + '…'
         await sleep(1000)
@@ -2040,6 +2075,15 @@ async function updateEverything(opts) {
       else await sleep(300)
       // The relaunched app reads this back and says once what happened.
       writeUpdateStore({ updated: { kind: 'app', to: appUpd.version, from: app.getVersion(), auto: !!want.auto } })
+      // The Linux AppImage updater starts the NEW app before this one quits;
+      // holding the single-instance lock then makes the new one hand its argv
+      // to us and exit, and we quit too — nothing left running. Let go of it
+      // (harmless on Windows/macOS, whose installer starts the app after we
+      // are gone); swapStalled takes it back if we don't quit after all.
+      try { app.releaseSingleInstanceLock() } catch (e) {}
+      swapPending = { engineUpdated }
+      const stalled = setTimeout(() => { swapStalled().catch(() => {}) }, SWAP_STALL_MS)
+      if (stalled.unref) stalled.unref()
       autoUpdater.quitAndInstall(true, true)   // silent install, relaunch after
       return updateRun
     }
@@ -2053,7 +2097,7 @@ async function updateEverything(opts) {
         updateRun = { state: 'idle', step: 'manual', message: 'The app update couldn\u2019t install itself \u2014 use the Update button.' }
         return updateRun
       }
-      shell.openExternal((updateAvailable && updateAvailable.url) || UPDATE_RELEASES_URL).catch(() => {})
+      shell.openExternal(upd.safeDownloadUrl(updateAvailable && updateAvailable.url, UPDATE_RELEASES_URL)).catch(() => {})
       updateRun = {
         state: 'idle', step: 'manual',
         message: (engineUpdated ? 'Engine updated. ' : '')
@@ -2086,6 +2130,35 @@ async function updateEverything(opts) {
   }
 }
 
+// quitAndInstall was called but this app is still running: the updater said
+// 'error', or SWAP_STALL_MS went by. electron-updater reports a failed install
+// on its 'error' event and simply doesn't quit (the AppImage couldn't be
+// replaced, the installer couldn't start, Squirrel.Mac refused the signature);
+// a vetoed quit says nothing at all. Without this the run stayed "Restarting
+// into MindFlock X…" for good, which also blocked every later automatic run,
+// and the engine server stopped for the swap stayed down.
+async function swapStalled() {
+  const pending = swapPending
+  swapPending = null
+  if (!pending || updateRun.state !== 'running' || updateRun.step !== 'restart') return
+  const engineUpdated = pending.engineUpdated
+  console.log('[mindflock] the app update did not install itself (still running',
+    'or reported an error)', appUpd.error ? '— ' + appUpd.error : '')
+  try { app.requestSingleInstanceLock() } catch (e) {}
+  writeUpdateStore({ updated: undefined })
+  if (appUpd.state !== 'error') {
+    appUpd = Object.assign({}, appUpd, { state: 'error', error: appUpd.error || 'the install did not start' })
+  }
+  // The old server was stopped for the swap: bring the (new) engine back.
+  if (engineUpdated && await portFree(PORT)) await restartServer()
+  updateRun = {
+    state: 'failed', step: 'restart',
+    message: 'MindFlock ' + (appUpd.version || '') + ' downloaded but couldn’t install itself'
+      + (appUpd.error ? ' (' + appUpd.error + ')' : '') + '. Retry, or install it from the download page.',
+  }
+  pushUpdateToRenderer()
+}
+
 // The engine install of an update run, and how it ended: { ok } or
 // { ok: false, message }. On native Windows a failure is checked against the
 // engine itself. install.ps1 builds the new engine beside the old one and
@@ -2102,9 +2175,12 @@ async function installEngineForUpdate(ref) {
   if (install.state === 'done') return { ok: true }
   const code = install.code
   if (!WIN_NATIVE) {
+    // The bundled install.sh builds the new engine beside the old one first
+    // and puts the old one back if the swap fails (its "stage" step), so a
+    // failure leaves the engine as it was; the server was never stopped.
     return {
       ok: false,
-      message: 'The engine update failed (exit ' + code + ') — MindFlock’s engine may be partially updated. Retry to finish it.',
+      message: 'The engine update failed (exit ' + code + '). Your engine was left as it was and keeps running — retry later.',
     }
   }
   let why = await probeNativeEngine(60000)
@@ -2157,8 +2233,9 @@ ipcMain.handle('update:get', async () => {
 ipcMain.handle('update:install', () => updateEverything({ engine: true, app: true }))
 ipcMain.handle('update:state', () => ({ app: appUpd, run: updateRun }))
 ipcMain.on('update:open', (_e, url) => {
-  const dest = typeof url === 'string' && url ? url : UPDATE_RELEASES_URL
-  shell.openExternal(dest).catch(() => {})
+  // Any page in the window can call this: only a web page is opened, never a
+  // file:// path or another app's URL scheme (shell.openExternal runs those).
+  shell.openExternal(upd.safeDownloadUrl(url, UPDATE_RELEASES_URL)).catch(() => {})
 })
 ipcMain.on('update:skip', (_e, version) => {
   skippedVersion = String(version || (updateAvailable && updateAvailable.version) || '')
@@ -2662,6 +2739,9 @@ const UPDATE_JS = `
           } else if (run.state === 'idle' && run.step) {
             stopPolling();
             later.disabled = false; upd.textContent = run.step === 'done' ? 'Done' : 'Update';
+            // Not installed (the download page opened instead): the button
+            // works again rather than sitting disabled under "Update".
+            upd.disabled = run.step === 'done';
           }
         }).catch(function () {});
       }, 1000);

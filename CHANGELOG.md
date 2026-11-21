@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failed engine update on Linux, macOS or WSL no longer leaves you with no
+  engine at all.** `uv tool install --force` removes the old engine before it
+  downloads the new one, so a network drop during the desktop app's engine
+  update (or a re-run of `install.sh`) deleted the `mindflock` command
+  outright. `install.sh` now builds the new engine beside the old one first —
+  every download happens there — then swaps it in and puts the old one back if
+  the swap fails, as `install.ps1` already does on Windows. The app's message
+  now says the engine was left as it was.
+- **An app update that can't install itself no longer sticks on "Restarting
+  into MindFlock X…".** If the updater reports an error during the swap
+  (on macOS that is where Squirrel checks the signature), or the app is still
+  running 30 s later (3 min on macOS), the update counts as failed: the card
+  offers Retry or the download
+  page, the engine server stopped for the swap starts again, and automatic
+  updates are no longer blocked for the rest of the session. On Linux the app
+  lets go of its one-instance lock before the AppImage swap, so the new
+  AppImage it starts isn't turned away by the old one.
+- **Clicking Update after a failed app download retries the download** before
+  falling back to the download page; an update check that never answers stops
+  the wait after 90 s instead of 20 minutes; a failed background download is
+  no longer logged as a FATAL unhandled rejection; and the update card's
+  button works again after it opened the download page.
+- **`0.15.0-beta.1` no longer counts as newer than `0.15.0`** in the app's
+  version check.
+
+### Security
+
+- **The update card's "open the download page" only opens web pages.** Any
+  page in the window could ask it to open a `file://` path or another app's
+  URL scheme.
+
+### Docs
+
+- **[docs/desktop-updates.md](docs/desktop-updates.md)**: how the packaged
+  app learns of, downloads, verifies and applies an update on each OS, and
+  what happens when each step fails. **[docs/desktop-update-test.md](docs/desktop-update-test.md)**:
+  the ten-minute manual check on a real Windows PC and Mac.
+
 ## [0.14.25] - 2026-11-20
 
 ### Changed

@@ -4,10 +4,16 @@
 // `node --test electron/test` can pin them (see electron/test/update.test.js).
 
 // Compare dotted numeric versions. >0 if a newer than b, <0 older, 0 equal.
-// Prerelease / non-numeric suffixes are ignored — we only nudge on a clear bump.
+// Prerelease / build suffixes are ignored — we only nudge on a clear bump.
+// The suffix goes WHOLE (everything from the first '-' or '+'): split on dots
+// first, '0.15.0-beta.1' read as 0.15.0.1 and so as NEWER than 0.15.0.
+function versionParts (v) {
+  return String(v == null ? '' : v).trim().replace(/^v/i, '').replace(/[-+].*$/, '')
+    .split('.').map((n) => parseInt(n, 10) || 0)
+}
 function cmpVersion (a, b) {
-  const pa = String(a == null ? '' : a).replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0)
-  const pb = String(b == null ? '' : b).replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0)
+  const pa = versionParts(a)
+  const pb = versionParts(b)
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
     const d = (pa[i] || 0) - (pb[i] || 0)
     if (d) return d > 0 ? 1 : -1
@@ -276,8 +282,18 @@ function localPort (url) {
   return u.protocol === 'https:' ? 443 : 80
 }
 
+// Where a "download the update" click may go: an http(s) URL as given, else
+// `fallback` (the releases page). The renderer can ask for any URL and
+// shell.openExternal also runs file:// paths and other apps' URL schemes.
+function safeDownloadUrl (url, fallback) {
+  let u
+  try { u = new URL(String(url || '')) } catch (e) { return fallback }
+  return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : fallback
+}
+
 module.exports = {
   cmpVersion, versionSkew, skewNotice, runState,
   autoUpdateVerdict, workingCount, updatedNotice, AUTO_IDLE_SEC, AUTO_WORKING_CAP_MS,
   MODES, resolveMode, legacyMode, modeToMigrate, modeForSwitch, offerToast, localPort,
+  safeDownloadUrl,
 }
