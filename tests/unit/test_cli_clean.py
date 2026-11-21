@@ -201,3 +201,35 @@ def test_a_stale_base_is_said_under_the_listing(capsys):
         "refreshed: Could not read from remote repository." in out
     )
     assert "Base branches fetched just now for 1 repository." in out
+
+
+def test_through_the_server_the_list_comes_before_the_sizes(monkeypatch):
+    """`mindflock clean` against a running server: it asks for a fresh scan
+    (passing --no-fetch / --no-size on), shows the list on the first report
+    that has it while sizes are measured, and returns the finished one."""
+    item = {"id": "a", "state": "safe", "size_bytes": None}
+    replies = [
+        {"scanning": True, "items": None, "progress": {"phase": "check", "done": 1, "total": 2}},
+        {"scanning": True, "sizing": True, "items": [item]},
+        {"scanning": True, "sizing": True, "items": [item],
+         "progress": {"phase": "size", "done": 0, "total": 1}},
+        {"scanning": False, "sizing": False, "items": [dict(item, size_bytes=5)]},
+    ]  # fmt: skip
+    asked = []
+
+    def get(base, path):
+        asked.append(path)
+        return replies.pop(0)
+
+    monkeypatch.setattr(cli_clean.client, "get", get)
+    monkeypatch.setattr(cli_clean.time, "sleep", lambda s: None)
+    listed, steps = [], []
+    rep = cli_clean._Server("http://x").report(
+        fetch=False,
+        on_listed=lambda r: listed.append([i["size_bytes"] for i in r["items"]]),
+        progress=lambda *a: steps.append(a),
+    )
+    assert asked[0] == "/api/cleanup?refresh=1&fetch=0"
+    assert listed == [[None]]  # once, before the sizes
+    assert steps == [("check", 1, 2), ("size", 0, 1)]
+    assert rep["items"][0]["size_bytes"] == 5
