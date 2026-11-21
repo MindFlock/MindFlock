@@ -1,7 +1,9 @@
 """Disk cleanup: the worktree garbage collector's routes
 (``core.worktree_gc_driver``; docs/web-api.md, *Disk cleanup*).
 
-* ``GET /api/cleanup`` — the last report (``?refresh=1`` starts a fresh scan).
+* ``GET /api/cleanup`` — the last report (``?refresh=1`` starts a fresh scan;
+  ``fetch=0``: without refreshing the base branches first, ``size=0``:
+  cached sizes only).
 * ``POST /api/cleanup/collect`` — remove every provably safe item now.
 * ``POST /api/cleanup/remove`` — remove one item; one that holds work needs
   ``confirm`` and has its work saved first.
@@ -41,8 +43,14 @@ def _refused() -> JSONResponse:
 
 
 @router.get("/api/cleanup")
-async def get_cleanup(refresh: int = 0) -> JSONResponse:
-    rep = await asyncio.to_thread(_driver.report, _server(), refresh=bool(refresh))
+async def get_cleanup(refresh: int = 0, fetch: int = 1, size: int = 1) -> JSONResponse:
+    rep = await asyncio.to_thread(
+        _driver.report,
+        _server(),
+        refresh=bool(refresh),
+        fetch=bool(fetch),
+        measure=bool(size),
+    )
     return JSONResponse(rep)
 
 

@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Disk cleanup judges worktrees against fresh base branches.** A base ref
+  nobody fetched for a day (a base clone's `origin/staging` was 25 hours old)
+  made every PR merged since look unmerged. Before it classifies, cleanup now
+  fetches each involved repository's base branches once — exactly the
+  `origin/<base>` refs it compares against, no tags, no prune, no
+  FETCH_HEAD, no hooks or auto-gc, no credential prompt, 20 s — at most every
+  15 minutes per repository (the background pass, Settings → Disk cleanup and
+  `mindflock clean` share the stamp). It never moves a local branch or
+  touches an index or a working tree. A fetch that fails changes nothing: the
+  scan goes on with the refs it has, and an item kept for unmerged commits
+  says how old its base is and that it may be merged since. `mindflock clean
+  --no-fetch` skips it; `GET /api/cleanup` takes `fetch=0` and reports each
+  repository's fetch (`bases`).
+- **Disk cleanup lists in seconds and shows the list before the sizes.** The
+  listing walked every folder three times (`du`, `find`, then a second `du`
+  for the totals — about 3–4 minutes, silent, on ~180 worktrees / 200 GB).
+  Each item is now walked once, its sizes kept in
+  `~/.mindflock/worktree_gc_sizes.json` until the folder shows a change, and
+  the totals come from the same walk: still every hard-linked file once
+  (each item records which shared files it links, so the union is exact from
+  the cache too). Measured on the owner's ~210 worktrees with a warm disk
+  cache: 40 s before, 12 s cold-cache (list ready at 5 s), 5 s warm.
+  `mindflock clean` prints the table as soon as the items are classified,
+  then a progress line on stderr (a terminal only; `--json` stays clean and
+  complete) while the rest is measured; `--no-size` lists at once with the
+  sizes already known; worktrees that aren't MindFlock's are measured only
+  with `--all` / `--json`. `GET /api/cleanup` publishes the classified list
+  first (`sizing: true`, unknown sizes `null`, `progress`) and takes `size=0`;
+  totals are `null` while unmeasured, never a per-item sum.
+
 ## [0.14.24] - 2026-11-20
 
 ### Changed

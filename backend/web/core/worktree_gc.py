@@ -54,6 +54,16 @@ read-only merge test"). Last, a branch whose PR is merged at this very HEAD
 A test that conflicts, fails or reads oddly answers "not merged": when
 unsure, keep.
 
+**Fresh bases** (:func:`refresh_bases`): before a scan classifies, each
+involved repository's ``origin/<base>`` refs are fetched once (throttled,
+bounded, no prompt; a failure keeps what is there and is said on the items
+it may affect). The only write a scan makes in anyone's repository.
+
+**Sizes** (:func:`measure_sizes`) come after the classification, so the
+list never waits on them: one walk per item, kept in the state dir until the
+folder changes (:class:`SizeCache`), and hard-link honest headline totals
+(:func:`measure_totals`) from the same walks.
+
 **Safe** = ours, a worktree or clone, not locked, not in use, nothing
 uncommitted, every commit in a base branch or on a remote (a clone: no stash
 either, it lives in the clone), and unused longer than the threshold.
@@ -71,16 +81,19 @@ deleted. If saving fails nothing is removed.
 
 from __future__ import annotations
 
+import base64
 import concurrent.futures
 import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
 import time
+import zlib
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set
 
 from backend import gitutil
@@ -94,10 +107,11 @@ DEFAULT_AFTER_DAYS = 14
 MAX_PER_PASS = 25
 #: Per-git-call ceiling; a hung git is "couldn't check", which keeps the item.
 GIT_TIMEOUT = 30
-#: ``du`` ceiling per folder; past it the size is unknown (never blocks).
+#: Size walk ceiling per folder; past it the size is unknown (never blocks).
 SIZE_TIMEOUT = 120
-#: A measured size is reused this long if the folder shows no newer use.
-SIZE_TTL_S = 24 * 3600.0
+#: A measured size is reused this long if the folder shows no change
+#: (:func:`size_key`); after it the folder is walked again.
+SIZE_TTL_S = 12 * 3600.0
 #: Items classified concurrently (git + du are I/O bound).
 WORKERS = 4
 
@@ -234,12 +248,14 @@ def main_repo_of(path: str) -> str:
     return norm(common)
 
 
-def base_refs(repo: str, hint: str = "") -> List[str]:
-    """The base branches work in ``repo`` merges into, as refs that exist:
-    the recorded base (``hint``), what ``origin/HEAD`` points at, and local
-    ``main`` / ``master`` / ``staging`` / ``develop``, each with its
-    ``origin/`` counterpart. Content found in any of them is content a remote
-    (or the repo's own integration branch) already has."""
+#: The usual integration branches: a repo that ships through `staging`
+#: (sitecheck does) squash-merges into it, not into main.
+_BASE_NAMES = ("main", "master", "staging", "develop", "development")
+
+
+def _base_names(repo: str, hint: str = "") -> List[str]:
+    """Candidate base branch NAMES for ``repo``: the recorded base
+    (``hint``), what ``origin/HEAD`` points at, then :data:`_BASE_NAMES`."""
     names: List[str] = []
     h = (hint or "").strip()
     for pre in ("refs/heads/", "refs/remotes/origin/", "origin/"):
@@ -250,15 +266,330 @@ def base_refs(repo: str, hint: str = "") -> List[str]:
     head = _out(repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
     if head and head.startswith("origin/"):
         names.append(head[len("origin/") :])
-    # The usual integration branches too: a repo that ships through
-    # `staging` (sitecheck does) squash-merges into it, not into main.
-    names += ["main", "master", "staging", "develop", "development"]
+    for n in _BASE_NAMES:
+        if n not in names:
+            names.append(n)
+    return names
+
+
+def _existing_refs(repo: str, refs: Sequence[str]) -> Optional[Set[str]]:
+    """Which of ``refs`` (full names) exist, in ONE ``for-each-ref``; None
+    when git can't say."""
+    if not refs:
+        return set()
+    cp = _git(repo, "for-each-ref", "--format=%(refname)", *refs)
+    if cp.returncode != 0:
+        return None
+    return {ln.strip() for ln in (cp.stdout or "").splitlines() if ln.strip()}
+
+
+def base_refs(repo: str, hint: str = "") -> List[str]:
+    """The base branches work in ``repo`` merges into, as refs that exist:
+    the recorded base (``hint``), what ``origin/HEAD`` points at, and local
+    ``main`` / ``master`` / ``staging`` / ``develop``, each with its
+    ``origin/`` counterpart. Content found in any of them is content a remote
+    (or the repo's own integration branch) already has.
+
+    Both sides on purpose: a local ``staging`` that lags ``origin/staging``
+    (nobody pulled) must not hide work that already landed on the remote,
+    and :func:`refresh_bases` keeps the ``origin/`` side current."""
+    names = _base_names(repo, hint)
+    want = [
+        ref for n in names for ref in ("refs/heads/" + n, "refs/remotes/origin/" + n)
+    ]
+    have = _existing_refs(repo, want)
     out: List[str] = []
-    for n in names:
-        for ref in ("refs/heads/" + n, "refs/remotes/origin/" + n):
-            if ref not in out and gitutil.ref_exists(repo, ref, timeout=GIT_TIMEOUT):
-                out.append(ref)
+    for ref in want:
+        if ref in out:
+            continue
+        if have is None:
+            if not gitutil.ref_exists(repo, ref, timeout=GIT_TIMEOUT):
+                continue
+        elif ref not in have:
+            continue
+        out.append(ref)
     return out
+
+
+# ------------------------------------------------------------ fresh bases
+#
+# The classifier compares a worktree with its repository's base branches as
+# they are on disk. A remote-tracking ref nobody fetched for a day makes
+# every PR merged since look unmerged (a base clone's ``origin/staging`` was
+# 25 hours old on the owner's machine). So, once per repository per scan,
+# :func:`refresh_bases` fetches exactly the base branches the classifier
+# compares against — the ``refs/remotes/origin/<base>`` that already exist —
+# and nothing else: no tags, no prune, no other branch, no FETCH_HEAD, no
+# hooks, no auto-gc, never a local branch, an index or a working tree. A
+# fetch that fails (offline, no credentials, no remote) changes nothing and
+# the scan goes on with the refs it has, saying how old they are. Fresher
+# refs can only show MORE work as already merged when it really is in the
+# base; the merge tests themselves are unchanged.
+
+#: A repository is fetched at most this often (the stamp is MindFlock's,
+#: in its state dir, shared by the background pass, the HTTP listing and
+#: the CLI).
+FETCH_TTL_S = 15 * 60.0
+#: One repository's base fetch at most this long.
+FETCH_TIMEOUT = 20
+#: A base not fetched for this long, that couldn't be refreshed, is said.
+BASE_STALE_S = 3600.0
+#: The throttle stamps, in the state dir.
+FETCH_STATE_FILE = "worktree_gc_fetch.json"
+#: The measured sizes, in the state dir (see :class:`SizeCache`).
+SIZE_CACHE_FILE = "worktree_gc_sizes.json"
+#: Test seam: where the stamp and size-cache files live (None = the config
+#: dir).
+STATE_DIR: Optional[str] = None
+
+_fetch_lock = threading.Lock()
+
+
+def state_dir() -> str:
+    return STATE_DIR or config_dir()
+
+
+def _fetch_env(repo: str) -> Dict[str, str]:
+    """git that can't ask anybody anything: no terminal prompt, no askpass
+    program (an empty ``GIT_ASKPASS`` turns it off), no GUI credential
+    manager, ssh in batch mode unless the person set their own ssh command.
+    Credential helpers (and MindFlock's GitHub sign-in) still answer."""
+    env = {
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ASKPASS": "",
+        "SSH_ASKPASS": "",
+        "SSH_ASKPASS_REQUIRE": "never",
+        "GCM_INTERACTIVE": "never",
+    }
+    if (
+        not os.environ.get("GIT_SSH_COMMAND")
+        and not os.environ.get("GIT_SSH")
+        and not _out(repo, "config", "--get", "core.sshCommand")
+    ):
+        env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o ConnectTimeout=10"
+    try:
+        from backend import git_auth_hints
+
+        env = git_auth_hints.github_signin(env)
+    except Exception:  # noqa: BLE001 — a sign-in overlay is optional
+        pass
+    return env
+
+
+def _fetch_bases(repo: str, names: Sequence[str], timeout: float = FETCH_TIMEOUT):
+    """THE network call: fetch ``names`` from ``origin`` into their
+    ``refs/remotes/origin/`` refs and nothing else. ``(ok, error)``. The
+    test suite guards this (tests/conftest.py): only repositories under
+    pytest's temp dir are ever fetched."""
+    refspecs = ["+refs/heads/%s:refs/remotes/origin/%s" % (n, n) for n in names]
+    cp = gitutil.git(
+        [
+            "-c",
+            "gc.auto=0",
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "fetch.writeCommitGraph=false",
+            "-c",
+            "core.hooksPath=" + os.devnull,
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-prune",
+            "--no-recurse-submodules",
+            "--no-write-fetch-head",
+            "--no-auto-maintenance",
+            "origin",
+            *refspecs,
+        ],
+        repo,
+        timeout=timeout,
+        env=_fetch_env(repo),
+        stdin=subprocess.DEVNULL,
+        new_session=True,
+    )
+    if cp.returncode == 0:
+        return True, ""
+    err = (cp.stderr or cp.stdout or "git fetch failed").strip().splitlines()
+    return False, (err[-1] if err else "git fetch failed")[:200]
+
+
+def _read_stamps() -> Dict[str, dict]:
+    try:
+        with open(os.path.join(state_dir(), FETCH_STATE_FILE), encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_stamps(d: Dict[str, dict]) -> None:
+    p = os.path.join(state_dir(), FETCH_STATE_FILE)
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = "%s.%d.tmp" % (p, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f)
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def _common_dir(repo: str) -> str:
+    out = _out(repo, "rev-parse", "--git-common-dir")
+    if not out:
+        return ""
+    return os.path.normpath(out if os.path.isabs(out) else os.path.join(repo, out))
+
+
+def last_fetched(
+    repo: str, names: Sequence[str], stamp: Optional[dict] = None
+) -> float:
+    """When ``repo``'s base refs were last brought from the remote, as best
+    the disk tells: the newest of FETCH_HEAD's mtime (any fetch writes it),
+    the newest reflog entry of each ``origin/<base>`` and MindFlock's own
+    stamp of a fetch that worked. 0 when nothing says."""
+    best = float((stamp or {}).get("ok_at") or 0.0)
+    common = _common_dir(repo)
+    if common:
+        try:
+            best = max(best, os.path.getmtime(os.path.join(common, "FETCH_HEAD")))
+        except OSError:
+            pass
+        for n in names:
+            best = max(
+                best,
+                _reflog_last(
+                    os.path.join(common, "logs", "refs", "remotes", "origin", n)
+                ),
+            )
+    return best
+
+
+def _fetchable(repo: str, hints: Iterable[str]) -> List[str]:
+    """The base names whose ``refs/remotes/origin/<name>`` exists: exactly
+    what the classifier compares against on the remote side."""
+    names: List[str] = []
+    for h in list(hints) or [""]:
+        for n in _base_names(repo, h):
+            if n not in names:
+                names.append(n)
+    have = _existing_refs(repo, ["refs/remotes/origin/" + n for n in names]) or set()
+    return [n for n in names if "refs/remotes/origin/" + n in have]
+
+
+def refresh_bases(
+    repos: Dict[str, Set[str]],
+    *,
+    fetch: bool = True,
+    now: Optional[float] = None,
+    ttl: float = FETCH_TTL_S,
+) -> Dict[str, dict]:
+    """Bring each repository's base refs up to date, once (``repos`` = repo
+    → the recorded base hints of its worktrees). Per repo: ``{"repo",
+    "names", "status", "error", "last_fetched", "stale"}`` where status is
+    ``fetched`` / ``failed`` / ``recent`` (fetched within ``ttl``, not
+    again) / ``skipped`` (``fetch`` off) / ``no_remote`` / ``no_base``.
+    ``stale`` = it couldn't be refreshed and is older than
+    :data:`BASE_STALE_S`. Never raises."""
+    now = time.time() if now is None else now
+    out: Dict[str, dict] = {}
+    with _fetch_lock:
+        stamps = _read_stamps()
+    changed = False
+
+    def one(repo: str) -> dict:
+        res = {
+            "repo": repo,
+            "names": [],
+            "status": "no_base",
+            "error": "",
+            "last_fetched": 0.0,
+            "stale": False,
+        }
+        try:
+            names = _fetchable(repo, repos.get(repo) or ())
+            res["names"] = names
+            if not names:
+                return res
+            if not _out(repo, "config", "--get", "remote.origin.url"):
+                res["status"] = "no_remote"
+                return res
+            st = stamps.get(repo) or {}
+            if not fetch:
+                res["status"] = "skipped"
+            elif now - float(st.get("at") or 0) < ttl:
+                res["status"] = "recent"
+                res["error"] = st.get("error") or ""
+            else:
+                ok, err = _fetch_bases(repo, names)
+                st = dict(st, at=now, error=err)
+                if ok:
+                    st["ok_at"] = now
+                res["status"] = "fetched" if ok else "failed"
+                res["error"] = err
+                res["_stamp"] = st
+            res["last_fetched"] = last_fetched(repo, names, st)
+            fresh = res["status"] == "fetched" or (
+                res["status"] == "recent" and not res["error"]
+            )
+            res["stale"] = not fresh and (
+                not res["last_fetched"] or now - res["last_fetched"] > BASE_STALE_S
+            )
+        except Exception as exc:  # noqa: BLE001 — unknown is "as it was"
+            res["status"] = "failed"
+            res["error"] = str(exc)[:200]
+            res["stale"] = True
+        return res
+
+    todo = sorted(r for r in repos if r and os.path.isdir(r))
+    if todo:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(WORKERS, len(todo))
+        ) as pool:
+            for res in pool.map(one, todo):
+                st = res.pop("_stamp", None)
+                if st is not None:
+                    stamps[res["repo"]] = st
+                    changed = True
+                out[res["repo"]] = res
+    if changed:
+        with _fetch_lock:
+            merged = _read_stamps()
+            for r, res in out.items():
+                if r in stamps:
+                    merged[r] = stamps[r]
+            _write_stamps(merged)
+    return out
+
+
+def stale_note(base: Optional[dict], now: Optional[float] = None) -> str:
+    """The words for a base that may be behind its remote, "" when it is
+    current (or can't be behind: no remote)."""
+    if not base or not base.get("stale"):
+        return ""
+    now = time.time() if now is None else now
+    names = base.get("names") or []
+    what = ("origin/" + names[0]) if len(names) == 1 else "its base branches"
+    if base.get("status") == "skipped":
+        why = "not refreshed (--no-fetch)"
+    else:
+        why = "couldn't be refreshed" + (
+            ": " + base["error"] if base.get("error") else ""
+        )
+    if base.get("last_fetched"):
+        return "%s was last fetched %s and %s, so it may be merged since" % (
+            what,
+            _ago(now - base["last_fetched"]),
+            why,
+        )
+    return (
+        "%s %s and when it was last fetched is unknown, so it may be merged since"
+        % (
+            what,
+            "was " + why if why.startswith("not") else why,
+        )
+    )
 
 
 def _looks_like_sha(s: str) -> bool:
@@ -822,103 +1153,88 @@ def last_activity(path: str) -> float:
     return best
 
 
-_size_cache: Dict[tuple, tuple] = {}
+# ------------------------------------------------------------------- sizes
+#
+# What a listing spends its time on is sizes: ~11 million files under ~200
+# worktrees on the owner's machine. So each item is walked ONCE (one
+# ``find``, never ``du`` + ``find`` + a second ``du`` for the headline),
+# and what the walk learns is kept in the state dir (:class:`SizeCache`)
+# until the folder shows a change, so a repeat listing walks only what
+# changed.
+#
+# The numbers stay hard-link honest. A checkout's ``.venv`` is mostly hard
+# links into uv's cache (8 of 11 million files on that machine, but only
+# 52 thousand distinct ones), so:
+#
+# * ``size_bytes`` — what the folder takes on disk on its own (``du -x``):
+#   a file linked twice inside it counts once.
+# * ``free_bytes`` — what removing it alone gives back: regular files
+#   nothing else links (link count 1).
+# * the headline (:func:`measure_totals`) — every file under the items
+#   once, however many of them link it: each item's unshared bytes plus the
+#   UNION of the shared files they link. The walk records which shared
+#   files (device, inode) an item links as a bitmap over one table of the
+#   shared files seen, so the union stays exact when most items come from
+#   the cache. (Summing per-item sizes instead once reported 2,039 GB for a
+#   210 GB tree.)
+
+#: Sizes walked at once (I/O bound; more threads only thrash the disk).
+SIZE_WORKERS = 4
+#: Shared files remembered at most; past it the table is rebuilt.
+MAX_SHARED = 2_000_000
+
 _size_lock = threading.Lock()
+_find_ok: Optional[bool] = None
 
 
-def _du(path: str, exclude: Sequence[str] = ()) -> Optional[int]:
-    """Bytes on disk under ``path`` (``du -sk -x``: what removing it frees),
-    leaving out the folders in ``exclude`` (other items nested inside it);
-    a walk's apparent size where there is no ``du``. None past
-    :data:`SIZE_TIMEOUT`."""
-    return du_total([path], exclude)
+def _glob_escape(path: str) -> str:
+    """``path`` as a literal ``find -path`` pattern."""
+    return re.sub(r"([\\*?\[\]])", r"\\\1", path)
 
 
-def du_total(paths: Sequence[str], exclude: Sequence[str] = ()) -> Optional[int]:
-    """Bytes on disk of ``paths`` together, each file counted ONCE however
-    many of them hard-link it (uv and pnpm hard-link their caches into every
-    checkout, so a per-folder sum counts the same bytes many times over), and
-    without ``exclude``. None when it can't be measured in time."""
-    paths = [p for p in paths if p and os.path.isdir(p)]
-    if not paths:
-        return 0
-    if os.name != "nt" and shutil.which("du"):
-        argv = ["du", "-sck", "-x"]
-        argv += ["--exclude=" + e for e in exclude]
-        try:
-            cp = subprocess.run(
-                argv + ["--"] + list(paths),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                timeout=SIZE_TIMEOUT * max(1, min(len(paths), 10)),
-                text=True,
-            )
-            # du exits 1 on an unreadable entry but still prints the total.
-            last = (cp.stdout or "").strip().splitlines()[-1:]
-            first = last[0].split("\t", 1)[0].strip() if last else ""
-            if first.isdigit():
-                return int(first) * 1024
-        except (OSError, subprocess.SubprocessError):
-            pass
-    skip = {norm(e) for e in exclude}
-    seen: Set[tuple] = set()
-    total = 0
-    deadline = time.monotonic() + SIZE_TIMEOUT
-    for top in paths:
-        for root, dirs, files in os.walk(top):
-            if time.monotonic() > deadline:
-                return None
-            dirs[:] = [d for d in dirs if norm(os.path.join(root, d)) not in skip]
-            for name in files:
-                try:
-                    st = os.lstat(os.path.join(root, name))
-                except OSError:
-                    continue
-                key = (st.st_dev, st.st_ino)
-                if key in seen:
-                    continue
-                seen.add(key)
-                total += st.st_size
-    return total
+def _find_has_printf() -> bool:
+    """GNU find (``-printf`` / ``-fprintf``); BSD find (macOS) has neither."""
+    global _find_ok
+    if _find_ok is None:
+        ok = False
+        if os.name != "nt" and shutil.which("find"):
+            try:
+                cp = subprocess.run(
+                    ["find", os.sep, "-maxdepth", "0", "-printf", "%b\n"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    timeout=10,
+                )
+                ok = cp.returncode == 0 and cp.stdout.strip().isdigit()
+            except (OSError, subprocess.SubprocessError):
+                ok = False
+        _find_ok = ok
+    return bool(_find_ok)
 
 
-def size_of(
-    path: str,
-    stamp: float,
-    *,
-    now: Optional[float] = None,
-    exclude: Sequence[str] = (),
-) -> Optional[int]:
-    """:func:`_du` of the item's OWN folder (nested items left out), cached
-    until it shows newer use (``stamp``) or :data:`SIZE_TTL_S` passes."""
-    now = time.time() if now is None else now
-    key = (norm(path), tuple(sorted(exclude)))
-    with _size_lock:
-        hit = _size_cache.get(key)
-    if hit and hit[0] == stamp and now - hit[1] < SIZE_TTL_S:
-        return hit[2]
-    n = _du(path, exclude)
-    if n is not None:
-        with _size_lock:
-            _size_cache[key] = (stamp, now, n)
-    return n
-
-
-def _freeable(path: str, exclude: Sequence[str] = ()) -> Optional[int]:
-    """Bytes removing ``path`` would actually give back: files no other path
-    hard-links (link count 1), leaving out ``exclude``. A checkout's ``.venv``
-    is mostly hard links into uv's cache — 8.5 of 10.1 GB in one measured
-    worktree — and those blocks stay allocated for as long as the cache
-    holds them, so ``du`` alone promises space a removal never frees. None
-    when it can't be measured in time."""
-    if not os.path.isdir(path):
-        return 0
-    if os.name != "nt" and shutil.which("find"):
+def _walk_find(path: str, exclude: Sequence[str]) -> Optional[dict]:
+    """One ``find -xdev`` over ``path`` (``exclude`` pruned), its output
+    split three ways so Python only sums numbers: blocks of unshared regular
+    files (stdout), of directories and other unshared entries (a temp file),
+    and ``inode blocks`` of every shared file (another)."""
+    with tempfile.TemporaryDirectory(prefix="mindflock-gc-size-") as td:
+        other = os.path.join(td, "own")
+        shared = os.path.join(td, "shared")
         argv = ["find", path, "-xdev"]
-        for e in exclude:
-            argv += ["-path", e, "-prune", "-o"]
-        argv += ["-type", "f", "-links", "1", "-printf", "%b\n"]
+        if exclude:
+            argv.append("(")
+            for k, e in enumerate(exclude):
+                if k:
+                    argv.append("-o")
+                argv += ["-path", _glob_escape(e)]
+            argv += [")", "-prune", "-o"]
+        argv += [
+            "(", "-type", "f", "-links", "1", "-printf", "%b\n", ")",
+            "-o", "(", "(", "-type", "d", "-o", "-links", "1", ")",
+            "-fprintf", other, "%b\n", ")",
+            "-o", "-fprintf", shared, "%i %b\n",
+        ]  # fmt: skip
         try:
             cp = subprocess.run(
                 argv,
@@ -926,54 +1242,377 @@ def _freeable(path: str, exclude: Sequence[str] = ()) -> Optional[int]:
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
                 timeout=SIZE_TIMEOUT,
-                text=True,
             )
-            total = 0
-            for line in cp.stdout.splitlines():
-                if line.isdigit():
-                    total += int(line) * 512
-            return total
-        except (OSError, subprocess.SubprocessError):
-            pass
+            # 1 = some entry couldn't be read; the rest still counts (du too).
+            if cp.returncode not in (0, 1):
+                return None
+            free = sum(map(int, cp.stdout.split()))
+            with open(other, "rb") as f:
+                own = free + sum(map(int, f.read().split()))
+            with open(shared, "rb") as f:
+                toks = f.read().split()
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
+    links = dict(zip(map(int, toks[0::2]), map(int, toks[1::2])))
+    return {"free": free * 512, "own": own * 512, "shared": links}
+
+
+def _walk_py(path: str, exclude: Sequence[str], dev: int) -> Optional[dict]:
+    """:func:`_walk_find` where there is no GNU find (slower, same numbers;
+    the apparent size where the OS reports no blocks)."""
     skip = {norm(e) for e in exclude}
-    total = 0
     deadline = time.monotonic() + SIZE_TIMEOUT
-    for root, dirs, files in os.walk(path):
+    free = own = 0
+    links: Dict[int, int] = {}
+
+    def blocks(st) -> int:
+        b = getattr(st, "st_blocks", None)
+        return int(b) if b is not None else (st.st_size + 511) // 512
+
+    try:
+        own += blocks(os.lstat(path))
+    except OSError:
+        return None
+    stack = [path]
+    while stack:
         if time.monotonic() > deadline:
             return None
-        dirs[:] = [d for d in dirs if norm(os.path.join(root, d)) not in skip]
-        for name in files:
-            try:
-                st = os.lstat(os.path.join(root, name))
-            except OSError:
-                continue
-            if st.st_nlink == 1 and not os.path.islink(os.path.join(root, name)):
-                total += getattr(st, "st_blocks", 0) * 512 or st.st_size
-    return total
+        d = stack.pop()
+        try:
+            it = os.scandir(d)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                try:
+                    st = e.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if st.st_dev != dev:
+                    continue
+                b = blocks(st)
+                if stat.S_ISDIR(st.st_mode):
+                    if skip and norm(e.path) in skip:
+                        continue
+                    own += b
+                    stack.append(e.path)
+                elif st.st_nlink > 1:
+                    links[st.st_ino] = b
+                else:
+                    own += b
+                    if stat.S_ISREG(st.st_mode):
+                        free += b
+    return {"free": free * 512, "own": own * 512, "shared": links}
 
 
-_free_cache: Dict[tuple, tuple] = {}
+def walk_sizes(path: str, exclude: Sequence[str] = ()) -> Optional[dict]:
+    """``{"size", "free", "own", "dev", "shared"}`` of ``path`` without the
+    folders in ``exclude`` (items nested inside it): bytes on disk, bytes
+    removing it alone frees, bytes of its unshared entries, and its shared
+    files as ``{inode: 512-byte blocks}`` on device ``dev``. One walk. None
+    when it can't be measured within :data:`SIZE_TIMEOUT`."""
+    try:
+        dev = os.lstat(path).st_dev
+    except OSError:
+        return None
+    if not os.path.isdir(path):
+        return None
+    m = _walk_find(path, exclude) if _find_has_printf() else None
+    if m is None and not _find_has_printf():
+        m = _walk_py(path, exclude, dev)
+    if m is None:
+        return None
+    m["dev"] = dev
+    m["size"] = m["own"] + sum(m["shared"].values()) * 512
+    return m
 
 
-def free_of(
-    path: str,
-    stamp: float,
+def size_key(path: str, stamp: float, exclude: Sequence[str] = ()) -> str:
+    """The cheap freshness signal a cached size is checked against: the
+    item's last use (HEAD reflog, session records), the mtime of its folder
+    and of each folder directly in it (a new ``node_modules`` or ``.venv``,
+    a build output dir), and the nested items left out of it."""
+    try:
+        m = os.stat(path).st_mtime_ns
+        with os.scandir(path) as it:
+            for e in it:
+                try:
+                    if e.is_dir(follow_symlinks=False):
+                        m = max(m, e.stat(follow_symlinks=False).st_mtime_ns)
+                except OSError:
+                    continue
+    except OSError:
+        m = 0
+    nested = hashlib.sha1("\0".join(sorted(exclude)).encode("utf-8", "replace"))
+    return "%d:%d:%s" % (int(stamp or 0), m, nested.hexdigest()[:10])
+
+
+class SizeCache:
+    """Measured sizes by folder, kept in ``<state>/worktree_gc_sizes.json``
+    across scans, processes and restarts. An entry is used while its
+    :func:`size_key` matches and it is younger than :data:`SIZE_TTL_S`.
+
+    Besides an item's three numbers it keeps WHICH shared (hard-linked)
+    files the item links, as a bitmap over one table of every shared file
+    seen (``shared``: ``[device, inode, blocks]``), so the headline's union
+    is exact without walking again (:meth:`shared_bytes`)."""
+
+    VERSION = 1
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.lock = threading.RLock()
+        self.entries: Dict[str, dict] = {}
+        self.table: List[List[int]] = []
+        self.index: Dict[int, Dict[int, int]] = {}
+        self.loaded = False
+        self.dirty = False
+
+    # -- persistence
+
+    def _load(self) -> None:
+        if self.loaded:
+            return
+        self.loaded = True
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                d = json.load(f)
+            if not isinstance(d, dict) or d.get("v") != self.VERSION:
+                return
+            table = [list(map(int, t)) for t in d.get("shared") or []]
+            entries = {}
+            for p, e in (d.get("items") or {}).items():
+                raw = zlib.decompress(base64.b64decode(e.get("bits") or ""))
+                entries[p] = {
+                    "key": str(e["key"]),
+                    "at": float(e["at"]),
+                    "size": int(e["size"]),
+                    "free": int(e["free"]),
+                    "own": int(e["own"]),
+                    "bits": int.from_bytes(raw, "little"),
+                }
+        except (OSError, ValueError, KeyError, TypeError, zlib.error):
+            return
+        self.table = table
+        self.index = {}
+        for i, (dev, ino, _b) in enumerate(table):
+            self.index.setdefault(dev, {})[ino] = i
+        self.entries = entries
+
+    def save(self, keep: Optional[Iterable[str]] = None) -> None:
+        """Write it out; with ``keep``, entries for other folders (removed,
+        or no longer items) are dropped first, and the table with them."""
+        with self.lock:
+            self._load()
+            if keep is not None:
+                keep = set(keep)
+                for p in [p for p in self.entries if p not in keep]:
+                    del self.entries[p]
+                    self.dirty = True
+            if not self.dirty:
+                return
+            self._compact()
+            items = {}
+            for p, e in self.entries.items():
+                b = e["bits"]
+                raw = b.to_bytes((b.bit_length() + 7) // 8, "little")
+                items[p] = {
+                    "key": e["key"],
+                    "at": e["at"],
+                    "size": e["size"],
+                    "free": e["free"],
+                    "own": e["own"],
+                    "bits": base64.b64encode(zlib.compress(raw, 6)).decode("ascii"),
+                }
+            doc = {"v": self.VERSION, "shared": self.table, "items": items}
+            self.dirty = False
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = "%s.%d.%d.tmp" % (self.path, os.getpid(), threading.get_ident())
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(doc, f, separators=(",", ":"))
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
+
+    def _compact(self) -> None:
+        """Drop shared files no entry links any more, once they are most of
+        the table (a removed worktree's ``.venv``)."""
+        live = 0
+        for e in self.entries.values():
+            live |= e["bits"]
+        n_live = bin(live).count("1")
+        if len(self.table) <= MAX_SHARED and (
+            len(self.table) < 50_000 or n_live * 2 > len(self.table)
+        ):
+            return
+        remap: Dict[int, int] = {}
+        table: List[List[int]] = []
+        for i, c in enumerate(bin(live)[:1:-1]):
+            if c == "1":
+                remap[i] = len(table)
+                table.append(self.table[i])
+        for e in self.entries.values():
+            ba = bytearray((len(table) + 7) // 8)
+            for i, c in enumerate(bin(e["bits"])[:1:-1]):
+                if c == "1":
+                    j = remap[i]
+                    ba[j >> 3] |= 1 << (j & 7)
+            e["bits"] = int.from_bytes(ba, "little")
+        self.table = table
+        self.index = {}
+        for i, (dev, ino, _b) in enumerate(table):
+            self.index.setdefault(dev, {})[ino] = i
+
+    def clear(self) -> None:
+        with self.lock:
+            self.entries.clear()
+            self.table = []
+            self.index = {}
+            self.loaded = True
+            self.dirty = True
+
+    # -- use
+
+    def get(self, path: str, key: str, now: float) -> Optional[dict]:
+        with self.lock:
+            self._load()
+            e = self.entries.get(path)
+        if e is None or e["key"] != key or not (0 <= now - e["at"] < SIZE_TTL_S):
+            return None
+        return e
+
+    def put(self, path: str, key: str, now: float, m: dict) -> None:
+        dev = int(m["dev"])
+        shared = m["shared"]
+        with self.lock:
+            self._load()
+            if len(self.table) + len(shared) > MAX_SHARED:
+                self.clear()
+            idx = self.index.setdefault(dev, {})
+            ba = bytearray((len(self.table) + len(shared) + 7) // 8)
+            for ino, blk in shared.items():
+                i = idx.get(ino)
+                if i is None:
+                    i = len(self.table)
+                    self.table.append([dev, ino, blk])
+                    idx[ino] = i
+                else:
+                    self.table[i][2] = blk
+                ba[i >> 3] |= 1 << (i & 7)
+            self.entries[path] = {
+                "key": key,
+                "at": now,
+                "size": int(m["size"]),
+                "free": int(m["free"]),
+                "own": int(m["own"]),
+                "bits": int.from_bytes(ba, "little"),
+            }
+            self.dirty = True
+
+    def has(self, path: str) -> bool:
+        with self.lock:
+            self._load()
+            return path in self.entries
+
+    def union_bytes(self, paths: Iterable[str]) -> Optional[int]:
+        """Bytes on disk of these folders together, every file once: their
+        unshared bytes plus each shared file they link, once. None when one
+        of them has no entry."""
+        with self.lock:
+            self._load()
+            own = 0
+            bits = 0
+            for p in paths:
+                e = self.entries.get(p)
+                if e is None:
+                    return None
+                own += e["own"]
+                bits |= e["bits"]
+            blocks = 0
+            for i, c in enumerate(bin(bits)[:1:-1]):
+                if c == "1":
+                    blocks += self.table[i][2]
+            return own + blocks * 512
+
+
+_caches: Dict[str, SizeCache] = {}
+
+
+def size_cache() -> SizeCache:
+    """The size cache of the current state dir (one per process)."""
+    p = os.path.join(state_dir(), SIZE_CACHE_FILE)
+    with _size_lock:
+        c = _caches.get(p)
+        if c is None:
+            c = _caches[p] = SizeCache(p)
+        return c
+
+
+def _sizable(item: dict) -> bool:
+    return item.get("state") != MISSING and os.path.isdir(item.get("path") or "")
+
+
+def measure_sizes(
+    items: Sequence[dict],
     *,
     now: Optional[float] = None,
-    exclude: Sequence[str] = (),
-) -> Optional[int]:
-    """:func:`_freeable`, cached like :func:`size_of`."""
+    walk: bool = True,
+    only: Optional[Callable[[dict], bool]] = None,
+    progress: Optional[Callable[[int, int], None]] = None,
+    keep_only_these: bool = False,
+    cache: Optional[SizeCache] = None,
+) -> int:
+    """Fill each item's ``size_bytes`` / ``free_bytes``: from the cache when
+    it is current, else by one walk (:data:`SIZE_WORKERS` at a time), unless
+    ``walk`` is off or ``only`` says to skip the item (its size stays
+    unknown). ``progress(done, total)`` counts the walks. Returns how many
+    items are left unmeasured. ``keep_only_these``: ``items`` is the whole
+    inventory, so cached entries of other folders are dropped."""
     now = time.time() if now is None else now
-    key = (norm(path), tuple(sorted(exclude)))
-    with _size_lock:
-        hit = _free_cache.get(key)
-    if hit and hit[0] == stamp and now - hit[1] < SIZE_TTL_S:
-        return hit[2]
-    n = _freeable(path, exclude)
-    if n is not None:
-        with _size_lock:
-            _free_cache[key] = (stamp, now, n)
-    return n
+    cache = cache or size_cache()
+    todo = []
+    for it in items:
+        if not _sizable(it):
+            continue
+        key = size_key(it["path"], it.get("last_used") or 0, it.get("nested") or ())
+        hit = cache.get(it["path"], key, now)
+        if hit is not None:
+            it["size_bytes"], it["free_bytes"] = hit["size"], hit["free"]
+            continue
+        it["size_bytes"] = it["free_bytes"] = None
+        if walk and (only is None or only(it)):
+            todo.append((it, key))
+    done = 0
+    lock = threading.Lock()
+    if progress is not None and todo:
+        progress(0, len(todo))
+
+    def one(pair) -> None:
+        nonlocal done
+        it, key = pair
+        m = walk_sizes(it["path"], it.get("nested") or ())
+        if m is not None:
+            cache.put(it["path"], key, now, m)
+            it["size_bytes"], it["free_bytes"] = m["size"], m["free"]
+        with lock:
+            done += 1
+            n = done
+        if progress is not None:
+            try:
+                progress(n, len(todo))
+            except Exception:  # noqa: BLE001 — a progress line never stops a scan
+                pass
+
+    if todo:
+        # Biggest first is unknowable; the oldest-measured last is not worth
+        # it: plain order, a few at a time.
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(SIZE_WORKERS, len(todo))
+        ) as pool:
+            list(pool.map(one, todo))
+    cache.save(keep=[i["path"] for i in items] if keep_only_these else None)
+    return sum(1 for it in items if _sizable(it) and it.get("size_bytes") is None)
 
 
 # ---------------------------------------------------------------- inventory
@@ -1212,12 +1851,42 @@ def classify(
     records: Optional[Dict[str, dict]] = None,
     measure: bool = True,
     nested: Sequence[str] = (),
+    base: Optional[dict] = None,
 ) -> dict:
     """One inventory item: the raw record plus what it holds and whether it
     is safe to collect; ``kept`` lists every reason it is not. A probe that
     fails becomes a "couldn't check" reason, which keeps the item.
     ``nested`` = other items inside this one's folder: they are left out of
-    its size, and they keep it (removing it would take them along)."""
+    its size, and they keep it (removing it would take them along).
+    ``base`` = :func:`refresh_bases`' word on its repository: when the base
+    may be behind its remote, the unmerged-commits reason says so.
+    ``measure``: its size too (cached, else one walk)."""
+    item = _classify(
+        rec,
+        usage,
+        after_days=after_days,
+        now=now,
+        root=root,
+        records=records,
+        nested=nested,
+        base=base,
+    )
+    if measure:
+        measure_sizes([item], now=now)
+    return item
+
+
+def _classify(
+    rec: dict,
+    usage: Usage,
+    *,
+    after_days: float,
+    now: Optional[float],
+    root: Optional[str],
+    records: Optional[Dict[str, dict]],
+    nested: Sequence[str],
+    base: Optional[dict],
+) -> dict:
     now = time.time() if now is None else now
     root = worktrees_root() if root is None else root
     records = load_records() if records is None else records
@@ -1245,6 +1914,7 @@ def classify(
         merged_into="",
         merged_how="",
         merged_at="",
+        base_stale=False,
         safe_reason="",
         last_used=0.0,
         size_bytes=None,
@@ -1282,9 +1952,6 @@ def classify(
     )
     item["last_used"] = last
     item["nested"] = list(nested)
-    if measure:
-        item["size_bytes"] = size_of(path, last, now=now, exclude=nested)
-        item["free_bytes"] = free_of(path, last, now=now, exclude=nested)
 
     def _state(holds: bool, recent: bool) -> str:
         if item["in_use"]:
@@ -1383,9 +2050,10 @@ def classify(
                 elif n:
                     item["unsaved_commits"] = n
                     unsaved_at = len(kept)
-                    kept.append(
-                        _plural(n, "commit") + " in no base branch and on no remote"
-                    )
+                    why = _plural(n, "commit") + " in no base branch and on no remote"
+                    note = stale_note(base, now)
+                    item["base_stale"] = bool(note)
+                    kept.append(why + (" (" + note + ")" if note else ""))
                     holds = True
 
     recent = bool(last) and now - last < after_days * DAY
@@ -1466,31 +2134,65 @@ def safe_reason(item: dict) -> str:
     return "every commit is on a remote; its branch is kept"
 
 
-def inventory(
+def _base_hint(rec: dict, usage: Usage, records: Dict[str, dict]) -> str:
+    info = usage.branch_info.get(rec["path"]) or {}
+    created = records.get(rec["path"]) or {}
+    return info.get("base") or created.get("base") or ""
+
+
+def classify_all(
     usage: Usage,
     *,
     after_days: float = DEFAULT_AFTER_DAYS,
     now: Optional[float] = None,
     root: Optional[str] = None,
-    measure: bool = True,
-) -> List[dict]:
-    """Every item, classified (concurrently). Blocking: run it off the loop."""
+    fetch: Optional[bool] = None,
+    progress: Optional[Callable[[str, int, int], None]] = None,
+) -> tuple:
+    """Every item classified (concurrently), sizes not yet known:
+    ``(items, bases)``. ``fetch``: True brings the involved repositories'
+    base refs up to date first (:func:`refresh_bases`, throttled), False
+    only checks how old they are (and says so), None does neither.
+    ``progress(phase, done, total)``: ``"fetch"`` then ``"check"``.
+    Blocking: run it off the loop."""
     root = worktrees_root() if root is None else root
     records = load_records()
     recs = discover(usage, root)
     inner = nesting([r["path"] for r in recs])
 
+    def tell(phase: str, done: int, total: int) -> None:
+        if progress is not None:
+            try:
+                progress(phase, done, total)
+            except Exception:  # noqa: BLE001 — a progress line never stops a scan
+                pass
+
+    bases: Dict[str, dict] = {}
+    if fetch is not None:
+        hints: Dict[str, Set[str]] = {}
+        for r in recs:
+            if r.get("kind") == KIND_WORKTREE and r.get("repo"):
+                hints.setdefault(r["repo"], set()).add(_base_hint(r, usage, records))
+        if hints:
+            tell("fetch", 0, len(hints))
+            bases = refresh_bases(hints, fetch=bool(fetch), now=now)
+            tell("fetch", len(hints), len(hints))
+
+    done = 0
+    lock = threading.Lock()
+
     def one(rec: dict) -> dict:
+        nonlocal done
         try:
-            return classify(
+            return _classify(
                 rec,
                 usage,
                 after_days=after_days,
                 now=now,
                 root=root,
                 records=records,
-                measure=measure,
                 nested=inner.get(rec["path"], ()),
+                base=bases.get(rec.get("repo") or ""),
             )
         except Exception as exc:  # noqa: BLE001 — one item never stops the scan
             out = dict(rec)
@@ -1503,24 +2205,59 @@ def inventory(
                 safe=False,
                 state=UNKNOWN,
                 size_bytes=None,
+                free_bytes=None,
                 last_used=0.0,
             )
             return out
+        finally:
+            with lock:
+                done += 1
+                n = done
+            tell("check", n, len(recs))
 
+    tell("check", 0, len(recs))
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
         items = list(pool.map(one, recs))
-    order = {
-        SAFE: 0,
-        RECENT: 1,
-        HOLDS_WORK: 2,
-        MISSING: 3,
-        UNKNOWN: 4,
-        IN_USE: 5,
-        NOT_OURS: 6,
-    }
+    sort_items(items)
+    return items, bases
+
+
+_ORDER = {
+    SAFE: 0,
+    RECENT: 1,
+    HOLDS_WORK: 2,
+    MISSING: 3,
+    UNKNOWN: 4,
+    IN_USE: 5,
+    NOT_OURS: 6,
+}
+
+
+def sort_items(items: List[dict]) -> None:
+    """The listing's order: the safe first, then what is kept, biggest first
+    within a state."""
     items.sort(
-        key=lambda i: (order.get(i.get("state"), 9), -(i.get("size_bytes") or 0))
+        key=lambda i: (_ORDER.get(i.get("state"), 9), -(i.get("size_bytes") or 0))
     )
+
+
+def inventory(
+    usage: Usage,
+    *,
+    after_days: float = DEFAULT_AFTER_DAYS,
+    now: Optional[float] = None,
+    root: Optional[str] = None,
+    measure: bool = True,
+    fetch: Optional[bool] = None,
+) -> List[dict]:
+    """Every item, classified (:func:`classify_all`) and sized
+    (:func:`measure_sizes`; ``measure`` off = cached sizes only). Blocking:
+    run it off the loop."""
+    items, _bases = classify_all(
+        usage, after_days=after_days, now=now, root=root, fetch=fetch
+    )
+    measure_sizes(items, now=now, walk=measure, keep_only_these=True)
+    sort_items(items)
     return items
 
 
@@ -1536,50 +2273,55 @@ def nesting(paths: Iterable[str]) -> Dict[str, List[str]]:
     return out
 
 
-def _outermost(paths: Iterable[str]) -> List[str]:
-    ps = sorted({norm(p) for p in paths if p})
-    return [p for p in ps if not any(strictly_under(p, q) for q in ps if q != p)]
+def measure_totals(
+    items: Sequence[dict], cache: Optional[SizeCache] = None
+) -> Dict[str, Optional[int]]:
+    """The on-disk headline numbers, every file counted once however many
+    items hard-link it (nested items are items of their own, left out of
+    the item around them): what MindFlock made (``bytes``) and what it did
+    not (``other_bytes``). Computed from what :func:`measure_sizes` recorded
+    — no walk. None for a number one of whose items has no measured size.
+    What collecting would FREE is the safe items' ``free_bytes`` (see
+    :func:`summarize`)."""
+    cache = cache or size_cache()
 
+    def total(pred) -> Optional[int]:
+        xs = [i for i in items if pred(i) and _sizable(i)]
+        if not xs:
+            return 0
+        if any(i.get("size_bytes") is None for i in xs):
+            return None
+        return cache.union_bytes(i["path"] for i in xs)
 
-def measure_totals(items: Sequence[dict]) -> Dict[str, Optional[int]]:
-    """The on-disk headline numbers, measured as ONE ``du`` each so a file is
-    counted once however many items hard-link it or contain it: what
-    MindFlock made (``bytes``) and what it did not (``other_bytes``). What
-    collecting would FREE is the safe items' ``free_bytes`` (see
-    :func:`summarize`). None for a number that couldn't be measured in time."""
-
-    def present(pred):
-        return [
-            i["path"] for i in items if pred(i) and os.path.isdir(i.get("path") or "")
-        ]
-
-    ours = present(lambda i: i.get("ours"))
-    others = present(lambda i: not i.get("ours"))
     return {
-        "bytes": du_total(_outermost(ours)) if ours else 0,
-        "other_bytes": du_total(_outermost(others)) if others else 0,
+        "bytes": total(lambda i: i.get("ours")),
+        "other_bytes": total(lambda i: not i.get("ours")),
     }
 
 
 def summarize(items: Sequence[dict], totals: Optional[dict] = None) -> dict:
-    """Counts and sizes. ``totals`` (:func:`measure_totals`) gives the true
-    byte numbers; without it they are a sum of the items' own sizes, nested
-    items included once (each item's size already leaves its nested ones
-    out), which over-counts only shared hard links."""
+    """Counts and sizes. ``bytes`` / ``other_bytes`` come from ``totals``
+    (:func:`measure_totals`, computed here when not given) — never a sum of
+    per-item sizes, which counts every hard-linked file once per item — and
+    are None while not every item is measured. ``safe_bytes`` (what
+    collecting the safe set frees) is a plain sum: files nothing else links
+    belong to exactly one item; None while a safe item is unmeasured."""
 
-    def total(xs):
-        return sum(int(x.get("size_bytes") or 0) for x in xs)
+    def freed(xs) -> Optional[int]:
+        n = 0
+        for x in xs:
+            v = x.get("free_bytes")
+            if v is None:
+                v = x.get("size_bytes")
+            if v is None:
+                if _sizable(x):
+                    return None
+                v = 0
+            n += int(v)
+        return n
 
-    def freed(xs):
-        return sum(
-            int(
-                x["free_bytes"]
-                if x.get("free_bytes") is not None
-                else x.get("size_bytes") or 0
-            )
-            for x in xs
-        )
-
+    if totals is None:
+        totals = measure_totals(items)
     safe = [i for i in items if i.get("safe")]
     ours = [i for i in items if i.get("ours")]
     others = [i for i in items if not i.get("ours")]
@@ -1592,9 +2334,9 @@ def summarize(items: Sequence[dict], totals: Optional[dict] = None) -> dict:
     # their own (``other_*``), never in the number a person reads as "mine".
     out = {
         "count": len(ours),
-        "bytes": total(ours),
+        "bytes": totals.get("bytes"),
         "other_count": len(others),
-        "other_bytes": total(others),
+        "other_bytes": totals.get("other_bytes"),
         "safe_count": len(safe),
         # What collecting the safe set gives back: files nothing else
         # hard-links (an item's free_bytes), never shared cache blocks.
@@ -1602,8 +2344,8 @@ def summarize(items: Sequence[dict], totals: Optional[dict] = None) -> dict:
         "by_state": by_state,
     }
     for k in ("bytes", "other_bytes", "safe_bytes"):
-        if totals and totals.get(k) is not None:
-            out[k] = int(totals[k])
+        if out[k] is not None:
+            out[k] = int(out[k])
     return out
 
 

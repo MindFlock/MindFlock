@@ -24,7 +24,10 @@ in use.
 **The report** (:func:`report`) is computed off the event loop
 (``srv._in_bg_pool`` / a thread) and cached; a GET returns the last one and
 starts a fresh scan when it is older than :data:`STALE_AFTER_S` (or on
-``refresh``). Sizes come from ``du`` and are cached per folder.
+``refresh``). A scan first brings the base refs up to date (one throttled
+fetch per repository, :func:`worktree_gc.refresh_bases`), publishes the
+classified list with the sizes the size cache knows, then walks the rest
+(:func:`worktree_gc.measure_sizes`).
 
 **The pass** (:func:`run_loop`): :data:`FIRST_DELAY_S` after boot, then every
 :data:`INTERVAL_S`. ``cleanup.mode`` decides: ``auto`` collects the safe set
@@ -71,6 +74,7 @@ _STATUS = {0: "running", 1: "ready", 2: "starting", 3: "paused"}
 _lock = threading.Lock()
 _remove_lock = threading.Lock()
 _report: dict = {}
+_progress: dict = {}
 _scanning = threading.Event()
 
 
@@ -430,45 +434,98 @@ def _save_state(d: dict) -> None:
         pass
 
 
-def scan(srv=None, *, measure: bool = True, now: Optional[float] = None) -> dict:
-    """A fresh report (blocking: git + du). Cached for :func:`report`."""
+def _make_report(items, bases, now, cfg, *, sizing: bool) -> dict:
+    return {
+        "items": items,
+        # Every file once, however many checkouts hard-link it (uv's and
+        # pnpm's caches): from what the size walks recorded, never a sum.
+        "summary": gc.summarize(items),
+        "bases": sorted(bases.values(), key=lambda b: b.get("repo") or ""),
+        "sizing": sizing,
+        "scanned_at": now,
+        "settings": cfg,
+        "worktrees_root": gc.worktrees_root(),
+        "kept_dir": gc.kept_root(),
+        "last_collect": _state().get("last_collect"),
+    }
+
+
+def _publish(rep: dict) -> None:
+    with _lock:
+        _report.clear()
+        _report.update(rep)
+
+
+def scan(
+    srv=None,
+    *,
+    measure: bool = True,
+    fetch: bool = True,
+    now: Optional[float] = None,
+    measure_only=None,
+    on_listed=None,
+    progress=None,
+) -> dict:
+    """A fresh report (blocking: git, then sizes). Cached for :func:`report`.
+
+    In two steps, so nobody waits on sizes to see the list: the items are
+    classified first (after bringing the base refs up to date, unless
+    ``fetch`` is off) and published at once with the sizes the cache knows
+    (``sizing`` true, ``on_listed(report)`` called); then the folders the
+    cache doesn't know are walked (``measure``; ``measure_only(item)`` may
+    skip some) and the final report replaces it. ``progress(phase, done,
+    total)`` and the report's ``progress`` follow it: ``fetch``, ``check``,
+    ``size``."""
     now = time.time() if now is None else now
     cfg = settings()
     _scanning.set()
+
+    def tell(phase: str, done: int, total: int) -> None:
+        with _lock:
+            _progress.update(phase=phase, done=done, total=total)
+        if progress is not None:
+            try:
+                progress(phase, done, total)
+            except Exception:  # noqa: BLE001
+                pass
+
     try:
         usage = build_usage(srv, after_days=cfg["after_days"], now=now)
-        items = gc.inventory(
-            usage, after_days=cfg["after_days"], now=now, measure=measure
+        items, bases = gc.classify_all(
+            usage, after_days=cfg["after_days"], now=now, fetch=fetch, progress=tell
         )
-        rep = {
-            "items": items,
-            # One du per headline number: a file shared by many checkouts
-            # (hard-linked caches) or an item inside another counts once.
-            "summary": gc.summarize(
-                items, gc.measure_totals(items) if measure else None
-            ),
-            "scanned_at": now,
-            "settings": cfg,
-            "worktrees_root": gc.worktrees_root(),
-            "kept_dir": gc.kept_root(),
-            "last_collect": _state().get("last_collect"),
-        }
-        with _lock:
-            _report.clear()
-            _report.update(rep)
+        left = gc.measure_sizes(items, now=now, walk=False, keep_only_these=True)
+        sizing = bool(measure and left)
+        rep = _make_report(list(items), bases, now, cfg, sizing=sizing)
+        _publish(rep)
+        if on_listed is not None:
+            on_listed(rep)
+        if sizing:
+            gc.measure_sizes(
+                items,
+                now=now,
+                only=measure_only,
+                progress=lambda d, t: tell("size", d, t),
+            )
+        final = list(items)
+        gc.sort_items(final)
+        rep = _make_report(final, bases, now, cfg, sizing=False)
+        _publish(rep)
         return rep
     finally:
+        with _lock:
+            _progress.clear()
         _scanning.clear()
 
 
-def _scan_in_background(srv) -> None:
+def _scan_in_background(srv, **kw) -> None:
     if _scanning.is_set():
         return
     _scanning.set()  # claimed before the thread starts, so two GETs start one
 
     def run():
         try:
-            scan(srv)
+            scan(srv, **kw)
         except Exception as exc:  # noqa: BLE001
             with _lock:
                 _report["error"] = str(exc)
@@ -478,16 +535,23 @@ def _scan_in_background(srv) -> None:
     threading.Thread(target=run, name="worktree-gc-scan", daemon=True).start()
 
 
-def report(srv=None, *, refresh: bool = False) -> dict:
+def report(
+    srv=None, *, refresh: bool = False, fetch: bool = True, measure: bool = True
+) -> dict:
     """The last report (``items`` may be absent before the first scan), with
-    ``scanning`` true while a fresh one is being made. Starts one when the
-    last is older than :data:`STALE_AFTER_S` or ``refresh``. Never blocks."""
+    ``scanning`` true while a fresh one is being made (and ``progress``:
+    its phase, done, total). Starts one when the last is older than
+    :data:`STALE_AFTER_S` or ``refresh`` (``fetch`` / ``measure`` off: no
+    base fetch / cached sizes only). Never blocks."""
     with _lock:
         rep = dict(_report)
+        prog = dict(_progress)
     age = time.time() - float(rep.get("scanned_at") or 0)
     if refresh or not rep or age > STALE_AFTER_S:
-        _scan_in_background(srv)
+        _scan_in_background(srv, fetch=fetch, measure=measure)
     rep["scanning"] = _scanning.is_set()
+    if rep["scanning"] and prog:
+        rep["progress"] = prog
     rep["settings"] = settings()
     rep.setdefault("items", None)
     return rep
@@ -676,29 +740,12 @@ def _drop_from_report(paths) -> None:
     with _lock:
         items = _report.get("items")
         if isinstance(items, list):
-            removed = [i for i in items if gc.norm(i.get("path") or "") in gone]
             _report["items"] = [
                 i for i in items if gc.norm(i.get("path") or "") not in gone
             ]
-            # Keep the measured (deduplicated) totals, less what went, until
-            # the next scan measures again: a plain per-item sum would bring
-            # the over-count back.
-            old = _report.get("summary") or {}
-            new = gc.summarize(_report["items"])
-            freed = sum(int(i.get("size_bytes") or 0) for i in removed)
-            freed_safe = sum(
-                int(i.get("free_bytes") or i.get("size_bytes") or 0)
-                for i in removed
-                if i.get("safe")
-            )
-            for k, less in (("bytes", freed), ("safe_bytes", freed_safe)):
-                if k in old:
-                    new[k] = max(0, int(old[k]) - less)
-            if "other_bytes" in old:
-                new["other_bytes"] = old["other_bytes"]
-            if not new["safe_count"]:
-                new["safe_bytes"] = 0
-            _report["summary"] = new
+            # The headline again from what the size walks recorded, without
+            # what went: still every file once (never a per-item sum).
+            _report["summary"] = gc.summarize(_report["items"])
 
 
 def _human(n) -> str:

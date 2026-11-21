@@ -233,7 +233,7 @@ waits until it answers again — use it after installing a new engine underneath
 server (install.sh does this for you). `mindflock serve` on a port where an
 older build is still running says so and points here.
 
-### `mindflock clean [--collect | --remove ITEM [--yes]] [--mode auto|ask|off] [--after-days N] [--all] [--json] [--local]`
+### `mindflock clean [--collect | --remove ITEM [--yes]] [--mode auto|ask|off] [--after-days N] [--all] [--json] [--no-fetch] [--no-size] [--local]`
 
 The worktree garbage collector (docs/web-api.md, *Disk cleanup*). With no
 option it only **lists** — a dry run: every worktree and session clone
@@ -258,6 +258,29 @@ A worktree whose branch was squash- or rebase-merged counts as merged even
 after the base moved on and rewrote the same lines: it is compared with the
 commit of the base the work landed in, byte for byte, without writing to the
 repository (docs/web-api.md, *Disk cleanup*).
+
+Before it classifies, it brings each involved repository's base branches up to
+date: one `git fetch` per repository of just the `origin/<base>` refs it
+compares against (no tags, no prune, no other branch; never a local branch, an
+index or a working tree), at most every 15 minutes per repository, with a 20 s
+timeout and no credential prompt. A fetch that fails (offline, no access, no
+remote) changes nothing: the listing goes on with the refs it has and says how
+old they are — on the reason of an item it keeps ("… (origin/staging was last
+fetched 25 hours ago and couldn't be refreshed: …, so it may be merged
+since)") and under the list. `--no-fetch` skips the fetch (and says so the
+same way).
+
+The list comes first: as soon as the items are classified (seconds) the table
+prints, with the sizes already known from the size cache (`?` for the rest);
+while the rest is measured a progress line runs on stderr (only when stderr is
+a terminal), then the sizes measured since and the totals follow. Piped
+output, and `--json`, get the finished report once and nothing on stdout but
+it. Sizes are kept in `~/.mindflock/worktree_gc_sizes.json` until a folder
+shows a change (its HEAD reflog, its own or a top-level folder's mtime, or 12
+hours), so a repeat listing measures only what changed: ~5 s instead of ~40
+s on ~210 worktrees / 250 GB with a warm disk cache. Without `--all` (or
+`--json`), worktrees that aren't MindFlock's — hidden from the list — aren't
+measured. `--no-size` lists at once with only the sizes already known.
 
 - `--collect` removes exactly the items marked `remove` (`POST
   /api/cleanup/collect`) and prints what went, the merged branches it deleted
