@@ -507,6 +507,9 @@ class Instance:
                         "configured (config.toml with [repository].url) "
                         "and no local repo was chosen"
                     )
+                # A flat base branch only where this repository has it
+                # (backend.repo_base); else the repository's own default.
+                settings = _prov.settle_base_branch(settings)
             branch = (
                 self._new_branch
                 or self._selected_branch

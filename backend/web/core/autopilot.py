@@ -316,6 +316,9 @@ def _blank() -> dict:
         "pr_title": "",
         "pr_body": "",
         "base": "",
+        # "Using main: this repository has no staging branch" — the PR rung
+        # passed over a configured base (backend.repo_base); the stop's receipt.
+        "base_note": "",
         "branch": "",
         "retryable": [],
         "attempts": {},
@@ -422,6 +425,7 @@ def _normalize(entry) -> dict:
     e["pr_title"] = str(entry.get("pr_title", "") or "")[:256]
     e["pr_body"] = str(entry.get("pr_body", "") or "")[:60000]
     e["base"] = str(entry.get("base", "") or "")
+    e["base_note"] = str(entry.get("base_note", "") or "")[:200]
     e["branch"] = str(entry.get("branch", "") or "")
     fixing = str(entry.get("fixing", "") or "")
     e["fixing"] = fixing if fixing in FIX_KINDS else ""

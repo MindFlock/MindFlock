@@ -4289,10 +4289,11 @@ def _judge_ship_lane(step, rec, lane) -> dict:
     if state == "done" and _awaiting_go(rec):
         return _wait("waiting for your go — it asks before it ships")
     if state == "done":
-        return _receipt(
-            {"action": "done", "note": rec.get("url") or ""},
-            ship_receipt(lane, rec.get("url") or ""),
-        )
+        receipt = ship_receipt(lane, rec.get("url") or "")
+        if rec.get("base_note") and lane in ("pr", "merge"):
+            # "PR #291 · Using main: this repository has no staging branch"
+            receipt += " · " + str(rec["base_note"])
+        return _receipt({"action": "done", "note": rec.get("url") or ""}, receipt)
     if state == "halted":
         return {"action": "fail", "reason": rec.get("reason") or "shipping stopped"}
     return _wait(rec.get("note") or "shipping: %s" % (rec.get("step") or lane))

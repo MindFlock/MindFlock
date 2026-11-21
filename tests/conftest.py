@@ -407,6 +407,34 @@ def _no_real_base_fetch(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_remote_probe(monkeypatch, tmp_path_factory):
+    """The base-branch resolver asks a repository's remote for its branches
+    (``repo_base.probe_remote``: ``git ls-remote``, a network call). Only a
+    remote that is a local directory under pytest's temp dir is really asked;
+    any other answers "could not ask" (None) without running git, so a test's
+    fake ``git@github.com:o/r`` origin never reaches the network. The
+    in-process probe cache is emptied around every test."""
+    try:
+        from backend import repo_base
+    except Exception:  # noqa: BLE001
+        return
+    real = repo_base.probe_remote
+    base = Path(tmp_path_factory.getbasetemp()).resolve()
+
+    def _guarded(remote, *a, **kw):
+        try:
+            Path(str(remote).replace("file://", "", 1)).resolve().relative_to(base)
+        except (ValueError, OSError):
+            return None
+        return real(remote, *a, **kw)
+
+    repo_base.forget()
+    monkeypatch.setattr(repo_base, "probe_remote", _guarded)
+    yield
+    repo_base.forget()
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_github_token(monkeypatch):
     """A developer's own ``$GH_TOKEN``/``$GITHUB_TOKEN`` must not reach the
     suite: with one, every session would launch "connected to GitHub" (the

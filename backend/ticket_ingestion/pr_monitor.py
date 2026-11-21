@@ -6,8 +6,10 @@ that have already been processed.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import aiohttp
 
@@ -26,6 +28,16 @@ _STATE_DIR = Path(".")
 # Total wall-clock budget for any single HTTP request/response.
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
 _GITHUB_API = "https://api.github.com"
+#: (repo, screen-wide base) -> (expires_at, exists: True/False/None).
+_BASE_SEEN: dict[tuple[str, str], tuple[float, bool | None]] = {}
+_BASE_TTL = 600.0
+
+
+def flat_base_missing(repo: str, base: str) -> bool:
+    """Whether :meth:`PRMonitor.base_filter` found ``repo`` without the
+    screen-wide ``base`` (so it watches all the repo's PRs). Cache read only."""
+    hit = _BASE_SEEN.get((repo, base))
+    return bool(hit) and hit[1] is False
 
 
 class PRMonitor:
@@ -97,6 +109,54 @@ class PRMonitor:
         _logger.info("PR monitor restricted to PRs authored by %s", login)
         return login
 
+    async def base_filter(self, repo: str) -> str:
+        """The base branch ``repo``'s PRs are filtered to, ``""`` = any.
+
+        A repo's own ``base_branch`` override is used as written. The
+        screen-wide value is checked against the repo first (one GitHub call
+        per repo per :data:`_BASE_TTL`): a flock-wide "staging" applied to a
+        repo that only has ``main`` would hide every one of its PRs, so there
+        it is dropped — the same rule :mod:`backend.repo_base` applies to the
+        PR target. Unknown (no token, network) keeps the filter."""
+        base = self.config.base_branch_for(repo)
+        if not base or self.config._override(repo, "base_branch") is not None:
+            return base
+        key = (repo, base)
+        now = time.time()
+        hit = _BASE_SEEN.get(key)
+        if hit and hit[0] > now:
+            exists = hit[1]
+        else:
+            exists = await self._branch_exists(repo, base)
+            _BASE_SEEN[key] = (now + _BASE_TTL, exists)
+            if exists is False:
+                _logger.info(
+                    "PR monitor: %s has no %s branch; watching all its PRs",
+                    repo,
+                    base,
+                )
+        return "" if exists is False else base
+
+    async def _branch_exists(self, repo: str, branch: str) -> bool | None:
+        """GitHub's answer to "does ``repo`` have ``branch``" (None: unknown)."""
+        try:
+            token = await resolve_token(self.config)
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+            url = f"{_GITHUB_API}/repos/{repo}/branches/{quote(branch, safe='')}"
+            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        return True
+                    if resp.status == 404:
+                        return False
+        except Exception as err:  # noqa: BLE001 — unknown keeps the filter
+            _logger.debug("PR monitor: branch probe for %s failed: %s", repo, err)
+        return None
+
     async def _list_prs(
         self, repo: str, *, all_bases: bool = False
     ) -> list[PullRequest]:
@@ -114,7 +174,7 @@ class PRMonitor:
         # branch there, or screen-wide to watch the same branch everywhere;
         # leave it blank so repos with different default branches (main vs
         # master) all match.
-        base = "" if all_bases else self.config.base_branch_for(repo)
+        base = "" if all_bases else await self.base_filter(repo)
         if base:
             params["base"] = base
         token = await resolve_token(self.config)

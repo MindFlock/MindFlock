@@ -826,6 +826,9 @@ async def _autopilot_act(title, wt, rec, snap, action, detail) -> None:
                 )
                 return
             fields["step"] = "pr"
+            # A configured base this repository lacks was passed over: say so
+            # once, as the stop's receipt, not as a failure.
+            fields["base_note"] = str(body.get("base_note") or "")
             # Remember the PR so the client can open it exactly once, the same
             # courtesy the manual "Make PR" button does.
             if body.get("url"):

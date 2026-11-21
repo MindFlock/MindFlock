@@ -357,6 +357,7 @@ def prepare_pr_worktree(
         raise PRWorktreeUnavailable(f"no provisioning settings: {err}") from err
     if settings is None:
         raise PRWorktreeUnavailable("no repository is configured to provision from")
+    settings = _prov.settle_base_branch(settings)
 
     base_dir = _prov.resolve_base_repo_dir(settings)
     if not (base_dir / ".git").is_dir():

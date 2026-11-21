@@ -618,8 +618,41 @@ Notes on individual keys:
   → the session's own fork base. A block's blank `pr_base_branch` means its own
   `base_branch`, never the flat PR base — a main-only repo must not inherit a
   `staging` target. Extra repos of a multi-repo ticket get the same answer in
-  their prompt instructions. None of these ever asks GitHub for the repo's
-  default branch; with nothing configured the fork base is literally `main`.
+  their prompt instructions.
+
+  **One resolver, no configuration needed** (`backend/repo_base.py`). Every
+  caller — Open PR (the button, the route's Open PR stop, MCP
+  `ship_session`), the ship dialog's default, Merge's post-merge fetch, a team
+  run's release PR, the base a provisioned workspace is cut from (ticket
+  sessions, the pipeline's PR workspaces), an epic lead's prompt and a
+  multi-repo ticket's prompt — goes through the same order:
+  1. the repo's own `repository.repo_branches` row, used as written;
+  2. the flat value (`repository.pr_base_branch`, or for the fork base
+     `MINDFLOCK_BASE_BRANCH` → `repository.base_branch` → `github.base_branch`)
+     **only if that branch exists on this repository** — its `origin/<name>`
+     ref, a local branch, or the remote itself (`git ls-remote`, cached ~10
+     min per remote) says so. An unreachable remote keeps the setting: "missing"
+     is only said on evidence;
+  3. (Open PR only) the session's own fork base, when the repository has it;
+  4. the repository's default branch — `origin/HEAD`, else the remote's answer
+     to `git ls-remote --symref`;
+  5. `main` or `master`, whichever the repository has.
+
+  A flat value that was passed over is said once, in plain words, where you
+  see it: "Using main: this repository has no staging branch" — on the Open PR
+  dialog under the picker, in the toast after a PR opens, and on the route's
+  Open PR stop receipt ("PR #291 · Using main: …"). If nothing resolves, Open
+  PR answers 409 with a sentence naming the remedy (set a base for that
+  repository in Settings → Workspace → Per-repo branches) instead of a git
+  error. **Per-repo branches** lists each repository MindFlock knows about
+  (live sessions, `repository.url`, existing rows) with the branch it will use
+  and why — "main · the repository's default", "staging · your setting" — and
+  a **Set** link that starts a row for it.
+
+  The pipeline's PR monitor applies the same rule to its base filter: a
+  screen-wide `github.base_branch` that a watched repo does not have (one
+  GitHub call per repo per ~10 min) is dropped for that repo, so its PRs are
+  still seen; a repo's own `base_branch` override is used as written.
 - `github.repo_settings` / `github.issue_repo_settings` — the per-repo override
   tables, spelled as nested tables whose key is the quoted repo slug
   (`[github.repo_settings."owner/name"]`). Each block accepts `agent`,
