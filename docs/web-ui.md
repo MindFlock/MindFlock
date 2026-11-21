@@ -6843,7 +6843,12 @@ A few screens got quieter:
   their size, kept out of both numbers) with **Remove *M* safe
   (*Y GB*)** (`#cleanup-collect`, `POST /api/cleanup/collect`, no confirm —
   safe means nothing can be lost: merged or pushed, nothing uncommitted, no
-  session/route/run on it, unused long enough) and **Check again**. Items sit
+  session/route/run on it, unused long enough) and **Check again**. A scan
+  shows the list as soon as the items are classified, with the sizes the
+  size cache knows: while the rest is measured the header adds "Measuring
+  sizes… *n*/*m*", an unmeasured size reads "…", and so does a fold's
+  "frees" and any total that would need it (never a sum that takes the
+  unknown ones as zero). Items sit
   in folds: **Will be removed**, **Kept** (holds work, used recently, already
   gone, couldn't check — each with its reasons, e.g. "2 commits in no base
   branch and on no remote; used 3 days ago"), **In use** and **Not

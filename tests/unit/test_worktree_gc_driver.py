@@ -302,11 +302,16 @@ def test_get_cleanup_returns_the_report(monkeypatch):
     monkeypatch.setattr(
         drv,
         "report",
-        lambda srv, refresh=False: seen.append(refresh)
+        lambda srv, refresh=False, fetch=True, measure=True: seen.append(
+            (refresh, fetch, measure)
+        )
         or {"items": [], "scanning": False},
     )
     r = client.get("/api/cleanup?refresh=1")
-    assert r.status_code == 200 and r.json()["items"] == [] and seen == [True]
+    assert r.status_code == 200 and r.json()["items"] == []
+    assert seen == [(True, True, True)]
+    client.get("/api/cleanup?refresh=1&fetch=0&size=0")
+    assert seen[-1] == (True, False, False)
 
 
 def test_removing_and_configuring_is_owner_only(monkeypatch):

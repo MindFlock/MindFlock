@@ -57,7 +57,7 @@ def env(tmp_path, monkeypatch):
         "GIT_COMMITTER_EMAIL": "t@example.com",
     }.items():
         monkeypatch.setenv(k, v)
-    gc._size_cache.clear()
+    gc._caches.clear()
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")

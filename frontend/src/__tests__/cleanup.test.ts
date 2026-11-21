@@ -102,6 +102,30 @@ describe("the words", () => {
     expect(lib.freeBytes(item({ free_bytes: undefined, size_bytes: 5 }))).toBe(5);
   });
 
+  it("never sums a section whose sizes are still being measured", () => {
+    const sized = item({ free_bytes: 1024 ** 3 });
+    const pending = item({ id: "p", size_bytes: null, free_bytes: null });
+    expect(lib.groupFreesText([sized])).toBe("frees 1.0 GB");
+    expect(lib.groupFreesText([sized, pending])).toBe("frees …");
+    // A folder that is already gone has no size and doesn't hold it up.
+    expect(lib.groupFreesText([sized, item({ ...pending, state: "missing" })])).toBe("frees 1.0 GB");
+    expect(lib.summaryLine({ count: 2, bytes: null, safe_count: 1, safe_bytes: null })).toBe(
+      "MindFlock made 2 of these: …. 1 can go safely, freeing ….",
+    );
+  });
+
+  it("says what a running scan is doing", () => {
+    const rep = (o: Partial<import("../lib/cleanup").CleanupReport>) =>
+      ({ items: [], scanning: true, settings: { mode: "ask", after_days: 14 }, ...o }) as import("../lib/cleanup").CleanupReport;
+    expect(lib.scanNote(rep({ scanning: false }))).toBe("");
+    expect(lib.scanNote(rep({ items: null }))).toBe("");
+    expect(lib.scanNote(rep({}))).toBe(" Checking again…");
+    expect(lib.scanNote(rep({ sizing: true }))).toBe(" Measuring sizes…");
+    expect(lib.scanNote(rep({ sizing: true, progress: { phase: "size", done: 3, total: 40 } }))).toBe(
+      " Measuring sizes… 3/40",
+    );
+  });
+
   it("defaults the mode to Ask me", () => {
     expect(lib.cleanupModeOf(undefined)).toBe("ask");
     expect(lib.cleanupModeOf("auto")).toBe("auto");
@@ -148,6 +172,23 @@ describe("the screen", () => {
     expect(html).toContain("Kept");
     expect(html).toContain("In use");
     expect(html).toContain(`checked="" value="ask"`);
+  });
+
+  it("shows the list while the sizes are still being measured", () => {
+    const html = render({
+      rep: {
+        items: [item({ size_bytes: null, free_bytes: null })],
+        summary: { count: 1, bytes: null, safe_count: 1, safe_bytes: null },
+        scanning: true,
+        sizing: true,
+        progress: { phase: "size", done: 0, total: 1 },
+        settings: { mode: "ask", after_days: 14 },
+      },
+    });
+    expect(html).toContain("u/done_1");
+    expect(html).toContain("Measuring sizes… 0/1");
+    expect(html).toContain("frees …");
+    expect(html).not.toContain("frees 0 B");
   });
 
   it("shows the app's own confirm card for an item holding work", () => {

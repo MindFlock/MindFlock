@@ -100,6 +100,19 @@ def add_parser(sub, server_opts) -> None:
         "--json", action="store_true", dest="as_json", help="print the report as JSON"
     )
     p.add_argument(
+        "--no-fetch",
+        action="store_true",
+        dest="no_fetch",
+        help="don't fetch the base branches first (work merged since the last "
+        "fetch then shows as unmerged; the listing says how old they are)",
+    )
+    p.add_argument(
+        "--no-size",
+        action="store_true",
+        dest="no_size",
+        help="list at once with the sizes already known; don't measure the rest",
+    )
+    p.add_argument(
         "--local",
         action="store_true",
         help="don't use a running server; work from the files",
@@ -127,20 +140,26 @@ def _ago(ts) -> str:
     return "today" if d < 1 else "%dd ago" % int(d)
 
 
-def render(rep: dict, show_all: bool = False) -> str:
-    items = rep.get("items") or []
-    root = rep.get("worktrees_root") or ""
-    shown = [
-        i for i in items if show_all or i.get("state") not in ("in_use", "not_ours")
+def _shown(rep: dict, show_all: bool) -> list:
+    return [
+        i
+        for i in rep.get("items") or []
+        if show_all or i.get("state") not in ("in_use", "not_ours")
     ]
+
+
+def _name(i: dict, root: str) -> str:
+    path = i.get("path") or ""
+    return (
+        os.path.relpath(path, root) if root and path.startswith(root + os.sep) else path
+    )
+
+
+def render_table(rep: dict, show_all: bool = False) -> str:
+    """The item table (sizes as known: "?" for one not measured yet)."""
+    root = rep.get("worktrees_root") or ""
     rows = []
-    for i in shown:
-        path = i.get("path") or ""
-        name = (
-            os.path.relpath(path, root)
-            if root and path.startswith(root + os.sep)
-            else path
-        )
+    for i in _shown(rep, show_all):
         why = (
             (i.get("safe_reason") or ("merged" if i.get("merged") else "pushed"))
             if i.get("safe")
@@ -152,31 +171,105 @@ def render(rep: dict, show_all: bool = False) -> str:
                 human(i.get("size_bytes")),
                 human(i.get("free_bytes")),
                 _ago(i.get("last_used")),
-                name,
+                _name(i, root),
                 why,
             ]
         )
+    if not rows:
+        return ""
     from backend.cli import _render_table
 
-    out = []
-    if rows:
-        out.append(
-            _render_table(rows, ["STATE", "SIZE", "FREES", "USED", "ITEM", "WHY"])
-        )
-    s = rep.get("summary") or {}
-    hidden = len(items) - len(shown)
-    out.append("")
-    out.append(
-        "MindFlock made %d of these: %s on disk."
-        % (s.get("count", 0), human(s.get("bytes", 0)))
+    return _render_table(rows, ["STATE", "SIZE", "FREES", "USED", "ITEM", "WHY"])
+
+
+def render_sizes(rep: dict, ids, show_all: bool = False) -> str:
+    """Sizes of the items in ``ids`` (listed before they were measured)."""
+    root = rep.get("worktrees_root") or ""
+    rows = [
+        [
+            _BADGE.get(i.get("state"), i.get("state") or "?"),
+            human(i.get("size_bytes")),
+            human(i.get("free_bytes")),
+            _name(i, root),
+        ]
+        for i in _shown(rep, show_all)
+        if i.get("id") in ids
+    ]
+    if not rows:
+        return ""
+    from backend.cli import _render_table
+
+    return "Sizes measured since:\n" + _render_table(
+        rows, ["STATE", "SIZE", "FREES", "ITEM"]
     )
+
+
+def _base_lines(rep: dict) -> list:
+    out = []
+    bases = rep.get("bases") or []
+    now = time.time()
+    for b in bases:
+        if not b.get("stale"):
+            continue
+        names = b.get("names") or []
+        what = ", ".join("origin/" + n for n in names) or "base branches"
+        when = (
+            "last fetched %s" % _ago_words(now - float(b["last_fetched"]))
+            if b.get("last_fetched")
+            else "last fetch unknown"
+        )
+        why = (
+            "not refreshed (--no-fetch)"
+            if b.get("status") == "skipped"
+            else "couldn't be refreshed"
+            + (": %s" % b["error"] if b.get("error") else "")
+        )
+        out.append(
+            "%s of %s: %s, %s. Work merged since then still shows as unmerged."
+            % (what, b.get("repo"), when, why)
+        )
+    fetched = sum(1 for b in bases if b.get("status") == "fetched")
+    if fetched:
+        out.append(
+            "Base branches fetched just now for %d repositor%s."
+            % (fetched, "y" if fetched == 1 else "ies")
+        )
+    return out
+
+
+def _ago_words(seconds: float) -> str:
+    from backend.web.core.worktree_gc import _ago as ago
+
+    return ago(seconds)
+
+
+def render_summary(rep: dict, show_all: bool = False, no_size: bool = False) -> str:
+    items = rep.get("items") or []
+    s = rep.get("summary") or {}
+    hidden = len(items) - len(_shown(rep, show_all))
+    out = []
+    if s.get("bytes") is None and s.get("count"):
+        out.append(
+            "MindFlock made %d of these (their size isn't fully measured%s)."
+            % (s.get("count", 0), "; without --no-size it is" if no_size else "")
+        )
+    else:
+        out.append(
+            "MindFlock made %d of these: %s on disk."
+            % (s.get("count", 0), human(s.get("bytes", 0)))
+        )
     if s.get("other_count"):
+        size = s.get("other_bytes")
         out.append(
             "%d other worktree%s of the same repositories (%s) are listed, never removed."
             % (
                 s["other_count"],
                 "" if s["other_count"] == 1 else "s",
-                human(s.get("other_bytes", 0)),
+                (
+                    human(size)
+                    if size is not None
+                    else "not measured; --all measures them"
+                ),
             )
         )
     if hidden:
@@ -190,12 +283,59 @@ def render(rep: dict, show_all: bool = False) -> str:
         )
     else:
         out.append("Nothing is safe to remove right now.")
+    out += _base_lines(rep)
     cfg = rep.get("settings") or {}
     out.append(
         "Background: %s, after %s days unused."
         % (cfg.get("mode", "ask"), cfg.get("after_days", 14))
     )
     return "\n".join(out)
+
+
+def render(rep: dict, show_all: bool = False, no_size: bool = False) -> str:
+    table = render_table(rep, show_all)
+    return "\n".join(
+        ([table] if table else []) + ["", render_summary(rep, show_all, no_size)]
+    )
+
+
+class _Progress:
+    """One self-rewriting status line on stderr while the scan works (only
+    when stderr is a terminal: a pipe or a log gets nothing)."""
+
+    _WHAT = {
+        "fetch": ("refreshing base branches", "repositories"),
+        "check": ("checking", "worktrees and clones"),
+        "size": ("measuring sizes", "folders"),
+    }
+
+    def __init__(self, on: bool) -> None:
+        import threading
+
+        self.on = on
+        self.lock = threading.Lock()
+        self.last = 0.0
+        self.drawn = False
+
+    def __call__(self, phase, done, total) -> None:
+        if not self.on or not total:
+            return
+        with self.lock:
+            now = time.monotonic()
+            if done < total and now - self.last < 0.2:
+                return
+            self.last = now
+            what, unit = self._WHAT.get(phase, (str(phase), "items"))
+            sys.stderr.write("\r%s… %d/%d %s\033[K" % (what, done, total, unit))
+            sys.stderr.flush()
+            self.drawn = True
+
+    def clear(self) -> None:
+        with self.lock:
+            if self.on and self.drawn:
+                sys.stderr.write("\r\033[K")
+                sys.stderr.flush()
+                self.drawn = False
 
 
 # ---------------------------------------------------------------- routing
@@ -205,13 +345,32 @@ class _Server:
     def __init__(self, base: str) -> None:
         self.base = base
 
-    def report(self) -> dict:
-        rep = client.get(self.base, "/api/cleanup?refresh=1")
+    def report(
+        self, *, fetch=True, size=True, measure_only=None, on_listed=None, progress=None
+    ) -> dict:
+        q = "/api/cleanup?refresh=1"
+        if not fetch:
+            q += "&fetch=0"
+        if not size:
+            q += "&size=0"
+        rep = client.get(self.base, q) or {}
+        listed = False
         deadline = time.monotonic() + SCAN_WAIT_S
-        while (rep or {}).get("scanning") and time.monotonic() < deadline:
-            time.sleep(2.0)
-            rep = client.get(self.base, "/api/cleanup")
-        return rep or {}
+        while rep.get("scanning") and time.monotonic() < deadline:
+            p = rep.get("progress") or {}
+            if progress is not None and p:
+                progress(p.get("phase"), p.get("done") or 0, p.get("total") or 0)
+            if (
+                not listed
+                and rep.get("sizing")
+                and rep.get("items") is not None
+                and on_listed is not None
+            ):
+                listed = True
+                on_listed(rep)
+            time.sleep(1.0)
+            rep = client.get(self.base, "/api/cleanup") or {}
+        return rep
 
     def collect(self) -> dict:
         return client.post(
@@ -243,8 +402,17 @@ class _Local:
 
         self.drv = drv
 
-    def report(self) -> dict:
-        rep = self.drv.scan(None)
+    def report(
+        self, *, fetch=True, size=True, measure_only=None, on_listed=None, progress=None
+    ) -> dict:
+        rep = self.drv.scan(
+            None,
+            fetch=fetch,
+            measure=size,
+            measure_only=measure_only,
+            on_listed=on_listed,
+            progress=progress,
+        )
         rep["settings"] = self.drv.settings()
         return rep
 
@@ -314,8 +482,12 @@ def cmd_clean(args: argparse.Namespace) -> int:
             % (len(res.get("removed") or []), human(res.get("freed_bytes")))
         )
         return 0
-    rep = be.report()
+    prog = _Progress(sys.stderr.isatty())
     if args.remove:
+        try:
+            rep = be.report(fetch=not args.no_fetch, size=False, progress=prog)
+        finally:
+            prog.clear()
         it = _find(rep, args.remove)
         if it is None:
             print(
@@ -351,8 +523,47 @@ def cmd_clean(args: argparse.Namespace) -> int:
         if res.get("branch_deleted"):
             print("deleted merged branch %s" % res["branch_deleted"])
         return 0
+    # The list as soon as it is classified (sizes the cache knows, "?" for
+    # the rest), progress on stderr while the rest is measured, then the
+    # totals. A pipe or --json gets the finished report once.
+    early = not args.as_json and sys.stdout.isatty()
+    unsized: set = set()
+
+    def on_listed(rep: dict) -> None:
+        if not early:
+            return
+        prog.clear()
+        table = render_table(rep, args.show_all)
+        if table:
+            print(table, flush=True)
+        unsized.update(
+            i.get("id")
+            for i in _shown(rep, args.show_all)
+            if i.get("size_bytes") is None
+        )
+        unsized.add(None)  # marks "the table is out"
+
+    show_all = args.show_all or args.as_json
+    try:
+        rep = be.report(
+            fetch=not args.no_fetch,
+            size=not args.no_size,
+            # What the listing hides is not worth the walk (--all, --json: all).
+            measure_only=None if show_all else (lambda it: bool(it.get("ours"))),
+            on_listed=on_listed,
+            progress=prog,
+        )
+    finally:
+        prog.clear()
     if args.as_json:
         print(json.dumps(rep, indent=2, default=str))
+    elif unsized:
+        sizes = render_sizes(rep, unsized, show_all=args.show_all)
+        if sizes:
+            print("")
+            print(sizes)
+        print("")
+        print(render_summary(rep, show_all=args.show_all, no_size=args.no_size))
     else:
-        print(render(rep, show_all=args.show_all))
+        print(render(rep, show_all=args.show_all, no_size=args.no_size))
     return 0

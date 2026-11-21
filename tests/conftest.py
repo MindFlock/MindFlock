@@ -383,6 +383,30 @@ def _no_real_checkout_fetch(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_base_fetch(monkeypatch, tmp_path_factory):
+    """Disk cleanup fetches each repository's base branches before it
+    classifies (``worktree_gc._fetch_bases``, a network call into the
+    repository). Only repos the tests made themselves (under pytest's temp
+    dir, with a local directory as ``origin``) are ever fetched; any other
+    answers "failed" without running git."""
+    try:
+        from backend.web.core import worktree_gc
+    except Exception:  # noqa: BLE001
+        return
+    real = worktree_gc._fetch_bases
+    base = Path(tmp_path_factory.getbasetemp()).resolve()
+
+    def _guarded(repo, *a, **kw):
+        try:
+            Path(repo).resolve().relative_to(base)
+        except ValueError:
+            return False, "not fetched under the test suite"
+        return real(repo, *a, **kw)
+
+    monkeypatch.setattr(worktree_gc, "_fetch_bases", _guarded)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_github_token(monkeypatch):
     """A developer's own ``$GH_TOKEN``/``$GITHUB_TOKEN`` must not reach the
     suite: with one, every session would launch "connected to GitHub" (the

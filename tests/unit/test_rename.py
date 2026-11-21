@@ -465,6 +465,8 @@ NOT_SESSION_KEYED = {
     "install.json": "install record",
     "update_auto.json": "what the automatic updater tried and reported, keyed by version",
     "worktree_gc.json": "the worktree garbage collector's notice + last-collection state, no keys",
+    "worktree_gc_fetch.json": "disk cleanup's base-fetch throttle, keyed by repository path",
+    "worktree_gc_sizes.json": "disk cleanup's size cache, keyed by folder path",
     "info.json": "what a kept-work folder (~/.mindflock/kept-work/<time>_<name>/) saved from a removed worktree; one per folder, keyed by nothing",
     "pricing.json": "model prices",
     "recently_closed.json": "a closed session keeps the name it closed under",
