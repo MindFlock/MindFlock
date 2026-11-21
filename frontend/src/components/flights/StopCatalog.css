@@ -324,7 +324,7 @@
 }
 
 /* --- Compact: the floating palette's cards (round 14) ---------------------
-   An icon, the name, one line; the ★ shows on the picked / hovered card (or
+   An icon, the name, two lines of what it does; the ★ shows on the picked / hovered card (or
    when the block is on the shelf), so a full palette stays calm. */
 .sky-catalog-list.compact {
   gap: 10px;
@@ -371,7 +371,9 @@
 
 .sky-catalog-list.compact .sky-catalog-summary {
   font-size: 11px;
-  -webkit-line-clamp: 1;
+  /* Two lines: one cut "Give the session's agent…" before it said what the
+     stop does. */
+  -webkit-line-clamp: 2;
 }
 
 .sky-catalog-list.compact .sky-catalog-shelf.fl-icon-btn {

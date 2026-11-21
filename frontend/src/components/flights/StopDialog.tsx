@@ -226,11 +226,6 @@ export function clientCheck(step: Pick<FlightStep, "kind" | "config"> | null | u
   return null;
 }
 
-/** An Agent stop with no prompt is fine: it says what that does. */
-export const AGENT_EMPTY_HINT = "Empty = the agent carries on with its task";
-export function agentPromptEmpty(step: Pick<FlightStep, "kind" | "config"> | null | undefined): boolean {
-  return step?.kind === "agent" && !String(step.config?.prompt ?? "").trim();
-}
 
 /** When the route reaches a stop while its dialog has unsaved edits. */
 export const SAVE_LOST = "The route reached this stop — your changes can't be saved now";
@@ -366,11 +361,6 @@ function StepDialog(p: StopDialogProps) {
         />
       ) : (
         <p className="fl-note muted">This stop's details haven't loaded yet.</p>
-      )}
-      {editable && agentPromptEmpty(shown) && (
-        <p className="fl-form-note muted stop-dialog-hint" role="note">
-          Prompt: {AGENT_EMPTY_HINT}
-        </p>
       )}
       {kind === "verify" && <VerifyStopLive verify={p.verify} session={p.verifySession || ""} />}
       {shown && (editable || p.onToggleHalt) && (

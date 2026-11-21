@@ -9323,8 +9323,7 @@ details.fl-group-waiting > summary {
   border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
 }
 
-.stop-dialog-save-hint,
-.stop-dialog-hint {
+.stop-dialog-save-hint {
   margin: 0;
   font-size: 12.5px;
   color: var(--muted);
@@ -14306,7 +14305,7 @@ details.fl-group-waiting > summary {
 }
 
 /* --- Compact: the floating palette's cards (round 14) ---------------------
-   An icon, the name, one line; the ★ shows on the picked / hovered card (or
+   An icon, the name, two lines of what it does; the ★ shows on the picked / hovered card (or
    when the block is on the shelf), so a full palette stays calm. */
 .sky-catalog-list.compact {
   gap: 10px;
@@ -14353,7 +14352,9 @@ details.fl-group-waiting > summary {
 
 .sky-catalog-list.compact .sky-catalog-summary {
   font-size: 11px;
-  -webkit-line-clamp: 1;
+  /* Two lines: one cut "Give the session's agent…" before it said what the
+     stop does. */
+  -webkit-line-clamp: 2;
 }
 
 .sky-catalog-list.compact .sky-catalog-shelf.fl-icon-btn {

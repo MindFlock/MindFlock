@@ -231,6 +231,8 @@ import {
   clearRightColumn,
   groundedLanding,
   GROUNDED_HIDDEN_LINE,
+  menuSpot,
+  QUICK_ADD_SIZE,
 } from "../../lib/skyLayout";
 import {
   MARQUEE_MIN,
@@ -1752,7 +1754,11 @@ export function SkyView() {
     if (!ground(e.target)) return;
     e.preventDefault();
     const r = vpRef.current!.getBoundingClientRect();
-    setGroundMenu({ x: e.clientX - r.left, y: e.clientY - r.top, at: planeAt(e.clientX, e.clientY) });
+    // Wholly in view, above the shelf: low on the sky it opens upward.
+    const shelf = document.querySelector(".sky-shelf")?.getBoundingClientRect();
+    const bottom = shelf && shelf.top > r.top && shelf.top < r.bottom ? shelf.top : r.bottom;
+    const spot = menuSpot(e.clientX - r.left, e.clientY - r.top, QUICK_ADD_SIZE, { w: r.width, h: bottom - r.top });
+    setGroundMenu({ x: spot.x, y: spot.y, at: planeAt(e.clientX, e.clientY) });
   };
   useEffect(() => {
     if (!groundMenu) return;

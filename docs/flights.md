@@ -99,6 +99,11 @@ Flights button as tabs of a Flights dialog; round 8 retired it — see
   default) shows one session's route only: with no session at all, placing a
   stop moves the view to All; otherwise a toast says where it went, with
   **Show all**.
+- **Know what a stop will do.** Open a stop (double-click) and its first
+  line says it with your settings — "Commits, pushes and opens the pull
+  request.", "Waits up to 60 min for the PR's CI checks to pass." — then its
+  halt point, "Only when" and what a failure does. A Wait and a Wait for me
+  cannot fail and offer no "If it fails".
 - **Run it.** A route on a session runs its stops in order; the bird shows
   where the work is, and a stop with a ✓ is done.
 - **Wait for me** stops the route until you press **Done** (or **Skip**) on

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A stop's dialog says what the stop will do.** Its first line used to say
+  only what happens on a failure ("If it fails, the route halts, red."). It
+  now starts with what the stop does with your settings: "Commits, pushes and
+  opens the pull request.", "Waits up to 60 min for the PR's CI checks to
+  pass.", "The session's agent carries on with its task; the stop is done once
+  its turn has settled…" (Agent, Ship, CI checks, Wait, Wait for me, Command,
+  Notify). The separate "Prompt: Empty = …" note under the form is gone; the
+  sentence says it.
+- **Wait and Wait for me stops no longer offer "If it fails".** Neither can
+  fail, so the four failure choices and "If it fails, the route halts" were
+  noise on them.
+- **All stops… shows two lines of what each stop does.** The floating
+  catalog cut every description to a few words ("Give the session's
+  agent…").
+- **The Stops shelf says what to do with its chips.** "Click to add · drag to
+  place" replaces the "Stops — drag onto the sky or a route" heading, so the
+  shelf no longer says "Stops" three times.
+
 - **The Sky says how long a route has been where it is.** A route's bar now
   ends with "for 12 min" (at a stop, waiting on you, halted or paused; hover
   for the clock time), and a route that finished says "route finished 15 min
@@ -59,6 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   totals are `null` while unmeasured, never a per-item sum. Settings → Disk
   cleanup shows that list at once, says "Measuring sizes… n/m" meanwhile, and
   a fold's "frees" reads "…" until its sizes are known (not "0 B").
+
+### Fixed
+
+- **Right-click "Add a stop…" low on the Sky opened under the shelf.** It now
+  opens upward (or leftward at the right edge), always wholly in view.
 
 ## [0.14.24] - 2026-11-20
 

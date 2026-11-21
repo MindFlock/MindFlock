@@ -4959,22 +4959,35 @@ above (details in docs/flights.md "Flow polish"):
   it stays open after Save, and unsaved edits are saved before Retry, Carry on
   or Fix). A refused value shows the server's sentence at the top of the form,
   labelled with the field; a Command stop with an empty command says *Needs a
-  command* as you type, and an empty Agent prompt hints *Empty = the agent
-  carries on with its task*. Esc, the backdrop and Cancel ask *Discard your
+  command* as you type; an empty Agent prompt is fine, and the read-back
+  sentence says what it does (*The session's agent carries on with its
+  task…*). Esc, the backdrop and Cancel ask *Discard your
   changes?* (**Keep editing**) when the draft changed; if the route reaches
   the stop while you edit, the dialog says *The route reached this stop — your
   changes can't be saved now* and keeps your text on screen, read-only.
 - **Stop options** carry a hint each — what it does, its default and its
   range (number fields are clamped to it) — and "If it fails" explains the
-  pick under it ("Let the agent fix it" tries up to 2 rounds). The form opens
-  on one **read-back sentence** of what the route will do at the stop (its
-  halt point, "Only when", "If it fails"; a Verify stop's own sentence, e.g.
+  pick under it ("Let the agent fix it" tries up to 2 rounds). A Wait and a
+  Wait for me cannot fail, so they offer no "If it fails". The form opens
+  on one **read-back sentence** of what the route will do at the stop: first
+  what the stop does with its settings (*Commits, pushes and opens the pull
+  request.*, *Waits up to 60 min for the PR's CI checks to pass.*, *Waits 10
+  min, then goes on.* — lib/stopEditing `stopDoes`, for Agent, Ship, CI
+  checks, Wait, Wait for me, Command and Notify), then its halt point, "Only
+  when" and "If it fails"; a Verify stop's own sentence, e.g.
   *Its agent verifies on this branch as soon as the route gets here; you
   confirm the steps only a person can do*), which follows your edits. A Verify
   stop's Who reads Agent, then me / Agent only / Agent, then my sign-off, and
   Where is a pick from the repo's environments. Menus use one name per action:
   Pause, Carry on, Add halt point, Remove halt point, Add a stop, Jump here,
   and the Verify stop's **Open Verify**.
+
+**Building a route** (2026-11-20). The shelf says "Click to add · drag to
+place" beside its chips (it no longer says "Stops" three times). The
+catalog's compact cards (All stops…) show two lines of what each stop does.
+Right-click on empty sky opens **Add a stop…** wholly in view: low on the sky
+it opens upward, above the shelf, and at the right edge leftward
+(lib/skyLayout `menuSpot`).
 
 **The phone.** Below 600px wide there is no pan or zoom: the toolbar, the
 drawer, then the lines as a plain list, each line's canvas running top to

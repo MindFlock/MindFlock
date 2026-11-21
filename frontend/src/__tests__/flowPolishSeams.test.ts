@@ -147,7 +147,7 @@ describe("a refusal under its own field (StopForm errors)", () => {
 describe("this round's classes have styles", () => {
   it("the stop dialog's parked-stop pieces, the paused frame, the save-route field", async () => {
     const dialog = (await import("../components/flights/StopDialog.css?raw")).default;
-    for (const c of [".stop-dialog-remedies", ".stop-dialog-settings > summary", ".stop-dialog-asks", ".stop-dialog-error", ".stop-dialog-lost", ".stop-dialog-save-hint", ".stop-dialog-hint"]) expect(dialog, c).toContain(c);
+    for (const c of [".stop-dialog-remedies", ".stop-dialog-settings > summary", ".stop-dialog-asks", ".stop-dialog-error", ".stop-dialog-lost", ".stop-dialog-save-hint"]) expect(dialog, c).toContain(c);
     expect(dialog).toMatch(/\.stop-dialog-settings > summary \{[^}]*cursor: pointer/);
     expect(dialog).toMatch(/\.stop-dialog-error,\s*\.stop-dialog-lost \{[^}]*color: var\(--fl-ink-red, var\(--red\)\)/);
     const line = (await import("../components/flights/SkyLine.css?raw")).default;
