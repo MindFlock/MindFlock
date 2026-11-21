@@ -36,19 +36,23 @@ export interface CleanupItem {
 export interface CleanupSummary {
   /** What MindFlock made (the headline); `other_*` = worktrees of the same
    * repos it did not make (listed, never removed). Bytes are measured once
-   * across items, so shared hard links and nested items count once. */
+   * across items, so shared hard links and nested items count once; null
+   * while an item is still being measured (never a per-item sum). */
   count: number;
-  bytes: number;
+  bytes: number | null;
   other_count?: number;
-  other_bytes?: number;
+  other_bytes?: number | null;
   safe_count: number;
-  safe_bytes: number;
+  safe_bytes: number | null;
 }
 
 export interface CleanupReport {
   items: CleanupItem[] | null;
   summary?: CleanupSummary;
   scanning: boolean;
+  /** The list is out; sizes the cache didn't know are being measured. */
+  sizing?: boolean;
+  progress?: { phase: "fetch" | "check" | "size"; done: number; total: number };
   scanned_at?: number;
   settings: { mode: CleanupMode; after_days: number };
   kept_dir?: string;
@@ -184,6 +188,24 @@ export function summaryLine(s: CleanupSummary | undefined): string {
 /** What removing it frees (falls back to its size on an older server). */
 export function freeBytes(it: CleanupItem): number {
   return Number(it.free_bytes ?? it.size_bytes ?? 0) || 0;
+}
+
+/** A section's "frees …" — "…" while one of its items is still unmeasured
+ * (a removed folder has no size and doesn't count), never a sum that
+ * quietly takes the unknown ones as zero. */
+export function groupFreesText(items: CleanupItem[]): string {
+  const pending = items.some((i) => i.state !== "missing" && i.free_bytes == null && i.size_bytes == null);
+  return "frees " + humanBytes(pending ? null : items.reduce((a, i) => a + freeBytes(i), 0));
+}
+
+/** What the header adds while a scan runs. */
+export function scanNote(rep: CleanupReport | null): string {
+  if (!rep?.scanning || rep.items == null) return "";
+  const p = rep.progress;
+  if (rep.sizing || p?.phase === "size") {
+    return " Measuring sizes…" + (p?.phase === "size" && p.total ? " " + p.done + "/" + p.total : "");
+  }
+  return " Checking again…";
 }
 
 /** "10.1 GB on disk · frees 1.7 GB" when shared files make the two differ. */

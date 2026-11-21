@@ -17,7 +17,8 @@ import {
   CLEANUP_MODES,
   canRemove,
   failSentence,
-  freeBytes,
+  groupFreesText,
+  scanNote,
   sizeText,
   cleanupModeOf,
   confirmText,
@@ -198,7 +199,7 @@ export function CleanupView(p: {
       <div className="set-row cleanup-head">
         <span className="cleanup-summary" id="cleanup-summary">
           {rep?.items == null ? "Looking at your disk…" : summaryLine(s)}
-          {rep?.scanning && rep?.items != null ? " Checking again…" : ""}
+          {scanNote(rep)}
         </span>
         <span className="test-row">
           <button
@@ -225,7 +226,7 @@ export function CleanupView(p: {
         <details className="cleanup-group" key={g.key} open={g.key === "safe" || g.key === "kept"}>
           <summary>
             {g.title} <span className="cleanup-count">{g.items.length}</span>
-            <span className="cleanup-size">{"frees " + humanBytes(g.items.reduce((a, i) => a + freeBytes(i), 0))}</span>
+            <span className="cleanup-size">{groupFreesText(g.items)}</span>
           </summary>
           <ul className="cleanup-list">
             {g.items.map((it) => (

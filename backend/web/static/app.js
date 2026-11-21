@@ -62222,6 +62222,15 @@ function summaryLine$1(s) {
 function freeBytes(it) {
 	return Number(it.free_bytes ?? it.size_bytes ?? 0) || 0;
 }
+function groupFreesText(items) {
+	return "frees " + humanBytes(items.some((i) => i.state !== "missing" && i.free_bytes == null && i.size_bytes == null) ? null : items.reduce((a, i) => a + freeBytes(i), 0));
+}
+function scanNote(rep) {
+	if (!rep?.scanning || rep.items == null) return "";
+	const p = rep.progress;
+	if (rep.sizing || p?.phase === "size") return " Measuring sizes…" + (p?.phase === "size" && p.total ? " " + p.done + "/" + p.total : "");
+	return " Checking again…";
+}
 function sizeText(it) {
 	if (it.size_bytes == null) return humanBytes(null);
 	if (it.free_bytes == null || it.free_bytes >= it.size_bytes * .95) return humanBytes(it.size_bytes);
@@ -134248,7 +134257,7 @@ function CleanupView(p) {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "cleanup-summary",
 				id: "cleanup-summary",
-				children: [rep?.items == null ? "Looking at your disk…" : summaryLine$1(s), rep?.scanning && rep?.items != null ? " Checking again…" : ""]
+				children: [rep?.items == null ? "Looking at your disk…" : summaryLine$1(s), scanNote(rep)]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "test-row",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -134283,7 +134292,7 @@ function CleanupView(p) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "cleanup-size",
-					children: "frees " + humanBytes(g.items.reduce((a, i) => a + freeBytes(i), 0))
+					children: groupFreesText(g.items)
 				})
 			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 				className: "cleanup-list",

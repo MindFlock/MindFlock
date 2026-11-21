@@ -37,7 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sizes already known; worktrees that aren't MindFlock's are measured only
   with `--all` / `--json`. `GET /api/cleanup` publishes the classified list
   first (`sizing: true`, unknown sizes `null`, `progress`) and takes `size=0`;
-  totals are `null` while unmeasured, never a per-item sum.
+  totals are `null` while unmeasured, never a per-item sum. Settings → Disk
+  cleanup shows that list at once, says "Measuring sizes… n/m" meanwhile, and
+  a fold's "frees" reads "…" until its sizes are known (not "0 B").
 
 ## [0.14.24] - 2026-11-20
 
