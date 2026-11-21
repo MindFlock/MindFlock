@@ -76,7 +76,7 @@ import { pushUndo } from "../../lib/skyUndo";
 import { deriveSessionState, idleUncommittedHint, idleUncommittedText, type IdleUncommitted, type SessionState, type SessionTone } from "../../lib/sessionState";
 import { carryOn } from "../../lib/sendPrompt";
 import { HELD_CHIP } from "../../lib/heldOffline";
-import { startSession } from "../../lib/revive";
+import { reviveSession, startSession } from "../../lib/revive";
 import { firstLine } from "../../lib/format";
 import { atHaltPoint, birdPerch, collapseFlown, drawnIndexes, flownCount, lineWhere, whereBesideChip, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { NODE_W, TILE, chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
@@ -388,11 +388,37 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
   );
 }
 
+/** An offline agent's chip on the Sky, its remedy in it (the rail says
+ * "Offline ↻ Restart"). */
+export const OFFLINE_RESTART_CHIP = "Offline · Restart";
+
 /** The agent tile's state chip. A session held offline after a crash
  * (lib/heldOffline) says its remedy — "Offline · Start" — and pressing it
  * starts the agent (the rail chip's Start); every other state is a label. */
 export function SkyStateChip({ ss, title, className }: { ss: SessionState; title: string; className: string }) {
   const [busy, setBusy] = useState(false);
+  // Offline carries its remedy, as on the rail's chip: "Offline · Restart"
+  // relaunches the agent (resuming its conversation). A plain "Offline" on
+  // the Sky left nothing to press.
+  if (!ss.held && ss.state === "offline" && ss.restartable)
+    return (
+      <button
+        type="button"
+        className={className + " sky-held-start"}
+        title={ss.hint}
+        aria-label="Offline — restart the agent"
+        disabled={busy}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          setBusy(true);
+          void reviveSession(title).finally(() => setBusy(false));
+        }}
+      >
+        {busy ? "Restarting…" : OFFLINE_RESTART_CHIP}
+      </button>
+    );
   if (!ss.held)
     return (
       <span className={className} title={ss.hint}>

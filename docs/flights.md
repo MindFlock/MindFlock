@@ -131,6 +131,10 @@ Flights button as tabs of a Flights dialog; round 8 retired it — see
   "Paused route · before Open PR · your halt point", "route finished 15 min
   ago". The agent tile shows only what the agent is doing; the stop that
   waits shows why, with its buttons.
+- **When the agent itself is down** (Offline), the route waits at its stop;
+  the chip on the Sky says **Offline · Restart** — press it. A route whose
+  session was closed says so in Needs you, with Retry, Skip and **Stop the
+  route**. A route that ended offers **Run again** in its ⋯.
 - **Edit the stop the route is on** when it failed, or when the route is
   paused before it with nothing run yet: Save, then Retry or Carry on runs it
   with the new settings ([Flow polish](#flow-polish-2026-11-10-as-built)).
@@ -1366,7 +1370,7 @@ column and `flight_status` has `owed`.
   there is no resume point. A stop id still starts at that stop. History:
   "carried on where route f_ab12cd stopped (its session was deleted), at
   Push".
-- **Fly again**: `POST /api/flights/{id}/again {at?, title?}` → 202 `{flight,
+- **Run again** (on screen; "Fly again" before 2026-11-20): `POST /api/flights/{id}/again {at?, title?}` → 202 `{flight,
   from, session, how}` starts a new flight with an ended route's stops, at the
   stop it had reached (`at` names another; a route that finished starts at
   stop 1). The session: `title` when given (`how: "chosen"`), its own
@@ -1399,7 +1403,7 @@ column and `flight_status` has `owed`.
 See docs/web-ui.md: a waiting review stop offers **Give it another round**
 and **Carry on**; owed checks show on the route while it flies and are
 settled on one perch; starting a route on a session offers **Start at…**
-and carries on at the resume point; an ended route offers **Fly again**.
+and carries on at the resume point; an ended route offers **Run again**.
 
 ## Where it lives
 

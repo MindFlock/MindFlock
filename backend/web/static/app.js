@@ -44164,11 +44164,11 @@ function againBody(at = "", title = "") {
 }
 function againText(how, stop, session) {
 	const from = stop ? " from " + stop : "";
-	if (how === "branch") return "Flying again on " + session + ", which holds its branch";
-	if (how === "reopened") return "Reopened " + session + " and flying again" + from;
+	if (how === "branch") return "Running again on " + session + ", which holds its branch";
+	if (how === "reopened") return "Reopened " + session + " and running again" + from;
 	if (how === "restored") return "Reopened " + session + ": its route carried on as it was";
-	if (how === "chosen") return "Flying again on " + session + from;
-	return "Flying again" + from;
+	if (how === "chosen") return "Running again on " + session + from;
+	return "Running again" + from;
 }
 async function flyAgain(flightId, at = "", title = "") {
 	try {
@@ -44179,7 +44179,7 @@ async function flyAgain(flightId, at = "", title = "") {
 		if (d.session) openWhenReady(d.session);
 		return d;
 	} catch (err) {
-		errorPop("Flying it again failed", refusalOf(err).detail);
+		errorPop("Running it again failed", refusalOf(err).detail);
 		return null;
 	} finally {
 		refreshFlights();
@@ -51215,7 +51215,13 @@ var WORDS = {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Skip" }),
 			" or ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Let the agent fix it" }),
-			"."
+			". A route that ended — finished, stopped, or left halted — offers ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Run again" }),
+			" in its ⋯: from where it stopped, or from another stop. An agent that went ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Offline" }),
+			" says ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Offline · Restart" }),
+			": press it to relaunch the agent where it left off."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
@@ -98053,13 +98059,13 @@ function againStop(f) {
 }
 function flyAgainLabel(f) {
 	const s = againStop(f);
-	return s ? "Fly again from " + s.title : "Fly again";
+	return s ? "Run again from " + s.title : "Run again";
 }
 function flyAgainTitle(f, gone) {
 	const s = againStop(f);
 	const from = s ? " from “" + s.title + "”" : " from its first stop";
-	if (!gone) return "Fly this route again on " + f.session + from + " — a new run of its stops";
-	return f.session + " is gone: it flies again" + from + " on the session that holds its branch, or reopens " + f.session + " from Recently closed";
+	if (!gone) return "Run this route again on " + f.session + from + " — a new run of its stops";
+	return f.session + " is gone: it runs again" + from + " on the session that holds its branch, or reopens " + f.session + " from Recently closed";
 }
 function flyAgainPrimary(f) {
 	return f.state === "cancelled" || f.state === "halted";
@@ -99669,6 +99675,7 @@ function canFixStep(flight) {
 	if (ss.state === "failed") return !ss.detail?.moved_on;
 	return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
 }
+var GONE_LINE = "Its session is closed, so no agent can fix this: Retry or Skip it, or Stop the route to end it.";
 function YouStepActions({ flight, compact = false, inTile = false, gone = false }) {
 	const step = flight.steps[flight.cursor];
 	const items = youItems(step);
@@ -99736,6 +99743,10 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 			!compact && !inTile && text && (!halted || handed) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-you-text",
 				children: text
+			}),
+			gone && !inTile && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fl-you-text muted",
+				children: GONE_LINE
 			}),
 			!halted && items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 				className: "fl-you-items",
@@ -99870,8 +99881,8 @@ function flyAgainItems(flight, gone = false) {
 		onSelect: () => void flyAgain(flight.id)
 	}, {
 		key: "again-pick",
-		label: "Fly again from another stop…",
-		title: "Pick the stop it flies again from",
+		label: "Run again from another stop…",
+		title: "Pick the stop it runs again from",
 		onSelect: () => pickAgainStop(flight)
 	}];
 }
@@ -102611,8 +102622,8 @@ function withAgainItem(items, n, ended) {
 	if (!ended || !canFlyAgain(ended) || !n.step || !ended.steps.some((s) => s.id === n.step.id)) return [...items];
 	return [{
 		key: AGAIN_HERE_KEY,
-		label: "Fly again from here",
-		title: "Fly “" + ended.plan_name + "” again from “" + n.title + "”"
+		label: "Run again from here",
+		title: "Run “" + ended.plan_name + "” again from “" + n.title + "”"
 	}, ...items];
 }
 function useChainMenu(h, flightId, ctx) {
@@ -106890,9 +106901,10 @@ function hereStop(flight, n) {
 	if (n.state === "perched" && Array.isArray(d.items)) out.asks = d.items.map(String).filter(Boolean);
 	out.primary = out.retry ? "retry" : out.resume ? "resume" : out.done ? "done" : void 0;
 	const reason = cap(String(n.reason || failedReason || rec?.note || "").trim());
+	const failure = reasonAfterTitle(n.title, reason).replace(/^failed:\s*/i, "");
 	if (haltPoint) out.why = "Paused at its halt point — nothing has run yet. Carry on runs it.";
-	else if (flight.state === "paused") out.why = "Paused" + (flight.reason ? ": " + flight.reason : "") + " — Carry on picks it up again.";
-	else if (failed) out.why = reason ? "It failed: " + reason : "It failed — the route waits here.";
+	else if (flight.state === "paused") out.why = (flight.reason ? "Paused: " + flight.reason : "Paused by you") + " — Carry on picks it up again.";
+	else if (failed) out.why = failure ? "It failed: " + failure : "It failed — the route waits here.";
 	else if (n.state === "perched") out.why = reason || (n.step.kind === "verify" ? "The check waits for you." : "It waits for you — press Done when you have done it.");
 	else out.why = "It is running — its settings can't change while it runs.";
 	return out;
@@ -151019,7 +151031,9 @@ function NeedsLine({ row, onFocus }) {
 		})
 	});
 	const a = row.attn;
-	const what = row.plan ? "Plan ready — review & Go" : a?.reason || "";
+	const ss = inst ? deriveSessionState(inst) : null;
+	const revive = row.kind === "broken" && ss?.state === "offline" && (ss.restartable || ss.held) ? ss.held ? "start" : "restart" : "";
+	const what = row.plan ? "Plan ready — review & Go" : revive && ss ? ss.hint : a?.reason || "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-perch sky-needs-" + row.kind,
 		"data-needs": row.key,
@@ -151047,8 +151061,25 @@ function NeedsLine({ row, onFocus }) {
 				className: "btn-primary fl-btn",
 				onClick: () => useUi.getState().openMap(row.title, { section: "plan" }),
 				children: "Review the plan"
+			}) : revive ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReviveButton, {
+				title: row.title,
+				start: revive === "start"
 			}) : null
 		]
+	});
+}
+function ReviveButton({ title, start }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "btn-primary fl-btn",
+		disabled: busy,
+		title: start ? "Start the agent — it was held offline after a crash" : "Relaunch the agent, resuming its conversation",
+		onClick: () => {
+			setBusy(true);
+			(start ? startSession(title) : reviveSession(title)).finally(() => setBusy(false));
+		},
+		children: busy ? start ? "Starting…" : "Restarting…" : start ? "Start" : "Restart"
 	});
 }
 function SkyDrawer({ open, onToggle, onFocus, onFocusFlight }) {
@@ -151893,8 +151924,24 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }) {
 		]
 	});
 }
+var OFFLINE_RESTART_CHIP = "Offline · Restart";
 function SkyStateChip({ ss, title, className }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	if (!ss.held && ss.state === "offline" && ss.restartable) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: className + " sky-held-start",
+		title: ss.hint,
+		"aria-label": "Offline — restart the agent",
+		disabled: busy,
+		onPointerDown: (e) => e.stopPropagation(),
+		onDoubleClick: (e) => e.stopPropagation(),
+		onClick: (e) => {
+			e.stopPropagation();
+			setBusy(true);
+			reviveSession(title).finally(() => setBusy(false));
+		},
+		children: busy ? "Restarting…" : OFFLINE_RESTART_CHIP
+	});
 	if (!ss.held) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className,
 		title: ss.hint,
@@ -157868,7 +157915,7 @@ function routeMenuLines(open, kinds, now) {
 		const at = k < own.length ? k : 0;
 		return [{
 			key: "note",
-			label: "Fly “" + f.plan_name + "” again from…",
+			label: "Run “" + f.plan_name + "” again from…",
 			note: true
 		}, ...stopChoices(own, kinds).map((c, i) => {
 			const mark = i === k ? "where it stopped" : i === 0 ? "the beginning" : "";
@@ -157879,7 +157926,7 @@ function routeMenuLines(open, kinds, now) {
 					choice: c,
 					mark
 				},
-				title: i === k ? "Fly it again from where it stopped" : "Fly it again from “" + c.title + "”",
+				title: i === k ? "Run it again from where it stopped" : "Run it again from “" + c.title + "”",
 				kind: c.kind,
 				primary: i === at,
 				run: () => void flyAgain(f.id, i === k ? "" : c.id)
@@ -158034,7 +158081,7 @@ function RouteStartMenu() {
 			set(null);
 		}
 	};
-	const label = open.mode === "again" ? "Fly “" + open.flight.plan_name + "” again from…" : "Where “" + open.plan.name + "” starts";
+	const label = open.mode === "again" ? "Run “" + open.flight.plan_name + "” again from…" : "Where “" + open.plan.name + "” starts";
 	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "fl-routestart-host",
 		style: {

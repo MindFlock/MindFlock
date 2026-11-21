@@ -101,7 +101,7 @@ describe("hereStop: what the current stop's dialog offers", () => {
 
   it("a person's pause mid-stop: Carry on primary, the settings stay read-only", () => {
     const h = hereStop(flight({ state: "paused", reason: "" }, test, rec("running")), node({ state: "paused" }));
-    expect(h).toMatchObject({ resume: true, retry: false, editNow: "", primary: "resume", why: "Paused — Carry on picks it up again." });
+    expect(h).toMatchObject({ resume: true, retry: false, editNow: "", primary: "resume", why: "Paused by you — Carry on picks it up again." });
   });
 
   it("a running stop: nothing to do, and why it can't change", () => {

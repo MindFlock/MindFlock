@@ -123,7 +123,7 @@ export function againStop(f: AgainFields): FlightStep | null {
  * for a route that finished (it starts over). */
 export function flyAgainLabel(f: AgainFields): string {
   const s = againStop(f);
-  return s ? "Fly again from " + s.title : "Fly again";
+  return s ? "Run again from " + s.title : "Run again";
 }
 
 /** Fly again's tooltip: what will happen. Its session alive: a new run of
@@ -132,8 +132,8 @@ export function flyAgainLabel(f: AgainFields): string {
 export function flyAgainTitle(f: AgainFields & Pick<Flight, "session">, gone: boolean): string {
   const s = againStop(f);
   const from = s ? " from “" + s.title + "”" : " from its first stop";
-  if (!gone) return "Fly this route again on " + f.session + from + " — a new run of its stops";
-  return f.session + " is gone: it flies again" + from + " on the session that holds its branch, or reopens " + f.session + " from Recently closed";
+  if (!gone) return "Run this route again on " + f.session + from + " — a new run of its stops";
+  return f.session + " is gone: it runs again" + from + " on the session that holds its branch, or reopens " + f.session + " from Recently closed";
 }
 
 /** Fly again is the route's primary action when it stopped part way —

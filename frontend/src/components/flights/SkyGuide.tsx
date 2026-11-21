@@ -310,7 +310,7 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   halt: (
     <>
       <p><b>⏸ Pause</b> (on the current stop, or a click on the bird) pauses the route where it is. <b>Add halt point</b> on a stop ahead makes it a halt point: the route pauses when it reaches that stop, before doing it, and the stop wears a pause badge; <b>Remove halt point</b> takes it off. <b>▶ Carry on</b> goes on from a pause.</p>
-      <p>A <b>halted</b> route is different: a stop failed and its <b>If it fails</b> said Halt. It turns red and waits for <b>Retry</b>, <b>Skip</b> or <b>Let the agent fix it</b>.</p>
+      <p>A <b>halted</b> route is different: a stop failed and its <b>If it fails</b> said Halt. It turns red and waits for <b>Retry</b>, <b>Skip</b> or <b>Let the agent fix it</b>. A route that ended — finished, stopped, or left halted — offers <b>Run again</b> in its ⋯: from where it stopped, or from another stop. An agent that went <b>Offline</b> says <b>Offline · Restart</b>: press it to relaunch the agent where it left off.</p>
       <p><b>Remove</b> (🗑, the menu, or <kbd>Delete</kbd>) takes a stop off at once, with <b>Undo</b> in the toast. Removing the stop the route is on asks first, then stops its work and pauses the route right before the next stop; Carry on goes into it. A finished route's stop asks too: removing it clears the whole finished route.</p>
     </>
   ),

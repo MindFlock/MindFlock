@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **"Fly again" is now "Run again".** An ended route's ⋯ offers "Run again
+  from Push" and "Run again from another stop…", a finished stop's menu "Run
+  again from here", and the toast says "Running again on …" — the word the
+  rest of the app uses for starting a route.
+- **An offline agent can be restarted from the Sky.** Its chip on the route's
+  bar and on the agent reads "Offline · Restart" and relaunches it; its row in
+  Needs you says why and has a Restart button. Before, the Sky showed a plain
+  "Offline" with nothing to press.
+- **A route whose session was closed says so in Needs you.** Its row reads
+  "Its session is closed, so no agent can fix this: Retry or Skip it, or Stop
+  the route to end it." (it was only a tooltip on the name).
+- **A failed stop's dialog says the failure once.** "It failed: CI checks
+  failed: test_export_empty" under the CI checks name now reads "It failed:
+  test_export_empty"; a pause you made says "Paused by you".
+
 - **A stop's dialog says what the stop will do.** Its first line used to say
   only what happens on a failure ("If it fails, the route halts, red."). It
   now starts with what the stop does with your settings: "Commits, pushes and

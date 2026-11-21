@@ -4982,6 +4982,15 @@ above (details in docs/flights.md "Flow polish"):
   Pause, Carry on, Add halt point, Remove halt point, Add a stop, Jump here,
   and the Verify stop's **Open Verify**.
 
+**When a route stops** (2026-11-20). An offline agent's chip on the Sky (the
+bar and the agent tile) is **Offline · Restart**, as on the rail, and its
+Needs-you row says why and offers **Restart**. A route parked on you whose
+session was closed says so under its stop — *Its session is closed, so no
+agent can fix this: Retry or Skip it, or Stop the route to end it* — not
+only in a tooltip. A failed stop's dialog says the failure once (*It failed:
+test_export_empty*, not *CI checks failed: …* under the CI checks name), and
+a pause says whose it is (*Paused by you*, or *Paused: stop removed*).
+
 **Building a route** (2026-11-20). The shelf says "Click to add · drag to
 place" beside its chips (it no longer says "Stops" three times). The
 catalog's compact cards (All stops…) show two lines of what each stop does.
@@ -5982,11 +5991,12 @@ The backend is docs/flights.md "Round 21".
   at Push** (focused), **Start from the beginning**, **Start at another
   stop…**. **Start at…** beside "Run these stops" lists the route's stops
   ("3. Push · Ship"); a later stop flies now.
-- **Fly again** on an ended route: "Fly again from Push" and "Fly again from
-  another stop…" on a finished, cancelled or halted route's ⋯ menu, on the
-  Finished list's cards and on the Route tab's head; right-click a stop of a
-  finished route for "Fly again from here". The toast says which session took
-  it ("Reopened sc-42 and flying again from Push").
+- **Run again** on an ended route (called "Fly again" until 2026-11-20; the
+  vocabulary says Run): "Run again from Push" and "Run again from another
+  stop…" on a finished, cancelled or halted route's ⋯ menu, on the Finished
+  list's cards and on the Route tab's head; right-click a stop of a finished
+  route for "Run again from here". The toast says which session took it
+  ("Reopened sc-42 and running again from Push").
 - **The stop editor** gets the new fields from `/api/flights/kinds`: a review
   stop's **Fix rounds** and **Findings still open after the last round**, a
   Verify stop's **When it needs you**.
