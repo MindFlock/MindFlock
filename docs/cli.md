@@ -659,6 +659,21 @@ folder and branch keep their names. Prints `renamed OLD -> NEW`; a name
 another session has, or one a title cannot be, is an error (exit 1). `OLD`
 resolves like `close`.
 
+### `mindflock send TITLE DEVICE [--note TEXT]`
+
+Sends a session to another of your devices
+(`POST /api/instances/{title}/send-to-device`, the MCP's `send_session`):
+pushes its branch (never a force), starts a session on `DEVICE` on that same
+branch in its checkout of the repository, and gives it a brief as its first
+prompt — what the session was for, its commits and changed files, its last
+reply, and `--note`. Only git and the brief travel: no logins, no chat
+history. Prints `sent TITLE -> DEVICE::TITLE (branch B, pushed)` and any
+caveat on stderr. Uncommitted changes, a device that is asleep or not one of
+yours, a repository the device has no checkout of, or a refused push is an
+error with the next step (exit 1); nothing is pushed for a refusal found
+before the push. `mindflock devices` lists the device names; `TITLE`
+resolves like `close`. See [devices.md](devices.md#send-a-session-to-another-device).
+
 ### `mindflock open TITLE`
 
 Open (or focus) the session's workspace in the configured IDE

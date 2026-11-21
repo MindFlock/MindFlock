@@ -414,6 +414,22 @@ def _build_parser() -> argparse.ArgumentParser:
     rename_.add_argument("old", metavar="OLD")
     rename_.add_argument("new", metavar="NEW")
 
+    send_ = sub.add_parser(
+        "send",
+        parents=[server_opts],
+        help="send a session to another of your devices (push, start it there)",
+        description="Carry a session's work to another of your devices: push "
+        "its branch (never a force), start a session on DEVICE on that same "
+        "branch in its checkout of the repo, and give it a brief as its first "
+        "prompt (what the session was for, its commits, its last reply, your "
+        "--note). Only git and the brief travel — no logins, no chat history. "
+        "Uncommitted changes are refused: commit first. TITLE may be any "
+        "unambiguous prefix; `mindflock devices` lists DEVICE names.",
+    )
+    send_.add_argument("title", metavar="TITLE")
+    send_.add_argument("device", metavar="DEVICE")
+    send_.add_argument("--note", default="", help="what the session should do there")
+
     open_ = sub.add_parser(
         "open",
         parents=[server_opts],
@@ -1090,6 +1106,7 @@ _HELP_GROUPS = (
             "sleep",
             "wake",
             "rename",
+            "send",
             "close",
             "delete",
             "rm",
@@ -1953,6 +1970,35 @@ def _cmd_rename(args: argparse.Namespace) -> int:
         print("%s is already called that" % title)
     else:
         print("renamed %s -> %s" % (title, res.get("title", args.new)))
+    return 0
+
+
+def _cmd_send(args: argparse.Namespace) -> int:
+    """``send TITLE DEVICE``: ``POST /api/instances/{title}/send-to-device``."""
+    base = client.discover(args.host, args.port)
+    title = str(
+        _resolve_title(client.get(base, "/api/instances") or [], args.title)["title"]
+    )
+    try:
+        res = (
+            client.post(
+                base,
+                "/api/instances/%s/send-to-device" % _quote_title(title),
+                {"device": args.device, "note": args.note or ""},
+                timeout=200.0,
+            )
+            or {}
+        )
+    except client.ApiError as err:
+        print("error: could not send %s: %s" % (title, err.message), file=sys.stderr)
+        return 1
+    pushed = "pushed" if res.get("pushed") else "already on the remote"
+    print(
+        "sent %s -> %s (branch %s, %s)"
+        % (title, res.get("title", "?"), res.get("branch", "?"), pushed)
+    )
+    for note in res.get("caveats") or []:
+        print("  note: %s" % note, file=sys.stderr)
     return 0
 
 
@@ -4125,6 +4171,7 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "sleep": _cmd_sleep_wake,
     "wake": _cmd_sleep_wake,
     "rename": _cmd_rename,
+    "send": _cmd_send,
     "open": _cmd_open,
     "events": _cmd_events,
     "msg": _cmd_msg,

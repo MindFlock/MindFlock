@@ -1,4 +1,4 @@
-"""The 40 MindFlock MCP tools: schemas, descriptions and handlers.
+"""The 42 MindFlock MCP tools: schemas, descriptions and handlers.
 
 The ship and ticket tools (``ship_session``, ``set_autopilot``,
 ``spawn_ticket_session``, ``list_tickets``) live in :mod:`backend.mcp.ship`,
@@ -7,8 +7,9 @@ and the team-run tools (``start_team_run``, ``get_run``, ``list_runs``,
 tools (``describe_flight``, ``start_flight``, ``flight_status``,
 ``control_flight``, ``edit_flight``, ``save_flight_plan``, ``run_pr_review``)
 in :mod:`backend.mcp.flights`, and the To-do tools (``add_todo``,
-``list_todos``, ``update_todo``) in :mod:`backend.mcp.todos` — all mixins of
-:class:`Toolbox`.
+``list_todos``, ``update_todo``) in :mod:`backend.mcp.todos`, and the device
+tools (``list_devices``, ``send_session``) in :mod:`backend.mcp.devices` — all
+mixins of :class:`Toolbox`.
 
 Every handler goes through the HTTP API (:mod:`backend.mcp.api`) — the MCP
 server holds no engine state of its own beyond three in-memory facts: which
@@ -39,6 +40,7 @@ from backend.mcp.api import WAIT_RETRY_S, Api
 from backend.mcp.identity import Identity
 from backend.mcp.policy import Flock, Policy, is_peer_row
 from backend.mcp.protocol import Tool, ToolContext, ToolError
+from backend.mcp import devices as _devices
 from backend.mcp import flights as _flights
 from backend.mcp import runs as _runs
 from backend.mcp import ship as _ship
@@ -90,19 +92,20 @@ WORKER (whoami has a parent): commit, report_result once (status + summary). No 
 
 ORCHESTRATOR:
 1. Commit first: workers fork from your HEAD.
-2. spawn_session per piece (self-contained, disjoint files); spawn_ticket_session per ticket (list_tickets). Fence each at spawn (only=/keep_out=); widen (fence_session, reason=) only for a changed task. Order: after=/set_order. Not this branch's work? separate=true: own branch, a PR, never a merge.
+2. spawn_session per piece (self-contained, disjoint files); spawn_ticket_session per ticket (list_tickets). Fence each at spawn (only=/keep_out=); widen (fence_session, reason=) only for a changed task. Order: after=/set_order. Not this branch's work? separate=true: own branch, a PR, no merge.
 3. wait_for_session(titles=[...]) or end your turn; never poll list_sessions.
 4. get_diff (stat, then files=[...]).
 5. git merge <branch> or ship_session(depth="pr"); set_autopilot ships at turn end. Merge PRs only if asked (confirm_merge=true).
-6. Merged workers auto-close in ~10 min; kill_session: now.
+6. Merged workers auto-close; kill_session: now.
 needs_input: read_output(view="screen"), answer_prompt/ask your user.
 
-TEAM RUN: start_team_run; wait_for_run/get_run/list_runs; control_run steers. Split lead: propose_run_plan; report_integrated after a conflict.
+TEAM RUN: start_team_run; wait_for_run/get_run/list_runs; control_run steers. Split lead: propose_run_plan; report_integrated on conflict.
 
 Routes: describe_flight → start_flight (dry_run first); flight_status, control_flight, edit_flight, save_flight_plan, run_pr_review.
 Also: get_session, check_inbox, wait_for_message, set_parent, verify_session, confirm_verify. Message-now/route any session; ship/close/delete: descendants.
-Long job: expect_background_job(duration) or MINDFLOCK_EXPECT=6h.
-Person must act (manual test, click, login, decision)? add_todo each, even if said in chat; list_todos, update_todo."""
+Devices: list_devices, send_session.
+Long job: expect_background_job or MINDFLOCK_EXPECT=6h.
+Person must act (test, click, login, decision)? add_todo each, even if said in chat; list_todos, update_todo."""
 
 _FOOTER = """
 
@@ -1039,7 +1042,13 @@ def _path_selected(path: str, wanted: List[str]) -> Optional[str]:
 # --------------------------------------------------------------------------- #
 # The toolbox
 # --------------------------------------------------------------------------- #
-class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools, _todos.TodoTools):
+class Toolbox(
+    _ship.ShipTools,
+    _runs.RunTools,
+    _flights.FlightTools,
+    _todos.TodoTools,
+    _devices.DeviceTools,
+):
     """Tool handlers bound to one API client, identity and policy."""
 
     def __init__(
@@ -3174,5 +3183,23 @@ def build_tools(box: Toolbox) -> List[Tool]:
             _todos.S_UPDATE,
             box.update_todo,
             _WRITE,
+        ),
+        # Devices: listing them is a read; sending a session pushes its branch
+        # and starts a session on another machine (openWorld), so it prompts.
+        Tool(
+            "list_devices",
+            "List your other devices",
+            _devices.D_LIST_DEVICES,
+            _devices.S_LIST_DEVICES,
+            box.list_devices,
+            _READ_ONLY,
+        ),
+        Tool(
+            "send_session",
+            "Send a session to another device",
+            _devices.D_SEND_SESSION,
+            _devices.S_SEND_SESSION,
+            box.send_session,
+            _WRITE_WORLD,
         ),
     ]

@@ -40,6 +40,35 @@ Remote devices, Peer links, Auth), the invite/join flow in
   (`POST /api/devices/{device}/connect`; was the sidebar's Connect dialog and
   Security's *Pair a device you don't own*.)
 
+## Send a session to another device
+
+A session's work can follow you to another of your devices: "send tripwire
+to my Mac" (the MCP's `send_session`, `mindflock send TITLE DEVICE`, `POST
+/api/instances/{title}/send-to-device` — [web-api.md](web-api.md#send-a-session-to-another-device)).
+MindFlock pushes the session's branch (never a force), starts a session on
+that device ON the same branch in its own checkout of the repository, and
+hands it a short brief as its first prompt: what the session was for, its
+commits and changed files, its last reply, and an optional note ("install it
+here as a launchd service").
+
+- **Only your devices.** The target must be one of **Your devices** (or a
+  device paired by pasted token) and reachable with remote control on — the
+  same trust the sidebar's `<device>::<title>` rows ride. No new trust path:
+  a gate-off MindFlock that merely shares your tailnet is refused.
+- **Only git and text travel.** No agent login, credential file or
+  conversation transcript is copied — a copied Claude refresh token would
+  log the real install out. The other device's agent starts on its own
+  login.
+- **Committed work only.** Uncommitted or untracked files are refused, by
+  name: commit them first. Nothing is committed or dropped for you.
+- **The repository must be there.** The device finds its checkout by the
+  remote URL (`GET /api/repos/find`). Without one the answer is the `git
+  clone <url>` to run there; then send again.
+- The new session shows here as `<device>::<title>`. It is not the sender's
+  child; read it with `read_output` / the sidebar.
+
+Not yet: a Send button in Sky or the sidebar (the API, MCP and CLI only).
+
 ## Keys and deep links
 
 The screen keys never changed: `devices`, `mobile`, `peer`, `security`. The

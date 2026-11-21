@@ -333,7 +333,7 @@ against every fresh listing.
 
 ## The tools
 
-The 40 tools. Every result is JSON text. Clients that negotiate protocol
+The 42 tools. Every result is JSON text. Clients that negotiate protocol
 `2025-06-18` or later also get `structuredContent`. Arguments are checked
 against each tool's JSON schema, and a violation comes back as a tool error
 with a fix-it message, not a protocol error. The check is lenient about what
@@ -385,6 +385,8 @@ it.
 | `add_todo` | write (the person's To-do list), every scope | **no** |
 | `list_todos` | read | **no** |
 | `update_todo` | write (your own items, your descendants', items with no session; any item with `person_asked`) | **no** |
+| `list_devices` | read | **no** |
+| `send_session` | write, pushes code and starts a session on another device (yourself or a session you manage) | **no** |
 
 "Auto-approved" is the `--allowedTools` list for Claude and the
 `approval_mode = "approve"` table for Codex. The server also sends
@@ -424,6 +426,9 @@ skip-permissions**:
   pre-approved list yet (see [Routes](#routes-from-a-sentence-to-a-running-route)).
 - `add_todo`, `list_todos` and `update_todo` are not on the pre-approved
   list yet either (see [To-do](#to-do-what-the-person-does-by-hand)).
+- `send_session` pushes a branch and starts a session on another machine
+  (`openWorldHint` true); `list_devices` is a read that is not pre-approved
+  yet (see [Devices](#devices-send-a-session-to-another-of-your-machines)).
 
 So an orchestrator launched **without** skip-permissions stops on a
 permission dialog for each message, spawn, answer and close/delete. Run orchestrators
@@ -1642,6 +1647,69 @@ in every scope including `readonly`. Anything else is refused with the
 owning session's name. Sends `PATCH /api/todo/items/{id}`; the server's
 `{"error": …}` comes back as the tool error.
 
+## Devices: send a session to another of your machines
+
+"Send tripwire to my Mac": one call carries a session's work to another of
+the user's own devices (Settings → Your devices, or a token-paired device)
+and starts it there. Only git and a short text brief travel — never an agent
+login, credential file or conversation transcript (a copied Claude refresh
+token logs the real install out). The work is one server route, `POST
+/api/instances/{title}/send-to-device` ([web-api.md](web-api.md#send-a-session-to-another-device),
+[devices.md](devices.md#send-a-session-to-another-device)); the tool is a
+thin call of it, and the CLI's `mindflock send TITLE DEVICE` is the same.
+
+### `list_devices`
+
+`{}` → `{this_device, devices: [{device, os, online, can_send, linked,
+sessions, error?}]}` from `GET /api/devices`. `linked` = on this device's
+"Your devices" roster (and saying so itself) or paired by a pasted token;
+`can_send` = linked and drivable from here now (answering, remote control
+on, a credential for it). Use the `device` value with `send_session`.
+
+### `send_session`
+
+`{device, title?, note?}` → `{ok, sent, title: "<device>::<title>",
+device, branch, pushed, already_pushed, commits, repo_path, queued,
+caveats}`. `title` defaults to the caller itself; `note` (≤ 1500 chars) is
+what the session should do there ("install this here as a launchd
+service"). In order, the server:
+
+1. checks the device is linked and answering, the session sits on a git
+   branch with a remote and a **clean** tree (uncommitted or untracked
+   files are refused by name — commit first; nothing is committed or
+   dropped for you), no red-zone breach is committed on the branch, and the
+   device has a checkout of the same repository (`GET /api/repos/find`
+   there, matched by remote URL whatever the transport; an older MindFlock is
+   matched by folder name and the result says so in `caveats`);
+2. pushes the branch: plain `git push --no-verify -u <remote> HEAD:<branch>`,
+   never a force — a remote branch that moved on is refused (rebase first),
+   one already at `HEAD` is not pushed again;
+3. starts a session on the device ON that branch (`continue_branch`), titled
+   like this one (`-2`, `-3` … when the name is taken there), with the same
+   agent CLI, marked agent-created so a short-on-memory device queues it
+   instead of refusing (`queued: true`);
+4. gives it a brief as its first prompt, labelled as a handoff from this
+   device's session: what the session was for (its create task), what was
+   done (commits since its fork point and a diffstat), where it left off (its
+   agent's last reply, as `read_output` serves it, trimmed to the tail) and
+   the note. ≤ 6000 characters.
+
+Every refusal is a plain sentence with the next step, and nothing is pushed
+unless every check passed: the device asleep or offline,
+remote control off there, not one of the user's devices, no checkout of the
+repository there (with the `git clone <url>` to run), no remote, a push
+refused (with git's reason and an auth hint), uncommitted work. The new
+session is on another device: it is not the caller's child, `report_result`
+does not reach the caller, and only `read_output` / `get_session` /
+`list_sessions` see it (`<device>::<title>`).
+
+**Who may send what** is the ship rule: the caller itself or a session it
+manages (its descendants under `children`), never a remote or pending row,
+never a team-run member, and never past a Goes as far as the user set below
+`push`. It is the stricter of the two candidates — "message/route any
+session" would let any session push and carry off another's work — and it
+still lets every session send itself.
+
 ## Messages
 
 A message is stored in the **recipient's mailbox** (`~/.mindflock/mailbox.json`)
@@ -2140,6 +2208,11 @@ stop at lane `merge`, or a kind whose `risk` includes `irreversible`), whose
 target under `children` must be a descendant. A grounded flight (no session)
 needs only write scope; `save_flight_plan` too. See
 [Routes](#routes-from-a-sentence-to-a-running-route).
+
+**Devices.** `send_session` follows the ship rule: the caller itself or a
+session it manages, never a team-run member, never past a user's Goes as far
+as below `push`; `readonly` refuses it. `list_devices` is a read. See
+[Devices](#devices-send-a-session-to-another-of-your-machines).
 
 **To-do.** `add_todo` and `list_todos` work in every scope, `readonly`
 included: adding to the person's list talks to the person and steers no

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Send a session to another of your devices.** "Send tripwire to my Mac"
+  is one call: the MCP's new `send_session` (and `list_devices` to see the
+  names; 42 tools now), `mindflock send TITLE DEVICE [--note …]`, or `POST
+  /api/instances/{title}/send-to-device`. MindFlock pushes the session's
+  branch (never a force), starts a session on that device ON the same branch
+  in its checkout of the repository, and gives it a brief as its first
+  prompt — what the session was for, its commits and changed files, its last
+  reply, your note. Only git and that brief travel: no logins, no chat
+  history. Uncommitted work, a device that is asleep or not one of yours, a
+  repository the device has no checkout of (with the `git clone` to run) and
+  a refused push are refused in a plain sentence, before anything is pushed
+  where possible. An agent may send itself or a session it manages. A new
+  `GET /api/repos/find?url=` tells which local folder is a given repository.
+  A Send button in the app is not part of this yet.
+
 ## [0.14.25] - 2026-11-20
 
 ### Changed

@@ -40,7 +40,7 @@ def _ctx(clock, **kw):
 # Text budgets and registry
 # --------------------------------------------------------------------------- #
 class TestRegistry:
-    def test_forty_tools_with_annotations(self):
+    def test_forty_two_tools_with_annotations(self):
         box, _, _ = make_box(_tree())
         tools = build_tools(box)
         assert [t.name for t in tools] == [
@@ -84,8 +84,10 @@ class TestRegistry:
             "add_todo",
             "list_todos",
             "update_todo",
+            "list_devices",
+            "send_session",
         ]
-        assert len(tools) == 40
+        assert len(tools) == 42
         by = {t.name: t for t in tools}
         for name in (
             "whoami",
@@ -136,6 +138,11 @@ class TestRegistry:
             assert by[name].annotations["openWorldHint"] is True
         assert by["save_flight_plan"].annotations["readOnlyHint"] is False
         assert by["save_flight_plan"].annotations["openWorldHint"] is False
+        # Devices: listing is a read; sending pushes and starts a session on
+        # another machine, so it always prompts.
+        assert by["list_devices"].annotations["readOnlyHint"] is True
+        assert by["send_session"].annotations["readOnlyHint"] is False
+        assert by["send_session"].annotations["openWorldHint"] is True
 
     def test_text_budgets(self):
         box, _, _ = make_box(_tree())

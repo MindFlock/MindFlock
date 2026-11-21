@@ -63,6 +63,8 @@ modules under
                      typed delivery line (the lane + routes live here)
     move_session     moving a session's workspace to a new folder (the
                      /move route's refusals, background run, session.moved)
+    send_session     sending a session to another of your devices (push its
+                     branch, start it there on that branch with a brief)
     mobile_access    phone access: tailscale URLs, QR codes, startup banner
     pane_find        in-place Ctrl+F in a live pane (tmux copy-mode search)
     pane_scroll_find in-place Ctrl+F for apps that scroll themselves (wheel + look)
@@ -198,6 +200,7 @@ from backend.web.core import (
 )  # noqa: F401 — registers the stores
 from backend.web.core import guests as _guests
 from backend.web.core import move_session as _move_session
+from backend.web.core import send_session as _send_session
 from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import terminal_ws as _terminal_ws
 from backend.web.core import guest_tunnel as _guest_tunnel
@@ -357,6 +360,7 @@ from backend.web.core.recently_closed import (
 from backend.web.core.repo_picker import (
     _has_git_dir,
     check_repo,
+    find_repos_by_url,
     search_repos,
     suggest_repos,
 )
@@ -4832,6 +4836,27 @@ async def repo_check(path: str = "") -> JSONResponse:
     return JSONResponse(await asyncio.to_thread(check_repo, path))
 
 
+@app.get("/api/repos/find")
+async def repo_find(url: str = "") -> JSONResponse:
+    """The local checkouts of the repository ``url`` names → ``{"url",
+    "matches": [{"path", "name", "remote"}]}`` (best first; ``[]`` when this
+    device has none). What a session sent here from another of your devices
+    is started in (:mod:`backend.web.core.send_session`). Local git config
+    only, no network; threaded like :func:`repo_suggestions`."""
+    if not (url or "").strip():
+        return JSONResponse({"error": "a url is required"}, status_code=400)
+
+    def _find() -> dict:
+        return find_repos_by_url(
+            url,
+            recent_paths=_recent_repo_paths(),
+            cwd=os.getcwd(),
+            extra_paths=_repo_url_workdirs(url),
+        )
+
+    return JSONResponse(await asyncio.to_thread(_find))
+
+
 @app.get("/api/repos/branches")
 async def repo_branches(path: str = "") -> JSONResponse:
     """The New-session dialog's Base branch menu for the folder in its Folder
@@ -5567,6 +5592,72 @@ async def instance_move(title: str, payload: Optional[dict] = None) -> JSONRespo
             status_code=409,
         )
     return JSONResponse(plan, status_code=202)
+
+
+@app.post("/api/instances/{title}/send-to-device")
+async def instance_send_to_device(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Send the session to another of your devices: ``{"device", "note"}`` →
+    **200** ``{"ok", "title": "<device>::<title>", "device", "remote_title",
+    "branch", "remote", "url", "pushed", "already_pushed", "commits",
+    "repo_path", "queued", "caveats"}``. Pushes its branch (never a force),
+    starts a session on that device ON the branch, and hands it a brief as its
+    first prompt — only git and that text travel
+    (:mod:`backend.web.core.send_session`). A refusal is ``{"error",
+    "code"}`` with a plain next step: 404 ``no_device``, 409 ``not_linked``
+    / ``device_offline`` / ``remote_control_off`` / ``not_connected`` /
+    ``uncommitted`` / ``repo_missing`` / ``diverged`` / ``red_zone`` /
+    ``not_git`` / ``detached``, 400 ``no_remote``, 502 ``push_failed`` /
+    ``device_refused``. Never for a guest link, a relayed request (one hop:
+    send it from the device it runs on) or a shared-folder session."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {
+                "error": "a guest link cannot send sessions to other devices",
+                "code": "guest",
+            },
+            status_code=403,
+        )
+    if _remote.from_remote(request):
+        return JSONResponse(
+            {"error": "send a session from the device it runs on", "code": "remote"},
+            status_code=400,
+        )
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    peer_err = _peer_guard.refusal(inst, "sending to another device")
+    if peer_err is not None:
+        return peer_err
+    body = payload if isinstance(payload, dict) else {}
+    device = body.get("device")
+    note = body.get("note", "")
+    if not isinstance(device, str) or not isinstance(note, str):
+        return JSONResponse(
+            {"error": "device and note must be strings", "code": "bad_request"},
+            status_code=400,
+        )
+
+    def _last_reply() -> str:
+        view, text, fallback, oerr, _status = _agent_output(inst, title, "last_reply")
+        if oerr is not None or fallback or view != "last_reply":
+            return ""
+        return text or ""
+
+    status, out = await _send_session.send(
+        inst,
+        title,
+        device,
+        note,
+        last_reply=_last_reply,
+        breaches=lambda wt: _red_zone_breaches_for(inst, wt, "HEAD"),
+    )
+    if status == 200:
+        _forget_probes(title)  # its row's pushed/stage probes are stale now
+    return JSONResponse(out, status_code=status)
 
 
 @app.post("/api/instances/{title}/background/{pid}/stop")

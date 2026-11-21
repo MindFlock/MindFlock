@@ -849,6 +849,49 @@ def connected_devices() -> List[dict]:
     return [dict(d) for d in _DEVICES.values() if _connected(d)]
 
 
+def find_device(name: str) -> Optional[dict]:
+    """A snapshot of the discovered device called ``name`` — its key, else
+    its host name, case-insensitively — or None."""
+    want = str(name or "").strip().lower()
+    if not want:
+        return None
+    for dev in _DEVICES.values():
+        if str(dev.get("key") or "").lower() == want:
+            return dict(dev)
+    for dev in _DEVICES.values():
+        if str(dev.get("host") or "").lower() == want:
+            return dict(dev)
+    return None
+
+
+def is_connected(dev: dict) -> bool:
+    """:func:`_connected` for a snapshot: drivable from here right now."""
+    return _connected(dev)
+
+
+def is_linked(dev: dict) -> bool:
+    """Whether ``dev`` is one of the person's OWN linked devices: on this
+    device's "Your devices" roster and saying so itself, or paired by a
+    pasted token. A gate-off MindFlock that merely shares the tailnet is
+    drivable (:func:`_connected`) but not linked — what carries a session's
+    work across asks for this."""
+    key = str(dev.get("key") or "")
+    return bool(token_for(key)) or (_member_device(dev) and _same_fleet(dev))
+
+
+async def refresh_instances(key: str) -> None:
+    """Re-read device ``key``'s session list now (after a create there), so
+    the next ``GET /api/instances`` already lists ``<device>::<title>``.
+    Best-effort: the mirror poll catches up otherwise."""
+    dev = _DEVICES.get(key)
+    if dev is None or aiohttp is None or not dev.get("base_url"):
+        return
+    try:
+        await _fetch_instances(dev)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _same_fleet(dev: dict) -> bool:
     """Whether ``dev``'s hello names this device's fleet (both non-empty)."""
     mine = _fleet_id()

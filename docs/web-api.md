@@ -723,6 +723,7 @@ Errors carry one human sentence and leave the form untouched:
 | POST | `/api/instances/{title}/pause` | Pause: stop the agent (its tmux session and PTY are killed) and keep the worktree and branch **exactly as they are** — no commit, no removal; `status` becomes `paused`. 400 when the engine refuses (not started, already paused) |
 | POST | `/api/instances/{title}/resume` | Resume a paused session: relaunch the agent in the same worktree. A session paused under the old scheme (worktree removed, branch kept) is rebuilt first. While memory is low **409** `{memory_confirm: true, …}` until resent with `{start_anyway: true}` |
 | POST | `/api/instances/{title}/move` | Move the session's workspace to a new folder, live: `{"dest": "<absolute folder>", "force": false}` → **202** `{title, from, to}`, then the move runs in the background (`core/move_session.py` → the engine's `MoveWorkspace`): the agent is stopped like Pause does, the folder moves (`git worktree move` + `repair` for a linked worktree, a plain move + `git worktree repair` for a main clone or a non-git folder), the provider carries its per-folder state, and the agent is relaunched there with its resume command (a paused session stays paused). Emits `session.moved {title, from, to}` or `session.move_failed {title, error, path}` (`path` = where the workspace is now). Refusals carry `{error, code}`: **404** `unknown_session`; **400** `bad_dest` (relative, inside the current workspace, parent folder missing, in the peer-link folder); **409** `exists` (something is at `dest`), `working` (agent mid-turn) and `in_flight` (its flight is running/waiting on you, or its fast-track is running) — those two yield to `"force": true` —, `moving` (a move of it already runs), `remote` (another device's row), `peer_share`, `not_ready` (no workspace on disk); **400** `bad_source` when the workspace is a sub-folder of a repo (moving it would carry tracked files out of their repo) |
+| POST | `/api/instances/{title}/send-to-device` | Send the session to another of your devices — see [Send a session to another device](#send-a-session-to-another-device) |
 | POST | `/api/instances/{title}/background/{pid}/stop` | Stop one **background job** the agent left running past its turn — the rail's **job stuck ✕** chip. Only a pid that is a *current* job root of this session (see `background` on the row and [providers.md](providers.md#background-jobs)) is signalled: SIGTERM to the job's process group, SIGKILL after 2 s. Claude Code then reports the job as ended, which may start a short turn. → `{title, pid, stopped: true}`. **404** unknown title; **409** `no such background job in this session` |
 | POST | `/api/instances/{title}/jobs/{job_id}/expect` | Say how long one **background job** should take, so it is not called stuck while inside that window — the chip menu's **Expected to take…**. Body `{duration, by?}`: `duration` is `"90s"`, `"20m"`, `"6h"`, `"2d"`, `"1h30m"` or a number of seconds, 1 minute to 14 days; `by` is `"you"` (default) or `"agent"` (the MCP tool `expect_background_job`). `job_id` is the row's `background[].id` (the id Claude Code printed when it backgrounded the command). Stored in `~/.mindflock/job_expectations.json` (under `$MINDFLOCK_HOME` when set), pruned a day after the job is gone. Precedence: a person's expectation, then the agent's, then a `MINDFLOCK_EXPECT=<duration>` prefix in the command itself; an agent's write over a person's changes nothing and answers `ok: false` with theirs. The job's stuck threshold becomes `max(15 min, 2 × longest_gap_s, 1.5 × expect_s)`, and when it first passes `expect_s` the server emits `session.job_past_expected` once. → `{ok, title, job_id, expect_s, expected_by, eta, state, reason}`. **400** bad duration or `by`; **404** unknown title, or a job id that is not a current job of this session |
 | DELETE | `/api/instances/{title}/jobs/{job_id}/expect` | Clear that expectation (a person's or the agent's; a command's own `MINDFLOCK_EXPECT=` still applies) → the same shape, `ok: false` when none was set. **404** unknown title or job |
@@ -3002,6 +3003,64 @@ would let a gate-off member launder strangers into gated ones.
 | POST | `/api/devices/{device}/disconnect` | Drop the pairing. **409** `{error: "<host> is one of your devices — remove it in Settings → Your devices"}` for a member: the fleet key keeps it connected whatever happens to a pasted token |
 | * | `/api/devices/{device}/fwd/<path>` | Forward to that device with its stored token — for a caller this device vouches for (see **Whose credential goes out** above; bare otherwise) — (502 when not connected). Allow-listed to what New Session asks: `GET /api/config`, `/api/settings`, `/api/templates`, `/api/providers`, `/api/providers/manage`, `/api/repos/suggest`, `/api/repos/search`, `/api/repos/check`, `/api/browse`; `POST /api/mkdir`, `/api/session-plan`, `/api/instances`; and for the phone's Recently closed sheet `GET /api/recently-closed` and `POST /api/recently-closed/<id>/reopen` (`<id>` one segment: no `/`, `\`, `%`, `?`, `#`, control characters or dot-only id, ≤ 256 characters, re-quoted on the way out; `…/forget` is not forwarded) — anything else 404s. A forwarded create or reopen refreshes that device's session list before answering, so the next `GET /api/instances` already carries `<device>::<title>` |
 
+### Send a session to another device
+
+`POST /api/instances/{title}/send-to-device` `{device, note?}` → **200**
+`{ok, title: "<device>::<title>", device, remote_title, branch, remote, url,
+head, pushed, already_pushed, commits, repo_path, queued, caveats}`
+(`core/send_session.py`; the MCP's `send_session`, the CLI's `mindflock
+send`). `device` is a key or host name from `GET /api/devices`; `note` is
+added to the brief.
+
+1. **Checks, before anything leaves**: the device is one of yours (a
+   "Your devices" member saying so itself, or paired by a pasted token — a
+   gate-off MindFlock that merely shares the tailnet is not), answering, with
+   remote control on; the session is on a branch of a git repository with a
+   remote (the branch's upstream remote, else `origin`) and a clean tree,
+   untracked files included; no red-zone breach is committed on the branch
+   (the Push button's override does not exist here); and the device has a
+   checkout of the repository: `GET /api/repos/find?url=` there, or — a
+   MindFlock without that route (404) — the `/api/repos/suggest` entry
+   with the repository's folder name (a caveat says so; the create's own
+   fetch of the branch proves it).
+2. **Push**: `git push --no-verify -u <remote> HEAD:refs/heads/<branch>`
+   with prompts off — never a force. The remote branch is fetched first:
+   behind it is a refusal (rebase), already at `HEAD` is no push
+   (`already_pushed`).
+3. **Start it there**: `POST /api/instances` on the device with
+   `{title, repo_path, base_ref: "<its remote>/<branch>", continue_branch,
+   program, spawned: true, prompt: <brief>}` — the session works ON the
+   branch ([Continue a pushed branch](#post-apiinstances--202)). A title
+   taken there steps to `-2` … `-5`. `spawned` lets a short-on-memory
+   device queue it (`queued: true`) instead of asking a person to confirm.
+   The device's session list is re-read before answering.
+
+The brief (≤ 6000 characters) is labelled as a handoff from this device's
+session and carries the session's create task (the worker footer dropped),
+its commits since the fork point and a diffstat, its agent's last reply (the
+`/output?view=last_reply` text, tail-trimmed) and the note. Only git and that
+text travel: no agent login, credential file or transcript.
+
+| Refusal | Status, `code` |
+|---|---|
+| no such device (the error lists the known ones), or this device | **404** `no_device`, **400** `same_device` |
+| not one of your devices | **409** `not_linked` |
+| asleep / offline / not answering | **409** `device_offline` (**502** when it stopped answering after the push: the branch is pushed) |
+| remote control off there; credential refused | **409** `remote_control_off`, `not_connected` |
+| no workspace, not a git repository, detached HEAD | **409** `no_workspace`, `not_git`, `detached` |
+| uncommitted or untracked files (named, `files`) | **409** `uncommitted` |
+| no remote | **400** `no_remote` |
+| a red-zone breach committed on the branch | **409** `red_zone` (`red_zone_breaches`) |
+| the device has no checkout of the repository (the `git clone <url>` to run, `url`) | **409** `repo_missing` |
+| the remote branch moved on | **409** `diverged` (`behind`) |
+| git refused the push (git's last line, an auth hint, `detail`) | **502** `push_failed` |
+| the device refused the create (its error) | **502** `device_refused`; **409** `title_taken` past `-5` |
+| a guest link; a relayed (`X-MindFlock-Remote`) request — one hop: send from the device it runs on; a shared-folder session | **403** `guest`, **400** `remote`, **409** (`peer_share: true`) |
+
+Nothing is pushed unless every check above passed. The route talks to
+the device directly with this device's credential for it — it adds nothing
+to the `fwd/` allow-list.
+
 ### Your devices (fleet)
 
 One person's computers as one group (`backend.web.core.fleet`, routes in
@@ -3366,6 +3425,7 @@ ask: {state: ""|"asking"|"failed", at, until, error}, theirs_unsupported, link_i
 | GET/POST | `/api/window-refresh` | The scheduled coding-CLI keepalive: config + per-provider `last_fired` (Settings → Agent CLI) |
 | GET | `/api/repos/suggest` | `{suggestions, home}` — folders to offer instead of a bare tree: the recency ladder (`general.last_repo_path` → live sessions newest-touched → the closed-session undo store), the folder the server was launched from, then a shallow sweep of the usual code directories. `POST /api/session-plan` builds its numbered folder menu from the **same** `server._recent_repo_paths` ladder (plus up to three name lookups drawn from the sentence), so the dialog's suggestion chips and a plan can never offer different folders |
 | GET | `/api/repos/branches?path=` | The New-session dialog's **Base branch** menu for the folder in its Folder field: `{path, is_git, current, default, branches: [{name, remote, current}], truncated}` — local branches first (the checked-out one on top, then newest-first), then remote-tracking refs (`origin/HEAD` left out), capped at 200 (`truncated: true` past that); memoised 10 s per folder. `default` is what the server cuts from when nothing is chosen (origin's HEAD, else `main`/`master`, else the checked-out branch). A folder that is not a repo answers `is_git: false` with an empty list; only a blank path is **400**. The dialog sends a pick as `base_ref` + `base_branch` (same name) on `POST /api/instances`, and only for a plain new-worktree session — the server refuses the pair for in-place and provisioned ones |
+| GET | `/api/repos/find?url=` | The local checkouts of the repository `url` names → `{url, matches: [{path, name, remote}]}`, best first (`[]` when there is none): the `/api/repos/suggest` places plus the provisioning base clone for the URL, kept when one of the folder's remotes is the same repository whatever the transport (`git@host:o/r.git` = `https://host/o/r`); `remote` is the matching remote's name, `origin` preferred. Local git config only, no network. What a session sent here from another of your devices starts in ([Send a session to another device](#send-a-session-to-another-device)). **400** without a url |
 | GET | `/api/browse?path=` | Directory listing `{path, parent, is_git, entries}` for the New-session dialog |
 | POST | `/api/mkdir` | Body `{path, name}` (single path segment) → `{path}` |
 | POST | `/api/paste-image?session=&name=` | Save a file pasted or dropped in the browser (raw bytes as the body) → `{path}`, the **absolute** path the UI then types into the PTY. `?session=<title>` stores it in that session's workspace under `.mindflock_pastes/` (git-excluded, so the agent needs no out-of-tree read); **omitting** `session` — the Assistant window, which has no worktree, and the phone UI — stores it under `~/.mindflock/pastes`. `?name=` keeps a sanitized copy of the original filename so the agent sees `report.pdf` rather than a blob; without it the extension comes from the content type (`image/png|jpeg|gif|webp|bmp`, else `.png` for any other `image/*`, else `.bin`). 400 on an empty body, 413 over 20 MB. Transient: each write prunes its own directory to the newest few pastes |
