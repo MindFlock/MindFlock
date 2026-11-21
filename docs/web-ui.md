@@ -4997,17 +4997,51 @@ command*, *Until is a time of day, like 18:00*).
 bar and the agent tile) is **Offline · Restart**, as on the rail, and its
 Needs-you row says why and offers **Restart**. A route parked on you whose
 session was closed says so under its stop — *Its session is closed, so no
-agent can fix this: Retry or Skip it, or Stop the route to end it* — not
-only in a tooltip. A failed stop's dialog says the failure once (*It failed:
+agent can fix this: Run again reopens it, or Skip this stop, or Stop the route
+to end it* — not only in a tooltip (round 5: Run again leads there). A failed stop's dialog says the failure once (*It failed:
 test_export_empty*, not *CI checks failed: …* under the CI checks name), and
 a pause says whose it is (*Paused by you*, or *Paused: stop removed*).
 
-**Building a route** (2026-11-20). The shelf says "Click to add · drag to
-place" beside its chips (it no longer says "Stops" three times). The
+**Building a route** (2026-11-20; round 5: a click adds to the route being
+built). The shelf says "Click to add · drag to place" beside its chips (it no longer says "Stops" three times). The
 catalog's compact cards (All stops…) show two lines of what each stop does.
 Right-click on empty sky opens **Add a stop…** wholly in view: low on the sky
 it opens upward, above the shelf, and at the right edge leftward
 (lib/skyLayout `menuSpot`).
+
+**Round 5: the owner's ten decisions** (2026-11-21). One state reads the
+same on the Sky, the rail, the bell, the phone and in voice:
+- A session at a **Wait for me** stop reads **Needs you: <stop>** (the stop
+  keeps its kind's name on the Sky and the shelf).
+- A route at a **halt point** needs you: an amber chip "Paused before <stop>",
+  in the bell, as the frame already said. A pause you made is calm, "Paused
+  by you"; one the server made, "Paused route".
+- The route's **first Agent stop** wears a task face (a clipboard, "gives the
+  agent the ticket"), not the agent tile's sparkle.
+- A **shelf click** adds the stop to the end of the route you are building
+  (the focused route with no session); with none, it places a new route and
+  focuses it. A toast says where it went. Dragging still places anywhere.
+- A route with no session shows its **name and ▶ Run quietly at rest** (muted,
+  no border; full on hover).
+- "If it fails" shows only where the server's kind says `can_fail` (the old
+  list stays as the fallback for an older server or a peer).
+- A **closed session's halted route** leads with **Run again** (it reopens the
+  session); Retry only on a stop that needs no session; then Skip and Stop
+  the route.
+- On a **test, CI checks or Verify failure** "Let the agent fix it" is the
+  primary remedy, Retry beside it — on the stop, its dialog, its ⋯, the
+  Needs-you panel, the bell's row and the phone. Other failures lead with
+  Retry.
+- A **narrow Sky** (under 900 px) folds the Intake lane to its rail by itself
+  ("Intake folded to make room on a narrow Sky"); open it and it stays open;
+  with room again it unfolds — unless you folded it yourself
+  (lib/skyLayout `laneFolded`).
+- A stop **held by its session** (the agent offline or at its usage limit) is
+  never the green working glow: a still dashed tile in the waiting tone,
+  "Held · agent offline" with **Restart** (Start after a crash) or "Held ·
+  usage limit, resumes 14:30"; the bird stays still, the bar says "held at
+  <stop>", a limited route's frame is dashed blue; the phone's row says "Held
+  at <stop> · agent offline".
 
 **The phone.** Below 600px wide there is no pan or zoom: the toolbar, the
 drawer, then the lines as a plain list, each line's canvas running top to

@@ -14,7 +14,7 @@ import { windowName } from "../../lib/windowName";
 import { loopable, type ChainGraph } from "../../lib/skyGraph";
 import { menuItemsFor } from "../../lib/stopEditing";
 import { controlFlight, flyAgain, joinParallel, leaveParallel, answerBehaviors, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
-import { isParallelSafe, type Flight, type FlightStep, type StepKindDef } from "../../lib/flights";
+import { FIX_LEADS, isParallelSafe, type Flight, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { canFlyAgain } from "../../lib/routeStart";
 import { StopMenu, type SkyMenuItem } from "./StopMenu";
 
@@ -88,17 +88,27 @@ export function loopMenuItems(choices: readonly LoopChoice[]): SkyMenuItem[] {
 const HERE: ReadonlySet<string> = new Set(["current", "perched", "halted", "paused"]);
 
 /** Round 21: "Let the agent fix it" on ANY halted stop, right after Retry
- * (lib/stopEditing offers it on a Verify stop only). A stop is drawn halted
- * only when it failed — a halt point pauses, it doesn't halt — which is what
- * the server's fix op takes (FlightStrip `canFixStep`). */
-export function withFixItem(items: readonly SkyMenuItem[], n: Pick<DiagramNode, "state" | "title">, fixable = true): SkyMenuItem[] {
-  const out = [...items];
+ * (lib/stopEditing offers it on a Verify stop only) — or, round 5, right
+ * BEFORE it on a test, CI or Verify failure (lib/flights `FIX_LEADS`: the
+ * remedy that usually works leads, as on the stop's buttons). A stop is
+ * drawn halted only when it failed — a halt point pauses, it doesn't halt —
+ * which is what the server's fix op takes (FlightStrip `canFixStep`). */
+export function withFixItem(items: readonly SkyMenuItem[], n: Pick<DiagramNode, "state" | "title"> & { step?: { kind?: string } | null }, fixable = true): SkyMenuItem[] {
+  let out = [...items];
   // `fixable` false: the route has no session whose agent could fix it.
   if (!fixable) return out.filter((i) => i.key !== "fix");
-  if (n.state !== "halted" || out.some((i) => i.key === "fix")) return out;
+  if (n.state !== "halted") return out;
   const at = out.findIndex((i) => i.key === "retry");
-  if (at < 0) return out;
-  out.splice(at + 1, 0, { key: "fix", label: "Let the agent fix it", title: "Hand the failure to the agent — “" + n.title + "” runs again after its fix" });
+  if (!out.some((i) => i.key === "fix")) {
+    if (at < 0) return out;
+    out.splice(at + 1, 0, { key: "fix", label: "Let the agent fix it", title: "Hand the failure to the agent — “" + n.title + "” runs again after its fix" });
+  }
+  if (FIX_LEADS.has(String(n.step?.kind || ""))) {
+    const fix = out.find((i) => i.key === "fix")!;
+    out = out.filter((i) => i !== fix);
+    const r = out.findIndex((i) => i.key === "retry");
+    out.splice(r < 0 ? 0 : r, 0, fix);
+  }
   return out;
 }
 

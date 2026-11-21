@@ -330,10 +330,10 @@ describe("follow-up: what the screenshot pass found", () => {
     expect(ss).toMatchObject({ state: "needs_you", reason: "flight_you", label: "Needs you: Second opinion", inBell: true });
     expect(ss.hint).toContain("2 findings still open after 3 rounds");
     expect(needsYouAction(ss)?.aria).toBe("Needs you: Second opinion — answer it in the bell");
-    // A Wait for me stop keeps its words.
+    // A Wait for me stop reads the same (round 5), its remedy Done.
     const perch = deriveSessionState({ title: "lead", status: "running", activity: "idle", flight: { ...reviewRow, step: { ...reviewRow.step, kind: "you", title: "Approve", actor: "you" } } } as unknown as Instance);
-    expect(perch.label).toBe("Wait for me: Approve");
-    expect(needsYouAction(perch)?.aria).toBe("Wait for me: Approve — press Done in the bell");
+    expect(perch.label).toBe("Needs you: Approve");
+    expect(needsYouAction(perch)?.aria).toBe("Needs you: Approve — press Done in the bell");
   });
 
   it("2. the owed note is muted over button.linklike's accent (a more specific rule)", () => {

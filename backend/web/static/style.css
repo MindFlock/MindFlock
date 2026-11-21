@@ -4622,6 +4622,15 @@ button.assist-chip:hover {
   animation: fl-box-glow 1.8s ease-in-out infinite;
 }
 
+/* Round 5: held by its session (agent offline / limited) — still and dashed
+   in the waiting tone, never the working pulse. */
+.fl-st-current.fl-held {
+  border-style: dashed;
+  border-color: var(--tone-waiting);
+  box-shadow: none;
+  animation: none;
+}
+
 /* Perched on you: the gold outline and a gold wash (its text stays the
    text colour; text ON solid gold is --tone-attention-ink). */
 .fl-st-perched {
@@ -5236,6 +5245,11 @@ button.assist-chip:hover {
 
 .fl-bird-marker.tone-paused {
   color: var(--muted);
+}
+
+/* Held by its session (agent offline / limited): still, in the waiting tone. */
+.fl-bird-marker.tone-held {
+  color: var(--tone-waiting);
 }
 
 @keyframes fl-bird-bob {
@@ -6333,6 +6347,22 @@ button.assist-chip:hover {
   border-color: var(--muted);
 }
 
+/* Round 5: HELD by its session — the current stop of a running route whose
+   agent is offline or at its usage limit. Never the green working glow: a
+   still, dashed tile in the waiting tone (the rail's "Waiting on limit"
+   colour), its icon dimmed, its line ("Held · agent offline") in that tone
+   and its remedy (Restart / Start) on its face. */
+.sky-node.st-current.is-held .sky-tile {
+  border: 1.5px dashed var(--tone-waiting);
+  box-shadow: none;
+}
+.sky-node.is-held .sky-tile-icon {
+  opacity: 0.6;
+}
+.sky-node.is-held .sky-node-sub {
+  color: var(--tone-waiting);
+}
+
 .sky-node.st-done .sky-tile {
   background: color-mix(in srgb, var(--sky-tile-bg) 70%, transparent);
 }
@@ -7010,8 +7040,9 @@ button.assist-chip:hover {
 
 /* --- A chain with no session: its run button (n8n's trigger ▶) --------------
    On the left of the first stop, where a run starts — never a label floating
-   over the chain. At rest it shows on hover; while the chain runs it stays,
-   as ■ (stop the run). */
+   over the chain. Round 5: at rest it shows quietly (the only way to run the
+   stops — it must be findable without a hover), full on hover; while the
+   chain runs it stays, as ■ (stop the run). */
 .sky-chain .sky-run {
   position: absolute;
   z-index: 3;
@@ -7027,7 +7058,7 @@ button.assist-chip:hover {
   line-height: 1;
   padding: 0 0 0 2px;
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.55;
   transition: opacity 0.12s, background 0.12s, color 0.12s;
 }
 .sky-chain .sky-run.is-running {
@@ -16208,17 +16239,25 @@ details.fl-group-waiting > summary {
 }
 
 /* A stops-only chain is free-floating blocks: its label (name, ⋯ — the drag
-   handle) shows on hover, focus or selection, not as a frame waiting for a
-   session. */
+   handle) is not a frame waiting for a session. Round 5 (the owner): its
+   name shows QUIETLY at rest — muted, no border, no fill — so a newcomer
+   sees what the stops are and that they can run; full on hover, focus or
+   selection. */
 .skl-chainline.skl-grounded > .skl-bar.skl-label {
-  opacity: 0;
-  transition: opacity 0.12s;
+  opacity: 0.72;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  transition: opacity 0.12s, border-color 0.12s, background 0.12s, color 0.12s;
 }
 .skl-chainline.skl-grounded:hover > .skl-bar.skl-label,
 .skl-chainline.skl-grounded:focus-within > .skl-bar.skl-label,
 .skl-chainline.skl-grounded.is-selected > .skl-bar.skl-label,
 .skl-chainline.skl-grounded.is-focused > .skl-bar.skl-label {
   opacity: 1;
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  color: inherit;
 }
 
 /* --- Round 20: a session is a FRAME round its chain ------------------------
@@ -16369,6 +16408,12 @@ details.fl-group-waiting > summary {
    amber, no breathing — so it never reads as one still running. */
 .skl-frame[data-frame="paused"] > .skl-frame-box {
   border: calc(1.5px / var(--sky-z, 1)) dashed color-mix(in srgb, var(--muted) 70%, transparent);
+}
+/* Held (round 5): the route runs, but its stop waits on the session's agent
+   (at its usage limit): still and dashed in the waiting tone — no breathing,
+   so it never reads as work going on. */
+.skl-frame[data-frame="held"] > .skl-frame-box {
+  border: calc(1.5px / var(--sky-z, 1)) dashed var(--tone-waiting);
 }
 /* The working cue: a ring that breathes (opacity only: no repaint). */
 .skl-frame[data-frame="working"] > .skl-frame-box::after {

@@ -1125,17 +1125,25 @@
 }
 
 /* A stops-only chain is free-floating blocks: its label (name, ⋯ — the drag
-   handle) shows on hover, focus or selection, not as a frame waiting for a
-   session. */
+   handle) is not a frame waiting for a session. Round 5 (the owner): its
+   name shows QUIETLY at rest — muted, no border, no fill — so a newcomer
+   sees what the stops are and that they can run; full on hover, focus or
+   selection. */
 .skl-chainline.skl-grounded > .skl-bar.skl-label {
-  opacity: 0;
-  transition: opacity 0.12s;
+  opacity: 0.72;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  transition: opacity 0.12s, border-color 0.12s, background 0.12s, color 0.12s;
 }
 .skl-chainline.skl-grounded:hover > .skl-bar.skl-label,
 .skl-chainline.skl-grounded:focus-within > .skl-bar.skl-label,
 .skl-chainline.skl-grounded.is-selected > .skl-bar.skl-label,
 .skl-chainline.skl-grounded.is-focused > .skl-bar.skl-label {
   opacity: 1;
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  color: inherit;
 }
 
 /* --- Round 20: a session is a FRAME round its chain ------------------------
@@ -1286,6 +1294,12 @@
    amber, no breathing — so it never reads as one still running. */
 .skl-frame[data-frame="paused"] > .skl-frame-box {
   border: calc(1.5px / var(--sky-z, 1)) dashed color-mix(in srgb, var(--muted) 70%, transparent);
+}
+/* Held (round 5): the route runs, but its stop waits on the session's agent
+   (at its usage limit): still and dashed in the waiting tone — no breathing,
+   so it never reads as work going on. */
+.skl-frame[data-frame="held"] > .skl-frame-box {
+  border: calc(1.5px / var(--sky-z, 1)) dashed var(--tone-waiting);
 }
 /* The working cue: a ring that breathes (opacity only: no repaint). */
 .skl-frame[data-frame="working"] > .skl-frame-box::after {

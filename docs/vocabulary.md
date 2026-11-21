@@ -39,12 +39,13 @@ the work, check the work, or ask a person**.
 | **Run** / **Run now** | start a route (or a template) now | Fly, Fly now, Fly these stops, Take off (as a button) |
 | **Starts:** By hand / Ticket / Schedule / … | what starts a saved route | Takes off… (as a dialog/menu name; "takes off" may stay as a verb in a sentence) |
 | **Stop the route** | cancel a running route | Stop the chain, Cancel flight |
-| **Paused** (**Pause** / **Carry on**) | a person holds the route where it is; **Carry on** picks it up | Halt now, Halt (for a pause) |
+| **Paused** (**Pause** / **Carry on**) | a person holds the route where it is; **Carry on** picks it up. A session's chip says **Paused by you** (calm); at a halt point **Paused before <stop>** (amber: it needs you) | Halt now, Halt (for a pause) |
+| **Held** | the stop a running route is at waits on the session's agent, which is offline or at its usage limit: "Held · agent offline" (Restart), "Held · usage limit" — never shown as working | Working (for it), Paused (for it) |
 | **Halted** | a stop failed and the route waits (red): **Retry**, **Skip** or **Let the agent fix it**, on the stop | Paused (for a failure), perch, recovery |
 | **halt point** (**Add halt point** / **Remove halt point**) | a breakpoint a person sets on a stop: the route **pauses** before it until you press Carry on | Halt here, Carry on past here, Pause here |
 | **Add a stop** · **Jump here** · **Retry** · **Skip** · **Let the agent fix it** | the stop actions | Tack on, Fly here |
 | **If it fails:** Halt · Let the agent fix it · Skip · Ask me | a stop's failure option | on_fail, recovery ladder |
-| **Wait for me** | the stop kind that waits for your OK | Perch, You (as the kind's name) |
+| **Wait for me** | the stop kind that waits for your OK — a session parked at one reads **Needs you: <stop>** | Perch, You (as the kind's name); "Wait for me: …" as a session's state |
 | **Needs you** | everything waiting on a person (the bell's word) | Perched on you, Waiting on you, Needs attention |
 | **Verify** | the session's own agent checking its own work — on demand from the session, or as a stop on its route — and the verb (2026-11-10: replaces "behaviors") | behaviors, checker, checklist, verify session, test plan; Verify dialog/tab (it is not a place) |
 | **steps** | what Verify's agent checks, each with its result and evidence; a step only a person can do is **yours** | behaviors, check items, test steps |

@@ -45,7 +45,7 @@ describe("a halt point reads 'before' everywhere", () => {
   it("the bell's row, the session's hint and the phone's mirror", () => {
     expect(pausedAtLine("Push")).toBe("Paused before Push — Carry on");
     expect(pausedAtLine("")).toBe("Paused at its halt point — Carry on");
-    expect(code("lib/sessionState.ts")).toContain('"reached its halt point before "');
+    expect(code("lib/sessionState.ts")).toContain('reached its halt point before "');
     // The phone (static/mobile.js) mirrors these: tests/unit/test_flight_plain_errors.py.
   });
 });

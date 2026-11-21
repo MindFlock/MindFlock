@@ -79,9 +79,12 @@ describe("1. a route running on its own", () => {
     expect(h).toMatchObject({ label: "Halted", tone: "broken" });
     expect(h.title).toContain("3 tests red");
     expect(h.title).toContain("Retry");
-    expect(G.runChip(flight({ state: "paused", reason: "" }))).toMatchObject({ label: "Paused", tone: "muted" });
-    expect(G.runChip(atHalt())).toMatchObject({ label: "At your halt point", tone: "attention" });
-    expect(G.runChip(waiting())).toMatchObject({ label: "Needs you", tone: "attention" });
+    // Round 5: the session chip's words for the same states.
+    expect(G.runChip(flight({ state: "paused", reason: "" }))).toMatchObject({ label: "Paused by you", tone: "muted" });
+    expect(G.runChip(flight({ state: "paused", reason: "stop removed" }))).toMatchObject({ label: "Paused", tone: "muted" });
+    expect(G.runChip(atHalt()).tone).toBe("attention");
+    expect(G.runChip(atHalt()).label).toMatch(/^Paused before /);
+    expect(G.runChip(waiting())).toMatchObject({ label: "Needs you: Look at the diff", tone: "attention" });
     expect(G.runChip(waiting()).title).toContain("Check the screenshots match");
     expect(G.runChip(flight())).toMatchObject({ label: "Running", tone: "working" });
   });
@@ -157,7 +160,8 @@ describe("2. the drawer says why", () => {
   it("a waiting row shows the stop's note; a halted one its failure; a halt point says so; the bare 'needs you' never", () => {
     expect(perchLine(waiting(), KINDS)).toContain("Check the screenshots match");
     expect(perchLine(halted(), KINDS)).toBe("Fix it — Failed: 3 tests red");
-    expect(perchLine(atHalt(), KINDS)).toContain("Paused at your halt point");
+    // Round 5: the bell's own words.
+    expect(perchLine(atHalt(), KINDS)).toBe("Paused before Fix it — Carry on");
     const bare = flight({ state: "waiting_you", steps: [step("s1", "you", "Look")], reason: "needs you" });
     expect(G.perchWhy(bare)).toBe("");
     const failed = flight({ state: "waiting_you", step_states: { s1: rec("waiting_you", { detail: { failed_reason: "lint failed" } }) } });

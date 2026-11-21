@@ -24823,6 +24823,45 @@ function skipCarriesOn(flight) {
 function sessionGone(flight, rows) {
 	return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
 }
+function canFixStep(flight) {
+	if (!flight || !flight.session || flight.state !== "halted" && flight.state !== "waiting_you") return false;
+	const step = flight.steps[flight.cursor];
+	const ss = step ? flight.step_states?.[step.id] : void 0;
+	if (!ss) return false;
+	if (ss.state === "failed") return !ss.detail?.moved_on;
+	return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
+}
+var FIX_LEADS = /* @__PURE__ */ new Set([
+	"test",
+	"checks",
+	"verify"
+]);
+function retryWorksGone(kind, kinds) {
+	const def = kinds?.find((k) => k?.kind === kind);
+	return !!def && def.needs_session === false;
+}
+function haltedRemedies(o) {
+	if (o.gone) {
+		const out = [];
+		if (o.state === "halted") out.push("again");
+		if (o.retryWorks) out.push("retry");
+		return [
+			...out,
+			"skip",
+			"stop"
+		];
+	}
+	if (o.canFix && FIX_LEADS.has(o.kind)) return [
+		"fix",
+		"retry",
+		"skip"
+	];
+	return o.canFix ? [
+		"retry",
+		"fix",
+		"skip"
+	] : ["retry", "skip"];
+}
 //#endregion
 //#region src/api/client.ts
 var ApiError = class extends Error {
@@ -25597,7 +25636,8 @@ var STATE_LABEL$1 = {
 };
 var REASON_LABEL = {
 	question: "Question",
-	flight_you: "Wait for me",
+	flight_you: "Needs you",
+	flight_paused: "Paused before its halt point",
 	flight_halted: "Halted",
 	precommit_failed: "Pre-commit failed",
 	checks_failing: "Checks failing",
@@ -25611,6 +25651,7 @@ var VERIFIED_LABEL = "Verified";
 var NOTIFY_RULE = {
 	question: "needs_input",
 	flight_you: "flight_needs_you",
+	flight_paused: "flight_needs_you",
 	flight_halted: "flight_finished",
 	precommit_failed: "precommit_failed",
 	setup_failed: "setup_failed",
@@ -25684,7 +25725,11 @@ function needsYou(reason, hint) {
 	};
 }
 function flightYouLabel(stepTitle) {
-	return perchLabel(stepTitle);
+	return perchedOnYou(stepTitle);
+}
+function haltPointLabel(stepTitle) {
+	const t = String(stepTitle || "").trim();
+	return t ? "Paused before " + t : REASON_LABEL.flight_paused;
 }
 function haltedHint(fl) {
 	const at = String(fl.step?.title || "").trim();
@@ -25698,6 +25743,10 @@ function haltedState(fl) {
 	};
 }
 var PAUSED_FLIGHT_LABEL = "Paused route";
+var PAUSED_BY_YOU_LABEL = "Paused by you";
+function isPausedRouteChip(ss) {
+	return ss?.label === PAUSED_FLIGHT_LABEL || ss?.label === PAUSED_BY_YOU_LABEL;
+}
 var HELD_WORKER_LABEL = "Waiting";
 function waitingState(w, now) {
 	return {
@@ -25902,14 +25951,19 @@ function deriveSessionState(inst, extras) {
 	const verifySpeaks = fl?.step?.kind === "verify" && !!verifyEarly && !!verifyNeedsYou(verifyEarly);
 	if (fl && fl.state === "waiting_you" && fl.step && (fl.step.actor === "you" || !verifySpeaks)) {
 		const perch = fl.step.actor === "you";
-		const label = perch ? flightYouLabel(fl.step.title) : perchedOnYou(fl.step.title);
+		const label = flightYouLabel(fl.step.title);
 		const why = String(fl.step.note ?? "").trim();
 		return {
+			perch,
 			...needsYou("flight_you", label + " — route “" + fl.plan_name + "” needs you" + (!perch && why ? ": " + why : "") + (perch ? "; press Done on its strip, the Sky or the bell" : "; answer it on its strip, the Sky or the bell")),
 			label
 		};
 	}
 	if (fl && fl.id && fl.state === "halted" && !askedInWords(inst)) return haltedState(fl);
+	if (fl && fl.id && fl.state === "paused" && fl.reason === "halt point" && !askedInWords(inst)) return {
+		...needsYou("flight_paused", "Route “" + fl.plan_name + "” reached its halt point before " + (fl.step?.title || "its next stop") + " — Carry on from its strip, its stop on the Sky or the bell"),
+		label: haltPointLabel(fl.step?.title)
+	};
 	const bgHint = backgroundHint(inst);
 	const verify = verifyOf(inst);
 	if (verify?.state === "verifying" && act !== "limit" && act !== "offline") return {
@@ -25968,14 +26022,17 @@ function deriveSessionState(inst, extras) {
 		return needsYou("precommit_failed", step ? "Pre-commit failed at: " + step : "Pre-commit failed");
 	}
 	if (inst.check && inst.check.state === "failed" && !inst.check.stale) return needsYou("checks_failing", "Checks failed — push is gated until they pass (or push anyway)");
-	if (inst.flight?.state === "paused") return {
-		state: "idle",
-		label: PAUSED_FLIGHT_LABEL,
-		tone: "neutral",
-		inBell: false,
-		restartable: false,
-		hint: "Route “" + inst.flight.plan_name + "” " + (inst.flight.reason === "halt point" ? "reached its halt point before " : "is paused at ") + (inst.flight.step?.title || "its current stop") + " — Carry on from its strip or its stop on the Sky"
-	};
+	if (inst.flight?.state === "paused") {
+		const why = String(inst.flight.reason || "").trim();
+		return {
+			state: "idle",
+			label: why ? PAUSED_FLIGHT_LABEL : PAUSED_BY_YOU_LABEL,
+			tone: "neutral",
+			inBell: false,
+			restartable: false,
+			hint: "Route “" + inst.flight.plan_name + "” " + (why ? "is paused at " : "was paused by you at ") + (inst.flight.step?.title || "its current stop") + (why ? " (" + why + ")" : "") + " — Carry on from its strip or its stop on the Sky"
+		};
+	}
 	if (verify?.state === "passed") return {
 		state: "idle",
 		label: VERIFIED_LABEL,
@@ -26013,7 +26070,11 @@ function needsYouAction(ss, prUrl) {
 		};
 		case "flight_you": return {
 			act: "bell",
-			aria: ss.label + (/^wait for me\b/i.test(ss.label) ? " — press Done in the bell" : " — answer it in the bell")
+			aria: ss.label + (ss.perch ? " — press Done in the bell" : " — answer it in the bell")
+		};
+		case "flight_paused": return {
+			act: "bell",
+			aria: ss.label + " — your halt point: Carry on in the bell"
 		};
 		case "flight_halted": return {
 			act: "bell",
@@ -29972,7 +30033,7 @@ function stateChip(ss) {
 	if (ss.label === "Paused") cls = "s-paused";
 	else if (ss.label === SLEEPING_LABEL) cls = "s-sleeping";
 	else if (ss.label === "Missing") cls = "s-missing";
-	if (ss.reason === "flight_you" || ss.label === PAUSED_FLIGHT_LABEL) cls += " chip-flight";
+	if (ss.reason === "flight_you" || ss.reason === "flight_paused" || isPausedRouteChip(ss)) cls += " chip-flight";
 	return {
 		label: ss.label,
 		cls: cls + " tone-" + ss.tone,
@@ -35555,6 +35616,14 @@ var FULL_DETAIL_LODS = [{
 	z: 1
 }];
 var nearLines = (z) => lodFor(z) === "near" ? Math.max(2, Math.min(8, Math.floor(z * 2))) : 0;
+var LANE_FOLD_BELOW = 900;
+var skyIsNarrow = (w) => w > 0 && w < LANE_FOLD_BELOW;
+function laneFolded(hand, narrow) {
+	return hand === "folded" || narrow && hand !== "open";
+}
+function laneHandAfter(fold, narrow) {
+	return fold ? "folded" : narrow ? "open" : null;
+}
 var SKY_DRAWER_KEY = "mf_sky_drawer";
 var skyDrawerOpen = (pref) => pref === "1";
 var FLYWAY_MIME = "application/x-mindflock-flyway";
@@ -36587,7 +36656,11 @@ function onFailHint(k, kind = "") {
 }
 var capital = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 var NEVER_FAILS = /* @__PURE__ */ new Set(["you", "wait"]);
-var canFail = (kind) => !NEVER_FAILS.has(kind);
+function canFail(kind, kinds) {
+	const def = kinds?.find((k) => k?.kind === kind);
+	if (def && typeof def.can_fail === "boolean") return def.can_fail;
+	return !NEVER_FAILS.has(kind);
+}
 function stopDoes(step) {
 	const c = step.config || {};
 	const n = (v, d) => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d;
@@ -36626,7 +36699,7 @@ function stopDoes(step) {
 		default: return "";
 	}
 }
-function stopSentence(step, fallback = "halt", body = "") {
+function stopSentence(step, fallback = "halt", body = "", kinds) {
 	const out = [];
 	if (step.halt) out.push("The route pauses here first (a halt point) — Carry on to run it.");
 	const when = (step.when || "").trim();
@@ -36635,7 +36708,7 @@ function stopSentence(step, fallback = "halt", body = "") {
 		out.push(body);
 		return out.join(" ");
 	}
-	if (!canFail(step.kind)) return out.join(" ");
+	if (!canFail(step.kind, kinds)) return out.join(" ");
 	const k = step.on_fail || fallback;
 	out.push("If it fails, " + (k === "agent" ? "the agent gets the failure and the stop runs again, up to " + FIX_ROUNDS + " rounds" : k === "skip" ? "the route goes on without it" : k === "you" ? "the route waits on you" : "the route halts, red") + ".");
 	return out.join(" ");
@@ -37035,7 +37108,7 @@ function stopOptionsLine(s, kinds) {
 	const fallback = defaultOnFail(kinds?.find((k) => k.kind === s.kind));
 	const failSet = !!s.on_fail && s.on_fail !== fallback;
 	if (!s.halt && !(s.when || "").trim() && !failSet) return "";
-	return stopSentence(s, fallback);
+	return stopSentence(s, fallback, "", kinds);
 }
 function addNode(title) {
 	return {
@@ -37084,6 +37157,7 @@ function flightStops(f, kinds) {
 	const grounded = f.state === "grounded" || f.state === "ready";
 	const [glo, ghi] = parallelSpan(f.steps, f.cursor);
 	const open = Math.max(f.cursor + 1, ghi);
+	const firstAgent = f.steps.findIndex((s) => s.kind === "agent");
 	return f.steps.map((s, i) => {
 		const st = stepStateOf(f, s, i);
 		const inGroup = ghi - glo > 1 && i >= glo && i < ghi;
@@ -37104,7 +37178,8 @@ function flightStops(f, kinds) {
 		const next = f.steps[i + 1];
 		const passedNext = !!next && ["done", "skipped"].includes(stepStateOf(f, next, i + 1));
 		const ret = returnMark(f.returns?.[s.id], fix, state, passedNext);
-		const summary = stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s));
+		const task = i === firstAgent;
+		const summary = stopSub(stopTitle(s, kinds), youFlownSub(s, state) || (task ? taskSummary(s, f.subject) : stopSummary(s)));
 		const waitsOnYou = state === "perched" && stepActor(s, kinds) !== "you";
 		const note = live && (state === "current" || waitsOnYou) && !looping && !fix?.active ? liveNote(rec?.note) : "";
 		const handed = state === "perched" ? String(rec?.detail?.failed_reason ?? "").trim() : "";
@@ -37117,7 +37192,7 @@ function flightStops(f, kinds) {
 			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : note || summary,
 			...tip ? { summary: tip } : {},
 			state,
-			icon: s.kind,
+			icon: task ? TASK_ICON : s.kind,
 			perch: stepActor(s, kinds) === "you",
 			step: s,
 			index: i,
@@ -37136,6 +37211,13 @@ function flightStops(f, kinds) {
 			...parallelMark(f.steps, i)
 		};
 	});
+}
+var TASK_ICON = "task";
+function taskSummary(step, subject) {
+	const c = step.config || {};
+	if (String(c.prompt ?? "").trim()) return stopSummary(step);
+	const k = String(subject?.kind || "");
+	return "gives the agent " + (k === "ticket" ? "the ticket" : k === "issue" ? "the issue" : k === "pr" ? "the pull request" : "its task") + (c.fresh ? " · new session" : "");
 }
 function liveNote(note) {
 	return clip$5(String(note ?? ""), 60);
@@ -37253,6 +37335,53 @@ function landedFlightOf(title, flights) {
 	}
 	return best;
 }
+var AGENT_STOP_KINDS = /* @__PURE__ */ new Set([
+	"agent",
+	"reviews",
+	"verify"
+]);
+var HELD_NOTE = [{
+	why: "offline",
+	re: /^the agent is offline\b/i
+}, {
+	why: "limit",
+	re: /^usage limit\b/i
+}];
+function heldMark(ss, node, note) {
+	if (node.state !== "current") return null;
+	const said = HELD_NOTE.find((h) => h.re.test(String(note || "").trim()))?.why;
+	const why = ss ? ss.state === "offline" ? "offline" : ss.state === "limit" ? "limit" : void 0 : said;
+	if (!why) return null;
+	if (!said && !AGENT_STOP_KINDS.has(String(node.step?.kind || ""))) return null;
+	if (why === "limit") {
+		const at = ss?.resumeAt ? fmtClock(ss.resumeAt) : "";
+		return {
+			why,
+			label: "Held · usage limit" + (at ? ", resumes " + at : ""),
+			title: "Held: the agent hit its usage limit — this stop goes on by itself when the window reopens" + (at ? " at " + at : "") + ". Nothing to do."
+		};
+	}
+	const remedy = ss?.held ? "start" : ss?.restartable ? "restart" : void 0;
+	return {
+		why,
+		label: "Held · agent offline",
+		title: "Held: the agent is offline, so this stop can't go on" + (remedy === "start" ? " — Start starts it (it was held offline after a crash)." : remedy === "restart" ? " — Restart relaunches it, resuming the conversation." : "."),
+		...remedy ? { remedy } : {}
+	};
+}
+function markHeld(line, ss, full) {
+	for (const n of line) {
+		if (n.kind !== "stop" || n.state !== "current") continue;
+		const note = full && n.step ? full.step_states?.[n.step.id]?.note : void 0;
+		const held = heldMark(ss, {
+			state: n.state,
+			step: { kind: n.step?.kind || n.icon }
+		}, note);
+		if (!held) continue;
+		n.held = held;
+		n.sub = held.label;
+	}
+}
 function sessionDiagram(rows, title, opts = {}) {
 	const row = rows.find((r) => r.title === title);
 	const empty = {
@@ -37297,6 +37426,7 @@ function sessionDiagram(rows, title, opts = {}) {
 			const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
 			line.push(...lifted.line);
 			loops = [...lifted.loops, ...returnEdges(line, me.id)];
+			if (full.state === "running") markHeld(line, deriveSessionState(row), full);
 		} else for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
 			const cur = i === fl.cursor;
 			const perch = cur && fl.step?.actor === "you";
@@ -37313,6 +37443,7 @@ function sessionDiagram(rows, title, opts = {}) {
 				reason: cur && fl.state === "halted" ? fl.reason || "" : ""
 			});
 		}
+		if (!full && fl.state === "running") markHeld(line, deriveSessionState(row));
 	} else if (landedFlightOf(title, opts.flights) && !ladderRungs(row).length) {
 		const done = landedFlightOf(title, opts.flights);
 		mode = "flight";
@@ -37723,8 +37854,8 @@ function lineWhere(d) {
 	}
 	if (!b) return "";
 	const haltPoint = b.tone === "paused" && n.state === "paused" && !!n.step?.halt;
-	const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : haltPoint ? "paused before " : b.tone === "paused" ? "paused at " : "at ";
-	const tail = n.ask ? "" : n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? reasonAfterTitle(n.title, n.reason) : haltPoint ? "your halt point" : n.kind === "stop" || n.kind === "group" ? n.sub : "";
+	const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : haltPoint ? "paused before " : b.tone === "paused" ? "paused at " : b.tone === "held" ? "held at " : "at ";
+	const tail = n.ask ? "" : n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? reasonAfterTitle(n.title, n.reason) : haltPoint ? "your halt point" : n.held ? n.held.label.replace(/^held · /i, "") : n.kind === "stop" || n.kind === "group" ? n.sub : "";
 	return head + (b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title) + (tail ? " · " + tail : "");
 }
 function reasonAfterTitle(title, reason, capital = false) {
@@ -37739,7 +37870,8 @@ function whereBesideChip(where, chip) {
 	if (!where) return where;
 	if (chip?.reason === "flight_you") return /^needs you at /i.test(where) ? "" : where;
 	if (chip?.reason === "flight_halted") return where.replace(/^halted (?=at )/i, "");
-	if (chip?.label === PAUSED_FLIGHT_LABEL) return where.replace(/^paused (?=at |before )/i, "");
+	if (chip?.reason === "flight_paused") return /^paused before /i.test(where) ? where.split(" · ").slice(1).join(" · ") : where;
+	if (isPausedRouteChip(chip)) return where.replace(/^paused (?=at |before )/i, "");
 	return where;
 }
 function flownCount(d) {
@@ -37922,7 +38054,7 @@ function birdPerch(d) {
 	}
 	if (stop) return {
 		nodeId: stop.id,
-		tone: STOP_TONE[stop.state]
+		tone: main.find((n) => n.id === stop.id)?.held ? "held" : STOP_TONE[stop.state]
 	};
 	const rung = main.find((n) => n.kind === "rung" && (n.state === "current" || n.state === "halted"));
 	if (rung) return {
@@ -38592,6 +38724,7 @@ function kindOf$1(r, byTitle) {
 	if (p >= 3) return "ready";
 	const fl = byTitle.get(r.title)?.flight;
 	if (fl && fl.state === "halted") return "halted";
+	if (fl && fl.state === "paused" && fl.reason === HALT_POINT_REASON) return "wait_for_me";
 	return rowWaitsOnYou(fl) ? "wait_for_me" : "broken";
 }
 var ORDER = new Map(NEEDS_YOU_KINDS.map((k, i) => [k, i]));
@@ -42058,6 +42191,28 @@ function StopIcon({ kind, size = 15 }) {
 		focusable: "false",
 		children: {
 			agent: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" }),
+			task: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+					x: "5",
+					y: "5",
+					width: "14",
+					height: "16",
+					rx: "2"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M9 5V3.5h6V5" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+					x1: "8.5",
+					y1: "10.5",
+					x2: "15.5",
+					y2: "10.5"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+					x1: "8.5",
+					y1: "14.5",
+					x2: "13.5",
+					y2: "14.5"
+				})
+			] }),
 			session: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
 					x: "3",
@@ -44553,6 +44708,160 @@ async function setIntakeDefault(body) {
 	}
 }
 //#endregion
+//#region src/lib/routeStart.ts
+function resumeSentence(r, now) {
+	const when = r.at > 0 ? " " + relTime(r.at, { now }) : "";
+	const why = r.reason ? " (" + r.reason + ")" : "";
+	return "Carries on at " + r.title + " — where it stopped" + when + why;
+}
+function kindLabel(kind, kinds) {
+	if (kind === "you") return "Wait for me";
+	if (kind === "someone") return "Someone";
+	return kinds?.find((k) => k.kind === kind)?.label || kind;
+}
+function stopChoices(steps, kinds) {
+	return steps.map((s, i) => ({
+		id: s.id,
+		n: i + 1,
+		title: s.title || kindLabel(s.kind, kinds),
+		kind: s.kind,
+		label: kindLabel(s.kind, kinds)
+	}));
+}
+function choiceLine(c) {
+	return c.n + ". " + c.title + (c.label && c.label !== c.title ? " · " + c.label : "");
+}
+function reachedIndex(f) {
+	const steps = f.steps || [];
+	const states = f.step_states || {};
+	let k = Math.min(Math.max(Math.floor(f.cursor || 0), 0), steps.length);
+	while (k < steps.length && ["done", "skipped"].includes(states[steps[k].id]?.state)) k++;
+	return k;
+}
+function ownSteps(f) {
+	const added = /* @__PURE__ */ new Set([...f.owed_added || [], ...f.owed_perch ? [f.owed_perch] : []]);
+	return (f.steps || []).filter((s) => !added.has(s.id));
+}
+function carryIndex(f) {
+	const own = ownSteps(f);
+	const k = reachedIndex(f);
+	const ids = new Set(own.map((s) => s.id));
+	const next = f.steps.slice(k).find((s) => ids.has(s.id));
+	const kOwn = next ? own.indexOf(next) : own.length;
+	const owed = new Set((f.owed || []).map((e) => e.step));
+	const first = own.slice(0, kOwn).findIndex((s) => owed.has(s.id));
+	return first >= 0 ? first : kOwn;
+}
+function canFlyAgain(f) {
+	if (!f || f.free || f.edits_default || !ownSteps(f).length) return false;
+	return f.state === "done" || f.state === "cancelled" || f.state === "halted";
+}
+function againStop(f) {
+	return ownSteps(f)[carryIndex(f)] || null;
+}
+function flyAgainLabel(f) {
+	const s = againStop(f);
+	return s ? "Run again from " + s.title : "Run again";
+}
+function flyAgainTitle(f, gone) {
+	const s = againStop(f);
+	const from = s ? " from “" + s.title + "”" : " from its first stop";
+	if (!gone) return "Run this route again on " + f.session + from + " — a new run of its stops";
+	return f.session + " is gone: it runs again" + from + " on the session that holds its branch, or reopens " + f.session + " from Recently closed";
+}
+function flyAgainPrimary(f) {
+	return f.state === "cancelled" || f.state === "halted";
+}
+var useRouteStartMenu = create((set) => ({
+	open: null,
+	set: (o) => set({ open: o })
+}));
+var lastPress = {
+	x: 0,
+	y: 0
+};
+function anchorOf(el, at) {
+	const box = el && typeof el.getBoundingClientRect === "function" ? el.closest?.(".fl-again-row") || el : null;
+	if (box) {
+		const r = box.getBoundingClientRect();
+		return {
+			left: r.left,
+			top: r.top,
+			right: r.right,
+			bottom: r.bottom
+		};
+	}
+	const x = at ? at.x : lastPress.x;
+	const y = at ? at.y : lastPress.y;
+	return {
+		left: x,
+		top: y,
+		right: x,
+		bottom: y
+	};
+}
+function placeMenu$1(anchor, size, view) {
+	const M = 8;
+	const GAP = 6;
+	const clampY = (y) => Math.max(M, Math.min(y, view.h - M - size.h));
+	const clampX = (x) => Math.max(M, Math.min(x, view.w - M - size.w));
+	if (anchor.right + GAP + size.w <= view.w - M) return {
+		x: anchor.right + GAP,
+		y: clampY(anchor.top)
+	};
+	const below = anchor.bottom + GAP;
+	const above = anchor.top - GAP - size.h;
+	if (below + size.h <= view.h - M) return {
+		x: clampX(anchor.left),
+		y: below
+	};
+	if (above >= M) return {
+		x: clampX(anchor.left),
+		y: above
+	};
+	const roomBelow = view.h - M - below;
+	const roomAbove = anchor.top - GAP - M;
+	return {
+		x: clampX(anchor.left),
+		y: clampY(roomBelow >= roomAbove ? below : above)
+	};
+}
+async function startSavedRoute(plan, title, opts) {
+	const check = await checkStart({
+		plan_id: plan.id,
+		title
+	});
+	if (!opts.choose && !check?.resume) {
+		await opts.normal();
+		return;
+	}
+	const anchor = anchorOf(opts.el, opts.at);
+	const steps = plan.steps?.length ? plan.steps : check?.steps || [];
+	useRouteStartMenu.getState().set({
+		mode: "start",
+		view: opts.choose ? "pick" : "resume",
+		back: false,
+		plan: {
+			...plan,
+			steps
+		},
+		title,
+		check,
+		anchor,
+		go: (startAt) => {
+			if (!startAt || startAt === steps[0]?.id) opts.normal();
+			else startFlightAt(title, plan.id, startAt);
+		}
+	});
+}
+function pickAgainStop(flight, el) {
+	useRouteStartMenu.getState().set({
+		mode: "again",
+		flight,
+		anchor: anchorOf(el)
+	});
+}
+//#endregion
 //#region src/components/flights/PerchAsks.tsx
 var stop$1 = (e) => e.stopPropagation();
 function ReviewFindings({ findings }) {
@@ -45185,6 +45494,7 @@ function FlightYouRow({ w, row, shown }) {
 }
 function FlightHaltedRow({ w, row, shown }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const kinds = useFlightKinds().data;
 	const { full, gone, fl } = useRoute(w, row);
 	const run = async (fn) => {
 		setBusy(true);
@@ -45196,6 +45506,14 @@ function FlightHaltedRow({ w, row, shown }) {
 	};
 	const at = fl?.step?.title || "";
 	const chip = "Halted" + (at ? " at " + at : "");
+	const kind = fl?.step?.kind || (full ? full.steps[full.cursor]?.kind : "") || "";
+	const remedies = haltedRemedies({
+		kind,
+		state: full?.state || "halted",
+		canFix: !!full && !gone && canFixStep(full),
+		gone,
+		retryWorks: retryWorksGone(kind, kinds)
+	});
 	const why = haltedWhy(at, w.reason);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pr-open-item ob-item ob-flight_halted",
@@ -45224,34 +45542,51 @@ function FlightHaltedRow({ w, row, shown }) {
 				className: "ik-item-start",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "ob-acts",
-					children: [
-						fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					children: [fl && remedies.map((r, i) => {
+						const cls = (i === 0 ? "btn-primary pr-review-btn" : "test-btn") + " ob-remedy-" + r;
+						if (r === "stop") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopRouteButton, {
+							id: fl.id,
+							busy,
+							run
+						}, r);
+						if (r === "again") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "btn-primary pr-review-btn",
+							className: cls,
+							disabled: busy,
+							title: full ? flyAgainTitle(full, true) : "Run the route again — its session reopens",
+							onClick: () => void run(() => flyAgain(fl.id)),
+							children: "Run again"
+						}, r);
+						if (r === "fix") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: cls,
+							disabled: busy,
+							title: "Hand the failure to the agent — “" + (at || "this stop") + "” runs again after its fix",
+							onClick: () => void run(() => stepFix(fl.id, fl.step.id)),
+							children: "Let the agent fix it"
+						}, r);
+						if (r === "retry") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: cls,
 							disabled: busy,
 							title: "Run “" + (at || "this stop") + "” again",
 							onClick: () => void run(() => stepRetry(fl.id, fl.step.id)),
 							children: "Retry"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						}, r);
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "test-btn",
+							className: cls,
 							disabled: busy,
 							title: "Skip “" + (at || "this stop") + "” — the route goes on without it",
 							onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
 							children: "Skip"
-						})] }),
-						fl && gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopRouteButton, {
-							id: fl.id,
-							busy,
-							run
-						}),
-						row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							onClick: () => openSession(w.title),
-							children: "Open ↗"
-						})
-					]
+						}, r);
+					}), row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: () => openSession(w.title),
+						children: "Open ↗"
+					})]
 				})
 			})
 		]
@@ -45284,7 +45619,7 @@ function FlightPausedRow({ w, row, shown }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pr-open-meta",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pr-open-chip",
+					className: "pr-open-chip warn",
 					title: w.reason || void 0,
 					children: chip
 				})
@@ -47715,7 +48050,7 @@ function NotificationsBell() {
 //#endregion
 //#region src/lib/menuPlace.ts
 var MENU_MARGIN = 6;
-function placeMenu$1(a, w, h, vw, vh, m = MENU_MARGIN) {
+function placeMenu(a, w, h, vw, vh, m = MENU_MARGIN) {
 	const maxHeight = Math.max(0, vh - 2 * m);
 	const hh = Math.min(h, maxHeight);
 	let left = a.align === "end" ? a.x - w : a.x;
@@ -67401,7 +67736,7 @@ function RowMenu({ id, at, label, opener, onClose, children }) {
 		const fit = () => {
 			const w = el.offsetWidth;
 			const h = el.offsetHeight - el.clientHeight + el.scrollHeight;
-			const next = placed.current ? refitMenu(placed.current, w, h, window.innerWidth, window.innerHeight) : placeMenu$1(at, w, h, window.innerWidth, window.innerHeight);
+			const next = placed.current ? refitMenu(placed.current, w, h, window.innerWidth, window.innerHeight) : placeMenu(at, w, h, window.innerWidth, window.innerHeight);
 			placed.current = next;
 			setPlace(next);
 		};
@@ -96950,7 +97285,7 @@ function PaneMoreMenu({ children, btnRef }) {
 		const fit = () => {
 			const w = el.offsetWidth;
 			const h = naturalHeight(el);
-			placed = placed ? refitMenu(placed, w, h, window.innerWidth, window.innerHeight) : placeMenu$1({
+			placed = placed ? refitMenu(placed, w, h, window.innerWidth, window.innerHeight) : placeMenu({
 				x: r.right,
 				y: r.bottom + 4,
 				flipY: r.top - 4,
@@ -98012,160 +98347,6 @@ function OverflowMenu({ label, items, boundaryId }) {
 	});
 }
 //#endregion
-//#region src/lib/routeStart.ts
-function resumeSentence(r, now) {
-	const when = r.at > 0 ? " " + relTime(r.at, { now }) : "";
-	const why = r.reason ? " (" + r.reason + ")" : "";
-	return "Carries on at " + r.title + " — where it stopped" + when + why;
-}
-function kindLabel(kind, kinds) {
-	if (kind === "you") return "Wait for me";
-	if (kind === "someone") return "Someone";
-	return kinds?.find((k) => k.kind === kind)?.label || kind;
-}
-function stopChoices(steps, kinds) {
-	return steps.map((s, i) => ({
-		id: s.id,
-		n: i + 1,
-		title: s.title || kindLabel(s.kind, kinds),
-		kind: s.kind,
-		label: kindLabel(s.kind, kinds)
-	}));
-}
-function choiceLine(c) {
-	return c.n + ". " + c.title + (c.label && c.label !== c.title ? " · " + c.label : "");
-}
-function reachedIndex(f) {
-	const steps = f.steps || [];
-	const states = f.step_states || {};
-	let k = Math.min(Math.max(Math.floor(f.cursor || 0), 0), steps.length);
-	while (k < steps.length && ["done", "skipped"].includes(states[steps[k].id]?.state)) k++;
-	return k;
-}
-function ownSteps(f) {
-	const added = /* @__PURE__ */ new Set([...f.owed_added || [], ...f.owed_perch ? [f.owed_perch] : []]);
-	return (f.steps || []).filter((s) => !added.has(s.id));
-}
-function carryIndex(f) {
-	const own = ownSteps(f);
-	const k = reachedIndex(f);
-	const ids = new Set(own.map((s) => s.id));
-	const next = f.steps.slice(k).find((s) => ids.has(s.id));
-	const kOwn = next ? own.indexOf(next) : own.length;
-	const owed = new Set((f.owed || []).map((e) => e.step));
-	const first = own.slice(0, kOwn).findIndex((s) => owed.has(s.id));
-	return first >= 0 ? first : kOwn;
-}
-function canFlyAgain(f) {
-	if (!f || f.free || f.edits_default || !ownSteps(f).length) return false;
-	return f.state === "done" || f.state === "cancelled" || f.state === "halted";
-}
-function againStop(f) {
-	return ownSteps(f)[carryIndex(f)] || null;
-}
-function flyAgainLabel(f) {
-	const s = againStop(f);
-	return s ? "Run again from " + s.title : "Run again";
-}
-function flyAgainTitle(f, gone) {
-	const s = againStop(f);
-	const from = s ? " from “" + s.title + "”" : " from its first stop";
-	if (!gone) return "Run this route again on " + f.session + from + " — a new run of its stops";
-	return f.session + " is gone: it runs again" + from + " on the session that holds its branch, or reopens " + f.session + " from Recently closed";
-}
-function flyAgainPrimary(f) {
-	return f.state === "cancelled" || f.state === "halted";
-}
-var useRouteStartMenu = create((set) => ({
-	open: null,
-	set: (o) => set({ open: o })
-}));
-var lastPress = {
-	x: 0,
-	y: 0
-};
-function anchorOf(el, at) {
-	const box = el && typeof el.getBoundingClientRect === "function" ? el.closest?.(".fl-again-row") || el : null;
-	if (box) {
-		const r = box.getBoundingClientRect();
-		return {
-			left: r.left,
-			top: r.top,
-			right: r.right,
-			bottom: r.bottom
-		};
-	}
-	const x = at ? at.x : lastPress.x;
-	const y = at ? at.y : lastPress.y;
-	return {
-		left: x,
-		top: y,
-		right: x,
-		bottom: y
-	};
-}
-function placeMenu(anchor, size, view) {
-	const M = 8;
-	const GAP = 6;
-	const clampY = (y) => Math.max(M, Math.min(y, view.h - M - size.h));
-	const clampX = (x) => Math.max(M, Math.min(x, view.w - M - size.w));
-	if (anchor.right + GAP + size.w <= view.w - M) return {
-		x: anchor.right + GAP,
-		y: clampY(anchor.top)
-	};
-	const below = anchor.bottom + GAP;
-	const above = anchor.top - GAP - size.h;
-	if (below + size.h <= view.h - M) return {
-		x: clampX(anchor.left),
-		y: below
-	};
-	if (above >= M) return {
-		x: clampX(anchor.left),
-		y: above
-	};
-	const roomBelow = view.h - M - below;
-	const roomAbove = anchor.top - GAP - M;
-	return {
-		x: clampX(anchor.left),
-		y: clampY(roomBelow >= roomAbove ? below : above)
-	};
-}
-async function startSavedRoute(plan, title, opts) {
-	const check = await checkStart({
-		plan_id: plan.id,
-		title
-	});
-	if (!opts.choose && !check?.resume) {
-		await opts.normal();
-		return;
-	}
-	const anchor = anchorOf(opts.el, opts.at);
-	const steps = plan.steps?.length ? plan.steps : check?.steps || [];
-	useRouteStartMenu.getState().set({
-		mode: "start",
-		view: opts.choose ? "pick" : "resume",
-		back: false,
-		plan: {
-			...plan,
-			steps
-		},
-		title,
-		check,
-		anchor,
-		go: (startAt) => {
-			if (!startAt || startAt === steps[0]?.id) opts.normal();
-			else startFlightAt(title, plan.id, startAt);
-		}
-	});
-}
-function pickAgainStop(flight, el) {
-	useRouteStartMenu.getState().set({
-		mode: "again",
-		flight,
-		anchor: anchorOf(el)
-	});
-}
-//#endregion
 //#region src/components/flights/FlywayCanvas.tsx
 var VERTICAL_BELOW_PX = 520;
 var firstOf = (v) => String(v ?? "").split("\n").map((l) => l.trim()).find(Boolean) || "";
@@ -99019,7 +99200,7 @@ function FlywayCanvas(p) {
 					const hold = here && (!n.editable || n.kind === "group") ? flightHold(n) : null;
 					const haltable = !!p.onToggleHalt && canHalt(n, here);
 					const waiting = n.join && n.join.waiting > 0 ? n.join : null;
-					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "") + (lit?.has(n.id) ? " fl-jump-target" : "") + (lit && birdDrag?.over === n.id ? " fl-jump-over" : "") + (loopDraw?.over === n.id ? " fl-loop-target" : "");
+					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.held ? " fl-held" : "") + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "") + (lit?.has(n.id) ? " fl-jump-target" : "") + (lit && birdDrag?.over === n.id ? " fl-jump-over" : "") + (loopDraw?.over === n.id ? " fl-loop-target" : "");
 					const said = n.kind === "add" ? drop ? addLabel : n.title : n.title + (n.group ? ", a group of " + n.group.total + (n.group.total === 1 ? " stop" : " stops") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") + (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD$1[n.state] || "") : "") + (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") + (mark ? ", halt point" : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						ref: (el) => {
@@ -99673,20 +99854,14 @@ function VerifyWalkHint({ session, here, onOpen }) {
 		children: here ? VERIFY_WALK_HERE : windowName(session) + "'s agent is verifying the work — open it to talk to it"
 	});
 }
-function canFixStep(flight) {
-	if (!flight || !flight.session || flight.state !== "halted" && flight.state !== "waiting_you") return false;
-	const step = flight.steps[flight.cursor];
-	const ss = step ? flight.step_states?.[step.id] : void 0;
-	if (!ss) return false;
-	if (ss.state === "failed") return !ss.detail?.moved_on;
-	return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
-}
-var GONE_LINE = "Its session is closed, so no agent can fix this: Retry or Skip it, or Stop the route to end it.";
+var GONE_LINE = "Its session is closed, so no agent can fix this: Run again reopens it, or Skip this stop, or Stop the route to end it.";
+var GONE_LINE_LIVE = "Its session is closed, so no agent can fix this: Skip this stop, or Stop the route to end it.";
 function YouStepActions({ flight, compact = false, inTile = false, gone = false }) {
 	const step = flight.steps[flight.cursor];
 	const items = youItems(step);
 	const [ticked, setTicked] = (0, import_react.useState)({});
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const kinds = queryClient.getQueryData(["flight-kinds"]);
 	const cancel = useCancelAsk(flight);
 	const haltPoint = atHaltPoint(flight);
 	const paused = haltPoint || flight.state === "paused";
@@ -99740,6 +99915,13 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 	const allTicked = items.every((_, i) => ticked[key(i)]);
 	const halted = flight.state === "halted" || paused || handed;
 	const fix = !paused && !gone && canFixStep(flight);
+	const remedies = haltedRemedies({
+		kind: step.kind,
+		state: flight.state,
+		canFix: fix,
+		gone,
+		retryWorks: retryWorksGone(step.kind, kinds)
+	});
 	const text = handed ? /^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason : ask === "owed" ? askSentence(rec, youText(flight)) : youText(flight);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : ""),
@@ -99752,7 +99934,7 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 			}),
 			gone && !inTile && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-you-text muted",
-				children: GONE_LINE
+				children: flight.state === "halted" ? GONE_LINE : GONE_LINE_LIVE
 			}),
 			!halted && items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 				className: "fl-you-items",
@@ -99782,28 +99964,22 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 						title: haltPoint ? "Carry on past the halt point — “" + step.title + "” runs, and the route goes on" : "Carry on — the route goes on from “" + step.title + "”",
 						onClick: () => void run(() => controlFlight(flight.id, "resume")),
 						children: "Carry on"
-					}) : halted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary fl-btn",
-						disabled: busy,
-						title: handed ? "Run “" + step.title + "” again" : "Run this stop again",
-						onClick: () => void run(() => stepRetry(flight.id, step.id)),
-						children: "Retry"
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					}) : halted ? remedies.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RemedyButton, {
+						remedy: r,
+						primary: i === 0,
+						flight,
+						step,
+						handed,
+						busy,
+						run,
+						onStop: cancel.ask
+					}, r)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "btn-primary fl-btn fl-done",
 						disabled: busy || !allTicked,
 						title: allTicked ? doneOffer ? doneOffer.title + (compact && owed.length ? "\n\n" + owedItemsText(owed) : "") : "Mark “" + step.title + "” done — the route goes on" : "Tick every item first",
 						onClick: () => void run(() => stepDone(flight.id, step.id)),
 						children: doneOffer ? doneOffer.label : "Done"
-					}),
-					fix && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn fl-btn fl-fix",
-						disabled: busy,
-						title: step.kind === "verify" ? "Hand the failure to the agent — Verify runs again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix",
-						onClick: () => void run(() => stepFix(flight.id, step.id)),
-						children: "Let the agent fix it"
 					}),
 					compact && owed.length > 0 && flight.session && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -99812,27 +99988,75 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 						onClick: () => openFlightTab(flight.session),
 						children: OWED_OPEN
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn fl-btn fl-skip",
-						disabled: busy,
-						title: "Skip “" + step.title + "” — the route goes on without it",
-						onClick: () => void run(async () => await stepSkip(flight.id, step.id) && skipCarriesOn(flight) && controlFlight(flight.id, "resume")),
-						children: "Skip"
+					(!halted || paused) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RemedyButton, {
+						remedy: "skip",
+						primary: false,
+						flight,
+						step,
+						handed,
+						busy,
+						run,
+						onStop: cancel.ask
 					}),
-					gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn fl-btn",
-						disabled: busy,
-						title: "Its session is closed — end this route",
-						onClick: cancel.ask,
-						children: "Stop the route"
+					(!halted || paused) && gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RemedyButton, {
+						remedy: "stop",
+						primary: false,
+						flight,
+						step,
+						handed,
+						busy,
+						run,
+						onStop: cancel.ask
 					})
 				]
 			}),
 			cancel.node
 		]
 	});
+}
+function RemedyButton({ remedy, primary, flight, step, handed, busy, run, onStop }) {
+	switch (remedy) {
+		case "again": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: (primary ? "btn-primary" : "test-btn") + " fl-btn fl-fly-again",
+			disabled: busy,
+			title: flyAgainTitle(flight, true),
+			onClick: () => void run(() => flyAgain(flight.id)),
+			children: "Run again"
+		});
+		case "retry": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: (primary ? "btn-primary" : "test-btn") + " fl-btn fl-retry",
+			disabled: busy,
+			title: handed ? "Run “" + step.title + "” again" : "Run this stop again",
+			onClick: () => void run(() => stepRetry(flight.id, step.id)),
+			children: "Retry"
+		});
+		case "fix": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: (primary ? "btn-primary" : "test-btn") + " fl-btn fl-fix",
+			disabled: busy,
+			title: (step.kind === "verify" ? "Hand the failure to the agent — Verify runs again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix") + (primary ? "\nRunning it again alone rarely mends a failing " + (step.kind === "verify" ? "check" : step.kind === "checks" ? "CI run" : "test") : ""),
+			onClick: () => void run(() => stepFix(flight.id, step.id)),
+			children: "Let the agent fix it"
+		});
+		case "skip": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: (primary ? "btn-primary" : "test-btn") + " fl-btn fl-skip",
+			disabled: busy,
+			title: "Skip “" + step.title + "” — the route goes on without it",
+			onClick: () => void run(async () => await stepSkip(flight.id, step.id) && skipCarriesOn(flight) && controlFlight(flight.id, "resume")),
+			children: "Skip"
+		});
+		case "stop": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: (primary ? "btn-primary" : "test-btn") + " fl-btn",
+			disabled: busy,
+			title: "Its session is closed — end this route",
+			onClick: onStop,
+			children: "Stop the route"
+		});
+	}
 }
 function FlightMenu({ flight, onCancelAsk, openSession = true }) {
 	const rows = useInstances().data;
@@ -99996,18 +100220,25 @@ function liveBoxParts(flight, expand, onCancelAsk, opts = {}) {
 	const renderInBox = (n) => {
 		if (!flight || n.kind !== "stop") return null;
 		const items = stopMenuItems(flight, n, onCancelAsk);
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "fl-box-menu",
-			onClick: stop,
-			"data-no-drag": true,
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
-				label: "Actions for " + n.title,
-				items
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-box-menu",
+				onClick: stop,
+				"data-no-drag": true,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
+					label: "Actions for " + n.title,
+					items
+				})
+			}),
+			expanded(n) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, {
+				flight,
+				inTile: opts.inTile
+			}),
+			n.held?.remedy && flight.session && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeldRemedy, {
+				held: n.held,
+				session: flight.session
 			})
-		}), expanded(n) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, {
-			flight,
-			inTile: opts.inTile
-		})] });
+		] });
 	};
 	const sizeOf = (n, base) => {
 		if (!expanded(n)) return base;
@@ -100027,6 +100258,27 @@ function liveBoxParts(flight, expand, onCancelAsk, opts = {}) {
 		renderInBox,
 		sizeOf
 	};
+}
+function HeldRemedy({ held, session }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const start = held.remedy === "start";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "fl-you-acts fl-held-acts",
+		onClick: stop,
+		"data-no-drag": true,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "btn-primary fl-btn fl-held-remedy",
+			disabled: busy,
+			title: held.title,
+			onPointerDown: (e) => e.stopPropagation(),
+			onClick: () => {
+				setBusy(true);
+				(start ? startSession(session) : reviveSession(session)).finally(() => setBusy(false));
+			},
+			children: busy ? start ? "Starting…" : "Restarting…" : start ? "Start" : "Restart"
+		})
+	});
 }
 function currentNodeId(d, flight) {
 	if (!flight) return null;
@@ -100107,7 +100359,7 @@ function FlightCard({ flight, kinds, expand = false }) {
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "fl-now-title",
-								children: you ? perchLabel(step.title) : step.title
+								children: you && flight.state === "waiting_you" ? perchedOnYou(step.title) : you ? perchLabel(step.title) : step.title
 							}),
 							elapsed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "fl-now-elapsed",
@@ -101370,6 +101622,7 @@ function inOrder(steps, ids) {
 //#region src/components/flights/StopIcons.tsx
 var FAMILY = {
 	agent: "work",
+	task: "work",
 	split: "work",
 	join: "work",
 	command: "work",
@@ -101648,6 +101901,10 @@ function stopWhy(n) {
 var STOP_TILE_W = 156;
 function stopTileBoxes(d, flight) {
 	const out = {};
+	for (const n of d.nodes) if (n.kind === "stop" && n.held) out[n.id] = {
+		w: STOP_TILE_W,
+		h: NODE_H + (n.held.remedy ? 40 : 16)
+	};
 	const haltPoint = !!flight?.steps && atHaltPoint(flight);
 	if (!flight || flight.state !== "halted" && flight.state !== "waiting_you" && flight.state !== "paused" && !haltPoint) return out;
 	for (const n of d.nodes) {
@@ -101861,6 +102118,7 @@ function SkyChain(p) {
 			dn.chip ? "tone-" + dn.chip.tone : "",
 			dn.kind === "group" ? "is-group" : "",
 			dn.perch ? "is-perch" : "",
+			!isHead && dn.held ? "is-held" : "",
 			!isHead && dn.ret?.shown === "fixing" && dn.state === "current" ? "is-fixing" : "",
 			n.inPort || n.outPort ? "" : "is-fixed",
 			isSel(n) ? "is-selected" : "",
@@ -102611,16 +102869,24 @@ var HERE = /* @__PURE__ */ new Set([
 	"paused"
 ]);
 function withFixItem(items, n, fixable = true) {
-	const out = [...items];
+	let out = [...items];
 	if (!fixable) return out.filter((i) => i.key !== "fix");
-	if (n.state !== "halted" || out.some((i) => i.key === "fix")) return out;
+	if (n.state !== "halted") return out;
 	const at = out.findIndex((i) => i.key === "retry");
-	if (at < 0) return out;
-	out.splice(at + 1, 0, {
-		key: "fix",
-		label: "Let the agent fix it",
-		title: "Hand the failure to the agent — “" + n.title + "” runs again after its fix"
-	});
+	if (!out.some((i) => i.key === "fix")) {
+		if (at < 0) return out;
+		out.splice(at + 1, 0, {
+			key: "fix",
+			label: "Let the agent fix it",
+			title: "Hand the failure to the agent — “" + n.title + "” runs again after its fix"
+		});
+	}
+	if (FIX_LEADS.has(String(n.step?.kind || ""))) {
+		const fix = out.find((i) => i.key === "fix");
+		out = out.filter((i) => i !== fix);
+		const r = out.findIndex((i) => i.key === "retry");
+		out.splice(r < 0 ? 0 : r, 0, fix);
+	}
 	return out;
 }
 var AGAIN_HERE_KEY = "again-here";
@@ -102986,6 +103252,15 @@ var GROUNDED_PREFIX = "flight:";
 var groundedKey = (id) => GROUNDED_PREFIX + id;
 var isGroundedKey = (key) => key.startsWith(GROUNDED_PREFIX);
 var groundedIdOf = (key) => isGroundedKey(key) ? key.slice(7) : "";
+function buildingRoute(focusKey, flights) {
+	const id = groundedIdOf(focusKey);
+	if (!id) return null;
+	const f = (flights || []).find((x) => x.id === id);
+	return f && f.state === "grounded" ? f : null;
+}
+function addedToRouteText(stop, route) {
+	return "Added “" + stop + "” to the end of “" + route + "” — click empty sky first to start another route";
+}
 var isFreeRun = (f) => !!f.free && !f.session && isLive(f);
 function groundedFlights(flights) {
 	return (flights || []).filter((f) => f.state === "grounded" || isFreeRun(f)).sort((a, b) => (b.started || 0) - (a.started || 0) || (a.id < b.id ? 1 : -1));
@@ -103214,7 +103489,7 @@ function lastRunWords(last, now) {
 function runChip(f) {
 	const step = f.steps[f.cursor];
 	if (atHaltPoint(f)) return {
-		label: "At your halt point",
+		label: haltPointLabel(step?.title),
 		tone: "attention",
 		title: "Paused at your halt point before “" + (step?.title || "the next stop") + "” — Carry on to go on"
 	};
@@ -103226,15 +103501,22 @@ function runChip(f) {
 			title: "Halted" + (step ? " at “" + step.title + "”" : "") + (why ? " — " + why : "") + ". Retry or Skip it on the stop."
 		};
 	}
-	if (f.state === "waiting_you") return {
-		label: "Needs you",
-		tone: "attention",
-		title: (perchWhy(f) || "Waiting on you") + (step ? " — at “" + step.title + "”" : "")
-	};
-	if (f.state === "paused") return {
+	if (f.state === "waiting_you") {
+		const why = perchWhy(f);
+		return {
+			label: perchedOnYou(step?.title),
+			tone: "attention",
+			title: (why || "Waiting on you") + (step ? " — at “" + step.title + "”" : "")
+		};
+	}
+	if (f.state === "paused") return f.reason ? {
 		label: "Paused",
 		tone: "muted",
-		title: "A person paused it: Carry on (in ⋯, or on its stop) to go on"
+		title: "Paused: " + f.reason + " — Carry on (in ⋯, or on its stop) to go on"
+	} : {
+		label: PAUSED_BY_YOU_LABEL,
+		tone: "muted",
+		title: "Paused by you: Carry on (in ⋯, or on its stop) to go on"
 	};
 	if (f.state === "running") return {
 		label: "Running",
@@ -105978,7 +106260,7 @@ function StopForm({ step, def, onChange, readOnly, lineSteps, errors }) {
 				className: "fl-form-note fl-stop-sentence fl-fld-wide" + (verify ? " vf-sentence" : " muted"),
 				role: "status",
 				"aria-label": "What the route does here",
-				children: verify ? stopSentence(step, fallback, verifySentence(step.config, onFail)) : [stopDoes(step), stopSentence(step, fallback)].filter(Boolean).join(" ")
+				children: verify ? stopSentence(step, fallback, verifySentence(step.config, onFail)) : [stopDoes(step), stopSentence(step, fallback, "", [def])].filter(Boolean).join(" ")
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 				label: "Title",
@@ -106012,7 +106294,7 @@ function StopForm({ step, def, onChange, readOnly, lineSteps, errors }) {
 				onChange: (w) => onChange({ when: w || void 0 }),
 				hint: "Empty: always runs. When false, the stop is skipped and the route goes on. ⓘ lists the conditions."
 			}),
-			canFail(step.kind) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+			canFail(step.kind, [def]) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 				label: "If it fails",
 				wide: true,
 				hint: errHint("on_fail") ?? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -106906,6 +107188,7 @@ function hereStop(flight, n) {
 	else if (haltPoint && (rec?.state || "pending") === "pending") out.editNow = "resume";
 	if (n.state === "perched" && Array.isArray(d.items)) out.asks = d.items.map(String).filter(Boolean);
 	out.primary = out.retry ? "retry" : out.resume ? "resume" : out.done ? "done" : void 0;
+	if (out.primary === "retry" && failed && FIX_LEADS.has(n.step.kind) && canFixStep(flight)) out.primary = "fix";
 	const reason = cap(String(n.reason || failedReason || rec?.note || "").trim());
 	const failure = reasonAfterTitle(n.title, reason).replace(/^failed:\s*/i, "");
 	if (haltPoint) out.why = "Paused at its halt point — nothing has run yet. Carry on runs it.";
@@ -118333,6 +118616,7 @@ function useWaiting(fetch = true) {
 }
 //#endregion
 //#region src/components/flights/IntakeLane.tsx
+var LANE_AUTO_FOLDED = "Intake folded to make room on a narrow Sky";
 var COLLAPSED_LS_KEY = "mf_sky_lane_collapsed";
 function loadCollapsed() {
 	try {
@@ -118528,7 +118812,7 @@ function Block({ block, onFly, open, editing, onEditDefault }) {
 	});
 }
 var headPress$5 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
-function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault }) {
+function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault, narrow = false }) {
 	const flights = useFlights().data;
 	const editDefault = (ref, label) => {
 		if (onEditDefault) onEditDefault(ref, label);
@@ -118579,7 +118863,9 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 	const tickets = usePanelQuery("tickets").data;
 	const prs = usePanelQuery("github-prs").data;
 	const issues = usePanelQuery("github-issues").data;
-	const [collapsed, setCollapsed] = (0, import_react.useState)(loadCollapsed);
+	const [hand, setHand] = (0, import_react.useState)(() => loadCollapsed() ? "folded" : null);
+	const collapsed = laneFolded(hand, narrow);
+	const autoFolded = collapsed && hand !== "folded";
 	const rootRef = (0, import_react.useRef)(null);
 	const measureRef = (0, import_react.useRef)(onMeasure);
 	measureRef.current = onMeasure;
@@ -118612,7 +118898,7 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 		}
 	});
 	const fold = (v) => {
-		setCollapsed(v);
+		setHand(laneHandAfter(v, narrow));
 		saveCollapsed(v);
 	};
 	const total = blocks.reduce((n, b) => n + laneCount(b), 0);
@@ -118625,13 +118911,14 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 		className: "sky-lane sky-lane-rail",
 		"aria-label": "Intake",
 		"data-collapsed": "true",
-		title: moveHint || void 0,
+		"data-auto": autoFolded ? "" : void 0,
+		title: [autoFolded ? LANE_AUTO_FOLDED : "", moveHint].filter(Boolean).join(" · ") || void 0,
 		onPointerDown: headDown,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			className: "sky-lane-toggle",
 			"aria-expanded": false,
-			title: "Open the intake lane",
+			title: autoFolded ? LANE_AUTO_FOLDED + " — open it" : "Open the intake lane",
 			onClick: () => fold(false),
 			children: "›"
 		}), blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -150982,7 +151269,8 @@ var KIND_ORDER = [
 ];
 function perchLine(flight, kinds) {
 	const step = flight.steps[flight.cursor];
-	const what = step ? stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title : "";
+	if (flight.state === "paused" && flight.reason === HALT_POINT_REASON) return pausedAtLine(step?.title);
+	const what = step ? stepActor(step, kinds) === "you" ? flight.state === "waiting_you" ? perchedOnYou(step.title) : perchLabel(step.title) : step.title : "";
 	const why = perchWhy(flight);
 	return what && why ? what + " — " + why : what || why;
 }
@@ -151807,6 +152095,7 @@ function frameState(s) {
 	if (s.tone === "broken") return "broken";
 	if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou || (f === "paused" || f === "halted") && s.haltPoint) return "you";
 	if (f === "paused") return "paused";
+	if (s.held) return "held";
 	if (f === "running" || s.tone === "working" || s.tone === "verifying") return "working";
 	if (f === "done" || s.landed) return "done";
 	if (f === "ready") return "ready";
@@ -152083,7 +152372,8 @@ function SkyLine(p) {
 		landed: !!line.landedId,
 		tone: ss.tone,
 		behaviorsYou: line.behaviors.mark?.tone === "you",
-		haltPoint: atHaltPoint(line.flight)
+		haltPoint: atHaltPoint(line.flight),
+		held: line.diagram.nodes.some((n) => !!n.held)
 	}) : "idle";
 	const rowOf = (t) => t ? p.rows.find((r) => r.title === t) : void 0;
 	const where = row ? lineWhere(line.diagram) : "";
@@ -156173,6 +156463,7 @@ function SkyView() {
 		}, taken, size, view);
 	};
 	const placing = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const growing = (0, import_react.useRef)(/* @__PURE__ */ new Map());
 	(0, import_react.useEffect)(() => {
 		for (const [key, near] of placing.current) {
 			if (!measured[key]) continue;
@@ -156186,10 +156477,43 @@ function SkyView() {
 				pinned: true
 			}));
 		}
+		for (const [key, w0] of growing.current) {
+			const size = measured[key];
+			if (!size || size.w === w0) continue;
+			growing.current.delete(key);
+			const taken = [
+				...lines.map((l) => l.id).filter((id) => id !== key),
+				INTAKE_KEY,
+				PALETTE_KEY
+			].map(rectOf).concat(objects.map((o) => rectOf(o.key))).filter((r) => !!r);
+			const here = posOf(key);
+			const c = camRef.current;
+			const pad = 16 / c.z;
+			const at = spotNear(here, taken, size, {
+				x: -c.x / c.z + pad,
+				y: -c.y / c.z + pad,
+				w: vp.w / c.z - 2 * pad,
+				h: vp.h / c.z - 2 * pad
+			});
+			if (at.x !== here.x || at.y !== here.y) setLayout((l) => patchSkyLine(l, key, {
+				x: at.x,
+				y: at.y,
+				pinned: true
+			}));
+		}
 	}, [measured, flights]);
 	const placeGrounded = async (d, near) => {
 		const plan = "planId" in d ? plans.find((p) => p.id === d.planId) : null;
 		if ("planId" in d && !plan) return;
+		const into = plan ? null : buildingRoute(groundFocus, flights);
+		const def = plan ? void 0 : kinds.find((k) => k.kind === d.kind);
+		if (into && def) {
+			const key = groundedKey(into.id);
+			growing.current.set(key, measured[key]?.w || 0);
+			if (await tackOn(into.id, newStep(def, into.steps.map((st) => st.id)))) toast(addedToRouteText(def.label, groundedName(into)));
+			else growing.current.delete(key);
+			return;
+		}
 		const f = await makeGrounded(plan ? { plan } : { kind: d.kind });
 		if (!f || !alive.current) return;
 		const at = spotRef.current(f, near);
@@ -156199,6 +156523,7 @@ function SkyView() {
 			pinned: true
 		}));
 		placing.current.set(groundedKey(f.id), near);
+		if (!plan) setGroundFocus(groundedKey(f.id));
 		groundedLanded(f);
 	};
 	const editPlan = async (plan) => {
@@ -157608,7 +157933,8 @@ function SkyView() {
 				onHeadDown: (e) => onDragStart(INTAKE_KEY, e),
 				draggable: liveTool === "drag",
 				onMeasure: (w, h) => onMeasure(INTAKE_KEY, w, h),
-				onEditDefault: editDefault
+				onEditDefault: editDefault,
+				narrow: skyIsNarrow(vp.w)
 			})
 		});
 	};
@@ -158018,7 +158344,7 @@ function RouteStartMenu() {
 	(0, import_react.useLayoutEffect)(() => {
 		const el = ref.current;
 		if (!open || !el) return setPos(null);
-		setPos(placeMenu(open.anchor, {
+		setPos(placeMenu$1(open.anchor, {
 			w: el.offsetWidth,
 			h: el.offsetHeight
 		}, {

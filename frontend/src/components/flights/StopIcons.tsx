@@ -21,6 +21,7 @@ export type StopFamily = "work" | "ship" | "outside" | "people" | "flow";
  * kinds are "outside", as the server says. */
 const FAMILY: Record<string, StopFamily> = {
   agent: "work",
+  task: "work",
   split: "work",
   join: "work",
   command: "work",

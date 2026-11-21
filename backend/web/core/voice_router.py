@@ -1743,6 +1743,30 @@ def session_state(row: dict, now: Optional[float] = None) -> dict:
         act == "idle" and not verify_waits and _prose_question(row)
     ):
         return st("needs_you", "Question", "question", True)
+    # A route parked on you (mobile.js sessionState, round 5): at a Wait for
+    # me stop "Needs you: <stop>", at a halt point "Paused before <stop>",
+    # halted "Halted" — whatever the agent is doing.
+    flight = row.get("flight") if isinstance(row.get("flight"), dict) else {}
+    fstep = flight.get("step") if isinstance(flight.get("step"), dict) else {}
+    fat = str(fstep.get("title") or "").strip()
+    if (
+        flight.get("id")
+        and flight.get("state") == "waiting_you"
+        and fstep.get("actor") == "you"
+    ):
+        fat = re.sub(r"^(you|perch|wait for me):\s*", "", fat, flags=re.I)
+        return st(
+            "needs_you", "Needs you" + (": " + fat if fat else ""), "flight_you", True
+        )
+    if (
+        flight.get("id")
+        and flight.get("state") == "paused"
+        and flight.get("reason") == "halt point"
+    ):
+        label = "Paused before " + fat if fat else "Paused before its halt point"
+        return st("needs_you", label, "flight_paused", True)
+    if flight.get("id") and flight.get("state") == "halted":
+        return st("needs_you", "Halted", "flight_halted", True)
     if vstate == "verifying" and act not in ("limit", "offline"):
         return st("working", "Verifying", "verifying")
     if act == "working":
@@ -1784,10 +1808,13 @@ def session_state(row: dict, now: Optional[float] = None) -> dict:
     # that will wake the agent, a route in flight.
     jobs = row.get("background") if isinstance(row.get("background"), list) else []
     job_wakes = any(isinstance(j, dict) and j.get("state") != "stuck" for j in jobs)
-    flight = row.get("flight") if isinstance(row.get("flight"), dict) else {}
     own_work = (
         not row.get("in_place") and not job_wakes and flight.get("state") != "running"
     )
+    if flight.get("id") and flight.get("state") == "paused":
+        # Calm: "Paused by you" when a person paused it, "Paused route" when
+        # the server did (a halt point is above).
+        return st("idle", "Paused route" if flight.get("reason") else "Paused by you")
     if vstate == "passed":
         return st("idle", "Verified", "verified")
     if idle_for > UNCOMMITTED_IDLE_S and dirty and own_work:
@@ -1820,6 +1847,11 @@ def _attn_rank(row: dict, now: float) -> int:
 
 def _state_word(ss: dict) -> str:
     """mobile.js ``voiceStateWord``: the state as a voice says it."""
+    if ss["reason"] == "flight_you":
+        # "needs you: Approve the merge" — the stop's name keeps its case.
+        return "needs you" + ss["label"][len("Needs you") :]
+    if ss["reason"] == "flight_paused":
+        return "p" + ss["label"][1:] + ", at your halt point"
     return {
         "question": "waiting on a question",
         "precommit_failed": "stuck on a failed pre-commit",
@@ -1838,6 +1870,9 @@ def _state_clause(name: str, ss: dict) -> str:
         "verifying": "%s is verifying its work",
         "verified": "%s is verified",
     }.get(ss["reason"])
+    if ss["reason"] == "flight_you":
+        # "Login fix needs you: Approve the merge" — not "is needs you".
+        return "%s %s" % (name, _state_word(ss))
     return verify % name if verify else "%s is %s" % (name, _state_word(ss))
 
 

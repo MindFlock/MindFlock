@@ -121,10 +121,11 @@ describe("2 · a failure handed to you says why, and Retry runs it again", () =>
     expect(Object.keys(boxes)).toHaveLength(1);
   });
 
-  it("the buttons: Retry (primary), Let the agent fix it, Skip — never Done", () => {
+  it("the buttons: Let the agent fix it (primary on a CI failure, round 5), Retry, Skip — never Done", () => {
     const html = withClient(createElement(YouStepActions, { flight: handed }));
     expect(html).toContain("Failed: 2 of 14 checks red");
-    expect(html).toMatch(/class="btn-primary fl-btn"[^>]*>Retry</);
+    expect(html).toMatch(/class="btn-primary fl-btn fl-fix"[^>]*>Let the agent fix it</);
+    expect(html).toMatch(/class="test-btn fl-btn fl-retry"[^>]*>Retry</);
     expect(html).toContain(">Let the agent fix it<");
     expect(html).toContain(">Skip<");
     expect(html).not.toContain(">Done<");

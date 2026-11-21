@@ -286,6 +286,14 @@ export interface StepKindDef {
    * types to the agent nor uses the worktree's lanes)? Older servers omit it
    * — treat that as false. */
   parallel_safe?: boolean;
+  /** Whether a step of this kind can fail (so whether its "If it fails"
+   * means anything): false for a Wait for me and a Wait. Older servers and
+   * peers omit it — lib/stopEditing `canFail` falls back to its own list. */
+  can_fail?: boolean;
+  /** Whether a step of this kind waits for the route's session (the agent,
+   * Ship, CI checks…): with that session closed, Retry only waits for it —
+   * Run again reopens it. Older servers omit it: read as true (`retryWorksGone`). */
+  needs_session?: boolean;
 }
 
 /** The session row's `flight` field (`/api/instances`): all the pane strip
@@ -1006,4 +1014,62 @@ export function skipCarriesOn(flight: Pick<Flight, "state" | "steps" | "cursor" 
  * they load = not gone). */
 export function sessionGone(flight: Pick<Flight, "session">, rows: readonly Pick<Instance, "title">[] | null | undefined): boolean {
   return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
+}
+
+// --- Which remedy leads (round 5) --------------------------------------------
+
+/** Whether "Let the agent fix it" applies to the flight's current stop — the
+ * server's `op_fix` rule (backend/web/core/flights.py): the stop FAILED (and
+ * the route did not already move on past it), or its failure was handed to
+ * you (`on_fail: you` — waiting on you with `detail.failed_reason`). Any
+ * kind: the agent gets the failure, then the stop runs again. A halt point
+ * (paused, nothing failed) has nothing to fix. */
+export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "step_states" | "session"> | null | undefined): boolean {
+  // No session (a free run): no agent to hand it to — the server refuses
+  // it (409 `no_session`).
+  if (!flight || !flight.session || (flight.state !== "halted" && flight.state !== "waiting_you")) return false;
+  const step = flight.steps[flight.cursor];
+  const ss = step ? flight.step_states?.[step.id] : undefined;
+  if (!ss) return false;
+  if (ss.state === "failed") return !ss.detail?.moved_on;
+  return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
+}
+
+
+/** Kinds whose failure re-running alone rarely mends — a test, CI checks, a
+ * Verify: "Let the agent fix it" is the leading remedy on them (when the
+ * agent can take it), Retry beside it. Every other kind leads with Retry. */
+export const FIX_LEADS: ReadonlySet<string> = new Set(["test", "checks", "verify"]);
+
+/** Whether Retry can run a stop of `kind` with its route's session closed:
+ * only a kind the server says needs no session (`needs_session: false`).
+ * A kind with no flag (an older server, a peer) counts as needing one — so
+ * a Retry that would only wait is never offered. */
+export function retryWorksGone(kind: string, kinds?: readonly (Pick<StepKindDef, "kind" | "needs_session"> | null | undefined)[] | null): boolean {
+  const def = kinds?.find((k) => k?.kind === kind);
+  return !!def && def.needs_session === false;
+}
+
+/** One remedy on a stopped stop: Run again (an ended route whose session is
+ * closed: it reopens that session), Retry, Let the agent fix it, Skip, Stop
+ * the route. */
+export type Remedy = "again" | "retry" | "fix" | "skip" | "stop";
+
+/** The remedies a failed stop offers, the leading (primary) one first:
+ *  - its session closed (`gone`): **Run again** leads where the route has
+ *    ended (halted: the server's `/again` reopens the session), Retry beside
+ *    it only where it works without the session (`retryWorks`), then Skip
+ *    and Stop the route — never an action that would fail or only wait;
+ *  - a test, CI or Verify failure the agent can take (`canFix`): **Let the
+ *    agent fix it**, then Retry, then Skip;
+ *  - any other: Retry, then Let the agent fix it (when it can), then Skip. */
+export function haltedRemedies(o: { kind: string; state: string; canFix: boolean; gone: boolean; retryWorks: boolean }): Remedy[] {
+  if (o.gone) {
+    const out: Remedy[] = [];
+    if (o.state === "halted") out.push("again");
+    if (o.retryWorks) out.push("retry");
+    return [...out, "skip", "stop"];
+  }
+  if (o.canFix && FIX_LEADS.has(o.kind)) return ["fix", "retry", "skip"];
+  return o.canFix ? ["retry", "fix", "skip"] : ["retry", "skip"];
 }

@@ -2144,6 +2144,11 @@ def _flight_needs(f: dict) -> Optional[Tuple[str, List[str]]]:
     why = str(ss.get("note") or f.get("reason") or "").strip()
     if state == "halted":
         return why or "a stop failed", ["retry", "skip", "resume", "cancel"]
+    if state == "paused" and str(f.get("reason") or "") == "halt point":
+        # The app's words (round 5): it waits on you before that stop.
+        return "paused before %s — your halt point" % (
+            step.get("title") or "its next stop"
+        ), ["resume", "skip", "cancel"]
     if state == "paused":
         return why or "paused by you", ["resume", "cancel"]
     if ss.get("state") != "waiting_you" and state != "waiting_you":

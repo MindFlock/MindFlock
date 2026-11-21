@@ -44,6 +44,7 @@ import { WAITING_PANEL, flyRequest, getIntakeDefault, refreshFlights, startGroun
 import { defaultEditorName, editorFor } from "../../lib/groundedLines";
 import { laneCount, nameParts, shownWaiting, sourceBlocks, stopsTip, stopsWords, type LanePanels, type LaneWaiting, type SourceBlock } from "../../lib/skyIntake";
 import { useWaiting } from "./useWaiting";
+import { laneFolded, laneHandAfter, type LaneHand } from "../../lib/skyLayout";
 import "./Flights.css";
 import "./IntakeLane.css";
 
@@ -72,9 +73,15 @@ export interface IntakeLaneProps {
    * board (the host: `openDefaultEditor`, then focus/place the chain). Unset:
    * `openDefaultEditor` as is. */
   onEditDefault?(ref: IntakeSourceRef, label: string): void;
+  /** Round 5: the Sky is narrow (lib/skyLayout `skyIsNarrow`) — the lane
+   * folds to its rail by itself unless the person opened it by hand. */
+  narrow?: boolean;
 }
 
-/** Per browser: whether the lane is folded to its rail. */
+/** The folded rail's words when the narrow Sky folded it (not the person). */
+export const LANE_AUTO_FOLDED = "Intake folded to make room on a narrow Sky";
+
+/** Per browser: whether the person folded the lane to its rail. */
 const COLLAPSED_LS_KEY = "mf_sky_lane_collapsed";
 
 function loadCollapsed(): boolean {
@@ -265,7 +272,7 @@ function Block({
 /** A press on the head that is the head's own (not one of its buttons). */
 const headPress = (e: ReactPointerEvent) => e.button === 0 && !(e.target as Element).closest("button, a, input, summary, [data-no-drag]");
 
-export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault }: IntakeLaneProps) {
+export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault, narrow = false }: IntakeLaneProps) {
   const flights = useFlights().data;
   // The host's (it focuses and places the editor); unset, made here as is.
   const editDefault = (ref: IntakeSourceRef, label: string) => {
@@ -309,7 +316,11 @@ export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, 
   const tickets = usePanelQuery<NonNullable<LanePanels["tickets"]> & { stale?: boolean }>("tickets").data;
   const prs = usePanelQuery<NonNullable<LanePanels["prs"]> & { stale?: boolean }>("github-prs").data;
   const issues = usePanelQuery<NonNullable<LanePanels["issues"]> & { stale?: boolean }>("github-issues").data;
-  const [collapsed, setCollapsed] = useState(loadCollapsed);
+  // The person's own say (a fold kept per browser; an open on a narrow Sky
+  // kept while it is shown), and the width: lib/skyLayout `laneFolded`.
+  const [hand, setHand] = useState<LaneHand>(() => (loadCollapsed() ? "folded" : null));
+  const collapsed = laneFolded(hand, narrow);
+  const autoFolded = collapsed && hand !== "folded";
   // The host lays the lane out from what it measures (plane px), as a line's.
   const rootRef = useRef<HTMLElement>(null);
   const measureRef = useRef(onMeasure);
@@ -341,7 +352,7 @@ export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, 
     panels: { tickets: tickets ?? null, prs: prs ?? null, issues: issues ?? null },
   });
   const fold = (v: boolean) => {
-    setCollapsed(v);
+    setHand(laneHandAfter(v, narrow));
     saveCollapsed(v);
   };
   const total = blocks.reduce((n, b) => n + laneCount(b), 0);
@@ -352,8 +363,16 @@ export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, 
 
   if (collapsed) {
     return (
-      <nav ref={rootRef} className="sky-lane sky-lane-rail" aria-label="Intake" data-collapsed="true" title={moveHint || undefined} onPointerDown={headDown}>
-        <button type="button" className="sky-lane-toggle" aria-expanded={false} title="Open the intake lane" onClick={() => fold(false)}>
+      <nav
+        ref={rootRef}
+        className="sky-lane sky-lane-rail"
+        aria-label="Intake"
+        data-collapsed="true"
+        data-auto={autoFolded ? "" : undefined}
+        title={[autoFolded ? LANE_AUTO_FOLDED : "", moveHint].filter(Boolean).join(" · ") || undefined}
+        onPointerDown={headDown}
+      >
+        <button type="button" className="sky-lane-toggle" aria-expanded={false} title={autoFolded ? LANE_AUTO_FOLDED + " — open it" : "Open the intake lane"} onClick={() => fold(false)}>
           ›
         </button>
         {blocks.map((b) => (

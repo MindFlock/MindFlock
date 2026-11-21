@@ -1310,7 +1310,9 @@ prompt reads, so the Sky's "describe it in a sentence" box and an agent
 agree:
 
 - `stops`: one line per kind, `kind (Label) · use: … · not: … · <typical
-  fields> · waits: … [· on_fail=agent ok] [· RARE] [· [irreversible]]`. RARE
+  fields> · waits: … [· on_fail=agent ok] [· RARE] [· [irreversible]]`; a
+  kind the server serves with `can_fail: false` (a Wait for me, a Wait) says
+  `cannot fail (on_fail unused)` beside its options. RARE
   kinds (screenshot, listen, call, budget, checkpoint, handoff, someone,
   preview) say plainly when *not* to use them. A kind newer than the cookbook
   gets the server's own line (`kind · label · summary · fields: …`). Each

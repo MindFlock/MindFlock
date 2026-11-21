@@ -7,10 +7,10 @@
  * saving. */
 
 import { atHaltPoint, flightDiagram, type Diagram } from "./flightDiagram";
-import { isLive, newStep, planFromSteps, stepActor, type Flight, type FlightPlan, type FlightStep, type IntakeSourceRef, type StepKindDef } from "./flights";
+import { isLive, newStep, perchedOnYou, planFromSteps, stepActor, type Flight, type FlightPlan, type FlightStep, type IntakeSourceRef, type StepKindDef } from "./flights";
 import { chainColor, type ChainHead } from "./skyGraph";
 import { relTime } from "./format";
-import { haltedWhy } from "./sessionState";
+import { haltPointLabel, haltedWhy, PAUSED_BY_YOU_LABEL } from "./sessionState";
 
 /** A grounded flight's line is laid out under `"flight:" + id` (a session's
  * line under its title — a title never starts with this). */
@@ -18,6 +18,22 @@ export const GROUNDED_PREFIX = "flight:";
 export const groundedKey = (id: string) => GROUNDED_PREFIX + id;
 export const isGroundedKey = (key: string) => key.startsWith(GROUNDED_PREFIX);
 export const groundedIdOf = (key: string) => (isGroundedKey(key) ? key.slice(GROUNDED_PREFIX.length) : "");
+
+/** Round 5 (the owner): the route a shelf click adds to — the focused route
+ * with no session that is still being built (grounded: not running, not
+ * started), else null and the click places a new route. `focusKey`: the
+ * Sky's focused grounded line key (`groundedKey`), "" when none. */
+export function buildingRoute<F extends Pick<Flight, "id" | "state">>(focusKey: string, flights: readonly F[] | null | undefined): F | null {
+  const id = groundedIdOf(focusKey);
+  if (!id) return null;
+  const f = (flights || []).find((x) => x.id === id);
+  return f && f.state === "grounded" ? f : null;
+}
+
+/** The toast after a shelf click added a stop to the route being built. */
+export function addedToRouteText(stop: string, route: string): string {
+  return "Added “" + stop + "” to the end of “" + route + "” — click empty sky first to start another route";
+}
 
 /** A free chain in the air: running with no session, in a folder. */
 export const isFreeRun = (f: Pick<Flight, "state"> & { free?: boolean; session?: string }) => !!f.free && !f.session && isLive(f);
@@ -274,21 +290,26 @@ export function lastRunWords(last: NonNullable<Flight["last_run"]>, now?: number
 
 /** What a route's state is called on its chip, and why, in the round's one
  * vocabulary: "Halted" (red) = a stop failed, the reason in the tooltip;
- * "At your halt point" (amber) = it paused at a halt point a person set and
- * waits on them; "Paused" (calm) = a person paused it; "Needs you" = a stop
- * waits on the person; "Running". */
+ * "Paused before Push" (amber) = it paused at a halt point a person set and
+ * waits on them; "Paused by you" (calm) = a person paused it ("Paused" when
+ * the server did, its reason in the tooltip); "Needs you: <stop>" = a stop
+ * waits on the person; "Running" — the words a session's chip uses for the
+ * same states (lib/sessionState, round 5). */
 export function runChip(f: Pick<Flight, "state" | "reason" | "steps" | "cursor" | "step_states">): { label: string; tone: string; title: string } {
   const step = f.steps[f.cursor];
-  if (atHaltPoint(f)) return { label: "At your halt point", tone: "attention", title: "Paused at your halt point before “" + (step?.title || "the next stop") + "” — Carry on to go on" };
+  if (atHaltPoint(f)) return { label: haltPointLabel(step?.title), tone: "attention", title: "Paused at your halt point before “" + (step?.title || "the next stop") + "” — Carry on to go on" };
   if (f.state === "halted") {
     const why = haltedWhy(step?.title, f.reason);
     return { label: "Halted", tone: "broken", title: "Halted" + (step ? " at “" + step.title + "”" : "") + (why ? " — " + why : "") + ". Retry or Skip it on the stop." };
   }
   if (f.state === "waiting_you") {
     const why = perchWhy(f);
-    return { label: "Needs you", tone: "attention", title: (why || "Waiting on you") + (step ? " — at “" + step.title + "”" : "") };
+    return { label: perchedOnYou(step?.title), tone: "attention", title: (why || "Waiting on you") + (step ? " — at “" + step.title + "”" : "") };
   }
-  if (f.state === "paused") return { label: "Paused", tone: "muted", title: "A person paused it: Carry on (in ⋯, or on its stop) to go on" };
+  if (f.state === "paused")
+    return f.reason
+      ? { label: "Paused", tone: "muted", title: "Paused: " + f.reason + " — Carry on (in ⋯, or on its stop) to go on" }
+      : { label: PAUSED_BY_YOU_LABEL, tone: "muted", title: "Paused by you: Carry on (in ⋯, or on its stop) to go on" };
   if (f.state === "running") return { label: "Running", tone: "working", title: "Running" + (step ? " “" + step.title + "”" : "") };
   return { label: f.state === "ready" ? "Ready" : f.state === "done" ? "Done" : f.state === "cancelled" ? "Stopped" : "Not started", tone: "muted", title: "" };
 }

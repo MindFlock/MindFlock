@@ -12,7 +12,7 @@
 
 import { useState, type MouseEvent, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
-import { useFlightKinds, useFlights, useInstances, useTestPlans } from "../../state/queries";
+import { queryClient, useFlightKinds, useFlights, useInstances, useTestPlans } from "../../state/queries";
 import { planForSession } from "../../lib/behaviors";
 import { openBehaviors } from "../../lib/behaviorsFocus";
 import { BehaviorsCard } from "../behaviors/BehaviorsCard";
@@ -28,6 +28,7 @@ import {
   flightProgress,
   isLive,
   perchLabel,
+  perchedOnYou,
   rowWaitsOnYou,
   stepActor,
   stripLabel,
@@ -38,8 +39,9 @@ import {
   type FlightRow,
   type StepKindDef,
 } from "../../lib/flights";
-import { HALT_POINT_REASON, atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { HALT_POINT_REASON, atHaltPoint, type HeldMark, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
+import { reviveSession, startSession } from "../../lib/revive";
 import { controlFlight, flyAgain, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { canFlyAgain, flyAgainLabel, flyAgainPrimary, flyAgainTitle, pickAgainStop } from "../../lib/routeStart";
 import "./RouteStartMenu.css";
@@ -48,7 +50,7 @@ import { OwedChecks, OwedNote, ReviewFindings } from "./PerchAsks";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
 import "./Flights.css";
-import { nextIsHaltPoint, sessionGone, skipCarriesOn } from "../../lib/flights";
+import { canFixStep, haltedRemedies, nextIsHaltPoint, retryWorksGone, sessionGone, skipCarriesOn, type Remedy } from "../../lib/flights";
 
 // Pure rules the bell's rows share (outbox/WaitingRow): they live in
 // lib/flights so that importing them does not pull this component's
@@ -234,22 +236,8 @@ export function VerifyWalkHint({ session, here, onOpen }: { session: string; her
   );
 }
 
-/** Whether "Let the agent fix it" applies to the flight's current stop — the
- * server's `op_fix` rule (backend/web/core/flights.py): the stop FAILED (and
- * the route did not already move on past it), or its failure was handed to
- * you (`on_fail: you` — waiting on you with `detail.failed_reason`). Any
- * kind: the agent gets the failure, then the stop runs again. A halt point
- * (paused, nothing failed) has nothing to fix. */
-export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "step_states" | "session"> | null | undefined): boolean {
-  // No session (a free run): no agent to hand it to — the server refuses
-  // it (409 `no_session`).
-  if (!flight || !flight.session || (flight.state !== "halted" && flight.state !== "waiting_you")) return false;
-  const step = flight.steps[flight.cursor];
-  const ss = step ? flight.step_states?.[step.id] : undefined;
-  if (!ss) return false;
-  if (ss.state === "failed") return !ss.detail?.moved_on;
-  return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
-}
+/** Whether "Let the agent fix it" applies (lib/flights `canFixStep`). */
+export { canFixStep };
 
 /** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
  * what enables Done); Retry / Skip on a halted stop — and on one whose
@@ -260,8 +248,12 @@ export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "
  * person paused it. A Verify stop parked on you answers its verify instead
  * (`VerifyStopActions`). `inTile` (a stop on the Sky): its text is the
  * tile's own line under its name, not a paragraph here. */
-/** A route parked on you whose session was closed under it. */
-export const GONE_LINE = "Its session is closed, so no agent can fix this: Retry or Skip it, or Stop the route to end it.";
+/** A route parked on you whose session was closed under it: Run again
+ * reopens that session (an ended route), else Skip or Stop the route. */
+export const GONE_LINE = "Its session is closed, so no agent can fix this: Run again reopens it, or Skip this stop, or Stop the route to end it.";
+/** The same, on a route that has not ended (waiting on you, paused): Run
+ * again is not there for it yet. */
+export const GONE_LINE_LIVE = "Its session is closed, so no agent can fix this: Skip this stop, or Stop the route to end it.";
 
 export function YouStepActions({
   flight,
@@ -281,6 +273,10 @@ export function YouStepActions({
   const items = youItems(step);
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
+  // The served kinds (`needs_session`), as cached — read, not fetched: a
+  // tile drawn before they load offers the safe set (no Retry on a closed
+  // session's stop).
+  const kinds = queryClient.getQueryData<StepKindDef[] | null>(["flight-kinds"]);
   // A closed session's "Stop the route" asks first, as every other one does.
   const cancel = useCancelAsk(flight);
   const haltPoint = atHaltPoint(flight);
@@ -331,6 +327,10 @@ export function YouStepActions({
   const allTicked = items.every((_, i) => ticked[key(i)]);
   const halted = flight.state === "halted" || paused || handed;
   const fix = !paused && !gone && canFixStep(flight);
+  // Which remedies, the leading one first (lib/flights haltedRemedies):
+  // Run again on a closed session's route, Let the agent fix it on a test /
+  // CI / Verify failure, else Retry.
+  const remedies = haltedRemedies({ kind: step.kind, state: flight.state, canFix: fix, gone, retryWorks: retryWorksGone(step.kind, kinds) });
   // The owed perch's sentence is the server's note ("Before this route
   // finishes: 3 checks for you"), which its own text alone would leave out.
   const text = handed ? (/^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason) : ask === "owed" ? askSentence(rec, youText(flight)) : youText(flight);
@@ -339,7 +339,7 @@ export function YouStepActions({
       {!compact && !inTile && text && (!halted || handed) && <p className="fl-you-text">{text}</p>}
       {/* Said, not only in a tooltip: with its session closed there is no
           agent to fix it, and Stop the route is the way out. */}
-      {gone && !inTile && <p className="fl-you-text muted">{GONE_LINE}</p>}
+      {gone && !inTile && <p className="fl-you-text muted">{flight.state === "halted" ? GONE_LINE : GONE_LINE_LIVE}</p>}
       {!halted && items.length > 0 && (
         <ul className="fl-you-items">
           {items.map((it, i) => (
@@ -369,15 +369,7 @@ export function YouStepActions({
             Carry on
           </button>
         ) : halted ? (
-          <button
-            type="button"
-            className="btn-primary fl-btn"
-            disabled={busy}
-            title={handed ? "Run “" + step.title + "” again" : "Run this stop again"}
-            onClick={() => void run(() => stepRetry(flight.id, step.id))}
-          >
-            Retry
-          </button>
+          remedies.map((r, i) => <RemedyButton key={r} remedy={r} primary={i === 0} flight={flight} step={step} handed={handed} busy={busy} run={run} onStop={cancel.ask} />)
         ) : (
           <button
             type="button"
@@ -389,17 +381,6 @@ export function YouStepActions({
             {doneOffer ? doneOffer.label : "Done"}
           </button>
         )}
-        {fix && (
-          <button
-            type="button"
-            className="test-btn fl-btn fl-fix"
-            disabled={busy}
-            title={step.kind === "verify" ? "Hand the failure to the agent — Verify runs again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix"}
-            onClick={() => void run(() => stepFix(flight.id, step.id))}
-          >
-            Let the agent fix it
-          </button>
-        )}
         {compact && owed.length > 0 && flight.session && (
           // The one-line strip has no room for each check's "This one didn't
           // work": this opens the Route tab, where the stop lists them.
@@ -407,9 +388,67 @@ export function YouStepActions({
             {OWED_OPEN}
           </button>
         )}
+        {(!halted || paused) && <RemedyButton remedy="skip" primary={false} flight={flight} step={step} handed={handed} busy={busy} run={run} onStop={cancel.ask} />}
+        {(!halted || paused) && gone && <RemedyButton remedy="stop" primary={false} flight={flight} step={step} handed={handed} busy={busy} run={run} onStop={cancel.ask} />}
+      </div>
+      {cancel.node}
+    </div>
+  );
+}
+
+/** One remedy's button (lib/flights `Remedy`): the leading one primary. */
+function RemedyButton({
+  remedy,
+  primary,
+  flight,
+  step,
+  handed,
+  busy,
+  run,
+  onStop,
+}: {
+  remedy: Remedy;
+  primary: boolean;
+  flight: Flight;
+  step: Flight["steps"][number];
+  handed: boolean;
+  busy: boolean;
+  run(fn: () => Promise<unknown>): Promise<void>;
+  onStop(): void;
+}) {
+  switch (remedy) {
+    case "again":
+      return (
+        <button type="button" className={(primary ? "btn-primary" : "test-btn") + " fl-btn fl-fly-again"} disabled={busy} title={flyAgainTitle(flight, true)} onClick={() => void run(() => flyAgain(flight.id))}>
+          Run again
+        </button>
+      );
+    case "retry":
+      return (
+        <button type="button" className={(primary ? "btn-primary" : "test-btn") + " fl-btn fl-retry"} disabled={busy} title={handed ? "Run “" + step.title + "” again" : "Run this stop again"} onClick={() => void run(() => stepRetry(flight.id, step.id))}>
+          Retry
+        </button>
+      );
+    case "fix":
+      return (
         <button
           type="button"
-          className="test-btn fl-btn fl-skip"
+          className={(primary ? "btn-primary" : "test-btn") + " fl-btn fl-fix"}
+          disabled={busy}
+          title={
+            (step.kind === "verify" ? "Hand the failure to the agent — Verify runs again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix") +
+            (primary ? "\nRunning it again alone rarely mends a failing " + (step.kind === "verify" ? "check" : step.kind === "checks" ? "CI run" : "test") : "")
+          }
+          onClick={() => void run(() => stepFix(flight.id, step.id))}
+        >
+          Let the agent fix it
+        </button>
+      );
+    case "skip":
+      return (
+        <button
+          type="button"
+          className={(primary ? "btn-primary" : "test-btn") + " fl-btn fl-skip"}
           disabled={busy}
           title={"Skip “" + step.title + "” — the route goes on without it"}
           // Skip carries on a paused route too, where there is somewhere to go (`skipCarriesOn`).
@@ -417,21 +456,14 @@ export function YouStepActions({
         >
           Skip
         </button>
-        {gone && (
-          <button
-            type="button"
-            className="test-btn fl-btn"
-            disabled={busy}
-            title="Its session is closed — end this route"
-            onClick={cancel.ask}
-          >
-            Stop the route
-          </button>
-        )}
-      </div>
-      {cancel.node}
-    </div>
-  );
+      );
+    case "stop":
+      return (
+        <button type="button" className={(primary ? "btn-primary" : "test-btn") + " fl-btn"} disabled={busy} title="Its session is closed — end this route" onClick={onStop}>
+          Stop the route
+        </button>
+      );
+  }
 }
 
 /** The flight's own ⋯: Open session · Pause / Carry on · Cancel. Cancel asks
@@ -595,6 +627,7 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
           </span>
         )}
         {expanded(n) && <YouStepActions flight={flight} inTile={opts.inTile} />}
+        {n.held?.remedy && flight.session && <HeldRemedy held={n.held} session={flight.session} />}
       </>
     );
   };
@@ -608,6 +641,31 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
     return { w: Math.max(base.w, n.ask ? ASK_TILE_W : 250), h: base.h + text + items * 23 + 38 + askRoom(n.ask, rec?.detail) };
   };
   return { renderInBox, sizeOf };
+}
+
+/** A held stop's remedy (lib/flightDiagram `heldMark`): Restart an offline
+ * agent (resuming its conversation), Start one held offline after a crash —
+ * the agent tile's "Offline · Restart" chip, where the route is stuck. */
+export function HeldRemedy({ held, session }: { held: HeldMark; session: string }) {
+  const [busy, setBusy] = useState(false);
+  const start = held.remedy === "start";
+  return (
+    <span className="fl-you-acts fl-held-acts" onClick={stop} data-no-drag>
+      <button
+        type="button"
+        className="btn-primary fl-btn fl-held-remedy"
+        disabled={busy}
+        title={held.title}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => {
+          setBusy(true);
+          void (start ? startSession(session) : reviveSession(session)).finally(() => setBusy(false));
+        }}
+      >
+        {busy ? (start ? "Starting…" : "Restarting…") : start ? "Start" : "Restart"}
+      </button>
+    </span>
+  );
 }
 
 /** The box of the stop a flight is at — the group box holding it, when it is
@@ -679,7 +737,7 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
           ) : step ? (
             <>
               <span className={"fl-now-dot" + (you ? " fl-now-you" : "") + (flight.state === "halted" ? " fl-now-halted" : "")} aria-hidden="true" />
-              <span className="fl-now-title">{you ? perchLabel(step.title) : step.title}</span>
+              <span className="fl-now-title">{you && flight.state === "waiting_you" ? perchedOnYou(step.title) : you ? perchLabel(step.title) : step.title}</span>
               {elapsed && <span className="fl-now-elapsed">{elapsed}</span>}
               {flight.state === "paused" && (
                 <span className="fl-now-paused" title={flight.reason === HALT_POINT_REASON ? "The route reached a halt point and stopped before this stop — Carry on to go on" : "Paused by you — Carry on to go on"}>
