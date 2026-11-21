@@ -30,7 +30,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type Keybo
 import { createPortal } from "react-dom";
 import type { Instance, TestPlan } from "../../api/types";
 import type { BehaviorsMark, BirdPerch, Diagram, DiagramEdge, DiagramNode } from "../../lib/flightDiagram";
-import { atHaltPoint, leftWord, loopIdlePill, loopPill, loopPillTitle, sessionDiagram, withBehaviors } from "../../lib/flightDiagram";
+import { atHaltPoint, leftWord, loopIdlePill, loopPill, loopPillTitle, reasonAfterTitle, sessionDiagram, withBehaviors } from "../../lib/flightDiagram";
 import { isLive, youItems, type Flight, type StepKindDef } from "../../lib/flights";
 import { verifyOf, verifyWord } from "../../lib/sessionState";
 import { behaviorSummary, nextNeedingYou, planForSession } from "../../lib/behaviors";
@@ -295,15 +295,7 @@ export function tileSub(n: DiagramNode): string {
 export const HALT_POINT_LINE = "Your halt point";
 export const PAUSED_LINE = "Paused by you";
 export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "step"> & Partial<Pick<DiagramNode, "ask" | "askNote">>): string {
-  if (n.state === "halted") {
-    const r = String(n.reason || "").trim();
-    const t = String(n.title || "").trim();
-    if (t && r.toLowerCase().startsWith(t.toLowerCase() + " ")) {
-      const rest = r.slice(t.length).trim();
-      return rest ? rest[0].toUpperCase() + rest.slice(1) : r;
-    }
-    return r;
-  }
+  if (n.state === "halted") return reasonAfterTitle(n.title, n.reason || "", true);
   if (n.state === "perched") {
     const r = String(n.reason || "").trim();
     if (r) return /^failed\b/i.test(r) ? r[0].toUpperCase() + r.slice(1) : "Failed: " + r;

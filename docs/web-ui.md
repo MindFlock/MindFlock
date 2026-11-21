@@ -4818,6 +4818,19 @@ trailing **+ Tack on a stop**), then, opened, its session box as the real
 pane. A new session appears in place on the next poll; a closed one's line
 fades away.
 
+**Reading a line at a glance** (2026-11-20). The bar says the session's
+state (its chip), then where the route is — "at Verify · 2 of 4 steps done",
+never the chip's word twice ("Halted · at CI checks · failed: …", "Paused
+route · before Open PR · your halt point") — then for how long ("for 12
+min", hover for the clock time; nothing in the first minute), or "route
+finished 15 min ago" on a route that landed (`lib/lineTime` `routeClock`).
+The agent tile's chip is the **agent's** own state (Working, Idle, Question,
+Offline…): where the route waits is drawn on that stop (the bird, its
+buttons) and said on the bar, never on the agent. A stop that waits on you
+and is not a Wait for me says what it waits for ("2 steps for you to check,
+then confirm"), its settings moving to its tooltip. The pane's Route strip
+reads the same way.
+
 **Sizes.** A line is **compact**, **normal** or **wide** (its bar's size
 control cycles them) — bigger shows more of each box's text — and an opened
 box has its own width and height. The auto-layout places lines at the size

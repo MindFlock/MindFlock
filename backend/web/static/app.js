@@ -36921,7 +36921,8 @@ function flightStops(f, kinds) {
 		const passedNext = !!next && ["done", "skipped"].includes(stepStateOf(f, next, i + 1));
 		const ret = returnMark(f.returns?.[s.id], fix, state, passedNext);
 		const summary = stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s));
-		const note = live && state === "current" && !looping && !fix?.active ? liveNote(rec?.note) : "";
+		const waitsOnYou = state === "perched" && stepActor(s, kinds) !== "you";
+		const note = live && (state === "current" || waitsOnYou) && !looping && !fix?.active ? liveNote(rec?.note) : "";
 		const handed = state === "perched" ? String(rec?.detail?.failed_reason ?? "").trim() : "";
 		const tip = [note && summary && note !== summary ? summary : "", stopOptionsLine(s, kinds)].filter(Boolean).join(" · ");
 		return {
@@ -37040,7 +37041,10 @@ function miniDots(row) {
 	return ladderRungs(row).map((r) => r.state === "done" || r.state === "current" ? "●" : r.state === "halted" ? "✗" : "○").join("");
 }
 function sessionBox(row, kind, rowAt) {
-	const ss = deriveSessionState(row);
+	const ss = deriveSessionState(kind === "session" ? {
+		...row,
+		flight: null
+	} : row);
 	return {
 		id: kind + ":" + row.title,
 		kind,
@@ -37534,13 +37538,25 @@ function lineWhere(d) {
 		};
 	}
 	if (!b) return "";
-	const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
-	const tail = n.ask ? "" : n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
+	const haltPoint = b.tone === "paused" && n.state === "paused" && !!n.step?.halt;
+	const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : haltPoint ? "paused before " : b.tone === "paused" ? "paused at " : "at ";
+	const tail = n.ask ? "" : n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? reasonAfterTitle(n.title, n.reason) : haltPoint ? "your halt point" : n.kind === "stop" || n.kind === "group" ? n.sub : "";
 	return head + (b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title) + (tail ? " · " + tail : "");
 }
+function reasonAfterTitle(title, reason, capital = false) {
+	const r = String(reason || "").trim();
+	const t = String(title || "").trim();
+	if (!t || !r.toLowerCase().startsWith(t.toLowerCase() + " ")) return r;
+	const rest = r.slice(t.length).trim();
+	if (!rest) return r;
+	return (capital ? rest[0].toUpperCase() : rest[0].toLowerCase()) + rest.slice(1);
+}
 function whereBesideChip(where, chip) {
-	if (!where || chip?.reason !== "flight_you") return where;
-	return /^needs you at /i.test(where) ? "" : where;
+	if (!where) return where;
+	if (chip?.reason === "flight_you") return /^needs you at /i.test(where) ? "" : where;
+	if (chip?.reason === "flight_halted") return where.replace(/^halted (?=at )/i, "");
+	if (chip?.label === PAUSED_FLIGHT_LABEL) return where.replace(/^paused (?=at |before )/i, "");
+	return where;
 }
 function flownCount(d) {
 	return d.nodes.find((n) => n.kind === "flown")?.count || 0;
@@ -100028,6 +100044,129 @@ function PaneFlightStrip({ inst }) {
 	});
 }
 //#endregion
+//#region src/lib/lineTime.ts
+var ENDS = /* @__PURE__ */ new Set([
+	"done",
+	"failed",
+	"skipped"
+]);
+function stepSeconds(hist, stepId) {
+	let total = 0;
+	let t0 = null;
+	for (const h of hist) {
+		if (h.step !== stepId) continue;
+		if (h.event === "started") t0 = h.at;
+		else if (ENDS.has(h.event) && t0 !== null) {
+			total += Math.max(0, h.at - t0);
+			t0 = null;
+		}
+	}
+	return Math.round(total);
+}
+function segmentsFor(flight) {
+	if (!flight) return [];
+	const hist = flight.history || [];
+	const out = [];
+	for (const s of flight.steps || []) {
+		const st = flight.step_states?.[s.id]?.state;
+		if (st !== "done" && st !== "skipped" && st !== "failed") continue;
+		out.push({
+			step: s.id,
+			title: s.title,
+			seconds: stepSeconds(hist, s.id),
+			state: st
+		});
+	}
+	return out;
+}
+function totalSeconds(segs) {
+	return segs.reduce((n, s) => n + s.seconds, 0);
+}
+function fmtDuration(seconds) {
+	const s = Math.max(0, Math.round(seconds));
+	if (s < 60) return s + " s";
+	const m = Math.round(s / 60);
+	if (m < 60) return m + " min";
+	const h = Math.floor(m / 60);
+	if (h < 24) return h + " h" + (m % 60 ? " " + String(m % 60).padStart(2, "0") + " min" : "");
+	return Math.floor(h / 24) + " d" + (h % 24 ? " " + h % 24 + " h" : "");
+}
+function segmentTitle(seg) {
+	return seg.title + " · " + fmtDuration(seg.seconds) + (seg.state === "failed" ? " · failed" : seg.state === "skipped" ? " · skipped" : "");
+}
+var OLD_AFTER_S = 86400;
+var STALE_AFTER_S = 259200;
+function ageOf(activitySince, now = Date.now()) {
+	const since = Number(activitySince) || 0;
+	if (since <= 0) return null;
+	const quiet = now / 1e3 - since;
+	if (quiet > STALE_AFTER_S) return "stale";
+	if (quiet > OLD_AFTER_S) return "old";
+	return null;
+}
+function ageWord(activitySince, now = Date.now()) {
+	if (ageOf(activitySince, now) !== "stale") return "";
+	const days = Math.floor((now / 1e3 - (Number(activitySince) || 0)) / 86400);
+	return days + (days === 1 ? " day" : " days") + " still";
+}
+function stateSince(f) {
+	if (!f) return 0;
+	const cur = f.steps?.[f.cursor];
+	const rec = cur ? f.step_states?.[cur.id] : void 0;
+	const hist = f.history || [];
+	const lastOf = (events) => {
+		for (let i = hist.length - 1; i >= 0; i--) {
+			const h = hist[i];
+			if (events.includes(h.event) && (!cur || !h.step || h.step === cur.id)) return Number(h.at) || 0;
+		}
+		return 0;
+	};
+	switch (f.state) {
+		case "running":
+		case "waiting_you": return Number(rec?.since) || 0;
+		case "halted": return lastOf(["failed", "halted"]) || Number(rec?.since) || 0;
+		case "paused": return lastOf(["paused", "halted_at"]);
+		case "done":
+		case "cancelled": return Number(f.finished) || 0;
+		default: return 0;
+	}
+}
+var CLOCK_FLOOR_S = 1577836800;
+var CLOCK_TITLE = {
+	running: "At this stop since ",
+	waiting_you: "Waiting on you since ",
+	halted: "Halted since ",
+	paused: "Paused since ",
+	done: "Finished at ",
+	cancelled: "Stopped at "
+};
+function clockAt(epochS, now) {
+	const d = /* @__PURE__ */ new Date(epochS * 1e3);
+	const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+	return new Date(now).toDateString() === d.toDateString() ? hm : d.toLocaleDateString(void 0, {
+		month: "short",
+		day: "numeric"
+	}) + " " + hm;
+}
+function routeClock(f, now = Date.now()) {
+	const since = stateSince(f);
+	if (!f || since < CLOCK_FLOOR_S || since * 1e3 > now + 6e4) return null;
+	const secs = Math.max(0, now / 1e3 - since);
+	const title = (CLOCK_TITLE[f.state] || "Since ") + clockAt(since, now);
+	if (f.state === "done" || f.state === "cancelled") return {
+		text: (f.state === "done" ? "route finished " : "route stopped ") + (secs < 60 ? "just now" : fmtDuration(secs) + " ago"),
+		title
+	};
+	if (secs < 60) return null;
+	return {
+		text: "for " + fmtDuration(secs),
+		title
+	};
+}
+function withClock(where, clock) {
+	return [where, clock?.text || ""].filter(Boolean).join(" · ");
+}
+//#endregion
 //#region src/lib/skyGraph.ts
 var TILE = 64;
 var NODE_W = 132;
@@ -101423,15 +101562,7 @@ function tileSub(n) {
 var HALT_POINT_LINE = "Your halt point";
 var PAUSED_LINE = "Paused by you";
 function stopWhy(n) {
-	if (n.state === "halted") {
-		const r = String(n.reason || "").trim();
-		const t = String(n.title || "").trim();
-		if (t && r.toLowerCase().startsWith(t.toLowerCase() + " ")) {
-			const rest = r.slice(t.length).trim();
-			return rest ? rest[0].toUpperCase() + rest.slice(1) : r;
-		}
-		return r;
-	}
+	if (n.state === "halted") return reasonAfterTitle(n.title, n.reason || "", true);
 	if (n.state === "perched") {
 		const r = String(n.reason || "").trim();
 		if (r) return /^failed\b/i.test(r) ? r[0].toUpperCase() + r.slice(1) : "Failed: " + r;
@@ -104351,7 +104482,9 @@ function FlightChain({ title, line, kinds, label }) {
 	const flightId = line.flight?.id || "";
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-	const shownWhere = whereBesideChip(row ? lineWhere(line.diagram) : "", ss);
+	const where = row ? lineWhere(line.diagram) : "";
+	const clock = row ? routeClock(line.flight || line.landed) : null;
+	const shownWhere = withClock(whereBesideChip(where, ss), clock);
 	const agent = agentTitle(row?.provider || row?.program, row?.program);
 	const headSub = agentDoing(row);
 	const head = (0, import_react.useMemo)(() => ({
@@ -104614,7 +104747,7 @@ function FlightChain({ title, line, kinds, label }) {
 							}),
 							shownWhere && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "fl-chain-frame-where",
-								title: shownWhere,
+								title: [shownWhere, clock?.title].filter(Boolean).join(" — "),
 								children: shownWhere
 							})
 						]
@@ -151458,72 +151591,6 @@ function WeatherLabel({ weather }) {
 	});
 }
 //#endregion
-//#region src/lib/lineTime.ts
-var ENDS = /* @__PURE__ */ new Set([
-	"done",
-	"failed",
-	"skipped"
-]);
-function stepSeconds(hist, stepId) {
-	let total = 0;
-	let t0 = null;
-	for (const h of hist) {
-		if (h.step !== stepId) continue;
-		if (h.event === "started") t0 = h.at;
-		else if (ENDS.has(h.event) && t0 !== null) {
-			total += Math.max(0, h.at - t0);
-			t0 = null;
-		}
-	}
-	return Math.round(total);
-}
-function segmentsFor(flight) {
-	if (!flight) return [];
-	const hist = flight.history || [];
-	const out = [];
-	for (const s of flight.steps || []) {
-		const st = flight.step_states?.[s.id]?.state;
-		if (st !== "done" && st !== "skipped" && st !== "failed") continue;
-		out.push({
-			step: s.id,
-			title: s.title,
-			seconds: stepSeconds(hist, s.id),
-			state: st
-		});
-	}
-	return out;
-}
-function totalSeconds(segs) {
-	return segs.reduce((n, s) => n + s.seconds, 0);
-}
-function fmtDuration(seconds) {
-	const s = Math.max(0, Math.round(seconds));
-	if (s < 60) return s + " s";
-	const m = Math.round(s / 60);
-	if (m < 60) return m + " min";
-	const h = Math.floor(m / 60);
-	if (h < 24) return h + " h" + (m % 60 ? " " + String(m % 60).padStart(2, "0") + " min" : "");
-	return Math.floor(h / 24) + " d" + (h % 24 ? " " + h % 24 + " h" : "");
-}
-function segmentTitle(seg) {
-	return seg.title + " · " + fmtDuration(seg.seconds) + (seg.state === "failed" ? " · failed" : seg.state === "skipped" ? " · skipped" : "");
-}
-var OLD_AFTER_S = 86400;
-var STALE_AFTER_S = 259200;
-function ageOf(activitySince, now = Date.now()) {
-	const since = Number(activitySince) || 0;
-	if (since <= 0) return null;
-	const quiet = now / 1e3 - since;
-	if (quiet > STALE_AFTER_S) return "stale";
-	if (quiet > OLD_AFTER_S) return "old";
-	return null;
-}
-function ageWord(activitySince, now = Date.now()) {
-	if (ageOf(activitySince, now) !== "stale") return "";
-	const days = Math.floor((now / 1e3 - (Number(activitySince) || 0)) / 86400);
-	return days + (days === 1 ? " day" : " days") + " still";
-}
-//#endregion
 //#region src/components/flights/SkyWires.tsx
 var HANDOFF_INK = "color-mix(in srgb, var(--text) 50%, transparent)";
 function nodeOfStep(g, stepId) {
@@ -151910,6 +151977,10 @@ function SkyLine(p) {
 	]);
 	const row = line.row;
 	const ss = deriveSessionState(row || {});
+	const agentSs = row ? deriveSessionState({
+		...row,
+		flight: null
+	}) : ss;
 	const frame = row ? frameState({
 		flight: line.flight?.state || row.flight?.state,
 		landed: !!line.landedId,
@@ -152221,6 +152292,8 @@ function SkyLine(p) {
 	const segments = (0, import_react.useMemo)(() => segmentsFor(line.flight), [line.flight]);
 	const age = ageOf(row?.activity_since);
 	const still = ageWord(row?.activity_since);
+	const clock = row ? routeClock(line.flight || line.landed) : null;
+	const barWhere = whereBesideChip(where, ss);
 	const cards = [];
 	const own = p.layout.open && row ? clampPane(p.layout.paneW ?? PANE_W, p.layout.paneH ?? PANE_H) : null;
 	const ownCard = own && row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -152370,10 +152443,15 @@ function SkyLine(p) {
 						u: ss.uncommitted,
 						local: !row.device
 					}),
-					whereBesideChip(where, ss) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					barWhere && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-where",
 						title: where,
-						children: whereBesideChip(where, ss)
+						children: barWhere
+					}),
+					clock && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "skl-where skl-clock",
+						title: clock.title,
+						children: barWhere ? "· " + clock.text : clock.text
 					}),
 					line.flight && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OwedNote, {
 						note: owedNoteOf(line.flight),
@@ -152464,9 +152542,9 @@ function SkyLine(p) {
 						renderOpen,
 						renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
 						renderHead: () => row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyStateChip, {
-							ss,
+							ss: agentSs,
 							title: row.title,
-							className: "sky-head-chip fl-box-chip tone-" + ss.tone
+							className: "sky-head-chip fl-box-chip tone-" + agentSs.tone
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-head-chip fl-box-chip tone-" + ss.tone,
 							title: ss.hint,

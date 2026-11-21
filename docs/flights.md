@@ -120,6 +120,12 @@ Flights button as tabs of a Flights dialog; round 8 retired it — see
   or "Paused". A stop's dialog shows the reason first, then the remedies (the
   one that usually works first), then its settings folded under **Its
   settings**.
+- **Read a line at a glance.** Its bar says the session's state, where the
+  route is and for how long: "Working · at Verify · 2 of 4 steps done · for 4
+  min", "Halted · at CI checks · failed: test_export_empty · for 3 h",
+  "Paused route · before Open PR · your halt point", "route finished 15 min
+  ago". The agent tile shows only what the agent is doing; the stop that
+  waits shows why, with its buttons.
 - **Edit the stop the route is on** when it failed, or when the route is
   paused before it with nothing run yet: Save, then Retry or Carry on runs it
   with the new settings ([Flow polish](#flow-polish-2026-11-10-as-built)).

@@ -16119,6 +16119,13 @@ details.fl-group-waiting > summary {
   white-space: nowrap;
 }
 
+/* How long the route has been where it is: whole, after a where that may
+   be cut short. */
+.skl-chainline > .skl-bar.skl-label .skl-where.skl-clock {
+  flex: none;
+  max-width: none;
+}
+
 /* A stops-only chain dragged by its label onto a session's chain. */
 .skl-chainline.is-merging {
   opacity: 0.7;

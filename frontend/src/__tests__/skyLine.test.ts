@@ -199,6 +199,10 @@ describe("the line", () => {
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain('const headSub = row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";');
     expect(src).toContain('<span className="skl-where" title={where}>');
+    expect(src).toContain('<span className="skl-where skl-clock" title={clock.title}>');
+    // The agent tile's chip is the agent's own state, never the route's wait.
+    expect(src).toContain("const agentSs = row ? deriveSessionState({ ...row, flight: null }) : ss;");
+    expect(src).toContain('<SkyStateChip ss={agentSs} title={row.title} className={"sky-head-chip fl-box-chip tone-" + agentSs.tone} />');
   });
 
   it("focus draws the ring; a pin shows when pinned", () => {

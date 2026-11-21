@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Sky says how long a route has been where it is.** A route's bar now
+  ends with "for 12 min" (at a stop, waiting on you, halted or paused; hover
+  for the clock time), and a route that finished says "route finished 15 min
+  ago" instead of only the agent's Idle. The pane's Route strip says the same.
+- **A route's bar no longer says its state twice.** "Halted · halted at CI
+  checks · CI checks failed: …" reads "Halted · at CI checks · failed: …";
+  "Paused route · paused at Open PR" reads "Paused route · at Open PR"; and a
+  route stopped by a halt point says "before Open PR · your halt point", since
+  that stop has not run yet.
+- **The agent tile on the Sky shows what the agent is doing.** It used to
+  wear the route's state, so a failed CI check painted the agent red
+  "Halted" and a Wait for me stop put a long amber "Wait for me: …" pill
+  (spilling out of the tile) on the agent. The stop that waits carries that,
+  with its buttons; the agent tile says Working, Idle, Question and so on.
+- **A stop that waits on you says what for.** A Verify stop (or any stop
+  other than Wait for me) waiting on you shows the server's reason on its
+  tile and the route's bar, "2 steps for you to check, then confirm", instead
+  of its settings ("Verify on this branch · agent only · right away").
+
 - **Disk cleanup judges worktrees against fresh base branches.** A base ref
   nobody fetched for a day (a base clone's `origin/staging` was 25 hours old)
   made every PR merged since look unmerged. Before it classifies, cleanup now
