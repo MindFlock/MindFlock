@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The menu of the stop a route is at no longer says a failed stop can't
+  change.** It offers **Edit** (save new settings, then Retry runs them)
+  instead of a read-only "Details" and "The route is here — it can't change
+  now"; its Remove reads "Remove — pauses before the next stop"; Skip and Done
+  say "the route goes on" rather than "the bird flies on".
+- **A halt point says "before" everywhere.** The bell's row reads "Paused
+  before Push — Carry on" (it said "Paused at Push", as if Push had run), and
+  so do the session's hint, the phone and its spoken summary — matching the
+  Sky's bar.
+- **Plain words in a stop's refusals.** "a command step needs a command",
+  "until is a time like 18:00", "wait at least one second" and "a split step
+  needs at least one prompt" now say "a Command stop needs a command", "Until
+  is a time of day, like 18:00", "a Wait stop waits at least one second" and
+  "a Split stop needs at least one prompt".
+- **`mindflock flight again` and the MCP's `control_flight` say "run an ended
+  route again"** (stopped, halted or finished), as the app does, not "fly" and
+  "landed".
+- **The Sky's zoom buttons have names for screen readers** — "Fit the focused
+  route" for **1**, "Fit all routes", "Zoom to 100%".
+
 - **"Fly again" is now "Run again".** An ended route's ⋯ offers "Run again
   from Push" and "Run again from another stop…", a finished stop's menu "Run
   again from here", and the toast says "Running again on …" — the word the

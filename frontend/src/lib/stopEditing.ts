@@ -218,7 +218,7 @@ export function removeTool(n: DiagramNode, here = false): StopMenuItem {
     const k = n.group?.total || 0;
     return { key: "remove", label: "Remove", title: "Remove this group and its " + k + (k === 1 ? " stop" : " stops") + " from the route", danger: true };
   }
-  if (here) return { key: "remove", label: "Remove — the route pauses here", title: "Remove this stop — the route pauses right before the stop that followed it", danger: true };
+  if (here) return { key: "remove", label: "Remove — pauses before the next stop", title: "Remove this stop — the route pauses right before the stop that followed it", danger: true };
   if (flownState(n.state)) return { key: "remove", label: "Remove from the route", title: "Take this finished stop off the route", danger: true };
   return { key: "remove", label: "Remove", title: "Take this stop off the route (Delete)", danger: true };
 }
@@ -305,7 +305,7 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
       items.push(
         verify
           ? { key: "behaviors", label: "Open Verify", title: "Check the steps only you can do, then Confirm verified or Not verified… — the route goes on once you answer" }
-          : { key: "done", label: "Done", title: "Mark this stop done — the bird flies on" }
+          : { key: "done", label: "Done", title: "Mark this stop done — the route goes on" }
       );
     if (n.state === "halted") items.push({ key: "retry", label: "Retry", title: "Run this stop again" });
     // Any halted stop (round 21; the server's op_fix takes every kind).
@@ -315,12 +315,21 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
         label: "Let the agent fix it",
         title: verify ? "Hand the failed steps and their evidence to the agent — it verifies again after its fix" : "Hand the failure to the agent — this stop runs again after its fix",
       });
-    items.push({ key: "skip", label: "Skip", title: "Skip this stop — the bird flies on to the next" });
+    items.push({ key: "skip", label: "Skip", title: "Skip this stop — the route goes on without it" });
   }
   if (can.halt && canHalt(n, !!ctx.here)) items.push(haltToggle(n));
-  if (can.edit) items.push({ key: "edit", label: "Details", title: "Open this stop (the route is here: read-only)" });
+  // A stop that failed CAN change: its dialog saves new settings and Retry
+  // runs them (useSessionLine `hereStop` editNow "retry") — so it says Edit,
+  // and no "can't change" note contradicts the dialog.
+  const editableNow = !!ctx.live && n.state === "halted";
+  if (can.edit)
+    items.push(
+      editableNow
+        ? { key: "edit", label: "Edit", title: "Open this stop — change its settings, then Retry runs them (Enter)" }
+        : { key: "edit", label: "Details", title: "Open this stop (the route is here: read-only)" }
+    );
   if (can.remove && ctx.live && ctx.here) items.push(removeTool(n, true));
-  items.push(note("The route is here — it can't change now"));
+  if (!editableNow) items.push(note("The route is here — it can't change now"));
   return items;
 }
 

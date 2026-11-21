@@ -4982,6 +4982,17 @@ above (details in docs/flights.md "Flow polish"):
   Pause, Carry on, Add halt point, Remove halt point, Add a stop, Jump here,
   and the Verify stop's **Open Verify**.
 
+**One vocabulary, honest menus** (2026-11-20). The right-click menu of the
+stop the route is at says **Edit** on a stop that failed (its dialog saves
+new settings; Retry runs them) and no longer ends "it can't change now"
+there; its Remove reads "Remove — pauses before the next stop"; Skip and Done
+say "the route goes on". A halt point reads "before <stop>" everywhere: the
+Sky's bar, the bell's row ("Paused before Push — Carry on"), the session's
+hint and the phone. The zoom bar's **1**, **Fit** and **100%** have
+screen-reader names (Fit the focused route, Fit all routes, Zoom to 100%).
+The refusals a stop's dialog can show say "stop" (*a Command stop needs a
+command*, *Until is a time of day, like 18:00*).
+
 **When a route stops** (2026-11-20). An offline agent's chip on the Sky (the
 bar and the agent tile) is **Offline · Restart**, as on the rail, and its
 Needs-you row says why and offers **Restart**. A route parked on you whose

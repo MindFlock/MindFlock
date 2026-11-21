@@ -37,9 +37,15 @@ def _flight(state, title, reason=""):
 
 def test_the_words_match_the_desktop():
     ts = TS.read_text()
-    assert 'return "Paused at " + (t || "its halt point") + " — Carry on";' in ts
+    assert (
+        'return t ? "Paused before " + t + " — Carry on" : "Paused at its halt point — Carry on";'
+        in ts
+    )
     js = JS.read_text()
-    assert 'return "Paused at " + (at || "its halt point") + " — Carry on";' in js
+    assert (
+        'return at ? "Paused before " + at + " — Carry on" : "Paused at its halt point — Carry on";'
+        in js
+    )
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
@@ -77,6 +83,6 @@ def test_a_halt_point_needs_you_a_hand_pause_does_not():
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
     assert out["list"] == [["point", "wait_for_me"], ["halt", "halted"]]
-    assert out["words"] == "Paused at Push — Carry on"
-    assert "reached its halt point at Push" in out["hint"]
+    assert out["words"] == "Paused before Push — Carry on"
+    assert "reached its halt point before Push" in out["hint"]
     assert out["calm"] is False

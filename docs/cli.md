@@ -765,7 +765,7 @@ feature's internal word, *flight*.)
   `--at STOP` starts at that stop (its id, number or title); `--at resume`
   starts where an earlier, unfinished run of the route on that session or
   branch stopped.
-* `flight again ROUTE [--at STOP] [--title SESSION]` — fly an ended route
+* `flight again ROUTE [--at STOP] [--title SESSION]` — run an ended route
   (cancelled, halted or finished) again from the stop it had reached, on its
   own session, the session that holds its branch, or its closed session
   reopened. `ROUTE` may be the session's title: its newest route.

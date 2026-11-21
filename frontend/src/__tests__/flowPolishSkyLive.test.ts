@@ -171,7 +171,7 @@ describe("3 · a paused route has a one-click way on", () => {
     expect(ss.hint).toContain("Carry on");
     expect(ss.hint).not.toContain("Resume it from");
     const halt = deriveSessionState({ title: "lead", status: "running", activity: "idle", flight: { ...row, reason: "halt point" } } as unknown as Instance);
-    expect(halt.hint).toContain("reached its halt point at CI checks");
+    expect(halt.hint).toContain("reached its halt point before CI checks");
   });
 
   const inst = (f: Flight) =>
@@ -188,7 +188,7 @@ describe("3 · a paused route has a one-click way on", () => {
     const rows = needsYouRows({ instances: [inst(atHalt)], waiting: [], flights: [atHalt] });
     expect(rows).toHaveLength(1);
     expect(rows[0].kind).toBe("wait_for_me");
-    expect(rows[0].waiting?.reason).toBe("Paused at CI checks — Carry on");
+    expect(rows[0].waiting?.reason).toBe("Paused before CI checks — Carry on");
     expect(rows[0].flight?.id).toBe("f_1");
     expect(pausedAtLine("")).toBe("Paused at its halt point — Carry on");
     // From the full flights alone (a route with no session row) too.

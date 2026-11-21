@@ -1068,7 +1068,7 @@ def _step_config_body(kind: str, raw: dict, strict: bool, where: str) -> dict:
         prompts = _text(prompts)
         if not prompts.strip() and strict:
             raise PlanError(
-                "a split step needs at least one prompt", where + ".prompts"
+                "a Split stop needs at least one prompt", where + ".prompts"
             )
         return {
             "prompts": prompts,
@@ -1114,7 +1114,7 @@ def _step_config_body(kind: str, raw: dict, strict: bool, where: str) -> dict:
         until = _text(c.get("until"), 5)
         if until and not _HHMM_RE.match(until):
             if strict:
-                raise PlanError("until is a time like 18:00", where + ".until")
+                raise PlanError("Until is a time of day, like 18:00", where + ".until")
             until = ""
         # How long, in SECONDS (2026-11-02: the owner wants seconds and hours,
         # not only minutes); an older `minutes` still reads. `minutes` stays in
@@ -1137,7 +1137,9 @@ def _step_config_body(kind: str, raw: dict, strict: bool, where: str) -> dict:
             if strict and (
                 c.get("seconds") not in (None, "") or c.get("minutes") not in (None, "")
             ):
-                raise PlanError("wait at least one second", where + ".seconds")
+                raise PlanError(
+                    "a Wait stop waits at least one second", where + ".seconds"
+                )
             seconds = 600
         if until:
             seconds = 0
@@ -1159,7 +1161,7 @@ def _step_config_body(kind: str, raw: dict, strict: bool, where: str) -> dict:
     if kind == "command":
         cmd = _text(c.get("command"), 4000)
         if not cmd and strict:
-            raise PlanError("a command step needs a command", where + ".command")
+            raise PlanError("a Command stop needs a command", where + ".command")
         return {
             "command": cmd,
             "timeout_minutes": _int(c.get("timeout_minutes"), 30, 1, 24 * 60),

@@ -25974,7 +25974,7 @@ function deriveSessionState(inst, extras) {
 		tone: "neutral",
 		inBell: false,
 		restartable: false,
-		hint: "Route “" + inst.flight.plan_name + "” " + (inst.flight.reason === "halt point" ? "reached its halt point at " : "is paused at ") + (inst.flight.step?.title || "its current stop") + " — Carry on from its strip or its stop on the Sky"
+		hint: "Route “" + inst.flight.plan_name + "” " + (inst.flight.reason === "halt point" ? "reached its halt point before " : "is paused at ") + (inst.flight.step?.title || "its current stop") + " — Carry on from its strip or its stop on the Sky"
 	};
 	if (verify?.state === "passed") return {
 		state: "idle",
@@ -36259,7 +36259,7 @@ function removeTool(n, here = false) {
 	}
 	if (here) return {
 		key: "remove",
-		label: "Remove — the route pauses here",
+		label: "Remove — pauses before the next stop",
 		title: "Remove this stop — the route pauses right before the stop that followed it",
 		danger: true
 	};
@@ -36386,7 +36386,7 @@ function boxItems(n, ctx) {
 		} : {
 			key: "done",
 			label: "Done",
-			title: "Mark this stop done — the bird flies on"
+			title: "Mark this stop done — the route goes on"
 		});
 		if (n.state === "halted") items.push({
 			key: "retry",
@@ -36401,17 +36401,22 @@ function boxItems(n, ctx) {
 		items.push({
 			key: "skip",
 			label: "Skip",
-			title: "Skip this stop — the bird flies on to the next"
+			title: "Skip this stop — the route goes on without it"
 		});
 	}
 	if (can.halt && canHalt(n, !!ctx.here)) items.push(haltToggle(n));
-	if (can.edit) items.push({
+	const editableNow = !!ctx.live && n.state === "halted";
+	if (can.edit) items.push(editableNow ? {
+		key: "edit",
+		label: "Edit",
+		title: "Open this stop — change its settings, then Retry runs them (Enter)"
+	} : {
 		key: "edit",
 		label: "Details",
 		title: "Open this stop (the route is here: read-only)"
 	});
 	if (can.remove && ctx.live && ctx.here) items.push(removeTool(n, true));
-	items.push(note("The route is here — it can't change now"));
+	if (!editableNow) items.push(note("The route is here — it can't change now"));
 	return items;
 }
 function birdAction(tone, onFlight) {
@@ -38477,7 +38482,8 @@ function elsewhere(inst) {
 }
 var FLIGHT_PAUSED = "flight_paused";
 function pausedAtLine(stepTitle) {
-	return "Paused at " + (String(stepTitle || "").trim() || "its halt point") + " — Carry on";
+	const t = String(stepTitle || "").trim();
+	return t ? "Paused before " + t + " — Carry on" : "Paused at its halt point — Carry on";
 }
 function pausedRow(title, f) {
 	const stepTitle = f.step?.title || "";
@@ -157285,6 +157291,7 @@ function SkyView() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sky-zoom-btn sky-fit-one",
+						"aria-label": "Fit the focused route",
 						title: "Fit the focused route — the grid's 1 (1)",
 						disabled: !focusLine && !oneLine,
 						onClick: () => fitFocused(),
@@ -157293,6 +157300,7 @@ function SkyView() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sky-zoom-btn sky-fit",
+						"aria-label": "Fit all routes",
 						title: "Fit all: every route and note in the window, however small (0, Shift+1)",
 						onClick: () => fitAll(),
 						children: "Fit"
@@ -157300,6 +157308,7 @@ function SkyView() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sky-zoom-btn sky-zoom-100",
+						"aria-label": "Zoom to 100%",
 						title: "Back to 100% (Shift+0)",
 						onClick: () => zoomTo(1),
 						children: "100%"

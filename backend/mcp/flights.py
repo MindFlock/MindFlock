@@ -140,7 +140,7 @@ D_CONTROL = (
     "stop) | jump (Jump here: move the cursor to step) | done (a Wait for me "
     "stop, with an optional note; on a Verify stop waiting for a confirm it "
     "is Confirm verified — it never passes a Verify stop's open steps) | "
-    "again (fly an ENDED route — stopped, halted or landed — again as a new "
+    "again (run an ENDED route — stopped, halted or finished — again as a new "
     "route on its session, from the stop it had reached; step = start there "
     "instead; its session gone → the one holding its branch, or its closed "
     "session reopened; a stop that can't be undone needs confirm_merge). "

@@ -89,7 +89,7 @@ describe("the bell's row for a route paused at a halt point", () => {
       createElement(QueryClientProvider, { client }, createElement(WaitingRow, { w, shown: (t: string) => t } as never))
     );
     expect(html).toContain("ob-flight_paused");
-    expect(html).toContain('<span class="pr-open-chip" title="Paused at Push — Carry on">Paused at Push</span>');
+    expect(html).toContain('<span class="pr-open-chip" title="Paused before Push — Carry on">Paused before Push</span>');
     expect(html).toMatch(/<button[^>]*>Carry on<\/button>/);
     expect(html).toMatch(/<button[^>]*>Skip<\/button>/);
     expect(html).not.toContain("pr-open-chip bad");

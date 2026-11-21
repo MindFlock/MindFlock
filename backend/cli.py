@@ -34,7 +34,7 @@ Installed via ``[project.scripts]``::
     mindflock flight start ROUTE [--repo PATH] [--title SESSION]  # run one (id or name)
     mindflock flight done ROUTE   # tick off the stop it waits on you at (skip / cancel too)
     mindflock flight retry ROUTE  # run a halted stop again (resume = carry on, pause, jump ROUTE STOP)
-    mindflock flight again ROUTE [--at STOP]  # fly an ended route again, from where it stopped
+    mindflock flight again ROUTE [--at STOP]  # run an ended route again, from where it stopped
 
     mindflock peer status         # peer links: pair-code with another MindFlock user
     mindflock peer invite         # …make a one-time invite link + code (you listen)
@@ -619,7 +619,7 @@ def _build_parser() -> argparse.ArgumentParser:
     fl_again = fl_sub.add_parser(
         "again",
         parents=[server_opts_nested],
-        help="fly an ended (stopped, halted or landed) route again, from the "
+        help="run an ended (stopped, halted or finished) route again, from the "
         "stop it had reached",
     )
     fl_again.add_argument(
@@ -635,7 +635,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--title",
         default=None,
         metavar="SESSION",
-        help="fly it on this session instead of its own",
+        help="run it on this session instead of its own",
     )
     for verb, text in (
         ("done", "tick off the Wait for me stop the route waits on you at"),

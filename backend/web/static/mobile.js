@@ -1272,7 +1272,7 @@
     if (inst.flight && inst.flight.id && inst.flight.state === "paused")
       return st("idle", { label: "Paused route",
                           hint: "Route “" + (inst.flight.plan_name || "") + "” " +
-                                (inst.flight.reason === "halt point" ? "reached its halt point at " : "is paused at ") +
+                                (inst.flight.reason === "halt point" ? "reached its halt point before " : "is paused at ") +
                                 (inst.flight.step && inst.flight.step.title || "its current stop") + " — Carry on is under ⋯" });
     if (verify && verify.state === "passed")
       return st("idle", { label: "Verified", tone: "verified", hint: "Verified" + (verify.detail ? " — " + verify.detail : "") });
@@ -1353,11 +1353,12 @@
     var fl = rowFlight(inst);
     return !!fl && fl.state === "paused" && fl.reason === "halt point";
   }
-  // "Paused at Push — Carry on" (lib/needsYou.ts pausedAtLine).
+  // "Paused before Push — Carry on" (lib/needsYou.ts pausedAtLine): a halt
+  // point stops the route BEFORE its stop runs.
   function pausedAtWords(inst) {
     var fl = rowFlight(inst);
     var at = fl && fl.step ? String(fl.step.title || "").trim() : "";
-    return "Paused at " + (at || "its halt point") + " — Carry on";
+    return at ? "Paused before " + at + " — Carry on" : "Paused at its halt point — Carry on";
   }
   // "Halted at CI checks" — what a halted route's row says beside its state.
   function haltedWords(inst) {
@@ -10475,7 +10476,7 @@
       if (kind === "halted") return endSentence(name + "'s route is " + haltedWords(i).toLowerCase());
       if (atHaltPoint(i)) {
         var hp = rowFlight(i), hpAt = hp && hp.step ? String(hp.step.title || "").trim() : "";
-        return endSentence(name + "'s route is paused at " + (hpAt || "its halt point") + ", waiting for Carry on");
+        return endSentence(name + "'s route is paused " + (hpAt ? "before " + hpAt : "at its halt point") + ", waiting for Carry on");
       }
       if (kind === "plan") return endSentence(name + " has a plan waiting for Go");
       if (kind === "ready") return endSentence(name + " is pushed and ready for its PR");
