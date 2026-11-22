@@ -500,6 +500,9 @@ NOT_SESSION_KEYED = {
     "direct_url.json": "package metadata",
     "rename_migration.json": "core.rename's own once-marker",
     "test_plans.json": "registered",
+    "claude.json": "an agent login/config file name send_files never sends (core.send_files), not a store",
+    "oauth_creds.json": "an agent login file name send_files never sends (core.send_files), not a store",
+    "transfer.json": "an unfinished file transfer's manifest in the inbox (core.inbox), keyed by transfer id",
     # Frontend / editor project files the server reads, not stores.
     "package.json": "npm manifest",
     "tsconfig.json": "TypeScript config",

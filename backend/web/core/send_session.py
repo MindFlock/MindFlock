@@ -8,14 +8,20 @@ and starts it there:
 1. **Checks first, before anything leaves.** The device must be one of the
    person's own (a "Your devices" member or a token-paired device — no new
    trust path, :func:`remote.is_linked`) and answering; the session must sit
-   on a branch of a git repository with a remote, with a clean tree (nothing
-   is committed or dropped for it: uncommitted work is refused, named, and
-   the caller commits first), and no red-zone breach on the branch; and the
-   device must have a checkout of the same repository (``GET
-   /api/repos/find`` there, matched by remote URL whatever the transport;
-   an older MindFlock without that route is matched by folder name through
-   ``/api/repos/suggest``). Every refusal says what to do next and that
-   nothing was pushed.
+   on a branch of a git repository, with a clean tree (nothing is committed
+   or dropped for it: uncommitted work is refused, named, and the caller
+   commits first), and no red-zone breach on the branch. Then: does the
+   device have a checkout of the same repository (``GET /api/repos/find``
+   there, matched by remote URL whatever the transport; an older MindFlock
+   without that route is matched by folder name through
+   ``/api/repos/suggest``)? Yes → steps 2–3 (``via: "git"``). No — or the
+   repo has no remote, or the device's fetch of the pushed branch fails, or
+   ``via: "bundle"`` / ``paths`` was asked — → the BUNDLE way
+   (:func:`_send_bundle`): the branch as a standalone git bundle
+   (:mod:`session_bundle`) streamed like ``send_files``
+   (:func:`send_files.transfer`) into the device's inbox, unpacked into a
+   new repository there, and the session started IN it. Every refusal says
+   what to do next and whether anything was pushed.
 2. **Push.** A plain ``git push --no-verify -u <remote> HEAD:<branch>`` of
    the session's own branch — never a force. A remote branch that moved on is
    refused (the way out is ``POST /rebase-remote``); one already at ``HEAD``
@@ -39,10 +45,11 @@ uses); nothing here opens a file of its own.
 
 from __future__ import annotations
 
+import difflib
 import os
 import subprocess
 import urllib.parse
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from backend import git_auth_hints
 from backend.web.core import remote as _remote
@@ -160,14 +167,6 @@ def local_facts(inst, title: str) -> dict:
     if not remote or remote == ".":
         remote = "origin"
     url = _out(wt, "remote", "get-url", remote)
-    if not url:
-        raise Refusal(
-            400,
-            "no_remote",
-            "%s's repository has no %s remote to push to — add one (git remote "
-            "add origin <url>) so the other device can fetch the branch, then "
-            "send again" % (title, remote),
-        )
     return {
         "wt": wt,
         "branch": branch,
@@ -176,6 +175,16 @@ def local_facts(inst, title: str) -> dict:
         "head": _out(wt, "rev-parse", "HEAD"),
         "base": str(getattr(inst, "BaseBranch", "") or ""),
     }
+
+
+def _no_remote(title: str, facts: dict) -> Refusal:
+    return Refusal(
+        400,
+        "no_remote",
+        "%s's repository has no %s remote to push to — add one (git remote "
+        "add origin <url>) so the other device can fetch the branch, or send "
+        "it as a bundle (via: bundle), then send again" % (title, facts["remote"]),
+    )
 
 
 def push(facts: dict) -> dict:
@@ -311,18 +320,60 @@ def build_brief(
     task: str,
     last_reply: str,
     note: str,
+    bundle: Optional[dict] = None,
 ) -> str:
-    """The new session's first prompt. Compact, labelled, ≤ :data:`BRIEF_MAX`."""
+    """The new session's first prompt. Compact, labelled, ≤ :data:`BRIEF_MAX`.
+    ``bundle``: the export (:func:`session_bundle.export`) when the work
+    came as a bundle rather than a push."""
     branch, remote = facts["branch"], facts["remote"]
     parts: List[str] = [
         '[Handoff from MindFlock: session "%s" on device "%s" sent its work '
         "here. This brief was written by MindFlock from that session, not "
         "typed by your user.]" % (title, from_device or "another device"),
-        "This worktree is already on branch %s (tracking %s/%s) with every "
-        "commit that session made. Continue the work here: commit on this "
-        "branch and push it to %s. Only git and this brief came across — no "
-        "chat history, no logins." % (branch, remote, branch, remote),
     ]
+    if bundle is None:
+        parts.append(
+            "This worktree is already on branch %s (tracking %s/%s) with every "
+            "commit that session made. Continue the work here: commit on this "
+            "branch and push it to %s. Only git and this brief came across — no "
+            "chat history, no logins." % (branch, remote, branch, remote)
+        )
+    else:
+        scope = bundle.get("scope")
+        scope_txt = (
+            "only %s of the repository (it is this folder's root)" % scope
+            if isinstance(scope, str) and scope
+            else (
+                "only %s of the repository" % ", ".join(scope)
+                if scope
+                else "the whole repository"
+            )
+        )
+        parts.append(
+            "This device has no checkout of that repository, so the work came "
+            "as a git bundle, unpacked into this folder — a NEW repository on "
+            "branch %s with no remote, carrying %s. Its first commit is a "
+            "snapshot of where the branch started; the commits after it are "
+            "that session's own (same changes, new hashes). Commit here; it "
+            "cannot be pushed to the original remote from this folder as is. "
+            "Nothing in it has been run; executable bits were removed%s (chmod "
+            "+x only what you mean to run). Only git and this brief came "
+            "across — no chat history, no logins."
+            % (
+                branch,
+                scope_txt,
+                (
+                    " (they were set on: %s)" % ", ".join(bundle["exec_stripped"][:20])
+                    if bundle.get("exec_stripped")
+                    else ""
+                ),
+            )
+        )
+        if bundle.get("left_out"):
+            parts.append(
+                "Left out as secrets or agent config (they never travel): %s"
+                % ", ".join(bundle["left_out"][:20])
+            )
     note = (note or "").strip()
     if note:
         if len(note) > NOTE_CHARS:
@@ -384,12 +435,22 @@ def resolve_device(name: str) -> dict:
                 400, "same_device", "%s is this device — pick another one" % want
             )
         names = _device_names()
+        close = difflib.get_close_matches(
+            want.lower(), [n.lower() for n in names], n=1, cutoff=0.6
+        )
+        guess = [n for n in names if close and n.lower() == close[0]]
         raise Refusal(
             404,
             "no_device",
-            "no device named %s%s. A device shows up once MindFlock runs there "
-            "and it is one of your devices (Settings → Your devices)"
-            % (want, " (known: %s)" % ", ".join(names) if names else ""),
+            "no device named %s%s%s. A device shows up once MindFlock runs "
+            "there and it is one of your devices (Settings → Your devices); "
+            "list_devices names them"
+            % (
+                want,
+                " — did you mean %s?" % guess[0] if guess else "",
+                " (known: %s)" % ", ".join(names) if names else "",
+            ),
+            **({"did_you_mean": guess[0]} if guess else {}),
         )
     key = dev["key"]
     if not _remote.is_linked(dev):
@@ -425,13 +486,16 @@ def resolve_device(name: str) -> dict:
     return dev
 
 
-def _unreachable(key: str, pushed: bool) -> Refusal:
-    if pushed:
+def _unreachable(key: str, after: str = "") -> Refusal:
+    """``after``: what already happened (``"The branch IS pushed"``), when
+    something did — the refusal then says so instead of "nothing was
+    pushed"."""
+    if after:
         return Refusal(
             502,
             "device_offline",
-            "%s stopped answering before the session started there. The branch "
-            "IS pushed; send again when it is back" % key,
+            "%s stopped answering before the session started there. %s; send "
+            "again when it is back" % (key, after),
         )
     return Refusal(
         409,
@@ -472,7 +536,7 @@ async def find_repo(dev: dict, facts: dict) -> Tuple[str, str, str]:
         dev, "/api/repos/find?url=" + urllib.parse.quote(url, safe=""), FIND_TIMEOUT_S
     )
     if status == 0:
-        raise _unreachable(key, False)
+        raise _unreachable(key)
     if status in (401, 403):
         raise _auth_refusal(key, status)
     if status == 200 and isinstance(body, dict):
@@ -485,7 +549,7 @@ async def find_repo(dev: dict, facts: dict) -> Tuple[str, str, str]:
         want = _repo_name(url, facts["wt"]).lower()
         status, body = await _remote.get_json(dev, "/api/repos/suggest", FIND_TIMEOUT_S)
         if status == 0:
-            raise _unreachable(key, False)
+            raise _unreachable(key)
         rows = body.get("suggestions") if isinstance(body, dict) else None
         for s in rows if isinstance(rows, list) else []:
             if (
@@ -511,9 +575,11 @@ def _title_taken(err: str) -> bool:
     ) or "already named" in e
 
 
-async def _create(dev: dict, title: str, body: dict, pushed: bool) -> Tuple[str, dict]:
+async def _create(dev: dict, title: str, body: dict, after: str) -> Tuple[str, dict]:
     """POST the create on the device, stepping the title past a name already
-    taken there (``tripwire`` → ``tripwire-2``). → ``(title, response)``."""
+    taken there (``tripwire`` → ``tripwire-2``). → ``(title, response)``.
+    ``after``: the sentence saying what already happened (``"The branch IS
+    pushed"``), carried by every refusal from here on."""
     key = dev["key"]
     for n in range(TITLE_TRIES):
         name = title if n == 0 else "%s-%d" % (title, n + 1)
@@ -523,7 +589,7 @@ async def _create(dev: dict, title: str, body: dict, pushed: bool) -> Tuple[str,
         if status in (200, 201, 202):
             return name, resp if isinstance(resp, dict) else {}
         if status == 0:
-            raise _unreachable(key, pushed)
+            raise _unreachable(key, after)
         if status in (401, 403):
             raise _auth_refusal(key, status)
         err = ""
@@ -536,9 +602,10 @@ async def _create(dev: dict, title: str, body: dict, pushed: bool) -> Tuple[str,
         raise Refusal(
             502,
             "device_refused",
-            "%s refused to start the session: %s. The branch %s pushed"
-            % (key, err or "HTTP %d" % status, "IS" if pushed else "was already"),
+            "%s refused to start the session: %s. %s"
+            % (key, err or "HTTP %d" % status, after),
             device_status=status,
+            device_error=err[:600],
         )
     raise Refusal(
         409,
@@ -551,12 +618,26 @@ async def _create(dev: dict, title: str, body: dict, pushed: bool) -> Tuple[str,
 # --------------------------------------------------------------------------- #
 # the whole send
 # --------------------------------------------------------------------------- #
+VIAS = ("auto", "git", "bundle")
+
+
+def _fetch_failed(r: Refusal) -> bool:
+    """A device refusal because ITS fetch of the pushed branch failed (no
+    access to the remote from there)."""
+    err = str(r.extra.get("device_error") or r.message).lower()
+    return r.code == "device_refused" and (
+        "fetch failed" in err or "is not a remote-tracking branch" in err
+    )
+
+
 async def send(
     inst,
     title: str,
     device: str,
     note: str = "",
     *,
+    via: str = "auto",
+    paths: Optional[List[str]] = None,
     last_reply: Callable[[], str] = lambda: "",
     breaches: Callable[[str], list] = lambda wt: [],
     to_thread=None,
@@ -564,11 +645,27 @@ async def send(
     """Carry ``title`` to ``device`` → ``(status, body)``. ``last_reply`` and
     ``breaches`` are the server's (the agent's newest reply; committed
     red-zone breaches for a push of ``wt``), injected so this module never
-    reaches into the server. See the module docstring for the steps."""
+    reaches into the server. See the module docstring for the steps.
+
+    ``via``: ``"git"`` = push + the device's own checkout (refused when it has
+    none); ``"bundle"`` = always a bundle; ``"auto"`` (default) = git when
+    the device has a checkout of the repository, else — or when the repo has
+    no remote, or the device cannot fetch from it — a bundle. ``paths``: send
+    only these paths of the repository, as a bundle (implies ``bundle``)."""
     import asyncio
 
     run = to_thread or asyncio.to_thread
     try:
+        if via not in VIAS:
+            raise Refusal(400, "bad_request", "via is one of auto, git, bundle")
+        paths = [p for p in (paths or []) if isinstance(p, str) and p.strip()]
+        if paths and via == "git":
+            raise Refusal(
+                400,
+                "bad_request",
+                "paths go only with a bundle (via: bundle or auto); a git send "
+                "carries the whole branch",
+            )
         dev = resolve_device(device)
         facts = await run(local_facts, inst, title)
         try:
@@ -589,35 +686,83 @@ async def send(
                 ),
                 red_zone_breaches=hits,
             )
-        path, there_remote, matched = await find_repo(dev, facts)
-        pushed = await run(push, facts)
-        work = await run(work_summary, facts)
-        try:
-            reply = await run(last_reply)
-        except Exception:  # noqa: BLE001 — the brief says "(no reply recorded)"
-            reply = ""
-        brief = build_brief(
-            title=title,
-            from_device=str(_remote.self_identity().get("key") or ""),
-            facts=facts,
-            work=work,
-            task=_task_text(inst),
-            last_reply=reply,
-            note=note,
+        reason = ""
+        if paths or via == "bundle":
+            reason = (
+                "only %s was asked for" % ", ".join(paths)
+                if paths
+                else "a bundle was asked for"
+            )
+        elif not facts["url"]:
+            if via == "git":
+                raise _no_remote(title, facts)
+            reason = "the repository has no %s remote" % facts["remote"]
+        else:
+            try:
+                found = await find_repo(dev, facts)
+            except Refusal as r:
+                if r.code != "repo_missing" or via == "git":
+                    raise
+                reason = "%s has no checkout of %s" % (dev["key"], facts["url"])
+        if not reason:
+            try:
+                return await _send_git(
+                    inst, title, dev, facts, found, note, last_reply, run
+                )
+            except Refusal as r:
+                if via == "git" or not _fetch_failed(r):
+                    raise
+                reason = "%s could not fetch the branch from %s" % (
+                    dev["key"],
+                    facts["remote"],
+                )
+        return await _send_bundle(
+            inst, title, dev, facts, note, paths, reason, last_reply, run
         )
-        body: Dict[str, object] = {
-            "repo_path": path,
-            "base_ref": "%s/%s" % (there_remote, facts["branch"]),
-            "continue_branch": facts["branch"],
-            "prompt": brief,
-            "spawned": True,
-        }
-        program = str(getattr(inst, "Program", "") or "")
-        if program:
-            body["program"] = program
-        name, resp = await _create(dev, title, body, pushed["pushed"])
     except Refusal as r:
         return r.status, r.body()
+
+
+async def _brief(inst, title, facts, work, note, last_reply, run, bundle=None) -> str:
+    try:
+        reply = await run(last_reply)
+    except Exception:  # noqa: BLE001 — the brief says "(no reply recorded)"
+        reply = ""
+    return build_brief(
+        title=title,
+        from_device=str(_remote.self_identity().get("key") or ""),
+        facts=facts,
+        work=work,
+        task=_task_text(inst),
+        last_reply=reply,
+        note=note,
+        bundle=bundle,
+    )
+
+
+def _commit_count(work: dict) -> int:
+    if work.get("count") is not None:
+        return work["count"]
+    return len(work.get("commits") or [])
+
+
+async def _send_git(inst, title, dev, facts, found, note, last_reply, run):
+    path, there_remote, matched = found
+    pushed = await run(push, facts)
+    work = await run(work_summary, facts)
+    brief = await _brief(inst, title, facts, work, note, last_reply, run)
+    body: Dict[str, object] = {
+        "repo_path": path,
+        "base_ref": "%s/%s" % (there_remote, facts["branch"]),
+        "continue_branch": facts["branch"],
+        "prompt": brief,
+        "spawned": True,
+    }
+    program = str(getattr(inst, "Program", "") or "")
+    if program:
+        body["program"] = program
+    after = "The branch %s pushed" % ("IS" if pushed["pushed"] else "was already")
+    name, resp = await _create(dev, title, body, after)
     await _remote.refresh_instances(dev["key"])
     caveats: List[str] = []
     if matched == "name":
@@ -634,6 +779,9 @@ async def send(
         caveats.append("%s already had a session named %s" % (dev["key"], title))
     return 200, {
         "ok": True,
+        "via": "git",
+        "how": "pushed %s to %s; %s works on it in its own checkout at %s"
+        % (facts["branch"], facts["remote"], dev["key"], path),
         "title": _remote.join_title(dev["key"], name),
         "device": dev["key"],
         "remote_title": name,
@@ -643,12 +791,153 @@ async def send(
         "head": facts["head"][:12],
         "pushed": pushed["pushed"],
         "already_pushed": pushed["already"],
-        "commits": (
-            work.get("count")
-            if work.get("count") is not None
-            else len(work.get("commits") or [])
-        ),
+        "commits": _commit_count(work),
         "repo_path": path,
         "queued": bool(resp.get("queued")),
         "caveats": caveats,
     }
+
+
+async def _send_bundle(inst, title, dev, facts, note, paths, reason, last_reply, run):
+    import shutil
+    import tempfile
+
+    from backend.web.core import send_files as _send_files
+    from backend.web.core import session_bundle as _bundle
+
+    lim = _send_files.limits()
+    work = await run(work_summary, facts)
+    tmp = tempfile.mkdtemp(prefix="mf-send-")
+    try:
+        try:
+            exp = await run(
+                lambda: _bundle.export(
+                    facts["wt"],
+                    facts["branch"],
+                    _fork_point(facts),
+                    tmp,
+                    paths=paths,
+                    classify=_send_files.classify,
+                )
+            )
+        except _bundle.BundleError as err:
+            raise Refusal(
+                400 if err.code in ("bad_path", "bad_branch") else 500,
+                err.code,
+                "could not bundle %s: %s — nothing was sent"
+                % (facts["branch"], err.message),
+            ) from None
+        if exp["size"] > lim["max_bytes"]:
+            raise Refusal(
+                413,
+                "too_large",
+                "the bundle of %s is %s, over the %s limit for one transfer — "
+                'send only the folder the work is in (paths=["<folder>"]), or '
+                "raise transfers.max_mb in Settings; nothing was sent"
+                % (
+                    facts["branch"],
+                    _send_files.human(exp["size"]),
+                    _send_files.human(lim["max_bytes"]),
+                ),
+                suggest_paths=_changed_top(facts),
+            )
+        sha, size = await run(_send_files._sha256, exp["path"])
+        wire = [
+            {
+                "path": exp["name"] + ".bundle",
+                "size": size,
+                "sha256": sha,
+                "exec": False,
+            }
+        ]
+        manifest = {
+            "v": 1,
+            "kind": "bundle",
+            "from_device": str(_remote.self_identity().get("key") or ""),
+            "from_session": title,
+            "note": (note or "")[:NOTE_CHARS],
+            "to_session": "",
+            "files": wire,
+            "total_size": size,
+            "total_sha256": _send_files.total_sha256(wire),
+            "bundle": {"branch": facts["branch"], "name": exp["name"]},
+        }
+        landed = await _send_files.transfer(dev, manifest, [exp["path"]])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    path = str(landed.get("path") or "")
+    exp["exec_stripped"] = landed.get("exec_stripped") or []
+    brief = await _brief(inst, title, facts, work, note, last_reply, run, bundle=exp)
+    body: Dict[str, object] = {
+        "repo_path": path,
+        "in_place": True,
+        "prompt": brief,
+        "spawned": True,
+    }
+    program = str(getattr(inst, "Program", "") or "")
+    if program:
+        body["program"] = program
+    after = "The work IS unpacked at %s there" % path
+    name, resp = await _create(dev, title, body, after)
+    await _remote.refresh_instances(dev["key"])
+    caveats: List[str] = []
+    if resp.get("queued"):
+        caveats.append(
+            "%s is short on memory: the session is queued and starts when there "
+            "is room" % dev["key"]
+        )
+    if name != title:
+        caveats.append("%s already had a session named %s" % (dev["key"], title))
+    if exp["left_out"]:
+        caveats.append(
+            "left out as secrets/agent config: %s" % ", ".join(exp["left_out"][:10])
+        )
+    if exp["folded"]:
+        caveats.append(
+            "the %d oldest commits were folded into the snapshot" % exp["folded"]
+        )
+    return 200, {
+        "ok": True,
+        "via": "bundle",
+        "how": "%s, so %s went as a git bundle (%s, %d commit%s on a snapshot of "
+        "where it started) unpacked into a new repository at %s there; nothing "
+        "was pushed"
+        % (
+            reason,
+            facts["branch"],
+            _send_files.human(size),
+            exp["commits"],
+            "" if exp["commits"] == 1 else "s",
+            path,
+        ),
+        "title": _remote.join_title(dev["key"], name),
+        "device": dev["key"],
+        "remote_title": name,
+        "branch": facts["branch"],
+        "head": facts["head"][:12],
+        "pushed": False,
+        "already_pushed": False,
+        "commits": _commit_count(work),
+        "repo_path": path,
+        "bundle": {
+            "size": size,
+            "sha256": sha,
+            "commits": exp["commits"],
+            "scope": exp["scope"],
+            "left_out": exp["left_out"],
+            "transfer_id": landed.get("id"),
+        },
+        "queued": bool(resp.get("queued")),
+        "caveats": caveats,
+    }
+
+
+def _changed_top(facts: dict) -> List[str]:
+    """The top folders the branch's own changes are in (a hint for
+    ``paths``)."""
+    fork = _fork_point(facts)
+    if not fork:
+        return []
+    names = _out(facts["wt"], "diff", "--name-only", fork, "HEAD").splitlines()
+    tops = sorted({n.split("/", 1)[0] for n in names if "/" in n})
+    return tops[:5]

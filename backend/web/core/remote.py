@@ -983,6 +983,31 @@ async def post_json(
         return 0, None
 
 
+async def put_bytes(
+    dev: dict, path: str, data: bytes, timeout: float = 60.0
+) -> Tuple[int, object]:
+    """``(status, body)`` for ``PUT <path>`` with a raw ``data`` body on a
+    device, with this device's credential for it (as :func:`post_json`);
+    ``(0, None)`` when it can't be reached. One chunk of a file transfer
+    (:mod:`backend.web.core.send_files`) — the same authenticated link every
+    other device call rides."""
+    if aiohttp is None or not dev.get("base_url"):
+        return 0, None
+    session = await _http_session()
+    headers = _headers_for(dev["key"])
+    headers["Content-Type"] = "application/octet-stream"
+    try:
+        async with session.put(
+            dev["base_url"] + path,
+            data=data,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            return resp.status, await _read_json(resp)
+    except Exception:  # noqa: BLE001 — unreachable / timeout
+        return 0, None
+
+
 async def refresh_device(key: str) -> Optional[dict]:
     """Re-probe ``key``'s hello NOW (instead of on the next sweep) and return
     its snapshot; None for a device discovery never found.

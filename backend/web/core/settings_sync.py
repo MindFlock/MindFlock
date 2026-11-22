@@ -310,6 +310,9 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
     # The worktree garbage collector (auto · ask · off, and its age line):
     # what is on THIS disk and what may be removed from it is per machine.
     "cleanup": ("mode", "after_days"),
+    # What this device sends and accepts from your other devices (limits, its
+    # inbox quota, whether secrets may be sent from here) is its own call.
+    "transfers": ("max_mb", "max_files", "inbox_mb", "keep_days", "allow_secrets"),
     # Not machine-specific, but never stamped or adopted as an edit: the
     # devices AGREE on one id — the pairing handshake, then
     # :func:`backend.web.core.person.reconcile` on every pass (sync_once).

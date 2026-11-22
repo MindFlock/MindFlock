@@ -724,6 +724,7 @@ Errors carry one human sentence and leave the form untouched:
 | POST | `/api/instances/{title}/resume` | Resume a paused session: relaunch the agent in the same worktree. A session paused under the old scheme (worktree removed, branch kept) is rebuilt first. While memory is low **409** `{memory_confirm: true, …}` until resent with `{start_anyway: true}` |
 | POST | `/api/instances/{title}/move` | Move the session's workspace to a new folder, live: `{"dest": "<absolute folder>", "force": false}` → **202** `{title, from, to}`, then the move runs in the background (`core/move_session.py` → the engine's `MoveWorkspace`): the agent is stopped like Pause does, the folder moves (`git worktree move` + `repair` for a linked worktree, a plain move + `git worktree repair` for a main clone or a non-git folder), the provider carries its per-folder state, and the agent is relaunched there with its resume command (a paused session stays paused). Emits `session.moved {title, from, to}` or `session.move_failed {title, error, path}` (`path` = where the workspace is now). Refusals carry `{error, code}`: **404** `unknown_session`; **400** `bad_dest` (relative, inside the current workspace, parent folder missing, in the peer-link folder); **409** `exists` (something is at `dest`), `working` (agent mid-turn) and `in_flight` (its flight is running/waiting on you, or its fast-track is running) — those two yield to `"force": true` —, `moving` (a move of it already runs), `remote` (another device's row), `peer_share`, `not_ready` (no workspace on disk); **400** `bad_source` when the workspace is a sub-folder of a repo (moving it would carry tracked files out of their repo) |
 | POST | `/api/instances/{title}/send-to-device` | Send the session to another of your devices — see [Send a session to another device](#send-a-session-to-another-device) |
+| POST | `/api/instances/{title}/send-files` | Send files or folders from the session's worktree to another of your devices' inbox — see [Send files to another device](#send-files-to-another-device) |
 | POST | `/api/instances/{title}/background/{pid}/stop` | Stop one **background job** the agent left running past its turn — the rail's **job stuck ✕** chip. Only a pid that is a *current* job root of this session (see `background` on the row and [providers.md](providers.md#background-jobs)) is signalled: SIGTERM to the job's process group, SIGKILL after 2 s. Claude Code then reports the job as ended, which may start a short turn. → `{title, pid, stopped: true}`. **404** unknown title; **409** `no such background job in this session` |
 | POST | `/api/instances/{title}/jobs/{job_id}/expect` | Say how long one **background job** should take, so it is not called stuck while inside that window — the chip menu's **Expected to take…**. Body `{duration, by?}`: `duration` is `"90s"`, `"20m"`, `"6h"`, `"2d"`, `"1h30m"` or a number of seconds, 1 minute to 14 days; `by` is `"you"` (default) or `"agent"` (the MCP tool `expect_background_job`). `job_id` is the row's `background[].id` (the id Claude Code printed when it backgrounded the command). Stored in `~/.mindflock/job_expectations.json` (under `$MINDFLOCK_HOME` when set), pruned a day after the job is gone. Precedence: a person's expectation, then the agent's, then a `MINDFLOCK_EXPECT=<duration>` prefix in the command itself; an agent's write over a person's changes nothing and answers `ok: false` with theirs. The job's stuck threshold becomes `max(15 min, 2 × longest_gap_s, 1.5 × expect_s)`, and when it first passes `expect_s` the server emits `session.job_past_expected` once. → `{ok, title, job_id, expect_s, expected_by, eta, state, reason}`. **400** bad duration or `by`; **404** unknown title, or a job id that is not a current job of this session |
 | DELETE | `/api/instances/{title}/jobs/{job_id}/expect` | Clear that expectation (a person's or the agent's; a command's own `MINDFLOCK_EXPECT=` still applies) → the same shape, `ok: false` when none was set. **404** unknown title or job |
@@ -3005,12 +3006,16 @@ would let a gate-off member launder strangers into gated ones.
 
 ### Send a session to another device
 
-`POST /api/instances/{title}/send-to-device` `{device, note?}` → **200**
-`{ok, title: "<device>::<title>", device, remote_title, branch, remote, url,
-head, pushed, already_pushed, commits, repo_path, queued, caveats}`
-(`core/send_session.py`; the MCP's `send_session`, the CLI's `mindflock
-send`). `device` is a key or host name from `GET /api/devices`; `note` is
-added to the brief.
+`POST /api/instances/{title}/send-to-device` `{device, note?, via?,
+paths?}` → **200** `{ok, via, how, title: "<device>::<title>", device,
+remote_title, branch, remote, url, head, pushed, already_pushed, commits,
+repo_path, bundle?, queued, caveats}` (`core/send_session.py`; the MCP's
+`send_session`, the CLI's `mindflock send`). `device` is a key or host name
+from `GET /api/devices`, matched case-insensitively (a near miss: **404**
+`no_device` with `did_you_mean`); `note` is added to the brief. `via`:
+`auto` (default) | `git` | `bundle`; `paths` (≤ 50): only these repository
+paths, as a bundle. The steps below are the `git` way; the bundle way
+follows them.
 
 1. **Checks, before anything leaves**: the device is one of yours (a
    "Your devices" member saying so itself, or paired by a pasted token — a
@@ -3060,6 +3065,69 @@ text travel: no agent login, credential file or transcript.
 Nothing is pushed unless every check above passed. The route talks to
 the device directly with this device's credential for it — it adds nothing
 to the `fwd/` allow-list.
+
+**The bundle way** (`via: "bundle"`, or `auto` when step 1 finds no
+checkout there — the `repo_missing` above is then `via: "git"` only —, the
+repository has no remote, or the device's create fails to fetch the pushed
+branch): `core/session_bundle.py` exports the branch as a standalone bundle
+(one snapshot commit of the fork point's tree, then the session's
+first-parent commits re-created on it, ≤ 200; files that look like secrets
+or agent config left out; with `paths`, only those trees — one folder
+becomes the root), sends it as a `kind: "bundle"` transfer (below), and the
+device unpacks it into a new repository in its inbox; the session is then
+created there with `{title, repo_path: <that repository>, in_place: true,
+program, spawned: true, prompt}`. Nothing is pushed (`pushed: false`).
+`bundle: {size, sha256, commits, scope, left_out, transfer_id}`. Extra
+refusals: **413** `too_large` (over `transfers.max_mb`, with
+`suggest_paths`), **400** `bad_path` (a `paths` entry not in the branch's
+last commit), **422** `bad_bundle` from the device.
+
+### Send files to another device
+
+`POST /api/instances/{title}/send-files` `{device, paths: [..],
+note?, to_session?, include_secrets?: bool}` → **200** `{ok, device,
+transfer_id, path, files: [{path, size, sha256}], total_size, total_sha256,
+exec_stripped, uncommitted, skipped: [{path, why}], caveats, messaged?,
+title?}` (`core/send_files.py`; the MCP's `send_files`, the CLI's
+`mindflock send-files`). `paths` (≤ 100) are files or folders inside the
+session's worktree, relative to it or absolute. Rules (what is skipped,
+never sent, or sent only with `include_secrets` + `transfers.allow_secrets`;
+limits; where files land) are in
+[devices.md](devices.md#send-files-to-another-device). Then: `to_session`
+→ `POST /api/instances/<to_session>/messages` on the device (`messaged`);
+else a `note` → `POST /api/instances` there with `{repo_path: <the inbox
+folder>, in_place: true, prompt, spawned: true, program}` (`title`).
+
+| Refusal | Status, `code` |
+|---|---|
+| a path outside the worktree (symlinks resolved), missing, or not a file/folder | **403** `outside_worktree`, **404** `not_found`, **400** `not_a_file` / `bad_path` |
+| `.git`, agent config/login/transcript, credential store | **403** `never_sent` |
+| a named secret; `include_secrets` without the setting | **403** `secret`, `secrets_not_allowed` |
+| in a red zone / outside the session's fence | **409** `red_zone` (`red_zone_breaches`) |
+| over `transfers.max_mb` / `max_files` (here or there) | **413** `too_large`, `too_many_files` |
+| everything was left out | **400** `nothing_to_send` (`skipped`) |
+| `to_session` is not a session there | **404** `no_session` (with "did you mean") |
+| the device's inbox is full | **507** `inbox_full` |
+| a checksum did not hold there | **422** `checksum_mismatch` |
+| the device ones of send-to-device; a device without these routes | as above; **502** `device_too_old` |
+| a guest link; a relayed request; a shared-folder session | **403** `guest`, **400** `remote`, **409** |
+
+### Receiving: `/api/transfers`
+
+The device side of both (`core/inbox.py`). Only for another MindFlock: the
+request must carry `X-MindFlock-Remote` AND a bearer that is this device's
+token or the fleet key — checked by the route even when the token gate is
+off (**403** `not_a_device`, **401** `not_linked`) — and **Allow remote
+control** must be on here (**403** `remote_control_off`, fleet members
+included); never a guest link. Not on the `fwd/` allow-list.
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/transfers` | Open: the manifest `{v: 1, kind: "files"\|"bundle", files: [{path, size, sha256, exec}], total_sha256, from_session, note, to_session, bundle?: {branch, name}}` → **201** `{id, received}`. Checked first: plain relative paths only (no absolute, `..`, `.`, empty segment, `\`, drive letter, control character, `.git` segment), no duplicates (case-insensitive), no file that is also a folder, `total_sha256` = SHA-256 over `"<sha256> <size> <path>\n"` per file, this device's `transfers.max_files` / `max_mb`, the inbox quota (**507** `inbox_full`), `to_session` a session here (**404** `no_session`). A bundle transfer is one `<name>.bundle` file. Old transfers are pruned first |
+| GET | `/api/transfers/{id}` | `{id, received: [bytes per file]}` — where a sender resumes |
+| PUT | `/api/transfers/{id}/files/{index}?offset=N` | One raw chunk (≤ 8 MB) appended at `offset`, which must equal what arrived (**409** `offset_mismatch` with `received`); past the declared size **400** `too_long`. Written with `O_NOFOLLOW` into `inbox/.partial/<id>/data/` |
+| POST | `/api/transfers/{id}/finish` | Verify every file's size and SHA-256 and the whole-transfer SHA-256 (**409** `incomplete`, **422** `checksum_mismatch`; anything but the sent plain files in staging: **409** `bad_state`; each drops the transfer), set files `0644` and folders `0755`, move it to `inbox/<from-device>/<id>/` (never over anything) with a record `inbox/<from-device>/<id>.json`; a bundle is unpacked into `<id>/<name>/` (**422** `bad_bundle`) → `{id, kind, from_device, from_session, note, path, files, total_size, total_sha256, exec_stripped, branch?, head?}` |
+| POST | `/api/transfers/{id}/cancel` | Drop an unfinished transfer |
 
 ### Your devices (fleet)
 

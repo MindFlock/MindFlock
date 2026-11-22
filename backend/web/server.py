@@ -64,7 +64,11 @@ modules under
     move_session     moving a session's workspace to a new folder (the
                      /move route's refusals, background run, session.moved)
     send_session     sending a session to another of your devices (push its
-                     branch, start it there on that branch with a brief)
+                     branch, or carry it as a git bundle; start it there)
+    send_files       sending files from a session's worktree to another of
+                     your devices (manifest + checksummed chunks)
+    inbox            receiving them: /api/transfers, the inbox, bundles
+    session_bundle   a branch as a standalone git bundle (export / unpack)
     mobile_access    phone access: tailscale URLs, QR codes, startup banner
     pane_find        in-place Ctrl+F in a live pane (tmux copy-mode search)
     pane_scroll_find in-place Ctrl+F for apps that scroll themselves (wheel + look)
@@ -201,6 +205,8 @@ from backend.web.core import (
 from backend.web.core import guests as _guests
 from backend.web.core import move_session as _move_session
 from backend.web.core import send_session as _send_session
+from backend.web.core import send_files as _send_files
+from backend.web.core import inbox as _inbox
 from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import terminal_ws as _terminal_ws
 from backend.web.core import guest_tunnel as _guest_tunnel
@@ -689,6 +695,7 @@ from backend.web.core.red_zone_driver import (
     _pr_committed_changed,
     _pr_content_ref,
     _red_zone_breaches_for,
+    zone_hits_for_paths,
     _rz_changed_paths,
     _rz_doc,
     _rz_exempt_ids,
@@ -5598,7 +5605,11 @@ async def instance_move(title: str, payload: Optional[dict] = None) -> JSONRespo
 async def instance_send_to_device(
     title: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
-    """Send the session to another of your devices: ``{"device", "note"}`` →
+    """Send the session to another of your devices: ``{"device", "note",
+    "via"?: auto|git|bundle, "paths"?: [..]}`` — ``via`` and the bundle
+    fallback are in :func:`backend.web.core.send_session.send`; the answer
+    adds ``via`` (``git`` / ``bundle``), ``how`` (one sentence) and, for a
+    bundle, ``bundle: {size, sha256, commits, scope, left_out}`` →
     **200** ``{"ok", "title": "<device>::<title>", "device", "remote_title",
     "branch", "remote", "url", "pushed", "already_pushed", "commits",
     "repo_path", "queued", "caveats"}``. Pushes its branch (never a force),
@@ -5635,9 +5646,20 @@ async def instance_send_to_device(
     body = payload if isinstance(payload, dict) else {}
     device = body.get("device")
     note = body.get("note", "")
-    if not isinstance(device, str) or not isinstance(note, str):
+    via = body.get("via") or "auto"
+    paths = body.get("paths") or []
+    if (
+        not isinstance(device, str)
+        or not isinstance(note, str)
+        or not isinstance(via, str)
+        or not isinstance(paths, list)
+        or not all(isinstance(x, str) for x in paths)
+    ):
         return JSONResponse(
-            {"error": "device and note must be strings", "code": "bad_request"},
+            {
+                "error": "device, note and via must be strings, paths a list of strings",
+                "code": "bad_request",
+            },
             status_code=400,
         )
 
@@ -5652,12 +5674,249 @@ async def instance_send_to_device(
         title,
         device,
         note,
+        via=via,
+        paths=paths[:50],
         last_reply=_last_reply,
         breaches=lambda wt: _red_zone_breaches_for(inst, wt, "HEAD"),
     )
     if status == 200:
         _forget_probes(title)  # its row's pushed/stage probes are stale now
     return JSONResponse(out, status_code=status)
+
+
+@app.post("/api/instances/{title}/send-files")
+async def instance_send_files(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Send files or folders from the session's worktree to another of your
+    devices: ``{"device", "paths": [..], "note"?, "to_session"?,
+    "include_secrets"?}`` → **200** ``{"ok", "device", "transfer_id",
+    "path", "files": [{path, size, sha256}], "total_size", "total_sha256",
+    "exec_stripped", "uncommitted", "skipped", "caveats", "messaged"?,
+    "title"?}`` (:mod:`backend.web.core.send_files`; the device's half is
+    :mod:`backend.web.core.inbox`). A refusal is ``{"error", "code"}`` with
+    the next step. Never for a guest link, a relayed request or a
+    shared-folder session."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {
+                "error": "a guest link cannot send files to other devices",
+                "code": "guest",
+            },
+            status_code=403,
+        )
+    if _remote.from_remote(request):
+        return JSONResponse(
+            {
+                "error": "send files from the device the session runs on",
+                "code": "remote",
+            },
+            status_code=400,
+        )
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    peer_err = _peer_guard.refusal(inst, "sending files to another device")
+    if peer_err is not None:
+        return peer_err
+    body = payload if isinstance(payload, dict) else {}
+    device, paths = body.get("device"), body.get("paths")
+    note, to_session = body.get("note", ""), body.get("to_session", "")
+    secrets_flag = body.get("include_secrets", False)
+    if (
+        not isinstance(device, str)
+        or not isinstance(note, str)
+        or not isinstance(to_session, str)
+        or not isinstance(paths, list)
+        or not all(isinstance(x, str) for x in paths)
+        or not isinstance(secrets_flag, bool)
+    ):
+        return JSONResponse(
+            {
+                "error": "device, note and to_session must be strings, paths a "
+                "list of strings, include_secrets a boolean",
+                "code": "bad_request",
+            },
+            status_code=400,
+        )
+    status, out = await _send_files.send(
+        inst,
+        title,
+        device,
+        paths,
+        note=note,
+        to_session=to_session.strip(),
+        include_secrets=secrets_flag,
+        zone_hits=zone_hits_for_paths,
+    )
+    return JSONResponse(out, status_code=status)
+
+
+# --------------------------------------------------------------------------- #
+# The inbox: receiving files from another of your devices (core.inbox)
+# --------------------------------------------------------------------------- #
+def _transfer_refusal(request: Request) -> Optional[JSONResponse]:
+    """Only another of your devices, over the device link, while remote
+    control is on here: the remote marker AND a valid credential (this
+    device's token or the fleet key) — checked even when the token gate is
+    off, so a tailnet stranger can never write into the inbox."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {"error": "a guest link cannot send files here", "code": "guest"},
+            status_code=403,
+        )
+    if not _remote.from_remote(request):
+        return JSONResponse(
+            {
+                "error": "transfers come only from your other devices "
+                "(send_files there)",
+                "code": "not_a_device",
+            },
+            status_code=403,
+        )
+    auth = request.headers.get("authorization") or ""
+    tok = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    if not tok or not _auth.token_valid(tok):
+        return JSONResponse(
+            {
+                "error": "this device did not accept the sender's credential — "
+                "pair the two again in Settings → Your devices",
+                "code": "not_linked",
+            },
+            status_code=401,
+        )
+    if not _remote.remote_control_enabled():
+        return JSONResponse(
+            {
+                "error": "Allow remote control is off on this device — turn it on "
+                "in Settings → Your devices → Advanced to receive files",
+                "code": "remote_control_off",
+            },
+            status_code=403,
+        )
+    return None
+
+
+def _inbox_in_use(path: str) -> bool:
+    """Whether a live session works in (or under) ``path``."""
+    real = os.path.realpath(path)
+    for inst in list(ENGINE.instances.values()):
+        for attr in ("GetWorktreePath",):
+            try:
+                wt = getattr(inst, attr)() or ""
+            except Exception:  # noqa: BLE001
+                wt = ""
+            if not wt:
+                continue
+            w = os.path.realpath(wt)
+            if w == real or w.startswith(real + os.sep):
+                return True
+        rp = str(getattr(inst, "Path", "") or "")
+        if rp:
+            r = os.path.realpath(rp)
+            if r == real or r.startswith(real + os.sep):
+                return True
+    return False
+
+
+def _inbox_session_check(title: str) -> Optional[str]:
+    if title in ENGINE.instances:
+        return None
+    import difflib
+
+    names = sorted(ENGINE.instances)
+    close = difflib.get_close_matches(title, names, n=1, cutoff=0.6)
+    return "no session named %s on this device%s — the files were not sent" % (
+        title,
+        " (did you mean %s?)" % close[0] if close else "",
+    )
+
+
+def _inbox_answer(fn, *args, ok: int = 200, **kw) -> JSONResponse:
+    try:
+        return JSONResponse(fn(*args, **kw), status_code=ok)
+    except _send_session.Refusal as r:
+        return JSONResponse(r.body(), status_code=r.status)
+
+
+@app.post("/api/transfers")
+async def transfer_begin(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Open a transfer from another of your devices: the manifest (``{v: 1,
+    kind: files|bundle, files: [{path, size, sha256, exec}], total_sha256,
+    note, from_session, to_session, bundle?}``) → **201** ``{id,
+    received}``. Every check of :func:`backend.web.core.inbox.check_manifest`
+    first; 400 ``bad_manifest`` / 413 ``too_large`` / ``too_many_files`` /
+    507 ``inbox_full`` / 404 ``no_session``."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    return await asyncio.to_thread(
+        _inbox_answer,
+        _inbox.begin,
+        payload,
+        request.headers.get(_remote.REMOTE_HEADER, ""),
+        lim=_send_files.limits(),
+        session_check=_inbox_session_check,
+        in_use=_inbox_in_use,
+        ok=201,
+    )
+
+
+@app.get("/api/transfers/{tid}")
+async def transfer_status(tid: str, request: Request) -> JSONResponse:
+    """``{id, received: [bytes per file]}`` — where a sender resumes."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    return await asyncio.to_thread(_inbox_answer, _inbox.status, tid)
+
+
+@app.put("/api/transfers/{tid}/files/{index}")
+async def transfer_chunk(
+    tid: str, index: int, request: Request, offset: int = -1
+) -> JSONResponse:
+    """One chunk of file ``index`` at ``offset`` (raw body, at most
+    :data:`backend.web.core.inbox.CHUNK_MAX` bytes) → ``{received}``; 409
+    ``offset_mismatch`` carries what arrived."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    data = bytearray()
+    async for part in request.stream():
+        data.extend(part)
+        if len(data) > _inbox.CHUNK_MAX:
+            return JSONResponse(
+                {
+                    "error": "a chunk is at most %d bytes" % _inbox.CHUNK_MAX,
+                    "code": "chunk_too_large",
+                },
+                status_code=413,
+            )
+    return await asyncio.to_thread(
+        _inbox_answer, _inbox.write_chunk, tid, index, offset, bytes(data)
+    )
+
+
+@app.post("/api/transfers/{tid}/finish")
+async def transfer_finish(tid: str, request: Request) -> JSONResponse:
+    """Verify every SHA-256 and move the transfer into the inbox (unpack a
+    bundle) → ``{id, path, files, total_sha256, exec_stripped, …}``; 422
+    ``checksum_mismatch`` / ``bad_bundle`` drop it."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    return await asyncio.to_thread(_inbox_answer, _inbox.finish, tid)
+
+
+@app.post("/api/transfers/{tid}/cancel")
+async def transfer_cancel(tid: str, request: Request) -> JSONResponse:
+    """Drop an unfinished transfer."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    return await asyncio.to_thread(_inbox_answer, _inbox.cancel, tid)
 
 
 @app.post("/api/instances/{title}/background/{pid}/stop")

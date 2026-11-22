@@ -206,10 +206,10 @@ class _FakeDevice:
         return 202, {"title": body["title"], "status": "loading"}
 
 
-def _send(device="mac", note=""):
+def _send(device="mac", note="", **extra):
     return client.post(
         "/api/instances/%s/send-to-device" % TITLE,
-        json={"device": device, "note": note},
+        json=dict({"device": device, "note": note}, **extra),
     )
 
 
@@ -359,8 +359,9 @@ class TestSendRoute:
         assert _send(device="macs-mac-mini").status_code == 200
 
     def test_repo_missing_on_the_device(self, world):
+        # via=git: no bundle fallback (that path: tests/unit/test_send_files.py).
         world["dev"].there = world["here"].parent / "nowhere"
-        r = _send()
+        r = _send(via="git")
         assert r.status_code == 409
         body = r.json()
         assert body["code"] == "repo_missing"
@@ -383,7 +384,7 @@ class TestSendRoute:
 
     def test_no_remote(self, world):
         _git(world["here"], "remote", "remove", "origin")
-        r = _send()
+        r = _send(via="git")
         assert r.status_code == 400 and r.json()["code"] == "no_remote"
         assert "git remote add origin" in r.json()["error"]
 

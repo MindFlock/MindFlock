@@ -1,4 +1,4 @@
-"""The 42 MindFlock MCP tools: schemas, descriptions and handlers.
+"""The 43 MindFlock MCP tools: schemas, descriptions and handlers.
 
 The ship and ticket tools (``ship_session``, ``set_autopilot``,
 ``spawn_ticket_session``, ``list_tickets``) live in :mod:`backend.mcp.ship`,
@@ -8,7 +8,8 @@ tools (``describe_flight``, ``start_flight``, ``flight_status``,
 ``control_flight``, ``edit_flight``, ``save_flight_plan``, ``run_pr_review``)
 in :mod:`backend.mcp.flights`, and the To-do tools (``add_todo``,
 ``list_todos``, ``update_todo``) in :mod:`backend.mcp.todos`, and the device
-tools (``list_devices``, ``send_session``) in :mod:`backend.mcp.devices` — all
+tools (``list_devices``, ``send_session``, ``send_files``) in
+:mod:`backend.mcp.devices` — all
 mixins of :class:`Toolbox`.
 
 Every handler goes through the HTTP API (:mod:`backend.mcp.api`) — the MCP
@@ -92,7 +93,7 @@ WORKER (whoami has a parent): commit, report_result once (status + summary). No 
 
 ORCHESTRATOR:
 1. Commit first: workers fork from your HEAD.
-2. spawn_session per piece (self-contained, disjoint files); spawn_ticket_session per ticket (list_tickets). Fence each at spawn (only=/keep_out=); widen (fence_session, reason=) only for a changed task. Order: after=/set_order. Not this branch's work? separate=true: own branch, a PR, no merge.
+2. spawn_session per piece (self-contained, disjoint files); spawn_ticket_session per ticket (list_tickets). Fence each at spawn (only=/keep_out=); widen (fence_session, reason=) only for a changed task. Order: after=/set_order. Unrelated work? separate=true: own branch, a PR, no merge.
 3. wait_for_session(titles=[...]) or end your turn; never poll list_sessions.
 4. get_diff (stat, then files=[...]).
 5. git merge <branch> or ship_session(depth="pr"); set_autopilot ships at turn end. Merge PRs only if asked (confirm_merge=true).
@@ -103,9 +104,9 @@ TEAM RUN: start_team_run; wait_for_run/get_run/list_runs; control_run steers. Sp
 
 Routes: describe_flight → start_flight (dry_run first); flight_status, control_flight, edit_flight, save_flight_plan, run_pr_review.
 Also: get_session, check_inbox, wait_for_message, set_parent, verify_session, confirm_verify. Message-now/route any session; ship/close/delete: descendants.
-Devices: list_devices, send_session.
+Devices: list_devices, send_session, send_files.
 Long job: expect_background_job or MINDFLOCK_EXPECT=6h.
-Person must act (test, click, login, decision)? add_todo each, even if said in chat; list_todos, update_todo."""
+Person must act (test, click, login, decide)? add_todo each, even if said in chat; list_todos, update_todo."""
 
 _FOOTER = """
 
@@ -3200,6 +3201,14 @@ def build_tools(box: Toolbox) -> List[Tool]:
             _devices.D_SEND_SESSION,
             _devices.S_SEND_SESSION,
             box.send_session,
+            _WRITE_WORLD,
+        ),
+        Tool(
+            "send_files",
+            "Send files to another device",
+            _devices.D_SEND_FILES,
+            _devices.S_SEND_FILES,
+            box.send_files,
             _WRITE_WORLD,
         ),
     ]

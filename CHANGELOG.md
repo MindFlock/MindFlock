@@ -23,6 +23,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where possible. An agent may send itself or a session it manages. A new
   `GET /api/repos/find?url=` tells which local folder is a given repository.
   A Send button in the app is not part of this yet.
+- **Send files, and send a session to a device without the repository.**
+  The MCP's new `send_files` (43 tools now), `mindflock send-files DEVICE
+  PATH…` or `POST /api/instances/{title}/send-files` sends files or folders
+  from a session's worktree to another of your devices over the same
+  authenticated device link: a manifest with a SHA-256 per file and for the
+  whole transfer, then 4 MB chunks the receiver confirms, verified before
+  anything appears in that device's inbox (`~/.mindflock/inbox/<from>/<id>/`,
+  a new folder every time, files `0644`, never run). Left out and listed:
+  git-ignored files, symlinks, `.git`, agent logins/config/transcripts,
+  credential stores, and — unless `include_secrets` and the new
+  `transfers.allow_secrets` setting — `.env*`, keys and credential files.
+  `to_session` tells a session there what arrived; a `note` alone starts a
+  session in that folder. `send_session` (and `mindflock send`) no longer
+  refuses a device without a checkout: the branch goes as a standalone git
+  bundle — a snapshot of where it started plus its commits, or just one
+  folder with `paths` — verified and unpacked into a new repository there
+  with hooks off, and the session starts in it (`via`: `auto` · `git` ·
+  `bundle`; the answer says which way it went). Device names match
+  case-insensitively, with "did you mean". New machine-local settings group
+  `transfers` (limits, inbox quota, keep days, `allow_secrets`).
 
 ## [0.14.25] - 2026-11-20
 

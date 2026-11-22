@@ -2260,6 +2260,61 @@ class CleanupSettings:
         return cls(mode=mode if mode in CLEANUP_MODES else "", after_days=days)
 
 
+#: Defaults of :class:`TransfersSettings` (docs/configuration.md "transfers").
+TRANSFER_MAX_MB = 512
+TRANSFER_MAX_FILES = 5000
+TRANSFER_INBOX_MB = 4096
+TRANSFER_KEEP_DAYS = 14
+
+
+@dataclass
+class TransfersSettings:
+    """Files and session work sent between your own devices (``send_files``,
+    ``send_session``'s git bundle; :mod:`backend.web.core.send_files`,
+    :mod:`backend.web.core.inbox`, docs/devices.md "Send files").
+
+    ``max_mb`` / ``max_files``: the most one transfer may carry — checked by
+    the sender before anything leaves, and by the receiver against its own
+    values (None = 512 MB / 5000 files). ``inbox_mb``: the quota of this
+    device's inbox (``<mindflock home>/inbox``; None = 4096 MB).
+    ``keep_days``: a received transfer no live session works in is removed
+    after this many days (None = 14). ``allow_secrets``: whether a sender
+    here may pass ``include_secrets`` at all (off by default: ``.env`` files,
+    keys and credentials are left out of every send). Machine-local: never
+    synced.
+    """
+
+    max_mb: Optional[int] = None
+    max_files: Optional[int] = None
+    inbox_mb: Optional[int] = None
+    keep_days: Optional[int] = None
+    allow_secrets: bool = False
+
+    def to_dict(self) -> dict:
+        out: dict = {}
+        for key in ("max_mb", "max_files", "inbox_mb", "keep_days"):
+            val = getattr(self, key)
+            if val is not None:
+                out[key] = val
+        if self.allow_secrets:
+            out["allow_secrets"] = True
+        return out
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TransfersSettings":
+        def cap(key: str, hi: int) -> Optional[int]:
+            n = _opt_pos_int(d.get(key))
+            return min(n, hi) if n is not None else None
+
+        return cls(
+            max_mb=cap("max_mb", 65536),
+            max_files=cap("max_files", 1000000),
+            inbox_mb=cap("inbox_mb", 1048576),
+            keep_days=cap("keep_days", 3650),
+            allow_secrets=d.get("allow_secrets") is True,
+        )
+
+
 @dataclass
 class Settings:
     """The whole user settings document. All groups default to empty.
@@ -2291,6 +2346,7 @@ class Settings:
     flights: FlightsSettings = field(default_factory=FlightsSettings)
     updates: UpdatesSettings = field(default_factory=UpdatesSettings)
     cleanup: CleanupSettings = field(default_factory=CleanupSettings)
+    transfers: TransfersSettings = field(default_factory=TransfersSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -2326,6 +2382,7 @@ class Settings:
             "flights": self.flights,
             "updates": self.updates,
             "cleanup": self.cleanup,
+            "transfers": self.transfers,
         }
 
     @classmethod
@@ -2373,6 +2430,7 @@ class Settings:
             flights=FlightsSettings.from_dict(_group(d, "flights")),
             updates=UpdatesSettings.from_dict(_group(d, "updates")),
             cleanup=CleanupSettings.from_dict(_group(d, "cleanup")),
+            transfers=TransfersSettings.from_dict(_group(d, "transfers")),
             schema_version=version,
         )
         _derive_setup_from_store(obj)

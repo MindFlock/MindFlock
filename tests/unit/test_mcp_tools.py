@@ -40,7 +40,7 @@ def _ctx(clock, **kw):
 # Text budgets and registry
 # --------------------------------------------------------------------------- #
 class TestRegistry:
-    def test_forty_two_tools_with_annotations(self):
+    def test_forty_three_tools_with_annotations(self):
         box, _, _ = make_box(_tree())
         tools = build_tools(box)
         assert [t.name for t in tools] == [
@@ -86,8 +86,9 @@ class TestRegistry:
             "update_todo",
             "list_devices",
             "send_session",
+            "send_files",
         ]
-        assert len(tools) == 42
+        assert len(tools) == 43
         by = {t.name: t for t in tools}
         for name in (
             "whoami",
@@ -143,6 +144,7 @@ class TestRegistry:
         assert by["list_devices"].annotations["readOnlyHint"] is True
         assert by["send_session"].annotations["readOnlyHint"] is False
         assert by["send_session"].annotations["openWorldHint"] is True
+        assert by["send_files"].annotations["openWorldHint"] is True
 
     def test_text_budgets(self):
         box, _, _ = make_box(_tree())
