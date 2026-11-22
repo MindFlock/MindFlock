@@ -1886,7 +1886,7 @@ people use Tailscale, node sharing is still the better choice.
   the server: on Linux it is SIGTERMed by the kernel when the server dies
   (`PR_SET_PDEATHSIG`), and everywhere a cloudflared left by a server that
   is gone is ended at the next server or tunnel start — matched on its
-  recorded pid, start time and exact command line, never a pattern
+  recorded pid, start time and exact arguments, never a pattern
   ([devices-anywhere.md §4](devices-anywhere.md#4-what-the-tunnel-exposes)). The direct TCP
   listener runs alongside it for whatever is direct — a direct invite or a
   link with `carrier == "tcp"` — so installing cloudflared never strands a

@@ -202,6 +202,24 @@ def _same_start(a, b) -> bool:
         return False
 
 
+def _same_cmd(now, recorded) -> bool:
+    """Whether a live process's command line is the recorded one: the same
+    ARGUMENTS (``argv[1:]`` — the subcommand, our own ``--config`` path and
+    ``--url http://127.0.0.1:<port>``), exactly. ``argv[0]`` is left out on
+    purpose: an exec in place keeps the pid, the start time and the arguments
+    but may rename the program — a macOS framework Python's ``bin/python3`` is
+    a stub that re-execs ``Python.app/Contents/MacOS/Python``, and a wrapper
+    script ``exec``s the real binary — so the name the OS reports first and
+    later can differ for the very same process. The match stays narrow: the
+    caller also requires the recorded pid AND start time, and an argument
+    list naming this state folder's own config file."""
+    if not (isinstance(now, list) and isinstance(recorded, list)):
+        return False
+    if len(now) < 2 or len(recorded) < 2:
+        return False
+    return [str(a) for a in now[1:]] == [str(a) for a in recorded[1:]]
+
+
 def _register(pid: int, argv: list) -> str:
     """Record a just-started cloudflared → the record's path (``""`` when it
     couldn't be written; the tunnel still runs). The command line recorded
@@ -211,7 +229,7 @@ def _register(pid: int, argv: list) -> str:
     child = _proc_facts(pid)
     if me is None or child is None or not child[1]:
         return ""
-    if child[1][-len(argv) + 1 :] != [str(a) for a in argv][1:]:
+    if len(argv) < 2 or child[1][-len(argv) + 1 :] != [str(a) for a in argv][1:]:
         return ""  # not the process we just started (gone and pid reused?)
     doc = {
         "pid": int(pid),
@@ -256,9 +274,9 @@ def reap_stale(folder: str | None = None) -> int:
 
     A record is acted on only when its server (pid + start time) no longer
     runs — or is this very process, re-exec'd since it wrote the record —
-    AND a process with the recorded pid, start time and exact command
-    line still does — then that one process is terminated (killed if it
-    lingers). A record whose process is gone, or whose pid now belongs to
+    AND a process with the recorded pid, start time and exact arguments
+    (:func:`_same_cmd`) still does — then that one process is terminated
+    (killed if it lingers). A record whose process is gone, or whose pid now belongs to
     something else, is just dropped. Never raises."""
     folder = folder or pids_dir()
     try:
@@ -297,7 +315,7 @@ def reap_stale(folder: str | None = None) -> int:
         if (
             child is None
             or not _same_start(child[0], doc.get("started"))
-            or child[1] != argv
+            or not _same_cmd(child[1], argv)
         ):
             _unregister(path)  # gone, or the pid is someone else's now
             continue

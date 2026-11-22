@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that reused the port; only the switch's own route (on the device itself)
   turns it on, never the generic settings save; cloudflared dies with the
   server (Linux) and a stale one is reaped at start by exact pid, start
-  time and command line; the local proxies refuse anything a relay
+  time and arguments; the local proxies refuse anything a relay
   forwarded; GitHub redirects are never followed and the repo must be
   yours and private at every write; the tunnel's origin must be this
   server's own, known port; open streams end when a device is removed.

@@ -208,8 +208,9 @@ addresses, forged pins and replays.
   (`<peer home>/cloudflared-pids/`: its pid, start time and exact command
   line, and the server's pid and start time), and at every server start
   (before any loopback listener opens) and every tunnel start a stale one
-  is ended — matched on the recorded pid **and** start time **and** command
-  line, never a pattern; a tunnel whose server still runs is left alone
+  is ended — matched on the recorded pid **and** start time **and** exact
+  arguments (the program name may change across an exec in place, as
+  macOS's framework-Python stub does), never a pattern; a tunnel whose server still runs is left alone
   (two servers may share one state folder), and so is one whose pid now
   belongs to something else. Without this, a SIGKILLed server could leave
   a public hostname forwarding to a freed loopback port that something
@@ -274,7 +275,7 @@ devices republish under the new one.
 | An internet scanner on the tunnel URL | One 128-bit path; everything else a constant 404; nothing reaches the HTTP API before the proof. |
 | A tunneled request posing as "this machine" | Tunnel connections are registered by source port (a counted hold, so a closed stream's late release can't unmark a live one on the same port) and treated as remote, gate on; forwarded headers ignored. |
 | Another device turning this device's tunnel on | Only `POST /api/devices/anywhere` sets the switch, and only from this device (never relayed, never tunneled); the generic settings save drops the field; settings sync never carries it. |
-| A crash leaving cloudflared running toward a freed port | Linux PDEATHSIG; a pid registry and an exact-match reaper (pid + start time + command line) at server and tunnel start; the local proxies refuse anything not sent by this server's own client. |
+| A crash leaving cloudflared running toward a freed port | Linux PDEATHSIG; a pid registry and an exact-match reaper (pid + start time + arguments) at server and tunnel start; the local proxies refuse anything not sent by this server's own client. |
 | A renamed / transferred / re-published GitHub repo | No redirects followed; the repo must be `<login>/mindflock-devices`, owned by the login, private — re-checked before every write. |
 | Piping to the wrong local port | The origin is the port the server was started on and that this process listens on; unknown → the tunnel doesn't start. |
 | Another local user on the dialing computer | The local proxy (`127.0.0.1:<port>`) only pipes to the far device, which still requires a token or the fleet key, exactly like a tailnet caller. A proxy's port is never released while the switch is on, so the fleet-key bearer can't be sent to a process that took over a freed port. Turning the switch off first drops those devices from discovery. |
