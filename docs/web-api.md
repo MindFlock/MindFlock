@@ -3200,7 +3200,7 @@ Per device, off by default (`general.devices_anywhere`).
 | Method | Path | Body / answer |
 |---|---|---|
 | `GET` | `/api/devices/anywhere` | `{on, state, text, retry, install, installed, tunnel, github: {state, text}, published_at, found, via_tunnel}`. `state` is `off` / `waiting` (not in a group yet) / `starting` / `on` / `failed` / `needs_github`. `text` is the plain line Settings shows under the switch. `retry` offers Retry, and `install` means cloudflared is missing (the doctor's install plan carries it). `found` lists the devices whose addresses were read, and `via_tunnel` those reached through the tunnel in the last sweep. No address, token or key is ever in it. |
-| `POST` | `/api/devices/anywhere` | `{on: bool}` → the status after applying it. On: starts the tunnel, publishes this device's record and reads the others'. Off: stops the tunnel, ingress and proxies, and **deletes this device's record**. 403 for a request relayed by another MindFlock or arriving through the tunnel; otherwise `auth.may_configure`. 400 without a boolean `on`. |
+| `POST` | `/api/devices/anywhere` | `{on: bool}` → the status after applying it. On: starts the tunnel, publishes this device's record and reads the others'. Off: stops the tunnel, ingress and proxies, and **deletes this device's record**. 403 for a request relayed by another MindFlock or arriving through the tunnel; otherwise `auth.may_configure`. 400 without a boolean `on`. The only way to set `general.devices_anywhere`: `POST /api/settings` drops that field. |
 | `POST` | `/api/devices/anywhere/retry` | Try the tunnel and GitHub again now (the status line's **Retry**). Same rules. |
 
 `GET /api/devices` rows and `GET /api/fleet` `members[]` carry `via`:

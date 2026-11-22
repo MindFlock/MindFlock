@@ -45,8 +45,16 @@ in again. It is also access-controlled, where a gist is only unlisted.
 
 - The repo is created on first publish (`POST /user/repos`, `private: true`,
   `auto_init: true`, an opaque description). An existing repo with that
-  name is used only if GitHub reports it **private**. A public one is
-  refused with a plain message.
+  name is used only if GitHub reports it **private** and it is exactly
+  `<signed-in login>/mindflock-devices`, **owned by that login**
+  (`full_name` and `owner.login`). A public one, or one owned by someone
+  else, is refused with a plain message.
+- **Redirects are never followed.** A renamed or transferred repo answers
+  `301` to wherever it went (possibly another account); the store treats
+  that as "moved" and stops, so neither a record nor the token goes
+  anywhere it didn't choose.
+- **Privacy is checked again before every write**, not once per process: a
+  repo made public (or transferred) since the last write gets no new record.
 - **Missing permission is never silent.** A classic token whose
   `X-OAuth-Scopes` lacks `repo` is refused before any call, and a 403/404 on
   the create/read/write calls (fine-grained tokens report no scopes) gets the
@@ -138,7 +146,13 @@ dial*. The connection authenticates on its own:
 4. Only after that does the stream reach this device's HTTP server, and
    **the access gate still applies**: requests that came through the tunnel
    are marked (by their loopback source port, which the tunnel registers)
-   and are treated as a tailnet caller with the gate **on**:
+   and are treated as a tailnet caller with the gate **on**. The mark is a
+   **counted hold** per port (`backend/peer/tunnel_peers.py`): a closed
+   stream gives its hold back 5 s later (the server may still be finishing
+   its last request), and a new stream handed the same ephemeral port in
+   the meantime holds its own, so the late release never unmarks a live
+   stream. Being marked a moment too long only ever makes a plain local
+   caller look remote. So:
    - public paths only, unless they carry a valid token or the current fleet
      key;
    - never "from this machine", even with the gate off in local mode;
@@ -149,8 +163,13 @@ dial*. The connection authenticates on its own:
 
 The tunnel speaks the **current key epoch only**. A device removed from the
 group holds only an old key, so it can neither read new records nor pass the
-handshake. A member that was offline during a removal must be reached once
-over Tailscale or the same network, or re-added.
+handshake. Streams that are **already open** are ended too: every save of
+the group's state (a removal rotates the key) and every 10 s tick ends each
+incoming stream whose member left the roster or whose keys are no longer
+the current ones (`TunnelServer.sweep`), and on a key change every stream
+through this device's own proxies (`DeviceProxy.drop_streams`). A member
+that was offline during a removal must be reached once over Tailscale or
+the same network, or re-added.
 
 **Someone who can write to the user's GitHub** (a stolen token, a
 compromised device signed in to it) can delete or corrupt records, or put
@@ -176,11 +195,38 @@ addresses, forged pins and replays.
   WebSockets).
 - The process gets the same sandboxed environment as peer relays
   (`QuickTunnel`: private `HOME`, our own config, `--no-autoupdate`).
+- **The origin is this server's own port, known for certain.** The server
+  passes the port it was started on (`UVICORN_PORT`, which `mindflock
+  serve` always exports, `PORT` or `--port`; never the 8765 guess) and the
+  tunnel checks that this very process listens on it. If not, it refuses
+  to start (*"this MindFlock server couldn't tell which port it listens
+  on"*), so another device's requests are never piped to whatever else
+  owns a guessed port.
+- **cloudflared never outlives the server.** On Linux the child asks the
+  kernel to SIGTERM it when the server dies (`PR_SET_PDEATHSIG`).
+  Everywhere, each running cloudflared is registered
+  (`<peer home>/cloudflared-pids/`: its pid, start time and exact command
+  line, and the server's pid and start time), and at every server start
+  (before any loopback listener opens) and every tunnel start a stale one
+  is ended — matched on the recorded pid **and** start time **and** command
+  line, never a pattern; a tunnel whose server still runs is left alone
+  (two servers may share one state folder), and so is one whose pid now
+  belongs to something else. Without this, a SIGKILLed server could leave
+  a public hostname forwarding to a freed loopback port that something
+  else binds later.
+- **The local proxies take only this server's own client.** A connection
+  to a `DeviceProxy` must open with a request addressed to that very
+  listener (`Host: 127.0.0.1:<its port>`) carrying none of the headers a
+  relay adds (`Cf-*`, `CDN-Loop`, `X-Forwarded-*`, `Forwarded`, …);
+  anything else is closed before a byte is dialed. So even a stale tunnel
+  that ended up pointing at a reused port gets nothing.
 
 ## 5. Lifecycle
 
 - **Switch on** (this device only; the setting is per device and never
-  synced): start the ingress, start the quick tunnel, wait for its name, then
+  synced; only `POST /api/devices/anywhere` changes it — the generic
+  settings save drops the field, and that route refuses another MindFlock
+  relaying and anything that came through the tunnel): start the ingress, start the quick tunnel, wait for its name, then
   **publish** the record. A tunnel that dies is restarted with backoff
   (5 s → 5 min). Each restart gets a new token and hostname and is published
   again. Publishing happens again on a key epoch change, and as a refresh
@@ -226,11 +272,41 @@ devices republish under the new one.
 | Cloudflare (or whoever answers the hostname) reads/alters/replays traffic | Inner pinned TLS 1.3 + mutual fleet-key proof; Cloudflare sees only TLS records. |
 | A forged or stale address in GitHub | Records are AEAD under a fleet-derived key, slot-bound, counter- and age-checked. An address that still gets through only says where to dial: pin + proof fail → failed connection. |
 | An internet scanner on the tunnel URL | One 128-bit path; everything else a constant 404; nothing reaches the HTTP API before the proof. |
-| A tunneled request posing as "this machine" | Tunnel connections are registered by source port and treated as remote, gate on; forwarded headers ignored. |
+| A tunneled request posing as "this machine" | Tunnel connections are registered by source port (a counted hold, so a closed stream's late release can't unmark a live one on the same port) and treated as remote, gate on; forwarded headers ignored. |
+| Another device turning this device's tunnel on | Only `POST /api/devices/anywhere` sets the switch, and only from this device (never relayed, never tunneled); the generic settings save drops the field; settings sync never carries it. |
+| A crash leaving cloudflared running toward a freed port | Linux PDEATHSIG; a pid registry and an exact-match reaper (pid + start time + command line) at server and tunnel start; the local proxies refuse anything not sent by this server's own client. |
+| A renamed / transferred / re-published GitHub repo | No redirects followed; the repo must be `<login>/mindflock-devices`, owned by the login, private — re-checked before every write. |
+| Piping to the wrong local port | The origin is the port the server was started on and that this process listens on; unknown → the tunnel doesn't start. |
 | Another local user on the dialing computer | The local proxy (`127.0.0.1:<port>`) only pipes to the far device, which still requires a token or the fleet key, exactly like a tailnet caller. A proxy's port is never released while the switch is on, so the fleet-key bearer can't be sent to a process that took over a freed port. Turning the switch off first drops those devices from discovery. |
-| A removed device | Holds only the old key: can't decrypt new records or pass the current-epoch handshake. |
+| A removed device | Holds only the old key: can't decrypt new records or pass the current-epoch handshake. Its open streams are ended when the key changes. |
 | A malicious member | Same as today: the fleet key is a full credential on every member. Over the tunnel one member could also claim another's name (Tailscale binds names, the fleet key does not); it gains nothing it doesn't already have. |
 | Metadata | GitHub sees when each device updates its record (and that a `mindflock-devices` repo exists). Cloudflare sees IPs, timing and volume, as for peer relays. |
+
+## Manual check (about ten minutes)
+
+Real GitHub and a real Cloudflare tunnel are not exercised by the test
+suite (it uses a folder store and a loopback carrier). With two of your
+devices, A and B, already in one group and both signed in to the same
+GitHub account:
+
+1. On A and on B: Settings → Your devices → turn on **Reach my devices from
+   anywhere**. Each status line reaches *"On · reachable through a private
+   tunnel"*.
+2. On GitHub, open your private `mindflock-devices` repo: two `.rec` files,
+   one per device, with opaque names and `mfd1.` ciphertext only (no host
+   name, IP or address in clear), commit messages all `update`.
+3. On A: `tailscale down`. Within a minute or two B's Your devices shows A
+   reachable with `via: "tunnel"` (`GET /api/devices` / `GET /api/fleet`);
+   A's sessions appear in B's list, a session started on A from B (device
+   forwarding) works, and a settings change on one arrives on the other.
+   `tailscale up` again afterwards: B goes back to `via: "tailnet"`.
+4. On A: turn the switch off. A's `.rec` file disappears from the repo, and
+   B stops listing A as reached through the tunnel.
+5. Hardening spot checks: `mindflock doctor` on A shows the
+   devices-anywhere row; after `kill -9` of A's server, no `cloudflared` of
+   A's is left running (Linux at once; elsewhere at the next start of A's
+   server); `POST /api/settings` with `{"general":{"devices_anywhere":true}}`
+   leaves the switch off.
 
 ## Not covered in this round
 

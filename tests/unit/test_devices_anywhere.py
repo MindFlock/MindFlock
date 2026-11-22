@@ -6,6 +6,7 @@ gate for tunneled requests."""
 from __future__ import annotations
 
 import asyncio
+import gc
 import base64
 import os
 import time
@@ -25,20 +26,42 @@ pytestmark = pytest.mark.filterwarnings(
 KEYS = fr.derive("k" * 43, "0123456789abcdef", 1)
 
 
+@pytest.fixture(autouse=True)
+def _finalize_earlier_loops():
+    """Finalize what earlier tests' (closed) event loops left behind, then
+    keep the cycle collector out of this test. Relay/tunnel coroutines left
+    pending when a test's loop closed are otherwise finalized by the
+    collector at a random allocation DURING a later test, running their
+    cleanup inside that test's loop — which cut a live stream of the later
+    test now and then (seen on the base commit too, depending on file
+    order). Test-only: a server runs one loop for its whole life."""
+    gc.collect()
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
+
+
 # --------------------------------------------------------------------------- #
 # The GitHub store, with a fake GitHub
 # --------------------------------------------------------------------------- #
 class FakeGitHub:
     def __init__(self, scopes="repo, read:org", private=True):
         self.scopes = scopes
-        self.repo = (
-            None
-            if private is None
-            else {"private": private, "permissions": {"push": True}}
-        )
+        self.repo = None if private is None else self._repo(private)
         self.files = {}
         self.calls = []
         self.fail = None  # (status, headers) for every call
+
+    @staticmethod
+    def _repo(private, owner="me"):
+        return {
+            "private": private,
+            "permissions": {"push": True},
+            "full_name": "%s/mindflock-devices" % owner,
+            "owner": {"login": owner},
+        }
 
     async def __call__(self, method, path, token, body=None):
         self.calls.append((method, path))
@@ -50,7 +73,7 @@ class FakeGitHub:
         if path == "/repos/me/mindflock-devices":
             return (200, h, dict(self.repo)) if self.repo else (404, h, {})
         if path == "/user/repos" and method == "POST":
-            self.repo = {"private": body["private"], "permissions": {"push": True}}
+            self.repo = self._repo(body["private"])
             return 201, h, dict(self.repo)
         prefix = "/repos/me/mindflock-devices/contents/"
         if path.startswith(prefix):
@@ -244,6 +267,7 @@ async def env(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(da, "_make_server", make_server)
+    monkeypatch.setattr(da, "_origin_port", lambda: oport)
     del real_make
     yield who, store, origin
     await da._shutdown()
@@ -258,10 +282,15 @@ async def _up():
     assert da._S.tunnel_state == "up", da.status()
 
 
+HI = b"pong:GET /hi HTTP/1.1\r\n"
+
+
 async def _through(proxy_url: str) -> bytes:
     port = int(proxy_url.rsplit(":", 1)[1])
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
-    writer.write(b"hi\n")
+    # The proxy takes only its own server's HTTP client: a request head
+    # addressed to it (the stand-in origin answers it line by line).
+    writer.write(b"GET /hi HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n" % port)
     await writer.drain()
     try:
         return await asyncio.wait_for(reader.readline(), 5)
@@ -284,7 +313,7 @@ async def test_publish_then_found_and_reached(env):
     peers = await da.candidates(exclude={"rig"})
     assert [p["key"] for p in peers] == ["laptop"]
     assert peers[0]["via"] == "tunnel" and peers[0]["dns"] == "laptop.x.ts.net"
-    assert await _through(peers[0]["base_url"]) == b"pong:hi\n"
+    assert await _through(peers[0]["base_url"]) == HI
     assert origin.conns == [True]
     # Tailnet answered for it: not offered.
     assert await da.candidates(exclude={"rig", "laptop"}) == []
@@ -298,7 +327,7 @@ async def test_address_change_after_tunnel_restart_is_found_again(env, monkeypat
     await da.read_records()
     first = da._S.addrs["laptop"].url
     proxy = (await da.candidates(exclude={"rig"}))[0]["base_url"]
-    assert await _through(proxy) == b"pong:hi\n"
+    assert await _through(proxy) == HI
 
     # cloudflared dies; a fresh tunnel (new token, new address) comes up and
     # is published — as laptop.
@@ -319,6 +348,7 @@ async def test_address_change_after_tunnel_restart_is_found_again(env, monkeypat
     da._S.file_sha.clear()
     port = int(proxy.rsplit(":", 1)[1])
     r, w = await asyncio.open_connection("127.0.0.1", port)
+    w.write(b"GET /hi HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n" % port)
     assert await asyncio.wait_for(r.read(), 5) == b""
     w.close()
     assert da._S.read_wanted and da._S.dial.get("laptop")
@@ -326,7 +356,7 @@ async def test_address_change_after_tunnel_restart_is_found_again(env, monkeypat
     assert da._read_due(time.time())
     await da.read_records()
     assert da._S.addrs["laptop"].url != first
-    assert await _through(proxy) == b"pong:hi\n"
+    assert await _through(proxy) == HI
 
 
 async def test_switch_off_deletes_the_record_and_stops(env):
@@ -541,6 +571,7 @@ async def test_proxy_port_is_kept_when_an_address_goes(env):
     assert da._S.proxies["laptop"] is proxy and proxy.port == port
     assert await da.candidates(exclude={"rig"}) == []
     r, w = await asyncio.open_connection("127.0.0.1", port)
+    w.write(b"GET /hi HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n" % port)
     assert await asyncio.wait_for(r.read(), 5) == b""
     w.close()
 

@@ -911,7 +911,11 @@ async def lifespan(app: FastAPI):
     _register_task(_settings_sync.sync_loop())
     # Reach my devices from anywhere: the private tunnel, this device's
     # address in the user's GitHub, and the others' (a no-op tick while off).
-    _register_task(_devices_anywhere.run_loop())
+    # Its origin is this server's own port, passed as discovery's is — but
+    # never the 8765 guess: unknown means the tunnel refuses to start.
+    from backend.web.core.mobile_access import server_port_known
+
+    _register_task(_devices_anywhere.run_loop(server_port_known()))
     # Engine updates: re-exec onto a finished install with no browser tab
     # open (core.update_watch), and announce a newer release (update.available).
     _register_task(_update_watch.watch_loop())

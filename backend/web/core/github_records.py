@@ -11,8 +11,10 @@ already grant; a gist would need ``gist``, which MindFlock's sign-in lacks.
 
 Every failure is a :class:`StoreError` with a ``kind`` and a plain sentence —
 never a silent one: ``no_token``, ``permission`` (with the remedy),
-``public_repo``, ``unreachable``, ``rate_limited`` (``retry_at``),
-``conflict``, ``error``. Only ciphertext and opaque file names ever go in;
+``public_repo``, ``not_owned``, ``moved``, ``unreachable``, ``rate_limited``
+(``retry_at``), ``conflict``, ``error``. Redirects are never followed; the
+repo must be exactly ``<signed-in login>/mindflock-devices``, owned by that
+login and private — checked again before every write. Only ciphertext and opaque file names ever go in;
 commit messages are the constant ``"update"``.
 
 :class:`DirStore` is the same interface over a local folder — the test
@@ -56,6 +58,14 @@ PUBLIC_TEXT = (
     "rename it; your devices only use a private one" % REPO_NAME
 )
 UNREACHABLE_TEXT = "Couldn't reach GitHub"
+MOVED_TEXT = (
+    "Your %s repo was renamed or moved on GitHub — your devices only use a "
+    "private repo of that name in your own account" % REPO_NAME
+)
+NOT_OWNED_TEXT = (
+    "The %s repo GitHub returned isn't one you own — your devices only use a "
+    "private repo of that name in your own account" % REPO_NAME
+)
 
 
 class StoreError(Exception):
@@ -107,8 +117,11 @@ async def _http(
     try:
         timeout = aiohttp.ClientTimeout(total=_TIMEOUT_S)
         async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Never follow a redirect: a renamed or transferred repo answers
+            # 301 to wherever it went (maybe another account) — and a token
+            # must never be replayed to a host we didn't choose.
             async with session.request(
-                method, API + path, headers=headers, json=body
+                method, API + path, headers=headers, json=body, allow_redirects=False
             ) as resp:
                 try:
                     data = await resp.json(content_type=None)
@@ -154,6 +167,9 @@ class GitHubStore:
             )
         if status >= 500:
             raise StoreError("unreachable", "GitHub answered HTTP %d" % status)
+        if 300 <= status < 400:
+            # Moved (renamed / transferred): not ours to follow (see _http).
+            raise StoreError("moved", MOVED_TEXT)
         return status, headers, data
 
     async def _who(self) -> str:
@@ -180,16 +196,31 @@ class GitHubStore:
     def _base(self) -> str:
         return "/repos/%s/%s" % (self.login, self.repo)
 
-    async def ensure_repo(self, create: bool) -> bool:
+    def _vet(self, data: dict) -> None:
+        """The repo GitHub described must be exactly ``<login>/<repo>``,
+        owned by the signed-in user, and private. Raises :class:`StoreError`."""
+        owner = data.get("owner") if isinstance(data.get("owner"), dict) else {}
+        want = ("%s/%s" % (self.login, self.repo)).lower()
+        if (
+            str(data.get("full_name") or "").lower() != want
+            or str(owner.get("login") or "").lower() != self.login.lower()
+        ):
+            raise StoreError("not_owned", NOT_OWNED_TEXT)
+        if data.get("private") is not True:
+            raise StoreError("public_repo", PUBLIC_TEXT)
+
+    async def ensure_repo(self, create: bool, fresh: bool = False) -> bool:
         """Whether the repo exists (private, ours). ``create``: make it when
-        it doesn't. Raises :class:`StoreError`."""
-        if self._checked:
+        it doesn't. ``fresh``: ask GitHub again even if it was checked before
+        (every write does: a repo made public or transferred since must not
+        get another record). Raises :class:`StoreError`."""
+        if self._checked and not fresh:
             return True
+        self._checked = False
         await self._who()
         status, _h, data = await self._call("GET", self._base())
         if status == 200 and isinstance(data, dict):
-            if not data.get("private"):
-                raise StoreError("public_repo", PUBLIC_TEXT)
+            self._vet(data)
             perms = data.get("permissions")
             if isinstance(perms, dict) and perms.get("push") is False:
                 raise StoreError("permission", PERMISSION_TEXT)
@@ -223,8 +254,11 @@ class GitHubStore:
             raise StoreError(
                 "error", "GitHub answered HTTP %d creating the repo" % status
             )
-        if isinstance(data, dict) and data.get("private") is False:
-            raise StoreError("public_repo", PUBLIC_TEXT)
+        if not isinstance(data, dict):
+            raise StoreError(
+                "error", "GitHub answered HTTP %d creating the repo" % status
+            )
+        self._vet(data)
         self._checked = True
         return True
 
@@ -285,7 +319,7 @@ class GitHubStore:
         """Create or replace one record file → its new sha."""
         if not _NAME_RE.match(name):
             raise ValueError("bad record name")
-        await self.ensure_repo(create=True)
+        await self.ensure_repo(create=True, fresh=True)
         body = {
             "message": "update",
             "content": base64.b64encode(text.encode("ascii")).decode("ascii"),

@@ -283,6 +283,12 @@ def _apply_post(payload: dict) -> list:
             # The id is agreed between the devices (core.person), never set
             # by a save — POST /api/person edits the rest with validation.
             fields = {k: v for k, v in fields.items() if k != "id"}
+        if group == "general" and "devices_anywhere" in fields:
+            # Reach my devices from anywhere opens a public tunnel to this
+            # device: only POST /api/devices/anywhere sets it, which takes it
+            # from the person AT this device (never another MindFlock
+            # relaying, never a request through the tunnel itself).
+            fields = {k: v for k, v in fields.items() if k != "devices_anywhere"}
         if group == "auth_profiles":
             # The profiles LIST is managed via its dedicated CRUD endpoint;
             # the group's scalars (default_profile) stay settable here.

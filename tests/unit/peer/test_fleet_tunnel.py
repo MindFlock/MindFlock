@@ -7,6 +7,7 @@ reaches the web server before the proof."""
 from __future__ import annotations
 
 import asyncio
+import gc
 
 import pytest
 
@@ -23,6 +24,23 @@ pytestmark = pytest.mark.filterwarnings(
 PATH = "/" + "q" * 26
 KEYS = fr.derive("k" * 43, "0123456789abcdef", 1)
 MEMBERS = {"laptop", "rig"}
+
+
+@pytest.fixture(autouse=True)
+def _finalize_earlier_loops():
+    """Finalize what earlier tests' (closed) event loops left behind, then
+    keep the cycle collector out of this test. Relay/tunnel coroutines left
+    pending when a test's loop closed are otherwise finalized by the
+    collector at a random allocation DURING a later test, running their
+    cleanup inside that test's loop — which cut a live stream of the later
+    test now and then (seen on the base commit too, depending on file
+    order). Test-only: a server runs one loop for its whole life."""
+    gc.collect()
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
 
 
 class Origin:
@@ -79,6 +97,16 @@ async def rig(tmp_path):
     yield r
     await ing.stop()
     origin.server.close()
+
+
+def _head(port: int, *extra: bytes) -> bytes:
+    """An HTTP request head as this server's own client sends it to a
+    device proxy (Host = the proxy's own address)."""
+    return (
+        b"GET / HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n" % port
+        + b"".join(h + b"\r\n" for h in extra)
+        + b"\r\n"
+    )
 
 
 async def _roundtrip(reader, writer, msg=b"hello\n") -> bytes:
@@ -281,7 +309,8 @@ async def test_proxy_pipes_and_reports(rig):
     await proxy.start()
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
-        assert await _roundtrip(reader, writer) == b"pong:hello\n"
+        head = _head(proxy.port)
+        assert await _roundtrip(reader, writer, head) == b"pong:GET / HTTP/1.1\r\n"
         writer.close()
         assert results == [(True, "")]
     finally:
@@ -299,6 +328,7 @@ async def test_proxy_with_a_dead_address_reports_failure(rig):
     await proxy.start()
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
+        writer.write(_head(proxy.port))
         assert await asyncio.wait_for(reader.read(), 5) == b""
         assert results == [(False, "unreachable")]
     finally:

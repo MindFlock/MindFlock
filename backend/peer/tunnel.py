@@ -22,6 +22,15 @@ Hardening:
   with a path, like the API endpoint in error messages), and never logged.
 * :meth:`QuickTunnel.stop` terminates it (then kills it); MindFlock stops the
   tunnel as soon as no invite or listener link needs it.
+* It never outlives the server: on Linux the child asks the kernel for
+  ``SIGTERM`` when its parent dies (``PR_SET_PDEATHSIG``); everywhere, each
+  running cloudflared is registered (:func:`pids_dir`: its pid, start time
+  and exact command line, and the server's own pid and start time), and
+  :func:`reap_stale` — run when a tunnel starts and at server start — ends
+  one whose server is gone. It matches the recorded pid AND start time AND
+  command line, never a pattern, and leaves alone a tunnel whose server
+  still runs (two servers may share one state folder). A stale tunnel would
+  otherwise keep a public hostname pointing at a freed loopback port.
 * Why a start failed is classified against a fixed set of patterns
   (:func:`classify_failure`) into one of :data:`FAILURE_TEXT`'s reasons; the
   line itself never leaves this module.
@@ -31,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
@@ -161,6 +171,178 @@ def tunnel_dir() -> str:
     return os.path.join(paths.peer_root(), "relay")
 
 
+# --------------------------------------------------------------------------- #
+# Never outliving the server
+# --------------------------------------------------------------------------- #
+def pids_dir() -> str:
+    """Where every running cloudflared of this state folder is registered
+    (one JSON file each), whichever feature started it."""
+    return os.path.join(paths.peer_root(), "cloudflared-pids")
+
+
+def _proc_facts(pid: int):
+    """``(create_time, cmdline)`` of a live process, or None (gone, or not
+    ours to inspect). Never raises."""
+    try:
+        import psutil
+
+        p = psutil.Process(int(pid))
+        with p.oneshot():
+            if p.status() == psutil.STATUS_ZOMBIE:
+                return None
+            return float(p.create_time()), list(p.cmdline())
+    except Exception:  # noqa: BLE001 — NoSuchProcess, AccessDenied, …
+        return None
+
+
+def _same_start(a, b) -> bool:
+    try:
+        return abs(float(a) - float(b)) < 0.5
+    except (TypeError, ValueError):
+        return False
+
+
+def _register(pid: int, argv: list) -> str:
+    """Record a just-started cloudflared → the record's path (``""`` when it
+    couldn't be written; the tunnel still runs). The command line recorded
+    is the one the OS reports for it (spawning returns after the exec), so
+    the reaper compares like with like; ``argv`` is what we asked to run."""
+    me = _proc_facts(os.getpid())
+    child = _proc_facts(pid)
+    if me is None or child is None or not child[1]:
+        return ""
+    if child[1][-len(argv) + 1 :] != [str(a) for a in argv][1:]:
+        return ""  # not the process we just started (gone and pid reused?)
+    doc = {
+        "pid": int(pid),
+        "started": child[0],
+        "argv": child[1],
+        "owner": os.getpid(),
+        "owner_started": me[0],
+    }
+    try:
+        d = paths.ensure_dir(pids_dir())
+        path = os.path.join(d, "%d-%d.json" % (os.getpid(), int(pid)))
+        tmp = path + ".tmp"
+        fd = os.open(
+            tmp,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | osflags.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(fd, "w") as f:
+            json.dump(doc, f)
+        os.replace(tmp, path)
+        _MINE.add(path)
+        return path
+    except OSError:
+        return ""
+
+
+#: The records THIS process image wrote. A server that re-execs itself in
+#: place (``core.restart``) keeps its pid and start time, so "its server
+#: still runs" can't tell a tunnel the previous image left behind — this can.
+_MINE: set = set()
+
+
+def _unregister(path: str) -> None:
+    if path:
+        _MINE.discard(path)
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+
+
+def reap_stale(folder: str | None = None) -> int:
+    """End every registered cloudflared whose server is gone → how many.
+
+    A record is acted on only when its server (pid + start time) no longer
+    runs — or is this very process, re-exec'd since it wrote the record —
+    AND a process with the recorded pid, start time and exact command
+    line still does — then that one process is terminated (killed if it
+    lingers). A record whose process is gone, or whose pid now belongs to
+    something else, is just dropped. Never raises."""
+    folder = folder or pids_dir()
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return 0
+    ended = 0
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+            pid, owner = int(doc["pid"]), int(doc["owner"])
+            argv = doc["argv"]
+            if not (
+                isinstance(argv, list)
+                and argv
+                and all(isinstance(a, str) for a in argv)
+            ):
+                raise ValueError("bad argv")
+        except (OSError, ValueError, KeyError, TypeError):
+            _unregister(path)
+            continue
+        if path in _MINE:
+            continue  # this server's own, live
+        owner_now = _proc_facts(owner)
+        if (
+            owner != os.getpid()
+            and owner_now is not None
+            and _same_start(owner_now[0], doc.get("owner_started"))
+        ):
+            continue  # another server still runs it (a shared state folder)
+        child = _proc_facts(pid)
+        if (
+            child is None
+            or not _same_start(child[0], doc.get("started"))
+            or child[1] != argv
+        ):
+            _unregister(path)  # gone, or the pid is someone else's now
+            continue
+        try:
+            import psutil
+
+            p = psutil.Process(pid)
+            p.terminate()
+            try:
+                p.wait(STOP_TIMEOUT)
+            except psutil.TimeoutExpired:
+                p.kill()
+                with contextlib.suppress(Exception):
+                    p.wait(STOP_TIMEOUT)
+            ended += 1
+            log.warning("peer: ended a cloudflared left running by a stopped server")
+        except Exception:  # noqa: BLE001 — gone meanwhile, or not ours
+            pass
+        _unregister(path)
+    return ended
+
+
+def _die_with_parent_kwargs() -> dict:
+    """Linux: ``preexec_fn`` that makes the kernel SIGTERM the child when
+    this server dies (``prctl(PR_SET_PDEATHSIG)``), exiting at once if the
+    server is already gone. Elsewhere ``{}`` (the registry covers it)."""
+    if not sys.platform.startswith("linux"):
+        return {}
+    try:
+        import ctypes
+
+        prctl = ctypes.CDLL(None, use_errno=True).prctl  # resolved pre-fork
+    except Exception:  # noqa: BLE001
+        return {}
+    parent = os.getpid()
+    sig = int(signal.SIGTERM)
+
+    def _child() -> None:
+        prctl(1, sig, 0, 0, 0)  # PR_SET_PDEATHSIG
+        if os.getppid() != parent:
+            os._exit(1)
+
+    return {"preexec_fn": _child}
+
+
 class QuickTunnel:
     """One ``cloudflared`` quick-tunnel process for ``origin_port``.
 
@@ -198,6 +380,7 @@ class QuickTunnel:
         self.failure: str | None = None
         self._reader: asyncio.Task | None = None
         self._stopping = False
+        self._pidfile = ""
 
     @property
     def alive(self) -> bool:
@@ -252,21 +435,26 @@ class QuickTunnel:
         self._stopping = False
         self.failure = None
         cfg, env = self._prepare()
+        await asyncio.to_thread(reap_stale)
+        argv = self.argv(cfg)
         try:
             self.proc = await self._spawn(
-                *self.argv(cfg),
+                *argv,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 env=env,
                 cwd=self.workdir,
                 **compat.detached_kwargs(),
+                **_die_with_parent_kwargs(),
                 limit=MAX_LINE,
             )
         except OSError as e:
             raise TunnelError(
                 f"could not start cloudflared: {type(e).__name__}"
             ) from None
+        if getattr(self.proc, "pid", None):
+            self._pidfile = await asyncio.to_thread(_register, self.proc.pid, argv)
         found: asyncio.Future = asyncio.get_running_loop().create_future()
         registered = asyncio.Event()
         self._reader = asyncio.create_task(
@@ -320,6 +508,9 @@ class QuickTunnel:
                 )
             # (Retrieving the exception also keeps asyncio from warning.)
             was_up = not found.cancelled() and found.exception() is None
+        if proc.returncode is not None and self.proc is proc:
+            pidfile, self._pidfile = self._pidfile, ""
+            _unregister(pidfile)
         if was_up and not self._stopping:
             log.warning("peer: relay tunnel (cloudflared) exited")
             self.hostname = None
@@ -342,6 +533,9 @@ class QuickTunnel:
                     proc.kill()
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(proc.wait(), STOP_TIMEOUT)
+        if proc is None or proc.returncode is not None:
+            pidfile, self._pidfile = self._pidfile, ""
+            _unregister(pidfile)
         reader, self._reader = self._reader, None
         if reader is not None and reader is not asyncio.current_task():
             reader.cancel()

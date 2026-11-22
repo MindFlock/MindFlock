@@ -28,11 +28,18 @@ connection in :mod:`backend.peer.tunnel_peers` first, so the web server's
 auth layer treats what arrives as a remote caller with the access gate on —
 never as "the person at this machine".
 
+Membership and keys are checked at the handshake; :meth:`TunnelServer.sweep`
+ends streams already open once their member leaves or the keys change (a
+removal rotates the key).
+
 The client side is :class:`DeviceProxy`: a loopback listener per remote
 device; each connection to it is one tunnel connection, so ``aiohttp`` (and
 everything in :mod:`backend.web.core.remote` that already talks to
 ``base_url``) works over it unchanged. Its requests still carry the fleet key
 as the bearer — inside the end-to-end TLS — exactly as to a tailnet member.
+A connection must open with a request addressed to that listener and carry
+nothing a relay adds (:func:`local_request`), so a stale public tunnel that
+ended up pointing at its port gets nothing.
 """
 
 from __future__ import annotations
@@ -59,6 +66,9 @@ log = logging.getLogger(__name__)
 PROTO_V = 1
 HANDSHAKE_TIMEOUT = 10.0
 MAX_UNAUTH = 16
+#: How long after a stream closed its loopback port stays marked tunneled
+#: (the web server may still be finishing the last request on it).
+RELEASE_GRACE = 5.0
 #: Bytes per read when piping.
 CHUNK = 64 * 1024
 _NONCE_LEN = 32
@@ -184,6 +194,7 @@ class TunnelServer:
         self.max_unauth = max_unauth
         self.handshake_timeout = handshake_timeout
         self._unauth = 0
+        self._streams: set = set()
         self.stats = {"accepted": 0, "denied": 0, "dropped": 0, "open": 0}
 
     async def __call__(self, reader, writer, source: str = "") -> None:
@@ -218,9 +229,10 @@ class TunnelServer:
             _abort(writer)
             return
         self.stats["accepted"] += 1
-        await self._serve(reader, writer)
+        await self._serve(reader, writer, *ok)
 
-    async def _handshake(self, reader, writer) -> bool:
+    async def _handshake(self, reader, writer):
+        """→ ``(member, keys)`` once the client proved it, else None."""
         sn = secrets.token_bytes(_NONCE_LEN)
         writer.write(wire.encode({"t": "hello", "v": PROTO_V, "nonce": _b64(sn)}))
         await writer.drain()
@@ -270,7 +282,7 @@ class TunnelServer:
             with contextlib.suppress(Exception):
                 writer.write(wire.encode({"t": "denied"}))
                 await writer.drain()
-            return False
+            return None
         writer.write(
             wire.encode(
                 {
@@ -285,34 +297,69 @@ class TunnelServer:
                 self._on_member(frm)  # e.g. "it's up: look for its address"
             except Exception:  # noqa: BLE001
                 pass
-        return True
+        return frm, keys
 
-    async def _serve(self, reader, writer) -> None:
+    async def _serve(self, reader, writer, member: str, keys: Keys) -> None:
         """Pipe the authenticated stream to this device's web server, with
-        the local port noted as tunneled before a byte is sent."""
+        the local port noted as tunneled before a byte is sent. The stream
+        is remembered with the member and the keys it proved, so
+        :meth:`sweep` can end it once either stops being current."""
         loop = asyncio.get_running_loop()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        port = 0
+        held = 0
         try:
             sock.setblocking(False)
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
             tunnel_peers.add(port)
-            await loop.sock_connect(sock, ("127.0.0.1", int(self._origin_port())))
+            held = port
+            origin = self._origin_port()
+            if not origin:
+                raise OSError("origin port unknown")
+            await loop.sock_connect(sock, ("127.0.0.1", int(origin)))
             o_reader, o_writer = await asyncio.open_connection(sock=sock)
-        except (OSError, ValueError):
-            tunnel_peers.discard(port)
+        except (OSError, ValueError, TypeError):
+            if held:
+                tunnel_peers.discard(held)
             sock.close()
             _abort(writer)
             return
+        stream = (member, keys.auth, writer, o_writer)
+        self._streams.add(stream)
         self.stats["open"] += 1
         try:
             await pipe(reader, writer, o_reader, o_writer)
         finally:
             self.stats["open"] -= 1
-            # Keep the port marked a moment after close: the server may still
-            # be finishing the last request on it.
-            loop.call_later(5.0, tunnel_peers.discard, port)
+            self._streams.discard(stream)
+            # Give the port's hold back a moment after close: the server may
+            # still be finishing the last request on it. Holds are counted
+            # (tunnel_peers), so a new connection handed the same port in the
+            # meantime keeps its own mark.
+            loop.call_later(RELEASE_GRACE, tunnel_peers.discard, held)
+
+    def sweep(self) -> int:
+        """End every open stream whose member left the roster or whose keys
+        are no longer the group's current ones (a removal rotates the key) —
+        membership is otherwise only checked at the handshake. → how many."""
+        keys = self._keys()
+        members = self._members()
+        ended = 0
+        for stream in list(self._streams):
+            member, auth, writer, o_writer = stream
+            if (
+                keys is not None
+                and hmac.compare_digest(auth, keys.auth)
+                and member in members
+            ):
+                continue
+            self._streams.discard(stream)
+            _abort(writer)
+            _abort(o_writer)
+            ended += 1
+        if ended:
+            self.stats["revoked"] = self.stats.get("revoked", 0) + ended
+        return ended
 
 
 # --------------------------------------------------------------------------- #
@@ -399,6 +446,50 @@ async def dial(
     return reader, writer
 
 
+#: Request headers a relay in front of a listener adds (Cloudflare's edge
+#: and cloudflared always set some of these); this server's own client never
+#: sends any of them.
+_RELAYED_HEADERS = frozenset(
+    {
+        b"cdn-loop",
+        b"forwarded",
+        b"x-forwarded-for",
+        b"x-forwarded-host",
+        b"x-forwarded-proto",
+        b"x-real-ip",
+        b"true-client-ip",
+    }
+)
+
+
+def local_request(head: bytes, port: Optional[int]) -> bool:
+    """Whether an HTTP request head was sent straight to ``127.0.0.1:<port>``
+    by a local client: exactly one ``Host`` naming this listener, and no
+    header a relay (a Cloudflare tunnel) adds. Never raises."""
+    if not port:
+        return False
+    try:
+        lines = head.split(b"\r\n")
+        if not lines or b" " not in lines[0]:
+            return False
+        hosts = []
+        for line in lines[1:]:
+            if not line:
+                continue
+            name, sep, value = line.partition(b":")
+            if not sep:
+                return False
+            name = name.strip().lower()
+            if name.startswith(b"cf-") or name in _RELAYED_HEADERS:
+                return False
+            if name == b"host":
+                hosts.append(value.strip().lower())
+        want = {b"127.0.0.1:%d" % port, b"localhost:%d" % port}
+        return len(hosts) == 1 and hosts[0] in want
+    except Exception:  # noqa: BLE001
+        return False
+
+
 #: ``resolve()`` result: ``(url, fp_hex, keys, self_key, target)`` or None.
 Route = Optional[tuple]
 
@@ -461,10 +552,42 @@ class DeviceProxy:
         except Exception:  # noqa: BLE001
             log.debug("device proxy: result hook failed", exc_info=True)
 
+    def drop_streams(self) -> int:
+        """End every connection piped through this proxy now (the group's
+        key changed: what was authenticated under the old one stops). The
+        listener stays. → how many."""
+        n = 0
+        for t in list(self._tasks):
+            if not t.done():
+                t.cancel()
+                n += 1
+        return n
+
     async def _on_conn(self, l_reader, l_writer) -> None:
         task = asyncio.current_task()
         self._tasks.add(task)
         try:
+            # Only this server's own HTTP client may use the proxy: its first
+            # request must be addressed to this very listener and carry none
+            # of what a relay adds. A stale Cloudflare tunnel (from a crashed
+            # run) that happens to point at this freed-and-reused port is
+            # refused before anything is dialed (docs/devices-anywhere.md §4).
+            try:
+                async with asyncio.timeout(HANDSHAKE_TIMEOUT):
+                    head = await l_reader.readuntil(b"\r\n\r\n")
+            except (
+                TimeoutError,
+                asyncio.IncompleteReadError,
+                asyncio.LimitOverrunError,
+                ValueError,
+                OSError,
+            ):
+                _abort(l_writer)
+                return
+            if not local_request(head, self.port):
+                _abort(l_writer)
+                await self._note(False, "refused_local")
+                return
             route = self._resolve()
             if not route:
                 _abort(l_writer)
@@ -490,6 +613,12 @@ class DeviceProxy:
                 await self._note(False, "unreachable")
                 return
             await self._note(True, "")
+            try:
+                r_writer.write(head)
+            except (OSError, ConnectionError, ssl.SSLError):
+                _abort(l_writer)
+                _abort(r_writer)
+                return
             await pipe(l_reader, l_writer, r_reader, r_writer)
         finally:
             self._tasks.discard(task)

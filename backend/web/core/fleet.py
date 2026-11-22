@@ -345,6 +345,15 @@ def _save(data: dict) -> None:
     )
     with _LOCK:
         _CACHE["sig"], _CACHE["doc"] = None, None
+    # Reach my devices from anywhere: a removal / key change ends the device
+    # tunnel's open streams at once (membership is otherwise only checked at
+    # each handshake).
+    try:
+        from backend.web.core import devices_anywhere as _anywhere
+
+        _anywhere.fleet_changed()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _self_ident() -> dict:

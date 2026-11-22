@@ -106,6 +106,8 @@ class _State:
         self.write_retry_at = 0.0
         self.write_delay = READ_MIN
         self.lock: Optional[asyncio.Lock] = None
+        # (fleet id, epoch) seen last tick: a change ends old streams.
+        self.keys_tag = None
 
 
 _S = _State()
@@ -249,10 +251,45 @@ def _members() -> set:
         return set()
 
 
-def _origin_port() -> int:
-    from backend.web.core import mobile_access as _mobile
+#: This server's own port, as the server passed it at start (:func:`run_loop`,
+#: the way discovery gets it) — None until then, and None when the process
+#: couldn't tell. Never guessed: a wrong guess would pipe another device's
+#: requests into whatever else listens on that port.
+_SERVER_PORT: Optional[int] = None
+_PORT_OK: Dict[int, bool] = {}
 
-    return _mobile._server_port()
+PORT_UNKNOWN_TEXT = (
+    "this MindFlock server couldn't tell which port it listens on — start it "
+    "with `mindflock serve` (or --port)"
+)
+
+
+def _listening_here(port: int) -> bool:
+    """Whether THIS process listens on TCP ``port`` (cached per port)."""
+    if port in _PORT_OK:
+        return _PORT_OK[port]
+    try:
+        import psutil
+
+        conns = psutil.Process().net_connections(kind="tcp")
+    except Exception:  # noqa: BLE001 — can't look: don't trust it
+        return False
+    ok = any(
+        c.status == "LISTEN" and c.laddr and int(c.laddr[1]) == int(port) for c in conns
+    )
+    if ok:
+        _PORT_OK[port] = True
+    return ok
+
+
+def _origin_port() -> int:
+    """This device's web server port, or 0 when it isn't known for certain
+    (the port the server was started with, and this process listens on it)
+    — the tunnel then refuses to start, and a stream is never piped."""
+    port = _SERVER_PORT
+    if not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536:
+        return 0
+    return port if _listening_here(port) else 0
 
 
 def _edge_ssl():
@@ -319,6 +356,16 @@ async def _start() -> None:
     from backend.peer.relay import RelayIngress
 
     _S.tunnel_state, _S.tunnel_error, _S.tunnel_reason = "starting", "", ""
+    if not await asyncio.to_thread(_origin_port):
+        _S.tunnel_state, _S.tunnel_error, _S.tunnel_reason = (
+            "failed",
+            PORT_UNKNOWN_TEXT,
+            "port_unknown",
+        )
+        _S.restart_at = time.time() + _S.restart_delay
+        _S.restart_delay = min(RESTART_MAX, _S.restart_delay * 2)
+        log.warning("devices anywhere: own port unknown; tunnel not started")
+        return
     binary = None
     if not _loopback():
         binary = _binary()
@@ -695,9 +742,48 @@ async def tick() -> None:
             log.warning("devices anywhere: tick failed (%s)", type(e).__name__)
 
 
+def _revoke_stale_streams(keys) -> None:
+    """Membership and keys are checked at each handshake; an open stream
+    outlives both unless ended here. Incoming streams whose member left or
+    whose keys are no longer current end (:meth:`TunnelServer.sweep`); on a
+    key change every stream through our proxies ends too (they were
+    authenticated under the old key)."""
+    if _S.server is not None:
+        try:
+            if _S.server.sweep():
+                log.info("devices anywhere: ended streams of a past key/member")
+        except Exception:  # noqa: BLE001
+            pass
+    tag = (keys.fleet_id, keys.epoch) if keys is not None else None
+    if _S.keys_tag is not None and tag != _S.keys_tag:
+        for proxy in list(_S.proxies.values()):
+            try:
+                proxy.drop_streams()
+            except Exception:  # noqa: BLE001
+                pass
+    _S.keys_tag = tag
+
+
+_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+
+def fleet_changed() -> None:
+    """The group's state was just saved (a removal, a key rotation, a
+    join): end what the change revoked NOW rather than at the next tick.
+    Callable from any thread; never raises."""
+    loop = _LOOP
+    if loop is None or loop.is_closed():
+        return
+    try:
+        loop.call_soon_threadsafe(lambda: _revoke_stale_streams(_keys()))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _tick() -> None:
     on = enabled()
     keys = _keys()
+    _revoke_stale_streams(keys)
     if not on or keys is None:
         if _S.ingress is not None or _S.tunnel is not None or _S.proxies:
             await _shutdown()
@@ -795,8 +881,23 @@ async def stop() -> None:
     await _shutdown()
 
 
-async def run_loop() -> None:
-    """The background loop (a no-op tick while the switch is off)."""
+async def run_loop(server_port: Optional[int] = None) -> None:
+    """The background loop (a no-op tick while the switch is off).
+
+    ``server_port``: the port this server was started on (None when it
+    can't tell; the tunnel then refuses to start). First, any cloudflared a
+    crashed run of this state folder left behind is ended
+    (:func:`backend.peer.tunnel.reap_stale`) — before this server opens a
+    single loopback listener a stale tunnel could be pointing at."""
+    global _SERVER_PORT, _LOOP
+    _SERVER_PORT = server_port
+    _LOOP = asyncio.get_running_loop()
+    try:
+        from backend.peer.tunnel import reap_stale
+
+        await asyncio.to_thread(reap_stale)
+    except Exception:  # noqa: BLE001
+        pass
     while True:
         await tick()
         await asyncio.sleep(TICK_S)
@@ -830,7 +931,13 @@ def status() -> dict:
             "Couldn't start the tunnel — %s" % (_S.tunnel_error or "it didn't start"),
             True,
         )
-    elif gh.get("state") in ("permission", "no_token", "public_repo"):
+    elif gh.get("state") in (
+        "permission",
+        "no_token",
+        "public_repo",
+        "not_owned",
+        "moved",
+    ):
         state, text, retry = "needs_github", gh.get("text") or "", True
     elif tstate != "up":
         state, text = "starting", STARTING_TEXT

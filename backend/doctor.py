@@ -1556,6 +1556,8 @@ def check_devices_anywhere() -> Optional[Check]:
             "permission": "GitHub permission missing",
             "no_token": "GitHub not signed in",
             "public_repo": "GitHub repo is public",
+            "not_owned": "GitHub repo isn't yours",
+            "moved": "GitHub repo was moved",
             "unreachable": "GitHub unreachable",
             "rate_limited": "GitHub rate-limiting",
         }.get(gh_state, "GitHub not checked yet")
@@ -1578,7 +1580,7 @@ def check_devices_anywhere() -> Optional[Check]:
             "install cloudflared (see the cloudflared row)",
             docs=_DOCS["cloudflared"],
         )
-    if gh_state in ("permission", "no_token", "public_repo"):
+    if gh_state in ("permission", "no_token", "public_repo", "not_owned", "moved"):
         return Check("devices-anywhere", label, "warn", detail, gh.get("text") or "")
     if fresh and snap.get("state") == "failed":
         return Check("devices-anywhere", label, "warn", detail, snap.get("text") or "")
