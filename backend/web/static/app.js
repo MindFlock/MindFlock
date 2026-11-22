@@ -31949,7 +31949,7 @@ async function submitMakePr(title, base, overrideRedZones = false) {
 			if (r.compare_url) offerUrl(r.compare_url, "Opened GitHub’s compare page — " + msg);
 			else toast(msg, { duration: 9e3 });
 		} else {
-			const said = (r?.note ? "PR already open for " : "Opened PR for ") + displayName(title);
+			const said = (r?.note ? "PR already open for " : "Opened PR for ") + displayName(title) + (r?.base_note ? ". " + r.base_note : "");
 			if (r?.url) offerUrl(r.url, said);
 			else toast(said);
 			await resetStage(title, { quiet: true });
@@ -133791,6 +133791,15 @@ function mapFrom(rows) {
 	}
 	return out;
 }
+function usedLine(row) {
+	if (!row.base.branch) return "no base branch found — set one below";
+	const pr = row.pr.branch && row.pr.branch !== row.base.branch ? " · PRs: " + row.pr.why : "";
+	return row.base.why + pr;
+}
+function usedNote(row) {
+	const notes = [row.base.note, row.pr.note].filter(Boolean);
+	return Array.from(new Set(notes)).join(". ");
+}
 //#endregion
 //#region src/components/settings/screens/RepoBranches.tsx
 function RepoBranches() {
@@ -133802,6 +133811,14 @@ function RepoBranches() {
 	(0, import_react.useEffect)(() => {
 		setRows((prev) => JSON.stringify(mapFrom(prev)) === storedKey ? prev : rowsFrom(stored));
 	}, [storedKey]);
+	const [used, setUsed] = (0, import_react.useState)([]);
+	(0, import_react.useEffect)(() => {
+		let alive = true;
+		api("/api/repos/bases").then((d) => alive && setUsed(Array.isArray(d?.repos) ? d.repos : [])).catch(() => alive && setUsed([]));
+		return () => {
+			alive = false;
+		};
+	}, [storedKey, defaultBase]);
 	const save = (next) => {
 		const map = mapFrom(next);
 		if (JSON.stringify(map) === storedKey) return;
@@ -133834,6 +133851,37 @@ function RepoBranches() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "main" }),
 					". Blank PR base = that repo's base branch."
 				]
+			}),
+			used.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "ws-repo-used",
+				id: "workspace-repo-used",
+				children: used.map((u) => {
+					const note = usedNote(u);
+					const hasRow = rows.some((r) => normalizeRepo(r.repo) === u.repo || r.repo === u.repo);
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: u.repo }),
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: usedLine(u)
+						}),
+						note && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint ws-repo-note",
+							children: [" — ", note]
+						}),
+						!hasRow && normalizeRepo(u.repo) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							"aria-label": "Set branches for " + u.repo,
+							onClick: () => setRows((prev) => [...prev, {
+								repo: u.repo,
+								base: "",
+								pr: ""
+							}]),
+							children: "Set"
+						})] })
+					] }, u.repo);
+				})
 			}),
 			rows.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ws-repo-branches",
@@ -141597,6 +141645,17 @@ function MakePrDialog() {
 							children: "See on map"
 						})
 					]
+				}),
+				info?.note && base === info.default && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					id: "make-pr-base-note",
+					children: [info.note, "."]
+				}),
+				info?.error && !base && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					id: "make-pr-base-error",
+					role: "alert",
+					children: info.error
 				}),
 				onBase ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "error",

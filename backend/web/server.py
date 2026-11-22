@@ -169,6 +169,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from backend import config, log
 from backend import providers
+from backend import repo_base as _repo_base
 from backend import session
 from backend import tailscale_cli as _tailscale_cli
 from backend.providers import config as provider_config
@@ -4858,6 +4859,21 @@ async def repo_branches(path: str = "") -> JSONResponse:
     return JSONResponse(await asyncio.to_thread(_list_branches, path))
 
 
+@app.get("/api/repos/bases")
+async def repo_bases() -> JSONResponse:
+    """Settings → Workspace → Per-repo branches: per known repository, the
+    base branch and PR base MindFlock will use and why (``"main · the
+    repository's default"``), from :mod:`backend.repo_base`. Read-only;
+    threaded (git, at most one cached ``ls-remote`` per remote). See
+    :mod:`backend.web.core.repo_bases`."""
+    from backend.web.core import repo_bases as _repo_bases
+
+    try:
+        return JSONResponse(await asyncio.to_thread(_repo_bases.list_bases, ENGINE))
+    except Exception:  # noqa: BLE001 — a hint list, never a 500
+        return JSONResponse({"repos": []})
+
+
 def _branches_path_allowed(path: str) -> bool:
     full = os.path.realpath(os.path.expanduser(str(path or "")))
     roots = [os.path.realpath(os.path.expanduser("~"))]
@@ -8426,12 +8442,17 @@ def _resolve_fallback_base_branch(wt: str) -> str:
             return cand
     # 3. The configured provision base — but only when this session's repo
     #    matches the configured repo (a global "staging" must never leak onto
-    #    an unrelated repo; that's the K1 bug).
+    #    an unrelated repo; that's the K1 bug) AND the branch is there. Local
+    #    refs only: this runs on the poll path.
     try:
         s = provisioning.load_provision_settings()
         if s is not None:
             origin = provisioning._git_origin_url(wt)
-            if origin and provisioning._same_repo_url(origin, s.repo_url):
+            if (
+                origin
+                and provisioning._same_repo_url(origin, s.repo_url)
+                and _repo_base.branch_exists(wt, s.base_branch, network=False)
+            ):
                 return s.base_branch
     except Exception:  # noqa: BLE001
         pass
@@ -8480,29 +8501,70 @@ def _configured_pr_base(wt: str = "") -> str:
 
     The repo's own ``repository.repo_branches`` block first (its
     ``pr_base_branch``, else its ``base_branch``), then the flock-wide
-    ``repository.pr_base_branch``. Read fresh from settings on each call so a
-    change takes effect without a restart. When set it overrides the
-    per-session fork-point as the "Make PR" target (see
-    :func:`instance_make_pr`); blank leaves the K1 behaviour intact.
+    ``repository.pr_base_branch`` — that one ONLY when the branch exists on
+    this repository (:mod:`backend.repo_base`; a flat "staging" is right for
+    one repo and an ``ambiguous argument`` for the next). Read fresh from
+    settings on each call so a change takes effect without a restart.
+    Blocking (git, maybe one cached ``ls-remote``).
     """
     try:
-        from backend.config.settings import load_settings, repo_branches_for
-
-        st = load_settings()
-        if wt:
-            pr = repo_branches_for(provisioning.repo_slug_for(wt), st)[1]
-            if pr:
-                return pr
-        return (st.repository.pr_base_branch or "").strip()
+        return _repo_base.resolve(wt, "pr", fallback=False).branch
     except Exception:  # noqa: BLE001 — settings optional; never break a PR
         return ""
 
 
-def _default_pr_base(wt: str, inst) -> str:
-    """The Make-PR target when the dialog picked none: the configured PR base,
-    else the session's own base. Blocking (settings + git): call it through
+def _pr_base_choice(wt: str, inst) -> "_repo_base.BaseChoice":
+    """The Make-PR target when the dialog picked none, and why.
+
+    Your setting for this repository → the flat PR base if this repository
+    has it (:func:`_configured_pr_base`) → the session's own base (K1) if the
+    repository has THAT → the repository's default branch → main/master.
+    ``.note`` says, once, when a configured branch was passed over;
+    ``.branch`` is ``""`` (and ``.error`` the plain sentence) when nothing
+    resolved. Blocking (settings + git): call it through
     ``asyncio.to_thread`` from a request handler."""
-    return _configured_pr_base(wt) or _session_base_branch(inst)
+    configured = _configured_pr_base(wt)
+    per_repo, flat = _repo_base.configured(wt, "pr")
+    if configured:
+        source = (
+            _repo_base.SOURCE_REPO
+            if per_repo and configured == per_repo
+            else _repo_base.SOURCE_SETTING
+        )
+        return _repo_base.BaseChoice(configured, source)
+    # Nothing configured came back although a flat value is set: the
+    # resolver passed it over because this repository does not have it.
+    skipped = flat if (flat and not per_repo) else ""
+    session_base = ""
+    try:
+        session_base = str(_session_base_branch(inst) or "").strip()
+    except Exception:  # noqa: BLE001
+        session_base = ""
+    if session_base and session_base != skipped:
+        # Local evidence counts here (the long-standing K1 target: a branch
+        # this checkout has); the remote is asked only when the checkout
+        # shows nothing — the case of a base recorded from a flat setting.
+        if (
+            _repo_base.branch_exists(wt, session_base, network=False)
+            or _repo_base.branch_exists(wt, session_base) is not False
+        ):
+            return _repo_base.BaseChoice(
+                session_base, _repo_base.SOURCE_SESSION, skipped
+            )
+        # A session recorded against a branch this repository lacks (one
+        # provisioned from a flat setting before the resolver existed).
+        skipped = skipped or session_base
+    try:
+        fell = _repo_base.resolve(wt, "pr", per_repo="", flat="")
+    except Exception:  # noqa: BLE001
+        fell = _repo_base.BaseChoice()
+    return _repo_base.BaseChoice(fell.branch, fell.source, skipped)
+
+
+def _default_pr_base(wt: str, inst) -> str:
+    """The Make-PR target when the dialog picked none (see
+    :func:`_pr_base_choice`), or ``""`` when nothing resolved. Blocking."""
+    return _pr_base_choice(wt, inst).branch
 
 
 _PR_CACHE: Dict[str, tuple] = {}  # branch -> (expires_epoch, info_or_None, last_good)
@@ -10073,8 +10135,20 @@ async def instance_branches(title: str) -> JSONResponse:
     current = await asyncio.to_thread(_current_branch, wt) or inst.Branch or ""
     # A settings parse plus up to a few git processes: off the event loop, so
     # every pane's output doesn't wait behind the dialog opening.
-    default = await asyncio.to_thread(_default_pr_base, wt, inst)
-    return JSONResponse({"branches": branches, "current": current, "default": default})
+    choice = await asyncio.to_thread(_pr_base_choice, wt, inst)
+    # ``note`` / ``error`` are the plain sentences the dialog shows under the
+    # picker: a configured branch this repository lacks was passed over, or
+    # nothing resolved at all (then the user picks one here).
+    return JSONResponse(
+        {
+            "branches": branches,
+            "current": current,
+            "default": choice.branch,
+            "why": choice.why,
+            "note": choice.note,
+            "error": choice.error,
+        }
+    )
 
 
 # The one remedy sentence every "MindFlock can't do the GitHub half itself"
@@ -10153,14 +10227,23 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
     chosen = (payload or {}).get("base")
 
     def _base_and_branch():
-        b = (chosen or "").strip() or _default_pr_base(wt, inst)
+        picked = (chosen or "").strip()
+        choice = (
+            _repo_base.BaseChoice(picked, "picked")
+            if picked
+            else _pr_base_choice(wt, inst)
+        )
         # PR the branch the worktree is *actually* on — the stored inst.Branch
         # can drift when the worktree is switched, which would PR the wrong one.
-        return b, _current_branch(wt) or inst.Branch or ""
+        return choice, _current_branch(wt) or inst.Branch or ""
 
     # Up to ~5 git processes plus a settings parse: one hop off the event loop
     # so every pane's output doesn't wait behind them.
-    base, branch = await asyncio.to_thread(_base_and_branch)
+    choice, branch = await asyncio.to_thread(_base_and_branch)
+    base = choice.branch
+    if not base:
+        # Never hand git a branch that does not exist: say what to set instead.
+        return JSONResponse({"error": choice.error}, status_code=409)
     if not branch or branch == base:
         return JSONResponse(
             {
@@ -10255,7 +10338,12 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
             if out:
                 msg += ": " + out
         return JSONResponse({"error": msg}, status_code=400)
-    return JSONResponse({"ok": True, "url": url})
+    out_body = {"ok": True, "url": url}
+    if choice.note:
+        # "Using main: this repository has no staging branch" — said once,
+        # where the PR was opened (the ship dialog's toast, the route stop).
+        out_body["base_note"] = choice.note
+    return JSONResponse(out_body)
 
 
 def _merge_browser_fallback(
@@ -10354,12 +10442,13 @@ async def instance_merge_pr(title: str, payload: Optional[dict] = None) -> JSONR
             pass
         _ORIGIN_SHA_CACHE.pop((wt, branch), None)
         base = _default_pr_base(wt, inst)
-        _run_capped(  # best-effort; a failure just leaves the old lag
-            ["git", "-C", wt, "fetch", "origin", base],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=120,
-        )
+        if base:
+            _run_capped(  # best-effort; a failure just leaves the old lag
+                ["git", "-C", wt, "fetch", "origin", base],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=120,
+            )
         return base
 
     base = await asyncio.to_thread(_post_merge)

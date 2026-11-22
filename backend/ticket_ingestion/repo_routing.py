@@ -593,22 +593,23 @@ def _worktree_dir(path: str, slug: str) -> str:
 def _extra_branches(url: str, path: str) -> tuple[str, str]:
     """``(fork base, PR base)`` for an extra repo of a multi-repo ticket.
 
-    The same answer its own ticket session would get: the repo's
-    ``repository.repo_branches`` block, else the flock-wide base / PR base.
-    ``("", "")`` when nothing is configured — the prompt then keeps
-    ``origin/HEAD`` and leaves the PR target to the repo's default. Never
-    raises: it only shapes prompt text.
+    The same answer its own ticket session would get (:mod:`backend.repo_base`):
+    the repo's ``repository.repo_branches`` block, else the flock-wide base /
+    PR base — each only when THIS repo has that branch. ``("", "")`` when
+    nothing configured applies — the prompt then keeps ``origin/HEAD`` and
+    leaves the PR target to the repo's default. Never raises: it only shapes
+    prompt text.
     """
     try:
-        from backend.config import settings as _s
-        from backend.session.provisioned import repo_slug_for
+        from backend import repo_base
 
-        st = _s.load_settings()
-        base, pr = _s.repo_branches_for(repo_slug_for(url or path), st)
-        if base:
-            return base, pr
-        base = (st.repository.base_branch or st.github.base_branch or "").strip()
-        return base, (st.repository.pr_base_branch or "").strip() or base
+        # The checkout when it is on this machine (local refs answer), else
+        # the URL — a missing path names no repository at all.
+        where = path if path and os.path.isdir(os.path.expanduser(path)) else url
+        base = repo_base.resolve(where, "base", fallback=False).branch
+        if not base:
+            return "", ""
+        return base, repo_base.resolve(where, "pr", fallback=False).branch or base
     except Exception:  # noqa: BLE001
         return "", ""
 

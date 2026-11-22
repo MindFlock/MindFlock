@@ -179,10 +179,16 @@ def test_base_branch_fallback_main_master_probe(tmp_path):
 
 def test_base_branch_configured_only_when_repo_matches(tmp_path, monkeypatch):
     # No origin/HEAD, no main/master -> the configured base applies ONLY to
-    # the configured repo; any other repo gets the neutral default.
+    # the configured repo (and only when that repo has the branch); any other
+    # repo gets the neutral default.
     src = _init_repo(tmp_path / "cfg-src", branch="trunk")
+    _git("branch", "staging", cwd=str(src))
     matching = _init_repo(tmp_path / "match", branch="trunk")
     _git("remote", "add", "origin", str(src), cwd=str(matching))
+    _git("fetch", "-q", "origin", cwd=str(matching))
+    # git >= 2.48's fetch creates origin/HEAD (followRemoteHEAD=create): the
+    # "no origin/HEAD" case this test is about is made explicitly.
+    _git("remote", "set-head", "origin", "--delete", cwd=str(matching))
     other = _init_repo(tmp_path / "other", branch="trunk")
     _git("remote", "add", "origin", str(tmp_path / "elsewhere"), cwd=str(other))
 
@@ -192,6 +198,19 @@ def test_base_branch_configured_only_when_repo_matches(tmp_path, monkeypatch):
     monkeypatch.setattr(server.provisioning, "load_provision_settings", lambda **k: cfg)
     assert server._session_base_branch(_FakeInst(str(matching))) == "staging"
     assert server._session_base_branch(_FakeInst(str(other))) == "main"
+
+
+def test_configured_base_missing_on_the_repo_is_not_used(tmp_path, monkeypatch):
+    # The configured repo itself, but it has no "staging": never hand git a
+    # branch that does not exist — the neutral default instead.
+    src = _init_repo(tmp_path / "cfg-src", branch="trunk")
+    matching = _init_repo(tmp_path / "match", branch="trunk")
+    _git("remote", "add", "origin", str(src), cwd=str(matching))
+    cfg = provisioned.ProvisionSettings(
+        repo_url=str(src), workspace_dir=tmp_path / "ws", base_branch="staging"
+    )
+    monkeypatch.setattr(server.provisioning, "load_provision_settings", lambda **k: cfg)
+    assert server._session_base_branch(_FakeInst(str(matching))) == "main"
 
 
 def test_base_branch_fallback_is_cached(tmp_path, monkeypatch):

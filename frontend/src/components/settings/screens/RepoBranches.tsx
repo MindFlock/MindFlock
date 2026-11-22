@@ -2,13 +2,27 @@
  * from the screen's two defaults (most repos fork from staging, a few only
  * have main) gets a row here. Stored as `repository.repo_branches`; inside a
  * row a blank PR base means that row's own base branch, not the default PR
- * base (backend/config/settings.py `repo_branches_for`). */
+ * base (backend/config/settings.py `repo_branches_for`).
+ *
+ * Above the rows: each repository MindFlock knows about and the branch it
+ * will actually use, with why ("main · the repository's default") — a default
+ * the repository lacks is passed over (backend/repo_base.py), so the user can
+ * see that without configuring anything, and "Set" starts a row for it. */
 
 import { useEffect, useState } from "react";
+import { api } from "../../../api/client";
 import { useSettings } from "../useSettings";
 import { flashSaved } from "../savedCue";
 import { toast } from "../../../lib/toast";
-import { mapFrom, normalizeRepo, rowsFrom, type RepoBranchRow } from "../../../lib/repoBranches";
+import {
+  mapFrom,
+  normalizeRepo,
+  rowsFrom,
+  usedLine,
+  usedNote,
+  type RepoBaseRow,
+  type RepoBranchRow,
+} from "../../../lib/repoBranches";
 
 export function RepoBranches() {
   const s = useSettings();
@@ -22,6 +36,18 @@ export function RepoBranches() {
     setRows((prev) => (JSON.stringify(mapFrom(prev)) === storedKey ? prev : rowsFrom(stored)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedKey]);
+
+  // What each known repository will use (read-only; re-asked after a save).
+  const [used, setUsed] = useState<RepoBaseRow[]>([]);
+  useEffect(() => {
+    let alive = true;
+    api<{ repos?: RepoBaseRow[] }>("/api/repos/bases")
+      .then((d) => alive && setUsed(Array.isArray(d?.repos) ? d.repos : []))
+      .catch(() => alive && setUsed([]));
+    return () => {
+      alive = false;
+    };
+  }, [storedKey, defaultBase]);
 
   const save = (next: RepoBranchRow[]) => {
     const map = mapFrom(next);
@@ -46,6 +72,33 @@ export function RepoBranches() {
         For a repo whose branches differ from the defaults above, e.g. one that only has{" "}
         <code>main</code>. Blank PR base = that repo&apos;s base branch.
       </span>
+      {used.length > 0 && (
+        <ul className="ws-repo-used" id="workspace-repo-used">
+          {used.map((u) => {
+            const note = usedNote(u);
+            const hasRow = rows.some((r) => normalizeRepo(r.repo) === u.repo || r.repo === u.repo);
+            return (
+              <li key={u.repo}>
+                <code>{u.repo}</code> <span className="set-hint">{usedLine(u)}</span>
+                {note && <span className="set-hint ws-repo-note"> — {note}</span>}
+                {!hasRow && normalizeRepo(u.repo) && (
+                  <>
+                    {" "}
+                    <button
+                      type="button"
+                      className="linklike"
+                      aria-label={"Set branches for " + u.repo}
+                      onClick={() => setRows((prev) => [...prev, { repo: u.repo, base: "", pr: "" }])}
+                    >
+                      Set
+                    </button>
+                  </>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {rows.length > 0 && (
         <div className="ws-repo-branches">
           <span className="set-hint">Repository</span>

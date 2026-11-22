@@ -111,6 +111,16 @@ def session_title(pr) -> str:
     return f"pr-{pr_slug(pr)}"
 
 
+def _pr_monitor_base_missing(repo: str, base: str) -> bool:
+    """The monitor dropped a screen-wide ``base`` this repo lacks."""
+    try:
+        from backend.ticket_ingestion.pr_monitor import flat_base_missing
+
+        return flat_base_missing(repo, base)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def skip_reasons(
     pr, processed: set, login: str, gh, now: datetime | None = None
 ) -> list[str]:
@@ -136,7 +146,7 @@ def skip_reasons(
     # PR, which means it has to say so — otherwise a PR sitting there with no
     # chips reads as "queued" when the monitor will never see it.
     base = gh.base_branch_for(pr.repo)
-    if base and pr.base_ref != base:
+    if base and pr.base_ref != base and not _pr_monitor_base_missing(pr.repo, base):
         reasons.append(f"into {pr.base_ref}, not {base}")
     return reasons
 
@@ -161,6 +171,11 @@ async def list_open_prs() -> dict:
 
     prs = []
     for repo in gh.repo_list():
+        # Warms the "this repo has no <screen-wide base>" answer the chips read.
+        try:
+            await monitor.base_filter(repo)
+        except Exception:  # noqa: BLE001
+            pass
         # all_bases: the panel lists every open PR and explains the skips in
         # chips, so a base-branch filter must not silently remove rows — it
         # becomes a reason instead (and stays force-reviewable).

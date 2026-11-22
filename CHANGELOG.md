@@ -46,6 +46,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A `limit` reading whose window is open delivers the queued task**, also
   with "Wait out usage limits" off: the queue checks the window (credits
   notice, meter, reset time) before switching itself off.
+- **Each repository gets the right PR base without configuring it.** A flat
+  "PR base branch" of `staging` (right for one repository) no longer halts a
+  route's Open PR stop on another repository with `ambiguous argument
+  'origin/staging...<branch>'`. One resolver (`backend/repo_base.py`) now
+  answers for Open PR (button, route stop, MCP `ship_session`), the ship
+  dialog's default, Merge, a team run's release PR, provisioned workspaces'
+  fork base, the PR monitor's base filter and the ticket/epic prompts: your
+  per-repository setting → the flat setting only if that repository has the
+  branch → the session's own base → the repository's default branch
+  (`origin/HEAD`, else `git ls-remote --symref`, cached) → `main`/`master`.
+  A skipped setting is said once in plain words ("Using main: this
+  repository has no staging branch") on the Open PR dialog, the toast and the
+  stop's receipt; nothing resolving is a plain sentence naming the remedy,
+  never a git message.
+
+### Added
+
+- **Settings → Workspace → Per-repo branches lists what each repository will
+  use and why** — "main · the repository's default", "staging · your
+  setting" — for every repository MindFlock knows about, with a **Set** link
+  that starts an override row (`GET /api/repos/bases`).
 
 ## [0.14.25] - 2026-11-20
 

@@ -3,10 +3,14 @@
  * and the screen renders the editor. */
 
 import { describe, expect, it } from "vitest";
-import { mapFrom, normalizeRepo, rowsFrom } from "../lib/repoBranches";
+import { mapFrom, normalizeRepo, rowsFrom, usedLine, usedNote } from "../lib/repoBranches";
 
 const WORKSPACE = Object.values(
   import.meta.glob<string>("../components/settings/screens/Workspace.tsx", { query: "?raw", import: "default", eager: true })
+)[0];
+
+const REPO_BRANCHES = Object.values(
+  import.meta.glob<string>("../components/settings/screens/RepoBranches.tsx", { query: "?raw", import: "default", eager: true })
 )[0];
 
 describe("repo branches", () => {
@@ -36,5 +40,29 @@ describe("repo branches", () => {
 
   it("is rendered on the Workspace screen", () => {
     expect(WORKSPACE).toContain("<RepoBranches />");
+  });
+});
+
+describe("what each known repo will use", () => {
+  const side = (branch: string, why: string, note = "") => ({ branch, source: "", why, note, error: "" });
+
+  it("says the branch and why, and the PR target only when it differs", () => {
+    const same = { repo: "acme/app", base: side("main", "main · the repository's default"), pr: side("main", "main · the repository's default") };
+    expect(usedLine(same)).toBe("main · the repository's default");
+    const split = { repo: "acme/site", base: side("staging", "staging · your setting"), pr: side("release", "release · your setting for this repository") };
+    expect(usedLine(split)).toBe("staging · your setting · PRs: release · your setting for this repository");
+    expect(usedLine({ repo: "x/y", base: side("", ""), pr: side("", "") })).toBe("no base branch found — set one below");
+  });
+
+  it("says a skipped default once", () => {
+    const n = "Using main: this repository has no staging branch";
+    const row = { repo: "acme/app", base: side("main", "", n), pr: side("main", "", n) };
+    expect(usedNote(row)).toBe(n);
+    expect(usedNote({ repo: "a/b", base: side("main", ""), pr: side("main", "") })).toBe("");
+  });
+
+  it("is listed on the same screen as the override rows", () => {
+    expect(REPO_BRANCHES).toContain('api<{ repos?: RepoBaseRow[] }>("/api/repos/bases")');
+    expect(REPO_BRANCHES).toContain("usedLine(u)");
   });
 });
