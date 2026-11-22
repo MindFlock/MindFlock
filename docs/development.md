@@ -550,6 +550,7 @@ options: `--phrases N`, `--seed`, `--tail-quiet N`, `--save DIR` (the WAVs),
 | PR flow | `test_pr_pipeline` |
 | Property (hypothesis) | backfill ordering, prompt construction, validation-with-context, assignee filter, timestamp persistence |
 | Integration | `test_claude_runner` (async ClaudeCodeRunner) |
+| UI preview isolation | `test_preview_sandbox` (tmux wrapper, env allowlist, refusals, stub agent, scenario tables), `integration/test_preview_isolation` (boots a real preview against a faked home + fake tmux sockets) |
 | Frontend (vitest) | `frontend/src/__tests__/*.test.ts(x)` — the pure logic modules (layout, diff, keymap, ordering, stage, format, barDefs, usageModel, sessionLabel, shell, intakeQueue, prefsSync, queueDnd, …) |
 
 `test_tailnet_trust` stubs `tailnet_trust._whois_uncached` and
@@ -572,6 +573,84 @@ to the bundle-freshness check:
 ```bash
 cd frontend && npm test           # 83 files, 1615 tests (2026-10-10)
 ```
+
+## Seeing a UI change
+
+`scripts/preview.py` starts a **scratch MindFlock with sample data** from the
+current checkout and takes screenshots of it — the way to check a web-UI
+change (Sky, routes, sidebar, Settings, the phone page) on a live server
+instead of hand-mocked API data. It is safe on a working machine: it never
+touches the real `~/.mindflock`, the real tmux server, the checkout's
+`config.toml`, or ports 9000/8765.
+
+```bash
+preview() { uv run --group dev --group web python scripts/preview.py "$@"; }
+preview shot --scenario sky --view sky --theme all -o /tmp/sky.png  # boots, seeds, shoots, stops
+preview up --scenario routes --detach        # or keep one running: prints its URL
+preview shot --view settings/appearance --theme light -o /tmp/s.png  # reuses it
+preview shot --view phone -o /tmp/phone.png  # the /m page, 390 px wide
+preview down                                 # stop + clean up (also after a crash)
+preview scenarios                            # list the scenarios
+```
+
+The served UI is the committed bundle (`backend/web/static`): rebuild it
+(`npm run build` in `frontend/`) before shooting a frontend change. Read the
+PNG back (an agent: with its image-reading tool) — the shot prints the page
+errors the browser reported under each file.
+
+**Scenarios** (`--scenario`, seeded through the server's own API):
+
+| Scenario | What it shows |
+|---|---|
+| `sky` (default) | everything below + to-dos, bell items, a worker's failed report |
+| `sessions` | working, idle, a permission question, a crashed agent (offline), uncommitted files, a parent with two workers |
+| `routes` | one route per state: running at a Wait stop, waiting for me, paused at a halt point, a failed Command stop (with Retry/Skip), finished, a gone session's route, a session-less route |
+| `routes-failed` | just the failed stop and the halt point |
+| `empty` / `empty-first-run` | no sessions; onboarded / the very first launch |
+
+**Views** (`--view`): `sky` (the All tab), `sky/<session>`, `grid`,
+`settings`, `settings/<screen>`, `intake`, `schedule`, `new`, `phone`, or a
+raw `#hash`. `--theme dark|light|all`, `--surface <name>|all` (Settings →
+Appearance; several combinations write `name-<theme>-<surface>.png`),
+`--width`/`--height`/`--scale`, `--full-page`, `--click 'text=Stops'`
+(repeatable: open a menu before the shot). The app's "needs you" pop-up is put
+off with Later unless `--keep-popups`.
+
+**What it isolates, and how** (`scripts/mfpreview/sandbox.py`):
+
+- a fresh `/tmp/mfpv-*` dir holds `$HOME`, `$MINDFLOCK_HOME`, every
+  `MINDFLOCK_*` store, `XDG_*`, `TMPDIR`, the git config and an empty
+  `config.toml`; the server gets an **allowlisted** environment (nothing of
+  yours leaks: no `CLAUDE_CONFIG_DIR`, tokens, `PORT`, `CS_WEB_MODE`) plus
+  `MINDFLOCK_HOME_GUARD=1`, which makes `backend/config/home_guard.py` refuse
+  any store path in the real `~/.mindflock` exactly as it does under pytest;
+  it refuses to boot if any path in its env leaves the scratch dir;
+- its own tmux server: a `tmux` wrapper first on `PATH` unsets `$TMUX` and
+  forces `-S <scratch>/tmux/sock` on every call (the server's, hooks', the
+  stub's); teardown kills that socket's server only;
+- a free port (never 9000/8765), 127.0.0.1 only, auth off, onboarded;
+- off: Cursor-window adoption, `claude agents --json`, the systemd slice, the
+  ticket pipeline, the update check, voice warm-up, login-shell PATH
+  enrichment, MCP attach; `tailscale`, `cloudflared`, `gh`, `systemctl`,
+  editors and Windows interop are failing stubs; `PATH` is that stub dir +
+  the system dirs;
+- `claude` is a stub (`scripts/mfpreview/stub_agent.py`) that plays a
+  scripted screen per session — working, idle, a permission question, a
+  crash — no login, no tokens; it reacts to a key or a typed line;
+- one preview at a time (a lock in `$XDG_RUNTIME_DIR/mindflock-preview`);
+  every process it starts carries `MFPREVIEW_ID`, and teardown — on `down`,
+  Ctrl-C, SIGTERM, or the next start after a crash — kills the server's
+  process group, the scratch tmux server and any tagged straggler, then
+  deletes the scratch dir. The server dies with the preview process even on
+  SIGKILL (`PR_SET_PDEATHSIG`).
+
+`tests/integration/test_preview_isolation.py` proves it end to end: with a
+faked home and listening fake tmux sockets at `$TMUX` and the default path,
+a real preview boots and seeds, and afterwards the fake home is byte-for-byte
+unchanged, neither socket saw a connection, and nothing of the preview is
+left. Not covered: the "idle for 20 min with uncommitted files" chip (it
+needs real elapsed time), real agent CLIs other than the stub, peer links and
+devices (stubbed off).
 
 ## Conventions
 

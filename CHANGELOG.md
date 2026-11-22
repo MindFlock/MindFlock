@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/preview.py`: see a UI change running, safely.** One command
+  boots an isolated scratch MindFlock from the checkout (its own home and
+  settings, its own tmux socket, a spare port, a stub `claude` that plays
+  working / idle / question / crashed screens), seeds named scenarios
+  (`sky`, `sessions`, `routes`, `routes-failed`, `empty`, `empty-first-run`)
+  through the real API, and screenshots any view — Sky, grid, Settings
+  screens, the phone page — in dark, light and every surface with the system
+  Chrome. It cleans up after Ctrl-C and after a crash, refuses the real home
+  and ports 9000/8765, and a new integration test proves nothing outside its
+  scratch dir is touched. See docs/development.md "Seeing a UI change".
+- **`MINDFLOCK_HOME_GUARD=1`** turns on the test suite's real-home guard in
+  any process: a store path in the real `~/.mindflock` raises instead of
+  being written. The preview's server runs with it.
+
 ## [0.14.25] - 2026-11-20
 
 ### Changed
