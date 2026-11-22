@@ -130,6 +130,11 @@ Overrides:
 
 ## Updating
 
+How a packaged install learns of, downloads, verifies and applies an update
+on each OS, and what each failure leaves behind:
+[docs/desktop-updates.md](../docs/desktop-updates.md); the manual check on a
+real PC and Mac: [docs/desktop-update-test.md](../docs/desktop-update-test.md).
+
 One path, one click. The app toast's **Update**, the engine-only toast's
 **Update** and the Settings → Advanced button all run the same
 `updateEverything({engine, app})` in `main.js`, and all poll the same run
@@ -174,7 +179,10 @@ engine-only offer.
   the release is what it swaps in; the `.dmg` stays the download.
 - Wherever the app can't swap itself (a copy run from the mounted dmg, a
   failed signature check, a build without update metadata) the button still
-  updates the engine and then opens the download page.
+  updates the engine and then opens the download page. A download that
+  failed is retried once by the click first; a swap that errors, or leaves
+  the app running 30 s later (3 min on macOS), is reported as failed (Retry),
+  and the engine server stopped for it is started again.
 - A **run from source** — the dev shell (`--mindflock-dev` / `MINDFLOCK_DEV=1`)
   or any unpackaged `electron .` — never updates itself: no app toast, no
   engine toast, no automatic run. It is a git checkout; a release download
