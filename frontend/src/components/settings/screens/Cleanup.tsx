@@ -5,8 +5,13 @@
  * rest is kept; one button collects the provably safe set, and each row has
  * its own Remove — which, for anything holding work, asks first in the app's
  * own InlineConfirm (the desktop app has no window.confirm) and says where
- * the work was saved. The mode (Automatic · Ask me · Off) and the age line
- * save through POST /api/cleanup/settings. */
+ * the work was saved. A folder whose files can't be checked (its repository,
+ * or git's record of it, is gone) has its own section: "Look inside" shows
+ * what it holds (GET /api/cleanup/inspect), and it goes only from there —
+ * at once when nothing in it could be lost, else after two in-page confirm
+ * steps that name its size and how many files look like work, deleted for
+ * good (`even_unchecked`). The mode (Automatic · Ask me · Off) and the age
+ * line save through POST /api/cleanup/settings. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
@@ -24,7 +29,9 @@ import {
   confirmText,
   groupItems,
   humanBytes,
+  isUnchecked,
   needsConfirm,
+  uncheckedConfirm,
   removedText,
   STATE_LABEL,
   summaryLine,
@@ -33,6 +40,8 @@ import {
   type CleanupItem,
   type CleanupMode,
   type CleanupReport,
+  type InspectFacts,
+  type InspectResult,
   type RemoveResult,
 } from "../../../lib/cleanup";
 import "./cleanup.css";
@@ -41,6 +50,8 @@ export function Cleanup({ active }: ScreenProps) {
   const [rep, setRep] = useState<CleanupReport | null>(null);
   const [busy, setBusy] = useState("");
   const [asking, setAsking] = useState<CleanupItem | null>(null);
+  const [looks, setLooks] = useState<Record<string, InspectFacts | "loading">>({});
+  const [deleting, setDeleting] = useState<{ id: string; step: 1 | 2 } | null>(null);
   const [days, setDays] = useState("");
   const timer = useRef<number | undefined>(undefined);
 
@@ -111,11 +122,49 @@ export function Cleanup({ active }: ScreenProps) {
     }
   };
 
+  const inspect = async (it: CleanupItem) => {
+    if (looks[it.id] && looks[it.id] !== "loading") {
+      setLooks(({ [it.id]: _gone, ...rest }) => rest);
+      setDeleting(null);
+      return;
+    }
+    setLooks((l) => ({ ...l, [it.id]: "loading" }));
+    try {
+      const r = await api<InspectResult>("/api/cleanup/inspect?id=" + encodeURIComponent(it.id));
+      if (r.facts) setLooks((l) => ({ ...l, [it.id]: r.facts as InspectFacts }));
+    } catch (err) {
+      setLooks(({ [it.id]: _gone, ...rest }) => rest);
+      toast(failSentence("Couldn't look inside " + it.name, err));
+    }
+  };
+
+  const removeUnchecked = async (it: CleanupItem, anyway: boolean) => {
+    setDeleting(null);
+    setBusy(it.id);
+    try {
+      const r = await api<RemoveResult>("/api/cleanup/remove", {
+        json: anyway ? { id: it.id, confirm: true, even_unchecked: true } : { id: it.id, confirm: true },
+      });
+      toast(removedText(it, r));
+      setLooks(({ [it.id]: _gone, ...rest }) => rest);
+    } catch (err) {
+      toast(failSentence("Couldn't remove " + it.name, err));
+    } finally {
+      setBusy("");
+      void load();
+    }
+  };
+
   return (
     <CleanupView
       rep={rep}
       busy={busy}
       asking={asking}
+      looks={looks}
+      deleting={deleting}
+      onInspect={(it) => void inspect(it)}
+      onDeleteStep={(it, step) => setDeleting(step ? { id: it.id, step } : null)}
+      onRemoveUnchecked={(it, anyway) => void removeUnchecked(it, anyway)}
       days={days}
       onDays={setDays}
       onSaveDays={() => {
@@ -136,6 +185,13 @@ export function CleanupView(p: {
   rep: CleanupReport | null;
   busy: string;
   asking: CleanupItem | null;
+  /** Looks inside folders that can't be checked, by item id. */
+  looks?: Record<string, InspectFacts | "loading">;
+  /** The unchecked deletion being confirmed, and its step. */
+  deleting?: { id: string; step: 1 | 2 } | null;
+  onInspect?(it: CleanupItem): void;
+  onDeleteStep?(it: CleanupItem, step: 1 | 2 | null): void;
+  onRemoveUnchecked?(it: CleanupItem, anyway: boolean): void;
   days: string;
   onDays(v: string): void;
   onSaveDays(): void;
@@ -223,7 +279,11 @@ export function CleanupView(p: {
       {rep?.error && <p className="set-hint cleanup-error">{rep.error}</p>}
 
       {groupItems(items).map((g) => (
-        <details className="cleanup-group" key={g.key} open={g.key === "safe" || g.key === "kept"}>
+        <details
+          className="cleanup-group"
+          key={g.key}
+          open={g.key === "safe" || g.key === "kept" || g.key === "unchecked"}
+        >
           <summary>
             {g.title} <span className="cleanup-count">{g.items.length}</span>
             <span className="cleanup-size">{groupFreesText(g.items)}</span>
@@ -240,6 +300,22 @@ export function CleanupView(p: {
                     {sizeText(it)}
                     {it.last_used ? " · " + usedAgo(it.last_used) : ""}
                   </span>
+                  {isUnchecked(it) && !it.in_use && (
+                    <button
+                      type="button"
+                      className="test-btn cleanup-inspect"
+                      disabled={!!p.busy || p.looks?.[it.id] === "loading"}
+                      onClick={() => p.onInspect?.(it)}
+                    >
+                      {p.busy === it.id
+                        ? "Removing…"
+                        : p.looks?.[it.id] === "loading"
+                          ? "Looking…"
+                          : p.looks?.[it.id]
+                            ? "Hide"
+                            : "Look inside"}
+                    </button>
+                  )}
                   {canRemove(it) && (
                     <button
                       type="button"
@@ -254,6 +330,16 @@ export function CleanupView(p: {
                 <div className="cleanup-why">
                   {it.branch ? <code>{it.branch}</code> : null} {whyLine(it)}
                 </div>
+                {isUnchecked(it) && p.looks?.[it.id] && p.looks[it.id] !== "loading" && (
+                  <UncheckedLook
+                    it={it}
+                    f={p.looks[it.id] as InspectFacts}
+                    busy={!!p.busy}
+                    step={p.deleting?.id === it.id ? p.deleting.step : null}
+                    onStep={(step) => p.onDeleteStep?.(it, step)}
+                    onRemove={(anyway) => p.onRemoveUnchecked?.(it, anyway)}
+                  />
+                )}
                 {p.asking?.id === it.id && (
                   <InlineConfirm
                     id="cleanup-confirm"
@@ -271,8 +357,96 @@ export function CleanupView(p: {
       ))}
       <p className="set-hint">
         Also from a terminal: <code>mindflock clean</code> lists the same, <code>mindflock clean --collect</code>{" "}
-        removes the safe set.
+        removes the safe set, <code>mindflock clean --inspect ITEM</code> looks inside a folder that can't be checked.
       </p>
     </>
+  );
+}
+
+/** A look inside a folder that can't be checked: the server's sentences,
+ * the top-level entries, the files that look like work, how it compares
+ * with its branch, and the way out — Remove when nothing could be lost,
+ * else "Remove anyway…" and two in-page confirm steps. */
+function UncheckedLook(p: {
+  it: CleanupItem;
+  f: InspectFacts;
+  busy: boolean;
+  step: 1 | 2 | null;
+  onStep(step: 1 | 2 | null): void;
+  onRemove(anyway: boolean): void;
+}) {
+  const { it, f } = p;
+  const cmp = f.git.compare;
+  const ask = p.step ? uncheckedConfirm(it, f, p.step) : null;
+  return (
+    <div className="cleanup-look" id={"cleanup-look-" + it.id}>
+      <ul className="cleanup-look-lines">
+        {f.summary.map((ln, i) => (
+          <li key={i}>{ln}</li>
+        ))}
+      </ul>
+      {f.top.length > 0 && (
+        <div className="cleanup-look-block">
+          <span className="cleanup-look-head">Top level</span>
+          <ul className="cleanup-look-entries">
+            {f.top.map((t) => (
+              <li key={t.name} className={"cleanup-entry-" + t.kind}>
+                <code>{t.name + (t.dir ? "/" : "")}</code> {t.files} {t.files === 1 ? "file" : "files"},{" "}
+                {humanBytes(t.bytes)}
+                {t.kind === "dependency" ? " · dependencies/caches" : t.kind === "git" ? " · git's" : ""}
+              </li>
+            ))}
+            {f.top_more > 0 && <li>… and {f.top_more} more</li>}
+          </ul>
+        </div>
+      )}
+      {f.work_sample.length > 0 && (
+        <div className="cleanup-look-block">
+          <span className="cleanup-look-head">Files that look like work, newest first</span>
+          <ul className="cleanup-look-entries">
+            {f.work_sample.map((w) => (
+              <li key={w.path}>
+                <code>{w.path}</code> {humanBytes(w.bytes)} · {new Date(w.mtime * 1000).toLocaleString()}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {cmp && (cmp.changed.length > 0 || cmp.extra.length > 0 || cmp.missing.length > 0) && (
+        <div className="cleanup-look-block">
+          <span className="cleanup-look-head">Against branch {f.git.branch}</span>
+          <ul className="cleanup-look-entries">
+            {cmp.changed.length > 0 && <li>Changed: {cmp.changed.join(", ")}</li>}
+            {cmp.extra.length > 0 && <li>Only here: {cmp.extra.join(", ")}</li>}
+            {cmp.missing.length > 0 && <li>Missing here: {cmp.missing.join(", ")}</li>}
+          </ul>
+        </div>
+      )}
+      {!ask && (
+        <span className="test-row">
+          {f.safe ? (
+            <button type="button" className="test-btn cleanup-remove" disabled={p.busy} onClick={() => p.onRemove(false)}>
+              Remove
+            </button>
+          ) : f.mounts.length ? null : (
+            <button type="button" className="test-btn cleanup-remove-anyway" disabled={p.busy} onClick={() => p.onStep(1)}>
+              Remove anyway…
+            </button>
+          )}
+        </span>
+      )}
+      {ask && (
+        <InlineConfirm
+          id="cleanup-unchecked-confirm"
+          title={ask.title}
+          body={ask.body}
+          confirmLabel={ask.confirmLabel}
+          cancelLabel="Keep it"
+          busy={p.busy}
+          onConfirm={() => (p.step === 1 ? p.onStep(2) : p.onRemove(true))}
+          onCancel={() => p.onStep(null)}
+        />
+      )}
+    </div>
   );
 }

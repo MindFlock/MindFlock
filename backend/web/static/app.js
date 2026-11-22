@@ -62414,6 +62414,7 @@ var STATE_LABEL = {
 	safe: "Will be removed",
 	recent: "Used recently",
 	holds_work: "Holds work",
+	unchecked: "Can't be checked",
 	in_use: "In use",
 	not_ours: "Not MindFlock's",
 	missing: "Already gone",
@@ -62434,11 +62435,30 @@ function needsConfirm(it) {
 	return !it.safe;
 }
 function canRemove(it) {
-	return !it.in_use && !it.kept.includes("locked in git");
+	return !it.in_use && !it.kept.includes("locked in git") && !isUnchecked(it);
+}
+function isUnchecked(it) {
+	return it.state === "unchecked";
+}
+function factsLine(f) {
+	return f.files + (f.files === 1 ? " file" : " files") + " (" + humanBytes(f.bytes) + "), " + f.work_files + (f.work_files === 1 ? " of them looks" : " of them look") + " like work (not dependencies, caches or build output)";
+}
+function uncheckedConfirm(it, f, step) {
+	const size = humanBytes(it.size_bytes ?? f.bytes);
+	if (step === 1) return {
+		title: "Delete " + it.name + " (" + size + ") for good?",
+		body: "It holds " + factsLine(f) + ". Its files can't be checked, so nothing is saved first, and MindFlock has no trash: this is permanent.",
+		confirmLabel: "Continue…"
+	};
+	return {
+		title: "Last check: delete " + it.name + " permanently?",
+		body: f.work_files + (f.work_files === 1 ? " file that looks" : " files that look") + " like work and " + size + " go with it. There is no undo.",
+		confirmLabel: "Delete permanently"
+	};
 }
 function confirmText(it, keptDir = "~/.mindflock/kept-work") {
 	const parts = [];
-	if (it.kind === "orphan") return "Git no longer knows this folder, so its files can't be checked or saved. They will be deleted.";
+	if (it.kind === "orphan") return "Its files can't be checked or saved: look inside first, then remove it for good if nothing in it matters.";
 	if (it.tracked_changes || it.untracked_files) parts.push("Its uncommitted changes are saved first as a patch in " + keptDir + ".");
 	if (it.unsaved_commits) parts.push(it.kind === "clone" ? "Its unpushed commits are saved there as a bundle." : it.branch ? "Its branch " + it.branch + " is kept, with its commits." : "Its commits are kept on a mindflock-kept/… branch.");
 	if (!it.ours) parts.push("MindFlock didn't create it.");
@@ -62446,6 +62466,10 @@ function confirmText(it, keptDir = "~/.mindflock/kept-work") {
 	return parts.join(" ");
 }
 function removedText(it, r) {
+	if (r.permanent) {
+		const n = r.deleted?.files ?? 0;
+		return "Deleted " + it.name + " permanently (" + n + (n === 1 ? " file" : " files") + ", " + humanBytes(r.deleted?.bytes ?? 0) + ").";
+	}
 	const bits = ["Removed " + it.name + "."];
 	if (r.saved?.patch) bits.push("Uncommitted changes saved to " + r.saved.patch + ".");
 	if (r.saved?.bundle) bits.push("Unpushed commits saved to " + r.saved.bundle + ".");
@@ -62457,8 +62481,9 @@ function summaryLine$1(s) {
 	if (!s) return "";
 	const mine = "MindFlock made " + s.count + " of these: " + humanBytes(s.bytes) + ".";
 	const reclaim = s.safe_count ? " " + s.safe_count + " can go safely, freeing " + humanBytes(s.safe_bytes) + "." : " Nothing is safe to remove right now.";
+	const unchecked = s.unchecked_count ? " " + s.unchecked_count + " can't be checked (" + humanBytes(s.unchecked_bytes ?? null) + "): look inside each to decide." : "";
 	const other = s.other_count ? " " + s.other_count + " other worktree" + (s.other_count === 1 ? "" : "s") + " of the same repos (" + humanBytes(s.other_bytes ?? 0) + ") are listed, never removed." : "";
-	return mine + reclaim + other;
+	return mine + reclaim + unchecked + other;
 }
 function freeBytes(it) {
 	return Number(it.free_bytes ?? it.size_bytes ?? 0) || 0;
@@ -62494,6 +62519,11 @@ function groupItems(items) {
 				"missing",
 				"unknown"
 			])
+		},
+		{
+			key: "unchecked",
+			title: "Can't be checked (never removed automatically)",
+			items: by(["unchecked"])
 		},
 		{
 			key: "in_use",
@@ -134387,6 +134417,8 @@ function Cleanup({ active }) {
 	const [rep, setRep] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)("");
 	const [asking, setAsking] = (0, import_react.useState)(null);
+	const [looks, setLooks] = (0, import_react.useState)({});
+	const [deleting, setDeleting] = (0, import_react.useState)(null);
 	const [days, setDays] = (0, import_react.useState)("");
 	const timer = (0, import_react.useRef)(void 0);
 	const load = (0, import_react.useCallback)(async (refresh = false) => {
@@ -134451,10 +134483,59 @@ function Cleanup({ active }) {
 			load();
 		}
 	};
+	const inspect = async (it) => {
+		if (looks[it.id] && looks[it.id] !== "loading") {
+			setLooks(({ [it.id]: _gone, ...rest }) => rest);
+			setDeleting(null);
+			return;
+		}
+		setLooks((l) => ({
+			...l,
+			[it.id]: "loading"
+		}));
+		try {
+			const r = await api("/api/cleanup/inspect?id=" + encodeURIComponent(it.id));
+			if (r.facts) setLooks((l) => ({
+				...l,
+				[it.id]: r.facts
+			}));
+		} catch (err) {
+			setLooks(({ [it.id]: _gone, ...rest }) => rest);
+			toast(failSentence$1("Couldn't look inside " + it.name, err));
+		}
+	};
+	const removeUnchecked = async (it, anyway) => {
+		setDeleting(null);
+		setBusy(it.id);
+		try {
+			toast(removedText(it, await api("/api/cleanup/remove", { json: anyway ? {
+				id: it.id,
+				confirm: true,
+				even_unchecked: true
+			} : {
+				id: it.id,
+				confirm: true
+			} })));
+			setLooks(({ [it.id]: _gone, ...rest }) => rest);
+		} catch (err) {
+			toast(failSentence$1("Couldn't remove " + it.name, err));
+		} finally {
+			setBusy("");
+			load();
+		}
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CleanupView, {
 		rep,
 		busy,
 		asking,
+		looks,
+		deleting,
+		onInspect: (it) => void inspect(it),
+		onDeleteStep: (it, step) => setDeleting(step ? {
+			id: it.id,
+			step
+		} : null),
+		onRemoveUnchecked: (it, anyway) => void removeUnchecked(it, anyway),
 		days,
 		onDays: setDays,
 		onSaveDays: () => {
@@ -134570,7 +134651,7 @@ function CleanupView(p) {
 		}),
 		groupItems(items).map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "cleanup-group",
-			open: g.key === "safe" || g.key === "kept",
+			open: g.key === "safe" || g.key === "kept" || g.key === "unchecked",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
 				g.title,
 				" ",
@@ -134603,6 +134684,13 @@ function CleanupView(p) {
 									className: "cleanup-meta",
 									children: [sizeText(it), it.last_used ? " · " + usedAgo(it.last_used) : ""]
 								}),
+								isUnchecked(it) && !it.in_use && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn cleanup-inspect",
+									disabled: !!p.busy || p.looks?.[it.id] === "loading",
+									onClick: () => p.onInspect?.(it),
+									children: p.busy === it.id ? "Removing…" : p.looks?.[it.id] === "loading" ? "Looking…" : p.looks?.[it.id] ? "Hide" : "Look inside"
+								}),
 								canRemove(it) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "test-btn cleanup-remove",
@@ -134619,6 +134707,14 @@ function CleanupView(p) {
 								" ",
 								whyLine(it)
 							]
+						}),
+						isUnchecked(it) && p.looks?.[it.id] && p.looks[it.id] !== "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UncheckedLook, {
+							it,
+							f: p.looks[it.id],
+							busy: !!p.busy,
+							step: p.deleting?.id === it.id ? p.deleting.step : null,
+							onStep: (step) => p.onDeleteStep?.(it, step),
+							onRemove: (anyway) => p.onRemoveUnchecked?.(it, anyway)
 						}),
 						p.asking?.id === it.id && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 							id: "cleanup-confirm",
@@ -134640,10 +134736,110 @@ function CleanupView(p) {
 				" lists the same, ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock clean --collect" }),
 				" ",
-				"removes the safe set."
+				"removes the safe set, ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock clean --inspect ITEM" }),
+				" looks inside a folder that can't be checked."
 			]
 		})
 	] });
+}
+function UncheckedLook(p) {
+	const { it, f } = p;
+	const cmp = f.git.compare;
+	const ask = p.step ? uncheckedConfirm(it, f, p.step) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "cleanup-look",
+		id: "cleanup-look-" + it.id,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cleanup-look-lines",
+				children: f.summary.map((ln, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: ln }, i))
+			}),
+			f.top.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cleanup-look-block",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cleanup-look-head",
+					children: "Top level"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+					className: "cleanup-look-entries",
+					children: [f.top.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "cleanup-entry-" + t.kind,
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: t.name + (t.dir ? "/" : "") }),
+							" ",
+							t.files,
+							" ",
+							t.files === 1 ? "file" : "files",
+							",",
+							" ",
+							humanBytes(t.bytes),
+							t.kind === "dependency" ? " · dependencies/caches" : t.kind === "git" ? " · git's" : ""
+						]
+					}, t.name)), f.top_more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+						"… and ",
+						f.top_more,
+						" more"
+					] })]
+				})]
+			}),
+			f.work_sample.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cleanup-look-block",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cleanup-look-head",
+					children: "Files that look like work, newest first"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "cleanup-look-entries",
+					children: f.work_sample.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: w.path }),
+						" ",
+						humanBytes(w.bytes),
+						" · ",
+						(/* @__PURE__ */ new Date(w.mtime * 1e3)).toLocaleString()
+					] }, w.path))
+				})]
+			}),
+			cmp && (cmp.changed.length > 0 || cmp.extra.length > 0 || cmp.missing.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cleanup-look-block",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "cleanup-look-head",
+					children: ["Against branch ", f.git.branch]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+					className: "cleanup-look-entries",
+					children: [
+						cmp.changed.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: ["Changed: ", cmp.changed.join(", ")] }),
+						cmp.extra.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: ["Only here: ", cmp.extra.join(", ")] }),
+						cmp.missing.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: ["Missing here: ", cmp.missing.join(", ")] })
+					]
+				})]
+			}),
+			!ask && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "test-row",
+				children: f.safe ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn cleanup-remove",
+					disabled: p.busy,
+					onClick: () => p.onRemove(false),
+					children: "Remove"
+				}) : f.mounts.length ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn cleanup-remove-anyway",
+					disabled: p.busy,
+					onClick: () => p.onStep(1),
+					children: "Remove anyway…"
+				})
+			}),
+			ask && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				id: "cleanup-unchecked-confirm",
+				title: ask.title,
+				body: ask.body,
+				confirmLabel: ask.confirmLabel,
+				cancelLabel: "Keep it",
+				busy: p.busy,
+				onConfirm: () => p.step === 1 ? p.onStep(2) : p.onRemove(true),
+				onCancel: () => p.onStep(null)
+			})
+		]
+	});
 }
 //#endregion
 //#region src/components/settings/screens/Ide.tsx

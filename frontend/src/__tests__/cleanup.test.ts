@@ -163,6 +163,81 @@ function render(over: Partial<Parameters<typeof CleanupView>[0]> = {}) {
   );
 }
 
+const facts = (o: Partial<import("../lib/cleanup").InspectFacts> = {}): import("../lib/cleanup").InspectFacts => ({
+  path: "/h/.mindflock/worktrees/u/gone_1",
+  name: "u/gone_1",
+  files: 120,
+  dirs: 9,
+  bytes: 5 * 1024 ** 2,
+  newest: 1_700_000_000,
+  newest_file: "notes.md",
+  work_files: 3,
+  work_bytes: 2048,
+  dependency_files: 117,
+  symlinks: 0,
+  mounts: [],
+  complete: true,
+  top: [{ name: "node_modules", dir: true, kind: "dependency", files: 117, bytes: 5 * 1024 ** 2 }],
+  top_more: 0,
+  work_sample: [{ path: "notes.md", bytes: 12, mtime: 1_700_000_000 }],
+  git: {
+    dot: "file",
+    gitdir: "/r/.git/worktrees/gone_1",
+    gitdir_exists: false,
+    repo: "/r",
+    repo_exists: true,
+    branch: "u/gone",
+    compare: { changed_count: 1, missing_count: 0, extra_count: 1, changed: ["a.py"], missing: [], extra: ["notes.md"] },
+    notes: [],
+  },
+  verdict: "differs",
+  safe: false,
+  summary: ["120 files in 9 folders (5.0 MB).", "2 files differ from branch u/gone: 1 changed, 1 only here, 0 missing here."],
+  ...o,
+});
+const gone = item({
+  id: "g",
+  path: "/h/.mindflock/worktrees/u/gone_1",
+  name: "u/gone_1",
+  kind: "orphan",
+  state: "unchecked",
+  safe: false,
+  branch: "",
+  size_bytes: 6 * 1024 ** 2,
+  kept: ["git no longer lists it as a worktree of /r, so its files can't be checked"],
+  unchecked_why: "unregistered",
+});
+
+describe("folders that can't be checked", () => {
+  it("get their own section, never a plain Remove, and count in the summary", () => {
+    expect(lib.STATE_LABEL.unchecked).toBe("Can't be checked");
+    expect(lib.canRemove(gone)).toBe(false);
+    const groups = lib.groupItems([base, gone]);
+    expect(groups.map((g) => g.key)).toEqual(["safe", "unchecked"]);
+    expect(groups[1].title).toContain("never removed automatically");
+    expect(
+      lib.summaryLine({ count: 2, bytes: 1, safe_count: 0, safe_bytes: 0, unchecked_count: 1, unchecked_bytes: 1024 }),
+    ).toContain("1 can't be checked (1.0 KB): look inside each to decide.");
+  });
+
+  it("confirms in two steps naming the folder, its size and its work files", () => {
+    const one = lib.uncheckedConfirm(gone, facts(), 1);
+    expect(one.title).toBe("Delete u/gone_1 (6.0 MB) for good?");
+    expect(one.body).toContain("120 files (5.0 MB), 3 of them look like work");
+    expect(one.body).toContain("permanent");
+    const two = lib.uncheckedConfirm(gone, facts(), 2);
+    expect(two.title).toContain("permanently");
+    expect(two.body).toContain("3 files that look like work and 6.0 MB");
+    expect(two.confirmLabel).toBe("Delete permanently");
+  });
+
+  it("says a permanent deletion as one", () => {
+    expect(lib.removedText(gone, { ok: true, permanent: true, deleted: { files: 120, work_files: 3, bytes: 1024 } })).toBe(
+      "Deleted u/gone_1 permanently (120 files, 1.0 KB).",
+    );
+  });
+});
+
 describe("the screen", () => {
   it("draws the summary, one collect button and the sections", () => {
     const html = render();
@@ -198,6 +273,55 @@ describe("the screen", () => {
     expect(html).toContain("Remove u/wip?");
     expect(html).toContain("Remove anyway");
     expect(html).toContain("/h/.mindflock/kept-work");
+  });
+
+  it("offers Look inside for a folder that can't be checked, and no Remove", () => {
+    const html = render({
+      rep: {
+        items: [gone],
+        summary: { count: 1, bytes: 1, safe_count: 0, safe_bytes: 0, unchecked_count: 1, unchecked_bytes: 1 },
+        scanning: false,
+        settings: { mode: "ask", after_days: 14 },
+      },
+    });
+    expect(html).toContain("Can&#x27;t be checked (never removed automatically)");
+    expect(html).toContain("Look inside");
+    expect(html).not.toContain(">Remove<");
+  });
+
+  it("shows what is inside and Remove anyway…, then each confirm step in the page", () => {
+    const rep = {
+      items: [gone],
+      summary: { count: 1, bytes: 1, safe_count: 0, safe_bytes: 0 },
+      scanning: false,
+      settings: { mode: "ask" as const, after_days: 14 },
+    };
+    let html = render({ rep, looks: { g: facts() } });
+    expect(html).toContain("120 files in 9 folders");
+    expect(html).toContain("node_modules/");
+    expect(html).toContain("notes.md");
+    expect(html).toContain("Changed: a.py");
+    expect(html).toContain("Remove anyway…");
+    expect(html).not.toContain('role="alertdialog"');
+    html = render({ rep, looks: { g: facts() }, deleting: { id: "g", step: 1 } });
+    expect(html).toContain('role="alertdialog"');
+    expect(html).toContain("Delete u/gone_1 (6.0 MB) for good?");
+    expect(html).toContain("Continue…");
+    html = render({ rep, looks: { g: facts() }, deleting: { id: "g", step: 2 } });
+    expect(html).toContain("Delete permanently");
+    expect(html).toContain("Keep it");
+  });
+
+  it("offers a plain Remove when the look found nothing that could be lost", () => {
+    const rep = {
+      items: [gone],
+      summary: { count: 1, bytes: 1, safe_count: 0, safe_bytes: 0 },
+      scanning: false,
+      settings: { mode: "ask" as const, after_days: 14 },
+    };
+    const html = render({ rep, looks: { g: facts({ safe: true, verdict: "matches" }) } });
+    expect(html).toContain(">Remove<");
+    expect(html).not.toContain("Remove anyway…");
   });
 
   it("before the first scan says it is looking", () => {

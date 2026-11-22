@@ -233,7 +233,7 @@ waits until it answers again — use it after installing a new engine underneath
 server (install.sh does this for you). `mindflock serve` on a port where an
 older build is still running says so and points here.
 
-### `mindflock clean [--collect | --remove ITEM [--yes]] [--mode auto|ask|off] [--after-days N] [--all] [--json] [--no-fetch] [--no-size] [--local]`
+### `mindflock clean [--collect | --remove ITEM [--yes] [--even-unchecked] | --inspect ITEM] [--mode auto|ask|off] [--after-days N] [--all] [--json] [--no-fetch] [--no-size] [--local]`
 
 The worktree garbage collector (docs/web-api.md, *Disk cleanup*). With no
 option it only **lists** — a dry run: every worktree and session clone
@@ -291,6 +291,41 @@ measured. `--no-size` lists at once with only the sizes already known.
   are first saved as `changes.patch` in `~/.mindflock/kept-work/<time>_<name>/`
   and the CLI prints where; an unmerged branch is kept. Something in use is
   never removed.
+- **Can't be checked** (`can't check` in the list): a folder under the
+  worktrees root whose repository, or git's record of it, is gone — "git no
+  longer lists it as a worktree of <repo>", "not a working git checkout (its
+  repository … is gone)", "not a git checkout any more (no .git; files left
+  behind)", a repository of its own, what a failed clone left. Its files
+  can't be checked the way a worktree's are, so it is never collected (not by
+  `--collect`, not in the background) and the summary counts these apart
+  ("2 can't be checked (1.4G): … look inside with mindflock clean --inspect
+  ITEM, delete one with --remove ITEM --even-unchecked").
+- `--inspect ITEM` looks inside one (on request; the listing never walks a
+  folder's files): how many files and folders, their size, the newest change,
+  the top-level entries (dependency, cache and build folders such as
+  `node_modules`, `.venv`, `__pycache__`, `dist` marked as such), up to 15
+  files that look like work, newest first, and what git can still tell —
+  where its `.git` points and that it no longer exists, whether its
+  repository is gone too, and, when the repository still has the branch it
+  was on (its creation record, else its folder name), how its files compare
+  with that branch: "Its files match branch X exactly" or "N files differ
+  from branch X: a changed, b only here, c missing here", with the paths.
+  The comparison reads the repository through a throwaway index and writes
+  nothing to it.
+- `--remove ITEM` on one prints the same facts first. When the look finds
+  nothing that could be lost — its files match the branch (or it only lacks
+  some of the branch's files), or it holds nothing but dependencies, caches
+  and build output — it is removed like a safe item. Otherwise it is removed
+  only with `--even-unchecked`, after a `y` (or `--yes`; no terminal
+  refuses): "Delete <name> permanently (N files, X, M that look like work)?".
+  MindFlock has no trash or holding folder, so this deletion is
+  **permanent** — nothing is saved first — and the CLI says so ("deleted
+  <path> permanently (N files, X)"). It deletes only a folder strictly inside
+  MindFlock's own worktree (or session-clone) folders, symlinks resolved; never
+  a symlink, a mount point, a folder on another filesystem than the one it
+  sits in, one git still knows as a worktree, or one with other worktree
+  folders or another checkout inside it; it never follows a symlink inside it (a link is removed as a
+  link) and never crosses into another filesystem (`-xdev`).
 - `--mode` / `--after-days` set `cleanup.mode` / `cleanup.after_days`
   (docs/configuration.md, *Disk cleanup*).
 

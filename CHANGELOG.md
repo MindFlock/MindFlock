@@ -139,6 +139,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`uv sync` in this repo installs dev + web** (`[tool.uv] default-groups`),
   the set the tests and the web UI need.
+### Added
+
+- **Disk cleanup can remove the folders whose repository is gone.** A folder
+  under the worktrees root that git no longer lists, or whose repository was
+  deleted, used to sit under "has work" forever: its files couldn't be
+  checked, so it was never safe, and the only way out was by hand. It now has
+  its own class, **can't be checked** (its own fold in Settings → Disk
+  cleanup, `can't check` in `mindflock clean`, counted apart in the summary),
+  with the plain reason. **Look inside** (`mindflock clean --inspect ITEM`,
+  `GET /api/cleanup/inspect`) shows what it holds — file count, size, newest
+  change, the top-level entries, the files that look like work (not
+  `node_modules`, `.venv`, caches or build output) — and what git can still
+  tell: that its `.git` points at a gitdir that no longer exists, whether the
+  repository is gone too, and, when the repository still has its branch,
+  "Its files match branch X exactly" or "N files differ from branch X". One
+  that matches (or holds only caches) is removable like a safe item; any other
+  goes only by an explicit **Remove anyway…** — two in-page confirm steps
+  naming its size and how many files look like work — or `mindflock clean
+  --remove ITEM --even-unchecked`, which prints the same facts first. The
+  deletion is permanent (MindFlock has no trash), only inside MindFlock's own
+  worktree folders, never through a symlink or across filesystems; collection
+  (the button, `--collect`, the background pass) never touches these.
 
 ## [0.14.25] - 2026-11-20
 

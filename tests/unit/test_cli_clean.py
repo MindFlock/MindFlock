@@ -99,6 +99,97 @@ def test_remove_yes_saves_the_work_and_says_where(setup, capsys):
     assert "unsaved idea" in open(patch).read()
 
 
+def _left(setup, work=True):
+    """A folder under the worktrees root whose repository is unknown (no
+    .git): its files can't be checked."""
+    path = setup["home"] / "worktrees" / "u" / "left_18e2d220aa03c9e5"
+    (path / "web" / ".vite").mkdir(parents=True)
+    (path / "web" / ".vite" / "dep.js").write_text("cache\n")
+    if work:
+        (path / "notes.md").write_text("an idea\n")
+    return path
+
+
+def test_the_listing_says_what_cant_be_checked_and_how(setup, capsys):
+    _left(setup)
+    assert cli.main(["clean", "--local", "--no-fetch"]) == 0
+    out = capsys.readouterr().out
+    assert "can't check" in out and "no .git" in out
+    assert "1 can't be checked" in out and "--even-unchecked" in out
+
+
+def test_inspect_prints_what_is_inside(setup, capsys):
+    path = _left(setup)
+    assert (
+        cli.main(
+            ["clean", "--local", "--no-fetch", "--inspect", "u/left_18e2d220aa03c9e5"]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "2 files" in out and "1 file looks like work" in out
+    assert (
+        "notes.md" in out
+        and "(dependencies/caches)" not in out.split("notes.md")[1][:0]
+    )
+    assert "web/" in out and path.is_dir()
+
+
+def test_remove_without_even_unchecked_prints_the_facts_and_keeps_it(setup, capsys):
+    path = _left(setup)
+    assert (
+        cli.main(
+            [
+                "clean",
+                "--local",
+                "--no-fetch",
+                "--remove",
+                "left_18e2d220aa03c9e5",
+                "--yes",
+            ]
+        )
+        == 1
+    )
+    out = capsys.readouterr().out
+    assert "notes.md" in out and "--even-unchecked" in out and "permanently" in out
+    assert path.is_dir()
+
+
+def test_even_unchecked_asks_and_refuses_without_a_terminal(setup, capsys, monkeypatch):
+    path = _left(setup)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False, raising=False)
+    argv = [
+        "clean",
+        "--local",
+        "--no-fetch",
+        "--remove",
+        "left_18e2d220aa03c9e5",
+        "--even-unchecked",
+    ]
+    assert cli.main(argv) == 1
+    assert "Nothing removed." in capsys.readouterr().out and path.is_dir()
+    assert cli.main(argv + ["--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "deleted %s permanently (2 files" % path in out
+    assert not path.exists()
+
+
+def test_a_folder_of_only_caches_goes_without_even_unchecked(setup, capsys):
+    path = _left(setup, work=False)
+    assert (
+        cli.main(
+            ["clean", "--local", "--no-fetch", "--remove", "left_18e2d220aa03c9e5"]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "Nothing in it looks like work" in out and not path.exists()
+
+
+def test_even_unchecked_needs_remove(setup, capsys):
+    assert cli.main(["clean", "--local", "--even-unchecked"]) == 2
+
+
 def test_mode_and_days_are_set(setup, capsys):
     assert cli.main(["clean", "--local", "--mode", "auto", "--after-days", "30"]) == 0
     assert "cleanup: auto, after 30 days unused" in capsys.readouterr().out

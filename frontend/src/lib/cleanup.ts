@@ -6,7 +6,15 @@
 
 export type CleanupMode = "auto" | "ask" | "off";
 
-export type CleanupState = "safe" | "recent" | "holds_work" | "in_use" | "not_ours" | "missing" | "unknown";
+export type CleanupState =
+  | "safe"
+  | "recent"
+  | "holds_work"
+  | "unchecked"
+  | "in_use"
+  | "not_ours"
+  | "missing"
+  | "unknown";
 
 export interface CleanupItem {
   id: string;
@@ -31,6 +39,9 @@ export interface CleanupItem {
   tracked_changes: number;
   untracked_files: number;
   unsaved_commits: number;
+  /** Why its files can't be checked (state "unchecked"): unregistered ·
+   * repo_gone · gitdir_gone · no_git · own_repo · clone_tmp. */
+  unchecked_why?: string;
 }
 
 export interface CleanupSummary {
@@ -44,6 +55,10 @@ export interface CleanupSummary {
   other_bytes?: number | null;
   safe_count: number;
   safe_bytes: number | null;
+  /** Folders whose files can't be checked: never collected, each a
+   * person's call after a look inside. */
+  unchecked_count?: number;
+  unchecked_bytes?: number | null;
 }
 
 export interface CleanupReport {
@@ -66,6 +81,59 @@ export interface RemoveResult {
   needs_confirm?: boolean;
   branch_deleted?: string;
   saved?: { dir: string; patch: string; bundle: string; kept_branch: string };
+  /** A folder that can't be checked was deleted for good. */
+  permanent?: boolean;
+  deleted?: { files: number; work_files: number; bytes: number };
+}
+
+/** What a look inside a folder that can't be checked found
+ * (GET /api/cleanup/inspect; backend worktree_gc.inspect_unchecked). */
+export interface InspectFacts {
+  path: string;
+  name: string;
+  files: number;
+  dirs: number;
+  bytes: number;
+  size_bytes?: number | null;
+  newest: number;
+  newest_file: string;
+  work_files: number;
+  work_bytes: number;
+  dependency_files: number;
+  symlinks: number;
+  mounts: string[];
+  complete: boolean;
+  top: { name: string; dir: boolean; kind: "work" | "dependency" | "git"; files: number; bytes: number }[];
+  top_more: number;
+  work_sample: { path: string; bytes: number; mtime: number }[];
+  git: {
+    dot: "file" | "dir" | "link" | "none";
+    gitdir: string;
+    gitdir_exists: boolean;
+    repo: string;
+    repo_exists: boolean;
+    branch: string;
+    compare: null | {
+      changed_count: number;
+      missing_count: number;
+      extra_count: number;
+      changed: string[];
+      missing: string[];
+      extra: string[];
+    };
+    notes: string[];
+  };
+  verdict: "matches" | "within" | "no_work" | "differs" | "own_repo" | "unknown";
+  /** Nothing in it could be lost: Remove needs no "anyway". */
+  safe: boolean;
+  /** The same, in sentences (the server's words). */
+  summary: string[];
+}
+
+export interface InspectResult {
+  ok: boolean;
+  error?: string;
+  facts?: InspectFacts;
 }
 
 export const CLEANUP_MODES: readonly { value: CleanupMode; label: string; hint: string }[] = [
@@ -107,6 +175,7 @@ export const STATE_LABEL: Record<CleanupState, string> = {
   safe: "Will be removed",
   recent: "Used recently",
   holds_work: "Holds work",
+  unchecked: "Can't be checked",
   in_use: "In use",
   not_ours: "Not MindFlock's",
   missing: "Already gone",
@@ -136,14 +205,66 @@ export function needsConfirm(it: CleanupItem): boolean {
  * (or route, run, queue) still uses, nor a locked one — the server refuses
  * those too. */
 export function canRemove(it: CleanupItem): boolean {
-  return !it.in_use && !it.kept.includes("locked in git");
+  return !it.in_use && !it.kept.includes("locked in git") && !isUnchecked(it);
+}
+
+/** A folder whose files can't be checked: it gets "Look inside", and is
+ * removed only from there (never by "Remove N safe"). */
+export function isUnchecked(it: CleanupItem): boolean {
+  return it.state === "unchecked";
+}
+
+/** "N files (X), M of them look like work" — the facts every unchecked
+ * confirm names. */
+export function factsLine(f: InspectFacts): string {
+  return (
+    f.files +
+    (f.files === 1 ? " file" : " files") +
+    " (" +
+    humanBytes(f.bytes) +
+    "), " +
+    f.work_files +
+    (f.work_files === 1 ? " of them looks" : " of them look") +
+    " like work (not dependencies, caches or build output)"
+  );
+}
+
+/** The two in-page confirm steps for deleting a folder that can't be
+ * checked (the desktop app has no window.confirm). Step 1 names the folder,
+ * its size and what it holds; step 2 is the last word before it goes. */
+export function uncheckedConfirm(
+  it: CleanupItem,
+  f: InspectFacts,
+  step: 1 | 2,
+): { title: string; body: string; confirmLabel: string } {
+  const size = humanBytes(it.size_bytes ?? f.bytes);
+  if (step === 1) {
+    return {
+      title: "Delete " + it.name + " (" + size + ") for good?",
+      body:
+        "It holds " +
+        factsLine(f) +
+        ". Its files can't be checked, so nothing is saved first, and MindFlock has no trash: this is permanent.",
+      confirmLabel: "Continue…",
+    };
+  }
+  return {
+    title: "Last check: delete " + it.name + " permanently?",
+    body:
+      f.work_files +
+      (f.work_files === 1 ? " file that looks" : " files that look") +
+      " like work and " +
+      size +
+      " go with it. There is no undo.",
+    confirmLabel: "Delete permanently",
+  };
 }
 
 /** The confirm card's consequence sentence for an item that holds work. */
 export function confirmText(it: CleanupItem, keptDir = "~/.mindflock/kept-work"): string {
   const parts: string[] = [];
   if (it.kind === "orphan") {
-    return "Git no longer knows this folder, so its files can't be checked or saved. They will be deleted.";
+    return "Its files can't be checked or saved: look inside first, then remove it for good if nothing in it matters.";
   }
   if (it.tracked_changes || it.untracked_files) {
     parts.push("Its uncommitted changes are saved first as a patch in " + keptDir + ".");
@@ -164,6 +285,10 @@ export function confirmText(it: CleanupItem, keptDir = "~/.mindflock/kept-work")
 
 /** What the removal kept, for the toast after it. */
 export function removedText(it: CleanupItem, r: RemoveResult): string {
+  if (r.permanent) {
+    const n = r.deleted?.files ?? 0;
+    return "Deleted " + it.name + " permanently (" + n + (n === 1 ? " file" : " files") + ", " + humanBytes(r.deleted?.bytes ?? 0) + ").";
+  }
   const bits = ["Removed " + it.name + "."];
   if (r.saved?.patch) bits.push("Uncommitted changes saved to " + r.saved.patch + ".");
   if (r.saved?.bundle) bits.push("Unpushed commits saved to " + r.saved.bundle + ".");
@@ -179,10 +304,13 @@ export function summaryLine(s: CleanupSummary | undefined): string {
   const reclaim = s.safe_count
     ? " " + s.safe_count + " can go safely, freeing " + humanBytes(s.safe_bytes) + "."
     : " Nothing is safe to remove right now.";
+  const unchecked = s.unchecked_count
+    ? " " + s.unchecked_count + " can't be checked (" + humanBytes(s.unchecked_bytes ?? null) + "): look inside each to decide."
+    : "";
   const other = s.other_count
     ? " " + s.other_count + " other worktree" + (s.other_count === 1 ? "" : "s") + " of the same repos (" + humanBytes(s.other_bytes ?? 0) + ") are listed, never removed."
     : "";
-  return mine + reclaim + other;
+  return mine + reclaim + unchecked + other;
 }
 
 /** What removing it frees (falls back to its size on an older server). */
@@ -221,6 +349,11 @@ export function groupItems(items: CleanupItem[]): { key: string; title: string; 
   return [
     { key: "safe", title: "Will be removed", items: by(["safe"]) },
     { key: "kept", title: "Kept", items: by(["holds_work", "recent", "missing", "unknown"]) },
+    {
+      key: "unchecked",
+      title: "Can't be checked (never removed automatically)",
+      items: by(["unchecked"]),
+    },
     { key: "in_use", title: "In use", items: by(["in_use"]) },
     { key: "not_ours", title: "Not MindFlock's (never removed automatically)", items: by(["not_ours"]) },
   ].filter((g) => g.items.length);

@@ -340,7 +340,9 @@ def test_remove_route_maps_outcomes_to_status_codes(monkeypatch):
     monkeypatch.setattr(
         drv,
         "remove_item",
-        lambda srv, item_id, confirm: dict(out[item_id], confirm=confirm),
+        lambda srv, item_id, confirm, even_unchecked=False: dict(
+            out[item_id], confirm=confirm, even_unchecked=even_unchecked
+        ),
     )
     out.update(
         gone={"ok": False, "missing": True},
@@ -356,6 +358,57 @@ def test_remove_route_maps_outcomes_to_status_codes(monkeypatch):
     )
     r = local_client.post("/api/cleanup/remove", json={"id": "done", "confirm": True})
     assert r.status_code == 200 and r.json()["confirm"] is True
+    assert r.json()["even_unchecked"] is False
+    # Only a real true asks for an unchecked deletion ("yes", 1 don't).
+    for v, want in ((True, True), ("yes", False), (1, False)):
+        r = local_client.post(
+            "/api/cleanup/remove", json={"id": "done", "even_unchecked": v}
+        )
+        assert r.json()["even_unchecked"] is want
+
+
+def test_inspect_route_is_owner_only_and_maps_outcomes(monkeypatch):
+    seen = []
+
+    def inspect_item(srv, item_id):
+        seen.append(item_id)
+        return {
+            "gone": {"ok": False, "missing": True, "error": "x"},
+            "ok": {"ok": True, "facts": {"files": 3}},
+            "checkable": {"ok": False, "error": "can be checked"},
+        }[item_id]
+
+    monkeypatch.setattr(drv, "inspect_item", inspect_item)
+    assert client.get("/api/cleanup/inspect?id=ok").status_code == 403
+    assert local_client.get("/api/cleanup/inspect").status_code == 400
+    assert local_client.get("/api/cleanup/inspect?id=gone").status_code == 404
+    assert local_client.get("/api/cleanup/inspect?id=checkable").status_code == 422
+    r = local_client.get("/api/cleanup/inspect?id=ok")
+    assert r.status_code == 200 and r.json()["facts"] == {"files": 3}
+    assert seen == ["gone", "checkable", "ok"]
+
+
+def test_inspect_and_remove_an_unchecked_folder_through_the_driver(home):
+    root = gc.worktrees_root()
+    assert root.startswith(str(home))  # never the real worktrees folder
+    path = os.path.join(root, "u", "left_18e2d220aa03c9e5")
+    os.makedirs(os.path.join(path, "src"))
+    with open(os.path.join(path, "src", "a.py"), "w") as f:
+        f.write("work\n")
+    rep = drv.scan(_srv(), fetch=False, measure=False)
+    it = next(i for i in rep["items"] if i["path"] == gc.norm(path))
+    assert it["state"] == gc.UNCHECKED
+    assert rep["summary"]["unchecked_count"] == 1
+    res = drv.inspect_item(_srv(), it["id"])
+    assert res["ok"] and res["facts"]["work_files"] == 1
+    res = drv.remove_item(_srv(), it["id"], confirm=True)
+    assert res["needs_confirm"] and res["unchecked"] and os.path.isdir(path)
+    # Collecting the safe set never takes it, whatever the look found.
+    assert not drv.collect_now(_srv())["removed"] and os.path.isdir(path)
+    rep = drv.scan(_srv(), fetch=False, measure=False)
+    it = next(i for i in rep["items"] if i["path"] == gc.norm(path))
+    res = drv.remove_item(_srv(), it["id"], confirm=True, even_unchecked=True)
+    assert res["ok"] and res["permanent"] and not os.path.exists(path)
 
 
 def test_settings_route_validates(home):
