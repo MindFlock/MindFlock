@@ -1210,6 +1210,24 @@ export async function rerunSetup(title: string) {
   await refreshInstances();
 }
 
+/** Show the tail of a session's worktree setup log (`.mindflock_setup.log`):
+ * what the preparation did (pin files carried, deps cloned or installed) and,
+ * when it stopped, why. */
+export async function showSetupLog(title: string) {
+  if (!title) return;
+  try {
+    const d = await instApi<{ status?: { state?: string; error?: string } | null; log?: string }>(
+      title,
+      "/setup?lines=40"
+    );
+    const st = d.status || {};
+    const head = st.state === "failed" ? "Setup didn't finish" + (st.error ? ": " + st.error : "") + "\n\n" : "";
+    confirmPop("Worktree setup log", head + ((d.log || "").trim() || "(the log is empty)"), [], "Close");
+  } catch (err) {
+    errorPop("Couldn't read the setup log", errMsg(err));
+  }
+}
+
 /** Hide/show a session's pane (client-side only; the session keeps running). */
 export function hideSession(title: string) {
   if (!title) return;

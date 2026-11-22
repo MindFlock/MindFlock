@@ -81,7 +81,10 @@ def test_any_other_refusal_still_closes_4409(monkeypatch):
 def test_create_reads_ports_and_worktree_config_in_a_thread():
     src = inspect.getsource(session_create._create)
     assert "asyncio.to_thread(srv._ports.env_for, title)" in src
-    assert "asyncio.to_thread(srv._wt_setup.load_config, plain_path)" in src
+    # The worktree recipe (config file + settings + the lockfile plan, which
+    # runs git) is read in one thread hop.
+    assert "await asyncio.to_thread(_setup_plan)" in src
+    assert "cfg = srv._wt_setup.load_setup_config(plain_path)" in src
     assert "srv._ports.env_for(title)" not in src
     assert "srv._wt_setup.load_config(plain_path)" not in src
 

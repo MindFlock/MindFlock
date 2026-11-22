@@ -446,8 +446,9 @@ def _typing_held(inst, title: str) -> bool:
     except Exception:  # noqa: BLE001
         _wt = ""
     if _wt:
-        _setup_st = _wt_setup.setup_status(_wt)
-        if _setup_st and _setup_st.get("state") in ("running", "failed"):
+        # Only a setup that holds: the automatic part of the recipe (deps,
+        # pin files) runs beside the agent and never holds (hold: false).
+        if _wt_setup.holds_prompts(_wt_setup.setup_status(_wt)):
             return True
     return False
 

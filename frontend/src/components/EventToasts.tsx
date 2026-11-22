@@ -274,7 +274,14 @@ export function EventToasts() {
         if (isReplay(env) || env.new === "ok") return;
         const ss = deriveSessionState({ title: env.session, setup: { state: "failed" } as Instance["setup"] });
         if (!ruleOn(notifyRuleFor(ss))) return;
-        notifyOnce(env.session, "setupfail", attentionToast(namedSlot(env.session), ss) + " — prompts held", {
+        // The automatic preparation (deps, pin files) holds nothing: say why
+        // it stopped and where its log is, not "prompts held".
+        const d = (env.data || {}) as { hold?: boolean; error?: string };
+        const tail =
+          d.hold === false
+            ? " — setup didn't finish" + (d.error ? ": " + d.error : "") + " · see log (session menu → Setup log)"
+            : " — prompts held";
+        notifyOnce(env.session, "setupfail", attentionToast(namedSlot(env.session), ss) + tail, {
           onClick: () => selectSession(env.session),
         });
       })

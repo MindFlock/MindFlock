@@ -212,6 +212,8 @@ _D_WHOAMI = (
     "across workers, or start it as a separate session (spawn_session "
     "separate=true). capacity: {room, session_mb, hint} = how many more sessions "
     "this machine has memory for now; plan your worker count from it. "
+    "session.setup: your worktree's preparation (deps, pin files): "
+    "running | ok | failed + error + log; run tests only once it is ok. "
     "Call this first."
 )
 _D_LIST = (
@@ -821,6 +823,20 @@ _CROSS_USER_NOTE = (
 )
 
 
+def _compact_setup(st) -> Optional[dict]:
+    """A row's worktree setup, cut to what an agent acts on: ``state``
+    (running | ok | failed), ``hold`` (whether its queued prompts wait for
+    it), ``error`` (why it failed) and ``log`` (the file to read). None when
+    the worktree has had no setup."""
+    if not isinstance(st, dict) or not st.get("state"):
+        return None
+    out = {"state": st.get("state"), "hold": st.get("hold", True) is not False}
+    if st.get("error"):
+        out["error"] = st["error"]
+    out["log"] = st.get("log") or ".mindflock_setup.log"
+    return out
+
+
 def _compact_message(m: dict) -> dict:
     out = {k: m.get(k) for k in _MESSAGE_KEYS if m.get(k) not in (None, "")}
     if m.get("detail"):
@@ -1104,6 +1120,9 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools, _todos.Todo
         for key in _COMPACT_OPTIONAL:
             if row.get(key):
                 out[key] = row[key]
+        setup = _compact_setup(row.get("setup"))
+        if setup is not None:
+            out["setup"] = setup
         # Queued by the launch gate (create or restart): why and where.
         waiting = _waiting.gate_record(
             {"waiting_for_memory": row.get("waiting_for_memory")}

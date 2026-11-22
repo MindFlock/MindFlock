@@ -15,8 +15,9 @@
  *            once, workers on every prompt; see `workersModes`)
  *   More ▸   the rare ones, folded: Terminal, Diff, Code map, Thread, Browse
  *            history, Copy entire history (pane only), Duplicate, Open in the IDE,
- *            Open preview, Select, Hide window, Move out of a group, Re-run
- *            worktree setup, Copy folder path, Customize header… (pane only)
+ *            Open preview, Select, Hide window, Move out of a group, Setup
+ *            log, Re-run worktree setup, Copy folder path, Customize header…
+ *            (pane only)
  *   Danger   Close, Delete…
  *
  * A group with nothing in it is left out. A pane passes what its own header
@@ -30,7 +31,7 @@ import type { Instance } from "../api/types";
 import { instApi } from "../api/client";
 import { isMovingRow, refreshInstances } from "../state/queries";
 import { displayName, useUi } from "../state/store";
-import { PR_FALLBACK_HINT, cleanupMissing, deleteConfirmText, deleteMenuTitle, deleteSession, openMoveSession, selectSession } from "./sessionActions";
+import { PR_FALLBACK_HINT, cleanupMissing, deleteConfirmText, deleteMenuTitle, deleteSession, openMoveSession, selectSession, showSetupLog } from "./sessionActions";
 import { api } from "../api/client";
 import { CONNECT_GITHUB_FOR_PRS, NOTHING_TO_PUSH } from "./vocab";
 import { actionLabel, actionNote, sessionAction, type ActionCtx, type SessionActionId } from "./sessionActionTable";
@@ -392,6 +393,13 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     // Hidden, the session can't be focused, so its chord can't reach it: the
     // shortcut is drawn only for Hide.
     fromTable("hide", ctx.hidden ? { keys: undefined } : {}),
+    !!inst.setup?.state &&
+      !peer && {
+        key: "setup-log",
+        label: "Setup log",
+        title: "What the worktree preparation did (pin files, dependencies, setup commands) — and why it stopped",
+        run: () => void showSetupLog(title),
+      },
     inst.setup?.state === "failed" &&
       !peer && {
         key: "rerun-setup",

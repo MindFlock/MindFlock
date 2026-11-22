@@ -57,12 +57,21 @@
  * because it is the input every state reads; stage.ts re-exports it so the
  * guided ship ladder keeps its import. */
 
-import type { Instance, SessionVerify } from "../api/types";
+import type { Instance, SessionVerify, SetupSummary } from "../api/types";
 import { backgroundHint, backgroundJobs } from "./backgroundJobs";
 import { agentName } from "./agentNames";
 import { haltedWhy, perchLabel, perchedOnYou } from "./flights";
 import { heldHint, isHeldOffline } from "./heldOffline";
 import { waitChip, waitHint, waitWhyOf } from "./waitWhy";
+
+/** Whether a session's worktree setup holds its queued prompts right now:
+ * running or failed, and not the automatic kind (`hold: false` — the
+ * dependency / pin-file preparation, which runs beside the agent). A status
+ * from an older server has no `hold` and holds, as it always did. */
+export function setupHolds(setup: SetupSummary | null | undefined): boolean {
+  if (!setup || (setup.state !== "running" && setup.state !== "failed")) return false;
+  return setup.hold !== false;
+}
 
 // --- Live agent activity, debounced across 2 polls (events push instantly) --
 
@@ -566,7 +575,7 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   if (isHeldOffline(inst))
     return { state: "offline", label: STATE_LABEL.offline, tone: "broken", inBell: false, restartable: true, held: true, hint: heldHint(inst.held_reason) };
   if (inst.sleeping) return sleepingState(inst.sleeping, now);
-  if (inst.setup && inst.setup.state === "running")
+  if (inst.setup && inst.setup.state === "running" && setupHolds(inst.setup))
     return {
       state: "starting",
       label: STATE_LABEL.starting,
@@ -575,7 +584,7 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       restartable: false,
       hint: "Worktree setup running (deps / env files) — queued prompts are held until it finishes",
     };
-  if (inst.setup && inst.setup.state === "failed")
+  if (inst.setup && inst.setup.state === "failed" && setupHolds(inst.setup))
     return needsYou(
       "setup_failed",
       "Worktree setup failed — prompts are held; re-run it from the actions menu (log: .mindflock_setup.log)"

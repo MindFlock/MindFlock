@@ -240,10 +240,14 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
       return { text: "cost over budget ($" + (Number(d.cost) || 0).toFixed(2) + ")", cls: "n-warn" };
     case "session.prompt_sent":
       return { text: "sent the next queued prompt (" + (Number(d.remaining) || 0) + " left)", cls: "n-info" };
-    case "session.setup_finished":
-      return env.new === "ok"
-        ? { text: "worktree setup finished", cls: "n-done" }
-        : { text: REASON_LABEL.setup_failed + " — prompts held", cls: "n-warn" };
+    case "session.setup_finished": {
+      if (env.new === "ok") return { text: "worktree setup finished", cls: "n-done" };
+      // hold: false = the automatic preparation, which holds no prompts.
+      const sd = d as { hold?: boolean; error?: string };
+      if (sd.hold === false)
+        return { text: "setup didn't finish" + (sd.error ? ": " + sd.error : "") + " · see log", cls: "n-warn" };
+      return { text: REASON_LABEL.setup_failed + " — prompts held", cls: "n-warn" };
+    }
     case "session.check_finished":
       return env.new === "ok"
         ? { text: "checks passed ✓", cls: "n-done" }

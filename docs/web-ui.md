@@ -1693,8 +1693,10 @@ window closes it. The items, in groups:
   the same; left out once `GET /api/ides`
   says the configured editor isn't installed here) · **Open preview ↗** `:port`
   when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
-  window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
-  after a failed one · **Copy folder path** · on a pane's ⋯ only, **Customize
+  window** (`Ctrl+K H`; the session keeps running) · **Setup log** once
+  the worktree has been prepared (the tail of `.mindflock_setup.log`: pin
+  files carried, each dependency step cloned or installed, and why it
+  stopped) · **Re-run worktree setup** after a failed one · **Copy folder path** · on a pane's ⋯ only, **Customize
   header…** (Customize opened on its Pane header page)
 - then the two ways to leave a session: **✕ Close** and **Delete…**.
 

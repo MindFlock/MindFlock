@@ -606,12 +606,11 @@ def test_setup_rerun_400_when_no_setup_configured(registered, monkeypatch, tmp_p
     wt = tmp_path / "ws"
     wt.mkdir()
     registered("st-2", wt=str(wt))
-    monkeypatch.setattr(
-        server._wt_setup, "load_config", lambda w: SimpleNamespace(has_setup=False)
-    )
+    # Nothing declared, no pin file, no lockfile: start_setup has nothing to do.
+    monkeypatch.setattr(server._wt_setup, "start_setup", lambda *a, **k: False)
     r = client.post("/api/instances/st-2/setup/rerun")
     assert r.status_code == 400
-    assert "no [workspace] setup" in r.json()["error"]
+    assert "nothing to set up" in r.json()["error"]
 
 
 def test_setup_rerun_409_when_already_running(registered, monkeypatch, tmp_path):
@@ -622,7 +621,7 @@ def test_setup_rerun_409_when_already_running(registered, monkeypatch, tmp_path)
     monkeypatch.setattr(
         server._wt_setup, "load_config", lambda w: SimpleNamespace(has_setup=True)
     )
-    monkeypatch.setattr(server._wt_setup, "start_setup", lambda *a, **k: False)
+    monkeypatch.setattr(server._wt_setup, "is_running", lambda w, kind: True)
     r = client.post("/api/instances/st-3/setup/rerun")
     assert r.status_code == 409
     assert "already running" in r.json()["error"]

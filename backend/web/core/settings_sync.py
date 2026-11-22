@@ -231,7 +231,9 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
 LOCAL: Dict[str, Tuple[str, ...]] = {
     "coding_cli": ("binary_paths",),
     "auth_profiles": ("profiles", "default_profile"),
-    "repository": ("workspace_dir",),
+    # worktree_setup: commands THIS machine runs in its worktrees, keyed by
+    # slug or by a checkout path on this device — never another device's.
+    "repository": ("workspace_dir", "worktree_setup"),
     "engine": ("enabled", "mode", "open_cursor", "max_sessions"),
     "local_model": ("enabled", "runtime", "base_url", "model"),
     "ui": ("cursor_autoadopt", "surface"),

@@ -30,8 +30,16 @@ export interface BudgetStatus {
 
 export interface SetupSummary {
   state: string;
-  steps?: Array<{ name: string; state: string; detail?: string }>;
+  steps?: Array<{ name: string; state: string; detail?: string; how?: string; note?: string; seconds?: number }>;
   failed_step?: string | null;
+  /** Whether queued prompts wait for it (only declared setup commands make
+   * them). `false` = the automatic preparation (deps, pin files), which runs
+   * beside the agent; absent (an older server) = it holds. */
+  hold?: boolean;
+  /** Why it failed, in one line ("npm ci in frontend exited 1"). */
+  error?: string;
+  /** The log file in the worktree (`.mindflock_setup.log`). */
+  log?: string;
 }
 
 // --- First-run checklist (GET /api/setup; backend/web/core/setup_steps.py) ----

@@ -1069,8 +1069,8 @@ survives server restarts. Events: `session.setup_started/finished`,
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/instances/{title}/setup?lines=200` | `{status, log}` — setup state (`running/ok/failed`, rc, copied files) + log tail |
-| POST | `/api/instances/{title}/setup/rerun` | Re-run the setup pass (copy `copy_untracked` + `setup_commands`) → 202; 400 without config, 409 while running |
+| GET | `/api/instances/{title}/setup?lines=200` | `{status, log}` — setup state (`running/ok/failed`, rc, `copied` files, `steps` per dependency step, `hold` = whether queued prompts wait for it, `error` = the one-line why) + log tail |
+| POST | `/api/instances/{title}/setup/rerun` | Re-run the worktree preparation (pin files + `copy_untracked`, the dependency steps, `setup_commands`) → 202; 400 when there is nothing to do, 409 while running |
 | GET | `/api/instances/{title}/check?lines=200` | `{status, log}` — check state incl. `sha` it ran against and `stale` vs current HEAD |
 | POST | `/api/instances/{title}/check` | Run `check_command` in the worktree → 202; 400 without config, 409 while running. Also auto-runs when a session reaches the `committed`/`pushed` stage with no (or a stale) result. |
 

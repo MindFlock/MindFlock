@@ -349,6 +349,29 @@ export function liveStep(inst: Partial<Instance>): LiveStep | null {
   // Worktree setup outranks everything: queued prompts are HELD while it runs,
   // and the autopilot refuses to act at all, so it must be visible.
   const setup = inst.setup;
+  // The automatic preparation (deps, pin files) holds nothing: the agent works
+  // beside it, so it is said, not escalated.
+  if (setup && setup.hold === false) {
+    if (setup.state === "running")
+      return {
+        label: "preparing",
+        tone: "work",
+        title:
+          "Preparing the worktree in the background (dependencies, pin files). The agent can already read code; " +
+          "tests and builds wait for it.",
+      };
+    if (setup.state === "failed")
+      return {
+        label: "setup didn't finish",
+        tone: "blocked",
+        title:
+          "Setup didn't finish" +
+          (setup.error ? ": " + setup.error : "") +
+          " · see the log (" +
+          (setup.log || ".mindflock_setup.log") +
+          ", or Setup log in the session menu). Prompts are not held.",
+      };
+  }
   if (setup?.state === "running")
     return { label: "setting up", tone: "work", title: "Running the workspace setup commands." };
   if (setup?.state === "failed")

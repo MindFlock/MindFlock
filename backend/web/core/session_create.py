@@ -535,6 +535,23 @@ async def _create(
             )
 
         prompt = await asyncio.to_thread(_decorate)
+
+    # O2: prepare the worktree (repo-committed .mindflock.toml [workspace] +
+    # the user's repository.worktree_setup + the automatic recipe: pin files,
+    # dependencies). Plain worktree sessions only — provisioned workspaces run
+    # their own setup, and in-place sessions share the repo dir (deps already
+    # there). When dependencies will be made ready in the background (and
+    # nothing declared holds the prompt), the first prompt says so.
+    setup_cfg = None
+    if git_enabled and not is_provisioned and not in_place and not peer_share:
+
+        def _setup_plan():
+            cfg = srv._wt_setup.load_setup_config(plain_path)
+            return cfg, srv._wt_setup.dependency_plan(plain_path, cfg)
+
+        setup_cfg, _dep_steps = await asyncio.to_thread(_setup_plan)
+        if prompt and not setup_cfg.holds_prompts:
+            prompt += srv._wt_setup.prompt_note(_dep_steps)
     inst = srv.session.NewInstance(
         srv.session.InstanceOptions(
             title=title,
@@ -567,12 +584,13 @@ async def _create(
         {} if peer_share else await asyncio.to_thread(srv._ports.env_for, title)
     )
 
-    # O2: per-worktree setup (repo-committed .mindflock.toml [workspace]).
-    # Plain worktree sessions only — provisioned workspaces run their own
-    # setup, and in-place sessions share the repo dir (deps already there).
-    setup_cfg = None
-    if git_enabled and not is_provisioned and not in_place and not peer_share:
-        setup_cfg = await asyncio.to_thread(srv._wt_setup.load_config, plain_path)
+    if setup_cfg is not None:
+        # Prepared between worktree creation and the agent's launch (inside
+        # Start): the pin files are there before the agent can look.
+        def _prepare(wt: str, _cfg=setup_cfg) -> None:
+            srv._wt_setup.start_setup(title, plain_path, wt, _cfg)
+
+        inst.OnWorktreeReady = _prepare
     # Start does the heavy lifting (git worktree/clone + provisioning + tmux),
     # which can take minutes on the first worktree run (one-time base clone +
     # uv sync). Register the instance as "loading" and run Start in the
@@ -671,7 +689,7 @@ async def _create(
         bool(prompt)
         and prompt_delivery != "held"
         and (
-            (setup_cfg is not None and setup_cfg.has_setup)
+            (setup_cfg is not None and setup_cfg.holds_prompts)
             or (not is_provisioned and not srv._provider_seeds_prompt(program))
             # A sandboxed launch can't read the seed file (it lives outside
             # the sandbox): a shared session's prompt is always typed in.
@@ -740,13 +758,6 @@ async def _create(
                 srv._worker_order_driver.mark_never_ran(title, inst)
             srv.ENGINE.save()
             await asyncio.to_thread(_remember_folder)
-            if setup_cfg is not None and setup_cfg.has_setup:
-                try:
-                    srv._wt_setup.start_setup(
-                        title, plain_path, inst.GetWorktreePath(), setup_cfg
-                    )
-                except Exception:  # noqa: BLE001 — setup is best-effort
-                    pass
         except Exception as err:  # noqa: BLE001
             if srv.log.ErrorLog is not None:
                 srv.log.ErrorLog.Printf("failed to create instance %s: %v", title, err)

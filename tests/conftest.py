@@ -18,6 +18,10 @@ os.environ.setdefault("MINDFLOCK_GITNEXUS_GATE", "0")
 # run.main() lowers the SERVER's oom_score_adj; under pytest that process is
 # the test runner, which must stay killable.
 os.environ.setdefault("MINDFLOCK_SERVER_OOM_PROTECT", "0")
+# No automatic dependency install in a session worktree a test creates (a
+# fixture repo with a lockfile would run uv / npm for real). The tests of
+# backend.worktree_prepare turn it back on.
+os.environ.setdefault("MINDFLOCK_WORKTREE_DEPS", "0")
 
 import pytest
 
