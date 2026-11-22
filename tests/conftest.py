@@ -430,6 +430,20 @@ def _no_real_remote_probe(monkeypatch, tmp_path_factory):
 
     repo_base.forget()
     monkeypatch.setattr(repo_base, "probe_remote", _guarded)
+    # The PR monitor's twin (``PRMonitor._branch_exists``, a GitHub call):
+    # "unknown" keeps the configured base filter, as it was before the probe
+    # existed; a test that wants an answer stubs it. Its cache is emptied too.
+    try:
+        from backend.ticket_ingestion import pr_monitor
+    except Exception:  # noqa: BLE001
+        pr_monitor = None
+    if pr_monitor is not None:
+
+        async def _unknown(self, repo, branch):
+            return None
+
+        monkeypatch.setattr(pr_monitor.PRMonitor, "_branch_exists", _unknown)
+        monkeypatch.setattr(pr_monitor, "_BASE_SEEN", {})
     yield
     repo_base.forget()
 

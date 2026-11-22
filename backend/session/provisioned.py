@@ -432,7 +432,8 @@ def settle_base_branch(settings: ProvisionSettings) -> ProvisionSettings:
     empty remote) keeps the candidate: the clone path already falls back to
     the remote's default branch. Mutates and returns ``settings``; blocking
     (at most one cached ``ls-remote``)."""
-    if settings.base_source == _repo_base.SOURCE_REPO:
+    source = str(getattr(settings, "base_source", "") or "")
+    if source == _repo_base.SOURCE_REPO or not getattr(settings, "repo_url", ""):
         return settings
     location = str(settings.repo_url)
     try:
@@ -441,15 +442,18 @@ def settle_base_branch(settings: ProvisionSettings) -> ProvisionSettings:
             location = str(base_dir)
     except Exception:  # noqa: BLE001
         pass
-    flat = settings.base_branch if settings.base_source == "setting" else ""
+    flat = settings.base_branch if source == _repo_base.SOURCE_SETTING else ""
     try:
         choice = _repo_base.resolve(location, "base", per_repo="", flat=flat)
     except Exception:  # noqa: BLE001 — never block a cut on the probe
         return settings
     if choice.branch:
         settings.base_branch = choice.branch
-        settings.base_source = choice.source
-        settings.base_note = choice.note
+        try:
+            settings.base_source = choice.source
+            settings.base_note = choice.note
+        except AttributeError:  # a frozen / slotted stand-in: the branch is what counts
+            pass
         if choice.note:
             _logger.info("provision %s: %s", settings.repo_url, choice.note)
     return settings
