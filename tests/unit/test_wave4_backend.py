@@ -186,6 +186,9 @@ def test_base_branch_configured_only_when_repo_matches(tmp_path, monkeypatch):
     matching = _init_repo(tmp_path / "match", branch="trunk")
     _git("remote", "add", "origin", str(src), cwd=str(matching))
     _git("fetch", "-q", "origin", cwd=str(matching))
+    # git >= 2.48's fetch creates origin/HEAD (followRemoteHEAD=create): the
+    # "no origin/HEAD" case this test is about is made explicitly.
+    _git("remote", "set-head", "origin", "--delete", cwd=str(matching))
     other = _init_repo(tmp_path / "other", branch="trunk")
     _git("remote", "add", "origin", str(tmp_path / "elsewhere"), cwd=str(other))
 

@@ -63,7 +63,11 @@ def _remote(tmp_path: Path, *branches: str, head: str = "main") -> Path:
 
 def _checkout(tmp_path: Path, bare: Path, *, origin_head: bool = True) -> Path:
     """A clone of ``bare``; without ``origin_head`` its origin/HEAD is unset
-    (a ``git remote add`` + fetch checkout, the case that asks the remote)."""
+    (a ``git remote add`` + fetch checkout, the case that asks the remote).
+
+    git >= 2.48 makes ``fetch`` create origin/HEAD itself
+    (``remote.<name>.followRemoteHEAD`` defaults to "create"), so the unset
+    case is made explicitly rather than relied on from the git version."""
     wt = tmp_path / "wt"
     if origin_head:
         _git("clone", "-q", str(bare), str(wt))
@@ -71,6 +75,7 @@ def _checkout(tmp_path: Path, bare: Path, *, origin_head: bool = True) -> Path:
         _git("init", "-q", "-b", "work", str(wt))
         _git("remote", "add", "origin", str(bare), cwd=wt)
         _git("fetch", "-q", "origin", cwd=wt)
+        _git("remote", "set-head", "origin", "--delete", cwd=wt)
     return wt
 
 
