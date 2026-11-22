@@ -21,6 +21,7 @@ import threading
 import time
 from typing import Dict, Iterator, Optional, Tuple
 
+from backend import gitutil
 from backend.session.git.util import _exit_error
 
 __all__ = [
@@ -80,8 +81,11 @@ def scratch_index_env(
     env.pop("GIT_INDEX_FILE", None)
     env.pop("GIT_TEST_SPLIT_INDEX", None)
     env["GIT_OPTIONAL_LOCKS"] = "0"
+    argv, env = gitutil.guarded(
+        ["git", "-C", worktree_path, "rev-parse", "--git-path", "index"], env
+    )
     cp = subprocess.run(
-        ["git", "-C", worktree_path, "rev-parse", "--git-path", "index"],
+        argv,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
@@ -148,9 +152,10 @@ def _scratch_git(worktree_path: str, *args: str) -> str:
     in ``run_git_command``'s Go format (``git command failed: <out> (<err>)``).
     """
     with scratch_index_env(worktree_path) as env:
+        argv, env = gitutil.guarded(["git", "-C", worktree_path, *args], env)
         try:
             cp = subprocess.run(
-                ["git", "-C", worktree_path, *args],
+                argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,

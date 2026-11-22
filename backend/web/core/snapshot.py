@@ -157,6 +157,18 @@ def _diff_stat_ttl() -> float:
 # Fingerprinting stats every dirty/untracked path; past this many, skip it and
 # fall back to plain TTL caching (a pathological status listing would cost
 # more to stat than it saves).
+
+
+def _git_run(argv, **kw):
+    """``subprocess.run`` of a ``git -C <wt> …`` probe, hardened when the
+    worktree is a folder that arrived from another device
+    (:func:`backend.gitutil.guarded`)."""
+    from backend import gitutil
+
+    argv, env = gitutil.guarded(argv, kw.pop("env", None))
+    return subprocess.run(argv, env=env, **kw)
+
+
 _FP_MAX_PATHS = 5000
 
 
@@ -169,7 +181,7 @@ def _worktree_fingerprint(wt: str, base_ref: str) -> Optional[str]:
     pair costs seconds. ``None`` = can't fingerprint (git trouble / too many
     paths) — the caller then falls back to plain TTL caching."""
     try:
-        head = subprocess.run(
+        head = _git_run(
             ["git", "-C", wt, "rev-parse", "HEAD"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -177,7 +189,7 @@ def _worktree_fingerprint(wt: str, base_ref: str) -> Optional[str]:
         )
         if head.returncode != 0:
             return None
-        st = subprocess.run(
+        st = _git_run(
             [
                 "git",
                 "--no-optional-locks",  # a probe must not refresh their index
@@ -243,7 +255,7 @@ def _session_fork_point(inst, wt: str) -> str:
     if base and not base.startswith("-"):
         refs = ["refs/remotes/origin/" + base, "refs/heads/" + base]
     for ref in refs:
-        cp = subprocess.run(
+        cp = _git_run(
             ["git", "-C", wt, "merge-base", "HEAD", ref],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -310,7 +322,7 @@ def _session_diff_stat(inst) -> Optional[dict]:
             _DIFF_STAT_CACHE[wt] = (now + ttl, cached[1], fp)
             return cached[1]
         with scratch_index_env(wt) as env:
-            cp = subprocess.run(
+            cp = _git_run(
                 ["git", "-C", wt, "diff", "--shortstat", base_ref],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -321,7 +333,7 @@ def _session_diff_stat(inst) -> Optional[dict]:
                 _DIFF_STAT_CACHE[wt] = (now + ttl, None, None)
                 return None
             result = _parse_shortstat(cp.stdout.decode("utf-8", "replace").strip())
-            cp = subprocess.run(
+            cp = _git_run(
                 ["git", "-C", wt, "diff", "--shortstat", "HEAD"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,

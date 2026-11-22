@@ -111,6 +111,9 @@ TOOL_NAMES = (
     "add_todo",
     "list_todos",
     "update_todo",
+    "list_devices",
+    "send_session",
+    "send_files",
 )
 
 #: First line of a launch prompt decorated with ``split`` — also how

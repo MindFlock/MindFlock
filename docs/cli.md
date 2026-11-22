@@ -694,6 +694,45 @@ folder and branch keep their names. Prints `renamed OLD -> NEW`; a name
 another session has, or one a title cannot be, is an error (exit 1). `OLD`
 resolves like `close`.
 
+### `mindflock send TITLE DEVICE [--note TEXT] [--via auto|git|bundle] [--path PATH]…`
+
+Sends a session to another of your devices
+(`POST /api/instances/{title}/send-to-device`, the MCP's `send_session`):
+pushes its branch (never a force), starts a session on `DEVICE` on that same
+branch in its checkout of the repository, and gives it a brief as its first
+prompt — what the session was for, its commits and changed files, its last
+reply, and `--note`. When `DEVICE` has no checkout of the repository (or
+cannot reach its remote, or there is none) the branch goes instead as a
+standalone git bundle unpacked into a new repository in that device's inbox,
+and the session starts there; `--via git` refuses instead, `--via bundle`
+always bundles, and `--path tripwire` (repeatable) sends only that folder as
+a bundle. Only git and the brief travel: no logins, no chat history, no
+secrets. Prints `sent TITLE -> DEVICE::TITLE (branch B, via git|bundle)`,
+then the one-line `how`, and any caveat on stderr. Uncommitted changes, a
+device that is asleep or not one of yours, or a refused push is an error
+with the next step (exit 1); nothing is pushed for a refusal found before
+the push. `mindflock devices` lists the device names (matched
+case-insensitively); `TITLE` resolves like `close`. See
+[devices.md](devices.md#send-a-session-to-another-device).
+
+### `mindflock send-files DEVICE PATH… [--from TITLE] [--note TEXT] [--to-session NAME] [--include-secrets]`
+
+Sends files or folders from a session's worktree to another of your devices
+(`POST /api/instances/{title}/send-files`, the MCP's `send_files`). The
+session is `--from TITLE`, else the one whose folder holds the current
+directory; relative `PATH`s are resolved from the current directory and must
+be inside that worktree. They land in a new folder in `DEVICE`'s inbox,
+`<mindflock home>/inbox/<this device>/<id>/`, SHA-256 checked, never run,
+executable bits removed. Git-ignored files, symlinks, `.git`, agent
+config/logins and secrets (`.env`, keys, credentials) are left out and
+listed; `--include-secrets` sends secrets only when `transfers.allow_secrets`
+is on. `--to-session NAME` tells that session on `DEVICE` what arrived;
+`--note` without it starts a session there in that folder with the note as
+its task. Prints `sent N files from TITLE -> DEVICE:<folder>`, each file's
+SHA-256 (first 16 hex), the whole transfer's SHA-256, then what was left
+out, uncommitted or stripped (stderr). A refusal is an error with the next
+step (exit 1). See [devices.md](devices.md#send-files-to-another-device).
+
 ### `mindflock open TITLE`
 
 Open (or focus) the session's workspace in the configured IDE

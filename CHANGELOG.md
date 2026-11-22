@@ -238,6 +238,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `describe_flight`'s stop lines: "cannot fail (on_fail unused)"). The stop
   dialog reads `can_fail` instead of a hard-coded list, which stays as the
   fallback for an older server or a peer.
+### Added
+
+- **Send a session to another of your devices.** "Send tripwire to my Mac"
+  is one call: the MCP's new `send_session` (and `list_devices` to see the
+  names; 42 tools now), `mindflock send TITLE DEVICE [--note …]`, or `POST
+  /api/instances/{title}/send-to-device`. MindFlock pushes the session's
+  branch (never a force), starts a session on that device ON the same branch
+  in its checkout of the repository, and gives it a brief as its first
+  prompt — what the session was for, its commits and changed files, its last
+  reply, your note. Only git and that brief travel: no logins, no chat
+  history. Uncommitted work, a device that is asleep or not one of yours, a
+  repository the device has no checkout of (with the `git clone` to run) and
+  a refused push are refused in a plain sentence, before anything is pushed
+  where possible. An agent may send itself or a session it manages. A new
+  `GET /api/repos/find?url=` tells which local folder is a given repository.
+  A Send button in the app is not part of this yet.
+- **Send files, and send a session to a device without the repository.**
+  The MCP's new `send_files` (43 tools now), `mindflock send-files DEVICE
+  PATH…` or `POST /api/instances/{title}/send-files` sends files or folders
+  from a session's worktree to another of your devices over the same
+  authenticated device link: a manifest with a SHA-256 per file and for the
+  whole transfer, then 4 MB chunks the receiver confirms, verified before
+  anything appears in that device's inbox (`~/.mindflock/inbox/<from>/<id>/`,
+  a new folder every time, files `0644`, never run). Left out and listed:
+  git-ignored files, symlinks, `.git`, agent logins/config/transcripts,
+  credential stores, and — unless `include_secrets` and the new
+  `transfers.allow_secrets` setting — `.env*`, keys and credential files.
+  `to_session` tells a session there what arrived; a `note` alone starts a
+  session in that folder. `send_session` (and `mindflock send`) no longer
+  refuses a device without a checkout: the branch goes as a standalone git
+  bundle — a snapshot of where it started plus its commits, or just one
+  folder with `paths` — verified and unpacked into a new repository there
+  with hooks off, and the session starts in it (`via`: `auto` · `git` ·
+  `bundle`; the answer says which way it went). Device names match
+  case-insensitively, with "did you mean". New machine-local settings group
+  `transfers` (limits, inbox quota, keep days, `allow_secrets`).
+
+### Security
+
+- **Send files / bundles hardened after an independent review.** The
+  receiving device refuses a folder laid out like a git repository (`HEAD`
+  beside `objects`/`refs`/`config`, at any depth or as the transfer itself —
+  a plain `git status` there could run its `core.fsmonitor`), Windows
+  look-alikes of `.git` (`.git.`, `GIT~1`, `a:b` streams) and bidi/invisible
+  names, in sent files and in a bundle's tree alike; every git MindFlock
+  runs in an inbox folder goes with `safe.bareRepository=explicit`, no
+  fsmonitor, no hooks and no discovery above the inbox. A bundle leaves
+  secrets out of every commit's tree, not just the tip (a `.env` committed
+  then deleted no longer survives in history) and honours
+  `.secrets.baseline`. The inbox quota counts open transfers at their
+  declared size, caps open transfers (8, 4 per device), rechecks on every
+  chunk, drops stale ones on a timer, and checks a bundle's checked-out size
+  before unpacking it. File, branch, device and session names reach an
+  agent's prompt as one escaped line each, and the prompt says received
+  files are untrusted. Also: the ignore filter fails closed and treats names
+  literally, a file is read without following a symlink at any folder,
+  `.env.dist`/`*.template`/`*.bak` copies count as secrets, `finish` no
+  longer holds the inbox lock while hashing, a non-ASCII bearer is a clean
+  401, and the record says "claims to be" unless the link identified the
+  sender.
 
 ## [0.14.25] - 2026-11-20
 

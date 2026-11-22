@@ -29,7 +29,7 @@ from typing import List, Optional, Tuple
 
 import pyperclip
 
-from backend import log
+from backend import gitutil, log
 from backend.session import git
 from backend.session import tmux
 from backend.session.storage import (
@@ -1507,11 +1507,15 @@ class _InPlaceWorktree(git.GitWorktree):
     def _detect(self) -> None:
         d = self.worktreePath
         try:
+            argv, env = gitutil.guarded(
+                ["git", "-C", d, "rev-parse", "--abbrev-ref", "HEAD"]
+            )
             r = subprocess.run(
-                ["git", "-C", d, "rev-parse", "--abbrev-ref", "HEAD"],
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=_GIT_PROBE_TIMEOUT_SECONDS,
+                env=env,
             )
             if r.returncode == 0 and r.stdout.strip():
                 self.branchName = r.stdout.strip()
@@ -1519,11 +1523,13 @@ class _InPlaceWorktree(git.GitWorktree):
             pass
         if not self.baseCommitSHA:
             try:
+                argv, env = gitutil.guarded(["git", "-C", d, "rev-parse", "HEAD"])
                 r = subprocess.run(
-                    ["git", "-C", d, "rev-parse", "HEAD"],
+                    argv,
                     capture_output=True,
                     text=True,
                     timeout=_GIT_PROBE_TIMEOUT_SECONDS,
+                    env=env,
                 )
                 if r.returncode == 0 and r.stdout.strip():
                     self.baseCommitSHA = r.stdout.strip()

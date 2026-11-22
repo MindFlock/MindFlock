@@ -849,6 +849,63 @@ def connected_devices() -> List[dict]:
     return [dict(d) for d in _DEVICES.values() if _connected(d)]
 
 
+def find_device(name: str) -> Optional[dict]:
+    """A snapshot of the discovered device called ``name`` — its key, else
+    its host name, case-insensitively — or None."""
+    want = str(name or "").strip().lower()
+    if not want:
+        return None
+    for dev in _DEVICES.values():
+        if str(dev.get("key") or "").lower() == want:
+            return dict(dev)
+    for dev in _DEVICES.values():
+        if str(dev.get("host") or "").lower() == want:
+            return dict(dev)
+    return None
+
+
+def device_for_ip(ip: str) -> str:
+    """The key of the discovered device whose tailnet address ``ip`` is, or
+    ``""``. A tailnet source address is bound to its node's WireGuard key,
+    so this names the sender by what the LINK says, not what it claims."""
+    ip = str(ip or "").strip()
+    if not ip:
+        return ""
+    for dev in list(_DEVICES.values()):
+        known = {a for a in [dev.get("ip")] + list(dev.get("ips") or []) if a}
+        if ip in known:
+            return str(dev.get("key") or "")
+    return ""
+
+
+def is_connected(dev: dict) -> bool:
+    """:func:`_connected` for a snapshot: drivable from here right now."""
+    return _connected(dev)
+
+
+def is_linked(dev: dict) -> bool:
+    """Whether ``dev`` is one of the person's OWN linked devices: on this
+    device's "Your devices" roster and saying so itself, or paired by a
+    pasted token. A gate-off MindFlock that merely shares the tailnet is
+    drivable (:func:`_connected`) but not linked — what carries a session's
+    work across asks for this."""
+    key = str(dev.get("key") or "")
+    return bool(token_for(key)) or (_member_device(dev) and _same_fleet(dev))
+
+
+async def refresh_instances(key: str) -> None:
+    """Re-read device ``key``'s session list now (after a create there), so
+    the next ``GET /api/instances`` already lists ``<device>::<title>``.
+    Best-effort: the mirror poll catches up otherwise."""
+    dev = _DEVICES.get(key)
+    if dev is None or aiohttp is None or not dev.get("base_url"):
+        return
+    try:
+        await _fetch_instances(dev)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _same_fleet(dev: dict) -> bool:
     """Whether ``dev``'s hello names this device's fleet (both non-empty)."""
     mine = _fleet_id()
@@ -933,6 +990,31 @@ async def post_json(
             dev["base_url"] + path,
             json=body,
             headers=_headers_for(dev["key"], auth=auth, bearer=bearer),
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            return resp.status, await _read_json(resp)
+    except Exception:  # noqa: BLE001 — unreachable / timeout
+        return 0, None
+
+
+async def put_bytes(
+    dev: dict, path: str, data: bytes, timeout: float = 60.0
+) -> Tuple[int, object]:
+    """``(status, body)`` for ``PUT <path>`` with a raw ``data`` body on a
+    device, with this device's credential for it (as :func:`post_json`);
+    ``(0, None)`` when it can't be reached. One chunk of a file transfer
+    (:mod:`backend.web.core.send_files`) — the same authenticated link every
+    other device call rides."""
+    if aiohttp is None or not dev.get("base_url"):
+        return 0, None
+    session = await _http_session()
+    headers = _headers_for(dev["key"])
+    headers["Content-Type"] = "application/octet-stream"
+    try:
+        async with session.put(
+            dev["base_url"] + path,
+            data=data,
+            headers=headers,
             timeout=aiohttp.ClientTimeout(total=timeout),
         ) as resp:
             return resp.status, await _read_json(resp)

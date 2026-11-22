@@ -541,6 +541,23 @@ pass off whatever the mode says.
 | `mode` | `auto` \| `ask` \| `off` \| `""` | `auto`: a background pass (15 min after start, then every 6 h) removes the provably safe leftovers by itself, at most 25 per pass. `ask` (and `""`, never chosen): the pass only looks, and the first time the safe set is worth reclaiming (≥ 2 GB or ≥ 10 items) it says so ONCE (`system.cleanup_available`, the bell's "Leftover worktrees can be cleaned up" rule); it says so again only after something has been collected and a new pile has built up. `off`: no pass, no notice — the Settings list and `mindflock clean` still work on demand |
 | `after_days` | integer 1–3650 (unset = 14) | How long a worktree must sit unused before it can count as safe. "Used" is read only from signals a read cannot move: the newest entry of the worktree's own HEAD reflog (a commit, checkout, reset, the `worktree add` itself; else its HEAD commit's time), its creation record, and MindFlock's session records (a close, a session's last update). Never the folder's or the git index's mtime: anyone's `git status` rewrites the index, and that would reset the clock on every scan. Work that never reached a commit shows as uncommitted and keeps the worktree anyway. A session closed within this many days keeps its folder, since it can still be reopened |
 
+### Transfers (`transfers`, settings store only)
+
+The `transfers` group of `~/.mindflock/settings.json` (`TransfersSettings`
+in `backend/config/settings.py`): what THIS device sends to and accepts from
+your other devices — `send_files` and `send_session`'s git bundle
+([devices.md](devices.md#send-files-to-another-device)). Machine-local:
+never synced. Owner-only through `POST /api/settings` (`{"transfers":
+{"allow_secrets": true}}`); there is no Settings screen for it yet.
+
+| Key | Values | Notes |
+|---|---|---|
+| `max_mb` | integer 1–65536 (unset = 512) | The most one transfer may carry, in MB. The sender checks its own value before anything leaves (a bundle: its size once built); the receiver checks ITS value on the manifest |
+| `max_files` | integer (unset = 5000) | The most files one transfer may carry, on both sides alike |
+| `inbox_mb` | integer (unset = 4096) | This device's inbox quota (`~/.mindflock/inbox`; every unfinished transfer counts at its declared size, and a bundle's unpacked checkout counts too). A transfer, chunk or bundle checkout that would go past it is refused (`inbox_full`) |
+| `keep_days` | integer 1–3650 (unset = 14) | A received transfer no live session works in is removed after this many days — checked on the next receive. An unfinished transfer goes after 6 h, or 1 h with nothing written (also on a 5-minute timer) |
+| `allow_secrets` | bool (default false) | Whether a sender on this device may pass `include_secrets` at all. Off: `.env*`, keys, certificates, credential files and the files `.secrets.baseline` names are left out of every send (and of every commit of a bundle). A name-based guardrail, not a content scan. Never covers `.git`, agent login/config/transcripts or credential stores — those are never sent |
+
 ### Auth profiles (`[auth_profiles]`, settings store only)
 
 Which identity a session's CLI runs as — a second Claude subscription, an API
@@ -769,6 +786,12 @@ server merges on save so multiple processes can share it.
 - `worktrees/` — worktree-mode session directories,
   `<sanitized-branch>_<hex-timestamp>`.
 - `recently_closed.json` — closed-but-reopenable sessions (cap 50).
+- `inbox/` — files and session work received from your other devices
+  (`core/inbox.py`): `inbox/<from-device>/<id>/…` per transfer (never
+  overwritten, never run; files `0644`) with its record `<id>.json`, and
+  unfinished ones in `inbox/.partial/<id>/` (manifest `transfer.json`, data
+  under `data/`). A git bundle is unpacked into `inbox/<from-device>/<id>/
+  <name>/`. Quota `transfers.inbox_mb`; pruned after `transfers.keep_days`.
 - `red_zones.json` — red zones per repo (keyed by the normalized `origin`) and
   per worktree, per-worktree waivers, each repo's Plan-first flag (applied
   to intake starts of CLIs that support plans) and companion patterns

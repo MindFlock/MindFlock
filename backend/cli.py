@@ -414,6 +414,71 @@ def _build_parser() -> argparse.ArgumentParser:
     rename_.add_argument("old", metavar="OLD")
     rename_.add_argument("new", metavar="NEW")
 
+    send_ = sub.add_parser(
+        "send",
+        parents=[server_opts],
+        help="send a session to another of your devices (push, start it there)",
+        description="Carry a session's work to another of your devices: push "
+        "its branch (never a force), start a session on DEVICE on that same "
+        "branch in its checkout of the repo, and give it a brief as its first "
+        "prompt (what the session was for, its commits, its last reply, your "
+        "--note). Only git and the brief travel — no logins, no chat history. "
+        "Uncommitted changes are refused: commit first. TITLE may be any "
+        "unambiguous prefix; `mindflock devices` lists DEVICE names.",
+    )
+    send_.add_argument("title", metavar="TITLE")
+    send_.add_argument("device", metavar="DEVICE")
+    send_.add_argument("--note", default="", help="what the session should do there")
+    send_.add_argument(
+        "--via",
+        choices=("auto", "git", "bundle"),
+        default="auto",
+        help="auto (default): push when DEVICE has a checkout of the repo, "
+        "else carry the branch as a git bundle; git / bundle force one",
+    )
+    send_.add_argument(
+        "--path",
+        action="append",
+        default=[],
+        dest="paths",
+        metavar="PATH",
+        help="send only this repo path, as a bundle (repeatable; one folder "
+        "becomes the new repository's root)",
+    )
+
+    sendf_ = sub.add_parser(
+        "send-files",
+        parents=[server_opts],
+        help="send files or folders to another of your devices' inbox",
+        description="Send files or folders from a session's worktree to "
+        "another of your devices over the device link. They land in a new "
+        "folder in that device's inbox (<mindflock home>/inbox/<this device>/"
+        "<id>/), SHA-256 checked, never run, executable bits removed. "
+        "Git-ignored files, symlinks, .git, agent config/logins and secrets "
+        "(.env, keys, credentials) are left out and listed. With --note and "
+        "no --to-session a session starts there in that folder with the note "
+        "as its task. `mindflock devices` lists DEVICE names.",
+    )
+    sendf_.add_argument("device", metavar="DEVICE")
+    sendf_.add_argument("paths", metavar="PATH", nargs="+")
+    sendf_.add_argument(
+        "--from",
+        dest="title",
+        default="",
+        metavar="TITLE",
+        help="the session to send from (default: the one whose folder holds "
+        "the current directory)",
+    )
+    sendf_.add_argument("--note", default="", help="what they are for there")
+    sendf_.add_argument(
+        "--to-session", default="", help="a session on DEVICE to tell what arrived"
+    )
+    sendf_.add_argument(
+        "--include-secrets",
+        action="store_true",
+        help="also send .env/keys/credentials (needs transfers.allow_secrets)",
+    )
+
     open_ = sub.add_parser(
         "open",
         parents=[server_opts],
@@ -1090,6 +1155,8 @@ _HELP_GROUPS = (
             "sleep",
             "wake",
             "rename",
+            "send",
+            "send-files",
             "close",
             "delete",
             "rm",
@@ -1953,6 +2020,127 @@ def _cmd_rename(args: argparse.Namespace) -> int:
         print("%s is already called that" % title)
     else:
         print("renamed %s -> %s" % (title, res.get("title", args.new)))
+    return 0
+
+
+def _cmd_send(args: argparse.Namespace) -> int:
+    """``send TITLE DEVICE``: ``POST /api/instances/{title}/send-to-device``."""
+    base = client.discover(args.host, args.port)
+    title = str(
+        _resolve_title(client.get(base, "/api/instances") or [], args.title)["title"]
+    )
+    try:
+        res = (
+            client.post(
+                base,
+                "/api/instances/%s/send-to-device" % _quote_title(title),
+                {
+                    "device": args.device,
+                    "note": args.note or "",
+                    "via": getattr(args, "via", "auto") or "auto",
+                    "paths": list(getattr(args, "paths", None) or []),
+                },
+                timeout=1800.0,
+            )
+            or {}
+        )
+    except client.ApiError as err:
+        print("error: could not send %s: %s" % (title, err.message), file=sys.stderr)
+        return 1
+    print(
+        "sent %s -> %s (branch %s, via %s)"
+        % (title, res.get("title", "?"), res.get("branch", "?"), res.get("via", "git"))
+    )
+    if res.get("how"):
+        print("  %s" % res["how"])
+    for note in res.get("caveats") or []:
+        print("  note: %s" % note, file=sys.stderr)
+    return 0
+
+
+def _title_for_cwd(instances: List[dict]) -> str:
+    """The session whose folder holds the current directory (deepest)."""
+    here = os.path.realpath(os.getcwd())
+    best, depth = "", -1
+    for inst in instances:
+        if not isinstance(inst, dict) or "::" in str(inst.get("title") or ""):
+            continue
+        folder = str(inst.get("folder") or "")
+        if not folder:
+            continue
+        f = os.path.realpath(folder)
+        if (here == f or here.startswith(f + os.sep)) and len(f) > depth:
+            best, depth = str(inst.get("title") or ""), len(f)
+    return best
+
+
+def _cmd_send_files(args: argparse.Namespace) -> int:
+    """``send-files DEVICE PATH…``: ``POST /api/instances/{title}/send-files``."""
+    base = client.discover(args.host, args.port)
+    instances = client.get(base, "/api/instances") or []
+    if args.title:
+        title = str(_resolve_title(instances, args.title)["title"])
+    else:
+        title = _title_for_cwd(instances)
+        if not title:
+            print(
+                "error: run this inside a session's folder, or name it with --from TITLE",
+                file=sys.stderr,
+            )
+            return 1
+    paths = [p if os.path.isabs(p) else os.path.abspath(p) for p in args.paths]
+    try:
+        res = (
+            client.post(
+                base,
+                "/api/instances/%s/send-files" % _quote_title(title),
+                {
+                    "device": args.device,
+                    "paths": paths,
+                    "note": args.note or "",
+                    "to_session": args.to_session or "",
+                    "include_secrets": bool(args.include_secrets),
+                },
+                timeout=1800.0,
+            )
+            or {}
+        )
+    except client.ApiError as err:
+        print(
+            "error: could not send from %s: %s" % (title, err.message), file=sys.stderr
+        )
+        return 1
+    files = res.get("files") or []
+    print(
+        "sent %d file%s from %s -> %s:%s"
+        % (
+            len(files),
+            "" if len(files) == 1 else "s",
+            title,
+            res.get("device", "?"),
+            res.get("path", "?"),
+        )
+    )
+    for f in files[:50]:
+        print("  %s  %s" % (str(f.get("sha256", ""))[:16], f.get("path")))
+    if len(files) > 50:
+        print("  … and %d more" % (len(files) - 50))
+    print("  total sha256 %s" % res.get("total_sha256", "?"))
+    for s in res.get("skipped") or []:
+        print("  left out: %s (%s)" % (s.get("path"), s.get("why")), file=sys.stderr)
+    if res.get("uncommitted"):
+        print("  uncommitted: %s" % ", ".join(res["uncommitted"][:20]), file=sys.stderr)
+    if res.get("exec_stripped"):
+        print(
+            "  executable bit removed there: %s" % ", ".join(res["exec_stripped"][:20]),
+            file=sys.stderr,
+        )
+    if res.get("messaged"):
+        print("  told %s" % res["messaged"])
+    if res.get("title"):
+        print("  started %s" % res["title"])
+    for note in res.get("caveats") or []:
+        print("  note: %s" % note, file=sys.stderr)
     return 0
 
 
@@ -4130,6 +4318,8 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "sleep": _cmd_sleep_wake,
     "wake": _cmd_sleep_wake,
     "rename": _cmd_rename,
+    "send": _cmd_send,
+    "send-files": _cmd_send_files,
     "open": _cmd_open,
     "events": _cmd_events,
     "msg": _cmd_msg,
