@@ -7297,6 +7297,25 @@ labels above the inputs.
   The **Make reachable** switch here is the one Tailscale-mode control in the
   app (Your phone and Security point at it).
 
+  Without Tailscale, **Add a device → It isn't on my network**
+  (`DevicesFarInvite.tsx`) shows a long one-time `mfd1:` code with Copy, a QR,
+  its countdown and a **safety number**; with Reach my devices from anywhere
+  off it first asks inline to turn it on. On the new computer the same
+  screen's **Paste a code** box recognises that code, says it joins through
+  the other computer's private tunnel, and shows one box, ticked by default,
+  *Let my devices reach this computer from anywhere*. Join first opens an
+  inline confirm (`devices-far-confirm`): the code's maker will be able to run
+  agents here and its settings replace these; the safety number to compare;
+  the group this computer would leave, by name. The join line then reads
+  "Joined X. Finishing setup…" and ends with what is left, if anything
+  (GitHub sign-in missing here); the inviter shows "X joined. It can reach
+  this computer already …" until X saved its address. A code used without
+  the join finishing shows on the inviter as a red row
+  (`devices-pair-alerts`) with **Change key** and **It was me**, and in the
+  bell (`device.pair_unfinished`); a device pairing right now shows as
+  "pairing now"
+  ([devices-anywhere.md §7](devices-anywhere.md#7-adding-a-new-device-without-tailscale)).
+
   When the other members do something this one doesn't, **Match my other
   devices** offers one confirm ("reachable on Tailscale + phone link
   “mindflock”"): it saves the same reachable settings plus

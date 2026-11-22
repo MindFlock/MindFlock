@@ -298,6 +298,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer holds the inbox lock while hashing, a non-ASCII bearer is a clean
   401, and the record says "claims to be" unless the link identified the
   sender.
+### Added
+
+- **Add a new device without Tailscale.** On the first computer, Settings →
+  Your devices → Add a device → **It isn't on my network** shows a long
+  one-time code (copy it, or scan its QR); on the new computer, paste it into
+  "Paste a code" on the same screen and Join. That's all: the new computer
+  needs no Tailscale, no GitHub sign-in and no setup first. The code works
+  through the first computer's private tunnel (the flow offers to turn
+  **Reach my devices from anywhere** on there), lasts 10 minutes, works once,
+  and dies after 5 wrong tries. The new computer checks the first one's key
+  fingerprint from the code before it sends anything, both sides prove the
+  code without sending it, and the first computer adds the new one only once
+  it has really joined. Before joining, the new computer says plainly what
+  the code's maker gets (it can run agents here, and its settings replace
+  these) and asks, with a **safety number** to compare against the one shown
+  next to the code on your own computer; if this computer is already in a
+  group with other devices, it names them and says it leaves them. A
+  ticked-by-default box on the new computer turns the switch (and remote
+  control) on there too, so your devices keep reaching each other; unticked,
+  nothing is turned on. Settings sync then brings the GitHub sign-in it needs
+  to leave its own address. The join line says "Finishing setup…"
+  meanwhile, and what to do if GitHub isn't signed in there. `mindflock join`
+  does the same from a terminal — it asks for the code without echoing it
+  (or reads it from stdin), then the same question unless `--yes`.
+  **A used code never goes unnoticed:** the first computer records the new
+  one as pending before the key leaves, and if a code is used but the join
+  doesn't finish — or two computers use the same code — it raises a loud
+  alarm (Your devices, the bell, a phone push) with a one-click **Change
+  key** for all your devices; the second computer is told "this code was
+  already used". Each code gets its own address on the private tunnel, which
+  stops working when the code is replaced, cancelled or expires; a lost last
+  message is reconciled so both computers agree whether the join happened;
+  device names and DNS names from a joiner are cleaned (no bidi or
+  zero-width characters). Design and threat model:
+  `docs/devices-anywhere.md` §7.
+- **Reach my devices from anywhere (no Tailscale needed).** A new switch on
+  Settings → Your devices, off by default. Your computers that are already in
+  one group reach each other without Tailscale and without any MindFlock
+  server:
+  - **The tunnel.** Each device runs a private Cloudflare quick tunnel. It
+    uses the same pinned-key TLS 1.3 inside a WebSocket that People links
+    use, plus a handshake where both ends prove they hold the group's key,
+    so Cloudflare carries bytes it can't read.
+  - **The address book.** Each device leaves its current address in a
+    private repo, `mindflock-devices`, in your own GitHub account,
+    encrypted and authenticated with a key derived from the group's key
+    (AES-256-GCM, HKDF). It uses the GitHub sign-in you already have.
+  - **Path choice.** Tailscale and your own network are tried first; the
+    tunnel only for a device they can't reach. The roster, the session
+    list, device forwarding and settings sync all work over it.
+  - **Turning it off** stops the tunnel and deletes this device's record.
+  - **Status.** The line under the switch says what is happening (on,
+    starting, couldn't start the tunnel and why, or a missing GitHub
+    permission with its remedy), with Retry, or the one-click cloudflared
+    install. `mindflock doctor` reports each piece.
+
+  Design and threat model: `docs/devices-anywhere.md`. Requests that come
+  through the tunnel are always held to the access gate as if it were on,
+  even in local mode, and never count as "this machine". Not yet: a stable
+  tunnel name.
+
+  Hardened after an independent security review: a tunnel stream's mark on
+  its loopback port is counted, so a closed stream can't unmark a live one
+  that reused the port; only the switch's own route (on the device itself)
+  turns it on, never the generic settings save; cloudflared dies with the
+  server (Linux) and a stale one is reaped at start by exact pid, start
+  time and arguments; the local proxies refuse anything a relay
+  forwarded; GitHub redirects are never followed and the repo must be
+  yours and private at every write; the tunnel's origin must be this
+  server's own, known port; open streams end when a device is removed.
 
 ## [0.14.25] - 2026-11-20
 

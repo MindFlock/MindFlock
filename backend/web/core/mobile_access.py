@@ -48,6 +48,14 @@ def _server_port() -> int:
     (``UVICORN_PORT`` / ``PORT``) and the ``--port`` CLI arg, defaulting to the
     8765 used in the module docstring's run command.
     """
+    return server_port_known() or 8765
+
+
+def server_port_known() -> Optional[int]:
+    """The port this server was told to bind — ``UVICORN_PORT`` (``run.py``
+    always exports the one it resolved), ``PORT`` or ``--port`` — or None
+    when nothing says (no 8765 guess: a caller that must not be wrong, like
+    the device tunnel's origin, refuses instead)."""
     for var in ("UVICORN_PORT", "PORT"):
         v = os.environ.get(var, "")
         if v.isdigit():
@@ -60,7 +68,7 @@ def _server_port() -> int:
             tail = a.split("=", 1)[1]
             if tail.isdigit():
                 return int(tail)
-    return 8765
+    return None
 
 
 def _tailscale_info() -> tuple:

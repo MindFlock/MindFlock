@@ -1273,7 +1273,9 @@ export interface FleetRequest {
 
 /** This device's own outgoing join attempt (one at a time). */
 export interface FleetJoin {
-  state: "idle" | "waiting" | "joining" | "joined" | "denied" | "expired" | "error";
+  /** "finishing": joined with a long code; reaching the other computer
+   * through its private tunnel and syncing settings from it. */
+  state: "idle" | "waiting" | "joining" | "finishing" | "joined" | "denied" | "expired" | "error";
   device: string;
   host: string;
   code: string;
@@ -1282,6 +1284,11 @@ export interface FleetJoin {
   /** Set once joined: false = this device is local-only, so the others can't
    * reach it (Make reachable). */
   self_reachable?: boolean;
+  /** "anywhere": joined with a long code through the other computer's
+   * private tunnel (no Tailscale). */
+  via?: string;
+  /** What is left to do after joining, in plain words ("" when nothing). */
+  note?: string;
 }
 
 /** A MindFlock on the tailnet that is not one of your devices (yet). */
@@ -1321,14 +1328,26 @@ export interface FleetAdmit {
   device: string;
   host: string;
   at: number;
-  state: "checking" | "reachable" | "unreachable_joiner";
+  /** "finishing": joined through this device's private tunnel; reachable
+   * from here once it saved its address (it needs GitHub sign-in there). */
+  state: "checking" | "reachable" | "unreachable_joiner" | "finishing";
   reason: string;
+  /** "anywhere": joined with a long code through the private tunnel. */
+  via?: string;
 }
 
 /** Who answers the shared phone link, per device. */
 export interface FleetPhoneLink {
   name: string;
   hosts: { key: string; host: string; self: boolean; state: "hosting" | "waiting" | "off" | "unknown" }[];
+}
+
+/** `GET /api/fleet`'s `pairing` (and `GET /api/devices/anywhere/pair-alerts`). */
+export interface FleetPairing {
+  pending: { device: string; host: string; at: number }[];
+  /** A code was used and the join didn't finish (or two computers used one):
+   * the devices' key may be with someone else — Change key answers it. */
+  alerts: { id: string; device: string; host: string; outcome: string; at: number; text: string }[];
 }
 
 export interface FleetStatus {
@@ -1344,6 +1363,9 @@ export interface FleetStatus {
   bind?: string;
   gate_on?: boolean;
   admitted?: FleetAdmit[];
+  /** A new device pairing through the tunnel right now (not a member yet),
+   * and codes used without the join finishing (docs/devices-anywhere.md §7). */
+  pairing?: FleetPairing;
   tailnet_peers?: FleetPeer[];
   /** The tailnet policy lines that open this port between your devices. */
   policy_grant?: string;

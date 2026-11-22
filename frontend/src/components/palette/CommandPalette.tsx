@@ -435,7 +435,10 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     const named = out.some((a) => fuzzyScore(query, a.label) >= 0 && fuzzyScore(query, a.label) < 1000);
     if (code.kind)
       out[named ? "push" : "unshift"]({
-        label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
+        label:
+          code.kind === "anywhere"
+            ? "Join your devices with this code"
+            : "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
         hint: code.kind === "peer" ? "another person · People" : "your devices",
         run: () => void routePastedCode(query),
       });

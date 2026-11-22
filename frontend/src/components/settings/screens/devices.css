@@ -464,3 +464,69 @@
 .devices-advanced #pair-by-token input {
   min-width: 240px;
 }
+
+/* Add a device → "It isn't on my network": the long code wraps (it is ~150
+   characters), and its QR stays dark-on-white to scan in any theme. */
+.devices-far-code {
+  font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace);
+  font-size: 13px;
+  word-break: break-all;
+  user-select: all;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.devices-far-qr {
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px;
+  width: 180px;
+  height: 180px;
+  box-sizing: border-box;
+}
+
+.devices-far-qr svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.devices-far-add {
+  margin-top: 8px;
+}
+
+.devices-far-reach {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  margin-top: 6px;
+}
+
+.devices-far-reach .set-hint {
+  flex-basis: 100%;
+}
+
+/* The safety number next to a long code: the new computer shows the same
+   one before it joins (docs/devices-anywhere.md §7). */
+.devices-far-safety {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A pairing code used without the join finishing: the text, It was me. */
+.devices-pair-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+}
+
+.devices-pair-alert p {
+  flex: 1 1 280px;
+  margin: 0;
+}
+
+#devices-pair-alerts > .test-btn {
+  margin-top: 8px;
+}

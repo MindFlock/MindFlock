@@ -77,7 +77,7 @@ export function routePastedCode(text: string): "peer" | "device" | "" {
     void joinPeerInvite(r.code);
     return "peer";
   }
-  if (r.kind === "device") {
+  if (r.kind === "device" || r.kind === "anywhere") {
     openDevicesFor({ paste: text.trim() });
     return "device";
   }

@@ -311,6 +311,14 @@ EVENT_NAMES = (
     # was removed; ``by`` the device that made the removal — the leaver for a
     # leave, "" when unknown).
     "device.removed",
+    # A pairing code (Add a device → It isn't on my network) was used — the
+    # devices' key went out to whoever used it — but the join didn't finish
+    # (they stopped, never confirmed, or this server stopped mid-way), or a
+    # second computer used the same code. Loud on purpose: if it wasn't the
+    # person, someone holds the key; the row on Your devices offers Change
+    # key (data: {"device", "host", "outcome": "aborted"|"unconfirmed"|
+    # "error"|"interrupted"|"used", "id", "detail"}). core.devices_pair.
+    "device.pair_unfinished",
     # Shared settings changed here: adopted from another of the user's devices
     # (data: {"paths": [unit ids], "from": <its device key>}) or written
     # locally through POST /api/prefs ("from": ""). For UI refetch only; no

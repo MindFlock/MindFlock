@@ -171,6 +171,7 @@ export const EXTRA_CHECKS = new Set([
   "tailscale",
   "bwrap",
   "cloudflared",
+  "devices-anywhere",
   "local-model",
   "cache-seeds",
   "tailnet-mtu",

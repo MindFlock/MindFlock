@@ -148,6 +148,7 @@ EXTRA_CHECKS = frozenset(
         "tailscale",
         "bwrap",
         "cloudflared",
+        "devices-anywhere",
         "local-model",
         "cache-seeds",
         "tailnet-mtu",

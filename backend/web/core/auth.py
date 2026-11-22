@@ -435,6 +435,21 @@ def presented_token(scope) -> bool:
     return any_token_valid(_cookies_from(headers)) or token_valid(_bearer_from(headers))
 
 
+def tunneled(scope) -> bool:
+    """Whether the request came through the device tunnel ("Reach my devices
+    from anywhere", :mod:`backend.peer.fleet_tunnel`): another of the user's
+    devices, which passed the tunnel's fleet-key handshake. It is held to
+    the gate as if it were ON whatever the mode (local mode's gate-off
+    shortcuts assume every caller is this machine) and is never "from this
+    machine" (:class:`~backend.web.core.tailnet_trust.PeerCaptureMiddleware`
+    marks it)."""
+    if scope.get("mf_tunnel"):
+        return True
+    from backend.peer import tunnel_peers as _tunnel_peers
+
+    return _tunnel_peers.is_tunneled(scope.get("mf_peer") or scope.get("client"))
+
+
 def _from_this_machine(scope) -> bool:
     """Whether the request's TRANSPORT peer is this machine, unproxied.
 
@@ -447,6 +462,8 @@ def _from_this_machine(scope) -> bool:
     shortcut and has to present the token)."""
     from backend.web.core import tailnet_trust as _tailnet_trust
 
+    if tunneled(scope):
+        return False  # another of the user's devices, not this machine
     peer = scope.get("mf_peer") or scope.get("client")
     if not peer:
         return False
@@ -502,6 +519,8 @@ def _unexposed_direct(scope) -> bool:
     in-process client), where every direct caller already is this machine."""
     headers = scope.get("headers") or []
     if any(k == _REMOTE_HEADER for k, _ in headers):
+        return False
+    if tunneled(scope):
         return False
     from backend.web.core import tailnet_trust as _tailnet_trust
 
@@ -1200,7 +1219,7 @@ class AuthMiddleware:
                 )
                 return
 
-        if not auth_enabled():
+        if not auth_enabled() and not tunneled(scope):
             await self.app(scope, receive, send)
             return
         if public or member_route:

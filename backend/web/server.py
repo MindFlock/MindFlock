@@ -211,6 +211,7 @@ from backend.web.core import inbox as _inbox
 from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import terminal_ws as _terminal_ws
 from backend.web.core import guest_tunnel as _guest_tunnel
+from backend.web.core import devices_anywhere as _devices_anywhere
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import shared_branch as _shared_branch
@@ -715,6 +716,7 @@ from backend.web.routes import peer as _peer_routes
 from backend.web.routes import peer_sessions as _peer_session_routes
 from backend.web.routes import chat as _chat_routes
 from backend.web.routes import guests as _guest_routes
+from backend.web.routes import devices_anywhere as _devices_anywhere_routes
 from backend.web.routes import team_runs as _team_runs_routes
 from backend.web.routes import flights as _flights_routes
 from backend.web.routes import sky as _sky_routes
@@ -922,6 +924,13 @@ async def lifespan(app: FastAPI):
     _register_task(_remote.instances_loop())
     # Settings sync across the paired devices (a no-op tick while it's off).
     _register_task(_settings_sync.sync_loop())
+    # Reach my devices from anywhere: the private tunnel, this device's
+    # address in the user's GitHub, and the others' (a no-op tick while off).
+    # Its origin is this server's own port, passed as discovery's is — but
+    # never the 8765 guess: unknown means the tunnel refuses to start.
+    from backend.web.core.mobile_access import server_port_known
+
+    _register_task(_devices_anywhere.run_loop(server_port_known()))
     # Engine updates: re-exec onto a finished install with no browser tab
     # open (core.update_watch), and announce a newer release (update.available).
     _register_task(_update_watch.watch_loop())
@@ -1125,6 +1134,10 @@ async def lifespan(app: FastAPI):
     finally:
         try:
             await _guest_tunnel.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await _devices_anywhere.stop()
         except Exception:  # noqa: BLE001
             pass
         # Addon shutdown hooks (reverse order), then cancel background tasks.
@@ -14530,6 +14543,8 @@ app.include_router(_peer_routes.router)
 app.include_router(_peer_session_routes.router)
 app.include_router(_chat_routes.router)
 app.include_router(_guest_routes.router)
+# Reach my devices from anywhere (docs/devices-anywhere.md)
+app.include_router(_devices_anywhere_routes.router)
 
 
 async def _attach_pty(ws: WebSocket, name: str, guest: bool):

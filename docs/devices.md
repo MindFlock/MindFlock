@@ -8,7 +8,7 @@ Remote devices, Peer links, Auth), the invite/join flow in
 
 | Screen (key) | What is there | What is NOT there |
 |---|---|---|
-| **Your devices** (`devices`) | Tailscale on this device · **Make reachable** (the one Tailscale-mode switch; **Restart server to apply** when needed) · the roster · **Add a device** (pair by code) / **Ask to join** → **Approve** · Paste a code · **Run here** (`github.automation_device`) · **Settings sync** · **One link for all devices** (the shared phone link + its setup checklist) · **Advanced**: Trusted Tailscale accounts, Allow remote control, Pair by pasted token | the access token |
+| **Your devices** (`devices`) | Tailscale on this device · **Make reachable** (the one Tailscale-mode switch; **Restart server to apply** when needed) · **Reach my devices from anywhere** (no Tailscale needed; `general.devices_anywhere`) · the roster · **Add a device** (pair by code) / **Ask to join** → **Approve** · Paste a code · **Run here** (`github.automation_device`) · **Settings sync** · **One link for all devices** (the shared phone link + its setup checklist) · **Advanced**: Trusted Tailscale accounts, Allow remote control, Pair by pasted token | the access token |
 | **Your phone** (`mobile`) | the three steps in order (Tailscale on this computer — with the doctor's diagnosis when it's missing; Tailscale on the phone; scan) · **one** QR · the `/m` links · a pointer to Your devices → Make reachable when the server is local-only | the token, the Tailscale-mode switch, the shared-link setup |
 | **People** (`peer`) | **Invite someone** / **Join someone**, links, the shared folder, messages; Advanced: the peer-links switch, relay, listen address | anything about your own devices |
 | **Security** (`security`) | **Require access token** (auto / on / off) · this device's token (Show / Copy / **Regenerate**) · "Trusting your own devices lives in Your devices" | trusted accounts, remote control, token pairing, settings sync |
@@ -21,6 +21,15 @@ Remote devices, Peer links, Auth), the invite/join flow in
    others can't reach (bound to 127.0.0.1) turns on **Make reachable** —
    Tailscale mode *with* the access gate, one save, MindFlock restarts once.
    Off again = this computer only.
+   **Without Tailscale**, **Reach my devices from anywhere** (off by default)
+   connects devices that are already in the group through a private
+   Cloudflare tunnel. Each device leaves its address, encrypted with the
+   group's key, in a private repo in your own GitHub. Tailscale and your own
+   network are still tried first. Design and threat model:
+   [devices-anywhere.md](devices-anywhere.md). A new device joins without
+   Tailscale too: **Add a device → It isn't on my network** shows a long
+   one-time code to paste on it
+   ([devices-anywhere.md §7](devices-anywhere.md#7-adding-a-new-device-without-tailscale)).
 2. **Other people → People.** A one-time invite (`mfp1:`/`mfp2:`), a
    safety number to compare, one shared folder per link, sandboxed. Nothing
    on your machine beyond that folder is exposed.
