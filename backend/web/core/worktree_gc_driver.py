@@ -692,13 +692,58 @@ def collect_now(srv=None, *, limit: Optional[int] = None, log=None) -> dict:
         return res
 
 
-def remove_item(srv, item_id: str, *, confirm: bool) -> dict:
-    """Remove the item ``item_id`` of the last report on a person's request
-    (see :func:`worktree_gc.remove_one`). 404-ish ``{"ok": False,
-    "missing": True}`` when the id isn't in the last report."""
+def _find_item(item_id: str) -> Optional[dict]:
     with _lock:
         items = list(_report.get("items") or [])
-    item = next((i for i in items if i.get("id") == item_id), None)
+    return next((i for i in items if i.get("id") == item_id), None)
+
+
+def inspect_item(srv, item_id: str) -> dict:
+    """A look inside the item ``item_id`` of the last report — a folder
+    whose files can't be checked (:func:`worktree_gc.inspect_unchecked`),
+    classified again first. Reads only; on request, never in a scan.
+    ``{"ok": True, "item", "facts"}``, or ``{"ok": False, "missing"?,
+    "error"}``."""
+    item = _find_item(item_id)
+    if item is None:
+        return {
+            "ok": False,
+            "missing": True,
+            "error": "Not in the current list; refresh it.",
+        }
+    cfg = settings()
+    usage = build_usage(srv, after_days=cfg["after_days"])
+    try:
+        fresh = _refresh_one(item, usage, cfg["after_days"])
+    except LookupError as exc:
+        return {"ok": False, "missing": True, "error": "It is gone (%s)." % exc}
+    if not os.path.isdir(fresh["path"]):
+        _drop_from_report([fresh["path"]])
+        return {"ok": False, "missing": True, "error": "Its folder is already gone."}
+    if fresh.get("kind") != gc.KIND_ORPHAN:
+        return {
+            "ok": False,
+            "error": "Its files can be checked; its reasons in the list say what it holds.",
+        }
+    facts = gc.inspect_unchecked(fresh, usage=usage)
+    return {
+        "ok": True,
+        "item": {
+            k: fresh.get(k)
+            for k in ("id", "path", "name", "kind", "state", "kept", "unchecked_why")
+        },
+        "facts": facts,
+    }
+
+
+def remove_item(
+    srv, item_id: str, *, confirm: bool, even_unchecked: bool = False
+) -> dict:
+    """Remove the item ``item_id`` of the last report on a person's request
+    (see :func:`worktree_gc.remove_one`; ``even_unchecked``: delete a
+    folder whose files can't be checked, for good). 404-ish ``{"ok":
+    False, "missing": True}`` when the id isn't in the last report."""
+    item = _find_item(item_id)
     if item is None:
         return {
             "ok": False,
@@ -718,7 +763,11 @@ def remove_item(srv, item_id: str, *, confirm: bool) -> dict:
                 "error": "It is already gone (%s)." % exc,
             }
         res = gc.remove_one(
-            fresh, confirmed=confirm, usage=usage, after_remove=_after_remove(srv)
+            fresh,
+            confirmed=confirm,
+            even_unchecked=even_unchecked,
+            usage=usage,
+            after_remove=_after_remove(srv),
         )
         if res.get("ok"):
             _tidy()

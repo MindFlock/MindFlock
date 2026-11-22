@@ -6906,7 +6906,26 @@ A few screens got quieter:
   app does not have) saying what happens to the work — "Its uncommitted
   changes are saved first as a patch in ~/.mindflock/kept-work", "Its branch
   … is kept, with its commits" — and **Remove anyway** then sends `confirm`;
-  the toast after says where the patch went. **Clean up** is the mode
+  the toast after says where the patch went. A folder whose files **can't be
+  checked** (its repository, or git's record of it, is gone; state
+  `unchecked`) sits in its own fold, **Can't be checked (never removed
+  automatically)**, with the plain reason and, instead of Remove, **Look
+  inside** (`GET /api/cleanup/inspect`, on request — the list never walks a
+  folder's files): the server's sentences (file and folder counts, size,
+  newest change, where its `.git` points and that it is gone, how its files
+  compare with its branch), the top-level entries (dependency/cache folders
+  and git's own greyed), up to 15 files that look like work with their size
+  and time, and the changed / only-here / missing paths against the branch.
+  When the look found nothing that could be lost (its files match the
+  branch, or it holds only dependencies and caches) a plain **Remove**
+  follows; otherwise **Remove anyway…** opens two in-page `InlineConfirm`
+  steps under it (never `window.confirm`): "Delete *name* (*size*) for good?
+  It holds *N* files (*X*), *M* of them look like work … this is permanent."
+  → **Continue…** → "Last check: delete *name* permanently?" → **Delete
+  permanently** (sends `even_unchecked`; **Keep it** backs out at either
+  step). The toast says "Deleted *name* permanently (*N* files, *X*)." The
+  header adds "*K* can't be checked (*X*): look inside each to decide." and
+  **Remove *M* safe** never includes them. **Clean up** is the mode
   (`cleanup.mode`): **Automatic**, **Ask me** (the default: one toast and
   bell entry, `system.cleanup_available`, the first time there is a
   meaningful amount to reclaim, with **Review** opening this screen) or

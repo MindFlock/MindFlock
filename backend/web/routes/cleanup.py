@@ -5,11 +5,17 @@
   ``fetch=0``: without refreshing the base branches first, ``size=0``:
   cached sizes only).
 * ``POST /api/cleanup/collect`` — remove every provably safe item now.
+* ``GET /api/cleanup/inspect?id=`` — a look inside one folder whose files
+  can't be checked (counts, newest change, top-level entries, files that
+  look like work, what git can still tell); on request, never in a scan.
 * ``POST /api/cleanup/remove`` — remove one item; one that holds work needs
-  ``confirm`` and has its work saved first.
+  ``confirm`` and has its work saved first; one whose files can't be
+  checked needs ``even_unchecked`` (deleted for good) unless its look
+  inside found nothing that could be lost.
 * ``POST /api/cleanup/settings`` — ``cleanup.mode`` / ``cleanup.after_days``.
 
-Everything that removes or configures is owner-only, like the update routes.
+Everything that removes, configures or looks inside a folder is owner-only,
+like the update routes.
 """
 
 from __future__ import annotations
@@ -63,6 +69,18 @@ async def post_cleanup_collect(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, **res})
 
 
+@router.get("/api/cleanup/inspect")
+async def get_cleanup_inspect(request: Request, id: str = "") -> JSONResponse:
+    if not await _owner(request):
+        return _refused()
+    if not id:
+        return JSONResponse({"error": "id is required"}, status_code=400)
+    res = await asyncio.to_thread(_driver.inspect_item, _server(), id)
+    if res.get("missing"):
+        return JSONResponse(res, status_code=404)
+    return JSONResponse(res, status_code=200 if res.get("ok") else 422)
+
+
 @router.post("/api/cleanup/remove")
 async def post_cleanup_remove(
     request: Request, payload: Optional[dict] = None
@@ -74,7 +92,11 @@ async def post_cleanup_remove(
     if not item_id:
         return JSONResponse({"error": "id is required"}, status_code=400)
     res = await asyncio.to_thread(
-        _driver.remove_item, _server(), item_id, confirm=bool(body.get("confirm"))
+        _driver.remove_item,
+        _server(),
+        item_id,
+        confirm=bool(body.get("confirm")),
+        even_unchecked=body.get("even_unchecked") is True,
     )
     if res.get("missing"):
         return JSONResponse(res, status_code=404)

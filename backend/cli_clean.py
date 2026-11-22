@@ -5,8 +5,11 @@ With no option it only LISTS (a dry run): every leftover worktree and session
 clone, its size, whether it would be removed, and why the rest is kept.
 ``--collect`` removes the provably safe set; ``--remove ITEM`` removes one,
 asking first (or ``--yes``) when it holds work, whose uncommitted changes are
-saved to a kept folder before it goes; ``--mode`` / ``--after-days`` set the
-background behaviour.
+saved to a kept folder before it goes; ``--inspect ITEM`` looks inside a
+folder whose files can't be checked (its repository, or git's record of it,
+is gone), and ``--remove ITEM --even-unchecked`` deletes one for good after
+printing the same facts; ``--mode`` / ``--after-days`` set the background
+behaviour.
 
 It prefers the running server (``--host`` / ``--port``): the server knows its
 live sessions, and its own lock serializes removals. With no server (or
@@ -35,6 +38,7 @@ _BADGE = {
     "safe": "remove",
     "recent": "recent",
     "holds_work": "has work",
+    "unchecked": "can't check",
     "in_use": "in use",
     "not_ours": "not ours",
     "missing": "missing",
@@ -60,7 +64,11 @@ def add_parser(sub, server_opts) -> None:
             "worktree remove`, its branch only when merged). --remove ITEM "
             "removes one item; one that holds work is removed only after you "
             "confirm, and its uncommitted changes are saved first as a patch "
-            "in ~/.mindflock/kept-work/."
+            "in ~/.mindflock/kept-work/. A folder whose files can't be checked "
+            "(its repository, or git's record of it, is gone) is never collected: "
+            "--inspect ITEM shows what is in it, and --remove ITEM "
+            "--even-unchecked deletes it for good (nothing is saved; MindFlock "
+            "has no trash) unless the look finds nothing that could be lost."
         ),
     )
     act = p.add_mutually_exclusive_group()
@@ -72,6 +80,21 @@ def add_parser(sub, server_opts) -> None:
         metavar="ITEM",
         default=None,
         help="remove one item: its path, its name in the list, or its id",
+    )
+    act.add_argument(
+        "--inspect",
+        metavar="ITEM",
+        default=None,
+        help="look inside one folder whose files can't be checked: counts, "
+        "newest change, top-level entries, files that look like work, and "
+        "what git can still tell",
+    )
+    p.add_argument(
+        "--even-unchecked",
+        action="store_true",
+        dest="even_unchecked",
+        help="with --remove: delete a folder whose files can't be checked, "
+        "permanently (the facts are printed first; asks unless --yes)",
     )
     p.add_argument(
         "--yes", "-y", action="store_true", help="with --remove: don't ask first"
@@ -276,6 +299,14 @@ def render_summary(rep: dict, show_all: bool = False, no_size: bool = False) -> 
         out.append(
             "%d in use or not MindFlock's are hidden; --all shows them." % hidden
         )
+    if s.get("unchecked_count"):
+        out.append(
+            "%d can't be checked (%s): their repository, or git's record of them, is "
+            "gone. They are never removed automatically; look inside with "
+            "mindflock clean --inspect ITEM, delete one with --remove ITEM "
+            "--even-unchecked."
+            % (s["unchecked_count"], human(s.get("unchecked_bytes")))
+        )
     if s.get("safe_count"):
         out.append(
             "%d can be removed safely (%s): mindflock clean --collect"
@@ -377,12 +408,26 @@ class _Server:
             self.base, "/api/cleanup/collect", {}, timeout=COLLECT_TIMEOUT_S
         )
 
-    def remove(self, item_id: str, confirm: bool) -> dict:
+    def remove(self, item_id: str, confirm: bool, even_unchecked: bool = False) -> dict:
+        body = {"id": item_id, "confirm": confirm}
+        if even_unchecked:
+            body["even_unchecked"] = True
         try:
             return client.post(
+                self.base, "/api/cleanup/remove", body, timeout=COLLECT_TIMEOUT_S
+            )
+        except client.ApiError as err:
+            if isinstance(err.payload, dict):
+                return err.payload
+            return {"ok": False, "error": err.message}
+
+    def inspect(self, item_id: str) -> dict:
+        from urllib.parse import quote
+
+        try:
+            return client.get(
                 self.base,
-                "/api/cleanup/remove",
-                {"id": item_id, "confirm": confirm},
+                "/api/cleanup/inspect?id=" + quote(item_id, safe=""),
                 timeout=COLLECT_TIMEOUT_S,
             )
         except client.ApiError as err:
@@ -419,8 +464,13 @@ class _Local:
     def collect(self) -> dict:
         return self.drv.collect_now(None)
 
-    def remove(self, item_id: str, confirm: bool) -> dict:
-        return self.drv.remove_item(None, item_id, confirm=confirm)
+    def remove(self, item_id: str, confirm: bool, even_unchecked: bool = False) -> dict:
+        return self.drv.remove_item(
+            None, item_id, confirm=confirm, even_unchecked=even_unchecked
+        )
+
+    def inspect(self, item_id: str) -> dict:
+        return self.drv.inspect_item(None, item_id)
 
     def settings(self, mode, days) -> dict:
         return self.drv.set_settings(mode, days)
@@ -450,6 +500,104 @@ def _find(rep: dict, needle: str) -> Optional[dict]:
     return matches[0] if len(matches) == 1 else None
 
 
+def _when(ts) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(ts))) if ts else "-"
+
+
+def render_facts(facts: dict) -> str:
+    """What a look inside a folder that can't be checked found
+    (``worktree_gc.inspect_unchecked``), for a person deciding."""
+    out = [facts.get("path") or ""]
+    out += ["  " + ln for ln in facts.get("summary") or []]
+    top = facts.get("top") or []
+    if top:
+        out.append("  Top level:")
+        for t in top:
+            what = {"dependency": "  (dependencies/caches)", "git": "  (git's)"}.get(
+                t.get("kind"), ""
+            )
+            n = t.get("files", 0)
+            out.append(
+                "    %-40s %8s file%s %8s%s"
+                % (
+                    t.get("name", "") + ("/" if t.get("dir") else ""),
+                    n,
+                    " " if n == 1 else "s",
+                    human(t.get("bytes")),
+                    what,
+                )
+            )
+        if facts.get("top_more"):
+            out.append("    … and %d more" % facts["top_more"])
+    sample = facts.get("work_sample") or []
+    if sample:
+        out.append("  Files that look like work, newest first:")
+        for f in sample:
+            out.append(
+                "    %s %8s  %s"
+                % (_when(f.get("mtime")), human(f.get("bytes")), f.get("path"))
+            )
+    cmp_ = (facts.get("git") or {}).get("compare") or {}
+    for key, label in (
+        ("changed", "changed"),
+        ("extra", "only here"),
+        ("missing", "missing here"),
+    ):
+        names = cmp_.get(key) or []
+        if names:
+            n = cmp_.get(key + "_count", len(names))
+            out.append(
+                "  %s (%d): %s%s"
+                % (label, n, ", ".join(names), "…" if n > len(names) else "")
+            )
+    return "\n".join(out)
+
+
+def _remove_unchecked(be, args, it: dict) -> int:
+    """``--remove`` of a folder whose files can't be checked: the facts
+    first, then only with ``--even-unchecked`` (and a yes) unless nothing in
+    it could be lost."""
+    res = be.inspect(it["id"])
+    if not res.get("ok"):
+        print(
+            "error: %s" % (res.get("error") or "couldn't look inside"), file=sys.stderr
+        )
+        return 1
+    facts = res.get("facts") or {}
+    print(render_facts(facts))
+    print("")
+    if not facts.get("safe"):
+        if not args.even_unchecked:
+            print(
+                "Its files can't be checked, so it isn't removed without "
+                "--even-unchecked. To delete it permanently (nothing is saved, "
+                "there is no undo):\n  mindflock clean --remove %s --even-unchecked"
+                % args.remove
+            )
+            return 1
+        if not args.yes and not _confirm(
+            "Delete %s permanently (%s files, %s, %s that look like work)?"
+            % (
+                it.get("name") or it.get("path"),
+                facts.get("files", 0),
+                human(facts.get("bytes")),
+                facts.get("work_files", 0),
+            )
+        ):
+            print("Nothing removed.")
+            return 1
+    out = be.remove(it["id"], True, even_unchecked=bool(args.even_unchecked))
+    if not out.get("ok"):
+        print("error: %s" % (out.get("error") or "not removed"), file=sys.stderr)
+        return 1
+    d = out.get("deleted") or {}
+    print(
+        "deleted %s permanently (%s files, %s)"
+        % (it.get("path"), d.get("files", 0), human(d.get("bytes")))
+    )
+    return 0
+
+
 def _confirm(prompt: str) -> bool:
     if not sys.stdin.isatty():
         return False
@@ -460,6 +608,9 @@ def _confirm(prompt: str) -> bool:
 
 
 def cmd_clean(args: argparse.Namespace) -> int:
+    if args.even_unchecked and not args.remove:
+        print("error: --even-unchecked goes with --remove ITEM", file=sys.stderr)
+        return 2
     be = _backend(args)
     if args.mode is not None or args.after_days is not None:
         cfg = be.settings(args.mode, args.after_days)
@@ -483,19 +634,41 @@ def cmd_clean(args: argparse.Namespace) -> int:
         )
         return 0
     prog = _Progress(sys.stderr.isatty())
-    if args.remove:
+    if args.remove or args.inspect:
+        needle = args.remove or args.inspect
         try:
             rep = be.report(fetch=not args.no_fetch, size=False, progress=prog)
         finally:
             prog.clear()
-        it = _find(rep, args.remove)
+        it = _find(rep, needle)
         if it is None:
             print(
                 "error: no item matches %r (run `mindflock clean --all` to list them)"
-                % args.remove,
+                % needle,
                 file=sys.stderr,
             )
             return 1
+        if args.inspect:
+            if it.get("kind") != "orphan":
+                print(
+                    "%s can be checked: %s"
+                    % (
+                        it.get("path"),
+                        it.get("safe_reason") or "; ".join(it.get("kept") or []),
+                    )
+                )
+                return 0
+            res = be.inspect(it["id"])
+            if not res.get("ok"):
+                print(
+                    "error: %s" % (res.get("error") or "couldn't look inside"),
+                    file=sys.stderr,
+                )
+                return 1
+            print(render_facts(res.get("facts") or {}))
+            return 0
+        if it.get("kind") == "orphan":
+            return _remove_unchecked(be, args, it)
         confirm = bool(args.yes)
         if not it.get("safe") and not confirm:
             print("%s holds work or isn't MindFlock's:" % it.get("path"))
