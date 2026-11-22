@@ -267,7 +267,8 @@ def test_route_actions_per_state():
     halt, pause, point, you, vstop, fly, none, branch = _run(
         rows, "rows.map(routeModel)"
     )
-    assert _labels(halt) == ["Retry", "Skip"]
+    # Round 5: a CI failure leads with the agent's fix, Retry beside it.
+    assert _labels(halt) == ["Let the agent fix it", "Retry", "Skip"]
     assert halt["head"] == "Route “Ticket to PR” · Halted at CI checks"
     # The reason in the server's words, without the stop's name in front.
     assert halt["detail"] == "Failed: 2 red"
@@ -277,7 +278,7 @@ def test_route_actions_per_state():
     assert point["head"] == "Route “Ticket to PR” · Paused before Merge"
     assert point["detail"] == "It reached a halt point."
     assert _labels(you) == ["Done", "Skip"]
-    assert you["head"] == "Route “Ticket to PR” · Wait for me: Try it on staging"
+    assert you["head"] == "Route “Ticket to PR” · Needs you: Try it on staging"
     # A Verify stop is answered by its Verify, never by Done (409).
     assert _labels(vstop) == ["Skip"]
     assert "Verify" in vstop["detail"]

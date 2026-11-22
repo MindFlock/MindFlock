@@ -36,24 +36,27 @@ describe("a flight perched on you is Needs you", () => {
     step: { id: "s5", kind: "you", title: "Approve the merge", state: "waiting_you", actor: "you" },
   };
 
-  it("on the rail, labelled Perch: <stop title>, in the bell, under its own notify rule", () => {
+  it("on the rail, labelled Needs you: <stop title>, in the bell, under its own notify rule", () => {
+    // Round 5 (the owner): a session parked at a Wait for me stop reads
+    // "Needs you: <stop>" — "Wait for me" is the stop kind's name.
     const ss = deriveSessionState(row(fl), { activity: "idle" });
-    expect(ss).toMatchObject({ state: "needs_you", reason: "flight_you", label: "Wait for me: Approve the merge", inBell: true });
+    expect(ss).toMatchObject({ state: "needs_you", reason: "flight_you", label: "Needs you: Approve the merge", inBell: true, perch: true });
     expect(notifyRuleFor(ss)).toBe("flight_needs_you");
-    expect(flightYouLabel("")).toBe("Wait for me");
+    expect(flightYouLabel("")).toBe("Needs you");
     // A flight that is merely in the air is not.
     expect(deriveSessionState(row({ ...fl, state: "running" }), { activity: "idle" }).reason).toBeUndefined();
     // Any other stop waiting on the person (a Review out of fix rounds): it
     // needs you too, in its own words — not "Wait for me", not "Idle".
     expect(deriveSessionState(row({ ...fl, step: { ...fl.step, actor: "robot" } }), { activity: "idle" })).toMatchObject({ state: "needs_you", reason: "flight_you", label: "Needs you: Approve the merge" });
-    // A stop already titled "Perch: …" (or the old "You: …") is not prefixed again.
-    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "Perch: approve" } }), { activity: "idle" }).label).toBe("Wait for me: approve");
-    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "You: approve" } }), { activity: "idle" }).label).toBe("Wait for me: approve");
+    // A stop already titled "Wait for me: …" (or the old "Perch: …" / "You: …") is read without it.
+    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "Perch: approve" } }), { activity: "idle" }).label).toBe("Needs you: approve");
+    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "You: approve" } }), { activity: "idle" }).label).toBe("Needs you: approve");
+    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "Wait for me: approve" } }), { activity: "idle" }).label).toBe("Needs you: approve");
     // Its chip is capped with an ellipsis (the full words in its title), and
     // a click opens the bell, where Done is.
     const chip = chipState(row(fl) as Instance, ss);
     expect(chip.cls).toContain("chip-flight");
-    expect(chip.title).toContain("Wait for me: Approve the merge");
+    expect(chip.title).toContain("Needs you: Approve the merge");
     expect(needsYouAction(ss)?.act).toBe("bell");
     expect(css("components/sidebar/SidebarRow.css")).toMatch(
       /\.inst \.stagechip\.chip-flight \{[^}]*max-width: 9\.5em;[^}]*text-overflow: ellipsis;/
@@ -61,8 +64,9 @@ describe("a flight perched on you is Needs you", () => {
   });
 
   it("a paused flight is a calm Paused flight, out of the bell", () => {
+    // A person's pause (no reason): "Paused by you" (round 5).
     const ss = deriveSessionState(row({ ...fl, state: "paused", step: { ...fl.step, state: "pending" } }), { activity: "idle" });
-    expect(ss).toMatchObject({ state: "idle", label: "Paused route", tone: "neutral", inBell: false });
+    expect(ss).toMatchObject({ state: "idle", label: "Paused by you", tone: "neutral", inBell: false });
     expect(ss.reason).toBeUndefined();
     expect(withFlightYou([], [{ ...row({ ...fl, state: "paused" }), title: "a" } as Instance])).toEqual([]);
   });

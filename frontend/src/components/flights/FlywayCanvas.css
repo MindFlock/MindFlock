@@ -394,6 +394,15 @@
   animation: fl-box-glow 1.8s ease-in-out infinite;
 }
 
+/* Round 5: held by its session (agent offline / limited) — still and dashed
+   in the waiting tone, never the working pulse. */
+.fl-st-current.fl-held {
+  border-style: dashed;
+  border-color: var(--tone-waiting);
+  box-shadow: none;
+  animation: none;
+}
+
 /* Perched on you: the gold outline and a gold wash (its text stays the
    text colour; text ON solid gold is --tone-attention-ink). */
 .fl-st-perched {
@@ -1008,6 +1017,11 @@
 
 .fl-bird-marker.tone-paused {
   color: var(--muted);
+}
+
+/* Held by its session (agent offline / limited): still, in the waiting tone. */
+.fl-bird-marker.tone-held {
+  color: var(--tone-waiting);
 }
 
 @keyframes fl-bird-bob {

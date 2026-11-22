@@ -1106,6 +1106,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             (open ? " fl-box-open" : "") +
             (drop ? " fl-drop" : "") +
             " fl-st-" + n.state +
+            (n.held ? " fl-held" : "") +
             (n.perch ? " fl-perch" : "") +
             (p.selected === n.id ? " selected" : "") +
             (p.highlight?.has(n.id) ? " fl-described" : "") +

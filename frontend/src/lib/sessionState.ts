@@ -60,7 +60,7 @@
 import type { Instance, SessionVerify, SetupSummary } from "../api/types";
 import { backgroundHint, backgroundJobs } from "./backgroundJobs";
 import { agentName } from "./agentNames";
-import { haltedWhy, perchLabel, perchedOnYou } from "./flights";
+import { haltedWhy, perchedOnYou } from "./flights";
 import { heldHint, isHeldOffline } from "./heldOffline";
 import { waitChip, waitHint, waitWhyOf } from "./waitWhy";
 
@@ -130,6 +130,7 @@ export type SessionStateKey = "starting" | "working" | "needs_you" | "idle" | "l
 export type SessionReason =
   | "question"
   | "flight_you"
+  | "flight_paused"
   | "flight_halted"
   | "precommit_failed"
   | "checks_failing"
@@ -156,6 +157,9 @@ export interface SessionState {
   /** Held offline after a crash (lib/heldOffline): its remedy is Start, and
    * nothing else will bring it back. */
   held?: boolean;
+  /** A route parked on you at a Wait for me stop: its remedy is Done (any
+   * other stop that waits on you is answered instead). */
+  perch?: boolean;
   /** Waiting in the launch gate (lib/launchGate): it starts by itself once
    * the gate allows; its remedies are Start anyway and Stop waiting. */
   waiting?: boolean;
@@ -201,8 +205,14 @@ export const STATE_LABEL: Record<Exclude<SessionStateKey, "needs_you">, string> 
 /** The label of each reason a session can need you. */
 export const REASON_LABEL: Record<SessionReason, string> = {
   question: "Question",
-  // "Wait for me: <the stop's title>" when the row names it (flightYouLabel).
-  flight_you: "Wait for me",
+  // "Needs you: <the stop's title>" when the row names it (flightYouLabel) —
+  // at a Wait for me stop or any other stop that waits on you. "Wait for me"
+  // stays the stop kind's name (the shelf, the stop), never a session's state.
+  flight_you: "Needs you",
+  // A route at a halt point a person put on a stop reads Paused before
+  // <stop> (haltPointLabel), amber — it waits on you to Carry on, as the bell
+  // and the Sky's frame say. A pause a person made stays calm (Paused by you).
+  flight_paused: "Paused before its halt point",
   // A route halted at a stop until you Retry or Skip it; the reason (the
   // stop and what failed) is the chip's tooltip, not its words.
   flight_halted: "Halted",
@@ -226,6 +236,7 @@ export const VERIFIED_LABEL = "Verified";
 export const NOTIFY_RULE: Record<SessionReason | "offline", string> = {
   question: "needs_input",
   flight_you: "flight_needs_you",
+  flight_paused: "flight_needs_you",
   // The server rings a halt as one of a route's finishes (addons/notify.py).
   flight_halted: "flight_finished",
   precommit_failed: "precommit_failed",
@@ -324,10 +335,19 @@ function needsYou(reason: SessionReason, hint?: string): SessionState {
   return { state: "needs_you", reason, label: REASON_LABEL[reason], tone: "attention", inBell: true, restartable: false, hint };
 }
 
-/** "Perch: Approve the merge" — a flight perched on you, as the rail chip says
- * it (never "Perch: Perch: …" for a stop whose title already says so). */
+/** "Needs you: Approve the merge" — a route parked on you, as the rail chip,
+ * the Sky, the bell and the phone say it (round 5: never "Wait for me: …" on
+ * a session — that is the stop kind's name). A title that already starts
+ * "Wait for me:" (or the old "Perch:" / "You:") is read without it. */
 export function flightYouLabel(stepTitle: string | null | undefined): string {
-  return perchLabel(stepTitle);
+  return perchedOnYou(stepTitle);
+}
+
+/** "Paused before Push" — a route stopped at a halt point, as its amber chip
+ * says it (the bell's row adds "— Carry on": lib/needsYou `pausedAtLine`). */
+export function haltPointLabel(stepTitle: string | null | undefined): string {
+  const t = String(stepTitle || "").trim();
+  return t ? "Paused before " + t : REASON_LABEL.flight_paused;
 }
 
 /** Why a route halted, without the stop's own name in front (lib/flights,
@@ -349,9 +369,20 @@ function haltedState(fl: NonNullable<Instance["flight"]>): SessionState {
   return { ...needsYou("flight_halted", haltedHint(fl as Parameters<typeof haltedHint>[0])), tone: "broken" };
 }
 
-/** The rail chip of a session whose flight is paused: a calm idle state,
- * not a needs-you one — whoever paused it resumes it. */
+/** The rail chip of a session whose flight is paused by the server (a stop
+ * removed while it ran, uncommitted changes to look at): a calm idle state,
+ * not a needs-you one. */
 export const PAUSED_FLIGHT_LABEL = "Paused route";
+
+/** The rail chip of a session whose route a person paused: calm — whoever
+ * paused it carries it on (round 5; docs/vocabulary.md "Paused"). */
+export const PAUSED_BY_YOU_LABEL = "Paused by you";
+
+/** Whether a chip is one of the calm paused-route chips ("Paused by you",
+ * "Paused route") — never the amber halt-point one. */
+export function isPausedRouteChip(ss: { label?: string } | null | undefined): boolean {
+  return ss?.label === PAUSED_FLIGHT_LABEL || ss?.label === PAUSED_BY_YOU_LABEL;
+}
 
 /** The rail's word for a held worker whose agent starts on its turn. */
 export const HELD_WORKER_LABEL = "Waiting";
@@ -593,18 +624,19 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   if (act === "clarify")
     return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
   // A flight parked on you: it waits for you, whatever the agent is doing —
-  // so ahead of Working. A Wait for me stop ("Wait for me: <stop>", Done);
-  // any other stop waiting on the person — a Review out of fix rounds, a
-  // failure handed to you — "Needs you: <stop>". A Verify stop whose verify
+  // so ahead of Working. "Needs you: <stop>" either way: a Wait for me stop
+  // (Done), or any other stop waiting on the person — a Review out of fix
+  // rounds, a failure handed to you (answered on the stop). A Verify stop whose verify
   // already says it (Confirm verified, failed, blocked) keeps that chip.
   const fl = inst.flight;
   const verifyEarly = verifyOf(inst);
   const verifySpeaks = fl?.step?.kind === "verify" && !!verifyEarly && !!verifyNeedsYou(verifyEarly);
   if (fl && fl.state === "waiting_you" && fl.step && (fl.step.actor === "you" || !verifySpeaks)) {
     const perch = fl.step.actor === "you";
-    const label = perch ? flightYouLabel(fl.step.title) : perchedOnYou(fl.step.title);
+    const label = flightYouLabel(fl.step.title);
     const why = String((fl.step as { note?: unknown }).note ?? "").trim();
     return {
+      perch,
       ...needsYou(
         "flight_you",
         label +
@@ -619,6 +651,18 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   // for me stop (it waits on you whatever the agent does), in red — behind a
   // question in plain words too, so the session keeps its answer row.
   if (fl && fl.id && fl.state === "halted" && !askedInWords(inst)) return haltedState(fl);
+  // A route at a halt point a person set: it waits on you to Carry on, so it
+  // needs you (amber), as the bell and the Sky's frame say — whatever the
+  // agent is doing. Behind a question in plain words, like a halt.
+  if (fl && fl.id && fl.state === "paused" && (fl as { reason?: string }).reason === "halt point" && !askedInWords(inst))
+    return {
+      ...needsYou(
+        "flight_paused",
+        "Route “" + fl.plan_name + "” reached its halt point before " + (fl.step?.title || "its next stop") +
+          " — Carry on from its strip, its stop on the Sky or the bell"
+      ),
+      label: haltPointLabel(fl.step?.title),
+    };
   const bgHint = backgroundHint(inst);
   const verify = verifyOf(inst);
   // The agent checking its own work: its own pill, whether it is mid-turn or
@@ -684,20 +728,24 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   }
   if (inst.check && inst.check.state === "failed" && !(inst.check as { stale?: boolean }).stale)
     return needsYou("checks_failing", "Checks failed — push is gated until they pass (or push anyway)");
-  // A paused flight: calm, out of the bell, and said as what it is.
-  if (inst.flight?.state === "paused")
+  // A paused flight: calm, out of the bell, and said as what it is — "Paused
+  // by you" when a person paused it (no reason), "Paused route" when the
+  // server did (its reason is the hint). A halt point is above (amber).
+  if (inst.flight?.state === "paused") {
+    const why = String((inst.flight as { reason?: string }).reason || "").trim();
     return {
       state: "idle",
-      label: PAUSED_FLIGHT_LABEL,
+      label: why ? PAUSED_FLIGHT_LABEL : PAUSED_BY_YOU_LABEL,
       tone: "neutral",
       inBell: false,
       restartable: false,
       hint:
-        "Route “" + inst.flight.plan_name + "” " +
-        ((inst.flight as { reason?: string }).reason === "halt point" ? "reached its halt point before " : "is paused at ") +
+        "Route “" + inst.flight.plan_name + "” " + (why ? "is paused at " : "was paused by you at ") +
         (inst.flight.step?.title || "its current stop") +
+        (why ? " (" + why + ")" : "") +
         " — Carry on from its strip or its stop on the Sky",
     };
+  }
   // Verified, calm, for the ten minutes the server keeps saying so.
   if (verify?.state === "passed")
     return { state: "idle", label: VERIFIED_LABEL, tone: "verified", inBell: false, restartable: false, hint: verifyHint(verify) };
@@ -729,7 +777,9 @@ export function needsYouAction(
     case "question":
       return { act: "bell", aria: "Question — answer it in the bell" };
     case "flight_you":
-      return { act: "bell", aria: ss.label + (/^wait for me\b/i.test(ss.label) ? " — press Done in the bell" : " — answer it in the bell") };
+      return { act: "bell", aria: ss.label + (ss.perch ? " — press Done in the bell" : " — answer it in the bell") };
+    case "flight_paused":
+      return { act: "bell", aria: ss.label + " — your halt point: Carry on in the bell" };
     case "flight_halted":
       return { act: "bell", aria: "Halted — Retry or Skip in the bell" };
     case "precommit_failed":

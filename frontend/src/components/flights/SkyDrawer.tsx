@@ -26,7 +26,8 @@ import { openBehaviors } from "../../lib/behaviorsFocus";
 import { windowName } from "../../lib/windowName";
 import { perchWhy } from "../../lib/groundedLines";
 import { isFailing, planName } from "../dialogs/verify";
-import { useNeedsYou, type NeedsYouRow } from "../../lib/needsYou";
+import { pausedAtLine, useNeedsYou, type NeedsYouRow } from "../../lib/needsYou";
+import { HALT_POINT_REASON } from "../../lib/flightDiagram";
 import { openAsk } from "../../lib/ask";
 import { deriveSessionState } from "../../lib/sessionState";
 import { reviveSession, startSession } from "../../lib/revive";
@@ -40,6 +41,7 @@ import {
   builtinPlanFor,
   isLive,
   perchLabel,
+  perchedOnYou,
   planChoices,
   stepActor,
   type Flight,
@@ -173,10 +175,13 @@ export const KIND_ORDER: readonly WaitingKind[] = ["tickets", "prs", "issues"];
 
 /** A perch row's stop line: the stop, then WHY it waits — for a halted
  * route its failure, for a waiting one the stop's note or failure reason,
- * at a halt point "Paused at your halt point" (lib/groundedLines `perchWhy`). */
+ * at a halt point the bell's "Paused before <stop> — Carry on". */
 export function perchLine(flight: Flight, kinds?: readonly StepKindDef[] | null): string {
   const step = flight.steps[flight.cursor];
-  const what = step ? (stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title) : "";
+  // At a halt point: the bell's own words (round 5), "Paused before Push — Carry on".
+  if (flight.state === "paused" && flight.reason === HALT_POINT_REASON) return pausedAtLine(step?.title);
+  // Parked at a Wait for me stop: "Needs you: <stop>", as its chip says.
+  const what = step ? (stepActor(step, kinds) === "you" ? (flight.state === "waiting_you" ? perchedOnYou(step.title) : perchLabel(step.title)) : step.title) : "";
   const why = perchWhy(flight);
   return what && why ? what + " — " + why : what || why;
 }

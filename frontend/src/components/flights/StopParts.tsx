@@ -663,7 +663,7 @@ export function StopForm({
           change: a Verify stop's whole check (lib/verifyStop.ts), any
           other's halt point, Only when and If it fails. */}
       <p className={"fl-form-note fl-stop-sentence fl-fld-wide" + (verify ? " vf-sentence" : " muted")} role="status" aria-label="What the route does here">
-        {verify ? stopSentence(step, fallback, verifySentence(step.config, onFail)) : [stopDoes(step), stopSentence(step, fallback)].filter(Boolean).join(" ")}
+        {verify ? stopSentence(step, fallback, verifySentence(step.config, onFail)) : [stopDoes(step), stopSentence(step, fallback, "", [def])].filter(Boolean).join(" ")}
       </p>
       <FlField label="Title" wide={false} hint={errHint("title")}>
         <TextField label="Stop title" value={step.title} onChange={(t) => !readOnly && onChange({ title: t })} />
@@ -691,8 +691,8 @@ export function StopForm({
         )
       )}
       <WhenField value={step.when || ""} readOnly={readOnly} error={errors?.when} onChange={(w) => onChange({ when: w || undefined })} hint="Empty: always runs. When false, the stop is skipped and the route goes on. ⓘ lists the conditions." />
-      {/* A Wait for me or a Wait cannot fail: no choice to offer. */}
-      {canFail(step.kind) && (
+      {/* A kind that cannot fail (the server's can_fail; a Wait for me, a Wait): no choice to offer. */}
+      {canFail(step.kind, [def]) && (
         <FlField
           label="If it fails"
           wide

@@ -167,10 +167,10 @@ describe("idle on uncommitted changes", () => {
     // A route in flight owns the next step (its own Commit stop included).
     const flight = (state: string) => ({ id: "f1", state, plan_name: "p", step: { title: "Checks" } }) as unknown as Instance["flight"];
     expect(at(long, { flight: flight("running") }).uncommitted).toBeUndefined();
-    // A route a person paused says "Paused route" instead.
+    // A route a person paused says "Paused by you" instead (round 5).
     const paused = at(long, { flight: flight("paused") });
     expect(paused.uncommitted).toBeUndefined();
-    expect(paused.label).toBe("Paused route");
+    expect(paused.label).toBe("Paused by you");
     // A finished route's leftovers are the session's own: still said.
     expect(at(long, { flight: flight("done") }).uncommitted).toBeDefined();
     // Paused and sleeping sessions have their own words.

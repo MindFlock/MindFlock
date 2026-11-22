@@ -548,6 +548,37 @@ export const nearLines = (z: number): number => (lodFor(z) === "near" ? Math.max
 
 // --- The drawer -------------------------------------------------------------------
 
+// --- The Intake lane on a narrow Sky (round 5) ---------------------------------
+
+/** Below this Sky width (screen px) the Intake lane folds to its rail by
+ * itself: at 820 px it filled the first screen and pushed every route off
+ * it (round 4). */
+export const LANE_FOLD_BELOW = 900;
+
+/** Whether the Sky is narrow enough to fold the lane (0 = not measured yet:
+ * never fold on a guess). */
+export const skyIsNarrow = (w: number): boolean => w > 0 && w < LANE_FOLD_BELOW;
+
+/** The person's own say about the lane: "folded" (they folded it — kept per
+ * browser, `mf_sky_lane_collapsed`), "open" (they opened it while the Sky
+ * was narrow — kept while the Sky is shown), or null (nothing said: it
+ * follows the width). */
+export type LaneHand = "folded" | "open" | null;
+
+/** The lane is folded when the person folded it, or when the Sky is narrow
+ * and they have not opened it by hand — so it never re-folds under them,
+ * and it opens again when there is room unless they folded it. */
+export function laneFolded(hand: LaneHand, narrow: boolean): boolean {
+  return hand === "folded" || (narrow && hand !== "open");
+}
+
+/** The say a fold / open press leaves: a fold is kept; an open on a narrow
+ * Sky is the person overriding the auto-fold; an open on a wide one leaves
+ * the lane to follow the width again. */
+export function laneHandAfter(fold: boolean, narrow: boolean): LaneHand {
+  return fold ? "folded" : narrow ? "open" : null;
+}
+
 /** The drawer at the sky's right edge folds to its tab (the perch count on
  * it) until opened, then remembers (`mf_sky_drawer`: "1" open, "0" folded). */
 export const SKY_DRAWER_KEY = "mf_sky_drawer";

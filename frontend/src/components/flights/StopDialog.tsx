@@ -122,7 +122,7 @@ export interface StopDialogProps {
   onResume?(): void;
   /** The remedy that usually works, drawn first as the primary button:
    * Retry for a failure, Carry on for a pause, Done for a sign-off. */
-  primary?: "done" | "retry" | "resume";
+  primary?: "done" | "retry" | "resume" | "fix";
   /** What the stop asks of the person (a Verify sign-off's steps to check,
    * a blocked check's way out), listed under its reason. */
   asks?: readonly string[];

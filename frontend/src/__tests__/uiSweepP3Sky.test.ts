@@ -177,7 +177,10 @@ describe("#22 a closed session's Stop the route asks first", () => {
     const src = code("components/flights/FlightStrip.tsx");
     const you = src.slice(src.indexOf("export function YouStepActions"), src.indexOf("export function FlightMenu"));
     expect(you).toContain("const cancel = useCancelAsk(flight);");
-    expect(you).toMatch(/title="Its session is closed — end this route"\s*onClick=\{cancel\.ask\}/);
+    // Round 5: the remedies render through RemedyButton; Stop the route's is
+    // handed cancel.ask.
+    expect(you).toMatch(/title="Its session is closed — end this route"\s*onClick=\{onStop\}/);
+    expect(you).toContain("onStop={cancel.ask}");
     expect(you).toContain("{cancel.node}");
     expect(src).not.toContain('"/cancel"');
   });

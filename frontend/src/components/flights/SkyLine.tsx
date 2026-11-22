@@ -199,6 +199,10 @@ export async function closeLine(title: string): Promise<void> {
  * running or the agent working → `working`; the route finished (still drawn,
  * or `landed`) → `done`; built and waiting for ▶ Run → `ready`; else `idle`.
  *
+ * A running route whose current stop is HELD by its session (the agent at
+ * its usage limit — an offline one is `broken` already) is `held`: a still
+ * dashed frame in the waiting tone, no breathing.
+ *
  * A PAUSED route (a person paused it) is `paused`: a calm dashed frame — no
  * red, no amber, no breathing — so it never reads as one still running.
  * Paused at a halt point (`haltPoint`: it waits on the person to Carry on)
@@ -208,13 +212,16 @@ export async function closeLine(title: string): Promise<void> {
  * Idle on uncommitted changes (lib/sessionState `uncommitted`) is NOT `you`:
  * its tone is neutral, so the frame stays as calm as any idle one, and the
  * bar carries a quiet note instead (`UncommittedNote`). */
-export type FrameState = "you" | "halted" | "broken" | "working" | "paused" | "done" | "ready" | "idle";
-export function frameState(s: { flight?: FlightState | null; landed?: boolean; tone?: SessionTone | null; behaviorsYou?: boolean; haltPoint?: boolean }): FrameState {
+export type FrameState = "you" | "halted" | "broken" | "working" | "held" | "paused" | "done" | "ready" | "idle";
+export function frameState(s: { flight?: FlightState | null; landed?: boolean; tone?: SessionTone | null; behaviorsYou?: boolean; haltPoint?: boolean; held?: boolean }): FrameState {
   const f = s.flight || null;
   if (f === "halted" && !s.haltPoint) return "halted";
   if (s.tone === "broken") return "broken";
   if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou || ((f === "paused" || f === "halted") && s.haltPoint)) return "you";
   if (f === "paused") return "paused";
+  // Round 5: the route runs but its stop is held by the session (agent
+  // offline / limited — lib/flightDiagram `heldMark`): never "working".
+  if (s.held) return "held";
   if (f === "running" || s.tone === "working" || s.tone === "verifying") return "working";
   if (f === "done" || s.landed) return "done";
   if (f === "ready") return "ready";
@@ -576,6 +583,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         tone: ss.tone,
         behaviorsYou: line.behaviors.mark?.tone === "you",
         haltPoint: atHaltPoint(line.flight),
+        held: line.diagram.nodes.some((n) => !!n.held),
       })
     : "idle";
   const rowOf = (t: string | undefined) => (t ? p.rows.find((r) => r.title === t) : undefined);

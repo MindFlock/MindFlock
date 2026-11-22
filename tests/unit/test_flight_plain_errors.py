@@ -33,7 +33,7 @@ def test_the_phone_says_a_halt_point_is_before_its_stop():
         'return at ? "Paused before " + at + " — Carry on" : "Paused at its halt point — Carry on";'
         in js
     )
-    assert '"reached its halt point before "' in js
+    assert '” reached its halt point before "' in js
     assert (
         '"\'s route is paused " + (hpAt ? "before " + hpAt : "at its halt point")' in js
     )

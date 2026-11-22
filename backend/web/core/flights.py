@@ -677,9 +677,31 @@ def kinds_dto() -> dict:
                 "family": spec.get("family") or _FAMILY.get(kind, "outside"),
                 "default_on_fail": spec.get("default_on_fail") or "halt",
                 "parallel_safe": parallel_safe(kind),
+                "can_fail": can_fail(kind),
+                # Waits for the route's session (:func:`_session_hold`): with
+                # that session closed, Retry only waits — Run again reopens it.
+                "needs_session": kind in SESSION_KINDS,
             }
         )
     return {"kinds": out, "on_fail": list(ON_FAIL)}
+
+
+#: Kinds that never fail: a Wait for me only waits for the person's Done (its
+#: on_fail is forced to halt, :func:`_step`), a Wait only counts down
+#: (:func:`_judge_wait` is done or waiting). Their stop dialog offers no "If
+#: it fails" (docs/flights.md "Kinds").
+NEVER_FAILS = frozenset({"you", "wait"})
+
+
+def can_fail(kind: str) -> bool:
+    """Whether a step of ``kind`` can fail (and so whether its ``on_fail``
+    means anything). A plug-in kind says so with ``spec["can_fail"]``."""
+    if kind in NEVER_FAILS:
+        return False
+    plug = _kinds.get(kind)
+    if plug is not None and plug.spec.get("can_fail") is False:
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -3723,7 +3745,9 @@ def event_data(flight: dict) -> dict:
         text, _items_ = you_text(flight)
         detail = "%s: %s" % (flight["session"] or flight["plan_name"], text)
     elif flight["state"] == "paused" and flight["reason"] == HALT_POINT:
-        detail = "%s: halted before %s" % (
+        # A halt point pauses (docs/vocabulary.md), it never "halts": the
+        # bell's words, "paused before Push — your halt point" (round 5).
+        detail = "%s: paused before %s — your halt point" % (
             flight["session"] or flight["plan_name"],
             step.get("title") or "the next stop",
         )
@@ -5663,7 +5687,13 @@ def _hit_halt_point(flight: dict, now: float) -> bool:
     flight["state"] = "paused"
     flight["reason"] = HALT_POINT
     flight["updated"] = now
-    _hist(flight, now, step["id"], "halted_at", "halted before %s" % step["title"])
+    _hist(
+        flight,
+        now,
+        step["id"],
+        "halted_at",
+        "paused before %s — your halt point" % step["title"],
+    )
     return True
 
 

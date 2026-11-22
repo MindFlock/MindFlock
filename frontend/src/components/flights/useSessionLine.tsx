@@ -46,7 +46,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { optimistic, optimisticDelete, stopToOpen, withSteps, withoutSteps } from "../../lib/flightOptimism";
-import { isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightStartOn, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
+import { FIX_LEADS, isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightStartOn, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
 import { LOOP_AGENT, atHaltPoint, drawnCanvas, findNode, firstStepOf, loopBackTo, loopChoices, loopSlotAfter, loopStepTo, reasonAfterTitle, receiptOf, sessionDiagram, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
 import {
   dropGroup,
@@ -252,7 +252,8 @@ export function shelfPlanFor(name: string, steps: readonly FlightStep[], planId:
  *  - the remedies: Retry (a failure; a Verify check that couldn't finish or
  *    couldn't start for memory), Carry on (whenever the route is paused —
  *    any stop's dialog), Done (a perch; "confirm" on a Verify sign-off), and
- *    `primary` the one that usually works.
+ *    `primary` the one that usually works — Let the agent fix it on a test,
+ *    CI or Verify failure the agent can take (round 5), else Retry.
  *  - `editNow`: the current stop's settings can change now — it failed
  *    ("retry") or the route waits at its halt point with nothing run yet
  *    ("resume"); the server resets it on Save so that remedy runs them.
@@ -269,7 +270,7 @@ export interface HereStop {
   done: "" | "done" | "confirm";
   retry: boolean;
   resume: boolean;
-  primary?: "done" | "retry" | "resume";
+  primary?: "done" | "retry" | "resume" | "fix";
   ask: StopAsk;
   findings: string;
   owed: OwedGroup[];
@@ -301,6 +302,9 @@ export function hereStop(flight: Flight | null | undefined, n: DiagramNode): Her
   else if (haltPoint && (rec?.state || "pending") === "pending") out.editNow = "resume";
   if (n.state === "perched" && Array.isArray(d.items)) out.asks = (d.items as unknown[]).map(String).filter(Boolean);
   out.primary = out.retry ? "retry" : out.resume ? "resume" : out.done ? "done" : undefined;
+  // A test, CI or Verify failure the agent can take: Let the agent fix it
+  // leads (lib/flights FIX_LEADS — re-running alone rarely mends it).
+  if (out.primary === "retry" && failed && FIX_LEADS.has(n.step.kind) && canFixStep(flight)) out.primary = "fix";
   const reason = cap(String(n.reason || failedReason || rec?.note || "").trim());
   // The dialog names the stop above this line: "It failed: test_export_empty",
   // not "It failed: CI checks failed: test_export_empty".

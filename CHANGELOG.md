@@ -201,6 +201,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A contrast test for every theme** (`themeContrast.test.ts`): every theme ×
   light/dark × accent is measured — text, secondary text, state colours,
   accents, the terminal, brightness — so a new or edited theme cannot regress.
+### Changed
+
+- **A session at a Wait for me stop reads "Needs you: <stop>"** on the Sky,
+  the rail, the bell, the phone and in voice ("Wait for me" stays the stop
+  kind's name).
+- **A route at a halt point needs you.** Its chip is amber "Paused before
+  <stop>", in the bell, as the frame already said; a pause you made stays
+  calm and says "Paused by you".
+- **The route's first Agent stop has its own face** — a clipboard and "gives
+  the agent the ticket" — so it no longer looks like the agent tile beside it.
+- **A shelf click adds the stop to the route you are building** (the focused
+  route with no session); with none it places a new route and focuses it.
+  Dragging still places a stop anywhere.
+- **A route with no session shows its name and ▶ Run at rest**, quietly, not
+  only on hover.
+- **Let the agent fix it leads on a test, CI checks or Verify failure**
+  (Retry beside it) — on the stop, its dialog and menu, the Needs-you panel,
+  the bell and the phone (which gains the button).
+- **A halted route whose session was closed leads with Run again** (it
+  reopens the session); Retry is offered there only where it can run without
+  the session.
+- **The Intake lane folds itself on a narrow Sky** (under 900 px) and opens
+  again with room — never against a fold or an open you made by hand.
+- **A stop held by an offline or usage-limited agent no longer glows
+  "working".** It reads "Held · agent offline" (with Restart) or "Held · usage
+  limit, resumes 14:30" in a still, dashed tone; the bird stops bobbing, the
+  bar says "held at <stop>", and the phone's row and voice say it too.
+- **Voice reads a route's state** (Needs you: <stop>, Paused before <stop>,
+  Halted, Paused by you) as the phone does, and says "Login fix needs you: …"
+  rather than "is needs you".
+
+### Added
+
+- **`can_fail` and `needs_session` on `GET /api/flights/kinds`** (and in
+  `describe_flight`'s stop lines: "cannot fail (on_fail unused)"). The stop
+  dialog reads `can_fail` instead of a hard-coded list, which stays as the
+  fallback for an older server or a peer.
 
 ## [0.14.25] - 2026-11-20
 

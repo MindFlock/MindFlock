@@ -98,26 +98,46 @@ Flights button as tabs of a Flights dialog; round 8 retired it — see
   with no session yet shows under **All** and **Mine**. **This session** (the
   default) shows one session's route only: with no session at all, placing a
   stop moves the view to All; otherwise a toast says where it went, with
-  **Show all**.
+  **Show all**. A **click** on a shelf chip adds that stop to the end of the
+  route you are building (the focused route with no session — the one a click
+  just placed, or one you clicked); with none focused it places a new route
+  and focuses it, so the next click joins it. A toast says where it went;
+  click empty sky first to start another route. **Dragging** still places a
+  stop anywhere: on empty sky a new route, on a route onto that route. A route
+  with no session shows its name and its **▶ Run** quietly at rest (full on
+  hover), so it can be run without hunting for it.
 - **Know what a stop will do.** Open a stop (double-click) and its first
   line says it with your settings — "Commits, pushes and opens the pull
   request.", "Waits up to 60 min for the PR's CI checks to pass." — then its
-  halt point, "Only when" and what a failure does. A Wait and a Wait for me
-  cannot fail and offer no "If it fails".
+  halt point, "Only when" and what a failure does. A kind that cannot fail
+  (the server's `can_fail: false` on the kind — a Wait and a Wait for me)
+  offers no "If it fails".
 - **Run it.** A route on a session runs its stops in order; the bird shows
   where the work is, and a stop with a ✓ is done.
 - **Wait for me** stops the route until you press **Done** (or **Skip**) on
-  the stop or in the bell; the route then **Needs you**.
+  the stop or in the bell; the session then reads **Needs you: <stop>**
+  everywhere (the Sky, the rail, the bell, the phone, voice) — "Wait for me"
+  is the stop's kind, never a session's state.
+- **The route's first Agent stop** ("Agent works the ticket") wears a task
+  face — a clipboard and "gives the agent the ticket" — so it is not read as
+  the agent tile beside it said twice: the tile is the session's agent, the
+  stop is the work handed to it.
 - **A stop that fails halts the route** (its *If it fails* option, Halt by
   default): the route is **Halted** — the stop turns red with the reason, and
-  offers **Retry**, **Skip** and **Let the agent fix it**.
+  offers **Retry**, **Skip** and **Let the agent fix it**. On a test, CI
+  checks or Verify failure **Let the agent fix it** leads (re-running alone
+  rarely mends those), Retry beside it; on any other kind Retry leads. The
+  stop, its dialog, its menu, the Sky's Needs you panel, the bell and the
+  phone offer them in that order.
 - **Paused** is a person's hold: **Pause** (the stop's menu, the bird) stops
   the route where it is, and **Carry on** picks it up. A **halt point**
   (**Add halt point** / **Remove halt point** on a stop) pauses the route when
   it reaches that stop, before doing it ([Halt points](#halt-points)). A paused
-  route offers Carry on and Skip right on its stop and in the pane strip; one
-  paused at a halt point is in Needs you as "Paused at <stop> — Carry on" (a
-  pause you made yourself is not).
+  route offers Carry on and Skip right on its stop and in the pane strip. One
+  paused at a halt point **needs you**: its session's chip is amber "Paused
+  before <stop>" (the bell: "Paused before <stop> — Carry on"), as the frame
+  says. A pause you made yourself stays calm: "Paused by you" (a pause the
+  server made — a stop removed while it ran — "Paused route").
 - **Every stop that waits says why**, in plain words, with an action that
   works: the stop's own reason ("2 steps for you to check, then confirm"),
   "Failed: …" on a failure handed to you (Retry, Let the agent fix it, Skip),
@@ -132,9 +152,18 @@ Flights button as tabs of a Flights dialog; round 8 retired it — see
   ago". The agent tile shows only what the agent is doing; the stop that
   waits shows why, with its buttons.
 - **When the agent itself is down** (Offline), the route waits at its stop;
-  the chip on the Sky says **Offline · Restart** — press it. A route whose
-  session was closed says so in Needs you, with Retry, Skip and **Stop the
-  route**. A route that ended offers **Run again** in its ⋯.
+  the chip on the Sky says **Offline · Restart** — press it. The stop it waits
+  at is **held**: never the green "working" glow, but a still, dashed tile in
+  the waiting tone reading "Held · agent offline" with **Restart** on it
+  (**Start** for an agent held offline after a crash), or "Held · usage
+  limit, resumes 14:30" (it goes on by itself); the bird sits still, the bar
+  says "held at <stop>", the phone's row "Held at <stop> · agent offline". A
+  route whose session was closed says so in Needs you: a halted one leads
+  with **Run again** (the server reopens the session from Recently closed and
+  runs the route from that stop), Retry beside it only on a stop that needs
+  no session (the kind's `needs_session: false` — elsewhere Retry would only
+  wait for the session), then Skip and **Stop the route**. A route that ended
+  offers **Run again** in its ⋯.
 - **Edit the stop the route is on** when it failed, or when the route is
   paused before it with nothing run yet: Save, then Retry or Carry on runs it
   with the new settings ([Flow polish](#flow-polish-2026-11-10-as-built)).
@@ -616,7 +645,7 @@ No model installed → 409 `no_model`.
 
 | Method and path | Body / query | Returns |
 |---|---|---|
-| `GET /api/flights/kinds` | | `{"kinds": [{kind, label, actor: "robot"|"you", summary, fields: [{name, type: "text"|"textarea"|"int"|"bool"|"select", label, options?, option_labels?, default?, placeholder?}], default_title}]}` (`option_labels`: `{option: words}`, e.g. a Verify stop's `who` → "Agent, then me") |
+| `GET /api/flights/kinds` | | `{"kinds": [{kind, label, actor: "robot"|"you", summary, fields: [{name, type: "text"|"textarea"|"int"|"bool"|"select", label, options?, option_labels?, default?, placeholder?}], default_title, risk, family, default_on_fail, parallel_safe, can_fail, needs_session}]}` (`option_labels`: `{option: words}`, e.g. a Verify stop's `who` → "Agent, then me"; `can_fail`: false for a kind whose `on_fail` means nothing — a Wait for me, a Wait, a plug-in with `spec["can_fail"] = False`; `needs_session`: the kind waits for the route's session, so with that session closed Retry only waits — Run again reopens it) |
 | `GET /api/flights/plans` | | `{"plans": [Plan]}` (built-ins first) |
 | `POST /api/flights/plans` | Plan (no `id` = create; `id` = replace) | `{"plan": Plan}`; 400 with `{"error", "detail", "field"}` on a bad step (strict: see [Flow polish](#flow-polish-2026-11-10-as-built)) |
 | `DELETE /api/flights/plans/{id}` | | 204; a built-in is reset to its default instead of removed |
@@ -2061,7 +2090,7 @@ The planner: when the cursor lands on a pending step with `halt` (`_advance`
 after a step finishes, or `next_action`'s `hold` verdict for a flight that
 takes off on one, is jumped onto, or gets one set on its current pending
 step), the flight goes `paused` with `reason: "halt point"`, history
-`halted_at` ("halted before <title>") and `step_states[sid].detail.halt_hit
+`halted_at` ("paused before <title> — your halt point"; the key keeps its old name) and `step_states[sid].detail.halt_hit
 = true`, before its executor starts. `halt_hit` lets it through after that:
 Resume carries on into the step and does not stop there again; a retry keeps
 it. Any "go" on the current step counts as passing its halt point (Resume,

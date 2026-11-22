@@ -68,7 +68,7 @@ describe("the pane's Verify strip", () => {
 });
 
 describe("the bell's row for a route paused at a halt point", () => {
-  it("a calm chip, Carry on and Skip — not a red row with only Open", async () => {
+  it("an amber chip (round 5), Carry on and Skip — not a red row with only Open", async () => {
     const { WaitingRow } = await import("../components/outbox/WaitingRow");
     const { withFlightRows } = await import("../lib/needsYou");
     const flight = {
@@ -89,7 +89,8 @@ describe("the bell's row for a route paused at a halt point", () => {
       createElement(QueryClientProvider, { client }, createElement(WaitingRow, { w, shown: (t: string) => t } as never))
     );
     expect(html).toContain("ob-flight_paused");
-    expect(html).toContain('<span class="pr-open-chip" title="Paused before Push — Carry on">Paused before Push</span>');
+    // Round 5: a halt point needs you — the amber (warn) chip.
+    expect(html).toContain('<span class="pr-open-chip warn" title="Paused before Push — Carry on">Paused before Push</span>');
     expect(html).toMatch(/<button[^>]*>Carry on<\/button>/);
     expect(html).toMatch(/<button[^>]*>Skip<\/button>/);
     expect(html).not.toContain("pr-open-chip bad");
