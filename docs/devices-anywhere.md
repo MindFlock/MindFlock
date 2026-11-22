@@ -24,7 +24,9 @@ party in the path and a stable address.
 Code: `backend/peer/fleet_record.py` (record crypto),
 `backend/peer/fleet_tunnel.py` (carrier, handshake, local proxies),
 `backend/web/core/github_records.py` (the GitHub store),
-`backend/web/core/devices_anywhere.py` (lifecycle, reader, status).
+`backend/web/core/devices_anywhere.py` (lifecycle, reader, status),
+`backend/peer/fleet_pair.py` + `backend/web/core/devices_pair.py` (adding a
+NEW device without Tailscale, §7).
 
 ## 1. Where in GitHub the record lives
 
@@ -189,7 +191,9 @@ addresses, forged pins and replays.
   request gets the same empty `404` (no banner, no handshake slot used).
 - Behind the path: the pinned TLS server and the proof above. A visitor
   without the fleet key gets `{"t":"denied"}` (or a timeout) and never a
-  byte from the HTTP server.
+  byte from the HTTP server. The same hello also takes a pairing code's
+  `pair` frame (§7); that branch does its exchange and closes — it never
+  reaches the HTTP server either.
 - Pre-auth limits: at most 16 unauthenticated handshakes at once, a 10 s
   handshake deadline, and the ingress's own caps (32 pending heads, 64 open
   WebSockets).
@@ -225,8 +229,9 @@ addresses, forged pins and replays.
 ## 5. Lifecycle
 
 - **Switch on** (this device only; the setting is per device and never
-  synced; only `POST /api/devices/anywhere` changes it — the generic
-  settings save drops the field, and that route refuses another MindFlock
+  synced; only `POST /api/devices/anywhere` (and §7's two pairing routes, on
+  this device) changes it — the generic
+  settings save drops the field, and those routes refuse another MindFlock
   relaying and anything that came through the tunnel): start the ingress, start the quick tunnel, wait for its name, then
   **publish** the record. A tunnel that dies is restarted with backoff
   (5 s → 5 min). Each restart gets a new token and hostname and is published
@@ -266,6 +271,111 @@ it. Leaving the fleet does the same. Removing a device rotates the fleet key,
 which makes every record under the old key unreadable, and the remaining
 devices republish under the new one.
 
+## 7. Adding a new device without Tailscale
+
+Everything above connects devices that already hold the group key. A
+computer that has nothing yet (no key, no GitHub sign-in, no Tailscale) joins
+with one long code instead of the 8-character one, whose `redeem` needs the
+two to reach each other directly.
+
+**For the person:** on the first computer, Settings → Your devices → Add a
+device → **It isn't on my network**: a long code (`mfd1:…`, Copy, and a QR).
+On the new computer, paste it into **Paste a code** on the same screen and
+Join. A box under it, ticked by default, says it also turns on Reach my
+devices from anywhere there. `mindflock join mfd1:…` does the same
+(`--no-anywhere` to leave the switch off).
+
+### The code
+
+```
+mfd1:<base32(payload)>-<checksum>            checksum = base32(sha256(payload)[:3])[:4]
+payload = ver(1)=1 | kind(1) | where | path(16) | fp(16) | invite_id(8) | secret(20)
+  kind 1: where = len(1) | label        → wss://<label>.trycloudflare.com/<base32(path)>
+  kind 2: where = port(2)               → wss://127.0.0.1:<port>/…   (the loopback TEST carrier only)
+```
+
+`path` is the ingress's 128-bit path token (§4), `fp` the inviter's
+identity fingerprint, `secret` 160 random bits that never travel. A code is
+made only while the inviter's tunnel is up (the flow offers to turn the
+switch on, and starts a group of one when there is none), lasts **10
+minutes**, works **once**, dies after **5 wrong proofs**, and dies when the
+tunnel restarts (its address is in it). Making a new one cancels the old: at
+most one live secret. A global limit caps proof attempts at 10 a minute
+across all codes. Codes live in memory only; a restart kills them.
+
+### The exchange
+
+Inside the same pinned TLS 1.3 as §3, answering the same hello:
+
+```
+S→C {"t":"hello","v":1,"nonce":sn}
+C→S {"t":"pair","v":1,"nonce":cn,"invite":<id>,"device","host","dns","runs",
+     "proof":HMAC(secret, "mfpair-client-v1" | T)}
+S→C {"t":"ok","v":1,"from":<inviter>,"bundle":{…},
+     "proof":HMAC(secret, "mfpair-server-v1" | T | inviter)}     or {"t":"denied"}
+C→S {"t":"confirm","proof":HMAC(K_confirm, "mfpair-confirm-v1" | T | inviter)}   or {"t":"abort"}
+S→C {"t":"added"}                                                 and close
+
+T         = server_pub | sn | cn | invite_id | device | host | dns | runs   (each length-prefixed)
+K_confirm = HKDF(group key, purpose "pair-confirm", group id, epoch)        (the key the bundle carried)
+```
+
+- **The joiner pins first.** It checks `sha256(server_pub)[:16]` against the
+  code's `fp` (constant time) before it sends a byte, then reads the hello.
+- **The inviter checks the proof** (constant time; an unknown id is checked
+  against a random key, so timing says nothing) before it answers anything.
+  A wrong, unknown, expired, used or rate-limited code all get the same
+  `{"t":"denied"}`. A right proof **consumes** the code.
+- **The joiner checks the inviter's proof** before it takes the bundle. The
+  bundle is exactly what a redeemed 8-character code hands out (`bundle_for`:
+  the key, the roster, a live entry for the joiner, the person); the
+  inviter's own roster is not touched yet.
+- **No ghost member.** The joiner adopts the bundle, then sends `confirm`,
+  MAC'd with a key derived from the group key it just took. Only a valid
+  confirm puts the joiner on the inviter's roster (and runs `after_admit`:
+  remote control on, settings sync seeded, the admit row). A joiner that
+  refuses the bundle (already in another group with other devices) sends
+  `abort`; one that vanishes, or sends a bad confirm, adds nothing. If the
+  joiner never gets `added`, it puts its previous group state back, so it
+  doesn't keep a key its group doesn't know it has.
+- **One name, one device.** The joiner may not take the inviter's name, nor
+  a live member's (the tunnel can't bind a name to an address the way the
+  tailnet does for the 8-character code). That refusal (`same_name`) is sent
+  only after a valid proof, so a wrong code learns nothing from it.
+- **That branch is all the code can do.** After `added` (or any refusal) the
+  stream closes; it never reaches the web server, is counted with the
+  unauthenticated handshakes (§4's limit of 16), and has a 60 s deadline.
+
+### After the pairing (the joiner)
+
+1. The inviter's person becomes this device's, and remote control goes on
+   (joining is the permission), as in any join.
+2. The inviter's address comes **from the code** (`devices_anywhere.seed`):
+   the joiner has no GitHub sign-in yet, so it can't read the address book.
+   The seeded address is only where to dial — the pin and the group-key
+   proof still decide — and it is kept until GitHub has that device's own
+   record (at most a day).
+3. Box ticked: the switch goes on here, discovery reaches the inviter through
+   its tunnel (it admits the joiner now: it is on its roster), and the join
+   finishes as any other (`fleet.after_adopt`): the other members are told,
+   settings sync starts **from the inviter**. The join line reads *"Joined
+   <host>. Finishing setup — reaching it through its private tunnel and
+   bringing over its settings…"*.
+4. Settings sync normally brings the GitHub sign-in (`github.token` is a
+   shared setting). The joiner then publishes its own address at once, and
+   the inviter, which looks for it (`want_read`, and the joiner's first
+   connection does too), reaches it. Until then **only the joiner can reach
+   the inviter**: the inviter's row says *"<host> joined. It can reach this
+   computer already; this one reaches <host> once it saves its address —
+   that needs GitHub sign-in on <host>…"*.
+5. No GitHub sign-in on the joiner after the sync (the inviter used `gh`'s
+   login or an environment token, which don't sync): the join line says
+   *"<host> can't reach this computer yet: GitHub isn't signed in here … Connect
+   GitHub (Settings → GitHub) with the same account as on <host>."*
+6. Box unticked: the join is complete (both rosters), the switch stays off,
+   and the line says the two can't reach each other until it is on here or
+   both use Tailscale. No settings sync runs.
+
 ## Threat model summary
 
 | Threat | Defense |
@@ -274,7 +384,7 @@ devices republish under the new one.
 | A forged or stale address in GitHub | Records are AEAD under a fleet-derived key, slot-bound, counter- and age-checked. An address that still gets through only says where to dial: pin + proof fail → failed connection. |
 | An internet scanner on the tunnel URL | One 128-bit path; everything else a constant 404; nothing reaches the HTTP API before the proof. |
 | A tunneled request posing as "this machine" | Tunnel connections are registered by source port (a counted hold, so a closed stream's late release can't unmark a live one on the same port) and treated as remote, gate on; forwarded headers ignored. |
-| Another device turning this device's tunnel on | Only `POST /api/devices/anywhere` sets the switch, and only from this device (never relayed, never tunneled); the generic settings save drops the field; settings sync never carries it. |
+| Another device turning this device's tunnel on | Only `POST /api/devices/anywhere` (and §7's pairing routes) sets the switch, and only from this device (never relayed, never tunneled); the generic settings save drops the field; settings sync never carries it. |
 | A crash leaving cloudflared running toward a freed port | Linux PDEATHSIG; a pid registry and an exact-match reaper (pid + start time + arguments) at server and tunnel start; the local proxies refuse anything not sent by this server's own client. |
 | A renamed / transferred / re-published GitHub repo | No redirects followed; the repo must be `<login>/mindflock-devices`, owned by the login, private — re-checked before every write. |
 | Piping to the wrong local port | The origin is the port the server was started on and that this process listens on; unknown → the tunnel doesn't start. |
@@ -282,6 +392,14 @@ devices republish under the new one.
 | A removed device | Holds only the old key: can't decrypt new records or pass the current-epoch handshake. Its open streams are ended when the key changes. |
 | A malicious member | Same as today: the fleet key is a full credential on every member. Over the tunnel one member could also claim another's name (Tailscale binds names, the fleet key does not); it gains nothing it doesn't already have. |
 | Metadata | GitHub sees when each device updates its record (and that a `mindflock-devices` repo exists). Cloudflare sees IPs, timing and volume, as for peer relays. |
+| **Pairing (§7)** — reachable from the internet before any trust exists | Only someone with the code even finds the pair branch (the 128-bit path is in it). Everything before a valid proof answers the same `denied`; the proof is checked in constant time; nonces from both ends; 10 attempts a minute across all codes. |
+| Guessing a code / replaying one | 160-bit secret; 5 wrong proofs kill the code; a used, expired or restarted-away code is gone (same `denied`). A replayed `pair` frame fails on the server's fresh nonce. |
+| A man in the middle on the code's address (Cloudflare, a stolen hostname) | The joiner pins the inviter's fingerprint from the code before sending anything; the proofs bind the TLS key it saw. A relay to the real inviter can't read or alter the TLS. |
+| A stolen code (someone else saw it) | Inherent to codes: whoever uses it first joins — so one live code, single use, 10 minutes; "send it only to yourself" is said next to it; the joiner shows up under Your devices and can be removed (which rotates the key). |
+| A joiner that takes the bundle and fails | Not on the inviter's roster without a confirm MAC'd with the group key; a joiner that never got `added` drops the key again. Lost `added` after a valid confirm leaves the inviter listing a device that dropped the key: harmless (it's yours), and a new code fixes it. |
+| A code holder naming itself after one of your devices | Refused (`same_name`), after a valid proof only. |
+| The secret leaking | Never sent, logged, put in a URL or reprs; it goes to the joiner's own server in a request body. The code is shown only to this device's own browser (privileged, never relayed or tunneled). |
+| Pairing weakening same-network pairing | Separate code format, book and handshake branch; `redeem`/`requests` are unchanged. |
 
 ## Manual check (about ten minutes)
 
@@ -309,11 +427,40 @@ GitHub account:
    server); `POST /api/settings` with `{"general":{"devices_anywhere":true}}`
    leaves the switch off.
 
+## Manual check: a new device without Tailscale (about ten minutes)
+
+Two computers: A with MindFlock signed in to GitHub (Settings → GitHub; a
+token saved there, so settings sync carries it), and B, a fresh install with
+**no Tailscale** (or `tailscale down`) and no GitHub sign-in.
+
+1. On A: Settings → Your devices → Add a device → **It isn't on my network**.
+   With the switch off, it asks first; confirm. A long `mfd1:…` code shows,
+   with a QR and "Works once · expires in 9:5x".
+2. On B: Settings → Your devices → paste the code into **Paste a code**. The
+   note says it joins through A's private tunnel; the box *Let my devices
+   reach this computer from anywhere* is ticked. Join.
+3. B's line goes "Joining…" → "Joined A. Finishing setup…" → "Joined A."
+   within a minute or so. A's code is gone; A lists B ("B joined. It can
+   reach this computer already…" until B's address is in GitHub).
+4. Within a couple of minutes: your `mindflock-devices` repo has two `.rec`
+   files; each computer lists the other reachable `via: "tunnel"`; B's
+   Settings → GitHub shows the token that came with settings sync; a session
+   started on B from A (device forwarding) works.
+5. Failure spot checks: paste the same code again on B (or on a third
+   computer): *"That code didn't work …"*. Change one character in a fresh
+   code: *"That code is damaged …"* or *"didn't work"*; five such tries kill
+   the code on A. Untick the box on a fresh joiner: it joins, its switch
+   stays off, and its line says the two can't reach each other yet.
+6. Without a GitHub token on A's Settings (A uses `gh auth login` only): B's
+   line ends with *"GitHub isn't signed in here … Connect GitHub"*; after
+   connecting GitHub on B, A reaches B within a few minutes.
+
 ## Not covered in this round
 
-- **Joining the group without Tailscale.** Pairing by code (`redeem`,
-  `requests`) still needs the two devices to reach each other directly. The
-  feature connects devices that are already in one group.
+- **A new device whose name has a dot.** Off the tailnet a device's name is
+  its OS hostname, lowercased; one like `ethans-macbook-pro.local` isn't a
+  valid device name, so its join stops with a plain message (the same holds
+  for the tunnel and every other join today).
 - **Same-network (LAN) discovery without Tailscale.** "Direct first" means
   the paths discovery already probes.
 - A stable name (a named tunnel) and an in-app `cloudflared` download that

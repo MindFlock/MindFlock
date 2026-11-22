@@ -820,8 +820,16 @@ devices' codes (`XXXX-XXXX`, `DEVICE CODE`, or the whole `mindflock devices
 join DEVICE CODE` line) runs `devices join` — a bare code goes to the one
 computer on your tailnet that can be joined, and with several it asks which
 (`--yes` skips the settings question as there). Someone's peer invite
-(`mfp1:`/`mfp2:`, also inside a pasted message) runs `peer join`. Anything
-else exits 1 saying what the two formats look like.
+(`mfp1:`/`mfp2:`, also inside a pasted message) runs `peer join`. A long
+`mfd1:` code (Settings → Your devices → Add a device → *It isn't on my
+network* on the other computer) joins your devices through that computer's
+private tunnel — no Tailscale on either side
+([devices-anywhere.md §7](devices-anywhere.md#7-adding-a-new-device-without-tailscale)):
+it turns on Reach my devices from anywhere here unless `--no-anywhere`, waits
+for the join to finish (up to 4 minutes), prints `joined <host>'s devices` and
+any line about what is left (a missing GitHub sign-in here), and exits 1 with
+the reason when it fails. Anything else exits 1 saying what the formats look
+like.
 
 ### `mindflock devices [list|add|join|cancel|approve|deny|remove|leave|update|bootstrap]`
 

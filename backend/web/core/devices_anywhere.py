@@ -28,6 +28,11 @@ An address found in GitHub only says where to dial; it never grants trust
 (the pin and the proof do), and the web server treats what comes through the
 tunnel as a remote caller with the gate on (``auth``, ``tunnel_peers``).
 
+* **A new device, paired** — the tunnel server also answers a pairing code
+  (:mod:`backend.web.core.devices_pair`, :mod:`backend.peer.fleet_pair`);
+  the joiner gets the inviter's address from the code itself
+  (:func:`seed`), so it reaches the inviter before it can read GitHub.
+
 Turning it off stops the tunnel, the ingress and every proxy, and deletes
 this device's record. Nothing here logs the fleet key, a derived key, a
 record's content or the tunnel address.
@@ -108,6 +113,9 @@ class _State:
         self.lock: Optional[asyncio.Lock] = None
         # (fleet id, epoch) seen last tick: a change ends old streams.
         self.keys_tag = None
+        # device -> until (epoch s): an address that came in a pairing code
+        # (seed), kept while GitHub has no record for that device yet.
+        self.seeded: Dict[str, float] = {}
 
 
 _S = _State()
@@ -319,9 +327,19 @@ def _make_server():
             members=_members,
             origin_port=_origin_port,
             on_member=_on_incoming,
+            pair=_pair_handler,
         ),
         ident.fingerprint().hex(),
     )
+
+
+async def _pair_handler(
+    reader, writer, server_pub: bytes, sn: bytes, msg: dict
+) -> None:
+    """A new device with a pairing code came in through the tunnel."""
+    from backend.web.core import devices_pair
+
+    await devices_pair.serve(reader, writer, server_pub, sn, msg)
 
 
 def _make_tunnel(binary: str, port: int):
@@ -405,6 +423,12 @@ async def _start() -> None:
     _S.url = url
     _S.died = False
     _S.tunnel_state, _S.tunnel_error, _S.tunnel_reason = "up", "", ""
+    try:  # a pairing code names the old address: it can't be used any more
+        from backend.web.core import devices_pair
+
+        devices_pair.tunnel_changed(url)
+    except Exception:  # noqa: BLE001
+        pass
     _S.restart_delay = RESTART_MIN
     log.info("devices anywhere: private tunnel up")
     await publish()
@@ -601,14 +625,19 @@ async def read_records() -> int:
                 _S.file_sha[name] = sha2 or sha
                 continue
             _S.file_sha[name] = sha2 or sha
+            _S.seeded.pop(device, None)  # its own record now says where it is
             old = _S.addrs.get(device)
             if old is None or old.url != rec.url or old.fp != rec.fp:
                 changed += 1
                 _S.dial.pop(device, None)
             _S.addrs[device] = rec
             seen[device] = rec.ctr
-        # A device whose record is gone (switched off, left) has no address.
+        # A device whose record is gone (switched off, left) has no address —
+        # unless the address came in the pairing code and that device hasn't
+        # published yet (no GitHub sign-in there, or not yet).
         for device in list(_S.addrs):
+            if device in members and _seed_live(device, now):
+                continue
             if device not in members or _rec.file_name(keys, device) not in files:
                 _S.addrs.pop(device, None)
                 changed += 1
@@ -624,6 +653,98 @@ async def read_records() -> int:
     await _sync_proxies()
     _write_status()
     return changed
+
+
+#: How long an address from a pairing code is used while GitHub has no record
+#: for that device (it is only where to dial: the pin and the proof decide).
+SEED_TTL = 86400.0
+
+
+def _seed_live(device: str, now: float) -> bool:
+    until = _S.seeded.get(device)
+    if until is None:
+        return False
+    if now >= until:
+        _S.seeded.pop(device, None)
+        return False
+    return True
+
+
+def seed(device: str, url: str, fp_hex: str) -> None:
+    """Use ``url`` (pinned to ``fp_hex``) for ``device`` — the address a
+    pairing code carried, which the joiner checked (pin + the inviter's
+    proof) — until GitHub has that device's own record, at most
+    :data:`SEED_TTL`. Raises ValueError for a malformed one."""
+    _rec.check_url(url, loopback=_loopback())
+    if not _rec._FP_RE.match(fp_hex or "") or not _rec._DEVICE_RE.match(device or ""):
+        raise ValueError("bad address")
+    now = time.time()
+    _S.addrs[device] = _rec.Record(device=device, url=url, fp=fp_hex, ctr=0, ts=now)
+    _S.seeded[device] = now + SEED_TTL
+    _S.dial.pop(device, None)
+
+
+def current_url() -> str:
+    """This device's tunnel address while it is up ("" otherwise). Never
+    logged; only ever put into a pairing code for this device's own screen."""
+    return _S.url if _S.tunnel_state == "up" else ""
+
+
+def fingerprint() -> str:
+    """This device's identity fingerprint (hex) as the tunnel presents it."""
+    return _FP
+
+
+async def ensure_up(timeout: float = 45.0) -> bool:
+    """Bring the tunnel up now if it isn't (the switch must be on and this
+    device in a group) and wait for it → whether it is up."""
+    if current_url():
+        return True
+    await apply()
+    task = _S.start_task
+    if task is not None and not task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout)
+        except (asyncio.TimeoutError, TimeoutError, Exception):  # noqa: BLE001
+            pass
+    return bool(current_url())
+
+
+async def publish_soon() -> None:
+    """Something that publishing needs may have just arrived (settings sync
+    brought the GitHub sign-in): try GitHub again now instead of after the
+    backoff. Never raises."""
+    _S.write_retry_at = 0.0
+    _S.read_at = 0.0
+    if _S.github.get("state") != "rate_limited":
+        _S.github = {"state": "unknown", "text": "", "retry_at": 0.0}
+    if not os.environ.get(STORE_ENV):
+        _S.store = None
+    await tick()
+
+
+async def github_ready() -> bool:
+    """Whether this device has a GitHub sign-in the address book can use
+    (a token at all — the repo checks come at the first write). The folder
+    test store always counts. Never raises."""
+    if (os.environ.get(STORE_ENV) or "").strip():
+        return True
+    try:
+        from backend.web.core import github_pr
+
+        return bool(await github_pr.api_token())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def save_switch(on: bool) -> None:
+    """Save the switch (this device only; never synced). Raises on a
+    settings file that can't be saved."""
+    from backend.config import settings as settings_store
+    from backend.web.core import settings_sync as _sync
+
+    settings_store.update_settings(general={"devices_anywhere": bool(on)})
+    _sync.local_change()
 
 
 def _route(device: str):
@@ -862,6 +983,7 @@ async def _shutdown() -> None:
         except Exception:  # noqa: BLE001
             pass
     _S.addrs.clear()
+    _S.seeded.clear()
     _S.file_sha.clear()
     _S.dial.clear()
     _S.tunnel_state, _S.tunnel_error, _S.tunnel_reason = "off", "", ""

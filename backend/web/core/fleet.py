@@ -765,6 +765,14 @@ def adopt_bundle(b: dict) -> List[str]:
     return exposed
 
 
+def restore(doc: dict) -> None:
+    """Put back a :func:`state` taken before an adopt that didn't complete
+    (a pairing whose inviter never acknowledged it): the key just adopted is
+    dropped again."""
+    with _LOCK:
+        _save(_normalize(copy.deepcopy(doc)))
+
+
 def add_member(key: str, host: str, by: str, dns: str = "") -> None:
     """Add (or re-add — a fresh ``added_at`` outranks an older tombstone)."""
     if not DEVICE_RE.match(key or ""):
@@ -2071,7 +2079,9 @@ def _settle_automation(joiner: str, joiner_runs: bool, admitter: str) -> None:
     _set_automation_device(joiner if joiner_runs else admitter)
 
 
-async def after_admit(joiner_runs: Optional[bool] = False, joiner: str = "") -> str:
+async def after_admit(
+    joiner_runs: Optional[bool] = False, joiner: str = "", via: str = ""
+) -> str:
     """This device just let another one in (a redeemed code, an approved
     request, a one-click add): make the membership real on THIS side too.
 
@@ -2110,7 +2120,7 @@ async def after_admit(joiner_runs: Optional[bool] = False, joiner: str = "") -> 
     if joiner_runs is not None and DEVICE_RE.match(joiner or ""):
         _settle_automation(joiner, bool(joiner_runs), _self_key())
     if DEVICE_RE.match(joiner or ""):
-        _note_admitted(joiner)
+        _note_admitted(joiner, via)
     return sync_error
 
 
@@ -2126,24 +2136,30 @@ _ADMITTED: Dict[str, dict] = {}
 #: Seconds after an admit at which the joiner is re-probed (it needs a moment
 #: to adopt the key and finish its own side). Empty: no automatic probe.
 ADMIT_PROBE_DELAYS: Tuple[float, ...] = (4.0, 15.0, 45.0)
+#: A device paired through the tunnel (``via`` "anywhere") is reachable from
+#: here only once it published its address (it needs GitHub sign-in for
+#: that, which settings sync usually brings): looked at for longer.
+ADMIT_PROBE_DELAYS_ANYWHERE: Tuple[float, ...] = (15.0, 45.0, 90.0, 180.0, 300.0, 600.0)
 #: How long an admit stays on the screen.
 ADMIT_SHOWN = 3600.0
 
 
-def _note_admitted(device: str) -> None:
+def _note_admitted(device: str, via: str = "", host: str = "") -> None:
     dev = _device(device)
     with _LOCK:
         _ADMITTED[device] = {
             "device": device,
-            "host": _label(dev, device),
+            "host": host or _label(dev, device),
             "at": _now(),
             "state": "checking",
             "reason": "",
+            "via": via,
         }
     if not ADMIT_PROBE_DELAYS:
         return
+    delays = ADMIT_PROBE_DELAYS_ANYWHERE if via == "anywhere" else ADMIT_PROBE_DELAYS
     try:
-        _spawn(_probe_joiner(device, ADMIT_PROBE_DELAYS))
+        _spawn(_probe_joiner(device, delays))
     except RuntimeError:  # no running loop (a sync caller)
         pass
 
@@ -2169,6 +2185,10 @@ async def probe_joiner(device: str) -> dict:
         return {}
     if snap.get("reachable"):
         rec.update(state="reachable", reason="", host=_label(snap, device))
+    elif rec.get("via") == "anywhere":
+        # It can reach THIS device already; this one reaches it once it saved
+        # its address to GitHub (no Tailscale reason applies).
+        rec.update(state="finishing", reason="")
     else:
         outcome = str(snap.get("probe") or "")
         rec.update(
@@ -2207,6 +2227,10 @@ def _idle_join() -> dict:
         "code": "",
         "error": "",
         "id": "",
+        # "anywhere": joined with a long code through the device tunnel.
+        "via": "",
+        # A plain line about what is left to do (devices_pair).
+        "note": "",
     }
 
 
@@ -2215,7 +2239,7 @@ _JOIN_TASK: List[Optional[asyncio.Task]] = [None]
 #: What withdrawing the outgoing request needs (never in join_status()):
 #: ``(device record, request id, secret)``.
 _JOIN_SECRET: List[Optional[tuple]] = [None]
-_BUSY = ("waiting", "joining")
+_BUSY = ("waiting", "joining", "finishing")
 
 
 def join_status() -> dict:
@@ -2409,7 +2433,7 @@ def cancel_join() -> dict:
     withdrawn on the other device (so it can't be approved after all).
     Refused once ``joining``: the bundle is in hand (or the code was
     sent) and the join completes — the state is returned unchanged."""
-    if _JOIN["state"] == "joining":
+    if _JOIN["state"] in ("joining", "finishing"):
         return join_status()
     task = _JOIN_TASK[0]
     if task is not None and not task.done():
@@ -2459,13 +2483,28 @@ async def _finish_join(dev: dict, b: dict, runs: Optional[bool] = None) -> None:
     except ValueError as err:
         _set_join(state="error", error=str(err))
         return
-    # Before settings sync starts: the inviter's person is this device's now.
-    _adopt_person(b.get("person") if isinstance(b, dict) else None, dev["key"])
+    adopted_side_effects(b, dev["key"])
+    await after_adopt(dev, exposed, runs)
+
+
+def adopted_side_effects(b: dict, admitter: str) -> None:
+    """Right after a bundle was adopted: the admitter's person is this
+    device's now (before settings sync starts), and remote control is on
+    (joining IS the permission). Never raises."""
+    _adopt_person(b.get("person") if isinstance(b, dict) else None, admitter)
     try:
         _enable_remote_control()
     except Exception as err:  # noqa: BLE001
         if log.ErrorLog is not None:
             log.ErrorLog.Printf("fleet: couldn't turn remote control on: %v", err)
+
+
+async def after_adopt(dev: dict, exposed: List[str], runs: bool, note_fn=None) -> None:
+    """The rest of a join once the bundle is adopted (:func:`_finish_join`,
+    and a pairing code through the device tunnel, ``devices_pair``): ``dev``
+    re-probed, the other members told, settings sync started from ``dev``,
+    automation settled, the join marked ``joined`` — with the line
+    ``await note_fn()`` gives, when given (asked after settings sync ran)."""
     await _refresh(dev["key"])
     await _announce(_visible_members(), roster(), fleet_key())
     if exposed:
@@ -2480,9 +2519,21 @@ async def _finish_join(dev: dict, b: dict, runs: Optional[bool] = None) -> None:
     # After ``dev``'s settings arrived: a choice the group already made
     # stands (what ``dev`` decides in after_admit too).
     _settle_automation(_self_key(), bool(runs), dev["key"])
+    note = ""
+    if note_fn is not None:
+        try:
+            note = str(await note_fn() or "")
+        except Exception:  # noqa: BLE001
+            note = ""
     # Joined — but a local-only device is a member the others can't reach:
-    # the join screen offers Make reachable right away (self_reachable).
-    _set_join(state="joined", error=sync_error, self_reachable=self_reachable())
+    # the join screen offers Make reachable right away (self_reachable). A
+    # device joined through the tunnel is reached that way instead.
+    _set_join(
+        state="joined",
+        error=sync_error,
+        self_reachable=True if _JOIN.get("via") == "anywhere" else self_reachable(),
+        note=note,
+    )
     _emit(
         "device.joined",
         device=_self_key(),

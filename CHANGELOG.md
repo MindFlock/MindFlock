@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Add a new device without Tailscale.** On the first computer, Settings →
+  Your devices → Add a device → **It isn't on my network** shows a long
+  one-time code (copy it, or scan its QR); on the new computer, paste it into
+  "Paste a code" on the same screen and Join. That's all: the new computer
+  needs no Tailscale, no GitHub sign-in and no setup first. The code works
+  through the first computer's private tunnel (the flow offers to turn
+  **Reach my devices from anywhere** on there), lasts 10 minutes, works once,
+  and dies after 5 wrong tries. The new computer checks the first one's key
+  fingerprint from the code before it sends anything, both sides prove the
+  code without sending it, and the first computer adds the new one only once
+  it has really joined. A ticked-by-default box on the new computer turns
+  the switch on there too, so your devices keep reaching each other; settings
+  sync then brings the GitHub sign-in it needs to leave its own address. The
+  join line says "Finishing setup…" meanwhile, and what to do if GitHub isn't
+  signed in there. `mindflock join mfd1:…` does the same from a terminal.
+  Design and threat model: `docs/devices-anywhere.md` §7.
 - **Reach my devices from anywhere (no Tailscale needed).** A new switch on
   Settings → Your devices, off by default. Your computers that are already in
   one group reach each other without Tailscale and without any MindFlock
@@ -32,8 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Design and threat model: `docs/devices-anywhere.md`. Requests that come
   through the tunnel are always held to the access gate as if it were on,
-  even in local mode, and never count as "this machine". Not yet: joining
-  the group without Tailscale, and a stable tunnel name.
+  even in local mode, and never count as "this machine". Not yet: a stable
+  tunnel name.
 
   Hardened after an independent security review: a tunnel stream's mark on
   its loopback port is counted, so a closed stream can't unmark a live one

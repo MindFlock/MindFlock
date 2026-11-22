@@ -142,7 +142,7 @@ export function paletteCode(query: string): ReturnType<typeof routeCode> {
   const none = { kind: "" as const, code: "", device: "" };
   const t = String(query || "").trim();
   if (!t) return none;
-  if (extractPeerCode(t)) return routeCode(t);
+  if (extractPeerCode(t) || /mfd1:[a-z2-7]+-[a-z2-7]{4}/i.test(t)) return routeCode(t);
   if (!/(^|\s)[A-Za-z0-9]{4}-[A-Za-z0-9]{4}(\s|$)/.test(t)) return none;
   return routeCode(t);
 }

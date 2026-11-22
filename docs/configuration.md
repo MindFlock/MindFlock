@@ -1007,8 +1007,10 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   your own GitHub account (created on first use; needs the `repo` permission
   MindFlock's GitHub sign-in already has). It finds your other devices the
   same way, for the ones Tailscale or your network can't reach. Per device,
-  never synced, and only its own route sets it (the generic `POST
-  /api/settings` drops the field). State is in `~/.mindflock/devices_anywhere/` (`state.json`:
+  never synced, and only its own routes set it — the switch, and adding a
+  device that isn't on your network (`/api/devices/anywhere/invite` with
+  `turn_on`, `/api/devices/anywhere/join`), all from this device itself; the
+  generic `POST /api/settings` drops the field. State is in `~/.mindflock/devices_anywhere/` (`state.json`:
   the record's counter and file name, plus the highest counter seen per
   device; `status.json`: a no-secrets snapshot for `mindflock doctor`;
   `tunnel/`: cloudflared's private home). See

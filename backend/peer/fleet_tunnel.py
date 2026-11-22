@@ -22,6 +22,11 @@ proves membership of the same group of devices:
 * Both proofs bind the server key the client SAW in TLS, so a middlebox that
   relays to the real device fails; the fleet key itself never travels.
 
+The same hello also answers a ``pair`` frame — a NEW device joining with a
+long code (:mod:`backend.peer.fleet_pair`) — when the server was given a
+``pair`` handler. That branch does that exchange and nothing else: the
+stream is closed after it and never reaches the web server.
+
 After ``ok`` the stream is a plain byte pipe to the device's own web server
 (127.0.0.1:<its port>). The server side registers the local port of that
 connection in :mod:`backend.peer.tunnel_peers` first, so the web server's
@@ -72,8 +77,19 @@ RELEASE_GRACE = 5.0
 #: Bytes per read when piping.
 CHUNK = 64 * 1024
 _NONCE_LEN = 32
+#: A pairing exchange (fleet_pair) may take this long after the hello.
+PAIR_TIMEOUT = 60.0
 _KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}\Z")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}\Z")
+
+
+class _PairAsk:
+    """The hello was answered with a ``pair`` frame (fleet_pair)."""
+
+    __slots__ = ("sn", "msg")
+
+    def __init__(self, sn: bytes, msg: dict):
+        self.sn, self.msg = sn, msg
 
 
 class TunnelAuthError(ConnectionError):
@@ -183,19 +199,23 @@ class TunnelServer:
         members: Callable[[], set],
         origin_port: Callable[[], int],
         on_member: Optional[Callable[[str], None]] = None,
+        pair: Optional[Callable[..., Awaitable]] = None,
         max_unauth: int = MAX_UNAUTH,
         handshake_timeout: float = HANDSHAKE_TIMEOUT,
+        pair_timeout: float = PAIR_TIMEOUT,
     ):
         self._ctx = server_ctx
         self._pub = server_pub
         self._keys, self._self_key = keys, self_key
         self._members, self._origin_port = members, origin_port
         self._on_member = on_member
+        self._pair = pair
         self.max_unauth = max_unauth
         self.handshake_timeout = handshake_timeout
+        self.pair_timeout = pair_timeout
         self._unauth = 0
         self._streams: set = set()
-        self.stats = {"accepted": 0, "denied": 0, "dropped": 0, "open": 0}
+        self.stats = {"accepted": 0, "denied": 0, "dropped": 0, "open": 0, "pair": 0}
 
     async def __call__(self, reader, writer, source: str = "") -> None:
         if self._unauth >= self.max_unauth:
@@ -204,6 +224,7 @@ class TunnelServer:
             return
         self._unauth += 1
         ok = None
+        paired = False
         try:
             async with asyncio.timeout(self.handshake_timeout):
                 await writer.start_tls(self._ctx)
@@ -211,6 +232,14 @@ class TunnelServer:
                 if sslobj is None or sslobj.version() != "TLSv1.3":
                     raise wire.ProtocolError("not TLS 1.3")
                 ok = await self._handshake(reader, writer)
+            if isinstance(ok, _PairAsk):
+                # A new device with a pairing code: that exchange, under its
+                # own deadline, still counted as unauthenticated — then the
+                # stream ends. Nothing of it reaches the web server.
+                ask, ok, paired = ok, None, True
+                self.stats["pair"] += 1
+                async with asyncio.timeout(self.pair_timeout):
+                    await self._pair(reader, writer, self._pub, ask.sn, ask.msg)
         except (
             TimeoutError,
             wire.ProtocolError,
@@ -224,6 +253,12 @@ class TunnelServer:
             raise
         finally:
             self._unauth -= 1
+        if paired:
+            with contextlib.suppress(Exception):
+                writer.close()
+                await asyncio.wait_for(writer.wait_closed(), 2.0)
+            _abort(writer)
+            return
         if not ok:
             self.stats["denied"] += 1
             _abort(writer)
@@ -232,11 +267,14 @@ class TunnelServer:
         await self._serve(reader, writer, *ok)
 
     async def _handshake(self, reader, writer):
-        """→ ``(member, keys)`` once the client proved it, else None."""
+        """→ ``(member, keys)`` once the client proved it, a :class:`_PairAsk`
+        for a pairing code (when this server takes them), else None."""
         sn = secrets.token_bytes(_NONCE_LEN)
         writer.write(wire.encode({"t": "hello", "v": PROTO_V, "nonce": _b64(sn)}))
         await writer.drain()
         msg = await wire.read_frame(reader, wire.HANDSHAKE_MAX_FRAME)
+        if isinstance(msg, dict) and msg.get("t") == "pair" and self._pair is not None:
+            return _PairAsk(sn, msg)
         keys = self._keys()
         me = self._self_key()
         good = False

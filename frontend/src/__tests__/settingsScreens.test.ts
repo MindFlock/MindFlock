@@ -147,6 +147,8 @@ describe("each trust control is rendered by exactly one screen", () => {
     ["the Tailscale-mode switch", /data-control="tailscale-mode"/, "devices"],
     ["the trusted-accounts list", /data-control="trusted-accounts"/, "devices"],
     ["the reach-from-anywhere switch", /data-control="devices-anywhere"/, "devices"],
+    ["the far-away device code", /data-control="devices-anywhere-invite"/, "devices"],
+    ["the far-away join checkbox", /data-control="devices-anywhere-join"/, "devices"],
   ];
   for (const [what, marker, owner] of ONCE) {
     it(what + " → " + owner, () => {

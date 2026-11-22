@@ -26,8 +26,10 @@ Remote devices, Peer links, Auth), the invite/join flow in
    Cloudflare tunnel. Each device leaves its address, encrypted with the
    group's key, in a private repo in your own GitHub. Tailscale and your own
    network are still tried first. Design and threat model:
-   [devices-anywhere.md](devices-anywhere.md). Pairing a new device still
-   needs the two to reach each other once.
+   [devices-anywhere.md](devices-anywhere.md). A new device joins without
+   Tailscale too: **Add a device → It isn't on my network** shows a long
+   one-time code to paste on it
+   ([devices-anywhere.md §7](devices-anywhere.md#7-adding-a-new-device-without-tailscale)).
 2. **Other people → People.** A one-time invite (`mfp1:`/`mfp2:`), a
    safety number to compare, one shared folder per link, sandboxed. Nothing
    on your machine beyond that folder is exposed.

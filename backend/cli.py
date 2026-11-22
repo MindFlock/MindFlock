@@ -758,14 +758,21 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "One place for every code MindFlock hands out. An 8-character code "
             "(or the whole `mindflock devices join DEVICE CODE` command) joins "
-            "your devices — the same as `devices join`; an mfp1:/mfp2: invite "
-            "pairs with another person — the same as `peer join`. Needs a "
-            "running server."
+            "your devices — the same as `devices join`; a long mfd1: code (from "
+            "Add a device → It isn't on my network) joins your devices through "
+            "the other computer's private tunnel, no Tailscale needed; an "
+            "mfp1:/mfp2: invite pairs with another person — the same as `peer "
+            "join`. Needs a running server."
         ),
     )
     join_any.add_argument("text", nargs="+", metavar="CODE")
     join_any.add_argument(
         "--yes", "-y", action="store_true", help="don't ask first (devices codes)"
+    )
+    join_any.add_argument(
+        "--no-anywhere",
+        action="store_true",
+        help="mfd1: codes: don't turn on Reach my devices from anywhere here",
     )
 
     devices = sub.add_parser(
@@ -3789,6 +3796,34 @@ def _print_bootstrap(b: dict) -> None:
     )
 
 
+def _join_anywhere(args: argparse.Namespace, code: str) -> int:
+    """``mindflock join mfd1:…`` — the new computer joins through the other
+    one's private tunnel (and turns "Reach my devices from anywhere" on here,
+    unless ``--no-anywhere``); waits for the join to finish."""
+    base = client.discover(args.host, args.port)
+    reachable = not getattr(args, "no_anywhere", False)
+    st = (
+        client.post(
+            base, "/api/devices/anywhere/join", {"code": code, "reachable": reachable}
+        )
+        or {}
+    )
+    deadline = time.time() + 240.0
+    while st.get("state") in ("joining", "finishing") and time.time() < deadline:
+        time.sleep(2.0)
+        st = _fleet_status(base).get("join") or {}
+    state = st.get("state")
+    host = st.get("host") or st.get("device") or "your other computer"
+    if state == "joined":
+        print("joined %s's devices" % host)
+        if st.get("note"):
+            print(st["note"])
+        if st.get("error"):
+            print(st["error"], file=sys.stderr)
+        return 0
+    raise client.ClientError(st.get("error") or "the join didn't finish (%s)" % state)
+
+
 def _cmd_join(args: argparse.Namespace) -> int:
     """``mindflock join CODE`` — route any pasted code by its format
     (:func:`backend.web.core.fleet.classify_code`): a peer invite goes to
@@ -3797,6 +3832,12 @@ def _cmd_join(args: argparse.Namespace) -> int:
     from backend.web.core.fleet import classify_code
 
     text = " ".join(args.text)
+    from backend.peer.fleet_pair import code_from_text as device_code_from_text
+
+    if device_code_from_text(text):
+        # A long code from one of your devices that isn't on this network
+        # (docs/devices-anywhere.md §7): joined through its private tunnel.
+        return _join_anywhere(args, device_code_from_text(text))
     # An invite link too, URL-encoded or not (…/join#mfp2%3A…).
     peer_code = code_from_text(text)
     hit = {"kind": "peer", "code": peer_code} if peer_code else classify_code(text)

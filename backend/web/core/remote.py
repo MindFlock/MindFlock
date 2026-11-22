@@ -1003,6 +1003,18 @@ async def refresh_device(key: str) -> Optional[dict]:
     dev = _DEVICES.get(key)
     if dev is None:
         return None
+    if aiohttp is not None and dev.get("via") == "tunnel" and dev.get("base_url"):
+        # Reached through "Reach my devices from anywhere": its local tunnel
+        # proxy is its one address (its tailnet name, if the roster has one,
+        # isn't answering — that's why the tunnel was used).
+        from backend.web.core import devices_anywhere as _anywhere
+
+        peer = {"base_url": dev["base_url"], "timeout": _anywhere.PROBE_TIMEOUT}
+        hit = await _probe_peer(peer)
+        _apply_probe(dev, hit, time.time(), grace=False)
+        if not hit and peer.get("probe"):
+            dev["probe"] = peer["probe"]
+        return dict(dev)
     if aiohttp is not None and (dev.get("ip") or dev.get("dns")):
         peer = {"ip": dev.get("ip", ""), "dns": dev.get("dns", "")}
         hit = await _probe_peer(peer)

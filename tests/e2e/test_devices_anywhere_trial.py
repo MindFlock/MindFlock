@@ -16,7 +16,12 @@ private GitHub repo):
   through the tunnel is still held to the key — tests/unit/
   test_devices_anywhere.py pins the refusal);
 * turning the switch off deletes that device's record and the other loses
-  it.
+  it;
+* and a NEW device joins with a long code (docs/devices-anywhere.md §7):
+  two servers in no group at all, the inviter's switch off — "Add a device
+  → It isn't on my network" turns it on and makes the code, the new one
+  pastes it, and both end up one group reaching each other through the
+  tunnel (a wrong code first fails and changes nothing).
 
 Real GitHub and a real Cloudflare tunnel are NOT exercised here (see
 docs/devices-anywhere.md for the manual check). Opt-in::
@@ -53,18 +58,27 @@ class Device(PeerServer):
 
     def _lay_out_scratch(self) -> None:
         super()._lay_out_scratch()
-        self.settings_path.write_text(
-            json.dumps(
-                {
-                    "general": {
-                        "onboarded": True,
-                        "remote_control": "on",
-                        "devices_anywhere": True,
+        if self.members is None:
+            # A fresh install: no group, the switch off.
+            self.settings_path.write_text(json.dumps({"general": {"onboarded": True}}))
+        else:
+            self.settings_path.write_text(
+                json.dumps(
+                    {
+                        "general": {
+                            "onboarded": True,
+                            "remote_control": "on",
+                            "devices_anywhere": True,
+                        }
                     }
-                }
+                )
             )
-        )
         # Already one group: the same id/key/epoch and both on the roster.
+        if self.members is not None:
+            self._write_fleet()
+        self._write_tailnet()
+
+    def _write_fleet(self) -> None:
         (self.settings_path.parent / "fleet.json").write_text(
             json.dumps(
                 {
@@ -78,6 +92,8 @@ class Device(PeerServer):
                 }
             )
         )
+
+    def _write_tailnet(self) -> None:
         # "Tailscale" knows only this node itself (its name), no peers.
         (self.scratch / "no-tailnet.json").write_text(
             json.dumps(
@@ -222,3 +238,85 @@ def test_two_devices_without_tailscale(pair):
 def _rows(srv):
     rows = srv.ok("GET", "/api/instances")
     return rows.get("instances", rows) if isinstance(rows, dict) else rows
+
+
+@pytest.fixture
+def strangers(tmp_path):
+    """Two fresh installs in no group, the switch off on both."""
+    store = tmp_path / "address-book"
+    a = Device(tmp_path / "a", "anya", store, None)
+    b = Device(tmp_path / "b", "bart", store, None)
+    started = []
+    try:
+        for d in (a, b):
+            d.start()
+            started.append(d)
+        yield a, b
+    finally:
+        for d in started:
+            d.stop()
+
+
+def _join_state(srv):
+    return srv.ok("GET", "/api/fleet").get("join") or {}
+
+
+def test_pair_a_new_device_without_tailscale(strangers):
+    a, b = strangers
+    assert not a.ok("GET", "/api/fleet")["in_fleet"]
+
+    # The switch is off: the flow has to ask first.
+    st, body = a.call("POST", "/api/devices/anywhere/invite", {})
+    assert st == 409 and body.get("needs_switch"), (st, body)
+    inv = a.ok("POST", "/api/devices/anywhere/invite", {"turn_on": True})["invite"]
+    code = inv["code"]
+    assert code.startswith("mfd1:") and inv["expires_at"] > time.time()
+    assert a.ok("GET", "/api/devices/anywhere")["on"]
+    assert a.ok("GET", "/api/fleet")["in_fleet"]  # a group of one to join
+    assert a.ok("GET", "/api/devices/anywhere/invite")["invite"]["code"] == code
+
+    # A wrong code (right address, wrong secret) fails and changes nothing.
+    from backend.peer import fleet_pair
+
+    c = fleet_pair.parse_code(code, loopback=True)
+    wrong = fleet_pair.encode_code(
+        c.url, c.fp, bytes.fromhex(c.invite_id), b"w" * 20, loopback=True
+    )
+    b.ok("POST", "/api/devices/anywhere/join", {"code": wrong})
+    wait_until(lambda: _join_state(b).get("state") == "error", 60, "wrong code fails")
+    assert "didn't work" in _join_state(b)["error"]
+    assert not b.ok("GET", "/api/fleet")["in_fleet"]
+
+    # The real one.
+    b.ok("POST", "/api/devices/anywhere/join", {"code": code, "reachable": True})
+    wait_until(
+        lambda: _join_state(b).get("state") not in ("joining", "finishing"),
+        180,
+        "bart finishes joining",
+    )
+    j = _join_state(b)
+    assert j["state"] == "joined", j
+    assert j["device"] == "anya" and j["via"] == "anywhere"
+    assert b.ok("GET", "/api/devices/anywhere")["on"]
+
+    # One group, on both sides; the code is used up.
+    for me, other in ((a, "bart"), (b, "anya")):
+        keys = {m["key"] for m in me.ok("GET", "/api/fleet")["members"]}
+        assert keys == {"anya", "bart"}, (me.name, keys)
+    assert a.ok("GET", "/api/devices/anywhere/invite")["invite"] is None
+
+    # bart reaches anya through the tunnel at once (the address in the
+    # code); anya reaches bart once bart published its own record.
+    wait_until(
+        lambda: (_device(b.ok("GET", "/api/devices"), "anya") or {}).get("via")
+        == "tunnel",
+        120,
+        "bart reaches anya",
+    )
+    wait_until(lambda: len(list(a.store.glob("*.rec"))) == 2, 120, "both records")
+    wait_until(
+        lambda: (_device(a.ok("GET", "/api/devices"), "bart") or {}).get("reachable"),
+        300,
+        "anya reaches bart",
+    )
+    assert _device(a.ok("GET", "/api/devices"), "bart")["via"] == "tunnel"

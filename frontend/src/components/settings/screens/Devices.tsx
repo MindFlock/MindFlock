@@ -93,6 +93,8 @@ import { TailscaleCard } from "./TailscaleCard";
 import { SharedLinkCard } from "./SharedLink";
 import { DevicesAdvanced } from "./DevicesAdvanced";
 import { DevicesAnywhere } from "./DevicesAnywhere";
+import { DevicesFarInvite } from "./DevicesFarInvite";
+import { FAR_REACHABLE_HINT, FAR_REACHABLE_LABEL } from "../../../lib/devicesAnywhere";
 import { NewComputerLine, ReadinessLine, SyncedAgentInstall, useFleetReadiness } from "./DeviceReadiness";
 import "./devices.css";
 
@@ -116,6 +118,9 @@ export function Devices(p: ScreenProps) {
   const [addFor, setAddFor] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [pasted, setPasted] = useState("");
+  /** A pasted long code (a computer not on this network): also turn on
+   * "Reach my devices from anywhere" here — ticked by default. */
+  const [farReach, setFarReach] = useState(true);
   /** Remove's "also replace every device's access token" — on by default. */
   const [rotateTokens, setRotateTokens] = useState(true);
   /** Make reachable's confirm is open (the This-device row, Add a device,
@@ -242,7 +247,7 @@ export function Devices(p: ScreenProps) {
   const joinState = st?.join?.state || "idle";
   const lastJoin = useRef<FleetJoin | null>(null);
   useEffect(() => {
-    if (joinState !== "waiting" && joinState !== "joining") return;
+    if (joinState !== "waiting" && joinState !== "joining" && joinState !== "finishing") return;
     const t = setInterval(async () => {
       if (document.hidden) return; // the screen poll catches up when shown
       try {
@@ -336,7 +341,7 @@ export function Devices(p: ScreenProps) {
   const lefts = leftLines(st);
   const readmitted = readmittedLines(st);
   const join = st.join;
-  const joinBusy = join && (join.state === "waiting" || join.state === "joining");
+  const joinBusy = join && (join.state === "waiting" || join.state === "joining" || join.state === "finishing");
 
   const askToJoin = (device: string) =>
     run("ask:" + device, () => api("/api/fleet/request", { json: { device } }));
@@ -358,6 +363,18 @@ export function Devices(p: ScreenProps) {
       const code = routeCode(pasted).code;
       setPasted("");
       return void joinPeerInvite(code);
+    }
+    // A long code: the other computer isn't on this network — joined
+    // through its private tunnel (docs/devices-anywhere.md §7).
+    if (routeCode(pasted).kind === "anywhere") {
+      const code = routeCode(pasted).code;
+      return run("paste", async () => {
+        const j = await api<FleetJoin>("/api/devices/anywhere/join", {
+          json: { code, reachable: farReach },
+        });
+        setSt((prev) => (prev ? { ...prev, join: j } : prev));
+        setPasted("");
+      });
     }
     // A bare code names no device: send it to the one it can be for, or ask.
     const { body, error } = pasteJoinBody(pasted, candidates, codeFor || focusDevice || null);
@@ -384,6 +401,7 @@ export function Devices(p: ScreenProps) {
   const local = st.self_reachable === false;
   const here = thisDeviceLine(st);
   const unreachable = (st.admitted || []).filter((a) => a.state === "unreachable_joiner");
+  const finishing = (st.admitted || []).filter((a) => a.state === "finishing");
   const match = matchText(st.match);
   const phone = phoneLinkLine(st.phone_link);
   const peers = st.tailnet_peers || [];
@@ -489,6 +507,15 @@ export function Devices(p: ScreenProps) {
         <div className="devices-warn" id="devices-unreachable-joiners" role="alert">
           {unreachable.map((a) => (
             <p key={a.device} data-unreachable={a.device}>
+              {admitLine(a)}
+            </p>
+          ))}
+        </div>
+      )}
+      {finishing.length > 0 && (
+        <div className="devices-note" id="devices-finishing-joiners" role="status">
+          {finishing.map((a) => (
+            <p key={a.device} data-finishing={a.device}>
               {admitLine(a)}
             </p>
           ))}
@@ -945,8 +972,9 @@ export function Devices(p: ScreenProps) {
       {local && !invite ? (
         <div className="devices-warn" id="devices-invite-blocked">
           <p>
-            A new computer couldn't use a code made here yet: this one only listens on 127.0.0.1,
-            so nothing else can reach it. Make it reachable first, then add the device.
+            A computer on your tailnet couldn't use a code made here yet: this one only listens on
+            127.0.0.1, so nothing else can reach it. Make it reachable first, then add the device —
+            or, for a computer without Tailscale, use “It isn't on my network” below.
           </p>
           {!reachAsk && (
             <button
@@ -1017,6 +1045,7 @@ export function Devices(p: ScreenProps) {
           </span>
         </div>
       )}
+      <DevicesFarInvite active={!!p.active} disabled={!!busy} />
 
       {/* 5. Join another computer (or pull one in). */}
       <div className="devices-subhead">
@@ -1234,8 +1263,23 @@ export function Devices(p: ScreenProps) {
           <span className="set-hint devices-join-note" id="devices-paste-note">
             {routeCode(pasted).kind === "peer"
               ? "That's an invite from another person — Join links you to them (People), not to your devices."
-              : joinSettingsNote("")}
+              : routeCode(pasted).kind === "anywhere"
+                ? "A code from one of your computers that isn't on this network: this one joins through its private tunnel. " +
+                  joinSettingsNote("")
+                : joinSettingsNote("")}
           </span>
+        )}
+        {routeCode(pasted).kind === "anywhere" && (
+          <label className="devices-far-reach" data-control="devices-anywhere-join" title={FAR_REACHABLE_HINT}>
+            <input
+              type="checkbox"
+              id="devices-far-reach"
+              checked={farReach}
+              onChange={(e) => setFarReach(e.target.checked)}
+            />{" "}
+            {FAR_REACHABLE_LABEL}
+            <span className="set-hint">{FAR_REACHABLE_HINT}</span>
+          </label>
         )}
       </div>
 

@@ -45354,6 +45354,40 @@ function showGroup(runId) {
 	else selectSession(to.row);
 }
 //#endregion
+//#region src/lib/devicesAnywhere.ts
+var ANYWHERE_LABEL = "Reach my devices from anywhere (no Tailscale needed)";
+var ANYWHERE_HINT = "Your computers find each other through a private, encrypted tunnel and your own GitHub (a private repo holds their addresses, encrypted with your devices' key). Nothing to install or sign up for. Tailscale, when it's there, is still used first. New — off by default.";
+var FAR_ADD_LABEL = "It isn't on my network";
+var FAR_ADD_HINT = "For a computer without Tailscale, anywhere: a long one-time code it pastes. Works through this computer's private tunnel.";
+var FAR_TURN_ON_TITLE = "Turn on “Reach my devices from anywhere” here?";
+var FAR_TURN_ON_BODY = "The new computer reaches this one through a private, encrypted tunnel (Cloudflare carries it but can't read it). It stays on afterwards so your devices keep finding each other — turn it off any time under the switch above.";
+var FAR_REACHABLE_LABEL = "Let my devices reach this computer from anywhere";
+var FAR_REACHABLE_HINT = "Turns on “Reach my devices from anywhere” on this computer — needed unless both computers use Tailscale. Leave it ticked unless you know you don't want it.";
+function extractDeviceCode(text) {
+	const m = /mfd1:[a-z2-7]+-[a-z2-7]{4}/i.exec(String(text || "").slice(0, 4096));
+	return m ? m[0].toLowerCase() : "";
+}
+function farInviteLine(inv, nowS) {
+	const left = Math.max(0, Math.round(inv.expires_at - nowS));
+	const m = Math.floor(left / 60);
+	const s = String(left % 60).padStart(2, "0");
+	return left > 0 ? `Works once · expires in ${m}:${s}` : "This code expired — make a new one";
+}
+function anywhereLine(st) {
+	if (!st) return "";
+	if (!st.on) return "Off";
+	const n = st.via_tunnel?.length || 0;
+	if (st.state === "on" && n > 0) return `${st.text} · ${n === 1 ? "1 device" : `${n} devices`} reached this way`;
+	return st.text;
+}
+function anywhereWarn(st) {
+	return !!st && st.on && (st.state === "failed" || st.state === "needs_github");
+}
+function anywherePollMs(st) {
+	if (st && st.on && (st.state === "starting" || st.state === "on" && !st.published_at)) return 2e3;
+	return 15e3;
+}
+//#endregion
 //#region src/lib/fleet.ts
 var CODE_ALPHABET = ["0123456789", "ABCDEFGHJKMNPQRSTVWXYZ"].join("");
 function normalizeCode(s) {
@@ -45493,7 +45527,8 @@ function joinLine(j) {
 	switch (j.state) {
 		case "waiting": return "Waiting for approval on " + host + (j.code ? " — code " + j.code : "");
 		case "joining": return "Joining " + host + "…";
-		case "joined": return "Joined " + host + ".";
+		case "finishing": return "Joined " + host + ". Finishing setup — reaching it through its private tunnel and bringing over its settings…";
+		case "joined": return "Joined " + host + "." + (j.note ? " " + j.note : "");
 		case "denied": return host + " said no.";
 		case "expired": return "The request to " + host + " expired — ask again.";
 		case "error": return j.error || "Couldn't join " + host + ".";
@@ -45777,11 +45812,17 @@ function unpinReplaces(path, sync) {
 	return "This replaces this device's “" + id + "” (and its token) with " + (leader ? leader + "'s" : "the one your other devices have under that id") + ". To keep both, give one of them a different id in Settings → Tickets instead.";
 }
 function routeCode(text) {
-	const t = (text || "").trim().slice(0, 2048);
+	const t = (text || "").trim().slice(0, 4096);
 	const peer = extractPeerCode(t);
 	if (peer) return {
 		kind: "peer",
 		code: peer,
+		device: ""
+	};
+	const far = extractDeviceCode(t);
+	if (far) return {
+		kind: "anywhere",
+		code: far,
 		device: ""
 	};
 	let tokens = t.split(/\s+/).filter(Boolean);
@@ -45849,12 +45890,20 @@ function phoneLinkLine(pl) {
 	};
 }
 function admitLine(a) {
+	if (a.state === "finishing") {
+		const n = a.host || a.device;
+		return n + " joined. It can reach this computer already; this one reaches " + n + " once it saves its address — that needs GitHub sign-in on " + n + " (settings sync usually brings it; if not: Settings → GitHub there).";
+	}
 	if (a.state !== "unreachable_joiner") return "";
 	const h = a.host || a.device;
 	return "Joined, but " + h + " isn't reachable from here" + (a.reason ? " — " + a.reason : "") + ". On " + h + ": Settings → Your devices → Make reachable.";
 }
 function joinedToast(j) {
 	const host = j.host || j.device;
+	if (j.note) return {
+		text: "Joined " + host + ". " + j.note,
+		offerReach: false
+	};
 	if (j.self_reachable === false) return {
 		text: "Joined " + host + " — but your other devices can't reach this one yet. Click to make it reachable.",
 		offerReach: true
@@ -46110,7 +46159,7 @@ function whatsNewCovers(releases, to, from) {
 //#region src/lib/updateRestart.ts
 var EXPECT_MAX_MS = 27e5;
 var BACK_WAIT_MS = 18e4;
-var POLL_MS$6 = 2e3;
+var POLL_MS$7 = 2e3;
 var expected = null;
 var dropped = false;
 var listeners$6 = /* @__PURE__ */ new Set();
@@ -46169,7 +46218,7 @@ function watchForNewBuild() {
 		if (restartLanded(c)) return reload();
 		if (c.state === "failed" || c.state === "rolled_back") return clearUpdateRestart();
 		stopPoll();
-	}, POLL_MS$6);
+	}, POLL_MS$7);
 }
 function installUpdateRecovery(ev) {
 	return ev.onStatus((s) => {
@@ -46255,7 +46304,7 @@ function followOldServerRun() {
 			clearUpdateRestart();
 			toast(runFailText(st), { error: true });
 		}
-	}, POLL_MS$6);
+	}, POLL_MS$7);
 }
 //#endregion
 //#region src/whatsNew/releases.ts
@@ -46643,7 +46692,7 @@ function routePastedCode(text) {
 		joinPeerInvite(r.code);
 		return "peer";
 	}
-	if (r.kind === "device") {
+	if (r.kind === "device" || r.kind === "anywhere") {
 		openDevicesFor({ paste: text.trim() });
 		return "device";
 	}
@@ -48714,7 +48763,7 @@ function paletteCode(query) {
 	};
 	const t = String(query || "").trim();
 	if (!t) return none;
-	if (extractPeerCode(t)) return routeCode(t);
+	if (extractPeerCode(t) || /mfd1:[a-z2-7]+-[a-z2-7]{4}/i.test(t)) return routeCode(t);
 	if (!/(^|\s)[A-Za-z0-9]{4}-[A-Za-z0-9]{4}(\s|$)/.test(t)) return none;
 	return routeCode(t);
 }
@@ -52058,7 +52107,7 @@ function CommandPalette({ host }) {
 		const code = paletteCode(query);
 		const named = out.some((a) => fuzzyScore(query, a.label) >= 0 && fuzzyScore(query, a.label) < 1e3);
 		if (code.kind) out[named ? "push" : "unshift"]({
-			label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
+			label: code.kind === "anywhere" ? "Join your devices with this code" : "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
 			hint: code.kind === "peer" ? "another person · People" : "your devices",
 			run: () => void routePastedCode(query)
 		});
@@ -53145,7 +53194,7 @@ function slowLevel(prev, level, dtMs) {
 }
 var HEARING_HOLD_MS = 700;
 var STALE_MS = 250;
-var POLL_MS$5 = 85;
+var POLL_MS$6 = 85;
 function noiseFloor(floor, rms) {
 	return floor === 0 ? rms : Math.min(rms, floor * 1.05 + .001);
 }
@@ -53199,7 +53248,7 @@ function paint$2() {
 function frame(t) {
 	raf = 0;
 	const now = Date.now();
-	if (poll && now - lastPoll >= POLL_MS$5) {
+	if (poll && now - lastPoll >= POLL_MS$6) {
 		lastPoll = now;
 		meterFeed(poll(), now);
 	}
@@ -54165,7 +54214,7 @@ function stripMarkup(text) {
 	return text;
 }
 var SEG = "[A-Za-z0-9_.~@+-]+";
-var PATH$1 = new RegExp("(^|[^A-Za-z0-9/.~])((?:~|\\.{1,2})?/" + SEG + "(?:/" + SEG + ")*/?|" + SEG + "(?:/" + SEG + ")+/?)(?::(\\d+))?(?![A-Za-z0-9/])", "g");
+var PATH$2 = new RegExp("(^|[^A-Za-z0-9/.~])((?:~|\\.{1,2})?/" + SEG + "(?:/" + SEG + ")*/?|" + SEG + "(?:/" + SEG + ")+/?)(?::(\\d+))?(?![A-Za-z0-9/])", "g");
 var FILE = new RegExp("(^|[^A-Za-z0-9/.])([A-Za-z0-9_][A-Za-z0-9_-]*\\.(" + byLength(Object.keys(TABLES.ext)).join("|") + "))(?::(\\d+))?(?![A-Za-z0-9.])", "g");
 var SHA = /(^|[^A-Za-z0-9])([0-9a-f]{7,40})(?![A-Za-z0-9])/g;
 function spokenName(name) {
@@ -54200,7 +54249,7 @@ function isPath(token) {
 	return !!ext && ext in TABLES.ext;
 }
 function paths(text, s) {
-	text = text.replace(PATH$1, (whole, pre, tokenIn, line) => {
+	text = text.replace(PATH$2, (whole, pre, tokenIn, line) => {
 		let token = tokenIn;
 		let tail = "";
 		while (token.endsWith(".") || token.endsWith(",")) {
@@ -70821,7 +70870,7 @@ function GuestLinks() {
 }
 //#endregion
 //#region src/components/sidebar/GuestBar.tsx
-var POLL_MS$4 = 1e4;
+var POLL_MS$5 = 1e4;
 function guestBarText(links, tunnel) {
 	const who = links === 1 ? "1 guest link" : links + " guest links";
 	if (tunnel?.state === "up") return who + " · public link up";
@@ -70845,7 +70894,7 @@ function GuestBar() {
 			feedGuestFocus(r.links || []);
 		}).catch(() => {});
 		tick();
-		const stop = pollWhileVisible(() => void tick(), POLL_MS$4);
+		const stop = pollWhileVisible(() => void tick(), POLL_MS$5);
 		return () => {
 			live = false;
 			stop();
@@ -94914,7 +94963,7 @@ function MapTour({ rootRef, onClose, ctx, steps }) {
 //#region src/components/grid/CodeMapTab.tsx
 var ENTRIES = /* @__PURE__ */ new Map();
 var ENTRY_MAX = 12;
-var POLL_MS$3 = 2e3;
+var POLL_MS$4 = 2e3;
 var NULL_FP_REFRESH_MS = 2e4;
 var PARTIAL_REFRESH_MS = 3e3;
 function entryFor(title) {
@@ -95185,7 +95234,7 @@ function CodeMap({ title, active }) {
 		if (!entryFor(title).snap) loadSnap();
 		const t = setInterval(() => {
 			if (!document.hidden) poll();
-		}, POLL_MS$3);
+		}, POLL_MS$4);
 		const onVis = () => {
 			if (!document.hidden) poll();
 		};
@@ -126180,7 +126229,7 @@ function ScrollSpeedRow() {
 }
 //#endregion
 //#region src/components/settings/screens/TailscaleCard.tsx
-var POLL_MS$2 = 3e3;
+var POLL_MS$3 = 3e3;
 function signedInAs(h) {
 	if (h.tagged) return "a tagged device (" + (h.tags || []).join(", ") + ")";
 	return h.user || "";
@@ -126397,7 +126446,7 @@ function TailscaleCard({ active = true, onHealth }) {
 		if (!active || !pending) return;
 		const t = setInterval(() => {
 			if (!document.hidden) load(true);
-		}, POLL_MS$2);
+		}, POLL_MS$3);
 		return () => clearInterval(t);
 	}, [
 		active,
@@ -136274,33 +136323,15 @@ function DevicesAdvanced({ focusDevice }) {
 	});
 }
 //#endregion
-//#region src/lib/devicesAnywhere.ts
-var ANYWHERE_LABEL = "Reach my devices from anywhere (no Tailscale needed)";
-var ANYWHERE_HINT = "Your computers find each other through a private, encrypted tunnel and your own GitHub (a private repo holds their addresses, encrypted with your devices' key). Nothing to install or sign up for. Tailscale, when it's there, is still used first. New — off by default.";
-function anywhereLine(st) {
-	if (!st) return "";
-	if (!st.on) return "Off";
-	const n = st.via_tunnel?.length || 0;
-	if (st.state === "on" && n > 0) return `${st.text} · ${n === 1 ? "1 device" : `${n} devices`} reached this way`;
-	return st.text;
-}
-function anywhereWarn(st) {
-	return !!st && st.on && (st.state === "failed" || st.state === "needs_github");
-}
-function anywherePollMs(st) {
-	if (st && st.on && (st.state === "starting" || st.state === "on" && !st.published_at)) return 2e3;
-	return 15e3;
-}
-//#endregion
 //#region src/components/settings/screens/DevicesAnywhere.tsx
-var PATH = "/api/devices/anywhere";
+var PATH$1 = "/api/devices/anywhere";
 function DevicesAnywhere({ active }) {
 	const [st, setSt] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [install, setInstall] = (0, import_react.useState)([]);
 	const load = (0, import_react.useCallback)(async () => {
 		try {
-			setSt(await api(PATH));
+			setSt(await api(PATH$1));
 		} catch {}
 	}, []);
 	(0, import_react.useEffect)(() => {
@@ -136366,7 +136397,7 @@ function DevicesAnywhere({ active }) {
 							"data-field": "devices_anywhere",
 							checked: st.on,
 							disabled: busy,
-							onChange: (e) => void post(PATH, { on: e.target.checked })
+							onChange: (e) => void post(PATH$1, { on: e.target.checked })
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -136384,7 +136415,7 @@ function DevicesAnywhere({ active }) {
 					className: "test-btn",
 					id: "devices-anywhere-retry",
 					disabled: busy,
-					onClick: () => void post(PATH + "/retry"),
+					onClick: () => void post(PATH$1 + "/retry"),
 					children: "Retry"
 				})] })]
 			}),
@@ -136394,6 +136425,136 @@ function DevicesAnywhere({ active }) {
 			})
 		]
 	});
+}
+//#endregion
+//#region src/components/settings/screens/DevicesFarInvite.tsx
+var PATH = "/api/devices/anywhere/invite";
+var POLL_MS$2 = 4e3;
+function DevicesFarInvite({ active, disabled }) {
+	const [st, setSt] = (0, import_react.useState)(null);
+	const [ask, setAsk] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			setSt(await api(PATH));
+		} catch {}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (active) load();
+	}, [active, load]);
+	const live = !!st?.invite;
+	(0, import_react.useEffect)(() => {
+		if (!active || !live) return;
+		const t = setInterval(() => {
+			if (!document.hidden) load();
+		}, POLL_MS$2);
+		return () => clearInterval(t);
+	}, [
+		active,
+		live,
+		load
+	]);
+	const now = useNow(live ? 1e3 : false) / 1e3;
+	const make = async (turnOn) => {
+		setBusy(true);
+		try {
+			setSt(await api(PATH, { json: { turn_on: turnOn } }));
+			setAsk(false);
+		} catch (e) {
+			if ((e instanceof ApiError ? e.body : null)?.needs_switch) setAsk(true);
+			else toast(e instanceof Error ? e.message : String(e), { duration: 8e3 });
+		} finally {
+			setBusy(false);
+		}
+	};
+	const cancel = async () => {
+		setBusy(true);
+		try {
+			setSt(await api(PATH, { method: "DELETE" }));
+		} catch (e) {
+			toast(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	if (!st) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		id: "devices-far",
+		"data-control": "devices-anywhere-invite",
+		children: st.invite ? renderInvite(st.invite) : renderAdd(st.gone)
+	});
+	function renderInvite(inv) {
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-invite devices-far-invite",
+			id: "devices-far-invite",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "On the new computer: open MindFlock → Settings → Your devices, paste this code into “Paste a code”, then Join."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "devices-command devices-far-code-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+						className: "devices-far-code",
+						id: "devices-far-code",
+						children: inv.code
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "devices-far-copy",
+						onClick: () => copyText(inv.code).then((ok) => toast(ok ? "Code copied" : "Copy failed")),
+						children: "Copy"
+					})]
+				}),
+				inv.qr_svg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "devices-far-qr",
+					"aria-label": "The code as a QR",
+					dangerouslySetInnerHTML: { __html: inv.qr_svg }
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint",
+					id: "devices-far-countdown",
+					children: [farInviteLine(inv, now), " · Anyone with this code can join your devices — send it only to yourself."]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn devices-self-start",
+					id: "devices-far-cancel",
+					disabled: busy,
+					onClick: () => void cancel(),
+					children: "Cancel"
+				})
+			]
+		});
+	}
+	function renderAdd(gone) {
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-add devices-far-add",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "devices-far-new",
+					disabled: busy || disabled || ask,
+					onClick: () => void make(false),
+					children: busy ? "Starting the private tunnel…" : FAR_ADD_LABEL
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: gone || FAR_ADD_HINT
+				}),
+				ask && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					id: "devices-far-turn-on",
+					title: FAR_TURN_ON_TITLE,
+					body: FAR_TURN_ON_BODY,
+					confirmLabel: busy ? "Turning it on…" : "Turn it on and make a code",
+					busy,
+					onConfirm: () => void make(true),
+					onCancel: () => setAsk(false)
+				})
+			]
+		});
+	}
 }
 //#endregion
 //#region src/components/settings/screens/DeviceReadiness.tsx
@@ -136541,6 +136702,7 @@ function Devices(p) {
 	const [addFor, setAddFor] = (0, import_react.useState)(null);
 	const [code, setCode] = (0, import_react.useState)("");
 	const [pasted, setPasted] = (0, import_react.useState)("");
+	const [farReach, setFarReach] = (0, import_react.useState)(true);
 	const [rotateTokens, setRotateTokens] = (0, import_react.useState)(true);
 	const [reachAsk, setReachAsk] = (0, import_react.useState)(false);
 	const [matchAsk, setMatchAsk] = (0, import_react.useState)(false);
@@ -136636,7 +136798,7 @@ function Devices(p) {
 	const joinState = st?.join?.state || "idle";
 	const lastJoin = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
-		if (joinState !== "waiting" && joinState !== "joining") return;
+		if (joinState !== "waiting" && joinState !== "joining" && joinState !== "finishing") return;
 		const t = setInterval(async () => {
 			if (document.hidden) return;
 			try {
@@ -136703,7 +136865,7 @@ function Devices(p) {
 	const lefts = leftLines(st);
 	const readmitted = readmittedLines(st);
 	const join = st.join;
-	const joinBusy = join && (join.state === "waiting" || join.state === "joining");
+	const joinBusy = join && (join.state === "waiting" || join.state === "joining" || join.state === "finishing");
 	const askToJoin = (device) => run("ask:" + device, () => api("/api/fleet/request", { json: { device } }));
 	const cancelJoin = () => run("cancel-join", () => api("/api/fleet/request", { method: "DELETE" }));
 	const joinWithCode = (device) => run("code:" + device, async () => {
@@ -136721,6 +136883,20 @@ function Devices(p) {
 			joinPeerInvite(code);
 			return;
 		}
+		if (routeCode(pasted).kind === "anywhere") {
+			const code = routeCode(pasted).code;
+			return run("paste", async () => {
+				const j = await api("/api/devices/anywhere/join", { json: {
+					code,
+					reachable: farReach
+				} });
+				setSt((prev) => prev ? {
+					...prev,
+					join: j
+				} : prev);
+				setPasted("");
+			});
+		}
 		const { body, error } = pasteJoinBody(pasted, candidates, codeFor || focusDevice || null);
 		if (!body) {
 			if (error) toast(error);
@@ -136736,6 +136912,7 @@ function Devices(p) {
 	const local = st.self_reachable === false;
 	const here = thisDeviceLine(st);
 	const unreachable = (st.admitted || []).filter((a) => a.state === "unreachable_joiner");
+	const finishing = (st.admitted || []).filter((a) => a.state === "finishing");
 	const match = matchText(st.match);
 	const phone = phoneLinkLine(st.phone_link);
 	const peers = st.tailnet_peers || [];
@@ -136837,6 +137014,15 @@ function Devices(p) {
 			role: "alert",
 			children: unreachable.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				"data-unreachable": a.device,
+				children: admitLine(a)
+			}, a.device))
+		}),
+		finishing.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-note",
+			id: "devices-finishing-joiners",
+			role: "status",
+			children: finishing.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				"data-finishing": a.device,
 				children: admitLine(a)
 			}, a.device))
 		}),
@@ -137235,7 +137421,7 @@ function Devices(p) {
 		local && !invite ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "devices-warn",
 			id: "devices-invite-blocked",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "A new computer couldn't use a code made here yet: this one only listens on 127.0.0.1, so nothing else can reach it. Make it reachable first, then add the device." }), !reachAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "A computer on your tailnet couldn't use a code made here yet: this one only listens on 127.0.0.1, so nothing else can reach it. Make it reachable first, then add the device — or, for a computer without Tailscale, use “It isn't on my network” below." }), !reachAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "test-btn devices-primary",
 				disabled: reach.busy,
@@ -137306,6 +137492,10 @@ function Devices(p) {
 				className: "set-hint",
 				children: "Shows a one-time code to type on the other computer."
 			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesFarInvite, {
+			active: !!p.active,
+			disabled: !!busy
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "devices-subhead",
@@ -137516,7 +137706,26 @@ function Devices(p) {
 				pasted.trim() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint devices-join-note",
 					id: "devices-paste-note",
-					children: routeCode(pasted).kind === "peer" ? "That's an invite from another person — Join links you to them (People), not to your devices." : joinSettingsNote("")
+					children: routeCode(pasted).kind === "peer" ? "That's an invite from another person — Join links you to them (People), not to your devices." : routeCode(pasted).kind === "anywhere" ? "A code from one of your computers that isn't on this network: this one joins through its private tunnel. " + joinSettingsNote("") : joinSettingsNote("")
+				}),
+				routeCode(pasted).kind === "anywhere" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "devices-far-reach",
+					"data-control": "devices-anywhere-join",
+					title: FAR_REACHABLE_HINT,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "devices-far-reach",
+							checked: farReach,
+							onChange: (e) => setFarReach(e.target.checked)
+						}),
+						" ",
+						FAR_REACHABLE_LABEL,
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: FAR_REACHABLE_HINT
+						})
+					]
 				})
 			]
 		}),
