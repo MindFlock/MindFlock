@@ -13,7 +13,10 @@ So the stores refuse on their own. Under pytest, :func:`guard` raises
 :class:`RealHomeStoreError` for any path inside the REAL user's (``pwd``, not
 ``$HOME``) ``.mindflock`` or ``.mindflock-assistant`` directory, whatever route
 the path arrived by (an unset override, an override pointing at the real file,
-a ``$HOME`` that was never redirected). Outside pytest it is the identity.
+a ``$HOME`` that was never redirected). Outside pytest it is the identity —
+unless ``$MINDFLOCK_HOME_GUARD=1``: the UI preview (``scripts/preview.py``)
+boots its scratch server with it, so a store that still resolves into the
+real home raises there too instead of quietly writing the owner's files.
 
 The error subclasses :class:`OSError` on purpose: the Go-parity readers
 (``LoadState``, ``LoadConfig``) already turn "config dir cannot be resolved"
@@ -26,7 +29,7 @@ from __future__ import annotations
 import os
 import sys
 
-__all__ = ["RealHomeStoreError", "guard", "real_home", "under_pytest"]
+__all__ = ["RealHomeStoreError", "active", "guard", "real_home", "under_pytest"]
 
 # The per-user directories the suite must never read or write.
 GUARDED_DIR_NAMES = (".mindflock", ".mindflock-assistant")
@@ -40,6 +43,12 @@ def under_pytest() -> bool:
     """True inside a pytest process — during collection (``pytest`` imported)
     as well as during a test (``PYTEST_CURRENT_TEST`` set)."""
     return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
+
+
+def active() -> bool:
+    """True when :func:`guard` refuses: under pytest, or in a process started
+    with ``$MINDFLOCK_HOME_GUARD=1`` (the scratch preview server)."""
+    return under_pytest() or os.environ.get("MINDFLOCK_HOME_GUARD") == "1"
 
 
 def real_home() -> str:
@@ -77,9 +86,10 @@ def _inside(path: str, root: str) -> bool:
 
 
 def guard(path: str, what: str = "store") -> str:
-    """Return ``path`` unchanged, or raise under pytest when it lies inside the
-    real user's ``~/.mindflock`` / ``~/.mindflock-assistant``."""
-    if not path or not under_pytest():
+    """Return ``path`` unchanged, or raise under pytest (or with
+    ``$MINDFLOCK_HOME_GUARD=1``) when it lies inside the real user's
+    ``~/.mindflock`` / ``~/.mindflock-assistant``."""
+    if not path or not active():
         return path
     home = real_home()
     resolved = os.path.realpath(os.path.expanduser(str(path)))
@@ -104,7 +114,7 @@ def guard_ledger_dir(path, what: str = "ticket ledger"):
     holding ``backend/ticket_ingestion``): a ``$MINDFLOCK_REPO_ROOT`` the live
     server exports into agent shells names the owner's main checkout while
     the suite runs from a sibling worktree."""
-    if not path or not under_pytest():
+    if not path or not active():
         return path
     guard(str(path), what)
     resolved = os.path.realpath(os.path.expanduser(str(path)))

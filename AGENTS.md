@@ -21,6 +21,15 @@ CLIs; `gh` is reported but **optional** — pushing is plain `git push` over the
 user's own remote, SSH or HTTPS, and PR create/merge fall back to the GitHub
 REST API with a token, then to a browser URL).
 
+**Seeing a UI change:** `uv run --group dev --group web python
+scripts/preview.py shot --scenario sky --view sky -o /tmp/sky.png` boots an
+isolated scratch MindFlock (own home, own tmux socket, spare port, stub agent,
+sample sessions and routes), screenshots it in headless Chrome and cleans up;
+`up --detach` / `down` keep one running. It never touches the real
+`~/.mindflock`, tmux server or ports 9000/8765 — use it instead of a
+hand-started server. Scenarios, views and themes: `docs/development.md`
+"Seeing a UI change".
+
 ## Map
 
 | Where | What |
