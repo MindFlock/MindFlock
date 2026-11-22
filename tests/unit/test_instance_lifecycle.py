@@ -519,6 +519,37 @@ def test_start_restore_failure_cleans_up_and_raises():
     assert inst.Started() is False
 
 
+def test_worktree_ready_hook_runs_before_the_agent_launches(tmp_path):
+    """OnWorktreeReady sees the new worktree before tmux starts the agent (so
+    carried pin files are there when the agent looks), runs once, and a
+    failing hook never fails the start."""
+    order = []
+
+    class _Tmux(FakeTmux):
+        def start(self, workdir):
+            order.append(("tmux", workdir))
+            return super().start(workdir)
+
+    for boom in (False, True):
+        order.clear()
+        inst = Instance()
+        inst.Title = "demo"
+        inst.Path = str(tmp_path)
+        inst.InPlace = True
+        inst._tmux_session = _Tmux()
+
+        def hook(path, boom=boom):
+            order.append(("hook", path))
+            if boom:
+                raise RuntimeError("prepare boom")
+
+        inst.OnWorktreeReady = hook
+        inst.Start(True)
+        assert inst.Started() is True
+        assert order == [("hook", str(tmp_path)), ("tmux", str(tmp_path))]
+        assert inst.OnWorktreeReady is None
+
+
 def test_start_in_place_first_time_success(tmp_path):
     # in_place uses the real _InPlaceWorktree over a real dir (no git needed:
     # _detect swallows the non-repo error), then starts the fake tmux session.

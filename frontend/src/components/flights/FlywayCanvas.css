@@ -59,8 +59,9 @@
   --fl-ink-red: #e8795a;
   --fl-ink-muted: #a0a6b8;
   /* The accent as TEXT: the raw accent reads 3.4–4:1 on the dark panels, so
-     dark mode lightens it (≈6.7:1) and light mode takes the deep twin. */
-  --fl-ink-accent: color-mix(in srgb, var(--accent) 62%, #fff);
+     dark mode lightens it (≥4.5:1 on every surface set's panels, Owl's
+     lighter dusk included) and light mode takes the deep twin. */
+  --fl-ink-accent: color-mix(in srgb, var(--accent) 55%, #fff);
   /* The app's button tiers (docs/flights.md "As built: round 11 style"):
      .btn-primary / .test-btn's radius, and the Sky toolbar's control height. */
   --fl-btn-radius: 6px;
@@ -393,6 +394,15 @@
   animation: fl-box-glow 1.8s ease-in-out infinite;
 }
 
+/* Round 5: held by its session (agent offline / limited) — still and dashed
+   in the waiting tone, never the working pulse. */
+.fl-st-current.fl-held {
+  border-style: dashed;
+  border-color: var(--tone-waiting);
+  box-shadow: none;
+  animation: none;
+}
+
 /* Perched on you: the gold outline and a gold wash (its text stays the
    text colour; text ON solid gold is --tone-attention-ink). */
 .fl-st-perched {
@@ -552,7 +562,7 @@
   border-radius: 15px;
   border-width: 2px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font-size: 16px;
   font-weight: 600;
   white-space: nowrap;
@@ -569,7 +579,7 @@
 
 .fl-gap-add:hover {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* Touch has no hover: the gaps' + always show there. */
@@ -863,7 +873,7 @@
 .fl-form .rt-seg button.on,
 .fl-seg-host .rt-seg button.on {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* A switch chip. */
@@ -1007,6 +1017,11 @@
 
 .fl-bird-marker.tone-paused {
   color: var(--muted);
+}
+
+/* Held by its session (agent offline / limited): still, in the waiting tone. */
+.fl-bird-marker.tone-held {
+  color: var(--tone-waiting);
 }
 
 @keyframes fl-bird-bob {

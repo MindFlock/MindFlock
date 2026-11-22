@@ -64,9 +64,11 @@
  * Round 13 (docs/flights.md "As built: round 13 sky"), a diagram tool's
  * manners: a palette click PLACES its block on the board (`placeGrounded`: a
  * grounded line at a free spot above the shelf or right of the floating
- * palette — `spotNear` — unselected, unfocused); only a drop on a line, the
- * line's own +, or a grounded line dragged onto a session's line
- * (`mergeTargetAt`, `.is-merge-target`) adds to a line. NOTHING FOCUSED is a
+ * palette — `spotNear`); a drop on a line, the line's own +, or a grounded
+ * line dragged onto a session's line (`mergeTargetAt`, `.is-merge-target`)
+ * adds to a line. Round 5 (the owner) changed the click: a stop clicked
+ * while a route with no session is being built (focused) goes on its end,
+ * and a click-placed route is focused so the next click joins it. NOTHING FOCUSED is a
  * state: the sky never picks a line itself; a click on empty sky or Esc
  * selects nothing (`selectSession(null)`). The blocks float as a sky object
  * too (`SkyPalette`, layout key "palette", `mf_sky_palette`), placed, dragged,
@@ -162,7 +164,7 @@ import { onSessionRenamed } from "../../lib/renameSession";
 import { popRedo, popUndo, pushUndo, undoAction } from "../../lib/skyUndo";
 import { snapBox, snapThreshold, type SnapGuide } from "../../lib/skySnap";
 import { deriveSessionState } from "../../lib/sessionState";
-import { defaultStepFor, groundedDiagram, groundedFlights, groundedIdOf, groundedKey, groundedShown, handoffLinks, isGroundedKey, triggerHeadFor } from "../../lib/groundedLines";
+import { addedToRouteText, buildingRoute, defaultStepFor, groundedDiagram, groundedFlights, groundedIdOf, groundedKey, groundedShown, handoffLinks, isGroundedKey, triggerHeadFor } from "../../lib/groundedLines";
 import { windowName } from "../../lib/windowName";
 import { reducedMotion, registerSkyHost, type Box, type SkyHost } from "../../lib/viewMode";
 import {
@@ -233,6 +235,7 @@ import {
   GROUNDED_HIDDEN_LINE,
   menuSpot,
   QUICK_ADD_SIZE,
+  skyIsNarrow,
 } from "../../lib/skyLayout";
 import {
   MARQUEE_MIN,
@@ -1545,6 +1548,9 @@ export function SkyView() {
   // placed once more at its real size (as `assignSpots` keeps a spot only once
   // a line is measured), so it never spills out of the view or onto a line.
   const placing = useRef(new Map<string, PlaceNear>());
+  // Round 5: routes a shelf click grew, by their width before (re-placed
+  // once measured at the new size, below).
+  const growing = useRef(new Map<string, number>());
   useEffect(() => {
     for (const [key, near] of placing.current) {
       if (!measured[key]) continue;
@@ -1554,19 +1560,50 @@ export function SkyView() {
       const at = spotRef.current(f, near);
       setLayout((l) => patchSkyLine(l, key, { x: at.x, y: at.y, pinned: true }));
     }
+    // Round 5: a route a shelf click grew keeps clear of the lane and the
+    // other lines — once drawn at its new size it moves only if it now
+    // overlaps something or runs out of view (`spotNear` from where it
+    // stands, inside the view, keeps a free spot).
+    for (const [key, w0] of growing.current) {
+      const size = measured[key];
+      if (!size || size.w === w0) continue;
+      growing.current.delete(key);
+      const taken = [...lines.map((l) => l.id).filter((id) => id !== key), INTAKE_KEY, PALETTE_KEY].map(rectOf).concat(objects.map((o) => rectOf(o.key))).filter((r): r is Rect => !!r);
+      const here = posOf(key);
+      const c = camRef.current;
+      const pad = 16 / c.z;
+      const view: Rect = { x: -c.x / c.z + pad, y: -c.y / c.z + pad, w: vp.w / c.z - 2 * pad, h: vp.h / c.z - 2 * pad };
+      const at = spotNear(here, taken, size, view);
+      if (at.x !== here.x || at.y !== here.y) setLayout((l) => patchSkyLine(l, key, { x: at.x, y: at.y, pinned: true }));
+    }
   }, [measured, flights]);
-  /** A palette click (a chip, the catalog's Add): the block goes ON THE
-   * BOARD — a grounded line near the palette, pinned there, nothing
-   * selected, nothing focused (docs/flights.md "Round 13": place, don't
-   * tack). Only a drop on a line, or its own +, adds to a line. */
+  /** A palette click (a chip, the catalog's Add). Round 5 (the owner, over
+   * round 13's "place, don't tack"): a stop clicked while a route with no
+   * session is being built (focused, not started — `buildingRoute`) goes on
+   * the END of that route, said in a toast. Otherwise the block goes ON THE
+   * BOARD — a grounded line near the palette, pinned there — and that new
+   * route is focused, so the next click adds to it and its name and ▶ show.
+   * A saved route's chip always places its own route; dragging still places
+   * anywhere (empty sky: a new route; a line: onto it). */
   const placeGrounded = async (d: CatalogDrop, near: "shelf" | "palette") => {
     const plan = "planId" in d ? plans.find((p) => p.id === d.planId) : null;
     if ("planId" in d && !plan) return;
+    const into = plan ? null : buildingRoute(groundFocus, flights);
+    const def = plan ? undefined : kinds.find((k) => k.kind === (d as { kind: string }).kind);
+    if (into && def) {
+      const key = groundedKey(into.id);
+      growing.current.set(key, measured[key]?.w || 0);
+      if (await tackOn(into.id, newStep(def, into.steps.map((st) => st.id)))) toast(addedToRouteText(def.label, groundedName(into)));
+      else growing.current.delete(key);
+      return;
+    }
     const f = await makeGrounded(plan ? { plan } : { kind: (d as { kind: string }).kind });
     if (!f || !alive.current) return;
     const at = spotRef.current(f, near);
     setLayout((l) => patchSkyLine(l, groundedKey(f.id), { x: at.x, y: at.y, pinned: true }));
     placing.current.set(groundedKey(f.id), near);
+    // The route being built now: the next stop clicked joins it.
+    if (!plan) setGroundFocus(groundedKey(f.id));
     // This session and Needs you draw no grounded line: say where it went.
     groundedLanded(f);
   };
@@ -2964,6 +3001,7 @@ export function SkyView() {
           draggable={liveTool === "drag"}
           onMeasure={(w, h) => onMeasure(INTAKE_KEY, w, h)}
           onEditDefault={editDefault}
+          narrow={skyIsNarrow(vp.w)}
         />
       </div>
     );

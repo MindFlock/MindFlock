@@ -270,7 +270,7 @@
   border-radius: 6px;
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font-weight: 600;
   font-family: inherit;
 }
@@ -479,7 +479,7 @@
   cursor: pointer;
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-radius: 7px;
   padding: 8px 14px;
   font-size: 13px;
@@ -629,7 +629,7 @@
   cursor: pointer;
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   border-radius: 7px;
   padding: 6px 12px;
   font-size: 13px;
@@ -728,7 +728,7 @@
 .prov-form button {
   background: var(--accent);
   border: none;
-  color: #fff;
+  color: var(--accent-ink);
   border-radius: 7px;
   padding: 8px;
   cursor: pointer;
@@ -863,7 +863,7 @@
 .prov-conn-actions .prov-login-btn {
   background: var(--accent);
   border: none;
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* Provider-login terminal modal. */
@@ -1220,6 +1220,19 @@
 
 .ws-repo-branches input {
   min-width: 0;
+}
+
+/* What each known repository will use, above the override rows. */
+.ws-repo-used {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.ws-repo-used li {
+  overflow-wrap: anywhere;
 }
 
 .ws-repo-branches input[aria-invalid] {

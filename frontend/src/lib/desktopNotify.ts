@@ -91,6 +91,12 @@ export function desktopNoteFor(
         target: "devices",
       };
     }
+    case "device.pair_unfinished":
+      return {
+        title: "Check your devices",
+        body: clip(String(d.detail || "A pairing code was used but the join didn't finish")),
+        target: "devices",
+      };
     case "peer.link_added": {
       const name = String(d.peer_name || "Someone");
       return {

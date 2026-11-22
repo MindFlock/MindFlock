@@ -425,5 +425,17 @@ class PeerCaptureMiddleware:
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] in ("http", "websocket") and "mf_peer" not in scope:
-            scope["mf_peer"] = scope.get("client")
+            client = scope.get("client")
+            # Another of the user's devices, through the device tunnel
+            # (backend.peer.fleet_tunnel): it arrives over loopback, but it
+            # is NOT this machine. Mark it, and give it a client that no
+            # loopback, tailnet or proxy-trust rule can match (so its
+            # X-Forwarded-For is never honoured either) — auth treats it as a
+            # remote caller with the gate on.
+            from backend.peer import tunnel_peers as _tunnel_peers
+
+            if _tunnel_peers.is_tunneled(client):
+                scope["mf_tunnel"] = True
+                scope["client"] = client = _tunnel_peers.CLIENT
+            scope["mf_peer"] = client
         await self._inner(scope, receive, send)

@@ -13,7 +13,7 @@
 import { useState } from "react";
 import type { Instance, OutboxWaiting } from "../../api/types";
 import { instApi } from "../../api/client";
-import { refreshInstances, useFlights, useInstances } from "../../state/queries";
+import { refreshInstances, useFlightKinds, useFlights, useInstances } from "../../state/queries";
 import { refreshRuns } from "../../state/runs";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
@@ -39,8 +39,9 @@ import {
 import { cancelRun, raiseBudget, runAction as act, runPath, suggestedBudget, taskPath } from "../../lib/runsApi";
 import { releaseChoices } from "../../lib/splitRun";
 import { openBehaviors } from "../../lib/behaviorsFocus";
-import { controlFlight, flightAction, flightPath, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
-import { perchedOnYou, sessionGone, skipCarriesOn, type Flight } from "../../lib/flights";
+import { controlFlight, flightAction, flightPath, flyAgain, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { canFixStep, haltedRemedies, perchedOnYou, retryWorksGone, sessionGone, skipCarriesOn, type Flight } from "../../lib/flights";
+import { flyAgainTitle } from "../../lib/routeStart";
 import { askOffers, findingsOf, flightAsk, owedGroups } from "../../lib/stopAsks";
 import { OwedChecks, ReviewFindings } from "../flights/PerchAsks";
 import type { RunInfo } from "../../lib/runs";
@@ -640,11 +641,12 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
   );
 }
 
-/** A route halted at a stop (docs/vocabulary.md "Halt"): why, and Retry /
- * Skip right here — the same two the stop itself and the Sky's Needs you
- * panel offer — with Open ↗ to go look first. */
+/** A route halted at a stop (docs/vocabulary.md "Halt"): why, and its
+ * remedies right here — the same ones, in the same order, the stop itself
+ * and the Sky's Needs you panel offer — with Open ↗ to go look first. */
 function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
   const [busy, setBusy] = useState(false);
+  const kinds = useFlightKinds().data;
   const { full, gone, fl } = useRoute(w, row);
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -656,6 +658,17 @@ function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
   };
   const at = fl?.step?.title || "";
   const chip = "Halted" + (at ? " at " + at : "");
+  // The remedies, the leading one first (lib/flights haltedRemedies): Run
+  // again on a closed session's route, Let the agent fix it on a test / CI /
+  // Verify failure, else Retry — as the stop itself and the Sky's panel.
+  const kind = fl?.step?.kind || (full ? full.steps[full.cursor]?.kind : "") || "";
+  const remedies = haltedRemedies({
+    kind,
+    state: full?.state || "halted",
+    canFix: !!full && !gone && canFixStep(full),
+    gone,
+    retryWorks: retryWorksGone(kind, kinds),
+  });
   // The chip names the stop; the line says what failed, without it again
   // (and not at all when the reason is only the chip's own words).
   const why = haltedWhy(at, w.reason);
@@ -670,29 +683,34 @@ function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
       {!!why && why !== chip && <div className="ob-halt-reason">{why}</div>}
       <div className="ik-item-start">
         <div className="ob-acts">
-          {fl && (
-            <>
-              <button
-                type="button"
-                className="btn-primary pr-review-btn"
-                disabled={busy}
-                title={"Run “" + (at || "this stop") + "” again"}
-                onClick={() => void run(() => stepRetry(fl.id, fl.step.id))}
-              >
-                Retry
-              </button>
-              <button
-                type="button"
-                className="test-btn"
-                disabled={busy}
-                title={"Skip “" + (at || "this stop") + "” — the route goes on without it"}
-                onClick={() => void run(() => stepSkip(fl.id, fl.step.id))}
-              >
-                Skip
-              </button>
-            </>
-          )}
-          {fl && gone && <StopRouteButton id={fl.id} busy={busy} run={run} />}
+          {fl &&
+            remedies.map((r, i) => {
+              const cls = (i === 0 ? "btn-primary pr-review-btn" : "test-btn") + " ob-remedy-" + r;
+              if (r === "stop") return <StopRouteButton key={r} id={fl.id} busy={busy} run={run} />;
+              if (r === "again")
+                return (
+                  <button key={r} type="button" className={cls} disabled={busy} title={full ? flyAgainTitle(full, true) : "Run the route again — its session reopens"} onClick={() => void run(() => flyAgain(fl.id))}>
+                    Run again
+                  </button>
+                );
+              if (r === "fix")
+                return (
+                  <button key={r} type="button" className={cls} disabled={busy} title={"Hand the failure to the agent — “" + (at || "this stop") + "” runs again after its fix"} onClick={() => void run(() => stepFix(fl.id, fl.step.id))}>
+                    Let the agent fix it
+                  </button>
+                );
+              if (r === "retry")
+                return (
+                  <button key={r} type="button" className={cls} disabled={busy} title={"Run “" + (at || "this stop") + "” again"} onClick={() => void run(() => stepRetry(fl.id, fl.step.id))}>
+                    Retry
+                  </button>
+                );
+              return (
+                <button key={r} type="button" className={cls} disabled={busy} title={"Skip “" + (at || "this stop") + "” — the route goes on without it"} onClick={() => void run(() => stepSkip(fl.id, fl.step.id))}>
+                  Skip
+                </button>
+              );
+            })}
           {row && (
             <button type="button" className="test-btn" onClick={() => openSession(w.title)}>
               Open ↗
@@ -705,7 +723,7 @@ function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
 }
 
 /** A route paused at a halt point a person set (docs/vocabulary.md "Halt
- * point"): a calm chip ("Paused before <stop>"), Carry on — the stop runs — or
+ * point"): an amber chip ("Paused before <stop>" — it needs you, round 5), Carry on — the stop runs — or
  * Skip — the route goes on without it — right here, with Open ↗ to go look
  * first. */
 function FlightPausedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
@@ -725,7 +743,8 @@ function FlightPausedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
     <div className="pr-open-item ob-item ob-flight_paused" data-outbox-row={w.title || w.key}>
       <RouteMain w={w} row={row} shown={shown} full={full} gone={gone} />
       <div className="pr-open-meta">
-        <span className="pr-open-chip" title={w.reason || undefined}>
+        {/* Round 5: a halt point needs you — amber, as its session's chip. */}
+        <span className="pr-open-chip warn" title={w.reason || undefined}>
           {chip}
         </span>
       </div>

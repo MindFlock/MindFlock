@@ -16,8 +16,17 @@ Plus a handful of environment variables.
 
 Commit this file to the root of a repo you run sessions on. It is read from
 the source repo at session-create time and from the worktree afterwards
-(re-run / check endpoints). Everything is opt-in — a repo without the file
-behaves exactly as before.
+(re-run / check endpoints). Everything in it is opt-in.
+
+**Without any file**, every new plain worktree session is still *prepared*
+(see [session-engine.md](session-engine.md#preparing-a-new-worktree-backendworktree_preparepy)):
+tool-version pins like `.python-version` are carried from the source
+checkout (never a secret), and each lockfile's dependencies are made ready the
+way the source checkout has them — `uv sync --frozen` from uv's cache,
+`node_modules` cloned (copy-on-write, or a hard-link tree on ext4) when the
+lockfile matches the source's, else `npm ci` / `yarn` / `pnpm install`. That
+runs in the background and never holds prompts; the agent's first prompt
+says so.
 
 ```toml
 [workspace]
@@ -28,8 +37,16 @@ behaves exactly as before.
 setup_commands = ["npm install"]
 
 # O2: untracked files/dirs copied from the source repo into each new
-# worktree before setup runs (never overwrites, skips missing).
+# worktree before setup runs (never overwrites, skips missing). Added to the
+# default pin files; a secret (.env) rides only when listed here or in your
+# own repository.worktree_setup block.
 copy_untracked = [".env", ".env.local"]
+
+# The automatic dependency step: "auto" (default — what the source checkout
+# has installed, reused when the lockfile matches, else installed), "install"
+# (every lockfile, always through its package manager; pick it for a repo
+# whose tools edit node_modules in place, e.g. patch-package) or "off".
+dependencies = "auto"
 
 # O3: the verification gate. Auto-runs after each commit (when the session
 # reaches the committed stage); its ✓/✗ chip shows on the session card and
@@ -49,6 +66,30 @@ check_command = "npm test"
 # anything else is ignored rather than guessed at.
 verify_on_push = true
 ```
+
+**Your own per-repo recipe** (not committed, for a repo you don't control or
+a step only you want) lives in settings, `repository.worktree_setup`, keyed by
+the repo's `owner/name` or by the source checkout's absolute path:
+
+```json
+"worktree_setup": {
+  "acme/app": {
+    "setup_commands": ["make seed-db"],
+    "copy_untracked": [".env"],
+    "dependencies": "install"
+  }
+}
+```
+
+Its commands run after the repo's own, its files are carried too, and its
+`dependencies` wins. Saved with `POST /api/settings` (`{"repository":
+{"worktree_setup": {…}}}`).
+
+**Trust.** Setup commands — the repo's and yours — and the package managers
+(whose install scripts are the repo's code too) run for a repo you started a
+session in, with your permissions: the same trust as the agent the session
+launches, which runs that repo's code anyway. They never run for a shared
+(peer-link) folder: its `.mindflock.toml` came from another machine.
 
 Verify's other per-repo settings are *not* here: they are keyed by GitHub slug
 in `repository.verify_repo_settings["owner/name"]` and edited in Verify →
@@ -500,6 +541,23 @@ pass off whatever the mode says.
 | `mode` | `auto` \| `ask` \| `off` \| `""` | `auto`: a background pass (15 min after start, then every 6 h) removes the provably safe leftovers by itself, at most 25 per pass. `ask` (and `""`, never chosen): the pass only looks, and the first time the safe set is worth reclaiming (≥ 2 GB or ≥ 10 items) it says so ONCE (`system.cleanup_available`, the bell's "Leftover worktrees can be cleaned up" rule); it says so again only after something has been collected and a new pile has built up. `off`: no pass, no notice — the Settings list and `mindflock clean` still work on demand |
 | `after_days` | integer 1–3650 (unset = 14) | How long a worktree must sit unused before it can count as safe. "Used" is read only from signals a read cannot move: the newest entry of the worktree's own HEAD reflog (a commit, checkout, reset, the `worktree add` itself; else its HEAD commit's time), its creation record, and MindFlock's session records (a close, a session's last update). Never the folder's or the git index's mtime: anyone's `git status` rewrites the index, and that would reset the clock on every scan. Work that never reached a commit shows as uncommitted and keeps the worktree anyway. A session closed within this many days keeps its folder, since it can still be reopened |
 
+### Transfers (`transfers`, settings store only)
+
+The `transfers` group of `~/.mindflock/settings.json` (`TransfersSettings`
+in `backend/config/settings.py`): what THIS device sends to and accepts from
+your other devices — `send_files` and `send_session`'s git bundle
+([devices.md](devices.md#send-files-to-another-device)). Machine-local:
+never synced. Owner-only through `POST /api/settings` (`{"transfers":
+{"allow_secrets": true}}`); there is no Settings screen for it yet.
+
+| Key | Values | Notes |
+|---|---|---|
+| `max_mb` | integer 1–65536 (unset = 512) | The most one transfer may carry, in MB. The sender checks its own value before anything leaves (a bundle: its size once built); the receiver checks ITS value on the manifest |
+| `max_files` | integer (unset = 5000) | The most files one transfer may carry, on both sides alike |
+| `inbox_mb` | integer (unset = 4096) | This device's inbox quota (`~/.mindflock/inbox`; every unfinished transfer counts at its declared size, and a bundle's unpacked checkout counts too). A transfer, chunk or bundle checkout that would go past it is refused (`inbox_full`) |
+| `keep_days` | integer 1–3650 (unset = 14) | A received transfer no live session works in is removed after this many days — checked on the next receive. An unfinished transfer goes after 6 h, or 1 h with nothing written (also on a 5-minute timer) |
+| `allow_secrets` | bool (default false) | Whether a sender on this device may pass `include_secrets` at all. Off: `.env*`, keys, certificates, credential files and the files `.secrets.baseline` names are left out of every send (and of every commit of a bundle). A name-based guardrail, not a content scan. Never covers `.git`, agent login/config/transcripts or credential stores — those are never sent |
+
 ### Auth profiles (`[auth_profiles]`, settings store only)
 
 Which identity a session's CLI runs as — a second Claude subscription, an API
@@ -618,8 +676,41 @@ Notes on individual keys:
   → the session's own fork base. A block's blank `pr_base_branch` means its own
   `base_branch`, never the flat PR base — a main-only repo must not inherit a
   `staging` target. Extra repos of a multi-repo ticket get the same answer in
-  their prompt instructions. None of these ever asks GitHub for the repo's
-  default branch; with nothing configured the fork base is literally `main`.
+  their prompt instructions.
+
+  **One resolver, no configuration needed** (`backend/repo_base.py`). Every
+  caller — Open PR (the button, the route's Open PR stop, MCP
+  `ship_session`), the ship dialog's default, Merge's post-merge fetch, a team
+  run's release PR, the base a provisioned workspace is cut from (ticket
+  sessions, the pipeline's PR workspaces), an epic lead's prompt and a
+  multi-repo ticket's prompt — goes through the same order:
+  1. the repo's own `repository.repo_branches` row, used as written;
+  2. the flat value (`repository.pr_base_branch`, or for the fork base
+     `MINDFLOCK_BASE_BRANCH` → `repository.base_branch` → `github.base_branch`)
+     **only if that branch exists on this repository** — its `origin/<name>`
+     ref, a local branch, or the remote itself (`git ls-remote`, cached ~10
+     min per remote) says so. An unreachable remote keeps the setting: "missing"
+     is only said on evidence;
+  3. (Open PR only) the session's own fork base, when the repository has it;
+  4. the repository's default branch — `origin/HEAD`, else the remote's answer
+     to `git ls-remote --symref`;
+  5. `main` or `master`, whichever the repository has.
+
+  A flat value that was passed over is said once, in plain words, where you
+  see it: "Using main: this repository has no staging branch" — on the Open PR
+  dialog under the picker, in the toast after a PR opens, and on the route's
+  Open PR stop receipt ("PR #291 · Using main: …"). If nothing resolves, Open
+  PR answers 409 with a sentence naming the remedy (set a base for that
+  repository in Settings → Workspace → Per-repo branches) instead of a git
+  error. **Per-repo branches** lists each repository MindFlock knows about
+  (live sessions, `repository.url`, existing rows) with the branch it will use
+  and why — "main · the repository's default", "staging · your setting" — and
+  a **Set** link that starts a row for it.
+
+  The pipeline's PR monitor applies the same rule to its base filter: a
+  screen-wide `github.base_branch` that a watched repo does not have (one
+  GitHub call per repo per ~10 min) is dropped for that repo, so its PRs are
+  still seen; a repo's own `base_branch` override is used as written.
 - `github.repo_settings` / `github.issue_repo_settings` — the per-repo override
   tables, spelled as nested tables whose key is the quoted repo slug
   (`[github.repo_settings."owner/name"]`). Each block accepts `agent`,
@@ -695,6 +786,12 @@ server merges on save so multiple processes can share it.
 - `worktrees/` — worktree-mode session directories,
   `<sanitized-branch>_<hex-timestamp>`.
 - `recently_closed.json` — closed-but-reopenable sessions (cap 50).
+- `inbox/` — files and session work received from your other devices
+  (`core/inbox.py`): `inbox/<from-device>/<id>/…` per transfer (never
+  overwritten, never run; files `0644`) with its record `<id>.json`, and
+  unfinished ones in `inbox/.partial/<id>/` (manifest `transfer.json`, data
+  under `data/`). A git bundle is unpacked into `inbox/<from-device>/<id>/
+  <name>/`. Quota `transfers.inbox_mb`; pruned after `transfers.keep_days`.
 - `red_zones.json` — red zones per repo (keyed by the normalized `origin`) and
   per worktree, per-worktree waivers, each repo's Plan-first flag (applied
   to intake starts of CLIs that support plans) and companion patterns
@@ -841,6 +938,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_HEAVY_SLOTS` | — | How many heavy commands `mindflock slot` lets run at once; wins over `general.heavy_slots` (`--max` wins over both) |
 | `MINDFLOCK_SLOT_HELD` | — | **Internal**: set by `mindflock slot` on the command it runs (the pools held, comma-separated), so a nested `mindflock slot` for the same pool runs straight through |
 | `MINDFLOCK_REVIVE_ON_START` | on | `0` starts the server without the background revive sweep or the auto-revive of agents the OOM killer took (sandboxed or scratch servers), whatever `general.revive_on_start` says. Agents that died are still **held offline** (that launches nothing) |
+| `MINDFLOCK_HOME_GUARD` | unset | `1` makes every store refuse a path inside the real user's `~/.mindflock` / `~/.mindflock-assistant` (the password-database home, not `$HOME`), as it always does under pytest (`backend/config/home_guard.py`): a write raises, a read falls back to defaults. The UI preview (`scripts/preview.py`) runs its scratch server with it |
 | `MINDFLOCK_HELD_FILE` | `~/.mindflock/held.json` | Path of the held-offline store (`title -> {since, reason}`): sessions whose agent died in a crash and that wait for a person's Start ([session-engine.md](session-engine.md#held-offline-the-default-after-a-crash)) |
 | `MALLOC_ARENA_MAX` | `2` (server only) | glibc malloc arenas for the web server process. Unset, `run.py` caps them at 2 with `mallopt` before any thread starts (not via the environment, so agent shells keep glibc's default); set it (or `GLIBC_TUNABLES=glibc.malloc.arena_max=…`) to choose another cap — glibc applies yours and the server leaves it alone. Uncapped, every worker thread grew its own arena of freed-but-kept memory (~1 GB RSS on a busy server). See [architecture.md](architecture.md) |
 | `MINDFLOCK_OOM_SCORE_ADJ` | `500` | The `oom_score_adj` every agent launch (and shell tab) gives itself, so under memory pressure the kernel kills an agent's process tree before the server ([session-engine.md](session-engine.md#when-the-oom-killer-fires-anyway-agents-go-first-and-come-back)); an integer up to 1000, `0` turns it off. Read when a launch command or launcher script is generated (a provisioned launcher keeps the value it was written with) |
@@ -906,6 +1004,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Antigravity CLI state dir (conversation DBs, usage) |
 | `MINDFLOCK_CLAUDE_JSON` | `~/.claude.json` | Path of the `.claude.json` used for pre-trust seeding of workspaces |
 | `MINDFLOCK_SEED_PROMPT_DIR` | `~/.mindflock-assistant/.seed-prompts` | Where generated seed prompts are written |
+| `MINDFLOCK_DEVICES_ANYWHERE_LOOPBACK` | — | Tests and sandboxes only — "Reach my devices from anywhere" runs no cloudflared: the relay ingress itself is the published address (`wss://127.0.0.1:<port>/<token>`, plain WebSocket), and only such addresses are accepted. The two-server trial (`tests/e2e/test_devices_anywhere_trial.py`) uses it |
+| `MINDFLOCK_DEVICES_ANYWHERE_STORE` | — | Tests and sandboxes only — keep "Reach my devices from anywhere" records in this local folder instead of the private GitHub repo |
 | `MINDFLOCK_TAILSCALE_STATUS_FILE` | — | Tests and sandboxes only — every Tailscale status reader (device discovery, phone URLs, the shared link, trusted accounts, the health card) reads this `tailscale status --json` document instead of running the `tailscale` CLI (the fleet end-to-end test gives each server a fake tailnet this way) |
 | `MINDFLOCK_TAILSCALE_BIN` | — | The `tailscale` CLI to use (a path, or a name on `PATH`), ahead of discovery. Without it MindFlock looks on `PATH`, then (macOS) the app's own CLI at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`. On WSL, a Windows-side `tailscale.exe` is reported (Settings → Your devices, the doctor) but never used — it is a different tailnet device (`backend/tailscale_cli.py`) |
 | `MINDFLOCK_UV_VERSION` | pinned in `install.sh` | `install.sh` only — uv version to install; overriding the pin **skips the sha256 verification** (a warning is printed) |
@@ -998,6 +1098,23 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   Settings → Your devices → One link for all devices shows a setup
   checklist with each step's live status and its fix. See
   [web-ui.md](web-ui.md) (Settings → Your devices).
+- **Reach my devices from anywhere** (`general.devices_anywhere`, bool,
+  default `false`; Settings → Your devices, `POST /api/devices/anywhere`):
+  this device keeps a Cloudflare quick tunnel up and leaves its address,
+  encrypted with the group's key, in a private repo `mindflock-devices` in
+  your own GitHub account (created on first use; needs the `repo` permission
+  MindFlock's GitHub sign-in already has). It finds your other devices the
+  same way, for the ones Tailscale or your network can't reach. Per device,
+  never synced, and only its own routes set it — the switch, and adding a
+  device that isn't on your network (`/api/devices/anywhere/invite` with
+  `turn_on`, `/api/devices/anywhere/join`), all from this device itself; the
+  generic `POST /api/settings` drops the field. State is in `~/.mindflock/devices_anywhere/` (`state.json`:
+  the record's counter and file name, plus the highest counter seen per
+  device; `status.json`: a no-secrets snapshot for `mindflock doctor`;
+  `tunnel/`: cloudflared's private home). A new device pairing through the
+  tunnel, and the alarms for pairing codes used without the join finishing,
+  are kept beside `fleet.json` in `fleet_pairing.json` (0600). See
+  [devices-anywhere.md](devices-anywhere.md).
 - **Trusted Tailscale accounts** (`general.tailnet_trusted_logins`; Settings →
   Your devices → Advanced): a list of Tailscale login names whose **untagged** devices skip
   the access token. Empty or absent means off. Stored lower-cased and

@@ -17,8 +17,9 @@ import {
   resetStep,
   NO_ORIGIN_CMD,
   NO_ORIGIN_ALT,
+  liveStep,
 } from "../lib/stage";
-import { deriveSessionState } from "../lib/sessionState";
+import { deriveSessionState, setupHolds } from "../lib/sessionState";
 
 const inst = (o: Partial<Instance>): Instance => o as unknown as Instance;
 
@@ -79,6 +80,23 @@ describe("chipState (persistent status chip)", () => {
     const ss = deriveSessionState(row);
     expect(chipState(row, ss)).toEqual(chipState(row));
     expect(chipState(row, ss).cls).toContain("tone-" + ss.tone);
+  });
+});
+
+describe("worktree preparation (setup hold: false)", () => {
+  it("running reads 'preparing', failed says why and where the log is", () => {
+    expect(liveStep(inst({ setup: { state: "running", hold: false } }))?.label).toBe("preparing");
+    const failed = liveStep(inst({ setup: { state: "failed", hold: false, error: "npm ci in frontend exited 1" } }));
+    expect(failed?.label).toBe("setup didn't finish");
+    expect(failed?.title).toContain("npm ci in frontend exited 1");
+    expect(failed?.title).toContain(".mindflock_setup.log");
+    expect(failed?.title).toContain("Prompts are not held");
+  });
+  it("only a holding setup holds (an older server's status, without hold, still does)", () => {
+    expect(setupHolds({ state: "running", hold: false })).toBe(false);
+    expect(setupHolds({ state: "failed" })).toBe(true);
+    expect(setupHolds({ state: "ok", hold: true })).toBe(false);
+    expect(liveStep(inst({ setup: { state: "running" } }))?.label).toBe("setting up");
   });
 });
 

@@ -325,11 +325,16 @@ def test_an_orphan_folder_is_listed_never_collected(env):
     open(os.path.join(orphan, "notes.txt"), "w").write("?")
     it = items(env)["gone_abc"]
     assert it["kind"] == gc.KIND_ORPHAN and not it["safe"]
+    assert it["state"] == gc.UNCHECKED
     assert "can't be checked" in it["kept"][-1]
     res = gc.remove_one(it, confirmed=False, root=env["root"])
     assert res.get("needs_confirm") and os.path.isdir(orphan)
+    # A plain confirm is not enough: deleting files nobody could check
+    # takes its own explicit ask.
     res = gc.remove_one(it, confirmed=True, root=env["root"])
-    assert res["ok"] and not os.path.exists(orphan)
+    assert res.get("unchecked") and os.path.isdir(orphan)
+    res = gc.remove_one(it, confirmed=True, even_unchecked=True, root=env["root"])
+    assert res["ok"] and res["permanent"] and not os.path.exists(orphan)
 
 
 def test_a_locked_worktree_is_kept(env):
@@ -501,7 +506,7 @@ def test_a_folder_outside_the_roots_is_never_rmtreed(env, tmp_path):
     stray = tmp_path / "stray"
     git(tmp_path, "clone", "-q", env["repo"], str(stray))
     item = {"path": str(stray), "kind": gc.KIND_CLONE, "safe": True}
-    assert gc._remove_folder(item, env["root"], gc.Usage(), allow_orphan=False)
+    assert gc._remove_folder(item, env["root"], gc.Usage())
     assert stray.is_dir()
 
 

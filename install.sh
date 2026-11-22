@@ -22,8 +22,10 @@
 #      SHA (printed, and pinned for the install so what you audited is what
 #      you get). uv fetches a suitable Python by itself, builds in an isolated
 #      venv, and links the `mindflock` command into ~/.local/bin. Re-running
-#      upgrades in place — and restarts a MindFlock server already running on
-#      this machine so it serves the new version (step 5). What was installed
+#      upgrades in place — building the new engine beside the old one first,
+#      so a failed download or build changes nothing — and restarts a
+#      MindFlock server already running on this machine so it serves the new
+#      version (step 5). What was installed
 #      (method, ref, commit, Python, time) is recorded in
 #      ~/.mindflock/install.json so `mindflock update` follows the same path.
 #   4. Ends on the same three steps `mindflock init` and `mindflock serve`
@@ -252,6 +254,51 @@ else
   SPEC="mindflock[web] @ git+$REPO@$PINNED"
   say "installing MindFlock from $REPO@$REF (commit $PINNED)…"
 fi
+# Install (or update) the uv tool so an engine already here is replaced whole
+# or not at all. `uv tool install --force` deletes the old tool venv BEFORE it
+# downloads the new one's wheels, so a network drop mid-update left NO engine
+# at all (shim and venv gone — checked with uv 0.11). So, the same steps
+# install.ps1 / engine_swap.py take on Windows:
+#   1. stage — the same install into a scratch tool dir beside the real one:
+#      every download and build happens there, the live engine untouched,
+#      and the staged one must answer --version. A failure changes nothing.
+#   2. move the live venv aside and install for real from the now-warm uv
+#      cache (seconds, no downloads left to fail);
+#   3. put the old venv (and its shim) back if that fails; drop it once the
+#      new one is in.
+# A first install has nothing to protect and installs straight away.
+uv_install_engine() {
+  TOOLS="$(uv tool dir 2>/dev/null || true)"
+  LIVE="$TOOLS/mindflock"
+  if [ -z "$TOOLS" ] || [ ! -d "$LIVE" ]; then
+    uv tool install --force --python "$INSTALL_PYTHON" "$SPEC"
+    return
+  fi
+  STAGE="$TOOLS-mindflock-next"
+  OLD="$TOOLS-mindflock-old-$$"
+  rm -rf "$STAGE"
+  say "building the new engine beside the one you have (it keeps working meanwhile)…"
+  if ! UV_TOOL_DIR="$STAGE/tools" UV_TOOL_BIN_DIR="$STAGE/bin" \
+      uv tool install --force --python "$INSTALL_PYTHON" "$SPEC" \
+    || ! "$STAGE/bin/mindflock" --version >/dev/null 2>&1; then
+    rm -rf "$STAGE"
+    fail "couldn't build MindFlock $REF — nothing was changed; the engine you have keeps working."
+  fi
+  rm -rf "$STAGE"
+  mv "$LIVE" "$OLD" || fail "couldn't move the old engine aside ($LIVE) — nothing was changed."
+  if uv tool install --force --python "$INSTALL_PYTHON" "$SPEC"; then
+    rm -rf "$OLD"
+    return 0
+  fi
+  rm -rf "$LIVE"
+  mv "$OLD" "$LIVE" || fail "the install failed and the old engine couldn't be put back — it is in $OLD; re-run this script."
+  BIN="$(uv tool dir --bin 2>/dev/null || true)"
+  if [ -n "$BIN" ] && [ ! -e "$BIN/mindflock" ]; then
+    ln -sf "$LIVE/bin/mindflock" "$BIN/mindflock" 2>/dev/null || true
+  fi
+  fail "the install failed — the engine you had was put back and still works."
+}
+
 # --force makes re-runs an in-place upgrade instead of an error (idempotent).
 # An engine first installed with pipx stays a pipx install: `mindflock update`
 # and the desktop updater both come through here and must not turn it into a
@@ -262,7 +309,7 @@ if [ -r "$HOME/.mindflock/install.json" ] && grep -q '"method": *"pipx"' "$HOME/
   pipx install --force "$SPEC"
   INSTALL_METHOD="pipx"
 else
-  uv tool install --force --python "$INSTALL_PYTHON" "$SPEC"
+  uv_install_engine
 fi
 
 command -v mindflock >/dev/null 2>&1 || fail "install finished but \`mindflock\` is not on PATH.

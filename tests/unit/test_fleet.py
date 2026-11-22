@@ -1443,6 +1443,7 @@ async def test_status_payload(world, monkeypatch):
         "bind",
         "gate_on",
         "admitted",
+        "pairing",
         "tailnet_peers",
         "policy_grant",
         "match",
@@ -1461,6 +1462,9 @@ async def test_status_payload(world, monkeypatch):
         "added_at": members["rig"]["added_at"],
         "self": False,
         "reachable": True,
+        # Reached over the tailnet path discovery found it on (a test
+        # device record carries no "via"): "" unless set.
+        "via": "",
         "version": "9.9.9",
         "same_fleet": True,
         "error": "",

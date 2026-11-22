@@ -245,6 +245,60 @@ every stored tmux session as a side effect of changing one field.
   snapshot, the index stays at `HEAD`, so everything arrives unstaged (a file
   staged in the source is an untracked file here).
 
+### Preparing a new worktree (`backend/worktree_prepare.py`)
+
+A fresh worktree has only what git tracks. `Instance.Start` calls
+`OnWorktreeReady(path)` once the worktree exists (after a Branch session's
+carry) and **before** the agent launches; the web server sets it to
+`worktree_setup.start_setup`, which:
+
+1. **Carries pin files** synchronously from the source checkout: the
+   well-known untracked tool-version pins (`.python-version`, `.nvmrc`,
+   `.node-version`, `.tool-versions`, `.ruby-version`, `.java-version`,
+   `.go-version`, `.terraform-version`, `.sdkmanrc`) — regular files only, no
+   symlink, ≤ 64 KiB, nothing whose name looks like a secret (`.env*`,
+   `.envrc`, keys, `.npmrc`, `*credential*`, `*token*` …). A secret rides only
+   when listed explicitly (`copy_untracked`). Never overwrites.
+2. **Makes each ecosystem's dependencies ready** in a background thread, one
+   step per tracked lockfile (≤ 6, ≤ 2 dirs deep), and only for what the
+   source checkout has installed (`auto` mirrors the source):
+
+   | Lockfile | What runs | Why |
+   |---|---|---|
+   | `uv.lock` (+ `pyproject.toml`) | `uv sync --frozen` | uv links every file from its cache (hard links on Linux, clones on APFS): seconds, ~2 MB unique. A venv is never copied — it embeds absolute paths, and its editable install points at the *source* checkout. `VIRTUAL_ENV` / `UV_PROJECT_ENVIRONMENT` are dropped so it can never sync the server's own venv. |
+   | `package-lock.json`, `yarn.lock` (v1) | the source's `node_modules` **cloned** when the lockfile is byte-identical and npm/yarn recorded a finished install newer than it; else `npm ci --prefer-offline` / `yarn install --frozen-lockfile --prefer-offline` | Copy-on-write where the filesystem can (`cp --reflink=always` on btrfs/XFS, `cp -c` = `clonefile` on APFS); on ext4 (no reflink) a **hard-link tree** (`cp -al`). npm and yarn replace a package's files on install rather than editing them, so the worktree never writes through a shared inode; the files they *do* rewrite in place (`node_modules/.package-lock.json`, `.yarn-integrity`, `.modules.yaml`) are made private copies, and tool caches (`.cache`, `.vite`, …) are left behind. Never a symlink: the bundler writes a symlinked `node_modules`' real path into its output. Only when `node_modules/` is git-ignored. |
+   | `pnpm-lock.yaml` | `pnpm install --frozen-lockfile --prefer-offline` | pnpm's store already hard-links every package. |
+
+   A step whose tool isn't installed is skipped and logged. Each step's
+   result (`how`: `reflink` / `clonefile` / `hardlink` / `install` /
+   `skipped`, seconds, note) lands in the status file.
+3. **Runs the declared setup commands** (the repo's `.mindflock.toml`, then
+   the user's `repository.worktree_setup` block — see
+   [configuration.md](configuration.md)), 900 s each.
+
+Everything is logged to `.mindflock_setup.log`; `.mindflock_setup.json`
+holds `state` (running → ok | failed), `hold`, `error` (one line: "npm ci in
+frontend exited 1") and `steps`. **Only declared setup commands hold queued
+prompts** (`hold: true`, the O2 contract); the automatic part runs beside the
+agent, whose first prompt gets a one-line note naming the steps and the
+status file, and MCP `whoami` / `get_session` carry it as `setup`. A failure
+is said, never blocking: the chip reads "setup didn't finish", the toast and
+bell give the why, and the session menu has **Setup log** and **Re-run
+worktree setup**.
+
+**Removing a worktree is always safe**: a hard link is a name, and the data
+lives while any other worktree (or the source) links it; nothing is a shared
+*directory*. Disk cleanup's per-worktree size is hard-link aware ("X on disk
+· frees Y", `worktree_gc.walk_sizes`), so a prepared worktree reports the
+little it really holds. A copy-on-write clone (btrfs/XFS/APFS) shares extents
+the size walk can't see, so there it over-reports what a removal frees.
+
+Known risk of the hard-link tree: a tool that edits a package file **in
+place** (patch-package applying a *new* patch, a hand edit while debugging)
+changes it in the source checkout and every sibling worktree too. Set
+`dependencies = "install"` for such a repo. `MINDFLOCK_WORKTREE_DEPS=0` turns
+the dependency step off machine-wide (the test suite does).
+
 ## tmux + PTY (`session/tmux/`)
 
 - Session name: `mindflock_` + title with whitespace stripped and `.`→`_`

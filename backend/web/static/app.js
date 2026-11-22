@@ -24823,6 +24823,45 @@ function skipCarriesOn(flight) {
 function sessionGone(flight, rows) {
 	return !!rows && !!flight.session && !rows.some((r) => r.title === flight.session);
 }
+function canFixStep(flight) {
+	if (!flight || !flight.session || flight.state !== "halted" && flight.state !== "waiting_you") return false;
+	const step = flight.steps[flight.cursor];
+	const ss = step ? flight.step_states?.[step.id] : void 0;
+	if (!ss) return false;
+	if (ss.state === "failed") return !ss.detail?.moved_on;
+	return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
+}
+var FIX_LEADS = /* @__PURE__ */ new Set([
+	"test",
+	"checks",
+	"verify"
+]);
+function retryWorksGone(kind, kinds) {
+	const def = kinds?.find((k) => k?.kind === kind);
+	return !!def && def.needs_session === false;
+}
+function haltedRemedies(o) {
+	if (o.gone) {
+		const out = [];
+		if (o.state === "halted") out.push("again");
+		if (o.retryWorks) out.push("retry");
+		return [
+			...out,
+			"skip",
+			"stop"
+		];
+	}
+	if (o.canFix && FIX_LEADS.has(o.kind)) return [
+		"fix",
+		"retry",
+		"skip"
+	];
+	return o.canFix ? [
+		"retry",
+		"fix",
+		"skip"
+	] : ["retry", "skip"];
+}
 //#endregion
 //#region src/api/client.ts
 var ApiError = class extends Error {
@@ -25546,6 +25585,10 @@ function stopWaitingToast(name, creates) {
 }
 //#endregion
 //#region src/lib/sessionState.ts
+function setupHolds(setup) {
+	if (!setup || setup.state !== "running" && setup.state !== "failed") return false;
+	return setup.hold !== false;
+}
 var actShown = /* @__PURE__ */ new Map();
 var actPending = /* @__PURE__ */ new Map();
 function noteActivity(inst) {
@@ -25597,7 +25640,8 @@ var STATE_LABEL$1 = {
 };
 var REASON_LABEL = {
 	question: "Question",
-	flight_you: "Wait for me",
+	flight_you: "Needs you",
+	flight_paused: "Paused before its halt point",
 	flight_halted: "Halted",
 	precommit_failed: "Pre-commit failed",
 	checks_failing: "Checks failing",
@@ -25611,6 +25655,7 @@ var VERIFIED_LABEL = "Verified";
 var NOTIFY_RULE = {
 	question: "needs_input",
 	flight_you: "flight_needs_you",
+	flight_paused: "flight_needs_you",
 	flight_halted: "flight_finished",
 	precommit_failed: "precommit_failed",
 	setup_failed: "setup_failed",
@@ -25684,7 +25729,11 @@ function needsYou(reason, hint) {
 	};
 }
 function flightYouLabel(stepTitle) {
-	return perchLabel(stepTitle);
+	return perchedOnYou(stepTitle);
+}
+function haltPointLabel(stepTitle) {
+	const t = String(stepTitle || "").trim();
+	return t ? "Paused before " + t : REASON_LABEL.flight_paused;
 }
 function haltedHint(fl) {
 	const at = String(fl.step?.title || "").trim();
@@ -25698,6 +25747,10 @@ function haltedState(fl) {
 	};
 }
 var PAUSED_FLIGHT_LABEL = "Paused route";
+var PAUSED_BY_YOU_LABEL = "Paused by you";
+function isPausedRouteChip(ss) {
+	return ss?.label === PAUSED_FLIGHT_LABEL || ss?.label === PAUSED_BY_YOU_LABEL;
+}
 var HELD_WORKER_LABEL = "Waiting";
 function waitingState(w, now) {
 	return {
@@ -25886,7 +25939,7 @@ function deriveSessionState(inst, extras) {
 		hint: heldHint(inst.held_reason)
 	};
 	if (inst.sleeping) return sleepingState(inst.sleeping, now);
-	if (inst.setup && inst.setup.state === "running") return {
+	if (inst.setup && inst.setup.state === "running" && setupHolds(inst.setup)) return {
 		state: "starting",
 		label: STATE_LABEL$1.starting,
 		tone: "muted",
@@ -25894,7 +25947,7 @@ function deriveSessionState(inst, extras) {
 		restartable: false,
 		hint: "Worktree setup running (deps / env files) — queued prompts are held until it finishes"
 	};
-	if (inst.setup && inst.setup.state === "failed") return needsYou("setup_failed", "Worktree setup failed — prompts are held; re-run it from the actions menu (log: .mindflock_setup.log)");
+	if (inst.setup && inst.setup.state === "failed" && setupHolds(inst.setup)) return needsYou("setup_failed", "Worktree setup failed — prompts are held; re-run it from the actions menu (log: .mindflock_setup.log)");
 	const act = extras?.activity ?? effectiveActivity(inst);
 	if (act === "clarify") return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
 	const fl = inst.flight;
@@ -25902,14 +25955,19 @@ function deriveSessionState(inst, extras) {
 	const verifySpeaks = fl?.step?.kind === "verify" && !!verifyEarly && !!verifyNeedsYou(verifyEarly);
 	if (fl && fl.state === "waiting_you" && fl.step && (fl.step.actor === "you" || !verifySpeaks)) {
 		const perch = fl.step.actor === "you";
-		const label = perch ? flightYouLabel(fl.step.title) : perchedOnYou(fl.step.title);
+		const label = flightYouLabel(fl.step.title);
 		const why = String(fl.step.note ?? "").trim();
 		return {
+			perch,
 			...needsYou("flight_you", label + " — route “" + fl.plan_name + "” needs you" + (!perch && why ? ": " + why : "") + (perch ? "; press Done on its strip, the Sky or the bell" : "; answer it on its strip, the Sky or the bell")),
 			label
 		};
 	}
 	if (fl && fl.id && fl.state === "halted" && !askedInWords(inst)) return haltedState(fl);
+	if (fl && fl.id && fl.state === "paused" && fl.reason === "halt point" && !askedInWords(inst)) return {
+		...needsYou("flight_paused", "Route “" + fl.plan_name + "” reached its halt point before " + (fl.step?.title || "its next stop") + " — Carry on from its strip, its stop on the Sky or the bell"),
+		label: haltPointLabel(fl.step?.title)
+	};
 	const bgHint = backgroundHint(inst);
 	const verify = verifyOf(inst);
 	if (verify?.state === "verifying" && act !== "limit" && act !== "offline") return {
@@ -25968,14 +26026,17 @@ function deriveSessionState(inst, extras) {
 		return needsYou("precommit_failed", step ? "Pre-commit failed at: " + step : "Pre-commit failed");
 	}
 	if (inst.check && inst.check.state === "failed" && !inst.check.stale) return needsYou("checks_failing", "Checks failed — push is gated until they pass (or push anyway)");
-	if (inst.flight?.state === "paused") return {
-		state: "idle",
-		label: PAUSED_FLIGHT_LABEL,
-		tone: "neutral",
-		inBell: false,
-		restartable: false,
-		hint: "Route “" + inst.flight.plan_name + "” " + (inst.flight.reason === "halt point" ? "reached its halt point before " : "is paused at ") + (inst.flight.step?.title || "its current stop") + " — Carry on from its strip or its stop on the Sky"
-	};
+	if (inst.flight?.state === "paused") {
+		const why = String(inst.flight.reason || "").trim();
+		return {
+			state: "idle",
+			label: why ? PAUSED_FLIGHT_LABEL : PAUSED_BY_YOU_LABEL,
+			tone: "neutral",
+			inBell: false,
+			restartable: false,
+			hint: "Route “" + inst.flight.plan_name + "” " + (why ? "is paused at " : "was paused by you at ") + (inst.flight.step?.title || "its current stop") + (why ? " (" + why + ")" : "") + " — Carry on from its strip or its stop on the Sky"
+		};
+	}
 	if (verify?.state === "passed") return {
 		state: "idle",
 		label: VERIFIED_LABEL,
@@ -26013,7 +26074,11 @@ function needsYouAction(ss, prUrl) {
 		};
 		case "flight_you": return {
 			act: "bell",
-			aria: ss.label + (/^wait for me\b/i.test(ss.label) ? " — press Done in the bell" : " — answer it in the bell")
+			aria: ss.label + (ss.perch ? " — press Done in the bell" : " — answer it in the bell")
+		};
+		case "flight_paused": return {
+			act: "bell",
+			aria: ss.label + " — your halt point: Carry on in the bell"
 		};
 		case "flight_halted": return {
 			act: "bell",
@@ -29972,7 +30037,7 @@ function stateChip(ss) {
 	if (ss.label === "Paused") cls = "s-paused";
 	else if (ss.label === SLEEPING_LABEL) cls = "s-sleeping";
 	else if (ss.label === "Missing") cls = "s-missing";
-	if (ss.reason === "flight_you" || ss.label === PAUSED_FLIGHT_LABEL) cls += " chip-flight";
+	if (ss.reason === "flight_you" || ss.reason === "flight_paused" || isPausedRouteChip(ss)) cls += " chip-flight";
 	return {
 		label: ss.label,
 		cls: cls + " tone-" + ss.tone,
@@ -30066,6 +30131,18 @@ function liveStep(inst) {
 		title: "Session paused — resume it to continue."
 	};
 	const setup = inst.setup;
+	if (setup && setup.hold === false) {
+		if (setup.state === "running") return {
+			label: "preparing",
+			tone: "work",
+			title: "Preparing the worktree in the background (dependencies, pin files). The agent can already read code; tests and builds wait for it."
+		};
+		if (setup.state === "failed") return {
+			label: "setup didn't finish",
+			tone: "blocked",
+			title: "Setup didn't finish" + (setup.error ? ": " + setup.error : "") + " · see the log (" + (setup.log || ".mindflock_setup.log") + ", or Setup log in the session menu). Prompts are not held."
+		};
+	}
 	if (setup?.state === "running") return {
 		label: "setting up",
 		tone: "work",
@@ -30681,6 +30758,49 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 	return state;
 }
 //#endregion
+//#region src/lib/termPalette.ts
+var ANSI_DARK = {
+	black: "#484f58",
+	red: "#ff7b72",
+	green: "#56d364",
+	yellow: "#e3b341",
+	blue: "#58a6ff",
+	magenta: "#d2a8ff",
+	cyan: "#39c5cf",
+	white: "#c9d1d9",
+	brightBlack: "#8b949e",
+	brightRed: "#ffa198",
+	brightGreen: "#7ee787",
+	brightYellow: "#f2cc60",
+	brightBlue: "#a5d6ff",
+	brightMagenta: "#e2c5ff",
+	brightCyan: "#7fe3eb",
+	brightWhite: "#f0f6fc"
+};
+var ANSI_LIGHT = {
+	black: "#24292f",
+	red: "#c3212c",
+	green: "#116329",
+	yellow: "#6f4b00",
+	blue: "#0a5fcc",
+	magenta: "#7340c8",
+	cyan: "#136b72",
+	white: "#59616b",
+	brightBlack: "#57606a",
+	brightRed: "#a40e26",
+	brightGreen: "#1a7136",
+	brightYellow: "#633c01",
+	brightBlue: "#0550ae",
+	brightMagenta: "#6639ba",
+	brightCyan: "#0f5b61",
+	brightWhite: "#424a53"
+};
+var SELECTION_DARK = "#3a415466";
+var SELECTION_LIGHT = "#b9c0d466";
+function ansiPalette(light) {
+	return light ? ANSI_LIGHT : ANSI_DARK;
+}
+//#endregion
 //#region src/lib/terminals.ts
 function cssVar(name, fallback) {
 	try {
@@ -30695,7 +30815,8 @@ function termTheme() {
 		background: cssVar("--term-bg", light ? "#ffffff" : "#0f1117"),
 		foreground: cssVar("--term-fg", light ? "#1f2430" : "#d7dae3"),
 		cursor: cssVar("--accent", "#7d56f4"),
-		selectionBackground: light ? "#b9c0d466" : "#3a415466"
+		selectionBackground: light ? SELECTION_LIGHT : SELECTION_DARK,
+		...ansiPalette(light)
 	};
 }
 function rethemeAll() {
@@ -31949,7 +32070,7 @@ async function submitMakePr(title, base, overrideRedZones = false) {
 			if (r.compare_url) offerUrl(r.compare_url, "Opened GitHub’s compare page — " + msg);
 			else toast(msg, { duration: 9e3 });
 		} else {
-			const said = (r?.note ? "PR already open for " : "Opened PR for ") + displayName(title);
+			const said = (r?.note ? "PR already open for " : "Opened PR for ") + displayName(title) + (r?.base_note ? ". " + r.base_note : "");
 			if (r?.url) offerUrl(r.url, said);
 			else toast(said);
 			await resetStage(title, { quiet: true });
@@ -31997,6 +32118,16 @@ async function rerunSetup(title) {
 		errorPop("Setup re-run failed", errMsg(err));
 	}
 	await refreshInstances();
+}
+async function showSetupLog(title) {
+	if (!title) return;
+	try {
+		const d = await instApi(title, "/setup?lines=40");
+		const st = d.status || {};
+		confirmPop("Worktree setup log", (st.state === "failed" ? "Setup didn't finish" + (st.error ? ": " + st.error : "") + "\n\n" : "") + ((d.log || "").trim() || "(the log is empty)"), [], "Close");
+	} catch (err) {
+		errorPop("Couldn't read the setup log", errMsg(err));
+	}
 }
 function hideSession(title) {
 	if (!title) return;
@@ -33399,213 +33530,74 @@ function InfoTip({ children, label = "More info", id, className }) {
 //#endregion
 //#region src/components/settings/screens/Appearance.tsx
 var SURFACES = [
-	[
-		"",
-		"Swallow (default)",
-		"#0f1117",
-		"#1e222e"
-	],
-	[
-		"raven",
-		"Raven",
-		"#000000",
-		"#141419"
-	],
-	[
-		"heron",
-		"Heron",
-		"#16181b",
-		"#292d33"
-	],
-	[
-		"cardinal",
-		"Cardinal",
-		"#d51322",
-		"#16060a",
-		"#3d060d"
-	],
-	[
-		"macaw",
-		"Scarlet Macaw",
-		"#1554e0",
-		"#06773a",
-		"#43060a"
-	],
-	[
-		"pheasant",
-		"Golden Pheasant",
-		"#f5b800",
-		"#05361f",
-		"#3f070c"
-	],
-	[
-		"oriole",
-		"Oriole",
-		"#ff7a12",
-		"#140c03",
-		"#421d03"
-	],
-	[
-		"lorikeet",
-		"Rainbow Lorikeet",
-		"#4b1fd6",
-		"#256e0a",
-		"#4f1c05"
-	],
-	[
-		"roller",
-		"Lilac-breasted Roller",
-		"#9b6ef0",
-		"#00736b",
-		"#3a2412"
-	],
-	[
-		"goldfinch",
-		"Goldfinch",
-		"#f2e00d",
-		"#131300",
-		"#33350d"
-	],
-	[
-		"toucan",
-		"Toco Toucan",
-		"#ffb01f",
-		"#08080a",
-		"#181820"
-	],
-	[
-		"quetzal",
-		"Quetzal",
-		"#00a35c",
-		"#4a0512",
-		"#033524"
-	],
-	[
-		"greenjay",
-		"Green Jay",
-		"#1440d6",
-		"#d6b800",
-		"#103a0e"
-	],
-	[
-		"gouldian",
-		"Gouldian Finch",
-		"#00c2b2",
-		"#52157a",
-		"#0e3a19"
-	],
-	[
-		"mallard",
-		"Mallard",
-		"#0d9c62",
-		"#5e330f",
-		"#22262e"
-	],
-	[
-		"kingfisher",
-		"Kingfisher",
-		"#00a8d6",
-		"#5e2404",
-		"#06323f"
-	],
-	[
-		"peacock",
-		"Peacock",
-		"#0a9cb8",
-		"#141f8f",
-		"#05383f"
-	],
-	[
-		"bluejay",
-		"Bluejay",
-		"#1266e6",
-		"#0a0e1c",
-		"#071a44"
-	],
-	[
-		"bunting",
-		"Indigo Bunting",
-		"#3b2ff0",
-		"#08061f",
-		"#150f52"
-	],
-	[
-		"violetear",
-		"Violetear",
-		"#7c2ff0",
-		"#0e0420",
-		"#220c40"
-	],
-	[
-		"mandarin",
-		"Mandarin Duck",
-		"#12a85e",
-		"#f2820f",
-		"#3a1445"
-	],
-	[
-		"flamingo",
-		"Flamingo",
-		"#ff2d8a",
-		"#180110",
-		"#420527"
-	]
+	["", "Swallow (default)"],
+	["raven", "Raven"],
+	["heron", "Heron"],
+	["owl", "Owl (low glare)"],
+	["wren", "Wren (warm paper)"],
+	["magpie", "Magpie (high contrast)"],
+	["cardinal", "Cardinal"],
+	["macaw", "Scarlet Macaw"],
+	["pheasant", "Golden Pheasant"],
+	["oriole", "Oriole"],
+	["lorikeet", "Rainbow Lorikeet"],
+	["roller", "Lilac-breasted Roller"],
+	["goldfinch", "Goldfinch"],
+	["toucan", "Toco Toucan"],
+	["quetzal", "Quetzal"],
+	["greenjay", "Green Jay"],
+	["gouldian", "Gouldian Finch"],
+	["mallard", "Mallard"],
+	["kingfisher", "Kingfisher"],
+	["peacock", "Peacock"],
+	["bluejay", "Bluejay"],
+	["bunting", "Indigo Bunting"],
+	["violetear", "Violetear"],
+	["mandarin", "Mandarin Duck"],
+	["flamingo", "Flamingo"]
 ];
-function swatchGradient(tones) {
-	const step = 100 / tones.length;
-	return `linear-gradient(135deg,${tones.map((c, i) => `${c} ${(i * step).toFixed(1)}% ${((i + 1) * step).toFixed(1)}%`).join(",")})`;
+function ThemePreview({ surface, light }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "theme-preview",
+		"data-surface": surface,
+		"data-mode": light ? "light" : "dark",
+		"aria-hidden": "true",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "tp-bar" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "tp-side",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "tp-dot tone-working" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "tp-dot tone-attention" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "tp-dot tone-broken" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "tp-dot tone-waiting" })
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "tp-win",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "tp-text",
+						children: "Aa"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "tp-muted" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "tp-btn" })
+				]
+			})
+		]
+	});
 }
 var ACCENTS = [
-	[
-		"",
-		"Violetear (default)",
-		"#7d56f4"
-	],
-	[
-		"cardinal",
-		"Cardinal",
-		"#e5484d"
-	],
-	[
-		"oriole",
-		"Oriole",
-		"#f07b3c"
-	],
-	[
-		"goldfinch",
-		"Goldfinch",
-		"#f0cf28"
-	],
-	[
-		"quetzal",
-		"Quetzal",
-		"#44b556"
-	],
-	[
-		"bluejay",
-		"Bluejay",
-		"#3d8bfd"
-	],
-	[
-		"bunting",
-		"Indigo Bunting",
-		"#4f46e5"
-	],
-	[
-		"flamingo",
-		"Flamingo",
-		"#f2559b"
-	],
-	[
-		"pheasant",
-		"Golden Pheasant",
-		"linear-gradient(135deg,#f0d78a,#b8860b)"
-	],
-	[
-		"heron",
-		"Heron",
-		"linear-gradient(135deg,#e2e7ef,#8d95a3)"
-	]
+	["", "Violetear (default)"],
+	["cardinal", "Cardinal"],
+	["oriole", "Oriole"],
+	["goldfinch", "Goldfinch"],
+	["quetzal", "Quetzal"],
+	["bluejay", "Bluejay"],
+	["bunting", "Indigo Bunting"],
+	["flamingo", "Flamingo"],
+	["pheasant", "Golden Pheasant"],
+	["heron", "Heron"]
 ];
 var DIMS = {
 	accent: {
@@ -33663,7 +33655,7 @@ function Appearance(_) {
 	const themeLight = useUi((s) => s.themeLight);
 	const [accent, setAccent] = (0, import_react.useState)(() => current$2(DIMS.accent));
 	const [surface, setSurface] = (0, import_react.useState)(() => current$2(DIMS.surface));
-	const surfaceSwatch = ([name, label, ...tones]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+	const surfaceSwatch = ([name, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		type: "button",
 		className: "accent-swatch surface-swatch" + (surface === name ? " active" : ""),
 		"data-surface-choice": name,
@@ -33671,10 +33663,13 @@ function Appearance(_) {
 			setSurface(name);
 			apply$1(DIMS.surface, name);
 		},
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "sw-dot",
-			style: { background: swatchGradient(tones) }
-		}), label]
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ThemePreview, {
+			surface: name,
+			light: themeLight
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "sw-label",
+			children: label
+		})]
 	}, name || "default");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
@@ -33704,6 +33699,10 @@ function Appearance(_) {
 			className: "set-section-title",
 			children: "Theme"
 		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Each preview is the theme itself: its bar, sidebar, text, an accent button and the working, needs-you, failed and waiting colours."
+		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "surface-swatches",
 			className: "accent-swatches",
@@ -33720,7 +33719,7 @@ function Appearance(_) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "accent-swatches",
 			className: "accent-swatches",
-			children: ACCENTS.map(([name, label, color]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			children: ACCENTS.map(([name, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 				type: "button",
 				className: "accent-swatch" + (accent === name ? " active" : ""),
 				"data-accent-choice": name,
@@ -33729,8 +33728,9 @@ function Appearance(_) {
 					apply$1(DIMS.accent, name);
 				},
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sw-dot",
-					style: { background: color }
+					className: "sw-dot theme-preview",
+					"data-accent-preview": name,
+					"data-mode": themeLight ? "light" : "dark"
 				}), label]
 			}, name || "default"))
 		}),
@@ -35555,6 +35555,14 @@ var FULL_DETAIL_LODS = [{
 	z: 1
 }];
 var nearLines = (z) => lodFor(z) === "near" ? Math.max(2, Math.min(8, Math.floor(z * 2))) : 0;
+var LANE_FOLD_BELOW = 900;
+var skyIsNarrow = (w) => w > 0 && w < LANE_FOLD_BELOW;
+function laneFolded(hand, narrow) {
+	return hand === "folded" || narrow && hand !== "open";
+}
+function laneHandAfter(fold, narrow) {
+	return fold ? "folded" : narrow ? "open" : null;
+}
 var SKY_DRAWER_KEY = "mf_sky_drawer";
 var skyDrawerOpen = (pref) => pref === "1";
 var FLYWAY_MIME = "application/x-mindflock-flyway";
@@ -36587,7 +36595,11 @@ function onFailHint(k, kind = "") {
 }
 var capital = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 var NEVER_FAILS = /* @__PURE__ */ new Set(["you", "wait"]);
-var canFail = (kind) => !NEVER_FAILS.has(kind);
+function canFail(kind, kinds) {
+	const def = kinds?.find((k) => k?.kind === kind);
+	if (def && typeof def.can_fail === "boolean") return def.can_fail;
+	return !NEVER_FAILS.has(kind);
+}
 function stopDoes(step) {
 	const c = step.config || {};
 	const n = (v, d) => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d;
@@ -36626,7 +36638,7 @@ function stopDoes(step) {
 		default: return "";
 	}
 }
-function stopSentence(step, fallback = "halt", body = "") {
+function stopSentence(step, fallback = "halt", body = "", kinds) {
 	const out = [];
 	if (step.halt) out.push("The route pauses here first (a halt point) — Carry on to run it.");
 	const when = (step.when || "").trim();
@@ -36635,7 +36647,7 @@ function stopSentence(step, fallback = "halt", body = "") {
 		out.push(body);
 		return out.join(" ");
 	}
-	if (!canFail(step.kind)) return out.join(" ");
+	if (!canFail(step.kind, kinds)) return out.join(" ");
 	const k = step.on_fail || fallback;
 	out.push("If it fails, " + (k === "agent" ? "the agent gets the failure and the stop runs again, up to " + FIX_ROUNDS + " rounds" : k === "skip" ? "the route goes on without it" : k === "you" ? "the route waits on you" : "the route halts, red") + ".");
 	return out.join(" ");
@@ -37035,7 +37047,7 @@ function stopOptionsLine(s, kinds) {
 	const fallback = defaultOnFail(kinds?.find((k) => k.kind === s.kind));
 	const failSet = !!s.on_fail && s.on_fail !== fallback;
 	if (!s.halt && !(s.when || "").trim() && !failSet) return "";
-	return stopSentence(s, fallback);
+	return stopSentence(s, fallback, "", kinds);
 }
 function addNode(title) {
 	return {
@@ -37084,6 +37096,7 @@ function flightStops(f, kinds) {
 	const grounded = f.state === "grounded" || f.state === "ready";
 	const [glo, ghi] = parallelSpan(f.steps, f.cursor);
 	const open = Math.max(f.cursor + 1, ghi);
+	const firstAgent = f.steps.findIndex((s) => s.kind === "agent");
 	return f.steps.map((s, i) => {
 		const st = stepStateOf(f, s, i);
 		const inGroup = ghi - glo > 1 && i >= glo && i < ghi;
@@ -37104,7 +37117,8 @@ function flightStops(f, kinds) {
 		const next = f.steps[i + 1];
 		const passedNext = !!next && ["done", "skipped"].includes(stepStateOf(f, next, i + 1));
 		const ret = returnMark(f.returns?.[s.id], fix, state, passedNext);
-		const summary = stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s));
+		const task = i === firstAgent;
+		const summary = stopSub(stopTitle(s, kinds), youFlownSub(s, state) || (task ? taskSummary(s, f.subject) : stopSummary(s)));
 		const waitsOnYou = state === "perched" && stepActor(s, kinds) !== "you";
 		const note = live && (state === "current" || waitsOnYou) && !looping && !fix?.active ? liveNote(rec?.note) : "";
 		const handed = state === "perched" ? String(rec?.detail?.failed_reason ?? "").trim() : "";
@@ -37117,7 +37131,7 @@ function flightStops(f, kinds) {
 			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : note || summary,
 			...tip ? { summary: tip } : {},
 			state,
-			icon: s.kind,
+			icon: task ? TASK_ICON : s.kind,
 			perch: stepActor(s, kinds) === "you",
 			step: s,
 			index: i,
@@ -37136,6 +37150,13 @@ function flightStops(f, kinds) {
 			...parallelMark(f.steps, i)
 		};
 	});
+}
+var TASK_ICON = "task";
+function taskSummary(step, subject) {
+	const c = step.config || {};
+	if (String(c.prompt ?? "").trim()) return stopSummary(step);
+	const k = String(subject?.kind || "");
+	return "gives the agent " + (k === "ticket" ? "the ticket" : k === "issue" ? "the issue" : k === "pr" ? "the pull request" : "its task") + (c.fresh ? " · new session" : "");
 }
 function liveNote(note) {
 	return clip$5(String(note ?? ""), 60);
@@ -37253,6 +37274,53 @@ function landedFlightOf(title, flights) {
 	}
 	return best;
 }
+var AGENT_STOP_KINDS = /* @__PURE__ */ new Set([
+	"agent",
+	"reviews",
+	"verify"
+]);
+var HELD_NOTE = [{
+	why: "offline",
+	re: /^the agent is offline\b/i
+}, {
+	why: "limit",
+	re: /^usage limit\b/i
+}];
+function heldMark(ss, node, note) {
+	if (node.state !== "current") return null;
+	const said = HELD_NOTE.find((h) => h.re.test(String(note || "").trim()))?.why;
+	const why = ss ? ss.state === "offline" ? "offline" : ss.state === "limit" ? "limit" : void 0 : said;
+	if (!why) return null;
+	if (!said && !AGENT_STOP_KINDS.has(String(node.step?.kind || ""))) return null;
+	if (why === "limit") {
+		const at = ss?.resumeAt ? fmtClock(ss.resumeAt) : "";
+		return {
+			why,
+			label: "Held · usage limit" + (at ? ", resumes " + at : ""),
+			title: "Held: the agent hit its usage limit — this stop goes on by itself when the window reopens" + (at ? " at " + at : "") + ". Nothing to do."
+		};
+	}
+	const remedy = ss?.held ? "start" : ss?.restartable ? "restart" : void 0;
+	return {
+		why,
+		label: "Held · agent offline",
+		title: "Held: the agent is offline, so this stop can't go on" + (remedy === "start" ? " — Start starts it (it was held offline after a crash)." : remedy === "restart" ? " — Restart relaunches it, resuming the conversation." : "."),
+		...remedy ? { remedy } : {}
+	};
+}
+function markHeld(line, ss, full) {
+	for (const n of line) {
+		if (n.kind !== "stop" || n.state !== "current") continue;
+		const note = full && n.step ? full.step_states?.[n.step.id]?.note : void 0;
+		const held = heldMark(ss, {
+			state: n.state,
+			step: { kind: n.step?.kind || n.icon }
+		}, note);
+		if (!held) continue;
+		n.held = held;
+		n.sub = held.label;
+	}
+}
 function sessionDiagram(rows, title, opts = {}) {
 	const row = rows.find((r) => r.title === title);
 	const empty = {
@@ -37297,6 +37365,7 @@ function sessionDiagram(rows, title, opts = {}) {
 			const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
 			line.push(...lifted.line);
 			loops = [...lifted.loops, ...returnEdges(line, me.id)];
+			if (full.state === "running") markHeld(line, deriveSessionState(row), full);
 		} else for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
 			const cur = i === fl.cursor;
 			const perch = cur && fl.step?.actor === "you";
@@ -37313,6 +37382,7 @@ function sessionDiagram(rows, title, opts = {}) {
 				reason: cur && fl.state === "halted" ? fl.reason || "" : ""
 			});
 		}
+		if (!full && fl.state === "running") markHeld(line, deriveSessionState(row));
 	} else if (landedFlightOf(title, opts.flights) && !ladderRungs(row).length) {
 		const done = landedFlightOf(title, opts.flights);
 		mode = "flight";
@@ -37723,8 +37793,8 @@ function lineWhere(d) {
 	}
 	if (!b) return "";
 	const haltPoint = b.tone === "paused" && n.state === "paused" && !!n.step?.halt;
-	const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : haltPoint ? "paused before " : b.tone === "paused" ? "paused at " : "at ";
-	const tail = n.ask ? "" : n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? reasonAfterTitle(n.title, n.reason) : haltPoint ? "your halt point" : n.kind === "stop" || n.kind === "group" ? n.sub : "";
+	const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : haltPoint ? "paused before " : b.tone === "paused" ? "paused at " : b.tone === "held" ? "held at " : "at ";
+	const tail = n.ask ? "" : n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? reasonAfterTitle(n.title, n.reason) : haltPoint ? "your halt point" : n.held ? n.held.label.replace(/^held · /i, "") : n.kind === "stop" || n.kind === "group" ? n.sub : "";
 	return head + (b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title) + (tail ? " · " + tail : "");
 }
 function reasonAfterTitle(title, reason, capital = false) {
@@ -37739,7 +37809,8 @@ function whereBesideChip(where, chip) {
 	if (!where) return where;
 	if (chip?.reason === "flight_you") return /^needs you at /i.test(where) ? "" : where;
 	if (chip?.reason === "flight_halted") return where.replace(/^halted (?=at )/i, "");
-	if (chip?.label === PAUSED_FLIGHT_LABEL) return where.replace(/^paused (?=at |before )/i, "");
+	if (chip?.reason === "flight_paused") return /^paused before /i.test(where) ? where.split(" · ").slice(1).join(" · ") : where;
+	if (isPausedRouteChip(chip)) return where.replace(/^paused (?=at |before )/i, "");
 	return where;
 }
 function flownCount(d) {
@@ -37922,7 +37993,7 @@ function birdPerch(d) {
 	}
 	if (stop) return {
 		nodeId: stop.id,
-		tone: STOP_TONE[stop.state]
+		tone: main.find((n) => n.id === stop.id)?.held ? "held" : STOP_TONE[stop.state]
 	};
 	const rung = main.find((n) => n.kind === "rung" && (n.state === "current" || n.state === "halted"));
 	if (rung) return {
@@ -38592,6 +38663,7 @@ function kindOf$1(r, byTitle) {
 	if (p >= 3) return "ready";
 	const fl = byTitle.get(r.title)?.flight;
 	if (fl && fl.state === "halted") return "halted";
+	if (fl && fl.state === "paused" && fl.reason === HALT_POINT_REASON) return "wait_for_me";
 	return rowWaitsOnYou(fl) ? "wait_for_me" : "broken";
 }
 var ORDER = new Map(NEEDS_YOU_KINDS.map((k, i) => [k, i]));
@@ -42058,6 +42130,28 @@ function StopIcon({ kind, size = 15 }) {
 		focusable: "false",
 		children: {
 			agent: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" }),
+			task: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+					x: "5",
+					y: "5",
+					width: "14",
+					height: "16",
+					rx: "2"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M9 5V3.5h6V5" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+					x1: "8.5",
+					y1: "10.5",
+					x2: "15.5",
+					y2: "10.5"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+					x1: "8.5",
+					y1: "14.5",
+					x2: "13.5",
+					y2: "14.5"
+				})
+			] }),
 			session: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
 					x: "3",
@@ -44553,6 +44647,160 @@ async function setIntakeDefault(body) {
 	}
 }
 //#endregion
+//#region src/lib/routeStart.ts
+function resumeSentence(r, now) {
+	const when = r.at > 0 ? " " + relTime(r.at, { now }) : "";
+	const why = r.reason ? " (" + r.reason + ")" : "";
+	return "Carries on at " + r.title + " — where it stopped" + when + why;
+}
+function kindLabel(kind, kinds) {
+	if (kind === "you") return "Wait for me";
+	if (kind === "someone") return "Someone";
+	return kinds?.find((k) => k.kind === kind)?.label || kind;
+}
+function stopChoices(steps, kinds) {
+	return steps.map((s, i) => ({
+		id: s.id,
+		n: i + 1,
+		title: s.title || kindLabel(s.kind, kinds),
+		kind: s.kind,
+		label: kindLabel(s.kind, kinds)
+	}));
+}
+function choiceLine(c) {
+	return c.n + ". " + c.title + (c.label && c.label !== c.title ? " · " + c.label : "");
+}
+function reachedIndex(f) {
+	const steps = f.steps || [];
+	const states = f.step_states || {};
+	let k = Math.min(Math.max(Math.floor(f.cursor || 0), 0), steps.length);
+	while (k < steps.length && ["done", "skipped"].includes(states[steps[k].id]?.state)) k++;
+	return k;
+}
+function ownSteps(f) {
+	const added = /* @__PURE__ */ new Set([...f.owed_added || [], ...f.owed_perch ? [f.owed_perch] : []]);
+	return (f.steps || []).filter((s) => !added.has(s.id));
+}
+function carryIndex(f) {
+	const own = ownSteps(f);
+	const k = reachedIndex(f);
+	const ids = new Set(own.map((s) => s.id));
+	const next = f.steps.slice(k).find((s) => ids.has(s.id));
+	const kOwn = next ? own.indexOf(next) : own.length;
+	const owed = new Set((f.owed || []).map((e) => e.step));
+	const first = own.slice(0, kOwn).findIndex((s) => owed.has(s.id));
+	return first >= 0 ? first : kOwn;
+}
+function canFlyAgain(f) {
+	if (!f || f.free || f.edits_default || !ownSteps(f).length) return false;
+	return f.state === "done" || f.state === "cancelled" || f.state === "halted";
+}
+function againStop(f) {
+	return ownSteps(f)[carryIndex(f)] || null;
+}
+function flyAgainLabel(f) {
+	const s = againStop(f);
+	return s ? "Run again from " + s.title : "Run again";
+}
+function flyAgainTitle(f, gone) {
+	const s = againStop(f);
+	const from = s ? " from “" + s.title + "”" : " from its first stop";
+	if (!gone) return "Run this route again on " + f.session + from + " — a new run of its stops";
+	return f.session + " is gone: it runs again" + from + " on the session that holds its branch, or reopens " + f.session + " from Recently closed";
+}
+function flyAgainPrimary(f) {
+	return f.state === "cancelled" || f.state === "halted";
+}
+var useRouteStartMenu = create((set) => ({
+	open: null,
+	set: (o) => set({ open: o })
+}));
+var lastPress = {
+	x: 0,
+	y: 0
+};
+function anchorOf(el, at) {
+	const box = el && typeof el.getBoundingClientRect === "function" ? el.closest?.(".fl-again-row") || el : null;
+	if (box) {
+		const r = box.getBoundingClientRect();
+		return {
+			left: r.left,
+			top: r.top,
+			right: r.right,
+			bottom: r.bottom
+		};
+	}
+	const x = at ? at.x : lastPress.x;
+	const y = at ? at.y : lastPress.y;
+	return {
+		left: x,
+		top: y,
+		right: x,
+		bottom: y
+	};
+}
+function placeMenu$1(anchor, size, view) {
+	const M = 8;
+	const GAP = 6;
+	const clampY = (y) => Math.max(M, Math.min(y, view.h - M - size.h));
+	const clampX = (x) => Math.max(M, Math.min(x, view.w - M - size.w));
+	if (anchor.right + GAP + size.w <= view.w - M) return {
+		x: anchor.right + GAP,
+		y: clampY(anchor.top)
+	};
+	const below = anchor.bottom + GAP;
+	const above = anchor.top - GAP - size.h;
+	if (below + size.h <= view.h - M) return {
+		x: clampX(anchor.left),
+		y: below
+	};
+	if (above >= M) return {
+		x: clampX(anchor.left),
+		y: above
+	};
+	const roomBelow = view.h - M - below;
+	const roomAbove = anchor.top - GAP - M;
+	return {
+		x: clampX(anchor.left),
+		y: clampY(roomBelow >= roomAbove ? below : above)
+	};
+}
+async function startSavedRoute(plan, title, opts) {
+	const check = await checkStart({
+		plan_id: plan.id,
+		title
+	});
+	if (!opts.choose && !check?.resume) {
+		await opts.normal();
+		return;
+	}
+	const anchor = anchorOf(opts.el, opts.at);
+	const steps = plan.steps?.length ? plan.steps : check?.steps || [];
+	useRouteStartMenu.getState().set({
+		mode: "start",
+		view: opts.choose ? "pick" : "resume",
+		back: false,
+		plan: {
+			...plan,
+			steps
+		},
+		title,
+		check,
+		anchor,
+		go: (startAt) => {
+			if (!startAt || startAt === steps[0]?.id) opts.normal();
+			else startFlightAt(title, plan.id, startAt);
+		}
+	});
+}
+function pickAgainStop(flight, el) {
+	useRouteStartMenu.getState().set({
+		mode: "again",
+		flight,
+		anchor: anchorOf(el)
+	});
+}
+//#endregion
 //#region src/components/flights/PerchAsks.tsx
 var stop$1 = (e) => e.stopPropagation();
 function ReviewFindings({ findings }) {
@@ -45185,6 +45433,7 @@ function FlightYouRow({ w, row, shown }) {
 }
 function FlightHaltedRow({ w, row, shown }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const kinds = useFlightKinds().data;
 	const { full, gone, fl } = useRoute(w, row);
 	const run = async (fn) => {
 		setBusy(true);
@@ -45196,6 +45445,14 @@ function FlightHaltedRow({ w, row, shown }) {
 	};
 	const at = fl?.step?.title || "";
 	const chip = "Halted" + (at ? " at " + at : "");
+	const kind = fl?.step?.kind || (full ? full.steps[full.cursor]?.kind : "") || "";
+	const remedies = haltedRemedies({
+		kind,
+		state: full?.state || "halted",
+		canFix: !!full && !gone && canFixStep(full),
+		gone,
+		retryWorks: retryWorksGone(kind, kinds)
+	});
 	const why = haltedWhy(at, w.reason);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pr-open-item ob-item ob-flight_halted",
@@ -45224,34 +45481,51 @@ function FlightHaltedRow({ w, row, shown }) {
 				className: "ik-item-start",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "ob-acts",
-					children: [
-						fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					children: [fl && remedies.map((r, i) => {
+						const cls = (i === 0 ? "btn-primary pr-review-btn" : "test-btn") + " ob-remedy-" + r;
+						if (r === "stop") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopRouteButton, {
+							id: fl.id,
+							busy,
+							run
+						}, r);
+						if (r === "again") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "btn-primary pr-review-btn",
+							className: cls,
+							disabled: busy,
+							title: full ? flyAgainTitle(full, true) : "Run the route again — its session reopens",
+							onClick: () => void run(() => flyAgain(fl.id)),
+							children: "Run again"
+						}, r);
+						if (r === "fix") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: cls,
+							disabled: busy,
+							title: "Hand the failure to the agent — “" + (at || "this stop") + "” runs again after its fix",
+							onClick: () => void run(() => stepFix(fl.id, fl.step.id)),
+							children: "Let the agent fix it"
+						}, r);
+						if (r === "retry") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: cls,
 							disabled: busy,
 							title: "Run “" + (at || "this stop") + "” again",
 							onClick: () => void run(() => stepRetry(fl.id, fl.step.id)),
 							children: "Retry"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						}, r);
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "test-btn",
+							className: cls,
 							disabled: busy,
 							title: "Skip “" + (at || "this stop") + "” — the route goes on without it",
 							onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
 							children: "Skip"
-						})] }),
-						fl && gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopRouteButton, {
-							id: fl.id,
-							busy,
-							run
-						}),
-						row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							onClick: () => openSession(w.title),
-							children: "Open ↗"
-						})
-					]
+						}, r);
+					}), row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: () => openSession(w.title),
+						children: "Open ↗"
+					})]
 				})
 			})
 		]
@@ -45284,7 +45558,7 @@ function FlightPausedRow({ w, row, shown }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pr-open-meta",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pr-open-chip",
+					className: "pr-open-chip warn",
 					title: w.reason || void 0,
 					children: chip
 				})
@@ -45352,6 +45626,53 @@ function showGroup(runId) {
 	if (!to) return;
 	if ("lead" in to) openThread(to.lead);
 	else selectSession(to.row);
+}
+//#endregion
+//#region src/lib/devicesAnywhere.ts
+var ANYWHERE_LABEL = "Reach my devices from anywhere (no Tailscale needed)";
+var ANYWHERE_HINT = "Your computers find each other through a private, encrypted tunnel and your own GitHub (a private repo holds their addresses, encrypted with your devices' key). Nothing to install or sign up for. Tailscale, when it's there, is still used first. New — off by default.";
+var FAR_ADD_LABEL = "It isn't on my network";
+var FAR_ADD_HINT = "For a computer without Tailscale, anywhere: a long one-time code it pastes. Works through this computer's private tunnel.";
+var FAR_TURN_ON_TITLE = "Turn on “Reach my devices from anywhere” here?";
+var FAR_TURN_ON_BODY = "The new computer reaches this one through a private, encrypted tunnel (Cloudflare carries it but can't read it). It stays on afterwards so your devices keep finding each other — turn it off any time under the switch above.";
+var FAR_REACHABLE_LABEL = "Let my devices reach this computer from anywhere";
+var FAR_REACHABLE_HINT = "Turns on “Reach my devices from anywhere” on this computer — needed unless both computers use Tailscale. Leave it ticked unless you know you don't want it.";
+var FAR_CONFIRM_TITLE = "Only join if this code came from your own computer.";
+function farConfirmBody(c, reach) {
+	const parts = [c.text, c.safety_text];
+	if (c.leave_text) parts.push(c.leave_text);
+	if (reach) parts.push("It also turns on remote control and “Reach my devices from anywhere” here.");
+	return parts.filter(Boolean).join(" ");
+}
+function farConfirmLabel(c) {
+	return c.other_group ? "Leave that group and join" : "It's my computer — join";
+}
+function farSafetyLine(inv) {
+	return inv.safety ? "Safety number " + inv.safety + " — the new computer shows the same before it joins." : "";
+}
+function extractDeviceCode(text) {
+	const m = /mfd1:[a-z2-7]+-[a-z2-7]{4}/i.exec(String(text || "").slice(0, 4096));
+	return m ? m[0].toLowerCase() : "";
+}
+function farInviteLine(inv, nowS) {
+	const left = Math.max(0, Math.round(inv.expires_at - nowS));
+	const m = Math.floor(left / 60);
+	const s = String(left % 60).padStart(2, "0");
+	return left > 0 ? `Works once · expires in ${m}:${s}` : "This code expired — make a new one";
+}
+function anywhereLine(st) {
+	if (!st) return "";
+	if (!st.on) return "Off";
+	const n = st.via_tunnel?.length || 0;
+	if (st.state === "on" && n > 0) return `${st.text} · ${n === 1 ? "1 device" : `${n} devices`} reached this way`;
+	return st.text;
+}
+function anywhereWarn(st) {
+	return !!st && st.on && (st.state === "failed" || st.state === "needs_github");
+}
+function anywherePollMs(st) {
+	if (st && st.on && (st.state === "starting" || st.state === "on" && !st.published_at)) return 2e3;
+	return 15e3;
 }
 //#endregion
 //#region src/lib/fleet.ts
@@ -45493,7 +45814,8 @@ function joinLine(j) {
 	switch (j.state) {
 		case "waiting": return "Waiting for approval on " + host + (j.code ? " — code " + j.code : "");
 		case "joining": return "Joining " + host + "…";
-		case "joined": return "Joined " + host + ".";
+		case "finishing": return "Joined " + host + ". Finishing setup — reaching it through its private tunnel and bringing over its settings…";
+		case "joined": return "Joined " + host + "." + (j.note ? " " + j.note : "");
 		case "denied": return host + " said no.";
 		case "expired": return "The request to " + host + " expired — ask again.";
 		case "error": return j.error || "Couldn't join " + host + ".";
@@ -45572,6 +45894,14 @@ function deviceEventNote(event, data) {
 			cls: "n-info",
 			toast: ""
 		};
+		case "device.pair_unfinished": {
+			const text = String(d.detail || "") || "A pairing code was used but the join didn't finish. If that wasn't you, change your devices' key now.";
+			return {
+				text,
+				cls: "n-warn",
+				toast: text
+			};
+		}
 		case "settings.sync_paused": return {
 			text: SYNC_PAUSED_NOTE,
 			cls: "n-warn",
@@ -45777,11 +46107,17 @@ function unpinReplaces(path, sync) {
 	return "This replaces this device's “" + id + "” (and its token) with " + (leader ? leader + "'s" : "the one your other devices have under that id") + ". To keep both, give one of them a different id in Settings → Tickets instead.";
 }
 function routeCode(text) {
-	const t = (text || "").trim().slice(0, 2048);
+	const t = (text || "").trim().slice(0, 4096);
 	const peer = extractPeerCode(t);
 	if (peer) return {
 		kind: "peer",
 		code: peer,
+		device: ""
+	};
+	const far = extractDeviceCode(t);
+	if (far) return {
+		kind: "anywhere",
+		code: far,
 		device: ""
 	};
 	let tokens = t.split(/\s+/).filter(Boolean);
@@ -45849,12 +46185,20 @@ function phoneLinkLine(pl) {
 	};
 }
 function admitLine(a) {
+	if (a.state === "finishing") {
+		const n = a.host || a.device;
+		return n + " joined. It can reach this computer already; this one reaches " + n + " once it saves its address — that needs GitHub sign-in on " + n + " (settings sync usually brings it; if not: Settings → GitHub there).";
+	}
 	if (a.state !== "unreachable_joiner") return "";
 	const h = a.host || a.device;
 	return "Joined, but " + h + " isn't reachable from here" + (a.reason ? " — " + a.reason : "") + ". On " + h + ": Settings → Your devices → Make reachable.";
 }
 function joinedToast(j) {
 	const host = j.host || j.device;
+	if (j.note) return {
+		text: "Joined " + host + ". " + j.note,
+		offerReach: false
+	};
 	if (j.self_reachable === false) return {
 		text: "Joined " + host + " — but your other devices can't reach this one yet. Click to make it reachable.",
 		offerReach: true
@@ -46110,7 +46454,7 @@ function whatsNewCovers(releases, to, from) {
 //#region src/lib/updateRestart.ts
 var EXPECT_MAX_MS = 27e5;
 var BACK_WAIT_MS = 18e4;
-var POLL_MS$6 = 2e3;
+var POLL_MS$7 = 2e3;
 var expected = null;
 var dropped = false;
 var listeners$6 = /* @__PURE__ */ new Set();
@@ -46169,7 +46513,7 @@ function watchForNewBuild() {
 		if (restartLanded(c)) return reload();
 		if (c.state === "failed" || c.state === "rolled_back") return clearUpdateRestart();
 		stopPoll();
-	}, POLL_MS$6);
+	}, POLL_MS$7);
 }
 function installUpdateRecovery(ev) {
 	return ev.onStatus((s) => {
@@ -46255,7 +46599,7 @@ function followOldServerRun() {
 			clearUpdateRestart();
 			toast(runFailText(st), { error: true });
 		}
-	}, POLL_MS$6);
+	}, POLL_MS$7);
 }
 //#endregion
 //#region src/whatsNew/releases.ts
@@ -46643,7 +46987,7 @@ function routePastedCode(text) {
 		joinPeerInvite(r.code);
 		return "peer";
 	}
-	if (r.kind === "device") {
+	if (r.kind === "device" || r.kind === "anywhere") {
 		openDevicesFor({ paste: text.trim() });
 		return "device";
 	}
@@ -47052,13 +47396,21 @@ function notifFromEvent(env) {
 			text: "sent the next queued prompt (" + (Number(d.remaining) || 0) + " left)",
 			cls: "n-info"
 		};
-		case "session.setup_finished": return env.new === "ok" ? {
-			text: "worktree setup finished",
-			cls: "n-done"
-		} : {
-			text: REASON_LABEL.setup_failed + " — prompts held",
-			cls: "n-warn"
-		};
+		case "session.setup_finished": {
+			if (env.new === "ok") return {
+				text: "worktree setup finished",
+				cls: "n-done"
+			};
+			const sd = d;
+			if (sd.hold === false) return {
+				text: "setup didn't finish" + (sd.error ? ": " + sd.error : "") + " · see log",
+				cls: "n-warn"
+			};
+			return {
+				text: REASON_LABEL.setup_failed + " — prompts held",
+				cls: "n-warn"
+			};
+		}
 		case "session.check_finished": return env.new === "ok" ? {
 			text: "checks passed ✓",
 			cls: "n-done"
@@ -47131,6 +47483,7 @@ function notifFromEvent(env) {
 		case "device.join_requested":
 		case "device.joined":
 		case "device.removed":
+		case "device.pair_unfinished":
 		case "settings.sync_paused": {
 			const n = deviceEventNote(env.event, d);
 			const approve = approvableRequest(env.event, d);
@@ -47715,7 +48068,7 @@ function NotificationsBell() {
 //#endregion
 //#region src/lib/menuPlace.ts
 var MENU_MARGIN = 6;
-function placeMenu$1(a, w, h, vw, vh, m = MENU_MARGIN) {
+function placeMenu(a, w, h, vw, vh, m = MENU_MARGIN) {
 	const maxHeight = Math.max(0, vh - 2 * m);
 	const hh = Math.min(h, maxHeight);
 	let left = a.align === "end" ? a.x - w : a.x;
@@ -48714,7 +49067,7 @@ function paletteCode(query) {
 	};
 	const t = String(query || "").trim();
 	if (!t) return none;
-	if (extractPeerCode(t)) return routeCode(t);
+	if (extractPeerCode(t) || /mfd1:[a-z2-7]+-[a-z2-7]{4}/i.test(t)) return routeCode(t);
 	if (!/(^|\s)[A-Za-z0-9]{4}-[A-Za-z0-9]{4}(\s|$)/.test(t)) return none;
 	return routeCode(t);
 }
@@ -52058,7 +52411,7 @@ function CommandPalette({ host }) {
 		const code = paletteCode(query);
 		const named = out.some((a) => fuzzyScore(query, a.label) >= 0 && fuzzyScore(query, a.label) < 1e3);
 		if (code.kind) out[named ? "push" : "unshift"]({
-			label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
+			label: code.kind === "anywhere" ? "Join your devices with this code" : "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
 			hint: code.kind === "peer" ? "another person · People" : "your devices",
 			run: () => void routePastedCode(query)
 		});
@@ -53145,7 +53498,7 @@ function slowLevel(prev, level, dtMs) {
 }
 var HEARING_HOLD_MS = 700;
 var STALE_MS = 250;
-var POLL_MS$5 = 85;
+var POLL_MS$6 = 85;
 function noiseFloor(floor, rms) {
 	return floor === 0 ? rms : Math.min(rms, floor * 1.05 + .001);
 }
@@ -53199,7 +53552,7 @@ function paint$2() {
 function frame(t) {
 	raf = 0;
 	const now = Date.now();
-	if (poll && now - lastPoll >= POLL_MS$5) {
+	if (poll && now - lastPoll >= POLL_MS$6) {
 		lastPoll = now;
 		meterFeed(poll(), now);
 	}
@@ -54165,7 +54518,7 @@ function stripMarkup(text) {
 	return text;
 }
 var SEG = "[A-Za-z0-9_.~@+-]+";
-var PATH = new RegExp("(^|[^A-Za-z0-9/.~])((?:~|\\.{1,2})?/" + SEG + "(?:/" + SEG + ")*/?|" + SEG + "(?:/" + SEG + ")+/?)(?::(\\d+))?(?![A-Za-z0-9/])", "g");
+var PATH$3 = new RegExp("(^|[^A-Za-z0-9/.~])((?:~|\\.{1,2})?/" + SEG + "(?:/" + SEG + ")*/?|" + SEG + "(?:/" + SEG + ")+/?)(?::(\\d+))?(?![A-Za-z0-9/])", "g");
 var FILE = new RegExp("(^|[^A-Za-z0-9/.])([A-Za-z0-9_][A-Za-z0-9_-]*\\.(" + byLength(Object.keys(TABLES.ext)).join("|") + "))(?::(\\d+))?(?![A-Za-z0-9.])", "g");
 var SHA = /(^|[^A-Za-z0-9])([0-9a-f]{7,40})(?![A-Za-z0-9])/g;
 function spokenName(name) {
@@ -54200,7 +54553,7 @@ function isPath(token) {
 	return !!ext && ext in TABLES.ext;
 }
 function paths(text, s) {
-	text = text.replace(PATH, (whole, pre, tokenIn, line) => {
+	text = text.replace(PATH$3, (whole, pre, tokenIn, line) => {
 		let token = tokenIn;
 		let tail = "";
 		while (token.endsWith(".") || token.endsWith(",")) {
@@ -62026,6 +62379,11 @@ function desktopNoteFor(event, data, env) {
 				target: "devices"
 			};
 		}
+		case "device.pair_unfinished": return {
+			title: "Check your devices",
+			body: clip$3(String(d.detail || "A pairing code was used but the join didn't finish")),
+			target: "devices"
+		};
 		case "peer.link_added": return {
 			title: String(d.peer_name || "Someone") + (d.repaired ? " reconnected" : " joined your invite"),
 			body: d.sas ? "Compare the safety number " + String(d.sas) + " with them" : "People",
@@ -62380,6 +62738,7 @@ var STATE_LABEL = {
 	safe: "Will be removed",
 	recent: "Used recently",
 	holds_work: "Holds work",
+	unchecked: "Can't be checked",
 	in_use: "In use",
 	not_ours: "Not MindFlock's",
 	missing: "Already gone",
@@ -62400,11 +62759,30 @@ function needsConfirm(it) {
 	return !it.safe;
 }
 function canRemove(it) {
-	return !it.in_use && !it.kept.includes("locked in git");
+	return !it.in_use && !it.kept.includes("locked in git") && !isUnchecked(it);
+}
+function isUnchecked(it) {
+	return it.state === "unchecked";
+}
+function factsLine(f) {
+	return f.files + (f.files === 1 ? " file" : " files") + " (" + humanBytes(f.bytes) + "), " + f.work_files + (f.work_files === 1 ? " of them looks" : " of them look") + " like work (not dependencies, caches or build output)";
+}
+function uncheckedConfirm(it, f, step) {
+	const size = humanBytes(it.size_bytes ?? f.bytes);
+	if (step === 1) return {
+		title: "Delete " + it.name + " (" + size + ") for good?",
+		body: "It holds " + factsLine(f) + ". Its files can't be checked, so nothing is saved first, and MindFlock has no trash: this is permanent.",
+		confirmLabel: "Continue…"
+	};
+	return {
+		title: "Last check: delete " + it.name + " permanently?",
+		body: f.work_files + (f.work_files === 1 ? " file that looks" : " files that look") + " like work and " + size + " go with it. There is no undo.",
+		confirmLabel: "Delete permanently"
+	};
 }
 function confirmText(it, keptDir = "~/.mindflock/kept-work") {
 	const parts = [];
-	if (it.kind === "orphan") return "Git no longer knows this folder, so its files can't be checked or saved. They will be deleted.";
+	if (it.kind === "orphan") return "Its files can't be checked or saved: look inside first, then remove it for good if nothing in it matters.";
 	if (it.tracked_changes || it.untracked_files) parts.push("Its uncommitted changes are saved first as a patch in " + keptDir + ".");
 	if (it.unsaved_commits) parts.push(it.kind === "clone" ? "Its unpushed commits are saved there as a bundle." : it.branch ? "Its branch " + it.branch + " is kept, with its commits." : "Its commits are kept on a mindflock-kept/… branch.");
 	if (!it.ours) parts.push("MindFlock didn't create it.");
@@ -62412,6 +62790,10 @@ function confirmText(it, keptDir = "~/.mindflock/kept-work") {
 	return parts.join(" ");
 }
 function removedText(it, r) {
+	if (r.permanent) {
+		const n = r.deleted?.files ?? 0;
+		return "Deleted " + it.name + " permanently (" + n + (n === 1 ? " file" : " files") + ", " + humanBytes(r.deleted?.bytes ?? 0) + ").";
+	}
 	const bits = ["Removed " + it.name + "."];
 	if (r.saved?.patch) bits.push("Uncommitted changes saved to " + r.saved.patch + ".");
 	if (r.saved?.bundle) bits.push("Unpushed commits saved to " + r.saved.bundle + ".");
@@ -62423,8 +62805,9 @@ function summaryLine$1(s) {
 	if (!s) return "";
 	const mine = "MindFlock made " + s.count + " of these: " + humanBytes(s.bytes) + ".";
 	const reclaim = s.safe_count ? " " + s.safe_count + " can go safely, freeing " + humanBytes(s.safe_bytes) + "." : " Nothing is safe to remove right now.";
+	const unchecked = s.unchecked_count ? " " + s.unchecked_count + " can't be checked (" + humanBytes(s.unchecked_bytes ?? null) + "): look inside each to decide." : "";
 	const other = s.other_count ? " " + s.other_count + " other worktree" + (s.other_count === 1 ? "" : "s") + " of the same repos (" + humanBytes(s.other_bytes ?? 0) + ") are listed, never removed." : "";
-	return mine + reclaim + other;
+	return mine + reclaim + unchecked + other;
 }
 function freeBytes(it) {
 	return Number(it.free_bytes ?? it.size_bytes ?? 0) || 0;
@@ -62460,6 +62843,11 @@ function groupItems(items) {
 				"missing",
 				"unknown"
 			])
+		},
+		{
+			key: "unchecked",
+			title: "Can't be checked (never removed automatically)",
+			items: by(["unchecked"])
 		},
 		{
 			key: "in_use",
@@ -62895,7 +63283,9 @@ function EventToasts() {
 				setup: { state: "failed" }
 			});
 			if (!ruleOn(notifyRuleFor(ss))) return;
-			notifyOnce(env.session, "setupfail", attentionToast(namedSlot(env.session), ss) + " — prompts held", { onClick: () => selectSession(env.session) });
+			const d = env.data || {};
+			const tail = d.hold === false ? " — setup didn't finish" + (d.error ? ": " + d.error : "") + " · see log (session menu → Setup log)" : " — prompts held";
+			notifyOnce(env.session, "setupfail", attentionToast(namedSlot(env.session), ss) + tail, { onClick: () => selectSession(env.session) });
 		}));
 		unsubs.push(ev.subscribe("session.check_finished", (env) => {
 			if (isReplay(env) || env.new === "ok") return;
@@ -63033,6 +63423,7 @@ function EventToasts() {
 		for (const name of [
 			"device.join_requested",
 			"device.joined",
+			"device.pair_unfinished",
 			"settings.sync_paused"
 		]) unsubs.push(ev.subscribe(name, (env) => {
 			if (isReplay(env)) return;
@@ -67401,7 +67792,7 @@ function RowMenu({ id, at, label, opener, onClose, children }) {
 		const fit = () => {
 			const w = el.offsetWidth;
 			const h = el.offsetHeight - el.clientHeight + el.scrollHeight;
-			const next = placed.current ? refitMenu(placed.current, w, h, window.innerWidth, window.innerHeight) : placeMenu$1(at, w, h, window.innerWidth, window.innerHeight);
+			const next = placed.current ? refitMenu(placed.current, w, h, window.innerWidth, window.innerHeight) : placeMenu(at, w, h, window.innerWidth, window.innerHeight);
 			placed.current = next;
 			setPlace(next);
 		};
@@ -67766,6 +68157,12 @@ function sessionMenu$1(inst, ctx, opts = {}) {
 			run: opts.onSelect
 		},
 		fromTable("hide", ctx.hidden ? { keys: void 0 } : {}),
+		!!inst.setup?.state && !peer && {
+			key: "setup-log",
+			label: "Setup log",
+			title: "What the worktree preparation did (pin files, dependencies, setup commands) — and why it stopped",
+			run: () => void showSetupLog(title)
+		},
 		inst.setup?.state === "failed" && !peer && {
 			key: "rerun-setup",
 			label: "Re-run worktree setup",
@@ -70821,7 +71218,7 @@ function GuestLinks() {
 }
 //#endregion
 //#region src/components/sidebar/GuestBar.tsx
-var POLL_MS$4 = 1e4;
+var POLL_MS$5 = 1e4;
 function guestBarText(links, tunnel) {
 	const who = links === 1 ? "1 guest link" : links + " guest links";
 	if (tunnel?.state === "up") return who + " · public link up";
@@ -70845,7 +71242,7 @@ function GuestBar() {
 			feedGuestFocus(r.links || []);
 		}).catch(() => {});
 		tick();
-		const stop = pollWhileVisible(() => void tick(), POLL_MS$4);
+		const stop = pollWhileVisible(() => void tick(), POLL_MS$5);
 		return () => {
 			live = false;
 			stop();
@@ -73009,6 +73406,7 @@ var EXTRA_CHECKS = /* @__PURE__ */ new Set([
 	"tailscale",
 	"bwrap",
 	"cloudflared",
+	"devices-anywhere",
 	"local-model",
 	"cache-seeds",
 	"tailnet-mtu",
@@ -94913,7 +95311,7 @@ function MapTour({ rootRef, onClose, ctx, steps }) {
 //#region src/components/grid/CodeMapTab.tsx
 var ENTRIES = /* @__PURE__ */ new Map();
 var ENTRY_MAX = 12;
-var POLL_MS$3 = 2e3;
+var POLL_MS$4 = 2e3;
 var NULL_FP_REFRESH_MS = 2e4;
 var PARTIAL_REFRESH_MS = 3e3;
 function entryFor(title) {
@@ -95184,7 +95582,7 @@ function CodeMap({ title, active }) {
 		if (!entryFor(title).snap) loadSnap();
 		const t = setInterval(() => {
 			if (!document.hidden) poll();
-		}, POLL_MS$3);
+		}, POLL_MS$4);
 		const onVis = () => {
 			if (!document.hidden) poll();
 		};
@@ -96950,7 +97348,7 @@ function PaneMoreMenu({ children, btnRef }) {
 		const fit = () => {
 			const w = el.offsetWidth;
 			const h = naturalHeight(el);
-			placed = placed ? refitMenu(placed, w, h, window.innerWidth, window.innerHeight) : placeMenu$1({
+			placed = placed ? refitMenu(placed, w, h, window.innerWidth, window.innerHeight) : placeMenu({
 				x: r.right,
 				y: r.bottom + 4,
 				flipY: r.top - 4,
@@ -98012,160 +98410,6 @@ function OverflowMenu({ label, items, boundaryId }) {
 	});
 }
 //#endregion
-//#region src/lib/routeStart.ts
-function resumeSentence(r, now) {
-	const when = r.at > 0 ? " " + relTime(r.at, { now }) : "";
-	const why = r.reason ? " (" + r.reason + ")" : "";
-	return "Carries on at " + r.title + " — where it stopped" + when + why;
-}
-function kindLabel(kind, kinds) {
-	if (kind === "you") return "Wait for me";
-	if (kind === "someone") return "Someone";
-	return kinds?.find((k) => k.kind === kind)?.label || kind;
-}
-function stopChoices(steps, kinds) {
-	return steps.map((s, i) => ({
-		id: s.id,
-		n: i + 1,
-		title: s.title || kindLabel(s.kind, kinds),
-		kind: s.kind,
-		label: kindLabel(s.kind, kinds)
-	}));
-}
-function choiceLine(c) {
-	return c.n + ". " + c.title + (c.label && c.label !== c.title ? " · " + c.label : "");
-}
-function reachedIndex(f) {
-	const steps = f.steps || [];
-	const states = f.step_states || {};
-	let k = Math.min(Math.max(Math.floor(f.cursor || 0), 0), steps.length);
-	while (k < steps.length && ["done", "skipped"].includes(states[steps[k].id]?.state)) k++;
-	return k;
-}
-function ownSteps(f) {
-	const added = /* @__PURE__ */ new Set([...f.owed_added || [], ...f.owed_perch ? [f.owed_perch] : []]);
-	return (f.steps || []).filter((s) => !added.has(s.id));
-}
-function carryIndex(f) {
-	const own = ownSteps(f);
-	const k = reachedIndex(f);
-	const ids = new Set(own.map((s) => s.id));
-	const next = f.steps.slice(k).find((s) => ids.has(s.id));
-	const kOwn = next ? own.indexOf(next) : own.length;
-	const owed = new Set((f.owed || []).map((e) => e.step));
-	const first = own.slice(0, kOwn).findIndex((s) => owed.has(s.id));
-	return first >= 0 ? first : kOwn;
-}
-function canFlyAgain(f) {
-	if (!f || f.free || f.edits_default || !ownSteps(f).length) return false;
-	return f.state === "done" || f.state === "cancelled" || f.state === "halted";
-}
-function againStop(f) {
-	return ownSteps(f)[carryIndex(f)] || null;
-}
-function flyAgainLabel(f) {
-	const s = againStop(f);
-	return s ? "Run again from " + s.title : "Run again";
-}
-function flyAgainTitle(f, gone) {
-	const s = againStop(f);
-	const from = s ? " from “" + s.title + "”" : " from its first stop";
-	if (!gone) return "Run this route again on " + f.session + from + " — a new run of its stops";
-	return f.session + " is gone: it runs again" + from + " on the session that holds its branch, or reopens " + f.session + " from Recently closed";
-}
-function flyAgainPrimary(f) {
-	return f.state === "cancelled" || f.state === "halted";
-}
-var useRouteStartMenu = create((set) => ({
-	open: null,
-	set: (o) => set({ open: o })
-}));
-var lastPress = {
-	x: 0,
-	y: 0
-};
-function anchorOf(el, at) {
-	const box = el && typeof el.getBoundingClientRect === "function" ? el.closest?.(".fl-again-row") || el : null;
-	if (box) {
-		const r = box.getBoundingClientRect();
-		return {
-			left: r.left,
-			top: r.top,
-			right: r.right,
-			bottom: r.bottom
-		};
-	}
-	const x = at ? at.x : lastPress.x;
-	const y = at ? at.y : lastPress.y;
-	return {
-		left: x,
-		top: y,
-		right: x,
-		bottom: y
-	};
-}
-function placeMenu(anchor, size, view) {
-	const M = 8;
-	const GAP = 6;
-	const clampY = (y) => Math.max(M, Math.min(y, view.h - M - size.h));
-	const clampX = (x) => Math.max(M, Math.min(x, view.w - M - size.w));
-	if (anchor.right + GAP + size.w <= view.w - M) return {
-		x: anchor.right + GAP,
-		y: clampY(anchor.top)
-	};
-	const below = anchor.bottom + GAP;
-	const above = anchor.top - GAP - size.h;
-	if (below + size.h <= view.h - M) return {
-		x: clampX(anchor.left),
-		y: below
-	};
-	if (above >= M) return {
-		x: clampX(anchor.left),
-		y: above
-	};
-	const roomBelow = view.h - M - below;
-	const roomAbove = anchor.top - GAP - M;
-	return {
-		x: clampX(anchor.left),
-		y: clampY(roomBelow >= roomAbove ? below : above)
-	};
-}
-async function startSavedRoute(plan, title, opts) {
-	const check = await checkStart({
-		plan_id: plan.id,
-		title
-	});
-	if (!opts.choose && !check?.resume) {
-		await opts.normal();
-		return;
-	}
-	const anchor = anchorOf(opts.el, opts.at);
-	const steps = plan.steps?.length ? plan.steps : check?.steps || [];
-	useRouteStartMenu.getState().set({
-		mode: "start",
-		view: opts.choose ? "pick" : "resume",
-		back: false,
-		plan: {
-			...plan,
-			steps
-		},
-		title,
-		check,
-		anchor,
-		go: (startAt) => {
-			if (!startAt || startAt === steps[0]?.id) opts.normal();
-			else startFlightAt(title, plan.id, startAt);
-		}
-	});
-}
-function pickAgainStop(flight, el) {
-	useRouteStartMenu.getState().set({
-		mode: "again",
-		flight,
-		anchor: anchorOf(el)
-	});
-}
-//#endregion
 //#region src/components/flights/FlywayCanvas.tsx
 var VERTICAL_BELOW_PX = 520;
 var firstOf = (v) => String(v ?? "").split("\n").map((l) => l.trim()).find(Boolean) || "";
@@ -99019,7 +99263,7 @@ function FlywayCanvas(p) {
 					const hold = here && (!n.editable || n.kind === "group") ? flightHold(n) : null;
 					const haltable = !!p.onToggleHalt && canHalt(n, here);
 					const waiting = n.join && n.join.waiting > 0 ? n.join : null;
-					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "") + (lit?.has(n.id) ? " fl-jump-target" : "") + (lit && birdDrag?.over === n.id ? " fl-jump-over" : "") + (loopDraw?.over === n.id ? " fl-loop-target" : "");
+					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.held ? " fl-held" : "") + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "") + (lit?.has(n.id) ? " fl-jump-target" : "") + (lit && birdDrag?.over === n.id ? " fl-jump-over" : "") + (loopDraw?.over === n.id ? " fl-loop-target" : "");
 					const said = n.kind === "add" ? drop ? addLabel : n.title : n.title + (n.group ? ", a group of " + n.group.total + (n.group.total === 1 ? " stop" : " stops") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") + (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD$1[n.state] || "") : "") + (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") + (mark ? ", halt point" : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						ref: (el) => {
@@ -99673,20 +99917,14 @@ function VerifyWalkHint({ session, here, onOpen }) {
 		children: here ? VERIFY_WALK_HERE : windowName(session) + "'s agent is verifying the work — open it to talk to it"
 	});
 }
-function canFixStep(flight) {
-	if (!flight || !flight.session || flight.state !== "halted" && flight.state !== "waiting_you") return false;
-	const step = flight.steps[flight.cursor];
-	const ss = step ? flight.step_states?.[step.id] : void 0;
-	if (!ss) return false;
-	if (ss.state === "failed") return !ss.detail?.moved_on;
-	return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
-}
-var GONE_LINE = "Its session is closed, so no agent can fix this: Retry or Skip it, or Stop the route to end it.";
+var GONE_LINE = "Its session is closed, so no agent can fix this: Run again reopens it, or Skip this stop, or Stop the route to end it.";
+var GONE_LINE_LIVE = "Its session is closed, so no agent can fix this: Skip this stop, or Stop the route to end it.";
 function YouStepActions({ flight, compact = false, inTile = false, gone = false }) {
 	const step = flight.steps[flight.cursor];
 	const items = youItems(step);
 	const [ticked, setTicked] = (0, import_react.useState)({});
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const kinds = queryClient.getQueryData(["flight-kinds"]);
 	const cancel = useCancelAsk(flight);
 	const haltPoint = atHaltPoint(flight);
 	const paused = haltPoint || flight.state === "paused";
@@ -99740,6 +99978,13 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 	const allTicked = items.every((_, i) => ticked[key(i)]);
 	const halted = flight.state === "halted" || paused || handed;
 	const fix = !paused && !gone && canFixStep(flight);
+	const remedies = haltedRemedies({
+		kind: step.kind,
+		state: flight.state,
+		canFix: fix,
+		gone,
+		retryWorks: retryWorksGone(step.kind, kinds)
+	});
 	const text = handed ? /^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason : ask === "owed" ? askSentence(rec, youText(flight)) : youText(flight);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : ""),
@@ -99752,7 +99997,7 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 			}),
 			gone && !inTile && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-you-text muted",
-				children: GONE_LINE
+				children: flight.state === "halted" ? GONE_LINE : GONE_LINE_LIVE
 			}),
 			!halted && items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 				className: "fl-you-items",
@@ -99782,28 +100027,22 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 						title: haltPoint ? "Carry on past the halt point — “" + step.title + "” runs, and the route goes on" : "Carry on — the route goes on from “" + step.title + "”",
 						onClick: () => void run(() => controlFlight(flight.id, "resume")),
 						children: "Carry on"
-					}) : halted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary fl-btn",
-						disabled: busy,
-						title: handed ? "Run “" + step.title + "” again" : "Run this stop again",
-						onClick: () => void run(() => stepRetry(flight.id, step.id)),
-						children: "Retry"
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					}) : halted ? remedies.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RemedyButton, {
+						remedy: r,
+						primary: i === 0,
+						flight,
+						step,
+						handed,
+						busy,
+						run,
+						onStop: cancel.ask
+					}, r)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "btn-primary fl-btn fl-done",
 						disabled: busy || !allTicked,
 						title: allTicked ? doneOffer ? doneOffer.title + (compact && owed.length ? "\n\n" + owedItemsText(owed) : "") : "Mark “" + step.title + "” done — the route goes on" : "Tick every item first",
 						onClick: () => void run(() => stepDone(flight.id, step.id)),
 						children: doneOffer ? doneOffer.label : "Done"
-					}),
-					fix && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn fl-btn fl-fix",
-						disabled: busy,
-						title: step.kind === "verify" ? "Hand the failure to the agent — Verify runs again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix",
-						onClick: () => void run(() => stepFix(flight.id, step.id)),
-						children: "Let the agent fix it"
 					}),
 					compact && owed.length > 0 && flight.session && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -99812,27 +100051,75 @@ function YouStepActions({ flight, compact = false, inTile = false, gone = false 
 						onClick: () => openFlightTab(flight.session),
 						children: OWED_OPEN
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn fl-btn fl-skip",
-						disabled: busy,
-						title: "Skip “" + step.title + "” — the route goes on without it",
-						onClick: () => void run(async () => await stepSkip(flight.id, step.id) && skipCarriesOn(flight) && controlFlight(flight.id, "resume")),
-						children: "Skip"
+					(!halted || paused) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RemedyButton, {
+						remedy: "skip",
+						primary: false,
+						flight,
+						step,
+						handed,
+						busy,
+						run,
+						onStop: cancel.ask
 					}),
-					gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn fl-btn",
-						disabled: busy,
-						title: "Its session is closed — end this route",
-						onClick: cancel.ask,
-						children: "Stop the route"
+					(!halted || paused) && gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RemedyButton, {
+						remedy: "stop",
+						primary: false,
+						flight,
+						step,
+						handed,
+						busy,
+						run,
+						onStop: cancel.ask
 					})
 				]
 			}),
 			cancel.node
 		]
 	});
+}
+function RemedyButton({ remedy, primary, flight, step, handed, busy, run, onStop }) {
+	switch (remedy) {
+		case "again": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: (primary ? "btn-primary" : "test-btn") + " fl-btn fl-fly-again",
+			disabled: busy,
+			title: flyAgainTitle(flight, true),
+			onClick: () => void run(() => flyAgain(flight.id)),
+			children: "Run again"
+		});
+		case "retry": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: (primary ? "btn-primary" : "test-btn") + " fl-btn fl-retry",
+			disabled: busy,
+			title: handed ? "Run “" + step.title + "” again" : "Run this stop again",
+			onClick: () => void run(() => stepRetry(flight.id, step.id)),
+			children: "Retry"
+		});
+		case "fix": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: (primary ? "btn-primary" : "test-btn") + " fl-btn fl-fix",
+			disabled: busy,
+			title: (step.kind === "verify" ? "Hand the failure to the agent — Verify runs again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix") + (primary ? "\nRunning it again alone rarely mends a failing " + (step.kind === "verify" ? "check" : step.kind === "checks" ? "CI run" : "test") : ""),
+			onClick: () => void run(() => stepFix(flight.id, step.id)),
+			children: "Let the agent fix it"
+		});
+		case "skip": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: (primary ? "btn-primary" : "test-btn") + " fl-btn fl-skip",
+			disabled: busy,
+			title: "Skip “" + step.title + "” — the route goes on without it",
+			onClick: () => void run(async () => await stepSkip(flight.id, step.id) && skipCarriesOn(flight) && controlFlight(flight.id, "resume")),
+			children: "Skip"
+		});
+		case "stop": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: (primary ? "btn-primary" : "test-btn") + " fl-btn",
+			disabled: busy,
+			title: "Its session is closed — end this route",
+			onClick: onStop,
+			children: "Stop the route"
+		});
+	}
 }
 function FlightMenu({ flight, onCancelAsk, openSession = true }) {
 	const rows = useInstances().data;
@@ -99996,18 +100283,25 @@ function liveBoxParts(flight, expand, onCancelAsk, opts = {}) {
 	const renderInBox = (n) => {
 		if (!flight || n.kind !== "stop") return null;
 		const items = stopMenuItems(flight, n, onCancelAsk);
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "fl-box-menu",
-			onClick: stop,
-			"data-no-drag": true,
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
-				label: "Actions for " + n.title,
-				items
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-box-menu",
+				onClick: stop,
+				"data-no-drag": true,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
+					label: "Actions for " + n.title,
+					items
+				})
+			}),
+			expanded(n) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, {
+				flight,
+				inTile: opts.inTile
+			}),
+			n.held?.remedy && flight.session && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeldRemedy, {
+				held: n.held,
+				session: flight.session
 			})
-		}), expanded(n) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, {
-			flight,
-			inTile: opts.inTile
-		})] });
+		] });
 	};
 	const sizeOf = (n, base) => {
 		if (!expanded(n)) return base;
@@ -100027,6 +100321,27 @@ function liveBoxParts(flight, expand, onCancelAsk, opts = {}) {
 		renderInBox,
 		sizeOf
 	};
+}
+function HeldRemedy({ held, session }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const start = held.remedy === "start";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "fl-you-acts fl-held-acts",
+		onClick: stop,
+		"data-no-drag": true,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "btn-primary fl-btn fl-held-remedy",
+			disabled: busy,
+			title: held.title,
+			onPointerDown: (e) => e.stopPropagation(),
+			onClick: () => {
+				setBusy(true);
+				(start ? startSession(session) : reviveSession(session)).finally(() => setBusy(false));
+			},
+			children: busy ? start ? "Starting…" : "Restarting…" : start ? "Start" : "Restart"
+		})
+	});
 }
 function currentNodeId(d, flight) {
 	if (!flight) return null;
@@ -100107,7 +100422,7 @@ function FlightCard({ flight, kinds, expand = false }) {
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "fl-now-title",
-								children: you ? perchLabel(step.title) : step.title
+								children: you && flight.state === "waiting_you" ? perchedOnYou(step.title) : you ? perchLabel(step.title) : step.title
 							}),
 							elapsed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "fl-now-elapsed",
@@ -101370,6 +101685,7 @@ function inOrder(steps, ids) {
 //#region src/components/flights/StopIcons.tsx
 var FAMILY = {
 	agent: "work",
+	task: "work",
 	split: "work",
 	join: "work",
 	command: "work",
@@ -101648,6 +101964,10 @@ function stopWhy(n) {
 var STOP_TILE_W = 156;
 function stopTileBoxes(d, flight) {
 	const out = {};
+	for (const n of d.nodes) if (n.kind === "stop" && n.held) out[n.id] = {
+		w: STOP_TILE_W,
+		h: NODE_H + (n.held.remedy ? 40 : 16)
+	};
 	const haltPoint = !!flight?.steps && atHaltPoint(flight);
 	if (!flight || flight.state !== "halted" && flight.state !== "waiting_you" && flight.state !== "paused" && !haltPoint) return out;
 	for (const n of d.nodes) {
@@ -101861,6 +102181,7 @@ function SkyChain(p) {
 			dn.chip ? "tone-" + dn.chip.tone : "",
 			dn.kind === "group" ? "is-group" : "",
 			dn.perch ? "is-perch" : "",
+			!isHead && dn.held ? "is-held" : "",
 			!isHead && dn.ret?.shown === "fixing" && dn.state === "current" ? "is-fixing" : "",
 			n.inPort || n.outPort ? "" : "is-fixed",
 			isSel(n) ? "is-selected" : "",
@@ -102611,16 +102932,24 @@ var HERE = /* @__PURE__ */ new Set([
 	"paused"
 ]);
 function withFixItem(items, n, fixable = true) {
-	const out = [...items];
+	let out = [...items];
 	if (!fixable) return out.filter((i) => i.key !== "fix");
-	if (n.state !== "halted" || out.some((i) => i.key === "fix")) return out;
+	if (n.state !== "halted") return out;
 	const at = out.findIndex((i) => i.key === "retry");
-	if (at < 0) return out;
-	out.splice(at + 1, 0, {
-		key: "fix",
-		label: "Let the agent fix it",
-		title: "Hand the failure to the agent — “" + n.title + "” runs again after its fix"
-	});
+	if (!out.some((i) => i.key === "fix")) {
+		if (at < 0) return out;
+		out.splice(at + 1, 0, {
+			key: "fix",
+			label: "Let the agent fix it",
+			title: "Hand the failure to the agent — “" + n.title + "” runs again after its fix"
+		});
+	}
+	if (FIX_LEADS.has(String(n.step?.kind || ""))) {
+		const fix = out.find((i) => i.key === "fix");
+		out = out.filter((i) => i !== fix);
+		const r = out.findIndex((i) => i.key === "retry");
+		out.splice(r < 0 ? 0 : r, 0, fix);
+	}
 	return out;
 }
 var AGAIN_HERE_KEY = "again-here";
@@ -102986,6 +103315,15 @@ var GROUNDED_PREFIX = "flight:";
 var groundedKey = (id) => GROUNDED_PREFIX + id;
 var isGroundedKey = (key) => key.startsWith(GROUNDED_PREFIX);
 var groundedIdOf = (key) => isGroundedKey(key) ? key.slice(7) : "";
+function buildingRoute(focusKey, flights) {
+	const id = groundedIdOf(focusKey);
+	if (!id) return null;
+	const f = (flights || []).find((x) => x.id === id);
+	return f && f.state === "grounded" ? f : null;
+}
+function addedToRouteText(stop, route) {
+	return "Added “" + stop + "” to the end of “" + route + "” — click empty sky first to start another route";
+}
 var isFreeRun = (f) => !!f.free && !f.session && isLive(f);
 function groundedFlights(flights) {
 	return (flights || []).filter((f) => f.state === "grounded" || isFreeRun(f)).sort((a, b) => (b.started || 0) - (a.started || 0) || (a.id < b.id ? 1 : -1));
@@ -103214,7 +103552,7 @@ function lastRunWords(last, now) {
 function runChip(f) {
 	const step = f.steps[f.cursor];
 	if (atHaltPoint(f)) return {
-		label: "At your halt point",
+		label: haltPointLabel(step?.title),
 		tone: "attention",
 		title: "Paused at your halt point before “" + (step?.title || "the next stop") + "” — Carry on to go on"
 	};
@@ -103226,15 +103564,22 @@ function runChip(f) {
 			title: "Halted" + (step ? " at “" + step.title + "”" : "") + (why ? " — " + why : "") + ". Retry or Skip it on the stop."
 		};
 	}
-	if (f.state === "waiting_you") return {
-		label: "Needs you",
-		tone: "attention",
-		title: (perchWhy(f) || "Waiting on you") + (step ? " — at “" + step.title + "”" : "")
-	};
-	if (f.state === "paused") return {
+	if (f.state === "waiting_you") {
+		const why = perchWhy(f);
+		return {
+			label: perchedOnYou(step?.title),
+			tone: "attention",
+			title: (why || "Waiting on you") + (step ? " — at “" + step.title + "”" : "")
+		};
+	}
+	if (f.state === "paused") return f.reason ? {
 		label: "Paused",
 		tone: "muted",
-		title: "A person paused it: Carry on (in ⋯, or on its stop) to go on"
+		title: "Paused: " + f.reason + " — Carry on (in ⋯, or on its stop) to go on"
+	} : {
+		label: PAUSED_BY_YOU_LABEL,
+		tone: "muted",
+		title: "Paused by you: Carry on (in ⋯, or on its stop) to go on"
 	};
 	if (f.state === "running") return {
 		label: "Running",
@@ -105978,7 +106323,7 @@ function StopForm({ step, def, onChange, readOnly, lineSteps, errors }) {
 				className: "fl-form-note fl-stop-sentence fl-fld-wide" + (verify ? " vf-sentence" : " muted"),
 				role: "status",
 				"aria-label": "What the route does here",
-				children: verify ? stopSentence(step, fallback, verifySentence(step.config, onFail)) : [stopDoes(step), stopSentence(step, fallback)].filter(Boolean).join(" ")
+				children: verify ? stopSentence(step, fallback, verifySentence(step.config, onFail)) : [stopDoes(step), stopSentence(step, fallback, "", [def])].filter(Boolean).join(" ")
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 				label: "Title",
@@ -106012,7 +106357,7 @@ function StopForm({ step, def, onChange, readOnly, lineSteps, errors }) {
 				onChange: (w) => onChange({ when: w || void 0 }),
 				hint: "Empty: always runs. When false, the stop is skipped and the route goes on. ⓘ lists the conditions."
 			}),
-			canFail(step.kind) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+			canFail(step.kind, [def]) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 				label: "If it fails",
 				wide: true,
 				hint: errHint("on_fail") ?? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -106906,6 +107251,7 @@ function hereStop(flight, n) {
 	else if (haltPoint && (rec?.state || "pending") === "pending") out.editNow = "resume";
 	if (n.state === "perched" && Array.isArray(d.items)) out.asks = d.items.map(String).filter(Boolean);
 	out.primary = out.retry ? "retry" : out.resume ? "resume" : out.done ? "done" : void 0;
+	if (out.primary === "retry" && failed && FIX_LEADS.has(n.step.kind) && canFixStep(flight)) out.primary = "fix";
 	const reason = cap(String(n.reason || failedReason || rec?.note || "").trim());
 	const failure = reasonAfterTitle(n.title, reason).replace(/^failed:\s*/i, "");
 	if (haltPoint) out.why = "Paused at its halt point — nothing has run yet. Carry on runs it.";
@@ -118333,6 +118679,7 @@ function useWaiting(fetch = true) {
 }
 //#endregion
 //#region src/components/flights/IntakeLane.tsx
+var LANE_AUTO_FOLDED = "Intake folded to make room on a narrow Sky";
 var COLLAPSED_LS_KEY = "mf_sky_lane_collapsed";
 function loadCollapsed() {
 	try {
@@ -118528,7 +118875,7 @@ function Block({ block, onFly, open, editing, onEditDefault }) {
 	});
 }
 var headPress$5 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
-function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault }) {
+function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault, narrow = false }) {
 	const flights = useFlights().data;
 	const editDefault = (ref, label) => {
 		if (onEditDefault) onEditDefault(ref, label);
@@ -118579,7 +118926,9 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 	const tickets = usePanelQuery("tickets").data;
 	const prs = usePanelQuery("github-prs").data;
 	const issues = usePanelQuery("github-issues").data;
-	const [collapsed, setCollapsed] = (0, import_react.useState)(loadCollapsed);
+	const [hand, setHand] = (0, import_react.useState)(() => loadCollapsed() ? "folded" : null);
+	const collapsed = laneFolded(hand, narrow);
+	const autoFolded = collapsed && hand !== "folded";
 	const rootRef = (0, import_react.useRef)(null);
 	const measureRef = (0, import_react.useRef)(onMeasure);
 	measureRef.current = onMeasure;
@@ -118612,7 +118961,7 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 		}
 	});
 	const fold = (v) => {
-		setCollapsed(v);
+		setHand(laneHandAfter(v, narrow));
 		saveCollapsed(v);
 	};
 	const total = blocks.reduce((n, b) => n + laneCount(b), 0);
@@ -118625,13 +118974,14 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 		className: "sky-lane sky-lane-rail",
 		"aria-label": "Intake",
 		"data-collapsed": "true",
-		title: moveHint || void 0,
+		"data-auto": autoFolded ? "" : void 0,
+		title: [autoFolded ? LANE_AUTO_FOLDED : "", moveHint].filter(Boolean).join(" · ") || void 0,
 		onPointerDown: headDown,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			className: "sky-lane-toggle",
 			"aria-expanded": false,
-			title: "Open the intake lane",
+			title: autoFolded ? LANE_AUTO_FOLDED + " — open it" : "Open the intake lane",
 			onClick: () => fold(false),
 			children: "›"
 		}), blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -126179,7 +126529,7 @@ function ScrollSpeedRow() {
 }
 //#endregion
 //#region src/components/settings/screens/TailscaleCard.tsx
-var POLL_MS$2 = 3e3;
+var POLL_MS$3 = 3e3;
 function signedInAs(h) {
 	if (h.tagged) return "a tagged device (" + (h.tags || []).join(", ") + ")";
 	return h.user || "";
@@ -126396,7 +126746,7 @@ function TailscaleCard({ active = true, onHealth }) {
 		if (!active || !pending) return;
 		const t = setInterval(() => {
 			if (!document.hidden) load(true);
-		}, POLL_MS$2);
+		}, POLL_MS$3);
 		return () => clearInterval(t);
 	}, [
 		active,
@@ -133791,6 +134141,15 @@ function mapFrom(rows) {
 	}
 	return out;
 }
+function usedLine(row) {
+	if (!row.base.branch) return "no base branch found — set one below";
+	const pr = row.pr.branch && row.pr.branch !== row.base.branch ? " · PRs: " + row.pr.why : "";
+	return row.base.why + pr;
+}
+function usedNote(row) {
+	const notes = [row.base.note, row.pr.note].filter(Boolean);
+	return Array.from(new Set(notes)).join(". ");
+}
 //#endregion
 //#region src/components/settings/screens/RepoBranches.tsx
 function RepoBranches() {
@@ -133802,6 +134161,14 @@ function RepoBranches() {
 	(0, import_react.useEffect)(() => {
 		setRows((prev) => JSON.stringify(mapFrom(prev)) === storedKey ? prev : rowsFrom(stored));
 	}, [storedKey]);
+	const [used, setUsed] = (0, import_react.useState)([]);
+	(0, import_react.useEffect)(() => {
+		let alive = true;
+		api("/api/repos/bases").then((d) => alive && setUsed(Array.isArray(d?.repos) ? d.repos : [])).catch(() => alive && setUsed([]));
+		return () => {
+			alive = false;
+		};
+	}, [storedKey, defaultBase]);
 	const save = (next) => {
 		const map = mapFrom(next);
 		if (JSON.stringify(map) === storedKey) return;
@@ -133834,6 +134201,37 @@ function RepoBranches() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "main" }),
 					". Blank PR base = that repo's base branch."
 				]
+			}),
+			used.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "ws-repo-used",
+				id: "workspace-repo-used",
+				children: used.map((u) => {
+					const note = usedNote(u);
+					const hasRow = rows.some((r) => normalizeRepo(r.repo) === u.repo || r.repo === u.repo);
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: u.repo }),
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: usedLine(u)
+						}),
+						note && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint ws-repo-note",
+							children: [" — ", note]
+						}),
+						!hasRow && normalizeRepo(u.repo) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							"aria-label": "Set branches for " + u.repo,
+							onClick: () => setRows((prev) => [...prev, {
+								repo: u.repo,
+								base: "",
+								pr: ""
+							}]),
+							children: "Set"
+						})] })
+					] }, u.repo);
+				})
 			}),
 			rows.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ws-repo-branches",
@@ -134297,6 +134695,8 @@ function Cleanup({ active }) {
 	const [rep, setRep] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)("");
 	const [asking, setAsking] = (0, import_react.useState)(null);
+	const [looks, setLooks] = (0, import_react.useState)({});
+	const [deleting, setDeleting] = (0, import_react.useState)(null);
 	const [days, setDays] = (0, import_react.useState)("");
 	const timer = (0, import_react.useRef)(void 0);
 	const load = (0, import_react.useCallback)(async (refresh = false) => {
@@ -134361,10 +134761,59 @@ function Cleanup({ active }) {
 			load();
 		}
 	};
+	const inspect = async (it) => {
+		if (looks[it.id] && looks[it.id] !== "loading") {
+			setLooks(({ [it.id]: _gone, ...rest }) => rest);
+			setDeleting(null);
+			return;
+		}
+		setLooks((l) => ({
+			...l,
+			[it.id]: "loading"
+		}));
+		try {
+			const r = await api("/api/cleanup/inspect?id=" + encodeURIComponent(it.id));
+			if (r.facts) setLooks((l) => ({
+				...l,
+				[it.id]: r.facts
+			}));
+		} catch (err) {
+			setLooks(({ [it.id]: _gone, ...rest }) => rest);
+			toast(failSentence$1("Couldn't look inside " + it.name, err));
+		}
+	};
+	const removeUnchecked = async (it, anyway) => {
+		setDeleting(null);
+		setBusy(it.id);
+		try {
+			toast(removedText(it, await api("/api/cleanup/remove", { json: anyway ? {
+				id: it.id,
+				confirm: true,
+				even_unchecked: true
+			} : {
+				id: it.id,
+				confirm: true
+			} })));
+			setLooks(({ [it.id]: _gone, ...rest }) => rest);
+		} catch (err) {
+			toast(failSentence$1("Couldn't remove " + it.name, err));
+		} finally {
+			setBusy("");
+			load();
+		}
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CleanupView, {
 		rep,
 		busy,
 		asking,
+		looks,
+		deleting,
+		onInspect: (it) => void inspect(it),
+		onDeleteStep: (it, step) => setDeleting(step ? {
+			id: it.id,
+			step
+		} : null),
+		onRemoveUnchecked: (it, anyway) => void removeUnchecked(it, anyway),
 		days,
 		onDays: setDays,
 		onSaveDays: () => {
@@ -134480,7 +134929,7 @@ function CleanupView(p) {
 		}),
 		groupItems(items).map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "cleanup-group",
-			open: g.key === "safe" || g.key === "kept",
+			open: g.key === "safe" || g.key === "kept" || g.key === "unchecked",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
 				g.title,
 				" ",
@@ -134513,6 +134962,13 @@ function CleanupView(p) {
 									className: "cleanup-meta",
 									children: [sizeText(it), it.last_used ? " · " + usedAgo(it.last_used) : ""]
 								}),
+								isUnchecked(it) && !it.in_use && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn cleanup-inspect",
+									disabled: !!p.busy || p.looks?.[it.id] === "loading",
+									onClick: () => p.onInspect?.(it),
+									children: p.busy === it.id ? "Removing…" : p.looks?.[it.id] === "loading" ? "Looking…" : p.looks?.[it.id] ? "Hide" : "Look inside"
+								}),
 								canRemove(it) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "test-btn cleanup-remove",
@@ -134529,6 +134985,14 @@ function CleanupView(p) {
 								" ",
 								whyLine(it)
 							]
+						}),
+						isUnchecked(it) && p.looks?.[it.id] && p.looks[it.id] !== "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UncheckedLook, {
+							it,
+							f: p.looks[it.id],
+							busy: !!p.busy,
+							step: p.deleting?.id === it.id ? p.deleting.step : null,
+							onStep: (step) => p.onDeleteStep?.(it, step),
+							onRemove: (anyway) => p.onRemoveUnchecked?.(it, anyway)
 						}),
 						p.asking?.id === it.id && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 							id: "cleanup-confirm",
@@ -134550,10 +135014,110 @@ function CleanupView(p) {
 				" lists the same, ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock clean --collect" }),
 				" ",
-				"removes the safe set."
+				"removes the safe set, ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock clean --inspect ITEM" }),
+				" looks inside a folder that can't be checked."
 			]
 		})
 	] });
+}
+function UncheckedLook(p) {
+	const { it, f } = p;
+	const cmp = f.git.compare;
+	const ask = p.step ? uncheckedConfirm(it, f, p.step) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "cleanup-look",
+		id: "cleanup-look-" + it.id,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cleanup-look-lines",
+				children: f.summary.map((ln, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: ln }, i))
+			}),
+			f.top.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cleanup-look-block",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cleanup-look-head",
+					children: "Top level"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+					className: "cleanup-look-entries",
+					children: [f.top.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "cleanup-entry-" + t.kind,
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: t.name + (t.dir ? "/" : "") }),
+							" ",
+							t.files,
+							" ",
+							t.files === 1 ? "file" : "files",
+							",",
+							" ",
+							humanBytes(t.bytes),
+							t.kind === "dependency" ? " · dependencies/caches" : t.kind === "git" ? " · git's" : ""
+						]
+					}, t.name)), f.top_more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+						"… and ",
+						f.top_more,
+						" more"
+					] })]
+				})]
+			}),
+			f.work_sample.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cleanup-look-block",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cleanup-look-head",
+					children: "Files that look like work, newest first"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "cleanup-look-entries",
+					children: f.work_sample.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: w.path }),
+						" ",
+						humanBytes(w.bytes),
+						" · ",
+						(/* @__PURE__ */ new Date(w.mtime * 1e3)).toLocaleString()
+					] }, w.path))
+				})]
+			}),
+			cmp && (cmp.changed.length > 0 || cmp.extra.length > 0 || cmp.missing.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cleanup-look-block",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "cleanup-look-head",
+					children: ["Against branch ", f.git.branch]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+					className: "cleanup-look-entries",
+					children: [
+						cmp.changed.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: ["Changed: ", cmp.changed.join(", ")] }),
+						cmp.extra.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: ["Only here: ", cmp.extra.join(", ")] }),
+						cmp.missing.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: ["Missing here: ", cmp.missing.join(", ")] })
+					]
+				})]
+			}),
+			!ask && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "test-row",
+				children: f.safe ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn cleanup-remove",
+					disabled: p.busy,
+					onClick: () => p.onRemove(false),
+					children: "Remove"
+				}) : f.mounts.length ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn cleanup-remove-anyway",
+					disabled: p.busy,
+					onClick: () => p.onStep(1),
+					children: "Remove anyway…"
+				})
+			}),
+			ask && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				id: "cleanup-unchecked-confirm",
+				title: ask.title,
+				body: ask.body,
+				confirmLabel: ask.confirmLabel,
+				cancelLabel: "Keep it",
+				busy: p.busy,
+				onConfirm: () => p.step === 1 ? p.onStep(2) : p.onRemove(true),
+				onCancel: () => p.onStep(null)
+			})
+		]
+	});
 }
 //#endregion
 //#region src/components/settings/screens/Ide.tsx
@@ -136273,6 +136837,317 @@ function DevicesAdvanced({ focusDevice }) {
 	});
 }
 //#endregion
+//#region src/components/settings/screens/DevicesAnywhere.tsx
+var PATH$2 = "/api/devices/anywhere";
+function DevicesAnywhere({ active }) {
+	const [st, setSt] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [install, setInstall] = (0, import_react.useState)([]);
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			setSt(await api(PATH$2));
+		} catch {}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (active) load();
+	}, [active, load]);
+	const ms = anywherePollMs(st);
+	(0, import_react.useEffect)(() => {
+		if (!active || !st?.on) return;
+		const t = setInterval(() => {
+			if (!document.hidden) load();
+		}, ms);
+		return () => clearInterval(t);
+	}, [
+		active,
+		st?.on,
+		ms,
+		load
+	]);
+	const needsInstall = !!st?.on && st.install;
+	(0, import_react.useEffect)(() => {
+		if (!needsInstall) {
+			setInstall([]);
+			return;
+		}
+		let live = true;
+		reprobeDoctor().then((d) => live && setInstall(d.install?.steps || [])).catch(() => live && setInstall([]));
+		return () => {
+			live = false;
+		};
+	}, [needsInstall]);
+	const post = async (path, body) => {
+		setBusy(true);
+		try {
+			setSt(await api(path, { json: body ?? {} }));
+		} catch (e) {
+			toast(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	if (!st) return null;
+	const line = anywhereLine(st);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "devices-this",
+		id: "devices-anywhere",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row set-switch-row",
+				id: "devices-anywhere-row",
+				"data-control": "devices-anywhere",
+				title: ANYWHERE_HINT,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: ANYWHERE_LABEL
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "ca-switch",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "devices-anywhere-switch",
+							"data-group": "general",
+							"data-field": "devices_anywhere",
+							checked: st.on,
+							disabled: busy,
+							onChange: (e) => void post(PATH$2, { on: e.target.checked })
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: ANYWHERE_HINT
+					})
+				]
+			}),
+			st.on && line && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: anywhereWarn(st) ? "devices-note warn" : "devices-note",
+				id: "devices-anywhere-status",
+				role: anywhereWarn(st) ? "alert" : void 0,
+				children: [line, st.retry && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "devices-anywhere-retry",
+					disabled: busy,
+					onClick: () => void post(PATH$2 + "/retry"),
+					children: "Retry"
+				})] })]
+			}),
+			needsInstall && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+				steps: install,
+				onDone: () => void load()
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/settings/screens/DevicesFarInvite.tsx
+var PATH$1 = "/api/devices/anywhere/invite";
+var POLL_MS$2 = 4e3;
+function DevicesFarInvite({ active, disabled }) {
+	const [st, setSt] = (0, import_react.useState)(null);
+	const [ask, setAsk] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			setSt(await api(PATH$1));
+		} catch {}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (active) load();
+	}, [active, load]);
+	const live = !!st?.invite;
+	(0, import_react.useEffect)(() => {
+		if (!active || !live) return;
+		const t = setInterval(() => {
+			if (!document.hidden) load();
+		}, POLL_MS$2);
+		return () => clearInterval(t);
+	}, [
+		active,
+		live,
+		load
+	]);
+	const now = useNow(live ? 1e3 : false) / 1e3;
+	const make = async (turnOn) => {
+		setBusy(true);
+		try {
+			setSt(await api(PATH$1, { json: { turn_on: turnOn } }));
+			setAsk(false);
+		} catch (e) {
+			if ((e instanceof ApiError ? e.body : null)?.needs_switch) setAsk(true);
+			else toast(e instanceof Error ? e.message : String(e), { duration: 8e3 });
+		} finally {
+			setBusy(false);
+		}
+	};
+	const cancel = async () => {
+		setBusy(true);
+		try {
+			setSt(await api(PATH$1, { method: "DELETE" }));
+		} catch (e) {
+			toast(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	if (!st) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		id: "devices-far",
+		"data-control": "devices-anywhere-invite",
+		children: st.invite ? renderInvite(st.invite) : renderAdd(st.gone)
+	});
+	function renderInvite(inv) {
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-invite devices-far-invite",
+			id: "devices-far-invite",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "On the new computer: open MindFlock → Settings → Your devices, paste this code into “Paste a code”, then Join."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "devices-command devices-far-code-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+						className: "devices-far-code",
+						id: "devices-far-code",
+						children: inv.code
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "devices-far-copy",
+						onClick: () => copyText(inv.code).then((ok) => toast(ok ? "Code copied" : "Copy failed")),
+						children: "Copy"
+					})]
+				}),
+				inv.qr_svg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "devices-far-qr",
+					"aria-label": "The code as a QR",
+					dangerouslySetInnerHTML: { __html: inv.qr_svg }
+				}),
+				inv.safety && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "devices-far-safety",
+					id: "devices-far-safety",
+					children: farSafetyLine(inv)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint",
+					id: "devices-far-countdown",
+					children: [farInviteLine(inv, now), " · Anyone with this code can join your devices — send it only to yourself."]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn devices-self-start",
+					id: "devices-far-cancel",
+					disabled: busy,
+					onClick: () => void cancel(),
+					children: "Cancel"
+				})
+			]
+		});
+	}
+	function renderAdd(gone) {
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-add devices-far-add",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "devices-far-new",
+					disabled: busy || disabled || ask,
+					onClick: () => void make(false),
+					children: busy ? "Starting the private tunnel…" : FAR_ADD_LABEL
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: gone || FAR_ADD_HINT
+				}),
+				ask && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					id: "devices-far-turn-on",
+					title: FAR_TURN_ON_TITLE,
+					body: FAR_TURN_ON_BODY,
+					confirmLabel: busy ? "Turning it on…" : "Turn it on and make a code",
+					busy,
+					onConfirm: () => void make(true),
+					onCancel: () => setAsk(false)
+				})
+			]
+		});
+	}
+}
+//#endregion
+//#region src/components/settings/screens/DevicesPairAlerts.tsx
+var PATH = "/api/devices/anywhere/pair-alerts";
+function DevicesPairAlerts({ pairing, reload }) {
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [ask, setAsk] = (0, import_react.useState)(false);
+	const alerts = pairing?.alerts || [];
+	const pending = pairing?.pending || [];
+	if (!alerts.length && !pending.length) return null;
+	const act = async (key, fn, ok) => {
+		setBusy(key);
+		try {
+			toast(ok(await fn()), { duration: 8e3 });
+			setAsk(false);
+		} catch (e) {
+			toast(e instanceof Error ? e.message : String(e), { duration: 8e3 });
+		} finally {
+			setBusy("");
+			reload();
+		}
+	};
+	const changeKey = () => act("key", () => api(PATH + "/change-key", { json: {} }), (r) => {
+		const out = r || {};
+		const n = out.rekeyed?.length || 0;
+		const missed = out.missed?.length || 0;
+		return "Key changed" + (n ? " on " + n + (n === 1 ? " other device" : " other devices") : "") + (missed ? " — " + missed + " offline take it when they're next seen" : "");
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [alerts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "devices-warn",
+		id: "devices-pair-alerts",
+		role: "alert",
+		children: [
+			alerts.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "devices-pair-alert",
+				"data-alert": a.id,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: a.text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					"data-dismiss": a.id,
+					disabled: !!busy,
+					onClick: () => void act("dismiss:" + a.id, () => api(PATH + "?id=" + encodeURIComponent(a.id), { method: "DELETE" }), () => "Dismissed"),
+					children: "It was me"
+				})]
+			}, a.id)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				id: "devices-pair-change-key",
+				disabled: !!busy || ask,
+				onClick: () => setAsk(true),
+				children: "Change key"
+			}),
+			ask && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				id: "devices-pair-change-key-confirm",
+				title: "Change your devices' key now?",
+				body: "Every device gets a new key and new access tokens, so whoever used the code is locked out. A phone signs in again with the QR in Your phone; a device that's offline takes the new key when it's next seen.",
+				confirmLabel: busy === "key" ? "Changing…" : "Change key",
+				busy: busy === "key",
+				onConfirm: () => void changeKey(),
+				onCancel: () => setAsk(false)
+			})
+		]
+	}), pending.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "devices-note",
+		id: "devices-pair-pending",
+		role: "status",
+		children: pending.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			"data-pending": p.device,
+			children: (p.host || p.device) + " is pairing now — not one of your devices until it confirms."
+		}, p.device))
+	})] });
+}
+//#endregion
 //#region src/components/settings/screens/DeviceReadiness.tsx
 function NewComputerLine({ code }) {
 	const [b, setB] = (0, import_react.useState)(null);
@@ -136418,6 +137293,8 @@ function Devices(p) {
 	const [addFor, setAddFor] = (0, import_react.useState)(null);
 	const [code, setCode] = (0, import_react.useState)("");
 	const [pasted, setPasted] = (0, import_react.useState)("");
+	const [farReach, setFarReach] = (0, import_react.useState)(true);
+	const [farAsk, setFarAsk] = (0, import_react.useState)(null);
 	const [rotateTokens, setRotateTokens] = (0, import_react.useState)(true);
 	const [reachAsk, setReachAsk] = (0, import_react.useState)(false);
 	const [matchAsk, setMatchAsk] = (0, import_react.useState)(false);
@@ -136513,7 +137390,7 @@ function Devices(p) {
 	const joinState = st?.join?.state || "idle";
 	const lastJoin = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
-		if (joinState !== "waiting" && joinState !== "joining") return;
+		if (joinState !== "waiting" && joinState !== "joining" && joinState !== "finishing") return;
 		const t = setInterval(async () => {
 			if (document.hidden) return;
 			try {
@@ -136580,9 +137457,27 @@ function Devices(p) {
 	const lefts = leftLines(st);
 	const readmitted = readmittedLines(st);
 	const join = st.join;
-	const joinBusy = join && (join.state === "waiting" || join.state === "joining");
+	const joinBusy = join && (join.state === "waiting" || join.state === "joining" || join.state === "finishing");
 	const askToJoin = (device) => run("ask:" + device, () => api("/api/fleet/request", { json: { device } }));
 	const cancelJoin = () => run("cancel-join", () => api("/api/fleet/request", { method: "DELETE" }));
+	const joinFarConfirmed = () => {
+		const ask = farAsk;
+		if (!ask) return;
+		return run("paste", async () => {
+			const j = await api("/api/devices/anywhere/join", { json: {
+				code: ask.code,
+				reachable: farReach,
+				confirm: true,
+				leave_group: !!ask.info.other_group
+			} });
+			setFarAsk(null);
+			setSt((prev) => prev ? {
+				...prev,
+				join: j
+			} : prev);
+			setPasted("");
+		});
+	};
 	const joinWithCode = (device) => run("code:" + device, async () => {
 		await api("/api/fleet/join", { json: {
 			device,
@@ -136597,6 +137492,27 @@ function Devices(p) {
 			setPasted("");
 			joinPeerInvite(code);
 			return;
+		}
+		if (routeCode(pasted).kind === "anywhere") {
+			const code = routeCode(pasted).code;
+			return run("paste", async () => {
+				try {
+					await api("/api/devices/anywhere/join", { json: {
+						code,
+						reachable: farReach
+					} });
+				} catch (e) {
+					const body = e instanceof ApiError ? e.body : null;
+					if (body?.needs_confirm) {
+						setFarAsk({
+							code,
+							info: body
+						});
+						return;
+					}
+					throw e;
+				}
+			});
 		}
 		const { body, error } = pasteJoinBody(pasted, candidates, codeFor || focusDevice || null);
 		if (!body) {
@@ -136613,6 +137529,7 @@ function Devices(p) {
 	const local = st.self_reachable === false;
 	const here = thisDeviceLine(st);
 	const unreachable = (st.admitted || []).filter((a) => a.state === "unreachable_joiner");
+	const finishing = (st.admitted || []).filter((a) => a.state === "finishing");
 	const match = matchText(st.match);
 	const phone = phoneLinkLine(st.phone_link);
 	const peers = st.tailnet_peers || [];
@@ -136707,12 +137624,26 @@ function Devices(p) {
 				})
 			]
 		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesAnywhere, { active: p.active }),
 		unreachable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "devices-warn",
 			id: "devices-unreachable-joiners",
 			role: "alert",
 			children: unreachable.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				"data-unreachable": a.device,
+				children: admitLine(a)
+			}, a.device))
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesPairAlerts, {
+			pairing: st.pairing,
+			reload: loadAll
+		}),
+		finishing.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-note",
+			id: "devices-finishing-joiners",
+			role: "status",
+			children: finishing.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				"data-finishing": a.device,
 				children: admitLine(a)
 			}, a.device))
 		}),
@@ -137111,7 +138042,7 @@ function Devices(p) {
 		local && !invite ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "devices-warn",
 			id: "devices-invite-blocked",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "A new computer couldn't use a code made here yet: this one only listens on 127.0.0.1, so nothing else can reach it. Make it reachable first, then add the device." }), !reachAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "A computer on your tailnet couldn't use a code made here yet: this one only listens on 127.0.0.1, so nothing else can reach it. Make it reachable first, then add the device — or, for a computer without Tailscale, use “It isn't on my network” below." }), !reachAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "test-btn devices-primary",
 				disabled: reach.busy,
@@ -137182,6 +138113,10 @@ function Devices(p) {
 				className: "set-hint",
 				children: "Shows a one-time code to type on the other computer."
 			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesFarInvite, {
+			active: !!p.active,
+			disabled: !!busy
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "devices-subhead",
@@ -137376,7 +138311,10 @@ function Devices(p) {
 					autoComplete: "off",
 					spellCheck: false,
 					value: pasted,
-					onChange: (e) => setPasted(e.target.value),
+					onChange: (e) => {
+						setPasted(e.target.value);
+						setFarAsk(null);
+					},
 					onKeyDown: (e) => {
 						if (e.key === "Enter" && pasted.trim() && !busy) joinWithText();
 					}
@@ -137392,7 +138330,35 @@ function Devices(p) {
 				pasted.trim() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint devices-join-note",
 					id: "devices-paste-note",
-					children: routeCode(pasted).kind === "peer" ? "That's an invite from another person — Join links you to them (People), not to your devices." : joinSettingsNote("")
+					children: routeCode(pasted).kind === "peer" ? "That's an invite from another person — Join links you to them (People), not to your devices." : routeCode(pasted).kind === "anywhere" ? "A code from one of your computers that isn't on this network: this one joins through its private tunnel. " + joinSettingsNote("") : joinSettingsNote("")
+				}),
+				routeCode(pasted).kind === "anywhere" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "devices-far-reach",
+					"data-control": "devices-anywhere-join",
+					title: FAR_REACHABLE_HINT,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "devices-far-reach",
+							checked: farReach,
+							onChange: (e) => setFarReach(e.target.checked)
+						}),
+						" ",
+						FAR_REACHABLE_LABEL,
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: FAR_REACHABLE_HINT
+						})
+					]
+				}),
+				farAsk && routeCode(pasted).kind === "anywhere" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					id: "devices-far-confirm",
+					title: FAR_CONFIRM_TITLE,
+					body: farConfirmBody(farAsk.info, farReach),
+					confirmLabel: busy === "paste" ? "Joining…" : farConfirmLabel(farAsk.info),
+					busy: busy === "paste",
+					onConfirm: () => void joinFarConfirmed(),
+					onCancel: () => setFarAsk(null)
 				})
 			]
 		}),
@@ -141597,6 +142563,17 @@ function MakePrDialog() {
 							children: "See on map"
 						})
 					]
+				}),
+				info?.note && base === info.default && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					id: "make-pr-base-note",
+					children: [info.note, "."]
+				}),
+				info?.error && !base && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					id: "make-pr-base-error",
+					role: "alert",
+					children: info.error
 				}),
 				onBase ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "error",
@@ -150982,7 +151959,8 @@ var KIND_ORDER = [
 ];
 function perchLine(flight, kinds) {
 	const step = flight.steps[flight.cursor];
-	const what = step ? stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title : "";
+	if (flight.state === "paused" && flight.reason === HALT_POINT_REASON) return pausedAtLine(step?.title);
+	const what = step ? stepActor(step, kinds) === "you" ? flight.state === "waiting_you" ? perchedOnYou(step.title) : perchLabel(step.title) : step.title : "";
 	const why = perchWhy(flight);
 	return what && why ? what + " — " + why : what || why;
 }
@@ -151807,6 +152785,7 @@ function frameState(s) {
 	if (s.tone === "broken") return "broken";
 	if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou || (f === "paused" || f === "halted") && s.haltPoint) return "you";
 	if (f === "paused") return "paused";
+	if (s.held) return "held";
 	if (f === "running" || s.tone === "working" || s.tone === "verifying") return "working";
 	if (f === "done" || s.landed) return "done";
 	if (f === "ready") return "ready";
@@ -152083,7 +153062,8 @@ function SkyLine(p) {
 		landed: !!line.landedId,
 		tone: ss.tone,
 		behaviorsYou: line.behaviors.mark?.tone === "you",
-		haltPoint: atHaltPoint(line.flight)
+		haltPoint: atHaltPoint(line.flight),
+		held: line.diagram.nodes.some((n) => !!n.held)
 	}) : "idle";
 	const rowOf = (t) => t ? p.rows.find((r) => r.title === t) : void 0;
 	const where = row ? lineWhere(line.diagram) : "";
@@ -156173,6 +157153,7 @@ function SkyView() {
 		}, taken, size, view);
 	};
 	const placing = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const growing = (0, import_react.useRef)(/* @__PURE__ */ new Map());
 	(0, import_react.useEffect)(() => {
 		for (const [key, near] of placing.current) {
 			if (!measured[key]) continue;
@@ -156186,10 +157167,43 @@ function SkyView() {
 				pinned: true
 			}));
 		}
+		for (const [key, w0] of growing.current) {
+			const size = measured[key];
+			if (!size || size.w === w0) continue;
+			growing.current.delete(key);
+			const taken = [
+				...lines.map((l) => l.id).filter((id) => id !== key),
+				INTAKE_KEY,
+				PALETTE_KEY
+			].map(rectOf).concat(objects.map((o) => rectOf(o.key))).filter((r) => !!r);
+			const here = posOf(key);
+			const c = camRef.current;
+			const pad = 16 / c.z;
+			const at = spotNear(here, taken, size, {
+				x: -c.x / c.z + pad,
+				y: -c.y / c.z + pad,
+				w: vp.w / c.z - 2 * pad,
+				h: vp.h / c.z - 2 * pad
+			});
+			if (at.x !== here.x || at.y !== here.y) setLayout((l) => patchSkyLine(l, key, {
+				x: at.x,
+				y: at.y,
+				pinned: true
+			}));
+		}
 	}, [measured, flights]);
 	const placeGrounded = async (d, near) => {
 		const plan = "planId" in d ? plans.find((p) => p.id === d.planId) : null;
 		if ("planId" in d && !plan) return;
+		const into = plan ? null : buildingRoute(groundFocus, flights);
+		const def = plan ? void 0 : kinds.find((k) => k.kind === d.kind);
+		if (into && def) {
+			const key = groundedKey(into.id);
+			growing.current.set(key, measured[key]?.w || 0);
+			if (await tackOn(into.id, newStep(def, into.steps.map((st) => st.id)))) toast(addedToRouteText(def.label, groundedName(into)));
+			else growing.current.delete(key);
+			return;
+		}
 		const f = await makeGrounded(plan ? { plan } : { kind: d.kind });
 		if (!f || !alive.current) return;
 		const at = spotRef.current(f, near);
@@ -156199,6 +157213,7 @@ function SkyView() {
 			pinned: true
 		}));
 		placing.current.set(groundedKey(f.id), near);
+		if (!plan) setGroundFocus(groundedKey(f.id));
 		groundedLanded(f);
 	};
 	const editPlan = async (plan) => {
@@ -157608,7 +158623,8 @@ function SkyView() {
 				onHeadDown: (e) => onDragStart(INTAKE_KEY, e),
 				draggable: liveTool === "drag",
 				onMeasure: (w, h) => onMeasure(INTAKE_KEY, w, h),
-				onEditDefault: editDefault
+				onEditDefault: editDefault,
+				narrow: skyIsNarrow(vp.w)
 			})
 		});
 	};
@@ -158018,7 +159034,7 @@ function RouteStartMenu() {
 	(0, import_react.useLayoutEffect)(() => {
 		const el = ref.current;
 		if (!open || !el) return setPos(null);
-		setPos(placeMenu(open.anchor, {
+		setPos(placeMenu$1(open.anchor, {
 			w: el.offsetWidth,
 			h: el.offsetHeight
 		}, {

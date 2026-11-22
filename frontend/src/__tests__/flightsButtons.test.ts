@@ -196,7 +196,7 @@ describe("quiet-icon: the house hover and the accent ring", () => {
 describe("both themes: accent text holds 4.5:1", () => {
   const canvas = css("components/flights/FlywayCanvas.css");
   it("--fl-ink-accent: lighter on dark, the deep twin on light", () => {
-    expect(cssRule(canvas, ":root")).toMatch(/--fl-ink-accent: color-mix\(in srgb, var\(--accent\) 62%, #fff\)/);
+    expect(cssRule(canvas, ":root")).toMatch(/--fl-ink-accent: color-mix\(in srgb, var\(--accent\) 55%, #fff\)/);
     expect(cssRule(canvas, ".light")).toContain("--fl-ink-accent: var(--accent-deep)");
   });
 

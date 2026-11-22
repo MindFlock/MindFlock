@@ -801,6 +801,14 @@ class RepositorySettings:
     #: named ``live`` (``test_plans.environments``), and a listed ``live``
     #: overrides it. Normalized by :func:`_verify_environments`.
     verify_repo_settings: Dict[str, dict] = field(default_factory=dict)
+    #: Per-repo "prepare a new worktree" recipe, the user's half of the one a
+    #: repo commits in ``.mindflock.toml`` (``web.core.worktree_setup``):
+    #: ``{"<owner/name or /abs/repo/path>": {"setup_commands": [str],
+    #: "copy_untracked": [str], "dependencies": "auto"|"install"|"off"}}``.
+    #: Keyed by slug like the blocks above, or by the source checkout's
+    #: absolute path for a repo with no forge remote. Commands here run after
+    #: the repo's own; ``dependencies`` here wins over the repo's.
+    worktree_setup: Dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -862,6 +870,14 @@ class RepositorySettings:
                 }
                 for k, v in self.verify_repo_settings.items()
             }
+        if self.worktree_setup:
+            d["worktree_setup"] = {
+                k: {
+                    kk: (list(vv) if isinstance(vv, list) else vv)
+                    for kk, vv in v.items()
+                }
+                for k, v in self.worktree_setup.items()
+            }
         return d
 
     @classmethod
@@ -884,6 +900,7 @@ class RepositorySettings:
             verify_enabled=d.get("verify_enabled", True) is not False,
             verify_use_conversation=d.get("verify_use_conversation", True) is not False,
             deploy_delay_minutes=_non_negative_int(d.get("deploy_delay_minutes"), 5),
+            worktree_setup=_worktree_setup(d.get("worktree_setup")),
         )
 
 
@@ -1225,6 +1242,13 @@ class GeneralSettings:
     route) and only forwards. Empty
     until something is done; stored per device.
 
+    ``devices_anywhere``: "Reach my devices from anywhere (no Tailscale
+    needed)" — Settings → Your devices. On: this device runs a private
+    Cloudflare quick tunnel and leaves its address, encrypted with the group's
+    key, in the user's own private GitHub repo, and finds the other devices
+    the same way (:mod:`backend.web.core.devices_anywhere`,
+    ``docs/devices-anywhere.md``). Off by default; per device, never synced.
+
     ``onboarded``: DERIVED — ``True`` exactly when ``setup.repo.done``. Kept as
     a field so settings sync and every existing reader keep working; a store
     that still carries the old standalone ``onboarded: true`` is migrated on
@@ -1414,6 +1438,7 @@ class GeneralSettings:
     remote_control: str = ""  # "" / "off" | "on"
     serve_mode: str = ""  # "" / "local" | "tailscale"
     shared_link: str = ""  # "" = off | a Tailscale Service name, e.g. "mindflock"
+    devices_anywhere: bool = False  # Reach my devices from anywhere (see docstring)
     ingestion_autostart: Optional[bool] = None
     intake_paused: Optional[List[str]] = None  # LEGACY, unread (see docstring)
     setup_devices: str = ""  # "" (not asked) | "first" | "join"
@@ -1467,6 +1492,8 @@ class GeneralSettings:
             d["serve_mode"] = self.serve_mode
         if self.shared_link:
             d["shared_link"] = self.shared_link
+        if self.devices_anywhere:
+            d["devices_anywhere"] = True
         if self.ingestion_autostart is not None:
             d["ingestion_autostart"] = self.ingestion_autostart
         if self.intake_paused is not None:
@@ -1536,6 +1563,7 @@ class GeneralSettings:
             remote_control=str(d.get("remote_control", "") or "").strip().lower(),
             serve_mode=str(d.get("serve_mode", "") or "").strip().lower(),
             shared_link=str(d.get("shared_link", "") or "").strip().lower(),
+            devices_anywhere=d.get("devices_anywhere") is True,
             ingestion_autostart=_opt_bool(d.get("ingestion_autostart")),
             intake_paused=_intake_kinds(d.get("intake_paused")),
             setup_devices=_setup_devices(d.get("setup_devices")),
@@ -2260,6 +2288,61 @@ class CleanupSettings:
         return cls(mode=mode if mode in CLEANUP_MODES else "", after_days=days)
 
 
+#: Defaults of :class:`TransfersSettings` (docs/configuration.md "transfers").
+TRANSFER_MAX_MB = 512
+TRANSFER_MAX_FILES = 5000
+TRANSFER_INBOX_MB = 4096
+TRANSFER_KEEP_DAYS = 14
+
+
+@dataclass
+class TransfersSettings:
+    """Files and session work sent between your own devices (``send_files``,
+    ``send_session``'s git bundle; :mod:`backend.web.core.send_files`,
+    :mod:`backend.web.core.inbox`, docs/devices.md "Send files").
+
+    ``max_mb`` / ``max_files``: the most one transfer may carry — checked by
+    the sender before anything leaves, and by the receiver against its own
+    values (None = 512 MB / 5000 files). ``inbox_mb``: the quota of this
+    device's inbox (``<mindflock home>/inbox``; None = 4096 MB).
+    ``keep_days``: a received transfer no live session works in is removed
+    after this many days (None = 14). ``allow_secrets``: whether a sender
+    here may pass ``include_secrets`` at all (off by default: ``.env`` files,
+    keys and credentials are left out of every send). Machine-local: never
+    synced.
+    """
+
+    max_mb: Optional[int] = None
+    max_files: Optional[int] = None
+    inbox_mb: Optional[int] = None
+    keep_days: Optional[int] = None
+    allow_secrets: bool = False
+
+    def to_dict(self) -> dict:
+        out: dict = {}
+        for key in ("max_mb", "max_files", "inbox_mb", "keep_days"):
+            val = getattr(self, key)
+            if val is not None:
+                out[key] = val
+        if self.allow_secrets:
+            out["allow_secrets"] = True
+        return out
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TransfersSettings":
+        def cap(key: str, hi: int) -> Optional[int]:
+            n = _opt_pos_int(d.get(key))
+            return min(n, hi) if n is not None else None
+
+        return cls(
+            max_mb=cap("max_mb", 65536),
+            max_files=cap("max_files", 1000000),
+            inbox_mb=cap("inbox_mb", 1048576),
+            keep_days=cap("keep_days", 3650),
+            allow_secrets=d.get("allow_secrets") is True,
+        )
+
+
 @dataclass
 class Settings:
     """The whole user settings document. All groups default to empty.
@@ -2291,6 +2374,7 @@ class Settings:
     flights: FlightsSettings = field(default_factory=FlightsSettings)
     updates: UpdatesSettings = field(default_factory=UpdatesSettings)
     cleanup: CleanupSettings = field(default_factory=CleanupSettings)
+    transfers: TransfersSettings = field(default_factory=TransfersSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -2326,6 +2410,7 @@ class Settings:
             "flights": self.flights,
             "updates": self.updates,
             "cleanup": self.cleanup,
+            "transfers": self.transfers,
         }
 
     @classmethod
@@ -2373,6 +2458,7 @@ class Settings:
             flights=FlightsSettings.from_dict(_group(d, "flights")),
             updates=UpdatesSettings.from_dict(_group(d, "updates")),
             cleanup=CleanupSettings.from_dict(_group(d, "cleanup")),
+            transfers=TransfersSettings.from_dict(_group(d, "transfers")),
             schema_version=version,
         )
         _derive_setup_from_store(obj)
@@ -2879,6 +2965,39 @@ def _verify_environments(v: Any) -> List[dict]:
         )
         if len(out) >= VERIFY_ENVIRONMENTS_MAX:
             break
+    return out
+
+
+#: ``repository.worktree_setup`` ``dependencies`` values (mirrors
+#: ``backend.worktree_prepare.DEPENDENCY_MODES``).
+WORKTREE_DEPENDENCY_MODES = ("auto", "install", "off")
+
+
+def _worktree_setup(v: Any) -> Dict[str, dict]:
+    """Normalize ``repository.worktree_setup`` (see the field). Tolerant: a
+    blank key, a non-map block, an unknown key or a bad value is dropped, and a
+    block left empty is dropped whole."""
+    if not isinstance(v, dict):
+        return {}
+    out: Dict[str, dict] = {}
+    for repo, block in v.items():
+        key = str(repo or "").strip()
+        if not key or not isinstance(block, dict):
+            continue
+        clean: dict = {}
+        for k in ("setup_commands", "copy_untracked"):
+            items = block.get(k)
+            if isinstance(items, list):
+                vals = [
+                    str(x).strip() for x in items if isinstance(x, str) and x.strip()
+                ]
+                if vals:
+                    clean[k] = vals
+        dep = str(block.get("dependencies") or "").strip().lower()
+        if dep in WORKTREE_DEPENDENCY_MODES:
+            clean["dependencies"] = dep
+        if clean:
+            out[key] = clean
     return out
 
 

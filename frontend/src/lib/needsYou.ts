@@ -12,8 +12,9 @@
  *                escalation (a group's plan, its one PR, a budget, a conflict…)
  *  - wait_for_me a route waiting on you at a Wait for me stop (or a Verify
  *                stop whose verify waits on you), or one paused at a halt
- *                point ("Paused at <stop> — Carry on"; a pause a person
- *                made stays out: whoever paused it carries it on)
+ *                point ("Paused before <stop> — Carry on", its session's
+ *                chip amber; a pause a person made stays out: whoever
+ *                paused it carries it on)
  *  - halted      a route halted at a stop until you Retry or Skip it
  *  - plan        a plan waiting for Go (the Map's Plan section)
  *  - broken      pre-commit / setup failed, offline
@@ -237,6 +238,8 @@ function kindOf(r: NeedsRow, byTitle: Map<string, Instance>): NeedsYouKind {
   // A route of another device's session has no route row here: its own row
   // still says halted (red), not just "broken".
   if (fl && fl.state === "halted") return "halted";
+  // …and one at a halt point still waits on you (its chip is amber).
+  if (fl && fl.state === "paused" && (fl as { reason?: string }).reason === HALT_POINT_REASON) return "wait_for_me";
   return rowWaitsOnYou(fl) ? "wait_for_me" : "broken";
 }
 

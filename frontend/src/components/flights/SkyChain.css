@@ -354,6 +354,22 @@
   border-color: var(--muted);
 }
 
+/* Round 5: HELD by its session — the current stop of a running route whose
+   agent is offline or at its usage limit. Never the green working glow: a
+   still, dashed tile in the waiting tone (the rail's "Waiting on limit"
+   colour), its icon dimmed, its line ("Held · agent offline") in that tone
+   and its remedy (Restart / Start) on its face. */
+.sky-node.st-current.is-held .sky-tile {
+  border: 1.5px dashed var(--tone-waiting);
+  box-shadow: none;
+}
+.sky-node.is-held .sky-tile-icon {
+  opacity: 0.6;
+}
+.sky-node.is-held .sky-node-sub {
+  color: var(--tone-waiting);
+}
+
 .sky-node.st-done .sky-tile {
   background: color-mix(in srgb, var(--sky-tile-bg) 70%, transparent);
 }
@@ -1031,8 +1047,9 @@
 
 /* --- A chain with no session: its run button (n8n's trigger ▶) --------------
    On the left of the first stop, where a run starts — never a label floating
-   over the chain. At rest it shows on hover; while the chain runs it stays,
-   as ■ (stop the run). */
+   over the chain. Round 5: at rest it shows quietly (the only way to run the
+   stops — it must be findable without a hover), full on hover; while the
+   chain runs it stays, as ■ (stop the run). */
 .sky-chain .sky-run {
   position: absolute;
   z-index: 3;
@@ -1048,7 +1065,7 @@
   line-height: 1;
   padding: 0 0 0 2px;
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.55;
   transition: opacity 0.12s, background 0.12s, color 0.12s;
 }
 .sky-chain .sky-run.is-running {
@@ -1062,7 +1079,7 @@
 .sky-chain .sky-run:hover,
 .sky-chain .sky-run:focus-visible {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--accent-ink);
   outline: none;
 }
 
@@ -1120,7 +1137,7 @@
   height: 20px;
   border-radius: 50%;
   background: var(--accent);
-  color: var(--bg);
+  color: var(--accent-ink);
   font-size: 13px;
   line-height: 20px;
   text-align: center;

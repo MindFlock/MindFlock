@@ -23,6 +23,12 @@ interface BranchInfo {
   branches: string[];
   current: string;
   default: string;
+  /** "main · the repository's default" (an older server sends none). */
+  why?: string;
+  /** "Using main: this repository has no staging branch". */
+  note?: string;
+  /** Nothing resolved: the plain sentence with the remedy. */
+  error?: string;
 }
 
 export function MakePrDialog() {
@@ -229,6 +235,16 @@ export function MakePrDialog() {
             >
               See on map
             </button>
+          </p>
+        )}
+        {info?.note && base === info.default && (
+          <p className="set-hint" id="make-pr-base-note">
+            {info.note}.
+          </p>
+        )}
+        {info?.error && !base && (
+          <p className="set-hint" id="make-pr-base-error" role="alert">
+            {info.error}
           </p>
         )}
         {onBase ? (

@@ -141,6 +141,7 @@ def test_event_names_vocabulary_is_complete():
         "device.join_requested",
         "device.joined",
         "device.removed",
+        "device.pair_unfinished",
         "settings.synced",
         "settings.sync_paused",
         "peer.link_added",

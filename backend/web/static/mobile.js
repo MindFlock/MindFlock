@@ -31,6 +31,14 @@
       foreground: cssVar("--term-fg", "#d7dae3"),
       cursor: cssVar("--accent", "#7d56f4"),
       selectionBackground: "#33384a",
+      // The desktop's dark ANSI palette (frontend/src/lib/termPalette.ts
+      // ANSI_DARK — a vitest pins the copy): every colour ≥ 4.5:1 on each
+      // surface set's terminal background. xterm's own blue was 3.9:1.
+      black: "#484f58", red: "#ff7b72", green: "#56d364", yellow: "#e3b341",
+      blue: "#58a6ff", magenta: "#d2a8ff", cyan: "#39c5cf", white: "#c9d1d9",
+      brightBlack: "#8b949e", brightRed: "#ffa198", brightGreen: "#7ee787",
+      brightYellow: "#f2cc60", brightBlue: "#a5d6ff", brightMagenta: "#e2c5ff",
+      brightCyan: "#7fe3eb", brightWhite: "#f0f6fc",
     };
   }
 
@@ -502,7 +510,7 @@
     // A halted route's word names its stop here ("Halted at CI checks"); the
     // full reason is its tooltip.
     // A route paused at its halt point says so, and what moves it on.
-    var haltPoint = atHaltPoint(inst) && ss.label === "Paused route";
+    var haltPoint = ss.reason === "flight_paused";
     word.textContent = ss.reason === "flight_halted" ? haltedWords(inst) : haltPoint ? pausedAtWords(inst) : ss.label;
     if (ss.reason === "flight_halted" || haltPoint) word.title = ss.hint;
     sub.appendChild(word);
@@ -514,6 +522,17 @@
       halt.textContent = haltedWords(inst);
       sub.appendChild(document.createTextNode(" "));
       sub.appendChild(halt);
+    }
+    var heldW = heldWords(inst, ss);
+    if (heldW) {
+      // The route runs but its stop waits on this agent (offline / at its
+      // limit): said beside the state, never as work going on (round 5,
+      // lib/flightDiagram.ts heldMark).
+      var held = document.createElement("span");
+      held.className = "sess-state sess-held tone-waiting";
+      held.textContent = heldW;
+      sub.appendChild(document.createTextNode(" "));
+      sub.appendChild(held);
     }
     var rz = rzChip(inst);
     if (rz) {
@@ -1023,10 +1042,12 @@
   //   state      tone       label
   //   starting   muted      Starting
   //   working    working    Working
-  //   needs_you  attention  Question · Wait for me: <stop> (a flight perched on
-  //                         you, docs/flights.md) · Halted (a route halted until
-  //                         you Retry or Skip — in the broken tone, red) ·
-  //                         Pre-commit failed · Checks failing · Setup failed
+  //   needs_you  attention  Question · Needs you: <stop> (a flight perched on
+  //                         you at a Wait for me stop, docs/flights.md) ·
+  //                         Paused before <stop> (a route at its halt point) ·
+  //                         Halted (a route halted until you Retry or Skip —
+  //                         in the broken tone, red) · Pre-commit failed ·
+  //                         Checks failing · Setup failed
   //   idle       neutral    Idle
   //   limit      waiting    Waiting on limit[, resumes HH:MM]
   //   offline    broken     Offline (actions: Restart)
@@ -1045,7 +1066,9 @@
   };
   var REASON_LABEL = {
     question: "Question",
-    flight_you: "Wait for me",
+    // A session's words, never the stop kind's ("Wait for me"): lib/sessionState.ts.
+    flight_you: "Needs you",
+    flight_paused: "Paused before its halt point",
     flight_halted: "Halted",
     precommit_failed: "Pre-commit failed",
     checks_failing: "Checks failing",
@@ -1159,8 +1182,9 @@
     return head + ": " + (err.message || "couldn't reach MindFlock");
   }
 
-  // "Perch: Approve the merge" — once: a stop already titled "Perch: …" (or
-  // the old "You: …") is read without it (lib/flights.ts perchLabel).
+  // "Needs you: Approve the merge" — once: a stop already titled "Wait for
+  // me: …" (or the old "Perch: …" / "You: …") is read without it
+  // (lib/sessionState.ts flightYouLabel).
   function youStepLabel(title) {
     var t = String(title || "").trim().replace(/^(you|perch|wait for me):\s*/i, "");
     return t ? REASON_LABEL.flight_you + ": " + t : REASON_LABEL.flight_you;
@@ -1228,7 +1252,15 @@
       var flHint = you + " — route “" + (inst.flight.plan_name || "") + "” needs you; press Done";
       return st("needs_you", { reason: "flight_you", label: you, inBell: true, hint: flHint });
     }
-    // A halted route: the same rank as Wait for me, in red (sessionState.ts).
+    // A route at a halt point a person set: it waits on their Carry on, so it
+    // needs you — amber, in the bell (sessionState.ts flight_paused).
+    if (atHaltPoint(inst)) {
+      var pat = inst.flight.step ? String(inst.flight.step.title || "").trim() : "";
+      return st("needs_you", { reason: "flight_paused", label: pat ? "Paused before " + pat : REASON_LABEL.flight_paused, inBell: true,
+                               hint: "Route “" + (inst.flight.plan_name || "") + "” reached its halt point before " +
+                                     (pat || "its next stop") + " — Carry on is under ⋯" });
+    }
+    // A halted route: the same rank as a Wait for me stop, in red (sessionState.ts).
     if (flightHalted(inst)) {
       var hfl = inst.flight, at = hfl.step ? String(hfl.step.title || "").trim() : "";
       var why = haltedWhy(at, hfl.reason);
@@ -1268,12 +1300,16 @@
     // a background job that will wake the agent, a route in flight.
     var jobWakes = (inst.background || []).some(function (j) { return j && j.state !== "stuck"; });
     var ownWork = !inst.in_place && !jobWakes && !(inst.flight && inst.flight.state === "running");
-    // A paused flight: calm and out of the bell (sessionState.ts).
-    if (inst.flight && inst.flight.id && inst.flight.state === "paused")
-      return st("idle", { label: "Paused route",
-                          hint: "Route “" + (inst.flight.plan_name || "") + "” " +
-                                (inst.flight.reason === "halt point" ? "reached its halt point before " : "is paused at ") +
-                                (inst.flight.step && inst.flight.step.title || "its current stop") + " — Carry on is under ⋯" });
+    // A paused flight: calm and out of the bell (sessionState.ts) — "Paused
+    // by you" when a person paused it, "Paused route" when the server did. A
+    // halt point is above (amber).
+    if (inst.flight && inst.flight.id && inst.flight.state === "paused") {
+      var pwhy = String(inst.flight.reason || "").trim();
+      return st("idle", { label: pwhy ? "Paused route" : "Paused by you",
+                          hint: "Route “" + (inst.flight.plan_name || "") + "” " + (pwhy ? "is paused at " : "was paused by you at ") +
+                                (inst.flight.step && inst.flight.step.title || "its current stop") +
+                                (pwhy ? " (" + pwhy + ")" : "") + " — Carry on is under ⋯" });
+    }
     if (verify && verify.state === "passed")
       return st("idle", { label: "Verified", tone: "verified", hint: "Verified" + (verify.detail ? " — " + verify.detail : "") });
     if (idleFor > UNCOMMITTED_IDLE_S && dirty && ownWork)
@@ -1365,6 +1401,18 @@
     var fl = rowFlight(inst);
     var at = fl && fl.step ? String(fl.step.title || "") : "";
     return "Halted" + (at ? " at " + at : "");
+  }
+  // Kinds that wait on the session's agent (lib/flightDiagram.ts AGENT_STOP_KINDS).
+  var AGENT_STOP_KINDS = { agent: true, reviews: true, verify: true };
+  // "Held at Agent works" — a running route whose current stop waits on an
+  // agent that is offline or at its usage limit (lib/flightDiagram.ts
+  // heldMark): "" otherwise.
+  function heldWords(inst, ss) {
+    var fl = rowFlight(inst);
+    if (!fl || fl.state !== "running" || !fl.step || !AGENT_STOP_KINDS[fl.step.kind]) return "";
+    if (!ss || (ss.state !== "offline" && ss.state !== "limit")) return "";
+    var at = String(fl.step.title || "").trim();
+    return "Held" + (at ? " at " + at : "") + (ss.state === "limit" ? " · usage limit" : " · agent offline");
   }
 
   // Copy `text` → a promise of whether it worked: the Clipboard API where the
@@ -1498,8 +1546,11 @@
     var s = fl.step || {};
     return String(s.note || s.failed_reason || fl.note || fl.reason || "").trim();
   }
-  // The route (lib/flightsApi.ts stepRetry / stepSkip / stepDone /
-  // controlFlight): Halted → Retry / Skip; Paused → Carry on; Wait for me →
+  // Kinds whose failure re-running alone rarely mends (lib/flights.ts FIX_LEADS).
+  var FIX_LEADS = { test: true, checks: true, verify: true };
+  // The route (lib/flightsApi.ts stepRetry / stepFix / stepSkip / stepDone /
+  // controlFlight): Halted → Retry · Let the agent fix it · Skip (the fix
+  // first on a test / CI / Verify failure); Paused → Carry on; Wait for me →
   // Done (Skip). A Verify stop waiting on you is answered by its Verify (Done
   // there is refused until it is), so it offers Skip only.
   function routeModel(inst) {
@@ -1509,12 +1560,18 @@
     var route = "Route “" + (fl.plan_name || "") + "”";
     var why = routeWhy(fl);
     var SKIP = { key: "route_skip", label: "Skip", hint: "leaves this stop and the route goes on" };
-    if (fl.state === "halted")
+    if (fl.state === "halted") {
+      // The remedy that usually works leads (lib/flights.ts haltedRemedies):
+      // Let the agent fix it on a test, CI or Verify failure, else Retry.
+      var RETRY = { key: "route_retry", label: "Retry", hint: "runs " + (at || "this stop") + " again" };
+      var FIX = { key: "route_fix", label: "Let the agent fix it", hint: "the agent gets the failure, then " + (at || "the stop") + " runs again" };
+      var fixLeads = !!fl.step && FIX_LEADS[fl.step.kind] === true;
       return {
         head: route + " · " + haltedWords(inst), detail: haltedWhy(at, why) || "The stop failed.",
         steps: [], stepsLabel: "",
-        acts: fl.step ? [{ key: "route_retry", label: "Retry", hint: "runs " + (at || "this stop") + " again" }, SKIP] : [],
+        acts: fl.step ? (fixLeads ? [FIX, RETRY, SKIP] : [RETRY, FIX, SKIP]) : [],
       };
+    }
     if (fl.state === "paused") {
       var point = fl.reason === "halt point";
       return {
@@ -3174,7 +3231,8 @@
       // The Verify / route block below says the same thing, step by step.
       var told = (vm && vm.head && /^verify_/.test(ss.reason || "")) ||
                  (vm && vm.head && (ss.label === "Verifying" || ss.label === "Verified")) ||
-                 (rm && (ss.reason === "flight_you" || ss.reason === "flight_halted" || ss.label === "Paused route"));
+                 (rm && (ss.reason === "flight_you" || ss.reason === "flight_halted" || ss.reason === "flight_paused" ||
+                         ss.label === "Paused route" || ss.label === "Paused by you"));
       if (ss.hint && !told) {
         var h = document.createElement("span");
         h.className = "act-hint";
@@ -3314,6 +3372,11 @@
       actPost(planApi(plan, "cancel"), {}, "Couldn't stop verifying", function () {
         return "Stopped verifying " + name + " — what it found so far is kept";
       });
+    } else if (fl && fl.step && key === "route_fix") {
+      actPost("/api/flights/" + encodeURIComponent(fl.id) + "/steps/" + encodeURIComponent(fl.step.id) + "/op/fix", {},
+        "Let the agent fix it failed", function () {
+          return "Handed to the agent — " + (fl.step.title || "the stop") + " runs again after its fix";
+        });
     } else if (fl && fl.step && (key === "route_retry" || key === "route_skip" || key === "route_done")) {
       var verb = key.slice(6);
       actPost("/api/flights/" + encodeURIComponent(fl.id) + "/steps/" + encodeURIComponent(fl.step.id) + "/" + verb, {},
@@ -6474,7 +6537,11 @@
   // sessionState's label as a voice says it ("Question" is a chip, not a sentence).
   function voiceStateWord(ss) {
     if (ss.reason === "question") return "waiting on a question";
-    if (ss.reason === "flight_you") return "needs you: " + String(ss.label || "").replace(/^you:\s*/i, "");
+    if (ss.reason === "flight_you") {
+      var yt = String(ss.label || "").replace(/^(needs you|wait for me|you)(:\s*|$)/i, "");
+      return "needs you" + (yt ? ": " + yt : "");
+    }
+    if (ss.reason === "flight_paused") return "p" + String(ss.label || "").slice(1) + ", at your halt point";
     if (ss.reason === "precommit_failed") return "stuck on a failed pre-commit";
     if (ss.reason === "checks_failing") return "waiting on failing checks";
     if (ss.reason === "setup_failed") return "stuck on a failed setup";
@@ -6483,7 +6550,11 @@
   // "<name> is <state word>", or a Verify state's own sentence: its pills
   // ("Confirm verified", "Verify failed") are chips, not words after "is".
   // The router's _state_clause says the same.
-  function voiceStateLine(name, ss) {
+  function voiceStateLine(name, ss, inst) {
+    var hw = inst ? heldWords(inst, ss) : "";
+    if (hw) return name + " is " + voiceStateWord(ss) + ", so its route is h" + hw.replace(/ · .*$/, "").slice(1);
+    // "Login fix needs you: Approve the merge" — not "is needs you".
+    if (ss.reason === "flight_you") return name + " " + voiceStateWord(ss);
     if (ss.reason === "verify_confirm") return name + " needs you to confirm it's verified";
     if (ss.reason === "verify_failed") return name + " failed its verify";
     if (ss.reason === "verify_blocked") return name + "'s verify is blocked";
@@ -10480,7 +10551,7 @@
       }
       if (kind === "plan") return endSentence(name + " has a plan waiting for Go");
       if (kind === "ready") return endSentence(name + " is pushed and ready for its PR");
-      return endSentence(voiceStateLine(name, ss));
+      return endSentence(voiceStateLine(name, ss, i));
     }).join(" ") : "Nothing needs you.";
     speakLine(line).then(function (ok) { if (ok) voiceIdle(); });
   }
@@ -10560,7 +10631,7 @@
       var since = Number(inst.activity_since) || 0;
       var mins = since ? Math.round((Date.now() / 1000 - since) / 60) : 0;
       var dur = inst.activity === "working" && mins >= 1 ? " for " + mins + " minute" + (mins === 1 ? "" : "s") : "";
-      line = voiceStateLine(name, ss) + dur + "." +
+      line = voiceStateLine(name, ss, inst) + dur + "." +
              (inst.last_turn ? " " + endSentence(stripMarkdown(inst.last_turn)) : "");
     }
     speakLine(line).then(function (ok) { if (ok) voiceIdle(); });

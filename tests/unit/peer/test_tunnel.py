@@ -304,3 +304,119 @@ def test_doctor_reports_cloudflared(tmp_path, monkeypatch):
     # Missing with no relay wanting it: reported, installable on request, but
     # never part of the one-shot install plan.
     assert c.status == "info" and c.install is False
+
+
+# -- never outliving the server (docs/devices-anywhere.md §4) -------------------
+
+
+def _records():
+    d = tunnel.pids_dir()
+    return sorted(os.listdir(d)) if os.path.isdir(d) else []
+
+
+async def test_a_running_tunnel_is_registered_and_unregistered(fake_cf, tmp_path):
+    exe, _ = fake_cf(BANNER)
+    t = make_tunnel(exe, tmp_path)
+    await t.start()
+    try:
+        [name] = _records()
+        with open(os.path.join(tunnel.pids_dir(), name)) as f:
+            doc = json.load(f)
+        assert doc["pid"] == t.proc.pid and doc["owner"] == os.getpid()
+        assert doc["argv"][-2:] == ["--url", "http://127.0.0.1:40001"]
+        # This server's own, live tunnel is never reaped.
+        assert tunnel.reap_stale() == 0 and t.alive
+    finally:
+        await t.stop()
+    assert _records() == []
+
+
+async def _orphan(fake_cf, tmp_path, edit=None):
+    """A tunnel registered as the real flow does it, whose server then
+    'dies' (the record's owner is a pid that is gone) → ``(proc, record
+    path)``. ``edit(doc)`` changes the record further."""
+    import subprocess
+
+    exe, _ = fake_cf(BANNER)
+    t = make_tunnel(exe, tmp_path)
+    await t.start()
+    proc = t.proc
+    [name] = _records()
+    path = os.path.join(tunnel.pids_dir(), name)
+    with open(path) as f:
+        doc = json.load(f)
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    doc.update(owner=gone.pid, owner_started=1.0)
+    if edit is not None:
+        edit(doc)
+    with open(path, "w") as f:
+        json.dump(doc, f)
+    tunnel._MINE.discard(path)
+    t.proc = None  # this object no longer knows it (the server crashed)
+    return proc, path
+
+
+@pytest.mark.parametrize(
+    "rename",
+    [
+        False,
+        # The program's name the OS reports changed since the record was
+        # written — what macOS's framework-Python stub does (it re-execs
+        # Python.app in place) and what a wrapper that execs the real binary
+        # does. Same pid, start time and arguments: still that process.
+        True,
+    ],
+)
+async def test_a_tunnel_left_by_a_dead_server_is_reaped(fake_cf, tmp_path, rename):
+    def edit(doc):
+        if rename:
+            doc["argv"][
+                0
+            ] = "/Library/Frameworks/Python.framework/Python.app/Contents/MacOS/Python"
+
+    proc, _path = await _orphan(fake_cf, tmp_path, edit)
+    try:
+        assert await asyncio.to_thread(tunnel.reap_stale) == 1
+        await asyncio.wait_for(proc.wait(), 10)
+        assert _records() == []
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+
+
+@pytest.mark.parametrize("what", ["args", "started", "short"])
+async def test_a_record_that_does_not_match_exactly_never_kills(
+    fake_cf, tmp_path, what
+):
+    """Other arguments, another start time, or a record too short to name
+    our own arguments: the process is left alone; the record is dropped."""
+
+    def edit(doc):
+        if what == "args":
+            doc["argv"][-1] = "http://127.0.0.1:40002"
+        elif what == "started":
+            doc["started"] = float(doc["started"]) - 5.0
+        else:
+            doc["argv"] = doc["argv"][:1]
+
+    proc, _path = await _orphan(fake_cf, tmp_path, edit)
+    try:
+        assert await asyncio.to_thread(tunnel.reap_stale) == 0
+        assert proc.returncode is None
+        assert _records() == []
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+
+
+def test_same_cmd_compares_the_arguments_only():
+    rec = ["/usr/bin/cloudflared", "tunnel", "--config", "/x/c.yml", "--url", "u"]
+    assert tunnel._same_cmd(list(rec), rec)
+    assert tunnel._same_cmd(["/other/name"] + rec[1:], rec)
+    assert not tunnel._same_cmd(rec[:-1], rec)
+    assert not tunnel._same_cmd(rec + ["--extra"], rec)
+    assert not tunnel._same_cmd(rec[:1], rec[:1])
+    assert not tunnel._same_cmd(None, rec)

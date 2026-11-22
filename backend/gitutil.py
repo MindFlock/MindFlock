@@ -12,6 +12,11 @@ mirrors: a hung or missing git is a *failed* result, never an exception).
 * :func:`parse_worktree_list` / :func:`worktree_list` /
   :func:`worktree_for_branch` — ``git worktree list --porcelain``.
 * :func:`ref_exists` — does ``ref`` name a commit in ``repo``.
+* :func:`untrusted_guard` — the ``-c`` options and env every git MindFlock
+  runs in a folder that ARRIVED from elsewhere (the transfer inbox) takes:
+  no implicit bare repository (a planted ``HEAD``/``objects``/``refs``/
+  ``config`` is not a repository), no fsmonitor, no hooks, and discovery
+  never climbs above the inbox. :func:`git` applies it by itself.
 
 Output is read as bytes and decoded UTF-8 with ``replace`` (no newline
 translation), so a stray non-UTF-8 byte in a path or commit message never
@@ -39,7 +44,77 @@ __all__ = [
     "worktree_list",
     "worktree_for_branch",
     "ref_exists",
+    "UNTRUSTED_CONFIG",
+    "untrusted_root",
+    "untrusted_guard",
+    "guarded",
 ]
+
+#: ``-c`` pairs for git in a received folder (see :func:`untrusted_guard`).
+#: Command-line config outranks the repository's own ``config``, and
+#: ``safe.bareRepository`` is honoured only from protected (command-line,
+#: global, system) config — exactly where this puts it.
+UNTRUSTED_CONFIG = (
+    ("safe.bareRepository", "explicit"),
+    ("core.fsmonitor", "false"),
+    ("core.hooksPath", os.devnull),
+)
+
+
+def untrusted_root() -> str:
+    """``<mindflock home>/inbox`` (real path), or ``""`` when the home can't
+    be resolved. Lazy: this module imports nothing from ``backend`` at load."""
+    try:
+        from backend.config import config as _config
+
+        return os.path.realpath(os.path.join(_config.GetConfigDir(), "inbox"))
+    except Exception:  # noqa: BLE001 — no home, no inbox to guard
+        return ""
+
+
+def untrusted_guard(cwd: Optional[str]):
+    """``(pre_args, env)`` for a git run in ``cwd``: when ``cwd`` is inside
+    the transfer inbox, ``-c`` options (:data:`UNTRUSTED_CONFIG`) to put
+    BEFORE the subcommand and ``GIT_CEILING_DIRECTORIES`` = the inbox, so
+    a plain-files folder there never discovers a repository above it;
+    else ``([], {})``. Never raises."""
+    if not cwd:
+        return [], {}
+    base = untrusted_root()
+    if not base:
+        return [], {}
+    try:
+        real = os.path.realpath(cwd)
+    except (OSError, ValueError):
+        return [], {}
+    if real != base and not real.startswith(base + os.sep):
+        return [], {}
+    pre: List[str] = []
+    for key, val in UNTRUSTED_CONFIG:
+        pre += ["-c", "%s=%s" % (key, val)]
+    return pre, {"GIT_CEILING_DIRECTORIES": base}
+
+
+def guarded(argv: Sequence[str], env: Optional[Mapping[str, str]] = None):
+    """``(argv, env)`` for a ready-made ``["git", …, "-C", cwd, …]`` command:
+    unchanged outside the inbox; inside it :func:`untrusted_guard`'s
+    options go in front of ``-C`` and its env over ``env`` (``None`` =
+    ``os.environ``). For call sites that run ``subprocess`` themselves."""
+    argv = list(argv)
+    try:
+        i = argv.index("-C")
+        cwd = argv[i + 1]
+    except (ValueError, IndexError):
+        return argv, env
+    if not argv or argv[0] != "git":
+        return argv, env
+    pre, extra = untrusted_guard(cwd)
+    if not pre:
+        return argv, env
+    full = dict(os.environ if env is None else env)
+    full.update(extra)
+    return argv[:i] + pre + argv[i:], full
+
 
 #: Returncode of a git killed at its timeout (coreutils ``timeout``'s code).
 TIMEOUT_RC = 124
@@ -94,11 +169,13 @@ def git(
     ``not_run`` set on the :class:`GitResult`). With ``check`` any non-zero
     returncode raises ``subprocess.CalledProcessError``.
     """
-    argv = ["git", "-C", cwd, *args] if cwd is not None else ["git", *args]
+    pre, guard_env = untrusted_guard(cwd)
+    argv = ["git", *pre, "-C", cwd, *args] if cwd is not None else ["git", *args]
     full_env = None
-    if env is not None:
+    if env is not None or guard_env:
         full_env = dict(os.environ)
-        full_env.update(env)
+        full_env.update(env or {})
+        full_env.update(guard_env)
     kw: Dict[str, object] = {"stdout": subprocess.PIPE, "stderr": stderr}
     if input is not None:
         kw["input"] = input

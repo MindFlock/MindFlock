@@ -572,3 +572,96 @@ def _branch_prefix() -> str:
         return str((data or {}).get("branch_prefix", "") or "")
     except Exception:  # noqa: BLE001 — a preview, never a reason to fail
         return ""
+
+
+def _same_remote(a: str, b: str) -> bool:
+    """Whether two remote URLs name one repository: transport-independent
+    for forge URLs (``git@host:o/r.git`` = ``https://host/o/r``), else the
+    trimmed spellings compared (a local-path or self-hosted remote)."""
+    from backend.session.git import remote_url
+
+    if remote_url.same_repo(a, b):
+        return True
+
+    def norm(u: str) -> str:
+        u = (u or "").strip().rstrip("/")
+        return u[: -len(".git")] if u.endswith(".git") else u
+
+    return bool(norm(a)) and norm(a) == norm(b)
+
+
+def _remote_urls(path: str) -> list:
+    """``[(remote name, url)]`` of the repo at ``path`` — one ``git config``
+    read, no network. ``[]`` for anything unreadable."""
+    import subprocess
+
+    try:
+        cp = subprocess.run(
+            ["git", "-C", path, "config", "--get-regexp", r"^remote\..*\.url$"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    out = []
+    for line in (cp.stdout or "").splitlines():
+        key, _, url = line.partition(" ")
+        if key.startswith("remote.") and key.endswith(".url") and url.strip():
+            out.append((key[len("remote.") : -len(".url")], url.strip()))
+    return out
+
+
+def find_repos_by_url(
+    url: str,
+    recent_paths: Iterable[str] = (),
+    cwd: Optional[str] = None,
+    extra_paths: Iterable[str] = (),
+    limit: int = 5,
+) -> dict:
+    """The local checkouts of the repository ``url`` names — "which folder
+    here IS that repo?", for a session sent from another device
+    (:mod:`backend.web.core.send_session` asks it over ``GET
+    /api/repos/find``).
+
+    Looks where :func:`suggest_repos` looks (``recent_paths`` in the caller's
+    order, ``cwd``, the depth-1 sweep) plus ``extra_paths`` (the provisioning
+    base clone for the URL), and keeps the folders with a remote whose URL is
+    the same repository, whatever the transport. → ``{"url", "matches":
+    [{"path", "name", "remote"}]}``, best first; ``remote`` is the matching
+    remote's name (``origin`` preferred when several match). Reads local git
+    config only — no fetch, no network. Never raises."""
+    want = str(url or "").strip()
+    out: dict = {"url": want, "matches": []}
+    if not want:
+        return out
+    seen: set = set()
+    candidates = list(recent_paths or ())
+    if cwd:
+        candidates.append(cwd)
+    candidates.extend(extra_paths or ())
+    try:
+        candidates.extend(_nearby_candidates(os.path.expanduser("~")))
+    except Exception:  # noqa: BLE001 — a shorter list, never an error
+        pass
+    for raw in candidates:
+        if len(out["matches"]) >= limit:
+            break
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            full = os.path.realpath(os.path.expanduser(text))
+        except (OSError, ValueError):
+            continue
+        if full in seen or not os.path.isdir(full):
+            continue
+        seen.add(full)
+        hits = [name for name, u in _remote_urls(full) if _same_remote(u, want)]
+        if not hits:
+            continue
+        remote = "origin" if "origin" in hits else hits[0]
+        out["matches"].append(
+            {"path": full, "name": os.path.basename(full) or full, "remote": remote}
+        )
+    return out

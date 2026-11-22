@@ -553,6 +553,10 @@ def _candidate_bases(peer: dict) -> List[str]:
     """Base URLs worth probing for a peer's MindFlock server, best first:
     the port this server runs on (fleets usually share a config), the default
     web port, then HTTPS via MagicDNS (a peer fronted by ``tailscale serve``)."""
+    if peer.get("base_url"):
+        # A member found through "Reach my devices from anywhere": its local
+        # tunnel proxy is the one address (core.devices_anywhere).
+        return [str(peer["base_url"])]
     bases = []
     for port in dict.fromkeys((_SERVER_PORT, 8765)) if peer.get("ip") else ():
         bases.append("http://%s:%d" % (peer["ip"], port))
@@ -640,7 +644,9 @@ async def _probe_peer(peer: dict) -> Optional[Tuple[str, dict]]:
         try:
             async with session.get(
                 base + HELLO_PATH,
-                timeout=aiohttp.ClientTimeout(total=_PROBE_TIMEOUT),
+                timeout=aiohttp.ClientTimeout(
+                    total=float(peer.get("timeout") or _PROBE_TIMEOUT)
+                ),
             ) as resp:
                 if resp.status != 200:
                     outcome = _better(outcome, "http_%d" % resp.status)
@@ -687,6 +693,9 @@ def _device_state(key: str) -> dict:
             "fleet": "",
             "fleet_proto": 0,
             "ips": [],
+            # How it was reached: "tailnet", or "tunnel" (Reach my devices
+            # from anywhere, core.devices_anywhere); "" before any answer.
+            "via": "",
             # Its hello says it runs PR review + issue handling (None: its
             # MindFlock is too old to say).
             "automation": None,
@@ -753,12 +762,54 @@ def _apply_probe(
     )
 
 
+async def _probe_tunnel_peers(peers: List[dict], results: list) -> None:
+    """Members the tailnet paths didn't answer for, tried through "Reach my
+    devices from anywhere" (core.devices_anywhere) — Tailscale/direct first,
+    the tunnel last. A tunnel answer replaces the tailnet miss for the same
+    device; ``peers``/``results`` are updated in place. A no-op while the
+    switch is off; never raises."""
+    try:
+        from backend.web.core import devices_anywhere as _anywhere
+
+        if not _anywhere.enabled():
+            return
+        me = self_identity()["key"]
+        reached = {p["key"] for p, h in zip(peers, results) if h}
+        extra = await _anywhere.candidates(exclude=reached | {me})
+        hits = list(await asyncio.gather(*(_probe_peer(p) for p in extra)))
+        at = {p["key"]: i for i, p in enumerate(peers)}
+        via_tunnel = set()
+        for peer, hit in zip(extra, hits):
+            if hit:
+                via_tunnel.add(peer["key"])
+                reached.add(peer["key"])
+            i = at.get(peer["key"])
+            if i is None:
+                peers.append(peer)
+                results.append(hit)
+            elif hit:
+                peers[i], results[i] = peer, hit
+        _anywhere.note_sweep(reached, via_tunnel)
+    except Exception:  # noqa: BLE001 — discovery must never fail on it
+        pass
+
+
+def forget_via(via: str) -> None:
+    """Drop every device last reached ``via`` this path (``"tunnel"``: Reach
+    my devices from anywhere was turned off) — unreachable, no base_url, so
+    nothing is sent to a local port that is about to be freed."""
+    for dev in _DEVICES.values():
+        if dev.get("via") == via:
+            dev.update(reachable=False, base_url="", instances_ok=False, via="")
+
+
 async def _discover_once() -> None:
     global _SELF
     self_entry, peers = await asyncio.to_thread(tailscale_nodes)
     if self_entry:
         _SELF = self_entry
-    results = await asyncio.gather(*(_probe_peer(p) for p in peers))
+    results = list(await asyncio.gather(*(_probe_peer(p) for p in peers)))
+    await _probe_tunnel_peers(peers, results)
     now = time.time()
     seen = set()
     for peer, hit in zip(peers, results):
@@ -775,6 +826,8 @@ async def _discover_once() -> None:
             ips=list(peer.get("ips") or []),
             tags=list(peer.get("tags") or []),
         )
+        if hit:
+            dev["via"] = str(peer.get("via") or "tailnet")
         _apply_probe(dev, hit, now)
         if not hit:
             dev["probe"] = str(peer.get("probe") or "unreachable")
@@ -847,6 +900,63 @@ def _connected(dev: dict) -> bool:
 def connected_devices() -> List[dict]:
     """Snapshots of the devices this server can drive right now."""
     return [dict(d) for d in _DEVICES.values() if _connected(d)]
+
+
+def find_device(name: str) -> Optional[dict]:
+    """A snapshot of the discovered device called ``name`` — its key, else
+    its host name, case-insensitively — or None."""
+    want = str(name or "").strip().lower()
+    if not want:
+        return None
+    for dev in _DEVICES.values():
+        if str(dev.get("key") or "").lower() == want:
+            return dict(dev)
+    for dev in _DEVICES.values():
+        if str(dev.get("host") or "").lower() == want:
+            return dict(dev)
+    return None
+
+
+def device_for_ip(ip: str) -> str:
+    """The key of the discovered device whose tailnet address ``ip`` is, or
+    ``""``. A tailnet source address is bound to its node's WireGuard key,
+    so this names the sender by what the LINK says, not what it claims."""
+    ip = str(ip or "").strip()
+    if not ip:
+        return ""
+    for dev in list(_DEVICES.values()):
+        known = {a for a in [dev.get("ip")] + list(dev.get("ips") or []) if a}
+        if ip in known:
+            return str(dev.get("key") or "")
+    return ""
+
+
+def is_connected(dev: dict) -> bool:
+    """:func:`_connected` for a snapshot: drivable from here right now."""
+    return _connected(dev)
+
+
+def is_linked(dev: dict) -> bool:
+    """Whether ``dev`` is one of the person's OWN linked devices: on this
+    device's "Your devices" roster and saying so itself, or paired by a
+    pasted token. A gate-off MindFlock that merely shares the tailnet is
+    drivable (:func:`_connected`) but not linked — what carries a session's
+    work across asks for this."""
+    key = str(dev.get("key") or "")
+    return bool(token_for(key)) or (_member_device(dev) and _same_fleet(dev))
+
+
+async def refresh_instances(key: str) -> None:
+    """Re-read device ``key``'s session list now (after a create there), so
+    the next ``GET /api/instances`` already lists ``<device>::<title>``.
+    Best-effort: the mirror poll catches up otherwise."""
+    dev = _DEVICES.get(key)
+    if dev is None or aiohttp is None or not dev.get("base_url"):
+        return
+    try:
+        await _fetch_instances(dev)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _same_fleet(dev: dict) -> bool:
@@ -940,6 +1050,31 @@ async def post_json(
         return 0, None
 
 
+async def put_bytes(
+    dev: dict, path: str, data: bytes, timeout: float = 60.0
+) -> Tuple[int, object]:
+    """``(status, body)`` for ``PUT <path>`` with a raw ``data`` body on a
+    device, with this device's credential for it (as :func:`post_json`);
+    ``(0, None)`` when it can't be reached. One chunk of a file transfer
+    (:mod:`backend.web.core.send_files`) — the same authenticated link every
+    other device call rides."""
+    if aiohttp is None or not dev.get("base_url"):
+        return 0, None
+    session = await _http_session()
+    headers = _headers_for(dev["key"])
+    headers["Content-Type"] = "application/octet-stream"
+    try:
+        async with session.put(
+            dev["base_url"] + path,
+            data=data,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            return resp.status, await _read_json(resp)
+    except Exception:  # noqa: BLE001 — unreachable / timeout
+        return 0, None
+
+
 async def refresh_device(key: str) -> Optional[dict]:
     """Re-probe ``key``'s hello NOW (instead of on the next sweep) and return
     its snapshot; None for a device discovery never found.
@@ -950,6 +1085,18 @@ async def refresh_device(key: str) -> Optional[dict]:
     dev = _DEVICES.get(key)
     if dev is None:
         return None
+    if aiohttp is not None and dev.get("via") == "tunnel" and dev.get("base_url"):
+        # Reached through "Reach my devices from anywhere": its local tunnel
+        # proxy is its one address (its tailnet name, if the roster has one,
+        # isn't answering — that's why the tunnel was used).
+        from backend.web.core import devices_anywhere as _anywhere
+
+        peer = {"base_url": dev["base_url"], "timeout": _anywhere.PROBE_TIMEOUT}
+        hit = await _probe_peer(peer)
+        _apply_probe(dev, hit, time.time(), grace=False)
+        if not hit and peer.get("probe"):
+            dev["probe"] = peer["probe"]
+        return dict(dev)
     if aiohttp is not None and (dev.get("ip") or dev.get("dns")):
         peer = {"ip": dev.get("ip", ""), "dns": dev.get("dns", "")}
         hit = await _probe_peer(peer)
@@ -1136,6 +1283,8 @@ def devices_json() -> dict:
                 "version": dev["version"],
                 "shared_link": dev.get("shared_link", ""),
                 "reachable": bool(dev["reachable"]),
+                # "tunnel": reached through Reach my devices from anywhere.
+                "via": dev.get("via", "") if dev["reachable"] else "",
                 "remote_control": bool(dev["remote_control"]),
                 "auth": bool(dev["auth"]),
                 "has_token": bool(token_for(dev["key"])),

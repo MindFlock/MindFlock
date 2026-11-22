@@ -1063,9 +1063,11 @@ write their own transcripts under `<project>/<conversation>/subagents/`, and on
 busy machines they are most of the spend. Claude Code writes one API response as
 several lines (one per content block, each repeating `message.usage`), and a
 resumed/forked conversation copies earlier lines into a new file, so turns are
-**deduplicated by `(message.id, requestId)`** across every file (the copy with
-the most output tokens wins) before they are summed and priced per-turn by their
-own model. Parsed files are memoized on (mtime, size, inode) with the byte
+**deduplicated by `(message.id, requestId)`** across every file (each token
+count is the most any copy reports — the final block's output — and the turn
+keeps its first copy's timestamp, so it never shrinks or moves to another day as
+more of its lines arrive: the ledger would otherwise keep the stale day total)
+before they are summed and priced per-turn by their own model. Parsed files are memoized on (mtime, size, inode) with the byte
 offset read to, so the 60 s refresh never re-reads an unchanged file and reads a
 grown one (transcripts are append-only) only from where it stopped; a line still
 being written is read again once complete. The memo is saved beside the ledger
@@ -1127,9 +1129,28 @@ Two provider methods drive the usage-limit hold on the prompt queue (see
   on a weekly-only plan models the WEEK (last reset rolled forward, the rolling
   week's cost) instead of chaining 5-hour windows from the first message.
 - `usage_limit_state(pane_text, now)` parses the CLI's on-pane limit banner
-  (`{limited, reset_at}`). The hold logic consults the live meter even when this
-  reports no banner, so a rebooted session with a fresh idle prompt is still
-  held when its meter shows a window genuinely spent.
+  (`{limited, reset_at, credits}`). The hold logic consults the live meter even
+  when this reports no banner, so a rebooted session with a fresh idle prompt is
+  still held when its meter shows a window genuinely spent.
+- `usage_credits_patterns()` names the CLI's "the plan window is spent, now
+  billing paid credits" notice — Claude Code's **"Now using usage credits"** /
+  **"You're now using extra usage"** (TOML: `[usage] credits_patterns`; default
+  `usage_limits.CREDITS_OPEN_PATTERNS`). That notice is **not a limit**: the
+  agent can still work. The **newest notice on the pane decides**, because a
+  terminal keeps old lines: a "You've hit your limit · resets 3pm" banner with
+  "Now using usage credits" printed after it (or later on the same line) reads
+  `{limited: false, credits: true}` — the activity is not `limit`, the queue's
+  hold is cleared (the meter is not asked: it reads the spent plan window), and
+  a held task is typed in. Credits that are themselves spent ("You've hit your
+  extra usage limit", "Out of usage credits") are a limit again, and so is a
+  limit banner printed after the credits notice. "Approaching usage limit" /
+  "You've used 92% of your weekly limit" never were limits. The activity
+  classifier (`usage_limits.is_limit_screen`) applies the same rule.
+- When the activity reads `limit` but the window turns out to be open (the
+  credits notice, the meter showing headroom, the reset passed), the queue
+  sends Esc and the next item at once — also with "Wait out usage limits"
+  off, which only decides what happens while a limit really holds (the queue
+  stops for a manual resume).
 
 ### One Claude reading per machine
 

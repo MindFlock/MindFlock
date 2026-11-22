@@ -326,6 +326,9 @@ export function stopTileBoxes(
   flight: (Pick<Flight, "cursor" | "state"> & Partial<Pick<Flight, "steps" | "reason" | "step_states">>) | null | undefined
 ): Record<string, { w: number; h: number }> {
   const out: Record<string, { w: number; h: number }> = {};
+  // Round 5: a stop held by its session wears its remedy (Restart / Start)
+  // on its face: a halted stop's room for its line and the button.
+  for (const n of d.nodes) if (n.kind === "stop" && n.held) out[n.id] = { w: STOP_TILE_W, h: NODE_H + (n.held.remedy ? 40 : 16) };
   const haltPoint = !!flight?.steps && atHaltPoint(flight as Pick<Flight, "steps" | "cursor" | "state" | "reason" | "step_states">);
   if (!flight || (flight.state !== "halted" && flight.state !== "waiting_you" && flight.state !== "paused" && !haltPoint)) return out;
   for (const n of d.nodes) {
@@ -560,6 +563,8 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       dn.chip ? "tone-" + dn.chip.tone : "",
       dn.kind === "group" ? "is-group" : "",
       dn.perch ? "is-perch" : "",
+      // Held by its session (agent offline / limited): no working glow.
+      !isHead && dn.held ? "is-held" : "",
       // Its failure is with the agent (its return wire is lit).
       !isHead && dn.ret?.shown === "fixing" && dn.state === "current" ? "is-fixing" : "",
       n.inPort || n.outPort ? "" : "is-fixed",

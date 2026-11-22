@@ -36,9 +36,12 @@ def test_the_route_is_a_thin_wrapper():
     assert body.count("await ") == 1
     # …stamping the person the request is for, never one named in the payload.
     assert "person=_auth.request_person(request)" in body
-    # And every branch of create_requested ends in create() itself.
+    # And every branch of create_requested ends in create() itself (the
+    # spawn branch logs the answer first: session_create._log_spawn).
     gated = inspect.getsource(session_create.create_requested)
-    assert gated.count("return await create(payload, person=person") == 3
+    assert gated.count("await create(payload, person=person") == 3
+    assert gated.count("return await create(payload, person=person") == 2
+    assert "_log_spawn(payload, resp, " in gated
 
 
 def test_create_result_claims_the_title_and_answers_202(reg, monkeypatch):

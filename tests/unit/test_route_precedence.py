@@ -77,7 +77,9 @@ def test_lifespan_starts_and_cancels_background_tasks():
         names = sorted(
             getattr(t, "get_name", lambda: repr(t))() for t in server._BG_TASKS
         )
-        assert 14 <= len(server._BG_TASKS) <= 16, names
+        # 0.14.26 added two long-lived loops (devices-anywhere, the transfer
+        # inbox sweep), so the steady count is 16 or 17, plus the short-lived one.
+        assert 16 <= len(server._BG_TASKS) <= 18, names
     assert server._BG_TASKS == []  # cancelled + cleared on shutdown
 
 

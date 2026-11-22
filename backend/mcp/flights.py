@@ -372,6 +372,11 @@ def _cut(text: Any, limit: int) -> str:
     return s if len(s) <= limit else s[: max(0, limit - 1)] + "…"
 
 
+#: A kind the server serves with ``can_fail: false`` (a Wait for me, a Wait):
+#: its ``on_fail`` means nothing, so describe_flight says so on its line.
+CANNOT_FAIL = "cannot fail (on_fail unused)"
+
+
 def compact_kinds(dto: dict) -> List[str]:
     """``GET /api/flights/kinds`` as one line per kind: ``kind · label ·
     summary · fields`` (+ ``[risk]`` when the kind carries any)."""
@@ -392,6 +397,8 @@ def compact_kinds(dto: dict) -> List[str]:
         )
         if k.get("actor") == "you":
             line += " · waits on a person"
+        if k.get("can_fail") is False:
+            line += " · " + CANNOT_FAIL
         risk = [str(r) for r in k.get("risk") or []]
         if risk:
             line += " · [%s]" % ", ".join(risk)
@@ -420,6 +427,13 @@ def cookbook_view(dto: dict, budget: int = DESCRIBE_BUDGET) -> dict:
                 line = compact_kinds({"kinds": [k]})[0]
             elif "irreversible" in [str(r) for r in k.get("risk") or []]:
                 line += " · [irreversible]"
+            if k.get("can_fail") is False and CANNOT_FAIL not in line:
+                # Next to the options (never cut), not at the line's end.
+                line = (
+                    line.replace(" · use: ", " · %s · use: " % CANNOT_FAIL, 1)
+                    if " · use: " in line
+                    else line + " · " + CANNOT_FAIL
+                )
             # The options come first and are never cut: they are the kind's
             # own definition, what start_flight is checked against.
             head = len(line.split(" · use: ", 1)[0]) if " · use: " in line else 0

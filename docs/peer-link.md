@@ -1882,7 +1882,12 @@ people use Tailscale, node sharing is still the better choice.
   resolves gets a clear error.
 - **Lifecycle.** The relay follows the listener rule: up while a relay
   invite or a listener-role link that comes by relay (`carrier`) exists, down
-  otherwise (`cloudflared` gets SIGTERM, then SIGKILL). The direct TCP
+  otherwise (`cloudflared` gets SIGTERM, then SIGKILL). It never outlives
+  the server: on Linux it is SIGTERMed by the kernel when the server dies
+  (`PR_SET_PDEATHSIG`), and everywhere a cloudflared left by a server that
+  is gone is ended at the next server or tunnel start — matched on its
+  recorded pid, start time and exact arguments, never a pattern
+  ([devices-anywhere.md §4](devices-anywhere.md#4-what-the-tunnel-exposes)). The direct TCP
   listener runs alongside it for whatever is direct — a direct invite or a
   link with `carrier == "tcp"` — so installing cloudflared never strands a
   tailnet/LAN link, and closes when nothing direct is left. If `cloudflared`

@@ -123,6 +123,16 @@ export function StopIcon({ kind, size = 15 }: { kind: string; size?: number }) {
     );
   const paths: Record<string, ReactNode> = {
     agent: <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" />,
+    // Round 5: a route's first Agent stop — the work handed to the agent (a
+    // clipboard), never the agent's own sparkle (lib/flightDiagram TASK_ICON).
+    task: (
+      <>
+        <rect x="5" y="5" width="14" height="16" rx="2" />
+        <path d="M9 5V3.5h6V5" />
+        <line x1="8.5" y1="10.5" x2="15.5" y2="10.5" />
+        <line x1="8.5" y1="14.5" x2="13.5" y2="14.5" />
+      </>
+    ),
     session: (
       <>
         <rect x="3" y="4" width="18" height="16" rx="2.5" />

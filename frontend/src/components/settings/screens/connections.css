@@ -126,7 +126,7 @@
 #signin-close.signin-done {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* The agent card's one next action, when it is Install: the same button

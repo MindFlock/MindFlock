@@ -510,7 +510,7 @@
 }
 
 .cm-add button.cm-add-go {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
   font-weight: 600;
@@ -1924,7 +1924,7 @@ button.ct-chip:hover {
 }
 
 .cm-actions button.cm-primary {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
   font-weight: 600;

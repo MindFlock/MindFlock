@@ -20,7 +20,9 @@ side — who uses what, the report cache, the loop, the setting — is
   points back to). A repository's main checkout is never an item.
 * ``orphan`` — a folder under the worktrees root git no longer lists (its
   repository or its registration is gone), and a ``*.clone-tmp`` leftover of
-  a failed clone. Its files can't be checked, so it is never collected.
+  a failed clone. Its files can't be checked (state ``unchecked``), so it is
+  never collected; a person may look inside it and remove it (see "Can't be
+  checked" below).
 * ``clone`` — a session's full clone (clone strategy) or a ``pr-*`` review
   clone in the provisioning workspace dir. Base clones and cache refreshers
   are shared infrastructure and never items.
@@ -77,6 +79,14 @@ silently: uncommitted changes (untracked files included) are saved first as
 unpushed commits and stash as ``commits.bundle``, a detached HEAD's unmerged
 commits on a ``mindflock-kept/…`` branch; an unmerged branch is never
 deleted. If saving fails nothing is removed.
+
+**Can't be checked** (:func:`inspect_unchecked`, :func:`unchecked_refusal`):
+an orphan is looked inside only on request — counts, newest change, the
+files that look like work, and what git can still tell, down to comparing
+its files with the branch it was on when the repository still has it. It
+goes when nothing in it could be lost, else only with ``even_unchecked``:
+deleted for good (there is no trash), only inside MindFlock's own folders,
+never through a symlink or across filesystems.
 """
 
 from __future__ import annotations
@@ -123,6 +133,10 @@ KIND_CLONE = "clone"
 IN_USE = "in_use"
 NOT_OURS = "not_ours"
 HOLDS_WORK = "holds_work"
+#: A folder whose files git can't check (its repository, or git's record of
+#: it, is gone): never collected, removable only per item after a look
+#: inside (:func:`inspect_unchecked`, :func:`remove_one` ``even_unchecked``).
+UNCHECKED = "unchecked"
 RECENT = "recent"
 UNKNOWN = "unknown"
 SAFE = "safe"
@@ -1965,18 +1979,12 @@ def _classify(
         return SAFE if not kept else UNKNOWN
 
     if kind == KIND_ORPHAN:
-        repo = rec.get("repo") or ""
-        if repo and os.path.isdir(repo):
-            kept.append(
-                "git no longer lists it as a worktree of "
-                + repo
-                + ", so its files can't be checked"
-            )
-        else:
-            kept.append(
-                "not a working git checkout (its repository is gone), so its files can't be checked"
-            )
+        why, text = unchecked_why(path, rec.get("repo") or "")
+        item["unchecked_why"] = why
+        kept.append(text)
         item["state"] = _state(True, False)
+        if item["state"] == HOLDS_WORK:
+            item["state"] = UNCHECKED
         return item
 
     holds = False
@@ -2116,6 +2124,54 @@ def _classify(
     return item
 
 
+#: Why an orphan can't be checked (``unchecked_why``), most specific first.
+GONE_UNREGISTERED = "unregistered"  # its repository is there, git forgot it
+GONE_REPO = "repo_gone"  # its ``.git`` file points at a repository that is gone
+GONE_GITDIR = "gitdir_gone"  # its ``.git`` file points at nothing git can read
+GONE_NO_GIT = "no_git"  # no ``.git`` at all: files left behind
+GONE_OWN_REPO = "own_repo"  # a ``.git`` folder: a repository of its own
+GONE_CLONE_TMP = "clone_tmp"  # what a failed clone left
+
+
+def unchecked_why(path: str, repo: str) -> tuple:
+    """``(code, sentence)``: why an orphan's files can't be checked, in the
+    listing's plain words (read from its ``.git`` alone, no git run)."""
+    dot = os.path.join(path, ".git")
+    if path.endswith(".clone-tmp"):
+        return (
+            GONE_CLONE_TMP,
+            "what is left of a clone that failed, so its files can't be checked",
+        )
+    if os.path.isdir(dot) and not os.path.islink(dot):
+        return (
+            GONE_OWN_REPO,
+            "a git repository of its own that MindFlock doesn't track, so its files can't be checked",
+        )
+    if repo and os.path.isdir(repo):
+        return (
+            GONE_UNREGISTERED,
+            "git no longer lists it as a worktree of "
+            + repo
+            + ", so its files can't be checked",
+        )
+    if repo:
+        return (
+            GONE_REPO,
+            "not a working git checkout (its repository "
+            + repo
+            + " is gone), so its files can't be checked",
+        )
+    if os.path.lexists(dot):
+        return (
+            GONE_GITDIR,
+            "not a working git checkout (its .git points at nothing git can read), so its files can't be checked",
+        )
+    return (
+        GONE_NO_GIT,
+        "not a git checkout any more (no .git; files left behind), so its files can't be checked",
+    )
+
+
 def safe_reason(item: dict) -> str:
     """Why a safe item may go, in plain words (the listing's WHY column)."""
     base = item.get("merged_into") or "the base branch"
@@ -2226,6 +2282,7 @@ _ORDER = {
     SAFE: 0,
     RECENT: 1,
     HOLDS_WORK: 2,
+    UNCHECKED: 3,
     MISSING: 3,
     UNKNOWN: 4,
     IN_USE: 5,
@@ -2325,6 +2382,7 @@ def summarize(items: Sequence[dict], totals: Optional[dict] = None) -> dict:
     safe = [i for i in items if i.get("safe")]
     ours = [i for i in items if i.get("ours")]
     others = [i for i in items if not i.get("ours")]
+    unchecked = [i for i in items if i.get("state") == UNCHECKED]
     by_state: Dict[str, int] = {}
     for i in items:
         s = i.get("state") or UNKNOWN
@@ -2341,9 +2399,13 @@ def summarize(items: Sequence[dict], totals: Optional[dict] = None) -> dict:
         # What collecting the safe set gives back: files nothing else
         # hard-links (an item's free_bytes), never shared cache blocks.
         "safe_bytes": freed(safe),
+        # Folders whose files can't be checked: never collected, each one
+        # a person's call (look inside, then remove anyway).
+        "unchecked_count": len(unchecked),
+        "unchecked_bytes": freed(unchecked),
         "by_state": by_state,
     }
-    for k in ("bytes", "other_bytes", "safe_bytes"):
+    for k in ("bytes", "other_bytes", "safe_bytes", "unchecked_bytes"):
         if out[k] is not None:
             out[k] = int(out[k])
     return out
@@ -2398,25 +2460,20 @@ def _remove_worktree(repo: str, path: str, force: bool = False) -> str:
     return (cp.stderr or cp.stdout or "git worktree remove failed").strip()
 
 
-def _remove_folder(item: dict, root: str, usage: Usage, *, allow_orphan: bool) -> str:
-    """rmtree a clone (or, on request, an orphan) — only strictly under a
-    root MindFlock owns, never a mount point, never a folder whose ``.git`` is
-    a live linked worktree. "" on success, else why not."""
+def _remove_folder(item: dict, root: str, usage: Usage) -> str:
+    """rmtree a clone — only strictly under a root MindFlock owns, never a
+    mount point. (A folder that can't be checked goes only through
+    :func:`remove_one` ``even_unchecked``.) "" on success, else why not."""
     path = norm(item["path"])
     roots = [root] + list(usage.clone_roots)
     if not any(strictly_under(path, r) for r in roots):
         return "it is outside MindFlock's own folders"
     if os.path.ismount(path):
         return "it is a mount point"
-    if item.get("kind") == KIND_CLONE:
-        if not os.path.isdir(os.path.join(path, ".git")):
-            return "it is no longer a clone"
-    elif not allow_orphan:
+    if item.get("kind") != KIND_CLONE:
         return "its files can't be checked"
-    else:
-        gd = gitdir_of(path)
-        if gd and os.path.isdir(gd):
-            return "git still knows it as a worktree"
+    if not os.path.isdir(os.path.join(path, ".git")):
+        return "it is no longer a clone"
     shutil.rmtree(path, ignore_errors=True)
     return "" if not os.path.exists(path) else "some files could not be deleted"
 
@@ -2445,9 +2502,7 @@ def _nested_refusal(path: str) -> str:
     return ""
 
 
-def _remove(
-    item: dict, root: str, usage: Usage, *, force: bool, allow_orphan: bool = False
-) -> str:
+def _remove(item: dict, root: str, usage: Usage, *, force: bool) -> str:
     kind = item.get("kind")
     if os.path.isdir(item["path"]):
         # Never take another checkout down with this one (git deletes what
@@ -2457,7 +2512,7 @@ def _remove(
             return "Not removed: " + refusal + "."
     if kind == KIND_WORKTREE:
         return _remove_worktree(item["repo"], item["path"], force=force)
-    return _remove_folder(item, root, usage, allow_orphan=allow_orphan)
+    return _remove_folder(item, root, usage)
 
 
 def collect(
@@ -2637,6 +2692,7 @@ def remove_one(
     item: dict,
     *,
     confirmed: bool,
+    even_unchecked: bool = False,
     usage: Optional[Usage] = None,
     root: Optional[str] = None,
     now: Optional[float] = None,
@@ -2645,8 +2701,13 @@ def remove_one(
     """Remove one item on a person's explicit request. ``item`` must be a
     FRESH classification. A safe one goes as :func:`collect` would; anything
     else needs ``confirmed`` and has its work saved first
-    (:func:`save_work`). Never: a worktree a session uses, a locked one.
-    Returns ``{"ok", "error"?, "needs_confirm"?, "saved"?, "branch_deleted"?}``."""
+    (:func:`save_work`). A folder that can't be checked (an orphan) is
+    looked inside first (:func:`inspect_unchecked`): it goes when nothing
+    in it could be lost, else only with ``even_unchecked`` — deleted for
+    good (``permanent``), after the path checks of
+    :func:`unchecked_refusal`. Never: a worktree a session uses, a locked
+    one. Returns ``{"ok", "error"?, "needs_confirm"?, "unchecked"?,
+    "facts"?, "saved"?, "branch_deleted"?, "permanent"?}``."""
     usage = usage or Usage()
     root = worktrees_root() if root is None else root
     if item.get("in_use"):
@@ -2669,6 +2730,14 @@ def remove_one(
         if not err:
             forget_records([item["path"]])
         return {"ok": not err, "error": err}
+    if item.get("kind") == KIND_ORPHAN:
+        return _remove_unchecked(
+            item,
+            even_unchecked=even_unchecked,
+            usage=usage,
+            root=root,
+            after_remove=after_remove,
+        )
     if not item.get("safe") and not confirmed:
         return {
             "ok": False,
@@ -2680,8 +2749,6 @@ def remove_one(
     saved: Optional[dict] = None
     if item.get("safe"):
         err = _remove(item, root, usage, force=False)
-    elif item.get("kind") == KIND_ORPHAN:
-        err = _remove(item, root, usage, force=True, allow_orphan=True)
     else:
         try:
             saved = save_work(item, now=now)
@@ -2706,3 +2773,692 @@ def remove_one(
     if saved:
         out["saved"] = saved
     return out
+
+
+# ------------------------------------------------------- can't be checked
+#
+# A folder under the worktrees root whose repository, or git's record of it,
+# is gone (an ``orphan``) can't be checked the way a worktree is, so it is
+# never collected and never part of "remove the safe ones". What is left is
+# a person's call, and they need to see what is in it to make it:
+# :func:`inspect_unchecked` looks inside on request (one bounded walk, and
+# whatever git can still tell), and :func:`remove_one` with
+# ``even_unchecked`` deletes it — only inside MindFlock's own folders, never
+# following a symlink out, never crossing into another filesystem. MindFlock
+# has no trash or holding folder, so that deletion is permanent and every
+# message about it says so. When the look finds nothing that could be lost
+# (its files match a branch the repository still has, or it holds only
+# dependencies, caches and build output) it is removable without
+# ``even_unchecked`` — still only one item at a time, on a person's request.
+
+#: Folder names whose files are dependencies, caches or build output, not
+#: work: a look inside counts them apart and never lists their files.
+DEPENDENCY_DIRS = frozenset(
+    {
+        "node_modules",
+        "bower_components",
+        ".pnpm-store",
+        ".venv",
+        "venv",
+        ".virtualenv",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".hypothesis",
+        ".tox",
+        ".nox",
+        ".eggs",
+        ".cache",
+        ".parcel-cache",
+        ".turbo",
+        ".next",
+        ".nuxt",
+        ".svelte-kit",
+        ".vite",
+        ".angular",
+        ".gradle",
+        ".terraform",
+        "dist",
+        "build",
+        "target",
+        "coverage",
+        "htmlcov",
+    }
+)
+#: Files that are build output wherever they are.
+_DEPENDENCY_SUFFIXES = (".pyc", ".pyo")
+#: A look inside walks at most this long; past it the counts are partial
+#: (said) and nothing is called safe.
+INSPECT_TIMEOUT = 60.0
+#: Top-level entries and work files a look lists (the counts are complete).
+INSPECT_TOP = 20
+INSPECT_SAMPLE = 15
+#: Differing paths a comparison with a branch lists per kind.
+COMPARE_SAMPLE = 10
+
+
+def is_dependency_dir(name: str) -> bool:
+    return name in DEPENDENCY_DIRS or name.endswith(".egg-info")
+
+
+def _walk_contents(path: str, limit_s: float = INSPECT_TIMEOUT) -> dict:
+    """One walk of ``path``: counts, sizes (apparent), the newest change, the
+    top-level entries, and the files that look like work (newest first). A
+    symlink is counted, never followed; a folder on another filesystem is
+    noted (``mounts``) and not entered."""
+    import heapq
+
+    deadline = time.monotonic() + limit_s
+    out: dict = {
+        "files": 0,
+        "dirs": 0,
+        "bytes": 0,
+        "symlinks": 0,
+        "newest": 0.0,
+        "newest_file": "",
+        "newest_work": 0.0,
+        "work_files": 0,
+        "work_bytes": 0,
+        "dependency_files": 0,
+        "dependency_bytes": 0,
+        "git_files": 0,
+        "mounts": [],
+        "complete": True,
+    }
+    try:
+        dev = os.lstat(path).st_dev
+    except OSError:
+        out["complete"] = False
+        out["top"], out["top_more"], out["work_sample"] = [], 0, []
+        return out
+    top: Dict[str, dict] = {}
+    sample: list = []  # min-heap of (mtime, rel, size): the newest kept
+    stack = [("", "work")]
+    while stack:
+        if time.monotonic() > deadline:
+            out["complete"] = False
+            break
+        rel, cat = stack.pop()
+        try:
+            it = os.scandir(os.path.join(path, rel) if rel else path)
+        except OSError:
+            out["complete"] = False
+            continue
+        with it:
+            for e in it:
+                r = os.path.join(rel, e.name) if rel else e.name
+                try:
+                    st = e.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                isdir = stat.S_ISDIR(st.st_mode)
+                c = cat
+                if not rel and e.name == ".git":
+                    c = "git"
+                elif c == "work" and (
+                    (isdir and is_dependency_dir(e.name))
+                    or (not isdir and e.name.endswith(_DEPENDENCY_SUFFIXES))
+                ):
+                    c = "dependency"
+                if not rel:
+                    top[e.name] = {
+                        "name": e.name,
+                        "dir": isdir,
+                        "kind": c,
+                        "files": 0,
+                        "bytes": 0,
+                    }
+                if isdir:
+                    if st.st_dev != dev:
+                        out["mounts"].append(r)
+                        continue
+                    out["dirs"] += 1
+                    stack.append((r, c))
+                    continue
+                if stat.S_ISLNK(st.st_mode):
+                    out["symlinks"] += 1
+                size = int(st.st_size)
+                out["files"] += 1
+                out["bytes"] += size
+                t = top[r.split(os.sep, 1)[0]]
+                t["files"] += 1
+                t["bytes"] += size
+                if st.st_mtime > out["newest"]:
+                    out["newest"], out["newest_file"] = float(st.st_mtime), r
+                if c == "work":
+                    out["work_files"] += 1
+                    out["work_bytes"] += size
+                    out["newest_work"] = max(out["newest_work"], float(st.st_mtime))
+                    entry = (float(st.st_mtime), r, size)
+                    if len(sample) < INSPECT_SAMPLE:
+                        heapq.heappush(sample, entry)
+                    elif entry > sample[0]:
+                        heapq.heapreplace(sample, entry)
+                else:
+                    out[c + "_files"] += 1
+                    if c == "dependency":
+                        out["dependency_bytes"] += size
+    tops = sorted(top.values(), key=lambda t: (-t["bytes"], t["name"]))
+    out["top"] = tops[:INSPECT_TOP]
+    out["top_more"] = max(0, len(tops) - INSPECT_TOP)
+    out["work_sample"] = [
+        {"path": r, "bytes": size, "mtime": mt}
+        for mt, r, size in sorted(sample, reverse=True)
+    ]
+    return out
+
+
+def _branch_candidates(
+    path: str, root: str, usage: Usage, records: Dict[str, dict]
+) -> List[str]:
+    """The branch the folder was probably on: what MindFlock recorded, then
+    its folder name (``<branch>_<hex>`` under the worktrees root)."""
+    out: List[str] = []
+    for src in (records.get(path) or {}, usage.branch_info.get(path) or {}):
+        b = str(src.get("branch") or "")
+        if b and b not in out:
+            out.append(b)
+    if strictly_under(path, root):
+        slug = _LEAF.sub("", os.path.relpath(path, norm(root))).replace(os.sep, "/")
+        if slug and slug not in out:
+            out.append(slug)
+    return out
+
+
+def _find_branch(repo: str, candidates: Sequence[str]) -> tuple:
+    """``(branch, ref)`` of the first candidate the repository still has —
+    a local branch, else one on a remote; the folder-name guess may also
+    match ONE local branch it is the start of (a long name is cut in the
+    folder's). ``("", "")`` when none is left."""
+    if not candidates:
+        return "", ""
+    remotes = (_out(repo, "remote") or "").split()
+    for i, b in enumerate(candidates):
+        refs = ["refs/heads/" + b] + ["refs/remotes/%s/%s" % (r, b) for r in remotes]
+        have = _existing_refs(repo, refs) or set()
+        for ref in refs:
+            if ref in have:
+                return b, ref
+        if i == len(candidates) - 1:
+            cp = _git(repo, "for-each-ref", "--format=%(refname)", "refs/heads/%s*" % b)
+            hits = [
+                ln.strip()
+                for ln in (cp.stdout or "").splitlines()
+                if cp.returncode == 0 and ln.strip()
+            ]
+            if len(hits) == 1:
+                return hits[0][len("refs/heads/") :], hits[0]
+    return "", ""
+
+
+def _under_dependency(rel: str) -> bool:
+    parts = rel.split("/")
+    return any(is_dependency_dir(p) for p in parts[:-1]) or rel.endswith(
+        _DEPENDENCY_SUFFIXES
+    )
+
+
+def compare_with_ref(
+    repo: str, path: str, ref: str, timeout: float = INSPECT_TIMEOUT
+) -> Optional[dict]:
+    """The folder's files against the tree of ``ref`` in ``repo``, through
+    a throwaway index (the repository is only read; the folder is never
+    touched): ``changed`` (in both, different), ``missing`` (the branch has
+    it, the folder doesn't), ``extra`` (only in the folder, not ignored —
+    ``extra_dependency`` of them under a dependency or cache folder). Git
+    runs with no global or system config, so no filter driver (git-lfs)
+    runs and no personal ignore file hides a file: unsure reads as
+    different. None when git can't say."""
+    common = _common_dir(repo)
+    if not common or not os.path.isdir(common):
+        return None
+    with tempfile.TemporaryDirectory(prefix="mindflock-gc-cmp-") as tmp:
+        env = {
+            "GIT_DIR": common,
+            "GIT_WORK_TREE": path,
+            "GIT_INDEX_FILE": os.path.join(tmp, "index"),
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+        cfg = (
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+            "-c",
+            "core.splitIndex=false",
+            "-c",
+            "core.hooksPath=" + os.devnull,
+        )
+
+        def run(*args):
+            return _git(path, *cfg, *args, env=env, timeout=timeout)
+
+        if run("read-tree", ref).returncode != 0:
+            return None
+        # Stat info for the fresh index (it has none, so every file would
+        # read as changed); exit 1 just means "some differ".
+        if run("update-index", "-q", "--refresh").returncode not in (0, 1):
+            return None
+        df = run("diff-files", "--name-status", "-z", "--no-renames")
+        ls = run("ls-files", "--others", "--exclude-standard", "-z")
+        if df.returncode != 0 or ls.returncode != 0:
+            return None
+    changed: List[str] = []
+    missing: List[str] = []
+    parts = (df.stdout or "").split("\0")
+    for st, name in zip(parts[0::2], parts[1::2]):
+        if not name:
+            continue
+        (missing if st.startswith("D") else changed).append(name)
+    extra = [n for n in (ls.stdout or "").split("\0") if n]
+    extra_dep = [n for n in extra if _under_dependency(n)]
+    extra_work = [n for n in extra if not _under_dependency(n)]
+    return {
+        "ref": ref,
+        "changed_count": len(changed),
+        "missing_count": len(missing),
+        "extra_count": len(extra_work),
+        "extra_dependency": len(extra_dep),
+        "changed": changed[:COMPARE_SAMPLE],
+        "missing": missing[:COMPARE_SAMPLE],
+        "extra": extra_work[:COMPARE_SAMPLE],
+    }
+
+
+def _when(ts: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else ""
+
+
+def _human_bytes(n) -> str:
+    v = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if v < 1024 or unit == "TB":
+            return ("%d %s" % (v, unit)) if unit == "B" else ("%.1f %s" % (v, unit))
+        v /= 1024
+    return "%d B" % v
+
+
+def inspect_unchecked(
+    item: dict,
+    *,
+    usage: Optional[Usage] = None,
+    root: Optional[str] = None,
+    records: Optional[Dict[str, dict]] = None,
+    limit_s: float = INSPECT_TIMEOUT,
+) -> dict:
+    """A look inside a folder whose files can't be checked (an orphan), for
+    a person deciding whether it may go: counts and sizes, its newest
+    change, the top-level entries, the files that look like work (not
+    dependencies, caches, build output or git's own), and what git can
+    still tell — where its ``.git`` points, whether that is gone, and,
+    when its repository still has the branch it was on, how its files
+    compare with that branch. Reads only. Blocking (one bounded walk plus a
+    few git calls): run it off the loop, on request, never in a listing.
+
+    ``safe`` = nothing in it could be lost: its files match a branch the
+    repository still has (it may lack some of the branch's), or it holds no
+    file that looks like work and no repository of its own, and the walk
+    finished without meeting another filesystem. ``verdict``: ``matches``,
+    ``within`` (nothing that isn't on the branch; it lacks some of its
+    files), ``no_work``, ``differs``, ``own_repo`` or ``unknown``.
+    ``summary``: the same in sentences."""
+    usage = usage or Usage()
+    root = worktrees_root() if root is None else root
+    records = load_records() if records is None else records
+    path = norm(item["path"])
+    walk = _walk_contents(path, limit_s)
+    dot = os.path.join(path, ".git")
+    kind = (
+        "link"
+        if os.path.islink(dot)
+        else "dir" if os.path.isdir(dot) else "file" if os.path.isfile(dot) else "none"
+    )
+    repo = item.get("repo") or ""
+    g: dict = {
+        "dot": kind,
+        "gitdir": "",
+        "gitdir_exists": False,
+        "repo": repo,
+        "repo_exists": bool(repo) and os.path.isdir(repo),
+        "branch": "",
+        "branch_ref": "",
+        "tried": [],
+        "compare": None,
+        "notes": [],
+    }
+    notes: List[str] = g["notes"]
+    if kind == "file":
+        gd = gitdir_of(path)
+        g["gitdir"] = gd
+        g["gitdir_exists"] = bool(gd) and os.path.isdir(gd)
+        if not gd:
+            notes.append("Its .git file doesn't say where its repository is.")
+        elif not g["gitdir_exists"]:
+            notes.append("Its .git file points at %s, which no longer exists." % gd)
+    elif kind == "dir":
+        notes.append(
+            "It has a .git folder: a repository of its own, whose commits would go with it."
+        )
+    elif kind == "link":
+        notes.append("Its .git is a symbolic link.")
+    else:
+        notes.append("It has no .git: nothing ties it to a repository any more.")
+    if repo and not g["repo_exists"]:
+        notes.append("Its repository %s is gone too." % repo)
+    if g["repo_exists"] and kind != "dir":
+        tried = _branch_candidates(path, root, usage, records)
+        g["tried"] = tried
+        branch, ref = _find_branch(repo, tried)
+        g["branch"], g["branch_ref"] = branch, ref
+        if not ref:
+            notes.append(
+                "%s has no branch it was on any more%s, so there is nothing to compare its files with."
+                % (repo, (" (looked for %s)" % ", ".join(tried)) if tried else "")
+            )
+        else:
+            g["compare"] = compare_with_ref(repo, path, ref)
+            if g["compare"] is None:
+                notes.append("Git couldn't compare its files with %s." % branch)
+
+    cmp_ = g["compare"]
+    if kind in ("dir", "link"):
+        verdict = "own_repo" if kind == "dir" else "unknown"
+    elif not walk["complete"] or walk["mounts"]:
+        verdict = "unknown"
+    elif cmp_ is not None:
+        if cmp_["changed_count"] or cmp_["extra_count"]:
+            verdict = "differs"
+        else:
+            verdict = "within" if cmp_["missing_count"] else "matches"
+    elif not walk["work_files"]:
+        verdict = "no_work"
+    else:
+        verdict = "unknown"
+    safe = verdict in ("matches", "within", "no_work")
+
+    lines: List[str] = []
+    lines.append(
+        "%s in %s (%s)%s."
+        % (
+            _plural(walk["files"], "file"),
+            _plural(walk["dirs"], "folder"),
+            _human_bytes(walk["bytes"]),
+            "" if walk["complete"] else ", counted in %d s before stopping" % limit_s,
+        )
+    )
+    lines.append(
+        "%s look%s like work (%s)%s; the rest is dependencies, caches, build output or git's own."
+        % (
+            _plural(walk["work_files"], "file"),
+            "s" if walk["work_files"] == 1 else "",
+            _human_bytes(walk["work_bytes"]),
+            (
+                (", newest changed %s" % _when(walk["newest_work"]))
+                if walk["newest_work"]
+                else ""
+            ),
+        )
+    )
+    if walk["newest"]:
+        lines.append(
+            "Newest change anywhere in it: %s (%s)."
+            % (_when(walk["newest"]), walk["newest_file"])
+        )
+    if walk["mounts"]:
+        lines.append(
+            "Another filesystem is mounted inside it (%s): it won't be removed."
+            % ", ".join(walk["mounts"][:3])
+        )
+    lines += notes
+    if cmp_ is not None:
+        b = g["branch"]
+        if verdict == "matches":
+            lines.append("Its files match branch %s exactly." % b)
+        elif verdict == "within":
+            lines.append(
+                "Every file in it is on branch %s as is (it lacks %s the branch has)."
+                % (b, _plural(cmp_["missing_count"], "file"))
+            )
+        else:
+            n = cmp_["changed_count"] + cmp_["missing_count"] + cmp_["extra_count"]
+            lines.append(
+                "%s differ from branch %s: %d changed, %d only here, %d missing here."
+                % (
+                    _plural(n, "file"),
+                    b,
+                    cmp_["changed_count"],
+                    cmp_["extra_count"],
+                    cmp_["missing_count"],
+                )
+            )
+        if cmp_["extra_dependency"]:
+            lines.append(
+                "(%s under dependency or cache folders not counted.)"
+                % _plural(cmp_["extra_dependency"], "file")
+            )
+    if safe:
+        lines.append(
+            "Nothing in it would be lost: it can be removed."
+            if verdict != "no_work"
+            else "Nothing in it looks like work: it can be removed."
+        )
+    else:
+        lines.append(
+            "Removing it deletes %s for good: nothing is saved first, and there is no undo."
+            % _plural(walk["files"], "file")
+        )
+    out = dict(walk)
+    out.update(
+        path=path,
+        name=item.get("name") or os.path.basename(path),
+        size_bytes=item.get("size_bytes"),
+        git=g,
+        verdict=verdict,
+        safe=safe,
+        summary=lines,
+        inspected_at=time.time(),
+    )
+    return out
+
+
+def unchecked_refusal(
+    item: dict, *, root: str, usage: Usage, records: Dict[str, dict]
+) -> str:
+    """Why the folder of an item that can't be checked may NOT be deleted,
+    "" when it may: it must be an orphan, MindFlock's own (strictly inside
+    the worktrees root or a session-clone root, symlinks resolved), a real
+    folder (not a symlink, not a mount point, on the same filesystem as the
+    folder it is in), and not a worktree git still knows."""
+    path = item.get("path") or ""
+    if item.get("kind") != KIND_ORPHAN:
+        return "only a folder whose files can't be checked is removed this way"
+    if not path or not os.path.isabs(path):
+        return "it has no usable path"
+    if os.path.islink(path):
+        return "it is a symbolic link"
+    if os.path.realpath(path) != path:
+        return "its path leads somewhere else through a symbolic link"
+    roots = [r for r in [root] + list(usage.clone_roots) if r]
+    if not any(strictly_under(path, r) for r in roots):
+        return "it is outside MindFlock's own folders"
+    if not is_ours(path, root, usage, records):
+        return "MindFlock didn't create it"
+    try:
+        st = os.lstat(path)
+        parent = os.lstat(os.path.dirname(path))
+    except OSError:
+        return "it is already gone"
+    if not stat.S_ISDIR(st.st_mode):
+        return "it is not a folder"
+    if os.path.ismount(path) or st.st_dev != parent.st_dev:
+        return "it is a mount point (another filesystem)"
+    gd = gitdir_of(path)
+    if gd and os.path.isdir(gd):
+        return "git still knows it as a worktree"
+    # A branch-slug level (``<root>/<user>/``) that a stray file turned into
+    # one item: it holds other worktree folders, each its own item.
+    try:
+        with os.scandir(path) as it:
+            inner = [
+                e.name
+                for e in it
+                if _LEAF.search(e.name) and e.is_dir(follow_symlinks=False)
+            ]
+    except OSError:
+        return "it can't be read"
+    if inner:
+        return "it holds other worktree folders (%s)" % (
+            ", ".join(sorted(inner)[:3]) + ("…" if len(inner) > 3 else "")
+        )
+    return ""
+
+
+def _delete_tree(path: str) -> str:
+    """Delete the folder ``path`` and everything in it, fd-relative all the
+    way down: a symlink is removed as a link and never followed (a folder
+    swapped for a link mid-way is noticed and left), and a folder on
+    another filesystem is never entered (``-xdev``) — it is left, and said.
+    A read-only folder is made writable by its owner to empty it. "" when
+    it is all gone, else what is left."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return ""
+    if not stat.S_ISDIR(st.st_mode):
+        return "it is not a folder"
+    dev = st.st_dev
+    left: List[str] = []
+
+    def retry(fn, dfd: int) -> None:
+        try:
+            fn()
+        except PermissionError:
+            os.fchmod(dfd, (os.fstat(dfd).st_mode & 0o7777) | 0o700)
+            fn()
+
+    def open_dir(name: str, dfd: Optional[int], want) -> int:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+        fst = os.fstat(fd)
+        if (fst.st_dev, fst.st_ino) != (want.st_dev, want.st_ino):
+            os.close(fd)
+            raise OSError("it changed while being deleted")
+        return fd
+
+    def clear(dfd: int, rel: str) -> None:
+        with os.scandir(dfd) as it:
+            names = [e.name for e in it]
+        for name in names:
+            r = os.path.join(rel, name)
+            try:
+                est = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                if stat.S_ISDIR(est.st_mode):
+                    if est.st_dev != dev:
+                        left.append("%s (another filesystem)" % r)
+                        continue
+                    try:
+                        fd = open_dir(name, dfd, est)
+                    except PermissionError:
+                        # An unreadable folder: let its owner read it, once.
+                        os.chmod(name, 0o700, dir_fd=dfd, follow_symlinks=False)
+                        fd = open_dir(name, dfd, est)
+                    try:
+                        clear(fd, r)
+                    finally:
+                        os.close(fd)
+                    retry(lambda: os.rmdir(name, dir_fd=dfd), dfd)
+                else:
+                    retry(lambda: os.unlink(name, dir_fd=dfd), dfd)
+            except FileNotFoundError:
+                continue
+            except (OSError, NotImplementedError) as exc:
+                left.append("%s (%s)" % (r, getattr(exc, "strerror", None) or exc))
+            except RecursionError:
+                left.append("%s (nested too deep)" % r)
+
+    try:
+        pfd = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as exc:
+        return "couldn't open the folder it is in (%s)" % exc
+    try:
+        base = os.path.basename(path)
+        try:
+            fd = open_dir(base, pfd, st)
+        except OSError as exc:
+            return "couldn't open it (%s)" % exc
+        try:
+            clear(fd, "")
+        finally:
+            os.close(fd)
+        if not left:
+            try:
+                os.rmdir(base, dir_fd=pfd)
+            except OSError as exc:
+                left.append("%s (%s)" % (base, exc.strerror or exc))
+    finally:
+        os.close(pfd)
+    if not left:
+        return ""
+    return "%s could not be deleted: %s" % (
+        _plural(len(left), "thing"),
+        ", ".join(left[:3]) + ("…" if len(left) > 3 else ""),
+    )
+
+
+def _remove_unchecked(
+    item: dict,
+    *,
+    even_unchecked: bool,
+    usage: Usage,
+    root: str,
+    after_remove: Optional[Callable[[dict], None]],
+) -> dict:
+    records = load_records()
+    refusal = unchecked_refusal(item, root=root, usage=usage, records=records)
+    if not refusal:
+        refusal = _nested_refusal(item["path"])
+    if refusal:
+        return {"ok": False, "error": "Not removed: %s." % refusal}
+    facts = inspect_unchecked(item, usage=usage, root=root, records=records)
+    if facts["mounts"]:
+        return {
+            "ok": False,
+            "facts": facts,
+            "error": "Not removed: another filesystem is mounted inside it (%s)."
+            % ", ".join(facts["mounts"][:3]),
+        }
+    if not facts["safe"] and not even_unchecked:
+        return {
+            "ok": False,
+            "needs_confirm": True,
+            "unchecked": True,
+            "facts": facts,
+            "error": "Its files can't be checked. Removing it deletes %s (%s, %s that look like work) permanently; ask for that explicitly."
+            % (
+                _plural(facts["files"], "file"),
+                _human_bytes(facts["bytes"]),
+                facts["work_files"],
+            ),
+        }
+    err = _delete_tree(item["path"])
+    if err:
+        return {"ok": False, "facts": facts, "error": "Not fully removed: %s." % err}
+    forget_records([item["path"]])
+    if after_remove is not None:
+        try:
+            after_remove(item)
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "ok": True,
+        "branch_deleted": "",
+        "permanent": True,
+        "verdict": facts["verdict"],
+        "deleted": {
+            "files": facts["files"],
+            "work_files": facts["work_files"],
+            "bytes": facts["bytes"],
+        },
+    }

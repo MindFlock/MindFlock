@@ -63,6 +63,12 @@ modules under
                      typed delivery line (the lane + routes live here)
     move_session     moving a session's workspace to a new folder (the
                      /move route's refusals, background run, session.moved)
+    send_session     sending a session to another of your devices (push its
+                     branch, or carry it as a git bundle; start it there)
+    send_files       sending files from a session's worktree to another of
+                     your devices (manifest + checksummed chunks)
+    inbox            receiving them: /api/transfers, the inbox, bundles
+    session_bundle   a branch as a standalone git bundle (export / unpack)
     mobile_access    phone access: tailscale URLs, QR codes, startup banner
     pane_find        in-place Ctrl+F in a live pane (tmux copy-mode search)
     pane_scroll_find in-place Ctrl+F for apps that scroll themselves (wheel + look)
@@ -169,6 +175,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from backend import config, log
 from backend import providers
+from backend import repo_base as _repo_base
 from backend import session
 from backend import tailscale_cli as _tailscale_cli
 from backend.providers import config as provider_config
@@ -198,9 +205,13 @@ from backend.web.core import (
 )  # noqa: F401 — registers the stores
 from backend.web.core import guests as _guests
 from backend.web.core import move_session as _move_session
+from backend.web.core import send_session as _send_session
+from backend.web.core import send_files as _send_files
+from backend.web.core import inbox as _inbox
 from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import terminal_ws as _terminal_ws
 from backend.web.core import guest_tunnel as _guest_tunnel
+from backend.web.core import devices_anywhere as _devices_anywhere
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import shared_branch as _shared_branch
@@ -357,6 +368,7 @@ from backend.web.core.recently_closed import (
 from backend.web.core.repo_picker import (
     _has_git_dir,
     check_repo,
+    find_repos_by_url,
     search_repos,
     suggest_repos,
 )
@@ -685,6 +697,7 @@ from backend.web.core.red_zone_driver import (
     _pr_committed_changed,
     _pr_content_ref,
     _red_zone_breaches_for,
+    zone_hits_for_paths,
     _rz_changed_paths,
     _rz_doc,
     _rz_exempt_ids,
@@ -703,6 +716,7 @@ from backend.web.routes import peer as _peer_routes
 from backend.web.routes import peer_sessions as _peer_session_routes
 from backend.web.routes import chat as _chat_routes
 from backend.web.routes import guests as _guest_routes
+from backend.web.routes import devices_anywhere as _devices_anywhere_routes
 from backend.web.routes import team_runs as _team_runs_routes
 from backend.web.routes import flights as _flights_routes
 from backend.web.routes import sky as _sky_routes
@@ -855,6 +869,9 @@ async def lifespan(app: FastAPI):
     # kicks, *_changed events, the addon sessions snapshot). Always-on so they
     # keep firing with zero clients connected; the GET is now read-only.
     _register_task(_instances_tick_loop())
+    # The transfer inbox: drop unfinished transfers that went idle or ran out
+    # of time even when no new one arrives (core.inbox.prune_partials).
+    _register_task(_inbox_partials_loop())
     # Red zones: keep every live worktree's guard file current, re-arm hooks
     # that were disarmed, and turn the tool feed into blocked/breached/
     # tampered events. Its own loop (not a piggyback on the instances tick) so
@@ -907,6 +924,13 @@ async def lifespan(app: FastAPI):
     _register_task(_remote.instances_loop())
     # Settings sync across the paired devices (a no-op tick while it's off).
     _register_task(_settings_sync.sync_loop())
+    # Reach my devices from anywhere: the private tunnel, this device's
+    # address in the user's GitHub, and the others' (a no-op tick while off).
+    # Its origin is this server's own port, passed as discovery's is — but
+    # never the 8765 guess: unknown means the tunnel refuses to start.
+    from backend.web.core.mobile_access import server_port_known
+
+    _register_task(_devices_anywhere.run_loop(server_port_known()))
     # Engine updates: re-exec onto a finished install with no browser tab
     # open (core.update_watch), and announce a newer release (update.available).
     _register_task(_update_watch.watch_loop())
@@ -1110,6 +1134,10 @@ async def lifespan(app: FastAPI):
     finally:
         try:
             await _guest_tunnel.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await _devices_anywhere.stop()
         except Exception:  # noqa: BLE001
             pass
         # Addon shutdown hooks (reverse order), then cancel background tasks.
@@ -2818,6 +2846,20 @@ async def _dialog_watch_loop() -> None:
         except Exception:  # noqa: BLE001 — the loop must never die
             pass
         await asyncio.sleep(_DIALOG_WATCH_INTERVAL)
+
+
+_INBOX_PRUNE_INTERVAL = 300.0
+
+
+async def _inbox_partials_loop() -> None:
+    """Every :data:`_INBOX_PRUNE_INTERVAL` s, drop stale unfinished
+    transfers (their reserved quota with them). Only ``inbox/.partial``."""
+    while True:
+        await asyncio.sleep(_INBOX_PRUNE_INTERVAL)
+        try:
+            await asyncio.to_thread(_inbox.prune_partials)
+        except Exception:  # noqa: BLE001 — housekeeping must never die
+            pass
 
 
 async def _instances_tick_loop() -> None:
@@ -4832,6 +4874,27 @@ async def repo_check(path: str = "") -> JSONResponse:
     return JSONResponse(await asyncio.to_thread(check_repo, path))
 
 
+@app.get("/api/repos/find")
+async def repo_find(url: str = "") -> JSONResponse:
+    """The local checkouts of the repository ``url`` names → ``{"url",
+    "matches": [{"path", "name", "remote"}]}`` (best first; ``[]`` when this
+    device has none). What a session sent here from another of your devices
+    is started in (:mod:`backend.web.core.send_session`). Local git config
+    only, no network; threaded like :func:`repo_suggestions`."""
+    if not (url or "").strip():
+        return JSONResponse({"error": "a url is required"}, status_code=400)
+
+    def _find() -> dict:
+        return find_repos_by_url(
+            url,
+            recent_paths=_recent_repo_paths(),
+            cwd=os.getcwd(),
+            extra_paths=_repo_url_workdirs(url),
+        )
+
+    return JSONResponse(await asyncio.to_thread(_find))
+
+
 @app.get("/api/repos/branches")
 async def repo_branches(path: str = "") -> JSONResponse:
     """The New-session dialog's Base branch menu for the folder in its Folder
@@ -4856,6 +4919,21 @@ async def repo_branches(path: str = "") -> JSONResponse:
             }
         )
     return JSONResponse(await asyncio.to_thread(_list_branches, path))
+
+
+@app.get("/api/repos/bases")
+async def repo_bases() -> JSONResponse:
+    """Settings → Workspace → Per-repo branches: per known repository, the
+    base branch and PR base MindFlock will use and why (``"main · the
+    repository's default"``), from :mod:`backend.repo_base`. Read-only;
+    threaded (git, at most one cached ``ls-remote`` per remote). See
+    :mod:`backend.web.core.repo_bases`."""
+    from backend.web.core import repo_bases as _repo_bases
+
+    try:
+        return JSONResponse(await asyncio.to_thread(_repo_bases.list_bases, ENGINE))
+    except Exception:  # noqa: BLE001 — a hint list, never a 500
+        return JSONResponse({"repos": []})
 
 
 def _branches_path_allowed(path: str) -> bool:
@@ -5569,6 +5647,342 @@ async def instance_move(title: str, payload: Optional[dict] = None) -> JSONRespo
     return JSONResponse(plan, status_code=202)
 
 
+@app.post("/api/instances/{title}/send-to-device")
+async def instance_send_to_device(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Send the session to another of your devices: ``{"device", "note",
+    "via"?: auto|git|bundle, "paths"?: [..]}`` — ``via`` and the bundle
+    fallback are in :func:`backend.web.core.send_session.send`; the answer
+    adds ``via`` (``git`` / ``bundle``), ``how`` (one sentence) and, for a
+    bundle, ``bundle: {size, sha256, commits, scope, left_out}`` →
+    **200** ``{"ok", "title": "<device>::<title>", "device", "remote_title",
+    "branch", "remote", "url", "pushed", "already_pushed", "commits",
+    "repo_path", "queued", "caveats"}``. Pushes its branch (never a force),
+    starts a session on that device ON the branch, and hands it a brief as its
+    first prompt — only git and that text travel
+    (:mod:`backend.web.core.send_session`). A refusal is ``{"error",
+    "code"}`` with a plain next step: 404 ``no_device``, 409 ``not_linked``
+    / ``device_offline`` / ``remote_control_off`` / ``not_connected`` /
+    ``uncommitted`` / ``repo_missing`` / ``diverged`` / ``red_zone`` /
+    ``not_git`` / ``detached``, 400 ``no_remote``, 502 ``push_failed`` /
+    ``device_refused``. Never for a guest link, a relayed request (one hop:
+    send it from the device it runs on) or a shared-folder session."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {
+                "error": "a guest link cannot send sessions to other devices",
+                "code": "guest",
+            },
+            status_code=403,
+        )
+    if _remote.from_remote(request):
+        return JSONResponse(
+            {"error": "send a session from the device it runs on", "code": "remote"},
+            status_code=400,
+        )
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    peer_err = _peer_guard.refusal(inst, "sending to another device")
+    if peer_err is not None:
+        return peer_err
+    body = payload if isinstance(payload, dict) else {}
+    device = body.get("device")
+    note = body.get("note", "")
+    via = body.get("via") or "auto"
+    paths = body.get("paths") or []
+    if (
+        not isinstance(device, str)
+        or not isinstance(note, str)
+        or not isinstance(via, str)
+        or not isinstance(paths, list)
+        or not all(isinstance(x, str) for x in paths)
+    ):
+        return JSONResponse(
+            {
+                "error": "device, note and via must be strings, paths a list of strings",
+                "code": "bad_request",
+            },
+            status_code=400,
+        )
+
+    def _last_reply() -> str:
+        view, text, fallback, oerr, _status = _agent_output(inst, title, "last_reply")
+        if oerr is not None or fallback or view != "last_reply":
+            return ""
+        return text or ""
+
+    status, out = await _send_session.send(
+        inst,
+        title,
+        device,
+        note,
+        via=via,
+        paths=paths[:50],
+        last_reply=_last_reply,
+        breaches=lambda wt: _red_zone_breaches_for(inst, wt, "HEAD"),
+    )
+    if status == 200:
+        _forget_probes(title)  # its row's pushed/stage probes are stale now
+    return JSONResponse(out, status_code=status)
+
+
+@app.post("/api/instances/{title}/send-files")
+async def instance_send_files(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Send files or folders from the session's worktree to another of your
+    devices: ``{"device", "paths": [..], "note"?, "to_session"?,
+    "include_secrets"?}`` → **200** ``{"ok", "device", "transfer_id",
+    "path", "files": [{path, size, sha256}], "total_size", "total_sha256",
+    "exec_stripped", "uncommitted", "skipped", "caveats", "messaged"?,
+    "title"?}`` (:mod:`backend.web.core.send_files`; the device's half is
+    :mod:`backend.web.core.inbox`). A refusal is ``{"error", "code"}`` with
+    the next step. Never for a guest link, a relayed request or a
+    shared-folder session."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {
+                "error": "a guest link cannot send files to other devices",
+                "code": "guest",
+            },
+            status_code=403,
+        )
+    if _remote.from_remote(request):
+        return JSONResponse(
+            {
+                "error": "send files from the device the session runs on",
+                "code": "remote",
+            },
+            status_code=400,
+        )
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    peer_err = _peer_guard.refusal(inst, "sending files to another device")
+    if peer_err is not None:
+        return peer_err
+    body = payload if isinstance(payload, dict) else {}
+    device, paths = body.get("device"), body.get("paths")
+    note, to_session = body.get("note", ""), body.get("to_session", "")
+    secrets_flag = body.get("include_secrets", False)
+    if (
+        not isinstance(device, str)
+        or not isinstance(note, str)
+        or not isinstance(to_session, str)
+        or not isinstance(paths, list)
+        or not all(isinstance(x, str) for x in paths)
+        or not isinstance(secrets_flag, bool)
+    ):
+        return JSONResponse(
+            {
+                "error": "device, note and to_session must be strings, paths a "
+                "list of strings, include_secrets a boolean",
+                "code": "bad_request",
+            },
+            status_code=400,
+        )
+    status, out = await _send_files.send(
+        inst,
+        title,
+        device,
+        paths,
+        note=note,
+        to_session=to_session.strip(),
+        include_secrets=secrets_flag,
+        zone_hits=zone_hits_for_paths,
+    )
+    return JSONResponse(out, status_code=status)
+
+
+# --------------------------------------------------------------------------- #
+# The inbox: receiving files from another of your devices (core.inbox)
+# --------------------------------------------------------------------------- #
+def _transfer_refusal(request: Request) -> Optional[JSONResponse]:
+    """Only another of your devices, over the device link, while remote
+    control is on here: the remote marker AND a valid credential (this
+    device's token or the fleet key) — checked even when the token gate is
+    off, so a tailnet stranger can never write into the inbox."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {"error": "a guest link cannot send files here", "code": "guest"},
+            status_code=403,
+        )
+    if not _remote.from_remote(request):
+        return JSONResponse(
+            {
+                "error": "transfers come only from your other devices "
+                "(send_files there)",
+                "code": "not_a_device",
+            },
+            status_code=403,
+        )
+    auth = request.headers.get("authorization") or ""
+    tok = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    if not tok or not _auth.token_valid(tok):
+        return JSONResponse(
+            {
+                "error": "this device did not accept the sender's credential — "
+                "pair the two again in Settings → Your devices",
+                "code": "not_linked",
+            },
+            status_code=401,
+        )
+    if not _remote.remote_control_enabled():
+        return JSONResponse(
+            {
+                "error": "Allow remote control is off on this device — turn it on "
+                "in Settings → Your devices → Advanced to receive files",
+                "code": "remote_control_off",
+            },
+            status_code=403,
+        )
+    return None
+
+
+def _transfer_sender(request: Request) -> Tuple[str, bool]:
+    """``(device label, verified)`` for a transfer: the discovered device the
+    request's tailnet address belongs to when there is one (verified), else
+    the remote marker the sender put on it (only a claim)."""
+    try:
+        ip = request.client.host if request.client else ""
+    except Exception:  # noqa: BLE001
+        ip = ""
+    seen = _remote.device_for_ip(ip)
+    if seen:
+        return seen, True
+    return request.headers.get(_remote.REMOTE_HEADER, ""), False
+
+
+def _inbox_in_use(path: str) -> bool:
+    """Whether a live session works in (or under) ``path``."""
+    real = os.path.realpath(path)
+    for inst in list(ENGINE.instances.values()):
+        for attr in ("GetWorktreePath",):
+            try:
+                wt = getattr(inst, attr)() or ""
+            except Exception:  # noqa: BLE001
+                wt = ""
+            if not wt:
+                continue
+            w = os.path.realpath(wt)
+            if w == real or w.startswith(real + os.sep):
+                return True
+        rp = str(getattr(inst, "Path", "") or "")
+        if rp:
+            r = os.path.realpath(rp)
+            if r == real or r.startswith(real + os.sep):
+                return True
+    return False
+
+
+def _inbox_session_check(title: str) -> Optional[str]:
+    if title in ENGINE.instances:
+        return None
+    import difflib
+
+    names = sorted(ENGINE.instances)
+    close = difflib.get_close_matches(title, names, n=1, cutoff=0.6)
+    return "no session named %s on this device%s — the files were not sent" % (
+        title,
+        " (did you mean %s?)" % close[0] if close else "",
+    )
+
+
+def _inbox_answer(fn, *args, ok: int = 200, **kw) -> JSONResponse:
+    try:
+        return JSONResponse(fn(*args, **kw), status_code=ok)
+    except _send_session.Refusal as r:
+        return JSONResponse(r.body(), status_code=r.status)
+
+
+@app.post("/api/transfers")
+async def transfer_begin(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Open a transfer from another of your devices: the manifest (``{v: 1,
+    kind: files|bundle, files: [{path, size, sha256, exec}], total_sha256,
+    note, from_session, to_session, bundle?}``) → **201** ``{id,
+    received}``. Every check of :func:`backend.web.core.inbox.check_manifest`
+    first; 400 ``bad_manifest`` / 413 ``too_large`` / ``too_many_files`` /
+    507 ``inbox_full`` / 404 ``no_session``."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    sender, verified = _transfer_sender(request)
+    return await asyncio.to_thread(
+        _inbox_answer,
+        _inbox.begin,
+        payload,
+        sender,
+        lim=_send_files.limits(),
+        session_check=_inbox_session_check,
+        in_use=_inbox_in_use,
+        from_verified=verified,
+        ok=201,
+    )
+
+
+@app.get("/api/transfers/{tid}")
+async def transfer_status(tid: str, request: Request) -> JSONResponse:
+    """``{id, received: [bytes per file]}`` — where a sender resumes."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    return await asyncio.to_thread(_inbox_answer, _inbox.status, tid)
+
+
+@app.put("/api/transfers/{tid}/files/{index}")
+async def transfer_chunk(
+    tid: str, index: int, request: Request, offset: int = -1
+) -> JSONResponse:
+    """One chunk of file ``index`` at ``offset`` (raw body, at most
+    :data:`backend.web.core.inbox.CHUNK_MAX` bytes) → ``{received}``; 409
+    ``offset_mismatch`` carries what arrived."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    data = bytearray()
+    async for part in request.stream():
+        data.extend(part)
+        if len(data) > _inbox.CHUNK_MAX:
+            return JSONResponse(
+                {
+                    "error": "a chunk is at most %d bytes" % _inbox.CHUNK_MAX,
+                    "code": "chunk_too_large",
+                },
+                status_code=413,
+            )
+    return await asyncio.to_thread(
+        _inbox_answer, _inbox.write_chunk, tid, index, offset, bytes(data)
+    )
+
+
+@app.post("/api/transfers/{tid}/finish")
+async def transfer_finish(tid: str, request: Request) -> JSONResponse:
+    """Verify every SHA-256 and move the transfer into the inbox (unpack a
+    bundle) → ``{id, path, files, total_sha256, exec_stripped, …}``; 422
+    ``checksum_mismatch`` / ``bad_bundle`` drop it."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    return await asyncio.to_thread(
+        _inbox_answer, _inbox.finish, tid, lim=_send_files.limits()
+    )
+
+
+@app.post("/api/transfers/{tid}/cancel")
+async def transfer_cancel(tid: str, request: Request) -> JSONResponse:
+    """Drop an unfinished transfer."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    return await asyncio.to_thread(_inbox_answer, _inbox.cancel, tid)
+
+
 @app.post("/api/instances/{title}/background/{pid}/stop")
 async def instance_background_stop(title: str, pid: int) -> JSONResponse:
     """Stop one background job the session's agent left running (the row's
@@ -5838,10 +6252,11 @@ async def instance_setup_status(title: str, lines: int = 200) -> JSONResponse:
 
 @app.post("/api/instances/{title}/setup/rerun")
 async def instance_setup_rerun(title: str) -> JSONResponse:
-    """Re-run the worktree's O2 setup pass (Settings action).
+    """Re-run the worktree's O2 setup pass (the session menu's action).
 
-    400 when no ``[workspace]`` setup is configured, 409 when one is already
-    running, else 202 with the fresh setup summary.
+    400 when there is nothing to do (no pin file to carry, no lockfile, no
+    declared setup), 409 when one is already running, else 202 with the
+    fresh setup summary.
     """
     inst, wt, err = _wt_or_409(title)
     if err is not None:
@@ -5849,15 +6264,24 @@ async def instance_setup_rerun(title: str) -> JSONResponse:
     peer_err = _peer_guard.refusal(inst, "worktree setup")
     if peer_err is not None:
         return peer_err
-    cfg = _wt_setup.load_config(wt)  # .mindflock.toml is committed → in the worktree
-    if not cfg.has_setup:
+    if _wt_setup.is_running(wt, "setup"):
+        return JSONResponse({"error": "setup already running"}, status_code=409)
+    # .mindflock.toml is committed → read from the worktree; the user's
+    # per-repo block is keyed by the source checkout.
+    cfg = await asyncio.to_thread(_wt_setup.load_setup_config, wt, inst.Path or wt)
+    started = await asyncio.to_thread(
+        _wt_setup.start_setup, title, inst.Path or wt, wt, cfg
+    )
+    if not started:
+        if _wt_setup.is_running(wt, "setup"):
+            return JSONResponse({"error": "setup already running"}, status_code=409)
         return JSONResponse(
-            {"error": "no [workspace] setup configured in .mindflock.toml"},
+            {
+                "error": "nothing to set up: no pin files to carry, no lockfiles, "
+                "and no [workspace] setup in .mindflock.toml"
+            },
             status_code=400,
         )
-    started = _wt_setup.start_setup(title, inst.Path or wt, wt, cfg)
-    if not started:
-        return JSONResponse({"error": "setup already running"}, status_code=409)
     return JSONResponse(
         {"ok": True, "status": _wt_setup.setup_summary(wt)}, status_code=202
     )
@@ -8426,12 +8850,17 @@ def _resolve_fallback_base_branch(wt: str) -> str:
             return cand
     # 3. The configured provision base — but only when this session's repo
     #    matches the configured repo (a global "staging" must never leak onto
-    #    an unrelated repo; that's the K1 bug).
+    #    an unrelated repo; that's the K1 bug) AND the branch is there. Local
+    #    refs only: this runs on the poll path.
     try:
         s = provisioning.load_provision_settings()
         if s is not None:
             origin = provisioning._git_origin_url(wt)
-            if origin and provisioning._same_repo_url(origin, s.repo_url):
+            if (
+                origin
+                and provisioning._same_repo_url(origin, s.repo_url)
+                and _repo_base.branch_exists(wt, s.base_branch, network=False)
+            ):
                 return s.base_branch
     except Exception:  # noqa: BLE001
         pass
@@ -8480,29 +8909,70 @@ def _configured_pr_base(wt: str = "") -> str:
 
     The repo's own ``repository.repo_branches`` block first (its
     ``pr_base_branch``, else its ``base_branch``), then the flock-wide
-    ``repository.pr_base_branch``. Read fresh from settings on each call so a
-    change takes effect without a restart. When set it overrides the
-    per-session fork-point as the "Make PR" target (see
-    :func:`instance_make_pr`); blank leaves the K1 behaviour intact.
+    ``repository.pr_base_branch`` — that one ONLY when the branch exists on
+    this repository (:mod:`backend.repo_base`; a flat "staging" is right for
+    one repo and an ``ambiguous argument`` for the next). Read fresh from
+    settings on each call so a change takes effect without a restart.
+    Blocking (git, maybe one cached ``ls-remote``).
     """
     try:
-        from backend.config.settings import load_settings, repo_branches_for
-
-        st = load_settings()
-        if wt:
-            pr = repo_branches_for(provisioning.repo_slug_for(wt), st)[1]
-            if pr:
-                return pr
-        return (st.repository.pr_base_branch or "").strip()
+        return _repo_base.resolve(wt, "pr", fallback=False).branch
     except Exception:  # noqa: BLE001 — settings optional; never break a PR
         return ""
 
 
-def _default_pr_base(wt: str, inst) -> str:
-    """The Make-PR target when the dialog picked none: the configured PR base,
-    else the session's own base. Blocking (settings + git): call it through
+def _pr_base_choice(wt: str, inst) -> "_repo_base.BaseChoice":
+    """The Make-PR target when the dialog picked none, and why.
+
+    Your setting for this repository → the flat PR base if this repository
+    has it (:func:`_configured_pr_base`) → the session's own base (K1) if the
+    repository has THAT → the repository's default branch → main/master.
+    ``.note`` says, once, when a configured branch was passed over;
+    ``.branch`` is ``""`` (and ``.error`` the plain sentence) when nothing
+    resolved. Blocking (settings + git): call it through
     ``asyncio.to_thread`` from a request handler."""
-    return _configured_pr_base(wt) or _session_base_branch(inst)
+    configured = _configured_pr_base(wt)
+    per_repo, flat = _repo_base.configured(wt, "pr")
+    if configured:
+        source = (
+            _repo_base.SOURCE_REPO
+            if per_repo and configured == per_repo
+            else _repo_base.SOURCE_SETTING
+        )
+        return _repo_base.BaseChoice(configured, source)
+    # Nothing configured came back although a flat value is set: the
+    # resolver passed it over because this repository does not have it.
+    skipped = flat if (flat and not per_repo) else ""
+    session_base = ""
+    try:
+        session_base = str(_session_base_branch(inst) or "").strip()
+    except Exception:  # noqa: BLE001
+        session_base = ""
+    if session_base and session_base != skipped:
+        # Local evidence counts here (the long-standing K1 target: a branch
+        # this checkout has); the remote is asked only when the checkout
+        # shows nothing — the case of a base recorded from a flat setting.
+        if (
+            _repo_base.branch_exists(wt, session_base, network=False)
+            or _repo_base.branch_exists(wt, session_base) is not False
+        ):
+            return _repo_base.BaseChoice(
+                session_base, _repo_base.SOURCE_SESSION, skipped
+            )
+        # A session recorded against a branch this repository lacks (one
+        # provisioned from a flat setting before the resolver existed).
+        skipped = skipped or session_base
+    try:
+        fell = _repo_base.resolve(wt, "pr", per_repo="", flat="")
+    except Exception:  # noqa: BLE001
+        fell = _repo_base.BaseChoice()
+    return _repo_base.BaseChoice(fell.branch, fell.source, skipped)
+
+
+def _default_pr_base(wt: str, inst) -> str:
+    """The Make-PR target when the dialog picked none (see
+    :func:`_pr_base_choice`), or ``""`` when nothing resolved. Blocking."""
+    return _pr_base_choice(wt, inst).branch
 
 
 _PR_CACHE: Dict[str, tuple] = {}  # branch -> (expires_epoch, info_or_None, last_good)
@@ -10073,8 +10543,20 @@ async def instance_branches(title: str) -> JSONResponse:
     current = await asyncio.to_thread(_current_branch, wt) or inst.Branch or ""
     # A settings parse plus up to a few git processes: off the event loop, so
     # every pane's output doesn't wait behind the dialog opening.
-    default = await asyncio.to_thread(_default_pr_base, wt, inst)
-    return JSONResponse({"branches": branches, "current": current, "default": default})
+    choice = await asyncio.to_thread(_pr_base_choice, wt, inst)
+    # ``note`` / ``error`` are the plain sentences the dialog shows under the
+    # picker: a configured branch this repository lacks was passed over, or
+    # nothing resolved at all (then the user picks one here).
+    return JSONResponse(
+        {
+            "branches": branches,
+            "current": current,
+            "default": choice.branch,
+            "why": choice.why,
+            "note": choice.note,
+            "error": choice.error,
+        }
+    )
 
 
 # The one remedy sentence every "MindFlock can't do the GitHub half itself"
@@ -10153,14 +10635,23 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
     chosen = (payload or {}).get("base")
 
     def _base_and_branch():
-        b = (chosen or "").strip() or _default_pr_base(wt, inst)
+        picked = (chosen or "").strip()
+        choice = (
+            _repo_base.BaseChoice(picked, "picked")
+            if picked
+            else _pr_base_choice(wt, inst)
+        )
         # PR the branch the worktree is *actually* on — the stored inst.Branch
         # can drift when the worktree is switched, which would PR the wrong one.
-        return b, _current_branch(wt) or inst.Branch or ""
+        return choice, _current_branch(wt) or inst.Branch or ""
 
     # Up to ~5 git processes plus a settings parse: one hop off the event loop
     # so every pane's output doesn't wait behind them.
-    base, branch = await asyncio.to_thread(_base_and_branch)
+    choice, branch = await asyncio.to_thread(_base_and_branch)
+    base = choice.branch
+    if not base:
+        # Never hand git a branch that does not exist: say what to set instead.
+        return JSONResponse({"error": choice.error}, status_code=409)
     if not branch or branch == base:
         return JSONResponse(
             {
@@ -10255,7 +10746,12 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
             if out:
                 msg += ": " + out
         return JSONResponse({"error": msg}, status_code=400)
-    return JSONResponse({"ok": True, "url": url})
+    out_body = {"ok": True, "url": url}
+    if choice.note:
+        # "Using main: this repository has no staging branch" — said once,
+        # where the PR was opened (the ship dialog's toast, the route stop).
+        out_body["base_note"] = choice.note
+    return JSONResponse(out_body)
 
 
 def _merge_browser_fallback(
@@ -10354,12 +10850,13 @@ async def instance_merge_pr(title: str, payload: Optional[dict] = None) -> JSONR
             pass
         _ORIGIN_SHA_CACHE.pop((wt, branch), None)
         base = _default_pr_base(wt, inst)
-        _run_capped(  # best-effort; a failure just leaves the old lag
-            ["git", "-C", wt, "fetch", "origin", base],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=120,
-        )
+        if base:
+            _run_capped(  # best-effort; a failure just leaves the old lag
+                ["git", "-C", wt, "fetch", "origin", base],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=120,
+            )
         return base
 
     base = await asyncio.to_thread(_post_merge)
@@ -14046,6 +14543,8 @@ app.include_router(_peer_routes.router)
 app.include_router(_peer_session_routes.router)
 app.include_router(_chat_routes.router)
 app.include_router(_guest_routes.router)
+# Reach my devices from anywhere (docs/devices-anywhere.md)
+app.include_router(_devices_anywhere_routes.router)
 
 
 async def _attach_pty(ws: WebSocket, name: str, guest: bool):

@@ -1635,7 +1635,9 @@ def test_the_flight_pauses_when_it_reaches_a_halt_point():
     ss = f["step_states"]["s2"]
     assert ss["state"] == "pending" and ss["detail"] == {"halt_hit": True}
     assert f["history"][-1]["event"] == "halted_at"
-    assert F.event_data(f)["detail"].endswith(": halted before Notify me")
+    assert F.event_data(f)["detail"].endswith(
+        ": paused before Notify me — your halt point"
+    )
     # Paused: nothing runs.
     assert F.next_action(f, {"session": sess()}, NOW)["action"] == "wait"
     # Resume carries on INTO the step and does not stop there again.

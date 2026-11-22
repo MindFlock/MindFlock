@@ -29,7 +29,7 @@ from typing import List, Optional, Tuple
 
 import pyperclip
 
-from backend import log
+from backend import gitutil, log
 from backend.session import git
 from backend.session import tmux
 from backend.session.storage import (
@@ -218,6 +218,12 @@ class Instance:
         # the web server before Start/Resume; not persisted — the server
         # re-derives it from its ports allocation on every (re)start.
         self.ExtraEnv: dict = {}
+        # Called with the worktree path once a first-time Start has created
+        # it (after a Branch session's carry) and BEFORE the agent launches:
+        # the web server prepares the worktree there (pin files carried,
+        # dependency setup started in the background). Not persisted; a
+        # failing hook never fails the start.
+        self.OnWorktreeReady = None
         # Provisioned-workspace extension (off by default).
         self.Provisioned: bool = False
         self.WorkspaceStrategy: str = "worktree"
@@ -392,6 +398,7 @@ class Instance:
                 # the agent can see the folder. A failure fails the start (and
                 # removes the worktree) rather than quietly leaving them out.
                 self._apply_carry()
+                self._worktree_ready()
 
                 # Resolve the coding provider and configure the launch
                 # command now that the worktree exists and before tmux starts.
@@ -464,6 +471,19 @@ class Instance:
             ) from err
         self._carry_ref = ""
 
+    def _worktree_ready(self) -> None:
+        """Run :attr:`OnWorktreeReady` once (best-effort, never raises)."""
+        hook, self.OnWorktreeReady = self.OnWorktreeReady, None
+        if hook is None:
+            return
+        try:
+            hook(self._git_worktree.GetWorktreePath())
+        except Exception as err:  # noqa: BLE001
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf(
+                    "worktree-ready hook for %v failed: %v", self.Title, err
+                )
+
     def _create_first_time_worktree(self) -> None:
         """Create the git worktree for a first-time :meth:`Start`.
 
@@ -507,6 +527,9 @@ class Instance:
                         "configured (config.toml with [repository].url) "
                         "and no local repo was chosen"
                     )
+                # A flat base branch only where this repository has it
+                # (backend.repo_base); else the repository's own default.
+                settings = _prov.settle_base_branch(settings)
             branch = (
                 self._new_branch
                 or self._selected_branch
@@ -1484,11 +1507,15 @@ class _InPlaceWorktree(git.GitWorktree):
     def _detect(self) -> None:
         d = self.worktreePath
         try:
+            argv, env = gitutil.guarded(
+                ["git", "-C", d, "rev-parse", "--abbrev-ref", "HEAD"]
+            )
             r = subprocess.run(
-                ["git", "-C", d, "rev-parse", "--abbrev-ref", "HEAD"],
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=_GIT_PROBE_TIMEOUT_SECONDS,
+                env=env,
             )
             if r.returncode == 0 and r.stdout.strip():
                 self.branchName = r.stdout.strip()
@@ -1496,11 +1523,13 @@ class _InPlaceWorktree(git.GitWorktree):
             pass
         if not self.baseCommitSHA:
             try:
+                argv, env = gitutil.guarded(["git", "-C", d, "rev-parse", "HEAD"])
                 r = subprocess.run(
-                    ["git", "-C", d, "rev-parse", "HEAD"],
+                    argv,
                     capture_output=True,
                     text=True,
                     timeout=_GIT_PROBE_TIMEOUT_SECONDS,
+                    env=env,
                 )
                 if r.returncode == 0 and r.stdout.strip():
                     self.baseCommitSHA = r.stdout.strip()

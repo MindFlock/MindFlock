@@ -824,6 +824,7 @@ def test_drain_stops_queue_on_limit_when_wait_off(drain, monkeypatch):
     server, sent = drain
     escapes = []
     monkeypatch.setattr(server, "_agent_activity", lambda i, t: "limit")
+    monkeypatch.setattr(server, "_refresh_limit_state", lambda i, t, n: 9_999_999_999.0)
     monkeypatch.setattr(server, "_send_escape_to_agent", lambda n: escapes.append(n))
     pq.enqueue("d1", "task")
     pq.set_flags("d1", wait_for_limit=False)
@@ -831,6 +832,23 @@ def test_drain_stops_queue_on_limit_when_wait_off(drain, monkeypatch):
     assert sent == [] and escapes == []
     assert server._prompt_queue.get_state("d1")["enabled"] is False
     assert [i["text"] for i in pq.list_queue("d1")] == ["task"]  # kept for resume
+
+
+def test_drain_limit_reading_that_is_open_sends_even_with_wait_off(drain, monkeypatch):
+    """The reading says 'limit' but the window is in fact open (the pane's
+    newest notice is "Now using usage credits", or the meter shows headroom):
+    the held task is delivered, never parked by switching the queue off —
+    wait_for_limit only decides what happens while a limit really holds."""
+    server, sent = drain
+    escapes = []
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: "limit")
+    monkeypatch.setattr(server, "_refresh_limit_state", lambda i, t, n: 0.0)
+    monkeypatch.setattr(server, "_send_escape_to_agent", lambda n: escapes.append(n))
+    pq.enqueue("d1", "task")
+    pq.set_flags("d1", wait_for_limit=False)
+    server._drain_one_queue("d1")
+    assert sent == ["task"] and len(escapes) == 1
+    assert server._prompt_queue.get_state("d1")["enabled"] is True
 
 
 def test_drain_does_not_double_send_until_reworks(drain, monkeypatch):

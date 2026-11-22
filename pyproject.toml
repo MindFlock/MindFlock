@@ -100,6 +100,13 @@ web = [
     "segno",  # pure-python QR codes for the startup mobile-URL banner
     "cryptography>=41",  # peer links: Ed25519 identity + self-signed TLS cert
 ]
+[tool.uv]
+# What a bare `uv sync` / `uv run` installs: dev + web, the set every test and
+# the web UI need (docs/development.md). MindFlock's own worktree preparation
+# runs a plain `uv sync --frozen` in each new session worktree, so this line is
+# what makes a fresh worktree of this repo ready to test.
+default-groups = ["dev", "web"]
+
 [build-system]
 requires = ["uv_build>=0.11.6,<0.14.0"]
 build-backend = "uv_build"

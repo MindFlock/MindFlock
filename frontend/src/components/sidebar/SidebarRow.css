@@ -823,7 +823,7 @@
 #view-modes .vm.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 
@@ -1153,7 +1153,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .inst .guest-pill.following {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--accent-ink);
 }
 .guest-note {
   margin: 4px 8px 2px;

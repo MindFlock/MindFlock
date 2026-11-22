@@ -443,6 +443,10 @@ class RelayIngress:
         self._pending = 0
         self._upgraded = 0
         self._tasks: set[asyncio.Task] = set()
+        # A second, short-lived path with its own handler (the device
+        # tunnel's pairing path: one per pairing code, gone when the code is
+        # replaced, cancelled or expires — :meth:`set_side_path`).
+        self._side: tuple | None = None
         self.stats = {"requests": 0, "rejected": 0, "dropped": 0, "upgraded": 0}
 
     @property
@@ -462,21 +466,50 @@ class RelayIngress:
             )
         return self.port
 
+    def set_side_path(
+        self,
+        path: str | None,
+        on_stream: Callable | None = None,
+        until: float = 0.0,
+    ) -> None:
+        """Also accept ``path`` (until ``until``, ``time.monotonic``), handing
+        its streams to ``on_stream`` instead — or, with ``None``, stop. One
+        side path at a time: setting a new one retires the old at once."""
+        if path is None:
+            self._side = None
+            return
+        if on_stream is None:
+            raise ValueError("a side path needs a handler")
+        self._side = (check_path(path).encode("ascii"), on_stream, float(until))
+
     async def stop(self) -> None:
+        self._side = None
         server, self._server = self._server, None
         if server is not None:
             server.close()
         for task in list(self._tasks):
             task.cancel()
 
-    def _check_upgrade(self, raw: bytes) -> tuple[str, str]:
-        """→ ``(Sec-WebSocket-Accept, source)``; :class:`WsError` otherwise."""
+    def _check_upgrade(self, raw: bytes) -> tuple[str, str, Callable]:
+        """→ ``(Sec-WebSocket-Accept, source, handler)``; :class:`WsError`
+        otherwise. Both paths are compared every time (constant time each)."""
         start, h = _parse_head(raw)
         parts = start.split(" ")
         if len(parts) != 3 or parts[0] != "GET" or parts[2] != "HTTP/1.1":
             raise WsError("not a GET")
         target = parts[1].encode("latin-1")
-        if not hmac.compare_digest(target, self._path):
+        main = hmac.compare_digest(target, self._path)
+        side = self._side
+        side_ok = False
+        if side is not None:
+            side_ok = (
+                hmac.compare_digest(target, side[0]) and time.monotonic() < side[2]
+            )
+        if main:
+            handler = self._on_stream
+        elif side_ok:
+            handler = side[1]
+        else:
             raise WsError("wrong path")
         if (
             h.get("upgrade", "").lower() != "websocket"
@@ -498,7 +531,7 @@ class RelayIngress:
                 source = str(ipaddress.ip_address(h["cf-connecting-ip"]))
             except ValueError:
                 pass
-        return accept_key(key), source
+        return accept_key(key), source, handler
 
     async def _reject(self, reader, writer) -> None:
         """Send the 404, then a lingering close: half-close and discard what
@@ -529,7 +562,7 @@ class RelayIngress:
             try:
                 async with asyncio.timeout(self.head_timeout):
                     raw = await _read_head(reader, self.max_head)
-                accept, source = self._check_upgrade(raw)
+                accept, source, handler = self._check_upgrade(raw)
             except (WsError, TimeoutError, OSError, ValueError, UnicodeError):
                 await self._reject(reader, writer)
                 return
@@ -541,7 +574,7 @@ class RelayIngress:
             self._upgraded += 1
             self.stats["upgraded"] += 1
             try:
-                await self._bridge(reader, writer, accept, source)
+                await self._bridge(reader, writer, accept, source, handler)
             finally:
                 self._upgraded -= 1
         except asyncio.CancelledError:
@@ -553,7 +586,10 @@ class RelayIngress:
         finally:
             self._tasks.discard(task)
 
-    async def _bridge(self, reader, writer, accept: str, source: str) -> None:
+    async def _bridge(
+        self, reader, writer, accept: str, source: str, handler=None
+    ) -> None:
+        on_stream = handler or self._on_stream
         writer.write(
             (
                 "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
@@ -569,7 +605,7 @@ class RelayIngress:
             inner.update(task=task, writer=iw)
             self._tasks.add(task)
             try:
-                await self._on_stream(ir, iw, source)
+                await on_stream(ir, iw, source)
             finally:
                 self._tasks.discard(task)
 

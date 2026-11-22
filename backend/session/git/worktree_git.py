@@ -19,7 +19,7 @@ import subprocess
 import webbrowser
 from typing import List
 
-from backend import git_auth_hints, log
+from backend import git_auth_hints, gitutil, log
 from backend.session.git.remote_url import branch_url, is_local_path
 from backend.session.git.util import _exit_error, _trim_prefix, gh_available
 
@@ -185,12 +185,16 @@ class GitWorktreeGitMixin:
         if _is_peer_share(path):
             args = _peer_share_args(args)
             base_args = [*_PEER_SHARE_GIT, "-C", path]
+        # A folder that arrived from another device (the transfer inbox):
+        # no implicit bare repo, fsmonitor or hooks (gitutil.untrusted_guard).
+        argv, env = gitutil.guarded(["git", *base_args, *args])
         try:
             cmd = subprocess.run(
-                ["git", *base_args, *args],
+                argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # CombinedOutput()
                 timeout=timeout,
+                env=env,
             )
         except subprocess.TimeoutExpired as err:
             raise RuntimeError(

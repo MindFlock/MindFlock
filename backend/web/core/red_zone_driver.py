@@ -435,6 +435,33 @@ def _red_zone_breaches_for(inst, wt: str, target: str = "HEAD") -> list:
     ]
 
 
+def zone_hits_for_paths(wt: str, rels: list) -> list:
+    """The paths of ``rels`` (worktree-relative) that a send must not carry:
+    in an enforced red zone or outside the session's green scope / fence —
+    the same ONE predicate as every other zone check, on the working tree
+    (``rev=None``) → ``[{"path", "pattern", "zone_id", "kind"}]``. ``[]``
+    when the repo has no zones; fails open like the push gate."""
+    try:
+        ident = _red_zones.repo_identity(wt)
+        ci = _red_zone_monitor.root_ci(wt)
+        doc = _rz_doc(wt, ident[0] if ident else None, ci=ci)
+        if not doc["red"] and not doc["green"]:
+            return []
+        hits = _red_zones.breach_verdicts(doc, rels, ci, root=os.path.realpath(wt))
+    except Exception:  # noqa: BLE001
+        return []
+    return [
+        {
+            "path": rel,
+            "pattern": hits[rel].get("pattern"),
+            "zone_id": hits[rel].get("zone_id"),
+            "kind": hits[rel].get("kind") or "red",
+        }
+        for rel in rels
+        if rel in hits
+    ]
+
+
 def _pr_committed_changed(inst, wt: str, target: str) -> list:
     """What a PR/merge of ``target`` (``origin/<branch>``) would carry, as the
     FORGE sees it: ``<base>...<target>`` — the diff from the merge-base of the

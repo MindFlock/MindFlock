@@ -272,7 +272,7 @@
   padding: 0 4px;
   border-radius: 7px;
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
   font-size: 9px;
   font-weight: 700;
   line-height: 14px;
@@ -479,7 +479,7 @@
 #addon-bars .addon-toggle.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 #addon-bars .addon-toggle:disabled {

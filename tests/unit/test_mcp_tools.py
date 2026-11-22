@@ -40,7 +40,7 @@ def _ctx(clock, **kw):
 # Text budgets and registry
 # --------------------------------------------------------------------------- #
 class TestRegistry:
-    def test_forty_tools_with_annotations(self):
+    def test_forty_three_tools_with_annotations(self):
         box, _, _ = make_box(_tree())
         tools = build_tools(box)
         assert [t.name for t in tools] == [
@@ -84,8 +84,11 @@ class TestRegistry:
             "add_todo",
             "list_todos",
             "update_todo",
+            "list_devices",
+            "send_session",
+            "send_files",
         ]
-        assert len(tools) == 40
+        assert len(tools) == 43
         by = {t.name: t for t in tools}
         for name in (
             "whoami",
@@ -136,6 +139,12 @@ class TestRegistry:
             assert by[name].annotations["openWorldHint"] is True
         assert by["save_flight_plan"].annotations["readOnlyHint"] is False
         assert by["save_flight_plan"].annotations["openWorldHint"] is False
+        # Devices: listing is a read; sending pushes and starts a session on
+        # another machine, so it always prompts.
+        assert by["list_devices"].annotations["readOnlyHint"] is True
+        assert by["send_session"].annotations["readOnlyHint"] is False
+        assert by["send_session"].annotations["openWorldHint"] is True
+        assert by["send_files"].annotations["openWorldHint"] is True
 
     def test_text_budgets(self):
         box, _, _ = make_box(_tree())
@@ -1123,6 +1132,30 @@ class TestSpawn:
 
         with pytest.raises(ToolError, match="failed to start"):
             box.spawn_session({"prompt": "p"}, _ctx(clock, on_sleep=drop))
+        assert "orch-w1" not in box.policy.spawned_by_me
+
+    def test_a_failed_start_row_is_an_error_at_once(self):
+        """The server keeps a spawn whose Start failed as a ``start_failed``
+        row (status still "loading"), so nothing a batch spawned vanishes:
+        the ready wait reports its reason on the next poll instead of
+        waiting the full ready window out."""
+        clock = FakeClock()
+        box, api, _ = make_box(_tree(), clock=clock)
+
+        def fail(now):
+            for r in api.rows:
+                if r["title"] == "orch-w1":
+                    r["pending"] = True
+                    r["start_failed"] = {
+                        "error": "git command failed: fatal: failed to read "
+                        ".git/worktrees/orch-w2_1/commondir",
+                        "at": 1.0,
+                    }
+
+        ctx = _ctx(clock, on_sleep=fail)
+        with pytest.raises(ToolError, match="failed to start: git command failed"):
+            box.spawn_session({"prompt": "p"}, ctx)
+        assert len(ctx.slept) == 1
         assert "orch-w1" not in box.policy.spawned_by_me
 
     def test_no_wait_ready(self):

@@ -1485,8 +1485,16 @@ def check_cloudflared() -> Check:
     except Exception:  # noqa: BLE001 — the doctor must never fail on it
         guests = False
     wanted = wanted or guests
+    # Reach my devices from anywhere runs the same kind of tunnel.
+    anywhere = _devices_anywhere_on()
+    wanted = wanted or anywhere
     cmd, pkg = _cloudflared_install()
-    if relay == "cloudflare":
+    if anywhere and relay != "cloudflare":
+        detail = (
+            "not found — Reach my devices from anywhere is on, but this "
+            "computer can't open its private tunnel until it's installed"
+        )
+    elif relay == "cloudflare":
         detail = "not found, but peer.relay is 'cloudflare' — invites will fail"
     elif guests and not (relay == "auto" and bool(peer.get("enabled"))):
         detail = (
@@ -1511,6 +1519,74 @@ def check_cloudflared() -> Check:
         pkg=pkg,
         install=wanted and bool(cmd),
     )
+
+
+def _devices_anywhere_on() -> bool:
+    try:
+        from backend.config.settings import load_settings
+
+        return bool(getattr(load_settings().general, "devices_anywhere", False))
+    except Exception:  # noqa: BLE001 — settings are optional
+        return False
+
+
+def check_devices_anywhere() -> Optional[Check]:
+    """Reach my devices from anywhere (``docs/devices-anywhere.md``): the
+    pieces — cloudflared, the GitHub permission, the tunnel, the published
+    record — as the running server last saw them (it writes a no-secrets
+    snapshot; this may be another process). None while the switch is off."""
+    if not _devices_anywhere_on():
+        return None
+    import os
+    import time as _time
+
+    from backend.peer.tunnel import find_cloudflared
+    from backend.web.core import devices_anywhere as _anywhere
+
+    label = "Reach my devices from anywhere"
+    have_cf = bool(find_cloudflared(os.environ.get("MINDFLOCK_CLOUDFLARED", "")))
+    snap = _anywhere.last_status()
+    fresh = bool(snap) and _time.time() - float(snap.get("at") or 0) < 120
+    parts = ["cloudflared %s" % ("found" if have_cf else "missing")]
+    gh = (snap.get("github") or {}) if fresh else {}
+    gh_state = gh.get("state") or "unknown"
+    parts.append(
+        {
+            "ok": "GitHub permission ok",
+            "permission": "GitHub permission missing",
+            "no_token": "GitHub not signed in",
+            "public_repo": "GitHub repo is public",
+            "not_owned": "GitHub repo isn't yours",
+            "moved": "GitHub repo was moved",
+            "unreachable": "GitHub unreachable",
+            "rate_limited": "GitHub rate-limiting",
+        }.get(gh_state, "GitHub not checked yet")
+    )
+    if fresh:
+        parts.append("tunnel %s" % (snap.get("tunnel") or "off"))
+        parts.append(
+            "record %s" % ("published" if snap.get("published_at") else "not published")
+        )
+        parts.append("%d other device(s) found" % int(snap.get("found") or 0))
+    else:
+        parts.append("the server isn't running (or hasn't reported yet)")
+    detail = " · ".join(parts)
+    if not have_cf:
+        return Check(
+            "devices-anywhere",
+            label,
+            "warn",
+            detail,
+            "install cloudflared (see the cloudflared row)",
+            docs=_DOCS["cloudflared"],
+        )
+    if gh_state in ("permission", "no_token", "public_repo", "not_owned", "moved"):
+        return Check("devices-anywhere", label, "warn", detail, gh.get("text") or "")
+    if fresh and snap.get("state") == "failed":
+        return Check("devices-anywhere", label, "warn", detail, snap.get("text") or "")
+    if fresh and snap.get("state") == "on" and snap.get("published_at"):
+        return Check("devices-anywhere", label, "ok", detail)
+    return Check("devices-anywhere", label, "info", detail)
 
 
 # --------------------------------------------------------------------------- #
@@ -1869,6 +1945,7 @@ CHECKS_BY_ID: dict[str, Callable[[], "Optional[Check] | List[Check]"]] = {
     "tailnet-mtu": check_tailnet_mtu,
     "bwrap": check_bwrap,
     "cloudflared": check_cloudflared,
+    "devices-anywhere": check_devices_anywhere,
     "state-schema": check_state_schema,
     "cache-seeds": check_cache_seeds,
     "db-drivers": check_db_drivers,

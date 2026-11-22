@@ -535,6 +535,23 @@ async def _create(
             )
 
         prompt = await asyncio.to_thread(_decorate)
+
+    # O2: prepare the worktree (repo-committed .mindflock.toml [workspace] +
+    # the user's repository.worktree_setup + the automatic recipe: pin files,
+    # dependencies). Plain worktree sessions only — provisioned workspaces run
+    # their own setup, and in-place sessions share the repo dir (deps already
+    # there). When dependencies will be made ready in the background (and
+    # nothing declared holds the prompt), the first prompt says so.
+    setup_cfg = None
+    if git_enabled and not is_provisioned and not in_place and not peer_share:
+
+        def _setup_plan():
+            cfg = srv._wt_setup.load_setup_config(plain_path)
+            return cfg, srv._wt_setup.dependency_plan(plain_path, cfg)
+
+        setup_cfg, _dep_steps = await asyncio.to_thread(_setup_plan)
+        if prompt and not setup_cfg.holds_prompts:
+            prompt += srv._wt_setup.prompt_note(_dep_steps)
     inst = srv.session.NewInstance(
         srv.session.InstanceOptions(
             title=title,
@@ -567,12 +584,13 @@ async def _create(
         {} if peer_share else await asyncio.to_thread(srv._ports.env_for, title)
     )
 
-    # O2: per-worktree setup (repo-committed .mindflock.toml [workspace]).
-    # Plain worktree sessions only — provisioned workspaces run their own
-    # setup, and in-place sessions share the repo dir (deps already there).
-    setup_cfg = None
-    if git_enabled and not is_provisioned and not in_place and not peer_share:
-        setup_cfg = await asyncio.to_thread(srv._wt_setup.load_config, plain_path)
+    if setup_cfg is not None:
+        # Prepared between worktree creation and the agent's launch (inside
+        # Start): the pin files are there before the agent can look.
+        def _prepare(wt: str, _cfg=setup_cfg) -> None:
+            srv._wt_setup.start_setup(title, plain_path, wt, _cfg)
+
+        inst.OnWorktreeReady = _prepare
     # Start does the heavy lifting (git worktree/clone + provisioning + tmux),
     # which can take minutes on the first worktree run (one-time base clone +
     # uv sync). Register the instance as "loading" and run Start in the
@@ -671,7 +689,7 @@ async def _create(
         bool(prompt)
         and prompt_delivery != "held"
         and (
-            (setup_cfg is not None and setup_cfg.has_setup)
+            (setup_cfg is not None and setup_cfg.holds_prompts)
             or (not is_provisioned and not srv._provider_seeds_prompt(program))
             # A sandboxed launch can't read the seed file (it lives outside
             # the sandbox): a shared session's prompt is always typed in.
@@ -740,13 +758,6 @@ async def _create(
                 srv._worker_order_driver.mark_never_ran(title, inst)
             srv.ENGINE.save()
             await asyncio.to_thread(_remember_folder)
-            if setup_cfg is not None and setup_cfg.has_setup:
-                try:
-                    srv._wt_setup.start_setup(
-                        title, plain_path, inst.GetWorktreePath(), setup_cfg
-                    )
-                except Exception:  # noqa: BLE001 — setup is best-effort
-                    pass
         except Exception as err:  # noqa: BLE001
             if srv.log.ErrorLog is not None:
                 srv.log.ErrorLog.Printf("failed to create instance %s: %v", title, err)
@@ -775,15 +786,20 @@ async def _create(
             # Surface the failure to watchers (UI toast, `mindflock events`,
             # the CLI's create poll) — a session silently vanishing from the
             # list is the worst failure mode.
-            if drained:
-                # It waited in the launch gate's queue: its row stays as a
-                # failure (with the task to retry) and its parent is told.
+            if drained or spawned:
+                # It waited in the launch gate's queue, or an agent spawned it
+                # (let through at once): its row stays as a failure (with the
+                # task to retry), wait_for_session reads failed_to_start, and
+                # its parent is told. Before, an agent's spawn admitted at once
+                # only dropped its row — a worker of a batch whose worktree
+                # add failed simply vanished.
                 note_start_failed(
                     title,
                     str(err),
                     parent=parent,
                     kind=kind or "spawn",
                     prompt=str(payload.get("prompt") or ""),
+                    spawned=spawned if spawned else None,
                 )
                 return
             srv._note_create_failure(title, str(err))
@@ -1847,6 +1863,36 @@ async def _create_gated(
     return JSONResponse(body, status_code=202), ""
 
 
+def _log_spawn(payload: dict, resp: JSONResponse, path: str) -> None:
+    """One info line per agent spawn the server answered: which title, for
+    which parent, and what became of it (queued / created / refused, with the
+    error). With the start's own outcome (``failed to create instance`` or
+    the launch gate's ``could not start``) every spawn of a batch can be
+    followed in the log. Never raises."""
+    try:
+        status, body = _json_result(resp)
+        if body.get("queued"):
+            what = "queued (%s, position %s)" % (
+                body.get("why") or "queue",
+                body.get("position"),
+            )
+        elif status < 400:
+            what = "creating"
+        else:
+            what = "refused %d: %s" % (status, body.get("error") or "")
+        srv = _server()
+        if srv.log.InfoLog is not None:
+            srv.log.InfoLog.Printf(
+                "spawn %s (parent %s, %s): %s",
+                str(body.get("title") or payload.get("title") or "?"),
+                str(payload.get("parent") or "-"),
+                path,
+                what,
+            )
+    except Exception:  # noqa: BLE001 — a log line never fails a create
+        pass
+
+
 async def create_requested(payload: dict, *, person: str = "") -> JSONResponse:
     """``POST /api/instances``: a create asks the launch gate, then
     :func:`create`. ``person``: who the request is for (the route stamps it
@@ -1870,10 +1916,13 @@ async def create_requested(payload: dict, *, person: str = "") -> JSONResponse:
     if payload.get("spawned") is True:
         held, key = await _create_gated(payload, person=person, kind="spawn")
         if held is not None:
+            _log_spawn(payload, held, "gate")
             return held
         title = str(payload.get("title") or "").strip()
         try:
-            return await create(payload, person=person, gated=True, admitted=key)
+            resp = await create(payload, person=person, gated=True, admitted=key)
+            _log_spawn(payload, resp, "admitted")
+            return resp
         finally:
             _unclaim(title)
     if not start_anyway:

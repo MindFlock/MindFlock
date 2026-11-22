@@ -414,6 +414,71 @@ def _build_parser() -> argparse.ArgumentParser:
     rename_.add_argument("old", metavar="OLD")
     rename_.add_argument("new", metavar="NEW")
 
+    send_ = sub.add_parser(
+        "send",
+        parents=[server_opts],
+        help="send a session to another of your devices (push, start it there)",
+        description="Carry a session's work to another of your devices: push "
+        "its branch (never a force), start a session on DEVICE on that same "
+        "branch in its checkout of the repo, and give it a brief as its first "
+        "prompt (what the session was for, its commits, its last reply, your "
+        "--note). Only git and the brief travel — no logins, no chat history. "
+        "Uncommitted changes are refused: commit first. TITLE may be any "
+        "unambiguous prefix; `mindflock devices` lists DEVICE names.",
+    )
+    send_.add_argument("title", metavar="TITLE")
+    send_.add_argument("device", metavar="DEVICE")
+    send_.add_argument("--note", default="", help="what the session should do there")
+    send_.add_argument(
+        "--via",
+        choices=("auto", "git", "bundle"),
+        default="auto",
+        help="auto (default): push when DEVICE has a checkout of the repo, "
+        "else carry the branch as a git bundle; git / bundle force one",
+    )
+    send_.add_argument(
+        "--path",
+        action="append",
+        default=[],
+        dest="paths",
+        metavar="PATH",
+        help="send only this repo path, as a bundle (repeatable; one folder "
+        "becomes the new repository's root)",
+    )
+
+    sendf_ = sub.add_parser(
+        "send-files",
+        parents=[server_opts],
+        help="send files or folders to another of your devices' inbox",
+        description="Send files or folders from a session's worktree to "
+        "another of your devices over the device link. They land in a new "
+        "folder in that device's inbox (<mindflock home>/inbox/<this device>/"
+        "<id>/), SHA-256 checked, never run, executable bits removed. "
+        "Git-ignored files, symlinks, .git, agent config/logins and secrets "
+        "(.env, keys, credentials) are left out and listed. With --note and "
+        "no --to-session a session starts there in that folder with the note "
+        "as its task. `mindflock devices` lists DEVICE names.",
+    )
+    sendf_.add_argument("device", metavar="DEVICE")
+    sendf_.add_argument("paths", metavar="PATH", nargs="+")
+    sendf_.add_argument(
+        "--from",
+        dest="title",
+        default="",
+        metavar="TITLE",
+        help="the session to send from (default: the one whose folder holds "
+        "the current directory)",
+    )
+    sendf_.add_argument("--note", default="", help="what they are for there")
+    sendf_.add_argument(
+        "--to-session", default="", help="a session on DEVICE to tell what arrived"
+    )
+    sendf_.add_argument(
+        "--include-secrets",
+        action="store_true",
+        help="also send .env/keys/credentials (needs transfers.allow_secrets)",
+    )
+
     open_ = sub.add_parser(
         "open",
         parents=[server_opts],
@@ -758,14 +823,34 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "One place for every code MindFlock hands out. An 8-character code "
             "(or the whole `mindflock devices join DEVICE CODE` command) joins "
-            "your devices — the same as `devices join`; an mfp1:/mfp2: invite "
-            "pairs with another person — the same as `peer join`. Needs a "
-            "running server."
+            "your devices — the same as `devices join`; a long mfd1: code (from "
+            "Add a device → It isn't on my network) joins your devices through "
+            "the other computer's private tunnel, no Tailscale needed — it asks "
+            "first and shows a safety number to compare; an mfp1:/mfp2: invite "
+            "pairs with another person — the same as `peer join`. With no CODE "
+            "it asks for the code (not echoed), or reads it from stdin: a code "
+            "typed as an argument stays in your shell history and shows in "
+            "`ps` while it runs. Needs a running server."
         ),
     )
-    join_any.add_argument("text", nargs="+", metavar="CODE")
     join_any.add_argument(
-        "--yes", "-y", action="store_true", help="don't ask first (devices codes)"
+        "text",
+        nargs="*",
+        metavar="CODE",
+        help="the code (omit it to be asked, or pipe it in: safer than an argument)",
+    )
+    join_any.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="don't ask first (devices codes; an mfd1: code then joins without "
+        "showing its safety number, leaving another group this computer is in "
+        "— only for a code you made yourself)",
+    )
+    join_any.add_argument(
+        "--no-anywhere",
+        action="store_true",
+        help="mfd1: codes: don't turn on Reach my devices from anywhere here",
     )
 
     devices = sub.add_parser(
@@ -1090,6 +1175,8 @@ _HELP_GROUPS = (
             "sleep",
             "wake",
             "rename",
+            "send",
+            "send-files",
             "close",
             "delete",
             "rm",
@@ -1956,6 +2043,127 @@ def _cmd_rename(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_send(args: argparse.Namespace) -> int:
+    """``send TITLE DEVICE``: ``POST /api/instances/{title}/send-to-device``."""
+    base = client.discover(args.host, args.port)
+    title = str(
+        _resolve_title(client.get(base, "/api/instances") or [], args.title)["title"]
+    )
+    try:
+        res = (
+            client.post(
+                base,
+                "/api/instances/%s/send-to-device" % _quote_title(title),
+                {
+                    "device": args.device,
+                    "note": args.note or "",
+                    "via": getattr(args, "via", "auto") or "auto",
+                    "paths": list(getattr(args, "paths", None) or []),
+                },
+                timeout=1800.0,
+            )
+            or {}
+        )
+    except client.ApiError as err:
+        print("error: could not send %s: %s" % (title, err.message), file=sys.stderr)
+        return 1
+    print(
+        "sent %s -> %s (branch %s, via %s)"
+        % (title, res.get("title", "?"), res.get("branch", "?"), res.get("via", "git"))
+    )
+    if res.get("how"):
+        print("  %s" % res["how"])
+    for note in res.get("caveats") or []:
+        print("  note: %s" % note, file=sys.stderr)
+    return 0
+
+
+def _title_for_cwd(instances: List[dict]) -> str:
+    """The session whose folder holds the current directory (deepest)."""
+    here = os.path.realpath(os.getcwd())
+    best, depth = "", -1
+    for inst in instances:
+        if not isinstance(inst, dict) or "::" in str(inst.get("title") or ""):
+            continue
+        folder = str(inst.get("folder") or "")
+        if not folder:
+            continue
+        f = os.path.realpath(folder)
+        if (here == f or here.startswith(f + os.sep)) and len(f) > depth:
+            best, depth = str(inst.get("title") or ""), len(f)
+    return best
+
+
+def _cmd_send_files(args: argparse.Namespace) -> int:
+    """``send-files DEVICE PATH…``: ``POST /api/instances/{title}/send-files``."""
+    base = client.discover(args.host, args.port)
+    instances = client.get(base, "/api/instances") or []
+    if args.title:
+        title = str(_resolve_title(instances, args.title)["title"])
+    else:
+        title = _title_for_cwd(instances)
+        if not title:
+            print(
+                "error: run this inside a session's folder, or name it with --from TITLE",
+                file=sys.stderr,
+            )
+            return 1
+    paths = [p if os.path.isabs(p) else os.path.abspath(p) for p in args.paths]
+    try:
+        res = (
+            client.post(
+                base,
+                "/api/instances/%s/send-files" % _quote_title(title),
+                {
+                    "device": args.device,
+                    "paths": paths,
+                    "note": args.note or "",
+                    "to_session": args.to_session or "",
+                    "include_secrets": bool(args.include_secrets),
+                },
+                timeout=1800.0,
+            )
+            or {}
+        )
+    except client.ApiError as err:
+        print(
+            "error: could not send from %s: %s" % (title, err.message), file=sys.stderr
+        )
+        return 1
+    files = res.get("files") or []
+    print(
+        "sent %d file%s from %s -> %s:%s"
+        % (
+            len(files),
+            "" if len(files) == 1 else "s",
+            title,
+            res.get("device", "?"),
+            res.get("path", "?"),
+        )
+    )
+    for f in files[:50]:
+        print("  %s  %s" % (str(f.get("sha256", ""))[:16], f.get("path")))
+    if len(files) > 50:
+        print("  … and %d more" % (len(files) - 50))
+    print("  total sha256 %s" % res.get("total_sha256", "?"))
+    for s in res.get("skipped") or []:
+        print("  left out: %s (%s)" % (s.get("path"), s.get("why")), file=sys.stderr)
+    if res.get("uncommitted"):
+        print("  uncommitted: %s" % ", ".join(res["uncommitted"][:20]), file=sys.stderr)
+    if res.get("exec_stripped"):
+        print(
+            "  executable bit removed there: %s" % ", ".join(res["exec_stripped"][:20]),
+            file=sys.stderr,
+        )
+    if res.get("messaged"):
+        print("  told %s" % res["messaged"])
+    if res.get("title"):
+        print("  started %s" % res["title"])
+    for note in res.get("caveats") or []:
+        print("  note: %s" % note, file=sys.stderr)
+    return 0
+
+
 def _cmd_open(args: argparse.Namespace) -> int:
     base = client.discover(args.host, args.port)
     inst = _resolve_title(client.get(base, "/api/instances") or [], args.title)
@@ -2144,6 +2352,11 @@ def _flight_needs(f: dict) -> Optional[Tuple[str, List[str]]]:
     why = str(ss.get("note") or f.get("reason") or "").strip()
     if state == "halted":
         return why or "a stop failed", ["retry", "skip", "resume", "cancel"]
+    if state == "paused" and str(f.get("reason") or "") == "halt point":
+        # The app's words (round 5): it waits on you before that stop.
+        return "paused before %s — your halt point" % (
+            step.get("title") or "its next stop"
+        ), ["resume", "skip", "cancel"]
     if state == "paused":
         return why or "paused by you", ["resume", "cancel"]
     if ss.get("state") != "waiting_you" and state != "waiting_you":
@@ -3789,6 +4002,82 @@ def _print_bootstrap(b: dict) -> None:
     )
 
 
+def _join_anywhere(args: argparse.Namespace, code: str) -> int:
+    """``mindflock join mfd1:…`` — the new computer joins through the other
+    one's private tunnel (and turns "Reach my devices from anywhere" on here,
+    unless ``--no-anywhere``); waits for the join to finish. The server
+    answers 409 ``needs_confirm`` first: what the other computer will be able
+    to do, the safety number to compare and — when this one is in another
+    group — that it leaves it. Asked here unless ``--yes``."""
+    base = client.discover(args.host, args.port)
+    reachable = not getattr(args, "no_anywhere", False)
+    body = {"code": code, "reachable": reachable}
+    if getattr(args, "yes", False):
+        body.update(confirm=True, leave_group=True)
+    try:
+        st = client.post(base, "/api/devices/anywhere/join", body) or {}
+    except client.ApiError as err:
+        info = err.payload or {}
+        if err.status != 409 or not info.get("needs_confirm"):
+            raise
+        print(info.get("text") or "", file=sys.stderr)
+        print(info.get("safety_text") or "", file=sys.stderr)
+        if info.get("leave_text"):
+            print(info["leave_text"], file=sys.stderr)
+        if reachable:
+            print(
+                "It also turns on Reach my devices from anywhere here "
+                "(--no-anywhere to leave it off).",
+                file=sys.stderr,
+            )
+        question = (
+            "Leave that group and join"
+            if info.get("other_group")
+            else "It's my own computer — join"
+        )
+        if not _confirm(question):
+            print(
+                "not joined (to join without being asked — only with a code you "
+                "made yourself — add --yes)",
+                file=sys.stderr,
+            )
+            return 1
+        body.update(confirm=True, leave_group=bool(info.get("other_group")))
+        st = client.post(base, "/api/devices/anywhere/join", body) or {}
+    deadline = time.time() + 240.0
+    while st.get("state") in ("joining", "finishing") and time.time() < deadline:
+        time.sleep(2.0)
+        st = _fleet_status(base).get("join") or {}
+    state = st.get("state")
+    host = st.get("host") or st.get("device") or "your other computer"
+    if state == "joined":
+        print("joined %s's devices" % host)
+        if st.get("note"):
+            print(st["note"])
+        if st.get("error"):
+            print(st["error"], file=sys.stderr)
+        return 0
+    raise client.ClientError(st.get("error") or "the join didn't finish (%s)" % state)
+
+
+def _read_code() -> str:
+    """The code when none was given as an argument: asked for (not echoed)
+    on a terminal, else read from stdin — so it never lands in the shell
+    history or in ``ps``."""
+    if sys.stdin is not None and sys.stdin.isatty():
+        import getpass
+
+        try:
+            return getpass.getpass("Paste the code (it isn't shown): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("", file=sys.stderr)
+            return ""
+    try:
+        return (sys.stdin.read(8192) if sys.stdin is not None else "").strip()
+    except OSError:
+        return ""
+
+
 def _cmd_join(args: argparse.Namespace) -> int:
     """``mindflock join CODE`` — route any pasted code by its format
     (:func:`backend.web.core.fleet.classify_code`): a peer invite goes to
@@ -3796,7 +4085,15 @@ def _cmd_join(args: argparse.Namespace) -> int:
     from backend.peer.invite import code_from_text
     from backend.web.core.fleet import classify_code
 
-    text = " ".join(args.text)
+    text = " ".join(args.text or [])
+    if not text.strip():
+        text = _read_code()
+    from backend.peer.fleet_pair import code_from_text as device_code_from_text
+
+    if device_code_from_text(text):
+        # A long code from one of your devices that isn't on this network
+        # (docs/devices-anywhere.md §7): joined through its private tunnel.
+        return _join_anywhere(args, device_code_from_text(text))
     # An invite link too, URL-encoded or not (…/join#mfp2%3A…).
     peer_code = code_from_text(text)
     hit = {"kind": "peer", "code": peer_code} if peer_code else classify_code(text)
@@ -4125,6 +4422,8 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "sleep": _cmd_sleep_wake,
     "wake": _cmd_sleep_wake,
     "rename": _cmd_rename,
+    "send": _cmd_send,
+    "send-files": _cmd_send_files,
     "open": _cmd_open,
     "events": _cmd_events,
     "msg": _cmd_msg,

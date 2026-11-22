@@ -377,6 +377,8 @@ def _autopilot_observe(title: str):
         _autopilot_note(title, rec, "waiting for the workspace")
         return
     setup_st = _wt_setup.setup_status(wt)
+    if not _wt_setup.holds_prompts(setup_st):
+        setup_st = None  # the automatic recipe's own state never holds a chain
     if setup_st and setup_st.get("state") == "running":
         _autopilot_note(title, rec, "workspace setup is running")
         return
@@ -826,6 +828,9 @@ async def _autopilot_act(title, wt, rec, snap, action, detail) -> None:
                 )
                 return
             fields["step"] = "pr"
+            # A configured base this repository lacks was passed over: say so
+            # once, as the stop's receipt, not as a failure.
+            fields["base_note"] = str(body.get("base_note") or "")
             # Remember the PR so the client can open it exactly once, the same
             # courtesy the manual "Make PR" button does.
             if body.get("url"):

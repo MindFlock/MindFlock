@@ -123,7 +123,7 @@ def _line_key(line: str) -> str:
 
 def _scan(path: str, start: int, turns: dict, first_ts):
     """Fold the usage lines of ``path`` from byte ``start`` into ``turns``
-    (key -> turn, kept per :func:`better_turn`) -> ``(first_ts, offset)``.
+    (key -> turn, folded per :func:`merge_turn`) -> ``(first_ts, offset)``.
 
     ``offset`` stops after the last line ending in a newline: a line still
     being written is parsed now and AGAIN next time (same key, so it is not
@@ -171,8 +171,7 @@ def _scan(path: str, start: int, turns: dict, first_ts):
                 )
             except (TypeError, ValueError):
                 continue
-            if better_turn(turn, turns.get(key)):
-                turns[key] = turn
+            turns[key] = merge_turn(turns.get(key), turn)
     return first_ts, off
 
 
@@ -181,8 +180,9 @@ def _parse_turns(path: str) -> Optional[tuple]:
 
     ``turns`` is a list of ``(key, ts, in, out, cache_read, cache_write,
     model)`` — ONE per API response: the lines Claude Code writes per content
-    block share ``(message.id, requestId)`` and are collapsed here, keeping the
-    copy with the most output tokens (the final block). ``key`` is
+    block share ``(message.id, requestId)`` and are collapsed here
+    (:func:`merge_turn`: the most of each token count — the final block's
+    output — at the first copy's timestamp). ``key`` is
     message id + requestId (NUL-joined), or a stable hash of the raw line when
     the message has no id. Lines without a usage block are ignored.
     ``first_ts`` is the earliest timestamp among usage lines (the
@@ -321,10 +321,29 @@ def _save_memo(now: float) -> None:
     _memo_state["saved_at"] = now
 
 
-def better_turn(new: tuple, old: Optional[tuple]) -> bool:
-    """Whether ``new`` should replace ``old`` for the same turn key: the copy
-    with more output tokens is the final content block of that response."""
-    return old is None or new[3] > old[3]
+def merge_turn(old: Optional[tuple], new: tuple) -> tuple:
+    """Fold another copy (``new``) of one turn key into ``old``.
+
+    Token counts take the per-field maximum (the final content block carries
+    the response's full output; the other fields repeat); the timestamp and
+    model are the FIRST copy's that has one. So a turn only ever grows and
+    never moves to another day as more of its lines are read: a later block
+    whose timestamp falls past midnight, or whose figures are smaller, can't
+    make a day total that the ledger already recorded shrink — the ledger
+    would keep the stale total and back-fill the difference into every window
+    as if it were a pruned transcript. Reading a transcript in pieces thus
+    yields exactly what one full read does."""
+    if old is None:
+        return new
+    return (
+        old[0],
+        old[1] if old[1] is not None else new[1],
+        max(old[2], new[2]),
+        max(old[3], new[3]),
+        max(old[4], new[4]),
+        max(old[5], new[5]),
+        old[6] or new[6],
+    )
 
 
 def iter_jsonl(top: str):
@@ -556,8 +575,10 @@ def _compute() -> tuple:
             if t[1] is None or not (t[2] or t[3] or t[4] or t[5]):
                 continue
             prev = seen.get(t[0])
-            if better_turn(t, prev[0] if prev else None):
+            if prev is None:
                 seen[t[0]] = (t, account)
+            else:
+                seen[t[0]] = (merge_turn(prev[0], t), prev[1])
     for p in [p for p in list(_FILE_MEMO) if p not in visited]:
         _FILE_MEMO.pop(p, None)
         _memo_state["dirty"] = True

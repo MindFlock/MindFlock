@@ -28,7 +28,7 @@ import {
 import { autopilotChipTitle, mergeBlockerLabel } from "./autopilot";
 import { useUi } from "../state/store";
 import { openBehaviors } from "./behaviorsFocus";
-import { deriveSessionState, PAUSED_FLIGHT_LABEL, REASON_LABEL, SLEEPING_LABEL, verifyOf, type SessionState } from "./sessionState";
+import { deriveSessionState, isPausedRouteChip, REASON_LABEL, SLEEPING_LABEL, verifyOf, type SessionState } from "./sessionState";
 import type { SessionVerify, TestPlan, TestPlansResponse } from "../api/types";
 import { verifyWords } from "./behaviors";
 import type { SessionMenuModel } from "./sessionMenu";
@@ -194,7 +194,7 @@ export function stateChip(ss: SessionState): ChipState {
   else if (ss.label === "Missing") cls = "s-missing";
   // A flight's chip carries the step's title, which can be long: it gets a
   // width cap and an ellipsis (SidebarRow.css), the full words in its title.
-  if (ss.reason === "flight_you" || ss.label === PAUSED_FLIGHT_LABEL) cls += " chip-flight";
+  if (ss.reason === "flight_you" || ss.reason === "flight_paused" || isPausedRouteChip(ss)) cls += " chip-flight";
   return { label: ss.label, cls: cls + " tone-" + ss.tone, title: ss.hint || ss.label };
 }
 
@@ -349,6 +349,29 @@ export function liveStep(inst: Partial<Instance>): LiveStep | null {
   // Worktree setup outranks everything: queued prompts are HELD while it runs,
   // and the autopilot refuses to act at all, so it must be visible.
   const setup = inst.setup;
+  // The automatic preparation (deps, pin files) holds nothing: the agent works
+  // beside it, so it is said, not escalated.
+  if (setup && setup.hold === false) {
+    if (setup.state === "running")
+      return {
+        label: "preparing",
+        tone: "work",
+        title:
+          "Preparing the worktree in the background (dependencies, pin files). The agent can already read code; " +
+          "tests and builds wait for it.",
+      };
+    if (setup.state === "failed")
+      return {
+        label: "setup didn't finish",
+        tone: "blocked",
+        title:
+          "Setup didn't finish" +
+          (setup.error ? ": " + setup.error : "") +
+          " · see the log (" +
+          (setup.log || ".mindflock_setup.log") +
+          ", or Setup log in the session menu). Prompts are not held.",
+      };
+  }
   if (setup?.state === "running")
     return { label: "setting up", tone: "work", title: "Running the workspace setup commands." };
   if (setup?.state === "failed")

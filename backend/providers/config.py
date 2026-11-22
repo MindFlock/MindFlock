@@ -180,6 +180,11 @@ class ProviderConfig:
     #: Regexes that identify this CLI's "usage limit reached" screen (roadmap D).
     #: Empty = use :data:`usage_limits.DEFAULT_LIMIT_PATTERNS`.
     usage_limit_patterns: Tuple[str, ...] = ()
+    #: Regexes for this CLI's "now billing paid credits" notice — the plan
+    #: window is spent but the agent can still work, so NOT a limit (the
+    #: newest notice on the pane wins). Empty = use
+    #: :data:`usage_limits.CREDITS_OPEN_PATTERNS`.
+    usage_credits_patterns: Tuple[str, ...] = ()
     #: Whether this provider appears in the sidebar's overall cost/usage panel
     #: by default. Only the bundled default CLIs (codex/antigravity/aider —
     #: plus Claude, which opts in on its own provider class) set this; user
@@ -1145,6 +1150,7 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
         usage_window_weekly_hours=float(usage.get("weekly_hours", 0.0) or 0.0),
         usage_window_note=usage.get("note", ""),
         usage_limit_patterns=tuple(usage.get("limit_patterns", ()) or ()),
+        usage_credits_patterns=tuple(usage.get("credits_patterns", ()) or ()),
         usage_visible=bool(usage.get("visible", False)),
         # [activity] hooks_file + [[activity.events]] (event, state) — opt-in
         # marker-hook integration for a user CLI that has its own hooks engine.

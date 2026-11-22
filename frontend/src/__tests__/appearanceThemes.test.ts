@@ -14,7 +14,15 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { ALL_CODE, ALL_CSS, code, src } from "./sourceText";
+import { ALL_CODE, ALL_CSS, CSS, code, src } from "./sourceText";
+import { ANSI_DARK } from "../lib/termPalette";
+
+const MOBILE_JS_RAW = import.meta.glob<string>("../../../backend/web/static/mobile.js", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+const MOBILE_JS: string = Object.values(MOBILE_JS_RAW)[0] ?? "";
 
 vi.mock("../api/client", () => ({ api: vi.fn(async () => ({})) }));
 vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
@@ -37,6 +45,9 @@ const COLORS = [
 ];
 const SURFACE_ONLY = [
   "raven",
+  "owl",
+  "wren",
+  "magpie",
   "macaw",
   "lorikeet",
   "roller",
@@ -143,15 +154,21 @@ describe("top-bar glyphs are monochrome, never emoji", () => {
 
 describe("the base palette", () => {
   const tokens = src("styles/tokens.css");
-  const block = (css: string, scope: string) => css.split(scope, 2)[1].split("}", 1)[0];
+  /** The body of the rule whose selector list starts with `scope` (":root",
+   * ".light"); the base blocks also carry `.theme-preview` selectors. */
+  const block = (css: string, scope: string) => {
+    const m = css.match(new RegExp(`(?:^|\\n)${scope.replace(".", "\\.")}\\s*[,{][^{]*\\{([^}]*)\\}`));
+    if (!m) throw new Error("no block " + scope);
+    return m[1];
+  };
 
   it("region tokens alias the globals on :root, never repeated in .light", () => {
-    const root = block(tokens, ":root {");
+    const root = block(tokens, ":root");
     for (const v of [...REGION_VARS, ...APP_ALIAS_VARS]) expect(root, v).toContain(v + ":");
     // A custom property resolves its var()s against the value that won on the
     // same element, so one declaration on :root already picks up the light
     // palette. A copy in .light would rot.
-    const light = block(tokens, ".light {");
+    const light = block(tokens, ".light");
     for (const v of REGION_VARS) expect(light, v).not.toContain(v + ":");
   });
 
@@ -179,7 +196,7 @@ describe("the base palette", () => {
 
   it(":root and .light carry the accent companions and terminal vars", () => {
     // So rgba() glows, light-mode deep text and xterm all resolve per theme.
-    for (const scope of [":root {", ".light {"]) {
+    for (const scope of [":root", ".light"]) {
       const b = block(tokens, scope);
       for (const v of ["--accent-rgb:", "--accent-deep:", "--term-bg:", "--term-fg:"]) {
         expect(b, `${scope} ${v}`).toContain(v);
@@ -187,5 +204,39 @@ describe("the base palette", () => {
     }
     // No accent-purple glow may remain hard-coded (it would ignore the theme).
     expect(ALL_CSS).not.toContain("rgba(125, 86, 244");
+  });
+});
+
+describe("the swatches are the real palette, and the ink follows the fill", () => {
+  it("the picker names no colours: every swatch is painted by theme.css", () => {
+    const screen = code("components/settings/screens/Appearance.tsx");
+    // A hex in the picker would be a second copy of a palette, free to drift.
+    expect(screen).not.toMatch(/#[0-9a-f]{6}\b/i);
+    expect(screen).toContain('className="theme-preview"');
+    expect(screen).toContain("data-accent-preview");
+    // The preview's own sheet lays the window out and names no colour either.
+    expect(src("components/settings/screens/Appearance.css")).not.toMatch(/\.tp-[\w-]+[^}]*#[0-9a-f]{3,6}\b/i);
+  });
+
+  it("text on an accent / red / green fill takes that fill's ink, never a fixed white", () => {
+    // White on Goldfinch's lemon was 1.4:1, on the dark-mode failure red 3.6:1.
+    const bad: string[] = [];
+    for (const [path, text] of Object.entries(CSS)) {
+      const flat = text.replace(/\/\*[\s\S]*?\*\//g, "");
+      for (const m of flat.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        const fill = m[2].match(/background(?:-color)?\s*:\s*var\((--accent|--red|--green)\)\s*;/);
+        if (!fill) continue;
+        if (/(?<![-\w])color\s*:\s*(#fff\b|#ffffff\b|white\b)/i.test(m[2])) {
+          bad.push(`${path} ${m[1].trim()} (${fill[1]} fill)`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it("the phone's terminal uses the desktop's dark ANSI palette", () => {
+    for (const [name, hex] of Object.entries(ANSI_DARK)) {
+      expect(MOBILE_JS, name).toMatch(new RegExp(`\\b${name}: "${hex}"`));
+    }
   });
 });

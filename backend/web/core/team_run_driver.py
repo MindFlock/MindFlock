@@ -1538,7 +1538,7 @@ def _release_prepare(run_id: str, now: float) -> None:
         if not wt:
             return
         try:
-            base = srv._configured_pr_base(wt) or srv._session_base_branch(inst) or ""
+            base = srv._default_pr_base(wt, inst) or ""
         except Exception:  # noqa: BLE001
             base = ""
         # The group's pinned branch — what the release ships.

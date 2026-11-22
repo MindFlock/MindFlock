@@ -36,6 +36,9 @@ COLORS = (
 # Surface-only sets: birds with no single "their color", so no accent counterpart.
 SURFACE_ONLY = (
     "raven",
+    "owl",
+    "wren",
+    "magpie",
     "macaw",
     "lorikeet",
     "roller",
@@ -49,7 +52,7 @@ SURFACE_ONLY = (
 )
 # The quiet sets — a single neutral throughout. Everything else is multi-color: a
 # hue per region (top bar / sidebar / window), the way the bird is marked.
-QUIET = ("raven", "heron")
+QUIET = ("raven", "heron", "owl", "wren", "magpie")
 ACCENTS = COLORS
 SURFACES = COLORS + SURFACE_ONLY
 MULTI = tuple(s for s in SURFACES if s not in QUIET)
@@ -137,9 +140,10 @@ def _contrast(fg: str, bg: str) -> float:
 
 
 def test_every_set_is_legible_in_every_region():
-    """The palettes are deliberately loud, so this is the guard rail: each region
-    is either dark with light text or bright with dark text, and the numbers have
-    to prove it. A brighter repaint that strands the text fails here."""
+    """A coarse floor kept beside the full check: every set × mode × accent is
+    walked by frontend/src/__tests__/themeContrast.test.ts (text 7:1, secondary
+    4.5:1, state colours 3:1, calm surfaces). This one keeps the served sheet
+    honest from the Python side too."""
     css = client.get("/theme.css").text
     for m in re.finditer(
         r'html(\.light)?\[data-surface="([\w-]+)"\]\s*\{([^}]*)\}', css

@@ -1693,8 +1693,10 @@ window closes it. The items, in groups:
   the same; left out once `GET /api/ides`
   says the configured editor isn't installed here) · **Open preview ↗** `:port`
   when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
-  window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
-  after a failed one · **Copy folder path** · on a pane's ⋯ only, **Customize
+  window** (`Ctrl+K H`; the session keeps running) · **Setup log** once
+  the worktree has been prepared (the tail of `.mindflock_setup.log`: pin
+  files carried, each dependency step cloned or installed, and why it
+  stopped) · **Re-run worktree setup** after a failed one · **Copy folder path** · on a pane's ⋯ only, **Customize
   header…** (Customize opened on its Pane header page)
 - then the two ways to leave a session: **✕ Close** and **Delete…**.
 
@@ -4997,17 +4999,51 @@ command*, *Until is a time of day, like 18:00*).
 bar and the agent tile) is **Offline · Restart**, as on the rail, and its
 Needs-you row says why and offers **Restart**. A route parked on you whose
 session was closed says so under its stop — *Its session is closed, so no
-agent can fix this: Retry or Skip it, or Stop the route to end it* — not
-only in a tooltip. A failed stop's dialog says the failure once (*It failed:
+agent can fix this: Run again reopens it, or Skip this stop, or Stop the route
+to end it* — not only in a tooltip (round 5: Run again leads there). A failed stop's dialog says the failure once (*It failed:
 test_export_empty*, not *CI checks failed: …* under the CI checks name), and
 a pause says whose it is (*Paused by you*, or *Paused: stop removed*).
 
-**Building a route** (2026-11-20). The shelf says "Click to add · drag to
-place" beside its chips (it no longer says "Stops" three times). The
+**Building a route** (2026-11-20; round 5: a click adds to the route being
+built). The shelf says "Click to add · drag to place" beside its chips (it no longer says "Stops" three times). The
 catalog's compact cards (All stops…) show two lines of what each stop does.
 Right-click on empty sky opens **Add a stop…** wholly in view: low on the sky
 it opens upward, above the shelf, and at the right edge leftward
 (lib/skyLayout `menuSpot`).
+
+**Round 5: the owner's ten decisions** (2026-11-21). One state reads the
+same on the Sky, the rail, the bell, the phone and in voice:
+- A session at a **Wait for me** stop reads **Needs you: <stop>** (the stop
+  keeps its kind's name on the Sky and the shelf).
+- A route at a **halt point** needs you: an amber chip "Paused before <stop>",
+  in the bell, as the frame already said. A pause you made is calm, "Paused
+  by you"; one the server made, "Paused route".
+- The route's **first Agent stop** wears a task face (a clipboard, "gives the
+  agent the ticket"), not the agent tile's sparkle.
+- A **shelf click** adds the stop to the end of the route you are building
+  (the focused route with no session); with none, it places a new route and
+  focuses it. A toast says where it went. Dragging still places anywhere.
+- A route with no session shows its **name and ▶ Run quietly at rest** (muted,
+  no border; full on hover).
+- "If it fails" shows only where the server's kind says `can_fail` (the old
+  list stays as the fallback for an older server or a peer).
+- A **closed session's halted route** leads with **Run again** (it reopens the
+  session); Retry only on a stop that needs no session; then Skip and Stop
+  the route.
+- On a **test, CI checks or Verify failure** "Let the agent fix it" is the
+  primary remedy, Retry beside it — on the stop, its dialog, its ⋯, the
+  Needs-you panel, the bell's row and the phone. Other failures lead with
+  Retry.
+- A **narrow Sky** (under 900 px) folds the Intake lane to its rail by itself
+  ("Intake folded to make room on a narrow Sky"); open it and it stays open;
+  with room again it unfolds — unless you folded it yourself
+  (lib/skyLayout `laneFolded`).
+- A stop **held by its session** (the agent offline or at its usage limit) is
+  never the green working glow: a still dashed tile in the waiting tone,
+  "Held · agent offline" with **Restart** (Start after a crash) or "Held ·
+  usage limit, resumes 14:30"; the bird stays still, the bar says "held at
+  <stop>", a limited route's frame is dashed blue; the phone's row says "Held
+  at <stop> · agent offline".
 
 **The phone.** Below 600px wide there is no pan or zoom: the toolbar, the
 drawer, then the lines as a plain list, each line's canvas running top to
@@ -6906,7 +6942,26 @@ A few screens got quieter:
   app does not have) saying what happens to the work — "Its uncommitted
   changes are saved first as a patch in ~/.mindflock/kept-work", "Its branch
   … is kept, with its commits" — and **Remove anyway** then sends `confirm`;
-  the toast after says where the patch went. **Clean up** is the mode
+  the toast after says where the patch went. A folder whose files **can't be
+  checked** (its repository, or git's record of it, is gone; state
+  `unchecked`) sits in its own fold, **Can't be checked (never removed
+  automatically)**, with the plain reason and, instead of Remove, **Look
+  inside** (`GET /api/cleanup/inspect`, on request — the list never walks a
+  folder's files): the server's sentences (file and folder counts, size,
+  newest change, where its `.git` points and that it is gone, how its files
+  compare with its branch), the top-level entries (dependency/cache folders
+  and git's own greyed), up to 15 files that look like work with their size
+  and time, and the changed / only-here / missing paths against the branch.
+  When the look found nothing that could be lost (its files match the
+  branch, or it holds only dependencies and caches) a plain **Remove**
+  follows; otherwise **Remove anyway…** opens two in-page `InlineConfirm`
+  steps under it (never `window.confirm`): "Delete *name* (*size*) for good?
+  It holds *N* files (*X*), *M* of them look like work … this is permanent."
+  → **Continue…** → "Last check: delete *name* permanently?" → **Delete
+  permanently** (sends `even_unchecked`; **Keep it** backs out at either
+  step). The toast says "Deleted *name* permanently (*N* files, *X*)." The
+  header adds "*K* can't be checked (*X*): look inside each to decide." and
+  **Remove *M* safe** never includes them. **Clean up** is the mode
   (`cleanup.mode`): **Automatic**, **Ask me** (the default: one toast and
   bell entry, `system.cleanup_available`, the first time there is a
   meaningful amount to reclaim, with **Review** opening this screen) or
@@ -7241,6 +7296,25 @@ labels above the inputs.
   connection refused on :8765 … On rig: Settings → Your devices → Make reachable".
   The **Make reachable** switch here is the one Tailscale-mode control in the
   app (Your phone and Security point at it).
+
+  Without Tailscale, **Add a device → It isn't on my network**
+  (`DevicesFarInvite.tsx`) shows a long one-time `mfd1:` code with Copy, a QR,
+  its countdown and a **safety number**; with Reach my devices from anywhere
+  off it first asks inline to turn it on. On the new computer the same
+  screen's **Paste a code** box recognises that code, says it joins through
+  the other computer's private tunnel, and shows one box, ticked by default,
+  *Let my devices reach this computer from anywhere*. Join first opens an
+  inline confirm (`devices-far-confirm`): the code's maker will be able to run
+  agents here and its settings replace these; the safety number to compare;
+  the group this computer would leave, by name. The join line then reads
+  "Joined X. Finishing setup…" and ends with what is left, if anything
+  (GitHub sign-in missing here); the inviter shows "X joined. It can reach
+  this computer already …" until X saved its address. A code used without
+  the join finishing shows on the inviter as a red row
+  (`devices-pair-alerts`) with **Change key** and **It was me**, and in the
+  bell (`device.pair_unfinished`); a device pairing right now shows as
+  "pairing now"
+  ([devices-anywhere.md §7](devices-anywhere.md#7-adding-a-new-device-without-tailscale)).
 
   When the other members do something this one doesn't, **Match my other
   devices** offers one confirm ("reachable on Tailscale + phone link
@@ -7831,6 +7905,84 @@ labels above the inputs.
 Theme (dark/light), sidebar visibility, view mode, pane order/layout, diff mode,
 last-used tab, and saved prompts are persisted in `localStorage` (`cs_*` /
 `mindflock.*` keys).
+
+### Themes (Settings → Appearance)
+
+A look is three independent choices: **Mode** (dark / light, also the moon in
+the top bar), a **Theme** (the surface set — `html[data-surface]`) and an
+**Accent** (`html[data-accent]`). The palettes live in
+`backend/web/static/theme.css`, shared with the phone page (which is dark only
+and paints the window palette, ignoring the region hues); the defaults —
+Swallow and Violetear — are `styles/tokens.css`. The choice is saved as
+`ui.surface` / `ui.accent` (every device) and cached in `cs_surface` /
+`cs_accent` for the pre-paint `<head>` script.
+
+**The sets.** Six quiet ones, a single neutral throughout: **Swallow**
+(default), **Raven** (true black), **Heron** (graphite), **Owl** (low glare —
+a dusk-grey page and text a step down from white, for long evenings), **Wren**
+(warm paper — cream pages and brown-black ink by day, sepia by night) and
+**Magpie** (high contrast — pure black/white, secondary text ≥ 9:1, borders
+you can see). Then nineteen birds, round the colour wheel: Cardinal, Scarlet
+Macaw, Golden Pheasant, Oriole, Rainbow Lorikeet, Lilac-breasted Roller,
+Goldfinch, Toco Toucan, Quetzal, Green Jay, Gouldian Finch, Mallard,
+Kingfisher, Peacock, Bluejay, Indigo Bunting, Violetear, Mandarin Duck,
+Flamingo. A bird paints its top bar and sidebar with region tokens
+(`--topbar-*`, `--sidebar-*`; `styles/regions.css` rebinds `--panel` & co. on
+each region).
+
+**Readability first.** The birds used to wear full plumage — lemon and amber
+top bars, a yellow or orange sidebar, saturated hairlines round every pane —
+and only Bluejay and the standard look were comfortable. Every coloured set is
+now built on one OKLCH lightness ladder (Bluejay's): a dark, low-chroma window
+(L .19–.27) and a near-black sidebar; by day a near-white window with a faint
+tint. The bird's colour lives in the **top bar** — a mid-dark band with
+near-white text, the same in both modes, or for the yellow birds (Goldfinch,
+Toucan, Pheasant) a quiet bar with one bright hairline under it — and in the
+hairlines, the accent and the tint. Never in a large bright surface.
+
+**The numbers are a test.** `src/__tests__/themeContrast.test.ts` resolves
+every set × mode × accent the way the browser cascades it
+(`__tests__/themePalette.ts` replays tokens.css + theme.css and resolves
+`var()` / `color-mix()`), and holds:
+
+- text ≥ 7:1 and secondary text ≥ 4.5:1 on every surface it sits on (the
+  window's three, the sidebar's two; the top bar's text ≥ 4.5:1);
+- the session-state tones ≥ 3:1 on every window and sidebar surface, their
+  chip ink ≥ 4.5:1, and working / needs-you / waiting / failed / idle at least
+  ΔE 12 apart; the status inks (`--green`, `--red`, `--gold`, the Sky's
+  `--fl-ink-*`) ≥ 4.5:1 as text;
+- each accent ≥ 3:1 as a ring on `--bg` / `--panel`, its button text
+  (`--accent-ink`) ≥ 4.5:1, and its text twin (`--accent-deep` by day, the
+  Sky's `--fl-ink-accent`) ≥ 4.5:1;
+- the terminal: foreground ≥ 7:1 and every ANSI colour ≥ 4.5:1 on the set's
+  terminal background — `lib/termPalette.ts` holds a dark and a light palette
+  (xterm's own yellow was 1.3:1 on a light canvas; the phone's `mobile.js`
+  carries the dark copy, pinned by a test);
+- calm: dark large surfaces (`--bg`, `--panel`, `--sidebar-bg`, `--term-bg`)
+  L ≤ 0.30 and chroma ≤ 0.09, light ones L ≥ 0.90 and chroma ≤ 0.03; a dark
+  top bar no lighter than L 0.60 (a light-mode bar is that band or a pale
+  strip), and no dark-mode hairline above L 0.72.
+
+A new set has to pass it; a failure names the look, the pair and both hexes.
+
+**Ink follows the fill.** Text on an accent fill (a primary button, the active
+tab) is `var(--accent-ink)` — white on the deep accents, near-black on the
+bright ones (Goldfinch, Oriole, Quetzal, Pheasant, Heron), where white was
+1.4–2.5:1. The same goes for `--red-ink` / `--green-ink` on a failure badge or a
+merged chip. A test refuses a fixed `#fff` over any of those fills. The
+light-mode accent blocks deepen an accent that would vanish as a ring on a
+white page.
+
+**The swatch is the theme.** Each surface swatch is a tiny window
+(`ThemePreview`: top bar, sidebar with the working / needs-you / failed /
+waiting dots, a line of text, a line of secondary text, an accent button). It
+names no colours: the element carries `class="theme-preview"`,
+`data-surface` and `data-mode`, which tokens.css and every theme.css block also
+match, so it is painted by the real palette in the current mode, wearing the
+current accent. An accent swatch's dot names its own accent
+(`data-accent-preview`). A preset key is never retired outright — a stored
+name must keep resolving, so an old key stays as an extra selector on the
+block that replaced it.
 
 ## Token / cost usage
 

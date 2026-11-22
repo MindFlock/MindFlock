@@ -38,11 +38,11 @@
 #memory-confirm .mc-start {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 #memory-confirm .mc-danger {
   background: var(--red);
   border-color: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }

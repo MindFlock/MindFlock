@@ -6,8 +6,13 @@
  * mobile.html — overrides the same names per html[data-accent] / [data-surface].
  *
  * :root and .light have EQUAL specificity (0,1,0), so .light must stay after
- * :root for the light palette to win. */
-:root {
+ * :root for the light palette to win.
+ *
+ * `.theme-preview` is a swatch in Settings → Appearance: a tiny window that
+ * re-declares the whole palette on itself (data-mode picks dark or light), so
+ * theme.css can paint it with the real set rather than a copy of its hexes. */
+:root,
+.theme-preview {
   /* Tell the browser to render native control internals (time-picker clock
      icon, number spinners, checkboxes, scrollbars) dark; .light flips it.
      Without this the native clock glyph sat near-invisible on the dark bg. */
@@ -24,8 +29,19 @@
      per accent theme (Settings → Appearance). */
   --accent-rgb: 125, 86, 244;
   --accent-deep: #5b3fc0;
+  /* Text ON an accent fill (a primary button, the active tab). White on the
+     default violet; theme.css swaps it to near-black for an accent too bright
+     to carry white (Goldfinch, Quetzal, Heron…). Never hard-code #fff there. */
+  --accent-ink: #ffffff;
   --green: #51bd73;
-  --red: #de613e;
+  /* Read as text (failed, an error line) on every dark panel, so a step
+     lighter than --tone-broken's fill red; Owl's dusk panels set the floor. */
+  --red: #f67653;
+  /* The text on a --green / --red FILL (a merged chip, a failure-count
+     badge): white could not sit on either bright tone in the dark (2.4:1 and
+     3.6:1), so it is near-black here and white by day. */
+  --green-ink: #0b1a10;
+  --red-ink: #1a0a05;
   --gold: #ffd700;
   /* Gold companions, and the reason they exist: --gold is tuned to be READ
      — as caution text, as a status dot — so it has to contrast with the page,
@@ -46,17 +62,19 @@
      (blue — a usage limit that auto-resumes; it is NOT red) and broken (red —
      offline). `-ink` is the text that goes over the tone as a fill. */
   --tone-muted: #8a90a2;
-  --tone-muted-ink: #ffffff;
+  --tone-muted-ink: #0f1117;
   --tone-working: #51bd73;
   --tone-working-ink: #0b1a10;
   --tone-attention: #ffd700;
   --tone-attention-ink: #1a1a1a;
-  --tone-neutral: #a3abbe;
+  --tone-neutral: #a8acb3;
   --tone-neutral-ink: #0f1117;
-  --tone-waiting: #4ea8de;
-  --tone-waiting-ink: #ffffff;
+  /* Waiting (blue) and idle (grey) sit side by side in the rail, so they
+     stay well apart by eye (ΔE ≥ 12), not just by label. */
+  --tone-waiting: #3fa0e8;
+  --tone-waiting-ink: #0b1622;
   --tone-broken: #de613e;
-  --tone-broken-ink: #ffffff;
+  --tone-broken-ink: #1a0a05;
   /* Terminal canvas colors — read by app.js termTheme() so xterm follows the
      surface theme (theme.css html[data-surface=…] blocks override these). */
   --term-bg: #0f1117;
@@ -96,8 +114,10 @@
 /* Light mode. `.light` is set on <html> early (in index.html) and toggled by
    the header button. Swapping these variables recolors nearly the whole UI; the
    handful of hard-coded colors that don't survive the swap are patched in
-   theme-light.css. The xterm terminal intentionally stays dark. */
-.light {
+   theme-light.css. The terminal follows too: --term-bg / --term-fg here, and a
+   light ANSI palette (lib/termPalette.ts) so coloured output stays legible. */
+.light,
+.theme-preview[data-mode="light"] {
   color-scheme: light;
   --bg: #f4f5f8;
   --panel: #ffffff;
@@ -108,25 +128,33 @@
   --accent: #7d56f4;
   --accent-rgb: 125, 86, 244;
   --accent-deep: #5b3fc0;
-  --green: #2e9e54;
-  --red: #d6451f;
-  --gold: #9a7400;
+  /* --green / --red / --gold are read as TEXT (pushed, failed, caution), so on
+     a light page they hold 4.5:1 even on --panel-2; the old #2e9e54 green was
+     3.4:1 on white. */
+  --green: #1a7039;
+  --red: #b53316;
+  --green-ink: #ffffff;
+  --red-ink: #ffffff;
+  --gold: #806000;
   /* A clean amber rather than the dark --gold above: this one is only ever a
      background, so it must be light enough for --gold-ink to sit on it (about
      9:1 here) instead of contrasting with the page. */
   --gold-fill: #f0b429;
   --gold-ink: #1a1a1a;
-  --tone-muted: #8a90a2;
+  /* The tones by day hold 3:1 against every light surface they sit on (a
+     dot, a ring, a chip edge) — the bright amber they replaced was 1.6:1 on
+     white, a needs-you dot you could miss. Chips still read: ink ≥ 4.5:1. */
+  --tone-muted: #6a6f81;
   --tone-muted-ink: #ffffff;
-  --tone-working: #2e9e54;
+  --tone-working: #1c7f43;
   --tone-working-ink: #ffffff;
-  --tone-attention: #f0b429;
-  --tone-attention-ink: #1a1a1a;
-  --tone-neutral: #6b7385;
+  --tone-attention: #a57900;
+  --tone-attention-ink: #141414;
+  --tone-neutral: #70747c;
   --tone-neutral-ink: #ffffff;
-  --tone-waiting: #1d6fa5;
+  --tone-waiting: #1a6db8;
   --tone-waiting-ink: #ffffff;
-  --tone-broken: #d6451f;
+  --tone-broken: #c73c15;
   --tone-broken-ink: #ffffff;
   --term-bg: #ffffff;
   --term-fg: #1b2030;

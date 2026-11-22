@@ -398,6 +398,22 @@ def _claim_path(title: str) -> Path:
     return Path(GetConfigDir()) / "epics" / ("%s.claim" % title)
 
 
+def _lead_pr_base(repo_url: str) -> str:
+    """The branch the epic's PRs target, for the lead prompt: the configured
+    PR base, else base — only where this repository has it
+    (:mod:`backend.repo_base`); ``""`` leaves it to the repo's default.
+    Blocking (maybe one cached ``ls-remote``)."""
+    try:
+        from backend import repo_base
+
+        return (
+            repo_base.resolve(repo_url, "pr", fallback=False).branch
+            or repo_base.resolve(repo_url, "base", fallback=False).branch
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _claim(title: str, force: bool) -> bool:
     """An exclusive claim on starting ``title`` (two servers on one config dir
     must not both start a lead). ``force`` (a person's Start) takes over a
@@ -455,14 +471,7 @@ async def launch(source: str, epic_id: str, *, auto: bool = False) -> dict:
     repo_url = targets[0].url
     program = str(getattr(src, "agent", "") or "") or srv.ENGINE.default_program()
     branch = branch_for(provider, epic_id, detail.get("name") or "")
-    base = ""
-    try:
-        from backend.config import settings as _settings
-
-        st = _settings.load_settings()
-        base = (st.repository.pr_base_branch or st.repository.base_branch or "").strip()
-    except Exception:  # noqa: BLE001
-        base = ""
+    base = await asyncio.to_thread(_lead_pr_base, repo_url)
     prompt = build_lead_prompt(detail, source, base, mine, others)
     srv._pending_add(title, "tix", branch=branch)
 

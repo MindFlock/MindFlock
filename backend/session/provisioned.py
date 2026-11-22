@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from backend import git_auth_hints, gitutil, workspace_setup
+from backend import repo_base as _repo_base
 from backend.providers import launch_script
 from backend.providers.base import LauncherSpec
 from backend.session.git import remote_url
@@ -149,6 +150,15 @@ class ProvisionSettings:
     workspace_dir: Path
     origin_url: str = ""
     base_branch: str = "staging"
+    #: Where ``base_branch`` came from: ``"repo"`` (``repository.repo_branches``,
+    #: used as written), ``"setting"`` (a flat setting, still to be checked
+    #: against this repository), ``""`` (nothing configured: an assumed
+    #: ``main``), or — after :func:`settle_base_branch` — the
+    #: :mod:`backend.repo_base` source that answered.
+    base_source: str = ""
+    #: "Using main: this repository has no staging branch" when settling
+    #: passed over the flat setting; ``""`` otherwise.
+    base_note: str = ""
     open_cursor: bool = False
     skip_permissions: bool = True
     # Generic workspace setup: shell commands run on provision (None =
@@ -291,15 +301,21 @@ def load_provision_settings(
 
     # The repo's own override (``repository.repo_branches``) beats every
     # flock-wide layer: one global base applied to every repo a ticket source
-    # covers is wrong the moment one of them has no such branch.
-    base_branch = _s.repo_branches_for(repo_slug_for(str(repo_url)))[
-        0
-    ] or _s.resolve_str(
-        env="MINDFLOCK_BASE_BRANCH",
-        settings_getter=lambda s: s.repository.base_branch or s.github.base_branch,
-        toml_value=github.get("base_branch"),
-        default="main",
-    )
+    # covers is wrong the moment one of them has no such branch. The flat
+    # layers are only a CANDIDATE here: :func:`settle_base_branch` checks it
+    # against the repository right before a workspace is cut (a network
+    # question this loader, read on poll paths, must not ask).
+    base_branch = _s.repo_branches_for(repo_slug_for(str(repo_url)))[0]
+    base_source = _repo_base.SOURCE_REPO if base_branch else ""
+    if not base_branch:
+        base_branch = _s.resolve_str(
+            env="MINDFLOCK_BASE_BRANCH",
+            settings_getter=lambda s: s.repository.base_branch or s.github.base_branch,
+            toml_value=github.get("base_branch"),
+            default="",
+        )
+        base_source = _repo_base.SOURCE_SETTING if base_branch else ""
+    base_branch = base_branch or "main"
 
     open_cursor = open_ide_on_ticket(toml_value=cs_section.get("open_cursor"))
     skip_permissions = _s.resolve_bool(
@@ -322,6 +338,7 @@ def load_provision_settings(
         origin_url=origin_url,
         workspace_dir=ws,
         base_branch=str(base_branch),
+        base_source=base_source,
         open_cursor=bool(open_cursor),
         skip_permissions=bool(skip_permissions),
         setup_commands=setup_commands,
@@ -401,6 +418,45 @@ def _git_origin_url(repo: str | Path) -> str:
     if cp.returncode != 0:
         return ""
     return cp.stdout.decode("utf-8", "replace").strip()
+
+
+def settle_base_branch(settings: ProvisionSettings) -> ProvisionSettings:
+    """Check ``settings.base_branch`` against the repository before a cut.
+
+    A per-repository base (``base_source == "repo"``) is used as written.
+    Otherwise the :mod:`backend.repo_base` order applies: the flat setting
+    only when the repository has that branch, else its default branch, else
+    main/master — so a flock-wide "staging" never becomes the fork point of a
+    repository that has none. Asked of the base clone when it exists (its
+    refs are local), else of the clone source. Nothing resolving (offline, an
+    empty remote) keeps the candidate: the clone path already falls back to
+    the remote's default branch. Mutates and returns ``settings``; blocking
+    (at most one cached ``ls-remote``)."""
+    source = str(getattr(settings, "base_source", "") or "")
+    if source == _repo_base.SOURCE_REPO or not getattr(settings, "repo_url", ""):
+        return settings
+    location = str(settings.repo_url)
+    try:
+        base_dir = resolve_base_repo_dir(settings)
+        if (base_dir / ".git").is_dir():
+            location = str(base_dir)
+    except Exception:  # noqa: BLE001
+        pass
+    flat = settings.base_branch if source == _repo_base.SOURCE_SETTING else ""
+    try:
+        choice = _repo_base.resolve(location, "base", per_repo="", flat=flat)
+    except Exception:  # noqa: BLE001 — never block a cut on the probe
+        return settings
+    if choice.branch:
+        settings.base_branch = choice.branch
+        try:
+            settings.base_source = choice.source
+            settings.base_note = choice.note
+        except AttributeError:  # a frozen / slotted stand-in: the branch is what counts
+            pass
+        if choice.note:
+            _logger.info("provision %s: %s", settings.repo_url, choice.note)
+    return settings
 
 
 def local_settings_for(repo_path: str | Path) -> Optional[ProvisionSettings]:

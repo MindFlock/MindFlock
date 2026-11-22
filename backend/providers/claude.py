@@ -1837,8 +1837,13 @@ def _claude_transcript_tokens(
                 ):
                     continue
                 prev = counted.get(t[0])
-                if usage_history.better_turn(t, prev[0] if prev else None):
+                if prev is None:
                     counted[t[0]] = (t, is_main)
+                else:
+                    counted[t[0]] = (
+                        usage_history.merge_turn(prev[0], t),
+                        prev[1] or is_main,
+                    )
 
         for proj in _claude_project_dirs(workdir):
             for cid, conv in _conversation_files(proj).items():

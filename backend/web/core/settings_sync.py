@@ -231,7 +231,9 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
 LOCAL: Dict[str, Tuple[str, ...]] = {
     "coding_cli": ("binary_paths",),
     "auth_profiles": ("profiles", "default_profile"),
-    "repository": ("workspace_dir",),
+    # worktree_setup: commands THIS machine runs in its worktrees, keyed by
+    # slug or by a checkout path on this device — never another device's.
+    "repository": ("workspace_dir", "worktree_setup"),
     "engine": ("enabled", "mode", "open_cursor", "max_sessions"),
     "local_model": ("enabled", "runtime", "base_url", "model"),
     "ui": ("cursor_autoadopt", "surface"),
@@ -247,6 +249,8 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "remote_control",
         "serve_mode",
         "shared_link",
+        # Whether THIS device runs the private tunnel (core.devices_anywhere).
+        "devices_anywhere",
         "ingestion_autostart",
         # LEGACY: what the former Pause intake turned off (no longer read).
         "intake_paused",
@@ -310,6 +314,9 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
     # The worktree garbage collector (auto · ask · off, and its age line):
     # what is on THIS disk and what may be removed from it is per machine.
     "cleanup": ("mode", "after_days"),
+    # What this device sends and accepts from your other devices (limits, its
+    # inbox quota, whether secrets may be sent from here) is its own call.
+    "transfers": ("max_mb", "max_files", "inbox_mb", "keep_days", "allow_secrets"),
     # Not machine-specific, but never stamped or adopted as an edit: the
     # devices AGREE on one id — the pairing handshake, then
     # :func:`backend.web.core.person.reconcile` on every pass (sync_once).

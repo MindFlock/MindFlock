@@ -48,7 +48,7 @@ import type { AutopilotRun, Instance } from "../api/types";
 import { verifyStopFace, type BehaviorTone } from "./behaviors";
 import { verifyFace } from "./verifyStop";
 import { LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
-import { PAUSED_FLIGHT_LABEL, deriveSessionState } from "./sessionState";
+import { deriveSessionState, fmtClock, isPausedRouteChip, type SessionState } from "./sessionState";
 import { windowName } from "./windowName";
 import { riskOf, type RiskTag } from "./stopRisk";
 import { stopSentence } from "./stopEditing";
@@ -68,6 +68,7 @@ import {
   type FlightReturn,
   type FlightRow,
   type FlightStep,
+  type FlightSubject,
   type StepFix,
   type StepKindDef,
   type StepRunState,
@@ -137,6 +138,10 @@ export interface DiagramNode {
   icon: string;
   /** A stop that waits on you. */
   perch?: boolean;
+  /** Round 5: the current stop is HELD by its session — the agent it needs
+   * is offline or at its usage limit (`heldMark`): drawn in the held tone,
+   * never the green "working" glow, its words and remedy on its face. */
+  held?: HeldMark;
   /** parent / session / child: its session title (a click selects it). */
   session?: string;
   /** A session box's state chip (lib/sessionState's label and tone). */
@@ -799,7 +804,7 @@ export function stopOptionsLine(s: Pick<FlightStep, "kind" | "halt" | "when" | "
   const fallback = defaultOnFail(kinds?.find((k) => k.kind === s.kind));
   const failSet = !!s.on_fail && s.on_fail !== fallback;
   if (!s.halt && !(s.when || "").trim() && !failSet) return "";
-  return stopSentence(s, fallback);
+  return stopSentence(s, fallback, "", kinds);
 }
 
 function addNode(title: string): DiagramNode {
@@ -843,6 +848,8 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
   // Round 20: the cursor's parallel group — every member flies at once.
   const [glo, ghi] = parallelSpan(f.steps, f.cursor);
   const open = Math.max(f.cursor + 1, ghi);
+  // Round 5: the route's first Agent stop wears the TASK face (`taskFace`).
+  const firstAgent = f.steps.findIndex((s) => s.kind === "agent");
   return f.steps.map((s, i) => {
     const st = stepStateOf(f, s, i);
     const inGroup = ghi - glo > 1 && i >= glo && i < ghi;
@@ -869,7 +876,8 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
     const next = f.steps[i + 1];
     const passedNext = !!next && ["done", "skipped"].includes(stepStateOf(f, next, i + 1));
     const ret = returnMark(f.returns?.[s.id], fix, state, passedNext);
-    const summary = stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s));
+    const task = i === firstAgent;
+    const summary = stopSub(stopTitle(s, kinds), youFlownSub(s, state) || (task ? taskSummary(s, f.subject) : stopSummary(s)));
     // A stop at work says what it is doing right now (the server's note: "the
     // agent is working", "3 new review comments for the agent"), not its
     // settings — those stay in its tooltip (`summary`). So does a stop that
@@ -891,7 +899,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : note || summary,
       ...(tip ? { summary: tip } : {}),
       state,
-      icon: s.kind,
+      icon: task ? TASK_ICON : s.kind,
       perch: stepActor(s, kinds) === "you",
       step: s,
       index: i,
@@ -907,6 +915,23 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       ...parallelMark(f.steps, i),
     };
   });
+}
+
+/** Round 5 (the owner): a route's FIRST Agent stop ("Agent works the
+ * ticket") draws with the task face — a clipboard, not the agent's sparkle —
+ * so it never reads as the agent tile beside it said twice: the tile is the
+ * session's agent, this stop is the work handed to it. */
+export const TASK_ICON = "task";
+
+/** The task face's line: what the stop hands the agent — "gives the agent
+ * the ticket" (a ticket / issue / PR route), "gives the agent its task" — or
+ * its own prompt when it has one. */
+export function taskSummary(step: Pick<FlightStep, "kind" | "config">, subject?: Pick<FlightSubject, "kind"> | null): string {
+  const c = step.config || {};
+  if (String(c.prompt ?? "").trim()) return stopSummary(step);
+  const k = String(subject?.kind || "");
+  const what = k === "ticket" ? "the ticket" : k === "issue" ? "the issue" : k === "pr" ? "the pull request" : "its task";
+  return "gives the agent " + what + (c.fresh ? " · new session" : "");
 }
 
 /** What a stop at work is doing right now, in one line for its tile: the
@@ -1055,6 +1080,83 @@ export interface SessionDiagramOpts {
 /** The SESSION's live diagram, from `/api/instances` rows: parent above, the
  * session box, its children branching below, then the flight's stops (or the
  * armed fast-track's rungs), and a trailing "+" to tack a stop on. */
+// --- A stop held by its session (round 5) ------------------------------------
+
+/** Why a current stop cannot go on although the route runs: its session's
+ * agent is offline, or at its usage limit. `label` is the stop's line
+ * ("Held · agent offline"), `title` its tooltip, `remedy` the button on it
+ * (Restart an offline agent, Start one held offline after a crash; a limit
+ * goes on by itself). */
+export interface HeldMark {
+  why: "offline" | "limit";
+  label: string;
+  title: string;
+  remedy?: "restart" | "start";
+}
+
+/** The kinds that wait on the session's agent (they type to it or have it
+ * check its own work): an offline or limited agent holds them. Another kind
+ * (CI checks, Ship, a Wait…) goes on without the agent — the server's note
+ * on it says when it is held anyway (`heldMark`'s `note`). */
+export const AGENT_STOP_KINDS: ReadonlySet<string> = new Set(["agent", "reviews", "verify"]);
+
+/** The server's words on a stop held by the agent (core/flights.py
+ * `_ACTIVITY_WORDS`): "the agent is offline", "usage limit — waiting for the
+ * window to reopen". */
+const HELD_NOTE: { why: HeldMark["why"]; re: RegExp }[] = [
+  { why: "offline", re: /^the agent is offline\b/i },
+  { why: "limit", re: /^usage limit\b/i },
+];
+
+/** The stop's held mark, or null: a current stop of a running route whose
+ * session's agent is offline or limited (`ss`, lib/sessionState) and which
+ * waits on that agent (`AGENT_STOP_KINDS`, or the server's own note says it
+ * is held). With no session state at hand, the server's note alone. */
+export function heldMark(
+  ss: Pick<SessionState, "state" | "restartable" | "held" | "resumeAt"> | null | undefined,
+  node: Pick<DiagramNode, "state"> & { step?: { kind?: string } | null },
+  note?: string | null
+): HeldMark | null {
+  if (node.state !== "current") return null;
+  const said = HELD_NOTE.find((h) => h.re.test(String(note || "").trim()))?.why;
+  // The session's state is the live word; the note (the server's last tick)
+  // speaks only where no session state is known.
+  const why: HeldMark["why"] | undefined = ss ? (ss.state === "offline" ? "offline" : ss.state === "limit" ? "limit" : undefined) : said;
+  if (!why) return null;
+  if (!said && !AGENT_STOP_KINDS.has(String(node.step?.kind || ""))) return null;
+  if (why === "limit") {
+    const at = ss?.resumeAt ? fmtClock(ss.resumeAt) : "";
+    return {
+      why,
+      label: "Held · usage limit" + (at ? ", resumes " + at : ""),
+      title: "Held: the agent hit its usage limit — this stop goes on by itself when the window reopens" + (at ? " at " + at : "") + ". Nothing to do.",
+    };
+  }
+  const remedy = ss?.held ? "start" : ss?.restartable ? "restart" : undefined;
+  return {
+    why,
+    label: "Held · agent offline",
+    title:
+      "Held: the agent is offline, so this stop can't go on" +
+      (remedy === "start" ? " — Start starts it (it was held offline after a crash)." : remedy === "restart" ? " — Restart relaunches it, resuming the conversation." : "."),
+    ...(remedy ? { remedy } : {}),
+  };
+}
+
+/** Mark the current stop of a session's line held (`heldMark`): its line
+ * says so instead of the live note. */
+function markHeld(line: DiagramNode[], ss: SessionState, full?: Flight): void {
+  for (const n of line) {
+    if (n.kind !== "stop" || n.state !== "current") continue;
+    const note = full && n.step ? full.step_states?.[n.step.id]?.note : undefined;
+    // A stop's kind is its icon (the row-only line has no step).
+    const held = heldMark(ss, { state: n.state, step: { kind: n.step?.kind || n.icon } }, note);
+    if (!held) continue;
+    n.held = held;
+    n.sub = held.label;
+  }
+}
+
 export function sessionDiagram(rows: readonly Instance[], title: string, opts: SessionDiagramOpts = {}): Diagram {
   const row = rows.find((r) => r.title === title);
   const empty: Diagram = { nodes: [], edges: [], flightId: "", mode: "none", insertFrom: 0 };
@@ -1094,6 +1196,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
       const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
       line.push(...lifted.line);
       loops = [...lifted.loops, ...returnEdges(line, me.id)];
+      if (full.state === "running") markHeld(line, deriveSessionState(row), full);
     } else
       for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
         const cur = i === fl.cursor;
@@ -1111,6 +1214,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
           reason: cur && fl.state === "halted" ? (fl as FlightRow & { reason?: string }).reason || "" : "",
         });
       }
+    if (!full && fl.state === "running") markHeld(line, deriveSessionState(row));
   } else if (landedFlightOf(title, opts.flights) && !ladderRungs(row).length) {
     // A flight that landed stays on its session's line, its stops flown (the
     // owner: the stops must not go away from the flow once they finish) —
@@ -1559,7 +1663,7 @@ export function lineWhere(d: Diagram): string {
   // A halt point stops the route BEFORE its stop runs: "paused before Push ·
   // your halt point", not "paused at Push" (which reads as Push half done).
   const haltPoint = b.tone === "paused" && n.state === "paused" && !!n.step?.halt;
-  const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : haltPoint ? "paused before " : b.tone === "paused" ? "paused at " : "at ";
+  const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : haltPoint ? "paused before " : b.tone === "paused" ? "paused at " : b.tone === "held" ? "held at " : "at ";
   // A stop with an ask (lib/stopAsks) says it on its own tile, its line
   // under its name and its buttons: the bar says only where it is.
   const tail = n.ask
@@ -1570,7 +1674,9 @@ export function lineWhere(d: Diagram): string {
         ? reasonAfterTitle(n.title, n.reason)
         : haltPoint
           ? "your halt point"
-          : n.kind === "stop" || n.kind === "group"
+          : n.held
+            ? n.held.label.replace(/^held · /i, "")
+            : n.kind === "stop" || n.kind === "group"
             ? n.sub
             : "";
   // "needs you at" already says whose stop it is: no "Wait for me:" after it.
@@ -1596,12 +1702,15 @@ export function reasonAfterTitle(title: string, reason: string, capital = false)
  * at that stop ("Needs you: Review" / "Wait for me: Your checks" next to
  * "needs you at Review"); "at CI checks · …" beside a Halted chip (not
  * "Halted · halted at CI checks"); "at Push" / "before Push · your halt
- * point" beside a Paused route chip; else `where`. */
+ * point" beside a Paused by you / Paused route chip; "your halt point"
+ * beside the amber "Paused before Push"; else `where`. */
 export function whereBesideChip(where: string, chip: { reason?: string; label?: string } | null | undefined): string {
   if (!where) return where;
   if (chip?.reason === "flight_you") return /^needs you at /i.test(where) ? "" : where;
   if (chip?.reason === "flight_halted") return where.replace(/^halted (?=at )/i, "");
-  if (chip?.label === PAUSED_FLIGHT_LABEL) return where.replace(/^paused (?=at |before )/i, "");
+  // "Paused before Push" already says where: only the rest ("your halt point").
+  if (chip?.reason === "flight_paused") return /^paused before /i.test(where) ? where.split(" · ").slice(1).join(" · ") : where;
+  if (isPausedRouteChip(chip)) return where.replace(/^paused (?=at |before )/i, "");
   return where;
 }
 
@@ -1776,7 +1885,7 @@ export function hasSessionDiagram(rows: readonly Instance[], title: string): boo
 
 /** How the bird sits: bobbing while the flock works, gold and still perched on
  * you, red when halted, still when paused. */
-export type BirdTone = "working" | "you" | "halted" | "paused";
+export type BirdTone = "working" | "you" | "halted" | "paused" | "held";
 
 export interface BirdPerch {
   nodeId: string;
@@ -1827,7 +1936,9 @@ export function birdPerch(d: Diagram): BirdPerch | null {
     const asking = d.nodes.some((n) => n.branch?.to === point.id && n.branch.state === "asking");
     return { nodeId: point.id, tone: asking ? "you" : "working" };
   }
-  if (stop) return { nodeId: stop.id, tone: STOP_TONE[stop.state]! };
+  // Round 5: a stop held by its session (agent offline / limited) — the bird
+  // sits still in the held tone, never bobbing as if the work went on.
+  if (stop) return { nodeId: stop.id, tone: main.find((n) => n.id === stop.id)?.held ? "held" : STOP_TONE[stop.state]! };
   const rung = main.find((n) => n.kind === "rung" && (n.state === "current" || n.state === "halted"));
   if (rung) return { nodeId: rung.id, tone: rung.state === "halted" ? "halted" : "working" };
   if (me?.chip?.tone === "working") return { nodeId: me.id, tone: "working" };

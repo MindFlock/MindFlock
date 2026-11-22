@@ -18,6 +18,7 @@ import type {
 } from "../api/types";
 import { relTime } from "./format";
 import { extractPeerCode } from "./peer";
+import { extractDeviceCode } from "./devicesAnywhere";
 
 /** Crockford base32 — what the server's invite codes are drawn from. */
 // Digits + letters without I L O U, kept as two literals: one 32-symbol
@@ -229,8 +230,10 @@ export function joinLine(j: FleetJoin | null | undefined): string {
       return "Waiting for approval on " + host + (j.code ? " — code " + j.code : "");
     case "joining":
       return "Joining " + host + "…";
+    case "finishing":
+      return "Joined " + host + ". Finishing setup — reaching it through its private tunnel and bringing over its settings…";
     case "joined":
-      return "Joined " + host + ".";
+      return "Joined " + host + "." + (j.note ? " " + j.note : "");
     case "denied":
       return host + " said no.";
     case "expired":
@@ -332,6 +335,15 @@ export function deviceEventNote(
     }
     case "device.removed":
       return { text: sentence(String(d.detail || "")) || host + " is no longer one of your devices", cls: "n-info", toast: "" };
+    // A pairing code was used and the join didn't finish (or two computers
+    // used one): the devices' key may be out. Loud — Your devices offers
+    // Change key.
+    case "device.pair_unfinished": {
+      const text =
+        String(d.detail || "") ||
+        "A pairing code was used but the join didn't finish. If that wasn't you, change your devices' key now.";
+      return { text, cls: "n-warn", toast: text };
+    }
     // Emitted on the device that paused (its own scan saw most settings go
     // back to defaults at once): nothing syncs either way until it's answered.
     case "settings.sync_paused":
@@ -715,11 +727,19 @@ export function unpinReplaces(path: string, sync: SyncStatus | null | undefined)
  * routes it: a peer-link invite (`mfp1:`/`mfp2:` anywhere in the text) to
  * People, one of your devices' 8-character codes — bare, as
  * "<device> <code>", or the whole `mindflock devices join` command — to
- * Devices. `device` is "" when the text names none. */
-export function routeCode(text: string): { kind: "peer" | "device" | ""; code: string; device: string } {
-  const t = (text || "").trim().slice(0, 2048);
+ * Devices, and the long `mfd1:` code of a device that isn't on this network
+ * ("anywhere", docs/devices-anywhere.md §7) to Devices too. `device` is ""
+ * when the text names none. */
+export function routeCode(text: string): {
+  kind: "peer" | "device" | "anywhere" | "";
+  code: string;
+  device: string;
+} {
+  const t = (text || "").trim().slice(0, 4096);
   const peer = extractPeerCode(t);
   if (peer) return { kind: "peer", code: peer, device: "" };
+  const far = extractDeviceCode(t);
+  if (far) return { kind: "anywhere", code: far, device: "" };
   let tokens = t.split(/\s+/).filter(Boolean);
   if (tokens.slice(0, 3).map((x) => x.toLowerCase()).join(" ") === "mindflock devices join") tokens = tokens.slice(3);
   if (tokens.length >= 2 && /^[a-z0-9][a-z0-9-]{0,62}$/.test(tokens[0].toLowerCase())) {
@@ -802,6 +822,17 @@ export function phoneLinkLine(pl: FleetPhoneLink | null | undefined): { text: st
  * reachable from here — <why>. On rig: Settings → Your devices → Make reachable."
  * "" for any other state. */
 export function admitLine(a: FleetAdmit): string {
+  if (a.state === "finishing") {
+    const n = a.host || a.device;
+    return (
+      n +
+      " joined. It can reach this computer already; this one reaches " +
+      n +
+      " once it saves its address — that needs GitHub sign-in on " +
+      n +
+      " (settings sync usually brings it; if not: Settings → GitHub there)."
+    );
+  }
   if (a.state !== "unreachable_joiner") return "";
   const h = a.host || a.device;
   return (
@@ -819,6 +850,7 @@ export function admitLine(a: FleetAdmit): string {
  * member the others can't reach — said, with the click that fixes it. */
 export function joinedToast(j: FleetJoin): { text: string; offerReach: boolean } {
   const host = j.host || j.device;
+  if (j.note) return { text: "Joined " + host + ". " + j.note, offerReach: false };
   if (j.self_reachable === false)
     return {
       text: "Joined " + host + " — but your other devices can't reach this one yet. Click to make it reachable.",

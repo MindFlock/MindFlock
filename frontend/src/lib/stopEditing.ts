@@ -24,7 +24,7 @@
  *                   words (the form's hints and its read-back sentence). */
 
 import type { BirdTone, Diagram, DiagramNode, Placed } from "./flightDiagram";
-import { STOP_MIME, type FlightStep, type OnFail } from "./flights";
+import { STOP_MIME, type FlightStep, type OnFail, type StepKindDef } from "./flights";
 import { FLYWAY_MIME } from "./skyLayout";
 import { FIX_ROUNDS, VERIFY_ON_FAIL } from "./verifyStop";
 import { askOffers } from "./stopAsks";
@@ -528,12 +528,21 @@ export function onFailHint(k: OnFail, kind = ""): string {
 
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** Kinds that cannot fail, so "If it fails" is no choice on them: a Wait
- * for me only waits for your Done (the server forces its on_fail to halt,
- * core/flights.py "a you step cannot fail"), a Wait only counts down
- * (`_judge_wait` is done or waiting, never failed). */
+/** The fallback for a kind the server describes without `can_fail` (an
+ * older server, a peer's): the two kinds that cannot fail — a Wait for me
+ * only waits for your Done (the server forces its on_fail to halt), a Wait
+ * only counts down. The server's own list is core/flights.py `NEVER_FAILS`. */
 export const NEVER_FAILS: ReadonlySet<string> = new Set(["you", "wait"]);
-export const canFail = (kind: string): boolean => !NEVER_FAILS.has(kind);
+
+/** Whether a stop of `kind` can fail, so whether "If it fails" is a choice
+ * on it: the server's `can_fail` on the kind (`GET /api/flights/kinds`)
+ * when it says, else the `NEVER_FAILS` fallback. `kinds`: the served kinds
+ * (or just the stop's own def). */
+export function canFail(kind: string, kinds?: readonly (Pick<StepKindDef, "kind" | "can_fail"> | null | undefined)[] | null): boolean {
+  const def = kinds?.find((k) => k?.kind === kind);
+  if (def && typeof def.can_fail === "boolean") return def.can_fail;
+  return !NEVER_FAILS.has(kind);
+}
 
 /** What a stop will DO with its settings, in one sentence — the read-back's
  * first part, so the dialog says what happens before what happens if it
@@ -591,7 +600,12 @@ export function stopDoes(step: Pick<FlightStep, "kind" | "config">): string {
  * otherwise it is skipped. If it fails, the route halts, red." `body`
  * replaces the failure part with a sentence of the stop's own that already
  * says it (a Verify stop's `verifySentence`). */
-export function stopSentence(step: Pick<FlightStep, "kind" | "halt" | "when" | "on_fail">, fallback: OnFail = "halt", body = ""): string {
+export function stopSentence(
+  step: Pick<FlightStep, "kind" | "halt" | "when" | "on_fail">,
+  fallback: OnFail = "halt",
+  body = "",
+  kinds?: readonly (Pick<StepKindDef, "kind" | "can_fail"> | null | undefined)[] | null
+): string {
   const out: string[] = [];
   if (step.halt) out.push("The route pauses here first (a halt point) — Carry on to run it.");
   const when = (step.when || "").trim();
@@ -600,7 +614,7 @@ export function stopSentence(step: Pick<FlightStep, "kind" | "halt" | "when" | "
     out.push(body);
     return out.join(" ");
   }
-  if (!canFail(step.kind)) return out.join(" ");
+  if (!canFail(step.kind, kinds)) return out.join(" ");
   const k = (step.on_fail || fallback) as OnFail;
   out.push(
     "If it fails, " +

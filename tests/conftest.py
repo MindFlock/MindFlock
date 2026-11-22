@@ -18,6 +18,10 @@ os.environ.setdefault("MINDFLOCK_GITNEXUS_GATE", "0")
 # run.main() lowers the SERVER's oom_score_adj; under pytest that process is
 # the test runner, which must stay killable.
 os.environ.setdefault("MINDFLOCK_SERVER_OOM_PROTECT", "0")
+# No automatic dependency install in a session worktree a test creates (a
+# fixture repo with a lockfile would run uv / npm for real). The tests of
+# backend.worktree_prepare turn it back on.
+os.environ.setdefault("MINDFLOCK_WORKTREE_DEPS", "0")
 
 import pytest
 
@@ -404,6 +408,48 @@ def _no_real_base_fetch(monkeypatch, tmp_path_factory):
         return real(repo, *a, **kw)
 
     monkeypatch.setattr(worktree_gc, "_fetch_bases", _guarded)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_remote_probe(monkeypatch, tmp_path_factory):
+    """The base-branch resolver asks a repository's remote for its branches
+    (``repo_base.probe_remote``: ``git ls-remote``, a network call). Only a
+    remote that is a local directory under pytest's temp dir is really asked;
+    any other answers "could not ask" (None) without running git, so a test's
+    fake ``git@github.com:o/r`` origin never reaches the network. The
+    in-process probe cache is emptied around every test."""
+    try:
+        from backend import repo_base
+    except Exception:  # noqa: BLE001
+        return
+    real = repo_base.probe_remote
+    base = Path(tmp_path_factory.getbasetemp()).resolve()
+
+    def _guarded(remote, *a, **kw):
+        try:
+            Path(str(remote).replace("file://", "", 1)).resolve().relative_to(base)
+        except (ValueError, OSError):
+            return None
+        return real(remote, *a, **kw)
+
+    repo_base.forget()
+    monkeypatch.setattr(repo_base, "probe_remote", _guarded)
+    # The PR monitor's twin (``PRMonitor._branch_exists``, a GitHub call):
+    # "unknown" keeps the configured base filter, as it was before the probe
+    # existed; a test that wants an answer stubs it. Its cache is emptied too.
+    try:
+        from backend.ticket_ingestion import pr_monitor
+    except Exception:  # noqa: BLE001
+        pr_monitor = None
+    if pr_monitor is not None:
+
+        async def _unknown(self, repo, branch):
+            return None
+
+        monkeypatch.setattr(pr_monitor.PRMonitor, "_branch_exists", _unknown)
+        monkeypatch.setattr(pr_monitor, "_BASE_SEEN", {})
+    yield
+    repo_base.forget()
 
 
 @pytest.fixture(autouse=True)

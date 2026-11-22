@@ -223,11 +223,23 @@ def _ts(v, clamp: bool) -> Optional[float]:
 
 def clean_dns(dns, key: str) -> str:
     """A member's full MagicDNS name (lower-case, no trailing dot) — or ""
-    when ``dns`` isn't a name whose first label is ``key``."""
-    name = str(dns or "").strip().rstrip(".").lower()[:_MAX_HOST]
-    if not name or name.split(".")[0] != key:
+    when ``dns`` isn't a plain DNS name (``[a-z0-9-]`` labels, at most 253
+    characters) whose first label is ``key``."""
+    from backend.peer.fleet_pair import dns_ok
+
+    name = str(dns or "").strip().rstrip(".").lower()
+    if not name or not dns_ok(name) or name.split(".")[0] != key:
         return ""
     return name
+
+
+def clean_host(host, key: str = "") -> str:
+    """A device's display name as stored and shown: no control, bidi or
+    zero-width characters, at most 64 characters (``fleet_pair.clean_host``)
+    — ``key`` when nothing is left."""
+    from backend.peer.fleet_pair import clean_host as _clean
+
+    return _clean(host) or key
 
 
 def _clean_members(raw, clamp: bool = False) -> Dict[str, dict]:
@@ -241,7 +253,7 @@ def _clean_members(raw, clamp: bool = False) -> Dict[str, dict]:
         if added_at is None:
             continue
         out[k] = {
-            "host": str(v.get("host") or "")[:_MAX_HOST],
+            "host": clean_host(v.get("host") or ""),
             "added_at": added_at,
             "added_by": str(v.get("added_by") or "")[:_MAX_HOST],
             "dns": clean_dns(v.get("dns"), k),
@@ -345,6 +357,15 @@ def _save(data: dict) -> None:
     )
     with _LOCK:
         _CACHE["sig"], _CACHE["doc"] = None, None
+    # Reach my devices from anywhere: a removal / key change ends the device
+    # tunnel's open streams at once (membership is otherwise only checked at
+    # each handshake).
+    try:
+        from backend.web.core import devices_anywhere as _anywhere
+
+        _anywhere.fleet_changed()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _self_ident() -> dict:
@@ -560,7 +581,11 @@ def key_valid(candidate: Optional[str]) -> bool:
     key = _load()["key"]
     if not key:
         return False
-    return hmac.compare_digest(str(candidate), key)
+    # Bytes: a non-ASCII str makes compare_digest raise instead of saying no.
+    return hmac.compare_digest(
+        str(candidate).encode("utf-8", "surrogateescape"),
+        str(key).encode("utf-8", "surrogateescape"),
+    )
 
 
 def create() -> dict:
@@ -588,16 +613,19 @@ def bundle() -> dict:
     )
 
 
-def bundle_for(device: str, host: str, dns: str = "") -> dict:
+def bundle_for(device: str, host: str, dns: str = "", note_admit: bool = True) -> dict:
     """The :func:`bundle` handed to a joiner: the roster plus a live entry for
     the joiner itself (added now, by this device). This device's OWN roster is
     left alone — the joiner puts itself on it once it actually holds the key
     (its announce and gossip), so a join that never completes leaves no ghost
-    member behind."""
+    member behind. ``note_admit`` False: the caller records the admit
+    (:func:`_note_admit`) itself, once the join is confirmed (a device
+    tunnel pairing, ``devices_pair``)."""
     out = bundle()
     tmp = {"members": out["members"], "removed": out["removed"]}
     _put_member(tmp, device, host, _self_key(), dns)
-    _note_admit(device, out["members"][device]["added_at"])
+    if note_admit:
+        _note_admit(device, out["members"][device]["added_at"])
     # Who the group belongs to: the joiner adopts this id (people.md).
     out["person"] = _person_handshake()
     return out
@@ -632,7 +660,7 @@ def _put_member(doc: dict, key: str, host: str, by: str, dns: str = "") -> None:
     if gone is not None and gone >= now:
         now = gone + 0.001
     doc["members"][key] = {
-        "host": str(host or key)[:_MAX_HOST],
+        "host": clean_host(host or key, key),
         "added_at": now,
         "added_by": str(by or "")[:_MAX_HOST],
         "dns": clean_dns(dns, key),
@@ -756,12 +784,38 @@ def adopt_bundle(b: dict) -> List[str]:
     return exposed
 
 
+def restore(doc: dict) -> None:
+    """Put back a :func:`state` taken before an adopt that didn't complete
+    (a pairing whose inviter never acknowledged it): the key just adopted is
+    dropped again."""
+    with _LOCK:
+        _save(_normalize(copy.deepcopy(doc)))
+
+
 def add_member(key: str, host: str, by: str, dns: str = "") -> None:
     """Add (or re-add — a fresh ``added_at`` outranks an older tombstone)."""
     if not DEVICE_RE.match(key or ""):
         raise ValueError("not a device name: %r" % key)
     with _LOCK:
         doc = _load()
+        _put_member(doc, key, host, by, dns)
+        _save(doc)
+
+
+class NameTaken(ValueError):
+    """:func:`add_new_member`: a live member already has that name."""
+
+
+def add_new_member(key: str, host: str, by: str, dns: str = "") -> None:
+    """:func:`add_member` for a NEW device only: refused (:class:`NameTaken`)
+    when ``key`` is a live member — checked and written under the lock, so a
+    join that finished meanwhile under the same name is never overwritten."""
+    if not DEVICE_RE.match(key or ""):
+        raise ValueError("not a device name: %r" % key)
+    with _LOCK:
+        doc = _load()
+        if _live(doc, key):
+            raise NameTaken(key)
         _put_member(doc, key, host, by, dns)
         _save(doc)
 
@@ -2062,7 +2116,9 @@ def _settle_automation(joiner: str, joiner_runs: bool, admitter: str) -> None:
     _set_automation_device(joiner if joiner_runs else admitter)
 
 
-async def after_admit(joiner_runs: Optional[bool] = False, joiner: str = "") -> str:
+async def after_admit(
+    joiner_runs: Optional[bool] = False, joiner: str = "", via: str = ""
+) -> str:
     """This device just let another one in (a redeemed code, an approved
     request, a one-click add): make the membership real on THIS side too.
 
@@ -2101,7 +2157,7 @@ async def after_admit(joiner_runs: Optional[bool] = False, joiner: str = "") -> 
     if joiner_runs is not None and DEVICE_RE.match(joiner or ""):
         _settle_automation(joiner, bool(joiner_runs), _self_key())
     if DEVICE_RE.match(joiner or ""):
-        _note_admitted(joiner)
+        _note_admitted(joiner, via)
     return sync_error
 
 
@@ -2117,24 +2173,30 @@ _ADMITTED: Dict[str, dict] = {}
 #: Seconds after an admit at which the joiner is re-probed (it needs a moment
 #: to adopt the key and finish its own side). Empty: no automatic probe.
 ADMIT_PROBE_DELAYS: Tuple[float, ...] = (4.0, 15.0, 45.0)
+#: A device paired through the tunnel (``via`` "anywhere") is reachable from
+#: here only once it published its address (it needs GitHub sign-in for
+#: that, which settings sync usually brings): looked at for longer.
+ADMIT_PROBE_DELAYS_ANYWHERE: Tuple[float, ...] = (15.0, 45.0, 90.0, 180.0, 300.0, 600.0)
 #: How long an admit stays on the screen.
 ADMIT_SHOWN = 3600.0
 
 
-def _note_admitted(device: str) -> None:
+def _note_admitted(device: str, via: str = "", host: str = "") -> None:
     dev = _device(device)
     with _LOCK:
         _ADMITTED[device] = {
             "device": device,
-            "host": _label(dev, device),
+            "host": host or _label(dev, device),
             "at": _now(),
             "state": "checking",
             "reason": "",
+            "via": via,
         }
     if not ADMIT_PROBE_DELAYS:
         return
+    delays = ADMIT_PROBE_DELAYS_ANYWHERE if via == "anywhere" else ADMIT_PROBE_DELAYS
     try:
-        _spawn(_probe_joiner(device, ADMIT_PROBE_DELAYS))
+        _spawn(_probe_joiner(device, delays))
     except RuntimeError:  # no running loop (a sync caller)
         pass
 
@@ -2160,6 +2222,10 @@ async def probe_joiner(device: str) -> dict:
         return {}
     if snap.get("reachable"):
         rec.update(state="reachable", reason="", host=_label(snap, device))
+    elif rec.get("via") == "anywhere":
+        # It can reach THIS device already; this one reaches it once it saved
+        # its address to GitHub (no Tailscale reason applies).
+        rec.update(state="finishing", reason="")
     else:
         outcome = str(snap.get("probe") or "")
         rec.update(
@@ -2198,6 +2264,10 @@ def _idle_join() -> dict:
         "code": "",
         "error": "",
         "id": "",
+        # "anywhere": joined with a long code through the device tunnel.
+        "via": "",
+        # A plain line about what is left to do (devices_pair).
+        "note": "",
     }
 
 
@@ -2206,7 +2276,7 @@ _JOIN_TASK: List[Optional[asyncio.Task]] = [None]
 #: What withdrawing the outgoing request needs (never in join_status()):
 #: ``(device record, request id, secret)``.
 _JOIN_SECRET: List[Optional[tuple]] = [None]
-_BUSY = ("waiting", "joining")
+_BUSY = ("waiting", "joining", "finishing")
 
 
 def join_status() -> dict:
@@ -2400,7 +2470,7 @@ def cancel_join() -> dict:
     withdrawn on the other device (so it can't be approved after all).
     Refused once ``joining``: the bundle is in hand (or the code was
     sent) and the join completes — the state is returned unchanged."""
-    if _JOIN["state"] == "joining":
+    if _JOIN["state"] in ("joining", "finishing"):
         return join_status()
     task = _JOIN_TASK[0]
     if task is not None and not task.done():
@@ -2450,13 +2520,32 @@ async def _finish_join(dev: dict, b: dict, runs: Optional[bool] = None) -> None:
     except ValueError as err:
         _set_join(state="error", error=str(err))
         return
-    # Before settings sync starts: the inviter's person is this device's now.
-    _adopt_person(b.get("person") if isinstance(b, dict) else None, dev["key"])
+    adopted_side_effects(b, dev["key"])
+    await after_adopt(dev, exposed, runs)
+
+
+def adopted_side_effects(b: dict, admitter: str, remote_control: bool = True) -> None:
+    """Right after a bundle was adopted: the admitter's person is this
+    device's now (before settings sync starts), and remote control is on
+    (joining IS the permission) — unless ``remote_control`` is False (a
+    device-tunnel join whose person unticked "let my devices reach this
+    computer": nothing turns on that they didn't agree to). Never raises."""
+    _adopt_person(b.get("person") if isinstance(b, dict) else None, admitter)
+    if not remote_control:
+        return
     try:
         _enable_remote_control()
     except Exception as err:  # noqa: BLE001
         if log.ErrorLog is not None:
             log.ErrorLog.Printf("fleet: couldn't turn remote control on: %v", err)
+
+
+async def after_adopt(dev: dict, exposed: List[str], runs: bool, note_fn=None) -> None:
+    """The rest of a join once the bundle is adopted (:func:`_finish_join`,
+    and a pairing code through the device tunnel, ``devices_pair``): ``dev``
+    re-probed, the other members told, settings sync started from ``dev``,
+    automation settled, the join marked ``joined`` — with the line
+    ``await note_fn()`` gives, when given (asked after settings sync ran)."""
     await _refresh(dev["key"])
     await _announce(_visible_members(), roster(), fleet_key())
     if exposed:
@@ -2471,9 +2560,21 @@ async def _finish_join(dev: dict, b: dict, runs: Optional[bool] = None) -> None:
     # After ``dev``'s settings arrived: a choice the group already made
     # stands (what ``dev`` decides in after_admit too).
     _settle_automation(_self_key(), bool(runs), dev["key"])
+    note = ""
+    if note_fn is not None:
+        try:
+            note = str(await note_fn() or "")
+        except Exception:  # noqa: BLE001
+            note = ""
     # Joined — but a local-only device is a member the others can't reach:
-    # the join screen offers Make reachable right away (self_reachable).
-    _set_join(state="joined", error=sync_error, self_reachable=self_reachable())
+    # the join screen offers Make reachable right away (self_reachable). A
+    # device joined through the tunnel is reached that way instead.
+    _set_join(
+        state="joined",
+        error=sync_error,
+        self_reachable=True if _JOIN.get("via") == "anywhere" else self_reachable(),
+        note=note,
+    )
     _emit(
         "device.joined",
         device=_self_key(),
@@ -3096,6 +3197,13 @@ def status(privileged: bool) -> dict:
                 "added_at": m["added_at"],
                 "self": mine,
                 "reachable": True if mine else bool(dev.get("reachable")),
+                # How: "tailnet", or "tunnel" (Reach my devices from
+                # anywhere — core.devices_anywhere); "" for self / unreached.
+                "via": (
+                    ""
+                    if mine or not dev.get("reachable")
+                    else str(dev.get("via") or "")
+                ),
                 "version": __version__ if mine else str(dev.get("version") or ""),
                 # Update all my devices: the build it runs, whether it can be
                 # updated from here (``editable``/``other`` can't), and its
@@ -3234,6 +3342,10 @@ def status(privileged: bool) -> dict:
         # Devices let in here lately, and whether this one can reach them
         # ("unreachable_joiner": joined, but local-only over there).
         "admitted": admitted(),
+        # A new device pairing through the tunnel right now (pending — not a
+        # member, can't connect as one) and pairing codes used without the
+        # join finishing: the key may be out (devices_pair).
+        "pairing": _pairing_status(),
         # Tailnet devices that aren't (reachable) MindFlocks, each with why:
         # what replaces "No other MindFlock found".
         "tailnet_peers": _tailnet_peers(doc, known, probes, port),
@@ -3246,6 +3358,15 @@ def status(privileged: bool) -> dict:
         # Who answers the shared phone link (one name, several hosts).
         "phone_link": _phone_link(doc, known),
     }
+
+
+def _pairing_status() -> dict:
+    try:
+        from backend.web.core import devices_pair as _pair
+
+        return _pair.pairing_status()
+    except Exception:  # noqa: BLE001
+        return {"pending": [], "alerts": []}
 
 
 def _probe_line(probe: Optional[dict], host: str, port: int) -> str:

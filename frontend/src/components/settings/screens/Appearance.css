@@ -1,9 +1,10 @@
 /* ---------------------------------------------------------------------------
  * Appearance picker (Settings → Appearance). The theme palettes themselves
  * live in theme.css (shared with the mobile page); these are just the picker
- * widgets. .accent-swatch = accent presets; .surface-swatch = surface sets
- * (backgrounds/panels/borders/text), previewed by a banded dot — two tones for a
- * single-hue set, three for a multi-color one (top bar / sidebar / window).
+ * widgets. .accent-swatch = accent presets (a dot); .surface-swatch = surface
+ * sets, each previewed by a .theme-preview: a tiny window that theme.css
+ * paints with the set's real variables (top bar / sidebar / window, text,
+ * secondary text, an accent button and four session-state dots).
  * --------------------------------------------------------------------------- */
 .accent-swatches {
   display: flex;
@@ -47,8 +48,123 @@
   border: 1px solid rgba(128, 128, 128, 0.35);
 }
 
-/* Surface swatches share the accent-swatch chrome; a rounded square rather than
-   a circle, so the diagonal bands of the preview read as areas of a window. */
-.surface-swatch .sw-dot {
+/* Surface swatches are cards: the preview window above, the name below. */
+.surface-swatch {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 116px;
+  padding: 6px 6px 8px;
+  text-align: left;
+}
+
+.surface-swatch .sw-label {
+  padding: 0 2px;
+  line-height: 1.25;
+}
+
+/* The preview. Every colour comes from the element's own custom properties,
+   which tokens.css + theme.css declare on .theme-preview[data-surface][data-mode]
+   — so this sheet only lays the window out; it never names a colour. The
+   cascade inherits nothing from the page: a dark preview on a light page is
+   dark. */
+.theme-preview {
+  display: grid;
+  grid-template-columns: 26% 1fr;
+  grid-template-rows: 9px 1fr;
+  height: 54px;
   border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.theme-preview .tp-bar {
+  grid-column: 1 / -1;
+  background: var(--topbar-bg);
+  border-bottom: 1px solid var(--topbar-border);
+}
+
+.theme-preview .tp-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+}
+
+.theme-preview .tp-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.theme-preview .tp-dot.tone-working {
+  background: var(--tone-working);
+}
+
+.theme-preview .tp-dot.tone-attention {
+  background: var(--tone-attention);
+}
+
+.theme-preview .tp-dot.tone-broken {
+  background: var(--tone-broken);
+}
+
+.theme-preview .tp-dot.tone-waiting {
+  background: var(--tone-waiting);
+}
+
+.theme-preview .tp-win {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 7px;
+  background: var(--panel);
+}
+
+.theme-preview .tp-text {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+}
+
+.theme-preview .tp-muted {
+  width: 70%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--muted);
+}
+
+.theme-preview .tp-btn {
+  width: 34px;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--accent);
+  position: relative;
+}
+
+/* The button's label, as a short bar in the accent's own ink. */
+.theme-preview .tp-btn::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 4px;
+  height: 1px;
+  background: var(--accent-ink);
+}
+
+/* An accent swatch's dot is a .theme-preview too (for its variables), not a
+   window: no grid, just the accent. */
+.accent-swatch .sw-dot.theme-preview {
+  display: inline-block;
+  height: 16px;
+  background: var(--accent);
+  border-color: rgba(128, 128, 128, 0.35);
 }

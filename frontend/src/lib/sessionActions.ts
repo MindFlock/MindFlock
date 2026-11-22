@@ -158,6 +158,9 @@ interface MakePrResult {
   message?: string;
   /** "PR already open": the branch had one; `url` is it. */
   note?: string;
+  /** "Using main: this repository has no staging branch" — a configured base
+   * this repository lacks was passed over (backend/repo_base.py). */
+  base_note?: string;
 }
 
 /** POST /merge-pr — 200 either way; `pr_url` is where to merge by hand.
@@ -1140,7 +1143,10 @@ export async function submitMakePr(title: string, base: string, overrideRedZones
     } else {
       // We are past an await, so a bare window.open is popup-blocked and the
       // PR opened in silence: offerUrl says so, and falls back to a click.
-      const said = (r?.note ? "PR already open for " : "Opened PR for ") + displayName(title);
+      const said =
+        (r?.note ? "PR already open for " : "Opened PR for ") +
+        displayName(title) +
+        (r?.base_note ? ". " + r.base_note : "");
       if (r?.url) offerUrl(r.url, said);
       else toast(said);
       // PR is open — restart the guided cycle: put the pill back to idle so the
@@ -1208,6 +1214,24 @@ export async function rerunSetup(title: string) {
     errorPop("Setup re-run failed", errMsg(err));
   }
   await refreshInstances();
+}
+
+/** Show the tail of a session's worktree setup log (`.mindflock_setup.log`):
+ * what the preparation did (pin files carried, deps cloned or installed) and,
+ * when it stopped, why. */
+export async function showSetupLog(title: string) {
+  if (!title) return;
+  try {
+    const d = await instApi<{ status?: { state?: string; error?: string } | null; log?: string }>(
+      title,
+      "/setup?lines=40"
+    );
+    const st = d.status || {};
+    const head = st.state === "failed" ? "Setup didn't finish" + (st.error ? ": " + st.error : "") + "\n\n" : "";
+    confirmPop("Worktree setup log", head + ((d.log || "").trim() || "(the log is empty)"), [], "Close");
+  } catch (err) {
+    errorPop("Couldn't read the setup log", errMsg(err));
+  }
 }
 
 /** Hide/show a session's pane (client-side only; the session keeps running). */

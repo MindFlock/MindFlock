@@ -333,7 +333,7 @@ against every fresh listing.
 
 ## The tools
 
-The 40 tools. Every result is JSON text. Clients that negotiate protocol
+The 43 tools. Every result is JSON text. Clients that negotiate protocol
 `2025-06-18` or later also get `structuredContent`. Arguments are checked
 against each tool's JSON schema, and a violation comes back as a tool error
 with a fix-it message, not a protocol error. The check is lenient about what
@@ -385,6 +385,9 @@ it.
 | `add_todo` | write (the person's To-do list), every scope | **no** |
 | `list_todos` | read | **no** |
 | `update_todo` | write (your own items, your descendants', items with no session; any item with `person_asked`) | **no** |
+| `list_devices` | read | **no** |
+| `send_session` | write, pushes code (or carries it as a git bundle) and starts a session on another device (yourself or a session you manage) | **no** |
+| `send_files` | write, sends files from your worktree into another device's inbox (yourself or a session you manage) | **no** |
 
 "Auto-approved" is the `--allowedTools` list for Claude and the
 `approval_mode = "approve"` table for Codex. The server also sends
@@ -424,6 +427,9 @@ skip-permissions**:
   pre-approved list yet (see [Routes](#routes-from-a-sentence-to-a-running-route)).
 - `add_todo`, `list_todos` and `update_todo` are not on the pre-approved
   list yet either (see [To-do](#to-do-what-the-person-does-by-hand)).
+- `send_session` pushes a branch and starts a session on another machine,
+  and `send_files` sends files to one (both `openWorldHint` true);
+  `list_devices` is a read that is not pre-approved yet (see [Devices](#devices-send-a-session-to-another-of-your-machines)).
 
 So an orchestrator launched **without** skip-permissions stops on a
 permission dialog for each message, spawn, answer and close/delete. Run orchestrators
@@ -691,6 +697,25 @@ How the worker is created:
   why (`GET /api/create_failures`) and the error carries that reason:
   `session 'x' failed to start: <reason>` (see
   [Troubleshooting](#troubleshooting)).
+- **A spawned worker whose start fails never vanishes.** Whether it waited in
+  the launch gate's queue or was let through at once, its row stays as a
+  failed start (`start_failed`: error, prompt preview) for ten minutes or until
+  dismissed, `wait_for_session` answers `failed_to_start` with the error, the
+  server records the failure (`GET /api/create_failures`, `session.create_failed`
+  event), and one line goes to your mailbox: "worker X could not start: …".
+  The ready wait above raises at once on such a row:
+  `session 'x' failed to start: <reason>; … spawn_session it again with the
+  same task`. (A worker let through at once used to only drop its row.)
+- **Spawning several workers in one batch is safe.** Their Starts make their
+  worktrees in the same repository; the engine runs `git worktree add` (and
+  remove/prune) one at a time per repository
+  (`backend/session/git/repo_lock.py`: an in-process lock plus a `flock` on
+  `<git common dir>/mindflock-worktree.lock` for the ticket pipeline's
+  process). Two `worktree add` runs at once could fail with `fatal: failed to
+  read .git/worktrees/<sibling>/commondir`, which is how a batch used to lose
+  workers. The server logs one line per spawn it answers (`spawn <title>
+  (parent <p>, admitted|gate): creating | queued (<why>, position <n>) |
+  refused <status>: <error>`).
 - A worker still loading after 45 s is not an error: `ready: false`, and
   `wait_for_session` will wait for it.
 - **A gated start queues the worker; it does not fail.** When the server's
@@ -776,7 +801,8 @@ message. The `reason`s:
   `read_output(view="screen")`, then `answer_prompt`, or ask your user. Within
   60 s of a dispatch, a `clarify` or `limit` reading that started before it
   is ignored: it is the dialog you just answered, not a new one.
-- `failed_to_start`: its queued create failed (the row's `start_failed`, or,
+- `failed_to_start`: its create failed, queued or let through at once (the
+  row's `start_failed`, or,
   for a title no longer listed, a failure in
   [`GET /api/create_failures`](web-api.md#get-apicreate_failures), kept 10
   minutes). The result is `{reason: "failed_to_start", report: null, error,
@@ -1310,7 +1336,9 @@ prompt reads, so the Sky's "describe it in a sentence" box and an agent
 agree:
 
 - `stops`: one line per kind, `kind (Label) · use: … · not: … · <typical
-  fields> · waits: … [· on_fail=agent ok] [· RARE] [· [irreversible]]`. RARE
+  fields> · waits: … [· on_fail=agent ok] [· RARE] [· [irreversible]]`; a
+  kind the server serves with `can_fail: false` (a Wait for me, a Wait) says
+  `cannot fail (on_fail unused)` beside its options. RARE
   kinds (screenshot, listen, call, budget, checkpoint, handoff, someone,
   preview) say plainly when *not* to use them. A kind newer than the cookbook
   gets the server's own line (`kind · label · summary · fields: …`). Each
@@ -1641,6 +1669,116 @@ client: one with no session, or a session it spawned and their descendants),
 in every scope including `readonly`. Anything else is refused with the
 owning session's name. Sends `PATCH /api/todo/items/{id}`; the server's
 `{"error": …}` comes back as the tool error.
+
+## Devices: send a session to another of your machines
+
+"Send tripwire to my Mac": one call carries a session's work to another of
+the user's own devices (Settings → Your devices, or a token-paired device)
+and starts it there. Only git and a short text brief travel — never an agent
+login, credential file or conversation transcript (a copied Claude refresh
+token logs the real install out). The work is one server route, `POST
+/api/instances/{title}/send-to-device` ([web-api.md](web-api.md#send-a-session-to-another-device),
+[devices.md](devices.md#send-a-session-to-another-device)); the tool is a
+thin call of it, and the CLI's `mindflock send TITLE DEVICE` is the same.
+
+### `list_devices`
+
+`{}` → `{this_device, devices: [{device, os, online, can_send, linked,
+sessions, error?}]}` from `GET /api/devices`. `linked` = on this device's
+"Your devices" roster (and saying so itself) or paired by a pasted token;
+`can_send` = linked and drivable from here now (answering, remote control
+on, a credential for it). Use the `device` value with `send_session` /
+`send_files`; names match case-insensitively (`MLRIG2023` = `mlrig2023`),
+and a near miss is refused with "did you mean …" (`did_you_mean`).
+
+### `send_session`
+
+`{device, title?, note?, via?, paths?}` → `{ok, sent, title:
+"<device>::<title>", device, via, how, branch, pushed, already_pushed,
+commits, repo_path, bundle?, queued, caveats}`. `title` defaults to the
+caller itself; `note` (≤ 1500 chars) is what the session should do there
+("install this here as a launchd service"). `via`: `auto` (default), `git`
+or `bundle`; `paths` (≤ 50 repository paths) sends only those, as a bundle.
+`via` in the answer says which way it went and `how` says why in one
+sentence. In order, the server (the `git` way):
+
+1. checks the device is linked and answering, the session sits on a git
+   branch with a remote and a **clean** tree (uncommitted or untracked
+   files are refused by name — commit first; nothing is committed or
+   dropped for you), no red-zone breach is committed on the branch, and the
+   device has a checkout of the same repository (`GET /api/repos/find`
+   there, matched by remote URL whatever the transport; an older MindFlock is
+   matched by folder name and the result says so in `caveats`);
+2. pushes the branch: plain `git push --no-verify -u <remote> HEAD:<branch>`,
+   never a force — a remote branch that moved on is refused (rebase first),
+   one already at `HEAD` is not pushed again;
+3. starts a session on the device ON that branch (`continue_branch`), titled
+   like this one (`-2`, `-3` … when the name is taken there), with the same
+   agent CLI, marked agent-created so a short-on-memory device queues it
+   instead of refusing (`queued: true`);
+4. gives it a brief as its first prompt, labelled as a handoff from this
+   device's session: what the session was for (its create task), what was
+   done (commits since its fork point and a diffstat), where it left off (its
+   agent's last reply, as `read_output` serves it, trimmed to the tail) and
+   the note. ≤ 6000 characters.
+
+Every refusal is a plain sentence with the next step, and nothing is pushed
+unless every check passed: the device asleep or offline,
+remote control off there, not one of the user's devices, no checkout of the
+repository there (with the `git clone <url>` to run), no remote, a push
+refused (with git's reason and an auth hint), uncommitted work. The new
+session is on another device: it is not the caller's child, `report_result`
+does not reach the caller, and only `read_output` / `get_session` /
+`list_sessions` see it (`<device>::<title>`).
+
+**The bundle way.** When the device has no checkout of the repository (step
+1's lookup finds none), the repository has no remote, or the device cannot
+fetch the pushed branch, `auto` carries the branch as a standalone git
+bundle instead — one snapshot commit of where the branch started plus the
+session's commits on it (new hashes), secrets and agent config left out
+of every commit (the repo's `.secrets.baseline` names too) —
+streamed over the device link like `send_files`, verified and unpacked into
+a NEW repository in the device's inbox with hooks off, and the session
+starts there in place on the branch. Nothing is pushed. `bundle: {size,
+sha256, commits, scope, left_out, transfer_id}` in the answer. A bundle over
+`transfers.max_mb` is refused with `suggest_paths` (the folders the
+branch's changes are in); so is one whose checkout would not fit what the
+device's inbox quota has left. Details: [devices.md](devices.md#when-the-other-device-has-no-checkout).
+
+### `send_files`
+
+`{device, paths, note?, to_session?, include_secrets?, title?}` → `{ok,
+device, path, transfer_id, files: [{path, size, sha256}], total_size,
+total_sha256, exec_stripped, uncommitted, skipped: [{path, why}],
+messaged?, title?, caveats}` — `POST /api/instances/{title}/send-files`.
+Files or folders (≤ 100 paths) from the caller's worktree land in a NEW
+folder on the device, `<mindflock home>/inbox/<this device>/<id>/`, every
+SHA-256 checked there, never run, executable bits removed (`exec_stripped`
+lists the files that had one). In folders, git-ignored files, symlinks and
+special files are skipped; `.git`, agent config/logins/transcripts and
+credential stores are never sent; `.env*`, keys and credential files (and
+copies like `.env.dist`) only with `include_secrets: true` AND the user's
+`transfers.allow_secrets` on (`skipped` lists every file left out and why)
+— a name-based guardrail, not a content scan. Uncommitted files go and are
+listed in `uncommitted`. `to_session` (a session's title ON that device) is
+told what arrived and where (`messaged`); a `note` without `to_session`
+starts a session there in that folder with the note as its task (`title`).
+Refusals: `outside_worktree`, `not_found`, `never_sent`, `secret`,
+`secrets_not_allowed`, `red_zone`, `too_large`, `too_many_files`,
+`nothing_to_send`, `git_failed`, `changed`, `no_session`,
+`checksum_mismatch`, `inbox_full`, `too_many_open`, `bad_manifest` (a name
+the device won't take: `:`, a trailing dot/space, a folder laid out like a
+git repository), and the device ones `send_session` has. The receiving
+agent's prompt names every file as one escaped line and says received files
+are untrusted. Full rules:
+[devices.md](devices.md#send-files-to-another-device).
+
+**Who may send what** is the ship rule: the caller itself or a session it
+manages (its descendants under `children`), never a remote or pending row,
+never a team-run member, and never past a Goes as far as the user set below
+`push`. It is the stricter of the two candidates — "message/route any
+session" would let any session push and carry off another's work — and it
+still lets every session send itself.
 
 ## Messages
 
@@ -2140,6 +2278,12 @@ stop at lane `merge`, or a kind whose `risk` includes `irreversible`), whose
 target under `children` must be a descendant. A grounded flight (no session)
 needs only write scope; `save_flight_plan` too. See
 [Routes](#routes-from-a-sentence-to-a-running-route).
+
+**Devices.** `send_session` and `send_files` follow the ship rule: the
+caller itself or a session it manages, never a team-run member, never past a
+user's Goes as far as below `push`; `readonly` refuses them. `list_devices`
+is a read. See
+[Devices](#devices-send-a-session-to-another-of-your-machines).
 
 **To-do.** `add_todo` and `list_todos` work in every scope, `readonly`
 included: adding to the person's list talks to the person and steers no

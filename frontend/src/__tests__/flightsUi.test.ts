@@ -417,7 +417,7 @@ describe("the sky", () => {
     const drawer = html.slice(html.indexOf('class="sky-drawer open"'));
     expect(drawer).toContain('id="fl-group-needs-h"');
     expect(drawer).toContain(">Fix the login</button>");
-    expect(drawer).toContain("Wait for me: Approve the merge");
+    expect(drawer).toContain("Needs you: Approve the merge");
     expect(drawer).toMatch(/class="btn-primary fl-btn fl-done"[^>]*>Done<\/button>/);
     expect(drawer.indexOf("Needs you")).toBeLessThan(drawer.indexOf("Waiting to start"));
     // The running flight isn't perched: not in the drawer.

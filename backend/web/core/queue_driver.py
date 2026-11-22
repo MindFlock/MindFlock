@@ -29,7 +29,6 @@ import subprocess
 import time
 from typing import Dict, Optional
 
-from backend.providers import usage_limits as _usage_limits
 from backend import log
 from backend import providers
 from backend import session
@@ -251,16 +250,22 @@ def _refresh_limit_state(inst, title: str, name: str) -> float:
     except Exception:  # noqa: BLE001
         text = ""
     provider = providers.resolve(getattr(inst, "Program", "") or "")
-    # "Now using usage credits": the plan window is spent but the CLI carries
-    # on, billed to credits — the window is OPEN for sending. Clear any hold
-    # before asking the limit parser or the meter (both read the spent window).
-    if _usage_limits.is_credits_banner(text):
-        _LIMIT_STATE.pop(title, None)
-        return 0.0
     try:
         state = provider.usage_limit_state(text, now)
     except Exception:  # noqa: BLE001 — detection must never break the drain
         state = {"limited": False, "reset_at": None}
+    # "Now using usage credits" is the newest notice on the pane (the
+    # provider's own patterns; a limit banner above it is history): the plan
+    # window is spent but the CLI carries on, billed to credits — the window
+    # is OPEN for sending. Clear any hold before asking the meter (it reads
+    # the spent plan window).
+    if state.get("credits"):
+        if _LIMIT_STATE.pop(title, None) and log.InfoLog is not None:
+            log.InfoLog.Printf(
+                "usage hold on %s released: the pane says it runs on credits",
+                title,
+            )
+        return 0.0
     prev = _LIMIT_STATE.get(title, 0.0)
     if state.get("limited"):
         # An active hold for THIS limit episode is kept stable — never recompute
@@ -446,8 +451,9 @@ def _typing_held(inst, title: str) -> bool:
     except Exception:  # noqa: BLE001
         _wt = ""
     if _wt:
-        _setup_st = _wt_setup.setup_status(_wt)
-        if _setup_st and _setup_st.get("state") in ("running", "failed"):
+        # Only a setup that holds: the automatic part of the recipe (deps,
+        # pin files) runs beside the agent and never holds (hold: false).
+        if _wt_setup.holds_prompts(_wt_setup.setup_status(_wt)):
             return True
     return False
 
@@ -860,17 +866,21 @@ def _drain_one_queue(title: str) -> None:
         # until a key is pressed — then submit the next prompt so it lands on a
         # clean input instead of selecting a menu entry.
         rec["idle_since"] = None
-        if not st.get("wait_for_limit", True):
-            # Not waiting it out: stop the queue so it sits until the user
-            # resumes by hand (mirrors the idle-path limit gate).
-            if st["enabled"]:
-                _prompt_queue.set_flags(title, enabled=False)
-                srv._emit_queue_changed(title)
-            return
         name, err = srv._ensure_agent_session(inst, title)
         if err is not None:
             return
+        # The window first: a 'limit' reading whose window is in fact open
+        # (the newest notice is "Now using usage credits", the meter shows
+        # headroom, the reset passed) is delivered to below — wait_for_limit
+        # decides only what happens while a limit really holds. Asked after
+        # it, a credits screen switched the queue off and parked a spawned
+        # worker's task until someone noticed.
         if srv._refresh_limit_state(inst, title, name) > now:
+            if not st.get("wait_for_limit", True) and st["enabled"]:
+                # Not waiting it out: stop the queue so it sits until the
+                # user resumes by hand (mirrors the idle-path limit gate).
+                _prompt_queue.set_flags(title, enabled=False)
+                srv._emit_queue_changed(title)
             return  # still limited — hold; the UI shows the reset countdown
         # Window reopened (parsed reset passed / live meter shows headroom) but
         # activity=='limit' means the menu is still on the pane this very tick.
