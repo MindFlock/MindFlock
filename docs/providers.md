@@ -1063,9 +1063,11 @@ write their own transcripts under `<project>/<conversation>/subagents/`, and on
 busy machines they are most of the spend. Claude Code writes one API response as
 several lines (one per content block, each repeating `message.usage`), and a
 resumed/forked conversation copies earlier lines into a new file, so turns are
-**deduplicated by `(message.id, requestId)`** across every file (the copy with
-the most output tokens wins) before they are summed and priced per-turn by their
-own model. Parsed files are memoized on (mtime, size, inode) with the byte
+**deduplicated by `(message.id, requestId)`** across every file (each token
+count is the most any copy reports — the final block's output — and the turn
+keeps its first copy's timestamp, so it never shrinks or moves to another day as
+more of its lines arrive: the ledger would otherwise keep the stale day total)
+before they are summed and priced per-turn by their own model. Parsed files are memoized on (mtime, size, inode) with the byte
 offset read to, so the 60 s refresh never re-reads an unchanged file and reads a
 grown one (transcripts are append-only) only from where it stopped; a line still
 being written is read again once complete. The memo is saved beside the ledger
