@@ -349,7 +349,12 @@ def own_token_valid(candidate: Optional[str]) -> bool:
     tok = get_token()
     if not tok:
         return False
-    return hmac.compare_digest(str(candidate), tok)
+    # Bytes, not str: compare_digest raises TypeError on a non-ASCII str (a
+    # header byte >= 0x80 arrives as one), which would be a 500, not a 401.
+    return hmac.compare_digest(
+        str(candidate).encode("utf-8", "surrogateescape"),
+        str(tok).encode("utf-8", "surrogateescape"),
+    )
 
 
 def _fleet_key_valid(candidate: Optional[str]) -> bool:

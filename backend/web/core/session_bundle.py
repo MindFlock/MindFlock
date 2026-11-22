@@ -15,7 +15,10 @@ single folder becomes the new repository's root (``tripwire/`` → a
 ``tripwire`` repository whose history is the commits that touched it).
 
 Files that look like secrets or agent logins (:func:`backend.web.core.
-send_files.classify`) are left out of every tree — listed, never carried.
+send_files.classify`, plus the repository's ``.secrets.baseline`` names) are
+left out of EVERY re-created commit's tree, each judged on its own — so a
+secret committed and later deleted is not in the history either — listed,
+never carried.
 The work happens in a throwaway bare repository whose ``alternates`` point at
 the session's object store: nothing is written to the session's repository.
 
@@ -26,8 +29,10 @@ them), ``core.hooksPath=/dev/null``, ``git bundle verify``, exactly one head
 — ``refs/heads/<branch>`` — fetched with ``fsckObjects`` on, then checked out
 with ``core.symlinks=false`` (a symlink in the tree becomes a small text
 file) and ``core.fileMode=false``; every file then loses its executable and
-set-id bits (recorded, so an agent can restore one on purpose). Nothing in
-the tree is ever run.
+set-id bits (recorded, so an agent can restore one on purpose). Before the
+checkout the caller's ``check`` sees the tree (paths, sizes, object count):
+the inbox refuses a repository-shaped folder, more files than its limit and
+a checkout bigger than its quota has left. Nothing in the tree is ever run.
 """
 
 from __future__ import annotations
@@ -164,7 +169,8 @@ def _export(
     _ok(["init", "--bare", "--template=", "-q", repo])
     with open(os.path.join(repo, "objects", "info", "alternates"), "w") as f:
         f.write(objects + "\n")
-    g = ["--git-dir", repo]
+    # --literal-pathspecs: a kept path is a path, never pathspec magic.
+    g = ["--literal-pathspecs", "--git-dir", repo]
 
     # The first-parent line from the fork point (or the last max_commits).
     rng = ("%s..%s" % (fork, tip)) if fork else tip
@@ -189,59 +195,50 @@ def _export(
         if kind == "tree":
             sub = keep[0]
 
-    # Every path the trees would carry, to find the ones to leave out.
-    names: set = set()
+    # Secrets and agent config are left out of EVERY re-created commit's
+    # tree, judged per tree: a file committed and later deleted must not
+    # survive in the history the bundle carries, whatever the fork point.
     scope = ["--"] + keep if keep else []
-    for rev in ([base] if base else []) + [tip]:
-        out = _ok(g + ["ls-tree", "-r", "-z", "--name-only", rev] + scope)
-        names.update(n for n in out.split("\x00") if n)
-    if base:
-        out = _ok(
-            g
-            + [
-                "log",
-                "--first-parent",
-                "--format=",
-                "--name-only",
-                "-z",
-                "%s..%s" % (base, tip),
-            ]
-            + scope
-        )
-        names.update(n.strip("\n") for n in out.split("\x00") if n.strip("\n"))
-    drop = sorted(n for n in names if classify(n))
-
     index = os.path.join(tmp, "index")
     tree_cache: Dict[str, str] = {}
+    verdicts: Dict[str, bool] = {}
+    dropped: set = set()
+
+    def left_out(path: str) -> bool:
+        if path not in verdicts:
+            verdicts[path] = bool(classify(path))
+        return verdicts[path]
 
     def tree_for(commit: str) -> str:
         if commit in tree_cache:
             return tree_cache[commit]
-        if not keep and not drop:
+        listing = _run(g + ["ls-tree", "-r", "-z", "--full-tree", commit] + scope)
+        if listing[0] != 0:
+            raise BundleError("bundle_failed", "git ls-tree failed: %s" % listing[2])
+        rows = []
+        cut = False
+        for rec in listing[1].split(b"\x00"):
+            if not rec:
+                continue
+            meta, _, name = rec.partition(b"\t")
+            path = name.decode("utf-8", "surrogateescape")
+            if left_out(path):
+                dropped.add(path)
+                cut = True
+                continue
+            if sub:
+                if not path.startswith(sub + "/"):
+                    continue
+                path = path[len(sub) + 1 :]
+            rows.append(meta + b"\t" + path.encode("utf-8", "surrogateescape"))
+        if not keep and not cut:
             t = _ok(g + ["rev-parse", "%s^{tree}" % commit])
-        elif sub and not drop:
+        elif sub and not cut:
             rc, out, _ = _run(
                 g + ["rev-parse", "--verify", "-q", "%s:%s" % (commit, sub)]
             )
             t = out.decode().strip() if rc == 0 else _EMPTY_TREE
         else:
-            listing = _run(g + ["ls-tree", "-r", "-z", "--full-tree", commit] + scope)[
-                1
-            ]
-            rows = []
-            dropped = set(drop)
-            for rec in listing.split(b"\x00"):
-                if not rec:
-                    continue
-                meta, _, name = rec.partition(b"\t")
-                path = name.decode("utf-8", "surrogateescape")
-                if path in dropped:
-                    continue
-                if sub:
-                    if not path.startswith(sub + "/"):
-                        continue
-                    path = path[len(sub) + 1 :]
-                rows.append(meta + b"\t" + path.encode("utf-8", "surrogateescape"))
             env = _env({"GIT_INDEX_FILE": index})
             if os.path.exists(index):
                 os.unlink(index)
@@ -312,7 +309,7 @@ def _export(
     made = 0
     for c in line:
         t = tree_for(c)
-        if head and (keep or drop) and t == head_tree:
+        if head and (keep or dropped) and t == head_tree:
             continue  # this commit changed nothing in the paths that travel
         msg = _run(g + ["log", "-1", "--format=%B", c])[1] or b"(no message)\n"
         head = commit_tree(t, head, c, msg)
@@ -335,7 +332,7 @@ def _export(
         "folded": folded,
         "snapshot": bool(base),
         "scope": sub or (keep if keep else ""),
-        "left_out": drop,
+        "left_out": sorted(dropped),
         "size": os.path.getsize(out_path),
     }
 
@@ -387,10 +384,21 @@ def _strip_modes(root: str) -> List[str]:
     return sorted(had_exec)
 
 
-def unpack(bundle: str, dest: str, branch: str) -> dict:
+def unpack(
+    bundle: str,
+    dest: str,
+    branch: str,
+    *,
+    check: Optional[Callable[[List[Tuple[str, int]], int], None]] = None,
+) -> dict:
     """Verify ``bundle`` and check its one branch out into the NEW folder
     ``dest`` (it must not exist) → ``{path, branch, head, exec_stripped}``.
-    Raises :class:`BundleError` (``bad_bundle``); ``dest`` is removed then."""
+    ``check(entries, objects)`` sees the branch's tree BEFORE anything is
+    checked out — ``[(path, size)]`` per file and the repository's object
+    count — and raises to refuse it (a planted repository layout, too many
+    files, a checkout bigger than the space left). Raises
+    :class:`BundleError` (``bad_bundle``) or what ``check`` raised; ``dest``
+    is removed then."""
     if not valid_branch(branch):
         raise BundleError(
             "bad_bundle", "the bundle names an unusable branch %r" % branch
@@ -459,6 +467,8 @@ def unpack(bundle: str, dest: str, branch: str) -> dict:
                 "the bundle's objects failed git's checks: %s"
                 % ((err.splitlines() or ["?"])[-1]),
             )
+        if check is not None:
+            check(*_tree_entries(g, want, env))
         rc, _, err = _run(g + ["checkout", "-q", "-f", branch], env=env)
         if rc != 0:
             raise BundleError(
@@ -468,10 +478,41 @@ def unpack(bundle: str, dest: str, branch: str) -> dict:
             )
         head = _run(g + ["rev-parse", "HEAD"], env=env)[1].decode().strip()
         stripped = _strip_modes(dest)
-    except BundleError:
+    except BaseException:
         shutil.rmtree(dest, ignore_errors=True)
         raise
     return {"path": dest, "branch": branch, "head": head, "exec_stripped": stripped}
+
+
+def _tree_entries(
+    g: List[str], ref: str, env: dict
+) -> Tuple[List[Tuple[str, int]], int]:
+    """``([(path, size)], objects)``: every file a checkout of ``ref`` would
+    write (a submodule entry counts 0 bytes) and the objects the repository
+    now holds — read before the checkout."""
+    rc, out, err = _run(g + ["ls-tree", "-r", "-l", "-z", "--full-tree", ref], env=env)
+    if rc != 0:
+        raise BundleError("bad_bundle", "could not read the bundle's tree: %s" % err)
+    entries: List[Tuple[str, int]] = []
+    for rec in out.split(b"\x00"):
+        if not rec:
+            continue
+        meta, _, name = rec.partition(b"\t")
+        cols = meta.split()
+        size = cols[3] if len(cols) > 3 else b"-"
+        entries.append(
+            (
+                name.decode("utf-8", "surrogateescape"),
+                int(size) if size.isdigit() else 0,
+            )
+        )
+    rc, out, _ = _run(g + ["count-objects", "-v"], env=env)
+    objects = 0
+    for line in out.decode("utf-8", "replace").splitlines():
+        key, _, val = line.partition(":")
+        if key.strip() in ("count", "in-pack") and val.strip().isdigit():
+            objects += int(val.strip())
+    return entries, objects
 
 
 def _run_ok(args: List[str], env: dict) -> None:

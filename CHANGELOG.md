@@ -44,6 +44,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   case-insensitively, with "did you mean". New machine-local settings group
   `transfers` (limits, inbox quota, keep days, `allow_secrets`).
 
+### Security
+
+- **Send files / bundles hardened after an independent review.** The
+  receiving device refuses a folder laid out like a git repository (`HEAD`
+  beside `objects`/`refs`/`config`, at any depth or as the transfer itself —
+  a plain `git status` there could run its `core.fsmonitor`), Windows
+  look-alikes of `.git` (`.git.`, `GIT~1`, `a:b` streams) and bidi/invisible
+  names, in sent files and in a bundle's tree alike; every git MindFlock
+  runs in an inbox folder goes with `safe.bareRepository=explicit`, no
+  fsmonitor, no hooks and no discovery above the inbox. A bundle leaves
+  secrets out of every commit's tree, not just the tip (a `.env` committed
+  then deleted no longer survives in history) and honours
+  `.secrets.baseline`. The inbox quota counts open transfers at their
+  declared size, caps open transfers (8, 4 per device), rechecks on every
+  chunk, drops stale ones on a timer, and checks a bundle's checked-out size
+  before unpacking it. File, branch, device and session names reach an
+  agent's prompt as one escaped line each, and the prompt says received
+  files are untrusted. Also: the ignore filter fails closed and treats names
+  literally, a file is read without following a symlink at any folder,
+  `.env.dist`/`*.template`/`*.bak` copies count as secrets, `finish` no
+  longer holds the inbox lock while hashing, a non-ASCII bearer is a clean
+  401, and the record says "claims to be" unless the link identified the
+  sender.
+
 ## [0.14.25] - 2026-11-20
 
 ### Changed

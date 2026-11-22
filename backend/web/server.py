@@ -866,6 +866,9 @@ async def lifespan(app: FastAPI):
     # kicks, *_changed events, the addon sessions snapshot). Always-on so they
     # keep firing with zero clients connected; the GET is now read-only.
     _register_task(_instances_tick_loop())
+    # The transfer inbox: drop unfinished transfers that went idle or ran out
+    # of time even when no new one arrives (core.inbox.prune_partials).
+    _register_task(_inbox_partials_loop())
     # Red zones: keep every live worktree's guard file current, re-arm hooks
     # that were disarmed, and turn the tool feed into blocked/breached/
     # tampered events. Its own loop (not a piggyback on the instances tick) so
@@ -2829,6 +2832,20 @@ async def _dialog_watch_loop() -> None:
         except Exception:  # noqa: BLE001 — the loop must never die
             pass
         await asyncio.sleep(_DIALOG_WATCH_INTERVAL)
+
+
+_INBOX_PRUNE_INTERVAL = 300.0
+
+
+async def _inbox_partials_loop() -> None:
+    """Every :data:`_INBOX_PRUNE_INTERVAL` s, drop stale unfinished
+    transfers (their reserved quota with them). Only ``inbox/.partial``."""
+    while True:
+        await asyncio.sleep(_INBOX_PRUNE_INTERVAL)
+        try:
+            await asyncio.to_thread(_inbox.prune_partials)
+        except Exception:  # noqa: BLE001 — housekeeping must never die
+            pass
 
 
 async def _instances_tick_loop() -> None:
@@ -5797,6 +5814,20 @@ def _transfer_refusal(request: Request) -> Optional[JSONResponse]:
     return None
 
 
+def _transfer_sender(request: Request) -> Tuple[str, bool]:
+    """``(device label, verified)`` for a transfer: the discovered device the
+    request's tailnet address belongs to when there is one (verified), else
+    the remote marker the sender put on it (only a claim)."""
+    try:
+        ip = request.client.host if request.client else ""
+    except Exception:  # noqa: BLE001
+        ip = ""
+    seen = _remote.device_for_ip(ip)
+    if seen:
+        return seen, True
+    return request.headers.get(_remote.REMOTE_HEADER, ""), False
+
+
 def _inbox_in_use(path: str) -> bool:
     """Whether a live session works in (or under) ``path``."""
     real = os.path.realpath(path)
@@ -5852,14 +5883,16 @@ async def transfer_begin(
     refused = _transfer_refusal(request)
     if refused is not None:
         return refused
+    sender, verified = _transfer_sender(request)
     return await asyncio.to_thread(
         _inbox_answer,
         _inbox.begin,
         payload,
-        request.headers.get(_remote.REMOTE_HEADER, ""),
+        sender,
         lim=_send_files.limits(),
         session_check=_inbox_session_check,
         in_use=_inbox_in_use,
+        from_verified=verified,
         ok=201,
     )
 
@@ -5907,7 +5940,9 @@ async def transfer_finish(tid: str, request: Request) -> JSONResponse:
     refused = _transfer_refusal(request)
     if refused is not None:
         return refused
-    return await asyncio.to_thread(_inbox_answer, _inbox.finish, tid)
+    return await asyncio.to_thread(
+        _inbox_answer, _inbox.finish, tid, lim=_send_files.limits()
+    )
 
 
 @app.post("/api/transfers/{tid}/cancel")

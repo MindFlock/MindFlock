@@ -3102,12 +3102,15 @@ folder>, in_place: true, prompt, spawned: true, program}` (`title`).
 |---|---|
 | a path outside the worktree (symlinks resolved), missing, or not a file/folder | **403** `outside_worktree`, **404** `not_found`, **400** `not_a_file` / `bad_path` |
 | `.git`, agent config/login/transcript, credential store | **403** `never_sent` |
+| git could not say which files it ignores (failed / timed out) | **500** `git_failed` (nothing sent) |
+| a file changed or its folder became a symlink while it was read | **409** `changed` |
 | a named secret; `include_secrets` without the setting | **403** `secret`, `secrets_not_allowed` |
 | in a red zone / outside the session's fence | **409** `red_zone` (`red_zone_breaches`) |
 | over `transfers.max_mb` / `max_files` (here or there) | **413** `too_large`, `too_many_files` |
 | everything was left out | **400** `nothing_to_send` (`skipped`) |
 | `to_session` is not a session there | **404** `no_session` (with "did you mean") |
 | the device's inbox is full | **507** `inbox_full` |
+| too many unfinished transfers open there | **429** `too_many_open` |
 | a checksum did not hold there | **422** `checksum_mismatch` |
 | the device ones of send-to-device; a device without these routes | as above; **502** `device_too_old` |
 | a guest link; a relayed request; a shared-folder session | **403** `guest`, **400** `remote`, **409** |
@@ -3123,10 +3126,10 @@ included); never a guest link. Not on the `fwd/` allow-list.
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/transfers` | Open: the manifest `{v: 1, kind: "files"\|"bundle", files: [{path, size, sha256, exec}], total_sha256, from_session, note, to_session, bundle?: {branch, name}}` → **201** `{id, received}`. Checked first: plain relative paths only (no absolute, `..`, `.`, empty segment, `\`, drive letter, control character, `.git` segment), no duplicates (case-insensitive), no file that is also a folder, `total_sha256` = SHA-256 over `"<sha256> <size> <path>\n"` per file, this device's `transfers.max_files` / `max_mb`, the inbox quota (**507** `inbox_full`), `to_session` a session here (**404** `no_session`). A bundle transfer is one `<name>.bundle` file. Old transfers are pruned first |
+| POST | `/api/transfers` | Open: the manifest `{v: 1, kind: "files"\|"bundle", files: [{path, size, sha256, exec}], total_sha256, from_session, note, to_session, bundle?: {branch, name}}` → **201** `{id, received}`. Checked first: plain relative paths only (no absolute, `..`, `.`, empty segment, `\`, `:`, drive letter, control/bidi/invisible character, a name ending in `.` or space, `.git` or `git~N` segment), no folder laid out like a git repository (`HEAD` beside `objects`/`refs`/`commondir`/`config`, the top folder included), no duplicates (case-insensitive), no file that is also a folder, `total_sha256` = SHA-256 over `"<sha256> <size> <path>\n"` per file, this device's `transfers.max_files` / `max_mb`, the inbox quota with every unfinished transfer counted at its declared size (**507** `inbox_full`), at most 8 open transfers, 4 per sending device (**429** `too_many_open`), `to_session` a session here (**404** `no_session`). A bundle transfer is one `<name>.bundle` file. Old and stale transfers are pruned first (and on a 5-minute timer) |
 | GET | `/api/transfers/{id}` | `{id, received: [bytes per file]}` — where a sender resumes |
-| PUT | `/api/transfers/{id}/files/{index}?offset=N` | One raw chunk (≤ 8 MB) appended at `offset`, which must equal what arrived (**409** `offset_mismatch` with `received`); past the declared size **400** `too_long`. Written with `O_NOFOLLOW` into `inbox/.partial/<id>/data/` |
-| POST | `/api/transfers/{id}/finish` | Verify every file's size and SHA-256 and the whole-transfer SHA-256 (**409** `incomplete`, **422** `checksum_mismatch`; anything but the sent plain files in staging: **409** `bad_state`; each drops the transfer), set files `0644` and folders `0755`, move it to `inbox/<from-device>/<id>/` (never over anything) with a record `inbox/<from-device>/<id>.json`; a bundle is unpacked into `<id>/<name>/` (**422** `bad_bundle`) → `{id, kind, from_device, from_session, note, path, files, total_size, total_sha256, exec_stripped, branch?, head?}` |
+| PUT | `/api/transfers/{id}/files/{index}?offset=N` | One raw chunk (≤ 8 MB) appended at `offset`, which must equal what arrived (**409** `offset_mismatch` with `received`); past the declared size **400** `too_long`; the inbox over its quota now **507** `inbox_full` (the transfer is dropped); while its finish runs **409** `finishing`. Written with `O_NOFOLLOW` into `inbox/.partial/<id>/data/` |
+| POST | `/api/transfers/{id}/finish` | Verify every file's size and SHA-256 and the whole-transfer SHA-256 (**409** `incomplete`, **422** `checksum_mismatch`; anything but the sent plain files in staging: **409** `bad_state`; each drops the transfer), set files `0644` and folders `0755`, move it to `inbox/<from-device>/<id>/` (never over anything) with a record `inbox/<from-device>/<id>.json`; a bundle's tree is checked before its checkout like a manifest (**422** `bad_bundle`; more than `max_files` files **413** `too_many_files`; more than 20× that many objects **413** `too_large`; a checkout bigger than the quota has left **507** `inbox_full`) and unpacked into `<id>/<name>/` → `{id, kind, from_device, from_verified, from_label, from_session, note, path, files, total_size, total_sha256, exec_stripped, branch?, head?}`. `from_device` is the device the link identified by its tailnet address when it could (`from_verified: true`), else the name the sender claimed (`from_label` "claims to be <name>"). At most 2 finishes run at once (**503** `busy` after 4 min) |
 | POST | `/api/transfers/{id}/cancel` | Drop an unfinished transfer |
 
 ### Your devices (fleet)

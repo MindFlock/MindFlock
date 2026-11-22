@@ -1713,13 +1713,15 @@ does not reach the caller, and only `read_output` / `get_session` /
 1's lookup finds none), the repository has no remote, or the device cannot
 fetch the pushed branch, `auto` carries the branch as a standalone git
 bundle instead — one snapshot commit of where the branch started plus the
-session's commits on it (new hashes), secrets and agent config left out —
+session's commits on it (new hashes), secrets and agent config left out
+of every commit (the repo's `.secrets.baseline` names too) —
 streamed over the device link like `send_files`, verified and unpacked into
 a NEW repository in the device's inbox with hooks off, and the session
 starts there in place on the branch. Nothing is pushed. `bundle: {size,
 sha256, commits, scope, left_out, transfer_id}` in the answer. A bundle over
 `transfers.max_mb` is refused with `suggest_paths` (the folders the
-branch's changes are in). Details: [devices.md](devices.md#when-the-other-device-has-no-checkout).
+branch's changes are in); so is one whose checkout would not fit what the
+device's inbox quota has left. Details: [devices.md](devices.md#when-the-other-device-has-no-checkout).
 
 ### `send_files`
 
@@ -1732,16 +1734,21 @@ folder on the device, `<mindflock home>/inbox/<this device>/<id>/`, every
 SHA-256 checked there, never run, executable bits removed (`exec_stripped`
 lists the files that had one). In folders, git-ignored files, symlinks and
 special files are skipped; `.git`, agent config/logins/transcripts and
-credential stores are never sent; `.env*`, keys and credential files only
-with `include_secrets: true` AND the user's `transfers.allow_secrets` on
-(`skipped` lists every file left out and why). Uncommitted files go and are
+credential stores are never sent; `.env*`, keys and credential files (and
+copies like `.env.dist`) only with `include_secrets: true` AND the user's
+`transfers.allow_secrets` on (`skipped` lists every file left out and why)
+— a name-based guardrail, not a content scan. Uncommitted files go and are
 listed in `uncommitted`. `to_session` (a session's title ON that device) is
 told what arrived and where (`messaged`); a `note` without `to_session`
 starts a session there in that folder with the note as its task (`title`).
 Refusals: `outside_worktree`, `not_found`, `never_sent`, `secret`,
 `secrets_not_allowed`, `red_zone`, `too_large`, `too_many_files`,
-`nothing_to_send`, `no_session`, `checksum_mismatch`, `inbox_full`, and the
-device ones `send_session` has. Full rules:
+`nothing_to_send`, `git_failed`, `changed`, `no_session`,
+`checksum_mismatch`, `inbox_full`, `too_many_open`, `bad_manifest` (a name
+the device won't take: `:`, a trailing dot/space, a folder laid out like a
+git repository), and the device ones `send_session` has. The receiving
+agent's prompt names every file as one escaped line and says received files
+are untrusted. Full rules:
 [devices.md](devices.md#send-files-to-another-device).
 
 **Who may send what** is the ship rule: the caller itself or a session it

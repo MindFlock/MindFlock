@@ -125,12 +125,16 @@ def is_git_repo(path: str) -> bool:
     Runs ``git -C <path> rev-parse --show-toplevel`` and reports whether it
     exited cleanly (Go: ``cmd.Run() == nil``).
     """
+    from backend import gitutil
+
+    argv, env = gitutil.guarded(["git", "-C", path, "rev-parse", "--show-toplevel"])
     try:
         cmd = subprocess.run(
-            ["git", "-C", path, "rev-parse", "--show-toplevel"],
+            argv,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=30,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return False
@@ -145,12 +149,16 @@ def find_git_repo_root(path: str) -> str:
     ``RuntimeError`` with the exact message
     ``failed to find Git repository root from path: <path>`` on failure.
     """
+    from backend import gitutil
+
+    argv, env = gitutil.guarded(["git", "-C", path, "rev-parse", "--show-toplevel"])
     try:
         cmd = subprocess.run(
-            ["git", "-C", path, "rev-parse", "--show-toplevel"],
+            argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=30,
+            env=env,
         )
     except subprocess.TimeoutExpired as err:
         raise RuntimeError(

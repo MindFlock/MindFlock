@@ -513,9 +513,9 @@ never synced. Owner-only through `POST /api/settings` (`{"transfers":
 |---|---|---|
 | `max_mb` | integer 1–65536 (unset = 512) | The most one transfer may carry, in MB. The sender checks its own value before anything leaves (a bundle: its size once built); the receiver checks ITS value on the manifest |
 | `max_files` | integer (unset = 5000) | The most files one transfer may carry, on both sides alike |
-| `inbox_mb` | integer (unset = 4096) | This device's inbox quota (`~/.mindflock/inbox`, unfinished transfers included). A transfer that would go past it is refused (`inbox_full`) |
-| `keep_days` | integer 1–3650 (unset = 14) | A received transfer no live session works in is removed after this many days — checked on the next receive. An unfinished transfer goes after 6 h |
-| `allow_secrets` | bool (default false) | Whether a sender on this device may pass `include_secrets` at all. Off: `.env*`, keys, certificates, credential files and the files `.secrets.baseline` names are left out of every send. Never covers `.git`, agent login/config/transcripts or credential stores — those are never sent |
+| `inbox_mb` | integer (unset = 4096) | This device's inbox quota (`~/.mindflock/inbox`; every unfinished transfer counts at its declared size, and a bundle's unpacked checkout counts too). A transfer, chunk or bundle checkout that would go past it is refused (`inbox_full`) |
+| `keep_days` | integer 1–3650 (unset = 14) | A received transfer no live session works in is removed after this many days — checked on the next receive. An unfinished transfer goes after 6 h, or 1 h with nothing written (also on a 5-minute timer) |
+| `allow_secrets` | bool (default false) | Whether a sender on this device may pass `include_secrets` at all. Off: `.env*`, keys, certificates, credential files and the files `.secrets.baseline` names are left out of every send (and of every commit of a bundle). A name-based guardrail, not a content scan. Never covers `.git`, agent login/config/transcripts or credential stores — those are never sent |
 
 ### Auth profiles (`[auth_profiles]`, settings store only)
 

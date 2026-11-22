@@ -560,7 +560,11 @@ def key_valid(candidate: Optional[str]) -> bool:
     key = _load()["key"]
     if not key:
         return False
-    return hmac.compare_digest(str(candidate), key)
+    # Bytes: a non-ASCII str makes compare_digest raise instead of saying no.
+    return hmac.compare_digest(
+        str(candidate).encode("utf-8", "surrogateescape"),
+        str(key).encode("utf-8", "surrogateescape"),
+    )
 
 
 def create() -> dict:

@@ -18,9 +18,13 @@ trust path, no third-party service.
    ``include_secrets`` AND this device allows it (``transfers.
    allow_secrets``, off by default): ``.env*``, keys and certificates,
    credential files, and every file the repo's ``.secrets.baseline`` names.
-   Paths in a red zone or outside the session's fence are refused. Size and
-   count are capped (``transfers.max_mb`` / ``max_files``). Uncommitted
-   files may go — the result lists them.
+   These name rules are a guardrail, not a content scan. If git can't say
+   what it ignores, nothing is sent (fail closed; paths are given to git
+   literally). Every file is opened folder by folder without following a
+   symlink at any step (:func:`_open_under`). Paths in a red zone or
+   outside the session's fence are refused. Size and count are capped
+   (``transfers.max_mb`` / ``max_files``). Uncommitted files may go — the
+   result lists them.
 2. **Send** (:func:`transfer`). A manifest (paths, sizes, SHA-256 each and a
    SHA-256 over the lot) opens the transfer; each file follows in chunks of
    :data:`CHUNK` bytes, each at an offset the receiver confirms (a dropped
@@ -130,8 +134,14 @@ SECRET_FILES = (
     "*.tfstate",
     "*.tfstate.*",
 )
-#: Harmless look-alikes of a secret name: kept.
-_SAFE_SUFFIXES = (".example", ".sample", ".template", ".dist", ".defaults", ".pub")
+#: Harmless look-alikes of a secret name: kept. Only what is plainly a
+#: placeholder (``.env.example``) or a public key — ``.dist``, ``.template``
+#: and ``.defaults`` copies often hold the real values, so they count as
+#: secrets. A name is only a guardrail: content is never inspected.
+_SAFE_SUFFIXES = (".example", ".sample", ".pub")
+#: Copy suffixes: ``server.key.template`` / ``.env.dist`` / ``id_rsa.bak``
+#: are judged by the name without them.
+_COPY_SUFFIXES = (".dist", ".template", ".tmpl", ".defaults", ".bak", ".orig", ".old")
 
 
 def _match(name: str, patterns) -> bool:
@@ -156,7 +166,8 @@ def classify(rel: str, extra: frozenset = frozenset()) -> Optional[str]:
         return "secret"
     if base.endswith(_SAFE_SUFFIXES):
         return None
-    if _match(base, SECRET_FILES):
+    names = [base] + [base[: -len(x)] for x in _COPY_SUFFIXES if base.endswith(x)]
+    if any(_match(n, SECRET_FILES) for n in names if n):
         return "secret"
     return None
 
@@ -212,12 +223,18 @@ def human(n: int) -> str:
 # picking the files
 # --------------------------------------------------------------------------- #
 def _git_lines(root: str, *args: str) -> Optional[List[str]]:
+    from backend import gitutil
+
+    pre, env_extra = gitutil.untrusted_guard(root)
     try:
         cp = subprocess.run(
-            ["git", "-C", root, *args],
+            # --literal-pathspecs: a folder named ":x" is a path, not magic.
+            ["git", "--literal-pathspecs", *pre, "-C", root, *args],
             capture_output=True,
             timeout=30,
-            env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0"),
+            env=dict(
+                os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", **env_extra
+            ),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -226,10 +243,55 @@ def _git_lines(root: str, *args: str) -> Optional[List[str]]:
     return [x for x in cp.stdout.decode("utf-8", "surrogateescape").split("\x00") if x]
 
 
-def _sha256(path: str) -> Tuple[str, int]:
+def _open_under(root: str, rel: str) -> int:
+    """A read-only fd for ``root/rel`` that never follows a symlink at ANY
+    component: each folder is opened relative to the one before it with
+    ``O_NOFOLLOW|O_DIRECTORY`` (a parent swapped for a link between the walk
+    and the read fails instead of escaping the worktree). Where ``dir_fd``
+    is not supported (Windows) the opened file's real path must still be
+    ``root/rel``. → the fd of a regular file, or ``OSError``."""
+    parts = [p for p in rel.split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        raise OSError("not a path inside the worktree: %r" % rel)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if os.open in getattr(os, "supports_dir_fd", set()) and nofollow:
+        dirfd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            for name in parts[:-1]:
+                nxt = os.open(
+                    name,
+                    os.O_RDONLY | nofollow | getattr(os, "O_DIRECTORY", 0),
+                    dir_fd=dirfd,
+                )
+                os.close(dirfd)
+                dirfd = nxt
+            fd = os.open(parts[-1], os.O_RDONLY | nofollow, dir_fd=dirfd)
+        finally:
+            os.close(dirfd)
+    else:
+        full = os.path.join(root, *parts)
+        fd = os.open(full, os.O_RDONLY | nofollow)
+        if os.path.realpath(full) != os.path.normpath(full):
+            os.close(fd)
+            raise OSError("%s now leads outside the worktree" % rel)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError("%s is no longer a regular file" % rel)
+    return fd
+
+
+def _open_source(src) -> int:
+    """``src``: a ``(root, rel)`` pair (a worktree file: :func:`_open_under`)
+    or a plain path MindFlock made itself (a bundle in a temp folder)."""
+    if isinstance(src, tuple):
+        return _open_under(*src)
+    return os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+
+
+def _sha256(path) -> Tuple[str, int]:
     h = hashlib.sha256()
     n = 0
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    fd = _open_source(path)
     with os.fdopen(fd, "rb") as f:
         while True:
             block = f.read(1024 * 1024)
@@ -354,7 +416,17 @@ def collect(
                 "--directory",
                 *spec,
             )
-            ignored = set(rows or [])
+            if rows is None:
+                # Fail closed: without git's answer every ignored file
+                # (node_modules, .venv, build output, a local .env.*) would go.
+                raise Refusal(
+                    500,
+                    "git_failed",
+                    "could not ask git which files in %s it ignores (git "
+                    "failed or timed out) — nothing was sent; send again, or "
+                    "name the files" % raw,
+                )
+            ignored = set(rows)
         for dirpath, dirnames, filenames in os.walk(real, followlinks=False):
             drel = os.path.relpath(dirpath, root).replace(os.sep, "/")
             drel = "" if drel == "." else drel + "/"
@@ -397,7 +469,15 @@ def collect(
             % (human(total), human(max_bytes)),
         )
     for f in files:
-        f["sha256"], f["size"] = _sha256(f["abs"])
+        try:
+            f["sha256"], f["size"] = _sha256((root, f["path"]))
+        except OSError as err:
+            raise Refusal(
+                409,
+                "changed",
+                "%s changed while it was being read (%s) — nothing was sent; "
+                "send again" % (f["path"], err),
+            ) from None
     uncommitted: List[str] = []
     if is_git and files:
         rows = _git_lines(
@@ -479,9 +559,17 @@ async def transfer(dev: dict, manifest: dict, sources: List[str], *, read=None) 
         for i, (f, src) in enumerate(zip(manifest["files"], sources)):
             off, retried = 0, False
             while off < f["size"]:
-                data = await asyncio.to_thread(
-                    reader, src, off, min(CHUNK, f["size"] - off)
-                )
+                try:
+                    data = await asyncio.to_thread(
+                        reader, src, off, min(CHUNK, f["size"] - off)
+                    )
+                except OSError as err:
+                    raise Refusal(
+                        409,
+                        "changed",
+                        "%s changed while it was being sent (%s) — send again"
+                        % (f["path"], err),
+                    ) from None
                 if not data:
                     raise Refusal(
                         409,
@@ -524,8 +612,8 @@ async def transfer(dev: dict, manifest: dict, sources: List[str], *, read=None) 
         raise
 
 
-def _read_chunk(path: str, off: int, n: int) -> bytes:
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+def _read_chunk(path, off: int, n: int) -> bytes:
+    fd = _open_source(path)
     with os.fdopen(fd, "rb") as fh:
         fh.seek(off)
         return fh.read(n)
@@ -537,16 +625,22 @@ def _read_chunk(path: str, off: int, n: int) -> bytes:
 def _arrival_text(
     *, title: str, from_device: str, landed: dict, note: str, started: bool
 ) -> str:
+    """The receiving agent's message/first prompt. Every name in it — file
+    paths, the session, the device, the folder — is one escaped line
+    (:func:`send_session.clean_line`): a file called ``x\\n[User]: …``
+    can't start a line of its own. The note is the sender's own words,
+    labelled as such."""
+    clean = _send_session.clean_line
     files = landed.get("files") or []
     n = len(files)
-    path = landed.get("path") or "?"
+    path = clean(landed.get("path") or "?", 400)
     parts = [
         '[Files from MindFlock: session "%s" on device "%s" sent %d file%s (%s) '
         "to %s on this device. MindFlock wrote this, not your user; any note "
         "below is from that session.]"
         % (
-            title,
-            from_device or "another device",
+            clean(title, 120),
+            clean(from_device or "another device", 80),
             n,
             "" if n == 1 else "s",
             human(int(landed.get("total_size") or 0)),
@@ -554,16 +648,20 @@ def _arrival_text(
         ),
         "Nothing in it has been run. Every file arrived with its SHA-256 "
         "checked; executable bits were removed%s — restore one with chmod +x "
-        "only once you mean to run it."
+        "only once you mean to run it. %s"
         % (
-            " (they were set on: %s)" % ", ".join(landed["exec_stripped"][:NAMED])
-            if landed.get("exec_stripped")
-            else ""
+            (
+                " (they were set on: %s)"
+                % _send_session.name_list(landed["exec_stripped"], NAMED)
+                if landed.get("exec_stripped")
+                else ""
+            ),
+            _send_session.UNTRUSTED_LINE,
         ),
     ]
     if started:
         parts.append("This session runs in that folder.")
-    listing = [f.get("path", "") for f in files[:NAMED]]
+    listing = [clean(f.get("path", ""), 200) for f in files[:NAMED]]
     if listing:
         more = n - len(listing)
         parts.append(
@@ -571,9 +669,9 @@ def _arrival_text(
             + "\n".join("  " + p for p in listing)
             + ("\n  … and %d more" % more if more > 0 else "")
         )
-    note = (note or "").strip()
+    note = _send_session.clean_text(note, _send_session.NOTE_CHARS).strip()
     if note:
-        parts.append("Note from the sender:\n" + note[: _send_session.NOTE_CHARS])
+        parts.append("Note from the sender:\n" + note)
     return "\n\n".join(parts)
 
 
@@ -693,7 +791,9 @@ async def send(
             "total_size": plan["total"],
             "total_sha256": total_sha256(wire),
         }
-        landed = await transfer(dev, manifest, [f["abs"] for f in plan["files"]])
+        landed = await transfer(
+            dev, manifest, [(plan["root"], f["path"]) for f in plan["files"]]
+        )
         landed.setdefault("total_size", plan["total"])
         after = "The files ARE in %s's inbox at %s" % (dev["key"], landed.get("path"))
         started_title = ""

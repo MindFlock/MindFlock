@@ -864,6 +864,20 @@ def find_device(name: str) -> Optional[dict]:
     return None
 
 
+def device_for_ip(ip: str) -> str:
+    """The key of the discovered device whose tailnet address ``ip`` is, or
+    ``""``. A tailnet source address is bound to its node's WireGuard key,
+    so this names the sender by what the LINK says, not what it claims."""
+    ip = str(ip or "").strip()
+    if not ip:
+        return ""
+    for dev in list(_DEVICES.values()):
+        known = {a for a in [dev.get("ip")] + list(dev.get("ips") or []) if a}
+        if ip in known:
+            return str(dev.get("key") or "")
+    return ""
+
+
 def is_connected(dev: dict) -> bool:
     """:func:`_connected` for a snapshot: drivable from here right now."""
     return _connected(dev)
