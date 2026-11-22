@@ -1152,7 +1152,7 @@
 .modal-actions button[type=submit] {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* Page 1's ONE primary is Start: it is what Enter does, so the accent and the
@@ -1166,7 +1166,7 @@
   white-space: nowrap;
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 #new-describe-start:hover:not(:disabled) {
@@ -1560,7 +1560,7 @@
 
 :is(#new-form, #commit-form, .tpl-editor) .rt-seg button.on {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 :is(#new-form, .tpl-editor) label.check.rt-ask {
@@ -1978,7 +1978,7 @@
 .tpl-row-actions button.tpl-save {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .tpl-row-actions button:disabled {

@@ -151,7 +151,11 @@ const contrast = (a: string, b: string) => {
 /** A token's value in the dark (`:root`) or `.light` block of tokens.css. */
 const token = (block: ":root" | ".light", name: string): string => {
   const sheet = css("styles/tokens.css");
-  const body = rule(sheet, block);
+  // The base blocks also carry the picker's preview selector
+  // (":root,\n.theme-preview {"), so match the selector list's first entry.
+  const at = sheet.search(new RegExp("(^|\\n)" + block.replace(".", "\\.") + "[,\\s]"));
+  if (at < 0) throw new Error("no rule " + block);
+  const body = sheet.slice(at, sheet.indexOf("}", at));
   const m = body.match(new RegExp(name + ":\\s*(#[0-9a-fA-F]{6})"));
   if (!m) throw new Error(name + " not in " + block);
   return m[1];

@@ -207,7 +207,7 @@
 
 .mic-pop .mic-seg-opt input:checked + span {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .mic-pop .mic-seg-opt input:focus-visible + span {

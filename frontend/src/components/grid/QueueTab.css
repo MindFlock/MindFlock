@@ -148,7 +148,7 @@
 .queue-actions button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .queue-actions button.primary:hover {
@@ -393,7 +393,7 @@
 .queue-item-edit-btns .qi-save {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .queue-item-edit-btns button:hover {

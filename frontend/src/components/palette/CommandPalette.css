@@ -113,7 +113,7 @@
 
 .palette-item.selected {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .palette-item .palette-label {

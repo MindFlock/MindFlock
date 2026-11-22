@@ -110,7 +110,7 @@
 }
 
 .stagechip.s-interrupt {
-  color: #fff;
+  color: var(--red-ink);
   background: var(--red);
 }
 
@@ -130,7 +130,7 @@
 }
 
 .stagechip.s-merged {
-  color: #fff;
+  color: var(--green-ink);
   background: var(--green);
 }
 
@@ -215,7 +215,7 @@
 }
 
 .diff-modes button.active {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
 }

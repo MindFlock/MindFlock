@@ -148,7 +148,7 @@
 .thread-root .th-btn.primary {
   background: var(--accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .thread-root .th-btn.primary:hover:not(:disabled) {

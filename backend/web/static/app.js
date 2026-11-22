@@ -30697,6 +30697,49 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 	return state;
 }
 //#endregion
+//#region src/lib/termPalette.ts
+var ANSI_DARK = {
+	black: "#484f58",
+	red: "#ff7b72",
+	green: "#56d364",
+	yellow: "#e3b341",
+	blue: "#58a6ff",
+	magenta: "#d2a8ff",
+	cyan: "#39c5cf",
+	white: "#c9d1d9",
+	brightBlack: "#8b949e",
+	brightRed: "#ffa198",
+	brightGreen: "#7ee787",
+	brightYellow: "#f2cc60",
+	brightBlue: "#a5d6ff",
+	brightMagenta: "#e2c5ff",
+	brightCyan: "#7fe3eb",
+	brightWhite: "#f0f6fc"
+};
+var ANSI_LIGHT = {
+	black: "#24292f",
+	red: "#c3212c",
+	green: "#116329",
+	yellow: "#6f4b00",
+	blue: "#0a5fcc",
+	magenta: "#7340c8",
+	cyan: "#136b72",
+	white: "#59616b",
+	brightBlack: "#57606a",
+	brightRed: "#a40e26",
+	brightGreen: "#1a7136",
+	brightYellow: "#633c01",
+	brightBlue: "#0550ae",
+	brightMagenta: "#6639ba",
+	brightCyan: "#0f5b61",
+	brightWhite: "#424a53"
+};
+var SELECTION_DARK = "#3a415466";
+var SELECTION_LIGHT = "#b9c0d466";
+function ansiPalette(light) {
+	return light ? ANSI_LIGHT : ANSI_DARK;
+}
+//#endregion
 //#region src/lib/terminals.ts
 function cssVar(name, fallback) {
 	try {
@@ -30711,7 +30754,8 @@ function termTheme() {
 		background: cssVar("--term-bg", light ? "#ffffff" : "#0f1117"),
 		foreground: cssVar("--term-fg", light ? "#1f2430" : "#d7dae3"),
 		cursor: cssVar("--accent", "#7d56f4"),
-		selectionBackground: light ? "#b9c0d466" : "#3a415466"
+		selectionBackground: light ? SELECTION_LIGHT : SELECTION_DARK,
+		...ansiPalette(light)
 	};
 }
 function rethemeAll() {
@@ -33425,213 +33469,74 @@ function InfoTip({ children, label = "More info", id, className }) {
 //#endregion
 //#region src/components/settings/screens/Appearance.tsx
 var SURFACES = [
-	[
-		"",
-		"Swallow (default)",
-		"#0f1117",
-		"#1e222e"
-	],
-	[
-		"raven",
-		"Raven",
-		"#000000",
-		"#141419"
-	],
-	[
-		"heron",
-		"Heron",
-		"#16181b",
-		"#292d33"
-	],
-	[
-		"cardinal",
-		"Cardinal",
-		"#d51322",
-		"#16060a",
-		"#3d060d"
-	],
-	[
-		"macaw",
-		"Scarlet Macaw",
-		"#1554e0",
-		"#06773a",
-		"#43060a"
-	],
-	[
-		"pheasant",
-		"Golden Pheasant",
-		"#f5b800",
-		"#05361f",
-		"#3f070c"
-	],
-	[
-		"oriole",
-		"Oriole",
-		"#ff7a12",
-		"#140c03",
-		"#421d03"
-	],
-	[
-		"lorikeet",
-		"Rainbow Lorikeet",
-		"#4b1fd6",
-		"#256e0a",
-		"#4f1c05"
-	],
-	[
-		"roller",
-		"Lilac-breasted Roller",
-		"#9b6ef0",
-		"#00736b",
-		"#3a2412"
-	],
-	[
-		"goldfinch",
-		"Goldfinch",
-		"#f2e00d",
-		"#131300",
-		"#33350d"
-	],
-	[
-		"toucan",
-		"Toco Toucan",
-		"#ffb01f",
-		"#08080a",
-		"#181820"
-	],
-	[
-		"quetzal",
-		"Quetzal",
-		"#00a35c",
-		"#4a0512",
-		"#033524"
-	],
-	[
-		"greenjay",
-		"Green Jay",
-		"#1440d6",
-		"#d6b800",
-		"#103a0e"
-	],
-	[
-		"gouldian",
-		"Gouldian Finch",
-		"#00c2b2",
-		"#52157a",
-		"#0e3a19"
-	],
-	[
-		"mallard",
-		"Mallard",
-		"#0d9c62",
-		"#5e330f",
-		"#22262e"
-	],
-	[
-		"kingfisher",
-		"Kingfisher",
-		"#00a8d6",
-		"#5e2404",
-		"#06323f"
-	],
-	[
-		"peacock",
-		"Peacock",
-		"#0a9cb8",
-		"#141f8f",
-		"#05383f"
-	],
-	[
-		"bluejay",
-		"Bluejay",
-		"#1266e6",
-		"#0a0e1c",
-		"#071a44"
-	],
-	[
-		"bunting",
-		"Indigo Bunting",
-		"#3b2ff0",
-		"#08061f",
-		"#150f52"
-	],
-	[
-		"violetear",
-		"Violetear",
-		"#7c2ff0",
-		"#0e0420",
-		"#220c40"
-	],
-	[
-		"mandarin",
-		"Mandarin Duck",
-		"#12a85e",
-		"#f2820f",
-		"#3a1445"
-	],
-	[
-		"flamingo",
-		"Flamingo",
-		"#ff2d8a",
-		"#180110",
-		"#420527"
-	]
+	["", "Swallow (default)"],
+	["raven", "Raven"],
+	["heron", "Heron"],
+	["owl", "Owl (low glare)"],
+	["wren", "Wren (warm paper)"],
+	["magpie", "Magpie (high contrast)"],
+	["cardinal", "Cardinal"],
+	["macaw", "Scarlet Macaw"],
+	["pheasant", "Golden Pheasant"],
+	["oriole", "Oriole"],
+	["lorikeet", "Rainbow Lorikeet"],
+	["roller", "Lilac-breasted Roller"],
+	["goldfinch", "Goldfinch"],
+	["toucan", "Toco Toucan"],
+	["quetzal", "Quetzal"],
+	["greenjay", "Green Jay"],
+	["gouldian", "Gouldian Finch"],
+	["mallard", "Mallard"],
+	["kingfisher", "Kingfisher"],
+	["peacock", "Peacock"],
+	["bluejay", "Bluejay"],
+	["bunting", "Indigo Bunting"],
+	["violetear", "Violetear"],
+	["mandarin", "Mandarin Duck"],
+	["flamingo", "Flamingo"]
 ];
-function swatchGradient(tones) {
-	const step = 100 / tones.length;
-	return `linear-gradient(135deg,${tones.map((c, i) => `${c} ${(i * step).toFixed(1)}% ${((i + 1) * step).toFixed(1)}%`).join(",")})`;
+function ThemePreview({ surface, light }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "theme-preview",
+		"data-surface": surface,
+		"data-mode": light ? "light" : "dark",
+		"aria-hidden": "true",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "tp-bar" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "tp-side",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "tp-dot tone-working" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "tp-dot tone-attention" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "tp-dot tone-broken" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "tp-dot tone-waiting" })
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "tp-win",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "tp-text",
+						children: "Aa"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "tp-muted" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "tp-btn" })
+				]
+			})
+		]
+	});
 }
 var ACCENTS = [
-	[
-		"",
-		"Violetear (default)",
-		"#7d56f4"
-	],
-	[
-		"cardinal",
-		"Cardinal",
-		"#e5484d"
-	],
-	[
-		"oriole",
-		"Oriole",
-		"#f07b3c"
-	],
-	[
-		"goldfinch",
-		"Goldfinch",
-		"#f0cf28"
-	],
-	[
-		"quetzal",
-		"Quetzal",
-		"#44b556"
-	],
-	[
-		"bluejay",
-		"Bluejay",
-		"#3d8bfd"
-	],
-	[
-		"bunting",
-		"Indigo Bunting",
-		"#4f46e5"
-	],
-	[
-		"flamingo",
-		"Flamingo",
-		"#f2559b"
-	],
-	[
-		"pheasant",
-		"Golden Pheasant",
-		"linear-gradient(135deg,#f0d78a,#b8860b)"
-	],
-	[
-		"heron",
-		"Heron",
-		"linear-gradient(135deg,#e2e7ef,#8d95a3)"
-	]
+	["", "Violetear (default)"],
+	["cardinal", "Cardinal"],
+	["oriole", "Oriole"],
+	["goldfinch", "Goldfinch"],
+	["quetzal", "Quetzal"],
+	["bluejay", "Bluejay"],
+	["bunting", "Indigo Bunting"],
+	["flamingo", "Flamingo"],
+	["pheasant", "Golden Pheasant"],
+	["heron", "Heron"]
 ];
 var DIMS = {
 	accent: {
@@ -33689,7 +33594,7 @@ function Appearance(_) {
 	const themeLight = useUi((s) => s.themeLight);
 	const [accent, setAccent] = (0, import_react.useState)(() => current$2(DIMS.accent));
 	const [surface, setSurface] = (0, import_react.useState)(() => current$2(DIMS.surface));
-	const surfaceSwatch = ([name, label, ...tones]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+	const surfaceSwatch = ([name, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		type: "button",
 		className: "accent-swatch surface-swatch" + (surface === name ? " active" : ""),
 		"data-surface-choice": name,
@@ -33697,10 +33602,13 @@ function Appearance(_) {
 			setSurface(name);
 			apply$1(DIMS.surface, name);
 		},
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "sw-dot",
-			style: { background: swatchGradient(tones) }
-		}), label]
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ThemePreview, {
+			surface: name,
+			light: themeLight
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "sw-label",
+			children: label
+		})]
 	}, name || "default");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
@@ -33730,6 +33638,10 @@ function Appearance(_) {
 			className: "set-section-title",
 			children: "Theme"
 		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Each preview is the theme itself: its bar, sidebar, text, an accent button and the working, needs-you, failed and waiting colours."
+		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "surface-swatches",
 			className: "accent-swatches",
@@ -33746,7 +33658,7 @@ function Appearance(_) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "accent-swatches",
 			className: "accent-swatches",
-			children: ACCENTS.map(([name, label, color]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			children: ACCENTS.map(([name, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 				type: "button",
 				className: "accent-swatch" + (accent === name ? " active" : ""),
 				"data-accent-choice": name,
@@ -33755,8 +33667,9 @@ function Appearance(_) {
 					apply$1(DIMS.accent, name);
 				},
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sw-dot",
-					style: { background: color }
+					className: "sw-dot theme-preview",
+					"data-accent-preview": name,
+					"data-mode": themeLight ? "light" : "dark"
 				}), label]
 			}, name || "default"))
 		}),

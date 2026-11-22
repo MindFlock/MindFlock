@@ -23,64 +23,80 @@ import { useUi } from "../../../state/store";
 import type { ScreenProps } from "../SettingsDialog";
 import { InfoTip } from "../../InfoTip";
 
-/* The aviary, in the order theme.css defines it: the three quiet neutrals, then
-   round the color wheel by the hue the window wears. Where a name exists in both
+/* The aviary, in the order theme.css defines it: the quiet sets, then round the
+   color wheel by the hue the window wears. Where a name exists in both
    dimensions the key is shared ("cardinal" is the red accent AND the red
-   surface), so the two pickers read as one palette; Swallow (default) and Raven
-   are surface-only.
+   surface), so the two pickers read as one palette; Swallow (default) and the
+   quiet sets are surface-only.
 
-   Swatch tones mirror the layout — top bar, sidebar, window — so a chip is a
-   little picture of the set. Neutrals pass two tones (background / panel)
-   instead of three; swatchGradient bands whatever it's given. */
-type Surface = [key: string, label: string, ...swatch: string[]];
-
-const SURFACES: Surface[] = [
-  ["", "Swallow (default)", "#0f1117", "#1e222e"],
-  ["raven", "Raven", "#000000", "#141419"],
-  ["heron", "Heron", "#16181b", "#292d33"],
-  ["cardinal", "Cardinal", "#d51322", "#16060a", "#3d060d"],
-  ["macaw", "Scarlet Macaw", "#1554e0", "#06773a", "#43060a"],
-  ["pheasant", "Golden Pheasant", "#f5b800", "#05361f", "#3f070c"],
-  ["oriole", "Oriole", "#ff7a12", "#140c03", "#421d03"],
-  ["lorikeet", "Rainbow Lorikeet", "#4b1fd6", "#256e0a", "#4f1c05"],
-  ["roller", "Lilac-breasted Roller", "#9b6ef0", "#00736b", "#3a2412"],
-  ["goldfinch", "Goldfinch", "#f2e00d", "#131300", "#33350d"],
-  ["toucan", "Toco Toucan", "#ffb01f", "#08080a", "#181820"],
-  ["quetzal", "Quetzal", "#00a35c", "#4a0512", "#033524"],
-  ["greenjay", "Green Jay", "#1440d6", "#d6b800", "#103a0e"],
-  ["gouldian", "Gouldian Finch", "#00c2b2", "#52157a", "#0e3a19"],
-  ["mallard", "Mallard", "#0d9c62", "#5e330f", "#22262e"],
-  ["kingfisher", "Kingfisher", "#00a8d6", "#5e2404", "#06323f"],
-  ["peacock", "Peacock", "#0a9cb8", "#141f8f", "#05383f"],
-  ["bluejay", "Bluejay", "#1266e6", "#0a0e1c", "#071a44"],
-  ["bunting", "Indigo Bunting", "#3b2ff0", "#08061f", "#150f52"],
-  ["violetear", "Violetear", "#7c2ff0", "#0e0420", "#220c40"],
-  ["mandarin", "Mandarin Duck", "#12a85e", "#f2820f", "#3a1445"],
-  ["flamingo", "Flamingo", "#ff2d8a", "#180110", "#420527"],
+   No colours here on purpose: each swatch is a <ThemePreview>, painted by
+   theme.css itself, so it shows the set exactly as it will look. */
+const SURFACES: Array<[key: string, label: string]> = [
+  ["", "Swallow (default)"],
+  ["raven", "Raven"],
+  ["heron", "Heron"],
+  ["owl", "Owl (low glare)"],
+  ["wren", "Wren (warm paper)"],
+  ["magpie", "Magpie (high contrast)"],
+  ["cardinal", "Cardinal"],
+  ["macaw", "Scarlet Macaw"],
+  ["pheasant", "Golden Pheasant"],
+  ["oriole", "Oriole"],
+  ["lorikeet", "Rainbow Lorikeet"],
+  ["roller", "Lilac-breasted Roller"],
+  ["goldfinch", "Goldfinch"],
+  ["toucan", "Toco Toucan"],
+  ["quetzal", "Quetzal"],
+  ["greenjay", "Green Jay"],
+  ["gouldian", "Gouldian Finch"],
+  ["mallard", "Mallard"],
+  ["kingfisher", "Kingfisher"],
+  ["peacock", "Peacock"],
+  ["bluejay", "Bluejay"],
+  ["bunting", "Indigo Bunting"],
+  ["violetear", "Violetear"],
+  ["mandarin", "Mandarin Duck"],
+  ["flamingo", "Flamingo"],
 ];
 
-/** Equal-width diagonal bands, one per tone in the set's swatch. */
-function swatchGradient(tones: string[]): string {
-  const step = 100 / tones.length;
-  const stops = tones.map(
-    (c, i) => `${c} ${(i * step).toFixed(1)}% ${((i + 1) * step).toFixed(1)}%`
+/** A surface set as a tiny window — top bar, sidebar with four session dots
+ * (working, needs you, failed, waiting), a line of text, a line of secondary
+ * text and an accent button. Every part is painted with the set's own CSS
+ * variables: the element carries data-surface / data-mode, which theme.css
+ * and tokens.css match (see theme.css "PREVIEWS"), so what you see is the
+ * real palette in the mode you're in, wearing the accent you picked. */
+function ThemePreview({ surface, light }: { surface: string; light: boolean }) {
+  return (
+    <span className="theme-preview" data-surface={surface} data-mode={light ? "light" : "dark"} aria-hidden="true">
+      <span className="tp-bar" />
+      <span className="tp-side">
+        <i className="tp-dot tone-working" />
+        <i className="tp-dot tone-attention" />
+        <i className="tp-dot tone-broken" />
+        <i className="tp-dot tone-waiting" />
+      </span>
+      <span className="tp-win">
+        <span className="tp-text">Aa</span>
+        <span className="tp-muted" />
+        <span className="tp-btn" />
+      </span>
+    </span>
   );
-  return `linear-gradient(135deg,${stops.join(",")})`;
 }
 
-// Gold and silver get a metallic sheen in the swatch dot; --accent itself stays
-// a flat color (a gradient can't be used as a border/cursor color).
-const ACCENTS: Array<[string, string, string]> = [
-  ["", "Violetear (default)", "#7d56f4"],
-  ["cardinal", "Cardinal", "#e5484d"],
-  ["oriole", "Oriole", "#f07b3c"],
-  ["goldfinch", "Goldfinch", "#f0cf28"],
-  ["quetzal", "Quetzal", "#44b556"],
-  ["bluejay", "Bluejay", "#3d8bfd"],
-  ["bunting", "Indigo Bunting", "#4f46e5"],
-  ["flamingo", "Flamingo", "#f2559b"],
-  ["pheasant", "Golden Pheasant", "linear-gradient(135deg,#f0d78a,#b8860b)"],
-  ["heron", "Heron", "linear-gradient(135deg,#e2e7ef,#8d95a3)"],
+// The accent swatches: a dot painted by theme.css's own accent block for that
+// key (data-accent-preview), in the current mode.
+const ACCENTS: Array<[string, string]> = [
+  ["", "Violetear (default)"],
+  ["cardinal", "Cardinal"],
+  ["oriole", "Oriole"],
+  ["goldfinch", "Goldfinch"],
+  ["quetzal", "Quetzal"],
+  ["bluejay", "Bluejay"],
+  ["bunting", "Indigo Bunting"],
+  ["flamingo", "Flamingo"],
+  ["pheasant", "Golden Pheasant"],
+  ["heron", "Heron"],
 ];
 
 interface Dim {
@@ -165,7 +181,7 @@ export function Appearance(_: ScreenProps) {
   const [accent, setAccent] = useState(() => current(DIMS.accent));
   const [surface, setSurface] = useState(() => current(DIMS.surface));
 
-  const surfaceSwatch = ([name, label, ...tones]: Surface) => (
+  const surfaceSwatch = ([name, label]: [string, string]) => (
     <button
       key={name || "default"}
       type="button"
@@ -176,8 +192,8 @@ export function Appearance(_: ScreenProps) {
         apply(DIMS.surface, name);
       }}
     >
-      <span className="sw-dot" style={{ background: swatchGradient(tones) }} />
-      {label}
+      <ThemePreview surface={name} light={themeLight} />
+      <span className="sw-label">{label}</span>
     </button>
   );
 
@@ -206,13 +222,17 @@ export function Appearance(_: ScreenProps) {
         ))}
       </div>
       <h3 className="set-section-title">Theme</h3>
+      <p className="set-hint">
+        Each preview is the theme itself: its bar, sidebar, text, an accent button and the
+        working, needs-you, failed and waiting colours.
+      </p>
       <div id="surface-swatches" className="accent-swatches">
         {SURFACES.map(surfaceSwatch)}
       </div>
       <h3 className="set-section-title">Accent</h3>
       <p className="set-hint">Highlights, buttons and the terminal cursor. Mix with any theme.</p>
       <div id="accent-swatches" className="accent-swatches">
-        {ACCENTS.map(([name, label, color]) => (
+        {ACCENTS.map(([name, label]) => (
           <button
             key={name || "default"}
             type="button"
@@ -223,7 +243,11 @@ export function Appearance(_: ScreenProps) {
               apply(DIMS.accent, name);
             }}
           >
-            <span className="sw-dot" style={{ background: color }} />
+            <span
+              className="sw-dot theme-preview"
+              data-accent-preview={name}
+              data-mode={themeLight ? "light" : "dark"}
+            />
             {label}
           </button>
         ))}

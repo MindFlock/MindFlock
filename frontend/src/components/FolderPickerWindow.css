@@ -133,7 +133,7 @@
   cursor: pointer;
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .fpw-use:hover:not(:disabled) {

@@ -236,7 +236,7 @@
   padding: 7px 16px;
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .sch-empty .tpl-run:hover {

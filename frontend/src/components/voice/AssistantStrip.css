@@ -190,7 +190,7 @@ button.assist-chip:hover {
 .assist-confirm .assist-yes {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .assist-confirm button:focus-visible,

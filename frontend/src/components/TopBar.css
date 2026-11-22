@@ -219,13 +219,13 @@ body #mf-winctl {
      whole failure. Same red-and-white as the bell so the two read as one idea
      ("this wants you") rather than two vocabularies of urgency. */
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 /* A checklist FAILED: the count is red, not the usual accent. */
 #topbar .tb-count.is-failing {
   background: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 /* Flock mark before the sidebar toggle. The PNG is used as a pure-alpha mask

@@ -4,30 +4,46 @@
  * default palette on :root (and .light on desktop); every block here only
  * overrides variables, so a page that doesn't load this file still renders.
  *
- * ONE bird per look, and the palette is the bird: what a Goldfinch wears is
- * brilliant lemon over a black cap, so that's what the set does — a brilliant
- * lemon top bar over a near-black sidebar. Where a name exists in both
- * dimensions the key is shared ("cardinal" is the red accent AND the red
- * surface), so the two pickers read as one aviary rather than two lists.
+ * ONE bird per look. Where a name exists in both dimensions the key is shared
+ * ("cardinal" is the red accent AND the red surface), so the two pickers read
+ * as one aviary rather than two lists.
  *
  *   red  Cardinal · orange Oriole   · yellow Goldfinch · green Quetzal
  *   blue Bluejay  · indigo Bunting  · violet Violetear · pink Flamingo
  *   gold Pheasant · silver Heron
  *
- * Most surface sets are MULTI-COLOR: a hue per region rather than one for the
- * whole window, because that's how the birds are actually marked. Only the three
- * deliberately quiet sets — Swallow (the default), Raven and Heron — are a single
- * neutral throughout. See REGION TOKENS below.
- *
  * The defaults (no data attribute) are Violetear (violet accent) and Swallow
  * (steel blue-gray surface); Violetear also has an explicit accent block so a
- * stored/legacy name can resolve to it. Raven (true black) is the one surface
- * outside the shared palette — there is no black accent to pair it with.
+ * stored name can resolve to it. The quiet sets — Raven, Heron, Owl, Wren,
+ * Magpie — are surface-only and one neutral throughout.
+ *
+ * READABILITY FIRST (2026-11 rebuild). The birds used to be painted at full
+ * plumage — lemon and amber top bars, a yellow or orange sidebar, saturated
+ * hairlines round every pane — and the owner's verdict was that only Bluejay
+ * and the standard look were usable. Every coloured set is now built on ONE
+ * lightness ladder (OKLCH), the one Bluejay already followed; only the hue and
+ * a little chroma change from bird to bird:
+ *
+ *   dark   window L .19/.225/.27, C ≤ .05 · sidebar L .165, near-black ·
+ *          hairlines L .42 · text L .945 (≈15:1) · secondary L .735 (≥6:1)
+ *   light  window L .97/.99/.935, C ≤ .03 · sidebar L .958 · hairlines L .85 ·
+ *          text L .24 (≈15:1) · secondary L .47 (≥5.5:1)
+ *   bar    a mid-dark band of the bird's colour (L .47) with near-white text,
+ *          the same in both modes — or, for the yellow birds, a quiet bar
+ *          whose colour is one bright hairline under it ("line").
+ *
+ * So the colour lives in the top bar, the hairlines, the accent and a tint —
+ * never in a large bright surface. frontend/src/__tests__/themeContrast.test.ts
+ * walks every set × mode × accent and holds the numbers: text ≥ 7:1, secondary
+ * text ≥ 4.5:1, state colours ≥ 3:1 on every surface they sit on, no bright or
+ * saturated large surface. A new set has to pass it; the swatch in the picker
+ * is drawn from these same variables, so it cannot drift.
  *
  * Two independent dimensions, composable:
- *   html[data-accent=…]  — the accent trio: --accent (main), --accent-rgb
- *                          (feeds rgba() glows/tints), --accent-deep (darker
- *                          text variant for light backgrounds).
+ *   html[data-accent=…]  — the accent: --accent (rings, fills), --accent-rgb
+ *                          (feeds rgba() glows/tints), --accent-deep (accent as
+ *                          text on a light page), --accent-ink (text ON an
+ *                          accent fill).
  *   html[data-surface=…] — the surface set: backgrounds, panels, borders, text,
  *                          muted text, the terminal bg/fg, and the region tokens
  *                          below.
@@ -40,47 +56,89 @@
  * to the globals in the base sheet, so a set that leaves them alone is
  * single-hue for free.
  *
- * Rules of thumb these follow, so a bird stays legible rather than merely loud:
- *   · Every region is either DARK with light --*-text or BRIGHT with dark
- *     --*-text — never a mid-tone that fights both. Bright-with-dark-text is
- *     where most of the pop comes from; it's the plumage.
- *   · --border is the cheapest pop there is: a saturated hairline reads as color
- *     everywhere at once and never has to carry text. Push it.
+ * Rules of thumb:
  *   · A region's --*-hi (hover/selected fill) sits one step off its --*-bg, and
- *     text must clear 4.5:1 against BOTH.
+ *     text must clear 7:1 (secondary 4.5:1) against BOTH.
  *   · In light mode the window and the SIDEBAR stay light. theme-light.css
  *     patches hover fills and stage chips with black-alpha washes that assume a
  *     light row or pane, so a dark sidebar there would quietly lose them.
- *   · The light-mode TOP BAR is exempt and stays as loud as the dark one:
- *     nothing in theme-light.css reaches into it, and its popovers opt out to the
- *     app palette (regions.css).
- *   · Top-bar icons are monochrome SVGs on currentColor for exactly this reason —
- *     an emoji 🌙/🔔 paints its own yellow and vanishes on Goldfinch's bar.
+ *   · Top-bar icons are monochrome SVGs on currentColor, so they follow the
+ *     bar's text whatever its hue.
  *
  * Selection is persisted server-side (ui.accent / ui.surface in
  * ~/.mindflock/settings.json) so every device shows the same look, and cached
  * in localStorage (cs_accent / cs_surface) so the inline <head> scripts can
- * apply it before first paint. Renaming or retiring a preset key needs a
- * matching entry in the LEGACY_PRESETS maps (app.js + mobile.js) so stored
- * names keep resolving.
+ * apply it before first paint. A preset key must never be retired outright: a
+ * stored name has to keep resolving, so an old key stays as an extra selector
+ * on the block that replaced it.
  *
  * Specificity contract (desktop light mode): html[data-surface=…] (0,1,1)
  * outranks .light (0,1,0), and html.light[data-surface=…] (0,2,1) outranks
  * both — so each surface set carries its own light-mode palette and the 🌙
- * toggle keeps working inside every theme.
+ * toggle keeps working inside every theme. (This sheet is unlayered, so it beats
+ * the layered tokens.css whatever the specificity anyway.)
+ *
+ * PREVIEWS. Settings → Appearance draws each swatch from these same blocks, so a
+ * swatch cannot drift from the look it picks. A surface swatch is a tiny window
+ * — an element with class="theme-preview", data-surface and data-mode — that
+ * every surface block also matches (tokens.css gives it the base palette
+ * first). It wears the accent you picked; an accent swatch instead names its
+ * own (data-accent-preview), which is why the page-wide accent rules skip it.
  * --------------------------------------------------------------------------- */
 
-/* --- Accent presets (default: Violetear, also declared in the base sheets) -- */
-html[data-accent="cardinal"]  { --accent: #f0323f; --accent-rgb: 240, 50, 63;   --accent-deep: #b0111c; }
-html[data-accent="oriole"]    { --accent: #ff7f1f; --accent-rgb: 255, 127, 31;  --accent-deep: #c05512; }
-html[data-accent="goldfinch"] { --accent: #f5dc16; --accent-rgb: 245, 220, 22;  --accent-deep: #8a7005; }
-html[data-accent="quetzal"]   { --accent: #17c163; --accent-rgb: 23, 193, 99;   --accent-deep: #157f3d; }
-html[data-accent="bluejay"]   { --accent: #2b8cff; --accent-rgb: 43, 140, 255;  --accent-deep: #1160cc; }
-html[data-accent="bunting"]   { --accent: #5442ff; --accent-rgb: 84, 66, 255;   --accent-deep: #2f24b8; }
-html[data-accent="violetear"] { --accent: #7d56f4; --accent-rgb: 125, 86, 244;  --accent-deep: #5b3fc0; }
-html[data-accent="flamingo"]  { --accent: #ff4d9e; --accent-rgb: 255, 77, 158;  --accent-deep: #b0125f; }
-html[data-accent="pheasant"]  { --accent: #f0b90b; --accent-rgb: 240, 185, 11;  --accent-deep: #7f6210; }
-html[data-accent="heron"]     { --accent: #aab4c6; --accent-rgb: 170, 180, 198; --accent-deep: #5b6577; }
+/* --- Accent presets (default: Violetear, also declared in the base sheets) --
+   --accent-ink is the text on an accent FILL (a primary button): white where
+   white clears 4.5:1 on the accent, near-black where it can't (the bright
+   yellows, greens and silver). The light-mode blocks deepen an accent that
+   would vanish as a ring on a white page. */
+html[data-accent="cardinal"] .theme-preview:not([data-accent-preview]),
+.theme-preview[data-accent-preview="cardinal"],
+html[data-accent="cardinal"] { --accent: #e21e33; --accent-rgb: 226, 30, 51; --accent-deep: #b0111c; --accent-ink: #ffffff; }
+html[data-accent="oriole"] .theme-preview:not([data-accent-preview]),
+.theme-preview[data-accent-preview="oriole"],
+html[data-accent="oriole"] { --accent: #ff7f1f; --accent-rgb: 255, 127, 31; --accent-deep: #9b4800; --accent-ink: #141414; }
+html[data-accent="goldfinch"] .theme-preview:not([data-accent-preview]),
+.theme-preview[data-accent-preview="goldfinch"],
+html[data-accent="goldfinch"] { --accent: #f5dc16; --accent-rgb: 245, 220, 22; --accent-deep: #6c6000; --accent-ink: #141414; }
+html[data-accent="quetzal"] .theme-preview:not([data-accent-preview]),
+.theme-preview[data-accent-preview="quetzal"],
+html[data-accent="quetzal"] { --accent: #17c163; --accent-rgb: 23, 193, 99; --accent-deep: #006f35; --accent-ink: #141414; }
+html[data-accent="bluejay"] .theme-preview:not([data-accent-preview]),
+.theme-preview[data-accent-preview="bluejay"],
+html[data-accent="bluejay"] { --accent: #0071e1; --accent-rgb: 0, 113, 225; --accent-deep: #005ebb; --accent-ink: #ffffff; }
+html[data-accent="bunting"] .theme-preview:not([data-accent-preview]),
+.theme-preview[data-accent-preview="bunting"],
+html[data-accent="bunting"] { --accent: #5f5cff; --accent-rgb: 95, 92, 255; --accent-deep: #2f24b8; --accent-ink: #ffffff; }
+html[data-accent="violetear"] .theme-preview:not([data-accent-preview]),
+.theme-preview[data-accent-preview="violetear"],
+html[data-accent="violetear"] { --accent: #7d56f4; --accent-rgb: 125, 86, 244; --accent-deep: #5b3fc0; --accent-ink: #ffffff; }
+html[data-accent="flamingo"] .theme-preview:not([data-accent-preview]),
+.theme-preview[data-accent-preview="flamingo"],
+html[data-accent="flamingo"] { --accent: #d9207e; --accent-rgb: 217, 32, 126; --accent-deep: #b0125f; --accent-ink: #ffffff; }
+html[data-accent="pheasant"] .theme-preview:not([data-accent-preview]),
+.theme-preview[data-accent-preview="pheasant"],
+html[data-accent="pheasant"] { --accent: #f0b90b; --accent-rgb: 240, 185, 11; --accent-deep: #795b00; --accent-ink: #141414; }
+html[data-accent="heron"] .theme-preview:not([data-accent-preview]),
+.theme-preview[data-accent-preview="heron"],
+html[data-accent="heron"] { --accent: #aab4c6; --accent-rgb: 170, 180, 198; --accent-deep: #576070; --accent-ink: #141414; }
+html[data-accent="oriole"] .theme-preview[data-mode="light"]:not([data-accent-preview]),
+.theme-preview[data-mode="light"][data-accent-preview="oriole"],
+html.light[data-accent="oriole"] { --accent: #d26300; --accent-rgb: 210, 99, 0; --accent-ink: #141414; }
+html[data-accent="goldfinch"] .theme-preview[data-mode="light"]:not([data-accent-preview]),
+.theme-preview[data-mode="light"][data-accent-preview="goldfinch"],
+html.light[data-accent="goldfinch"] { --accent: #938400; --accent-rgb: 147, 132, 0; --accent-ink: #141414; }
+html[data-accent="quetzal"] .theme-preview[data-mode="light"]:not([data-accent-preview]),
+.theme-preview[data-mode="light"][data-accent-preview="quetzal"],
+html.light[data-accent="quetzal"] { --accent: #00974a; --accent-rgb: 0, 151, 74; --accent-ink: #141414; }
+html[data-accent="bunting"] .theme-preview[data-mode="light"]:not([data-accent-preview]),
+.theme-preview[data-mode="light"][data-accent-preview="bunting"],
+html.light[data-accent="bunting"] { --accent: #5442ff; --accent-rgb: 84, 66, 255; --accent-ink: #ffffff; }
+html[data-accent="pheasant"] .theme-preview[data-mode="light"]:not([data-accent-preview]),
+.theme-preview[data-mode="light"][data-accent-preview="pheasant"],
+html.light[data-accent="pheasant"] { --accent: #a47d00; --accent-rgb: 164, 125, 0; --accent-ink: #141414; }
+html[data-accent="heron"] .theme-preview[data-mode="light"]:not([data-accent-preview]),
+.theme-preview[data-mode="light"][data-accent-preview="heron"],
+html.light[data-accent="heron"] { --accent: #7a8394; --accent-rgb: 122, 131, 148; --accent-ink: #141414; }
 
 /* ===========================================================================
  * SURFACE SETS (default: Swallow steel blue-gray, in the base sheets)
@@ -89,20 +147,21 @@ html[data-accent="heron"]     { --accent: #aab4c6; --accent-rgb: 170, 180, 198; 
  * (mobile has no light mode, so only the dark block applies there — and mobile
  * renders the window palette only, ignoring the region tokens).
  *
- * Ordered the way the picker shows them: the three quiet neutrals, then round
- * the color wheel by the hue the WINDOW wears, since that's the surface you
- * stare at all day.
+ * Ordered the way the picker shows them: the quiet sets, then round the color
+ * wheel by the hue the WINDOW wears.
  * =========================================================================== */
 
-/* --- The quiet three ------------------------------------------------------- */
+/* --- The quiet sets: one neutral throughout, no region hues ---------------- */
 
-/* Raven — true black, stark high contrast. For OLED fans. Surface only: there
-   is no black accent, so no matching html[data-accent] block. */
+/* Raven — true black with soft hairlines, for OLED screens. (Magpie, below, is
+   the high-contrast set.) Surface only: there is no black accent. */
+.theme-preview[data-surface="raven"],
 html[data-surface="raven"] {
   --bg: #000000; --panel: #0a0a0d; --panel-2: #141419; --border: #303039;
   --text: #ececf2; --muted: #90909f;
   --term-bg: #000000; --term-fg: #ececf2;
 }
+.theme-preview[data-mode="light"][data-surface="raven"],
 html.light[data-surface="raven"] {
   --bg: #fcfcfd; --panel: #ffffff; --panel-2: #efeff3; --border: #c6c6d0;
   --text: #000000; --muted: #4a4a58;
@@ -110,411 +169,506 @@ html.light[data-surface="raven"] {
 }
 
 /* Heron — neutral silver-graphite, no color cast at all. */
+.theme-preview[data-surface="heron"],
 html[data-surface="heron"] {
   --bg: #16181b; --panel: #1f2226; --panel-2: #292d33; --border: #454b54;
   --text: #e4e7ec; --muted: #979da7;
   --term-bg: #16181b; --term-fg: #e4e7ec;
 }
+.theme-preview[data-mode="light"][data-surface="heron"],
 html.light[data-surface="heron"] {
   --bg: #f0f1f4; --panel: #ffffff; --panel-2: #e2e4ea; --border: #c3c7d0;
   --text: #1a1d22; --muted: #5a6069;
   --term-bg: #ffffff; --term-fg: #1a1d22;
 }
 
-/* --- Red ------------------------------------------------------------------- */
+/* Owl — low glare: a dusk-grey page instead of a near-black one, and text a
+   step down from white (about 10:1 rather than 15+), for long evenings. By day,
+   a grey page with no pure white anywhere. */
+.theme-preview[data-surface="owl"],
+html[data-surface="owl"] {
+  --bg: #1e2228; --panel: #24282e; --panel-2: #2b2f37; --border: #484d57;
+  --text: #dadee5; --muted: #a5abb7;
+  --term-bg: #1e2228; --term-fg: #dadee5;
+}
+.theme-preview[data-mode="light"][data-surface="owl"],
+html.light[data-surface="owl"] {
+  --bg: #e7eaee; --panel: #f0f1f4; --panel-2: #e0e3e8; --border: #b9bec6;
+  --text: #282e38; --muted: #575e69;
+  --term-bg: #f0f1f4; --term-fg: #282e38;
+}
 
-/* Cardinal — the whole bird is brilliant red behind a jet-black face mask. */
+/* Wren — warm paper: cream pages and brown-black ink by day, a sepia study by
+   night. The calmest light set. */
+.theme-preview[data-surface="wren"],
+html[data-surface="wren"] {
+  --bg: #1b1611; --panel: #241e18; --panel-2: #2f2922; --border: #4f463c;
+  --text: #eee7d9; --muted: #b3a99a;
+  --term-bg: #1b1611; --term-fg: #eee7d9;
+}
+.theme-preview[data-mode="light"][data-surface="wren"],
+html.light[data-surface="wren"] {
+  --bg: #f7f2e7; --panel: #fdfaf2; --panel-2: #efe7d9; --border: #d8ccbc;
+  --text: #30231b; --muted: #6b5a4d;
+  --term-bg: #fdfaf2; --term-fg: #30231b;
+}
+
+/* Magpie — high contrast: pure black and white, secondary text that still
+   clears 9:1, and borders you can see (3:1 or more against every surface)
+   rather than hairlines. For low vision, glare, or a projector. */
+.theme-preview[data-surface="magpie"],
+html[data-surface="magpie"] {
+  --bg: #000000; --panel: #0d0d0d; --panel-2: #1d1d1d; --border: #868686;
+  --text: #ffffff; --muted: #d4d4d4;
+  --term-bg: #000000; --term-fg: #ffffff;
+}
+.theme-preview[data-mode="light"][data-surface="magpie"],
+html.light[data-surface="magpie"] {
+  --bg: #ffffff; --panel: #ffffff; --panel-2: #ededed; --border: #636363;
+  --text: #000000; --muted: #3d3d3d;
+  --term-bg: #ffffff; --term-fg: #000000;
+}
+
+/* --- Red ----------------------------------------------------------------- */
+
+/* Cardinal — a red bird behind a black mask: a cardinal-red bar over a
+   near-black sidebar, a deep wine window with rose hairlines. */
+.theme-preview[data-surface="cardinal"],
 html[data-surface="cardinal"] {
-  --bg: #2b0409; --panel: #3d060d; --panel-2: #540a13; --border: #ff3b47;
-  --text: #ffe3e5; --muted: #f0949a;
-  --term-bg: #2b0409; --term-fg: #ffe3e5;
-  --topbar-bg: #d51322; --topbar-hi: #b80f1d; --topbar-border: #ff5c66;
-  --topbar-text: #fff0f1; --topbar-muted: #ffc2c6;
-  --sidebar-bg: #16060a; --sidebar-hi: #26090f; --sidebar-border: #7a141c;
-  --sidebar-text: #ffd9dc; --sidebar-muted: #d1868c;
+  --bg: #250a09; --panel: #2f1110; --panel-2: #3c1b19; --border: #773733;
+  --text: #f5eae9; --muted: #c1a09d;
+  --term-bg: #250a09; --term-fg: #f5eae9;
+  --topbar-bg: #a12623; --topbar-hi: #8f0e12; --topbar-border: #c15e55;
+  --topbar-text: #fffbfa; --topbar-muted: #f3d9d5;
+  --sidebar-bg: #160b0b; --sidebar-hi: #231515; --sidebar-border: #402d2d;
+  --sidebar-text: #f2e6e6; --sidebar-muted: #b6a09f;
 }
+.theme-preview[data-mode="light"][data-surface="cardinal"],
 html.light[data-surface="cardinal"] {
-  --bg: #ffe4e5; --panel: #fff6f6; --panel-2: #ffc9cc; --border: #f0323f;
-  --text: #4a0206; --muted: #a3121c;
-  --term-bg: #fff6f6; --term-fg: #4a0206;
-  --topbar-bg: #d51322; --topbar-hi: #b80f1d; --topbar-border: #8f0713;
-  --topbar-text: #ffffff; --topbar-muted: #ffd4d7;
-  --sidebar-bg: #fff0f1; --sidebar-hi: #ffdcde; --sidebar-border: #e86b74;
-  --sidebar-text: #3d0205; --sidebar-muted: #96131d;
+  --bg: #fef1f0; --panel: #fffcfc; --panel-2: #f5e5e4; --border: #edc2bd;
+  --text: #2c1a18; --muted: #72514e;
+  --term-bg: #fffcfc; --term-fg: #2c1a18;
+  --topbar-bg: #a12623; --topbar-hi: #8f0e12; --topbar-border: #c15e55;
+  --topbar-text: #fffbfa; --topbar-muted: #f3d9d5;
+  --sidebar-bg: #f7efef; --sidebar-hi: #ece1e1; --sidebar-border: #d2c3c3;
+  --sidebar-text: #2c1919; --sidebar-muted: #725150;
 }
 
-/* Scarlet Macaw — scarlet body, cobalt and emerald wings. The loudest bird in
-   the aviary, and the one the region tokens were built for. */
+/* Scarlet Macaw — scarlet body, cobalt and emerald wings: a cobalt bar, an
+   emerald-black sidebar, a scarlet-tinted window. */
+.theme-preview[data-surface="macaw"],
 html[data-surface="macaw"] {
-  --bg: #2e0406; --panel: #43060a; --panel-2: #5c090f; --border: #f5242c;
-  --text: #ffe4e0; --muted: #f09a92;
-  --term-bg: #2e0406; --term-fg: #ffe4e0;
-  --topbar-bg: #1554e0; --topbar-hi: #1a63ff; --topbar-border: #4d8bff;
-  --topbar-text: #ffffff; --topbar-muted: #d1e0ff;
-  --sidebar-bg: #06773a; --sidebar-hi: #05602f; --sidebar-border: #14c266;
-  --sidebar-text: #e0ffee; --sidebar-muted: #96e0b8;
+  --bg: #230c09; --panel: #2d1310; --panel-2: #3a1d1a; --border: #723b34;
+  --text: #f5eae8; --muted: #c1a09b;
+  --term-bg: #230c09; --term-fg: #f5eae8;
+  --topbar-bg: #2454b3; --topbar-hi: #1443a1; --topbar-border: #557ecc;
+  --topbar-text: #fafcff; --topbar-muted: #d5e0f4;
+  --sidebar-bg: #031307; --sidebar-hi: #0a1e10; --sidebar-border: #1e3a26;
+  --sidebar-text: #e4ece6; --sidebar-muted: #95ad9b;
 }
+.theme-preview[data-mode="light"][data-surface="macaw"],
 html.light[data-surface="macaw"] {
-  --bg: #ffe3e0; --panel: #fff6f4; --panel-2: #ffc7c2; --border: #f5242c;
-  --text: #45050a; --muted: #a01019;
-  --term-bg: #fff6f4; --term-fg: #45050a;
-  --topbar-bg: #1554e0; --topbar-hi: #1147c2; --topbar-border: #0d3ba8;
-  --topbar-text: #ffffff; --topbar-muted: #d1e0ff;
-  --sidebar-bg: #d9f7e4; --sidebar-hi: #b3edc9; --sidebar-border: #2eab5e;
-  --sidebar-text: #05391c; --sidebar-muted: #0d7040;
+  --bg: #fdf1f0; --panel: #fffcfb; --panel-2: #f4e6e4; --border: #edc2bc;
+  --text: #2c1a17; --muted: #72514d;
+  --term-bg: #fffcfb; --term-fg: #2c1a17;
+  --topbar-bg: #2454b3; --topbar-hi: #1443a1; --topbar-border: #557ecc;
+  --topbar-text: #fafcff; --topbar-muted: #d5e0f4;
+  --sidebar-bg: #eaf4ec; --sidebar-hi: #dae8dd; --sidebar-border: #bacdbe;
+  --sidebar-text: #142318; --sidebar-muted: #48624e;
 }
 
-/* Golden Pheasant — golden crest, scarlet body, emerald mantle. */
+/* Golden Pheasant — golden crest, scarlet body, emerald mantle: the gold is
+   the bar's hairline (and the window's), the scarlet the window, the emerald
+   the sidebar. */
+.theme-preview[data-surface="pheasant"],
 html[data-surface="pheasant"] {
-  --bg: #2b0407; --panel: #3f070c; --panel-2: #560a11; --border: #e01f2b;
-  --text: #ffe4dc; --muted: #eda08e;
-  --term-bg: #2b0407; --term-fg: #ffe4dc;
-  --topbar-bg: #f5b800; --topbar-hi: #ffc814; --topbar-border: #ad8000;
-  --topbar-text: #241900; --topbar-muted: #5c4100;
-  --sidebar-bg: #05361f; --sidebar-hi: #07472a; --sidebar-border: #128f52;
-  --sidebar-text: #d9ffea; --sidebar-muted: #74d1a0;
+  --bg: #230c09; --panel: #2d1310; --panel-2: #3a1d1a; --border: #61481b;
+  --text: #f5eae8; --muted: #c1a09b;
+  --term-bg: #230c09; --term-fg: #f5eae8;
+  --topbar-bg: #221d13; --topbar-hi: #312a1d; --topbar-border: #eab532;
+  --topbar-text: #f0ece4; --topbar-muted: #b8ab90;
+  --sidebar-bg: #011309; --sidebar-hi: #071f13; --sidebar-border: #1a3b2a;
+  --sidebar-text: #e3ece7; --sidebar-muted: #92ae9e;
 }
+.theme-preview[data-mode="light"][data-surface="pheasant"],
 html.light[data-surface="pheasant"] {
-  --bg: #ffe3e0; --panel: #fff6f4; --panel-2: #ffc7c2; --border: #e02532;
-  --text: #45050a; --muted: #a01019;
-  --term-bg: #fff6f4; --term-fg: #45050a;
-  --topbar-bg: #ffc411; --topbar-hi: #f0b400; --topbar-border: #ad8000;
-  --topbar-text: #241900; --topbar-muted: #5c4100;
-  --sidebar-bg: #d9f7e6; --sidebar-hi: #b8edcf; --sidebar-border: #2ea365;
-  --sidebar-text: #06381f; --sidebar-muted: #0d6b40;
+  --bg: #fdf1f0; --panel: #fffcfb; --panel-2: #f4e6e4; --border: #dfcbaa;
+  --text: #2c1a17; --muted: #72514d;
+  --term-bg: #fffcfb; --term-fg: #2c1a17;
+  --topbar-bg: #fbefd6; --topbar-hi: #f1e1c2; --topbar-border: #c79600;
+  --topbar-text: #261e0e; --topbar-muted: #655637;
+  --sidebar-bg: #e9f5ed; --sidebar-hi: #d9e8df; --sidebar-border: #b8cdc1;
+  --sidebar-text: #12241a; --sidebar-muted: #446352;
 }
 
-/* --- Orange --------------------------------------------------------------- */
+/* --- Orange -------------------------------------------------------------- */
 
-/* Oriole — brilliant tangerine body under a jet-black hood. */
+/* Oriole — tangerine under a black hood: a burnt-orange bar over a black
+   sidebar and an ember-tinted window. */
+.theme-preview[data-surface="oriole"],
 html[data-surface="oriole"] {
-  --bg: #2e1402; --panel: #421d03; --panel-2: #5a2805; --border: #ff8c1a;
-  --text: #ffe9d3; --muted: #eaa869;
-  --term-bg: #2e1402; --term-fg: #ffe9d3;
-  --topbar-bg: #ff7a12; --topbar-hi: #ff8c2e; --topbar-border: #b35400;
-  --topbar-text: #2b1200; --topbar-muted: #6b3400;
-  --sidebar-bg: #140c03; --sidebar-hi: #241504; --sidebar-border: #7a4408;
-  --sidebar-text: #ffe6cd; --sidebar-muted: #d19a5c;
+  --bg: #210e02; --panel: #2b1606; --panel-2: #38200f; --border: #6e401e;
+  --text: #f4ebe5; --muted: #bea392;
+  --term-bg: #210e02; --term-fg: #f4ebe5;
+  --topbar-bg: #923f00; --topbar-hi: #7b3400; --topbar-border: #b9683b;
+  --topbar-text: #fffbf9; --topbar-muted: #f1dacf;
+  --sidebar-bg: #130d09; --sidebar-hi: #1e1814; --sidebar-border: #3a312b;
+  --sidebar-text: #f0e8e2; --sidebar-muted: #b0a39b;
 }
+.theme-preview[data-mode="light"][data-surface="oriole"],
 html.light[data-surface="oriole"] {
-  --bg: #ffe7cd; --panel: #fff7ef; --panel-2: #ffd0a3; --border: #f07a10;
-  --text: #421c02; --muted: #9c4d05;
-  --term-bg: #fff7ef; --term-fg: #421c02;
-  --topbar-bg: #ff8c1f; --topbar-hi: #f07d12; --topbar-border: #ad5200;
-  --topbar-text: #2b1200; --topbar-muted: #6b3400;
-  --sidebar-bg: #fff2e4; --sidebar-hi: #ffe0c2; --sidebar-border: #d1852f;
-  --sidebar-text: #3d1a02; --sidebar-muted: #8f4604;
+  --bg: #fcf2ec; --panel: #fffcfa; --panel-2: #f2e7e0; --border: #e9c6af;
+  --text: #2a1b11; --muted: #6f5443;
+  --term-bg: #fffcfa; --term-fg: #2a1b11;
+  --topbar-bg: #923f00; --topbar-hi: #7b3400; --topbar-border: #b9683b;
+  --topbar-text: #fffbf9; --topbar-muted: #f1dacf;
+  --sidebar-bg: #f4f0ee; --sidebar-hi: #e8e3e0; --sidebar-border: #cdc6c1;
+  --sidebar-text: #2a1b11; --sidebar-muted: #6f5443;
 }
 
 /* Rainbow Lorikeet — violet-blue head, lime collar, tangerine breast. */
+.theme-preview[data-surface="lorikeet"],
 html[data-surface="lorikeet"] {
-  --bg: #3a1403; --panel: #4f1c05; --panel-2: #6b2607; --border: #ff7a10;
-  --text: #ffeada; --muted: #eba873;
-  --term-bg: #3a1403; --term-fg: #ffeada;
-  --topbar-bg: #4b1fd6; --topbar-hi: #5a2bf0; --topbar-border: #8a6bff;
-  --topbar-text: #ffffff; --topbar-muted: #ded1ff;
-  --sidebar-bg: #256e0a; --sidebar-hi: #2c820c; --sidebar-border: #4fd11f;
-  --sidebar-text: #edffe0; --sidebar-muted: #b3e896;
+  --bg: #220e03; --panel: #2c1507; --panel-2: #381f11; --border: #6f3f22;
+  --text: #f4ebe6; --muted: #bfa393;
+  --term-bg: #220e03; --term-fg: #f4ebe6;
+  --topbar-bg: #5148b0; --topbar-hi: #43379e; --topbar-border: #7575ca;
+  --topbar-text: #fbfbff; --topbar-muted: #dcdef4;
+  --sidebar-bg: #081203; --sidebar-hi: #111d0b; --sidebar-border: #28381e;
+  --sidebar-text: #e6ebe3; --sidebar-muted: #9cac94;
 }
+.theme-preview[data-mode="light"][data-surface="lorikeet"],
 html.light[data-surface="lorikeet"] {
-  --bg: #ffe8d1; --panel: #fff7ee; --panel-2: #ffd1a3; --border: #f07a10;
-  --text: #451c02; --muted: #a34d05;
-  --term-bg: #fff7ee; --term-fg: #451c02;
-  --topbar-bg: #4b1fd6; --topbar-hi: #3f19b8; --topbar-border: #33149c;
-  --topbar-text: #ffffff; --topbar-muted: #ded1ff;
-  --sidebar-bg: #e2fad1; --sidebar-hi: #cbf2ad; --sidebar-border: #63b833;
-  --sidebar-text: #1c3d08; --sidebar-muted: #3f7a14;
+  --bg: #fcf2ed; --panel: #fffcfa; --panel-2: #f3e7e1; --border: #eac5b1;
+  --text: #2b1b12; --muted: #705444;
+  --term-bg: #fffcfa; --term-fg: #2b1b12;
+  --topbar-bg: #5148b0; --topbar-hi: #43379e; --topbar-border: #7575ca;
+  --topbar-text: #fbfbff; --topbar-muted: #dcdef4;
+  --sidebar-bg: #edf4e9; --sidebar-hi: #dee7da; --sidebar-border: #c0ccb9;
+  --sidebar-text: #192314; --sidebar-muted: #506147;
 }
 
 /* Lilac-breasted Roller — lilac breast, turquoise belly, cinnamon back. */
+.theme-preview[data-surface="roller"],
 html[data-surface="roller"] {
-  --bg: #2b1a0d; --panel: #3a2412; --panel-2: #4f3119; --border: #d18f4f;
-  --text: #ffeeda; --muted: #dcb488;
-  --term-bg: #2b1a0d; --term-fg: #ffeeda;
-  --topbar-bg: #9b6ef0; --topbar-hi: #ac82ff; --topbar-border: #6b3fc2;
-  --topbar-text: #1c0a3d; --topbar-muted: #43208a;
-  --sidebar-bg: #00736b; --sidebar-hi: #005c55; --sidebar-border: #14d6c4;
-  --sidebar-text: #e0fffb; --sidebar-muted: #8fd9d1;
+  --bg: #1e1006; --panel: #27180c; --panel-2: #332215; --border: #66452b;
+  --text: #f3ebe5; --muted: #baa495;
+  --term-bg: #1e1006; --term-fg: #f3ebe5;
+  --topbar-bg: #674698; --topbar-hi: #583687; --topbar-border: #8a71b5;
+  --topbar-text: #fcfbff; --topbar-muted: #e2dcf1;
+  --sidebar-bg: #001211; --sidebar-hi: #001f1e; --sidebar-border: #0b3b39;
+  --sidebar-text: #e1eceb; --sidebar-muted: #8baeac;
 }
+.theme-preview[data-mode="light"][data-surface="roller"],
 html.light[data-surface="roller"] {
-  --bg: #ffeeda; --panel: #fff8f0; --panel-2: #f7d9b8; --border: #c2854a;
-  --text: #3d2410; --muted: #8f5a24;
-  --term-bg: #fff8f0; --term-fg: #3d2410;
-  --topbar-bg: #9b6ef0; --topbar-hi: #ad86f7; --topbar-border: #6135b3;
-  --topbar-text: #1c0a3d; --topbar-muted: #43208a;
-  --sidebar-bg: #d1f7f3; --sidebar-hi: #b3ede7; --sidebar-border: #3ba39a;
-  --sidebar-text: #00332f; --sidebar-muted: #066b63;
+  --bg: #faf3ee; --panel: #fffcfa; --panel-2: #f0e8e2; --border: #e8c6ae;
+  --text: #2a1c11; --muted: #6e5542;
+  --term-bg: #fffcfa; --term-fg: #2a1c11;
+  --topbar-bg: #674698; --topbar-hi: #583687; --topbar-border: #8a71b5;
+  --topbar-text: #fcfbff; --topbar-muted: #e2dcf1;
+  --sidebar-bg: #e6f5f4; --sidebar-hi: #d5e9e7; --sidebar-border: #b3cecc;
+  --sidebar-text: #0c2423; --sidebar-muted: #3b6361;
 }
 
-/* --- Yellow --------------------------------------------------------------- */
+/* --- Yellow -------------------------------------------------------------- */
 
-/* Goldfinch — brilliant lemon body, jet-black cap and wings. */
+/* Goldfinch — a lemon bird with a black cap and wings: black regions,
+   an olive-black window and one lemon hairline under the bar. */
+.theme-preview[data-surface="goldfinch"],
 html[data-surface="goldfinch"] {
-  --bg: #23240a; --panel: #33350d; --panel-2: #464a12; --border: #e8f01c;
-  --text: #f9fdd0; --muted: #cdd673;
-  --term-bg: #23240a; --term-fg: #f9fdd0;
-  --topbar-bg: #f2e00d; --topbar-hi: #ffef1f; --topbar-border: #a89b00;
-  --topbar-text: #1f1c00; --topbar-muted: #4f4800;
-  --sidebar-bg: #131300; --sidebar-hi: #232300; --sidebar-border: #6b6800;
-  --sidebar-text: #f7fbcb; --sidebar-muted: #c9d16a;
+  --bg: #161405; --panel: #1e1d09; --panel-2: #292713; --border: #524f26;
+  --text: #eeede4; --muted: #acab92;
+  --term-bg: #161405; --term-fg: #eeede4;
+  --topbar-bg: #1f1f14; --topbar-hi: #2d2c1e; --topbar-border: #cfc200;
+  --topbar-text: #eeede4; --topbar-muted: #b0ae91;
+  --sidebar-bg: #0f0f0a; --sidebar-hi: #1a1a14; --sidebar-border: #34332b;
+  --sidebar-text: #eaeae1; --sidebar-muted: #a7a79a;
 }
+.theme-preview[data-mode="light"][data-surface="goldfinch"],
 html.light[data-surface="goldfinch"] {
-  --bg: #f8fbcf; --panel: #fefee9; --panel-2: #edf3a4; --border: #b8c400;
-  --text: #24270a; --muted: #5c6600;
-  --term-bg: #fefee9; --term-fg: #24270a;
-  --topbar-bg: #ffe921; --topbar-hi: #f0da13; --topbar-border: #a89b00;
-  --topbar-text: #1f1c00; --topbar-muted: #4f4800;
-  --sidebar-bg: #fcfde6; --sidebar-hi: #f4f7c4; --sidebar-border: #b3bb3d;
-  --sidebar-text: #22250a; --sidebar-muted: #5a6300;
+  --bg: #f5f5ee; --panel: #fdfdfa; --panel-2: #eaeae1; --border: #d2d0ab;
+  --text: #21200f; --muted: #5e5c3f;
+  --term-bg: #fdfdfa; --term-fg: #21200f;
+  --topbar-bg: #f3f2d7; --topbar-hi: #e7e5c3; --topbar-border: #ada200;
+  --topbar-text: #21200f; --topbar-muted: #5c5a38;
+  --sidebar-bg: #f1f1ee; --sidebar-hi: #e4e4e0; --sidebar-border: #c8c8c2;
+  --sidebar-text: #21200f; --sidebar-muted: #5e5c3f;
 }
 
-/* Toco Toucan — jet-black bird, one enormous amber bill. */
+/* Toco Toucan — a jet-black bird with one amber bill: neutral black
+   throughout, the amber is the bar's hairline. */
+.theme-preview[data-surface="toucan"],
 html[data-surface="toucan"] {
-  --bg: #101014; --panel: #181820; --panel-2: #23232e; --border: #ffb01f;
-  --text: #eceef4; --muted: #9498a6;
-  --term-bg: #101014; --term-fg: #eceef4;
-  --topbar-bg: #ffb01f; --topbar-hi: #ffc039; --topbar-border: #c28000;
-  --topbar-text: #241700; --topbar-muted: #5c3d00;
-  --sidebar-bg: #08080a; --sidebar-hi: #15151a; --sidebar-border: #33333d;
-  --sidebar-text: #f0f0f5; --sidebar-muted: #8f8f9c;
+  --bg: #131416; --panel: #1b1b1f; --panel-2: #26262a; --border: #5d492d;
+  --text: #ebecf5; --muted: #a7a8b3;
+  --term-bg: #131416; --term-fg: #ebecf5;
+  --topbar-bg: #241d13; --topbar-hi: #332a1d; --topbar-border: #f9ad26;
+  --topbar-text: #f2ece4; --topbar-muted: #bca991;
+  --sidebar-bg: #0e0e10; --sidebar-hi: #19191b; --sidebar-border: #323336;
+  --sidebar-text: #e8e9f2; --sidebar-muted: #a4a5af;
 }
+.theme-preview[data-mode="light"][data-surface="toucan"],
 html.light[data-surface="toucan"] {
-  --bg: #f5f5f8; --panel: #ffffff; --panel-2: #e9e9ef; --border: #e09800;
-  --text: #17171c; --muted: #585866;
-  --term-bg: #ffffff; --term-fg: #17171c;
-  --topbar-bg: #ffc033; --topbar-hi: #f5b01f; --topbar-border: #c28000;
-  --topbar-text: #241700; --topbar-muted: #5c3d00;
-  --sidebar-bg: #e6e6ec; --sidebar-hi: #d6d6e0; --sidebar-border: #9c9cad;
-  --sidebar-text: #101014; --sidebar-muted: #4c4c5a;
+  --bg: #f4f4f6; --panel: #fdfdfd; --panel-2: #e9e9eb; --border: #e1caaa;
+  --text: #1c1e2d; --muted: #555874;
+  --term-bg: #fdfdfd; --term-fg: #1c1e2d;
+  --topbar-bg: #feedd7; --topbar-hi: #f5dfc3; --topbar-border: #d38f00;
+  --topbar-text: #281d0e; --topbar-muted: #695438;
+  --sidebar-bg: #f1f1f2; --sidebar-hi: #e3e4e5; --sidebar-border: #c7c7c9;
+  --sidebar-text: #1c1e2d; --sidebar-muted: #555874;
 }
 
-/* --- Green ---------------------------------------------------------------- */
+/* --- Green --------------------------------------------------------------- */
 
 /* Quetzal — iridescent emerald above a crimson breast. */
+.theme-preview[data-surface="quetzal"],
 html[data-surface="quetzal"] {
-  --bg: #02251a; --panel: #033524; --panel-2: #054a31; --border: #12d47c;
-  --text: #d4ffe9; --muted: #67d9a3;
-  --term-bg: #02251a; --term-fg: #d4ffe9;
-  --topbar-bg: #00a35c; --topbar-hi: #00b866; --topbar-border: #007a44;
-  --topbar-text: #002415; --topbar-muted: #003d21;
-  --sidebar-bg: #4a0512; --sidebar-hi: #610718; --sidebar-border: #c2142c;
-  --sidebar-text: #ffdce1; --sidebar-muted: #e5919c;
+  --bg: #01190d; --panel: #052214; --panel-2: #0f2d1f; --border: #1b5a3e;
+  --text: #e6efea; --muted: #94b1a1;
+  --term-bg: #01190d; --term-fg: #e6efea;
+  --topbar-bg: #006d3c; --topbar-hi: #005b32; --topbar-border: #469264;
+  --topbar-text: #f8fdf9; --topbar-muted: #d1e6d7;
+  --sidebar-bg: #19090a; --sidebar-hi: #271314; --sidebar-border: #462a2c;
+  --sidebar-text: #f1e6e7; --sidebar-muted: #bb9e9f;
 }
+.theme-preview[data-mode="light"][data-surface="quetzal"],
 html.light[data-surface="quetzal"] {
-  --bg: #d2fbe6; --panel: #f0fff7; --panel-2: #a9f2cd; --border: #00a85e;
-  --text: #033325; --muted: #0a7a50;
-  --term-bg: #f0fff7; --term-fg: #033325;
-  --topbar-bg: #00a35c; --topbar-hi: #00b866; --topbar-border: #00663a;
-  --topbar-text: #002415; --topbar-muted: #003d21;
-  --sidebar-bg: #ffe1e5; --sidebar-hi: #ffc9d0; --sidebar-border: #d1435a;
-  --sidebar-text: #4a0512; --sidebar-muted: #a3121f;
+  --bg: #eef7f1; --panel: #fafefc; --panel-2: #e1ede6; --border: #b2d8c3;
+  --text: #12241a; --muted: #446352;
+  --term-bg: #fafefc; --term-fg: #12241a;
+  --topbar-bg: #006d3c; --topbar-hi: #005b32; --topbar-border: #469264;
+  --topbar-text: #f8fdf9; --topbar-muted: #d1e6d7;
+  --sidebar-bg: #faeeee; --sidebar-hi: #efdfe0; --sidebar-border: #d7c1c2;
+  --sidebar-text: #2c191b; --sidebar-muted: #725153;
 }
 
-/* Green Jay — cobalt crown, lime body, brilliant yellow underside. */
+/* Green Jay — cobalt crown, green body, a yellow underside (the sidebar's
+   olive tint). */
+.theme-preview[data-surface="greenjay"],
 html[data-surface="greenjay"] {
-  --bg: #0c2b0a; --panel: #103a0e; --panel-2: #164f13; --border: #7ad91f;
-  --text: #e2ffd9; --muted: #9ed186;
-  --term-bg: #0c2b0a; --term-fg: #e2ffd9;
-  --topbar-bg: #1440d6; --topbar-hi: #1a4ef0; --topbar-border: #5c82ff;
-  --topbar-text: #ffffff; --topbar-muted: #d1dcff;
-  --sidebar-bg: #d6b800; --sidebar-hi: #edcc00; --sidebar-border: #8f7a00;
-  --sidebar-text: #241f00; --sidebar-muted: #5c4f00;
+  --bg: #091806; --panel: #10210c; --panel-2: #1a2c16; --border: #34582c;
+  --text: #e9efe7; --muted: #9cb098;
+  --term-bg: #091806; --term-fg: #e9efe7;
+  --topbar-bg: #2454b3; --topbar-hi: #1443a1; --topbar-border: #557ecc;
+  --topbar-text: #fafcff; --topbar-muted: #d5e0f4;
+  --sidebar-bg: #110f03; --sidebar-hi: #1c1a0a; --sidebar-border: #37331e;
+  --sidebar-text: #ebeae1; --sidebar-muted: #aaa792;
 }
+.theme-preview[data-mode="light"][data-surface="greenjay"],
 html.light[data-surface="greenjay"] {
-  --bg: #ddf7d6; --panel: #f2fef0; --panel-2: #bdedb3; --border: #5cb814;
-  --text: #0c330a; --muted: #2b7a14;
-  --term-bg: #f2fef0; --term-fg: #0c330a;
-  --topbar-bg: #1440d6; --topbar-hi: #1136b8; --topbar-border: #0d2b9c;
-  --topbar-text: #ffffff; --topbar-muted: #d1dcff;
-  --sidebar-bg: #ffe866; --sidebar-hi: #f7dc3d; --sidebar-border: #b39b00;
-  --sidebar-text: #241f00; --sidebar-muted: #5c4f00;
+  --bg: #f0f7ef; --panel: #fbfefa; --panel-2: #e4ece3; --border: #bdd6b8;
+  --text: #182315; --muted: #4e6149;
+  --term-bg: #fbfefa; --term-fg: #182315;
+  --topbar-bg: #2454b3; --topbar-hi: #1443a1; --topbar-border: #557ecc;
+  --topbar-text: #fafcff; --topbar-muted: #d5e0f4;
+  --sidebar-bg: #f3f1e9; --sidebar-hi: #e6e4d9; --sidebar-border: #cac8b9;
+  --sidebar-text: #22200e; --sidebar-muted: #615c3e;
 }
 
-/* Gouldian Finch — turquoise collar, purple breast, green back, lemon belly.
-   The most colors any one bird gets away with. */
+/* Gouldian Finch — turquoise collar, purple breast, green back, yellow belly
+   (the hairlines). */
+.theme-preview[data-surface="gouldian"],
 html[data-surface="gouldian"] {
-  --bg: #0a2b12; --panel: #0e3a19; --panel-2: #134f22; --border: #f2d413;
-  --text: #dcffe4; --muted: #86d199;
-  --term-bg: #0a2b12; --term-fg: #dcffe4;
-  --topbar-bg: #00c2b2; --topbar-hi: #00d6c4; --topbar-border: #008f83;
-  --topbar-text: #002b28; --topbar-muted: #005c56;
-  --sidebar-bg: #52157a; --sidebar-hi: #631a91; --sidebar-border: #a34dd1;
-  --sidebar-text: #f4e0ff; --sidebar-muted: #cd9ae8;
+  --bg: #07180b; --panel: #0d2112; --panel-2: #172c1c; --border: #554e25;
+  --text: #e7efe9; --muted: #99b09d;
+  --term-bg: #07180b; --term-fg: #e7efe9;
+  --topbar-bg: #006966; --topbar-hi: #005856; --topbar-border: #30918e;
+  --topbar-text: #f6fefd; --topbar-muted: #cae6e5;
+  --sidebar-bg: #12091c; --sidebar-hi: #1e142a; --sidebar-border: #392b4a;
+  --sidebar-text: #ebe8f0; --sidebar-muted: #aca0bb;
 }
+.theme-preview[data-mode="light"][data-surface="gouldian"],
 html.light[data-surface="gouldian"] {
-  --bg: #d9f7de; --panel: #f2fef4; --panel-2: #b3edbf; --border: #c2a800;
-  --text: #0a3314; --muted: #147a2b;
-  --term-bg: #f2fef4; --term-fg: #0a3314;
-  --topbar-bg: #00c2b2; --topbar-hi: #00a89a; --topbar-border: #008f83;
-  --topbar-text: #002b28; --topbar-muted: #005c56;
-  --sidebar-bg: #efdcff; --sidebar-hi: #e0c2f7; --sidebar-border: #9c5cc9;
-  --sidebar-text: #2e0a45; --sidebar-muted: #6b1f96;
+  --bg: #eff7f0; --panel: #fbfefb; --panel-2: #e4ece5; --border: #d5cfaa;
+  --text: #152318; --muted: #49624e;
+  --term-bg: #fbfefb; --term-fg: #152318;
+  --topbar-bg: #006966; --topbar-hi: #005856; --topbar-border: #30918e;
+  --topbar-text: #f6fefd; --topbar-muted: #cae6e5;
+  --sidebar-bg: #f4eefb; --sidebar-hi: #e7e0f1; --sidebar-border: #ccc2d9;
+  --sidebar-text: #231c2b; --sidebar-muted: #61556f;
 }
 
-/* Mallard — iridescent green head, chestnut breast, slate flanks. The subtlest
-   of the colored sets: a neutral window between two saturated edges. */
+/* Mallard — iridescent green head, chestnut breast, slate flanks: a neutral
+   slate window between an emerald bar and a chestnut sidebar. */
+.theme-preview[data-surface="mallard"],
 html[data-surface="mallard"] {
-  --bg: #191c22; --panel: #22262e; --panel-2: #2e333d; --border: #0fc27a;
-  --text: #e4e8ef; --muted: #959cad;
-  --term-bg: #191c22; --term-fg: #e4e8ef;
-  --topbar-bg: #0d9c62; --topbar-hi: #10b371; --topbar-border: #087a4a;
-  --topbar-text: #002417; --topbar-muted: #003a23;
-  --sidebar-bg: #5e330f; --sidebar-hi: #723e13; --sidebar-border: #c2762e;
-  --sidebar-text: #ffeada; --sidebar-muted: #dfae82;
+  --bg: #101419; --panel: #181c22; --panel-2: #22272d; --border: #2d5742;
+  --text: #e8edf5; --muted: #a1aab6;
+  --term-bg: #101419; --term-fg: #e8edf5;
+  --topbar-bg: #006c45; --topbar-hi: #005b39; --topbar-border: #3e936a;
+  --topbar-text: #f7fefa; --topbar-muted: #d0e6d9;
+  --sidebar-bg: #190a04; --sidebar-hi: #26140c; --sidebar-border: #452c21;
+  --sidebar-text: #f1e7e3; --sidebar-muted: #b9a095;
 }
+.theme-preview[data-mode="light"][data-surface="mallard"],
 html.light[data-surface="mallard"] {
-  --bg: #f1f2f5; --panel: #ffffff; --panel-2: #e3e6eb; --border: #0aa869;
-  --text: #1b1f26; --muted: #5b6270;
-  --term-bg: #ffffff; --term-fg: #1b1f26;
-  --topbar-bg: #0daa6b; --topbar-hi: #12bd78; --topbar-border: #087a4a;
-  --topbar-text: #002417; --topbar-muted: #003a23;
-  --sidebar-bg: #f7e6d6; --sidebar-hi: #edd2b8; --sidebar-border: #b3773f;
-  --sidebar-text: #3d1f08; --sidebar-muted: #82501f;
+  --bg: #f3f5f7; --panel: #fcfdfe; --panel-2: #e7eaed; --border: #b2d8c3;
+  --text: #15202d; --muted: #4a5c74;
+  --term-bg: #fcfdfe; --term-fg: #15202d;
+  --topbar-bg: #006c45; --topbar-hi: #005b39; --topbar-border: #3e936a;
+  --topbar-text: #f7fefa; --topbar-muted: #d0e6d9;
+  --sidebar-bg: #faefea; --sidebar-hi: #efe1da; --sidebar-border: #d6c3bb;
+  --sidebar-text: #2b1b13; --sidebar-muted: #715346;
 }
 
-/* --- Teal ----------------------------------------------------------------- */
+/* --- Teal ---------------------------------------------------------------- */
 
-/* Kingfisher — electric cyan back over a rust belly. */
+/* Kingfisher — an electric-cyan back over a rust belly. */
+.theme-preview[data-surface="kingfisher"],
 html[data-surface="kingfisher"] {
-  --bg: #04222e; --panel: #06323f; --panel-2: #084456; --border: #00c2f0;
-  --text: #d9f7ff; --muted: #7cc9e0;
-  --term-bg: #04222e; --term-fg: #d9f7ff;
-  --topbar-bg: #00a8d6; --topbar-hi: #00bcec; --topbar-border: #00738f;
-  --topbar-text: #002230; --topbar-muted: #005064;
-  --sidebar-bg: #5e2404; --sidebar-hi: #752e06; --sidebar-border: #d1651a;
-  --sidebar-text: #ffe8d6; --sidebar-muted: #e0a878;
+  --bg: #00171f; --panel: #00202a; --panel-2: #052b36; --border: #00566b;
+  --text: #e5eff3; --muted: #8eafbc;
+  --term-bg: #00171f; --term-fg: #e5eff3;
+  --topbar-bg: #006483; --topbar-hi: #00546e; --topbar-border: #358bad;
+  --topbar-text: #f8fdff; --topbar-muted: #cce4f0;
+  --sidebar-bg: #190a04; --sidebar-hi: #26140c; --sidebar-border: #452c21;
+  --sidebar-text: #f1e7e3; --sidebar-muted: #b9a095;
 }
+.theme-preview[data-mode="light"][data-surface="kingfisher"],
 html.light[data-surface="kingfisher"] {
-  --bg: #d2f2fb; --panel: #eefcff; --panel-2: #a9e4f2; --border: #00a3cc;
-  --text: #032a36; --muted: #06718f;
-  --term-bg: #eefcff; --term-fg: #032a36;
-  --topbar-bg: #00b0e0; --topbar-hi: #009cc9; --topbar-border: #00738f;
-  --topbar-text: #002230; --topbar-muted: #005064;
-  --sidebar-bg: #ffe7d6; --sidebar-hi: #ffd2b3; --sidebar-border: #d1732b;
-  --sidebar-text: #4a1d02; --sidebar-muted: #9c440a;
+  --bg: #ecf7fb; --panel: #fafeff; --panel-2: #dfecf1; --border: #abd6e5;
+  --text: #0d2229; --muted: #3e616d;
+  --term-bg: #fafeff; --term-fg: #0d2229;
+  --topbar-bg: #006483; --topbar-hi: #00546e; --topbar-border: #358bad;
+  --topbar-text: #f8fdff; --topbar-muted: #cce4f0;
+  --sidebar-bg: #faefea; --sidebar-hi: #efe1da; --sidebar-border: #d6c3bb;
+  --sidebar-text: #2b1b13; --sidebar-muted: #715346;
 }
 
-/* Peacock — teal train, royal-blue neck, gold eye-spots. The gold is the
-   hairline on both colored regions rather than a fill. */
+/* Peacock — teal train, royal-blue neck, gold eye-spots (the hairlines). */
+.theme-preview[data-surface="peacock"],
 html[data-surface="peacock"] {
-  --bg: #032830; --panel: #05383f; --panel-2: #074c55; --border: #f0c419;
-  --text: #d6f7f5; --muted: #7fd1cc;
-  --term-bg: #032830; --term-fg: #d6f7f5;
-  --topbar-bg: #0a9cb8; --topbar-hi: #0bb0cf; --topbar-border: #f0c419;
-  --topbar-text: #002229; --topbar-muted: #00333c;
-  --sidebar-bg: #141f8f; --sidebar-hi: #1a29ad; --sidebar-border: #f0c419;
-  --sidebar-text: #e6e9ff; --sidebar-muted: #a3aae8;
+  --bg: #001819; --panel: #002123; --panel-2: #002d2f; --border: #5f4a1a;
+  --text: #e4eff0; --muted: #8cb1b3;
+  --term-bg: #001819; --term-fg: #e4eff0;
+  --topbar-bg: #006770; --topbar-hi: #00565e; --topbar-border: #3c8e97;
+  --topbar-text: #f6fdfe; --topbar-muted: #cae6e9;
+  --sidebar-bg: #050d24; --sidebar-hi: #0d1833; --sidebar-border: #213156;
+  --sidebar-text: #e6eaf2; --sidebar-muted: #9aa6c0;
 }
+.theme-preview[data-mode="light"][data-surface="peacock"],
 html.light[data-surface="peacock"] {
-  --bg: #d2f4f2; --panel: #eefefc; --panel-2: #a9e8e3; --border: #cca300;
-  --text: #032e33; --muted: #067078;
-  --term-bg: #eefefc; --term-fg: #032e33;
-  --topbar-bg: #0ab0cf; --topbar-hi: #0bc2e3; --topbar-border: #8a6e00;
-  --topbar-text: #002229; --topbar-muted: #00333c;
-  --sidebar-bg: #dde0ff; --sidebar-hi: #c2c7fa; --sidebar-border: #9c8000;
-  --sidebar-text: #131f6b; --sidebar-muted: #3d47a3;
+  --bg: #ebf7f8; --panel: #f9fefe; --panel-2: #deeded; --border: #ddcca9;
+  --text: #0b2425; --muted: #3b6365;
+  --term-bg: #f9fefe; --term-fg: #0b2425;
+  --topbar-bg: #006770; --topbar-hi: #00565e; --topbar-border: #3c8e97;
+  --topbar-text: #f6fdfe; --topbar-muted: #cae6e9;
+  --sidebar-bg: #ebf1ff; --sidebar-hi: #dae4f8; --sidebar-border: #bbc8e3;
+  --sidebar-text: #181f2e; --sidebar-muted: #4e5b75;
 }
 
-/* --- Blue through violet -------------------------------------------------- */
+/* --- Blue through violet ------------------------------------------------- */
 
-/* Bluejay — brilliant azure above a jet-black necklace. */
+/* Bluejay — brilliant azure above a jet-black necklace. The yardstick the
+   rest were rebuilt to: a saturated bar, a near-black sidebar, a deep window. */
+.theme-preview[data-surface="bluejay"],
 html[data-surface="bluejay"] {
   --bg: #04102e; --panel: #071a44; --panel-2: #0a2662; --border: #2b8cff;
   --text: #dcebff; --muted: #7fa8ef;
   --term-bg: #04102e; --term-fg: #dcebff;
   --topbar-bg: #1266e6; --topbar-hi: #0f55c4; --topbar-border: #5c9dff;
-  --topbar-text: #ffffff; --topbar-muted: #cfe2ff;
+  --topbar-text: #ffffff; --topbar-muted: #eef4ff;
   --sidebar-bg: #0a0e1c; --sidebar-hi: #131a30; --sidebar-border: #2b3a5e;
   --sidebar-text: #dfe9fa; --sidebar-muted: #8f9fbf;
 }
+.theme-preview[data-mode="light"][data-surface="bluejay"],
 html.light[data-surface="bluejay"] {
-  --bg: #d4e6ff; --panel: #f0f7ff; --panel-2: #aecfff; --border: #1a75e6;
-  --text: #04173d; --muted: #0a4a9c;
-  --term-bg: #f0f7ff; --term-fg: #04173d;
+  --bg: #eef5ff; --panel: #fbfdff; --panel-2: #e0eaf9; --border: #7fa6e0;
+  --text: #16202e; --muted: #4b5c74;
+  --term-bg: #fbfdff; --term-fg: #16202e;
   --topbar-bg: #1266e6; --topbar-hi: #0f58c9; --topbar-border: #0a4198;
-  --topbar-text: #ffffff; --topbar-muted: #cfe2ff;
-  --sidebar-bg: #eaf1fd; --sidebar-hi: #d4e2f7; --sidebar-border: #7f9cc9;
-  --sidebar-text: #0a1730; --sidebar-muted: #3d5580;
+  --topbar-text: #ffffff; --topbar-muted: #eef4ff;
+  --sidebar-bg: #ecf2fa; --sidebar-hi: #dde5f0; --sidebar-border: #bec8d7;
+  --sidebar-text: #16202e; --sidebar-muted: #4b5c74;
 }
 
-/* Indigo Bunting — electric indigo, head to tail. */
+/* Indigo Bunting — indigo, head to tail. */
+.theme-preview[data-surface="bunting"],
 html[data-surface="bunting"] {
-  --bg: #0d0a3a; --panel: #150f52; --panel-2: #1e1670; --border: #5442ff;
-  --text: #e7e4ff; --muted: #a49df5;
-  --term-bg: #0d0a3a; --term-fg: #e7e4ff;
-  --topbar-bg: #3b2ff0; --topbar-hi: #4a3eff; --topbar-border: #8578ff;
-  --topbar-text: #ffffff; --topbar-muted: #dcd8ff;
-  --sidebar-bg: #08061f; --sidebar-hi: #100c33; --sidebar-border: #2a2170;
-  --sidebar-text: #e2dfff; --sidebar-muted: #9a94e0;
+  --bg: #0f102a; --panel: #161835; --panel-2: #202342; --border: #414682;
+  --text: #ebecf5; --muted: #a3a7c3;
+  --term-bg: #0f102a; --term-fg: #ebecf5;
+  --topbar-bg: #4547bd; --topbar-hi: #3836aa; --topbar-border: #6a76d5;
+  --topbar-text: #fbfcff; --topbar-muted: #dadef4;
+  --sidebar-bg: #0c0d19; --sidebar-hi: #161826; --sidebar-border: #2e3145;
+  --sidebar-text: #e7e9f2; --sidebar-muted: #a1a5b9;
 }
+.theme-preview[data-mode="light"][data-surface="bunting"],
 html.light[data-surface="bunting"] {
-  --bg: #ddd9ff; --panel: #f3f1ff; --panel-2: #beb8ff; --border: #4a3ce8;
-  --text: #100b45; --muted: #372da8;
-  --term-bg: #f3f1ff; --term-fg: #100b45;
-  --topbar-bg: #3b2ff0; --topbar-hi: #3226d1; --topbar-border: #2318b3;
-  --topbar-text: #ffffff; --topbar-muted: #dcd8ff;
-  --sidebar-bg: #efedff; --sidebar-hi: #dcd8ff; --sidebar-border: #8f88d6;
-  --sidebar-text: #14104f; --sidebar-muted: #3f36a8;
+  --bg: #f2f4ff; --panel: #fcfdff; --panel-2: #e6e9f7; --border: #c5cbef;
+  --text: #1c1e2d; --muted: #555974;
+  --term-bg: #fcfdff; --term-fg: #1c1e2d;
+  --topbar-bg: #4547bd; --topbar-hi: #3836aa; --topbar-border: #6a76d5;
+  --topbar-text: #fbfcff; --topbar-muted: #dadef4;
+  --sidebar-bg: #eff1f9; --sidebar-hi: #e1e3ee; --sidebar-border: #c4c6d5;
+  --sidebar-text: #1c1e2d; --sidebar-muted: #555974;
 }
 
-/* Violetear — iridescent violet hummingbird with a violet ear-flash. */
+/* Violetear — an iridescent violet hummingbird. */
+.theme-preview[data-surface="violetear"],
 html[data-surface="violetear"] {
-  --bg: #16062b; --panel: #220c40; --panel-2: #301357; --border: #a355ff;
-  --text: #f3e3ff; --muted: #c08ee8;
-  --term-bg: #16062b; --term-fg: #f3e3ff;
-  --topbar-bg: #7c2ff0; --topbar-hi: #8b3fff; --topbar-border: #b382ff;
-  --topbar-text: #ffffff; --topbar-muted: #e8d6ff;
-  --sidebar-bg: #0e0420; --sidebar-hi: #190a33; --sidebar-border: #472178;
-  --sidebar-text: #efe0ff; --sidebar-muted: #b285d6;
+  --bg: #170e27; --panel: #201531; --panel-2: #2b1f3e; --border: #563e7b;
+  --text: #eeebf4; --muted: #ada4bf;
+  --term-bg: #170e27; --term-fg: #eeebf4;
+  --topbar-bg: #6a39b0; --topbar-hi: #5b269e; --topbar-border: #8c6aca;
+  --topbar-text: #fcfbff; --topbar-muted: #e2dcf2;
+  --sidebar-bg: #100c18; --sidebar-hi: #1b1724; --sidebar-border: #352f42;
+  --sidebar-text: #eae8f1; --sidebar-muted: #a9a2b7;
 }
+.theme-preview[data-mode="light"][data-surface="violetear"],
 html.light[data-surface="violetear"] {
-  --bg: #e9dcff; --panel: #f8f3ff; --panel-2: #d3bcff; --border: #8c3ff0;
-  --text: #260a4a; --muted: #5f24a8;
-  --term-bg: #f8f3ff; --term-fg: #260a4a;
-  --topbar-bg: #7c2ff0; --topbar-hi: #6b25d1; --topbar-border: #5417ad;
-  --topbar-text: #ffffff; --topbar-muted: #e8d6ff;
-  --sidebar-bg: #f4eeff; --sidebar-hi: #e6dbff; --sidebar-border: #a789d6;
-  --sidebar-text: #200840; --sidebar-muted: #5a2199;
+  --bg: #f6f2fe; --panel: #fdfcff; --panel-2: #ebe7f5; --border: #d2c7ea;
+  --text: #211c2b; --muted: #5e5571;
+  --term-bg: #fdfcff; --term-fg: #211c2b;
+  --topbar-bg: #6a39b0; --topbar-hi: #5b269e; --topbar-border: #8c6aca;
+  --topbar-text: #fcfbff; --topbar-muted: #e2dcf2;
+  --sidebar-bg: #f2f0f8; --sidebar-hi: #e5e2ec; --sidebar-border: #c9c5d3;
+  --sidebar-text: #211c2b; --sidebar-muted: #5e5571;
 }
 
-/* Mandarin Duck — emerald crest, tangerine sail fins, plum breast. */
+/* Mandarin Duck — emerald crest, tangerine sail fins (the sidebar's tint),
+   plum breast. */
+.theme-preview[data-surface="mandarin"],
 html[data-surface="mandarin"] {
-  --bg: #2b0f33; --panel: #3a1445; --panel-2: #4f1c5c; --border: #c94fd6;
-  --text: #f7e0ff; --muted: #cf96db;
-  --term-bg: #2b0f33; --term-fg: #f7e0ff;
-  --topbar-bg: #12a85e; --topbar-hi: #15bd6a; --topbar-border: #0a7040;
-  --topbar-text: #002415; --topbar-muted: #00381f;
-  --sidebar-bg: #f2820f; --sidebar-hi: #ff8f1f; --sidebar-border: #b35c00;
-  --sidebar-text: #2b1200; --sidebar-muted: #6b3400;
+  --bg: #1c0d1e; --panel: #251428; --panel-2: #311f34; --border: #613d67;
+  --text: #f1eaf2; --muted: #b6a1b9;
+  --term-bg: #1c0d1e; --term-fg: #f1eaf2;
+  --topbar-bg: #006c45; --topbar-hi: #005b39; --topbar-border: #3e936a;
+  --topbar-text: #f7fefa; --topbar-muted: #d0e6d9;
+  --sidebar-bg: #190a04; --sidebar-hi: #26150b; --sidebar-border: #442c1f;
+  --sidebar-text: #f1e7e3; --sidebar-muted: #b9a094;
 }
+.theme-preview[data-mode="light"][data-surface="mandarin"],
 html.light[data-surface="mandarin"] {
-  --bg: #f4dcff; --panel: #fcf2ff; --panel-2: #e6bdf7; --border: #a83fb8;
-  --text: #2e0f38; --muted: #6b2b7a;
-  --term-bg: #fcf2ff; --term-fg: #2e0f38;
-  --topbar-bg: #12a85e; --topbar-hi: #14b866; --topbar-border: #0a7040;
-  --topbar-text: #002415; --topbar-muted: #00381f;
-  --sidebar-bg: #ffd9b3; --sidebar-hi: #ffc48f; --sidebar-border: #c96e1f;
-  --sidebar-text: #3d1c02; --sidebar-muted: #8f4a05;
+  --bg: #f9f2fa; --panel: #fefcff; --panel-2: #efe6f0; --border: #dec3e2;
+  --text: #261a28; --muted: #67536a;
+  --term-bg: #fefcff; --term-fg: #261a28;
+  --topbar-bg: #006c45; --topbar-hi: #005b39; --topbar-border: #3e936a;
+  --topbar-text: #f7fefa; --topbar-muted: #d0e6d9;
+  --sidebar-bg: #f9efe9; --sidebar-hi: #eee1da; --sidebar-border: #d5c3ba;
+  --sidebar-text: #2b1b12; --sidebar-muted: #705444;
 }
 
-/* --- Pink ----------------------------------------------------------------- */
+/* --- Pink ---------------------------------------------------------------- */
 
-/* Flamingo — brilliant hot pink, black-tipped bill. */
+/* Flamingo — a hot-pink bird with a black-tipped bill. */
+.theme-preview[data-surface="flamingo"],
 html[data-surface="flamingo"] {
-  --bg: #2e021a; --panel: #420527; --panel-2: #5a0836; --border: #ff3d9e;
-  --text: #ffdcef; --muted: #f58cbf;
-  --term-bg: #2e021a; --term-fg: #ffdcef;
-  --topbar-bg: #ff2d8a; --topbar-hi: #ff4599; --topbar-border: #c2005e;
-  --topbar-text: #2e0014; --topbar-muted: #6b0031;
-  --sidebar-bg: #180110; --sidebar-hi: #28031c; --sidebar-border: #7a0a4a;
-  --sidebar-text: #ffd9ec; --sidebar-muted: #e086b5;
+  --bg: #230a15; --panel: #2d111d; --panel-2: #3a1b28; --border: #72364f;
+  --text: #f4eaed; --muted: #bf9faa;
+  --term-bg: #230a15; --term-fg: #f4eaed;
+  --topbar-bg: #9b255c; --topbar-hi: #880e4d; --topbar-border: #bb5c81;
+  --topbar-text: #fffafc; --topbar-muted: #f1d8e0;
+  --sidebar-bg: #150b0f; --sidebar-hi: #22151a; --sidebar-border: #3f2d33;
+  --sidebar-text: #f1e6ea; --sidebar-muted: #b4a0a7;
 }
+.theme-preview[data-mode="light"][data-surface="flamingo"],
 html.light[data-surface="flamingo"] {
-  --bg: #ffe0f0; --panel: #fff5fa; --panel-2: #ffc2dd; --border: #ff4d9e;
-  --text: #4d0024; --muted: #ad0a57;
-  --term-bg: #fff5fa; --term-fg: #4d0024;
-  --topbar-bg: #ff4d9e; --topbar-hi: #f03b8c; --topbar-border: #c2005e;
-  --topbar-text: #2e0014; --topbar-muted: #6b0031;
-  --sidebar-bg: #fff0f7; --sidebar-hi: #ffdcec; --sidebar-border: #ff70b0;
-  --sidebar-text: #40001d; --sidebar-muted: #a30a52;
+  --bg: #fdf1f5; --panel: #fffcfd; --panel-2: #f4e5ea; --border: #eac1cf;
+  --text: #2b1920; --muted: #70505c;
+  --term-bg: #fffcfd; --term-fg: #2b1920;
+  --topbar-bg: #9b255c; --topbar-hi: #880e4d; --topbar-border: #bb5c81;
+  --topbar-text: #fffafc; --topbar-muted: #f1d8e0;
+  --sidebar-bg: #f6eff1; --sidebar-hi: #ebe1e4; --sidebar-border: #d1c3c8;
+  --sidebar-text: #2b1920; --sidebar-muted: #70505c;
 }

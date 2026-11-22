@@ -94,7 +94,7 @@
 }
 
 .ik-tab.active .ik-tab-count {
-  color: #fff;
+  color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -809,7 +809,7 @@
 .ik-merge .ik-merge-go.armed {
   background: var(--red);
   border-color: var(--red);
-  color: #fff;
+  color: var(--red-ink);
 }
 
 .ik-merge .ik-merge-go:disabled {
@@ -859,7 +859,7 @@
   border-radius: 6px;
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   cursor: pointer;
 }
 
@@ -1528,7 +1528,7 @@
 .ik-arm.armed {
   background: var(--red);
   border-color: var(--red);
-  color: #fff;
+  color: var(--red-ink);
   font-weight: 600;
 }
 
@@ -1673,7 +1673,7 @@
 .ik-step.done .ik-step-num {
   background: var(--green);
   border-color: var(--green);
-  color: #fff;
+  color: var(--green-ink);
 }
 .ik-step.cur {
   color: var(--text);
@@ -1682,7 +1682,7 @@
 .ik-step.cur .ik-step-num {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 .ik-kinds {
   display: grid;
@@ -2018,7 +2018,7 @@
 .ik-setup-step.done .ik-step-num {
   background: var(--green);
   border-color: var(--green);
-  color: #fff;
+  color: var(--green-ink);
 }
 .ik-setup-done {
   color: var(--muted);
@@ -2061,7 +2061,7 @@
 .ik-edit-step.cur .ik-step-num {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 .ik-edit-step .ik-source-pill {
   font-weight: 400;
