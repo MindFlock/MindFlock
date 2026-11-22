@@ -7,60 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **A Claude response written across midnight no longer counts twice in the
-  usage totals.** When the 60-second refresh read a response between its first
-  content block (before midnight) and its final one (after), the durable day
-  ledger kept yesterday's figure for it and added it back into every window
-  (day, week, month, year) as if a transcript had been pruned. A turn now keeps
-  its first block's time and the most of each token count, so it only grows
-  and stays on one day: totals are the same however the file was read. The
-  same fix stops a final block with smaller figures from leaving a stale,
-  larger day total behind. It also fixes the property test that failed CI on
-  pull requests just after 00:00 UTC.
-- **Workers spawned in one batch are no longer lost.** Their starts ran
-  `git worktree add` in the same repository at the same moment, and git can
-  fail that (`fatal: failed to read .git/worktrees/<sibling>/commondir`: one
-  add reads a sibling's half-written admin folder). Worktree add/remove/prune
-  now run one at a time per repository (an in-process lock plus a `flock` on
-  `<git common dir>/mindflock-worktree.lock`, so the ticket pipeline's process
-  waits too).
-- **A spawned worker whose start fails always says so.** One the launch gate
-  let through at once used to drop its row, tell its orchestrator nothing and
-  forget the reason after ten minutes. It now stays as a failed-start row like
-  a queued one: `wait_for_session` answers `failed_to_start` with the error,
-  the orchestrator's mailbox gets "worker X could not start: …", and
-  `spawn_session`'s ready wait raises with the reason at once instead of
-  waiting out 45 s. The server logs one line per spawn it answers.
-- **"Now using usage credits" is not a usage limit.** When Claude Code rolls
-  from the plan onto paid credits it prints that notice under (or on the same
-  line as) its "You've hit your limit" banner; the session read as `limit`, so
-  `wait_for_session` answered `usage_limit` and a worker's task could sit held.
-  The newest notice on the pane now decides: a credits notice ("Now using
-  usage credits", "You're now using extra usage") after the banner is open;
-  spent credits ("You've hit your extra usage limit", "Out of usage credits")
-  or a limit banner printed after the notice is a limit again. Providers name
-  their own notice (`usage_credits_patterns()`, TOML `[usage]
-  credits_patterns`).
-- **A `limit` reading whose window is open delivers the queued task**, also
-  with "Wait out usage limits" off: the queue checks the window (credits
-  notice, meter, reset time) before switching itself off.
-- **Each repository gets the right PR base without configuring it.** A flat
-  "PR base branch" of `staging` (right for one repository) no longer halts a
-  route's Open PR stop on another repository with `ambiguous argument
-  'origin/staging...<branch>'`. One resolver (`backend/repo_base.py`) now
-  answers for Open PR (button, route stop, MCP `ship_session`), the ship
-  dialog's default, Merge, a team run's release PR, provisioned workspaces'
-  fork base, the PR monitor's base filter and the ticket/epic prompts: your
-  per-repository setting → the flat setting only if that repository has the
-  branch → the session's own base → the repository's default branch
-  (`origin/HEAD`, else `git ls-remote --symref`, cached) → `main`/`master`.
-  A skipped setting is said once in plain words ("Using main: this
-  repository has no staging branch") on the Open PR dialog, the toast and the
-  stop's receipt; nothing resolving is a plain sentence naming the remedy,
-  never a git message.
-
 ### Added
 
 - **Settings → Workspace → Per-repo branches lists what each repository will
@@ -92,20 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`0.15.0-beta.1` no longer counts as newer than `0.15.0`** in the app's
   version check.
 
-### Security
-
-- **The update card's "open the download page" only opens web pages.** Any
-  page in the window could ask it to open a `file://` path or another app's
-  URL scheme.
-
-### Docs
-
-- **[docs/desktop-updates.md](docs/desktop-updates.md)**: how the packaged
-  app learns of, downloads, verifies and applies an update on each OS, and
-  what happens when each step fails. **[docs/desktop-update-test.md](docs/desktop-update-test.md)**:
-  the ten-minute manual check on a real Windows PC and Mac.
-### Added
-
 - **`scripts/preview.py`: see a UI change running, safely.** One command
   boots an isolated scratch MindFlock from the checkout (its own home and
   settings, its own tmux socket, a spare port, a stub `claude` that plays
@@ -119,7 +51,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`MINDFLOCK_HOME_GUARD=1`** turns on the test suite's real-home guard in
   any process: a store path in the real `~/.mindflock` raises instead of
   being written. The preview's server runs with it.
-### Added
 
 - **A new session's worktree is ready to work in, and small.** Pin files
   such as `.python-version` are carried from the checkout it was cut from
@@ -134,12 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of ~200 MB. `[workspace] dependencies = "auto" | "install" | "off"`
   in `.mindflock.toml`, and a per-repo `repository.worktree_setup` setting
   for your own commands and files.
-
-### Changed
-
-- **`uv sync` in this repo installs dev + web** (`[tool.uv] default-groups`),
-  the set the tests and the web UI need.
-### Added
 
 - **Disk cleanup can remove the folders whose repository is gone.** A folder
   under the worktrees root that git no longer lists, or whose repository was
@@ -161,39 +86,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deletion is permanent (MindFlock has no trash), only inside MindFlock's own
   worktree folders, never through a symlink or across filesystems; collection
   (the button, `--collect`, the background pass) never touches these.
-### Changed
-
-- **Every theme is now as easy to read as Bluejay.** The coloured themes were
-  painted at full plumage — lemon and amber top bars, a yellow or orange
-  sidebar, saturated hairlines round every pane — and several were too bright
-  to work in. Each is rebuilt on one lightness ladder (Bluejay's): a dark,
-  low-colour window and sidebar, a near-white one by day, and the bird's colour
-  in the top bar, the hairlines and the accent. Body text in the coloured
-  themes is now 12.6:1 or better (it was as low as 4.6:1 on Lorikeet's sidebar),
-  secondary text 5.0:1 or better everywhere (was 3.5:1), and no large surface is
-  bright or saturated. Bluejay itself barely moves (its bar's secondary text 3.9 → 4.7:1;
-  its light page is calmer).
-- **State colours hold up in light mode and on every sidebar.** The needs-you
-  amber was 1.6:1 on a light page and the working green 2.9:1; on Green Jay's
-  and Mandarin's sidebars the state dots all but vanished (1.0–1.9:1). Every
-  tone is now 3:1 or more on every surface it sits on, waiting (blue) and idle
-  (grey) are further apart, and the text on a tone chip is 4.5:1 or more.
-- **Buttons in the bright accents are readable.** Text on an accent button is
-  near-black on Goldfinch, Oriole, Quetzal, Pheasant and Heron (white was
-  1.4–2.5:1), and the Cardinal, Bluejay, Flamingo and Indigo Bunting accents
-  are a shade deeper or lighter so their white text clears 4.5:1 and their
-  focus ring shows on every panel. Failure badges and merged chips get the same
-  care in dark mode.
-- **The terminal has its own colours.** Coloured output (diffs, test results,
-  warnings) uses a palette made for the theme's background: every ANSI colour
-  is 4.5:1 or more, in light mode too, where xterm's yellow was 1.3:1. The
-  phone's terminal uses the dark set.
-- **Theme swatches show the theme.** Settings → Appearance draws each theme as
-  a tiny window — its bar, sidebar, text, an accent button and the working,
-  needs-you, failed and waiting colours — painted by the theme itself, in the
-  mode you are in.
-
-### Added
 
 - **Three quiet themes:** **Owl** (low glare — a dusk-grey page and gentler text),
   **Wren** (warm paper by day, sepia by night) and **Magpie** (high contrast —
@@ -201,44 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A contrast test for every theme** (`themeContrast.test.ts`): every theme ×
   light/dark × accent is measured — text, secondary text, state colours,
   accents, the terminal, brightness — so a new or edited theme cannot regress.
-### Changed
-
-- **A session at a Wait for me stop reads "Needs you: <stop>"** on the Sky,
-  the rail, the bell, the phone and in voice ("Wait for me" stays the stop
-  kind's name).
-- **A route at a halt point needs you.** Its chip is amber "Paused before
-  <stop>", in the bell, as the frame already said; a pause you made stays
-  calm and says "Paused by you".
-- **The route's first Agent stop has its own face** — a clipboard and "gives
-  the agent the ticket" — so it no longer looks like the agent tile beside it.
-- **A shelf click adds the stop to the route you are building** (the focused
-  route with no session); with none it places a new route and focuses it.
-  Dragging still places a stop anywhere.
-- **A route with no session shows its name and ▶ Run at rest**, quietly, not
-  only on hover.
-- **Let the agent fix it leads on a test, CI checks or Verify failure**
-  (Retry beside it) — on the stop, its dialog and menu, the Needs-you panel,
-  the bell and the phone (which gains the button).
-- **A halted route whose session was closed leads with Run again** (it
-  reopens the session); Retry is offered there only where it can run without
-  the session.
-- **The Intake lane folds itself on a narrow Sky** (under 900 px) and opens
-  again with room — never against a fold or an open you made by hand.
-- **A stop held by an offline or usage-limited agent no longer glows
-  "working".** It reads "Held · agent offline" (with Restart) or "Held · usage
-  limit, resumes 14:30" in a still, dashed tone; the bird stops bobbing, the
-  bar says "held at <stop>", and the phone's row and voice say it too.
-- **Voice reads a route's state** (Needs you: <stop>, Paused before <stop>,
-  Halted, Paused by you) as the phone does, and says "Login fix needs you: …"
-  rather than "is needs you".
-
-### Added
 
 - **`can_fail` and `needs_session` on `GET /api/flights/kinds`** (and in
   `describe_flight`'s stop lines: "cannot fail (on_fail unused)"). The stop
   dialog reads `can_fail` instead of a hard-coded list, which stays as the
   fallback for an older server or a peer.
-### Added
 
 - **Send a session to another of your devices.** "Send tripwire to my Mac"
   is one call: the MCP's new `send_session` (and `list_devices` to see the
@@ -274,31 +133,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bundle`; the answer says which way it went). Device names match
   case-insensitively, with "did you mean". New machine-local settings group
   `transfers` (limits, inbox quota, keep days, `allow_secrets`).
-
-### Security
-
-- **Send files / bundles hardened after an independent review.** The
-  receiving device refuses a folder laid out like a git repository (`HEAD`
-  beside `objects`/`refs`/`config`, at any depth or as the transfer itself —
-  a plain `git status` there could run its `core.fsmonitor`), Windows
-  look-alikes of `.git` (`.git.`, `GIT~1`, `a:b` streams) and bidi/invisible
-  names, in sent files and in a bundle's tree alike; every git MindFlock
-  runs in an inbox folder goes with `safe.bareRepository=explicit`, no
-  fsmonitor, no hooks and no discovery above the inbox. A bundle leaves
-  secrets out of every commit's tree, not just the tip (a `.env` committed
-  then deleted no longer survives in history) and honours
-  `.secrets.baseline`. The inbox quota counts open transfers at their
-  declared size, caps open transfers (8, 4 per device), rechecks on every
-  chunk, drops stale ones on a timer, and checks a bundle's checked-out size
-  before unpacking it. File, branch, device and session names reach an
-  agent's prompt as one escaped line each, and the prompt says received
-  files are untrusted. Also: the ignore filter fails closed and treats names
-  literally, a file is read without following a symlink at any folder,
-  `.env.dist`/`*.template`/`*.bak` copies count as secrets, `finish` no
-  longer holds the inbox lock while hashing, a non-ASCII bearer is a clean
-  401, and the record says "claims to be" unless the link identified the
-  sender.
-### Added
 
 - **Add a new device without Tailscale.** On the first computer, Settings →
   Your devices → Add a device → **It isn't on my network** shows a long
@@ -368,6 +202,159 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forwarded; GitHub redirects are never followed and the repo must be
   yours and private at every write; the tunnel's origin must be this
   server's own, known port; open streams end when a device is removed.
+
+### Changed
+
+- **`uv sync` in this repo installs dev + web** (`[tool.uv] default-groups`),
+  the set the tests and the web UI need.
+
+- **Every theme is now as easy to read as Bluejay.** The coloured themes were
+  painted at full plumage — lemon and amber top bars, a yellow or orange
+  sidebar, saturated hairlines round every pane — and several were too bright
+  to work in. Each is rebuilt on one lightness ladder (Bluejay's): a dark,
+  low-colour window and sidebar, a near-white one by day, and the bird's colour
+  in the top bar, the hairlines and the accent. Body text in the coloured
+  themes is now 12.6:1 or better (it was as low as 4.6:1 on Lorikeet's sidebar),
+  secondary text 5.0:1 or better everywhere (was 3.5:1), and no large surface is
+  bright or saturated. Bluejay itself barely moves (its bar's secondary text 3.9 → 4.7:1;
+  its light page is calmer).
+- **State colours hold up in light mode and on every sidebar.** The needs-you
+  amber was 1.6:1 on a light page and the working green 2.9:1; on Green Jay's
+  and Mandarin's sidebars the state dots all but vanished (1.0–1.9:1). Every
+  tone is now 3:1 or more on every surface it sits on, waiting (blue) and idle
+  (grey) are further apart, and the text on a tone chip is 4.5:1 or more.
+- **Buttons in the bright accents are readable.** Text on an accent button is
+  near-black on Goldfinch, Oriole, Quetzal, Pheasant and Heron (white was
+  1.4–2.5:1), and the Cardinal, Bluejay, Flamingo and Indigo Bunting accents
+  are a shade deeper or lighter so their white text clears 4.5:1 and their
+  focus ring shows on every panel. Failure badges and merged chips get the same
+  care in dark mode.
+- **The terminal has its own colours.** Coloured output (diffs, test results,
+  warnings) uses a palette made for the theme's background: every ANSI colour
+  is 4.5:1 or more, in light mode too, where xterm's yellow was 1.3:1. The
+  phone's terminal uses the dark set.
+- **Theme swatches show the theme.** Settings → Appearance draws each theme as
+  a tiny window — its bar, sidebar, text, an accent button and the working,
+  needs-you, failed and waiting colours — painted by the theme itself, in the
+  mode you are in.
+
+- **A session at a Wait for me stop reads "Needs you: <stop>"** on the Sky,
+  the rail, the bell, the phone and in voice ("Wait for me" stays the stop
+  kind's name).
+- **A route at a halt point needs you.** Its chip is amber "Paused before
+  <stop>", in the bell, as the frame already said; a pause you made stays
+  calm and says "Paused by you".
+- **The route's first Agent stop has its own face** — a clipboard and "gives
+  the agent the ticket" — so it no longer looks like the agent tile beside it.
+- **A shelf click adds the stop to the route you are building** (the focused
+  route with no session); with none it places a new route and focuses it.
+  Dragging still places a stop anywhere.
+- **A route with no session shows its name and ▶ Run at rest**, quietly, not
+  only on hover.
+- **Let the agent fix it leads on a test, CI checks or Verify failure**
+  (Retry beside it) — on the stop, its dialog and menu, the Needs-you panel,
+  the bell and the phone (which gains the button).
+- **A halted route whose session was closed leads with Run again** (it
+  reopens the session); Retry is offered there only where it can run without
+  the session.
+- **The Intake lane folds itself on a narrow Sky** (under 900 px) and opens
+  again with room — never against a fold or an open you made by hand.
+- **A stop held by an offline or usage-limited agent no longer glows
+  "working".** It reads "Held · agent offline" (with Restart) or "Held · usage
+  limit, resumes 14:30" in a still, dashed tone; the bird stops bobbing, the
+  bar says "held at <stop>", and the phone's row and voice say it too.
+- **Voice reads a route's state** (Needs you: <stop>, Paused before <stop>,
+  Halted, Paused by you) as the phone does, and says "Login fix needs you: …"
+  rather than "is needs you".
+
+### Fixed
+
+- **A Claude response written across midnight no longer counts twice in the
+  usage totals.** When the 60-second refresh read a response between its first
+  content block (before midnight) and its final one (after), the durable day
+  ledger kept yesterday's figure for it and added it back into every window
+  (day, week, month, year) as if a transcript had been pruned. A turn now keeps
+  its first block's time and the most of each token count, so it only grows
+  and stays on one day: totals are the same however the file was read. The
+  same fix stops a final block with smaller figures from leaving a stale,
+  larger day total behind. It also fixes the property test that failed CI on
+  pull requests just after 00:00 UTC.
+- **Workers spawned in one batch are no longer lost.** Their starts ran
+  `git worktree add` in the same repository at the same moment, and git can
+  fail that (`fatal: failed to read .git/worktrees/<sibling>/commondir`: one
+  add reads a sibling's half-written admin folder). Worktree add/remove/prune
+  now run one at a time per repository (an in-process lock plus a `flock` on
+  `<git common dir>/mindflock-worktree.lock`, so the ticket pipeline's process
+  waits too).
+- **A spawned worker whose start fails always says so.** One the launch gate
+  let through at once used to drop its row, tell its orchestrator nothing and
+  forget the reason after ten minutes. It now stays as a failed-start row like
+  a queued one: `wait_for_session` answers `failed_to_start` with the error,
+  the orchestrator's mailbox gets "worker X could not start: …", and
+  `spawn_session`'s ready wait raises with the reason at once instead of
+  waiting out 45 s. The server logs one line per spawn it answers.
+- **"Now using usage credits" is not a usage limit.** When Claude Code rolls
+  from the plan onto paid credits it prints that notice under (or on the same
+  line as) its "You've hit your limit" banner; the session read as `limit`, so
+  `wait_for_session` answered `usage_limit` and a worker's task could sit held.
+  The newest notice on the pane now decides: a credits notice ("Now using
+  usage credits", "You're now using extra usage") after the banner is open;
+  spent credits ("You've hit your extra usage limit", "Out of usage credits")
+  or a limit banner printed after the notice is a limit again. Providers name
+  their own notice (`usage_credits_patterns()`, TOML `[usage]
+  credits_patterns`).
+- **A `limit` reading whose window is open delivers the queued task**, also
+  with "Wait out usage limits" off: the queue checks the window (credits
+  notice, meter, reset time) before switching itself off.
+- **Each repository gets the right PR base without configuring it.** A flat
+  "PR base branch" of `staging` (right for one repository) no longer halts a
+  route's Open PR stop on another repository with `ambiguous argument
+  'origin/staging...<branch>'`. One resolver (`backend/repo_base.py`) now
+  answers for Open PR (button, route stop, MCP `ship_session`), the ship
+  dialog's default, Merge, a team run's release PR, provisioned workspaces'
+  fork base, the PR monitor's base filter and the ticket/epic prompts: your
+  per-repository setting → the flat setting only if that repository has the
+  branch → the session's own base → the repository's default branch
+  (`origin/HEAD`, else `git ls-remote --symref`, cached) → `main`/`master`.
+  A skipped setting is said once in plain words ("Using main: this
+  repository has no staging branch") on the Open PR dialog, the toast and the
+  stop's receipt; nothing resolving is a plain sentence naming the remedy,
+  never a git message.
+
+### Security
+
+- **The update card's "open the download page" only opens web pages.** Any
+  page in the window could ask it to open a `file://` path or another app's
+  URL scheme.
+
+- **Send files / bundles hardened after an independent review.** The
+  receiving device refuses a folder laid out like a git repository (`HEAD`
+  beside `objects`/`refs`/`config`, at any depth or as the transfer itself —
+  a plain `git status` there could run its `core.fsmonitor`), Windows
+  look-alikes of `.git` (`.git.`, `GIT~1`, `a:b` streams) and bidi/invisible
+  names, in sent files and in a bundle's tree alike; every git MindFlock
+  runs in an inbox folder goes with `safe.bareRepository=explicit`, no
+  fsmonitor, no hooks and no discovery above the inbox. A bundle leaves
+  secrets out of every commit's tree, not just the tip (a `.env` committed
+  then deleted no longer survives in history) and honours
+  `.secrets.baseline`. The inbox quota counts open transfers at their
+  declared size, caps open transfers (8, 4 per device), rechecks on every
+  chunk, drops stale ones on a timer, and checks a bundle's checked-out size
+  before unpacking it. File, branch, device and session names reach an
+  agent's prompt as one escaped line each, and the prompt says received
+  files are untrusted. Also: the ignore filter fails closed and treats names
+  literally, a file is read without following a symlink at any folder,
+  `.env.dist`/`*.template`/`*.bak` copies count as secrets, `finish` no
+  longer holds the inbox lock while hashing, a non-ASCII bearer is a clean
+  401, and the record says "claims to be" unless the link identified the
+  sender.
+
+### Docs
+
+- **[docs/desktop-updates.md](docs/desktop-updates.md)**: how the packaged
+  app learns of, downloads, verifies and applies an update on each OS, and
+  what happens when each step fails. **[docs/desktop-update-test.md](docs/desktop-update-test.md)**:
+  the ten-minute manual check on a real Windows PC and Mac.
 
 ## [0.14.25] - 2026-11-20
 
