@@ -9,8 +9,15 @@ device's own business — never another MindFlock relaying, and it needs
 Adding a NEW device without Tailscale (``core.devices_pair``,
 docs/devices-anywhere.md §7) lives here too: ``/invite`` makes, shows and
 cancels the long code on the inviter; ``/join`` takes it on the new
-computer. Both are the owner's own browser only (privileged, never relayed,
-never through the tunnel): a code is the group's key in waiting.
+computer (409 ``needs_confirm`` until the person confirmed); ``/pair-alerts``
+lists, dismisses and answers (Change key) the alarm a used-but-unfinished
+code raises. They are never relayed and never served through the tunnel, and
+they need :func:`auth.privileged`: a browser on this computer, a caller with
+this device's access token or the devices' key (a signed-in phone), or one
+of the owner's trusted Tailscale devices. Every one of those can already do
+more than a code does (the token drives this computer; the devices' key IS
+what a code hands out), so the live code is theirs to read too — it is not
+limited to the browser that made it.
 """
 
 from __future__ import annotations
@@ -165,7 +172,58 @@ async def anywhere_join(request: Request) -> JSONResponse:
             {"error": "paste the code from your other computer"}, status_code=400
         )
     try:
-        st = await _pair.join(code[:4096], reachable=body.get("reachable") is not False)
+        st = await _pair.join(
+            code[:4096],
+            reachable=body.get("reachable") is not False,
+            confirm=body.get("confirm") is True,
+            leave_group=body.get("leave_group") is True,
+        )
+    except _pair.NeedsConfirm as err:
+        # Nothing was sent: the person confirms first (in-page, or the CLI's
+        # prompt) with the safety number in front of them.
+        return JSONResponse({"error": str(err), **err.info}, status_code=409)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
     return JSONResponse(st)
+
+
+@router.get("/api/devices/anywhere/pair-alerts")
+async def anywhere_pair_alerts(request: Request) -> JSONResponse:
+    """``{pending: [...], alerts: [...]}`` — a new device pairing right now,
+    and codes used without the join finishing (the key may be out)."""
+    refused = await _owner_only(request)
+    if refused is not None:
+        return refused
+    from backend.web.core import devices_pair as _pair
+
+    return JSONResponse(_pair.pairing_status())
+
+
+@router.post("/api/devices/anywhere/pair-alerts/change-key")
+async def anywhere_change_key(request: Request) -> JSONResponse:
+    """The alarm's **Change key**: a new devices' key for every member (and
+    new access tokens, as removing a device does); the alarms clear."""
+    refused = await _owner_only(request)
+    if refused is not None:
+        return refused
+    from backend.web.core import devices_pair as _pair
+
+    try:
+        out = await _pair.change_key()
+    except Exception as err:  # noqa: BLE001
+        return JSONResponse(
+            {"error": "couldn't change the key: %s" % err}, status_code=500
+        )
+    return JSONResponse({"ok": True, **out})
+
+
+@router.delete("/api/devices/anywhere/pair-alerts")
+async def anywhere_dismiss_alerts(request: Request) -> JSONResponse:
+    """ "It was me": ``?id=<alert id>`` drops one alarm, no id drops all."""
+    refused = await _owner_only(request)
+    if refused is not None:
+        return refused
+    from backend.web.core import devices_pair as _pair
+
+    n = _pair.dismiss_alerts(str(request.query_params.get("id") or "")[:32])
+    return JSONResponse({"dismissed": n, **_pair.pairing_status()})

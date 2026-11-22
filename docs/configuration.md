@@ -1013,7 +1013,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   generic `POST /api/settings` drops the field. State is in `~/.mindflock/devices_anywhere/` (`state.json`:
   the record's counter and file name, plus the highest counter seen per
   device; `status.json`: a no-secrets snapshot for `mindflock doctor`;
-  `tunnel/`: cloudflared's private home). See
+  `tunnel/`: cloudflared's private home). A new device pairing through the
+  tunnel, and the alarms for pairing codes used without the join finishing,
+  are kept beside `fleet.json` in `fleet_pairing.json` (0600). See
   [devices-anywhere.md](devices-anywhere.md).
 - **Trusted Tailscale accounts** (`general.tailnet_trusted_logins`; Settings →
   Your devices → Advanced): a list of Tailscale login names whose **untagged** devices skip

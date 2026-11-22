@@ -279,11 +279,25 @@ with one long code instead of the 8-character one, whose `redeem` needs the
 two to reach each other directly.
 
 **For the person:** on the first computer, Settings → Your devices → Add a
-device → **It isn't on my network**: a long code (`mfd1:…`, Copy, and a QR).
-On the new computer, paste it into **Paste a code** on the same screen and
-Join. A box under it, ticked by default, says it also turns on Reach my
-devices from anywhere there. `mindflock join mfd1:…` does the same
-(`--no-anywhere` to leave the switch off).
+device → **It isn't on my network**: a long code (`mfd1:…`, Copy, and a QR)
+with a **safety number** (`ddd ddd ddd`). On the new computer, paste it into
+**Paste a code** on the same screen and Join. Before anything is sent, the
+new computer asks in-page: *"The computer that made this code will be able
+to run agents on this computer, and its settings will replace this
+computer's. Only continue if the code came from your own computer."* — with
+the same safety number to compare, and, when this computer is already in a
+group with other devices, that it will leave them (named). A box under the
+paste box, ticked by default, also turns on Reach my devices from anywhere
+(and remote control) there; unticked, nothing is turned on. `mindflock join`
+does the same: it asks for the code without echoing it (or reads it from
+stdin — a code typed as an argument lands in the shell history and `ps`),
+then asks the same question unless `--yes` (`--no-anywhere` leaves the
+switch off).
+
+The box stays ticked by default: the owner wanted the simplest flow, and the
+risk the review raised (a hostile code taking over a fresh install) is
+answered by the explicit confirm and the safety number in front of every
+join, not by a second unticked control.
 
 ### The code
 
@@ -294,14 +308,27 @@ payload = ver(1)=1 | kind(1) | where | path(16) | fp(16) | invite_id(8) | secret
   kind 2: where = port(2)               → wss://127.0.0.1:<port>/…   (the loopback TEST carrier only)
 ```
 
-`path` is the ingress's 128-bit path token (§4), `fp` the inviter's
-identity fingerprint, `secret` 160 random bits that never travel. A code is
-made only while the inviter's tunnel is up (the flow offers to turn the
-switch on, and starts a group of one when there is none), lasts **10
-minutes**, works **once**, dies after **5 wrong proofs**, and dies when the
-tunnel restarts (its address is in it). Making a new one cancels the old: at
-most one live secret. A global limit caps proof attempts at 10 a minute
-across all codes. Codes live in memory only; a restart kills them.
+`path` is a 128-bit **pairing path**: NOT the members' path (§4), but a
+fresh token per code that the relay ingress serves as a second, side path
+until the code would expire (`RelayIngress.set_side_path`). Making a new
+code, Cancel, the expiry, the 5th wrong proof and a tunnel restart all retire
+it, so an old code's address is a 404. On that path the tunnel server takes
+`pair` frames only, and the members' path never takes one. `fp` is the
+inviter's identity fingerprint, `secret` 160 random bits that never travel.
+A code is made only while the inviter's tunnel is up (the flow offers to
+turn the switch on, and starts a group of one when there is none), lasts
+**10 minutes**, works **once**, dies after **5 wrong proofs**, and dies when
+the tunnel restarts. Making a new one cancels the old: at most one live
+secret. Proof attempts naming the live code are capped at 10 a minute;
+attempts naming any other id have a budget of their own (they can't use up
+a real pairing's), and "denied" is logged at most once a minute. Codes live
+in memory only; a restart kills them.
+
+The **safety number** is `sha256("mindflock-device-pair-safety-v1|" | fp |
+invite_id)`, 30 bits as `ddd ddd ddd`: the inviter shows it next to the code,
+the new computer before it joins. It depends on the code's random id, so a
+code made by anyone else shows a different number than the person's own
+computer does, even with a key ground to look alike.
 
 ### The exchange
 
@@ -311,9 +338,11 @@ Inside the same pinned TLS 1.3 as §3, answering the same hello:
 S→C {"t":"hello","v":1,"nonce":sn}
 C→S {"t":"pair","v":1,"nonce":cn,"invite":<id>,"device","host","dns","runs",
      "proof":HMAC(secret, "mfpair-client-v1" | T)}
-S→C {"t":"ok","v":1,"from":<inviter>,"bundle":{…},
-     "proof":HMAC(secret, "mfpair-server-v1" | T | inviter)}     or {"t":"denied"}
-C→S {"t":"confirm","proof":HMAC(K_confirm, "mfpair-confirm-v1" | T | inviter)}   or {"t":"abort"}
+    (inviter: the joiner is recorded PENDING, durably, before the next frame)
+S→C {"t":"ok","v":1,"from":<inviter>,"addr":<members' address>,"bundle":{…},
+     "proof":HMAC(secret, "mfpair-server-v1" | T | inviter | addr)}
+     or {"t":"denied"[,"reason":"same_name"|"used"]}
+C→S {"t":"confirm","proof":HMAC(K_confirm, "mfpair-confirm-v1" | T | inviter | addr)}   or {"t":"abort"}
 S→C {"t":"added"}                                                 and close
 
 T         = server_pub | sn | cn | invite_id | device | host | dns | runs   (each length-prefixed)
@@ -324,33 +353,63 @@ K_confirm = HKDF(group key, purpose "pair-confirm", group id, epoch)        (the
   code's `fp` (constant time) before it sends a byte, then reads the hello.
 - **The inviter checks the proof** (constant time; an unknown id is checked
   against a random key, so timing says nothing) before it answers anything.
-  A wrong, unknown, expired, used or rate-limited code all get the same
-  `{"t":"denied"}`. A right proof **consumes** the code.
+  A wrong, unknown, expired or rate-limited code all get the same
+  `{"t":"denied"}`. A right proof **consumes** the code. A right proof for a
+  code that was **already used** gets `{"t":"denied","reason":"used"}` (it
+  proved the code, so nothing new leaks) and the new computer says *"This
+  code was already used by another computer…"*; the inviter raises the alarm
+  below — two computers had that code.
+- **No key leaves without a trace.** Before the bundle is sent the inviter
+  records the joiner as **pending** in `fleet_pairing.json` (beside
+  `fleet.json`, durable). Pending is not membership: it is on no roster, is
+  never gossiped, and can't pass the members' handshake. Your devices shows
+  it (*"pairing now"*).
 - **The joiner checks the inviter's proof** before it takes the bundle. The
   bundle is exactly what a redeemed 8-character code hands out (`bundle_for`:
   the key, the roster, a live entry for the joiner, the person); the
-  inviter's own roster is not touched yet.
+  inviter's own roster is not touched yet, and neither is its tombstone
+  bypass (`admits`: recorded only at commit).
 - **No ghost member.** The joiner adopts the bundle, then sends `confirm`,
   MAC'd with a key derived from the group key it just took. Only a valid
-  confirm puts the joiner on the inviter's roster (and runs `after_admit`:
-  remote control on, settings sync seeded, the admit row). A joiner that
-  refuses the bundle (already in another group with other devices) sends
-  `abort`; one that vanishes, or sends a bad confirm, adds nothing. If the
-  joiner never gets `added`, it puts its previous group state back, so it
-  doesn't keep a key its group doesn't know it has.
+  confirm turns pending into a member — re-checking, under the lock, that no
+  live member took that name meanwhile — and runs `after_admit` (remote
+  control on, settings sync seeded, the admit row).
+- **The alarm.** Every other ending after the bundle went out — an `abort`,
+  a bad or missing confirm, a commit error, or this server stopping mid-way
+  (a pending entry older than ~2 minutes) — drops the pending entry and
+  raises a **durable** alarm: a row on Your devices, *"A pairing code was
+  used but the join didn't finish (…). If that wasn't you, change your
+  devices' key now."*, with **Change key** (a new devices' key for every
+  member and new access tokens, as removing a device does) and **It was me**;
+  plus a `device.pair_unfinished` event (a bell row, a toast, a phone push).
+  Whoever read the bundle holds the group key, and on the members' path the
+  group key lets a caller name itself after any member (§3), so this is
+  detection plus rotation, not prevention: changing the key is what locks
+  them out.
+- **A lost `added`.** The joiner then dials the inviter's members' path
+  (`addr`) with the key it just took: the inviter lets only roster members
+  through, so getting in means the join was committed there (it keeps it),
+  `denied` means it wasn't (it puts its previous state back). A few tries;
+  no answer at all is treated as not joined.
 - **One name, one device.** The joiner may not take the inviter's name, nor
   a live member's (the tunnel can't bind a name to an address the way the
   tailnet does for the 8-character code). That refusal (`same_name`) is sent
   only after a valid proof, so a wrong code learns nothing from it.
+- **Names are plain.** The joiner's `dns` must be `""` or `[a-z0-9-]` labels
+  (≤253 characters; `clean_dns` everywhere); its `host` is stored without
+  control, bidi or zero-width characters and capped at 64.
 - **That branch is all the code can do.** After `added` (or any refusal) the
   stream closes; it never reaches the web server, is counted with the
   unauthenticated handshakes (§4's limit of 16), and has a 60 s deadline.
 
 ### After the pairing (the joiner)
 
-1. The inviter's person becomes this device's, and remote control goes on
-   (joining is the permission), as in any join.
-2. The inviter's address comes **from the code** (`devices_anywhere.seed`):
+1. The inviter's person becomes this device's. With the box ticked, remote
+   control goes on (joining is the permission), as in any join; unticked, it
+   stays as it was.
+2. The inviter's members' address comes **from the pairing** (`addr`, MAC'd
+   in the `ok` frame, on the same tunnel host as the code — the code itself
+   only names the pairing path) and is seeded (`devices_anywhere.seed`):
    the joiner has no GitHub sign-in yet, so it can't read the address book.
    The seeded address is only where to dial — the pin and the group-key
    proof still decide — and it is kept until GitHub has that device's own
@@ -372,9 +431,14 @@ K_confirm = HKDF(group key, purpose "pair-confirm", group id, epoch)        (the
    login or an environment token, which don't sync): the join line says
    *"<host> can't reach this computer yet: GitHub isn't signed in here … Connect
    GitHub (Settings → GitHub) with the same account as on <host>."*
-6. Box unticked: the join is complete (both rosters), the switch stays off,
-   and the line says the two can't reach each other until it is on here or
-   both use Tailscale. No settings sync runs.
+6. Box unticked: the join is complete (both rosters), the switch and remote
+   control stay off, and the line says so and that the two can't reach each
+   other until the switch is on here or both use Tailscale. No settings sync
+   runs.
+7. Already in a group with other devices: the confirm names them and says
+   this computer leaves them; on confirm, it leaves that group properly (the
+   others are told) right before it takes the new key — only if the code's
+   group is a different one.
 
 ## Threat model summary
 
@@ -392,13 +456,16 @@ K_confirm = HKDF(group key, purpose "pair-confirm", group id, epoch)        (the
 | A removed device | Holds only the old key: can't decrypt new records or pass the current-epoch handshake. Its open streams are ended when the key changes. |
 | A malicious member | Same as today: the fleet key is a full credential on every member. Over the tunnel one member could also claim another's name (Tailscale binds names, the fleet key does not); it gains nothing it doesn't already have. |
 | Metadata | GitHub sees when each device updates its record (and that a `mindflock-devices` repo exists). Cloudflare sees IPs, timing and volume, as for peer relays. |
-| **Pairing (§7)** — reachable from the internet before any trust exists | Only someone with the code even finds the pair branch (the 128-bit path is in it). Everything before a valid proof answers the same `denied`; the proof is checked in constant time; nonces from both ends; 10 attempts a minute across all codes. |
-| Guessing a code / replaying one | 160-bit secret; 5 wrong proofs kill the code; a used, expired or restarted-away code is gone (same `denied`). A replayed `pair` frame fails on the server's fresh nonce. |
+| **Pairing (§7)** — reachable from the internet before any trust exists | Only someone with the live code even finds the pair branch: its 128-bit pairing path is a fresh side path per code (a new code, Cancel, expiry or a restart turn the old one into a 404), and the members' path never takes a `pair` frame. Everything before a valid proof answers the same `denied`; the proof is checked in constant time; nonces from both ends; 10 attempts a minute naming the code, a separate budget for any other id; "denied" logged at most once a minute. |
+| Guessing a code / replaying one | 160-bit secret; 5 wrong proofs kill the code; an expired or restarted-away code is gone (same `denied`). A replayed `pair` frame fails on the server's fresh nonce. |
 | A man in the middle on the code's address (Cloudflare, a stolen hostname) | The joiner pins the inviter's fingerprint from the code before sending anything; the proofs bind the TLS key it saw. A relay to the real inviter can't read or alter the TLS. |
-| A stolen code (someone else saw it) | Inherent to codes: whoever uses it first joins — so one live code, single use, 10 minutes; "send it only to yourself" is said next to it; the joiner shows up under Your devices and can be removed (which rotates the key). |
-| A joiner that takes the bundle and fails | Not on the inviter's roster without a confirm MAC'd with the group key; a joiner that never got `added` drops the key again. Lost `added` after a valid confirm leaves the inviter listing a device that dropped the key: harmless (it's yours), and a new code fixes it. |
+| A stolen code (someone else saw it) | Inherent to codes: whoever uses it first gets the group key — so one live code, single use, 10 minutes; "send it only to yourself" is said next to it. It can't happen silently: a joiner that completes shows up under Your devices ("X joined", removable — which changes the key); one that takes the bundle and stops raises the alarm (below); the real computer then hears "already used" and the inviter is alarmed again. |
+| A joiner that takes the bundle and fails (or stops on purpose) | Recorded as pending (durably, on no roster) before the bundle leaves; without a valid confirm it never becomes a member, and the inviter raises a durable alarm with **Change key** — a crash mid-pairing too (a stale pending entry). What remains: until the person changes the key, that party holds it and could name itself after any member on the members' path (the group key is a shared credential, §3). Detection plus a one-click rotation, not prevention. |
+| A lost `added` | The joiner asks the inviter's members' path with the new key: in → it keeps the join; `denied` → it drops the key; both sides agree. Only when the inviter can't be reached at all does the joiner drop the key while the inviter keeps it listed (harmless: it's yours; remove it there). |
+| A hostile code (an attacker's own, pasted by the victim) | The new computer explains what the code's maker gets (it runs agents here; its settings replace these) and asks before sending anything; it shows a safety number the person's own computer shows next to its real code (bound to the code's random id — a forged code shows another); it names the group this computer would leave. Unticked box: neither remote control nor the switch turns on. |
+| Spoofed names in the roster and in "X joined" | `host` stripped of control, bidi and zero-width characters, capped at 64; `dns` only plain `[a-z0-9-]` labels (also on every roster read). |
 | A code holder naming itself after one of your devices | Refused (`same_name`), after a valid proof only. |
-| The secret leaking | Never sent, logged, put in a URL or reprs; it goes to the joiner's own server in a request body. The code is shown only to this device's own browser (privileged, never relayed or tunneled). |
+| The secret leaking | Never sent, logged, put in a URL or reprs; it goes to the joiner's own server in a request body (the CLI asks for it without echoing, or reads stdin, instead of argv). The live code is readable through the invite route by any `auth.privileged` caller of this device — a browser on this computer, a caller with this device's access token or the devices' key (a signed-in phone), or one of the owner's trusted Tailscale devices — never relayed or through the tunnel. Each of those can already do more than a code does (the token drives this computer; the devices' key is what a code hands out), so the code is not limited to the browser that made it. |
 | Pairing weakening same-network pairing | Separate code format, book and handshake branch; `redeem`/`requests` are unchanged. |
 
 ## Manual check (about ten minutes)
@@ -427,18 +494,23 @@ GitHub account:
    server); `POST /api/settings` with `{"general":{"devices_anywhere":true}}`
    leaves the switch off.
 
-## Manual check: a new device without Tailscale (about ten minutes)
+## Manual check: a new device without Tailscale (about fifteen minutes)
 
 Two computers: A with MindFlock signed in to GitHub (Settings → GitHub; a
 token saved there, so settings sync carries it), and B, a fresh install with
-**no Tailscale** (or `tailscale down`) and no GitHub sign-in.
+**no Tailscale** (or `tailscale down`) and no GitHub sign-in. A third
+computer C (any MindFlock, a scratch install is fine) for the stolen-code
+check.
 
 1. On A: Settings → Your devices → Add a device → **It isn't on my network**.
    With the switch off, it asks first; confirm. A long `mfd1:…` code shows,
-   with a QR and "Works once · expires in 9:5x".
+   with a QR, "Works once · expires in 9:5x" and a safety number.
 2. On B: Settings → Your devices → paste the code into **Paste a code**. The
    note says it joins through A's private tunnel; the box *Let my devices
-   reach this computer from anywhere* is ticked. Join.
+   reach this computer from anywhere* is ticked. Join. An in-page confirm
+   (not a browser dialog) says A will be able to run agents on B and its
+   settings replace B's, and shows a number: it matches the one next to the
+   code on A. Confirm.
 3. B's line goes "Joining…" → "Joined A. Finishing setup…" → "Joined A."
    within a minute or so. A's code is gone; A lists B ("B joined. It can
    reach this computer already…" until B's address is in GitHub).
@@ -446,12 +518,29 @@ token saved there, so settings sync carries it), and B, a fresh install with
    files; each computer lists the other reachable `via: "tunnel"`; B's
    Settings → GitHub shows the token that came with settings sync; a session
    started on B from A (device forwarding) works.
-5. Failure spot checks: paste the same code again on B (or on a third
-   computer): *"That code didn't work …"*. Change one character in a fresh
-   code: *"That code is damaged …"* or *"didn't work"*; five such tries kill
-   the code on A. Untick the box on a fresh joiner: it joins, its switch
-   stays off, and its line says the two can't reach each other yet.
-6. Without a GitHub token on A's Settings (A uses `gh auth login` only): B's
+5. Failure spot checks: paste the same code again on C within its 10
+   minutes: C says *"This code was already used by another computer…"*, and
+   A shows a red row under Your devices, *"A pairing code was used by two
+   computers…"*, plus a bell row and (with phone notifications) a push.
+   Press **It was me** — the row goes. Change one character in a fresh code:
+   *"That code is damaged …"* or *"didn't work"*; five such tries kill the
+   code on A. Make a code, then a second one: pasting the FIRST on B can't
+   even reach A (*"Couldn't reach the other computer…"*). Untick the box on a
+   fresh joiner: it joins, its switch and Settings → remote control stay
+   off, and its line says so.
+6. The alarm: on A make a code; on C run `mindflock join` with no argument,
+   paste the code at the hidden prompt, and answer **n** at the confirm —
+   nothing reaches A (no row). Then, to simulate someone who takes the key
+   and stops, kill C's server (`kill -9`) right after confirming, before
+   "Joined": within a minute or two A shows *"A pairing code was used but
+   the join didn't finish …"* with **Change key**; pressing it reports the
+   devices that took the new key (B among them), and B keeps working with
+   A. (If C was quick enough to finish, it is listed as a device instead —
+   remove it, which changes the key too.)
+7. A device already in a group: on B (now with A), paste a code made on C
+   (C in its own group of one): the confirm names A and says B leaves it.
+   Cancel — nothing changes.
+8. Without a GitHub token on A's Settings (A uses `gh auth login` only): B's
    line ends with *"GitHub isn't signed in here … Connect GitHub"*; after
    connecting GitHub on B, A reaches B within a few minutes.
 

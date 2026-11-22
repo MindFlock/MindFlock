@@ -34,7 +34,7 @@
  * prompt/confirm anywhere: the desktop app has neither (InlineConfirm). */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../../../api/client";
+import { api, ApiError } from "../../../api/client";
 import type { FleetJoin, FleetStatus, SyncStatus } from "../../../api/types";
 import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
@@ -94,7 +94,15 @@ import { SharedLinkCard } from "./SharedLink";
 import { DevicesAdvanced } from "./DevicesAdvanced";
 import { DevicesAnywhere } from "./DevicesAnywhere";
 import { DevicesFarInvite } from "./DevicesFarInvite";
-import { FAR_REACHABLE_HINT, FAR_REACHABLE_LABEL } from "../../../lib/devicesAnywhere";
+import { DevicesPairAlerts } from "./DevicesPairAlerts";
+import {
+  FAR_CONFIRM_TITLE,
+  FAR_REACHABLE_HINT,
+  FAR_REACHABLE_LABEL,
+  farConfirmBody,
+  farConfirmLabel,
+  type FarJoinConfirm,
+} from "../../../lib/devicesAnywhere";
 import { NewComputerLine, ReadinessLine, SyncedAgentInstall, useFleetReadiness } from "./DeviceReadiness";
 import "./devices.css";
 
@@ -121,6 +129,10 @@ export function Devices(p: ScreenProps) {
   /** A pasted long code (a computer not on this network): also turn on
    * "Reach my devices from anywhere" here — ticked by default. */
   const [farReach, setFarReach] = useState(true);
+  /** A pasted long code waiting on its confirm (the server's 409: nothing
+   * was sent yet) — what the code's maker gets, the safety number, the
+   * group this computer would leave. */
+  const [farAsk, setFarAsk] = useState<{ code: string; info: FarJoinConfirm } | null>(null);
   /** Remove's "also replace every device's access token" — on by default. */
   const [rotateTokens, setRotateTokens] = useState(true);
   /** Make reachable's confirm is open (the This-device row, Add a device,
@@ -347,6 +359,20 @@ export function Devices(p: ScreenProps) {
     run("ask:" + device, () => api("/api/fleet/request", { json: { device } }));
   const cancelJoin = () =>
     run("cancel-join", () => api("/api/fleet/request", { method: "DELETE" }));
+  /** The confirm's go-ahead: the same code, now confirmed (and, when this
+   * computer is in another group, leaving it — the confirm said so). */
+  const joinFarConfirmed = () => {
+    const ask = farAsk;
+    if (!ask) return;
+    return run("paste", async () => {
+      const j = await api<FleetJoin>("/api/devices/anywhere/join", {
+        json: { code: ask.code, reachable: farReach, confirm: true, leave_group: !!ask.info.other_group },
+      });
+      setFarAsk(null);
+      setSt((prev) => (prev ? { ...prev, join: j } : prev));
+      setPasted("");
+    });
+  };
   const joinWithCode = (device: string) =>
     run(
       "code:" + device,
@@ -369,11 +395,17 @@ export function Devices(p: ScreenProps) {
     if (routeCode(pasted).kind === "anywhere") {
       const code = routeCode(pasted).code;
       return run("paste", async () => {
-        const j = await api<FleetJoin>("/api/devices/anywhere/join", {
-          json: { code, reachable: farReach },
-        });
-        setSt((prev) => (prev ? { ...prev, join: j } : prev));
-        setPasted("");
+        try {
+          // Without `confirm` the server only answers what to ask (409).
+          await api<FleetJoin>("/api/devices/anywhere/join", { json: { code, reachable: farReach } });
+        } catch (e) {
+          const body = e instanceof ApiError ? (e.body as FarJoinConfirm | null) : null;
+          if (body?.needs_confirm) {
+            setFarAsk({ code, info: body });
+            return;
+          }
+          throw e;
+        }
       });
     }
     // A bare code names no device: send it to the one it can be for, or ask.
@@ -512,6 +544,9 @@ export function Devices(p: ScreenProps) {
           ))}
         </div>
       )}
+      {/* A code used without the join finishing (Change key), and a device
+          pairing through the tunnel right now. */}
+      <DevicesPairAlerts pairing={st.pairing} reload={loadAll} />
       {finishing.length > 0 && (
         <div className="devices-note" id="devices-finishing-joiners" role="status">
           {finishing.map((a) => (
@@ -1245,7 +1280,10 @@ export function Devices(p: ScreenProps) {
           autoComplete="off"
           spellCheck={false}
           value={pasted}
-          onChange={(e) => setPasted(e.target.value)}
+          onChange={(e) => {
+            setPasted(e.target.value);
+            setFarAsk(null);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && pasted.trim() && !busy) void joinWithText();
           }}
@@ -1280,6 +1318,17 @@ export function Devices(p: ScreenProps) {
             {FAR_REACHABLE_LABEL}
             <span className="set-hint">{FAR_REACHABLE_HINT}</span>
           </label>
+        )}
+        {farAsk && routeCode(pasted).kind === "anywhere" && (
+          <InlineConfirm
+            id="devices-far-confirm"
+            title={FAR_CONFIRM_TITLE}
+            body={farConfirmBody(farAsk.info, farReach)}
+            confirmLabel={busy === "paste" ? "Joining…" : farConfirmLabel(farAsk.info)}
+            busy={busy === "paste"}
+            onConfirm={() => void joinFarConfirmed()}
+            onCancel={() => setFarAsk(null)}
+          />
         )}
       </div>
 

@@ -282,13 +282,24 @@ def test_pair_a_new_device_without_tailscale(strangers):
     wrong = fleet_pair.encode_code(
         c.url, c.fp, bytes.fromhex(c.invite_id), b"w" * 20, loopback=True
     )
-    b.ok("POST", "/api/devices/anywhere/join", {"code": wrong})
+    b.ok("POST", "/api/devices/anywhere/join", {"code": wrong, "confirm": True})
     wait_until(lambda: _join_state(b).get("state") == "error", 60, "wrong code fails")
     assert "didn't work" in _join_state(b)["error"]
     assert not b.ok("GET", "/api/fleet")["in_fleet"]
 
-    # The real one.
-    b.ok("POST", "/api/devices/anywhere/join", {"code": code, "reachable": True})
+    # The real one: first the confirm (nothing is sent until it's given),
+    # with the same safety number anya shows next to the code.
+    st, ask = b.call(
+        "POST", "/api/devices/anywhere/join", {"code": code, "reachable": True}
+    )
+    assert st == 409 and ask["needs_confirm"], (st, ask)
+    assert ask["safety"] == inv["safety"] and ask["other_group"] is None
+    assert _join_state(b).get("state") in ("error", "idle")  # nothing started
+    b.ok(
+        "POST",
+        "/api/devices/anywhere/join",
+        {"code": code, "reachable": True, "confirm": True},
+    )
     wait_until(
         lambda: _join_state(b).get("state") not in ("joining", "finishing"),
         180,
@@ -304,6 +315,8 @@ def test_pair_a_new_device_without_tailscale(strangers):
         keys = {m["key"] for m in me.ok("GET", "/api/fleet")["members"]}
         assert keys == {"anya", "bart"}, (me.name, keys)
     assert a.ok("GET", "/api/devices/anywhere/invite")["invite"] is None
+    # A clean join leaves no pending entry and no alarm.
+    assert a.ok("GET", "/api/fleet")["pairing"] == {"pending": [], "alerts": []}
 
     # bart reaches anya through the tunnel at once (the address in the
     # code); anya reaches bart once bart published its own record.

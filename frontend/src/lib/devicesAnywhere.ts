@@ -35,6 +35,8 @@ export interface AnywhereInvite {
   expires_at: number;
   /** This computer's name, as the new one will show it. */
   host: string;
+  /** The number the new computer shows before it joins ("482 093 117"). */
+  safety?: string;
   /** The code as a QR (inline SVG), when the server can draw one. */
   qr_svg?: string | null;
 }
@@ -58,6 +60,40 @@ export const FAR_REACHABLE_LABEL = "Let my devices reach this computer from anyw
 export const FAR_REACHABLE_HINT =
   "Turns on “Reach my devices from anywhere” on this computer — needed unless both computers use Tailscale. " +
   "Leave it ticked unless you know you don't want it.";
+
+/** The 409 `POST /api/devices/anywhere/join` answers until the person
+ * confirmed (nothing was sent yet). */
+export interface FarJoinConfirm {
+  needs_confirm: true;
+  /** What the code's maker will be able to do here. */
+  text: string;
+  safety: string;
+  safety_text: string;
+  /** This computer's other group, when it has other live members. */
+  other_group: { count: number; hosts: string[] } | null;
+  leave_text: string;
+}
+
+export const FAR_CONFIRM_TITLE = "Only join if this code came from your own computer.";
+
+/** The confirm's body: the server's words, the number to compare, the group
+ * this computer would leave, and what the ticked box also turns on. */
+export function farConfirmBody(c: FarJoinConfirm, reach: boolean): string {
+  const parts = [c.text, c.safety_text];
+  if (c.leave_text) parts.push(c.leave_text);
+  if (reach) parts.push("It also turns on remote control and “Reach my devices from anywhere” here.");
+  return parts.filter(Boolean).join(" ");
+}
+
+/** The confirm's go-ahead: it names leaving a group when it does. */
+export function farConfirmLabel(c: FarJoinConfirm): string {
+  return c.other_group ? "Leave that group and join" : "It's my computer — join";
+}
+
+/** The line next to the inviter's code. */
+export function farSafetyLine(inv: AnywhereInvite): string {
+  return inv.safety ? "Safety number " + inv.safety + " — the new computer shows the same before it joins." : "";
+}
 
 /** The `mfd1:` code inside pasted text (lowercased), or "". */
 export function extractDeviceCode(text: string): string {

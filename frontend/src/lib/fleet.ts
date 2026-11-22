@@ -335,6 +335,15 @@ export function deviceEventNote(
     }
     case "device.removed":
       return { text: sentence(String(d.detail || "")) || host + " is no longer one of your devices", cls: "n-info", toast: "" };
+    // A pairing code was used and the join didn't finish (or two computers
+    // used one): the devices' key may be out. Loud — Your devices offers
+    // Change key.
+    case "device.pair_unfinished": {
+      const text =
+        String(d.detail || "") ||
+        "A pairing code was used but the join didn't finish. If that wasn't you, change your devices' key now.";
+      return { text, cls: "n-warn", toast: text };
+    }
     // Emitted on the device that paused (its own scan saw most settings go
     // back to defaults at once): nothing syncs either way until it's answered.
     case "settings.sync_paused":

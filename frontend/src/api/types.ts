@@ -1334,6 +1334,14 @@ export interface FleetPhoneLink {
   hosts: { key: string; host: string; self: boolean; state: "hosting" | "waiting" | "off" | "unknown" }[];
 }
 
+/** `GET /api/fleet`'s `pairing` (and `GET /api/devices/anywhere/pair-alerts`). */
+export interface FleetPairing {
+  pending: { device: string; host: string; at: number }[];
+  /** A code was used and the join didn't finish (or two computers used one):
+   * the devices' key may be with someone else — Change key answers it. */
+  alerts: { id: string; device: string; host: string; outcome: string; at: number; text: string }[];
+}
+
 export interface FleetStatus {
   in_fleet: boolean;
   id: string;
@@ -1347,6 +1355,9 @@ export interface FleetStatus {
   bind?: string;
   gate_on?: boolean;
   admitted?: FleetAdmit[];
+  /** A new device pairing through the tunnel right now (not a member yet),
+   * and codes used without the join finishing (docs/devices-anywhere.md §7). */
+  pairing?: FleetPairing;
   tailnet_peers?: FleetPeer[];
   /** The tailnet policy lines that open this port between your devices. */
   policy_grant?: string;

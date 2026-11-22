@@ -5,8 +5,15 @@
  * from there yet. The two controls live on Your devices only. */
 import { describe, expect, it } from "vitest";
 import type { FleetAdmit, FleetJoin } from "../api/types";
-import { extractDeviceCode, farInviteLine } from "../lib/devicesAnywhere";
-import { admitLine, joinedToast, joinLine, routeCode } from "../lib/fleet";
+import {
+  extractDeviceCode,
+  farConfirmBody,
+  farConfirmLabel,
+  farInviteLine,
+  farSafetyLine,
+  type FarJoinConfirm,
+} from "../lib/devicesAnywhere";
+import { admitLine, deviceEventNote, joinedToast, joinLine, routeCode } from "../lib/fleet";
 import { paletteCode } from "../components/palette/paletteRank";
 
 const CODE = "mfd1:aeaqgnlpmvwgk3dnfzuxi2lmn5ygszjnmrsxm2ldmvzwcylsfuytemzu-abcd";
@@ -87,5 +94,68 @@ describe("the two controls are on Your devices", () => {
     for (const f of ["DevicesFarInvite.tsx", "Devices.tsx"]) {
       expect(SCREEN_SRC[f]).not.toMatch(/window\.(prompt|alert|confirm)\(/);
     }
+  });
+});
+
+describe("a hostile code: the joiner confirms first (review M2)", () => {
+  const ask: FarJoinConfirm = {
+    needs_confirm: true,
+    text: "The computer that made this code will be able to run agents on this computer, and its settings will replace this computer's. Only continue if the code came from your own computer.",
+    safety: "482 093 117",
+    safety_text: "Check that your other computer shows the same number next to the code: 482 093 117",
+    other_group: null,
+    leave_text: "",
+  };
+
+  it("says what the code's maker gets, the number, and what the box turns on", () => {
+    const body = farConfirmBody(ask, true);
+    expect(body).toContain("run agents on this computer");
+    expect(body).toContain("482 093 117");
+    expect(body).toContain("remote control");
+    expect(farConfirmBody(ask, false)).not.toContain("remote control");
+    expect(farConfirmLabel(ask)).toBe("It's my computer — join");
+  });
+
+  it("names the group this computer would leave", () => {
+    const leaving = { ...ask, other_group: { count: 3, hosts: ["Rig", "Mini"] }, leave_text: "This computer is already one of 3 devices (Rig, Mini)." };
+    expect(farConfirmBody(leaving, true)).toContain("Rig, Mini");
+    expect(farConfirmLabel(leaving)).toBe("Leave that group and join");
+  });
+
+  it("the inviter shows the same number by its code", () => {
+    expect(farSafetyLine({ code: CODE, expires_at: 1, host: "Anya", safety: "482 093 117" })).toContain("482 093 117");
+    expect(farSafetyLine({ code: CODE, expires_at: 1, host: "Anya" })).toBe("");
+  });
+
+  it("Join goes through an in-page confirm with the server's answer", () => {
+    const src = SCREEN_SRC["Devices.tsx"];
+    expect(src).toContain('id="devices-far-confirm"');
+    expect(src).toMatch(/needs_confirm/);
+    expect(src).toMatch(/confirm: true, leave_group: !!ask\.info\.other_group/);
+    expect(SCREEN_SRC["DevicesFarInvite.tsx"]).toContain('id="devices-far-safety"');
+  });
+});
+
+describe("a code used without the join finishing (review M1)", () => {
+  it("is a loud bell row and toast with the server's words", () => {
+    const n = deviceEventNote("device.pair_unfinished", {
+      detail: "A pairing code was used but the join didn't finish (x). If that wasn't you, change your devices' key now.",
+    });
+    expect(n?.cls).toBe("n-warn");
+    expect(n?.text).toContain("change your devices' key");
+    expect(n?.toast).toBe(n?.text);
+  });
+
+  it("Your devices shows it with Change key and It was me — on that screen only", () => {
+    const src = SCREEN_SRC["DevicesPairAlerts.tsx"];
+    expect(src).toContain('id="devices-pair-change-key"');
+    expect(src).toContain("It was me");
+    expect(src).toContain("/api/devices/anywhere/pair-alerts");
+    expect(SCREEN_SRC["Devices.tsx"]).toMatch(/<DevicesPairAlerts /);
+    const elsewhere = Object.entries(SCREEN_SRC).filter(
+      ([f, t]) => f !== "DevicesPairAlerts.tsx" && t.includes("devices-pair-change-key")
+    );
+    expect(elsewhere).toEqual([]);
+    expect(src).not.toMatch(/window\.(prompt|alert|confirm)\(/);
   });
 });

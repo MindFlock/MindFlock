@@ -167,9 +167,11 @@ def test_book_expiry_rate_limit_and_one_live_code():
     assert book.check(b["invite_id"], _proof(s), b"t") is None  # expired
     c = book.create("wss://a-b.trycloudflare.com/%s" % TOKEN, FP)
     s = _secret_of(book, c["invite_id"])
-    assert book.check("ffffffffffffffff", "0" * 64, b"t") is None
-    assert book.check(c["invite_id"], "0" * 64, b"t") is None
-    # The 4th attempt in the window is refused even with the right proof.
+    assert book.check("ffffffffffffffff", "0" * 64, b"t") is None  # its own budget
+    for _ in range(3):
+        assert book.check(c["invite_id"], "0" * 64, b"t") is None
+    # The 4th attempt naming the code in the window is refused even with the
+    # right proof.
     assert book.check(c["invite_id"], _proof(s), b"t") is None
     assert book.stats["limited"] == 1
     now["t"] += fp.RATE_WINDOW_S + 1
@@ -203,6 +205,15 @@ class Inviter:
         self.bundles = 0
         self.commit_fails = False
         self.taken = set()
+        #: The roster the members' handshake checks, and the keys it uses.
+        self.members = {"laptop"}
+        self.keys = None
+        #: What serve_pair told: pending begun, unfinished joins, reuses.
+        self.begun = []
+        self.unfinished = []
+        self.reused = []
+        #: Drop the stream right after the commit (a lost ``added``).
+        self.drop_added = False
 
     def make_bundle(self, device, host, dns):
         if device in self.taken:
@@ -214,8 +225,12 @@ class Inviter:
         if self.commit_fails:
             raise RuntimeError("disk full")
         self.committed.append((device, host, dns, runs))
+        self.members.add(device)
+        if self.drop_added:
+            self._writer.transport.abort()
 
     async def pair(self, reader, writer, server_pub, sn, msg):
+        self._writer = writer
         self.outcomes.append(
             await fp.serve_pair(
                 reader,
@@ -227,6 +242,10 @@ class Inviter:
                 self_key=lambda: "laptop",
                 make_bundle=self.make_bundle,
                 commit=self.commit,
+                begin=lambda *a: self.begun.append(a[:4]),
+                unfinished=lambda *a: self.unfinished.append(a),
+                reused=lambda *a: self.reused.append(a),
+                addr=lambda: self.url,
                 confirm_timeout=5.0,
             )
         )
@@ -237,22 +256,35 @@ class Inviter:
         self.server = ft.TunnelServer(
             server_ssl_context(self.ident),
             self.ident.pub,
-            keys=lambda: None,
+            keys=lambda: self.keys,
             self_key=lambda: "laptop",
-            members=lambda: {"laptop"},
+            members=lambda: set(self.members),
             origin_port=lambda: oport,
             pair=self.pair if with_pair else None,
         )
         self.token = da._new_token()
         self.ingress = RelayIngress(self.server, "/" + self.token)
         port = await self.ingress.start()
+        self.port = port
         self.url = "wss://127.0.0.1:%d/%s" % (port, self.token)
         return self
 
+    def pair_url(self, ttl=fp.TTL_S) -> str:
+        """A fresh pairing path (what devices_anywhere.open_pair_path does)."""
+        import time
+
+        token = da._new_token()
+
+        async def on_pair(r, w, source=""):
+            await self.server(r, w, source, pair_only=True)
+
+        self.ingress.set_side_path("/" + token, on_pair, until=time.monotonic() + ttl)
+        return "wss://127.0.0.1:%d/%s" % (self.port, token)
+
     def code(self) -> str:
-        return self.book.create(self.url, self.ident.fingerprint(), loopback=True)[
-            "code"
-        ]
+        return self.book.create(
+            self.pair_url(), self.ident.fingerprint(), loopback=True, tunnel=self.url
+        )["code"]
 
     async def stop(self):
         await self.ingress.stop()
@@ -287,8 +319,8 @@ async def _join(code_text, device="mini", adopt=None, **kw):
 
 
 async def test_happy_path(inviter):
-    (who, bundle), got = await _join(inviter.code())
-    assert who == "laptop"
+    (who, bundle, addr), got = await _join(inviter.code())
+    assert who == "laptop" and addr == inviter.url  # the members' address
     assert bundle["key"] == FLEET_KEY and "mini" in bundle["members"]
     assert got == [("laptop", bundle)]
     assert inviter.committed == [("mini", "Mini", "", False)]
@@ -296,15 +328,19 @@ async def test_happy_path(inviter):
     assert inviter.server.stats["pair"] == 1
     assert inviter.origin.hits == 0  # nothing reached the web server
     assert inviter.book.active() == []  # single use
+    assert inviter.begun == [("mini", "Mini", "", False)]  # pending before the bundle
+    assert inviter.unfinished == []
 
 
 async def test_used_code_fails_and_learns_nothing(inviter):
     code = inviter.code()
     await _join(code)
     with pytest.raises(fp.PairError) as e:
-        await _join(code)
-    assert e.value.reason == "denied"
+        await _join(code, device="rig")
+    # It proved the code, so it is told it was used (M1) — and gets nothing.
+    assert e.value.reason == "used"
     assert inviter.bundles == 1 and len(inviter.committed) == 1
+    assert inviter.reused == [("rig", "Mini")]
 
 
 def _with_secret(code_text: str, secret: bytes) -> str:
@@ -321,7 +357,7 @@ async def test_wrong_secret_is_denied_and_counts(inviter):
     assert e.value.reason == "denied"
     assert inviter.bundles == 0 and inviter.committed == []
     assert inviter.book.stats["wrong"] == 1
-    (who, _b), _g = await _join(code)  # the real code still works
+    (who, _b, _a), _g = await _join(code)  # the real code still works
     assert who == "laptop"
 
 
@@ -360,7 +396,11 @@ async def test_a_different_key_fails_at_the_pin_before_anything_is_sent(
         # The code names the inviter's fingerprint, but the address leads to
         # the MITM (as if it held the hostname).
         forged = fp.encode_code(
-            mitm.url, real.fp, bytes.fromhex(real.invite_id), real.secret, loopback=True
+            mitm.pair_url(),
+            real.fp,
+            bytes.fromhex(real.invite_id),
+            real.secret,
+            loopback=True,
         )
         with pytest.raises(fp.PairError) as e:
             await _join(forged)
@@ -372,6 +412,7 @@ async def test_a_different_key_fails_at_the_pin_before_anything_is_sent(
             "unknown": 0,
             "limited": 0,
             "killed": 0,
+            "used": 0,
         }
         assert mitm.outcomes == []
         assert inviter.book.active()  # the real code is untouched
@@ -390,6 +431,8 @@ async def test_refused_bundle_leaves_no_ghost_member(inviter):
     assert e.value.reason == "refused" and "leave that group" in e.value.text
     await asyncio.sleep(0.05)
     assert inviter.outcomes == ["aborted"] and inviter.committed == []
+    # The bundle went out: the inviter is told (it raises the alarm).
+    assert inviter.unfinished == [("mini", "Mini", "aborted")]
 
 
 async def test_no_added_means_unconfirmed(inviter):
@@ -400,6 +443,7 @@ async def test_no_added_means_unconfirmed(inviter):
     assert e.value.reason == "unconfirmed"
     assert adopted == ["laptop"]  # the caller undoes this (devices_pair)
     assert inviter.outcomes == ["error"]
+    assert inviter.unfinished == [("mini", "Mini", "error")]
 
 
 async def test_same_name_is_said_after_a_valid_proof_only(inviter):
@@ -456,6 +500,7 @@ async def _drive(book, iid, secret, then):
         "proof": fp._mac(secret, fp.CLIENT_LABEL, t),
     }
     committed = []
+    told = []
 
     async def commit(*a):
         committed.append(a)
@@ -471,16 +516,25 @@ async def _drive(book, iid, secret, then):
             self_key=lambda: "laptop",
             make_bundle=lambda d, h, n: _bundle(d, h),
             commit=commit,
+            begin=lambda *a: told.append(("begin",) + a[:4]),
+            unfinished=lambda *a: told.append(("unfinished",) + a),
+            addr=lambda: MEMBERS_URL,
             confirm_timeout=2.0,
         )
     )
     ok = await wire.read_frame(cr, fp.BUNDLE_MAX_FRAME)
-    assert ok["t"] == "ok"
-    await then(cr, cw, t + fp._field(b"laptop"), ok)
+    assert ok["t"] == "ok" and ok["addr"] == MEMBERS_URL
+    told.append(("ok-read",))
+    tt = t + fp._field(b"laptop") + fp._field(MEMBERS_URL.encode())
+    await then(cr, cw, tt, ok)
     outcome = await asyncio.wait_for(server, 5)
     cw.close()
     sw.close()
+    _drive.told = told
     return outcome, committed
+
+
+MEMBERS_URL = "wss://a-b.trycloudflare.com/%s" % TOKEN
 
 
 @pytest.mark.parametrize("how", ["wrong_key", "no_confirm", "garbage"])
@@ -504,6 +558,10 @@ async def test_no_ghost_member_without_a_valid_confirm(how):
 
     outcome, committed = await _drive(book, iid, secret, then)
     assert outcome == "unconfirmed" and committed == []
+    # Pending was recorded BEFORE the bundle was read, and the unfinished
+    # join reported after (M1).
+    assert [x[0] for x in _drive.told] == ["begin", "ok-read", "unfinished"]
+    assert _drive.told[-1] == ("unfinished", "mini", "Mini", "unconfirmed")
 
 
 async def test_valid_confirm_commits():
@@ -529,6 +587,7 @@ async def test_valid_confirm_commits():
 
     outcome, committed = await _drive(book, iid, secret, then)
     assert outcome == "added" and committed == [("mini", "Mini", "", False)]
+    assert [x[0] for x in _drive.told] == ["begin", "ok-read"]  # no alarm
 
 
 # --------------------------------------------------------------------------- #
@@ -579,10 +638,10 @@ CODE_URL = "wss://127.0.0.1:4567/%s" % TOKEN
 def _fake_pair(monkeypatch, *, fail_after_adopt=None):
     async def fake(code, *, device, host, dns, runs, adopt, edge_ssl, **kw):
         b = _bundle(device, host)
-        adopt("laptop", b)
+        await fp._maybe_await(adopt("laptop", b))
         if fail_after_adopt:
             raise fail_after_adopt
-        return "laptop", b
+        return "laptop", b, CODE_URL
 
     monkeypatch.setattr(fp, "pair", fake)
 
@@ -605,7 +664,7 @@ async def test_joiner_undoes_the_adopt_when_the_inviter_never_confirms(
     fleet, _calls = home
     assert not fleet.in_fleet()
     _fake_pair(monkeypatch, fail_after_adopt=fp.PairError("unconfirmed"))
-    await dp.join(_code(), reachable=True)
+    await dp.join(_code(), reachable=True, confirm=True)
     st = await _wait_join(fleet)
     assert st["state"] == "error" and "didn't confirm" in st["error"]
     assert not fleet.in_fleet()  # the key it took is gone again
@@ -616,7 +675,7 @@ async def test_checkbox_off_joins_but_leaves_the_switch_off(home, monkeypatch):
     _fake_pair(monkeypatch)
     turned = []
     monkeypatch.setattr(da, "save_switch", lambda on: turned.append(on))
-    st = await dp.join(_code(), reachable=False)
+    st = await dp.join(_code(), reachable=False, confirm=True)
     assert st["state"] == "joining" and st["via"] == "anywhere"
     st = await _wait_join(fleet)
     assert st["state"] == "joined", st
@@ -658,7 +717,7 @@ async def test_joiner_without_github_is_told_what_to_do(home, monkeypatch):
 
     monkeypatch.setattr(fleet, "_refresh", refresh)
     monkeypatch.setattr(fleet, "_announce", announce)
-    await dp.join(_code(), reachable=True)
+    await dp.join(_code(), reachable=True, confirm=True)
     st = await _wait_join(fleet)
     assert st["state"] == "joined", st
     assert turned == [True]
@@ -679,7 +738,7 @@ async def test_unreached_inviter_says_so(home, monkeypatch):
 
     monkeypatch.setattr(da, "apply", nothing)
     monkeypatch.setattr(dp, "_reach", nothing)
-    await dp.join(_code(), reachable=True)
+    await dp.join(_code(), reachable=True, confirm=True)
     st = await _wait_join(fleet)
     assert st["state"] == "joined" and "didn't answer" in st["note"]
 
@@ -700,7 +759,7 @@ async def test_join_errors_are_plain(home, monkeypatch, err, want):
         raise err
 
     monkeypatch.setattr(fp, "pair", fake)
-    await dp.join(_code(), reachable=True)
+    await dp.join(_code(), reachable=True, confirm=True)
     st = await _wait_join(fleet)
     assert st["state"] == "error" and want in st["error"]
     assert not fleet.in_fleet()
@@ -708,7 +767,7 @@ async def test_join_errors_are_plain(home, monkeypatch, err, want):
 
 async def test_a_bad_code_is_refused_before_anything(home):
     with pytest.raises(ValueError):
-        await dp.join("mfd1:abc-defg", reachable=True)
+        await dp.join("mfd1:abc-defg", reachable=True, confirm=True)
 
 
 async def test_inviter_needs_the_switch_then_makes_a_code(home, monkeypatch):
@@ -729,10 +788,14 @@ async def test_inviter_needs_the_switch_then_makes_a_code(home, monkeypatch):
 
     monkeypatch.setattr(da, "ensure_up", up)
     monkeypatch.setattr(da, "_FP", FP.hex())
+    pair_url = "wss://127.0.0.1:4567/%s" % da._new_token()
+    monkeypatch.setattr(da, "open_pair_path", lambda ttl: pair_url)
     inv = await dp.create_invite(turn_on=True)
     assert turned == [True] and fleet.in_fleet()  # a group of one to invite into
     c = fp.parse_code(inv["code"], loopback=True)
-    assert c.url == CODE_URL and c.fp == FP
+    # The code names the pairing path, never the members' one.
+    assert c.url == pair_url and c.url != CODE_URL and c.fp == FP
+    assert inv["safety"] == fp.safety_number(FP, c.invite_id)
     assert dp.invite_status()["invite"]["code"] == inv["code"]
     # The tunnel restarts: the code names a dead address — it goes.
     dp.tunnel_changed("wss://127.0.0.1:1/%s" % da._new_token())

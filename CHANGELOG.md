@@ -19,12 +19,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and dies after 5 wrong tries. The new computer checks the first one's key
   fingerprint from the code before it sends anything, both sides prove the
   code without sending it, and the first computer adds the new one only once
-  it has really joined. A ticked-by-default box on the new computer turns
-  the switch on there too, so your devices keep reaching each other; settings
-  sync then brings the GitHub sign-in it needs to leave its own address. The
-  join line says "Finishing setup…" meanwhile, and what to do if GitHub isn't
-  signed in there. `mindflock join mfd1:…` does the same from a terminal.
-  Design and threat model: `docs/devices-anywhere.md` §7.
+  it has really joined. Before joining, the new computer says plainly what
+  the code's maker gets (it can run agents here, and its settings replace
+  these) and asks, with a **safety number** to compare against the one shown
+  next to the code on your own computer; if this computer is already in a
+  group with other devices, it names them and says it leaves them. A
+  ticked-by-default box on the new computer turns the switch (and remote
+  control) on there too, so your devices keep reaching each other; unticked,
+  nothing is turned on. Settings sync then brings the GitHub sign-in it needs
+  to leave its own address. The join line says "Finishing setup…"
+  meanwhile, and what to do if GitHub isn't signed in there. `mindflock join`
+  does the same from a terminal — it asks for the code without echoing it
+  (or reads it from stdin), then the same question unless `--yes`.
+  **A used code never goes unnoticed:** the first computer records the new
+  one as pending before the key leaves, and if a code is used but the join
+  doesn't finish — or two computers use the same code — it raises a loud
+  alarm (Your devices, the bell, a phone push) with a one-click **Change
+  key** for all your devices; the second computer is told "this code was
+  already used". Each code gets its own address on the private tunnel, which
+  stops working when the code is replaced, cancelled or expires; a lost last
+  message is reconciled so both computers agree whether the join happened;
+  device names and DNS names from a joiner are cleaned (no bidi or
+  zero-width characters). Design and threat model:
+  `docs/devices-anywhere.md` §7.
 - **Reach my devices from anywhere (no Tailscale needed).** A new switch on
   Settings → Your devices, off by default. Your computers that are already in
   one group reach each other without Tailscale and without any MindFlock

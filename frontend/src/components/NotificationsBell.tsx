@@ -319,6 +319,7 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     case "device.join_requested":
     case "device.joined":
     case "device.removed":
+    case "device.pair_unfinished":
     case "settings.sync_paused": {
       const n = deviceEventNote(env.event, d);
       const approve = approvableRequest(env.event, d);

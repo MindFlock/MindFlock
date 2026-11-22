@@ -24,8 +24,11 @@ proves membership of the same group of devices:
 
 The same hello also answers a ``pair`` frame — a NEW device joining with a
 long code (:mod:`backend.peer.fleet_pair`) — when the server was given a
-``pair`` handler. That branch does that exchange and nothing else: the
-stream is closed after it and never reaches the web server.
+``pair`` handler AND the stream came in on the pairing path (``pair_only``:
+the relay ingress's side path, a fresh token per code; the members' path
+never takes a ``pair`` frame, and the pairing path never takes a ``dev``
+one). That branch does that exchange and nothing else: the stream is closed
+after it and never reaches the web server.
 
 After ``ok`` the stream is a plain byte pipe to the device's own web server
 (127.0.0.1:<its port>). The server side registers the local port of that
@@ -217,7 +220,9 @@ class TunnelServer:
         self._streams: set = set()
         self.stats = {"accepted": 0, "denied": 0, "dropped": 0, "open": 0, "pair": 0}
 
-    async def __call__(self, reader, writer, source: str = "") -> None:
+    async def __call__(
+        self, reader, writer, source: str = "", pair_only: bool = False
+    ) -> None:
         if self._unauth >= self.max_unauth:
             self.stats["dropped"] += 1
             _abort(writer)
@@ -231,7 +236,7 @@ class TunnelServer:
                 sslobj = writer.get_extra_info("ssl_object")
                 if sslobj is None or sslobj.version() != "TLSv1.3":
                     raise wire.ProtocolError("not TLS 1.3")
-                ok = await self._handshake(reader, writer)
+                ok = await self._handshake(reader, writer, pair_only)
             if isinstance(ok, _PairAsk):
                 # A new device with a pairing code: that exchange, under its
                 # own deadline, still counted as unauthenticated — then the
@@ -251,6 +256,15 @@ class TunnelServer:
         except asyncio.CancelledError:
             _abort(writer)
             raise
+        except (
+            Exception
+        ) as err:  # noqa: BLE001 — a bug in a handler: never a leaked stream
+            log.warning("device tunnel: handshake error (%s)", type(err).__name__)
+            ok = None
+            if not paired:
+                _abort(writer)
+                self.stats["denied"] += 1
+                return
         finally:
             self._unauth -= 1
         if paired:
@@ -266,15 +280,24 @@ class TunnelServer:
         self.stats["accepted"] += 1
         await self._serve(reader, writer, *ok)
 
-    async def _handshake(self, reader, writer):
+    async def _handshake(self, reader, writer, pair_only: bool = False):
         """→ ``(member, keys)`` once the client proved it, a :class:`_PairAsk`
-        for a pairing code (when this server takes them), else None."""
+        for a pairing code (only on the pairing path, when this server takes
+        them), else None."""
         sn = secrets.token_bytes(_NONCE_LEN)
         writer.write(wire.encode({"t": "hello", "v": PROTO_V, "nonce": _b64(sn)}))
         await writer.drain()
         msg = await wire.read_frame(reader, wire.HANDSHAKE_MAX_FRAME)
-        if isinstance(msg, dict) and msg.get("t") == "pair" and self._pair is not None:
-            return _PairAsk(sn, msg)
+        is_pair = isinstance(msg, dict) and msg.get("t") == "pair"
+        if pair_only or is_pair:
+            if pair_only and is_pair and self._pair is not None:
+                return _PairAsk(sn, msg)
+            # A pair frame on the members' path, or anything else on the
+            # pairing path: the same generic refusal, the book untouched.
+            with contextlib.suppress(Exception):
+                writer.write(wire.encode({"t": "denied"}))
+                await writer.drain()
+            return None
         keys = self._keys()
         me = self._self_key()
         good = False

@@ -223,11 +223,23 @@ def _ts(v, clamp: bool) -> Optional[float]:
 
 def clean_dns(dns, key: str) -> str:
     """A member's full MagicDNS name (lower-case, no trailing dot) — or ""
-    when ``dns`` isn't a name whose first label is ``key``."""
-    name = str(dns or "").strip().rstrip(".").lower()[:_MAX_HOST]
-    if not name or name.split(".")[0] != key:
+    when ``dns`` isn't a plain DNS name (``[a-z0-9-]`` labels, at most 253
+    characters) whose first label is ``key``."""
+    from backend.peer.fleet_pair import dns_ok
+
+    name = str(dns or "").strip().rstrip(".").lower()
+    if not name or not dns_ok(name) or name.split(".")[0] != key:
         return ""
     return name
+
+
+def clean_host(host, key: str = "") -> str:
+    """A device's display name as stored and shown: no control, bidi or
+    zero-width characters, at most 64 characters (``fleet_pair.clean_host``)
+    — ``key`` when nothing is left."""
+    from backend.peer.fleet_pair import clean_host as _clean
+
+    return _clean(host) or key
 
 
 def _clean_members(raw, clamp: bool = False) -> Dict[str, dict]:
@@ -241,7 +253,7 @@ def _clean_members(raw, clamp: bool = False) -> Dict[str, dict]:
         if added_at is None:
             continue
         out[k] = {
-            "host": str(v.get("host") or "")[:_MAX_HOST],
+            "host": clean_host(v.get("host") or ""),
             "added_at": added_at,
             "added_by": str(v.get("added_by") or "")[:_MAX_HOST],
             "dns": clean_dns(v.get("dns"), k),
@@ -597,16 +609,19 @@ def bundle() -> dict:
     )
 
 
-def bundle_for(device: str, host: str, dns: str = "") -> dict:
+def bundle_for(device: str, host: str, dns: str = "", note_admit: bool = True) -> dict:
     """The :func:`bundle` handed to a joiner: the roster plus a live entry for
     the joiner itself (added now, by this device). This device's OWN roster is
     left alone — the joiner puts itself on it once it actually holds the key
     (its announce and gossip), so a join that never completes leaves no ghost
-    member behind."""
+    member behind. ``note_admit`` False: the caller records the admit
+    (:func:`_note_admit`) itself, once the join is confirmed (a device
+    tunnel pairing, ``devices_pair``)."""
     out = bundle()
     tmp = {"members": out["members"], "removed": out["removed"]}
     _put_member(tmp, device, host, _self_key(), dns)
-    _note_admit(device, out["members"][device]["added_at"])
+    if note_admit:
+        _note_admit(device, out["members"][device]["added_at"])
     # Who the group belongs to: the joiner adopts this id (people.md).
     out["person"] = _person_handshake()
     return out
@@ -641,7 +656,7 @@ def _put_member(doc: dict, key: str, host: str, by: str, dns: str = "") -> None:
     if gone is not None and gone >= now:
         now = gone + 0.001
     doc["members"][key] = {
-        "host": str(host or key)[:_MAX_HOST],
+        "host": clean_host(host or key, key),
         "added_at": now,
         "added_by": str(by or "")[:_MAX_HOST],
         "dns": clean_dns(dns, key),
@@ -779,6 +794,24 @@ def add_member(key: str, host: str, by: str, dns: str = "") -> None:
         raise ValueError("not a device name: %r" % key)
     with _LOCK:
         doc = _load()
+        _put_member(doc, key, host, by, dns)
+        _save(doc)
+
+
+class NameTaken(ValueError):
+    """:func:`add_new_member`: a live member already has that name."""
+
+
+def add_new_member(key: str, host: str, by: str, dns: str = "") -> None:
+    """:func:`add_member` for a NEW device only: refused (:class:`NameTaken`)
+    when ``key`` is a live member — checked and written under the lock, so a
+    join that finished meanwhile under the same name is never overwritten."""
+    if not DEVICE_RE.match(key or ""):
+        raise ValueError("not a device name: %r" % key)
+    with _LOCK:
+        doc = _load()
+        if _live(doc, key):
+            raise NameTaken(key)
         _put_member(doc, key, host, by, dns)
         _save(doc)
 
@@ -2487,11 +2520,15 @@ async def _finish_join(dev: dict, b: dict, runs: Optional[bool] = None) -> None:
     await after_adopt(dev, exposed, runs)
 
 
-def adopted_side_effects(b: dict, admitter: str) -> None:
+def adopted_side_effects(b: dict, admitter: str, remote_control: bool = True) -> None:
     """Right after a bundle was adopted: the admitter's person is this
     device's now (before settings sync starts), and remote control is on
-    (joining IS the permission). Never raises."""
+    (joining IS the permission) — unless ``remote_control`` is False (a
+    device-tunnel join whose person unticked "let my devices reach this
+    computer": nothing turns on that they didn't agree to). Never raises."""
     _adopt_person(b.get("person") if isinstance(b, dict) else None, admitter)
+    if not remote_control:
+        return
     try:
         _enable_remote_control()
     except Exception as err:  # noqa: BLE001
@@ -3301,6 +3338,10 @@ def status(privileged: bool) -> dict:
         # Devices let in here lately, and whether this one can reach them
         # ("unreachable_joiner": joined, but local-only over there).
         "admitted": admitted(),
+        # A new device pairing through the tunnel right now (pending — not a
+        # member, can't connect as one) and pairing codes used without the
+        # join finishing: the key may be out (devices_pair).
+        "pairing": _pairing_status(),
         # Tailnet devices that aren't (reachable) MindFlocks, each with why:
         # what replaces "No other MindFlock found".
         "tailnet_peers": _tailnet_peers(doc, known, probes, port),
@@ -3313,6 +3354,15 @@ def status(privileged: bool) -> dict:
         # Who answers the shared phone link (one name, several hosts).
         "phone_link": _phone_link(doc, known),
     }
+
+
+def _pairing_status() -> dict:
+    try:
+        from backend.web.core import devices_pair as _pair
+
+        return _pair.pairing_status()
+    except Exception:  # noqa: BLE001
+        return {"pending": [], "alerts": []}
 
 
 def _probe_line(probe: Optional[dict], host: str, port: int) -> str:

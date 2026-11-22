@@ -19,6 +19,7 @@ import {
   FAR_TURN_ON_BODY,
   FAR_TURN_ON_TITLE,
   farInviteLine,
+  farSafetyLine,
   type AnywhereInviteState,
 } from "../../../lib/devicesAnywhere";
 import { toast } from "../../../lib/toast";
@@ -107,6 +108,11 @@ export function DevicesFarInvite({ active, disabled }: { active: boolean; disabl
         </div>
         {inv.qr_svg && (
           <div className="devices-far-qr" aria-label="The code as a QR" dangerouslySetInnerHTML={{ __html: inv.qr_svg }} />
+        )}
+        {inv.safety && (
+          <span className="devices-far-safety" id="devices-far-safety">
+            {farSafetyLine(inv)}
+          </span>
         )}
         <span className="set-hint" id="devices-far-countdown">
           {farInviteLine(inv, now)} · Anyone with this code can join your devices — send it only to yourself.

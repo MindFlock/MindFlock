@@ -521,7 +521,7 @@ export function EventToasts() {
     // you while it's minimized (lib/desktopNotify): a join request, someone
     // arriving on a peer link, an update (below, with the update toast).
     unsubs.push(installDesktopNotifyClicks());
-    for (const name of ["device.join_requested", "device.joined", "settings.sync_paused"]) {
+    for (const name of ["device.join_requested", "device.joined", "device.pair_unfinished", "settings.sync_paused"]) {
       unsubs.push(
         ev.subscribe(name, (env) => {
           if (isReplay(env)) return;

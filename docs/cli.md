@@ -825,11 +825,17 @@ computer on your tailnet that can be joined, and with several it asks which
 network* on the other computer) joins your devices through that computer's
 private tunnel — no Tailscale on either side
 ([devices-anywhere.md §7](devices-anywhere.md#7-adding-a-new-device-without-tailscale)):
-it turns on Reach my devices from anywhere here unless `--no-anywhere`, waits
-for the join to finish (up to 4 minutes), prints `joined <host>'s devices` and
-any line about what is left (a missing GitHub sign-in here), and exits 1 with
-the reason when it fails. Anything else exits 1 saying what the formats look
-like.
+first it prints what the code's maker will be able to do here, the safety
+number to compare with the one next to the code on your other computer, and
+(when this computer is in another group) that it leaves it, and asks — `--yes`
+skips that, only for a code you made yourself. It turns on Reach my devices
+from anywhere here unless `--no-anywhere`, waits for the join to finish (up
+to 4 minutes), prints `joined <host>'s devices` and any line about what is
+left (a missing GitHub sign-in here), and exits 1 with the reason when it
+fails. With no `CODE`, `mindflock join` asks for it without echoing it (or
+reads it from stdin): a code typed as an argument stays in your shell history
+and shows in `ps` while it runs. Anything else exits 1 saying what the formats
+look like.
 
 ### `mindflock devices [list|add|join|cancel|approve|deny|remove|leave|update|bootstrap]`
 

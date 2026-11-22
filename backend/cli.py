@@ -760,14 +760,27 @@ def _build_parser() -> argparse.ArgumentParser:
             "(or the whole `mindflock devices join DEVICE CODE` command) joins "
             "your devices — the same as `devices join`; a long mfd1: code (from "
             "Add a device → It isn't on my network) joins your devices through "
-            "the other computer's private tunnel, no Tailscale needed; an "
-            "mfp1:/mfp2: invite pairs with another person — the same as `peer "
-            "join`. Needs a running server."
+            "the other computer's private tunnel, no Tailscale needed — it asks "
+            "first and shows a safety number to compare; an mfp1:/mfp2: invite "
+            "pairs with another person — the same as `peer join`. With no CODE "
+            "it asks for the code (not echoed), or reads it from stdin: a code "
+            "typed as an argument stays in your shell history and shows in "
+            "`ps` while it runs. Needs a running server."
         ),
     )
-    join_any.add_argument("text", nargs="+", metavar="CODE")
     join_any.add_argument(
-        "--yes", "-y", action="store_true", help="don't ask first (devices codes)"
+        "text",
+        nargs="*",
+        metavar="CODE",
+        help="the code (omit it to be asked, or pipe it in: safer than an argument)",
+    )
+    join_any.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="don't ask first (devices codes; an mfd1: code then joins without "
+        "showing its safety number, leaving another group this computer is in "
+        "— only for a code you made yourself)",
     )
     join_any.add_argument(
         "--no-anywhere",
@@ -3799,15 +3812,45 @@ def _print_bootstrap(b: dict) -> None:
 def _join_anywhere(args: argparse.Namespace, code: str) -> int:
     """``mindflock join mfd1:…`` — the new computer joins through the other
     one's private tunnel (and turns "Reach my devices from anywhere" on here,
-    unless ``--no-anywhere``); waits for the join to finish."""
+    unless ``--no-anywhere``); waits for the join to finish. The server
+    answers 409 ``needs_confirm`` first: what the other computer will be able
+    to do, the safety number to compare and — when this one is in another
+    group — that it leaves it. Asked here unless ``--yes``."""
     base = client.discover(args.host, args.port)
     reachable = not getattr(args, "no_anywhere", False)
-    st = (
-        client.post(
-            base, "/api/devices/anywhere/join", {"code": code, "reachable": reachable}
+    body = {"code": code, "reachable": reachable}
+    if getattr(args, "yes", False):
+        body.update(confirm=True, leave_group=True)
+    try:
+        st = client.post(base, "/api/devices/anywhere/join", body) or {}
+    except client.ApiError as err:
+        info = err.payload or {}
+        if err.status != 409 or not info.get("needs_confirm"):
+            raise
+        print(info.get("text") or "", file=sys.stderr)
+        print(info.get("safety_text") or "", file=sys.stderr)
+        if info.get("leave_text"):
+            print(info["leave_text"], file=sys.stderr)
+        if reachable:
+            print(
+                "It also turns on Reach my devices from anywhere here "
+                "(--no-anywhere to leave it off).",
+                file=sys.stderr,
+            )
+        question = (
+            "Leave that group and join"
+            if info.get("other_group")
+            else "It's my own computer — join"
         )
-        or {}
-    )
+        if not _confirm(question):
+            print(
+                "not joined (to join without being asked — only with a code you "
+                "made yourself — add --yes)",
+                file=sys.stderr,
+            )
+            return 1
+        body.update(confirm=True, leave_group=bool(info.get("other_group")))
+        st = client.post(base, "/api/devices/anywhere/join", body) or {}
     deadline = time.time() + 240.0
     while st.get("state") in ("joining", "finishing") and time.time() < deadline:
         time.sleep(2.0)
@@ -3824,6 +3867,24 @@ def _join_anywhere(args: argparse.Namespace, code: str) -> int:
     raise client.ClientError(st.get("error") or "the join didn't finish (%s)" % state)
 
 
+def _read_code() -> str:
+    """The code when none was given as an argument: asked for (not echoed)
+    on a terminal, else read from stdin — so it never lands in the shell
+    history or in ``ps``."""
+    if sys.stdin is not None and sys.stdin.isatty():
+        import getpass
+
+        try:
+            return getpass.getpass("Paste the code (it isn't shown): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("", file=sys.stderr)
+            return ""
+    try:
+        return (sys.stdin.read(8192) if sys.stdin is not None else "").strip()
+    except OSError:
+        return ""
+
+
 def _cmd_join(args: argparse.Namespace) -> int:
     """``mindflock join CODE`` — route any pasted code by its format
     (:func:`backend.web.core.fleet.classify_code`): a peer invite goes to
@@ -3831,7 +3892,9 @@ def _cmd_join(args: argparse.Namespace) -> int:
     from backend.peer.invite import code_from_text
     from backend.web.core.fleet import classify_code
 
-    text = " ".join(args.text)
+    text = " ".join(args.text or [])
+    if not text.strip():
+        text = _read_code()
     from backend.peer.fleet_pair import code_from_text as device_code_from_text
 
     if device_code_from_text(text):

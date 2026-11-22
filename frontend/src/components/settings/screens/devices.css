@@ -506,3 +506,27 @@
 .devices-far-reach .set-hint {
   flex-basis: 100%;
 }
+
+/* The safety number next to a long code: the new computer shows the same
+   one before it joins (docs/devices-anywhere.md §7). */
+.devices-far-safety {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A pairing code used without the join finishing: the text, It was me. */
+.devices-pair-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+}
+
+.devices-pair-alert p {
+  flex: 1 1 280px;
+  margin: 0;
+}
+
+#devices-pair-alerts > .test-btn {
+  margin-top: 8px;
+}

@@ -540,6 +540,23 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["computer"],
     },
     {
+        # A pairing code was used but the join didn't finish (or two computers
+        # used one code): the devices' key may be with someone else. Loud and
+        # on by default — Change key on Your devices is the answer
+        # (core.devices_pair).
+        "id": "device_pair_unfinished",
+        "label": "A pairing code was used but the join didn't finish",
+        "description": "If that wasn't you, change your devices' key.",
+        "event": "device.pair_unfinished",
+        "old": None,
+        "new": None,
+        "title": "Check your devices",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 5,
+        "tags": ["warning"],
+    },
+    {
         # A flight parked on you (core.flight_driver emits it once per step
         # and round): a *you* step, open checklist items, a failure handed to
         # you. The flight waits until you press Done, so it rings by default.

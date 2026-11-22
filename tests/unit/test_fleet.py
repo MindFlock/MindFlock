@@ -1443,6 +1443,7 @@ async def test_status_payload(world, monkeypatch):
         "bind",
         "gate_on",
         "admitted",
+        "pairing",
         "tailnet_peers",
         "policy_grant",
         "match",

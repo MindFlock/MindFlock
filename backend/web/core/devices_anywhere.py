@@ -685,9 +685,38 @@ def seed(device: str, url: str, fp_hex: str) -> None:
 
 
 def current_url() -> str:
-    """This device's tunnel address while it is up ("" otherwise). Never
-    logged; only ever put into a pairing code for this device's own screen."""
+    """This device's tunnel address while it is up ("" otherwise) — the
+    members' path. Never logged, never put in a pairing code (that gets its
+    own path, :func:`open_pair_path`)."""
     return _S.url if _S.tunnel_state == "up" else ""
+
+
+def open_pair_path(ttl_s: float) -> str:
+    """A fresh pairing path on the live tunnel, for ``ttl_s`` seconds → its
+    address (``wss://<tunnel host>/<new token>``), "" when the tunnel isn't
+    up. It replaces any earlier pairing path at once (one code at a time),
+    takes ONLY pairing frames, and dies with the tunnel."""
+    url, ingress, server = current_url(), _S.ingress, _S.server
+    if not url or ingress is None or server is None:
+        return ""
+    token = _new_token()
+
+    async def on_pair(reader, writer, source: str = "") -> None:
+        await server(reader, writer, source, pair_only=True)
+
+    ingress.set_side_path("/" + token, on_pair, until=time.monotonic() + float(ttl_s))
+    base = url.rsplit("/", 1)[0]
+    return "%s/%s" % (base, token)
+
+
+def close_pair_path() -> None:
+    """Retire the pairing path (the code was cancelled, or no code is live)."""
+    ingress = _S.ingress
+    if ingress is not None:
+        try:
+            ingress.set_side_path(None)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def fingerprint() -> str:

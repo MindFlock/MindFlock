@@ -45363,6 +45363,19 @@ var FAR_TURN_ON_TITLE = "Turn on “Reach my devices from anywhere” here?";
 var FAR_TURN_ON_BODY = "The new computer reaches this one through a private, encrypted tunnel (Cloudflare carries it but can't read it). It stays on afterwards so your devices keep finding each other — turn it off any time under the switch above.";
 var FAR_REACHABLE_LABEL = "Let my devices reach this computer from anywhere";
 var FAR_REACHABLE_HINT = "Turns on “Reach my devices from anywhere” on this computer — needed unless both computers use Tailscale. Leave it ticked unless you know you don't want it.";
+var FAR_CONFIRM_TITLE = "Only join if this code came from your own computer.";
+function farConfirmBody(c, reach) {
+	const parts = [c.text, c.safety_text];
+	if (c.leave_text) parts.push(c.leave_text);
+	if (reach) parts.push("It also turns on remote control and “Reach my devices from anywhere” here.");
+	return parts.filter(Boolean).join(" ");
+}
+function farConfirmLabel(c) {
+	return c.other_group ? "Leave that group and join" : "It's my computer — join";
+}
+function farSafetyLine(inv) {
+	return inv.safety ? "Safety number " + inv.safety + " — the new computer shows the same before it joins." : "";
+}
 function extractDeviceCode(text) {
 	const m = /mfd1:[a-z2-7]+-[a-z2-7]{4}/i.exec(String(text || "").slice(0, 4096));
 	return m ? m[0].toLowerCase() : "";
@@ -45607,6 +45620,14 @@ function deviceEventNote(event, data) {
 			cls: "n-info",
 			toast: ""
 		};
+		case "device.pair_unfinished": {
+			const text = String(d.detail || "") || "A pairing code was used but the join didn't finish. If that wasn't you, change your devices' key now.";
+			return {
+				text,
+				cls: "n-warn",
+				toast: text
+			};
+		}
 		case "settings.sync_paused": return {
 			text: SYNC_PAUSED_NOTE,
 			cls: "n-warn",
@@ -47180,6 +47201,7 @@ function notifFromEvent(env) {
 		case "device.join_requested":
 		case "device.joined":
 		case "device.removed":
+		case "device.pair_unfinished":
 		case "settings.sync_paused": {
 			const n = deviceEventNote(env.event, d);
 			const approve = approvableRequest(env.event, d);
@@ -54214,7 +54236,7 @@ function stripMarkup(text) {
 	return text;
 }
 var SEG = "[A-Za-z0-9_.~@+-]+";
-var PATH$2 = new RegExp("(^|[^A-Za-z0-9/.~])((?:~|\\.{1,2})?/" + SEG + "(?:/" + SEG + ")*/?|" + SEG + "(?:/" + SEG + ")+/?)(?::(\\d+))?(?![A-Za-z0-9/])", "g");
+var PATH$3 = new RegExp("(^|[^A-Za-z0-9/.~])((?:~|\\.{1,2})?/" + SEG + "(?:/" + SEG + ")*/?|" + SEG + "(?:/" + SEG + ")+/?)(?::(\\d+))?(?![A-Za-z0-9/])", "g");
 var FILE = new RegExp("(^|[^A-Za-z0-9/.])([A-Za-z0-9_][A-Za-z0-9_-]*\\.(" + byLength(Object.keys(TABLES.ext)).join("|") + "))(?::(\\d+))?(?![A-Za-z0-9.])", "g");
 var SHA = /(^|[^A-Za-z0-9])([0-9a-f]{7,40})(?![A-Za-z0-9])/g;
 function spokenName(name) {
@@ -54249,7 +54271,7 @@ function isPath(token) {
 	return !!ext && ext in TABLES.ext;
 }
 function paths(text, s) {
-	text = text.replace(PATH$2, (whole, pre, tokenIn, line) => {
+	text = text.replace(PATH$3, (whole, pre, tokenIn, line) => {
 		let token = tokenIn;
 		let tail = "";
 		while (token.endsWith(".") || token.endsWith(",")) {
@@ -62075,6 +62097,11 @@ function desktopNoteFor(event, data, env) {
 				target: "devices"
 			};
 		}
+		case "device.pair_unfinished": return {
+			title: "Check your devices",
+			body: clip$3(String(d.detail || "A pairing code was used but the join didn't finish")),
+			target: "devices"
+		};
 		case "peer.link_added": return {
 			title: String(d.peer_name || "Someone") + (d.repaired ? " reconnected" : " joined your invite"),
 			body: d.sas ? "Compare the safety number " + String(d.sas) + " with them" : "People",
@@ -63082,6 +63109,7 @@ function EventToasts() {
 		for (const name of [
 			"device.join_requested",
 			"device.joined",
+			"device.pair_unfinished",
 			"settings.sync_paused"
 		]) unsubs.push(ev.subscribe(name, (env) => {
 			if (isReplay(env)) return;
@@ -136324,14 +136352,14 @@ function DevicesAdvanced({ focusDevice }) {
 }
 //#endregion
 //#region src/components/settings/screens/DevicesAnywhere.tsx
-var PATH$1 = "/api/devices/anywhere";
+var PATH$2 = "/api/devices/anywhere";
 function DevicesAnywhere({ active }) {
 	const [st, setSt] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [install, setInstall] = (0, import_react.useState)([]);
 	const load = (0, import_react.useCallback)(async () => {
 		try {
-			setSt(await api(PATH$1));
+			setSt(await api(PATH$2));
 		} catch {}
 	}, []);
 	(0, import_react.useEffect)(() => {
@@ -136397,7 +136425,7 @@ function DevicesAnywhere({ active }) {
 							"data-field": "devices_anywhere",
 							checked: st.on,
 							disabled: busy,
-							onChange: (e) => void post(PATH$1, { on: e.target.checked })
+							onChange: (e) => void post(PATH$2, { on: e.target.checked })
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -136415,7 +136443,7 @@ function DevicesAnywhere({ active }) {
 					className: "test-btn",
 					id: "devices-anywhere-retry",
 					disabled: busy,
-					onClick: () => void post(PATH$1 + "/retry"),
+					onClick: () => void post(PATH$2 + "/retry"),
 					children: "Retry"
 				})] })]
 			}),
@@ -136428,7 +136456,7 @@ function DevicesAnywhere({ active }) {
 }
 //#endregion
 //#region src/components/settings/screens/DevicesFarInvite.tsx
-var PATH = "/api/devices/anywhere/invite";
+var PATH$1 = "/api/devices/anywhere/invite";
 var POLL_MS$2 = 4e3;
 function DevicesFarInvite({ active, disabled }) {
 	const [st, setSt] = (0, import_react.useState)(null);
@@ -136436,7 +136464,7 @@ function DevicesFarInvite({ active, disabled }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const load = (0, import_react.useCallback)(async () => {
 		try {
-			setSt(await api(PATH));
+			setSt(await api(PATH$1));
 		} catch {}
 	}, []);
 	(0, import_react.useEffect)(() => {
@@ -136458,7 +136486,7 @@ function DevicesFarInvite({ active, disabled }) {
 	const make = async (turnOn) => {
 		setBusy(true);
 		try {
-			setSt(await api(PATH, { json: { turn_on: turnOn } }));
+			setSt(await api(PATH$1, { json: { turn_on: turnOn } }));
 			setAsk(false);
 		} catch (e) {
 			if ((e instanceof ApiError ? e.body : null)?.needs_switch) setAsk(true);
@@ -136470,7 +136498,7 @@ function DevicesFarInvite({ active, disabled }) {
 	const cancel = async () => {
 		setBusy(true);
 		try {
-			setSt(await api(PATH, { method: "DELETE" }));
+			setSt(await api(PATH$1, { method: "DELETE" }));
 		} catch (e) {
 			toast(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -136510,6 +136538,11 @@ function DevicesFarInvite({ active, disabled }) {
 					className: "devices-far-qr",
 					"aria-label": "The code as a QR",
 					dangerouslySetInnerHTML: { __html: inv.qr_svg }
+				}),
+				inv.safety && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "devices-far-safety",
+					id: "devices-far-safety",
+					children: farSafetyLine(inv)
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "set-hint",
@@ -136555,6 +136588,78 @@ function DevicesFarInvite({ active, disabled }) {
 			]
 		});
 	}
+}
+//#endregion
+//#region src/components/settings/screens/DevicesPairAlerts.tsx
+var PATH = "/api/devices/anywhere/pair-alerts";
+function DevicesPairAlerts({ pairing, reload }) {
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [ask, setAsk] = (0, import_react.useState)(false);
+	const alerts = pairing?.alerts || [];
+	const pending = pairing?.pending || [];
+	if (!alerts.length && !pending.length) return null;
+	const act = async (key, fn, ok) => {
+		setBusy(key);
+		try {
+			toast(ok(await fn()), { duration: 8e3 });
+			setAsk(false);
+		} catch (e) {
+			toast(e instanceof Error ? e.message : String(e), { duration: 8e3 });
+		} finally {
+			setBusy("");
+			reload();
+		}
+	};
+	const changeKey = () => act("key", () => api(PATH + "/change-key", { json: {} }), (r) => {
+		const out = r || {};
+		const n = out.rekeyed?.length || 0;
+		const missed = out.missed?.length || 0;
+		return "Key changed" + (n ? " on " + n + (n === 1 ? " other device" : " other devices") : "") + (missed ? " — " + missed + " offline take it when they're next seen" : "");
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [alerts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "devices-warn",
+		id: "devices-pair-alerts",
+		role: "alert",
+		children: [
+			alerts.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "devices-pair-alert",
+				"data-alert": a.id,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: a.text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					"data-dismiss": a.id,
+					disabled: !!busy,
+					onClick: () => void act("dismiss:" + a.id, () => api(PATH + "?id=" + encodeURIComponent(a.id), { method: "DELETE" }), () => "Dismissed"),
+					children: "It was me"
+				})]
+			}, a.id)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				id: "devices-pair-change-key",
+				disabled: !!busy || ask,
+				onClick: () => setAsk(true),
+				children: "Change key"
+			}),
+			ask && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				id: "devices-pair-change-key-confirm",
+				title: "Change your devices' key now?",
+				body: "Every device gets a new key and new access tokens, so whoever used the code is locked out. A phone signs in again with the QR in Your phone; a device that's offline takes the new key when it's next seen.",
+				confirmLabel: busy === "key" ? "Changing…" : "Change key",
+				busy: busy === "key",
+				onConfirm: () => void changeKey(),
+				onCancel: () => setAsk(false)
+			})
+		]
+	}), pending.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "devices-note",
+		id: "devices-pair-pending",
+		role: "status",
+		children: pending.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			"data-pending": p.device,
+			children: (p.host || p.device) + " is pairing now — not one of your devices until it confirms."
+		}, p.device))
+	})] });
 }
 //#endregion
 //#region src/components/settings/screens/DeviceReadiness.tsx
@@ -136703,6 +136808,7 @@ function Devices(p) {
 	const [code, setCode] = (0, import_react.useState)("");
 	const [pasted, setPasted] = (0, import_react.useState)("");
 	const [farReach, setFarReach] = (0, import_react.useState)(true);
+	const [farAsk, setFarAsk] = (0, import_react.useState)(null);
 	const [rotateTokens, setRotateTokens] = (0, import_react.useState)(true);
 	const [reachAsk, setReachAsk] = (0, import_react.useState)(false);
 	const [matchAsk, setMatchAsk] = (0, import_react.useState)(false);
@@ -136868,6 +136974,24 @@ function Devices(p) {
 	const joinBusy = join && (join.state === "waiting" || join.state === "joining" || join.state === "finishing");
 	const askToJoin = (device) => run("ask:" + device, () => api("/api/fleet/request", { json: { device } }));
 	const cancelJoin = () => run("cancel-join", () => api("/api/fleet/request", { method: "DELETE" }));
+	const joinFarConfirmed = () => {
+		const ask = farAsk;
+		if (!ask) return;
+		return run("paste", async () => {
+			const j = await api("/api/devices/anywhere/join", { json: {
+				code: ask.code,
+				reachable: farReach,
+				confirm: true,
+				leave_group: !!ask.info.other_group
+			} });
+			setFarAsk(null);
+			setSt((prev) => prev ? {
+				...prev,
+				join: j
+			} : prev);
+			setPasted("");
+		});
+	};
 	const joinWithCode = (device) => run("code:" + device, async () => {
 		await api("/api/fleet/join", { json: {
 			device,
@@ -136886,15 +137010,22 @@ function Devices(p) {
 		if (routeCode(pasted).kind === "anywhere") {
 			const code = routeCode(pasted).code;
 			return run("paste", async () => {
-				const j = await api("/api/devices/anywhere/join", { json: {
-					code,
-					reachable: farReach
-				} });
-				setSt((prev) => prev ? {
-					...prev,
-					join: j
-				} : prev);
-				setPasted("");
+				try {
+					await api("/api/devices/anywhere/join", { json: {
+						code,
+						reachable: farReach
+					} });
+				} catch (e) {
+					const body = e instanceof ApiError ? e.body : null;
+					if (body?.needs_confirm) {
+						setFarAsk({
+							code,
+							info: body
+						});
+						return;
+					}
+					throw e;
+				}
 			});
 		}
 		const { body, error } = pasteJoinBody(pasted, candidates, codeFor || focusDevice || null);
@@ -137016,6 +137147,10 @@ function Devices(p) {
 				"data-unreachable": a.device,
 				children: admitLine(a)
 			}, a.device))
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesPairAlerts, {
+			pairing: st.pairing,
+			reload: loadAll
 		}),
 		finishing.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "devices-note",
@@ -137690,7 +137825,10 @@ function Devices(p) {
 					autoComplete: "off",
 					spellCheck: false,
 					value: pasted,
-					onChange: (e) => setPasted(e.target.value),
+					onChange: (e) => {
+						setPasted(e.target.value);
+						setFarAsk(null);
+					},
 					onKeyDown: (e) => {
 						if (e.key === "Enter" && pasted.trim() && !busy) joinWithText();
 					}
@@ -137726,6 +137864,15 @@ function Devices(p) {
 							children: FAR_REACHABLE_HINT
 						})
 					]
+				}),
+				farAsk && routeCode(pasted).kind === "anywhere" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					id: "devices-far-confirm",
+					title: FAR_CONFIRM_TITLE,
+					body: farConfirmBody(farAsk.info, farReach),
+					confirmLabel: busy === "paste" ? "Joining…" : farConfirmLabel(farAsk.info),
+					busy: busy === "paste",
+					onConfirm: () => void joinFarConfirmed(),
+					onCancel: () => setFarAsk(null)
 				})
 			]
 		}),
