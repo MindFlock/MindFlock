@@ -119,6 +119,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`MINDFLOCK_HOME_GUARD=1`** turns on the test suite's real-home guard in
   any process: a store path in the real `~/.mindflock` raises instead of
   being written. The preview's server runs with it.
+### Added
+
+- **A new session's worktree is ready to work in, and small.** Pin files
+  such as `.python-version` are carried from the checkout it was cut from
+  (never a secret by default), and each lockfile's dependencies are made
+  ready the way that checkout has them: `uv sync --frozen` from uv's cache,
+  `node_modules` cloned copy-on-write — or as a hard-link tree on ext4 — when
+  the lockfile matches, else `npm ci` / `yarn` / `pnpm install`. It runs in
+  the background while the agent reads code (its first prompt and MCP
+  `whoami` say so) and never holds prompts; a failure reads "setup didn't
+  finish: <why>" with a **Setup log** in the session menu. For this repo a
+  worktree is ready in ~1 s instead of ~6 s and holds ~61 MB of its own
+  instead of ~200 MB. `[workspace] dependencies = "auto" | "install" | "off"`
+  in `.mindflock.toml`, and a per-repo `repository.worktree_setup` setting
+  for your own commands and files.
+
+### Changed
+
+- **`uv sync` in this repo installs dev + web** (`[tool.uv] default-groups`),
+  the set the tests and the web UI need.
 
 ## [0.14.25] - 2026-11-20
 

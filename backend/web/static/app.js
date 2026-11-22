@@ -25546,6 +25546,10 @@ function stopWaitingToast(name, creates) {
 }
 //#endregion
 //#region src/lib/sessionState.ts
+function setupHolds(setup) {
+	if (!setup || setup.state !== "running" && setup.state !== "failed") return false;
+	return setup.hold !== false;
+}
 var actShown = /* @__PURE__ */ new Map();
 var actPending = /* @__PURE__ */ new Map();
 function noteActivity(inst) {
@@ -25886,7 +25890,7 @@ function deriveSessionState(inst, extras) {
 		hint: heldHint(inst.held_reason)
 	};
 	if (inst.sleeping) return sleepingState(inst.sleeping, now);
-	if (inst.setup && inst.setup.state === "running") return {
+	if (inst.setup && inst.setup.state === "running" && setupHolds(inst.setup)) return {
 		state: "starting",
 		label: STATE_LABEL$1.starting,
 		tone: "muted",
@@ -25894,7 +25898,7 @@ function deriveSessionState(inst, extras) {
 		restartable: false,
 		hint: "Worktree setup running (deps / env files) — queued prompts are held until it finishes"
 	};
-	if (inst.setup && inst.setup.state === "failed") return needsYou("setup_failed", "Worktree setup failed — prompts are held; re-run it from the actions menu (log: .mindflock_setup.log)");
+	if (inst.setup && inst.setup.state === "failed" && setupHolds(inst.setup)) return needsYou("setup_failed", "Worktree setup failed — prompts are held; re-run it from the actions menu (log: .mindflock_setup.log)");
 	const act = extras?.activity ?? effectiveActivity(inst);
 	if (act === "clarify") return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
 	const fl = inst.flight;
@@ -30066,6 +30070,18 @@ function liveStep(inst) {
 		title: "Session paused — resume it to continue."
 	};
 	const setup = inst.setup;
+	if (setup && setup.hold === false) {
+		if (setup.state === "running") return {
+			label: "preparing",
+			tone: "work",
+			title: "Preparing the worktree in the background (dependencies, pin files). The agent can already read code; tests and builds wait for it."
+		};
+		if (setup.state === "failed") return {
+			label: "setup didn't finish",
+			tone: "blocked",
+			title: "Setup didn't finish" + (setup.error ? ": " + setup.error : "") + " · see the log (" + (setup.log || ".mindflock_setup.log") + ", or Setup log in the session menu). Prompts are not held."
+		};
+	}
 	if (setup?.state === "running") return {
 		label: "setting up",
 		tone: "work",
@@ -31997,6 +32013,16 @@ async function rerunSetup(title) {
 		errorPop("Setup re-run failed", errMsg(err));
 	}
 	await refreshInstances();
+}
+async function showSetupLog(title) {
+	if (!title) return;
+	try {
+		const d = await instApi(title, "/setup?lines=40");
+		const st = d.status || {};
+		confirmPop("Worktree setup log", (st.state === "failed" ? "Setup didn't finish" + (st.error ? ": " + st.error : "") + "\n\n" : "") + ((d.log || "").trim() || "(the log is empty)"), [], "Close");
+	} catch (err) {
+		errorPop("Couldn't read the setup log", errMsg(err));
+	}
 }
 function hideSession(title) {
 	if (!title) return;
@@ -47052,13 +47078,21 @@ function notifFromEvent(env) {
 			text: "sent the next queued prompt (" + (Number(d.remaining) || 0) + " left)",
 			cls: "n-info"
 		};
-		case "session.setup_finished": return env.new === "ok" ? {
-			text: "worktree setup finished",
-			cls: "n-done"
-		} : {
-			text: REASON_LABEL.setup_failed + " — prompts held",
-			cls: "n-warn"
-		};
+		case "session.setup_finished": {
+			if (env.new === "ok") return {
+				text: "worktree setup finished",
+				cls: "n-done"
+			};
+			const sd = d;
+			if (sd.hold === false) return {
+				text: "setup didn't finish" + (sd.error ? ": " + sd.error : "") + " · see log",
+				cls: "n-warn"
+			};
+			return {
+				text: REASON_LABEL.setup_failed + " — prompts held",
+				cls: "n-warn"
+			};
+		}
 		case "session.check_finished": return env.new === "ok" ? {
 			text: "checks passed ✓",
 			cls: "n-done"
@@ -62895,7 +62929,9 @@ function EventToasts() {
 				setup: { state: "failed" }
 			});
 			if (!ruleOn(notifyRuleFor(ss))) return;
-			notifyOnce(env.session, "setupfail", attentionToast(namedSlot(env.session), ss) + " — prompts held", { onClick: () => selectSession(env.session) });
+			const d = env.data || {};
+			const tail = d.hold === false ? " — setup didn't finish" + (d.error ? ": " + d.error : "") + " · see log (session menu → Setup log)" : " — prompts held";
+			notifyOnce(env.session, "setupfail", attentionToast(namedSlot(env.session), ss) + tail, { onClick: () => selectSession(env.session) });
 		}));
 		unsubs.push(ev.subscribe("session.check_finished", (env) => {
 			if (isReplay(env) || env.new === "ok") return;
@@ -67766,6 +67802,12 @@ function sessionMenu$1(inst, ctx, opts = {}) {
 			run: opts.onSelect
 		},
 		fromTable("hide", ctx.hidden ? { keys: void 0 } : {}),
+		!!inst.setup?.state && !peer && {
+			key: "setup-log",
+			label: "Setup log",
+			title: "What the worktree preparation did (pin files, dependencies, setup commands) — and why it stopped",
+			run: () => void showSetupLog(title)
+		},
 		inst.setup?.state === "failed" && !peer && {
 			key: "rerun-setup",
 			label: "Re-run worktree setup",

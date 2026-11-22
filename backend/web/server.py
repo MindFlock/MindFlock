@@ -5854,10 +5854,11 @@ async def instance_setup_status(title: str, lines: int = 200) -> JSONResponse:
 
 @app.post("/api/instances/{title}/setup/rerun")
 async def instance_setup_rerun(title: str) -> JSONResponse:
-    """Re-run the worktree's O2 setup pass (Settings action).
+    """Re-run the worktree's O2 setup pass (the session menu's action).
 
-    400 when no ``[workspace]`` setup is configured, 409 when one is already
-    running, else 202 with the fresh setup summary.
+    400 when there is nothing to do (no pin file to carry, no lockfile, no
+    declared setup), 409 when one is already running, else 202 with the
+    fresh setup summary.
     """
     inst, wt, err = _wt_or_409(title)
     if err is not None:
@@ -5865,15 +5866,24 @@ async def instance_setup_rerun(title: str) -> JSONResponse:
     peer_err = _peer_guard.refusal(inst, "worktree setup")
     if peer_err is not None:
         return peer_err
-    cfg = _wt_setup.load_config(wt)  # .mindflock.toml is committed → in the worktree
-    if not cfg.has_setup:
+    if _wt_setup.is_running(wt, "setup"):
+        return JSONResponse({"error": "setup already running"}, status_code=409)
+    # .mindflock.toml is committed → read from the worktree; the user's
+    # per-repo block is keyed by the source checkout.
+    cfg = await asyncio.to_thread(_wt_setup.load_setup_config, wt, inst.Path or wt)
+    started = await asyncio.to_thread(
+        _wt_setup.start_setup, title, inst.Path or wt, wt, cfg
+    )
+    if not started:
+        if _wt_setup.is_running(wt, "setup"):
+            return JSONResponse({"error": "setup already running"}, status_code=409)
         return JSONResponse(
-            {"error": "no [workspace] setup configured in .mindflock.toml"},
+            {
+                "error": "nothing to set up: no pin files to carry, no lockfiles, "
+                "and no [workspace] setup in .mindflock.toml"
+            },
             status_code=400,
         )
-    started = _wt_setup.start_setup(title, inst.Path or wt, wt, cfg)
-    if not started:
-        return JSONResponse({"error": "setup already running"}, status_code=409)
     return JSONResponse(
         {"ok": True, "status": _wt_setup.setup_summary(wt)}, status_code=202
     )

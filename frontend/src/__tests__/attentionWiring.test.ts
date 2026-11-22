@@ -115,9 +115,19 @@ describe("O2/O3: chips, menu actions, gate override", () => {
     expect(STATE_LABEL.starting).toBe("Starting");
     expect(deriveSessionState(inst("a", { setup: { state: "running" } } as Partial<Instance>)).label).toBe("Starting");
     expect(deriveSessionState(inst("a", { setup: { state: "failed" } } as Partial<Instance>)).label).toBe("Setup failed");
-    expect(has(fn("lib/sessionState.ts", "deriveSessionState"), 'if (inst.setup && inst.setup.state === "running")')).toBe(
-      true
-    );
+    expect(
+      has(
+        fn("lib/sessionState.ts", "deriveSessionState"),
+        'if (inst.setup && inst.setup.state === "running" && setupHolds(inst.setup))'
+      )
+    ).toBe(true);
+    // The automatic preparation (hold: false) holds nothing: neither Starting
+    // nor Setup failed — the agent works beside it.
+    for (const state of ["running", "failed"]) {
+      const ss = deriveSessionState(inst("a", { setup: { state, hold: false } } as Partial<Instance>));
+      expect(ss.label).not.toBe("Starting");
+      expect(ss.label).not.toBe("Setup failed");
+    }
   });
 
   it("the check chip and its actions", () => {

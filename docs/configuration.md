@@ -16,8 +16,17 @@ Plus a handful of environment variables.
 
 Commit this file to the root of a repo you run sessions on. It is read from
 the source repo at session-create time and from the worktree afterwards
-(re-run / check endpoints). Everything is opt-in — a repo without the file
-behaves exactly as before.
+(re-run / check endpoints). Everything in it is opt-in.
+
+**Without any file**, every new plain worktree session is still *prepared*
+(see [session-engine.md](session-engine.md#preparing-a-new-worktree-backendworktree_preparepy)):
+tool-version pins like `.python-version` are carried from the source
+checkout (never a secret), and each lockfile's dependencies are made ready the
+way the source checkout has them — `uv sync --frozen` from uv's cache,
+`node_modules` cloned (copy-on-write, or a hard-link tree on ext4) when the
+lockfile matches the source's, else `npm ci` / `yarn` / `pnpm install`. That
+runs in the background and never holds prompts; the agent's first prompt
+says so.
 
 ```toml
 [workspace]
@@ -28,8 +37,16 @@ behaves exactly as before.
 setup_commands = ["npm install"]
 
 # O2: untracked files/dirs copied from the source repo into each new
-# worktree before setup runs (never overwrites, skips missing).
+# worktree before setup runs (never overwrites, skips missing). Added to the
+# default pin files; a secret (.env) rides only when listed here or in your
+# own repository.worktree_setup block.
 copy_untracked = [".env", ".env.local"]
+
+# The automatic dependency step: "auto" (default — what the source checkout
+# has installed, reused when the lockfile matches, else installed), "install"
+# (every lockfile, always through its package manager; pick it for a repo
+# whose tools edit node_modules in place, e.g. patch-package) or "off".
+dependencies = "auto"
 
 # O3: the verification gate. Auto-runs after each commit (when the session
 # reaches the committed stage); its ✓/✗ chip shows on the session card and
@@ -49,6 +66,30 @@ check_command = "npm test"
 # anything else is ignored rather than guessed at.
 verify_on_push = true
 ```
+
+**Your own per-repo recipe** (not committed, for a repo you don't control or
+a step only you want) lives in settings, `repository.worktree_setup`, keyed by
+the repo's `owner/name` or by the source checkout's absolute path:
+
+```json
+"worktree_setup": {
+  "acme/app": {
+    "setup_commands": ["make seed-db"],
+    "copy_untracked": [".env"],
+    "dependencies": "install"
+  }
+}
+```
+
+Its commands run after the repo's own, its files are carried too, and its
+`dependencies` wins. Saved with `POST /api/settings` (`{"repository":
+{"worktree_setup": {…}}}`).
+
+**Trust.** Setup commands — the repo's and yours — and the package managers
+(whose install scripts are the repo's code too) run for a repo you started a
+session in, with your permissions: the same trust as the agent the session
+launches, which runs that repo's code anyway. They never run for a shared
+(peer-link) folder: its `.mindflock.toml` came from another machine.
 
 Verify's other per-repo settings are *not* here: they are keyed by GitHub slug
 in `repository.verify_repo_settings["owner/name"]` and edited in Verify →

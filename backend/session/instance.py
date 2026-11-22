@@ -218,6 +218,12 @@ class Instance:
         # the web server before Start/Resume; not persisted — the server
         # re-derives it from its ports allocation on every (re)start.
         self.ExtraEnv: dict = {}
+        # Called with the worktree path once a first-time Start has created
+        # it (after a Branch session's carry) and BEFORE the agent launches:
+        # the web server prepares the worktree there (pin files carried,
+        # dependency setup started in the background). Not persisted; a
+        # failing hook never fails the start.
+        self.OnWorktreeReady = None
         # Provisioned-workspace extension (off by default).
         self.Provisioned: bool = False
         self.WorkspaceStrategy: str = "worktree"
@@ -392,6 +398,7 @@ class Instance:
                 # the agent can see the folder. A failure fails the start (and
                 # removes the worktree) rather than quietly leaving them out.
                 self._apply_carry()
+                self._worktree_ready()
 
                 # Resolve the coding provider and configure the launch
                 # command now that the worktree exists and before tmux starts.
@@ -463,6 +470,19 @@ class Instance:
                 "failed to carry uncommitted changes: {}".format(_err_text(err))
             ) from err
         self._carry_ref = ""
+
+    def _worktree_ready(self) -> None:
+        """Run :attr:`OnWorktreeReady` once (best-effort, never raises)."""
+        hook, self.OnWorktreeReady = self.OnWorktreeReady, None
+        if hook is None:
+            return
+        try:
+            hook(self._git_worktree.GetWorktreePath())
+        except Exception as err:  # noqa: BLE001
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf(
+                    "worktree-ready hook for %v failed: %v", self.Title, err
+                )
 
     def _create_first_time_worktree(self) -> None:
         """Create the git worktree for a first-time :meth:`Start`.

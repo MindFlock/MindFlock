@@ -801,6 +801,14 @@ class RepositorySettings:
     #: named ``live`` (``test_plans.environments``), and a listed ``live``
     #: overrides it. Normalized by :func:`_verify_environments`.
     verify_repo_settings: Dict[str, dict] = field(default_factory=dict)
+    #: Per-repo "prepare a new worktree" recipe, the user's half of the one a
+    #: repo commits in ``.mindflock.toml`` (``web.core.worktree_setup``):
+    #: ``{"<owner/name or /abs/repo/path>": {"setup_commands": [str],
+    #: "copy_untracked": [str], "dependencies": "auto"|"install"|"off"}}``.
+    #: Keyed by slug like the blocks above, or by the source checkout's
+    #: absolute path for a repo with no forge remote. Commands here run after
+    #: the repo's own; ``dependencies`` here wins over the repo's.
+    worktree_setup: Dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -862,6 +870,14 @@ class RepositorySettings:
                 }
                 for k, v in self.verify_repo_settings.items()
             }
+        if self.worktree_setup:
+            d["worktree_setup"] = {
+                k: {
+                    kk: (list(vv) if isinstance(vv, list) else vv)
+                    for kk, vv in v.items()
+                }
+                for k, v in self.worktree_setup.items()
+            }
         return d
 
     @classmethod
@@ -884,6 +900,7 @@ class RepositorySettings:
             verify_enabled=d.get("verify_enabled", True) is not False,
             verify_use_conversation=d.get("verify_use_conversation", True) is not False,
             deploy_delay_minutes=_non_negative_int(d.get("deploy_delay_minutes"), 5),
+            worktree_setup=_worktree_setup(d.get("worktree_setup")),
         )
 
 
@@ -2879,6 +2896,39 @@ def _verify_environments(v: Any) -> List[dict]:
         )
         if len(out) >= VERIFY_ENVIRONMENTS_MAX:
             break
+    return out
+
+
+#: ``repository.worktree_setup`` ``dependencies`` values (mirrors
+#: ``backend.worktree_prepare.DEPENDENCY_MODES``).
+WORKTREE_DEPENDENCY_MODES = ("auto", "install", "off")
+
+
+def _worktree_setup(v: Any) -> Dict[str, dict]:
+    """Normalize ``repository.worktree_setup`` (see the field). Tolerant: a
+    blank key, a non-map block, an unknown key or a bad value is dropped, and a
+    block left empty is dropped whole."""
+    if not isinstance(v, dict):
+        return {}
+    out: Dict[str, dict] = {}
+    for repo, block in v.items():
+        key = str(repo or "").strip()
+        if not key or not isinstance(block, dict):
+            continue
+        clean: dict = {}
+        for k in ("setup_commands", "copy_untracked"):
+            items = block.get(k)
+            if isinstance(items, list):
+                vals = [
+                    str(x).strip() for x in items if isinstance(x, str) and x.strip()
+                ]
+                if vals:
+                    clean[k] = vals
+        dep = str(block.get("dependencies") or "").strip().lower()
+        if dep in WORKTREE_DEPENDENCY_MODES:
+            clean["dependencies"] = dep
+        if clean:
+            out[key] = clean
     return out
 
 

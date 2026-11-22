@@ -377,6 +377,8 @@ def _autopilot_observe(title: str):
         _autopilot_note(title, rec, "waiting for the workspace")
         return
     setup_st = _wt_setup.setup_status(wt)
+    if not _wt_setup.holds_prompts(setup_st):
+        setup_st = None  # the automatic recipe's own state never holds a chain
     if setup_st and setup_st.get("state") == "running":
         _autopilot_note(title, rec, "workspace setup is running")
         return

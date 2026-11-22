@@ -14,9 +14,22 @@ sessions, configured by a file committed to the target repo:
     copy_untracked = [".env", ".env.local"]  # repo files copied into it first
     check_command  = "npm test"          # O3 verification gate (see below)
 
-Explicit opt-in only: a repo without the file (or without the relevant keys)
-gets no setup run and no gate — plain sessions behave exactly as before.
+Every new plain worktree also gets the automatic half of the recipe
+(:mod:`backend.worktree_prepare`), with no file at all: well-known pin files
+(``.python-version`` …) carried from the source checkout, and each tracked
+lockfile's dependencies made ready (uv from its cache, ``node_modules``
+cloned from the source when the lockfile matches, else installed). That part
+never holds prompts: it runs in the background while the agent reads code,
+and the agent is told (a note on its first prompt, ``setup`` in MCP
+``whoami``). Declared ``setup_commands`` (the repo's, then the user's
+``repository.worktree_setup`` block) run after it and keep their contract:
+queued prompts wait for them. The gate (``check_command``) stays opt-in.
 (Provisioned workspaces keep their config.toml auto-detection.)
+
+Trust: commands run for a repo the user started a session in — the same
+trust as the agent itself, which runs that repo's code with the user's
+permissions anyway — and never for a shared (peer-link) folder, whose
+``.mindflock.toml`` came from another machine.
 
 Both runners execute in a background thread, appending to a log file in the
 worktree and maintaining a small status JSON next to it (state
@@ -38,14 +51,13 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import threading
 import time
-from pathlib import Path
 from typing import List, Optional
 
 from backend import compat
+from backend import worktree_prepare as _prep
 from backend.web.core import events as _events
 from backend.web.core import ports as _ports
 from backend.workspace_setup import WorkspaceConfigError, parse_setup_commands
@@ -76,9 +88,15 @@ class WorkspaceConfig:
         copy_untracked: Optional[List[str]] = None,
         check_command: str = "",
         verify_on_push: bool = False,
+        dependencies: str = "auto",
     ) -> None:
         self.setup_commands = setup_commands  # None = not configured
         self.copy_untracked = copy_untracked or []
+        # The automatic dependency step: auto | install | off
+        # (backend.worktree_prepare.DEPENDENCY_MODES).
+        self.dependencies = (
+            dependencies if dependencies in _prep.DEPENDENCY_MODES else "auto"
+        )
         self.check_command = check_command
         # Whether a push in this repo should automatically have a Verify test
         # plan written for it. Default False, and deliberately so: generating a
@@ -93,7 +111,14 @@ class WorkspaceConfig:
 
     @property
     def has_setup(self) -> bool:
+        """Whether anything is DECLARED (commands or files to carry)."""
         return bool(self.setup_commands) or bool(self.copy_untracked)
+
+    @property
+    def holds_prompts(self) -> bool:
+        """Declared setup commands hold queued prompts until they succeed;
+        the automatic part of the recipe never does."""
+        return bool(self.setup_commands)
 
 
 def _in_peer_folder(path: str) -> bool:
@@ -142,6 +167,8 @@ def load_config(repo_path: str) -> WorkspaceConfig:
     check = ws.get("check_command", "")
     if not isinstance(check, str):
         check = ""
+    deps = ws.get("dependencies", "auto")
+    deps = deps.strip().lower() if isinstance(deps, str) else "auto"
     # Strict ``is True``: only the boolean turns this on. A repo that wrote
     # ``verify_on_push = "no"`` or ``= 0`` meant no, and Python's truthiness
     # would read the string as yes — spending a model call per push on the
@@ -152,6 +179,92 @@ def load_config(repo_path: str) -> WorkspaceConfig:
         copy_untracked=[p.strip() for p in copy_untracked if p.strip()],
         check_command=check.strip(),
         verify_on_push=ws.get("verify_on_push") is True,
+        dependencies=deps,
+    )
+
+
+def _user_block(repo_path: str) -> dict:
+    """The user's ``repository.worktree_setup`` block for the repo at
+    ``repo_path`` (by absolute path, else by its origin's ``owner/name``), or
+    ``{}``. Never raises."""
+    try:
+        from backend.config import settings as _settings
+
+        table = _settings.load_settings().repository.worktree_setup or {}
+    except Exception:  # noqa: BLE001 — a settings fault never blocks a create
+        return {}
+    if not table or not repo_path:
+        return {}
+    try:
+        real = os.path.realpath(os.path.expanduser(repo_path))
+    except Exception:  # noqa: BLE001
+        real = ""
+    for key, block in table.items():
+        if key.startswith(("/", "~")) or (len(key) > 2 and key[1] == ":"):
+            try:
+                if os.path.realpath(os.path.expanduser(key)) == real:
+                    return dict(block)
+            except Exception:  # noqa: BLE001
+                continue
+    try:
+        from backend.session import provisioned as _prov
+
+        slug = _prov.repo_slug_for(_prov._git_origin_url(repo_path)).lower()
+    except Exception:  # noqa: BLE001
+        slug = ""
+    if slug:
+        for key, block in table.items():
+            if key.strip().lower() == slug:
+                return dict(block)
+    return {}
+
+
+def load_setup_config(config_dir: str, repo_path: str = "") -> WorkspaceConfig:
+    """:func:`load_config` of ``config_dir`` merged with the user's
+    ``repository.worktree_setup`` block for ``repo_path`` (default: the same
+    folder): the repo's commands first, then the user's; files carried from
+    both; the user's ``dependencies`` wins. A shared folder gets neither."""
+    cfg = load_config(config_dir)
+    if _in_peer_folder(config_dir) or _in_peer_folder(repo_path or config_dir):
+        return cfg
+    block = _user_block(repo_path or config_dir)
+    if not block:
+        return cfg
+    commands = list(cfg.setup_commands or []) + list(block.get("setup_commands") or [])
+    carry = list(cfg.copy_untracked)
+    carry += [p for p in block.get("copy_untracked") or [] if p not in carry]
+    cfg.setup_commands = (
+        commands if commands or cfg.setup_commands is not None else None
+    )
+    cfg.copy_untracked = carry
+    if block.get("dependencies") in _prep.DEPENDENCY_MODES:
+        cfg.dependencies = block["dependencies"]
+    return cfg
+
+
+def dependency_plan(checkout: str, cfg: WorkspaceConfig, source: str = "") -> list:
+    """The automatic dependency steps a worktree of ``checkout`` will run
+    (``[]`` when switched off for the repo or the machine). In ``auto`` mode
+    only what ``source`` (default: ``checkout``) has installed."""
+    if cfg.dependencies == "off" or _prep.deps_disabled():
+        return []
+    if not checkout or _in_peer_folder(checkout):
+        return []
+    mirror = (source or checkout) if cfg.dependencies == "auto" else ""
+    return _prep.plan_dependencies(checkout, mirror)
+
+
+def prompt_note(steps: list) -> str:
+    """What an agent's first prompt is told while its worktree's dependencies
+    are still being made ready ("" when there are none)."""
+    if not steps:
+        return ""
+    what = ", ".join(s.name for s in steps)
+    return (
+        "\n\n(MindFlock: this worktree's dependencies are being prepared in the "
+        "background — %s. Read and edit code now; before running tests or "
+        'builds, check that `%s` says "state": "ok" (the `setup` field of '
+        "the whoami tool says the same; log: `%s`).)" % (what, SETUP_STATUS, SETUP_LOG)
     )
 
 
@@ -162,27 +275,9 @@ def copy_untracked(repo_path: str, wt_path: str, patterns: List[str]) -> List[st
     Paths are repo-root-relative; escapes (``..``, absolute) are rejected.
     Never overwrites something already in the worktree and never raises —
     a missing source is simply skipped. Returns the paths actually copied.
+    (Only the declared list: :func:`start_setup` adds the default pins.)
     """
-    copied: List[str] = []
-    repo = Path(repo_path or "").resolve()
-    wt = Path(wt_path or "").resolve()
-    for rel in patterns:
-        try:
-            src = (repo / rel).resolve()
-            if not str(src).startswith(str(repo) + os.sep):
-                continue  # path escaped the repo root
-            dst = wt / rel
-            if not src.exists() or dst.exists():
-                continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            if src.is_dir():
-                shutil.copytree(src, dst)
-            else:
-                shutil.copy2(src, dst)
-            copied.append(rel)
-        except Exception:  # noqa: BLE001 — best-effort per entry
-            continue
-    return copied
+    return _prep.carry_files(repo_path, wt_path, patterns, defaults=False)
 
 
 # --- status files ------------------------------------------------------------
@@ -329,22 +424,37 @@ def is_running(wt_path: str, kind: str) -> bool:
 def start_setup(
     title: str, repo_path: str, wt_path: str, cfg: Optional[WorkspaceConfig] = None
 ) -> bool:
-    """Kick off the setup pass for a fresh worktree (background thread).
+    """Kick off the "prepare a new worktree" pass (background thread).
 
-    Copies ``copy_untracked`` entries synchronously (fast, must precede any
-    setup command that reads them), then runs ``setup_commands`` in a
-    thread. Returns False when nothing is configured or a run is already
-    live for this worktree.
+    Synchronously, before returning (fast, and must precede everything that
+    reads them): the default pin files and the declared ``copy_untracked``
+    entries are carried from ``repo_path``. Then, in a thread: the automatic
+    dependency steps (:func:`dependency_plan` of the worktree), then the
+    declared ``setup_commands``, all logged to :data:`SETUP_LOG`. The status
+    (:data:`SETUP_STATUS`) says ``hold`` — whether queued prompts wait for it
+    (only declared commands make them) — and, on a failure, ``error``: the
+    one-line why. Returns False when there is nothing to do or a run is
+    already live for this worktree.
     """
     if _in_peer_folder(wt_path) or _in_peer_folder(repo_path):
         return False
-    cfg = cfg or load_config(repo_path)
-    if not cfg.has_setup or not wt_path or not os.path.isdir(wt_path):
+    cfg = cfg or load_setup_config(repo_path)
+    if not wt_path or not os.path.isdir(wt_path):
         return False
     if is_running(wt_path, "setup"):
         return False
-    copied = copy_untracked(repo_path, wt_path, cfg.copy_untracked)
+    copied = _prep.carry_files(repo_path, wt_path, cfg.copy_untracked)
+    steps = dependency_plan(wt_path, cfg, source=repo_path)
     commands = list(cfg.setup_commands or [])
+    if not (copied or steps or commands or cfg.has_setup):
+        return False
+    # The status and log are MindFlock's, never the branch's (see start_check).
+    try:
+        from backend import workspace_setup as _ws
+
+        _ws.exclude_artifacts(wt_path)
+    except Exception:  # noqa: BLE001 — best-effort
+        pass
     status = {
         "state": "running",
         "rc": None,
@@ -352,12 +462,17 @@ def start_setup(
         "finished": None,
         "commands": commands,
         "copied": copied,
+        "deps": [s.to_dict() for s in steps],
+        "steps": [],
+        "hold": cfg.holds_prompts,
+        "error": "",
+        "log": SETUP_LOG,
     }
     _write_status(wt_path, SETUP_STATUS, status)
     _events.BUS.emit(
         "session.setup_started",
         session=title,
-        data={"commands": commands, "copied": copied},
+        data={"commands": commands, "copied": copied, "hold": status["hold"]},
     )
 
     def run() -> None:
@@ -365,17 +480,51 @@ def start_setup(
         # the session card can't wedge at "running" if the body raises (a stray
         # OSError from a command spawn used to strand it there forever).
         rc = 1
+        error = ""
         try:
-            rc = _run_logged(commands, wt_path, SETUP_LOG, title) if commands else 0
+            rc = 0
+            if copied:
+                with open(
+                    os.path.join(wt_path, SETUP_LOG), "a", encoding="utf-8"
+                ) as logf:
+                    logf.write(
+                        "# carried from the source checkout: %s\n" % ", ".join(copied)
+                    )
+            for step in steps:
+                with open(
+                    os.path.join(wt_path, SETUP_LOG), "a", encoding="utf-8"
+                ) as logf:
+                    res = _prep.run_dependency_step(
+                        step, repo_path, wt_path, cfg.dependencies, logf
+                    )
+                status["steps"].append(res)
+                _write_status(wt_path, SETUP_STATUS, status)
+                if res["state"] == "failed" and not error:
+                    rc, error = 1, res.get("note") or ("%s failed" % step.name)
+            if commands:
+                crc = _run_logged(commands, wt_path, SETUP_LOG, title)
+                if crc != 0:
+                    rc = crc
+                    error = error or (
+                        "a setup command timed out"
+                        if crc == 124
+                        else "a setup command exited %d" % crc
+                    )
         except Exception as err:  # noqa: BLE001
+            rc, error = 1, "setup crashed: %s" % err
             _note_crash(wt_path, SETUP_LOG, err)
-        status.update(state="ok" if rc == 0 else "failed", rc=rc, finished=time.time())
+        status.update(
+            state="ok" if rc == 0 else "failed",
+            rc=rc,
+            finished=time.time(),
+            error=error,
+        )
         _write_status(wt_path, SETUP_STATUS, status)
         _events.BUS.emit(
             "session.setup_finished",
             session=title,
             new=status["state"],
-            data={"rc": rc},
+            data={"rc": rc, "hold": status["hold"], "error": error},
         )
 
     threading.Thread(
@@ -385,6 +534,15 @@ def start_setup(
         daemon=True,
     ).start()
     return True
+
+
+def holds_prompts(status: Optional[dict]) -> bool:
+    """Whether a setup status holds queued prompts: running or failed, and
+    not the automatic-only kind (``hold: false``). A status written before
+    ``hold`` existed holds, as it always did."""
+    if not status or status.get("state") not in ("running", "failed"):
+        return False
+    return status.get("hold", True) is not False
 
 
 def start_check(title: str, wt_path: str, command: str) -> bool:
