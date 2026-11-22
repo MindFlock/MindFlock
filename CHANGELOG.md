@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Claude response written across midnight no longer counts twice in the
+  usage totals.** When the 60-second refresh read a response between its first
+  content block (before midnight) and its final one (after), the durable day
+  ledger kept yesterday's figure for it and added it back into every window
+  (day, week, month, year) as if a transcript had been pruned. A turn now keeps
+  its first block's time and the most of each token count, so it only grows
+  and stays on one day: totals are the same however the file was read. The
+  same fix stops a final block with smaller figures from leaving a stale,
+  larger day total behind. It also fixes the property test that failed CI on
+  pull requests just after 00:00 UTC.
+
 ## [0.14.25] - 2026-11-20
 
 ### Changed

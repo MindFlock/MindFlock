@@ -1186,6 +1186,139 @@ def test_a_failed_memo_save_keeps_the_previous_file_and_retries(_isolate, monkey
 
 
 # --------------------------------------------------------------------------- #
+# A response read mid-write: incremental reads equal one full read
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def _tz():
+    """Set the process time zone (``TZ`` + ``tzset``); restored after."""
+    saved = os.environ.get("TZ")
+
+    def set_tz(name):
+        os.environ["TZ"] = name
+        time.tzset()
+
+    yield set_tz
+    if saved is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = saved
+    time.tzset()
+
+
+def _windows_read(tmp_path, monkeypatch, name, lines, cuts):
+    """Write ``lines`` (rendered JSONL) to a fresh home in pieces split at
+    ``cuts`` (byte offsets), scanning after each piece -> the final windows."""
+    home = tmp_path / name
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("MINDFLOCK_ASSISTANT_DIR", str(tmp_path / (name + "-a")))
+    monkeypatch.setattr(uh, "_FILE_MEMO", {})
+    monkeypatch.setattr(
+        uh, "_memo_state", {"path": None, "dirty": False, "saved_at": 0.0}
+    )
+    path = _write_transcript(home, "proj", "a.jsonl", [])
+    blob = "".join(json.dumps(e) + "\n" for e in lines).encode()
+    w = None
+    for lo, hi in zip([0, *cuts], [*cuts, len(blob)]):
+        with open(path, "ab") as f:
+            f.write(blob[lo:hi])
+        _reset_cache(monkeypatch)
+        w = uh.windows()
+    return w
+
+
+def _first_line_len(e):
+    return len(json.dumps(e)) + 1
+
+
+@pytest.mark.parametrize(
+    "tz, wall",
+    [
+        # Just after midnight UTC on a UTC host (the CI runner, 2026-11-22).
+        ("UTC", "2026-11-22T00:00:05+00:00"),
+        ("UTC", "2026-11-22T00:25:00+00:00"),
+        # Just after LOCAL midnight, behind and ahead of UTC.
+        ("America/New_York", "2026-11-22T00:00:05-05:00"),
+        ("Asia/Kolkata", "2026-11-22T00:00:05+05:30"),
+    ],
+)
+def test_a_response_whose_blocks_straddle_midnight_counts_once(
+    _isolate, monkeypatch, tmp_path, _tz, tz, wall
+):
+    """One response, its first content block written just before local
+    midnight and its final block just after. A scan that read only the first
+    block filed the turn under yesterday in the ledger; when the final block
+    moved it to today, yesterday's scanned total shrank, the ledger kept the
+    stale figure and back-filled it into every window as if a transcript had
+    been pruned — so the totals depended on WHEN the file was read."""
+    _tz(tz)
+    now = dt.datetime.fromisoformat(wall).timestamp()
+    midnight = time.mktime(
+        time.strptime(time.strftime("%Y-%m-%d", time.localtime(now)), "%Y-%m-%d")
+    )
+    clock = _clock(monkeypatch)
+    clock.t = now
+    first = _api_line(midnight - 10, "m1", "r1", cr=1)
+    lines = [
+        first,
+        _api_line(midnight + 2, "m1", "r1", out=1),
+        _api_line(midnight + 3, "m2", "r2", inp=4),
+    ]
+    want = _windows_read(tmp_path, monkeypatch, "full", lines, [])
+    got = _windows_read(
+        tmp_path, monkeypatch, "pieces", lines, [_first_line_len(first)]
+    )
+    assert got == want
+    # m1 once (its most of each figure), m2 once — nothing back-filled.
+    assert want["day"] == {
+        "in": 4,
+        "out": 1,
+        "cache_read": 1,
+        "cache_write": 0,
+        "cost": pytest.approx(4 + 10 + 0.1),
+    }
+    assert got["year"] == got["day"]
+    # And the ledger files the turn under the first block's day only.
+    ledger = json.loads((tmp_path / "pieces-a" / "usage-history.json").read_text())
+    yesterday = time.strftime("%Y-%m-%d", time.localtime(midnight - 10))
+    assert ledger["days"][yesterday]["out"] == 1
+
+
+def test_a_final_block_with_smaller_figures_does_not_shrink_the_day(
+    _isolate, monkeypatch, tmp_path
+):
+    """A later block with more output but less of another field: the turn
+    keeps the most of each, so the day only grows and the ledger never holds a
+    stale, larger total for it."""
+    clock = _clock(monkeypatch)
+    now = clock.t
+    first = _api_line(now - 20, "m1", "r1", inp=20)
+    lines = [first, _api_line(now - 19, "m1", "r1", out=1)]
+    want = _windows_read(tmp_path, monkeypatch, "full", lines, [])
+    got = _windows_read(
+        tmp_path, monkeypatch, "pieces", lines, [_first_line_len(first)]
+    )
+    assert got == want
+    assert want["day"]["in"] == 20 and want["day"]["out"] == 1
+
+
+def test_merge_turn_keeps_the_first_timestamp_and_the_most_of_each_figure():
+    a = ("k", 100.0, 5, 1, 7, 0, "m")
+    b = ("k", 200.0, 3, 9, 7, 2, "other")
+    assert uh.merge_turn(None, a) == a
+    assert uh.merge_turn(a, b) == ("k", 100.0, 5, 9, 7, 2, "m")
+    assert uh.merge_turn(("k", None, 0, 0, 0, 0, ""), b) == (
+        "k",
+        200.0,
+        3,
+        9,
+        7,
+        2,
+        "other",
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Ledger v2: a day never shrinks because transcripts were pruned
 # --------------------------------------------------------------------------- #
 def _day(epoch):
