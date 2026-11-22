@@ -401,7 +401,7 @@ def test_scenarios_are_self_consistent():
 
 def test_surfaces_match_settings_appearance():
     src = (ROOT / "frontend/src/components/settings/screens/Appearance.tsx").read_text()
-    block = src.split("const SURFACES: Surface[] = [", 1)[1].split("];", 1)[0]
+    block = re.split(r"const SURFACES[^=]*= \[", src, maxsplit=1)[1].split("];", 1)[0]
     keys = tuple(re.findall(r'^\s*\["([^"]*)"', block, re.M))
     assert keys == shots.SURFACES
 
