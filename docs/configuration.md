@@ -906,6 +906,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Antigravity CLI state dir (conversation DBs, usage) |
 | `MINDFLOCK_CLAUDE_JSON` | `~/.claude.json` | Path of the `.claude.json` used for pre-trust seeding of workspaces |
 | `MINDFLOCK_SEED_PROMPT_DIR` | `~/.mindflock-assistant/.seed-prompts` | Where generated seed prompts are written |
+| `MINDFLOCK_DEVICES_ANYWHERE_LOOPBACK` | — | Tests and sandboxes only — "Reach my devices from anywhere" runs no cloudflared: the relay ingress itself is the published address (`wss://127.0.0.1:<port>/<token>`, plain WebSocket), and only such addresses are accepted. The two-server trial (`tests/e2e/test_devices_anywhere_trial.py`) uses it |
+| `MINDFLOCK_DEVICES_ANYWHERE_STORE` | — | Tests and sandboxes only — keep "Reach my devices from anywhere" records in this local folder instead of the private GitHub repo |
 | `MINDFLOCK_TAILSCALE_STATUS_FILE` | — | Tests and sandboxes only — every Tailscale status reader (device discovery, phone URLs, the shared link, trusted accounts, the health card) reads this `tailscale status --json` document instead of running the `tailscale` CLI (the fleet end-to-end test gives each server a fake tailnet this way) |
 | `MINDFLOCK_TAILSCALE_BIN` | — | The `tailscale` CLI to use (a path, or a name on `PATH`), ahead of discovery. Without it MindFlock looks on `PATH`, then (macOS) the app's own CLI at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`. On WSL, a Windows-side `tailscale.exe` is reported (Settings → Your devices, the doctor) but never used — it is a different tailnet device (`backend/tailscale_cli.py`) |
 | `MINDFLOCK_UV_VERSION` | pinned in `install.sh` | `install.sh` only — uv version to install; overriding the pin **skips the sha256 verification** (a warning is printed) |
@@ -998,6 +1000,18 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   Settings → Your devices → One link for all devices shows a setup
   checklist with each step's live status and its fix. See
   [web-ui.md](web-ui.md) (Settings → Your devices).
+- **Reach my devices from anywhere** (`general.devices_anywhere`, bool,
+  default `false`; Settings → Your devices, `POST /api/devices/anywhere`):
+  this device keeps a Cloudflare quick tunnel up and leaves its address,
+  encrypted with the group's key, in a private repo `mindflock-devices` in
+  your own GitHub account (created on first use; needs the `repo` permission
+  MindFlock's GitHub sign-in already has). It finds your other devices the
+  same way, for the ones Tailscale or your network can't reach. Per device,
+  never synced. State is in `~/.mindflock/devices_anywhere/` (`state.json`:
+  the record's counter and file name, plus the highest counter seen per
+  device; `status.json`: a no-secrets snapshot for `mindflock doctor`;
+  `tunnel/`: cloudflared's private home). See
+  [devices-anywhere.md](devices-anywhere.md).
 - **Trusted Tailscale accounts** (`general.tailnet_trusted_logins`; Settings →
   Your devices → Advanced): a list of Tailscale login names whose **untagged** devices skip
   the access token. Empty or absent means off. Stored lower-cased and

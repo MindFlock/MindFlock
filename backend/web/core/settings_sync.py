@@ -247,6 +247,8 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "remote_control",
         "serve_mode",
         "shared_link",
+        # Whether THIS device runs the private tunnel (core.devices_anywhere).
+        "devices_anywhere",
         "ingestion_autostart",
         # LEGACY: what the former Pause intake turned off (no longer read).
         "intake_paused",

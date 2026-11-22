@@ -92,6 +92,7 @@ import PersonCard from "./PersonCard";
 import { TailscaleCard } from "./TailscaleCard";
 import { SharedLinkCard } from "./SharedLink";
 import { DevicesAdvanced } from "./DevicesAdvanced";
+import { DevicesAnywhere } from "./DevicesAnywhere";
 import { NewComputerLine, ReadinessLine, SyncedAgentInstall, useFleetReadiness } from "./DeviceReadiness";
 import "./devices.css";
 
@@ -481,6 +482,9 @@ export function Devices(p: ScreenProps) {
           <p className="devices-note warn">MindFlock hasn't come back yet — reload in a moment.</p>
         )}
       </div>
+      {/* 0b. Reach my devices from anywhere — the no-Tailscale path
+          (docs/devices-anywhere.md). */}
+      <DevicesAnywhere active={p.active} />
       {unreachable.length > 0 && (
         <div className="devices-warn" id="devices-unreachable-joiners" role="alert">
           {unreachable.map((a) => (

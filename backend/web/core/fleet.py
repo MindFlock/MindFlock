@@ -3096,6 +3096,13 @@ def status(privileged: bool) -> dict:
                 "added_at": m["added_at"],
                 "self": mine,
                 "reachable": True if mine else bool(dev.get("reachable")),
+                # How: "tailnet", or "tunnel" (Reach my devices from
+                # anywhere — core.devices_anywhere); "" for self / unreached.
+                "via": (
+                    ""
+                    if mine or not dev.get("reachable")
+                    else str(dev.get("via") or "")
+                ),
                 "version": __version__ if mine else str(dev.get("version") or ""),
                 # Update all my devices: the build it runs, whether it can be
                 # updated from here (``editable``/``other`` can't), and its

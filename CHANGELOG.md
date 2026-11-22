@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Reach my devices from anywhere (no Tailscale needed).** A new switch on
+  Settings → Your devices, off by default. Your computers that are already in
+  one group reach each other without Tailscale and without any MindFlock
+  server:
+  - **The tunnel.** Each device runs a private Cloudflare quick tunnel. It
+    uses the same pinned-key TLS 1.3 inside a WebSocket that People links
+    use, plus a handshake where both ends prove they hold the group's key,
+    so Cloudflare carries bytes it can't read.
+  - **The address book.** Each device leaves its current address in a
+    private repo, `mindflock-devices`, in your own GitHub account,
+    encrypted and authenticated with a key derived from the group's key
+    (AES-256-GCM, HKDF). It uses the GitHub sign-in you already have.
+  - **Path choice.** Tailscale and your own network are tried first; the
+    tunnel only for a device they can't reach. The roster, the session
+    list, device forwarding and settings sync all work over it.
+  - **Turning it off** stops the tunnel and deletes this device's record.
+  - **Status.** The line under the switch says what is happening (on,
+    starting, couldn't start the tunnel and why, or a missing GitHub
+    permission with its remedy), with Retry, or the one-click cloudflared
+    install. `mindflock doctor` reports each piece.
+
+  Design and threat model: `docs/devices-anywhere.md`. Requests that come
+  through the tunnel are always held to the access gate as if it were on,
+  even in local mode, and never count as "this machine". Not yet: joining
+  the group without Tailscale, and a stable tunnel name.
+
 ## [0.14.25] - 2026-11-20
 
 ### Changed

@@ -54165,7 +54165,7 @@ function stripMarkup(text) {
 	return text;
 }
 var SEG = "[A-Za-z0-9_.~@+-]+";
-var PATH = new RegExp("(^|[^A-Za-z0-9/.~])((?:~|\\.{1,2})?/" + SEG + "(?:/" + SEG + ")*/?|" + SEG + "(?:/" + SEG + ")+/?)(?::(\\d+))?(?![A-Za-z0-9/])", "g");
+var PATH$1 = new RegExp("(^|[^A-Za-z0-9/.~])((?:~|\\.{1,2})?/" + SEG + "(?:/" + SEG + ")*/?|" + SEG + "(?:/" + SEG + ")+/?)(?::(\\d+))?(?![A-Za-z0-9/])", "g");
 var FILE = new RegExp("(^|[^A-Za-z0-9/.])([A-Za-z0-9_][A-Za-z0-9_-]*\\.(" + byLength(Object.keys(TABLES.ext)).join("|") + "))(?::(\\d+))?(?![A-Za-z0-9.])", "g");
 var SHA = /(^|[^A-Za-z0-9])([0-9a-f]{7,40})(?![A-Za-z0-9])/g;
 function spokenName(name) {
@@ -54200,7 +54200,7 @@ function isPath(token) {
 	return !!ext && ext in TABLES.ext;
 }
 function paths(text, s) {
-	text = text.replace(PATH, (whole, pre, tokenIn, line) => {
+	text = text.replace(PATH$1, (whole, pre, tokenIn, line) => {
 		let token = tokenIn;
 		let tail = "";
 		while (token.endsWith(".") || token.endsWith(",")) {
@@ -73009,6 +73009,7 @@ var EXTRA_CHECKS = /* @__PURE__ */ new Set([
 	"tailscale",
 	"bwrap",
 	"cloudflared",
+	"devices-anywhere",
 	"local-model",
 	"cache-seeds",
 	"tailnet-mtu",
@@ -136273,6 +136274,128 @@ function DevicesAdvanced({ focusDevice }) {
 	});
 }
 //#endregion
+//#region src/lib/devicesAnywhere.ts
+var ANYWHERE_LABEL = "Reach my devices from anywhere (no Tailscale needed)";
+var ANYWHERE_HINT = "Your computers find each other through a private, encrypted tunnel and your own GitHub (a private repo holds their addresses, encrypted with your devices' key). Nothing to install or sign up for. Tailscale, when it's there, is still used first. New — off by default.";
+function anywhereLine(st) {
+	if (!st) return "";
+	if (!st.on) return "Off";
+	const n = st.via_tunnel?.length || 0;
+	if (st.state === "on" && n > 0) return `${st.text} · ${n === 1 ? "1 device" : `${n} devices`} reached this way`;
+	return st.text;
+}
+function anywhereWarn(st) {
+	return !!st && st.on && (st.state === "failed" || st.state === "needs_github");
+}
+function anywherePollMs(st) {
+	if (st && st.on && (st.state === "starting" || st.state === "on" && !st.published_at)) return 2e3;
+	return 15e3;
+}
+//#endregion
+//#region src/components/settings/screens/DevicesAnywhere.tsx
+var PATH = "/api/devices/anywhere";
+function DevicesAnywhere({ active }) {
+	const [st, setSt] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [install, setInstall] = (0, import_react.useState)([]);
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			setSt(await api(PATH));
+		} catch {}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (active) load();
+	}, [active, load]);
+	const ms = anywherePollMs(st);
+	(0, import_react.useEffect)(() => {
+		if (!active || !st?.on) return;
+		const t = setInterval(() => {
+			if (!document.hidden) load();
+		}, ms);
+		return () => clearInterval(t);
+	}, [
+		active,
+		st?.on,
+		ms,
+		load
+	]);
+	const needsInstall = !!st?.on && st.install;
+	(0, import_react.useEffect)(() => {
+		if (!needsInstall) {
+			setInstall([]);
+			return;
+		}
+		let live = true;
+		reprobeDoctor().then((d) => live && setInstall(d.install?.steps || [])).catch(() => live && setInstall([]));
+		return () => {
+			live = false;
+		};
+	}, [needsInstall]);
+	const post = async (path, body) => {
+		setBusy(true);
+		try {
+			setSt(await api(path, { json: body ?? {} }));
+		} catch (e) {
+			toast(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	if (!st) return null;
+	const line = anywhereLine(st);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "devices-this",
+		id: "devices-anywhere",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row set-switch-row",
+				id: "devices-anywhere-row",
+				"data-control": "devices-anywhere",
+				title: ANYWHERE_HINT,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: ANYWHERE_LABEL
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "ca-switch",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "devices-anywhere-switch",
+							"data-group": "general",
+							"data-field": "devices_anywhere",
+							checked: st.on,
+							disabled: busy,
+							onChange: (e) => void post(PATH, { on: e.target.checked })
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: ANYWHERE_HINT
+					})
+				]
+			}),
+			st.on && line && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: anywhereWarn(st) ? "devices-note warn" : "devices-note",
+				id: "devices-anywhere-status",
+				role: anywhereWarn(st) ? "alert" : void 0,
+				children: [line, st.retry && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "devices-anywhere-retry",
+					disabled: busy,
+					onClick: () => void post(PATH + "/retry"),
+					children: "Retry"
+				})] })]
+			}),
+			needsInstall && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+				steps: install,
+				onDone: () => void load()
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/settings/screens/DeviceReadiness.tsx
 function NewComputerLine({ code }) {
 	const [b, setB] = (0, import_react.useState)(null);
@@ -136707,6 +136830,7 @@ function Devices(p) {
 				})
 			]
 		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesAnywhere, { active: p.active }),
 		unreachable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "devices-warn",
 			id: "devices-unreachable-joiners",

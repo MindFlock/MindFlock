@@ -1225,6 +1225,13 @@ class GeneralSettings:
     route) and only forwards. Empty
     until something is done; stored per device.
 
+    ``devices_anywhere``: "Reach my devices from anywhere (no Tailscale
+    needed)" — Settings → Your devices. On: this device runs a private
+    Cloudflare quick tunnel and leaves its address, encrypted with the group's
+    key, in the user's own private GitHub repo, and finds the other devices
+    the same way (:mod:`backend.web.core.devices_anywhere`,
+    ``docs/devices-anywhere.md``). Off by default; per device, never synced.
+
     ``onboarded``: DERIVED — ``True`` exactly when ``setup.repo.done``. Kept as
     a field so settings sync and every existing reader keep working; a store
     that still carries the old standalone ``onboarded: true`` is migrated on
@@ -1414,6 +1421,7 @@ class GeneralSettings:
     remote_control: str = ""  # "" / "off" | "on"
     serve_mode: str = ""  # "" / "local" | "tailscale"
     shared_link: str = ""  # "" = off | a Tailscale Service name, e.g. "mindflock"
+    devices_anywhere: bool = False  # Reach my devices from anywhere (see docstring)
     ingestion_autostart: Optional[bool] = None
     intake_paused: Optional[List[str]] = None  # LEGACY, unread (see docstring)
     setup_devices: str = ""  # "" (not asked) | "first" | "join"
@@ -1467,6 +1475,8 @@ class GeneralSettings:
             d["serve_mode"] = self.serve_mode
         if self.shared_link:
             d["shared_link"] = self.shared_link
+        if self.devices_anywhere:
+            d["devices_anywhere"] = True
         if self.ingestion_autostart is not None:
             d["ingestion_autostart"] = self.ingestion_autostart
         if self.intake_paused is not None:
@@ -1536,6 +1546,7 @@ class GeneralSettings:
             remote_control=str(d.get("remote_control", "") or "").strip().lower(),
             serve_mode=str(d.get("serve_mode", "") or "").strip().lower(),
             shared_link=str(d.get("shared_link", "") or "").strip().lower(),
+            devices_anywhere=d.get("devices_anywhere") is True,
             ingestion_autostart=_opt_bool(d.get("ingestion_autostart")),
             intake_paused=_intake_kinds(d.get("intake_paused")),
             setup_devices=_setup_devices(d.get("setup_devices")),

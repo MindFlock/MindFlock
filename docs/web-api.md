@@ -3191,6 +3191,25 @@ runs_automation}`; 401 without it, 409 when this device is in another group.
   commit, install, blocked, state, ref, error, restart_pending}`. Both answer
   401 `{error, id, epoch, kfp}` to anything but the current fleet key.
 
+#### Reach my devices from anywhere (no Tailscale needed)
+
+The no-Tailscale path between your own devices
+([devices-anywhere.md](devices-anywhere.md): design and threat model).
+Per device, off by default (`general.devices_anywhere`).
+
+| Method | Path | Body / answer |
+|---|---|---|
+| `GET` | `/api/devices/anywhere` | `{on, state, text, retry, install, installed, tunnel, github: {state, text}, published_at, found, via_tunnel}`. `state` is `off` / `waiting` (not in a group yet) / `starting` / `on` / `failed` / `needs_github`. `text` is the plain line Settings shows under the switch. `retry` offers Retry, and `install` means cloudflared is missing (the doctor's install plan carries it). `found` lists the devices whose addresses were read, and `via_tunnel` those reached through the tunnel in the last sweep. No address, token or key is ever in it. |
+| `POST` | `/api/devices/anywhere` | `{on: bool}` → the status after applying it. On: starts the tunnel, publishes this device's record and reads the others'. Off: stops the tunnel, ingress and proxies, and **deletes this device's record**. 403 for a request relayed by another MindFlock or arriving through the tunnel; otherwise `auth.may_configure`. 400 without a boolean `on`. |
+| `POST` | `/api/devices/anywhere/retry` | Try the tunnel and GitHub again now (the status line's **Retry**). Same rules. |
+
+`GET /api/devices` rows and `GET /api/fleet` `members[]` carry `via`:
+`"tailnet"`, `"tunnel"`, or `""` (this device / not reached). Requests that
+arrive through the tunnel are held to the access gate as if it were **on**,
+even in local mode: public paths only, unless they carry a token or the
+current fleet key. They are never "from this machine", and their
+`X-Forwarded-For` is ignored (see [Authentication](#authentication)).
+
 ### People
 
 The person all of your devices share — an identifier, never a credential
@@ -4314,6 +4333,16 @@ run **before everything else**, public paths included: a cross-site
   (`privileged`, the token reveal, `may_configure`) needs the `Host` header
   to be a loopback name too (`localhost`, `127.x`, `::1`): a rebound page
   reaches 127.0.0.1 from a loopback peer with its own name as the `Host`.
+- **Through the device tunnel is not "this machine".** "Reach my devices
+  from anywhere" hands another device's authenticated stream to this server
+  over loopback. The tunnel registers the local port of each such connection
+  first (`backend/peer/tunnel_peers.py`), and the outermost middleware then
+  marks the request (`scope["mf_tunnel"]`) and replaces its client with a
+  non-address (`devices-tunnel`), so no loopback, tailnet or proxy-trust rule
+  matches it. `auth.tunneled` requests get the gate **on** whatever the mode:
+  public paths, member routes, or a valid token / current fleet key, else
+  401. They are never "from this machine". See
+  [devices-anywhere.md](devices-anywhere.md).
 
 | Method | Path | Behavior |
 |---|---|---|

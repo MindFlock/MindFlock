@@ -146,6 +146,7 @@ describe("each trust control is rendered by exactly one screen", () => {
     ["the access-token display", /data-control="access-token"/, "security"],
     ["the Tailscale-mode switch", /data-control="tailscale-mode"/, "devices"],
     ["the trusted-accounts list", /data-control="trusted-accounts"/, "devices"],
+    ["the reach-from-anywhere switch", /data-control="devices-anywhere"/, "devices"],
   ];
   for (const [what, marker, owner] of ONCE) {
     it(what + " → " + owner, () => {
@@ -159,6 +160,7 @@ describe("each trust control is rendered by exactly one screen", () => {
     expect(SRC.security).toMatch(/data-control="access-token"[\s\S]{0,400}id="auth-token-value"/);
     expect(SRC.devices).toMatch(/data-control="tailscale-mode"[\s\S]{0,900}data-field="serve_mode"/);
     expect(SRC.devices).toMatch(/data-control="trusted-accounts"[\s\S]{0,1500}data-login=\{login\}/);
+    expect(SRC.devices).toMatch(/data-control="devices-anywhere"[\s\S]{0,600}data-field="devices_anywhere"/);
   });
 
   it("the moved controls left their old screens", () => {
