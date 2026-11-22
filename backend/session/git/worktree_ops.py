@@ -18,6 +18,7 @@ import shutil
 import subprocess
 
 from backend import gitutil, log
+from backend.session.git.repo_lock import worktree_lock
 from backend.session.git.util import _exit_error, _trim_prefix
 
 __all__ = [
@@ -89,7 +90,15 @@ class GitWorktreeOpsMixin:
         ``refs/heads/<branch>`` exists) or creates a brand-new worktree from
         HEAD (or from ``baseRef``). A ``baseRef`` whose branch already exists is
         refused rather than silently reusing a branch cut from somewhere else.
+
+        Holds the repository's worktree lock (:mod:`.repo_lock`): concurrent
+        ``git worktree add`` runs in one repository can fail reading each
+        other's half-written admin folders.
         """
+        with worktree_lock(self.repoPath):
+            self._setup_locked()
+
+    def _setup_locked(self) -> None:
         from backend.session.git.worktree import get_worktree_directory
 
         # Ensure worktrees directory exists early.
@@ -364,8 +373,12 @@ class GitWorktreeOpsMixin:
         """Remove the worktree and (unless pre-existing) its branch, then prune.
 
         Collects errors and joins them via ``combine_errors`` so multiple
-        failures surface together.
+        failures surface together. Holds the repository's worktree lock.
         """
+        with worktree_lock(self.repoPath):
+            self._cleanup_locked()
+
+    def _cleanup_locked(self) -> None:
         errs = []
 
         # Check if worktree path exists before attempting removal.
@@ -420,9 +433,10 @@ class GitWorktreeOpsMixin:
     def Remove(self) -> None:
         """Remove the worktree but keep the branch."""
         try:
-            self.run_git_command(
-                self.repoPath, "worktree", "remove", "-f", self.worktreePath
-            )
+            with worktree_lock(self.repoPath):
+                self.run_git_command(
+                    self.repoPath, "worktree", "remove", "-f", self.worktreePath
+                )
         except Exception as err:  # noqa: BLE001
             raise RuntimeError("failed to remove worktree: {}".format(err)) from err
 
@@ -430,7 +444,8 @@ class GitWorktreeOpsMixin:
     def Prune(self) -> None:
         """Remove all working-tree administrative files via ``worktree prune``."""
         try:
-            self.run_git_command(self.repoPath, "worktree", "prune")
+            with worktree_lock(self.repoPath):
+                self.run_git_command(self.repoPath, "worktree", "prune")
         except Exception as err:  # noqa: BLE001
             raise RuntimeError("failed to prune worktrees: {}".format(err)) from err
 

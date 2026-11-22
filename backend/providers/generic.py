@@ -281,6 +281,11 @@ class GenericProvider(BaseProvider):
             return self.cfg.usage_limit_patterns
         return super().usage_limit_patterns()
 
+    def usage_credits_patterns(self):
+        if self.cfg.usage_credits_patterns:
+            return self.cfg.usage_credits_patterns
+        return super().usage_credits_patterns()
+
     # --- usage-window knowledge (roadmap E) ------------------------------- #
     def usage_window(self) -> dict:
         return self.cfg.usage_window()

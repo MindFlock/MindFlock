@@ -250,3 +250,122 @@ def test_credits_banner_is_open_not_a_limit():
     assert is_credits_banner(text)
     assert not is_limit_screen(text)
     assert not is_credits_banner("usage limit reached ∙ resets 3am")
+
+
+# --------------------------------------------------------------------------- #
+# Credits / extra usage is NOT a limit — the latest notice on the pane decides
+# --------------------------------------------------------------------------- #
+# Claude Code's own wording, as seen on the owner's panes and in its UI. The
+# plan window is spent but the account rolled onto paid credits (or "extra
+# usage"): the agent can still work.
+CREDITS_NOTICES = (
+    "Now using usage credits",
+    "\n                     Now using usage credits\n",
+    "You're now using extra usage",
+    "Now using extra usage",
+    "Extra usage is on",
+)
+# Still a wall: the plan window with no credits, or the credits themselves spent.
+REAL_LIMITS = (
+    "Claude usage limit reached · resets 3am",
+    "5-hour limit reached ∙ resets 3am",
+    "Weekly limit reached ∙ resets Jul 24 at 10:59am (America/New_York)",
+    "You've hit your limit · resets 4pm",
+    "You've hit your extra usage limit",
+    "Out of usage credits",
+    "You've used all of your usage credits",
+)
+
+
+def test_credits_notices_are_credits_and_never_a_limit():
+    for s in CREDITS_NOTICES:
+        assert ul.is_credits_banner(s), s
+        assert not ul.is_limit_screen(s), s
+        state = ul.detect_limit(s, now=1_000_000.0)
+        assert state["limited"] is False and state["credits"] is True, s
+
+
+def test_real_limits_stay_limits():
+    for s in REAL_LIMITS:
+        assert ul.is_limit_screen(s), s
+        state = ul.detect_limit(s, now=1_000_000.0)
+        assert state["limited"] is True and state["credits"] is False, s
+
+
+def test_approaching_a_limit_is_not_a_limit():
+    for s in (
+        "Approaching usage limit · resets at 9pm",
+        "Approaching weekly limit",
+        "You've used 92% of your weekly limit · resets Jul 24 at 10:59am",
+    ):
+        assert not ul.is_limit_screen(s), s
+        assert ul.detect_limit(s, now=1_000_000.0)["limited"] is False, s
+
+
+def test_a_credits_notice_after_the_limit_banner_wins():
+    """The observed screen: the CLI printed its limit banner, then rolled onto
+    credits and said so — the banner stays on the pane above. Read as a limit,
+    a spawned worker sat idle with its task held (wait_for_session:
+    usage_limit) though it could work."""
+    for pane in (
+        "You've hit your limit · resets 3pm (America/New_York)\n"
+        "  /extra-usage to finish what you're working on.\n\n"
+        "                     Now using usage credits\n> ",
+        "5-hour limit reached ∙ resets 3am\n\n✻ Now using usage credits\n",
+        "5-hour limit reached ∙ now using usage credits",
+        "Weekly limit reached ∙ resets Jul 24 at 10:59am (America/New_York)\n"
+        "You're now using extra usage\n",
+    ):
+        assert not ul.is_limit_screen(pane), pane
+        state = ul.detect_limit(pane, now=1_000_000.0)
+        assert state == {"limited": False, "reset_at": None, "credits": True}, pane
+
+
+def test_a_limit_after_the_credits_notice_is_a_limit_again():
+    """Credits ran out later: the newest notice is a wall again."""
+    pane = (
+        "Now using usage credits\n...work...\n"
+        "You've hit your extra usage limit · resets Dec 1 at 12am (UTC)\n"
+    )
+    assert ul.is_limit_screen(pane)
+    state = ul.detect_limit(pane, now=1_000_000.0)
+    assert state["limited"] is True and state["credits"] is False
+
+
+def test_the_claude_provider_reads_credits_as_open():
+    prov = providers.resolve("claude")
+    pane = "You've hit your limit · resets 3pm\n\nNow using usage credits\n"
+    state = prov.usage_limit_state(pane, 1_000_000.0)
+    assert state["limited"] is False and state["credits"] is True
+    assert "now using usage credits" in [
+        p.lower() for p in prov.usage_credits_patterns()
+    ]
+
+
+def test_a_toml_provider_can_name_its_own_credits_notice():
+    from backend.providers.config import ProviderConfig
+    from backend.providers.generic import GenericProvider
+
+    cfg = ProviderConfig(
+        name="acme",
+        program_aliases=("acme",),
+        usage_limit_patterns=(r"quota exhausted",),
+        usage_credits_patterns=(r"billing to your card now",),
+    )
+    prov = GenericProvider(cfg)
+    assert prov.usage_limit_state("quota exhausted", 1.0)["limited"] is True
+    state = prov.usage_limit_state("quota exhausted\nbilling to your card now", 1.0)
+    assert state["limited"] is False and state["credits"] is True
+
+
+def test_the_gate_clears_a_hold_on_the_real_combined_pane(monkeypatch):
+    """End to end through the real Claude provider: a hold armed by the limit
+    banner is released once the credits notice follows it."""
+    server._LIMIT_STATE["s4"] = 9_999_999_999.0
+    _no_live(monkeypatch)
+    _fake_pane(
+        monkeypatch,
+        "You've hit your limit · resets 3pm\n\n   Now using usage credits\n",
+    )
+    assert server._refresh_limit_state(_inst(), "s4", "tmux-s4") == 0.0
+    assert "s4" not in server._LIMIT_STATE

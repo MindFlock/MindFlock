@@ -775,15 +775,20 @@ async def _create(
             # Surface the failure to watchers (UI toast, `mindflock events`,
             # the CLI's create poll) — a session silently vanishing from the
             # list is the worst failure mode.
-            if drained:
-                # It waited in the launch gate's queue: its row stays as a
-                # failure (with the task to retry) and its parent is told.
+            if drained or spawned:
+                # It waited in the launch gate's queue, or an agent spawned it
+                # (let through at once): its row stays as a failure (with the
+                # task to retry), wait_for_session reads failed_to_start, and
+                # its parent is told. Before, an agent's spawn admitted at once
+                # only dropped its row — a worker of a batch whose worktree
+                # add failed simply vanished.
                 note_start_failed(
                     title,
                     str(err),
                     parent=parent,
                     kind=kind or "spawn",
                     prompt=str(payload.get("prompt") or ""),
+                    spawned=spawned if spawned else None,
                 )
                 return
             srv._note_create_failure(title, str(err))
@@ -1847,6 +1852,36 @@ async def _create_gated(
     return JSONResponse(body, status_code=202), ""
 
 
+def _log_spawn(payload: dict, resp: JSONResponse, path: str) -> None:
+    """One info line per agent spawn the server answered: which title, for
+    which parent, and what became of it (queued / created / refused, with the
+    error). With the start's own outcome (``failed to create instance`` or
+    the launch gate's ``could not start``) every spawn of a batch can be
+    followed in the log. Never raises."""
+    try:
+        status, body = _json_result(resp)
+        if body.get("queued"):
+            what = "queued (%s, position %s)" % (
+                body.get("why") or "queue",
+                body.get("position"),
+            )
+        elif status < 400:
+            what = "creating"
+        else:
+            what = "refused %d: %s" % (status, body.get("error") or "")
+        srv = _server()
+        if srv.log.InfoLog is not None:
+            srv.log.InfoLog.Printf(
+                "spawn %s (parent %s, %s): %s",
+                str(body.get("title") or payload.get("title") or "?"),
+                str(payload.get("parent") or "-"),
+                path,
+                what,
+            )
+    except Exception:  # noqa: BLE001 — a log line never fails a create
+        pass
+
+
 async def create_requested(payload: dict, *, person: str = "") -> JSONResponse:
     """``POST /api/instances``: a create asks the launch gate, then
     :func:`create`. ``person``: who the request is for (the route stamps it
@@ -1870,10 +1905,13 @@ async def create_requested(payload: dict, *, person: str = "") -> JSONResponse:
     if payload.get("spawned") is True:
         held, key = await _create_gated(payload, person=person, kind="spawn")
         if held is not None:
+            _log_spawn(payload, held, "gate")
             return held
         title = str(payload.get("title") or "").strip()
         try:
-            return await create(payload, person=person, gated=True, admitted=key)
+            resp = await create(payload, person=person, gated=True, admitted=key)
+            _log_spawn(payload, resp, "admitted")
+            return resp
         finally:
             _unclaim(title)
     if not start_anyway:

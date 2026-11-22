@@ -847,13 +847,29 @@ class BaseProvider:
 
         return DEFAULT_LIMIT_PATTERNS
 
+    def usage_credits_patterns(self) -> Sequence[str]:
+        """Regexes for this CLI's "the plan window is spent, now billing paid
+        credits" notice (Claude Code: "Now using usage credits") — the window
+        is OPEN, not a limit. Default: the shared
+        :data:`usage_limits.CREDITS_OPEN_PATTERNS`."""
+        from .usage_limits import CREDITS_OPEN_PATTERNS
+
+        return CREDITS_OPEN_PATTERNS
+
     def usage_limit_state(self, pane_text: str, now: Optional[float] = None) -> dict:
-        """``{"limited": bool, "reset_at": float|None}`` from the agent pane —
-        whether the CLI is currently usage-limited and when it resets, so the
-        queue can wait out the limit and resume when it reopens."""
+        """``{"limited": bool, "reset_at": float|None, "credits": bool}`` from
+        the agent pane — whether the CLI is currently usage-limited and when
+        it resets, so the queue can wait out the limit and resume when it
+        reopens. ``credits``: the newest notice says it runs on paid credits
+        (not limited, whatever the plan meter reads)."""
         from .usage_limits import detect_limit
 
-        return detect_limit(pane_text, self.usage_limit_patterns(), now)
+        return detect_limit(
+            pane_text,
+            self.usage_limit_patterns(),
+            now,
+            credits_patterns=self.usage_credits_patterns(),
+        )
 
     # --- minimal / connection-free launch (roadmap E) -------------------- #
     def minimal_launch_command(

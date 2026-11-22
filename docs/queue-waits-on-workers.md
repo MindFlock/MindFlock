@@ -77,7 +77,14 @@ A child is **finished** when:
   sent it, so a follow-up ask makes it "out" again; or
 - it is gone, paused, offline (closed, stopped or asleep), usage-limited, or
   on a dialog (`clarify`). A dialog needs a person or the orchestrator to
-  act, and holding the queue behind it helps no one.
+  act, and holding the queue behind it helps no one. A child whose pane says
+  **"Now using usage credits"** after its limit banner is *not*
+  usage-limited: it can still work, so it holds like any working child
+  (see [Live usage & limit state](providers.md#live-usage--limit-state)).
+- its start failed. A spawned worker whose create failed — queued or let
+  through at once — is never a session, so it never holds; its row stays as
+  a failed start and its parent's mailbox gets "worker X could not start: …"
+  ([`spawn_session`](mcp.md#spawn_session)).
 
 ### Escapes, so a stuck child cannot hold the queue forever
 

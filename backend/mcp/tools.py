@@ -2112,6 +2112,16 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools, _todos.Todo
                         "check the MindFlock UI or server log for the reason" % title
                     )
                 row = match[0]
+                failed = _waiting.start_failure(row)
+                if failed is not None:
+                    # Its row stays as a failed start (the server keeps it so
+                    # nothing a batch spawned can vanish): say why now.
+                    self.policy.spawned_by_me.discard(title)
+                    why = str(failed.get("error") or "") or self._create_failure(title)
+                    raise ToolError(
+                        "session %r failed to start: %s; %s"
+                        % (title, why or "no reason recorded", _FAILED_TO_START_HINT)
+                    )
                 if str(row.get("status") or "") != "loading":
                     ready = True
                     break

@@ -1073,6 +1073,14 @@ class ShipTools:
                     % (title, why or "it disappeared while provisioning")
                 )
             row = match[0]
+            failed = _waiting.start_failure(row)
+            if failed is not None:
+                self.policy.spawned_by_me.discard(title)
+                why = str(failed.get("error") or "") or self._create_failure(title)
+                raise ToolError(
+                    "ticket session %r failed to start: %s"
+                    % (title, why or "no reason recorded")
+                )
             if not row.get("pending") and str(row.get("status")) != "loading":
                 return True, row
         return False, row
