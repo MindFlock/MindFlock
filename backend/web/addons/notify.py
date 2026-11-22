@@ -553,7 +553,7 @@ NOTIFY_RULES: List[dict] = [
         "title": "Check your devices",
         "body": "{detail}",
         "default_enabled": True,
-        "priority": 5,
+        "priority": 4,
         "tags": ["warning"],
     },
     {

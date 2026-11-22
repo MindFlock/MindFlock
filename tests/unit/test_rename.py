@@ -474,6 +474,7 @@ NOT_SESSION_KEYED = {
     "ntfy_recent.json": "recent phone pushes, keyed by a hash of their words",
     "remote_devices.json": "devices",
     "fleet.json": "devices",
+    "fleet_pairing.json": "devices (pending pairings + their alarms)",
     "fleet_update.json": "devices",
     "settings_sync.json": "settings sync",
     "update_announced.json": "release notes",
