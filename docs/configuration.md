@@ -573,6 +573,7 @@ no Settings screen for it — Settings → Disk cleanup shows how full it is.
 | `item_mb` | integer 1–65536 (unset = 100) | The most one item can be (`too_large`) |
 | `max_items` | integer (unset = 300) | How many items Shared files holds (`hub_full`) |
 | `keep_days` | integer 1–3650 (unset = 14) | An unpinned item is removed this many days after it was added or last used (a code sent, a copy into a session, a pin) — on the server's 5-minute timer. Pinned items stay |
+| `offer_to_devices` | `true` / `false` (unset = on) | Whether THIS device offers its shared files to your other devices (they list them and fetch one when it is used — [devices.md](devices.md#shared-files-on-your-other-devices)). Off: they are told "keeps its shared files to itself". Enforced here, where the items live; one item can also be kept here with its "Keep on this device only" mark. The drawer footer's **Show these on my other devices** sets it |
 
 ### Auth profiles (`[auth_profiles]`, settings store only)
 

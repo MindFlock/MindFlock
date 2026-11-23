@@ -197,7 +197,7 @@ describe("several at once", () => {
   it("the batch is one request; Remove asks once, naming the count", () => {
     expect(LIBHUB).toContain('api<BatchResult>("/api/hub/batch"');
     expect(PANEL).toContain("removeItems(these)");
-    expect(PANEL).toContain('Remove {n === 1 ? "it" : n}');
+    expect(PANEL).toContain('Remove {selLocal.length === 1 ? "it" : selLocal.length}');
     expect(PANEL).toContain("Keep");
     expect(PANEL).toContain("Select all");
   });
@@ -238,7 +238,7 @@ describe("wiring", () => {
     expect(CLIP).toContain("expandRefs(text)");
     expect(CLIP).toContain("HUB_MIME");
     // The client's code rule is the server's (core/hub.py HANDLE_RE): both prefixes.
-    expect(HUBREF).toContain("(?<![A-Za-z0-9_./:@-])(?:file|hub):([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])");
+    expect(HUBREF).toContain("(?<![A-Za-z0-9_./:@-])(?:file|hub)(?:@[A-Za-z0-9][A-Za-z0-9-]{0,62})?:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])");
     expect(hubref.REF_RE.test("see file:k7m2 now")).toBe(true);
     expect(hubref.REF_RE.test("see hub:k7m2 now")).toBe(true);
     expect(hubref.REF_RE.test("profile:k7m2")).toBe(false);
@@ -311,5 +311,84 @@ describe("round 4: what the owner sees", () => {
   it("a terminal paste or drop of a code goes through the dialog-safe send", () => {
     expect(CLIP).toContain("typeIntoAgent(session, text)");
     expect(HUBREF).toContain("submit: false, dialog_safe: true");
+  });
+});
+
+
+describe("your other devices' shared files", () => {
+  const devices = (over: Partial<import("../lib/hub").HubDevice> = {}): import("../lib/hub").HubDevices => ({
+    self: "laptop",
+    devices: [
+      {
+        device: "mac-mini",
+        name: "Mac mini",
+        state: "ok",
+        note: "",
+        dropped: 0,
+        truncated: false,
+        items: [
+          { id: "p3qx", ref: "file:p3qx", name: "trace.log", kind: "file", mime: "", size: 10, sha256: "a", by: "you", by_name: "", added: 2000, note: "", textual: true, preview: "boom", secret: false, too_big: false, copy: null },
+          { id: "k7m2", ref: "file@mac-mini:k7m2", name: "shot.png", kind: "image", mime: "image/png", size: 4 << 20, sha256: "b", by: "you", by_name: "", added: 1500, note: "", textual: false, preview: "", secret: false, too_big: false, copy: null },
+          { id: "zz22", ref: "file:zz22", name: "here.txt", kind: "text", mime: "", size: 3, sha256: "c", by: "you", by_name: "", added: 1200, note: "", textual: true, preview: "x", secret: false, too_big: false, copy: "zz22" },
+        ],
+        ...over,
+      },
+      { device: "win-rig", name: "Win rig", state: "offline", note: "Win rig is offline — its shared files show here when it is back", items: [], dropped: 0, truncated: false },
+      { device: "old-box", name: "Old box", state: "old", note: "Old box runs an older MindFlock — update it to see its shared files here", items: [], dropped: 0, truncated: false },
+    ],
+  });
+
+  it("their items are rows of this list, by device code, and one already here is left out", () => {
+    const rows = hub.remoteItems(devices());
+    expect(rows.map((r) => r.id)).toEqual(["file@mac-mini:p3qx", "file@mac-mini:k7m2"]);
+    expect(rows[1].ref).toBe("file@mac-mini:k7m2");
+    expect(rows[0].remote).toMatchObject({ device: "mac-mini", deviceName: "Mac mini", id: "p3qx" });
+  });
+
+  it("a device that can't be asked is named, never an empty list", () => {
+    expect(hub.deviceNotes(devices()).map((d) => d.state)).toEqual(["offline", "old"]);
+    expect(hub.deviceNotes(devices())[1].note).toContain("update");
+  });
+
+  it("a big remote picture is never pulled to draw the list; a small one is its checked thumbnail", () => {
+    const [, big] = hub.remoteItems(devices());
+    expect(hub.hasThumb(big)).toBe(false);
+    const small = { ...big, size: 1000 };
+    expect(hub.hasThumb(small)).toBe(true);
+    expect(hub.rawUrl(small)).toBe("/api/hub/devices/mac-mini/items/k7m2/thumb");
+  });
+
+  it("the Other devices filter and find by device name", () => {
+    const rows = [...hub.remoteItems(devices()), item(), item({ id: "c0py", ref: "file:c0py", origin: { device: "mac-mini", name: "Mac mini", id: "zz22" } })];
+    expect(panel.filterItems(rows, "devices", "").map((r) => r.id)).toEqual(["file@mac-mini:p3qx", "file@mac-mini:k7m2", "c0py"]);
+    expect(panel.filterItems(rows, "all", "mac mini").length).toBe(3);
+    expect(hub.whoLabel(rows[3])).toBe("from Mac mini");
+  });
+
+  it("a code finds its item: own first, then a fetched copy, then the one device offering it", () => {
+    const remote = hub.remoteItems(devices());
+    const local = [item(), item({ id: "c0py", ref: "file:c0py", origin: { device: "mac-mini", name: "Mac mini", id: "zz22" } })];
+    expect(hub.findByRef("file:k7m2", local, remote)?.id).toBe("k7m2");
+    expect(hub.findByRef("file@mac-mini:k7m2", local, remote)?.id).toBe("file@mac-mini:k7m2");
+    expect(hub.findByRef("file:zz22", local, remote)?.id).toBe("c0py");
+    expect(hub.findByRef("file:p3qx", local, remote)?.remote?.deviceName).toBe("Mac mini");
+    expect(hub.findByRef("file:nope", local, remote)).toBeUndefined();
+  });
+
+  it("the composer's chips keep a device code's device; ✕ takes out only that one", () => {
+    expect(attach.attachedRefs("a file@Mac-Mini:K7M2 b file:k7m2")).toEqual(["file@mac-mini:k7m2", "file:k7m2"]);
+    expect(attach.removeRef("a file@mac-mini:k7m2 b file:k7m2 c", "file@mac-mini:k7m2")).toBe("a b file:k7m2 c");
+    expect(attach.removeRef("a file@mac-mini:k7m2 b file:k7m2 c", "file:k7m2")).toBe("a file@mac-mini:k7m2 b c");
+    expect(hubref.REF_RE.test("see file@mac-mini:k7m2")).toBe(true);
+  });
+
+  it("using one fetches it first; pin and remove stay this device's; the switch is in the footer", () => {
+    expect(PANEL).toContain("useThen(selItems, (here) => useHubUi.getState().openSend(here))");
+    expect(PANEL).toContain("pinItems(selLocal.filter((i) => !i.pinned), true)");
+    expect(PANEL).toContain("Save to this device");
+    expect(PANEL).toContain("Keep on this device only");
+    expect(PANEL).toContain("Show these on my other devices");
+    expect(LIBHUB).toContain('json: { action: "fetch", ids: rem.map((i) => i.id) }');
+    expect(LIBHUB).toContain("Bring it anyway");
   });
 });

@@ -42,6 +42,68 @@ export interface HubItem {
   preview: string;
   path: string;
   expires: number | null;
+  /** Kept on this device only: never offered to the person's other devices. */
+  local_only?: boolean;
+  /** Fetched from another of the person's devices (a snapshot of it). */
+  origin?: HubOrigin;
+  /** An item ANOTHER device holds, shown in this list (read-only here; any
+   * use fetches it first — bringHere). Its `id` is its device code. */
+  remote?: HubRemote;
+}
+
+export interface HubOrigin {
+  device: string;
+  name: string;
+  id: string;
+}
+
+export interface HubRemote {
+  device: string;
+  deviceName: string;
+  /** Its id on that device. */
+  id: string;
+  /** Bigger than one shared file may be here. */
+  tooBig: boolean;
+  /** Its name looks like a secret: only the person can bring it here. */
+  secret: boolean;
+}
+
+/** Why another device can't be asked right now (core/hub_remote.py). */
+export type HubDeviceState = "ok" | "offline" | "old" | "off" | "private" | "not_linked" | "refused" | "error";
+
+export interface HubDeviceRow {
+  id: string;
+  ref: string;
+  name: string;
+  kind: HubKind;
+  mime: string;
+  size: number;
+  sha256: string;
+  by: HubItem["by"];
+  by_name: string;
+  added: number;
+  note: string;
+  textual: boolean;
+  preview: string;
+  secret: boolean;
+  too_big: boolean;
+  /** The local copy's id, once fetched here. */
+  copy: string | null;
+}
+
+export interface HubDevice {
+  device: string;
+  name: string;
+  state: HubDeviceState;
+  note: string;
+  items: HubDeviceRow[];
+  dropped: number;
+  truncated: boolean;
+}
+
+export interface HubDevices {
+  self: string;
+  devices: HubDevice[];
 }
 
 export interface HubList {
@@ -76,6 +138,166 @@ export function useHub(enabled = true) {
 
 export function refreshHub(): void {
   void queryClient.invalidateQueries({ queryKey: ["hub"] });
+  void queryClient.invalidateQueries({ queryKey: ["hub-devices"] });
+}
+
+/** What the person's OTHER devices offer right now (GET /api/hub/devices:
+ * only the list — nothing is copied to draw it). A server without device
+ * sharing answers 404: no devices. */
+export function useHubDevices(enabled = true) {
+  return useQuery({
+    queryKey: ["hub-devices"],
+    queryFn: async (): Promise<HubDevices> => {
+      try {
+        return await api<HubDevices>("/api/hub/devices");
+      } catch (err) {
+        if ((err as ApiError)?.status === 404) return { self: "", devices: [] };
+        throw err;
+      }
+    },
+    enabled,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    retry: false,
+  });
+}
+
+/** `file@mac-mini:k7m2` — an item named with the device that holds it. */
+export function deviceCode(device: string, id: string): string {
+  return "file@" + device + ":" + id;
+}
+
+/** The other devices' items as rows of this list — one already fetched here
+ * is left out (its local copy is the row, "from ‹device›"). */
+export function remoteItems(d: HubDevices | undefined): HubItem[] {
+  const out: HubItem[] = [];
+  for (const dev of d?.devices || []) {
+    if (dev.state !== "ok") continue;
+    for (const r of dev.items) {
+      if (r.copy) continue;
+      out.push({
+        id: deviceCode(dev.device, r.id),
+        ref: r.ref,
+        name: r.name,
+        kind: r.kind,
+        mime: r.mime,
+        size: r.size,
+        sha256: r.sha256,
+        by: r.by,
+        by_name: r.by_name,
+        added: r.added,
+        used: r.added,
+        note: r.note,
+        pinned: false,
+        textual: r.textual,
+        preview: r.preview,
+        path: "",
+        expires: null,
+        remote: { device: dev.device, deviceName: dev.name, id: r.id, tooBig: r.too_big, secret: r.secret },
+      });
+    }
+  }
+  return out;
+}
+
+/** The item a code in text means, for a chip: `file:k7m2` — this device's
+ * k7m2, else the one copy fetched from another device's k7m2, else the one
+ * other device offering it; `file@mac-mini:k7m2` — that device's k7m2 (its
+ * copy here once fetched). Undefined when none (or several) match. */
+export function findByRef(ref: string, local: HubItem[], remote: HubItem[]): HubItem | undefined {
+  const m = /^(?:file|hub)(?:@([A-Za-z0-9-]+))?:([A-Za-z0-9]{4,8})$/i.exec(ref.trim());
+  if (!m) return undefined;
+  const dev = (m[1] || "").toLowerCase();
+  const id = m[2].toLowerCase();
+  if (dev) {
+    return (
+      local.find((i) => i.origin?.device === dev && i.origin.id === id) ||
+      remote.find((i) => i.remote?.device === dev && i.remote.id === id)
+    );
+  }
+  const own = local.find((i) => i.id === id);
+  if (own) return own;
+  const copies = local.filter((i) => i.origin?.id === id);
+  if (copies.length) return new Set(copies.map((i) => i.origin!.device)).size === 1 ? copies[0] : undefined;
+  const there = remote.filter((i) => i.remote?.id === id);
+  return there.length === 1 ? there[0] : undefined;
+}
+
+/** The devices that can't be asked right now, with the sentence to show
+ * ("Mac mini is offline — …", "… needs an update"). */
+export function deviceNotes(d: HubDevices | undefined): { device: string; name: string; state: HubDeviceState; note: string }[] {
+  return (d?.devices || []).filter((x) => x.state !== "ok").map((x) => ({ device: x.device, name: x.name, state: x.state, note: x.note }));
+}
+
+/** The largest picture of another device drawn as a thumbnail (it is its
+ * own thumbnail: core/hub_remote.py THUMB_MAX). */
+export const REMOTE_THUMB_MAX = 512 * 1024;
+
+/** Whether the list can draw this picture (a remote one only when small —
+ * a bigger one is never pulled just to draw the list). */
+export function hasThumb(it: Pick<HubItem, "kind" | "size" | "remote">): boolean {
+  return it.kind === "image" && (!it.remote || it.size <= REMOTE_THUMB_MAX);
+}
+
+/** Bring items of other devices HERE before using them (one POST
+ * /api/hub/batch action=fetch, answered per item): each lands in this
+ * device's shared files as a normal item that remembers where it came from;
+ * one already here is found, not fetched again. → the items to use, local
+ * ones as they were, fetched ones as their local copies, in the order given;
+ * what couldn't be fetched is said in the drawer, item by item (a secret-
+ * looking one with "Bring it anyway"). */
+export async function bringHere(items: HubItem[], opts: { secretOk?: boolean } = {}): Promise<HubItem[]> {
+  const rem = items.filter((i) => i.remote);
+  if (!rem.length) return items;
+  const from = [...new Set(rem.map((i) => i.remote!.deviceName))].join(" and ");
+  say((rem.length === 1 ? "Fetching " + rem[0].name : "Fetching " + rem.length + " items") + " from " + from + "…", { ms: 60_000 });
+  const got = new Map<string, HubItem>();
+  try {
+    if (opts.secretOk) {
+      for (const it of rem) {
+        const rec = await api<HubItem>("/api/hub/devices/fetch", { json: { id: it.id, secret_ok: true } });
+        got.set(it.id, rec);
+      }
+    } else {
+      const r = await api<BatchResult>("/api/hub/batch", { json: { action: "fetch", ids: rem.map((i) => i.id) } });
+      for (const row of r.results) {
+        const it = rem.find((i) => i.id === row.id);
+        if (!it) continue;
+        if (row.ok && row.item) got.set(it.id, row.item);
+        else if (row.code === "secret")
+          addProblem(
+            it.name + " on " + it.remote!.deviceName + " looks like a secret (an env file, key or credential) — it wasn't brought here. Every session here can read Shared files.",
+            undefined,
+            { label: "Bring it anyway", run: () => void bringHere([it], { secretOk: true }).then((l) => l.length && say("Brought " + it.name + " here as " + l[0].ref)) }
+          );
+        else addProblem("Couldn't fetch " + it.name + " from " + it.remote!.deviceName + ": " + (row.error || "error"));
+      }
+    }
+  } catch (err) {
+    say("Couldn't fetch from " + from + ": " + errMsg(err), { error: true });
+    refreshHub();
+    return [];
+  }
+  refreshHub();
+  if (got.size === rem.length) hush();
+  else if (!got.size)
+    say("Couldn't fetch " + (rem.length === 1 ? rem[0].name : rem.length + " items") + " from " + from + " — why is in Shared files", { error: true });
+  else say("Fetched " + got.size + " of " + rem.length + " from " + from + " — why " + (rem.length - got.size) + " couldn't be is in Shared files");
+  const out: HubItem[] = [];
+  for (const i of items) {
+    if (!i.remote) out.push(i);
+    else if (got.has(i.id)) out.push(got.get(i.id)!);
+  }
+  return out;
+}
+
+/** Save other devices' items on this one (the ⋯ menu's and the selection
+ * bar's "Save to this device"). */
+export async function saveHere(items: HubItem[]): Promise<void> {
+  const rem = items.filter((i) => i.remote);
+  if (!rem.length) return;
+  const got = await bringHere(rem);
+  if (got.length) say(got.length === 1 ? "Saved " + got[0].name + " on this device as " + got[0].ref : batchLine(got.length, rem.length, "Saved") + " on this device");
 }
 
 let bridged = false;
@@ -108,6 +330,8 @@ export interface HubProblem {
   text: string;
   /** Too big for the per-item limit: the MB a one-click raise would set. */
   raiseTo?: number;
+  /** A one-click way past it (a secret-looking item: "Bring it anyway"). */
+  confirm?: { label: string; run(): void };
 }
 
 interface HubUi {
@@ -168,8 +392,8 @@ export function hush(): void {
 }
 
 let _p = 0;
-export function addProblem(text: string, raiseTo?: number): void {
-  useHubUi.setState((s) => ({ problems: [...s.problems.slice(-3), { id: ++_p, text, raiseTo }] }));
+export function addProblem(text: string, raiseTo?: number, confirm?: HubProblem["confirm"]): void {
+  useHubUi.setState((s) => ({ problems: [...s.problems.slice(-3), { id: ++_p, text, raiseTo, confirm }] }));
 }
 
 export function dropProblem(id: number): void {
@@ -240,7 +464,9 @@ export function humanSize(n: number): string {
 }
 
 /** Who added it, as the panel says it: "you", "your phone", "session api". */
-export function whoLabel(it: Pick<HubItem, "by" | "by_name">): string {
+export function whoLabel(it: Pick<HubItem, "by" | "by_name"> & { origin?: HubOrigin; remote?: HubRemote }): string {
+  if (it.origin) return "from " + (it.origin.name || it.origin.device);
+  if (it.by === "session" && it.remote) return "session " + (it.by_name || "?");
   if (it.by === "session") return "session " + displayName(it.by_name || "?");
   if (it.by === "device") return "device " + (it.by_name || "?");
   if (it.by === "phone") return "your phone";
@@ -262,7 +488,11 @@ export function expiryLabel(it: Pick<HubItem, "pinned" | "expires">, now = Date.
   return "Deleted automatically in " + Math.ceil(d) + (Math.ceil(d) === 1 ? " day" : " days") + " unless used — Pin to keep";
 }
 
-export function rawUrl(it: Pick<HubItem, "id">, download = false): string {
+export function rawUrl(it: Pick<HubItem, "id"> & { remote?: HubRemote }, download = false): string {
+  if (it.remote)
+    // Another device's picture: only its thumbnail (checked here) — never
+    // its whole file just to draw it.
+    return "/api/hub/devices/" + encodeURIComponent(it.remote.device) + "/items/" + encodeURIComponent(it.remote.id) + "/thumb";
   return "/api/hub/items/" + encodeURIComponent(it.id) + "/raw" + (download ? "?download=1" : "");
 }
 
@@ -405,7 +635,12 @@ export async function rebuildHub(): Promise<void> {
   try {
     const r = await api<{ items: number; restored: number; read_again: number }>("/api/hub/rebuild", { method: "POST" });
     refreshHub();
-    say("Rebuilt the list: " + r.items + (r.items === 1 ? " item" : " items") + " — nothing was lost");
+    say(
+      "Rebuilt the list: " + r.items + (r.items === 1 ? " item" : " items") + " — nothing was lost" +
+        (r.read_again
+          ? ". " + r.read_again + " read again " + (r.read_again === 1 ? "is" : "are") + " kept on this device only — ⋯ → Show on my other devices to share one again"
+          : "")
+    );
   } catch (err) {
     say("Couldn't rebuild the list: " + errMsg(err), { error: true });
   }
@@ -604,7 +839,7 @@ export async function freePath(title: string, it: HubItem, path = ""): Promise<{
   );
 }
 
-export async function updateItem(it: HubItem, patch: Partial<Pick<HubItem, "name" | "note" | "pinned">>): Promise<HubItem | null> {
+export async function updateItem(it: HubItem, patch: Partial<Pick<HubItem, "name" | "note" | "pinned" | "local_only">>): Promise<HubItem | null> {
   try {
     const r = await api<HubItem>("/api/hub/items/" + encodeURIComponent(it.id), { method: "PATCH", json: patch });
     refreshHub();
@@ -644,7 +879,7 @@ export async function removeItem(it: HubItem): Promise<void> {
 // --------------------------------------------------------------------------
 // Several at once (the selection bar): one request, answered per item
 // --------------------------------------------------------------------------
-export type BatchAction = "pin" | "unpin" | "remove" | "restore" | "copy";
+export type BatchAction = "pin" | "unpin" | "remove" | "restore" | "copy" | "fetch";
 
 export interface BatchRow {
   id: string;

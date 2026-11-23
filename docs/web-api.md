@@ -2978,15 +2978,19 @@ read changed. An item is `{id, ref ("file:k7m2"), name, kind
 (image|text|file), mime (only for an allow-listed image: png, jpeg, gif,
 webp — sniffed from its bytes), size, sha256, by (you|phone|session|device),
 by_name, added, used, note, pinned, textual, preview (first 400 characters of
-text), path, expires (null when pinned)}`. Every refusal is `{error, code}`
-with the next step in the sentence.
+text), path, expires (null when pinned), local_only, secret (added although
+its name looks like one, confirmed), origin? ({device, name, id, sha256,
+fetched} — fetched from another of your devices)}`. Every refusal is
+`{error, code}` with the next step in the sentence.
 
 **Who.** The owner's gate like the rest of the API. A guest link never
 reaches it (the auth middleware's allow-list has no `/api/hub` path and no
 `hub` session sub-route; the routes check again: **403** `guest`), nor does a
 request another MindFlock relayed (**403** `remote` — each device has its own
-hub; not on the `fwd/` allow-list), nor a shared-folder (peer) session
-(**409** `peer_share`). `hub.changed` events (`{count}`) never reach a guest.
+hub; these are not on the `fwd/` allow-list — only the three "offered" GETs
+below are, and they answer ONLY another of your devices), nor a shared-folder
+(peer) session (**409** `peer_share`). `hub.changed` events (`{count}`) never
+reach a guest.
 
 | Method | Path | Notes |
 |---|---|---|
@@ -2996,11 +3000,11 @@ hub; not on the `fwd/` allow-list), nor a shared-folder (peer) session
 | GET | `/api/hub/items/{id}` | One item (`id`, `file:id` or the first `hub:id`); a removed or expired one **410** `removed`, none **404** `not_found` |
 | GET | `/api/hub/items/{id}/raw?download=1` | Its bytes. Only an allow-listed image is served with its own type, `inline`; everything else (SVG, HTML, scripts, PDFs, text) is `application/octet-stream` as an `attachment`. Always `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin`, an `ETag` of its SHA-256 and `Cache-Control: private, no-cache` — revalidated every time (**304** while unchanged), so a removed item is **410**, never a cached copy |
 | GET | `/api/hub/items/{id}/text` | `{text, truncated}` of a snippet or text file (**415** `not_text`) |
-| PATCH | `/api/hub/items/{id}` | `{name?, note?, pinned?}`; a rename moves the file inside its own folder (the reference never changes) |
+| PATCH | `/api/hub/items/{id}` | `{name?, note?, pinned?, local_only?}`; a rename moves the file inside its own folder (the reference never changes); `local_only: true` keeps it on this device (never offered to your other devices) |
 | DELETE | `/api/hub/items/{id}` | Remove (kept 10 minutes for Undo) → `{ok, id, ref, undo_s}` |
 | POST | `/api/hub/items/{id}/restore` | Undo a remove |
 | POST | `/api/hub/clear` | Disk cleanup: remove every unpinned item → `{removed, freed}` |
-| POST | `/api/hub/batch` | Several items in ONE request (the app's selection bar): `{action, ids, session?}` — `action` is `pin`, `unpin`, `remove`, `restore` (Undo of a batch remove) or `copy` (needs `session`: each item is saved in that session's folder at `hub/<name>` or the next free path beside it, never over a file, through the same checks as `copy-to`; a shared-folder session **409**). `ids` are 1–1000 codes (`file:id`, `hub:id` or `id`). Each item is checked exactly as its one-item route checks it and answered on its own — never all-or-nothing, never a silent skip: **200** `{action, results: [{id, ref, ok: true, item? / path?, wanted?, undo_s?} \| {id, ok: false, error, code}], done, failed}`, in the order asked, a repeated id once. pin/unpin/remove/restore change the list under one lock with one write and one `hub.changed`. A malformed request **400** `bad_request` |
+| POST | `/api/hub/batch` | Several items in ONE request (the app's selection bar): `{action, ids, session?}` — `action` is `pin`, `unpin`, `remove`, `restore` (Undo of a batch remove), `fetch` (bring other devices' items here: `{ok, item, already}` each) or `copy` (needs `session`: each item is saved in that session's folder at `hub/<name>` or the next free path beside it, never over a file, through the same checks as `copy-to`; a shared-folder session **409**). `ids` are 1–1000 codes (`file:id`, `hub:id` or `id`). Each item is checked exactly as its one-item route checks it and answered on its own — never all-or-nothing, never a silent skip: **200** `{action, results: [{id, ref, ok: true, item? / path?, wanted?, undo_s?} \| {id, ok: false, error, code}], done, failed}`, in the order asked, a repeated id once. pin/unpin/remove/restore change the list under one lock with one write and one `hub.changed`. `ids` may name another device's item (`file@mac-mini:k7m2`): `copy` and `fetch` bring it here first (each answered on its own — `secret`, `device_offline`, `too_large` …); pin/unpin/remove/restore of one is **`read_only`** (it lives on that device). A malformed request **400** `bad_request` |
 | POST | `/api/hub/items/{id}/copy-to` | The owner's copy (the app's Send to session… → Save a copy, `mindflock hub cp --to`): `{session, path?, replace?}` → save it in that session's folder at `path` (default `hub/<name>`) — anywhere in the folder except what the hub never writes (below), never outside it or through a link (**403** `bad_path`), never over a file unless `replace: true` (**409** `exists` with `free`). → `{ok, ref, name, path, abs, size, sha256, replaced}` |
 | GET | `/api/hub/items/{id}/free?session=&path=` | Where that copy would land without replacing anything: `{path, wanted, taken, root}`; a never-written path is its refusal |
 | POST | `/api/hub/rebuild` | The list (`hub.json`) can't be read: make a new one from the item folders on disk — records from `hub.json.bak` where the file still matches (pins, notes), the rest read afresh. Nothing is deleted; the unreadable file is kept as `hub.json.broken`. → `{items, restored, read_again, skipped}` |
@@ -3008,6 +3012,7 @@ hub; not on the `fwd/` allow-list), nor a shared-folder (peer) session
 | POST | `/api/instances/{title}/hub/put` | An agent's put (the MCP `hub` tool): `{key, path}` — ONE regular file inside that session's worktree (resolved real path; **403** `outside_worktree`), not a secret (**403** `secret`, never with a bypass) or never-sent path (**403** `never_shared`), not in a red zone or outside its fence (**403** `zone`), not a folder, link or FIFO (**400** `not_a_file`) — or `{key, text}`; `name?`, `note?`. **201** the item, `by: session` |
 | POST | `/api/instances/{title}/hub/take` | An agent's copy into ITS OWN folder: `{key, id, path?}` — only under `hub/` (**403** `outside_hub_folder`), default `hub/<name>`; never over a file (**409** `exists` with `free`; no `replace` here), never what the hub never writes, never through a link, never in a red zone or outside its fence (**403** `zone`) |
 | POST | `/api/instances/{title}/hub/remove` | `{key, id}`: remove an item THAT session added (**403** `not_yours` otherwise) |
+| POST | `/api/instances/{title}/hub/fetch` | `{key, id}`: an agent brings an item of another of your devices HERE (`file@mac-mini:k7m2`, or a `file:` code exactly one reachable device holds) — the same fetch as the owner's below, logged with the session; never a secret-looking item (**403** `secret`, `can_confirm: false`). Nothing on the other device changes; there is no remote remove, pin or put |
 
 **The session routes answer only that session.** Every local client (the
 app, the CLI, each session's MCP) uses the same access token, so a title in
@@ -3067,6 +3072,64 @@ expiry. A reference to nothing (or a removed item) is left as typed and the
 answer carries `hub_unknown: ["file:zz99"]` and `hub_note` (a sentence). A
 guest's, a relayed or a shared-folder session's text is never expanded (a
 guest's queued prompt is stored `nohub`).
+
+A code may name the device holding the item, `file@mac-mini:k7m2` (a
+MagicDNS label — a MindFlock older than this matches no part of it). Before
+the expansion, a code naming an item on another of your devices is FETCHED
+(`core/hub_remote.py prepare_codes`): this device's own item always wins,
+then a copy already fetched, then the one reachable device offering that
+code; two holders, or one that can't be asked, leave the code as typed and
+the answer's `hub_note` says why ("file:k7m2 is on Mac mini and Win rig —
+say which: …", "… can't be asked right now — it was sent as typed"). `POST
+…/queue` fetches when the prompt is queued (the drain has no request to
+fetch with); `POST …/messages` never fetches (its `from` is the body's own
+claim) — such a code stays as typed with the usual note. At most 20 codes
+per text are looked up.
+
+### Shared files on your other devices
+
+On demand, never a sync (`core/hub_remote.py`; docs/devices.md "Shared files
+on your other devices"). Every request to another device rides the existing
+forwarding path `/api/devices/<device>/fwd/…` — run in-process through the
+forwarding middleware with the caller's own request, so its allow-list,
+one-hop rule, path checks and credential-lending rule apply exactly as to a
+browser. Only your OWN devices are asked: "Your devices" members and devices
+paired by a pasted token — never a MindFlock that merely shares the tailnet
+(a device whose key is not a plain DNS label is left out). A device is named
+by its exact key first; a name two devices answer to is **409**
+`ambiguous_device`, never a guess. The lists (15 s) and thumbnails kept in
+memory are read and written only for a caller this device lends its
+credential to (the forwarding path's own rule): a caller it would not lend
+it to is asked for afresh — and refused by the other device — and can never
+change what the owner sees. `GET /api/hub/devices` and the thumbnail refuse
+a request a page of another site made the browser send (`Sec-Fetch-Site`
+`cross-site`/`same-site`: **403** `cross_site`), so a foreign `<img>` can't
+make this device ask the others; POSTs are covered by the gate's Origin
+check. A device's 3xx is handed back as its answer, never followed. A
+remote read never restarts the item's expiry there.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/hub/devices?fresh=0\|1` | `{self, devices: [{device, name, state, note, items, dropped, truncated, at}]}` — each of your other devices and what it offers now. `state` is `ok` or why it can't be asked: `offline`, `old` (an older MindFlock: "update it"), `off` (Allow remote control is off there), `private` (it doesn't offer them), `not_linked`, `refused`, `error`; `note` is the sentence to show. Items: `{id, ref, name, kind, mime, size, sha256, by, by_name, added, note, textual, preview, secret, too_big, copy, device, device_name}` — `ref` the code to type (`file@<device>:<id>` when that id is on more than one of your devices, or here), `copy` the local copy's id once fetched. Each device's list is cached 15 s (`fresh=1` asks again) |
+| POST | `/api/hub/devices/fetch` | `{id, device?, secret_ok?}` → the LOCAL item plus `already` (it was here: nothing moved) and `from`. `id` may carry the device (`file@mac-mini:k7m2`). Refused with a plain next step: **404** `no_device` / `not_found` / `not_offered`, **409** `ambiguous` / `device_old` / `changed`, **502** `device_offline` / `incomplete` / `overrun` / `device_refused`, **403** `secret` (`can_confirm: true`: send again with `secret_ok` for that one item), **413** `too_large`, **507** `hub_full` / `disk_full`, **422** `checksum_mismatch`. A failed fetch leaves nothing behind |
+| GET | `/api/hub/devices/{device}/items/{id}/thumb` | A picture of another device at most 512 KB (its own thumbnail): its type sniffed HERE from the bytes (png, jpeg, gif, webp only), its bytes checked against the listed SHA-256, served `inline` with `nosniff` and a sandboxing CSP; kept in memory. **404** `no_thumb` for anything else — never a whole big file pulled to draw a list |
+
+**What this device offers the others** — answered only to another of your
+devices over the device link (the remote marker AND this device's token or
+the fleet key, checked even with the gate off; Allow remote control on; never
+a guest; and a request opened by this device's own token that names a
+different person, `X-MindFlock-Person`, is **403** `other_person` — the
+fleet key is the person's own group by construction). Only while
+`hub.offer_to_devices` is on (**403** `not_offered` otherwise), never an item
+kept on this device only or one fetched from elsewhere (**404**
+`not_offered`, never saying which). GET only, this store only; these three
+are the forwarding path's whole hub allow-list:
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/hub/offer` | `{v: 1, device, items: [{id, name, kind, mime, size, sha256, by, by_name, added, note, textual, preview, secret}]}` (at most 1000) — never a path on this disk |
+| GET | `/api/hub/offer/{id}/raw?offset=&length=&sha256=` | `length` (1 – 4 MiB) bytes from `offset`, `application/octet-stream`, an attachment, `nosniff`; with `sha256` only while the item still has those bytes (**409** `changed`); past the end **416** |
+| GET | `/api/hub/offer/{id}/thumb` | An offered picture at most 512 KB, itself (**404** `no_thumb` otherwise) |
 
 ## Remote devices (tailnet)
 

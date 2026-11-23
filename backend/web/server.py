@@ -5866,24 +5866,31 @@ async def instance_send_files(
 # --------------------------------------------------------------------------- #
 # The inbox: receiving files from another of your devices (core.inbox)
 # --------------------------------------------------------------------------- #
-def _transfer_refusal(request: Request) -> Optional[JSONResponse]:
+def _device_link_refusal(
+    request: Request,
+    *,
+    guest: str,
+    not_device: str,
+    remote_off: str,
+    same_person: bool = False,
+) -> Optional[JSONResponse]:
     """Only another of your devices, over the device link, while remote
     control is on here: the remote marker AND a valid credential (this
     device's token or the fleet key) — checked even when the token gate is
-    off, so a tailnet stranger can never write into the inbox."""
+    off, so a tailnet stranger never gets in. A guest link never. The
+    request arrived over ONE hop: the forwarding middleware never relays a
+    request that already carries the marker (core.remote).
+
+    ``same_person`` (Shared files across your devices): a request opened by
+    this device's own token (a pasted pairing, not the fleet key — the fleet
+    key is the person's own group by construction) that names a different
+    person than this device's (``X-MindFlock-Person``, docs/people.md) is
+    refused too. The person is never a credential; it can only take away."""
     if _guests.scope_guest(request) is not None:
-        return JSONResponse(
-            {"error": "a guest link cannot send files here", "code": "guest"},
-            status_code=403,
-        )
+        return JSONResponse({"error": guest, "code": "guest"}, status_code=403)
     if not _remote.from_remote(request):
         return JSONResponse(
-            {
-                "error": "transfers come only from your other devices "
-                "(send_files there)",
-                "code": "not_a_device",
-            },
-            status_code=403,
+            {"error": not_device, "code": "not_a_device"}, status_code=403
         )
     auth = request.headers.get("authorization") or ""
     tok = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
@@ -5898,14 +5905,43 @@ def _transfer_refusal(request: Request) -> Optional[JSONResponse]:
         )
     if not _remote.remote_control_enabled():
         return JSONResponse(
-            {
-                "error": "Allow remote control is off on this device — turn it on "
-                "in Settings → Your devices → Advanced to receive files",
-                "code": "remote_control_off",
-            },
-            status_code=403,
+            {"error": remote_off, "code": "remote_control_off"}, status_code=403
         )
+    if same_person and not _fleet_store().key_valid(tok):
+        theirs = (request.headers.get(_remote.PERSON_HEADER) or "").strip()
+        try:
+            from backend.web.core import person as _person_mod
+
+            mine = _person_mod.known_id()
+        except Exception:  # noqa: BLE001 — unknown: nothing to compare
+            mine = ""
+        if theirs and mine and theirs != mine:
+            return JSONResponse(
+                {
+                    "error": "that device belongs to someone else — shared files "
+                    "are offered only to your own devices",
+                    "code": "other_person",
+                },
+                status_code=403,
+            )
     return None
+
+
+def _fleet_store():
+    from backend.web.core import fleet as _fleet_mod
+
+    return _fleet_mod
+
+
+def _transfer_refusal(request: Request) -> Optional[JSONResponse]:
+    """Transfers: :func:`_device_link_refusal` with the inbox's words."""
+    return _device_link_refusal(
+        request,
+        guest="a guest link cannot send files here",
+        not_device="transfers come only from your other devices (send_files there)",
+        remote_off="Allow remote control is off on this device — turn it on "
+        "in Settings → Your devices → Advanced to receive files",
+    )
 
 
 def _transfer_sender(request: Request) -> Tuple[str, bool]:
@@ -8566,10 +8602,13 @@ async def instance_send(
             status_code=409,
         )
     hub_unknown: List[str] = []
+    hub_why: Dict[str, str] = {}
     _HUB_NOHUB.set(not _hub_may_expand(request, inst))
     if not enter and not dictating:
         # file:<id> (or hub:<id>) → the item's path, name and kind, one line each
-        # (core.hub.expand); a reference to nothing stays as typed.
+        # (core.hub.expand); a reference to nothing stays as typed. A code for
+        # an item on another of your devices fetches it first (core.hub_remote).
+        hub_why = await _hub_prefetch(request, inst, text)
         text, hub_unknown = await asyncio.to_thread(_hub_expand, request, inst, text)
     asleep = _sleep.is_sleeping(title)
     held = await asyncio.to_thread(_held_down, title)
@@ -8615,7 +8654,7 @@ async def instance_send(
         body = {"sent": False, "queued": True, "submitted": False}
         if asleep:
             body["woke"] = True  # it was asleep: it goes in once the agent is back
-        return JSONResponse(_hub_flag(body, hub_unknown))
+        return JSONResponse(_hub_flag(body, hub_unknown, hub_why))
     if enter or (submit and not dictating):
         # A prompt went in: a ready chain waiting on the next prompt takes
         # off after its turn (docs/flights.md "Round 19"). A queued one does
@@ -8625,7 +8664,9 @@ async def instance_send(
         return JSONResponse({"sent": True, "submitted": True, "entered": True})
     if dictating:
         return JSONResponse({"sent": True, "submitted": False, "erased": erase})
-    return JSONResponse(_hub_flag({"sent": True, "submitted": submit}, hub_unknown))
+    return JSONResponse(
+        _hub_flag({"sent": True, "submitted": submit}, hub_unknown, hub_why)
+    )
 
 
 def _hub_changed() -> None:
@@ -8661,12 +8702,42 @@ def _hub_expand(request: Optional[Request], inst, text: str) -> Tuple[str, List[
     return out, unknown
 
 
-def _hub_flag(body: dict, unknown: List[str]) -> dict:
-    """The send answer's word on references that matched nothing."""
+def _hub_flag(
+    body: dict, unknown: List[str], why: Optional[Dict[str, str]] = None
+) -> dict:
+    """The send answer's word on references that matched nothing — with the
+    reason for a code another device was asked about (``why``)."""
     if unknown:
         body["hub_unknown"] = unknown
-        body["hub_note"] = _hub.unknown_note(unknown)
+        body["hub_note"] = _hub.unknown_note(unknown, why)
     return body
+
+
+async def _hub_prefetch(
+    request: Optional[Request], inst, text: str, session: str = ""
+) -> Dict[str, str]:
+    """Before a send's codes are expanded: fetch the items its codes name on
+    the person's other devices (core.hub_remote.prepare_codes) → ``{code:
+    why not}``. Only where :func:`_hub_may_expand` says yes, and only with a
+    request (its scope decides what the forwarding path lends); never
+    raises."""
+    if (
+        request is None
+        or not text
+        or not _hub.has_code(text)
+        or not _hub_may_expand(request, inst)
+    ):
+        return {}
+    if session and _peer_guard.is_peer_session(ENGINE.instances.get(session)):
+        # Another person's shared-folder session never reaches the owner's
+        # other devices through a message it sends.
+        return {}
+    try:
+        from backend.web.core import hub_remote as _hub_remote
+
+        return await _hub_remote.prepare_codes(request.scope, text, session=session)
+    except Exception:  # noqa: BLE001 — never break a send over shared files
+        return {}
 
 
 def _queue_state_json(title: str) -> dict:
@@ -8757,8 +8828,21 @@ def post_queue(title: str, payload: dict, request: Request = None) -> JSONRespon
         return JSONResponse({"error": str(err)}, status_code=400)
     _emit_queue_changed(title)
     # Told now, while the sender is here: a reference to nothing in the hub.
+    # A code for an item on another of your devices is fetched NOW, while
+    # the owner's request is here to carry it — the drain later finds the
+    # copy here (it has no request to fetch with).
+    why: Dict[str, str] = {}
+    if not nohub and _hub.has_code(text):
+        try:
+            import anyio.from_thread
+
+            why = anyio.from_thread.run(
+                _hub_prefetch, request, ENGINE.instances.get(title), text
+            )
+        except Exception:  # noqa: BLE001 — not in a worker thread (a direct call)
+            why = {}
     unknown = [] if nohub else _hub.unknown_refs(text)
-    return JSONResponse(_hub_flag(_queue_state_json(title), unknown))
+    return JSONResponse(_hub_flag(_queue_state_json(title), unknown, why))
 
 
 @app.post("/api/instances/{title}/queue/flags")
@@ -9178,6 +9262,12 @@ async def post_message(
             data["diff_stat"] = stat
     # file:<id> (or hub:<id>) codes → the item's path, name and kind (core.hub); never
     # for a guest's or a relayed message.
+    # No cross-device fetch from a message: its "from" is the body's own
+    # claim, so it can't say WHICH session (or whether a peer's shared-folder
+    # session) asked. A code for another device's item stays as typed with
+    # the plain note; an agent brings one here with its hub tool (its own
+    # session key) and sends the code after.
+    hub_why: Dict[str, str] = {}
     text, hub_unknown = await asyncio.to_thread(_hub_expand, request, inst, text)
     # delivery "now" from any local session: one session may direct another
     # without being its parent (the MCP's "steering" rule, mcp/policy.py).
@@ -9229,7 +9319,7 @@ async def post_message(
     body = {"message": msg, "delivery": result}
     if detail:
         body["detail"] = detail
-    return JSONResponse(_hub_flag(body, hub_unknown), status_code=201)
+    return JSONResponse(_hub_flag(body, hub_unknown, hub_why), status_code=201)
 
 
 @app.get("/api/instances/{title}/messages")

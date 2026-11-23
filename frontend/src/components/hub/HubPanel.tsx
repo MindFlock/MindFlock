@@ -16,6 +16,16 @@
  * Send to session… is a STEP of the drawer (HubSendStep: the content swaps,
  * with Back), never a dialog the drawer could cover.
  *
+ * The person's OTHER devices (GET /api/hub/devices): their items are rows of
+ * the same list, filters and day headings, each "on ‹device›" — read-only
+ * here (no Pin, Rename or Remove). Using one (Send to session…, Put in its
+ * prompt, Save to this device, Download, Copy text) fetches it first
+ * (bringHere); it then is a row of this device, "from ‹device›", and its
+ * remote row goes. A device that can't be asked says why under the filters
+ * (offline, needs an update …) — never an empty list read as "nothing
+ * there". A remote picture is drawn only when it is small (its own
+ * thumbnail); a bigger one is an icon until fetched.
+ *
  * Not a modal: the sessions stay usable beside it, so an item — or the
  * whole selection — can be DRAGGED (by a card's grip) onto a session's row,
  * its message box or its terminal. Escape goes Back from the send step,
@@ -26,23 +36,26 @@
 
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { api } from "../../api/client";
-import { useConfig, useInstances } from "../../state/queries";
+import { putSettingsDoc, useConfig, useInstances, useSettingsDoc } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
 import { errMsg, relTime } from "../../lib/format";
 import {
   addFiles,
   addText,
   addedToast,
+  bringHere,
   canCopyImage,
   copyImage,
   copyItemText,
   copyPath,
   copyRef,
   copyRefs,
+  deviceNotes,
   download,
   dragSet,
   dropProblem,
   expiryLabel,
+  hasThumb,
   humanSize,
   hush,
   kindLabel,
@@ -52,13 +65,16 @@ import {
   rawUrl,
   rebuildHub,
   refreshHub,
+  remoteItems,
   removeItem,
   removeItems,
+  saveHere,
   say,
   startDrag,
   updateItem,
   usageLine,
   useHub,
+  useHubDevices,
   useHubUi,
   whoLabel,
   type HubItem,
@@ -78,13 +94,15 @@ function editable(t: EventTarget | null): boolean {
 
 const PASTE_KEY = typeof navigator !== "undefined" && navigator.platform?.startsWith("Mac") ? "⌘V" : "Ctrl+V";
 
-export type HubFilter = "all" | "pictures" | "text" | "agents";
+export type HubFilter = "all" | "pictures" | "text" | "agents" | "devices";
 
 export const FILTERS: { key: HubFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "pictures", label: "Pictures" },
   { key: "text", label: "Text" },
   { key: "agents", label: "From agents" },
+  // Shown only when another device has items (or one came from there).
+  { key: "devices", label: "Other devices" },
 ];
 
 export function filterItems(items: HubItem[], f: HubFilter, find: string): HubItem[] {
@@ -93,8 +111,10 @@ export function filterItems(items: HubItem[], f: HubFilter, find: string): HubIt
     if (f === "pictures" && i.kind !== "image") return false;
     if (f === "text" && !(i.kind === "text" || i.textual)) return false;
     if (f === "agents" && i.by !== "session") return false;
+    if (f === "devices" && !(i.remote || i.origin)) return false;
     if (!q) return true;
     return (
+      (i.remote?.deviceName || "").toLowerCase().includes(q) ||
       i.name.toLowerCase().includes(q) ||
       i.ref.includes(q) ||
       (i.note || "").toLowerCase().includes(q) ||
@@ -119,6 +139,18 @@ export function rangeSelect(selected: string[], shownIds: string[], anchor: stri
   }
   // In list order, so the bar and a send carry them as shown.
   return [...shownIds.filter((x) => set.has(x)), ...selected.filter((x) => set.has(x) && !shownIds.includes(x))];
+}
+
+/** Use items: the remote ones are fetched first (bringHere), then `fn`
+ * gets what is here. */
+export function useThen(items: HubItem[], fn: (here: HubItem[]) => unknown): void {
+  if (!items.some((i) => i.remote)) {
+    fn(items);
+    return;
+  }
+  void bringHere(items).then((here) => {
+    if (here.length) fn(here);
+  });
 }
 
 /** Which of the selected items Pin and Unpin act on — the bar says both
@@ -207,6 +239,12 @@ function HubDrawer() {
   const q = useHub(true);
   const list = q.data;
   const items = useMemo(() => list?.items || [], [list]);
+  // The person's other devices: their items join this list (newest first).
+  const dq = useHubDevices(true);
+  const remote = useMemo(() => remoteItems(dq.data), [dq.data]);
+  const notes = useMemo(() => deviceNotes(dq.data), [dq.data]);
+  const all = useMemo(() => (remote.length ? [...items, ...remote].sort((a, b) => b.added - a.added) : items), [items, remote]);
+  const fromDevices = remote.length > 0 || items.some((i) => i.origin);
   const ref = useRef<HTMLElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const findRef = useRef<HTMLInputElement>(null);
@@ -288,7 +326,7 @@ function HubDrawer() {
   }, []);
 
   const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer.types || []).includes("Files");
-  const shown = useMemo(() => filterItems(items, filter, find), [items, filter, find]);
+  const shown = useMemo(() => filterItems(all, filter, find), [all, filter, find]);
   const shownIds = useMemo(() => shown.map((i) => i.id), [shown]);
   const days = useMemo(() => {
     const out: { label: string; items: HubItem[] }[] = [];
@@ -303,7 +341,11 @@ function HubDrawer() {
   const unpinned = items.filter((i) => !i.pinned).length;
 
   // The selection, as items still in the list (one removed elsewhere drops out).
-  const selItems = useMemo(() => items.filter((i) => selected.includes(i.id)), [items, selected]);
+  const selItems = useMemo(() => all.filter((i) => selected.includes(i.id)), [all, selected]);
+  // Pin, Unpin and Remove are this device's: another device's items are
+  // read-only from here (the bar says how many it leaves alone).
+  const selLocal = useMemo(() => selItems.filter((i) => !i.remote), [selItems]);
+  const selRemote = selItems.length - selLocal.length;
   const hiddenSel = selItems.filter((i) => !shownIds.includes(i.id)).length;
   const shownSel = selItems.length - hiddenSel;
   const allOn = shown.length > 0 && shownSel === shown.length;
@@ -363,7 +405,7 @@ function HubDrawer() {
     }
   };
 
-  const { toPin, toUnpin } = pinSplit(selItems);
+  const { toPin, toUnpin } = pinSplit(selLocal);
   const n = selItems.length;
 
   return (
@@ -454,6 +496,18 @@ function HubDrawer() {
             <div key={p.id} className="hub-problem" role="alert">
               <p>{p.text}</p>
               <div className="hub-confirm-actions">
+                {p.confirm && (
+                  <button
+                    type="button"
+                    className="hub-btn"
+                    onClick={() => {
+                      dropProblem(p.id);
+                      p.confirm!.run();
+                    }}
+                  >
+                    {p.confirm.label}
+                  </button>
+                )}
                 {p.raiseTo && (
                   <button
                     type="button"
@@ -496,7 +550,7 @@ function HubDrawer() {
             </div>
           ))}
 
-          {items.length > 0 && (
+          {all.length > 0 && (
             <div className="hub-tools">
               <label className="hub-all" title="Select everything shown (Ctrl+A)">
                 <input
@@ -510,7 +564,7 @@ function HubDrawer() {
                 />
               </label>
               <div className="hub-chips" role="group" aria-label="Show">
-                {FILTERS.map((f) => (
+                {FILTERS.filter((f) => f.key !== "devices" || fromDevices).map((f) => (
                   <button
                     key={f.key}
                     type="button"
@@ -534,6 +588,16 @@ function HubDrawer() {
             </div>
           )}
 
+          {notes.length > 0 && (
+            <ul className="hub-devnotes" aria-label="Your other devices">
+              {notes.map((d) => (
+                <li key={d.device} className={"hub-devnote is-" + d.state}>
+                  {d.note}
+                </li>
+              ))}
+            </ul>
+          )}
+
           <div className="hub-list-wrap">
             {brokenErr ? (
               <div className="hub-problem" role="alert">
@@ -553,7 +617,7 @@ function HubDrawer() {
                   Try again
                 </button>
               </p>
-            ) : !items.length ? (
+            ) : !all.length ? (
               <div className="hub-empty-big">
                 <div className="hub-empty-art" aria-hidden="true">
                   ⇪
@@ -582,7 +646,7 @@ function HubDrawer() {
                         onView={setViewing}
                         checked={selected.includes(it.id)}
                         onTick={(on, shift) => tick(it.id, on, shift)}
-                        dragItems={() => dragSet(it, items, useHubUi.getState().selected)}
+                        dragItems={() => dragSet(it, all, useHubUi.getState().selected)}
                       />
                     ))}
                   </ul>
@@ -601,6 +665,12 @@ function HubDrawer() {
                     · {hiddenSel} not shown by the filter
                   </span>
                 )}
+                {selRemote > 0 && (
+                  <span className="muted" title="Using them fetches them to this device first; pin and remove them on the device they live on">
+                    {" "}
+                    · {selRemote} on {selRemote === 1 ? "another device" : "other devices"}
+                  </span>
+                )}
                 <button type="button" className="hub-link hub-selbar-clear" onClick={clearSel} title="Clear the selection (Esc)">
                   Clear
                 </button>
@@ -608,20 +678,21 @@ function HubDrawer() {
               {removing ? (
                 <div className="hub-selbar-confirm" role="alertdialog" aria-label={"Remove " + n + (n === 1 ? " item" : " items") + "?"}>
                   <p>
-                    Remove {n === 1 ? selItems[0].name : n + " items"}? {n === 1 ? "Its code stops" : "Their codes stop"} working in every
-                    session (Undo right after).
+                    Remove {selLocal.length === 1 ? selLocal[0].name : selLocal.length + " items"}?{" "}
+                    {selLocal.length === 1 ? "Its code stops" : "Their codes stop"} working in every session (Undo right after).
+                    {selRemote > 0 && " The " + selRemote + " on other devices stay there."}
                   </p>
                   <div className="hub-confirm-actions">
                     <button
                       type="button"
                       className="hub-btn danger"
                       onClick={() => {
-                        const these = selItems;
+                        const these = selLocal;
                         clearSel();
                         void removeItems(these);
                       }}
                     >
-                      Remove {n === 1 ? "it" : n}
+                      Remove {selLocal.length === 1 ? "it" : selLocal.length}
                     </button>
                     <button type="button" className="hub-btn primary" autoFocus onClick={() => setRemoving(false)}>
                       Keep
@@ -630,7 +701,11 @@ function HubDrawer() {
                 </div>
               ) : (
                 <div className="hub-selbar-acts">
-                  <button type="button" className="hub-btn primary" onClick={() => useHubUi.getState().openSend(selItems)}>
+                  <button
+                    type="button"
+                    className="hub-btn primary"
+                    onClick={() => useThen(selItems, (here) => useHubUi.getState().openSend(here))}
+                  >
                     Send to session…
                   </button>
                   {here && (
@@ -638,10 +713,7 @@ function HubDrawer() {
                       type="button"
                       className="hub-btn"
                       title={"Type " + (n === 1 ? "its code" : "their " + n + " codes") + " into " + displayName(here) + "'s prompt"}
-                      onClick={() => {
-                        const these = selItems;
-                        void putInPrompt(here, these, "", { focus: true });
-                      }}
+                      onClick={() => useThen(selItems, (these) => void putInPrompt(here, these, "", { focus: true }))}
                     >
                       Put in {displayName(here)}'s prompt
                     </button>
@@ -649,12 +721,22 @@ function HubDrawer() {
                   <button type="button" className="hub-btn" onClick={() => void copyRefs(selItems)}>
                     {n === 1 ? "Copy code" : "Copy codes"}
                   </button>
+                  {selRemote > 0 && (
+                    <button
+                      type="button"
+                      className="hub-btn"
+                      title="Fetch them from the device they are on, into this device's shared files"
+                      onClick={() => void saveHere(selItems)}
+                    >
+                      {selRemote === n ? "Save to this device" : "Save " + selRemote + " to this device"}
+                    </button>
+                  )}
                   {toPin > 0 && (
                     <button
                       type="button"
                       className="hub-btn"
                       title={toUnpin ? toUnpin + " already pinned — this pins the other " + toPin : "Keep them past the automatic clean-up"}
-                      onClick={() => void pinItems(selItems.filter((i) => !i.pinned), true)}
+                      onClick={() => void pinItems(selLocal.filter((i) => !i.pinned), true)}
                     >
                       {toUnpin ? "Pin " + toPin : "Pin"}
                     </button>
@@ -664,14 +746,16 @@ function HubDrawer() {
                       type="button"
                       className="hub-btn"
                       title={toPin ? toPin + " not pinned — this unpins the " + toUnpin + " that are" : "Let them go with the automatic clean-up"}
-                      onClick={() => void pinItems(selItems.filter((i) => i.pinned), false)}
+                      onClick={() => void pinItems(selLocal.filter((i) => i.pinned), false)}
                     >
                       {toPin ? "Unpin " + toUnpin : "Unpin"}
                     </button>
                   )}
-                  <button type="button" className="hub-btn danger" onClick={() => setRemoving(true)}>
-                    Remove…
-                  </button>
+                  {selLocal.length > 0 && (
+                    <button type="button" className="hub-btn danger" onClick={() => setRemoving(true)}>
+                      Remove…
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -682,6 +766,7 @@ function HubDrawer() {
                 <span className="muted" title={"Settings: hub.keep_days (" + list.keep_days + ")"}>
                   Deleted automatically {list.keep_days} days after last use — Pin to keep
                 </span>
+                {(dq.data?.devices.length || 0) > 0 && <OfferSwitch />}
                 {unpinned > 0 &&
                   (clearing ? (
                     <span className="hub-foot-confirm" role="alertdialog" aria-label="Remove every unpinned item?">
@@ -772,8 +857,39 @@ function SnippetEditor(props: { value: string; onChange(v: string): void; onDone
   );
 }
 
+/** This device's switch: offer its shared files to the person's other
+ * devices (`hub.offer_to_devices`, on unless turned off). */
+function OfferSwitch() {
+  const doc = useSettingsDoc(true).data as { hub?: { offer_to_devices?: boolean } } | undefined;
+  const on = doc?.hub?.offer_to_devices !== false;
+  const [busy, setBusy] = useState(false);
+  return (
+    <label className="hub-offer" title="Your other devices list this device's shared files and fetch one when it is used. Items you mark “Keep on this device only” never show there.">
+      <input
+        type="checkbox"
+        checked={on}
+        disabled={busy || !doc}
+        onChange={async (e) => {
+          const want = e.target.checked;
+          setBusy(true);
+          try {
+            const r = await api<{ settings?: Record<string, unknown> }>("/api/settings", { json: { hub: { offer_to_devices: want } } });
+            if (r?.settings) putSettingsDoc(r.settings as never);
+            say(want ? "Your other devices can see this device's shared files" : "This device's shared files are no longer shown on your other devices");
+          } catch (err) {
+            say("Couldn't change that: " + errMsg(err), { error: true });
+          } finally {
+            setBusy(false);
+          }
+        }}
+      />{" "}
+      Show these on my other devices
+    </label>
+  );
+}
+
 function KindIcon({ item, onView }: { item: HubItem; onView?(it: HubItem): void }) {
-  if (item.kind === "image") {
+  if (item.kind === "image" && hasThumb(item)) {
     return (
       <button type="button" className="hub-thumb-btn" aria-label={"View " + item.name + " larger"} title="View larger" onClick={() => onView?.(item)}>
         <img className="hub-thumb" src={rawUrl(item)} alt="" loading="lazy" draggable={false} />
@@ -867,13 +983,30 @@ function HubCard(props: {
     setMenu(false);
     fn();
   };
-  const meta = [kindLabel(item), humanSize(item.size), whoLabel(item), relTime(item.added)].join(" · ");
+  const rem = item.remote;
+  const meta = [
+    kindLabel(item),
+    humanSize(item.size),
+    rem ? (item.by === "you" ? "" : whoLabel(item)) : whoLabel(item),
+    relTime(item.added),
+    rem?.secret ? "looks like a secret" : "",
+    rem?.tooBig ? "too big for this device" : "",
+    item.local_only ? "kept on this device" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const use = (fn: (here: HubItem) => unknown) => () => {
+    setMenu(false);
+    useThen([item], (here) => fn(here[0]));
+  };
   // A snippet's name is made from its first words: its row shows the text.
   const title = item.kind === "text" ? firstLine(item) : item.name;
 
   return (
     <li
-      className={"hub-card" + (item.pinned ? " is-pinned" : "") + (compact ? " is-compact" : "") + (checked ? " is-selected" : "")}
+      className={
+        "hub-card" + (item.pinned ? " is-pinned" : "") + (compact ? " is-compact" : "") + (checked ? " is-selected" : "") + (rem ? " is-remote" : "")
+      }
       draggable={!editing}
       onDragStart={(e) => {
         const these = props.dragItems();
@@ -938,6 +1071,11 @@ function HubCard(props: {
               {title}
             </span>
           )}
+          {rem && (
+            <span className="hub-on" title={"On " + rem.deviceName + " — using it brings it to this device"}>
+              on {rem.deviceName}
+            </span>
+          )}
           <span className="hub-meta">{meta}</span>
           <div className="hub-row2">
             <button
@@ -953,6 +1091,7 @@ function HubCard(props: {
               </span>
             </button>
             <div className="hub-actions">
+              {!rem && (
               <button
                 type="button"
                 className={"hub-pin-btn" + (item.pinned ? " on" : "")}
@@ -966,11 +1105,12 @@ function HubCard(props: {
                   <path d="M12 13v8" />
                 </svg>
               </button>
+              )}
               <button
                 type="button"
                 className="hub-btn"
                 aria-label={"Send " + item.name + " to a session…"}
-                onClick={() => openSend(item)}
+                onClick={() => useThen([item], (here) => openSend(here))}
                 title="Point a session's agent at it, or save a copy in its project folder"
               >
                 {compact ? "Send…" : "Send to session…"}
@@ -987,7 +1127,27 @@ function HubCard(props: {
                 >
                   ⋯
                 </button>
-                {menu && (
+                {menu && rem && (
+                  <div className="hub-menu" role="menu" ref={menuRef} onKeyDown={menuKey} aria-label={"More for " + item.name}>
+                    <button type="button" role="menuitem" onClick={act(() => void saveHere([item]))}>
+                      Save to this device
+                    </button>
+                    {textual && (
+                      <button type="button" role="menuitem" onClick={use((h) => void copyItemText(h))}>
+                        Copy text
+                      </button>
+                    )}
+                    {item.kind === "image" && canCopyImage() && (
+                      <button type="button" role="menuitem" onClick={use((h) => void copyImage(h))}>
+                        Copy image
+                      </button>
+                    )}
+                    <button type="button" role="menuitem" onClick={use((h) => download(h))}>
+                      Download
+                    </button>
+                  </div>
+                )}
+                {menu && !rem && (
                   <div className="hub-menu" role="menu" ref={menuRef} onKeyDown={menuKey} aria-label={"More for " + item.name}>
                     {textual && (
                       <button type="button" role="menuitem" onClick={act(() => void copyItemText(item))}>
@@ -1011,6 +1171,16 @@ function HubCard(props: {
                     <button type="button" role="menuitem" onClick={() => startEdit("note")}>
                       {item.note ? "Edit note" : "Add a note"}
                     </button>
+                    {!item.origin && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        title="Whether your other devices list it (and can fetch it)"
+                        onClick={act(() => void updateItem(item, { local_only: !item.local_only }))}
+                      >
+                        {item.local_only ? "Show on my other devices" : "Keep on this device only"}
+                      </button>
+                    )}
                     <button type="button" role="menuitem" className="danger" onClick={act(() => void removeItem(item))}>
                       Remove
                     </button>

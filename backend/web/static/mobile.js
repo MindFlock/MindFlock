@@ -2388,11 +2388,21 @@
   // (thumbnail, name, ✕) above the box — the confirmation a status line
   // drawn over the terminal never was.
   var hubAttached = {};
+  // A picture's thumbnail: this device's item, or another device's small
+  // one (its checked thumbnail — a bigger one is never pulled just to draw).
+  function hubThumbUrl(it) {
+    if (it.remote) {
+      return it.size <= 512 * 1024
+        ? "/api/hub/devices/" + encodeURIComponent(it.remote.device) + "/items/" + encodeURIComponent(it.remote.id) + "/thumb"
+        : "";
+    }
+    return "/api/hub/items/" + encodeURIComponent(it.id) + "/raw";
+  }
   function hubChipThumb(it) {
     var t;
-    if (it.kind === "image") {
+    if (it.kind === "image" && hubThumbUrl(it)) {
       t = document.createElement("img");
-      t.src = "/api/hub/items/" + encodeURIComponent(it.id) + "/raw";
+      t.src = hubThumbUrl(it);
       t.alt = "";
     } else {
       t = document.createElement("span");
@@ -2443,7 +2453,8 @@
   }
   composeEl.addEventListener("input", hubRenderChips);
   // A reference, not glued to a word or path before it (the server's rule).
-  var HUB_REF_RE = /(^|[^A-Za-z0-9_./:@-])(?:file|hub):[A-Za-z0-9]{4,8}(?![A-Za-z0-9_])/i;
+  // (It may name the device holding the item: file@mac-mini:k7m2.)
+  var HUB_REF_RE = /(^|[^A-Za-z0-9_./:@-])(?:file|hub)(?:@[A-Za-z0-9][A-Za-z0-9-]{0,62})?:[A-Za-z0-9]{4,8}(?![A-Za-z0-9_])/i;
   function hubHere() { return !current || String(current).indexOf("::") < 0; }
   function hubSize(n) {
     n = Number(n) || 0;
@@ -2452,6 +2463,7 @@
     return (n / 1048576).toFixed(1) + " MB";
   }
   function hubWho(it) {
+    if (it.origin && it.origin.device) return "from " + (it.origin.name || it.origin.device);
     if (it.by === "session") return "session " + (it.by_name || "?");
     if (it.by === "device") return "device " + (it.by_name || "?");
     return it.by === "phone" ? "your phone" : "you";
@@ -2600,9 +2612,9 @@
     tickWrap.appendChild(tick);
     row.appendChild(tickWrap);
     var thumb;
-    if (it.kind === "image") {
+    if (it.kind === "image" && hubThumbUrl(it)) {
       thumb = document.createElement("img");
-      thumb.src = "/api/hub/items/" + encodeURIComponent(it.id) + "/raw";
+      thumb.src = hubThumbUrl(it);
       thumb.alt = "";
       thumb.loading = "lazy";
     } else {
@@ -2618,7 +2630,9 @@
     name.textContent = it.name;
     var meta = document.createElement("span");
     meta.className = "hub-row-meta";
-    meta.textContent = hubSize(it.size) + " · " + hubWho(it);
+    meta.textContent =
+      hubSize(it.size) + " · " + (it.remote ? "on " + it.remote.deviceName : hubWho(it));
+    if (it.remote) row.classList.add("is-remote");
     var ref = document.createElement("span");
     ref.className = "hub-row-ref";
     ref.textContent = it.ref;
@@ -2679,10 +2693,44 @@
         }
         items.slice(0, 60).forEach(function (it) { hubListEl.appendChild(hubRow(it)); });
       })
+      .then(loadHubDevices)
       .catch(function (err) {
         hubListEl.innerHTML = "";
         hubErr(errText(err, "couldn't read shared files"));
       });
+  }
+  // The person's OTHER devices (GET /api/hub/devices; core/hub_remote.py):
+  // their items after this device's, each "on <device>". Adding one to the
+  // message puts its code in; the server brings it to this computer when
+  // the message is expanded. A device that can't be asked says why.
+  function loadHubDevices() {
+    return fetch("/api/hub/devices")
+      .then(function (r) { return r.ok ? r.json() : { devices: [] }; })
+      .then(function (j) {
+        var shown = 0;
+        ((j && j.devices) || []).forEach(function (d) {
+          if (d.state !== "ok") {
+            hubListEl.appendChild(folderNote(String(d.note || (d.name + " can't be asked right now"))));
+            return;
+          }
+          (d.items || []).forEach(function (r) {
+            if (r.copy || shown >= 60) return;
+            shown++;
+            var it = {
+              id: "file@" + d.device + ":" + r.id,
+              ref: r.ref,
+              name: r.name,
+              kind: r.kind,
+              size: r.size,
+              by: r.by,
+              by_name: r.by_name,
+              remote: { device: d.device, deviceName: d.name, id: r.id },
+            };
+            hubListEl.appendChild(hubRow(it));
+          });
+        });
+      })
+      .catch(function () {});
   }
   function openHubSheet() {
     closeSheet(sessionsSheet);
