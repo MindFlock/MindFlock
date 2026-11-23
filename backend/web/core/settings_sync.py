@@ -165,7 +165,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "oauth_client_id",
     ),
     "engine": ("skip_permissions", "agent"),
-    "ui": ("scroll_speed", "accent"),
+    "ui": ("scroll_speed", "mobile_scroll_speed", "accent"),
     "general": (
         "session_budget_usd",
         "window_budget_usd",
@@ -454,7 +454,8 @@ LABELS: Dict[str, str] = {
     "github.oauth_client_id": "GitHub sign-in app (OAuth client id)",
     "engine.skip_permissions": "Skip permission prompts",
     "engine.agent": "Ticket agent",
-    "ui.scroll_speed": "Terminal scroll speed",
+    "ui.scroll_speed": "Terminal scroll speed (desktop)",
+    "ui.mobile_scroll_speed": "Phone scroll speed",
     "ui.accent": "Accent colour",
     "general.session_budget_usd": "Session budget",
     "general.window_budget_usd": "Window budget",

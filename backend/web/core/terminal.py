@@ -122,6 +122,16 @@ def _tmux_server_running() -> bool:
         return False
 
 
+def scroll_lines_per_tick(speed=None) -> int:
+    """Lines tmux scrolls for ONE wheel tick at desktop ``speed``: the whole-
+    line part apply_scroll_speed binds (never below one — the sub-line part is
+    the desktop browser eating ticks, which a phone's ticks never go through).
+    The phone's touch scrollback divides this back out (mobile.js
+    touchScrollTicks) so its own speed doesn't move with the desktop's."""
+    speed = load_scroll_speed() if speed is None else _clamp_scroll_speed(speed)
+    return max(1, int(round(speed)))
+
+
 def apply_scroll_speed(speed: Optional[int] = None) -> None:
     """Tune the tmux mouse-wheel scroll amount to ``speed`` per notch, server-wide.
 
@@ -145,7 +155,7 @@ def apply_scroll_speed(speed: Optional[int] = None) -> None:
         return
     # Sub-line speeds (< 1) are enforced browser-side by eating wheel events;
     # tmux can only scroll whole lines, so it runs at the one-line floor here.
-    lines = max(1, int(round(speed)))
+    lines = scroll_lines_per_tick(speed)
     for table in ("copy-mode", "copy-mode-vi"):
         for key, direction in (
             ("WheelUpPane", "scroll-up"),

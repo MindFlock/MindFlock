@@ -291,9 +291,9 @@ function ScrollSpeedRow() {
   return (
     <label
       className="set-row"
-      title="How many lines the mouse wheel scrolls in the terminal, in thirds of a line (0.33–3). Below 1, wheel input is damped so a notch scrolls less than a line. Applies immediately to all open terminals."
+      title="How many lines the mouse wheel scrolls in the terminal, in thirds of a line (0.33–3). Below 1, wheel input is damped so a notch scrolls less than a line. Applies immediately to all open terminals. The phone has its own speed (⋯ → Scroll speed on /m)."
     >
-      <span className="set-label">Terminal scroll speed</span>
+      <span className="set-label">Terminal scroll speed (desktop)</span>
       <span className="ss-row">
         <input
           type="range"

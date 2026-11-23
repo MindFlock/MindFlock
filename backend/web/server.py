@@ -501,6 +501,7 @@ from backend.web.core.terminal import (
     load_scroll_speed,
     pump_pty,
     save_scroll_speed,
+    scroll_lines_per_tick,
     spawn_tail,
     spawn_tmux_attach,
     start_pty_reader,
@@ -15074,6 +15075,53 @@ def scroll_speed_set(payload: dict) -> JSONResponse:
     except Exception:  # noqa: BLE001 — the live speed is set; sync is a bonus
         pass
     return JSONResponse({"speed": speed})
+
+
+def _mobile_scroll_speed_body() -> dict:
+    """The phone's scroll speed plus what it needs to undo the desktop's:
+    ``speed`` lines per row dragged (``ui.mobile_scroll_speed``, default
+    when unset) and ``lines_per_tick``, the lines tmux scrolls per wheel tick
+    at the desktop speed (``desktop``)."""
+    from backend.config import settings as _settings
+
+    speed = _settings.load_settings().ui.mobile_scroll_speed
+    desktop = load_scroll_speed()
+    return {
+        "speed": _settings.MOBILE_SCROLL_SPEED_DEFAULT if speed is None else speed,
+        "default": _settings.MOBILE_SCROLL_SPEED_DEFAULT,
+        "min": _settings.MOBILE_SCROLL_SPEED_MIN,
+        "max": _settings.MOBILE_SCROLL_SPEED_MAX,
+        "desktop": desktop,
+        "lines_per_tick": scroll_lines_per_tick(desktop),
+    }
+
+
+@app.get("/api/mobile-scroll-speed")
+def mobile_scroll_speed_get() -> JSONResponse:
+    """The phone's touch-scroll speed (/m ⋯ → Scroll speed), independent of
+    the desktop wheel speed: see :func:`_mobile_scroll_speed_body`."""
+    return JSONResponse(_mobile_scroll_speed_body())
+
+
+@app.post("/api/mobile-scroll-speed")
+def mobile_scroll_speed_set(payload: dict) -> JSONResponse:
+    """Save the phone's scroll speed (``{"speed": n}``, whole lines per row
+    dragged, clamped 1 … 8) as the synced setting ``ui.mobile_scroll_speed``;
+    a server setting survives the phone clearing its site data."""
+    from backend.config import settings as _settings
+
+    speed = _settings._opt_mobile_scroll_speed((payload or {}).get("speed"))
+    if speed is None:
+        return JSONResponse({"error": "speed must be a number"}, status_code=400)
+    try:
+        _settings.update_settings(ui={"mobile_scroll_speed": speed})
+    except _settings.SettingsUnreadable:
+        return JSONResponse({"error": _settings.UNREADABLE_HINT}, status_code=409)
+    try:
+        _settings_sync.local_change()
+    except Exception:  # noqa: BLE001 — saved here; sync is a bonus
+        pass
+    return JSONResponse(_mobile_scroll_speed_body())
 
 
 @app.get("/api/providers")

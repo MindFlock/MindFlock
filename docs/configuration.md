@@ -893,7 +893,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `pricing.json` | Cached model-pricing feed (24 h TTL) |
 | `usage-history.json` | Durable daily token/cost ledger |
 | `usage-parse-cache.json` | Each transcript's parsed usage turns, keyed on (mtime, size, inode) and the byte offset read to: a restart re-reads only what changed, a grown transcript only its new lines. Safe to delete (the next scan rebuilds it) |
-| `scroll-speed` | Terminal wheel speed, 1–20 (also settable in the UI) |
+| `scroll-speed` | Terminal wheel speed, ⅓–3 in thirds (also settable in the UI; the `ui.scroll_speed` setting wins) |
 | `.exit-markers/<session>.code` | Last exit code per session (clean-quit vs crash detection) |
 | `.activity-markers/<session>.json`, `<session>.reply.json` | The per-session `{state, ts}` activity marker the CLI's lifecycle hooks write ([providers.md](providers.md#activity-signal-activity_markerspy)), and beside it the reply the `Stop` hook files — `{"ts", "text"}`, the payload's `last_assistant_message` cut at 8000 chars — which is where a session's spoken `Say:` line is read from (the `last_say` row field, the `say` event data, `GET …/voice`). Both keyed by tmux session name; the reply file goes with the session. The server watches this directory to publish a reply the moment it lands. Override the directory with `MINDFLOCK_ACTIVITY_MARKER_DIR` (below) — on a network or coarse-mtime filesystem replies fall back to the 1 s rescan |
 | `.voice/<session>.on`, `.voice/<session>.next` | The per-session **voice files** (`backend/web/core/voice.py`). `.on` exists while a phone is in a voice conversation with that session (the row's `voice`; `POST …/voice` writes and removes it) and asks nothing of the session. `.next` is the **one-shot** request for a spoken reply: `POST …/send {say: true}` arms it right before the keystrokes (it holds the arming time), the installed `UserPromptSubmit` hook reads it at fire time, deletes it, and prints the voice instruction for Claude Code to inject only when it is under 120 s old — so a typed prompt costs no `Say:` tokens and a prompt that never got submitted cannot attach its line to the next one. Session removal drops both, so a closed session leaves nothing behind and a namesake inherits none. Override the directory with `MINDFLOCK_VOICE_FLAG_DIR` |
@@ -1080,8 +1080,15 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   `backend/config/ide.py`.
 - **IDE auto-adopt** (`/api/cursor/autoadopt`) — automatically adopt workspaces
   opened in the linked IDE as sessions (requires a VS Code-family editor).
-- **Scroll speed** (`/api/scroll-speed`) — tmux wheel lines per notch, 1–20,
-  applied live to all sessions.
+- **Scroll speed** (`/api/scroll-speed`, `ui.scroll_speed`) — tmux wheel lines
+  per notch, ⅓–3 in thirds, applied live to all sessions (Settings → General,
+  *Terminal scroll speed (desktop)*).
+- **Phone scroll speed** (`ui.mobile_scroll_speed`, `/api/mobile-scroll-speed`,
+  the phone's ⋯ → Scroll speed) — lines the phone's terminal scrolls per row the
+  finger drags, whole lines 1–8 (clamped); unset = 3, how the phone felt before
+  it had its own. Independent of the desktop speed: the phone divides the
+  desktop's lines per wheel tick back out. Synced, labelled *Phone scroll
+  speed*.
 - **Default provider** (`coding_cli.default_provider`, Settings → Agent CLI) —
   the provider new sessions launch by default. It **must reference an installed
   CLI**: the Settings picker lists only installed providers and a `POST
