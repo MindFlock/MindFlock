@@ -229,7 +229,7 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
   };
   const [sending, setSending] = useState(false);
   const box = useRef<HTMLTextAreaElement | null>(null);
-  // The hub in this box: hub: picker, paperclip, pasted files (HubAttach).
+  // Shared files in this box: file: picker, paperclip, pasted files (HubAttach).
   const hubc = useHubComposer({ box, value: draft, setValue: setDraft, title });
   const chips = composeChips(
     title,
@@ -314,7 +314,7 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
       (i < plannedNow.length && !queuedByServer ? now : later).push(who[i]);
     });
     setDraft("");
-    // A hub: reference to nothing went as typed: say so (lib/hub).
+    // A code to nothing went as typed: say so (lib/hub).
     const hubNote = results
       .map((r) => (r.status === "fulfilled" ? (r.value as { hub_note?: string } | null)?.hub_note : ""))
       .find(Boolean);

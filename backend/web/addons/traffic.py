@@ -14,6 +14,14 @@ updates and re-downloads and cannot be split into new versus returning users
 by any means. So "new user" figures come from the click side only, and the
 download side is labelled for what it is.
 
+Neither side is all people. The Worker classifies each click as human,
+unverified or automated (from Fetch Metadata headers and the network it came
+from) and reports a human-only copy of every section beside the original,
+unfiltered one — passed through here untouched. On the GitHub side, most
+release assets are not installers at all (auto-update manifests, checksums,
+Python packages), so every asset is given a ``kind`` and the installer count
+is reported separately from ``downloads_total``.
+
 Every upstream call is best-effort: a GitHub rate limit or the click-tracking
 worker being unreachable degrades that ONE section (``errors.github`` /
 ``errors.clicks``) rather than 500ing the whole payload — the two sections
@@ -119,33 +127,89 @@ async def _fetch_repo(token: str) -> tuple[Optional[dict], str]:
     return None, "GitHub repo lookup failed ({}): {}".format(status, msg)
 
 
-async def _fetch_releases(token: str) -> tuple[list, int, str]:
-    """Per-release asset download counts, newest first, plus the all-time sum.
+#: The three files a person downloads to install MindFlock. The release
+#: buttons on mindflock.ai point at exactly these (the Worker's /go/mac,
+#: /go/windows and /go/linux), and they are version-less on purpose.
+#:
+#: Not proof of a first install either: electron-updater ALSO downloads the
+#: Windows ``.exe`` and the Linux ``.AppImage`` to update an existing install
+#: (docs/desktop-updates.md), so for those two platforms an update and a first
+#: download look the same. Only macOS updates through a different file.
+INSTALLER_ASSETS = frozenset(
+    {"MindFlock.dmg", "MindFlock-Setup.exe", "MindFlock.AppImage"}
+)
 
-    One page of up to 100 covers every release this project has cut so far
-    with room to spare; if that ever stops being true, download counts merely
-    stop at the 100th-newest release rather than the endpoint breaking.
+#: The macOS auto-update payload: electron-updater on macOS fetches the zip,
+#: never the dmg. Counted as an update, not an installer, because nobody
+#: installs from it by hand — the releases page offers the dmg for that.
+MAC_UPDATE_ASSET = "MindFlock.zip"
+
+#: Kinds, in display order. Every asset name maps to exactly one.
+ASSET_KINDS = ("installer", "update", "update_check", "checksum", "package", "other")
+
+
+def asset_kind(name: str) -> str:
+    """What a release asset is, from its file name.
+
+    - ``installer``: the three desktop installers (:data:`INSTALLER_ASSETS`).
+    - ``update``: the macOS update zip and every ``.blockmap`` (electron-updater
+      reads block maps to download only what changed).
+    - ``update_check``: ``latest*.yml`` — fetched by every running app's
+      update check, so this counts app launches, not downloads.
+    - ``checksum``: ``*.sha256`` and ``SHA256SUMS``.
+    - ``package``: the Python wheel and sdist (the engine; the installer
+      builds from git, not from these).
+    - ``other``: anything else.
     """
+    n = str(name or "")
+    low = n.lower()
+    if n in INSTALLER_ASSETS:
+        return "installer"
+    if n == MAC_UPDATE_ASSET or low.endswith(".blockmap"):
+        return "update"
+    if low.startswith("latest") and low.endswith((".yml", ".yaml")):
+        return "update_check"
+    if low.endswith(".sha256") or low == "sha256sums":
+        return "checksum"
+    if low.endswith((".whl", ".tar.gz")):
+        return "package"
+    return "other"
+
+
+async def _fetch_releases(token: str) -> tuple[list, dict, str]:
+    """Per-release asset download counts, newest first, plus all-time sums.
+
+    The sums come back as one dict: ``total`` (every asset — the old
+    ``downloads_total``), ``installers`` and ``by_kind`` (``ASSET_KINDS`` →
+    count). One page of up to 100 covers every release this project has cut so
+    far with room to spare; if that ever stops being true, download counts
+    merely stop at the 100th-newest release rather than the endpoint breaking.
+    """
+    sums = {"total": 0, "installers": 0, "by_kind": {k: 0 for k in ASSET_KINDS}}
     status, data = await _get_json(
         "{}/repos/{}/releases?per_page=100".format(_GITHUB_API, _REPO), token=token
     )
     if status != 200 or not isinstance(data, list):
         msg = data.get("message") if isinstance(data, dict) else str(data)
-        return [], 0, "GitHub releases lookup failed ({}): {}".format(status, msg)
+        return [], sums, "GitHub releases lookup failed ({}): {}".format(status, msg)
 
     releases = []
-    total = 0
     for rel in data:
         if not isinstance(rel, dict):
             continue
         assets = []
         rel_total = 0
+        rel_installers = 0
         for a in rel.get("assets") or []:
             if not isinstance(a, dict):
                 continue
             n = int(a.get("download_count") or 0)
-            assets.append({"name": a.get("name"), "downloads": n})
+            kind = asset_kind(a.get("name") or "")
+            assets.append({"name": a.get("name"), "downloads": n, "kind": kind})
             rel_total += n
+            sums["by_kind"][kind] += n
+            if kind == "installer":
+                rel_installers += n
         releases.append(
             {
                 "tag": rel.get("tag_name"),
@@ -153,10 +217,12 @@ async def _fetch_releases(token: str) -> tuple[list, int, str]:
                 "prerelease": bool(rel.get("prerelease")),
                 "assets": assets,
                 "total_downloads": rel_total,
+                "installer_downloads": rel_installers,
             }
         )
-        total += rel_total
-    return releases, total, ""
+        sums["total"] += rel_total
+        sums["installers"] += rel_installers
+    return releases, sums, ""
 
 
 #: Bounds the stargazers pagination below. 30 pages * 100/page = 3,000 stars
@@ -225,6 +291,8 @@ def _empty_clicks(days: int, error: str) -> dict:
         "visitors_by_slug": [],
         "totals": None,
         "downloads": None,
+        "human": None,
+        "classification": None,
         "error": error,
     }
 
@@ -243,6 +311,13 @@ async def _fetch_clicks(days: int) -> dict:
     They stay ``None``/empty against a Worker that predates visitor
     attribution, so the screen can say "not available yet" instead of drawing
     a chart of zeros.
+
+    ``human`` and ``classification`` are the same idea one Worker version
+    later: ``human`` repeats the sections above over clicks the Worker
+    classified as a person, and ``classification`` says how the window's
+    clicks split by class, why, and from which day classification exists
+    (``since``). Both are ``None`` against an older Worker, which is how the
+    screen knows to label its figures as unfiltered.
     """
     status, data = await _get_json("{}?days={}".format(_CLICKS_STATS_URL, days))
     if status != 200 or not isinstance(data, dict):
@@ -273,6 +348,8 @@ async def _fetch_clicks(days: int) -> dict:
         "visitors_by_slug": _list("visitors_by_slug"),
         "totals": _dict("totals"),
         "downloads": _dict("downloads"),
+        "human": _dict("human"),
+        "classification": _dict("classification"),
         "error": "",
     }
 
@@ -299,7 +376,7 @@ class TrafficAddon(Addon):
 
         token = await _token()
         repo, repo_err = await _fetch_repo(token)
-        releases, downloads_total, releases_err = await _fetch_releases(token)
+        releases, download_sums, releases_err = await _fetch_releases(token)
         star_history, star_history_err = await _fetch_star_history(token)
         clicks = await _fetch_clicks(days)
 
@@ -309,7 +386,12 @@ class TrafficAddon(Addon):
             "repo": repo,
             "star_history": star_history,
             "releases": releases,
-            "downloads_total": downloads_total,
+            # Every asset of every release, kept for compatibility. It is NOT
+            # installs: most of it is update checks, checksums and packages.
+            "downloads_total": download_sums["total"],
+            # The three installers only, and the per-kind split of the rest.
+            "installer_downloads_total": download_sums["installers"],
+            "downloads_by_kind": download_sums["by_kind"],
             "clicks": clicks,
             "errors": {
                 "github": github_err or None,

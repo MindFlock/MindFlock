@@ -22,6 +22,14 @@ measures it:
   subtree (``npm exec`` → node); ``other_mb`` is the rest (launcher shells,
   the Bash tool's shells, test runs, dev servers).
 
+* **What the launch gate reads** — :func:`session_agent_mb` /
+  :func:`session_agent_peak_mb`: ``agent_mb + mcp_mb`` per session and its
+  peak this incarnation, the cost of one more session's AGENT. ``other_mb``
+  is left out on purpose (2026-11-12): a test run in one pane moved the
+  gate's per-session cost 637 → 1,780 MB in a minute and held back sessions
+  the machine had room for. What it really takes still shows, once, in the
+  machine's available memory and pressure readings.
+
 * **PSS, on a budget** — memory is PSS (``smaps_rollup``: shared pages split
   between their users) where the kernel reports it, else RSS. Reading
   ``smaps_rollup`` makes the kernel walk the process's page tables, ~1 ms of
@@ -595,6 +603,7 @@ _STATE: Dict[str, object] = {
     "tick_ms": None,
     "tick_cpu_ms": None,
     "source": "",
+    "agent_peaks": {},  # title -> agent + MCP peak mb (the launch gate's)
 }
 
 
@@ -606,6 +615,32 @@ def session_mb() -> Dict[str, int]:
     return {
         t: int(r["mb"]) for t, r in rows.items() if isinstance(r, dict) and r.get("mb")
     }
+
+
+def session_agent_mb() -> Dict[str, int]:
+    """{title: agent_mb + mcp_mb} from the last reading: what the session's
+    agent CLI and the MCP servers it started take, without whatever else
+    runs in its panes (``other_mb``). The launch gate's per-session cost
+    (``core.launch_gate``'s agent sizes seam)."""
+    with _LOCK:
+        rows = dict(_STATE["sessions"])  # type: ignore[arg-type]
+    out: Dict[str, int] = {}
+    for t, r in rows.items():
+        if not isinstance(r, dict):
+            continue
+        n = int(r.get("agent_mb") or 0) + int(r.get("mcp_mb") or 0)
+        if n:
+            out[t] = n
+    return out
+
+
+def session_agent_peak_mb() -> Dict[str, int]:
+    """{title: peak of agent_mb + mcp_mb} this incarnation, from the last
+    reading (the gate counts a warming agent at the learned agent peak)."""
+    with _LOCK:
+        rows = dict(_STATE["sessions"])  # type: ignore[arg-type]
+        peaks = dict(_STATE.get("agent_peaks") or {})  # type: ignore[call-overload]
+    return {t: int(v) for t, v in peaks.items() if t in rows and v}
 
 
 def session_peak_mb() -> Dict[str, int]:
@@ -620,8 +655,9 @@ def session_peak_mb() -> Dict[str, int]:
     }
 
 
-#: title -> (roots tuple, peak mb): the peak resets with a new incarnation.
-_PEAKS: Dict[str, Tuple[Tuple[int, ...], int]] = {}
+#: title -> (roots tuple, peak mb, agent + MCP peak mb): both peaks reset
+#: with a new incarnation.
+_PEAKS: Dict[str, Tuple[Tuple[int, ...], int, int]] = {}
 _HIST = {"last": 0.0, "failed": False}
 _TICK_LOCK = threading.Lock()
 
@@ -728,6 +764,7 @@ def sample(
     )[: OTHERS_TOP * 2]
     kb = _measure(table, list(in_session) + [p.pid for p in cands], source, root)
     rows: Dict[str, dict] = {}
+    agent_peaks: Dict[str, int] = {}
     live_titles = set()
     for title, (roots, cls) in per.items():
         live_titles.add(title)
@@ -735,9 +772,13 @@ def sample(
         for pid, c in cls.items():
             sums[c] += kb.get(pid, 0)
         total = _mb(sum(sums.values()))
+        agent = _mb(sums["agent"]) + _mb(sums["mcp"])
         prev = _PEAKS.get(title)
-        peak = max(total, prev[1]) if prev and prev[0] == roots else total
-        _PEAKS[title] = (roots, peak)
+        same = bool(prev) and prev[0] == roots  # type: ignore[index]
+        peak = max(total, prev[1]) if same else total  # type: ignore[index]
+        agent_peak = max(agent, prev[2]) if same else agent  # type: ignore[index]
+        _PEAKS[title] = (roots, peak, agent_peak)
+        agent_peaks[title] = agent_peak
         rows[title] = {
             "mb": total,
             "peak_mb": peak,
@@ -772,6 +813,7 @@ def sample(
     }
     with _LOCK:
         _STATE.update(result)
+        _STATE["agent_peaks"] = agent_peaks
     return result
 
 
@@ -915,6 +957,69 @@ def history(minutes: float = 60.0, now: Optional[float] = None) -> List[dict]:
         except OSError:
             continue
     return out
+
+
+#: How much of each history file's end :func:`tail` reads (a line is ~1-3 KB;
+#: a few minutes of two servers' lines fit many times over).
+TAIL_BYTES = 1024 * 1024
+
+
+def _tail_lines(path: str, max_bytes: int) -> Tuple[List[dict], bool]:
+    """The parsed lines in the last ``max_bytes`` of ``path`` (oldest first)
+    and whether that was the whole file. Missing / unreadable → ``([],
+    True)``."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            start = max(0, size - max_bytes)
+            fh.seek(start)
+            data = fh.read()
+    except OSError:
+        return [], True
+    lines = data.split(b"\n")
+    if start > 0 and lines:
+        lines = lines[1:]  # the first one was cut in half by the seek
+    out: List[dict] = []
+    for line in lines:
+        if not _AT_RE.match(line):
+            continue
+        try:
+            row = json.loads(line)
+            row["at"] = float(row["at"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        out.append(row)
+    return out, start == 0
+
+
+def tail(before: float, seconds: float, max_bytes: Optional[int] = None) -> List[dict]:
+    """The history's LAST stretch before ``before``, whatever its age: the
+    lines from ``seconds`` before the newest line written before ``before``
+    up to it, oldest first (the rotated file too when the live one is short).
+    ``[]`` when there is no history. The boot pass reads it to see how the
+    previous run ended (:func:`backend.web.core.revive.stop_evidence`) —
+    :func:`history` would find nothing after a night with the laptop off.
+    Never raises."""
+    cap = TAIL_BYTES if max_bytes is None else int(max_bytes)
+    try:
+        path = history_path()
+    except Exception:  # noqa: BLE001
+        return []
+    rows: List[dict] = []
+    for p in (path, path + ".1"):
+        got, whole = _tail_lines(p, cap)
+        rows = [r for r in got if r["at"] < before] + rows
+        if not whole:
+            break  # a long file: the window (minutes) is in its last MB
+        ats = [r["at"] for r in rows]
+        if ats and min(ats) <= max(ats) - seconds:
+            break  # this file alone reaches back far enough
+    if not rows:
+        return []
+    rows.sort(key=lambda r: r["at"])
+    last = rows[-1]["at"]
+    return [r for r in rows if r["at"] >= last - seconds]
 
 
 # --------------------------------------------------------------------------- #

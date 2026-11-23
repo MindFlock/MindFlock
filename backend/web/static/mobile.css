@@ -761,7 +761,7 @@ html, body {
   user-select: none;
 }
 #send:active { background: rgba(var(--accent-rgb), 0.75); }
-/* The hub's 📎 (mobile.js HUB section): beside the compose box. */
+/* Shared files' 📎 (mobile.js HUB section): beside the compose box. */
 #hub-attach {
   flex: 0 0 auto;
   min-width: 42px;
@@ -1021,6 +1021,23 @@ html, body {
 .act-label { font-size: 14px; }
 .act-hint { color: var(--muted); font-size: 11px; }
 .act-danger .act-label, button.act-danger { color: #f87171; }
+/* ⋯ → Scroll speed: the phone's own speed as a row of steps, the current
+   one in the accent. */
+.act-speed { display: flex; flex-direction: column; gap: 8px; padding: 4px 2px 6px; }
+.act-speed-steps { display: flex; gap: 6px; }
+.act-speed-step {
+  flex: 1 1 0;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 0;
+  font-size: 15px;
+  font-family: inherit;
+}
+.act-speed-step:active { background: var(--border); }
+.act-speed-step.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 /* Delete's inline strip — the rail's: what it does, then Cancel / Delete. */
 .delete-strip {
   display: flex;
@@ -1605,3 +1622,48 @@ html, body {
 .voice-cmd:last-child { border-bottom: 0; }
 .voice-cmd-say { font-size: 15px; color: var(--text); }
 .voice-cmd-does { font-size: 13px; color: var(--muted, var(--text)); opacity: 0.8; }
+
+/* Shared files' sheet: a tick per row, and the bar that adds the ticked items
+   to the message at once (mobile.js HUB section). */
+.hub-row-tick {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 2px 0 0;
+}
+.hub-row-check {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.hub-row.is-picked {
+  border-color: var(--accent);
+}
+.hub-selbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--accent);
+}
+.hub-selbar.hidden { display: none; }
+#hub-sel-count { font-weight: 600; font-size: 14px; margin-right: auto; }
+.hub-selbar button {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2, var(--bg));
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.hub-selbar button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+
+/* Another of your devices' item (core/hub_remote.py): read-only here; its
+   code brings it to this computer when the message is sent. */
+.hub-row.is-remote { border-style: dashed; }

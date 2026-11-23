@@ -471,7 +471,7 @@ def github(monkeypatch):
     async def _pr_of(sess, flight):
         return (_pr(), "o/r") if state["pr"] else (None, "")
 
-    async def _fetch(pr, cfg):
+    async def _fetch(pr, cfg, **_kw):
         if isinstance(state["comments"], Exception):
             raise state["comments"]
         return list(state["comments"])
@@ -494,7 +494,14 @@ def _obs(f, now=NOW):
 
 def test_the_driver_reports_the_reviewer_on_the_head(github):
     f = fly({"kind": "reviews", "config": {"require_reviewer": "CodeRabbit"}})
-    assert _obs(f) == {"ids": [], "created": {}, "reviewer": rv()}
+    assert _obs(f) == {
+        "ids": [],
+        "created": {},
+        "open_threads": None,
+        "reviewer": rv(),
+        "reviewer_name": "CodeRabbit",
+        "required": True,
+    }
     assert github["calls"] == [("CodeRabbit", "", 0.0, NOW)]
     # Within the minute: the cache answers.
     github["reviewer"] = rv(reviewed=True)
@@ -515,13 +522,21 @@ def test_the_driver_reports_the_reviewer_on_the_head(github):
 
 def test_the_driver_never_asks_an_unrequired_reviewer(github):
     g = fly({"kind": "reviews", "config": {}}, session="t")
-    assert _obs(g) == {"ids": [], "created": {}} and github["calls"] == []
+    assert _obs(g) == {"ids": [], "created": {}, "open_threads": None}
+    assert github["calls"] == []
 
 
 def test_a_failed_ask_is_unknown_not_never(github):
     github["reviewer"] = RuntimeError("502")
     f = fly({"kind": "reviews", "config": {"require_reviewer": "coderabbit"}})
-    assert _obs(f) == {"ids": [], "created": {}, "reviewer": None}
+    assert _obs(f) == {
+        "ids": [],
+        "created": {},
+        "open_threads": None,
+        "reviewer": None,
+        "reviewer_name": "coderabbit",
+        "required": True,
+    }
 
 
 def test_the_driver_says_why_the_comments_could_not_be_read(github):

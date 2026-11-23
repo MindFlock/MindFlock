@@ -6,7 +6,15 @@
  * wrong answer, so it lives here where it can be tested rather than inline in
  * the component. */
 
-import type { TrafficResponse } from "../api/types";
+import type {
+  TrafficClickRow,
+  TrafficClickTotals,
+  TrafficDownloadFunnel,
+  TrafficOsMatch,
+  TrafficResponse,
+  TrafficVisitorDay,
+  TrafficVisitorSlug,
+} from "../api/types";
 
 export type TrafficMetric = "people" | "clicks";
 
@@ -72,4 +80,156 @@ export function niceTicks(rawMax: number, targetCount = 4): { max: number; ticks
   const ticks: number[] = [];
   for (let v = 0; v <= max; v += step) ticks.push(v);
   return { max, ticks };
+}
+
+/** Where the click Worker is with human/automated classification:
+ *
+ * - "old-worker": it predates classification (`clicks.classification` absent),
+ *   so every click figure includes automated traffic and must say so.
+ * - "pending": classification is deployed but has not seen a click in this
+ *   window yet.
+ * - "partial": classified clicks exist, but part of the window predates
+ *   classification — human figures cover `since` onwards only.
+ * - "full": the whole window is classified. */
+export type ClassificationState = "old-worker" | "pending" | "partial" | "full";
+
+/** The click figures the screen should lead with, and how to label them.
+ *
+ * Against a classifying Worker these are the HUMAN-only sections, with the
+ * automated and unverified shares beside them; against an older Worker they
+ * are the unfiltered sections, and `scope: "all"` tells the screen to say so.
+ * Deciding this once here keeps the tiles, the funnel, the chart and the
+ * by-link table from mixing scopes — a human visitor count next to an
+ * unfiltered click count would be a ratio of two different populations. */
+export interface ClickView {
+  state: ClassificationState;
+  scope: "human" | "all";
+  /** First classified UTC day, when `scope` is "human" and there is one. */
+  since: string | null;
+  series: TrafficClickRow[];
+  visitors_by_day: TrafficVisitorDay[];
+  visitors_by_slug: TrafficVisitorSlug[];
+  totals: TrafficClickTotals | null;
+  downloads: TrafficDownloadFunnel | null;
+  /** Classified clicks (all three classes) and each class's share of them —
+   * the same period as the human figures, so the shares are honest. Null
+   * against an old Worker. */
+  classified: {
+    clicks: number;
+    human: { clicks: number; visitors: number };
+    unverified: { clicks: number; visitors: number };
+    automated: { clicks: number; visitors: number };
+  } | null;
+}
+
+export function clickView(data: TrafficResponse | undefined | null): ClickView | null {
+  const clicks = data?.clicks;
+  if (!clicks) return null;
+  const c = clicks.classification;
+  const h = clicks.human;
+  if (!c || !h) {
+    return {
+      state: "old-worker",
+      scope: "all",
+      since: null,
+      series: clicks.series ?? [],
+      visitors_by_day: clicks.visitors_by_day ?? [],
+      visitors_by_slug: clicks.visitors_by_slug ?? [],
+      totals: clicks.totals ?? null,
+      downloads: clicks.downloads ?? null,
+      classified: null,
+    };
+  }
+  const zero = { clicks: 0, visitors: 0 };
+  const human = c.by_class?.human ?? zero;
+  const unverified = c.by_class?.unverified ?? zero;
+  const automated = c.by_class?.automated ?? zero;
+  const state: ClassificationState = !c.since
+    ? "pending"
+    : c.unclassified_clicks > 0
+      ? "partial"
+      : "full";
+  return {
+    state,
+    scope: "human",
+    since: c.since ?? null,
+    series: h.series ?? [],
+    visitors_by_day: h.visitors_by_day ?? [],
+    visitors_by_slug: h.visitors_by_slug ?? [],
+    totals: h.totals ?? null,
+    downloads: h.downloads ?? null,
+    classified: {
+      clicks: human.clicks + unverified.clicks + automated.clicks,
+      human,
+      unverified,
+      automated,
+    },
+  };
+}
+
+/** The slugs whose destination is a desktop installer, mapped to the UA OS
+ * that installer runs on (the Worker's `osFromUA` names). */
+export const INSTALLER_SLUG_OS: Record<string, string> = { mac: "mac", windows: "windows", linux: "linux" };
+
+/** Download-button clicks, and how many came from a UA on the installer's own
+ * OS. Uses the Worker's `downloads.os_match` when it sends one, else folds the
+ * click series — clicks are plain tallies, so unlike visitor counts they may
+ * be summed, which is what lets this work against an older Worker too.
+ *
+ * A mismatch is not proof of a bot (people fetch an installer for another
+ * machine), but a crawler clicking all three installers from one UA can match
+ * at most one in three, and a phone fetching a desktop installer is rarely
+ * about to install it. */
+export function osMatchedDownloads(
+  series: TrafficClickRow[],
+  fromWorker?: TrafficOsMatch | null
+): TrafficOsMatch {
+  if (fromWorker && typeof fromWorker.clicks === "number") return fromWorker;
+  const by = new Map(
+    Object.keys(INSTALLER_SLUG_OS).map((slug) => [slug, { slug, clicks: 0, matched: 0 }])
+  );
+  for (const r of series) {
+    const b = by.get(r.slug);
+    if (!b) continue;
+    b.clicks += r.clicks;
+    if (r.os === INSTALLER_SLUG_OS[r.slug]) b.matched += r.clicks;
+  }
+  const by_slug = Array.from(by.values());
+  return {
+    clicks: by_slug.reduce((n, b) => n + b.clicks, 0),
+    matched: by_slug.reduce((n, b) => n + b.matched, 0),
+    by_slug,
+  };
+}
+
+/** Release-asset downloads split into the installers and the rest, by kind.
+ *
+ * GitHub's counters carry no identity, so none of this is people: the
+ * installer figure still includes Windows and Linux auto-updates (the updater
+ * fetches the same .exe and .AppImage) and anything that crawls release
+ * assets. It is only the most honest of GitHub's numbers, not a real-downloads
+ * number. `installers` is null against a backend from before the split. */
+export function releaseDownloads(data: TrafficResponse | undefined | null): {
+  installers: number | null;
+  other: number | null;
+  byKind: Record<string, number> | null;
+} {
+  const installers = data?.installer_downloads_total;
+  if (typeof installers !== "number") return { installers: null, other: null, byKind: null };
+  return {
+    installers,
+    other: Math.max(0, (data?.downloads_total ?? 0) - installers),
+    byKind: data?.downloads_by_kind ?? null,
+  };
+}
+
+/** `part` as a whole-number percent of `whole`, or null when there is no
+ * whole to be a share of. Rounded, except that a non-zero share never shows
+ * as 0% and a share short of everything never shows as 100%. */
+export function sharePct(part: number, whole: number): number | null {
+  if (!whole || !Number.isFinite(part) || !Number.isFinite(whole)) return null;
+  const pct = Math.round((part / whole) * 100);
+  if (part > 0 && pct === 0) return 1;
+  if (part < whole && pct === 100) return 99;
+  return pct;
 }

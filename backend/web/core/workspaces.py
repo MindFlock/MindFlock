@@ -560,6 +560,26 @@ def scan_workspaces(active: dict | None = None, sizes: bool = False) -> list:
     return out
 
 
+def _row_repo(folder: str, gitdir: str, data: "dict | None" = None) -> str:
+    """The project folder a row's work belongs to — the repository a worktree
+    was cut from — or ``""`` when the row's own directory IS that folder (an
+    in-place session, a plain clone), so nothing is said twice.
+
+    A worktree lives under the worktrees root, where its path names the
+    branch and never the project; without this a closed session could not be
+    found by the project it was for. Read from the closed session's own
+    record first (it survives the directory), then from the worktree's
+    gitdir pointer."""
+    data = data or {}
+    wt = data.get("worktree") if isinstance(data.get("worktree"), dict) else {}
+    repo = str(wt.get("repo_path") or data.get("path") or "").strip()
+    if not repo:
+        repo = _worktree_repo_path(gitdir or "")
+    if not repo or (folder and _realpath(repo) == _realpath(folder)):
+        return ""
+    return repo
+
+
 def recent_rows(sizes: bool = False, days: float = STALE_WORKTREE_DAYS) -> dict:
     """The merged Recently-closed page: closed sessions plus leftover disk.
 
@@ -614,6 +634,7 @@ def recent_rows(sizes: bool = False, days: float = STALE_WORKTREE_DAYS) -> dict:
                 "name": d.get("name") or e.get("branch") or e.get("title") or "",
                 "path": folder,
                 "folder": folder,
+                "repo": _row_repo(folder, gitdir or "", e.get("data")),
                 # The directory's classification, and only that: an in-place
                 # session is not a workspace kind, it is a flag (and the row
                 # already wears its own badge for it).
@@ -682,6 +703,7 @@ def recent_rows(sizes: bool = False, days: float = STALE_WORKTREE_DAYS) -> dict:
                 "name": d["name"],
                 "path": d["path"],
                 "folder": d["path"],
+                "repo": _row_repo(d["path"], d.get("gitdir") or ""),
                 "kind": d["kind"],
                 "worktree": bool(d["worktree"]),
                 "in_place": False,

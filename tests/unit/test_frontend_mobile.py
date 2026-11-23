@@ -36,7 +36,8 @@ def test_mobile_js_touch_scroll_wiring():
     # Same SGR wheel encoding as the desktop path (CSI < 64/65 ; col ; row M).
     assert '"\\x1b[<" + btn + ";" + col + ";" + row + "M"' in js
     # Natural scrolling: finger moving down reveals earlier output (wheel up).
-    assert "sendWheelTicks(t.clientX, t.clientY, dy > 0" in js
+    assert "var up = dy > 0;" in js
+    assert "sendWheelTicks(t.clientX, t.clientY, up," in js
     # Single-finger vertical drags only; taps and pinches pass through.
     assert "ev.touches.length !== 1" in js
     assert "Math.abs(dy) <= Math.abs(dx)" in js
@@ -82,14 +83,19 @@ def test_mobile_css_keys_is_bottommost_bar():
 
 
 def test_touch_scroll_speed_multiplier():
-    # 1:1 finger-to-line felt "far too slow" (user report) — 3 ticks per cell
-    # dragged, with the per-event cap raised to match. mobile.js is hand-written
-    # and ships as-is; the desktop grid's twin (lib/terminals attachWheelScroll)
-    # is driven in frontend/src/__tests__/touchScroll.test.ts.
+    # 1:1 finger-to-line felt "far too slow" (user report) — 3 lines per cell
+    # dragged by default. The phone now has its own speed (⋯ → Scroll speed,
+    # ui.mobile_scroll_speed) with the desktop's lines per tick divided back
+    # out: driven under node in test_mobile_scroll_speed.py. mobile.js is
+    # hand-written and ships as-is; the desktop grid's twin (lib/terminals
+    # attachWheelScroll) is driven in frontend/src/__tests__/touchScroll.test.ts.
     mobile = client.get("/mobile.js").text
-    assert "TOUCH_SCROLL_MULT = 3" in mobile
-    assert "Math.abs(dy) * TOUCH_SCROLL_MULT / cellH" in mobile
-    assert "Math.min(24, lines)" in mobile
+    assert "var touchSpeed = { speed: 3, def: 3," in mobile
+    assert (
+        "touchScrollTicks(Math.abs(dy) / cellH, touchSpeed.speed, touchSpeed.perTick, touchCarry)"
+        in mobile
+    )
+    assert "Math.min(TOUCH_SCROLL_MAX_TICKS, step.ticks)" in mobile
 
 
 def test_mobile_js_composer_wiring():

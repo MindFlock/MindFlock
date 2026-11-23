@@ -52,7 +52,7 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
   const [state, setState] = useState<QueueStatePayload | null>(queueCache.get(title) || null);
   const [draft, setDraft] = useState("");
   const draftBox = useRef<HTMLTextAreaElement | null>(null);
-  // The hub in this box: hub: picker, paperclip, pasted files (HubAttach).
+  // Shared files in this box: file: picker, paperclip, pasted files (HubAttach).
   const hubc = useHubComposer({ box: draftBox, value: draft, setValue: setDraft, title });
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   // Drag-and-drop reorder: the id in flight and the insertion slot the pointer
@@ -181,7 +181,7 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
     try {
       const r = (await qApi(title, "/send", { json: { text } })) as { hub_note?: string } | null;
       setDraft("");
-      // A hub: reference to nothing went as typed: say so (lib/hub).
+      // A code to nothing went as typed: say so (lib/hub).
       toast(r?.hub_note ? "Sent to " + displayName(title) + " — " + r.hub_note : "Sent to " + displayName(title));
       reload();
     } catch (err) {

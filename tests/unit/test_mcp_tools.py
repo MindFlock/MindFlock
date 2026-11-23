@@ -89,8 +89,9 @@ class TestRegistry:
             "send_session",
             "send_files",
             "hub",
+            "report_issue",
         ]
-        assert len(tools) == 44
+        assert len(tools) == 45
         by = {t.name: t for t in tools}
         for name in (
             "whoami",

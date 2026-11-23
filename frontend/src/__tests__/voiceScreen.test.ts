@@ -71,6 +71,9 @@ const {
   hereDetail,
   MOONSHINE_WHY,
   liveWordsLine,
+  ACCURATE_OFF_LINE,
+  ACCURATE_ON_LABEL,
+  accurateOff,
   moonshineOffer,
   moonshineView,
   basicRecognizer,
@@ -869,6 +872,34 @@ describe("Live words: Moonshine or whisper, and the fast-recognition installer",
     expect(html).toContain(esc(MOONSHINE_WHY));
     expect(tag(html, "voice-moonshine-btn")).not.toContain("disabled");
     expect(html).toContain(MOONSHINE_LABEL);
+  });
+
+  it("accurateOff: Moonshine live with whisper's accurate pass off — the setting first, else the server's model", () => {
+    expect(accurateOff(MOON, "off")).toBe(true);
+    expect(accurateOff(MOON, " OFF ")).toBe(true);
+    expect(accurateOff(MOON, "")).toBe(false);
+    expect(accurateOff(MOON, "medium.en")).toBe(false);
+    expect(accurateOff({ ...MOON, final_model: "" }, undefined)).toBe(true);
+    expect(accurateOff({ ...MOON, final_model: "small.en" }, undefined)).toBe(false);
+    expect(accurateOff(MOON, undefined)).toBe(false); // an older server: no word
+    expect(accurateOff(WHISPER, "off")).toBe(false); // whisper's own fast words still type
+    expect(accurateOff(null, "off")).toBe(false);
+  });
+
+  it("Moonshine live, the accurate pass off: the row says dictation types nothing, and turns it back on", () => {
+    const html = render({ stt_backend: "local", stt_final: "off" }, MOON, undefined, fast());
+    expect(html).toMatch(/id="voice-live-words"[^>]*>Live words: Moonshine</);
+    expect(html).toContain('id="voice-accurate-off-hint"');
+    expect(html).toContain(esc(ACCURATE_OFF_LINE));
+    expect(tag(html, "voice-accurate-on-btn")).not.toContain("disabled");
+    expect(html).toContain(ACCURATE_ON_LABEL);
+    const viewer = render({ stt_backend: "local", stt_final: "off" }, { ...MOON, configure_allowed: false }, undefined, fast());
+    expect(tag(viewer, "voice-accurate-on-btn")).toContain("disabled");
+    // The button saves voice.stt_final back to "" (the one-shot model).
+    expect(voiceSrc).toMatch(/id="voice-accurate-on-btn"[\s\S]{0,120}model\.saveField\("voice", "stt_final", ""\)/);
+    // On, or on whisper: no warning.
+    expect(render({ stt_backend: "local" }, MOON, undefined, fast())).not.toContain("voice-accurate-off");
+    expect(render({ stt_backend: "local", stt_final: "off" }, WHISPER, undefined, fast())).not.toContain("voice-accurate-off");
   });
 
   it("Moonshine live: only the line, no button", () => {

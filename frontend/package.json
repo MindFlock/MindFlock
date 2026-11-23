@@ -1,7 +1,7 @@
 {
   "name": "mindflock-frontend",
   "private": true,
-  "version": "0.14.27",
+  "version": "0.14.28",
   "license": "Apache-2.0",
   "type": "module",
   "description": "MindFlock web UI \u2014 React + TypeScript source; builds into backend/web/static/",
@@ -24,10 +24,10 @@
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.2.1",
-    "playwright": "^1.65.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "playwright": "^1.65.1",
     "typescript": "^7.0.2",
-    "vite": "8.3.6",
+    "vite": "8.3.8",
     "vitest": "^5.1.0"
   },
   "overrides": {

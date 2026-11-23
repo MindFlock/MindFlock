@@ -1,7 +1,7 @@
 {
   "name": "mindflock-desktop",
   "productName": "MindFlock",
-  "version": "0.14.27",
+  "version": "0.14.28",
   "license": "Apache-2.0",
   "private": true,
   "description": "Native desktop shell for the MindFlock web UI (Electron).",
@@ -17,7 +17,7 @@
     "dist:linux": "electron-builder --linux"
   },
   "devDependencies": {
-    "electron": "^45.2.3",
+    "electron": "^45.3.4",
     "electron-builder": "^26.18.0"
   },
   "build": {

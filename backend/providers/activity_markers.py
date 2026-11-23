@@ -164,11 +164,11 @@ def reply_path(session_name: str):
     return marker_dir() / (safe_session_name(session_name) + ".reply.json")
 
 
-def _read_entry(session_name: str):
+def _read_entry(session_name: str, now: Optional[float] = None):
     """``(state, ts)`` from the session's marker, or None.
 
     Returns the entry only when the state is recognised and the marker is fresh
-    (< 6h old). Never raises. Shared by :func:`read_activity_marker` and
+    (< 6h old, as of ``now``; default the clock). Never raises. Shared by :func:`read_activity_marker` and
     :func:`read_activity_marker_age`.
     """
     import json
@@ -183,18 +183,23 @@ def _read_entry(session_name: str):
         return None
     if state not in _ACTIVITY_STATES:
         return None
-    if time.time() - ts > _ACTIVITY_STALE_AFTER:
+    if (time.time() if now is None else float(now)) - ts > _ACTIVITY_STALE_AFTER:
         return None
     return state, ts
 
 
-def read_activity_marker(session_name: str) -> Optional[str]:
+def read_activity_marker(
+    session_name: str, now: Optional[float] = None
+) -> Optional[str]:
     """State recorded by the session's CLI hooks, or None.
 
     Returns ``working`` / ``idle`` / ``clarify`` when the marker parses and is
-    fresh (< 6h old). Never raises.
+    fresh (< 6h old). ``now``: the moment "fresh" is measured from (default:
+    the clock) — the boot pass asks as of when the previous run stopped, so a
+    laptop that was off overnight still reads the turn it cut off. Never
+    raises.
     """
-    entry = _read_entry(session_name)
+    entry = _read_entry(session_name, now)
     return entry[0] if entry else None
 
 

@@ -44,6 +44,7 @@ import {
   nothingMessage,
   pruneMessage,
   prunedMessage,
+  projectNote,
   rowSearchFields,
   rowSortValue,
   staleDays,
@@ -516,7 +517,7 @@ export function RecentDialog() {
             id="recent-filter"
             value={query}
             onChange={setQuery}
-            placeholder="Filter by name, branch, session, or path…  ( Ctrl+F )"
+            placeholder="Filter by name, branch, folder, or path…  ( Ctrl+F )"
             onEscape={closeDialog}
           />
           <SortPicker
@@ -593,6 +594,7 @@ export function RecentDialog() {
                         a ? "Saved name: " + a : "",
                         e.branch ? "Branch: " + e.branch : "",
                         e.title ? "Session: " + e.title : "",
+                        e.repo ? "Folder: " + e.repo : "",
                         e.path || "",
                       ]
                         .filter(Boolean)
@@ -615,6 +617,14 @@ export function RecentDialog() {
                           all say "main" without this. */}
                       {dirNote(e, a) && (
                         <span className="recent-slug muted">{dirNote(e, a)}</span>
+                      )}
+                      {/* Which project a worktree was for: its own path names
+                          the branch, so this is the only place the folder shows
+                          (and the filter finds the row by it). */}
+                      {projectNote(e) && projectNote(e) !== dirNote(e, a) && (
+                        <span className="recent-slug muted" title={"Folder: " + e.repo}>
+                          {projectNote(e)}
+                        </span>
                       )}
                       {/* The directory's kind, then the flags. `in-place` is a
                           flag, so it is skipped here even if a payload puts it

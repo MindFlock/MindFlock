@@ -1172,6 +1172,7 @@ def test_find_pr_folds_a_merged_pr_into_ghs_vocabulary(monkeypatch):
                         "number": 4,
                         "base": {"ref": "staging"},
                         "head": {"ref": "feat/x", "sha": "c0ffee"},
+                        "user": {"login": "alice"},
                     }
                 ],
             )
@@ -1190,6 +1191,9 @@ def test_find_pr_folds_a_merged_pr_into_ghs_vocabulary(monkeypatch):
         # is how the stage probe tells "this branch IS that PR" from "there
         # are commits since" (agent_state pr_merged).
         "head": "c0ffee",
+        # Who opened it: a Reviews stop never hands the PR author's own
+        # replies back to the agent as requests.
+        "author": "alice",
     }
 
 

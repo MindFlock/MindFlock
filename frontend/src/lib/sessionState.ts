@@ -432,6 +432,13 @@ function sleepingState(info: NonNullable<Instance["sleeping"]>, now: number): Se
   const freed = Number(info.freed_mb) || 0;
   let hint = "Asleep";
   if (since > 0) hint += " since " + fmtClock(since) + " (" + spanWord(now / 1000 - since) + ")";
+  if (info.reason === "shutdown") {
+    // Found down at server start, no crash in sight (backend core/revive
+    // hold_on_boot): the computer was off. Only a person wakes it.
+    hint += " — the computer was turned off or restarted";
+    if (info.mid_turn) hint += " in the middle of its work; when it wakes it is asked to continue where it left off";
+    return { state: "idle", label: SLEEPING_LABEL, tone: "muted", inBell: false, restartable: false, hint: hint + ". Opening it or sending it anything wakes it, resuming the conversation." };
+  }
   hint += info.reason === "memory" ? " — memory was low" : info.reason === "manual" ? "" : " — it was idle";
   if (freed > 0) hint += "; freed ~" + (freed >= 1024 ? (freed / 1024).toFixed(1) + " GB" : freed + " MB");
   hint += ". Opening it or sending it anything wakes it, resuming the conversation.";

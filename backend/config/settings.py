@@ -721,8 +721,12 @@ class RepositorySettings:
     #: Master pause for the whole Verify feature, and the sidebar bar's switch.
     #:
     #: Off means MindFlock does nothing about verification ON ITS OWN: no plan is
-    #: written when a branch lands (``server._verify_auto_for``), and no plan is
-    #: moved to ``due`` by the liveness loop. Nothing is deleted and nothing is
+    #: written when a branch lands (``server._verify_auto_for``), and a plan a
+    #: push wrote is not watched, written or moved to ``due`` by the loop. A
+    #: checklist somebody ASKED for — a route's Verify stop, the Verify button,
+    #: an empty or branch checklist — is still followed until its work ships
+    #: (``test_plans.is_asked_for``, ``test_plans_driver._plans_to_follow``):
+    #: the switch never strands a check that was asked for. Nothing is deleted and nothing is
     #: forgotten — the tracked repos, the plans and their recorded answers all
     #: survive, and turning it back on resumes exactly where it stopped. This is
     #: the twin of ``github.enabled``, and it pauses the same KIND of thing: the
@@ -1113,6 +1117,12 @@ class UiSettings:
     # not an int: a whole value stays an int on disk. The live value is the
     # scroll-speed FILE (web/core/terminal.py); this copy is what syncs.
     scroll_speed: Optional[float] = None
+    # The phone's own scroll speed (/m touch scrollback): lines scrolled per
+    # terminal row the finger drags, whole lines 1 … 8. None = the default
+    # (MOBILE_SCROLL_SPEED_DEFAULT, how the phone felt before it had its own
+    # setting). Independent of scroll_speed: the phone divides the desktop's
+    # lines per wheel tick back out (mobile.js touchScrollTicks).
+    mobile_scroll_speed: Optional[int] = None
     cursor_autoadopt: Optional[bool] = None
     # Appearance themes (Settings → Appearance): accent preset name and surface
     # (background/panel/border/text) preset name. Empty = built-in defaults.
@@ -1125,6 +1135,8 @@ class UiSettings:
         d: dict = {}
         if self.scroll_speed is not None:
             d["scroll_speed"] = self.scroll_speed
+        if self.mobile_scroll_speed is not None:
+            d["mobile_scroll_speed"] = self.mobile_scroll_speed
         if self.cursor_autoadopt is not None:
             d["cursor_autoadopt"] = self.cursor_autoadopt
         if self.accent:
@@ -1137,6 +1149,7 @@ class UiSettings:
     def from_dict(cls, d: dict) -> "UiSettings":
         return cls(
             scroll_speed=_opt_speed(d.get("scroll_speed")),
+            mobile_scroll_speed=_opt_mobile_scroll_speed(d.get("mobile_scroll_speed")),
             cursor_autoadopt=_opt_bool(d.get("cursor_autoadopt")),
             accent=str(d.get("accent") or ""),
             surface=str(d.get("surface") or ""),
@@ -1311,17 +1324,21 @@ class GeneralSettings:
     (never set) reads as ON — the whole point of the limit gate is that running
     out is temporary. ``False`` turns it off.
 
-    ``revive_on_start`` ("Bring agents back by themselves after a crash"):
-    whether the server relaunches, in the background after it boots, every
-    session whose agent was running when it stopped
+    ``revive_on_start`` ("Bring agents back by themselves after a shutdown or
+    crash"): whether the server relaunches, in the background after it boots,
+    every session whose agent was running when it stopped
     (:mod:`backend.web.core.revive`), and brings back an agent the OOM killer
     took once memory recovers (the auto-revive, rate-limited per session).
-    ``None`` (never set) reads as OFF, like ``False``: a session whose agent
-    died is instead HELD offline (:mod:`backend.web.core.held`) — nothing
-    starts it, not a pane attaching nor a queued prompt, until a person
-    presses Start — so a crash can't refill memory. ``True`` opts in to the
-    old behaviour (and nothing is held). ``POST /api/server/revive-all``
-    runs the sweep on demand either way.
+    ``None`` (never set) reads as OFF, like ``False``: at boot, a session
+    whose agent died in what looks like a CRASH (its exit marker, or memory
+    history that ends in distress — ``revive.stop_evidence``) is HELD offline
+    (:mod:`backend.web.core.held`) — nothing starts it, not a pane attaching
+    nor a queued prompt, until a person presses Start — so a crash can't
+    refill memory; one that went down in a plain shutdown (the computer
+    turned off) comes back ASLEEP (:mod:`backend.web.core.sleep`, reason
+    ``shutdown``) and wakes when a person opens it or sends it something.
+    ``True`` opts in to the old behaviour (nothing is held or slept at boot).
+    ``POST /api/server/revive-all`` runs the sweep on demand either way.
 
     ``sleep_idle_minutes``: put an agent to sleep (:mod:`backend.web.core.sleep`
     — its CLI and MCP servers stopped to give their memory back, the session,
@@ -2359,6 +2376,10 @@ class HubSettings:
     one item can be (None = 100 MB). ``max_items``: how many items it holds
     (None = 300). ``keep_days``: an unpinned item is removed this many days
     after it was added or last used (None = 14); pinned items stay.
+    ``offer_to_devices``: whether this device offers its shared files to
+    the person's other devices (they list them and fetch one on use —
+    :mod:`backend.web.core.hub_remote`); None = on, ``False`` = off. Each
+    item can also be kept on this device only (its "local_only" mark).
     Machine-local: never synced.
     """
 
@@ -2366,11 +2387,12 @@ class HubSettings:
     item_mb: Optional[int] = None
     max_items: Optional[int] = None
     keep_days: Optional[int] = None
+    offer_to_devices: Optional[bool] = None
 
     def to_dict(self) -> dict:
         return {
             k: getattr(self, k)
-            for k in ("max_mb", "item_mb", "max_items", "keep_days")
+            for k in ("max_mb", "item_mb", "max_items", "keep_days", "offer_to_devices")
             if getattr(self, k) is not None
         }
 
@@ -2385,6 +2407,11 @@ class HubSettings:
             item_mb=cap("item_mb", 65536),
             max_items=cap("max_items", 100000),
             keep_days=cap("keep_days", 3650),
+            offer_to_devices=(
+                d.get("offer_to_devices")
+                if isinstance(d.get("offer_to_devices"), bool)
+                else None
+            ),
         )
 
 
@@ -2591,6 +2618,22 @@ def _opt_speed(v: Any) -> Optional[float]:
     if f is None or f != f or f in (float("inf"), float("-inf")):  # unset / NaN
         return None
     return int(f) if f.is_integer() else f
+
+
+#: The phone's scroll speed (``ui.mobile_scroll_speed``): lines per row dragged.
+MOBILE_SCROLL_SPEED_DEFAULT = 3
+MOBILE_SCROLL_SPEED_MIN = 1
+MOBILE_SCROLL_SPEED_MAX = 8
+
+
+def _opt_mobile_scroll_speed(v: Any) -> Optional[int]:
+    """Whole lines per row dragged, clamped to MIN … MAX; None when unset or
+    not a number (the phone then uses MOBILE_SCROLL_SPEED_DEFAULT)."""
+    f = _opt_float(v)
+    if f is None or f != f:  # unset / NaN
+        return None
+    f = max(MOBILE_SCROLL_SPEED_MIN, min(MOBILE_SCROLL_SPEED_MAX, f))
+    return int(round(f))
 
 
 #: The ``general`` fields holding the spawn guard-rails (see GeneralSettings).

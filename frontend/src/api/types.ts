@@ -196,8 +196,13 @@ export interface BackgroundJob {
 export interface SleepInfo {
   /** Epoch seconds it fell asleep. */
   since: number;
-  /** "idle" (the sweep), "memory" (the sweep, sooner: memory was low), "manual". */
+  /** "idle" (the sweep), "memory" (the sweep, sooner: memory was low),
+   * "manual", "shutdown" (found down at server start with no sign of a
+   * crash: the computer was turned off — only a person wakes it). */
   reason: string;
+  /** A "shutdown" sleeper whose agent was cut off mid-turn: its wake queues
+   * a "continue where you left off". */
+  mid_turn?: boolean;
   /** Roughly how much memory stopping it gave back, in MB (0 = unknown). */
   freed_mb: number;
 }
@@ -1599,9 +1604,17 @@ export type TicketingSource = Record<string, string> & {
  * per-release download counts, and click totals for the mindflock.ai/go/
  * tracked links. `errors.*` is set when that ONE section's upstream failed;
  * the rest of the payload still renders. */
+/** What a release asset is (backend/web/addons/traffic.py `asset_kind`):
+ * the three desktop installers, the update payloads electron-updater fetches
+ * (the macOS zip, block maps), the `latest*.yml` every running app's update
+ * check reads, checksums, and the Python packages. */
+export type TrafficAssetKind = "installer" | "update" | "update_check" | "checksum" | "package" | "other";
+
 export interface TrafficReleaseAsset {
   name: string;
   downloads: number;
+  /** Absent from a backend older than the installer split. */
+  kind?: TrafficAssetKind;
 }
 
 export interface TrafficStarPoint {
@@ -1615,6 +1628,8 @@ export interface TrafficRelease {
   prerelease: boolean;
   assets: TrafficReleaseAsset[];
   total_downloads: number;
+  /** The three installers only. Absent from a backend older than the split. */
+  installer_downloads?: number;
 }
 
 export interface TrafficClickRow {
@@ -1663,6 +1678,41 @@ export interface TrafficDownloadFunnel {
   new_visitors: number;
   new_visitors_clicked: number;
   by_slug: Array<{ slug: string; new_visitors: number; visitors: number; clicks: number }>;
+  /** Download-button clicks from a UA whose OS matches the installer. Only
+   * from a Worker with click classification; absent from older ones. */
+  os_match?: TrafficOsMatch;
+}
+
+export interface TrafficOsMatch {
+  clicks: number;
+  matched: number;
+  by_slug: Array<{ slug: string; clicks: number; matched: number }>;
+}
+
+export type TrafficClickClass = "human" | "unverified" | "automated";
+
+/** The click sections again, counted by the Worker over clicks it classified
+ * as a person (same grain rules as above). Covers only the days since
+ * `TrafficClassification.since`. */
+export interface TrafficHumanClicks {
+  series: TrafficClickRow[];
+  visitors_by_day: TrafficVisitorDay[];
+  visitors_by_slug: TrafficVisitorSlug[];
+  totals: TrafficClickTotals;
+  downloads: TrafficDownloadFunnel;
+}
+
+/** How the window's clicks split human / unverified / automated, why, and
+ * from which UTC day classification exists (`since`, null before the first
+ * classified click). `unclassified_clicks` > 0 means part of the window
+ * predates classification. `by_class[*].visitors` are distinct within a class
+ * and do not sum to a total. */
+export interface TrafficClassification {
+  since: string | null;
+  unclassified_clicks: number;
+  by_class: Record<TrafficClickClass, { clicks: number; visitors: number }>;
+  reasons: Array<{ class: TrafficClickClass; reason: string; clicks: number }>;
+  by_slug: Array<{ slug: string } & Record<TrafficClickClass, number>>;
 }
 
 export interface TrafficResponse {
@@ -1670,7 +1720,11 @@ export interface TrafficResponse {
   repo: { stars: number | null; forks: number | null; open_issues: number | null; url: string } | null;
   star_history: TrafficStarPoint[];
   releases: TrafficRelease[];
+  /** Every asset of every release — NOT installs (see downloads_by_kind). */
   downloads_total: number;
+  /** The three desktop installers only. Absent from an older backend. */
+  installer_downloads_total?: number;
+  downloads_by_kind?: Record<TrafficAssetKind, number>;
   clicks: {
     days: number;
     series: TrafficClickRow[];
@@ -1679,6 +1733,10 @@ export interface TrafficResponse {
     visitors_by_slug: TrafficVisitorSlug[];
     totals: TrafficClickTotals | null;
     downloads: TrafficDownloadFunnel | null;
+    /** Null against a Worker from before click classification (and from an
+     * older backend, which omits them). */
+    human?: TrafficHumanClicks | null;
+    classification?: TrafficClassification | null;
     error: string;
   };
   errors: { github: string | null; clicks: string | null };
@@ -1907,6 +1965,12 @@ export interface TestPlan {
    * `empty: true`) — a person writes its steps, no model call was made. ""
    * for a generated checklist. Optional: an older server doesn't send it. */
   origin?: "" | "manual";
+  /** Who wanted this checklist. "push": written by itself because a watched
+   * repo was pushed to — the one kind the Verify master switch pauses.
+   * "asked": a route's Verify stop or a person asked for it (followed until
+   * its work ships, switch or not). "" = written before the field; counts as
+   * asked. Optional: an older server doesn't send it. */
+  trigger?: "" | "push" | "asked";
   /** The MAIN repo, never the session's worktree: worktrees get reclaimed, and a
    * plan outlives the session that produced it. */
   repo_root: string;

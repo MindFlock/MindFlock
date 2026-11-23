@@ -15,20 +15,39 @@
  * - GitHub's download counters carry NO identity. They cannot be split into new
  *   versus updating users by any means, so they are labelled as the raw tallies
  *   they are, and the new-user funnel is built from download-button clicks
- *   (which the Worker can attribute) instead.
+ *   (which the Worker can attribute) instead. Most release assets are not
+ *   installers at all (update manifests, checksums, packages), so the Downloads
+ *   tile counts the three installers and shows the rest as what it is.
+ * - Most raw clicks are automated. A Worker that classifies clicks (human /
+ *   unverified / automated) sends human-only copies of every click section;
+ *   the screen leads with those, shows the automated share beside them, and
+ *   labels them "since <date>" while the window is only partly classified.
+ *   Against an older Worker it shows the unfiltered figures and says so.
+ *   lib/traffic.ts `clickView` makes that choice once for the whole screen.
  */
 
 import { useMemo, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { refreshTraffic, useTraffic } from "../../../state/queries";
 import type {
+  TrafficClassification,
   TrafficClickRow,
   TrafficDownloadFunnel,
+  TrafficOsMatch,
   TrafficRelease,
   TrafficStarPoint,
   TrafficVisitorDay,
 } from "../../../api/types";
-import { niceTicks, shownMetric, type TrafficMetric } from "../../../lib/traffic";
+import {
+  clickView,
+  niceTicks,
+  osMatchedDownloads,
+  releaseDownloads,
+  sharePct,
+  shownMetric,
+  type ClickView,
+  type TrafficMetric,
+} from "../../../lib/traffic";
 import type { ScreenProps } from "../SettingsDialog";
 
 const DAYS_OPTIONS = [30, 90] as const;
@@ -42,7 +61,50 @@ const SLUG_LABEL: Record<string, string> = {
   latest: "Latest release",
   producthunt: "Product Hunt",
   nxgn: "NxGn Tools",
+  viberank: "VibeRank",
+  launchbuff: "LaunchBuff",
 };
+
+/** The Worker's reason codes (worker/README.md "Human or automated"), in the
+ * words the evidence table uses. */
+const TRAFFIC_REASON_LABEL: Record<string, string> = {
+  navigation: "browser link click",
+  "bot-ua": "declared bot or crawler",
+  prefetch: "prefetch / link preview",
+  head: "HEAD request (link checker)",
+  "automation-ua": "automation tool or HTTP library",
+  "verified-bot": "Cloudflare verified bot",
+  "bot-score": "Cloudflare bot score",
+  "no-fetch-meta": "claims a modern browser, sends no browser headers",
+  datacenter: "hosting / cloud network",
+  "not-navigation": "not a page navigation",
+  insecure: "plain HTTP",
+  "old-browser": "old browser or in-app webview",
+  direct: "typed, bookmarked or opened from an app",
+  "no-user-activation": "no user gesture",
+  accept: "not asking for a page",
+  "no-accept-language": "no Accept-Language",
+};
+
+const TRAFFIC_CLASS_LABEL: Record<string, string> = {
+  human: "Human",
+  unverified: "Unverified",
+  automated: "Automated",
+};
+
+/** The scope every click figure on the screen is counted over, in words. */
+function scopeTag(view: ClickView, days: number): string {
+  switch (view.state) {
+    case "old-worker":
+      return `${days}d, all clicks incl. automated`;
+    case "pending":
+      return "human clicks — none recorded yet";
+    case "partial":
+      return `human clicks since ${fmtDate(view.since)}`;
+    default:
+      return `human clicks, ${days}d`;
+  }
+}
 
 function slugLabel(slug: string): string {
   return SLUG_LABEL[slug] || slug;
@@ -56,7 +118,12 @@ function fmtInt(n: number | null | undefined): string {
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    // A bare "YYYY-MM-DD" (the Worker's UTC day keys) parses as UTC midnight,
+    // which west of Greenwich formats as the PREVIOUS day — so "since Nov 24"
+    // read "since Nov 23". A calendar day is shown as that calendar day.
+    const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    const when = day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])) : new Date(iso);
+    return when.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   } catch {
     return iso;
   }
@@ -69,6 +136,17 @@ function fmtPct(part: number, whole: number): string {
 
 function plural(n: number, word: string): string {
   return `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function fmtShare(part: number, whole: number): string {
+  const pct = sharePct(part, whole);
+  return pct == null ? "—" : `${pct}%`;
+}
+
+/** A release's installer downloads, falling back to every asset against a
+ * backend from before the installer split. */
+function releaseCount(r: TrafficRelease): number {
+  return r.installer_downloads ?? r.total_downloads;
 }
 
 /* --- Shared chart geometry -------------------------------------------------
@@ -274,7 +352,7 @@ function ReleasesChart({ releases }: { releases: TrafficRelease[] }) {
     return <p className="set-hint">No published releases yet.</p>;
   }
 
-  const { max, ticks } = niceTicks(Math.max(...chrono.map((r) => r.total_downloads)));
+  const { max, ticks } = niceTicks(Math.max(...chrono.map(releaseCount)));
   const scale = scaleFor(max);
   const barGap = 3;
   const barW = Math.max(1, (CHART_W - PAD_L) / chrono.length - barGap);
@@ -290,12 +368,12 @@ function ReleasesChart({ releases }: { releases: TrafficRelease[] }) {
           viewBox={`0 0 ${CHART_W} ${CHART_H}`}
           preserveAspectRatio="none"
           role="img"
-          aria-label={`Downloads per release, ${chrono[0].tag} through ${chrono[chrono.length - 1].tag}, on a vertical scale of 0 to ${fmtInt(max)} downloads`}
+          aria-label={`Installer downloads per release, ${chrono[0].tag} through ${chrono[chrono.length - 1].tag}, on a vertical scale of 0 to ${fmtInt(max)} downloads`}
           onMouseLeave={() => setHover(null)}
         >
           <Gridlines ticks={ticks} yAt={(v) => PLOT_H - scale(v)} />
           {chrono.map((r, i) => {
-            const barH = Math.max(1, scale(r.total_downloads));
+            const barH = Math.max(1, scale(releaseCount(r)));
             const x = PAD_L + i * (barW + barGap);
             const y = PLOT_H - barH;
             return (
@@ -322,7 +400,9 @@ function ReleasesChart({ releases }: { releases: TrafficRelease[] }) {
         {hovered ? (
           <>
             <strong>{hovered.tag}</strong> ({fmtDate(hovered.published_at)}) —{" "}
-            {fmtInt(hovered.total_downloads)} download{hovered.total_downloads === 1 ? "" : "s"}
+            {hovered.installer_downloads != null
+              ? `${plural(hovered.installer_downloads, "installer download")} of ${fmtInt(hovered.total_downloads)} asset downloads`
+              : plural(hovered.total_downloads, "download")}
             {hovered.assets.length > 0 && (
               <span className="traffic-tooltip-detail">
                 {" "}
@@ -466,8 +546,18 @@ function VisitorsChart({ days }: { days: TrafficVisitorDay[] }) {
  *
  * Bars are drawn against the same denominator so the funnel's two rows are
  * directly comparable in length, which is the whole point of drawing it. */
-function DownloadFunnel({ funnel, days }: { funnel: TrafficDownloadFunnel; days: number }) {
+function DownloadFunnel({
+  funnel,
+  scope,
+  osMatch,
+}: {
+  funnel: TrafficDownloadFunnel;
+  /** What the figures are counted over, e.g. "human clicks since Nov 25". */
+  scope: string;
+  osMatch: TrafficOsMatch;
+}) {
   const { new_visitors: total, new_visitors_clicked: clicked } = funnel;
+  const matchBySlug = new Map(osMatch.by_slug.map((m) => [m.slug, m]));
 
   if (!total) {
     return (
@@ -545,6 +635,7 @@ function DownloadFunnel({ funnel, days }: { funnel: TrafficDownloadFunnel; days:
             <th className="num">First-time</th>
             <th className="num">All visitors</th>
             <th className="num">Clicks</th>
+            <th className="num">From that OS</th>
           </tr>
         </thead>
         <tbody>
@@ -554,17 +645,23 @@ function DownloadFunnel({ funnel, days }: { funnel: TrafficDownloadFunnel; days:
               <td className="num">{fmtInt(s.new_visitors)}</td>
               <td className="num">{fmtInt(s.visitors)}</td>
               <td className="num">{fmtInt(s.clicks)}</td>
+              <td className="num">
+                {fmtShare(matchBySlug.get(s.slug)?.matched ?? 0, matchBySlug.get(s.slug)?.clicks ?? 0)}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
 
       <p className="set-hint">
-        Download <em>intent</em>, not installs, over the last {days} days: someone pressing a
-        platform button on mindflock.ai. It misses anyone who downloaded straight from the GitHub
-        repo page, and a click is not a finished install. Per-platform first-timers can overlap
-        (one person pressing both macOS and Linux is in both rows), so they may add up to more than
-        the {fmtInt(clicked)} above — that figure is the deduplicated one.
+        Download <em>intent</em>, not installs ({scope}): someone pressing a platform button on
+        mindflock.ai. It misses anyone who downloaded straight from the GitHub repo page, and a
+        click is not a finished install. Per-platform first-timers can overlap (one person pressing
+        both macOS and Linux is in both rows), so they may add up to more than the{" "}
+        {fmtInt(clicked)} above — that figure is the deduplicated one. "From that OS" is the share
+        of that button's clicks whose browser runs the installer's own OS: people do fetch an
+        installer for another machine, but a crawler pressing every button can't match more than
+        one in three.
       </p>
     </div>
   );
@@ -648,6 +745,79 @@ function ClicksChart({ series }: { series: TrafficClickRow[] }) {
   );
 }
 
+/** Who is clicking: the classified clicks by class, and the rules that decided
+ * the non-human ones. This is the evidence behind every human-only figure on
+ * the screen, so it is shown rather than summarised away. Shares are of
+ * classified clicks only — the same period the human figures cover. */
+function WhoIsClicking({ c, scope }: { c: TrafficClassification; scope: string }) {
+  const classes = ["human", "unverified", "automated"] as const;
+  const total = classes.reduce((n, k) => n + (c.by_class?.[k]?.clicks ?? 0), 0);
+  const reasons = (c.reasons ?? []).filter((r) => r.class !== "human" && r.clicks > 0).slice(0, 6);
+
+  if (!total) {
+    return (
+      <p className="set-hint">
+        No classified clicks yet. Every click recorded from now on is labelled human, unverified or
+        automated.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <table className="traffic-table">
+        <thead>
+          <tr>
+            <th>Class</th>
+            <th className="num">Clicks</th>
+            <th className="num">Share</th>
+            <th className="num">Visitors</th>
+          </tr>
+        </thead>
+        <tbody>
+          {classes.map((k) => (
+            <tr key={k}>
+              <td>{TRAFFIC_CLASS_LABEL[k]}</td>
+              <td className="num">{fmtInt(c.by_class?.[k]?.clicks ?? 0)}</td>
+              <td className="num">{fmtShare(c.by_class?.[k]?.clicks ?? 0, total)}</td>
+              <td className="num">{fmtInt(c.by_class?.[k]?.visitors ?? 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {reasons.length > 0 && (
+        <table className="traffic-table">
+          <thead>
+            <tr>
+              <th>Why not counted as human</th>
+              <th>Class</th>
+              <th className="num">Clicks</th>
+            </tr>
+          </thead>
+          <tbody>
+            {reasons.map((r) => (
+              <tr key={`${r.class}|${r.reason}`}>
+                <td>{TRAFFIC_REASON_LABEL[r.reason] || r.reason}</td>
+                <td>{TRAFFIC_CLASS_LABEL[r.class] || r.class}</td>
+                <td className="num">{fmtInt(r.clicks)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="set-hint">
+        Classified by the click Worker from the headers a browser sends with a real link click
+        (Fetch Metadata, Accept-Language) and the network it came from ({scope}). <em>Human</em>{" "}
+        needs all of it. <em>Unverified</em> is real-browser-shaped but unproven: typed or
+        bookmarked URLs, links opened from Slack or a terminal, old browsers, VPNs.{" "}
+        <em>Automated</em> has positive evidence of a machine. Visitors are distinct within each
+        class and don't add up across them. Rule and blind spots: <code>worker/README.md</code> in
+        the webpage repo.
+      </p>
+    </>
+  );
+}
+
 export function Traffic(_: ScreenProps) {
   const [days, setDays] = useState<(typeof DAYS_OPTIONS)[number]>(90);
   const [metric, setMetric] = useState<TrafficMetric>("people");
@@ -655,24 +825,43 @@ export function Traffic(_: ScreenProps) {
   const q = useTraffic(true, days);
   const data = q.data;
 
-  const clickTotalsSorted = useMemo(() => {
-    if (!data) return [];
-    return Object.entries(data.clicks.totals_by_slug).sort((a, b) => b[1] - a[1]);
-  }, [data]);
+  // Which click figures lead (human-only, or unfiltered against an older
+  // Worker) — decided once so no two parts of the screen mix scopes.
+  const view = useMemo(() => clickView(data), [data]);
+  const classification = data?.clicks.classification ?? null;
 
-  /** Per-link visitor counts, keyed by slug for the clicks table to join on.
-   * Empty against a Worker that predates visitor attribution. */
-  const visitorsBySlug = useMemo(() => {
-    const map = new Map<string, { visitors: number; new_visitors: number }>();
-    for (const row of data?.clicks.visitors_by_slug ?? []) map.set(row.slug, row);
-    return map;
-  }, [data]);
+  /** Per-link rows in the screen's scope: human clicks joined to the
+   * automated/unverified counts when classified, else the unfiltered totals. */
+  const linkRows = useMemo(() => {
+    if (!data || !view) return [];
+    const visitors = new Map(view.visitors_by_slug.map((r) => [r.slug, r]));
+    if (view.scope === "all") {
+      return Object.entries(data.clicks.totals_by_slug)
+        .sort((a, b) => b[1] - a[1])
+        .map(([slug, n]) => ({ slug, clicks: n, visitors: visitors.get(slug), unverified: null, automated: null }));
+    }
+    const human = new Map<string, number>();
+    for (const r of view.series) human.set(r.slug, (human.get(r.slug) || 0) + r.clicks);
+    const other = new Map((classification?.by_slug ?? []).map((r) => [r.slug, r]));
+    const slugs = new Set([...human.keys(), ...other.keys()]);
+    return Array.from(slugs)
+      .map((slug) => ({
+        slug,
+        clicks: human.get(slug) ?? 0,
+        visitors: visitors.get(slug),
+        unverified: other.get(slug)?.unverified ?? 0,
+        automated: other.get(slug)?.automated ?? 0,
+      }))
+      .sort((a, b) => b.clicks - a.clicks || b.automated - a.automated);
+  }, [data, view, classification]);
 
-  // `totals` is absent (not zero) until the Worker carrying visitor attribution
-  // is deployed — the difference matters, since zeros would read as "nobody
-  // came" rather than "not measured yet".
-  const people = data?.clicks.totals ?? null;
-  const funnel = data?.clicks.downloads ?? null;
+  const people = view?.totals ?? null;
+  const funnel = view?.downloads ?? null;
+  const osMatch = useMemo(
+    () => osMatchedDownloads(view?.series ?? [], view?.downloads?.os_match),
+    [view]
+  );
+  const dl = releaseDownloads(data);
 
   // What the chart may actually draw, as opposed to what was last asked for —
   // see lib/traffic.ts for why this is derived rather than read off state.
@@ -688,12 +877,17 @@ export function Traffic(_: ScreenProps) {
     }
   };
 
+  const tag = view && data ? scopeTag(view, data.clicks.days) : "";
+  const cls = view?.classified ?? null;
+
   return (
     <>
       <h3 className="set-section-title">Site traffic</h3>
       <p className="set-hint">
-        Reach across mindflock.ai and the GitHub repo — pulled live from GitHub's API and the
-        click-tracking Worker on mindflock.ai/go/*. Visible in this dev build only.
+        Clicks on the tracked links on mindflock.ai (download buttons, GitHub, directory badges —
+        mindflock.ai/go/*) and GitHub's own counters, pulled live from GitHub's API and the
+        click-tracking Worker. Page views aren't measured at all: the site runs no analytics.
+        Visible in this dev build only.
       </p>
 
       {q.isLoading && !data && <p className="set-hint">Loading…</p>}
@@ -706,7 +900,7 @@ export function Traffic(_: ScreenProps) {
         </p>
       )}
 
-      {data && (
+      {data && view && (
         <>
           {(data.errors.github || data.errors.clicks) && (
             <div className="traffic-warn">
@@ -718,19 +912,48 @@ export function Traffic(_: ScreenProps) {
           <div className="traffic-tiles">
             <div className="traffic-tile primary">
               <span className="traffic-tile-num">{fmtInt(people?.new_visitors)}</span>
-              <span className="traffic-tile-label">
-                First-time visitors ({data.clicks.days}d)
-              </span>
+              <span className="traffic-tile-label">First-time visitors ({tag})</span>
             </div>
             <div className="traffic-tile">
               <span className="traffic-tile-num">{fmtInt(people?.visitors)}</span>
-              <span className="traffic-tile-label">Unique visitors ({data.clicks.days}d)</span>
+              <span className="traffic-tile-label">Unique visitors ({tag})</span>
+              {cls && cls.clicks > 0 && (
+                <span className="traffic-tile-sub">
+                  {plural(cls.automated.visitors, "automated visitor")} left out
+                </span>
+              )}
             </div>
             <div className="traffic-tile">
               <span className="traffic-tile-num">
-                {fmtInt(people?.clicks ?? clickTotalsSorted.reduce((s, [, n]) => s + n, 0))}
+                {fmtInt(people?.clicks ?? view.series.reduce((n, r) => n + r.clicks, 0))}
               </span>
-              <span className="traffic-tile-label">Tracked link clicks ({data.clicks.days}d)</span>
+              <span className="traffic-tile-label">Tracked link clicks ({tag})</span>
+              {cls && cls.clicks > 0 && (
+                <span className="traffic-tile-sub">
+                  +{fmtInt(cls.automated.clicks)} automated ({fmtShare(cls.automated.clicks, cls.clicks)}),{" "}
+                  {fmtInt(cls.unverified.clicks)} unverified
+                </span>
+              )}
+            </div>
+            <div className="traffic-tile">
+              <span className="traffic-tile-num">{fmtShare(osMatch.matched, osMatch.clicks)}</span>
+              <span className="traffic-tile-label">Download clicks from the installer's OS ({tag})</span>
+              <span className="traffic-tile-sub">
+                {fmtInt(osMatch.matched)} of {plural(osMatch.clicks, "download click")}
+              </span>
+            </div>
+            <div className="traffic-tile">
+              <span className="traffic-tile-num">{fmtInt(dl.installers ?? data.downloads_total)}</span>
+              <span className="traffic-tile-label">
+                {dl.installers != null
+                  ? "Installer downloads (GitHub, all-time)"
+                  : "Release asset downloads (GitHub, all-time)"}
+              </span>
+              {dl.other != null && (
+                <span className="traffic-tile-sub">
+                  +{fmtInt(dl.other)} other files: update checks, checksums, packages
+                </span>
+              )}
             </div>
             <div className="traffic-tile">
               <span className="traffic-tile-num">{fmtInt(data.repo?.stars)}</span>
@@ -740,25 +963,57 @@ export function Traffic(_: ScreenProps) {
               <span className="traffic-tile-num">{fmtInt(data.repo?.forks)}</span>
               <span className="traffic-tile-label">Forks</span>
             </div>
-            <div className="traffic-tile">
-              <span className="traffic-tile-num">{fmtInt(data.downloads_total)}</span>
-              <span className="traffic-tile-label">Downloads (all releases, all-time)</span>
-            </div>
           </div>
 
-          {!people && !data.errors.clicks && (
+          {!data.errors.clicks && view.state === "old-worker" && (
+            <p className="set-hint" id="traffic-scope-note">
+              <strong>These click and visitor figures are unfiltered.</strong> The click Worker on
+              mindflock.ai doesn't yet tell people from automated traffic, and most of this is
+              automated: every link draws about the same count, and phones "click" desktop
+              installers. Deploy the classifying Worker (<code>worker/README.md</code> in the
+              webpage repo) for human-only figures; they cover clicks from the deploy onwards.
+            </p>
+          )}
+          {!data.errors.clicks && view.state === "pending" && (
+            <p className="set-hint" id="traffic-scope-note">
+              The click Worker classifies clicks, but none have been recorded since it was deployed.
+              The figures above fill in as people click.
+            </p>
+          )}
+          {!data.errors.clicks && view.state === "partial" && (
+            <p className="set-hint" id="traffic-scope-note">
+              Click and visitor figures count <strong>human clicks only</strong>, from{" "}
+              {fmtDate(view.since)} — when the Worker started classifying. The{" "}
+              {fmtInt(classification?.unclassified_clicks ?? 0)} clicks before then in this window
+              can't be told apart and are left out.
+            </p>
+          )}
+          {!people && !data.errors.clicks && view.state === "old-worker" && (
             <p className="set-hint">
               Visitor counts are empty because the click Worker hasn't been redeployed with visitor
               attribution yet (see <code>worker/README.md</code> in the webpage repo — it needs the{" "}
               <code>VISITORS</code> KV namespace and the <code>VISITOR_SALT</code> secret). Clicks
-              below are unaffected. Numbers start accumulating at deploy time, so expect visitors to
-              trail clicks until the window fills in.
+              below are unaffected.
             </p>
           )}
 
-          <h3 className="set-section-title">New user funnel ({data.clicks.days}d)</h3>
+          {classification && (
+            <>
+              <h3 className="set-section-title">Who's clicking</h3>
+              <WhoIsClicking
+                c={classification}
+                scope={
+                  view.state === "partial"
+                    ? `since ${fmtDate(view.since)}`
+                    : `last ${data.clicks.days} days`
+                }
+              />
+            </>
+          )}
+
+          <h3 className="set-section-title">New user funnel ({tag})</h3>
           {funnel ? (
-            <DownloadFunnel funnel={funnel} days={data.clicks.days} />
+            <DownloadFunnel funnel={funnel} scope={tag} osMatch={osMatch} />
           ) : (
             <p className="set-hint">
               Not available until the click Worker reports visitor attribution. GitHub's download
@@ -776,7 +1031,7 @@ export function Traffic(_: ScreenProps) {
           <StarsChart points={data.star_history ?? []} />
 
           <h3 className="set-section-title">
-            {shown === "people" ? "Visitors over time" : "Clicks over time"}
+            {shown === "people" ? "Visitors over time" : "Clicks over time"} ({tag})
           </h3>
 
           <div className="set-row traffic-range-row">
@@ -804,7 +1059,7 @@ export function Traffic(_: ScreenProps) {
                   Clicks moved you to a state you could not leave. A control
                   whose default value is the one it disables is a trap, so when
                   there is one option it is simply not a control. */}
-              {people && (
+              {data.clicks.totals ? (
                 <div className="usage-periods traffic-range">
                   <button
                     type="button"
@@ -821,7 +1076,7 @@ export function Traffic(_: ScreenProps) {
                     Clicks
                   </button>
                 </div>
-              )}
+              ) : null}
             </div>
             <span className="test-row">
               <button type="button" className="test-btn" onClick={doRefresh} disabled={refreshing}>
@@ -834,14 +1089,14 @@ export function Traffic(_: ScreenProps) {
           </div>
 
           {shown === "people" ? (
-            <VisitorsChart days={data.clicks.visitors_by_day} />
+            <VisitorsChart days={view.visitors_by_day} />
           ) : (
-            <ClicksChart series={data.clicks.series} />
+            <ClicksChart series={view.series} />
           )}
 
-          {clickTotalsSorted.length > 0 && (
+          {linkRows.length > 0 && (
             <>
-              <h3 className="set-section-title">By link ({data.clicks.days}d)</h3>
+              <h3 className="set-section-title">By link ({tag})</h3>
               <table className="traffic-table">
                 <thead>
                   <tr>
@@ -849,19 +1104,19 @@ export function Traffic(_: ScreenProps) {
                     {people && <th className="num">First-time</th>}
                     {people && <th className="num">Visitors</th>}
                     <th className="num">Clicks</th>
+                    {view.scope === "human" && <th className="num">Unverified</th>}
+                    {view.scope === "human" && <th className="num">Automated</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {clickTotalsSorted.map(([slug, n]) => (
-                    <tr key={slug}>
-                      <td>{slugLabel(slug)}</td>
-                      {people && (
-                        <td className="num">{fmtInt(visitorsBySlug.get(slug)?.new_visitors)}</td>
-                      )}
-                      {people && (
-                        <td className="num">{fmtInt(visitorsBySlug.get(slug)?.visitors)}</td>
-                      )}
-                      <td className="num">{fmtInt(n)}</td>
+                  {linkRows.map((r) => (
+                    <tr key={r.slug}>
+                      <td>{slugLabel(r.slug)}</td>
+                      {people && <td className="num">{fmtInt(r.visitors?.new_visitors ?? 0)}</td>}
+                      {people && <td className="num">{fmtInt(r.visitors?.visitors ?? 0)}</td>}
+                      <td className="num">{fmtInt(r.clicks)}</td>
+                      {view.scope === "human" && <td className="num">{fmtInt(r.unverified)}</td>}
+                      {view.scope === "human" && <td className="num">{fmtInt(r.automated)}</td>}
                     </tr>
                   ))}
                 </tbody>
@@ -871,12 +1126,14 @@ export function Traffic(_: ScreenProps) {
                   Visitor columns are deduplicated per link over the window, so they don't add up
                   down the column — one person clicking two links is one visitor on each row and one
                   visitor overall.
+                  {view.scope === "all" &&
+                    " Near-equal counts on every link, the directory badges included, are the sign of something following every link on the page."}
                 </p>
               )}
             </>
           )}
 
-          <h3 className="set-section-title">Downloads over time</h3>
+          <h3 className="set-section-title">Installer downloads over time</h3>
           {data.releases.length === 0 ? (
             <p className="set-hint">No releases found.</p>
           ) : (
@@ -885,12 +1142,25 @@ export function Traffic(_: ScreenProps) {
 
           <h3 className="set-section-title">Downloads by version</h3>
           <p className="set-hint">
-            GitHub's raw asset counters. These are <em>not</em> people: they include updates and
-            repeat downloads, and GitHub attaches no identity to them, so there is no way to split
-            them into new versus returning users. For new-user numbers use the funnel above. Note
-            too that MindFlock's updater opens the releases page in a browser rather than fetching
-            the asset itself, so an update looks exactly like a first-time download here.
+            GitHub's raw asset counters, which are <em>not</em> people: GitHub attaches no identity,
+            so nothing here can be split into new versus returning users, or people versus crawlers.
+            <em> Installers</em> are <code>MindFlock.dmg</code>, <code>MindFlock-Setup.exe</code>{" "}
+            and <code>MindFlock.AppImage</code> — but the app's auto-updater downloads the same .exe
+            and .AppImage to update an existing install, so on Windows and Linux an update looks
+            exactly like a first download. <em>Other files</em> are the <code>latest*.yml</code>{" "}
+            every running app reads when it checks for an update, the macOS update{" "}
+            <code>MindFlock.zip</code> and block maps, checksums, and the Python packages. Near-equal
+            installer counts for all three platforms on a release are more likely a crawler
+            fetching every file than three sets of people.
           </p>
+          {dl.byKind && (
+            <p className="set-hint">
+              All-time: {fmtInt(dl.byKind.installer)} installers · {fmtInt(dl.byKind.update)} update
+              files · {fmtInt(dl.byKind.update_check)} update checks · {fmtInt(dl.byKind.checksum)}{" "}
+              checksums · {fmtInt(dl.byKind.package)} Python packages
+              {dl.byKind.other ? ` · ${fmtInt(dl.byKind.other)} other` : ""}.
+            </p>
+          )}
           {data.releases.length === 0 ? (
             <p className="set-hint">No releases found.</p>
           ) : (
@@ -899,7 +1169,9 @@ export function Traffic(_: ScreenProps) {
                 <tr>
                   <th>Version</th>
                   <th>Published</th>
-                  <th className="num">Downloads</th>
+                  {dl.installers != null && <th className="num">Installers</th>}
+                  {dl.installers != null && <th className="num">Other files</th>}
+                  <th className="num">All assets</th>
                 </tr>
               </thead>
               <tbody>
@@ -910,6 +1182,10 @@ export function Traffic(_: ScreenProps) {
                       {r.prerelease && <span className="traffic-pre"> pre-release</span>}
                     </td>
                     <td>{fmtDate(r.published_at)}</td>
+                    {dl.installers != null && <td className="num">{fmtInt(r.installer_downloads ?? 0)}</td>}
+                    {dl.installers != null && (
+                      <td className="num">{fmtInt(r.total_downloads - (r.installer_downloads ?? 0))}</td>
+                    )}
                     <td className="num">{fmtInt(r.total_downloads)}</td>
                   </tr>
                 ))}

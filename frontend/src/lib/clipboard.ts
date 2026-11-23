@@ -230,12 +230,12 @@ export function attachFileDrop(
     } else if (text) {
       if (canSend && !canSend()) return;
       if (REF_RE.test(text)) {
-        // A hub code (hub:k7m2): the agent gets the item's path, name and
+        // A shared-file code (file:k7m2; an old hub:k7m2 too): the agent gets the item's path, name and
         // kind. In a session's terminal it goes through the server's
         // dialog-safe typing — never into a prompt that opened meanwhile.
         if (session) {
           void typeIntoAgent(session, text).then((r) => {
-            toast(r.ok ? r.note || "Pasted with the hub item's path" : r.note);
+            toast(r.ok ? r.note || "Pasted with the shared file's path" : r.note);
           });
         } else {
           void expandRefs(text).then((r) => {
@@ -254,7 +254,7 @@ export function attachFileDrop(
   const isHub = (ev: DragEvent) => Array.from(ev.dataTransfer?.types || []).includes(HUB_MIME);
   const onDragOver = (ev: DragEvent) => {
     if (isHub(ev)) {
-      // A hub item from the Hub panel: its reference, expanded, is typed in.
+      // Shared files dragged from their drawer: their codes, expanded, are typed in.
       ev.preventDefault();
       ev.stopPropagation();
       ev.dataTransfer!.dropEffect = "copy";
@@ -279,7 +279,7 @@ export function attachFileDrop(
       const ref = ev.dataTransfer!.getData("text/plain");
       if (session) {
         void typeIntoAgent(session, ref + " ").then((r) => {
-          toast(r.ok ? r.note || ref + " is in the prompt — add your words and press Enter" : r.note);
+          toast(r.ok ? r.note || ref + (ref.includes(" ") ? " are" : " is") + " in the prompt — add your words and press Enter" : r.note);
         });
       } else {
         void expandRefs(ref).then((r) => {

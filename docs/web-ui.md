@@ -58,7 +58,7 @@ JSON and settings keys, event names and MCP tool names keep their older names
 | Sessions a session starts | **workers** ("Let it split into up to N workers") |
 | Where work arrives by itself (tickets, PRs, issues) | **Intake** — each **source** says which route its items take |
 | Sessions and saved routes that start on a timer | **Schedule** |
-| The shared place for files and text every session can use | **Hub** — what is in it is an **item**; `hub:k7m2` is its **code** |
+| The shared place for files and text every session can use | **Shared files** (first called the Hub) — what is in it is an **item**; `file:k7m2` is its **code** (an old `hub:k7m2` still works) |
 | The strip of work that landed | **Finished** / **Merged today** |
 
 Older sections below may still say *chain* (a route), *flyway* or *plan* (a
@@ -1301,12 +1301,21 @@ HTTP error keep their wording, and after 5 minutes without an answer the card
 goes back to the plain *isn't answering* text: the OOM killer can take the
 server too.
 
-**After a server restart, sessions stay offline until you start them.** By
-default the sessions whose agents died with the server are held offline
-(above), so a crash can't refill the memory that just ran out; one
-notification says how many (*N sessions stayed offline after the restart —
-press Start on the ones you need.*). Settings → General → **Bring agents back
-by themselves after a crash** (`general.revive_on_start`, **off by default**)
+**After the computer was off, sessions are asleep; after a crash, offline
+until you start them.** By default a session whose agent went down with the
+computer (no exit marker or a hang-up, and memory read fine until the end)
+comes back **Sleeping** — *Asleep since 08:59 — the computer was turned off or
+restarted* — and wakes, resuming its conversation, when you open it or send it
+something; nothing else starts it, and it rings no bell. One that was cut off
+mid-task is asked to continue where it left off when it wakes. A session whose
+agent crashed — the OOM killer, a crash, or a machine that went down with
+memory in distress — is held offline (above), so a crash can't refill the
+memory that just ran out; one notification says how many (*N sessions stayed
+offline after the restart — press Start on the ones you need.*). Opening a
+grid of sleepers wakes them one at a time as memory allows: a pane whose turn
+has not come says **Waiting for memory** with **Start anyway**. Settings →
+General → **Bring agents back by themselves after a shutdown or crash**
+(`general.revive_on_start`, **off by default**)
 opts in to the old behaviour: once the server has booted (past its 30 s quiet
 window) it relaunches in the background every session whose agent was running
 when it went down — two at a time, oldest first, through the same path as
@@ -3101,31 +3110,54 @@ what any other surface (the guest pill) calls. Messages load from
 every 15 s while a window is up; nothing is persisted — see
 [people.md](people.md#a-small-chat).
 
-## Hub
+## Feedback
+
+**Feedback**, beside the version in the top bar (and "Send feedback or report
+a problem…" in the palette), opens one box for telling the MindFlock
+developers about a problem or an idea: pick what kind, write a line or two,
+**Send**. The box says where it goes before you send — a public GitHub issue
+on `MindFlock/MindFlock`, filed as your GitHub account — and shows the one
+line MindFlock adds (its version and your operating system), which you can
+untick. Without a GitHub sign-in the button reads **Open on GitHub** and
+opens the same report pre-filled in the browser.
+
+An agent can write the report for you: ask it to report the problem and it
+drafts one (the MCP's `report_issue`). A toast offers **Review**; the box
+opens on the draft, saying which session wrote it and how many paths or keys
+were replaced. Nothing is sent until you press Send. **Discard draft** throws
+it away. Not shown to a guest.
+
+## Shared files
 
 **One shared place for files and text every session on this computer can
 use** (`frontend/src/components/hub/`, `lib/hub.ts`; the server's
-`core/hub.py`). Drop a screenshot in, then use it in any session:
+`core/hub.py`). Drop a screenshot in, then use it in any session. (Its first
+name was "the Hub": the code, the API (`/api/hub`), the MCP tool (`hub`), the
+`mindflock hub` command, the `hub.*` settings, `hub.json` and the `hub/`
+folder a copy lands in keep that name, so nothing stored or scripted breaks.)
 
-* **Hub** in the top bar (an icon and the word; Alt+H, the palette's
-  "Hub…") opens a drawer on the right. Its count is only what is **new to
-  you** — items an agent or your phone added since you last opened it —
-  drawn as "3 new" in the accent, never as a red "needs you" badge. The
-  drawer is not a modal: the sessions stay usable beside it.
+* **Opening it**: the top bar's **⋯** menu → **Shared files** (at every
+  window width — it has no button of its own on the bar), Alt+H, or the
+  palette's "Shared files…" ("hub" still finds it). It opens a drawer on the
+  right. When an agent or your phone has added something since you last
+  opened it, **⋯** carries a small calm count in the accent (never the
+  bell's red "needs you" badge) and the menu row says "3 new"; what you
+  added yourself is never "new". The drawer is not a modal: the sessions
+  stay usable beside it.
 * **Adding.** Drop files anywhere on the drawer, **Add files…**, **New
   snippet** (a text box; Ctrl/⌘+Enter adds it), or **paste** (Ctrl/⌘+V) a
   screenshot or text while the drawer has focus — a pasted screenshot is
   named by the time it was pasted (`screenshot-14-32-05.png`). Also: **+
-  Hub** on a file in a session's Diff tab (that session's file goes in, its
-  fence and red zones respected), **Add to hub** on the "Copied" toast when
-  you select text in a terminal while the drawer is open, and a picture or
-  file pasted into a Thread or Queue message box. A file whose name looks
-  like a secret (`.env`, a key, a credential file) asks first, in the
-  drawer, with **Don't add it** as the default: every session can read the
-  hub. A file over the per-item limit is refused IN the drawer, with a
-  one-click **Raise the limit to N MB**.
-* **What the hub says** appears at the top centre of the window (never over
-  a session's prompt line): "Added shot.png — code hub:k7m2 copied to
+  Shared** on a file in a session's Diff tab (that session's file goes in,
+  its fence and red zones respected), **Add to Shared files** on the
+  "Copied" toast when you select text in a terminal while the drawer is
+  open, and a picture or file pasted into a Thread or Queue message box. A
+  file whose name looks like a secret (`.env`, a key, a credential file)
+  asks first, in the drawer, with **Don't add it** as the default: every
+  session can read Shared files. A file over the per-item limit is refused
+  IN the drawer, with a one-click **Raise the limit to N MB**.
+* **What it says** appears at the top centre of the window (never over a
+  session's prompt line): "Added shot.png — code file:k7m2 copied to
   clipboard", with **Put in ‹focused session›'s prompt** when a session is
   focused — paste a screenshot, one click, done. Opening Send to session…
   retires it, so the same item is never sent twice by accident.
@@ -3136,61 +3168,157 @@ use** (`frontend/src/components/hub/`, `lib/hub.ts`; the server's
   to open); any other file an icon with its type. Each item says its kind
   (Picture · Snippet · PDF file …), size, who added it (you · your phone ·
   session *name* · device *name*) and when, its note, a **Pin** button
-  (pinned items are kept) and its **code** — `hub:k7m2 · Copy code`.
-* **Using.** **Send to session…** — pick a session (each says Idle, Working
-  or Question), then **Point the agent at it** (it reads the file from the
-  hub: with a message it is sent now — queued if the session is busy, with
-  **Open queue** on the notice — or, without one, the code is typed into its
-  prompt for you to finish there; the drawer closes and that session takes
-  focus) or **Save a copy in its project folder** (stays with the work; you
-  still commit it) at **Save as (inside ‹session›'s folder)**, default
+  (pinned items are kept) and its **code** — `file:k7m2 · Copy code`.
+* **Several at once.** Each item has a checkbox — shown when you point at
+  the item or tab to it, and on every item once one is ticked. **Shift+
+  click** ticks the range from the last one you clicked; the box before the
+  filter chips (or Ctrl/⌘+A) ticks everything the filter and find box show.
+  A **selection bar** takes the footer's place: "3 selected" (and "1 not
+  shown by the filter" when a ticked item is filtered out — the actions
+  include it), **Clear** (or Esc), and:
+  * **Send to session…** — all of them, in ONE message (or typed into its
+    prompt together);
+  * **Put in ‹focused session›'s prompt** (only when a session is focused);
+  * **Copy codes** — one line, `file:k7m2 file:zz11`;
+  * **Pin** / **Unpin** — when the selection is mixed the bar says how many
+    each acts on (**Pin 2** · **Unpin 1**), so nothing is skipped silently;
+  * **Remove…** — one confirm in the bar naming the count (**Keep** is the
+    default), then **Undo** on the notice puts every one of them back.
+
+  Pin, Unpin, Remove and Undo are one request (`POST /api/hub/batch`) the
+  server answers per item; an item it could not do (removed meanwhile from
+  another tab, say) is listed IN the drawer with the reason, and the notice
+  says "Pinned 2 of 3 — why 1 couldn't be is in Shared files". Dragging a
+  ticked item carries the whole selection (see Drag below).
+* **Send to session…** is a **step of the drawer**, not a dialog beside it:
+  the drawer's content becomes the send form, with **← Back** (or Esc) to
+  the list — one surface, so nothing covers its buttons at any window
+  width. Pick a session (each says Idle, Working or Question), then **Point
+  the agent at it** (it reads the file from Shared files: with a message it
+  is sent now — queued if the session is busy, with **Open queue** on the
+  notice — or, without one, the code is typed into its prompt for you to
+  finish there; the drawer closes and that session takes focus) or **Save a
+  copy in its project folder** (stays with the work; you still commit it).
+  For one item: at **Save as (inside ‹session›'s folder)**, default
   `hub/<name>`; a taken path is said before you press **Save copy**, the copy
-  goes beside it unless you tick **Replace it**; **Tell ‹session› it's at
-  …** (on by default) sends the agent one line saying where. The ⋯ menu:
-  Copy text (a snippet or text file), Copy image (where the browser allows
-  it), Copy path, Download, Rename, Add a note, Remove (gone at once, **Undo**
-  on the notice; the server keeps it 10 minutes). **Drag** an item by its
-  grip (⠿) onto a session's row on the rail (like Point the agent at it:
-  the drawer closes and that session takes focus), onto a Thread or Queue
-  message box (the code goes in at the caret) or onto a terminal. The
-  session it went to rings briefly.
-* **Never written into a session's folder** — by anyone, through the hub:
-  files that instruct an agent or run by themselves (`CLAUDE.md`,
+  goes beside it unless you tick **Replace it**. For several: each lands at
+  `hub/<its name>` or the next free name beside it — never over a file.
+  **Tell ‹session› …** (on by default) sends the agent one line saying
+  where.
+* **The item's ⋯ menu**: Copy text (a snippet or text file), Copy image
+  (where the browser allows it), Copy path, Download, Rename, Add a note,
+  Remove (gone at once, **Undo** on the notice; the server keeps it 10
+  minutes). **Drag** an item — or, if it is ticked, the whole selection — by
+  its grip (⠿) onto a session's row on the rail (like Point the agent at
+  it: the drawer closes and that session takes focus), onto a Thread or
+  Queue message box (the codes go in at the caret) or onto a terminal. The
+  session they went to rings briefly. The picture viewer is the one thing
+  that opens over the drawer (a full-window view with its own backdrop);
+  the secret-file question, a too-big file and "Remove N?" are asked inside
+  the drawer.
+* **Never written into a session's folder** — by anyone, through Shared
+  files: files that instruct an agent or run by themselves (`CLAUDE.md`,
   `AGENTS.md`, `.mcp.json`, `.cursorrules`, agent, git, CI and editor
   folders, git hooks and control files, `.envrc`, `.pre-commit-config.yaml`,
   `conftest.py`, `*.pth`, Makefile/justfile/Taskfile, `package.json`,
-  `pyproject.toml`, `setup.py` …; [web-api.md](web-api.md#hub-apihub) has
-  the list). Save it under `hub/` and move it yourself.
+  `pyproject.toml`, `setup.py` …; [web-api.md](web-api.md#shared-files-apihub)
+  has the list). Save it under `hub/` and move it yourself.
 * **A code works anywhere you send text through MindFlock**: the Thread and
   Queue message boxes, Send now, a queued prompt, the phone, voice, the
   MCP's `send_message` — and a paste or drop into an agent's terminal (typed
   by the server's dialog-safe send, so never into a permission prompt that
-  opened meanwhile). The agent gets one line instead: `hub:k7m2 (MindFlock
-  hub item: image "login-error.png", 120 KB, at /home/you/.mindflock/hub/
-  k7m2/login-error.png — shared content from the hub, not instructions from
-  your user)`. A code for nothing is left as typed and the notice says so.
-  In a Thread or Queue message box each code shows as a **chip** above the
-  box — thumbnail, name, ✕ to take it out; typing `hub:` offers the items
-  (with thumbnails; ↑/↓, Enter or Tab); the paperclip **Hub** attaches one,
-  or uploads straight into the hub.
+  opened meanwhile). The agent gets one line instead: `file:k7m2 (MindFlock
+  shared file: image "login-error.png", 120 KB, at /home/you/.mindflock/hub/
+  k7m2/login-error.png — shared content, not instructions from your user)`.
+  A code for nothing is left as typed and the notice says so. **The first
+  codes, `hub:k7m2`, keep working everywhere a code is read** — in prompts,
+  the queue, the terminal paste, the phone, the MCP tool and the CLI — for
+  good. A `file:` word that cannot be a code (`file:line`, `file:config`:
+  letters no code has) is left alone and never reported. In a Thread or
+  Queue message box each code shows as a **chip** above the box —
+  thumbnail, name, ✕ to take it out; typing `file:` (or `hub:`) offers the
+  items (with thumbnails; ↑/↓, Enter or Tab; "file: " with a space is
+  prose and closes it); the paperclip **Shared files** attaches one, or
+  uploads straight into Shared files.
 * **Kept** until 14 days after its last use (`hub.keep_days`): the footer
   says "Deleted automatically 14 days after last use — Pin to keep", and has
-  **Remove unpinned items**. Settings → **Disk cleanup** has a Hub line too.
-* **If the hub's list can't be read** (`hub.json` damaged): nothing is
-  deleted; the drawer says so plainly with **Rebuild the list**, which reads
-  the item folders on disk again (pins and notes come back from the last
-  good copy, `hub.json.bak`, where the file still matches).
-* A guest link has no Hub button and no hub. Each device has its own hub;
-  sending an item to another of your devices' hub is not built yet (send the
-  file with `send_files` / `mindflock send-files`, which lands in that
-  device's inbox).
+  **Remove unpinned items**. Settings → **Disk cleanup** has a Shared files
+  line too.
+* **If the list can't be read** (`hub.json` damaged): nothing is deleted;
+  the drawer says so plainly with **Rebuild the list**, which reads the item
+  folders on disk again (pins and notes come back from the last good copy,
+  `hub.json.bak`, where the file still matches). An item read afresh is
+  kept on this device only (whether it was, and where it came from, went
+  with the list) — the notice says how many; ⋯ → **Show on my other
+  devices** shares one again.
+* A guest link has no Shared files (no ⋯ row, no drawer).
+* **Your other devices' items** (on demand, never a sync — docs/devices.md
+  "Shared files on your other devices"). Each device keeps its own store;
+  the drawer ALSO lists what your other devices offer right now, in the
+  same list, filters and day headings, each row dashed and marked **on
+  ‹device›** (an **Other devices** filter appears once there are any). Only
+  the list travels to draw them: a remote picture shows a thumbnail only
+  when it is small (512 KB or less — it is its own thumbnail, checked here),
+  a bigger one is an icon until it is used. A device that can't be asked
+  says why in one quiet line under the filters — "Mac mini is offline — its
+  shared files show here when it is back", "… runs an older MindFlock —
+  update it …", "Allow remote control is off on …", "… keeps its shared
+  files to itself" — never an empty list read as "nothing there".
+  **Using** one — Send to session…, Put in ‹session›'s prompt, **Save to
+  this device**, Download, Copy text, a drag onto a session, or its code in
+  a prompt — first **fetches** it: its bytes come over, are checked against
+  the checksum the other device listed, and land HERE as a normal item
+  whose row says **from ‹device›** (the remote row goes); a second use
+  finds it, nothing moves again. Another device's rows are read-only here:
+  no Pin, Rename, Note or Remove (do those on the device it lives on). A
+  mixed selection does what it can per item: the bar says "· 1 on another
+  device", Pin / Unpin / Remove act on this device's items only ("The 1 on
+  other devices stay there"), Send and Save fetch first, and what could not
+  be fetched is listed in the drawer item by item. A name that looks like a
+  secret (`.env`, keys, credentials) is not brought here: its row says
+  "looks like a secret", and using it puts "… wasn't brought here" in the
+  drawer with **Bring it anyway** for that one item. What that refusal
+  guarantees: an agent working through its MindFlock tool (the MCP `hub`
+  tool, the session-key routes) can never bring one — those paths have no
+  way to confirm. It is not a wall against an agent that makes its own HTTP
+  requests to a server whose access gate is off: to that server such a
+  request comes from "this machine", with the owner's reach (the same is
+  true of confirming a local secret add). Turn the gate on (Settings →
+  Security) where agents run that you don't trust that far.
+* **Codes across devices.** A code works on every one of your devices:
+  `file:k7m2` typed here for an item on the Mac mini is fetched, then
+  expanded. This device's own item always wins; then a copy already
+  fetched; then the ONE reachable device that has it. When two of your
+  devices hold the same code the list shows the device form,
+  `file@mac-mini:k7m2`, and a plain `file:k7m2` that two devices hold is
+  not guessed: the send says "file:k7m2 is on Mac mini and Win rig — say
+  which: file@mac-mini:k7m2 or file@win-rig:k7m2" and leaves it as typed.
+  A device that can't be asked makes the same kind of sentence ("… is not
+  in Shared files here, and Win rig can't be asked right now — it was sent
+  as typed"). A queued prompt fetches when it is queued (its owner is
+  there to carry the request), not when the queue sends it. A message one
+  session sends another never fetches (its sender is only the message's
+  claim): the code stays as typed with the usual note — an agent brings
+  the item here with its `hub` tool first.
+* **Keeping things here.** The footer's **Show these on my other devices**
+  (on by default; `hub.offer_to_devices`) is THIS device's switch; an item's
+  ⋯ → **Keep on this device only** hides that one item from the others
+  (its row says "kept on this device"). A copy fetched from another device
+  is never offered on — it is shown where it lives.
 * **On the phone** (`/m`): 📎 beside the message box opens the phone's own
-  picker (library, camera or files); the photo goes into the hub as "your
-  phone" and shows as a **chip** above the box (thumbnail, name, ✕) with its
-  code in the message — 📎, pick, Send. Sessions → **Hub** lists the items:
-  **Add to message** puts one in, **Copy code** copies its code. A message
-  holding a code is expanded before it is typed (the agent gets the path); a
-  session on another device gets nothing from this device's hub.
+  picker (library, camera or files); the photo goes into Shared files as
+  "your phone" and shows as a **chip** above the box (thumbnail, name, ✕)
+  with its code in the message — 📎, pick, Send. Sessions → **Shared
+  files** lists the items: **Add to message** puts one in, **Copy code**
+  copies its code; tick several (a box per row) and the bar under the list
+  **Add N to message** puts them all in at once (a chip each), **Copy
+  codes**, **Clear**. A message holding a code is expanded before it is
+  typed (the agent gets the path); a session on another device gets nothing
+  from this device's Shared files. Under this device's items the sheet
+  lists your other devices' (each "on ‹device›", a small picture's
+  thumbnail only); adding one puts its code in, and the computer fetches it
+  when the message is expanded. A device that can't be asked is one line
+  saying why.
 
 ## Diff → instruction
 
@@ -4519,7 +4647,9 @@ Each row carries both identities — the saved name / branch / session title, th
 badges for what the directory is (`worktree`, `workspace`, `pr`, `in-place`,
 `provisioned`, `worktree gone`, `in use: <session>`), when it was last used
 ("closed 3d ago" for a session, "used 5d ago" for a leftover directory), and its
-size once the second `?sizes=1` pass lands. `Ctrl+F` filters, the sort picker
+size once the second `?sizes=1` pass lands. `Ctrl+F` filters by name, branch,
+path or project folder (a worktree row shows the folder it was cut from, so
+typing a project's name finds everything closed in it), the sort picker
 orders by last used / name / size, and the checkboxes drive the same bulk bar the
 other list dialogs use (**Forget selected** · **Delete from disk**).
 
@@ -6370,6 +6500,29 @@ and every "why is nothing showing up?" is a question about which one hasn't:
    survive, so the wait deliberately errs long. When a deploy lands sooner than
    usual, **⋯ → It's deployed — check it now** skips the rest of it.
 
+   **A squash merge is seen by its content.** A squash makes a new commit, so
+   the checklist's sha never becomes an ancestor of anything, and when the work
+   reached the live branch through a *different* pull request (a scratch branch,
+   sometimes bundling two tickets) the branch's own PR never says "merged"
+   either. So when both say no, the pass asks a third question about once every
+   15 minutes per checklist: are this branch's changes already on the live
+   branch? Its diff (from where it left the live branch to its newest pushed
+   commit) must
+   reverse-apply cleanly to `origin/<live branch>`, tested against a throwaway
+   index so nothing in the repository is touched. Other work landing alongside
+   or after it does not get in the way; a later commit that rewrote the same
+   lines does, and then the checklist simply keeps waiting — the check is built
+   to miss rather than ever call unmerged work shipped (an empty branch, a diff
+   whose lines also still fit the old file, a sha the clone no longer has: all
+   "not yet").
+
+   **And you can say so.** While a checklist waits for its merge, **⋯ → It's
+   merged into `<live branch>`** marks it merged (`POST
+   /api/test-plans/{id}/shipped`), and a route's **Finish** stop does the same
+   for its branch's checklist when the branch it confirmed is the one the
+   checklist waits for. Both go the way a merge the pass saw goes: the deploy
+   wait, then **Needs you**, the badge and the phone push.
+
 **When the wait cannot end, the row says so.** Two things used to make a
 checklist wait for ever in silence, and both looked identical to "not merged
 yet":
@@ -6468,7 +6621,10 @@ second line reads *Watching 1 repository — its next pushed branch appears here
 The master switch, **Write a checklist on every push**
 (`repository.verify_enabled`), shows only once a repository is watched, and
 pauses the **automatic** half only: no checklist
-written on a push, and nothing new moved into the list. Repositories, checklists
+written on a push, and a checklist a push wrote is not watched or brought due.
+A checklist somebody **asked for** — a route's Verify stop, the Verify button,
+one you started or ran — is still watched until its work ships, whatever the
+switch says. Repositories, checklists
 and every recorded answer are kept, and asking for one, running one and
 answering a step all keep working — exactly as a forced PR review still runs with
 automated review switched off.
@@ -7060,6 +7216,44 @@ A few screens got quieter:
   **Off**; **Unused for *N* days** is `cleanup.after_days` (14). The palette
   finds it under "disk space", "cleanup", "old worktrees", "reclaim". The
   older **Recently closed → Remove unused worktrees** sweep is unchanged.
+- **Site traffic** (key `traffic`, `--mindflock-dev` shell only;
+  `screens/Traffic.tsx`, pure rules in `lib/traffic.ts`; reads
+  `GET /api/traffic`, see [web-api.md](web-api.md)). The maintainer's reach
+  dashboard: clicks on the tracked `mindflock.ai/go/*` links and GitHub's
+  counters. **Page views are not measured** — the site runs no analytics — and
+  the screen says so. It leads with the honest figures:
+  - **Clicks and visitors are human-only** once the click Worker classifies
+    clicks (human / unverified / automated, `worker/README.md` in the webpage
+    repo). The First-time visitors, Unique visitors and Tracked link clicks
+    tiles, the funnel, the chart and the By link table all use the Worker's
+    `human` sections; the Clicks tile shows the automated share and the
+    unverified count beside it, and a **Who's clicking** section lists clicks,
+    share and visitors per class plus the top reasons a click was not counted
+    as human. While part of the 90-day window predates classification, every
+    label says *human clicks since ‹date›* and a note says how many earlier
+    clicks are left out. Against a Worker without classification the same
+    tiles show the unfiltered figures labelled *all clicks incl. automated*,
+    with a note that most of it is automated. `clickView()` makes that choice
+    once so no two parts of the screen mix scopes.
+  - **Download clicks from the installer's OS** — the share of download-button
+    clicks whose browser runs the installer's own OS (the Worker's
+    `downloads.os_match`, or folded from the click series against an older
+    Worker); also a *From that OS* column in the funnel's platform table. Not
+    proof of a bot, but a crawler pressing every button matches one in three
+    at best.
+  - **Installer downloads** counts only `MindFlock.dmg`,
+    `MindFlock-Setup.exe` and `MindFlock.AppImage`, with *+N other files*
+    under it; the per-release chart draws installers, and Downloads by
+    version has Installers / Other files / All assets columns and an
+    all-time line per kind. The copy says what the counters are: no identity,
+    and Windows/Linux auto-updates fetch the same `.exe`/`.AppImage`, so they
+    are not people or first installs.
+
+  The screen is dev-shell gated (`isDevShell()`), so `scripts/preview.py`
+  cannot open it on its own: to look at it, run `preview up --detach` and
+  drive Chrome with Playwright, setting `window.mfshell = {dev: true}` in an
+  init script and, for the classified shape, routing `/api/traffic` to a
+  payload carrying `clicks.human` and `clicks.classification`.
 
 **Spacing.** Every screen runs on one rhythm (`--set-rhythm`, 24px, on
 `#settings-panel`): a field's label, control and hint sit 6px apart, the next
@@ -7217,14 +7411,14 @@ labels above the inputs.
   [Send a message / prompt queue](#send-a-message--prompt-queue--per-pane) for
   the gate it shares with `wait_for_limit`). Off leaves it parked; the "Usage comes back"
   notification fires either way.
-- **General → Bring agents back by themselves after a crash**
-  (`general.revive_on_start`, **default off**; note: *Off: sessions whose
-  agent died stay Offline until you press Start, so a crash can't refill
-  memory.*) — on, the server relaunches, in the background after it boots,
-  every session whose agent was running when it went down (see
-  [One session state](#one-session-state)), and an agent the system killed
-  for memory once memory recovers. Off (the default) holds them **Offline**
-  until you press **Start**.
+- **General → Bring agents back by themselves after a shutdown or crash**
+  (`general.revive_on_start`, **default off**; note: *Off: after the computer was turned off, sessions come back asleep and wake when you open them; after a crash they stay Offline until you press Start, so a crash can't refill memory.*) — on, the server
+  relaunches, in the background after it boots, every session whose agent was
+  running when it went down (see [One session state](#one-session-state)),
+  and an agent the system killed for memory once memory recovers. Off (the
+  default) brings them back **Sleeping** after a plain shutdown (opening one
+  wakes it) and holds them **Offline** after a crash until you press
+  **Start**.
 - **Agent orchestration → Close finished sub-sessions automatically**
   (`general.auto_close_children`, on by default) and **Minutes a finished
   worker stays open first** (`general.auto_close_grace_minutes`, 10): a worker
@@ -7964,7 +8158,9 @@ labels above the inputs.
   here from the Setup checklist).
 - **System logs** — a grid pane tailing the server log (`GET /api/logs`,
   3 s poll).
-- **Terminal scroll speed** — 1–20 lines per wheel notch, applied live.
+- **Terminal scroll speed (desktop)** — ⅓–3 lines per wheel notch, in thirds,
+  applied live. The phone has its own (⋯ → Scroll speed on `/m`; see
+  [Mobile UI](#mobile-ui-m)).
 - **Appearance** — **Mode** (*Dark* / *Light*: the same value as the top
   bar's 🌙, held in the UI store and set through `lib/theme.ts`, synced as the
   `theme` pref; until anyone chooses, the first paint follows the OS colour
@@ -8379,8 +8575,22 @@ is retyped to it, the same backspace-then-type correction as above and never
 before the phrase's start (a text box gets its value set once), before the
 phrase's closing space — and the radio words, a stop phrase, the router and a
 dialog answer are all read off `final`, not the fast guess (a fast
-"…overall" that was really "…over all" sends). `same`, or no `final` (the
-accurate pass timed out or is off): the fast words stand.
+"…overall" that was really "…over all" sends). `same`, or no `final` on a
+whisper stream (the accurate pass timed out or is off): the fast words
+stand. **On a Moonshine stream the live words are a preview, never the
+text** (Moonshine detects, whisper writes): `/end` without a `final`
+(`final_missed`, `onMissed`) takes back what the phrase typed, types and
+sends nothing of it, and the caption says *Recognition didn't finish — say
+it again* (*…nothing sent; …* when "over" waited on it; for `"off"`,
+*Nothing typed — whisper's accurate pass is off: Settings → Voice*), while
+listening goes on. So "over", a stop phrase with words before it ("fix it,
+stop listening") and letting go of push to talk wait for the phrase's
+`/end` however long it takes — never the finals' budget, never the fast
+words even when finals seldom change them — and a phrase ended before the
+next one's words come back is waited for, not settled with its preview
+(`settleBefore`). With the accurate pass off and Moonshine live, the mic's
+caption before a word is *Commands only — dictation needs whisper's
+accurate pass, which is off: Settings → Voice*.
 
 **Pacing** (`chunkMinS` in `lib/voiceDesktop.ts`): a phrase's first chunk
 goes as soon as 150 ms of speech is recorded (`FIRST_CHUNK_S`; the short
@@ -8694,6 +8904,25 @@ the desktop grid uses for the mouse wheel (and the desktop grid now accepts
 touch drags the same way, for tablets). Taps, pinches, and horizontal gestures
 pass through untouched, so tapping the terminal still raises the keyboard for
 raw keystroke mode.
+
+The phone has its **own scroll speed**, apart from the desktop's wheel speed:
+**⋯ → Scroll speed** (the last row of the actions sheet, with or without a
+session open) shows *3 lines per row dragged (default)*; tapping it unfolds
+steps **1 2 3 4 6 8** (lines scrolled per terminal row the finger drags). The
+tapped step applies to the next drag and is saved as the synced setting
+`ui.mobile_scroll_speed` (`POST /api/mobile-scroll-speed`), so it survives the
+phone clearing its site data and follows the person to their other devices; a
+failed save puts the old step back with *Couldn't save the scroll speed*.
+Because tmux scrolls every wheel tick by the desktop's speed (a global
+binding: `max(1, round(speed))` lines a tick), the phone sends
+`rows dragged × phone speed ÷ lines per tick` ticks, carrying the part of a
+tick left over to the next move so a slow drag still moves and a speed below
+the desktop's lines per tick scrolls in that many lines at a time. The phone
+reads the desktop's lines per tick from `GET /api/mobile-scroll-speed` when it
+loads, when ⋯ opens and on a drag a minute after the last read, so changing
+the desktop speed no longer changes how the phone scrolls. The default (3)
+is how the phone felt before it had its own setting, at the desktop default
+of 1.
 
 **Compose box** — a normal phone text field between the terminal and the
 soft-key bar: type or paste with full native autocorrect/clipboard support,
@@ -9161,7 +9390,14 @@ of the person stopping. When
 replaced in the box by `final`, the caret at the end, **before** the phrase
 is decided: *over*, *over and out*, *disregard*, a command, a dialog's answer all
 read the accurate words. Without `final` (an older server, one model) the
-fast words stand. Diagnostics' *Last transcribe* line says *final 1.2 s*
+fast words stand — but never a Moonshine stream's (the open's `engine`):
+its `/end` without a `final` (`final_missed`) takes its guess out of the
+box, types and sends nothing — a Send tapped or an "over" waiting on it
+sends nothing, the box's earlier words stay — and the strip says
+*Recognition didn't finish — say it again* (`voiceMissedLine`; the
+accurate pass off also sets the error line). On Moonshine "over" and a stop
+phrase with words before it wait for `/end` with no budget, and a broken
+stream's words never lead its clip. Diagnostics' *Last transcribe* line says *final 1.2 s*
 (and *(corrected)* when it changed the words). A 409 on the open that says
 the server does not stream after all (a clip per phrase until `GET
 /api/voice` says otherwise) or any failed request turns the phrase into a

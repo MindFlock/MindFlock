@@ -165,7 +165,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "oauth_client_id",
     ),
     "engine": ("skip_permissions", "agent"),
-    "ui": ("scroll_speed", "accent"),
+    "ui": ("scroll_speed", "mobile_scroll_speed", "accent"),
     "general": (
         "session_budget_usd",
         "window_budget_usd",
@@ -317,8 +317,9 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
     # What this device sends and accepts from your other devices (limits, its
     # inbox quota, whether secrets may be sent from here) is its own call.
     "transfers": ("max_mb", "max_files", "inbox_mb", "keep_days", "allow_secrets"),
-    # The hub's quota and expiry: what this disk holds.
-    "hub": ("max_mb", "item_mb", "max_items", "keep_days"),
+    # The hub's quota and expiry: what this disk holds; whether THIS device
+    # offers its shared files to the others is its own call.
+    "hub": ("max_mb", "item_mb", "max_items", "keep_days", "offer_to_devices"),
     # Not machine-specific, but never stamped or adopted as an edit: the
     # devices AGREE on one id — the pairing handshake, then
     # :func:`backend.web.core.person.reconcile` on every pass (sync_once).
@@ -453,7 +454,8 @@ LABELS: Dict[str, str] = {
     "github.oauth_client_id": "GitHub sign-in app (OAuth client id)",
     "engine.skip_permissions": "Skip permission prompts",
     "engine.agent": "Ticket agent",
-    "ui.scroll_speed": "Terminal scroll speed",
+    "ui.scroll_speed": "Terminal scroll speed (desktop)",
+    "ui.mobile_scroll_speed": "Phone scroll speed",
     "ui.accent": "Accent colour",
     "general.session_budget_usd": "Session budget",
     "general.window_budget_usd": "Window budget",

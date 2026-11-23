@@ -40,6 +40,10 @@ export interface TermHandle {
   retry(): void;
   /** The last "[error] …" the server sent, for the "failed" cover. */
   readonly error: string;
+  /** While "waiting": what for — "turn" (an ordered worker before its turn)
+   * or "memory" (a sleeper's wake waits in the launch gate: memory is short,
+   * or other agents are starting first). "" otherwise. */
+  readonly waitingFor: "" | "turn" | "memory";
   /** When this terminal lost its socket (or, before the first attach, when
    * it was made); 0 while a socket is open. The pane's cover turns into
    * "Can't reach the session" after UNREACHABLE_MS of it. */
@@ -220,18 +224,18 @@ export function attachCopyOnSelect(
     if (sel && sel.trim()) {
       copyText(sel).then((ok) => {
         if (!ok) return;
-        // With the hub open, the copy offers to keep the text there too
+        // With Shared files open, the copy offers to keep the text there too
         // (a snippet every session can use) — never otherwise: copying is
         // too frequent for an action toast each time.
         if (useHubUi.getState().open)
           toast("Copied " + sel.length + " chars", {
             action: {
-              label: "Add to hub",
-              ariaLabel: "Add the selected text to the hub as a snippet",
+              label: "Add to Shared files",
+              ariaLabel: "Add the selected text to Shared files as a snippet",
               onClick: () =>
                 void addText(sel)
-                  .then((it) => toast("Added a snippet to the hub — " + it.ref))
-                  .catch((err) => toast("Couldn't add it to the hub: " + errMsg(err))),
+                  .then((it) => toast("Added a snippet to Shared files — " + it.ref))
+                  .catch((err) => toast("Couldn't add it to Shared files: " + errMsg(err))),
             },
           });
         else toast("Copied " + sel.length + " chars");
@@ -581,6 +585,7 @@ function makeTerm(
   // written into the terminal (never written twice in a row).
   let errorRuns = 0;
   let lastError = "";
+  let waitingFor: "" | "turn" | "memory" = "";
   let downSince = Date.now();
   let notSentAt = 0;
   // Input to a socket that isn't open is dropped: say so over the pane
@@ -591,7 +596,7 @@ function makeTerm(
     const now = Date.now();
     if (now - notSentAt > NOT_SENT_THROTTLE_MS) {
       notSentAt = now;
-      showTermNotice(container, notSentLine(state));
+      showTermNotice(container, notSentLine(state, waitingFor));
     }
     return false;
   };
@@ -607,6 +612,9 @@ function makeTerm(
     },
     get error() {
       return lastError;
+    },
+    get waitingFor() {
+      return waitingFor;
     },
     get downSince() {
       return downSince;
@@ -656,9 +664,11 @@ function makeTerm(
       // error did the server send before closing it.
       let attached = false;
       let errorHere = "";
+      let memoryHere = false;
       const markAttached = () => {
         if (attached) return;
         attached = true;
+        waitingFor = "";
         reconnectAttempt = 0;
         errorRuns = 0;
         lastError = "";
@@ -692,6 +702,7 @@ function makeTerm(
               // line already on screen: a retry loop adds no new lines, and a
               // waiting worker's refusal is the pane's cover, not a line.
               errorHere = String(j.message ?? "");
+              memoryHere = j.waiting_for_memory === true;
               return;
             }
             // Another person drives (core.ownership): say so over the pane.
@@ -717,6 +728,7 @@ function makeTerm(
         if (closeAction(code) !== "waiting") handle._setState("disconnected");
         if (closed) return;
         if (closeAction(code) === "waiting") {
+          waitingFor = memoryHere ? "memory" : "turn";
           handle._setState("waiting");
           reconnectTimer = setTimeout(() => {
             if (!closed) handle.connect();
@@ -825,8 +837,8 @@ const NOT_SENT_THROTTLE_MS = 1500;
 
 /** The notice over a terminal when typed or pasted input was dropped because
  * its socket isn't open, by the terminal's state. Pure, for the node tests. */
-export function notSentLine(state: string): string {
-  if (state === "waiting") return "Waiting its turn — that wasn't sent";
+export function notSentLine(state: string, waitingFor: string = ""): string {
+  if (state === "waiting") return (waitingFor === "memory" ? "Waiting for memory" : "Waiting its turn") + " — that wasn't sent";
   if (state === "failed" || state === "gone") return "Not connected — that wasn't sent";
   return "Reconnecting — that wasn't sent";
 }

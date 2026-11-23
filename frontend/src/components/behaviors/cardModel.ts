@@ -17,7 +17,7 @@ import { VERIFIED_LABEL, VERIFYING_LABEL, REASON_LABEL, verifyProgress } from ".
 
 /** The ⋯ menu's keys. A Verify stop's "Skip this stop" is a head button,
  * not a menu item. */
-export type CardMenuKey = "verify" | "deployed" | "fix" | "watch" | "cancel" | "session" | "diff" | "risk" | "pr" | "delete";
+export type CardMenuKey = "verify" | "merged" | "deployed" | "fix" | "watch" | "cancel" | "session" | "diff" | "risk" | "pr" | "delete";
 
 export interface CardMenuItem {
   key: CardMenuKey;
@@ -52,6 +52,10 @@ export function cardMenuItems(plan: TestPlan, ctx: CardMenuCtx): CardMenuItem[] 
   const verify = ctx.session?.verify || null;
   if (primary !== "verify" && canVerify(plan, verify) && (ctx.session || (plan.steps || []).length))
     items.push({ key: "verify", label: "Verify again", title: VERIFY_TITLE });
+  // Waiting for its merge: a person can say it's out. A squash through
+  // another branch's PR is a merge MindFlock can miss (docs/behaviors.md).
+  if (plan.state === "generated" && !plan.merged_at && !plan.live_at)
+    items.push({ key: "merged", ...mergedItem(plan) });
   if (plan.state === "generated" && plan.merged_at && !plan.live_at)
     items.push({ key: "deployed", label: "It's deployed — check now", title: "Don't wait out the deploy timer" });
   if (isFailing(plan) || verify?.state === "failed")
@@ -68,6 +72,17 @@ export function cardMenuItems(plan: TestPlan, ctx: CardMenuCtx): CardMenuItem[] 
   }
   items.push({ key: "delete", label: "Delete these steps", title: "Delete these steps and their results", danger: true });
   return items;
+}
+
+/** "It's merged into main" — the ⋯ item on a checklist waiting for its merge,
+ * for the merges MindFlock can't see (a squash through another branch's PR).
+ * Worded after the card's own "Not merged yet — … once it reaches main." */
+export function mergedItem(plan: Pick<TestPlan, "live_branch">): { label: string; title: string } {
+  const live = plan.live_branch || "the live branch";
+  return {
+    label: "It's merged into " + live,
+    title: "Mark these changes as on " + live + " — for a merge MindFlock can't see, like a squash through another branch's PR",
+  };
 }
 
 /** What Verify does, as its buttons' tooltip. */

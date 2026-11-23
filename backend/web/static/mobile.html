@@ -141,14 +141,14 @@
          tappable for raw keystroke mode. Text box above the key bar (user
          preference); both stay visible while typing because applyViewport
          clamps + polls the app height while the keyboard settles. -->
-    <!-- What the message carries from the hub: one chip per item (its
+    <!-- What the message carries from Shared files: one chip per item (its
          thumbnail, name and ✕), right above the box (mobile.js HUB section). -->
-    <div id="hub-chips" class="hidden" aria-label="From the hub"></div>
+    <div id="hub-chips" class="hidden" aria-label="From Shared files"></div>
     <div id="composer">
-      <!-- The hub (mobile.js HUB section): a photo or file from this phone
-           goes into the hub and its code (hub:k7m2) into the message —
+      <!-- Shared files (mobile.js HUB section): a photo or file from this
+           phone goes into Shared files and its code (file:k7m2) into the message —
            📎, pick, Send. -->
-      <button type="button" id="hub-attach" aria-label="Add a photo or file to the hub and put it in your message">📎</button>
+      <button type="button" id="hub-attach" aria-label="Add a photo or file to Shared files and put it in your message">📎</button>
       <input type="file" id="hub-file" hidden multiple aria-hidden="true" tabindex="-1">
       <textarea id="compose" rows="1" placeholder="Type here — Send adds ⏎"
                 autocomplete="on" autocapitalize="none" spellcheck="false"
@@ -208,7 +208,7 @@
           <div id="ask-notify-note" class="new-muted"></div>
         </div>
         <div class="sheet-actions">
-          <button type="button" id="sessions-hub">Hub</button>
+          <button type="button" id="sessions-hub">Shared files</button>
           <button type="button" id="sessions-recent">Recently closed</button>
           <button type="button" id="sessions-new">New session</button>
         </div>
@@ -230,16 +230,23 @@
       </div>
     </div>
 
-    <!-- The hub: files, pictures and snippets every session can use (GET
-         /api/hub). "Use" puts an item's reference in the message box; the
-         agent gets its path when it is sent. -->
+    <!-- Shared files: files, pictures and snippets every session can use
+         (GET /api/hub). "Add to message" puts an item's code in the message
+         box; the agent gets its path when it is sent. A tick per row selects
+         several; the bar under the list adds them all at once. -->
     <div id="hub-sheet" class="sheet hidden" role="dialog" aria-labelledby="hub-title">
       <div class="sheet-box">
-        <div class="sheet-title" id="hub-title">Hub</div>
-        <div class="new-muted">Files and text every session can use. Put an item's code (like hub:k7m2) in a message and the agent gets the file.</div>
+        <div class="sheet-title" id="hub-title">Shared files</div>
+        <div class="new-muted">Files and text every session can use. Put an item's code (like file:k7m2) in a message and the agent gets the file. Tick several to add them at once.</div>
         <button type="button" id="hub-add" class="new-row">📷 Add a photo or file</button>
         <div id="hub-list" class="sheet-list"></div>
         <div id="hub-error" class="new-error hidden" aria-live="polite"></div>
+        <div id="hub-selbar" class="hub-selbar hidden" role="toolbar" aria-label="Selected shared files">
+          <span id="hub-sel-count"></span>
+          <button type="button" id="hub-sel-add" class="primary">Add to message</button>
+          <button type="button" id="hub-sel-copy">Copy codes</button>
+          <button type="button" id="hub-sel-clear">Clear</button>
+        </div>
         <div class="sheet-actions">
           <button type="button" id="hub-done">Done</button>
         </div>

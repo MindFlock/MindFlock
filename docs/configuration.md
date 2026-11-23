@@ -558,20 +558,22 @@ never synced. Owner-only through `POST /api/settings` (`{"transfers":
 | `keep_days` | integer 1–3650 (unset = 14) | A received transfer no live session works in is removed after this many days — checked on the next receive. An unfinished transfer goes after 6 h, or 1 h with nothing written (also on a 5-minute timer) |
 | `allow_secrets` | bool (default false) | Whether a sender on this device may pass `include_secrets` at all. Off: `.env*`, keys, certificates, credential files and the files `.secrets.baseline` names are left out of every send (and of every commit of a bundle). A name-based guardrail, not a content scan. Never covers `.git`, agent login/config/transcripts or credential stores — those are never sent |
 
-### Hub (`hub`, settings store only)
+### Shared files (`hub`, settings store only)
 
 The `hub` group of `~/.mindflock/settings.json` (`HubSettings` in
-`backend/config/settings.py`): the limits of this device's hub
-(`~/.mindflock/hub`, [web-ui.md](web-ui.md#hub)). Machine-local: never
+`backend/config/settings.py`): the limits of this device's Shared files
+(`~/.mindflock/hub`, [web-ui.md](web-ui.md#shared-files); the group keeps its
+first name, so saved settings keep working). Machine-local: never
 synced. Through `POST /api/settings` (`{"hub": {"max_mb": 2048}}`); there is
 no Settings screen for it — Settings → Disk cleanup shows how full it is.
 
 | Key | Values | Notes |
 |---|---|---|
-| `max_mb` | integer 1–1048576 (unset = 1024) | The whole hub's quota, in MB. Removed items still in their 10-minute Undo window count. An add that would pass it is refused (`hub_full`) before a byte is written; adds in flight count at their declared size |
+| `max_mb` | integer 1–1048576 (unset = 1024) | The quota of all shared files, in MB. Removed items still in their 10-minute Undo window count. An add that would pass it is refused (`hub_full`) before a byte is written; adds in flight count at their declared size |
 | `item_mb` | integer 1–65536 (unset = 100) | The most one item can be (`too_large`) |
-| `max_items` | integer (unset = 300) | How many items the hub holds (`hub_full`) |
-| `keep_days` | integer 1–3650 (unset = 14) | An unpinned item is removed this many days after it was added or last used (a reference sent, a copy into a session, a pin) — on the server's 5-minute timer. Pinned items stay |
+| `max_items` | integer (unset = 300) | How many items Shared files holds (`hub_full`) |
+| `keep_days` | integer 1–3650 (unset = 14) | An unpinned item is removed this many days after it was added or last used (a code sent, a copy into a session, a pin) — on the server's 5-minute timer. Pinned items stay |
+| `offer_to_devices` | `true` / `false` (unset = on) | Whether THIS device offers its shared files to your other devices (they list them and fetch one when it is used — [devices.md](devices.md#shared-files-on-your-other-devices)). Off: they are told "keeps its shared files to itself". Enforced here, where the items live; one item can also be kept here with its "Keep on this device only" mark. The drawer footer's **Show these on my other devices** sets it |
 
 ### Auth profiles (`[auth_profiles]`, settings store only)
 
@@ -891,7 +893,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `pricing.json` | Cached model-pricing feed (24 h TTL) |
 | `usage-history.json` | Durable daily token/cost ledger |
 | `usage-parse-cache.json` | Each transcript's parsed usage turns, keyed on (mtime, size, inode) and the byte offset read to: a restart re-reads only what changed, a grown transcript only its new lines. Safe to delete (the next scan rebuilds it) |
-| `scroll-speed` | Terminal wheel speed, 1–20 (also settable in the UI) |
+| `scroll-speed` | Terminal wheel speed, ⅓–3 in thirds (also settable in the UI; the `ui.scroll_speed` setting wins) |
 | `.exit-markers/<session>.code` | Last exit code per session (clean-quit vs crash detection) |
 | `.activity-markers/<session>.json`, `<session>.reply.json` | The per-session `{state, ts}` activity marker the CLI's lifecycle hooks write ([providers.md](providers.md#activity-signal-activity_markerspy)), and beside it the reply the `Stop` hook files — `{"ts", "text"}`, the payload's `last_assistant_message` cut at 8000 chars — which is where a session's spoken `Say:` line is read from (the `last_say` row field, the `say` event data, `GET …/voice`). Both keyed by tmux session name; the reply file goes with the session. The server watches this directory to publish a reply the moment it lands. Override the directory with `MINDFLOCK_ACTIVITY_MARKER_DIR` (below) — on a network or coarse-mtime filesystem replies fall back to the 1 s rescan |
 | `.voice/<session>.on`, `.voice/<session>.next` | The per-session **voice files** (`backend/web/core/voice.py`). `.on` exists while a phone is in a voice conversation with that session (the row's `voice`; `POST …/voice` writes and removes it) and asks nothing of the session. `.next` is the **one-shot** request for a spoken reply: `POST …/send {say: true}` arms it right before the keystrokes (it holds the arming time), the installed `UserPromptSubmit` hook reads it at fire time, deletes it, and prints the voice instruction for Claude Code to inject only when it is under 120 s old — so a typed prompt costs no `Say:` tokens and a prompt that never got submitted cannot attach its line to the next one. Session removal drops both, so a closed session leaves nothing behind and a namesake inherits none. Override the directory with `MINDFLOCK_VOICE_FLAG_DIR` |
@@ -1078,8 +1080,15 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   `backend/config/ide.py`.
 - **IDE auto-adopt** (`/api/cursor/autoadopt`) — automatically adopt workspaces
   opened in the linked IDE as sessions (requires a VS Code-family editor).
-- **Scroll speed** (`/api/scroll-speed`) — tmux wheel lines per notch, 1–20,
-  applied live to all sessions.
+- **Scroll speed** (`/api/scroll-speed`, `ui.scroll_speed`) — tmux wheel lines
+  per notch, ⅓–3 in thirds, applied live to all sessions (Settings → General,
+  *Terminal scroll speed (desktop)*).
+- **Phone scroll speed** (`ui.mobile_scroll_speed`, `/api/mobile-scroll-speed`,
+  the phone's ⋯ → Scroll speed) — lines the phone's terminal scrolls per row the
+  finger drags, whole lines 1–8 (clamped); unset = 3, how the phone felt before
+  it had its own. Independent of the desktop speed: the phone divides the
+  desktop's lines per wheel tick back out. Synced, labelled *Phone scroll
+  speed*.
 - **Default provider** (`coding_cli.default_provider`, Settings → Agent CLI) —
   the provider new sessions launch by default. It **must reference an installed
   CLI**: the Settings picker lists only installed providers and a `POST
@@ -1317,18 +1326,22 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   back on — seeded"); a field unset here is stamped older still, so it never
   clears another device's value. Otherwise sync stays off (logged once) until
   the device joins your others again.
-- **Bring agents back by themselves after a crash** (`general.revive_on_start`;
-  Settings → General, note: "Off: sessions whose agent died stay Offline until
-  you press Start, so a crash can't refill memory."). Unset = **off** (since
-  2026-11-04): a session whose agent died — at a server restart, or killed by
-  the OOM killer / crashed while the server runs — is **held offline**
+- **Bring agents back by themselves after a shutdown or crash**
+  (`general.revive_on_start`; Settings → General, note: "Off: after the computer was turned off, sessions come back asleep and wake when you open them; after a crash they stay Offline until you press Start, so a crash can't refill memory."). Unset = **off**
+  (since 2026-11-04): a session whose agent died in a crash — killed by the
+  OOM killer, crashed, or (found at a server restart) its machine went down
+  with memory in distress — is **held offline**
   ([session-engine.md](session-engine.md#held-offline-the-default-after-a-crash)):
   nothing relaunches it, not a pane attaching, a sent or queued prompt, a
   wake or a sweep, until someone presses Start (the Offline chip, the pane's
-  Start button, Start all). A prompt sent to it waits on its queue. `true`
-  opts in to the old behaviour: the startup revive sweep relaunches every
-  agent that was running, and the auto-revive brings back one the OOM killer
-  took once memory recovers; nothing is held. Per device: never synced (it is
+  Start button, Start all). A prompt sent to it waits on its queue. A session
+  whose agent simply went down with the computer (no sign of a crash) comes
+  back **asleep** instead
+  ([session-engine.md](session-engine.md#asleep-after-a-shutdown)): opening
+  it or sending it something wakes it; nothing automatic does. `true` opts in
+  to the old behaviour: the startup revive sweep relaunches every agent that
+  was running, and the auto-revive brings back one the OOM killer took once
+  memory recovers; nothing is held or slept at boot. Per device: never synced (it is
   about what THIS machine relaunches when its own server boots). Read at boot
   and per death.
 - **Sleeping agents** (`general.sleep_idle_minutes`; Settings → General →
@@ -1741,7 +1754,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     {"what": "moonshine"}`; it changes no setting) — a true streaming model
     that hears the live words and the control words ("over", the stop
     phrases, a session's name) ~30 ms after they are said, while the
-    accurate pass (`stt_final`) still writes every phrase's final text; a
+    accurate pass (`stt_final`) still writes every phrase's final text —
+    Moonshine's words are never typed: a phrase that pass does not write
+    types nothing and the mic says to say it again; a
     phrase that is only a control phrase is acted on at once, on
     Moonshine's words — else
     `base.en`, and `base` for any other language (Moonshine is English
@@ -1763,8 +1778,11 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     whatever the phrase's length, started once 0.5 s of quiet follows the speech so the
     correction usually lands within a second of the person stopping; it is
     skipped only under 0.2 s of speech, so a lone "stop" is still corrected,
-    and waited for at most 1.5 s, after which the fast words stand; `"off"`
-    = no accurate pass — fastest, the fast words stand; any faster-whisper size
+    and waited for at most 1.5 s, after which whisper's fast words stand —
+    with Moonshine live, nothing of the phrase is typed; `"off"`
+    = no accurate pass — fastest, whisper's fast words stand; with Moonshine
+    live, dictation types nothing at all (only the control words work:
+    Settings → Voice's *Live words* row says so and turns it back on); any faster-whisper size
     or `org/repo` id = that model, e.g. `medium.en` for more accuracy at
     more delay; a non-size name reads as blank). A third model is loaded and
     kept resident with the other two. The wake word ("MindFlock") is judged

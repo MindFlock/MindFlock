@@ -20,6 +20,13 @@ shares its folder. What the thread did lands in the step's
 ``detail.closed`` ("deleted" / "closed" / "failed: …"); a server restart
 between the ``done`` and the thread leaves the session open (the stop is
 done; close it by hand).
+
+Landing is also the route's word that the work SHIPPED: the Verify checklist
+for the branch (:func:`_ship_checklist`) is marked merged, through the same
+path the Verify due loop takes when it sees a merge itself — a squash through
+another branch's PR is one it often cannot see. Only when the branch the stop
+confirmed is the one the checklist waits for; the id lands in
+``detail.checklist``.
 """
 
 from __future__ import annotations
@@ -177,16 +184,46 @@ def _check(flight: dict, step: dict) -> dict:
     }
 
 
+def _ship_checklist(plan: dict) -> str:
+    """Mark the Verify checklist for the landed branch shipped → its id, or
+    ``""`` when there was nothing to mark. Blocking; never raises — a
+    checklist is not a reason to fail a landing.
+
+    Only a checklist WAITING for ``plan["main"]`` — the branch this stop just
+    confirmed the work merged into. One waiting for another branch (a repo
+    that merges into ``main`` and ships from ``release``) is left to its own
+    watch: telling it "shipped" would be a false shipped, the one answer
+    Verify must never give."""
+    try:
+        from backend.web.core import test_plans as T
+        from backend.web.core import test_plans_driver as TPD
+
+        pid = T.owner_for_branch(plan["title"], plan["repo"], plan["branch"])
+        found = T.get(pid) if pid else None
+        if found is None or found["live_branch"] != plan["main"]:
+            return ""
+        if found["state"] != "generated" or found["merged_at"]:
+            return ""
+        return pid if TPD._ship_test_plan(pid) is not None else ""
+    except Exception as err:  # noqa: BLE001
+        _log("flight land: marking the checklist of %s shipped: %v", plan["title"], err)
+        return ""
+
+
 async def _run(flight, step, action, now) -> dict:
     plan = await asyncio.to_thread(_check, flight, step)
     note = "finished on %s" % plan["main"]
     if plan["why"]:
         note += " — closing, not deleting: %s" % plan["why"]
+    shipped = await asyncio.to_thread(_ship_checklist, plan)
     _start_close(flight["id"], step["id"], plan)
+    detail = {"receipt": "finished", "pending_close": plan}
+    if shipped:
+        detail["checklist"] = shipped
     return {
         "action": "done",
         "note": note,
-        "detail": {"receipt": "finished", "pending_close": plan},
+        "detail": detail,
     }
 
 

@@ -99,18 +99,21 @@ function ResumeOnUsageResetRow() {
   );
 }
 
-/** Bring agents back after a crash (backend/web/core/revive.py,
- * core/held.py). OFF by default (unset reads as off): a session whose agent
- * died — the server restarting, the OOM killer — is HELD offline and starts
- * only when you press Start, so a crash under memory pressure can't relaunch
- * everything into the same pressure and crash again. ON is the old
- * behaviour: once the server has booted it relaunches, two at a time, every
- * session whose agent was running, and an agent killed for memory comes back
- * once memory recovers (a few times an hour at most). */
+/** Bring agents back after a shutdown or crash (backend/web/core/revive.py,
+ * core/held.py, core/sleep.py). OFF by default (unset reads as off): after a
+ * plain shutdown (the computer turned off, no sign of a crash) the sessions
+ * come back ASLEEP — opening one wakes it — and a session whose agent
+ * CRASHED (the OOM killer, a crash, a machine that went down short of
+ * memory) is HELD offline and starts only when you press Start, so a crash
+ * under memory pressure can't relaunch everything into the same pressure and
+ * crash again. ON is the old behaviour: once the server has booted it
+ * relaunches, two at a time, every session whose agent was running, and an
+ * agent killed for memory comes back once memory recovers (a few times an
+ * hour at most). */
 /** The switch's words (exported for tests). */
-export const REVIVE_LABEL = "Bring agents back by themselves after a crash";
+export const REVIVE_LABEL = "Bring agents back by themselves after a shutdown or crash";
 export const REVIVE_NOTE =
-  "Off: sessions whose agent died stay Offline until you press Start, so a crash can't refill memory.";
+  "Off: after the computer was turned off, sessions come back asleep and wake when you open them; after a crash they stay Offline until you press Start, so a crash can't refill memory.";
 
 function ReviveOnStartRow() {
   const s = useSettings();
@@ -288,9 +291,9 @@ function ScrollSpeedRow() {
   return (
     <label
       className="set-row"
-      title="How many lines the mouse wheel scrolls in the terminal, in thirds of a line (0.33–3). Below 1, wheel input is damped so a notch scrolls less than a line. Applies immediately to all open terminals."
+      title="How many lines the mouse wheel scrolls in the terminal, in thirds of a line (0.33–3). Below 1, wheel input is damped so a notch scrolls less than a line. Applies immediately to all open terminals. The phone has its own speed (⋯ → Scroll speed on /m)."
     >
-      <span className="set-label">Terminal scroll speed</span>
+      <span className="set-label">Terminal scroll speed (desktop)</span>
       <span className="ss-row">
         <input
           type="range"

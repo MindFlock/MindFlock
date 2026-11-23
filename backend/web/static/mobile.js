@@ -1251,7 +1251,10 @@
       return st("starting", { hint: "Provisioning workspace" });
     if (inst.sleeping)
       return st("idle", { label: "Sleeping", tone: "muted",
-                          hint: "Asleep to free memory — opening it or sending it anything wakes it" });
+                          hint: (inst.sleeping.reason === "shutdown"
+                                  ? "Asleep since the computer was turned off"
+                                  : "Asleep to free memory") +
+                                " — opening it or sending it anything wakes it" });
     if (inst.setup && inst.setup.state === "running")
       return st("starting", { hint: "Worktree setup running" });
     if (inst.setup && inst.setup.state === "failed")
@@ -2254,11 +2257,68 @@
     ws.send(seq);
     return true;
   }
-  var touchLast = null, touchScrolling = false;
+  // The phone's own scroll speed (⋯ → Scroll speed; synced setting
+  // ui.mobile_scroll_speed): `speed` lines per terminal row the finger drags.
+  // Each wheel tick scrolls `perTick` lines — the desktop's wheel speed,
+  // bound globally in tmux — so a drag sends speed / perTick ticks per row
+  // and the desktop setting no longer moves the phone. Defaults are today's
+  // feel: 3 lines a row at the desktop's default of 1 line a tick.
+  var TOUCH_SPEED_STEPS = [1, 2, 3, 4, 6, 8];
+  var TOUCH_SCROLL_MAX_TICKS = 48;      // per move event: a flick, not a flood
+  var TOUCH_SPEED_STALE_MS = 60000;     // re-read the speeds once a minute of use
+  var touchSpeed = { speed: 3, def: 3, min: 1, max: 8, perTick: 1, at: 0 };
+  // Lines tmux scrolls per wheel tick at desktop speed `desktop` (pure; the
+  // server's terminal.scroll_lines_per_tick): the whole-line part, never
+  // below one — the sub-line part is the desktop browser eating ticks, which
+  // the phone's ticks never pass through.
+  function tmuxLinesPerTick(desktop) {
+    var n = Number(desktop);
+    if (!isFinite(n) || n <= 0) return 1;
+    return Math.max(1, Math.round(n));
+  }
+  // Ticks to send for a drag of `cells` rows at `speed` lines a row when one
+  // tick scrolls `perTick` lines (pure). `carry` is the part of a tick the
+  // earlier moves owed, so a slow drag (or speed < perTick) still moves.
+  function touchScrollTicks(cells, speed, perTick, carry) {
+    var want = cells * speed / (perTick > 0 ? perTick : 1) + (carry > 0 ? carry : 0);
+    var ticks = Math.floor(want + 1e-9);
+    return { ticks: ticks, carry: Math.max(0, want - ticks) };
+  }
+  // "3 lines per row dragged (default)" — the sheet row's hint (pure).
+  function touchSpeedHint(speed, def) {
+    return speed + (speed === 1 ? " line" : " lines") + " per row dragged" +
+      (speed === def ? " (default)" : "");
+  }
+  // The server's answer (GET/POST /api/mobile-scroll-speed) into touchSpeed.
+  function applyTouchSpeed(j) {
+    if (!j) return;
+    var n = Number(j.speed);
+    if (isFinite(n) && n > 0) touchSpeed.speed = n;
+    if (isFinite(Number(j["default"]))) touchSpeed.def = Number(j["default"]);
+    if (isFinite(Number(j.min))) touchSpeed.min = Number(j.min);
+    if (isFinite(Number(j.max))) touchSpeed.max = Number(j.max);
+    touchSpeed.perTick = isFinite(Number(j.lines_per_tick)) && Number(j.lines_per_tick) >= 1
+      ? Number(j.lines_per_tick) : tmuxLinesPerTick(j.desktop);
+    touchSpeed.at = Date.now();
+  }
+  function loadTouchSpeed() {
+    touchSpeed.at = Date.now();   // one read in flight at a time
+    return fetch("/api/mobile-scroll-speed")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(applyTouchSpeed)
+      .catch(function () { /* offline — keep the last speeds */ });
+  }
+  loadTouchSpeed();
+
+  var touchLast = null, touchScrolling = false, touchCarry = 0, touchUp = null;
   termHost.addEventListener("touchstart", function (ev) {
     if (ev.touches.length !== 1) { touchLast = null; return; }  // pinch etc.
     touchLast = { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
     touchScrolling = false;
+    touchCarry = 0; touchUp = null;
+    // The desktop speed can change under us (Settings, sync): re-read it now
+    // and then; this drag uses the speeds we have.
+    if (Date.now() - touchSpeed.at > TOUCH_SPEED_STALE_MS) loadTouchSpeed();
   }, { capture: true, passive: true });
   termHost.addEventListener("touchmove", function (ev) {
     if (!touchLast || ev.touches.length !== 1) return;
@@ -2269,17 +2329,16 @@
       touchScrolling = true;
     }
     var cellH = termHost.getBoundingClientRect().height / ((term && term.rows) || 24) || 16;
-    // 3 ticks per cell dragged: a 1:1 finger-to-line mapping feels glacial on
-    // a phone screen (the TUI scrolls one line per tick, and there are only
-    // ~40 rows to a full swipe). 3x tracks a fast flick without overshooting
-    // a slow precise drag.
-    var TOUCH_SCROLL_MULT = 3;
-    var lines = Math.floor(Math.abs(dy) * TOUCH_SCROLL_MULT / cellH);
-    if (lines > 0) {
-      // Finger moving down reveals earlier output = wheel up.
-      if (!sendWheelTicks(t.clientX, t.clientY, dy > 0, Math.min(24, lines))) return;
-      touchLast = { x: t.clientX, y: t.clientY };  // consume the emitted distance
-    }
+    // touchSpeed.speed lines per row dragged (default 3: a 1:1 finger-to-line
+    // mapping feels glacial on a phone, ~40 rows to a full swipe), whatever
+    // the desktop's lines per tick. A turn of direction drops what was owed.
+    var up = dy > 0;   // finger moving down reveals earlier output = wheel up
+    if (touchUp !== up) { touchCarry = 0; touchUp = up; }
+    var step = touchScrollTicks(Math.abs(dy) / cellH, touchSpeed.speed, touchSpeed.perTick, touchCarry);
+    if (step.ticks > 0 &&
+        !sendWheelTicks(t.clientX, t.clientY, up, Math.min(TOUCH_SCROLL_MAX_TICKS, step.ticks))) return;
+    touchCarry = step.carry;
+    touchLast = { x: t.clientX, y: t.clientY };  // the distance is in ticks + carry now
     ev.preventDefault();   // no page bounce, no synthetic tap after the drag
     ev.stopPropagation();
   }, { capture: true, passive: false });
@@ -2325,8 +2384,8 @@
       // later: a TUI like claude treats a rapid burst as a paste, and a \r
       // inside a paste becomes a newline in its input box instead of a
       // submit. The gap ends the paste burst so the Enter actually sends.
-      // A hub reference (hub:k7m2) goes in expanded: the agent gets the
-      // item's path, name and kind (HUB section).
+      // A shared-file code (file:k7m2, or an old hub:k7m2) goes in
+      // expanded: the agent gets the item's path, name and kind (HUB section).
       hubAttached = {};
       if (HUB_REF_RE.test(text) && hubHere()) {
         hubExpand(text).then(function (typed) {
@@ -2365,29 +2424,41 @@
   });
 
   // --- HUB -----------------------------------------------------------------
-  // The hub (backend core/hub.py; docs/web-ui.md "Hub"): one shared place
-  // per MindFlock home for files, pictures and snippets every session can use.
-  // 📎 beside the compose box: pick a photo or file (the phone's own picker:
-  // library, camera or files) → it goes into the hub (source=phone) and its
-  // reference (hub:k7m2) into the message → Send. A message holding a
-  // reference is expanded (POST /api/hub/expand) before it goes down the
-  // PTY, so the agent gets the item's path, name and kind. The hub is THIS
-  // computer's: a session on another device gets nothing from it.
+  // Shared files (internally "the hub": backend core/hub.py; docs/web-ui.md
+  // "Shared files"): one shared place per MindFlock home for files, pictures
+  // and snippets every session can use. 📎 beside the compose box: pick a
+  // photo or file (the phone's own picker: library, camera or files) → it
+  // goes into Shared files (source=phone) and its code (file:k7m2) into the
+  // message → Send. A message holding a code (file:, or the first hub:) is
+  // expanded (POST /api/hub/expand) before it goes down the PTY, so the agent
+  // gets the item's path, name and kind. They are THIS computer's: a session
+  // on another device gets nothing from them. The sheet ticks several items
+  // (a checkbox per row) and adds them all to the message at once.
   var hubAttachBtn = document.getElementById("hub-attach");
   var hubFileEl = document.getElementById("hub-file");
   var hubSheet = document.getElementById("hub-sheet");
   var hubListEl = document.getElementById("hub-list");
   var hubErrEl = document.getElementById("hub-error");
   var hubChipsEl = document.getElementById("hub-chips");
-  // What the message carries from the hub: ref -> item, shown as chips
+  // What the message carries from Shared files: ref -> item, shown as chips
   // (thumbnail, name, ✕) above the box — the confirmation a status line
   // drawn over the terminal never was.
   var hubAttached = {};
+  // A picture's thumbnail: this device's item, or another device's small
+  // one (its checked thumbnail — a bigger one is never pulled just to draw).
+  function hubThumbUrl(it) {
+    if (it.remote) {
+      return it.size <= 512 * 1024
+        ? "/api/hub/devices/" + encodeURIComponent(it.remote.device) + "/items/" + encodeURIComponent(it.remote.id) + "/thumb"
+        : "";
+    }
+    return "/api/hub/items/" + encodeURIComponent(it.id) + "/raw";
+  }
   function hubChipThumb(it) {
     var t;
-    if (it.kind === "image") {
+    if (it.kind === "image" && hubThumbUrl(it)) {
       t = document.createElement("img");
-      t.src = "/api/hub/items/" + encodeURIComponent(it.id) + "/raw";
+      t.src = hubThumbUrl(it);
       t.alt = "";
     } else {
       t = document.createElement("span");
@@ -2438,7 +2509,8 @@
   }
   composeEl.addEventListener("input", hubRenderChips);
   // A reference, not glued to a word or path before it (the server's rule).
-  var HUB_REF_RE = /(^|[^A-Za-z0-9_./:@-])hub:[A-Za-z0-9]{4,8}(?![A-Za-z0-9_])/i;
+  // (It may name the device holding the item: file@mac-mini:k7m2.)
+  var HUB_REF_RE = /(^|[^A-Za-z0-9_./:@-])(?:file|hub)(?:@[A-Za-z0-9][A-Za-z0-9-]{0,62})?:[A-Za-z0-9]{4,8}(?![A-Za-z0-9_])/i;
   function hubHere() { return !current || String(current).indexOf("::") < 0; }
   function hubSize(n) {
     n = Number(n) || 0;
@@ -2447,6 +2519,7 @@
     return (n / 1048576).toFixed(1) + " MB";
   }
   function hubWho(it) {
+    if (it.origin && it.origin.device) return "from " + (it.origin.name || it.origin.device);
     if (it.by === "session") return "session " + (it.by_name || "?");
     if (it.by === "device") return "device " + (it.by_name || "?");
     return it.by === "phone" ? "your phone" : "you";
@@ -2467,7 +2540,7 @@
   function hubAddFiles(files, intoCompose) {
     var list = Array.prototype.slice.call(files || []);
     if (!list.length) return Promise.resolve([]);
-    flashStatus("adding " + (list.length === 1 ? (list[0].name || "the photo") : list.length + " files") + " to the hub…");
+    flashStatus("adding " + (list.length === 1 ? (list[0].name || "the photo") : list.length + " files") + " to Shared files…");
     var refs = [];
     var chain = Promise.resolve();
     list.forEach(function (f) {
@@ -2485,8 +2558,8 @@
       }
       return refs;
     }).catch(function (err) {
-      setStatus("couldn't add it to the hub: " + errText(err, "error"));
-      hubErr(errText(err, "couldn't add it to the hub"));
+      setStatus("couldn't add it to Shared files: " + errText(err, "error"));
+      hubErr(errText(err, "couldn't add it to Shared files"));
       return refs;
     });
   }
@@ -2512,7 +2585,7 @@
   }
   hubAttachBtn.addEventListener("click", function () {
     if (!hubHere()) {
-      flashStatus("the hub is on this computer — this session runs on another device");
+      flashStatus("Shared files are on this computer — this session runs on another device");
       return;
     }
     hubFileEl.click();
@@ -2526,13 +2599,78 @@
       else composeEl.focus();
     });
   });
+  // The sheet's selection: id -> item, in the order ticked. The bar under
+  // the list adds them all to the message (one chip each) or copies their
+  // codes; a tick never sends anything by itself.
+  var hubPicked = {};
+  var hubPickedOrder = [];
+  var hubSelBar = document.getElementById("hub-selbar");
+  var hubSelCount = document.getElementById("hub-sel-count");
+  function hubPickedItems() {
+    return hubPickedOrder.map(function (id) { return hubPicked[id]; }).filter(Boolean);
+  }
+  function hubRenderSel() {
+    var n = hubPickedItems().length;
+    hubSelBar.classList.toggle("hidden", !n);
+    hubSelCount.textContent = n + " selected";
+    document.getElementById("hub-sel-add").textContent = n === 1 ? "Add to message" : "Add " + n + " to message";
+    document.getElementById("hub-sel-copy").textContent = n === 1 ? "Copy code" : "Copy codes";
+  }
+  function hubClearSel() {
+    hubPicked = {};
+    hubPickedOrder = [];
+    Array.prototype.forEach.call(hubListEl.querySelectorAll(".hub-row-check"), function (c) {
+      c.checked = false;
+      c.closest(".hub-row").classList.remove("is-picked");
+    });
+    hubRenderSel();
+  }
+  document.getElementById("hub-sel-add").addEventListener("click", function () {
+    var items = hubPickedItems();
+    if (!items.length) return;
+    closeSheet(hubSheet);
+    items.forEach(hubAttach);
+    hubClearSel();
+    composeEl.focus();
+  });
+  document.getElementById("hub-sel-copy").addEventListener("click", function () {
+    var items = hubPickedItems();
+    if (!items.length) return;
+    var codes = items.map(function (it) { return it.ref; }).join(" ");
+    copyPlain(codes).then(function (ok) {
+      flashStatus(ok ? (items.length === 1 ? "code" : items.length + " codes") + " copied to clipboard — paste in any message" : "the codes are " + codes);
+    });
+  });
+  document.getElementById("hub-sel-clear").addEventListener("click", hubClearSel);
   function hubRow(it) {
     var row = document.createElement("div");
     row.className = "hub-row";
+    // A tick per row (a label: the whole box is the tap target).
+    var tickWrap = document.createElement("label");
+    tickWrap.className = "hub-row-tick";
+    var tick = document.createElement("input");
+    tick.type = "checkbox";
+    tick.className = "hub-row-check";
+    tick.checked = !!hubPicked[it.id];
+    tick.setAttribute("aria-label", "Select " + it.name);
+    row.classList.toggle("is-picked", tick.checked);
+    tick.addEventListener("change", function () {
+      if (tick.checked) {
+        hubPicked[it.id] = it;
+        if (hubPickedOrder.indexOf(it.id) < 0) hubPickedOrder.push(it.id);
+      } else {
+        delete hubPicked[it.id];
+        hubPickedOrder = hubPickedOrder.filter(function (x) { return x !== it.id; });
+      }
+      row.classList.toggle("is-picked", tick.checked);
+      hubRenderSel();
+    });
+    tickWrap.appendChild(tick);
+    row.appendChild(tickWrap);
     var thumb;
-    if (it.kind === "image") {
+    if (it.kind === "image" && hubThumbUrl(it)) {
       thumb = document.createElement("img");
-      thumb.src = "/api/hub/items/" + encodeURIComponent(it.id) + "/raw";
+      thumb.src = hubThumbUrl(it);
       thumb.alt = "";
       thumb.loading = "lazy";
     } else {
@@ -2548,7 +2686,9 @@
     name.textContent = it.name;
     var meta = document.createElement("span");
     meta.className = "hub-row-meta";
-    meta.textContent = hubSize(it.size) + " · " + hubWho(it);
+    meta.textContent =
+      hubSize(it.size) + " · " + (it.remote ? "on " + it.remote.deviceName : hubWho(it));
+    if (it.remote) row.classList.add("is-remote");
     var ref = document.createElement("span");
     ref.className = "hub-row-ref";
     ref.textContent = it.ref;
@@ -2586,27 +2726,67 @@
   function loadHubSheet() {
     hubErr("");
     hubListEl.innerHTML = "";
-    hubListEl.appendChild(folderNote("Loading the hub…"));
+    hubListEl.appendChild(folderNote("Loading shared files…"));
     fetch("/api/hub")
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) {
-          if (!r.ok) throw new Error((j && j.error) || "couldn't read the hub (" + r.status + ")");
+          if (!r.ok) throw new Error((j && j.error) || "couldn't read shared files (" + r.status + ")");
           return j;
         });
       })
       .then(function (j) {
         hubListEl.innerHTML = "";
         var items = (j && j.items) || [];
+        // A ticked item gone meanwhile (removed elsewhere) drops out.
+        var live = {};
+        items.forEach(function (it) { live[it.id] = it; });
+        hubPickedOrder = hubPickedOrder.filter(function (id) { return !!live[id]; });
+        Object.keys(hubPicked).forEach(function (id) { if (!live[id]) delete hubPicked[id]; else hubPicked[id] = live[id]; });
+        hubRenderSel();
         if (!items.length) {
-          hubListEl.appendChild(folderNote("Nothing in the hub yet. Add a photo or file above — or on the computer, drop or paste one on the Hub panel."));
+          hubListEl.appendChild(folderNote("Nothing in Shared files yet. Add a photo or file above — or on the computer, drop or paste one in Shared files (⋯ menu)."));
           return;
         }
         items.slice(0, 60).forEach(function (it) { hubListEl.appendChild(hubRow(it)); });
       })
+      .then(loadHubDevices)
       .catch(function (err) {
         hubListEl.innerHTML = "";
-        hubErr(errText(err, "couldn't read the hub"));
+        hubErr(errText(err, "couldn't read shared files"));
       });
+  }
+  // The person's OTHER devices (GET /api/hub/devices; core/hub_remote.py):
+  // their items after this device's, each "on <device>". Adding one to the
+  // message puts its code in; the server brings it to this computer when
+  // the message is expanded. A device that can't be asked says why.
+  function loadHubDevices() {
+    return fetch("/api/hub/devices")
+      .then(function (r) { return r.ok ? r.json() : { devices: [] }; })
+      .then(function (j) {
+        var shown = 0;
+        ((j && j.devices) || []).forEach(function (d) {
+          if (d.state !== "ok") {
+            hubListEl.appendChild(folderNote(String(d.note || (d.name + " can't be asked right now"))));
+            return;
+          }
+          (d.items || []).forEach(function (r) {
+            if (r.copy || shown >= 60) return;
+            shown++;
+            var it = {
+              id: "file@" + d.device + ":" + r.id,
+              ref: r.ref,
+              name: r.name,
+              kind: r.kind,
+              size: r.size,
+              by: r.by,
+              by_name: r.by_name,
+              remote: { device: d.device, deviceName: d.name, id: r.id },
+            };
+            hubListEl.appendChild(hubRow(it));
+          });
+        });
+      })
+      .catch(function () {});
   }
   function openHubSheet() {
     closeSheet(sessionsSheet);
@@ -2614,7 +2794,7 @@
     loadHubSheet();
   }
   document.getElementById("hub-add").addEventListener("click", function () { hubFileEl.click(); });
-  document.getElementById("hub-done").addEventListener("click", function () { closeSheet(hubSheet); });
+  document.getElementById("hub-done").addEventListener("click", function () { hubClearSel(); closeSheet(hubSheet); });
 
   // --- image paste -----------------------------------------------------------
   // A pasted image can't go down the PTY as keystrokes, and the agent CLI runs
@@ -3481,6 +3661,8 @@
   function openActSheet(title) {
     actFor = title || "";
     actBusy = false;
+    actSpeedOpen = false;
+    loadTouchSpeed().then(refreshSpeedHint);   // the desktop's speed may have moved since
     actOpenedAt = Date.now();
     actError("");
     renderActSheet();
@@ -3561,6 +3743,58 @@
     }
     actListEl.appendChild(actRow("Recently closed", "reopen a session you closed",
       function () { closeActSheet(); openRecentSheet(); }));
+    actSpeedRow = actListEl.appendChild(actRow("Scroll speed", touchSpeedHint(touchSpeed.speed, touchSpeed.def),
+      function () { actSpeedOpen = !actSpeedOpen; renderActSheet(); }, "act-speed-row"));
+    if (actSpeedOpen) actListEl.appendChild(touchSpeedPicker());
+  }
+
+  // ⋯ → Scroll speed: the phone's own speed, a few steps; the tapped one
+  // applies to the next drag and saves as the synced ui.mobile_scroll_speed.
+  var actSpeedOpen = false, actSpeedRow = null;
+  // A fresh read landed: say it on the row, leaving the rest of the sheet
+  // (a Delete strip, a note being typed) as it is.
+  function refreshSpeedHint() {
+    var h = actSpeedRow && actSpeedRow.querySelector(".act-hint");
+    if (h) h.textContent = touchSpeedHint(touchSpeed.speed, touchSpeed.def);
+  }
+  function touchSpeedPicker() {
+    var box = document.createElement("div");
+    box.className = "act-speed";
+    var note = document.createElement("div");
+    note.className = "act-hint";
+    note.textContent = "Lines per row your finger drags on the phone, separate from the desktop's wheel speed.";
+    box.appendChild(note);
+    var row = document.createElement("div");
+    row.className = "act-speed-steps";
+    TOUCH_SPEED_STEPS.forEach(function (n) {
+      if (n < touchSpeed.min || n > touchSpeed.max) return;
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "act-speed-step" + (n === touchSpeed.speed ? " on" : "");
+      b.textContent = String(n);
+      b.addEventListener("click", function () { setTouchSpeed(n); });
+      row.appendChild(b);
+    });
+    box.appendChild(row);
+    return box;
+  }
+  function setTouchSpeed(n) {
+    var was = touchSpeed.speed;
+    touchSpeed.speed = n;   // the next drag uses it, saved or not yet
+    actError("");
+    renderActSheet();
+    fetch("/api/mobile-scroll-speed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ speed: n })
+    })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (j) { applyTouchSpeed(j); refreshSpeedHint(); })
+      .catch(function () {
+        touchSpeed.speed = was;
+        actError("Couldn't save the scroll speed");
+        renderActSheet();
+      });
   }
 
   // One Verify or route block (verifyModel / routeModel): what it waits on in
@@ -4470,6 +4704,7 @@
   var VOICE_REC_WAIT_MS = 50;            // the phone's recognizer waiting for a line said over the listen: checked this often
   var VOICE_BARGE_MUTE_MS = 150;         // barge-in: the mic opens this long after the speaker is cut (its tail is not heard)
   var VOICE_QUIET_CAPTION_MS = 1500;     // "Quiet." stays on the strip this long
+  var VOICE_MISSED_CAPTION_MS = 3000;    // "Recognition didn't finish — say it again" this long
 
   // --- PhoneSTT: SpeechRecognition / webkitSpeechRecognition ----------------
   // The state machine restarts it while its listening window is open; the
@@ -5004,11 +5239,19 @@
   // Whether an /end answer's final is the accurate pass's (a sample for
   // the "over" budget and the fast-trust window): it has one, and not
   // Moonshine's own text (`final_by: "moonshine"` — a control-only phrase,
-  // answered at once, or the pass timed out: neither says how long the
-  // accurate pass takes nor whether it changes words).
+  // answered at once: it says nothing of how long the accurate pass takes
+  // nor whether it changes words; a timed-out pass has no final at all).
   function voiceTimedFinal(j) {
     j = j || {};
     return typeof j.final === "string" && j.final_by !== "moonshine";
+  }
+  // What the strip says when a phrase ended without its text (/end
+  // `final_missed`; lib/voiceDesktop missedLine says the same): say it
+  // again — and, when a send waited on it, nothing was sent. "off" is the
+  // setting (voice.stt_final), and says where to turn it back on. Pure.
+  function voiceMissedLine(why, sending) {
+    if (why === "off") return (sending ? "Nothing sent" : "Nothing typed") + " — whisper's accurate pass is off: Settings → Voice";
+    return sending ? "Recognition didn't finish — nothing sent; say it again" : "Recognition didn't finish — say it again";
   }
   function voiceJoin(a, b) {
     a = String(a || "").trim();
@@ -5988,7 +6231,9 @@
           if (g.dead) { streamDelete(id); return; }
           // loading: nobody was listening, so the server's recognition is
           // loading now — the first words wait for it ("Starting the mic…").
-          if (id) { g.sid = id; g.mode = "stream"; voiceSttLoading(x.j.loading === true); if (mine) { voiceTraceMark(g, "open"); streamPump(g, mine); } return; }
+          // moon: Moonshine streams it — its words are a preview, never the
+          // phrase's text (only /end's whisper final is: streamEnd).
+          if (id) { g.sid = id; g.mode = "stream"; g.moon = x.j.engine === "moonshine"; voiceSttLoading(x.j.loading === true); if (mine) { voiceTraceMark(g, "open"); streamPump(g, mine); } return; }
           if (x.r.status === 409 && voiceStreamFull(x.j)) {
             voice.rec.streamFull = { at: Date.now(), n: ((voice.rec.streamFull && voice.rec.streamFull.n) || 0) + 1 };
             if (Date.now() - t0 + VOICE_STREAM_FULL_RETRY_MS <= VOICE_STREAM_FULL_MAX_MS) {
@@ -6073,7 +6318,7 @@
         streamWords(g, mine, x.j.committed, x.j.partial);
         // "Over" waiting for its final: this chunk settled the last of its
         // words, and the finals here seldom change them — it goes now.
-        if (g.endFire && !g.partial && voiceFastStands(voice.rec.finals)) { g.endFire(); return; }
+        if (g.endFire && !g.moon && !g.partial && voiceFastStands(voice.rec.finals)) { g.endFire(); return; }
         streamPump(g, mine);
       }, function (err) {
         if (g.dead) return;
@@ -6093,7 +6338,9 @@
       g.pend = voiceJoin(g.pend, committed);
       g.partial = String(partial || "").trim();
       var tail = voiceTail(g.pend, false, true);
-      if (tail && tail.kind === "stop") {
+      // (Moonshine's words before a stop phrase are no text: the phrase's
+      // end — whisper's words — decides, controlFire.)
+      if (tail && tail.kind === "stop" && !(g.moon && String(tail.text || "").trim())) {
         var all = g.pend;
         g.pend = g.partial = "";
         if (h.onFinal) h.onFinal(all, g.spokeAt);
@@ -6117,12 +6364,17 @@
     // has been taking here, 1.5× plus 100 ms; a later final ignored).
     // voice.rec.ctl times it: the word's end (its last loud block) → the
     // send (voiceCtlSent), and keeps the budget.
+    // On Moonshine (g.moon) the guess is a preview, never the text: a send,
+    // and a stop phrase with words before it, wait for /end however long it
+    // takes (no budget, no fast-stands) — whisper's words then send or stop,
+    // or none come (onMissed): nothing of the phrase is typed or sent.
     function controlFire(g, mine) {
       var c = g.ctl;
       g.ctl = null;
       voice.rec.ctl = { word: c.word, wordEnd: g.lastLoud || Date.now(), at: Date.now() };
       voiceTraceMark(g, "control");
-      if (!c.send) {
+      var stopWords = c.word === "stop" && String((voiceTail(c.text, false) || {}).text || "").trim();
+      if (!c.send && !(g.moon && stopWords)) {
         rec = null;
         clearTimeout(capTimer);
         // Its stream goes FIRST (DELETE on its way), then the carried
@@ -6143,7 +6395,7 @@
       if (token !== mine) return;
       // The fast words all settled (no unstable tail) and the finals here
       // seldom change them (voiceFastStands): no wait for this one's.
-      var budget = !g.partial && voiceFastStands(voice.rec.finals) ? 0 : voiceEndBudgetMs(voice.rec.endMs);
+      var budget = g.moon ? 0 : !g.partial && voiceFastStands(voice.rec.finals) ? 0 : voiceEndBudgetMs(voice.rec.endMs);
       voice.rec.ctl.budget = budget;
       g.endFire = function () {
         clearTimeout(g.endTimer);
@@ -6162,7 +6414,7 @@
         voice.rec.last = { ms: budget, backend: "stream", error: "", at: Date.now(), finalMs: 0, fixed: false, late: true };
         streamDone(g, mine, g.fast);
       };
-      g.endTimer = setTimeout(g.endFire, budget);
+      if (!g.moon) g.endTimer = setTimeout(g.endFire, budget);
       finish();
     }
     // The phrase is over: /end flushes the words the stream still holds —
@@ -6179,14 +6431,15 @@
       streamReq(g, streamUrl(g.sid, "end"), { method: "POST" }).then(function (x) {
         voiceSttLoading(false);
         if (g.dead) return;
+        var waited = !!g.endFire;   // "over" waited on it (controlFire)
         clearTimeout(g.endTimer);
         g.endFire = null;
         g.busy = false;
         if (!x.r.ok) { if (!g.late) streamFail(g, mine, streamWhy(x)); return; }
         g.sid = "";   // ended: nothing to DELETE
         var text = voiceJoin(g.pend, x.j.committed), fin = voiceStreamFinal(text, x.j);
-        // An accurate final came (absent, or Moonshine's own: off, skipped,
-        // failed, timed out or a control-only phrase — that says nothing of
+        // An accurate final came (absent — off, skipped, failed, timed out —
+        // or Moonshine's own for a control-only phrase: that says nothing of
         // how long one takes; voiceTimedFinal): its round trip, late or not,
         // is a sample for the next "over"'s budget (voiceEndBudgetMs of the
         // median, voiceEndTypicalMs); and whether it changed a word.
@@ -6196,6 +6449,18 @@
           voice.rec.finals = voiceKeepLast(voice.rec.finals, x.j.same !== true && voicePlainWords(x.j.final) !== voicePlainWords(text), VOICE_FAST_TRUST_WINDOW);
         }
         if (g.late) return;   // "over" went with the fast words already
+        // Moonshine heard words whisper did not write (`final_missed`; no
+        // final anyway: "failed"): nothing of the phrase is text — its guess
+        // comes out of the box (onMissed, then onEnd), nothing is sent.
+        var missed = g.moon && typeof x.j.final !== "string"
+          ? String(x.j.final_missed || "") || (voiceJoin(text, g.partial) ? "failed" : "") : "";
+        if (missed) {
+          voice.heardEnd = null;
+          voice.rec.last = { ms: Number(x.j.ms) || (Date.now() - t0), backend: "stream", error: "", at: Date.now(), finalMs: 0, fixed: false, missed: missed };
+          if (token === mine && mine.h.onMissed) mine.h.onMissed(missed, waited);
+          streamDone(g, mine, "");
+          return;
+        }
         // Moonshine's own text of the phrase: the router decides the
         // control words on it (voiceRouteBody's `heard`).
         voice.heardEnd = typeof x.j.heard === "string" && x.j.heard.trim() ? { final: fin.text, heard: x.j.heard, at: Date.now() } : null;
@@ -6220,8 +6485,12 @@
       g.sid = "";
       g.mode = "clip";
       streamDelete(sid);
-      g.lead = voiceJoin(g.pend, g.partial);
+      // Moonshine's words are no text: none of them lead the clip — the
+      // guess comes out of the box, and the strip says so.
+      var said = voiceJoin(g.pend, g.partial);
+      g.lead = g.moon && said ? "" : said;
       g.pend = g.partial = "";
+      if (g.moon && said && mine && token === mine && mine.h.onMissed) mine.h.onMissed("failed", !!g.endFire);
       if (g.ending && token === mine) clipSend(g, mine);
     }
     // The phrase's last words (none: the window decides, as for a clip).
@@ -7057,12 +7326,13 @@
   // A moment's word on the strip, VOICE_QUIET_CAPTION_MS long: the cue
   // that something ended — "Quiet." after a hush, "Heard nothing." when a
   // listening window closed without a word.
-  function voiceStripNote(word) {
+  function voiceStripNote(word, ms) {
+    ms = ms > 0 ? ms : VOICE_QUIET_CAPTION_MS;
     voice.quietWord = String(word || "");
-    voice.quietUntil = Date.now() + VOICE_QUIET_CAPTION_MS;
+    voice.quietUntil = Date.now() + ms;
     voiceCaption(voice.quietWord);
     clearTimeout(voice.quietTimer);
-    voice.quietTimer = setTimeout(voiceStripPaint, VOICE_QUIET_CAPTION_MS + 20);
+    voice.quietTimer = setTimeout(voiceStripPaint, ms + 20);
   }
   function voiceQuiet() { voiceStripNote("Quiet."); }
   function voiceError(msg) {
@@ -7191,6 +7461,7 @@
     var L = voiceListen_, s = voice.stt;
     if (L.mode === "dialog") { voiceListenDone(); return; }
     L.overAfter = true;
+    L.missed = "";               // only a phrase that ends from here on counts (voiceListenFlush)
     L.cont = false;
     L.until = 0;                 // no more restarts
     L.overBy = Date.now() + VOICE_OVER_WAIT_MS;
@@ -7211,14 +7482,33 @@
   }
   // The words are in: stop, keep them. Never a send — unless Send was
   // tapped while they were on their way (voiceTakesSend): then they go.
+  // Unless they never came (whisper did not write the last phrase,
+  // voiceMissed): nothing is sent — what is in the box stays — and the
+  // strip says why.
   function voiceListenFlush() {
-    var L = voiceListen_, send = L.sendTapped;
+    var L = voiceListen_, send = L.sendTapped, missed = L.missed;
     L.overAfter = false;
     L.sendTapped = false;
+    L.missed = "";
     clearTimeout(L.timer);
     voice.stt.stop();
+    if (missed) { voiceListenKept(); voiceMissedNote(missed, send); return; }
     if (send && vbox().value.trim()) { voiceSend(vbox().value); return; }
     voiceListenKept();
+  }
+  // A phrase whisper did not write (the server's `final_missed`: "off",
+  // "skipped", "failed", "timeout", "empty"): Moonshine detects, whisper
+  // writes — its words are never typed — so the person is told to say it
+  // again (voiceMissedLine); the reason is kept for voiceListenFlush.
+  // "off" is a setting, not a miss: it stays on the error line.
+  function voiceMissed(why, sending) {
+    voiceListen_.missed = String(why || "failed");
+    voiceMissedNote(why, sending);
+  }
+  function voiceMissedNote(why, sending) {
+    var line = voiceMissedLine(why, sending);
+    if (why === "off") voiceError(line);
+    voiceStripNote(line, VOICE_MISSED_CAPTION_MS);
   }
   function voiceIdle(caption) {
     clearTimeout(voiceListen_.timer);
@@ -7734,6 +8024,7 @@
     L.held = !!held;
     L.overAfter = false;
     L.sendTapped = false;
+    L.missed = "";
     L.routing = false;
     L.routeQ = [];
     L.draining = false;
@@ -7855,6 +8146,15 @@
       onBarge: function () { if (voiceIsListening()) voiceBargeIn(); },
       // "over" heard in the guess: the send is on its way (voiceRouteEarly).
       onEarly: function (t, at) { if (voiceIsListening()) voiceRouteEarly(t, mode, voiceSpokeAt(at)); },
+      // A Moonshine phrase whisper did not write (ServerSTT's streamEnd): its
+      // guess comes out of the box — nothing of it is typed or sent — and
+      // the strip says to say it again (voiceMissed).
+      onMissed: function (why, sending) {
+        if (!voiceIsListening()) return;
+        voiceGuessDrop();
+        voiceListen_.early = null;
+        voiceMissed(why, !!sending || voiceListen_.sendTapped);
+      },
       // The phrase's final: its guess is taken back first, so every rule
       // reads the box as it was before the phrase (and only final words).
       // (While the router has the phrase before it, the guess in the box is

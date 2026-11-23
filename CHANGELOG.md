@@ -7,6 +7,244 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.28] - 2026-11-23
+
+### Added
+
+- **Several shared files at once.** Each item in Shared files has a
+  checkbox (shown on hover or focus, on every item once one is ticked;
+  Shift+click ticks a range; Select all — or Ctrl/⌘+A — ticks what the
+  filter shows). A selection bar sends them all to a session in **one**
+  message (or saves copies in its folder, each at `hub/<name>` or the next
+  free name, never over a file), puts them in the focused session's prompt,
+  copies their codes, pins / unpins them (a mixed selection says **Pin 2** ·
+  **Unpin 1**), or removes them after one confirm that names the count, with
+  one **Undo** for all. Dragging a ticked item carries the whole selection
+  onto a session's row, message box or terminal. The server takes the batch
+  in one request, `POST /api/hub/batch`, checking each item as its one-item
+  route does and answering per item; what could not be done is listed in
+  the drawer with the reason, never skipped silently. On the phone, Sessions
+  → Shared files has a tick per row and **Add N to message**.
+
+- **Shared files across your devices.** The drawer, the phone sheet and
+  the agents' `hub` tool also list what your OTHER devices offer right now,
+  in the same list, each marked **on ‹device›** — and a device that can't
+  be asked says why (offline, needs an update, remote control off, not
+  offering), never an empty list. On demand, not a sync: only the list
+  travels to draw it (a remote picture shows a thumbnail only when it is
+  512 KB or less). Using one — Send to session…, Put in a prompt, **Save to
+  this device**, Download, Copy text, or its code in any prompt — fetches it
+  over the existing device forwarding path, checks it against the listed
+  checksum, and keeps it here as a normal item "from ‹device›"; a second
+  use moves nothing. Codes work across devices (`file:k7m2` typed here for
+  the Mac mini's item is fetched, then expanded); when two devices hold one
+  code the list shows `file@mac-mini:k7m2`, and a plain code two devices
+  hold is said, never guessed. Another device's items are read-only from
+  here; a mixed selection pins and removes only this device's, fetches the
+  rest, and lists per item what failed. A secret-looking item (`.env`,
+  keys) is not brought over unless you confirm that one item — never by an
+  agent, whose fetches are logged with its session. **Show these on my
+  other devices** in the drawer footer (`hub.offer_to_devices`, on) and an
+  item's **Keep on this device only** are enforced on the device that holds
+  them. New routes: `GET /api/hub/devices`, `POST /api/hub/devices/fetch`,
+  `GET /api/hub/devices/{device}/items/{id}/thumb`, the session's `POST
+  …/hub/fetch`; what a device offers, `GET /api/hub/offer` (+ `…/{id}/raw`,
+  `…/{id}/thumb`), answers only your own devices over the device link and
+  is the forwarding allow-list's only hub entry (docs/devices.md "Shared
+  files on your other devices").
+
+- **Feedback: report a MindFlock problem or idea in one step.** **Feedback**
+  beside the version in the top bar (or the palette) opens a box: write a
+  line or two, press Send, and it is filed as a GitHub issue on
+  MindFlock/MindFlock with the GitHub sign-in MindFlock already has (without
+  one, it opens the same report pre-filled in the browser). Or ask the agent
+  you are talking to: the MCP's new `report_issue` drafts the report, a toast
+  offers **Review**, and you read, edit and send it. Agents can only draft.
+  Reports are public, so the box says so, shows the one line MindFlock adds
+  (version and operating system), and paths and anything shaped like a key
+  are replaced before a draft is stored or a report is sent.
+
+- **The phone has its own scroll speed.** ⋯ → Scroll speed on `/m` picks how
+  many lines a swipe scrolls per row your finger drags (1, 2, 3, 4, 6 or 8;
+  default 3, which is how it felt before). It used to be 3× the desktop's
+  wheel speed, so changing the speed on the PC changed the phone too; the
+  phone now divides the desktop's lines per tick back out and carries the
+  leftover between moves, so slow drags still move. Saved as the synced
+  setting `ui.mobile_scroll_speed`; Settings → General now says *Terminal
+  scroll speed (desktop)*.
+
+- **Squash merges are recognised.** A squash makes a new commit, so "are
+  this branch's commits on the live branch" never said yes, and work that
+  reached the live branch through another pull request (a scratch branch,
+  sometimes bundling two tickets) was missed by the pull-request check
+  too. Verify now also asks whether the branch's changes are already
+  present on the live branch. It answers no whenever it is unsure (a later
+  commit rewrote the same lines, only part landed, an empty branch), so
+  unmerged work is never called live.
+
+- **"It's merged into <live branch>"** in a checklist's ⋯ menu while it
+  waits for its merge, for what the check above misses
+  (`POST /api/test-plans/{id}/shipped`). A route's Finish stop marks its
+  branch's checklist merged the same way.
+
+### Changed
+
+- **After the computer was turned off, sessions come back Sleeping, not
+  Offline.** Before, every session whose agent went down with the machine
+  was held offline at the next start, so the morning after a power-off the
+  whole rail read "Offline" though nothing was broken. Now only what looks
+  like a crash is held: an exit marker from the OOM killer or a crash, or —
+  for the no-marker / hang-up stop that a power-off and an abrupt WSL death
+  under memory pressure both leave — memory history (`logs/memory.jsonl`)
+  whose last 5 minutes before the stop read low/critical, show an OOM kill,
+  or had distress pending. Those are held with the new reason *memory was
+  running out when it stopped*. Everything else is **Sleeping** (*the
+  computer was turned off or restarted*): no bell, not in the Offline count
+  or the "stayed offline" notice, and opening it or sending it something
+  wakes it, resuming its conversation. No memory history at all (a fresh
+  install, the sampler off) reads as a plain shutdown. Only a person wakes
+  such a session: its queued prompts, messages and flight steps wait for
+  that, so a boot never starts agents by itself (that stays
+  `general.revive_on_start`, off by default). A session cut off mid-task is
+  asked to continue where it left off when it wakes; an idle one is not.
+  Existing holds stay held. An orderly server stop now writes
+  `clean_stop.json`, used only as supporting evidence. Settings → General's
+  switch is now **Bring agents back by themselves after a shutdown or
+  crash**, with a note that says both.
+
+- **Site traffic counts people, not crawlers** (Settings, `--mindflock-dev`
+  shell). Most of the 90-day click volume was automated: every link drew about
+  the same count, directory badges included, and phones "clicked" desktop
+  installers hundreds of times. With the classifying click Worker (webpage
+  repo, deployed separately) the visitor, click and funnel figures are
+  human-only, labelled *human clicks since ‹date›* while the window fills, with
+  the automated share beside them and a **Who's clicking** table of classes and
+  reasons. Against the current Worker the same figures are labelled *all
+  clicks incl. automated*, with a note saying most of it is. New tile:
+  **Download clicks from the installer's OS** (24% today). The Downloads tile
+  now counts the three installers only (1,703, not 4,113) with *+N other
+  files: update checks, checksums, packages* under it; the per-release chart
+  and table split installers from the rest. `GET /api/traffic` adds
+  `installer_downloads_total`, `downloads_by_kind`, per-asset `kind`,
+  per-release `installer_downloads`, and passes the Worker's `clicks.human`
+  and `clicks.classification` through.
+
+- **The Hub is now called Shared files, and lives in the top bar's ⋯
+  menu.** The standing top-bar button is gone; ⋯ is always there with
+  **Shared files** as its first row (Alt+H and the palette's "Shared files…"
+  still open it — "hub" still finds it), and when an agent or your phone
+  added something since you last looked, ⋯ carries a small calm count in the
+  accent. One vocabulary in the drawer, notices, tooltips, the composers'
+  paperclip and picker, Disk cleanup, the keyboard help, the phone page, the
+  MCP tool's description and the CLI's help. The tool keeps its name `hub`,
+  as do the API (`/api/hub`), the `hub.*` settings, `hub.json` and the
+  folders, so existing installs, other devices and agents keep working.
+
+- **Codes read `file:k7m2`.** New and existing items show the `file:` form;
+  the first `hub:k7m2` codes keep working everywhere a code is read — sent
+  prompts, the queue, a terminal paste, the phone, the MCP tool, the CLI —
+  for good. A `file:` word that cannot be a code (`file:line`) is left
+  alone and never reported as unknown; "file: " with a space is prose and
+  does not open the picker. The line an agent gets now reads `file:k7m2
+  (MindFlock shared file: …)`; a prompt already expanded the old way is not
+  expanded twice.
+
+- **Recently closed can be searched by project folder.** A session that ran
+  in a worktree was only findable by its branch, name or worktree path, none
+  of which name the project it was for. Each row now carries the folder it
+  was cut from: the filter matches it (type the project's name), the row
+  shows it, and hovering gives the full path.
+
+- **The memory gate sizes a new session by its agent, not by everything
+  running in sessions' terminals.** "Room for N more sessions" used to drop
+  sharply whenever one session ran a test suite, a build or a dev server:
+  that work was counted twice, once as memory really in use and again as
+  the assumed cost of every future session. A 4 GB test run in one of four
+  sessions took room from 18 to 4; it now takes it to 12, which is what
+  4 GB really costs. The estimate ("~M MB per agent") stays steady while
+  such work starts and stops. Memory in use is still counted in full, and
+  the pressure readings, the reserve, the spacing between starts and the
+  cap on live sessions still hold a start whatever the arithmetic says.
+  This does let more sessions start than before while heavy work is
+  running in others: up to 7 where the old rule allowed none, in the worst
+  case measured.
+
+- **With Verify switched off, a check you asked for is still followed
+  through.** The switch used to stop the watcher that notices merges, while
+  a route's Verify stop went on creating checklists; those then waited for
+  a merge nobody was looking for, for good. The switch now pauses only what
+  MindFlock starts by itself (checklists written because a watched
+  repository was pushed to). A checklist a route's Verify stop or a person
+  asked for is watched until its work ships, and then comes due.
+
+- **Voice: only whisper's words are ever typed.** Moonshine, the fast
+  recogniser, is for control words and for showing words as you speak;
+  whisper, the accurate one, writes the text. But when whisper's pass was
+  off, skipped, failed or ran out of time, Moonshine's words were typed in
+  its place, and you could not tell. Several other paths did the same: "over"
+  sent the fast words when whisper took longer than its budget, letting go
+  of push-to-talk typed the phrase in flight, a stop phrase typed the fast
+  words before it, and a new phrase starting early settled the previous one
+  with its fast words. All of them now wait for whisper. When whisper does
+  not write a phrase, what the live words put in the box is taken back,
+  nothing of that phrase is typed or sent, and the caption says
+  "Recognition didn't finish — say it again". Text already in the box stays,
+  unsent. On the desktop and the phone.
+
+- With Moonshine on, "over", a stop phrase with words before it, and
+  letting go of push-to-talk now always wait for whisper's words (up to
+  about 1.5 seconds on a busy machine) where they used to send the fast
+  words early.
+
+- If whisper's accurate pass is switched off while Moonshine is on,
+  dictation types nothing. Settings → Voice and the mic's caption now say
+  so, with a button to turn the pass back on.
+
+- A page that was already open before the update keeps the old behaviour
+  until it is reloaded.
+
+### Fixed
+
+- **Opening a grid of sleeping sessions no longer starts every agent at
+  once.** A pane attaching woke its sleeper without asking the launch gate,
+  so a grid of nine sleepers started nine agents together whatever memory
+  read. The wake now goes through the gate: they start one at a time as
+  memory allows, and a pane still waiting says **Waiting for memory** with
+  **Start anyway**.
+
+- **A route's CodeRabbit loop finishes by itself and hands the agent the
+  right things.** On a real PR, the Reviews stop failed after two hours
+  with "gave up waiting at agent after 120 min — already at pr — waiting
+  for new work", and later sat at that note with every thread resolved.
+  The agent pushes each round itself (its prompt says to), or a round
+  changes nothing, and the stop's push then waited on a lane with nothing
+  left to push. The stop now sees that git already has the round, goes back
+  to watching and turns the lane off. CodeRabbit's "Nitpick comments",
+  "Outside diff range comments" and "Duplicate comments" live only in its
+  review body, which was dropped whole as a summary. Each item in its newest
+  review of the PR's current commit now goes to the agent as its own request,
+  once: it is keyed by file and title, and a duplicate of an inline thread
+  is never sent a second time. The agent's own replies (the PR author's
+  account, and the account MindFlock's token acts as) and short notices from
+  bots that never reviewed the PR (a Shortcut link, a deploy preview) are no
+  longer requests. CodeRabbit itself always counts. When CodeRabbit has
+  posted on the PR, the loop waits for its review of each new commit, even
+  without "Wait for this reviewer". It finishes at once when that review
+  leaves nothing to address and every thread is resolved. With no review yet
+  it keeps waiting, up to "Give that reviewer" minutes, then the usual quiet
+  rule decides.
+
+- **Site traffic** dates were a day early west of UTC (a `2026-11-24` day key
+  showed as Nov 23), and its copy said the app's updater opens the releases
+  page in a browser — it downloads the installer itself, so updates show up
+  in GitHub's installer counts.
+
+- **Send to session… no longer hides under the drawer.** It was a dialog in
+  the middle of the window that the Shared files drawer covered — at 1100 px
+  and narrower its own Send and Cancel buttons were under the drawer. It is
+  now a step inside the drawer (the content swaps to the send form, with
+  **← Back** / Esc), one surface at every width.
+
 ## [0.14.27] - 2026-11-23
 
 ### Added
@@ -7359,7 +7597,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.27...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.28...HEAD
+[0.14.28]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.28
 [0.14.27]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.27
 [0.14.26]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.26
 [0.14.25]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.25

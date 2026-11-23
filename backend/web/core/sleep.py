@@ -52,6 +52,33 @@ included. Nothing used to offload it. Sleeping does:
   into a booting CLI). The prompt queue's own drain wakes a sleeper simply
   by relaunching it (its ``offline`` path).
 
+* **After a shutdown** — the computer was turned off (or WSL restarted)
+  while agents ran: at the next server start
+  :func:`backend.web.core.revive.hold_on_boot` puts every session whose
+  agent was running, and whose stop shows no sign of a crash, to sleep with
+  :data:`REASON_SHUTDOWN` (a crash is held offline instead —
+  :mod:`backend.web.core.held`). Such a "boot-sleeper" differs from the
+  others in two ways:
+
+  - only a PERSON wakes it (``ensure_awake(person=True)``: a terminal
+    attaching, ``/send``, Send now, the Wake chip). Automatic wakes — its
+    prompt queue's drain, the mailbox lane, a flight step, a launch saved
+    from before the shutdown — leave it asleep and keep their items parked
+    (:data:`BOOT_WAITS`), so a boot never starts agents by the back door
+    (that is ``general.revive_on_start``'s job, off by default). Once a
+    person woke it, it is an ordinary session again;
+  - it may have been cut off MID-TURN (``mid_turn`` in its record: its CLI's
+    hooks last said ``working``). Its wake then puts revive's "continue
+    where you left off" at the front of its prompt queue
+    (:func:`backend.web.core.revive.queue_continue`), so the interrupted
+    task is not silently dropped. An idle one gets nothing.
+
+  A terminal attaching is gated like an automatic start
+  (``ensure_awake(auto=True, person=True)`` — core.launch_gate): opening a
+  grid of nine sleepers starts them one at a time as memory allows, not all
+  at once; a wait closes the socket with 4410 and the pane says "Waiting for
+  memory" with Start anyway.
+
 Keyed by session title throughout (``foo`` and ``foo-copy`` share a folder
 and a branch, never a sleep record); remote rows (``device::title``) are
 never here — only this server's ENGINE sessions are swept.
@@ -102,6 +129,15 @@ HEAL_AFTER_S = 60.0
 REASON_IDLE = "idle"
 REASON_MEMORY = "memory"
 REASON_MANUAL = "manual"
+#: Found down at server start with no sign of a crash: the computer was
+#: turned off or restarted while its agent ran (core.revive.hold_on_boot).
+REASON_SHUTDOWN = "shutdown"
+
+#: What an automatic wake of a boot-sleeper (:data:`REASON_SHUTDOWN`)
+#: answers: it waits for a person, and whatever asked stays queued.
+BOOT_WAITS = (
+    "asleep since the computer was turned off — it waits for someone to open it"
+)
 
 # Vetoes (stable strings: the route's 409 and the tests name them).
 V_ASLEEP = "already asleep"
@@ -175,11 +211,14 @@ def _clean(d: dict) -> Dict[str, dict]:
             since = float(v.get("since") or 0.0)
         except (TypeError, ValueError):
             continue
-        out[str(k)] = {
+        rec = {
             "since": since,
             "reason": str(v.get("reason") or REASON_IDLE),
             "freed_mb": max(0, int(v.get("freed_mb") or 0)),
         }
+        if v.get("mid_turn"):
+            rec["mid_turn"] = True
+        out[str(k)] = rec
     return out
 
 
@@ -276,15 +315,46 @@ def is_sleeping(title: str) -> bool:
     return info(title) is not None
 
 
-def mark(title: str, reason: str, freed_mb: int = 0) -> None:
+def mark(title: str, reason: str, freed_mb: int = 0, *, mid_turn: bool = False) -> None:
     """Record ``title`` as asleep (before its agent is stopped, so no reader
-    ever sees the dead agent without the record)."""
+    ever sees the dead agent without the record). ``mid_turn``: its agent was
+    cut off in the middle of a turn (a boot-sleeper only), so its wake queues
+    the continue prompt."""
+    rec = {
+        "since": time.time(),
+        "reason": reason,
+        "freed_mb": max(0, int(freed_mb or 0)),
+    }
+    if mid_turn:
+        rec["mid_turn"] = True
     with _LOCK, _STORE.transaction() as recs:
-        recs[str(title)] = {
-            "since": time.time(),
-            "reason": reason,
-            "freed_mb": max(0, int(freed_mb or 0)),
-        }
+        recs[str(title)] = rec
+
+
+def boot_asleep(title: str) -> bool:
+    """Whether ``title`` is asleep since a shutdown (:data:`REASON_SHUTDOWN`):
+    only a person wakes it. Never raises."""
+    rec = info(title)
+    return bool(rec) and rec.get("reason") == REASON_SHUTDOWN
+
+
+def drop_boot_sleeps() -> int:
+    """Forget every :data:`REASON_SHUTDOWN` record (``general.revive_on_start``
+    turned on: the boot sweep revives those agents instead) → how many.
+    Never raises."""
+    try:
+        with _LOCK:
+            if not any(r.get("reason") == REASON_SHUTDOWN for r in _load().values()):
+                return 0
+            with _STORE.transaction() as recs:
+                gone = [
+                    t for t, r in recs.items() if r.get("reason") == REASON_SHUTDOWN
+                ]
+                for t in gone:
+                    recs.pop(t, None)
+        return len(gone)
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def woke(title: str) -> None:
@@ -305,6 +375,8 @@ def woke(title: str) -> None:
             return
         now = time.time()
         _WOKE_AT[title] = now
+        if rec.get("mid_turn"):
+            _continue_after_wake(title)
         _info(
             "wake %s: %s (asleep %s)",
             title,
@@ -322,6 +394,20 @@ def woke(title: str) -> None:
         except Exception:  # noqa: BLE001
             pass
     except Exception:  # noqa: BLE001 — a wake must never fail over bookkeeping
+        pass
+
+
+def _continue_after_wake(title: str) -> None:
+    """A boot-sleeper cut off mid-turn just woke: put revive's "continue where
+    you left off" at the front of its queue (sent once the CLI has drawn its
+    prompt and settled idle; visible and removable before it goes). Never
+    raises."""
+    try:
+        from backend.web.core import revive as _revive
+
+        if _revive.queue_continue(_server(), title):
+            _info("wake %s: it was cut off mid-turn — a continue is queued", title)
+    except Exception:  # noqa: BLE001
         pass
 
 
@@ -865,7 +951,13 @@ def sleep_now(inst, title: str, srv=None) -> Optional[str]:
 
 
 def ensure_awake(
-    inst, title: str, why: str, srv=None, *, auto: bool = False
+    inst,
+    title: str,
+    why: str,
+    srv=None,
+    *,
+    auto: bool = False,
+    person: Optional[bool] = None,
 ) -> Tuple[bool, Optional[str]]:
     """Wake ``title`` if it is asleep → ``(woke, error)``. Every path that
     types into a session calls this first (or relaunches through
@@ -877,6 +969,12 @@ def ensure_awake(
     the gate says wait, the wake joins its queue instead (the row shows
     "Waiting for memory") and the answer is ``(False,
     launch_gate.WAITING_FOR_MEMORY)``. The queue wakes it when memory allows.
+
+    ``person``: a person asked (default: ``not auto``). A boot-sleeper
+    (:data:`REASON_SHUTDOWN`) wakes only for a person; anything else gets
+    ``(False, BOOT_WAITS)`` and the caller keeps what it wanted to send
+    queued. A terminal attaching is both: ``auto=True`` (gated: a grid of
+    sleepers must not start all at once) and ``person=True``.
 
     A PAUSED session is never woken: Pause outranks a sleep (the pause route
     drops the record), so a leftover one is dropped here and the wake is
@@ -902,6 +1000,13 @@ def ensure_awake(
         drop(title)
         _info("wake %s: refused — the session is paused", title)
         return False, PAUSED_REFUSED
+    if person is None:
+        person = not auto
+    if not person and boot_asleep(title):
+        # Nothing but a person wakes a boot-sleeper: a queued prompt, a
+        # message or a flight step from before the shutdown starting it
+        # would be revive-on-start by the back door.
+        return False, BOOT_WAITS
     if srv is None:
         srv = _server()
     gated = False
@@ -912,11 +1017,15 @@ def ensure_awake(
             cur = srv.ENGINE.instances.get(title)
             if cur is None:
                 return "the session was closed"
-            return ensure_awake(cur, title, why, srv)[1]
+            return ensure_awake(cur, title, why, srv, person=person)[1]
 
         try:
             queued = _gate.gate_auto(
-                title, _later, kind="wake", source=why, args={"why": why}
+                title,
+                _later,
+                kind="wake",
+                source=why,
+                args={"why": why, "person": bool(person)},
             )
         except _gate.QueueFull as err:
             _info("wake %s: not started (%s)", title, err)
@@ -953,12 +1062,15 @@ def _restore_wake(rec: dict):
     if inst is None or not is_sleeping(title):
         return None
     why = str((rec.get("args") or {}).get("why") or "a queued wake")
+    # Saved by another run: a person who opened it then is not here now, so
+    # it never wakes a boot-sleeper (only a person does).
+    person = bool((rec.get("args") or {}).get("person")) and not boot_asleep(title)
 
     def _later() -> Optional[str]:
         cur = srv.ENGINE.instances.get(title)
         if cur is None:
             return "the session was closed"
-        return ensure_awake(cur, title, why, srv)[1]
+        return ensure_awake(cur, title, why, srv, person=person)[1]
 
     return _later
 

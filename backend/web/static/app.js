@@ -25798,6 +25798,18 @@ function sleepingState(info, now) {
 	const freed = Number(info.freed_mb) || 0;
 	let hint = "Asleep";
 	if (since > 0) hint += " since " + fmtClock(since) + " (" + spanWord(now / 1e3 - since) + ")";
+	if (info.reason === "shutdown") {
+		hint += " — the computer was turned off or restarted";
+		if (info.mid_turn) hint += " in the middle of its work; when it wakes it is asked to continue where it left off";
+		return {
+			state: "idle",
+			label: SLEEPING_LABEL,
+			tone: "muted",
+			inBell: false,
+			restartable: false,
+			hint: hint + ". Opening it or sending it anything wakes it, resuming the conversation."
+		};
+	}
 	hint += info.reason === "memory" ? " — memory was low" : info.reason === "manual" ? "" : " — it was idle";
 	if (freed > 0) hint += "; freed ~" + (freed >= 1024 ? (freed / 1024).toFixed(1) + " GB" : freed + " MB");
 	hint += ". Opening it or sending it anything wakes it, resuming the conversation.";
@@ -28677,7 +28689,30 @@ function freshStage(title) {
 //#endregion
 //#region src/lib/hubRef.ts
 var HUB_MIME = "application/x-mf-hub-ref";
-var REF_RE = /(?<![A-Za-z0-9_./:@-])hub:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/i;
+var REF_RE = /(?<![A-Za-z0-9_./:@-])(?:file|hub)(?:@[A-Za-z0-9][A-Za-z0-9-]{0,62})?:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/i;
+function setDragItems(dt, items) {
+	const list = items.map((i) => ({
+		id: i.id,
+		ref: i.ref,
+		name: i.name
+	}));
+	if (!list.length) return;
+	dt.setData(HUB_MIME, JSON.stringify({
+		...list[0],
+		items: list
+	}));
+	dt.setData("text/plain", list.map((i) => i.ref).join(" "));
+	dt.effectAllowed = "copy";
+}
+function dragItems(dt) {
+	if (!dt) return [];
+	try {
+		const v = JSON.parse(dt.getData(HUB_MIME));
+		return (Array.isArray(v?.items) && v.items.length ? v.items : v?.ref ? [v] : []).filter((i) => typeof i?.ref === "string" && REF_RE.test(i.ref));
+	} catch {
+		return [];
+	}
+}
 async function expandRefs(text) {
 	if (!REF_RE.test(text)) return {
 		text,
@@ -28830,7 +28865,7 @@ function attachFileDrop(host, term, session, canSend) {
 			if (canSend && !canSend()) return;
 			if (REF_RE.test(text)) {
 				if (session) typeIntoAgent(session, text).then((r) => {
-					toast(r.ok ? r.note || "Pasted with the hub item's path" : r.note);
+					toast(r.ok ? r.note || "Pasted with the shared file's path" : r.note);
 				});
 				else expandRefs(text).then((r) => {
 					term.paste(r.text);
@@ -28868,7 +28903,7 @@ function attachFileDrop(host, term, session, canSend) {
 			if (canSend && !canSend()) return;
 			const ref = ev.dataTransfer.getData("text/plain");
 			if (session) typeIntoAgent(session, ref + " ").then((r) => {
-				toast(r.ok ? r.note || ref + " is in the prompt — add your words and press Enter" : r.note);
+				toast(r.ok ? r.note || ref + (ref.includes(" ") ? " are" : " is") + " in the prompt — add your words and press Enter" : r.note);
 			});
 			else expandRefs(ref).then((r) => {
 				term.paste(r.text + " ");
@@ -30628,13 +30663,148 @@ function useHub(enabled = true) {
 }
 function refreshHub() {
 	queryClient.invalidateQueries({ queryKey: ["hub"] });
+	queryClient.invalidateQueries({ queryKey: ["hub-devices"] });
 }
-var bridged$2 = false;
+function useHubDevices(enabled = true) {
+	return useQuery({
+		queryKey: ["hub-devices"],
+		queryFn: async () => {
+			try {
+				return await api("/api/hub/devices");
+			} catch (err) {
+				if (err?.status === 404) return {
+					self: "",
+					devices: []
+				};
+				throw err;
+			}
+		},
+		enabled,
+		staleTime: 15e3,
+		refetchInterval: 3e4,
+		retry: false
+	});
+}
+function deviceCode(device, id) {
+	return "file@" + device + ":" + id;
+}
+function remoteItems(d) {
+	const out = [];
+	for (const dev of d?.devices || []) {
+		if (dev.state !== "ok") continue;
+		for (const r of dev.items) {
+			if (r.copy) continue;
+			out.push({
+				id: deviceCode(dev.device, r.id),
+				ref: r.ref,
+				name: r.name,
+				kind: r.kind,
+				mime: r.mime,
+				size: r.size,
+				sha256: r.sha256,
+				by: r.by,
+				by_name: r.by_name,
+				added: r.added,
+				used: r.added,
+				note: r.note,
+				pinned: false,
+				textual: r.textual,
+				preview: r.preview,
+				path: "",
+				expires: null,
+				remote: {
+					device: dev.device,
+					deviceName: dev.name,
+					id: r.id,
+					tooBig: r.too_big,
+					secret: r.secret
+				}
+			});
+		}
+	}
+	return out;
+}
+function findByRef(ref, local, remote) {
+	const m = /^(?:file|hub)(?:@([A-Za-z0-9-]+))?:([A-Za-z0-9]{4,8})$/i.exec(ref.trim());
+	if (!m) return void 0;
+	const dev = (m[1] || "").toLowerCase();
+	const id = m[2].toLowerCase();
+	if (dev) return local.find((i) => i.origin?.device === dev && i.origin.id === id) || remote.find((i) => i.remote?.device === dev && i.remote.id === id);
+	const own = local.find((i) => i.id === id);
+	if (own) return own;
+	const copies = local.filter((i) => i.origin?.id === id);
+	if (copies.length) return new Set(copies.map((i) => i.origin.device)).size === 1 ? copies[0] : void 0;
+	const there = remote.filter((i) => i.remote?.id === id);
+	return there.length === 1 ? there[0] : void 0;
+}
+function deviceNotes(d) {
+	return (d?.devices || []).filter((x) => x.state !== "ok").map((x) => ({
+		device: x.device,
+		name: x.name,
+		state: x.state,
+		note: x.note
+	}));
+}
+var REMOTE_THUMB_MAX = 524288;
+function hasThumb(it) {
+	return it.kind === "image" && (!it.remote || it.size <= REMOTE_THUMB_MAX);
+}
+async function bringHere(items, opts = {}) {
+	const rem = items.filter((i) => i.remote);
+	if (!rem.length) return items;
+	const from = [...new Set(rem.map((i) => i.remote.deviceName))].join(" and ");
+	say((rem.length === 1 ? "Fetching " + rem[0].name : "Fetching " + rem.length + " items") + " from " + from + "…", { ms: 6e4 });
+	const got = /* @__PURE__ */ new Map();
+	try {
+		if (opts.secretOk) for (const it of rem) {
+			const rec = await api("/api/hub/devices/fetch", { json: {
+				id: it.id,
+				secret_ok: true
+			} });
+			got.set(it.id, rec);
+		}
+		else {
+			const r = await api("/api/hub/batch", { json: {
+				action: "fetch",
+				ids: rem.map((i) => i.id)
+			} });
+			for (const row of r.results) {
+				const it = rem.find((i) => i.id === row.id);
+				if (!it) continue;
+				if (row.ok && row.item) got.set(it.id, row.item);
+				else if (row.code === "secret") addProblem(it.name + " on " + it.remote.deviceName + " looks like a secret (an env file, key or credential) — it wasn't brought here. Every session here can read Shared files.", void 0, {
+					label: "Bring it anyway",
+					run: () => void bringHere([it], { secretOk: true }).then((l) => l.length && say("Brought " + it.name + " here as " + l[0].ref))
+				});
+				else addProblem("Couldn't fetch " + it.name + " from " + it.remote.deviceName + ": " + (row.error || "error"));
+			}
+		}
+	} catch (err) {
+		say("Couldn't fetch from " + from + ": " + errMsg(err), { error: true });
+		refreshHub();
+		return [];
+	}
+	refreshHub();
+	if (got.size === rem.length) hush();
+	else if (!got.size) say("Couldn't fetch " + (rem.length === 1 ? rem[0].name : rem.length + " items") + " from " + from + " — why is in Shared files", { error: true });
+	else say("Fetched " + got.size + " of " + rem.length + " from " + from + " — why " + (rem.length - got.size) + " couldn't be is in Shared files");
+	const out = [];
+	for (const i of items) if (!i.remote) out.push(i);
+	else if (got.has(i.id)) out.push(got.get(i.id));
+	return out;
+}
+async function saveHere(items) {
+	const rem = items.filter((i) => i.remote);
+	if (!rem.length) return;
+	const got = await bringHere(rem);
+	if (got.length) say(got.length === 1 ? "Saved " + got[0].name + " on this device as " + got[0].ref : batchLine(got.length, rem.length, "Saved") + " on this device");
+}
+var bridged$3 = false;
 function bridgeHubEvents() {
-	if (bridged$2) return;
+	if (bridged$3) return;
 	const ev = typeof window !== "undefined" ? window.mindflock?.events : void 0;
 	if (!ev) return;
-	bridged$2 = true;
+	bridged$3 = true;
 	ev.subscribe("hub.changed", () => refreshHub());
 }
 var _n = 0;
@@ -30644,17 +30814,26 @@ var useHubUi = create((set, get) => ({
 	open: false,
 	setOpen: (v) => {
 		if (v) markHubSeen();
-		set({ open: v });
+		set(v ? { open: true } : {
+			open: false,
+			sending: null,
+			selected: []
+		});
 	},
-	toggle: () => {
-		if (!get().open) markHubSeen();
-		set({ open: !get().open });
-	},
+	toggle: () => get().setOpen(!get().open),
 	sending: null,
-	openSend: (item) => set(item ? {
-		sending: item,
-		notice: null
-	} : { sending: null }),
+	openSend: (items) => {
+		const list = items ? Array.isArray(items) ? items : [items] : [];
+		if (!list.length) return set({ sending: null });
+		if (!get().open) markHubSeen();
+		set({
+			sending: list,
+			notice: null,
+			open: true
+		});
+	},
+	selected: [],
+	setSelected: (ids) => set({ selected: ids }),
 	insert: null,
 	insertInto: (title, text) => set({ insert: {
 		title,
@@ -30676,11 +30855,12 @@ function hush() {
 	useHubUi.setState({ notice: null });
 }
 var _p = 0;
-function addProblem(text, raiseTo) {
+function addProblem(text, raiseTo, confirm) {
 	useHubUi.setState((s) => ({ problems: [...s.problems.slice(-3), {
 		id: ++_p,
 		text,
-		raiseTo
+		raiseTo,
+		confirm
 	}] }));
 }
 function dropProblem(id) {
@@ -30729,6 +30909,8 @@ function humanSize(n) {
 	return (n / 1024 ** 3).toFixed(1) + " GB";
 }
 function whoLabel$1(it) {
+	if (it.origin) return "from " + (it.origin.name || it.origin.device);
+	if (it.by === "session" && it.remote) return "session " + (it.by_name || "?");
 	if (it.by === "session") return "session " + displayName(it.by_name || "?");
 	if (it.by === "device") return "device " + (it.by_name || "?");
 	if (it.by === "phone") return "your phone";
@@ -30747,18 +30929,21 @@ function expiryLabel(it, now = Date.now() / 1e3) {
 	return "Deleted automatically in " + Math.ceil(d) + (Math.ceil(d) === 1 ? " day" : " days") + " unless used — Pin to keep";
 }
 function rawUrl(it, download = false) {
+	if (it.remote) return "/api/hub/devices/" + encodeURIComponent(it.remote.device) + "/items/" + encodeURIComponent(it.remote.id) + "/thumb";
 	return "/api/hub/items/" + encodeURIComponent(it.id) + "/raw" + (download ? "?download=1" : "");
 }
 function usageLine(l) {
 	return l.count + (l.count === 1 ? " item" : " items") + " · " + humanSize(l.used) + " of " + humanSize(l.quota);
 }
 function refTokenAt(text, caret) {
-	const m = text.slice(0, caret).match(/(^|[\s([{"'`])hub:([A-Za-z0-9._ -]{0,40})$/i);
+	const m = text.slice(0, caret).match(/(^|[\s([{"'`])(file:|hub:)((?:[A-Za-z0-9._-][A-Za-z0-9._ -]{0,39})?)$/i);
 	if (!m) return null;
-	const query = m[2];
+	const prefix = m[2];
+	const query = m[3];
 	if (/\s\s/.test(query) || query.length > 40) return null;
 	return {
-		start: caret - query.length - 4,
+		start: caret - query.length - prefix.length,
+		prefix,
 		query
 	};
 }
@@ -30837,7 +31022,7 @@ function addedToast(r) {
 			label: "Put in " + displayName(here) + "'s prompt",
 			run: () => void putInPrompt(here, it, "", { focus: true })
 		}] } : {});
-	} else if (r.added.length > 1) say("Added " + r.added.length + " items to the hub");
+	} else if (r.added.length > 1) say("Added " + r.added.length + " items to Shared files");
 	for (const x of r.refused.filter((x) => !x.secret)) addProblem("Couldn't add " + x.file.name + ": " + x.error, x.raiseTo);
 }
 async function raiseItemLimit(mb) {
@@ -30855,9 +31040,9 @@ async function rebuildHub() {
 	try {
 		const r = await api("/api/hub/rebuild", { method: "POST" });
 		refreshHub();
-		say("Rebuilt the hub: " + r.items + (r.items === 1 ? " item" : " items") + " — nothing was lost");
+		say("Rebuilt the list: " + r.items + (r.items === 1 ? " item" : " items") + " — nothing was lost" + (r.read_again ? ". " + r.read_again + " read again " + (r.read_again === 1 ? "is" : "are") + " kept on this device only — ⋯ → Show on my other devices to share one again" : ""));
 	} catch (err) {
-		say("Couldn't rebuild the hub: " + errMsg(err), { error: true });
+		say("Couldn't rebuild the list: " + errMsg(err), { error: true });
 	}
 }
 async function copyRef(it) {
@@ -30918,10 +31103,20 @@ async function openQueue(title) {
 	}, void 0);
 	selectSession(title);
 }
-async function putInPrompt(title, it, message = "", opts = {}) {
+function codesOf(items) {
+	return items.map((i) => i.ref).join(" ");
+}
+function itemsWord(items) {
+	return items.length === 1 ? items[0].name : items.length + " items";
+}
+async function putInPrompt(title, its, message = "", opts = {}) {
+	const list = Array.isArray(its) ? its : [its];
+	if (!list.length) return false;
+	const codes = codesOf(list);
 	const msg = message.trim();
-	const text = msg ? msg + " " + it.ref : it.ref + " ";
+	const text = msg ? msg + " " + codes : codes + " ";
 	const name = displayName(title);
+	const what = list.length === 1 ? list[0].ref : list.length + " codes";
 	try {
 		const r = await instApi(title, "/send", { json: msg ? {
 			text,
@@ -30931,12 +31126,13 @@ async function putInPrompt(title, it, message = "", opts = {}) {
 			submit: false,
 			dialog_safe: true
 		} });
-		if (msg && r?.queued) say(name + " is busy — your message with " + it.ref + " is queued; it gets it when it's free", { actions: [{
+		const note = r?.hub_note ? " (" + r.hub_note + ")" : "";
+		if (msg && r?.queued) say(name + " is busy — your message with " + what + " is queued; it gets it when it's free" + note, { actions: [{
 			label: "Open queue",
 			run: () => void openQueue(title)
 		}] });
-		else if (msg) say("Sent to " + name + " with " + it.ref);
-		else say(it.ref + " is in " + name + "'s prompt — add your words there and press Enter");
+		else if (msg) say("Sent to " + name + " with " + what + note);
+		else say(what + (list.length === 1 ? " is" : " are") + " in " + name + "'s prompt — add your words there and press Enter" + note);
 		if (opts.focus) {
 			useHubUi.getState().setOpen(false);
 			const { selectSession } = await __vitePreload(async () => {
@@ -30953,10 +31149,10 @@ async function putInPrompt(title, it, message = "", opts = {}) {
 			useUi.getState().threadOpen(title);
 			if (opts.focus) useHubUi.getState().setOpen(false);
 			flashTarget(title);
-			say(name + " is answering a question — " + it.ref + " is in its Thread box; send it from there");
+			say(name + " is answering a question — " + what + (list.length === 1 ? " is" : " are") + " in its Thread box; send it from there");
 			return true;
 		}
-		say("Couldn't send " + it.ref + " to " + name + ": " + errMsg(err), { error: true });
+		say("Couldn't send " + what + " to " + name + ": " + errMsg(err), { error: true });
 		return false;
 	}
 }
@@ -30970,7 +31166,7 @@ async function copyInto(title, it, path, replace, tell = false) {
 	let told = false;
 	if (tell) try {
 		await instApi(title, "/send", { json: {
-			text: "I saved " + it.name + " in your project folder at " + r.path + " (from the MindFlock hub; you can read it there).",
+			text: "I saved " + it.name + " in your project folder at " + r.path + " (from MindFlock's Shared files; you can read it there).",
 			dialog_safe: true
 		} });
 		told = true;
@@ -31005,7 +31201,7 @@ async function removeItem$1(it) {
 		return;
 	}
 	refreshHub();
-	say("Removed " + it.name + " from the hub", {
+	say("Removed " + it.name + " from Shared files", {
 		actions: [{
 			label: "Undo",
 			run: () => {
@@ -31017,6 +31213,109 @@ async function removeItem$1(it) {
 		}],
 		ms: UNDO_MS
 	});
+}
+async function batch(action, items, session) {
+	const r = await api("/api/hub/batch", { json: {
+		action,
+		ids: items.map((i) => i.id),
+		...session ? { session } : {}
+	} });
+	refreshHub();
+	return r;
+}
+function batchProblems(r, items, verb) {
+	const out = [];
+	for (const row of r.results.filter((x) => !x.ok)) {
+		const it = items.find((i) => i.id === row.id);
+		const line = "Couldn't " + verb + " " + (it ? it.name : row.ref || row.id) + ": " + (row.error || "error");
+		out.push(line);
+		addProblem(line);
+	}
+	return out;
+}
+function batchLine(done, asked, past) {
+	if (done === asked) return past + " " + (asked === 1 ? "1 item" : asked + " items");
+	return past + " " + done + " of " + asked + " — why " + (asked - done) + " couldn't be is in Shared files";
+}
+async function pinItems(items, pinned) {
+	if (!items.length) return null;
+	try {
+		const r = await batch(pinned ? "pin" : "unpin", items);
+		batchProblems(r, items, pinned ? "pin" : "unpin");
+		say(batchLine(r.done, items.length, pinned ? "Pinned" : "Unpinned"), { error: r.failed > 0 && r.done === 0 });
+		return r;
+	} catch (err) {
+		say("Couldn't " + (pinned ? "pin" : "unpin") + " them: " + errMsg(err), { error: true });
+		return null;
+	}
+}
+async function removeItems(items) {
+	if (!items.length) return null;
+	let r;
+	try {
+		r = await batch("remove", items);
+	} catch (err) {
+		say("Couldn't remove them: " + errMsg(err), { error: true });
+		return null;
+	}
+	batchProblems(r, items, "remove");
+	const gone = items.filter((i) => r.results.some((x) => x.id === i.id && x.ok));
+	if (!gone.length) {
+		say("Nothing was removed", { error: true });
+		return r;
+	}
+	say(batchLine(gone.length, items.length, "Removed") + " from Shared files", {
+		actions: [{
+			label: "Undo",
+			run: () => {
+				batch("restore", gone).then((back) => {
+					batchProblems(back, gone, "put back");
+					say(batchLine(back.done, gone.length, "Put back"), { error: back.done === 0 });
+				}).catch((err) => say("Couldn't put them back: " + errMsg(err), { error: true }));
+			}
+		}],
+		ms: UNDO_MS
+	});
+	return r;
+}
+async function copyRefs(items) {
+	if (items.length === 1) return copyRef(items[0]);
+	const codes = codesOf(items);
+	const ok = await copyText(codes);
+	say(ok ? items.length + " codes copied to clipboard — paste them into any prompt or terminal" : "Couldn't copy — the codes are " + codes, { error: !ok });
+}
+async function copyIntoMany(title, items, tell) {
+	const r = await batch("copy", items, title);
+	const name = displayName(title);
+	batchProblems(r, items, "copy");
+	const saved = r.results.filter((x) => x.ok && x.path);
+	let told = false;
+	if (tell && saved.length) {
+		const where = saved.map((x) => {
+			const it = items.find((i) => i.id === x.id);
+			return (it ? it.name + " at " : "") + x.path;
+		}).join(", ");
+		try {
+			await instApi(title, "/send", { json: {
+				text: "I saved " + (saved.length === 1 ? "a file" : saved.length + " files") + " in your project folder: " + where + " (from MindFlock's Shared files; you can read them there).",
+				dialog_safe: true
+			} });
+			told = true;
+		} catch {
+			told = false;
+		}
+	}
+	if (saved.length) flashTarget(title);
+	say(batchLine(saved.length, items.length, "Saved copies of") + " in " + name + "'s folder" + (tell && saved.length ? told ? " — and told " + name : " — couldn't tell " + name + " (it may be offline)" : ""), { error: !saved.length });
+	return r;
+}
+function dragSet(it, all, selected) {
+	if (!selected.includes(it.id)) return [it];
+	const sel = all.filter((i) => selected.includes(i.id));
+	return sel.length ? sel : [it];
+}
+function startDrag(dt, items) {
+	setDragItems(dt, items);
 }
 //#endregion
 //#region src/lib/claudeCopy.ts
@@ -31490,9 +31789,9 @@ function attachCopyOnSelect(host, term, opts) {
 			copyText(sel).then((ok) => {
 				if (!ok) return;
 				if (useHubUi.getState().open) toast("Copied " + sel.length + " chars", { action: {
-					label: "Add to hub",
-					ariaLabel: "Add the selected text to the hub as a snippet",
-					onClick: () => void addText(sel).then((it) => toast("Added a snippet to the hub — " + it.ref)).catch((err) => toast("Couldn't add it to the hub: " + errMsg(err)))
+					label: "Add to Shared files",
+					ariaLabel: "Add the selected text to Shared files as a snippet",
+					onClick: () => void addText(sel).then((it) => toast("Added a snippet to Shared files — " + it.ref)).catch((err) => toast("Couldn't add it to Shared files: " + errMsg(err)))
 				} });
 				else toast("Copied " + sel.length + " chars");
 			});
@@ -31731,6 +32030,7 @@ function makeTerm(title, wsPath, interactive) {
 	let state = "connecting";
 	let errorRuns = 0;
 	let lastError = "";
+	let waitingFor = "";
 	let downSince = Date.now();
 	let notSentAt = 0;
 	const canSend = () => {
@@ -31738,7 +32038,7 @@ function makeTerm(title, wsPath, interactive) {
 		const now = Date.now();
 		if (now - notSentAt > NOT_SENT_THROTTLE_MS) {
 			notSentAt = now;
-			showTermNotice(container, notSentLine(state));
+			showTermNotice(container, notSentLine(state, waitingFor));
 		}
 		return false;
 	};
@@ -31753,6 +32053,9 @@ function makeTerm(title, wsPath, interactive) {
 		},
 		get error() {
 			return lastError;
+		},
+		get waitingFor() {
+			return waitingFor;
 		},
 		get downSince() {
 			return downSince;
@@ -31799,9 +32102,11 @@ function makeTerm(title, wsPath, interactive) {
 			sentSize = "";
 			let attached = false;
 			let errorHere = "";
+			let memoryHere = false;
 			const markAttached = () => {
 				if (attached) return;
 				attached = true;
+				waitingFor = "";
 				reconnectAttempt = 0;
 				errorRuns = 0;
 				lastError = "";
@@ -31827,6 +32132,7 @@ function makeTerm(title, wsPath, interactive) {
 					const j = JSON.parse(ev.data);
 					if (j.type === "error") {
 						errorHere = String(j.message ?? "");
+						memoryHere = j.waiting_for_memory === true;
 						return;
 					}
 					const ctl = controlNotice(j);
@@ -31849,6 +32155,7 @@ function makeTerm(title, wsPath, interactive) {
 				if (closeAction(code) !== "waiting") handle._setState("disconnected");
 				if (closed) return;
 				if (closeAction(code) === "waiting") {
+					waitingFor = memoryHere ? "memory" : "turn";
 					handle._setState("waiting");
 					reconnectTimer = setTimeout(() => {
 						if (!closed) handle.connect();
@@ -31924,8 +32231,8 @@ var WAITING_RETRY_MS = 5e3;
 var ERROR_RETRY_LIMIT = 5;
 var UNREACHABLE_MS = 1e4;
 var NOT_SENT_THROTTLE_MS = 1500;
-function notSentLine(state) {
-	if (state === "waiting") return "Waiting its turn — that wasn't sent";
+function notSentLine(state, waitingFor = "") {
+	if (state === "waiting") return (waitingFor === "memory" ? "Waiting for memory" : "Waiting its turn") + " — that wasn't sent";
 	if (state === "failed" || state === "gone") return "Not connected — that wasn't sent";
 	return "Reconnecting — that wasn't sent";
 }
@@ -39925,7 +40232,7 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+H",
-			"Hub — files, pictures and snippets every session can use"
+			"Shared files — files, pictures and snippets every session can use"
 		],
 		when: () => !isEditingTarget(document.activeElement),
 		run: () => useHubUi.getState().toggle()
@@ -51356,7 +51663,7 @@ var SKY_GUIDE_KEYS = [
 	["Ctrl+Y", "Switch between the grid and the sky"],
 	["Ctrl/Alt+N", "A new session on the sky (double-click empty sky does too)"]
 ];
-function Box({ x, y, w = 44, h = 26, cls = "" }) {
+function Box$1({ x, y, w = 44, h = 26, cls = "" }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
 		className: "sg-box " + cls,
 		x,
@@ -51393,7 +51700,7 @@ function Line({ x, y, n = 4, cls = [] }) {
 		y1: y + 27,
 		x2: x + k * 54,
 		y2: y + 27
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 		x: x + k * 54,
 		y: y + 14,
 		cls: k === 0 ? "sg-session" : cls[k] || ""
@@ -51557,7 +51864,7 @@ var SKETCHES = {
 	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
 		label: "A saved route on the sky: one group holding three stops, and its chip on the shelf with a dot per stop",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 12,
 				y: 24,
 				w: 150,
@@ -51570,21 +51877,21 @@ var SKETCHES = {
 				y: 38,
 				children: "Ticket to merge · 2 of 3"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 20,
 				y: 46,
 				w: 40,
 				h: 24,
 				cls: "sg-done"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 66,
 				y: 46,
 				w: 40,
 				h: 24,
 				cls: "sg-here"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 112,
 				y: 46,
 				w: 40,
@@ -51712,11 +52019,11 @@ var SKETCHES = {
 				y: 61,
 				children: "socket"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 94,
 				y: 44
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 148,
 				y: 44
 			}),
@@ -51815,13 +52122,13 @@ var SKETCHES = {
 				y: 12,
 				w: 120
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 12,
 				y: 26,
 				w: 56,
 				cls: "sg-group"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 76,
 				y: 26,
 				w: 56,
@@ -51838,7 +52145,7 @@ var SKETCHES = {
 				y: 12,
 				w: 140
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 168,
 				y: 26,
 				w: 140,
@@ -52610,6 +52917,74 @@ function WhatsNew() {
 	});
 }
 //#endregion
+//#region src/lib/feedback.ts
+var KIND_LABEL = {
+	bug: "Something is broken",
+	idea: "An idea",
+	feedback: "Other feedback"
+};
+var useFeedbackUi = create((set, get) => ({
+	open: false,
+	draftId: null,
+	n: 0,
+	show: (draftId = null) => set({
+		open: true,
+		draftId,
+		n: get().n + 1
+	}),
+	close: () => set({
+		open: false,
+		draftId: null
+	})
+}));
+function openFeedback(draftId) {
+	useFeedbackUi.getState().show(draftId ?? null);
+}
+function loadFeedback() {
+	return api("/api/feedback");
+}
+function discardDraft(id) {
+	return api("/api/feedback/drafts/" + encodeURIComponent(id), { method: "DELETE" });
+}
+function sendFeedback(body) {
+	return api("/api/feedback/send", { json: body });
+}
+function destinationLine(info) {
+	if (!info) return "";
+	if (info.signed_in && info.login) return "Posted publicly on GitHub (" + info.repo + ") as " + info.login + ".";
+	if (info.signed_in) return "Posted publicly on GitHub (" + info.repo + ").";
+	return "Opens a pre-filled GitHub page (" + info.repo + ") for you to submit. It will be public.";
+}
+function sentLine$1(r) {
+	if (r.via === "github") return "Thanks — filed as issue #" + (r.number ?? "") + ".";
+	return "Opened GitHub with your report filled in — press Submit there.";
+}
+function pickDraft(drafts, want) {
+	if (want) {
+		const hit = drafts.find((d) => d.id === want);
+		if (hit) return hit;
+	}
+	return drafts[0] || null;
+}
+var bridged$2 = false;
+function bridgeFeedbackEvents() {
+	if (bridged$2) return;
+	const ev = typeof window !== "undefined" ? window.mindflock?.events : void 0;
+	if (!ev) return;
+	bridged$2 = true;
+	ev.subscribe("feedback.draft", (env) => {
+		const d = env.data || {};
+		if (useFeedbackUi.getState().open) return;
+		toast("A report about MindFlock is ready for you to review" + (d.title ? ": " + d.title : "."), {
+			action: {
+				label: "Review",
+				onClick: () => openFeedback(d.id || null)
+			},
+			duration: 15e3
+		});
+	});
+}
+//#endregion
 //#region src/components/palette/CommandPalette.tsx
 var PALETTE_ACTIONS = [
 	"rename",
@@ -52706,9 +53081,9 @@ function buildPaletteActions({ config, host, extensions }) {
 		run: () => ui.openDialogFor("intake", "autostart")
 	});
 	acts.push({
-		label: "Hub…",
+		label: "Shared files…",
 		hint: "Alt+H",
-		keywords: "files share paste screenshot image snippet clipboard attach upload reference",
+		keywords: "hub files share shared paste screenshot image picture snippet clipboard attach upload code reference",
 		run: () => useHubUi.getState().setOpen(true)
 	});
 	acts.push({
@@ -52813,6 +53188,12 @@ function buildPaletteActions({ config, host, extensions }) {
 	acts.push({
 		label: "Open Doctor",
 		run: () => host.openDoctor()
+	});
+	acts.push({
+		label: "Send feedback or report a problem…",
+		hint: "to the MindFlock developers",
+		keywords: "feedback bug issue report idea github problem broken suggest",
+		run: () => openFeedback()
 	});
 	acts.push({
 		label: "Your devices",
@@ -56107,6 +56488,10 @@ function undoLine(o) {
 	return "Took back “" + (Array.from(t).length > 40 ? Array.from(t).slice(0, 39).join("") + "…" : t) + "” — go on";
 }
 var STOPPED_LINE = "Stopped listening";
+function missedLine(reason, sending = false) {
+	if (reason === "off") return (sending ? "Nothing sent" : "Nothing typed") + " — whisper's accurate pass is off: Settings → Voice";
+	return sending ? "Recognition didn't finish — nothing sent; say it again" : "Recognition didn't finish — say it again";
+}
 var HUSH_LINE = "Quiet.";
 var HUSH_CAPTION_MS = 1e3;
 var NOTE_CAPTION_MS = 3e3;
@@ -56271,6 +56656,7 @@ var Dictation = class {
 	routes = true;
 	continuous = false;
 	answering = false;
+	liveText = true;
 	phraseAt = -1;
 	marks = [];
 	addressedUntil = 0;
@@ -56443,6 +56829,7 @@ var Dictation = class {
 	finish() {
 		if (!this.listening) return { kind: "stopped" };
 		const tail = joinWords(this.held, this.partial);
+		if (!this.liveText && (tail || this.phraseAt >= 0)) return this.inFlightMissed();
 		const out = tail || this.phraseAt >= 0 ? this.heard(tail) : { kind: "continue" };
 		this.listening = false;
 		if (out.kind === "type") return withErase({
@@ -56487,12 +56874,30 @@ var Dictation = class {
 			kind: "hush",
 			end: true
 		}, this.settle("").erase || "");
+		if (!this.liveText && (all || this.phraseAt >= 0)) return this.inFlightMissed();
 		const r = parseRadio(all);
 		const rest = r.kind === "undo" ? "" : r.text;
 		return {
 			kind: "leave",
 			...this.settle(rest ? rest + " " : "")
 		};
+	}
+	missed(reason, sending = false) {
+		if (!this.listening) return { kind: "stopped" };
+		const s = this.settle("");
+		return withErase({
+			kind: "missed",
+			reason,
+			...sending ? { sending } : {}
+		}, s.erase || "");
+	}
+	inFlightMissed() {
+		this.listening = false;
+		return withErase({
+			kind: "leave",
+			text: "",
+			missed: true
+		}, this.settle("").erase || "");
 	}
 	guess() {
 		if (this.phraseAt < 0) {
@@ -56537,6 +56942,7 @@ var Dictation = class {
 	control(all, whole) {
 		if (whole && isHushPhrase(all)) return withErase({ kind: "hush" }, this.settle("").erase || "");
 		const before = stopTail(all, whole);
+		if (before !== null && !whole && !this.liveText && before.trim()) return null;
 		if (before !== null) {
 			this.listening = false;
 			const out = parseRadio(before);
@@ -56823,6 +57229,9 @@ var LiveDictation = class {
 	note = "";
 	waitLine = "";
 	noteUntil = 0;
+	missLine = "";
+	missUntil = 0;
+	waitSends = false;
 	noteTimer;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
@@ -56923,7 +57332,17 @@ var LiveDictation = class {
 		});
 	}
 	fastStands() {
-		return !!this.hooks.endsSurely?.() && !this.dict.partial && !!this.dict.held && finalClock.fastStands();
+		return this.liveText() && !!this.hooks.endsSurely?.() && !this.dict.partial && !!this.dict.held && finalClock.fastStands();
+	}
+	liveText() {
+		return this.hooks.liveIsText?.() !== false;
+	}
+	missed(reason, spokeAt) {
+		const sending = !!this.sendWait && this.waitSends;
+		clearInterval(this.early?.timer);
+		this.endPhraseAt(spokeAt);
+		if (this.phraseEnded()) return this.chain;
+		return this.step(() => this.dict.missed(reason, sending));
 	}
 	words(w) {
 		return this.stream(w, "");
@@ -57022,6 +57441,17 @@ var LiveDictation = class {
 		this.wordEnd = this.hooks.loudAt?.() || Date.now() - Math.min(quiet, 6e4);
 		const spoke = this.endPhraseAt(this.hooks.spokeAt?.());
 		this.hooks.endPhrase?.();
+		if (!this.liveText() && (radio || t.kind === "stop" && !!stopTail(t.text)?.trim())) {
+			if (early) this.watchQuiet();
+			this.sendNow = null;
+			this.waitSends = radio;
+			this.sendWait = setTimeout(() => {
+				this.sendWait = void 0;
+				this.swallow();
+				this.step(() => this.dict.missed("timeout", radio), spoke);
+			}, SWALLOW_STREAM_MAX_MS);
+			return;
+		}
 		if (radio) {
 			const e = early ? this.watchQuiet() : null;
 			const fire = () => {
@@ -57150,6 +57580,7 @@ var LiveDictation = class {
 			this.stepSpoke = spoke || this.phraseSpoke || this.spokeFrom();
 			const t = this.target;
 			this.dict.answering = t?.kind === "session" && !!this.hooks.pending?.(t.title);
+			this.dict.liveText = this.liveText();
 			return this.apply(next());
 		}).catch(() => {}).then(() => this.watchTail());
 		return this.chain;
@@ -57240,8 +57671,19 @@ var LiveDictation = class {
 				this.end(out.text ? "Disregarded" : "", false, "stopped");
 				return;
 			case "leave":
+				if (out.missed) {
+					if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
+					this.end(missedLine("failed"), false);
+					return;
+				}
 				if ((out.text || out.erase) && !await this.put(out.text, true, out.erase)) return;
-				this.end(t?.kind === "session" && this.dict.typed ? LEFT_LINE : out.stop ? STOPPED_LINE : "", false, out.stop ? "stopped" : void 0);
+				this.end(this.missNote() || (t?.kind === "session" && this.dict.typed ? LEFT_LINE : out.stop ? STOPPED_LINE : ""), false, out.stop ? "stopped" : void 0);
+				return;
+			case "missed":
+				if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
+				this.note = this.missLine = missedLine(out.reason, !!out.sending);
+				this.noteUntil = this.missUntil = Date.now() + NOTE_CAPTION_MS;
+				this.show();
 				return;
 			case "send": {
 				const quiet = this.hooks.quietMs?.();
@@ -57432,6 +57874,9 @@ var LiveDictation = class {
 			return false;
 		}
 		return this.done ? false : null;
+	}
+	missNote() {
+		return this.missUntil > Date.now() ? this.missLine : "";
 	}
 	verdict(v) {
 		if (v && typeof v === "object") {
@@ -59218,6 +59663,7 @@ var STREAM_FRESH_MS = 4e4;
 var CLIP_FINISH_WAIT_MS = 45e3;
 function finishWaitMs(rec) {
 	if (rec.name !== "server") return HOLD_FINAL_WAIT_MS;
+	if (rec.moonshine) return CLIP_FINISH_WAIT_MS;
 	return rec.streaming ? overWaitMs(finalClock.typical(rec.finalMs)) : CLIP_FINISH_WAIT_MS;
 }
 var BARGE_POLL_MS = 40;
@@ -59317,6 +59763,7 @@ function serverRecognizer(opts = {}) {
 	let capTimer;
 	const aborters = /* @__PURE__ */ new Set();
 	let streaming = false;
+	let moonLive = false;
 	let lastHeard = null;
 	const ending = [];
 	const open = /* @__PURE__ */ new Set();
@@ -59475,7 +59922,8 @@ function serverRecognizer(opts = {}) {
 			if (sid) {
 				abandon(sid);
 				h?.onPartial?.("");
-				h?.onFlush?.("");
+				if (p.moon && (p.said || p.partial)) h?.onMissed?.("failed", p.spokeAt || void 0);
+				else h?.onFlush?.("");
 			}
 			if (cur === p) {
 				clearTimeout(capTimer);
@@ -59526,6 +59974,8 @@ function serverRecognizer(opts = {}) {
 				if (r.ok && id) {
 					c.sid = id;
 					c.opened = Date.now();
+					c.moon = r.j.engine === "moonshine";
+					moonLive = c.moon;
 					open.add(id);
 					voiceMark("stream");
 					if (r.j.loading === true) setLoading(true);
@@ -59598,13 +60048,18 @@ function serverRecognizer(opts = {}) {
 			if (p === c) return;
 			await p.heardAll;
 			if (h !== hh) return;
+			if (p.moon && p.ended) {
+				await p.ended;
+				if (h !== hh) return;
+			}
 			if (p.flushed) continue;
 			p.flushed = true;
 			const i = ending.indexOf(p);
 			if (i >= 0) ending.splice(i, 1);
 			if (!p.stream) continue;
 			hh.onPartial?.("");
-			hh.onFlush?.(p.partial, void 0, p.spokeAt || void 0);
+			if (p.moon && (p.said || p.partial)) hh.onMissed?.("failed", p.spokeAt || void 0);
+			else hh.onFlush?.(p.partial, void 0, p.spokeAt || void 0);
 		}
 	};
 	const endStream = async (c) => {
@@ -59614,6 +60069,8 @@ function serverRecognizer(opts = {}) {
 		uploads++;
 		let heard = () => {};
 		c.heardAll = new Promise((r) => heard = r);
+		let over = () => {};
+		c.ended = new Promise((r) => over = r);
 		ending.push(c);
 		const unlist = () => {
 			const i = ending.indexOf(c);
@@ -59655,7 +60112,8 @@ function serverRecognizer(opts = {}) {
 					voiceMark("final");
 				}
 				const committed = wordsOf(r.j.committed);
-				lastHeard = typeof r.j.heard === "string" && r.j.heard.trim() ? {
+				const missed = c.moon && !ran ? String(r.j.final_missed || "") || (c.said || committed || c.partial ? "failed" : "") : "";
+				lastHeard = !missed && typeof r.j.heard === "string" && r.j.heard.trim() ? {
 					text: r.j.heard.trim(),
 					at: Date.now()
 				} : null;
@@ -59672,7 +60130,8 @@ function serverRecognizer(opts = {}) {
 				c.stream = false;
 				const final = ran && r.j.same !== true ? wordsOf(r.j.final) : "";
 				hh.onPartial?.("");
-				hh.onFlush?.(committed, final || void 0, c.spokeAt || void 0);
+				if (missed) hh.onMissed?.(missed, c.spokeAt || void 0);
+				else hh.onFlush?.(committed, final || void 0, c.spokeAt || void 0);
 			} catch (err) {
 				if (h !== hh || c.flushed) return;
 				c.sid = sid;
@@ -59682,6 +60141,7 @@ function serverRecognizer(opts = {}) {
 			}
 		} finally {
 			heard();
+			over();
 			unlist();
 			uploads--;
 			if (h === hh) maybeEnd();
@@ -59749,7 +60209,9 @@ function serverRecognizer(opts = {}) {
 			byWord: false,
 			endAt: 0,
 			flushed: false,
-			heardAll: null
+			heardAll: null,
+			moon: false,
+			ended: null
 		};
 		if (c.stream) openStream(c);
 		let s;
@@ -59909,6 +60371,9 @@ function serverRecognizer(opts = {}) {
 		get streaming() {
 			return streaming;
 		},
+		get moonshine() {
+			return streaming && moonLive;
+		},
 		takeHeard() {
 			const h = lastHeard;
 			lastHeard = null;
@@ -60013,6 +60478,8 @@ function serverRecognizer(opts = {}) {
 	};
 	return self;
 }
+var accurateOff$1 = (c) => !!c.server_ready.stt_stream && c.stream_engine === "moonshine" && c.final_model === "";
+var ACCURATE_OFF_HINT = "Commands only — dictation needs whisper's accurate pass, which is off: Settings → Voice";
 var DEFAULT_VOICE_CFG = {
 	stt: "phone",
 	tts: "phone",
@@ -60071,7 +60538,9 @@ async function loadVoiceCfg(prev, warm = true) {
 				approve_dialogs: j.approve_dialogs === true,
 				...typeof j.say_all === "boolean" ? { say_all: j.say_all } : {},
 				server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
-				system: j.system && typeof j.system === "object" ? j.system : {}
+				system: j.system && typeof j.system === "object" ? j.system : {},
+				...typeof j.stream_engine === "string" ? { stream_engine: j.stream_engine } : {},
+				...typeof j.final_model === "string" ? { final_model: j.final_model } : {}
 			};
 			warmStt(cfg);
 			return cfg;
@@ -62040,9 +62509,10 @@ function TopBarMic() {
 			sentIn: (ms) => void (lastSentMs = ms),
 			finalMs: () => r === serverRec ? serverRec.finalMs : null,
 			endsSurely: () => r === serverRec && serverRec.streaming,
+			liveIsText: () => !(r === serverRec && serverRec.moonshine),
 			spokeAt: () => r === serverRec ? serverRec.spokeAt : 0
 		}, {
-			hint: opts.hint,
+			hint: engine === "server" && !opts.assistant && accurateOff$1(c) ? ACCURATE_OFF_HINT : opts.hint,
 			continuous
 		});
 		live.current = d;
@@ -62107,6 +62577,10 @@ function TopBarMic() {
 				if (live.current !== d) return;
 				closeCheat();
 				d.flush(t, final, at);
+			},
+			onMissed: (reason, at) => {
+				if (live.current !== d) return;
+				d.missed(reason, at);
 			},
 			blank: () => live.current !== d || !d.dict.typed,
 			context: () => live.current === d ? d.streamContext() : null,
@@ -64652,7 +65126,7 @@ function fitTopBar({ room, fixed, brand, items, more }) {
 		shown
 	};
 }
-var HUB_TITLE = "Hub — files and text every session can use";
+var HUB_TITLE = "Shared files — files, pictures and text every session can use";
 function TopBar() {
 	const ui = useUi(useShallow((s) => ({
 		narrow: s.narrow,
@@ -64726,14 +65200,6 @@ function TopBar() {
 			failing: true,
 			open: () => ui.openDialogFor("schedule")
 		},
-		!guest && {
-			key: "hub",
-			label: hubCount ? "Hub · " + hubCount + " new" : "Hub",
-			title: HUB_TITLE + keys("hub"),
-			count: 0,
-			failing: false,
-			open: () => useHubUi.getState().toggle()
-		},
 		{
 			key: "settings",
 			label: "Settings",
@@ -64749,6 +65215,7 @@ function TopBar() {
 	});
 	const folded = foldable.slice(fit.shown);
 	const isFolded = (key) => folded.some((f) => f.key === key);
+	const moreAlways = !guest;
 	const barRef = (0, import_react.useRef)(null);
 	const startRef = (0, import_react.useRef)(null);
 	const menuRef = (0, import_react.useRef)(null);
@@ -64766,7 +65233,7 @@ function TopBar() {
 		const menuGap = gap(menu);
 		let fixed = 0;
 		for (const el of Array.from(menu.children)) {
-			const key = el.dataset.fold || (el.classList.contains("tb-more") ? "more" : "");
+			const key = el.dataset.fold || (el.classList.contains("tb-more") && !moreAlways ? "more" : "");
 			const width = w(el);
 			if (!key) fixed += width + menuGap;
 			else if (width > 0) seen[key] = width;
@@ -64782,7 +65249,7 @@ function TopBar() {
 			fixed: w(start.firstElementChild) + gap(start) + fixed - menuGap + barGap + (end ? barGap + w(end) : 0),
 			brand: (seen.brand || 0) + barGap,
 			items: foldable.map((f) => (seen[f.key] || 0) + menuGap),
-			more: (seen.more || w(document.getElementById("palette-btn"))) + menuGap
+			more: moreAlways ? 0 : (seen.more || w(document.getElementById("palette-btn"))) + menuGap
 		});
 		setFit((prev) => {
 			if (prev.brand === next.brand && prev.shown === next.shown) return prev;
@@ -64803,9 +65270,10 @@ function TopBar() {
 	const moreRef = (0, import_react.useRef)(null);
 	const moreBtn = (0, import_react.useRef)(null);
 	const hasFolded = folded.length > 0;
+	const showMore = moreAlways || hasFolded;
 	(0, import_react.useEffect)(() => {
-		if (!hasFolded) setMoreOpen(false);
-	}, [hasFolded]);
+		if (!showMore) setMoreOpen(false);
+	}, [showMore]);
 	(0, import_react.useEffect)(() => {
 		if (!moreOpen) return;
 		moreRef.current?.querySelector("[role=\"menuitem\"]")?.focus();
@@ -64972,36 +65440,6 @@ function TopBar() {
 								children: schedFailing
 							})]
 						}),
-						!guest && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							id: "hub-btn",
-							className: "tb-item" + (hubOpen ? " active" : "") + (isFolded("hub") ? " tb-folded" : ""),
-							"data-fold": "hub",
-							type: "button",
-							title: HUB_TITLE + keys("hub"),
-							"aria-pressed": hubOpen,
-							"aria-label": hubCount ? "Hub, " + hubCount + " new" : "Hub",
-							onClick: () => useHubUi.getState().toggle(),
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-									className: "tb-hub-icon",
-									viewBox: "0 0 24 24",
-									width: "14",
-									height: "14",
-									fill: "none",
-									stroke: "currentColor",
-									strokeWidth: "2",
-									strokeLinejoin: "round",
-									"aria-hidden": "true",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 8l9-5 9 5-9 5z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 13l9 5 9-5" })]
-								}),
-								"Hub",
-								hubCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-									className: "tb-count is-new",
-									title: hubCount + " added by an agent or your phone since you last looked",
-									children: [hubCount, " new"]
-								})
-							]
-						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							id: "settings-btn",
 							className: "tb-item" + (isFolded("settings") ? " tb-folded" : ""),
@@ -65012,7 +65450,7 @@ function TopBar() {
 							onClick: () => openSettings(),
 							children: "Settings"
 						}),
-						hasFolded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						showMore && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "tb-more",
 							ref: moreRef,
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -65020,57 +65458,90 @@ function TopBar() {
 								ref: moreBtn,
 								className: "tb-item",
 								type: "button",
-								title: "More — " + folded.map((f) => f.label).join(", "),
-								"aria-label": "More actions",
+								title: "More — " + [...moreAlways ? ["Shared files"] : [], ...folded.map((f) => f.label)].join(", ") + (hubCount > 0 ? "\n" + hubCount + " new in Shared files (added by an agent or your phone)" : ""),
+								"aria-label": hubCount > 0 ? "More actions, " + hubCount + " new in Shared files" : "More actions",
 								"aria-haspopup": "menu",
 								"aria-expanded": moreOpen,
 								onClick: () => setMoreOpen((v) => !v),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-									viewBox: "0 0 24 24",
-									width: "15",
-									height: "15",
-									"aria-hidden": "true",
-									fill: "currentColor",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-											cx: "5",
-											cy: "12",
-											r: "1.9"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-											cx: "12",
-											cy: "12",
-											r: "1.9"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-											cx: "19",
-											cy: "12",
-											r: "1.9"
-										})
-									]
-								}), foldedCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "tb-count" + (foldedFailing ? " is-failing" : ""),
-									children: foldedCount
-								})]
-							}), moreOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+										viewBox: "0 0 24 24",
+										width: "15",
+										height: "15",
+										"aria-hidden": "true",
+										fill: "currentColor",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+												cx: "5",
+												cy: "12",
+												r: "1.9"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+												cx: "12",
+												cy: "12",
+												r: "1.9"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+												cx: "19",
+												cy: "12",
+												r: "1.9"
+											})
+										]
+									}),
+									foldedCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "tb-count" + (foldedFailing ? " is-failing" : ""),
+										children: foldedCount
+									}),
+									hubCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "tb-new-dot",
+										"aria-hidden": "true",
+										children: hubCount > 9 ? "9+" : hubCount
+									})
+								]
+							}), moreOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "tb-more-menu",
 								role: "menu",
 								"aria-label": "More actions",
-								children: folded.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									type: "button",
-									role: "menuitem",
-									className: "tb-more-item",
-									"data-fold-item": f.key,
-									title: f.title,
-									onClick: () => {
-										setMoreOpen(false);
-										f.open();
-									},
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: f.label }), f.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "tb-count" + (f.failing ? " is-failing" : ""),
-										children: f.count
-									})]
-								}, f.key))
+								children: [
+									moreAlways && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										type: "button",
+										role: "menuitem",
+										className: "tb-more-item tb-more-files" + (hubOpen ? " is-on" : ""),
+										"data-fold-item": "hub",
+										title: HUB_TITLE + keys("hub"),
+										onClick: () => {
+											setMoreOpen(false);
+											useHubUi.getState().toggle();
+										},
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Shared files" }), hubCount > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "tb-count is-new",
+											title: hubCount + " added by an agent or your phone since you last looked",
+											children: [hubCount, " new"]
+										}) : keys("hub") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "tb-more-key",
+											children: keys("hub").replace(/^ \((.*)\)$/, "$1")
+										})]
+									}),
+									moreAlways && folded.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "tb-more-sep",
+										role: "separator"
+									}),
+									folded.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										type: "button",
+										role: "menuitem",
+										className: "tb-more-item",
+										"data-fold-item": f.key,
+										title: f.title,
+										onClick: () => {
+											setMoreOpen(false);
+											f.open();
+										},
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: f.label }), f.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "tb-count" + (f.failing ? " is-failing" : ""),
+											children: f.count
+										})]
+									}, f.key))
+								]
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -65124,6 +65595,13 @@ function TopBar() {
 							cursor: "pointer"
 						},
 						children: ["v", version]
+					}),
+					!guest && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "tb-feedback",
+						title: "Tell us about a problem or an idea",
+						onClick: () => openFeedback(),
+						children: "Feedback"
 					})
 				]
 			}),
@@ -66159,10 +66637,8 @@ function withHubDrop(title, dnd, enabled = true) {
 			ev.preventDefault();
 			ev.stopPropagation();
 			ev.currentTarget.classList.remove("hub-drop-target");
-			try {
-				const it = JSON.parse(ev.dataTransfer.getData(HUB_MIME));
-				if (it?.ref) putInPrompt(title, it, "", { focus: true });
-			} catch {}
+			const items = dragItems(ev.dataTransfer);
+			if (items.length) putInPrompt(title, items, "", { focus: true });
 		}
 	};
 }
@@ -75959,10 +76435,10 @@ async function addSessionFile(title, path) {
 		const it = await instApi(title, "/hub/put", { json: { path } });
 		refreshHub();
 		const ok = await copyText(it.ref);
-		toast("Added " + it.name + " to the hub — " + it.ref + (ok ? " (copied)" : ""));
+		toast("Added " + it.name + " to Shared files — " + it.ref + (ok ? " (copied)" : ""));
 		return it;
 	} catch (err) {
-		toast("Couldn't add " + path + " to the hub: " + errMsg(err));
+		toast("Couldn't add " + path + " to Shared files: " + errMsg(err));
 		return null;
 	}
 }
@@ -75971,13 +76447,13 @@ function HubAddButton({ title, path }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: "diff-file-map diff-file-hub",
-		title: "Add " + path + " to the hub — every session can use it",
-		"aria-label": "Add " + path + " to the hub",
+		title: "Add " + path + " to Shared files — every session can use it",
+		"aria-label": "Add " + path + " to Shared files",
 		onClick: (ev) => {
 			ev.stopPropagation();
 			addSessionFile(title, path);
 		},
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "+ Hub" })
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "+ Shared" })
 	});
 }
 //#endregion
@@ -77888,6 +78364,8 @@ function useHubComposer({ box, value, setValue, title }) {
 	const [dropping, setDropping] = (0, import_react.useState)(false);
 	const refsIn = (0, import_react.useMemo)(() => attachedRefs(value), [value]);
 	const hub = useHub(!guest && (!!tok || refsIn.length > 0));
+	const devs = useHubDevices(!guest && refsIn.length > 0);
+	const remote = (0, import_react.useMemo)(() => remoteItems(devs.data), [devs.data]);
 	const [pickAt, setPickAt] = (0, import_react.useState)(null);
 	(0, import_react.useLayoutEffect)(() => {
 		if (!tok) {
@@ -77935,7 +78413,7 @@ function useHubComposer({ box, value, setValue, title }) {
 	const choose = (it) => {
 		if (!tok) return;
 		const v = valueRef.current;
-		const caret = tok.start + 4 + tok.query.length;
+		const caret = tok.start + tok.prefix.length + tok.query.length;
 		const ins = it.ref + " ";
 		place(v.slice(0, tok.start) + ins + v.slice(caret).replace(/^ /, ""), tok.start + ins.length);
 		setTok(null);
@@ -78009,21 +78487,20 @@ function useHubComposer({ box, value, setValue, title }) {
 			e.preventDefault();
 			e.stopPropagation();
 			setDropping(false);
-			try {
-				const it = JSON.parse(e.dataTransfer.getData(HUB_MIME));
-				if (it?.ref) insert(it.ref);
-			} catch {}
+			const items = dragItems(e.dataTransfer);
+			if (items.length) insert(items.map((i) => i.ref).join(" "));
 		},
 		chips: refsIn.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "hub-att-chips",
-			"aria-label": "From the hub",
+			"aria-label": "From Shared files",
 			children: refsIn.map((ref) => {
-				const it = (hub.data?.items || []).find((i) => i.ref === ref);
+				const it = findByRef(ref, hub.data?.items || [], remote);
+				const on = it?.remote ? " — on " + it.remote.deviceName + " (brought here when it is sent)" : "";
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "hub-att-chip" + (it ? "" : " is-unknown"),
-					title: it ? it.name + " — " + ref : ref + " is not in the hub",
+					title: it ? it.name + " — " + ref + on : ref + " is not in Shared files",
 					children: [
-						it?.kind === "image" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+						it && hasThumb(it) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 							src: rawUrl(it),
 							alt: "",
 							className: "hub-att-thumb"
@@ -78034,7 +78511,7 @@ function useHubComposer({ box, value, setValue, title }) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "hub-att-name",
-							children: it ? it.name : ref + " — not in the hub"
+							children: it ? it.name + (it.remote ? " · on " + it.remote.deviceName : "") : ref + " — not in Shared files"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -78053,7 +78530,7 @@ function useHubComposer({ box, value, setValue, title }) {
 		popup: tok && matches.length && pickAt ? (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 			className: "hub-pick hub-pick-float",
 			role: "listbox",
-			"aria-label": "Hub items — Enter or Tab puts the code in",
+			"aria-label": "Shared files — Enter or Tab puts the code in",
 			style: {
 				left: pickAt.left,
 				top: pickAt.top,
@@ -78064,7 +78541,7 @@ function useHubComposer({ box, value, setValue, title }) {
 				className: "hub-pick-head",
 				role: "presentation",
 				"aria-hidden": "true",
-				children: "Hub items · Enter puts the code in"
+				children: "Shared files · Enter puts the code in"
 			}), matches.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 				role: "option",
 				"aria-selected": i === sel,
@@ -78099,7 +78576,7 @@ function useHubComposer({ box, value, setValue, title }) {
 		}), document.body) : tok && hub.data && !hub.data.items.length && pickAt ? (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 			className: "hub-pick hub-pick-float",
 			role: "listbox",
-			"aria-label": "Hub items",
+			"aria-label": "Shared files",
 			style: {
 				left: pickAt.left,
 				top: pickAt.top,
@@ -78109,7 +78586,7 @@ function useHubComposer({ box, value, setValue, title }) {
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 				className: "hub-pick-head",
 				role: "presentation",
-				children: "The hub is empty — paste a file here, or use the paperclip"
+				children: "Nothing in Shared files yet — paste a file here, or use the paperclip"
 			})
 		}), document.body) : null,
 		attach: guest ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubAttachButton, {
@@ -78120,15 +78597,17 @@ function useHubComposer({ box, value, setValue, title }) {
 }
 function attachedRefs(text) {
 	const out = [];
-	for (const m of (text || "").matchAll(/(?<![A-Za-z0-9_./:@-])hub:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/gi)) {
-		const ref = "hub:" + m[1].toLowerCase();
+	for (const m of (text || "").matchAll(/(?<![A-Za-z0-9_./:@-])(?:file|hub)(?:@([A-Za-z0-9][A-Za-z0-9-]{0,62}))?:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/gi)) {
+		const ref = (m[1] ? "file@" + m[1].toLowerCase() + ":" : "file:") + m[2].toLowerCase();
 		if (!out.includes(ref)) out.push(ref);
 	}
 	return out;
 }
 function removeRef(text, ref) {
-	const id = ref.replace(/^hub:/i, "");
-	const re = new RegExp("(?<![A-Za-z0-9_./:@-])hub:" + id + "(?![A-Za-z0-9_]) ?", "gi");
+	const m = /^(?:file|hub)(?:@([A-Za-z0-9-]+))?:(.*)$/i.exec(ref);
+	const dev = (m?.[1] || "").replace(/[^A-Za-z0-9-]/g, "");
+	const id = (m ? m[2] : ref).replace(/[^A-Za-z0-9]/g, "");
+	const re = new RegExp("(?<![A-Za-z0-9_./:@-])(?:file|hub)" + (dev ? "@" + dev : "") + ":" + id + "(?![A-Za-z0-9_]) ?", "gi");
 	return text.replace(re, "").replace(/ {2,}/g, " ");
 }
 function HubAttachButton(props) {
@@ -78169,8 +78648,8 @@ function HubAttachButton(props) {
 				className: "hub-attach-btn",
 				"aria-haspopup": "menu",
 				"aria-expanded": open,
-				"aria-label": "Attach from the hub",
-				title: "Attach from the hub — or paste a picture or file straight into the box",
+				"aria-label": "Attach from Shared files",
+				title: "Attach from Shared files — or paste a picture or file straight into the box",
 				onClick: () => setOpen((v) => !v),
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
 					viewBox: "0 0 24 24",
@@ -78183,7 +78662,7 @@ function HubAttachButton(props) {
 					strokeLinejoin: "round",
 					"aria-hidden": "true",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M20.5 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" })
-				}), "Hub"]
+				}), "Shared files"]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				ref: file,
@@ -78202,7 +78681,7 @@ function HubAttachButton(props) {
 			open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 				className: "hub-pick",
 				role: "menu",
-				"aria-label": "Attach from the hub",
+				"aria-label": "Attach from Shared files",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 						role: "none",
@@ -78211,13 +78690,13 @@ function HubAttachButton(props) {
 							role: "menuitem",
 							"data-first": "",
 							onClick: () => file.current?.click(),
-							children: "Upload files to the hub…"
+							children: "Upload files to Shared files…"
 						})
 					}),
 					items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 						className: "hub-pick-head",
 						role: "presentation",
-						children: "Recent in the hub"
+						children: "Recent in Shared files"
 					}),
 					items.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 						role: "none",
@@ -78244,7 +78723,7 @@ function HubAttachButton(props) {
 					hub.data && !items.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 						className: "hub-pick-head",
 						role: "presentation",
-						children: "The hub is empty"
+						children: "Nothing in Shared files yet"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 						role: "none",
@@ -78255,7 +78734,7 @@ function HubAttachButton(props) {
 								setOpen(false);
 								useHubUi.getState().setOpen(true);
 							},
-							children: "Open the hub"
+							children: "Open Shared files"
 						})
 					})
 				]
@@ -98976,6 +99455,10 @@ function cardMenuItems(plan, ctx) {
 		label: "Verify again",
 		title: VERIFY_TITLE
 	});
+	if (plan.state === "generated" && !plan.merged_at && !plan.live_at) items.push({
+		key: "merged",
+		...mergedItem(plan)
+	});
 	if (plan.state === "generated" && plan.merged_at && !plan.live_at) items.push({
 		key: "deployed",
 		label: "It's deployed — check now",
@@ -99026,6 +99509,13 @@ function cardMenuItems(plan, ctx) {
 		danger: true
 	});
 	return items;
+}
+function mergedItem(plan) {
+	const live = plan.live_branch || "the live branch";
+	return {
+		label: "It's merged into " + live,
+		title: "Mark these changes as on " + live + " — for a merge MindFlock can't see, like a squash through another branch's PR"
+	};
 }
 var VERIFY_TITLE = "The session's own agent writes the steps to check its work and works them in its terminal — it tells you anything only a person can do";
 var CHIP_WORDS = {
@@ -99296,6 +99786,23 @@ function BehaviorRow({ plan, step, index, onFix, allOpen }) {
 	});
 }
 //#endregion
+//#region src/components/behaviors/markMerged.ts
+function mergedToast(plan, after) {
+	if (after && after.state === "due") return planName(plan) + " is ready to check";
+	return planName(plan) + " is merged — it's ready to check once it deploys";
+}
+async function markPlanMerged(plan) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/shipped", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		await refreshTestPlans();
+		toast(mergedToast(plan, r?.plan));
+	} catch (err) {
+		errorPop("Couldn't mark " + planName(plan) + " merged", errMsg(err));
+		refreshTestPlans();
+	}
+}
+//#endregion
 //#region src/components/behaviors/BehaviorsCard.tsx
 function defaultFixInSession(plan, _stepIds) {
 	return fixInSession(plan.id, plan.title || plan.id);
@@ -99365,6 +99872,9 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded, onFixInSe
 		switch (key) {
 			case "verify":
 				verifyNow();
+				break;
+			case "merged":
+				withBusy("merged", () => markPlanMerged(plan));
 				break;
 			case "deployed":
 				withBusy("deployed", () => markPlanDeployed(plan));
@@ -110861,6 +111371,31 @@ function TermCover({ title, kind, state, booted }) {
 	if (cover === "loading") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "term-loading",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "spinner" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: kind === "shell" ? "Loading shell…" : "Loading session…" })]
+	});
+	if (cover === "waiting" && h?.waitingFor === "memory") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "term-loading term-cover",
+		role: "status",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "term-cover-head",
+				children: "Waiting for memory"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "It wakes by itself once there is room — other agents start first, one at a time." }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				disabled: busy,
+				title: "Wake it now, past the launch gate",
+				onClick: (e) => {
+					e.stopPropagation();
+					setBusy(true);
+					startWaiting(title).then((r) => {
+						setBusy(false);
+						if (r) peekTerm(title, kind)?.retry();
+					});
+				},
+				children: busy ? "Starting…" : "▶ Start anyway"
+			})
+		]
 	});
 	if (cover === "waiting") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "term-loading term-cover",
@@ -127455,8 +127990,8 @@ function ResumeOnUsageResetRow() {
 		})]
 	});
 }
-var REVIVE_LABEL = "Bring agents back by themselves after a crash";
-var REVIVE_NOTE = "Off: sessions whose agent died stay Offline until you press Start, so a crash can't refill memory.";
+var REVIVE_LABEL = "Bring agents back by themselves after a shutdown or crash";
+var REVIVE_NOTE = "Off: after the computer was turned off, sessions come back asleep and wake when you open them; after a crash they stay Offline until you press Start, so a crash can't refill memory.";
 function ReviveOnStartRow() {
 	const s = useSettings();
 	const on = s.get("general", "revive_on_start") === true;
@@ -127650,10 +128185,10 @@ function ScrollSpeedRow() {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		className: "set-row",
-		title: "How many lines the mouse wheel scrolls in the terminal, in thirds of a line (0.33–3). Below 1, wheel input is damped so a notch scrolls less than a line. Applies immediately to all open terminals.",
+		title: "How many lines the mouse wheel scrolls in the terminal, in thirds of a line (0.33–3). Below 1, wheel input is damped so a notch scrolls less than a line. Applies immediately to all open terminals. The phone has its own speed (⋯ → Scroll speed on /m).",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "set-label",
-			children: "Terminal scroll speed"
+			children: "Terminal scroll speed (desktop)"
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "ss-row",
 			children: [
@@ -129694,6 +130229,13 @@ function liveWordsLine(view) {
 	if (view.stream_engine === "moonshine") return "Live words: Moonshine";
 	return view.stream_model ? "Live words: Whisper " + view.stream_model : "";
 }
+var ACCURATE_OFF_LINE = "Dictation types nothing while whisper's accurate pass is off: Moonshine only hears the control words (“over”, “stop”, a switch) — whisper writes every word typed.";
+var ACCURATE_ON_LABEL = "Turn the accurate pass on";
+function accurateOff(view, finalSetting) {
+	if (view?.stream_engine !== "moonshine") return false;
+	if (finalSetting !== void 0 && finalSetting !== null) return String(finalSetting).trim().toLowerCase() === "off";
+	return view.final_model === "";
+}
 function moonshineOffer(view, streamSetting) {
 	const sr = view?.server_ready;
 	if (!sr?.stt_stream || sr.stt_backend !== "local") return false;
@@ -129884,6 +130426,29 @@ function InstallRow({ offer, install, allowed }) {
 function LiveWordsRow({ model, view, fast }) {
 	const line = liveWordsLine(view);
 	if (!line) return null;
+	if (accurateOff(view, model.get("voice", "stt_final"))) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row onboarding-action",
+		id: "voice-accurate-off",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "onboarding-action-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				id: "voice-live-words",
+				children: line
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				id: "voice-accurate-off-hint",
+				children: ACCURATE_OFF_LINE
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "test-btn",
+			id: "voice-accurate-on-btn",
+			disabled: view?.configure_allowed === false,
+			onClick: () => void model.saveField("voice", "stt_final", ""),
+			children: ACCURATE_ON_LABEL
+		})]
+	});
 	const offer = moonshineOffer(view, model.get("voice", "stt_stream_model"));
 	if (!(!!fast?.supported && (offer || fast.status.state === "running" || fast.touched)) || !fast) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "set-hint",
@@ -135860,10 +136425,10 @@ function HubCleanup() {
 		setBusy(true);
 		try {
 			const r = await api("/api/hub/clear", { method: "POST" });
-			toast("Removed " + r.removed + (r.removed === 1 ? " item" : " items") + " from the hub — " + humanSize(r.freed) + " freed");
+			toast("Removed " + r.removed + (r.removed === 1 ? " item" : " items") + " from Shared files — " + humanSize(r.freed) + " freed");
 			refreshHub();
 		} catch (err) {
-			toast("Couldn't clear the hub: " + errMsg(err));
+			toast("Couldn't clear Shared files: " + errMsg(err));
 		} finally {
 			setBusy(false);
 			setAsking(false);
@@ -135875,7 +136440,7 @@ function HubCleanup() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-label",
-				children: "Hub"
+				children: "Shared files"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "cleanup-summary",
@@ -135889,7 +136454,7 @@ function HubCleanup() {
 					" — unpinned items go by themselves ",
 					l.keep_days,
 					" days after their last use."
-				] }) : "The hub is empty."
+				] }) : "Nothing in Shared files."
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "test-row",
@@ -135897,7 +136462,7 @@ function HubCleanup() {
 					type: "button",
 					className: "test-btn",
 					onClick: () => useHubUi.getState().setOpen(true),
-					children: "Open the hub"
+					children: "Open Shared files"
 				}), unpinned > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
@@ -140829,6 +141394,91 @@ function niceTicks(rawMax, targetCount = 4) {
 		ticks
 	};
 }
+function clickView(data) {
+	const clicks = data?.clicks;
+	if (!clicks) return null;
+	const c = clicks.classification;
+	const h = clicks.human;
+	if (!c || !h) return {
+		state: "old-worker",
+		scope: "all",
+		since: null,
+		series: clicks.series ?? [],
+		visitors_by_day: clicks.visitors_by_day ?? [],
+		visitors_by_slug: clicks.visitors_by_slug ?? [],
+		totals: clicks.totals ?? null,
+		downloads: clicks.downloads ?? null,
+		classified: null
+	};
+	const zero = {
+		clicks: 0,
+		visitors: 0
+	};
+	const human = c.by_class?.human ?? zero;
+	const unverified = c.by_class?.unverified ?? zero;
+	const automated = c.by_class?.automated ?? zero;
+	return {
+		state: !c.since ? "pending" : c.unclassified_clicks > 0 ? "partial" : "full",
+		scope: "human",
+		since: c.since ?? null,
+		series: h.series ?? [],
+		visitors_by_day: h.visitors_by_day ?? [],
+		visitors_by_slug: h.visitors_by_slug ?? [],
+		totals: h.totals ?? null,
+		downloads: h.downloads ?? null,
+		classified: {
+			clicks: human.clicks + unverified.clicks + automated.clicks,
+			human,
+			unverified,
+			automated
+		}
+	};
+}
+var INSTALLER_SLUG_OS = {
+	mac: "mac",
+	windows: "windows",
+	linux: "linux"
+};
+function osMatchedDownloads(series, fromWorker) {
+	if (fromWorker && typeof fromWorker.clicks === "number") return fromWorker;
+	const by = new Map(Object.keys(INSTALLER_SLUG_OS).map((slug) => [slug, {
+		slug,
+		clicks: 0,
+		matched: 0
+	}]));
+	for (const r of series) {
+		const b = by.get(r.slug);
+		if (!b) continue;
+		b.clicks += r.clicks;
+		if (r.os === INSTALLER_SLUG_OS[r.slug]) b.matched += r.clicks;
+	}
+	const by_slug = Array.from(by.values());
+	return {
+		clicks: by_slug.reduce((n, b) => n + b.clicks, 0),
+		matched: by_slug.reduce((n, b) => n + b.matched, 0),
+		by_slug
+	};
+}
+function releaseDownloads(data) {
+	const installers = data?.installer_downloads_total;
+	if (typeof installers !== "number") return {
+		installers: null,
+		other: null,
+		byKind: null
+	};
+	return {
+		installers,
+		other: Math.max(0, (data?.downloads_total ?? 0) - installers),
+		byKind: data?.downloads_by_kind ?? null
+	};
+}
+function sharePct(part, whole) {
+	if (!whole || !Number.isFinite(part) || !Number.isFinite(whole)) return null;
+	const pct = Math.round(part / whole * 100);
+	if (part > 0 && pct === 0) return 1;
+	if (part < whole && pct === 100) return 99;
+	return pct;
+}
 //#endregion
 //#region src/components/settings/screens/Traffic.tsx
 var DAYS_OPTIONS = [30, 90];
@@ -140840,8 +141490,41 @@ var SLUG_LABEL = {
 	releases: "Releases page",
 	latest: "Latest release",
 	producthunt: "Product Hunt",
-	nxgn: "NxGn Tools"
+	nxgn: "NxGn Tools",
+	viberank: "VibeRank",
+	launchbuff: "LaunchBuff"
 };
+var TRAFFIC_REASON_LABEL = {
+	navigation: "browser link click",
+	"bot-ua": "declared bot or crawler",
+	prefetch: "prefetch / link preview",
+	head: "HEAD request (link checker)",
+	"automation-ua": "automation tool or HTTP library",
+	"verified-bot": "Cloudflare verified bot",
+	"bot-score": "Cloudflare bot score",
+	"no-fetch-meta": "claims a modern browser, sends no browser headers",
+	datacenter: "hosting / cloud network",
+	"not-navigation": "not a page navigation",
+	insecure: "plain HTTP",
+	"old-browser": "old browser or in-app webview",
+	direct: "typed, bookmarked or opened from an app",
+	"no-user-activation": "no user gesture",
+	accept: "not asking for a page",
+	"no-accept-language": "no Accept-Language"
+};
+var TRAFFIC_CLASS_LABEL = {
+	human: "Human",
+	unverified: "Unverified",
+	automated: "Automated"
+};
+function scopeTag(view, days) {
+	switch (view.state) {
+		case "old-worker": return `${days}d, all clicks incl. automated`;
+		case "pending": return "human clicks — none recorded yet";
+		case "partial": return `human clicks since ${fmtDate(view.since)}`;
+		default: return `human clicks, ${days}d`;
+	}
+}
 function slugLabel(slug) {
 	return SLUG_LABEL[slug] || slug;
 }
@@ -140852,7 +141535,8 @@ function fmtInt(n) {
 function fmtDate(iso) {
 	if (!iso) return "—";
 	try {
-		return new Date(iso).toLocaleDateString(void 0, {
+		const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+		return (day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])) : new Date(iso)).toLocaleDateString(void 0, {
 			year: "numeric",
 			month: "short",
 			day: "numeric"
@@ -140867,6 +141551,13 @@ function fmtPct(part, whole) {
 }
 function plural$1(n, word) {
 	return `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
+}
+function fmtShare(part, whole) {
+	const pct = sharePct(part, whole);
+	return pct == null ? "—" : `${pct}%`;
+}
+function releaseCount(r) {
+	return r.installer_downloads ?? r.total_downloads;
 }
 var CHART_W = 640;
 var CHART_H = 160;
@@ -141024,7 +141715,7 @@ function ReleasesChart({ releases }) {
 		className: "set-hint",
 		children: "No published releases yet."
 	});
-	const { max, ticks } = niceTicks(Math.max(...chrono.map((r) => r.total_downloads)));
+	const { max, ticks } = niceTicks(Math.max(...chrono.map(releaseCount)));
 	const scale = scaleFor(max);
 	const barGap = 3;
 	const barW = Math.max(1, 636 / chrono.length - barGap);
@@ -141043,7 +141734,7 @@ function ReleasesChart({ releases }) {
 					viewBox: `0 0 ${CHART_W} ${CHART_H}`,
 					preserveAspectRatio: "none",
 					role: "img",
-					"aria-label": `Downloads per release, ${chrono[0].tag} through ${chrono[chrono.length - 1].tag}, on a vertical scale of 0 to ${fmtInt(max)} downloads`,
+					"aria-label": `Installer downloads per release, ${chrono[0].tag} through ${chrono[chrono.length - 1].tag}, on a vertical scale of 0 to ${fmtInt(max)} downloads`,
 					onMouseLeave: () => setHover(null),
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Gridlines, {
@@ -141051,7 +141742,7 @@ function ReleasesChart({ releases }) {
 							yAt: (v) => PLOT_H - scale(v)
 						}),
 						chrono.map((r, i) => {
-							const barH = Math.max(1, scale(r.total_downloads));
+							const barH = Math.max(1, scale(releaseCount(r)));
 							const x = PAD_L + i * (barW + barGap);
 							const y = PLOT_H - barH;
 							return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
@@ -141087,9 +141778,7 @@ function ReleasesChart({ releases }) {
 				fmtDate(hovered.published_at),
 				") —",
 				" ",
-				fmtInt(hovered.total_downloads),
-				" download",
-				hovered.total_downloads === 1 ? "" : "s",
+				hovered.installer_downloads != null ? `${plural$1(hovered.installer_downloads, "installer download")} of ${fmtInt(hovered.total_downloads)} asset downloads` : plural$1(hovered.total_downloads, "download"),
 				hovered.assets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "traffic-tooltip-detail",
 					children: [
@@ -141237,8 +141926,9 @@ function VisitorsChart({ days }) {
 		]
 	});
 }
-function DownloadFunnel({ funnel, days }) {
+function DownloadFunnel({ funnel, scope, osMatch }) {
 	const { new_visitors: total, new_visitors_clicked: clicked } = funnel;
+	const matchBySlug = new Map(osMatch.by_slug.map((m) => [m.slug, m]));
 	if (!total) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "set-hint",
 		children: "No first-time visitors recorded in this window yet — the funnel fills in as the tracked links get clicked."
@@ -141309,6 +141999,10 @@ function DownloadFunnel({ funnel, days }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
 						className: "num",
 						children: "Clicks"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+						className: "num",
+						children: "From that OS"
 					})
 				] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: funnel.by_slug.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: slugLabel(s.slug) }),
@@ -141323,6 +142017,10 @@ function DownloadFunnel({ funnel, days }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
 						className: "num",
 						children: fmtInt(s.clicks)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+						className: "num",
+						children: fmtShare(matchBySlug.get(s.slug)?.matched ?? 0, matchBySlug.get(s.slug)?.clicks ?? 0)
 					})
 				] }, s.slug)) })]
 			}),
@@ -141331,11 +142029,12 @@ function DownloadFunnel({ funnel, days }) {
 				children: [
 					"Download ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "intent" }),
-					", not installs, over the last ",
-					days,
-					" days: someone pressing a platform button on mindflock.ai. It misses anyone who downloaded straight from the GitHub repo page, and a click is not a finished install. Per-platform first-timers can overlap (one person pressing both macOS and Linux is in both rows), so they may add up to more than the ",
+					", not installs (",
+					scope,
+					"): someone pressing a platform button on mindflock.ai. It misses anyone who downloaded straight from the GitHub repo page, and a click is not a finished install. Per-platform first-timers can overlap (one person pressing both macOS and Linux is in both rows), so they may add up to more than the",
+					" ",
 					fmtInt(clicked),
-					" above — that figure is the deduplicated one."
+					" above — that figure is the deduplicated one. \"From that OS\" is the share of that button's clicks whose browser runs the installer's own OS: people do fetch an installer for another machine, but a crawler pressing every button can't match more than one in three."
 				]
 			})
 		]
@@ -141428,23 +142127,127 @@ function ClicksChart({ series }) {
 		})]
 	});
 }
+function WhoIsClicking({ c, scope }) {
+	const classes = [
+		"human",
+		"unverified",
+		"automated"
+	];
+	const total = classes.reduce((n, k) => n + (c.by_class?.[k]?.clicks ?? 0), 0);
+	const reasons = (c.reasons ?? []).filter((r) => r.class !== "human" && r.clicks > 0).slice(0, 6);
+	if (!total) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "set-hint",
+		children: "No classified clicks yet. Every click recorded from now on is labelled human, unverified or automated."
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
+			className: "traffic-table",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "Class" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+					className: "num",
+					children: "Clicks"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+					className: "num",
+					children: "Share"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+					className: "num",
+					children: "Visitors"
+				})
+			] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: classes.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: TRAFFIC_CLASS_LABEL[k] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+					className: "num",
+					children: fmtInt(c.by_class?.[k]?.clicks ?? 0)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+					className: "num",
+					children: fmtShare(c.by_class?.[k]?.clicks ?? 0, total)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+					className: "num",
+					children: fmtInt(c.by_class?.[k]?.visitors ?? 0)
+				})
+			] }, k)) })]
+		}),
+		reasons.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
+			className: "traffic-table",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "Why not counted as human" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "Class" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+					className: "num",
+					children: "Clicks"
+				})
+			] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: reasons.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: TRAFFIC_REASON_LABEL[r.reason] || r.reason }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: TRAFFIC_CLASS_LABEL[r.class] || r.class }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+					className: "num",
+					children: fmtInt(r.clicks)
+				})
+			] }, `${r.class}|${r.reason}`)) })]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"Classified by the click Worker from the headers a browser sends with a real link click (Fetch Metadata, Accept-Language) and the network it came from (",
+				scope,
+				"). ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Human" }),
+				" ",
+				"needs all of it. ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Unverified" }),
+				" is real-browser-shaped but unproven: typed or bookmarked URLs, links opened from Slack or a terminal, old browsers, VPNs.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Automated" }),
+				" has positive evidence of a machine. Visitors are distinct within each class and don't add up across them. Rule and blind spots: ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "worker/README.md" }),
+				" in the webpage repo."
+			]
+		})
+	] });
+}
 function Traffic(_) {
 	const [days, setDays] = (0, import_react.useState)(90);
 	const [metric, setMetric] = (0, import_react.useState)("people");
 	const [refreshing, setRefreshing] = (0, import_react.useState)(false);
 	const q = useTraffic(true, days);
 	const data = q.data;
-	const clickTotalsSorted = (0, import_react.useMemo)(() => {
-		if (!data) return [];
-		return Object.entries(data.clicks.totals_by_slug).sort((a, b) => b[1] - a[1]);
-	}, [data]);
-	const visitorsBySlug = (0, import_react.useMemo)(() => {
-		const map = /* @__PURE__ */ new Map();
-		for (const row of data?.clicks.visitors_by_slug ?? []) map.set(row.slug, row);
-		return map;
-	}, [data]);
-	const people = data?.clicks.totals ?? null;
-	const funnel = data?.clicks.downloads ?? null;
+	const view = (0, import_react.useMemo)(() => clickView(data), [data]);
+	const classification = data?.clicks.classification ?? null;
+	const linkRows = (0, import_react.useMemo)(() => {
+		if (!data || !view) return [];
+		const visitors = new Map(view.visitors_by_slug.map((r) => [r.slug, r]));
+		if (view.scope === "all") return Object.entries(data.clicks.totals_by_slug).sort((a, b) => b[1] - a[1]).map(([slug, n]) => ({
+			slug,
+			clicks: n,
+			visitors: visitors.get(slug),
+			unverified: null,
+			automated: null
+		}));
+		const human = /* @__PURE__ */ new Map();
+		for (const r of view.series) human.set(r.slug, (human.get(r.slug) || 0) + r.clicks);
+		const other = new Map((classification?.by_slug ?? []).map((r) => [r.slug, r]));
+		const slugs = /* @__PURE__ */ new Set([...human.keys(), ...other.keys()]);
+		return Array.from(slugs).map((slug) => ({
+			slug,
+			clicks: human.get(slug) ?? 0,
+			visitors: visitors.get(slug),
+			unverified: other.get(slug)?.unverified ?? 0,
+			automated: other.get(slug)?.automated ?? 0
+		})).sort((a, b) => b.clicks - a.clicks || b.automated - a.automated);
+	}, [
+		data,
+		view,
+		classification
+	]);
+	const people = view?.totals ?? null;
+	const funnel = view?.downloads ?? null;
+	const osMatch = (0, import_react.useMemo)(() => osMatchedDownloads(view?.series ?? [], view?.downloads?.os_match), [view]);
+	const dl = releaseDownloads(data);
 	const shown = shownMetric(metric, data);
 	const doRefresh = async () => {
 		setRefreshing(true);
@@ -141455,6 +142258,8 @@ function Traffic(_) {
 			setRefreshing(false);
 		}
 	};
+	const tag = view && data ? scopeTag(view, data.clicks.days) : "";
+	const cls = view?.classified ?? null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -141462,7 +142267,7 @@ function Traffic(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
-			children: "Reach across mindflock.ai and the GitHub repo — pulled live from GitHub's API and the click-tracking Worker on mindflock.ai/go/*. Visible in this dev build only."
+			children: "Clicks on the tracked links on mindflock.ai (download buttons, GitHub, directory badges — mindflock.ai/go/*) and GitHub's own counters, pulled live from GitHub's API and the click-tracking Worker. Page views aren't measured at all: the site runs no analytics. Visible in this dev build only."
 		}),
 		q.isLoading && !data && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
@@ -141483,7 +142288,7 @@ function Traffic(_) {
 				})
 			]
 		}),
-		data && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		data && view && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			(data.errors.github || data.errors.clicks) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "traffic-warn",
 				children: [data.errors.github && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: ["GitHub: ", data.errors.github] }), data.errors.clicks && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: ["Click tracking: ", data.errors.clicks] })]
@@ -141500,38 +142305,107 @@ function Traffic(_) {
 							className: "traffic-tile-label",
 							children: [
 								"First-time visitors (",
-								data.clicks.days,
-								"d)"
+								tag,
+								")"
 							]
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "traffic-tile",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "traffic-tile-num",
-							children: fmtInt(people?.visitors)
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "traffic-tile-label",
-							children: [
-								"Unique visitors (",
-								data.clicks.days,
-								"d)"
-							]
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "traffic-tile-num",
+								children: fmtInt(people?.visitors)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-label",
+								children: [
+									"Unique visitors (",
+									tag,
+									")"
+								]
+							}),
+							cls && cls.clicks > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-sub",
+								children: [plural$1(cls.automated.visitors, "automated visitor"), " left out"]
+							})
+						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "traffic-tile",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "traffic-tile-num",
-							children: fmtInt(people?.clicks ?? clickTotalsSorted.reduce((s, [, n]) => s + n, 0))
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "traffic-tile-label",
-							children: [
-								"Tracked link clicks (",
-								data.clicks.days,
-								"d)"
-							]
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "traffic-tile-num",
+								children: fmtInt(people?.clicks ?? view.series.reduce((n, r) => n + r.clicks, 0))
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-label",
+								children: [
+									"Tracked link clicks (",
+									tag,
+									")"
+								]
+							}),
+							cls && cls.clicks > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-sub",
+								children: [
+									"+",
+									fmtInt(cls.automated.clicks),
+									" automated (",
+									fmtShare(cls.automated.clicks, cls.clicks),
+									"),",
+									" ",
+									fmtInt(cls.unverified.clicks),
+									" unverified"
+								]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "traffic-tile",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "traffic-tile-num",
+								children: fmtShare(osMatch.matched, osMatch.clicks)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-label",
+								children: [
+									"Download clicks from the installer's OS (",
+									tag,
+									")"
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-sub",
+								children: [
+									fmtInt(osMatch.matched),
+									" of ",
+									plural$1(osMatch.clicks, "download click")
+								]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "traffic-tile",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "traffic-tile-num",
+								children: fmtInt(dl.installers ?? data.downloads_total)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "traffic-tile-label",
+								children: dl.installers != null ? "Installer downloads (GitHub, all-time)" : "Release asset downloads (GitHub, all-time)"
+							}),
+							dl.other != null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-sub",
+								children: [
+									"+",
+									fmtInt(dl.other),
+									" other files: update checks, checksums, packages"
+								]
+							})
+						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "traffic-tile",
@@ -141552,20 +142426,40 @@ function Traffic(_) {
 							className: "traffic-tile-label",
 							children: "Forks"
 						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "traffic-tile",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "traffic-tile-num",
-							children: fmtInt(data.downloads_total)
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "traffic-tile-label",
-							children: "Downloads (all releases, all-time)"
-						})]
 					})
 				]
 			}),
-			!people && !data.errors.clicks && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			!data.errors.clicks && view.state === "old-worker" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				id: "traffic-scope-note",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "These click and visitor figures are unfiltered." }),
+					" The click Worker on mindflock.ai doesn't yet tell people from automated traffic, and most of this is automated: every link draws about the same count, and phones \"click\" desktop installers. Deploy the classifying Worker (",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "worker/README.md" }),
+					" in the webpage repo) for human-only figures; they cover clicks from the deploy onwards."
+				]
+			}),
+			!data.errors.clicks && view.state === "pending" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				id: "traffic-scope-note",
+				children: "The click Worker classifies clicks, but none have been recorded since it was deployed. The figures above fill in as people click."
+			}),
+			!data.errors.clicks && view.state === "partial" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				id: "traffic-scope-note",
+				children: [
+					"Click and visitor figures count ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "human clicks only" }),
+					", from",
+					" ",
+					fmtDate(view.since),
+					" — when the Worker started classifying. The",
+					" ",
+					fmtInt(classification?.unclassified_clicks ?? 0),
+					" clicks before then in this window can't be told apart and are left out."
+				]
+			}),
+			!people && !data.errors.clicks && view.state === "old-worker" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
 					"Visitor counts are empty because the click Worker hasn't been redeployed with visitor attribution yet (see ",
@@ -141575,20 +142469,28 @@ function Traffic(_) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "VISITORS" }),
 					" KV namespace and the ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "VISITOR_SALT" }),
-					" secret). Clicks below are unaffected. Numbers start accumulating at deploy time, so expect visitors to trail clicks until the window fills in."
+					" secret). Clicks below are unaffected."
 				]
 			}),
+			classification && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "set-section-title",
+				children: "Who's clicking"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WhoIsClicking, {
+				c: classification,
+				scope: view.state === "partial" ? `since ${fmtDate(view.since)}` : `last ${data.clicks.days} days`
+			})] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 				className: "set-section-title",
 				children: [
 					"New user funnel (",
-					data.clicks.days,
-					"d)"
+					tag,
+					")"
 				]
 			}),
 			funnel ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DownloadFunnel, {
 				funnel,
-				days: data.clicks.days
+				scope: tag,
+				osMatch
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "set-hint",
 				children: "Not available until the click Worker reports visitor attribution. GitHub's download counters can't stand in for it — they're opaque tallies that include updates and re-downloads, with no way to tell one person from another."
@@ -141598,9 +142500,14 @@ function Traffic(_) {
 				children: "GitHub stars over time"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StarsChart, { points: data.star_history ?? [] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 				className: "set-section-title",
-				children: shown === "people" ? "Visitors over time" : "Clicks over time"
+				children: [
+					shown === "people" ? "Visitors over time" : "Clicks over time",
+					" (",
+					tag,
+					")"
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-row traffic-range-row",
@@ -141614,7 +142521,7 @@ function Traffic(_) {
 							onClick: () => setDays(d),
 							children: [d, "d"]
 						}, d))
-					}), people && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					}), data.clicks.totals ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "usage-periods traffic-range",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -141627,7 +142534,7 @@ function Traffic(_) {
 							onClick: () => setMetric("clicks"),
 							children: "Clicks"
 						})]
-					})]
+					}) : null]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "test-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -141642,14 +142549,14 @@ function Traffic(_) {
 					})]
 				})]
 			}),
-			shown === "people" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VisitorsChart, { days: data.clicks.visitors_by_day }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ClicksChart, { series: data.clicks.series }),
-			clickTotalsSorted.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			shown === "people" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VisitorsChart, { days: view.visitors_by_day }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ClicksChart, { series: view.series }),
+			linkRows.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 					className: "set-section-title",
 					children: [
 						"By link (",
-						data.clicks.days,
-						"d)"
+						tag,
+						")"
 					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
@@ -141667,31 +142574,47 @@ function Traffic(_) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
 							className: "num",
 							children: "Clicks"
+						}),
+						view.scope === "human" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+							className: "num",
+							children: "Unverified"
+						}),
+						view.scope === "human" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+							className: "num",
+							children: "Automated"
 						})
-					] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: clickTotalsSorted.map(([slug, n]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: slugLabel(slug) }),
+					] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: linkRows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: slugLabel(r.slug) }),
 						people && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
 							className: "num",
-							children: fmtInt(visitorsBySlug.get(slug)?.new_visitors)
+							children: fmtInt(r.visitors?.new_visitors ?? 0)
 						}),
 						people && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
 							className: "num",
-							children: fmtInt(visitorsBySlug.get(slug)?.visitors)
+							children: fmtInt(r.visitors?.visitors ?? 0)
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
 							className: "num",
-							children: fmtInt(n)
+							children: fmtInt(r.clicks)
+						}),
+						view.scope === "human" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+							className: "num",
+							children: fmtInt(r.unverified)
+						}),
+						view.scope === "human" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+							className: "num",
+							children: fmtInt(r.automated)
 						})
-					] }, slug)) })]
+					] }, r.slug)) })]
 				}),
-				people && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				people && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "set-hint",
-					children: "Visitor columns are deduplicated per link over the window, so they don't add up down the column — one person clicking two links is one visitor on each row and one visitor overall."
+					children: ["Visitor columns are deduplicated per link over the window, so they don't add up down the column — one person clicking two links is one visitor on each row and one visitor overall.", view.scope === "all" && " Near-equal counts on every link, the directory badges included, are the sign of something following every link on the page."]
 				})
 			] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 				className: "set-section-title",
-				children: "Downloads over time"
+				children: "Installer downloads over time"
 			}),
 			data.releases.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "set-hint",
@@ -141704,9 +142627,45 @@ function Traffic(_) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
-					"GitHub's raw asset counters. These are ",
+					"GitHub's raw asset counters, which are ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "not" }),
-					" people: they include updates and repeat downloads, and GitHub attaches no identity to them, so there is no way to split them into new versus returning users. For new-user numbers use the funnel above. Note too that MindFlock's updater opens the releases page in a browser rather than fetching the asset itself, so an update looks exactly like a first-time download here."
+					" people: GitHub attaches no identity, so nothing here can be split into new versus returning users, or people versus crawlers.",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: " Installers" }),
+					" are ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "MindFlock.dmg" }),
+					", ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "MindFlock-Setup.exe" }),
+					" ",
+					"and ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "MindFlock.AppImage" }),
+					" — but the app's auto-updater downloads the same .exe and .AppImage to update an existing install, so on Windows and Linux an update looks exactly like a first download. ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Other files" }),
+					" are the ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "latest*.yml" }),
+					" ",
+					"every running app reads when it checks for an update, the macOS update",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "MindFlock.zip" }),
+					" and block maps, checksums, and the Python packages. Near-equal installer counts for all three platforms on a release are more likely a crawler fetching every file than three sets of people."
+				]
+			}),
+			dl.byKind && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"All-time: ",
+					fmtInt(dl.byKind.installer),
+					" installers · ",
+					fmtInt(dl.byKind.update),
+					" update files · ",
+					fmtInt(dl.byKind.update_check),
+					" update checks · ",
+					fmtInt(dl.byKind.checksum),
+					" ",
+					"checksums · ",
+					fmtInt(dl.byKind.package),
+					" Python packages",
+					dl.byKind.other ? ` · ${fmtInt(dl.byKind.other)} other` : "",
+					"."
 				]
 			}),
 			data.releases.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -141717,9 +142676,17 @@ function Traffic(_) {
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "Version" }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "Published" }),
+					dl.installers != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+						className: "num",
+						children: "Installers"
+					}),
+					dl.installers != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+						className: "num",
+						children: "Other files"
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
 						className: "num",
-						children: "Downloads"
+						children: "All assets"
 					})
 				] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: data.releases.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("td", { children: [r.tag, r.prerelease && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -141727,6 +142694,14 @@ function Traffic(_) {
 						children: " pre-release"
 					})] }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: fmtDate(r.published_at) }),
+					dl.installers != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+						className: "num",
+						children: fmtInt(r.installer_downloads ?? 0)
+					}),
+					dl.installers != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+						className: "num",
+						children: fmtInt(r.total_downloads - (r.installer_downloads ?? 0))
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
 						className: "num",
 						children: fmtInt(r.total_downloads)
@@ -145523,6 +146498,8 @@ function rowSearchFields(e, alias = "") {
 		e.title,
 		e.name,
 		e.path,
+		e.repo,
+		projectNote(e),
 		e.kind,
 		e.in_place ? "in-place" : "",
 		e.provisioned ? "provisioned" : "",
@@ -145535,6 +146512,11 @@ function dirNote(e, alias = "") {
 	const base = pathBasename(e.path || "");
 	if (!base) return "";
 	return entryLabel(e, alias).includes(base) || base === e.title ? "" : base;
+}
+function projectNote(e) {
+	const base = pathBasename(e.repo || "").replace(/^_base_/, "");
+	if (!base || base === pathBasename(e.path || "")) return "";
+	return base;
 }
 function sumBytes(rows) {
 	const seen = /* @__PURE__ */ new Set();
@@ -145964,7 +146946,7 @@ function RecentDialog() {
 							id: "recent-filter",
 							value: query,
 							onChange: setQuery,
-							placeholder: "Filter by name, branch, session, or path…  ( Ctrl+F )",
+							placeholder: "Filter by name, branch, folder, or path…  ( Ctrl+F )",
 							onEscape: closeDialog
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SortPicker, {
@@ -146025,6 +147007,7 @@ function RecentDialog() {
 												a ? "Saved name: " + a : "",
 												e.branch ? "Branch: " + e.branch : "",
 												e.title ? "Session: " + e.title : "",
+												e.repo ? "Folder: " + e.repo : "",
 												e.path || ""
 											].filter(Boolean).join("\n"),
 											children: label(e)
@@ -146043,6 +147026,11 @@ function RecentDialog() {
 												dirNote(e, a) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "recent-slug muted",
 													children: dirNote(e, a)
+												}),
+												projectNote(e) && projectNote(e) !== dirNote(e, a) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "recent-slug muted",
+													title: "Folder: " + e.repo,
+													children: projectNote(e)
 												}),
 												e.kind && e.kind !== "in-place" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "ws-badge kind",
@@ -160409,26 +161397,19 @@ function RouteStartMenu() {
 	}), document.body);
 }
 //#endregion
-//#region src/components/hub/HubSendDialog.tsx
+//#region src/components/hub/HubSendStep.tsx
 function hubTargets(list) {
 	return (list || []).filter((i) => !!i.title && !i.title.includes("::") && !i.peer_share && !i.locked);
 }
-function HubSendDialog() {
-	const item = useHubUi((s) => s.sending);
-	const close = () => useHubUi.getState().openSend(null);
-	if (!item) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SendDialog, {
-		item,
-		onClose: close
-	}, item.id);
-}
-function SendDialog({ item, onClose }) {
+function HubSendStep({ items, onBack, onDone }) {
 	const sessions = hubTargets(useInstances().data);
 	const focused = useUi((s) => s.focused);
+	const many = items.length > 1;
+	const one = items[0];
 	const [title, setTitle] = (0, import_react.useState)(() => focused && sessions.some((s) => s.title === focused) ? focused : sessions[0]?.title || "");
 	const [mode, setMode] = (0, import_react.useState)("prompt");
 	const [message, setMessage] = (0, import_react.useState)("");
-	const [path, setPath] = (0, import_react.useState)("hub/" + item.name);
+	const [path, setPath] = (0, import_react.useState)("hub/" + one.name);
 	const [replace, setReplace] = (0, import_react.useState)(false);
 	const [tell, setTell] = (0, import_react.useState)(true);
 	const [taken, setTaken] = (0, import_react.useState)("");
@@ -160437,19 +161418,23 @@ function SendDialog({ item, onClose }) {
 	const [err, setErr] = (0, import_react.useState)("");
 	const [find, setFind] = (0, import_react.useState)("");
 	const name = title ? displayName(title) : "the session";
+	const ref = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		ref.current?.querySelector("input[type=radio]:checked, button")?.focus({ preventScroll: true });
+	}, []);
 	const shown = (0, import_react.useMemo)(() => {
 		const f = find.trim().toLowerCase();
 		return f ? sessions.filter((s) => (displayName(s.title) + " " + s.title).toLowerCase().includes(f)) : sessions;
 	}, [sessions, find]);
 	(0, import_react.useEffect)(() => {
-		if (mode !== "copy" || !title || !path.trim()) {
+		if (many || mode !== "copy" || !title || !path.trim()) {
 			setTaken("");
 			setPathErr("");
 			return;
 		}
 		let live = true;
 		const t = setTimeout(() => {
-			freePath(title, item, path.trim()).then((r) => {
+			freePath(title, one, path.trim()).then((r) => {
 				if (!live) return;
 				setTaken(r.taken ? r.path : "");
 				setPathErr("");
@@ -160464,10 +161449,11 @@ function SendDialog({ item, onClose }) {
 			clearTimeout(t);
 		};
 	}, [
+		many,
 		mode,
 		title,
 		path,
-		item
+		one
 	]);
 	const go = async () => {
 		if (!title || busy) return;
@@ -160475,11 +161461,14 @@ function SendDialog({ item, onClose }) {
 		setErr("");
 		try {
 			if (mode === "prompt") {
-				if (await putInPrompt(title, item, message, { focus: true })) onClose();
+				if (await putInPrompt(title, items, message, { focus: true })) onDone();
+			} else if (many) {
+				await copyIntoMany(title, items, tell);
+				onDone();
 			} else {
 				const dest = taken && !replace ? taken : path.trim();
-				await copyInto(title, item, dest, replace, tell);
-				onClose();
+				await copyInto(title, one, dest, replace, tell);
+				onDone();
 			}
 		} catch (e) {
 			setErr(errMsg(e));
@@ -160488,218 +161477,275 @@ function SendDialog({ item, onClose }) {
 		}
 	};
 	const dest = taken && !replace ? taken : path.trim();
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-		onClose,
-		className: "hub-send-modal",
-		role: "dialog",
-		"aria-modal": "true",
+	const them = many ? "them" : "it";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "hub-send hub-send-step",
+		ref,
+		role: "region",
 		"aria-labelledby": "hub-send-h",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "modal-card hub-send",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+		onKeyDown: (e) => {
+			if (e.key === "Escape" && !e.defaultPrevented) {
+				e.preventDefault();
+				e.stopPropagation();
+				onBack();
+			}
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "hub-send-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "hub-btn hub-back",
+					onClick: onBack,
+					title: "Back to the list (Esc)",
+					children: "← Back"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 					id: "hub-send-h",
 					children: [
 						"Send ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "hub-send-name",
-							children: item.name
+							children: itemsWord(items)
 						}),
 						" to a session"
 					]
-				}),
-				!sessions.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "hub-empty",
-					children: "No sessions are running here yet — start one with New, then send it."
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					sessions.length > 6 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						className: "hub-filter",
-						type: "search",
-						placeholder: "Find a session…",
-						"aria-label": "Find a session",
-						value: find,
-						onChange: (e) => setFind(e.target.value)
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "hub-send-list",
-						role: "radiogroup",
-						"aria-label": "Session",
-						children: [shown.map((s) => {
-							const st = stateWord(effectiveActivity(s));
-							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-								className: "hub-send-row" + (s.title === title ? " on" : ""),
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-										type: "radio",
-										name: "hub-send-session",
-										checked: s.title === title,
-										onChange: () => setTitle(s.title)
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "hub-send-title",
-										children: displayName(s.title)
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "hub-send-state is-" + st.toLowerCase().replace(/\s+/g, "-"),
-										children: st
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "hub-send-sub muted",
-										children: s.repo || s.folder_label || ""
-									})
-								]
-							}, s.title);
-						}), !shown.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-							className: "muted",
-							children: [
-								"No session matches \"",
-								find,
-								"\"."
-							]
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
-						className: "hub-send-how",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", { children: "How" }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-								className: "hub-send-opt",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "radio",
-									name: "hub-send-mode",
-									checked: mode === "prompt",
-									onChange: () => setMode("prompt")
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Point the agent at it" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "muted",
-									children: " — it reads the file from the hub."
-								})] })]
-							}),
-							mode === "prompt" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "hub-send-msg-wrap",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-										className: "hub-send-label",
-										htmlFor: "hub-send-msg",
-										children: "Add a message (optional)"
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-										id: "hub-send-msg",
-										className: "hub-send-msg",
-										rows: 2,
-										value: message,
-										onChange: (e) => setMessage(e.target.value),
-										onKeyDown: (e) => {
-											if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-												e.preventDefault();
-												go();
-											}
-										}
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-										className: "hub-send-help muted",
-										children: [
-											"With a message, it is sent now",
-											name ? " to " + name : "",
-											" ",
-											"(queued if it is busy). Without one, ",
-											item.ref,
-											" is typed into its prompt for you to finish there."
-										]
-									})
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-								className: "hub-send-opt",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "radio",
-									name: "hub-send-mode",
-									checked: mode === "copy",
-									onChange: () => setMode("copy")
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Save a copy in its project folder" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "muted",
-									children: " — stays with the work; you still commit it."
-								})] })]
-							}),
-							mode === "copy" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "hub-send-path",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-										className: "hub-send-label",
-										htmlFor: "hub-send-path",
-										children: [
-											"Save as (inside ",
-											name,
-											"'s folder)"
-										]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-										id: "hub-send-path",
-										value: path,
-										spellCheck: false,
-										"aria-invalid": !!pathErr,
-										onChange: (e) => setPath(e.target.value)
-									}),
-									pathErr ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-										className: "hub-send-err",
-										role: "alert",
-										children: pathErr
-									}) : taken && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-										className: "hub-send-taken",
-										role: "status",
-										children: [
-											path.trim(),
-											" already exists there — ",
-											replace ? "it will be replaced." : "the copy goes to " + taken + ".",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-												className: "hub-send-replace",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-													type: "checkbox",
-													checked: replace,
-													onChange: (e) => setReplace(e.target.checked)
-												}), " Replace it"]
-											})
-										]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-										className: "hub-send-replace",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-												type: "checkbox",
-												checked: tell,
-												onChange: (e) => setTell(e.target.checked)
-											}),
-											" Tell ",
-											name,
-											" it's at ",
-											dest || "…"
-										]
-									})
-								]
-							})
-						]
-					})
-				] }),
-				err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "hub-send-err",
-					role: "alert",
-					children: err
+				})]
+			}),
+			many && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "hub-send-items",
+				"aria-label": "Being sent",
+				children: items.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					title: it.name + " — " + it.ref,
+					children: [it.kind === "image" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+						src: rawUrl(it),
+						alt: "",
+						className: "hub-att-thumb"
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "hub-att-ext",
+						"aria-hidden": "true",
+						children: (it.name.match(/\.([A-Za-z0-9]{1,4})$/) || [])[1] || (it.kind === "text" ? "txt" : "file")
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "hub-att-name",
+						children: it.name
+					})]
+				}, it.id))
+			}),
+			!sessions.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "hub-empty",
+				children: [
+					"No sessions are running here yet — start one with New, then send ",
+					them,
+					"."
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				sessions.length > 6 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					className: "hub-filter",
+					type: "search",
+					placeholder: "Find a session…",
+					"aria-label": "Find a session",
+					value: find,
+					onChange: (e) => setFind(e.target.value)
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "modal-actions",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						onClick: onClose,
-						children: "Cancel"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "primary",
-						disabled: !title || busy || mode === "copy" && (!path.trim() || !!pathErr),
-						onClick: () => void go(),
-						children: busy ? "Sending…" : mode === "copy" ? "Save copy" : "Send"
+					className: "hub-send-list",
+					role: "radiogroup",
+					"aria-label": "Session",
+					children: [shown.map((s) => {
+						const st = stateWord(effectiveActivity(s));
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "hub-send-row" + (s.title === title ? " on" : ""),
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "radio",
+									name: "hub-send-session",
+									checked: s.title === title,
+									onChange: () => setTitle(s.title)
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hub-send-title",
+									children: displayName(s.title)
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hub-send-state is-" + st.toLowerCase().replace(/\s+/g, "-"),
+									children: st
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hub-send-sub muted",
+									children: s.repo || s.folder_label || ""
+								})
+							]
+						}, s.title);
+					}), !shown.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "muted",
+						children: [
+							"No session matches \"",
+							find,
+							"\"."
+						]
 					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
+					className: "hub-send-how",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", { children: "How" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "hub-send-opt",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "hub-send-mode",
+								checked: mode === "prompt",
+								onChange: () => setMode("prompt")
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: ["Point the agent at ", them] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "muted",
+								children: [
+									" — it reads ",
+									many ? "the files" : "the file",
+									" from Shared files."
+								]
+							})] })]
+						}),
+						mode === "prompt" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "hub-send-msg-wrap",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+									className: "hub-send-label",
+									htmlFor: "hub-send-msg",
+									children: "Add a message (optional)"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+									id: "hub-send-msg",
+									className: "hub-send-msg",
+									rows: 2,
+									value: message,
+									onChange: (e) => setMessage(e.target.value),
+									onKeyDown: (e) => {
+										if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+											e.preventDefault();
+											go();
+										}
+									}
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "hub-send-help muted",
+									children: [
+										"With a message, it is sent now",
+										name ? " to " + name : "",
+										" ",
+										"(queued if it is busy)",
+										many ? ", all " + items.length + " codes in one message" : "",
+										". Without one,",
+										" ",
+										many ? codesOf(items) + " are" : one.ref + " is",
+										" typed into its prompt for you to finish there."
+									]
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "hub-send-opt",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "hub-send-mode",
+								checked: mode === "copy",
+								onChange: () => setMode("copy")
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: many ? "Save copies in its project folder" : "Save a copy in its project folder" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "muted",
+								children: [
+									" — stays with the work; you still commit ",
+									them,
+									"."
+								]
+							})] })]
+						}),
+						mode === "copy" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "hub-send-path",
+							children: [many ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "hub-send-help muted",
+								children: [
+									"Each lands at hub/‹its name› inside ",
+									name,
+									"'s folder — or the next free name beside it, never over a file."
+								]
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+									className: "hub-send-label",
+									htmlFor: "hub-send-path",
+									children: [
+										"Save as (inside ",
+										name,
+										"'s folder)"
+									]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									id: "hub-send-path",
+									value: path,
+									spellCheck: false,
+									"aria-invalid": !!pathErr,
+									onChange: (e) => setPath(e.target.value)
+								}),
+								pathErr ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "hub-send-err",
+									role: "alert",
+									children: pathErr
+								}) : taken && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "hub-send-taken",
+									role: "status",
+									children: [
+										path.trim(),
+										" already exists there — ",
+										replace ? "it will be replaced." : "the copy goes to " + taken + ".",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+											className: "hub-send-replace",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+												type: "checkbox",
+												checked: replace,
+												onChange: (e) => setReplace(e.target.checked)
+											}), " Replace it"]
+										})
+									]
+								})
+							] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "hub-send-replace",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										type: "checkbox",
+										checked: tell,
+										onChange: (e) => setTell(e.target.checked)
+									}),
+									" ",
+									many ? "Tell " + name + " where they are" : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+										"Tell ",
+										name,
+										" it's at ",
+										dest || "…"
+									] })
+								]
+							})]
+						})
+					]
 				})
-			]
-		})
+			] }),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "hub-send-err",
+				role: "alert",
+				children: err
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "hub-send-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "hub-btn",
+					onClick: onBack,
+					children: "Back"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "hub-btn primary",
+					disabled: !title || busy || mode === "copy" && !many && (!path.trim() || !!pathErr),
+					onClick: () => void go(),
+					children: busy ? "Sending…" : mode === "copy" ? many ? "Save copies" : "Save copy" : "Send"
+				})]
+			})
+		]
 	});
 }
 //#endregion
@@ -160726,6 +161772,10 @@ var FILTERS = [
 	{
 		key: "agents",
 		label: "From agents"
+	},
+	{
+		key: "devices",
+		label: "Other devices"
 	}
 ];
 function filterItems(items, f, find) {
@@ -160734,9 +161784,36 @@ function filterItems(items, f, find) {
 		if (f === "pictures" && i.kind !== "image") return false;
 		if (f === "text" && !(i.kind === "text" || i.textual)) return false;
 		if (f === "agents" && i.by !== "session") return false;
+		if (f === "devices" && !(i.remote || i.origin)) return false;
 		if (!q) return true;
-		return i.name.toLowerCase().includes(q) || i.ref.includes(q) || (i.note || "").toLowerCase().includes(q) || whoLabel$1(i).toLowerCase().includes(q) || (i.preview || "").toLowerCase().includes(q);
+		return (i.remote?.deviceName || "").toLowerCase().includes(q) || i.name.toLowerCase().includes(q) || i.ref.includes(q) || (i.note || "").toLowerCase().includes(q) || whoLabel$1(i).toLowerCase().includes(q) || (i.preview || "").toLowerCase().includes(q);
 	});
+}
+function rangeSelect(selected, shownIds, anchor, id, on, shift) {
+	let ids = [id];
+	const a = anchor ? shownIds.indexOf(anchor) : -1;
+	const b = shownIds.indexOf(id);
+	if (shift && a >= 0 && b >= 0) ids = shownIds.slice(Math.min(a, b), Math.max(a, b) + 1);
+	const set = new Set(selected);
+	for (const x of ids) if (on) set.add(x);
+	else set.delete(x);
+	return [...shownIds.filter((x) => set.has(x)), ...selected.filter((x) => set.has(x) && !shownIds.includes(x))];
+}
+function useThen(items, fn) {
+	if (!items.some((i) => i.remote)) {
+		fn(items);
+		return;
+	}
+	bringHere(items).then((here) => {
+		if (here.length) fn(here);
+	});
+}
+function pinSplit(items) {
+	const pinned = items.filter((i) => i.pinned).length;
+	return {
+		toPin: items.length - pinned,
+		toUnpin: pinned
+	};
 }
 function dayLabel(ts, now = Date.now() / 1e3) {
 	const d = /* @__PURE__ */ new Date(ts * 1e3);
@@ -160761,11 +161838,7 @@ function HubPanel() {
 		if (location.hash === "#hub") useHubUi.getState().setOpen(true);
 	}, []);
 	if (guest) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubDrawer, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubSendDialog, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubNoticeBar, {})
-	] });
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubDrawer, {}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubNoticeBar, {})] });
 }
 function HubNoticeBar() {
 	const n = useHubUi((s) => s.notice);
@@ -160810,12 +161883,22 @@ function HubNoticeBar() {
 function HubDrawer() {
 	const setOpen = useHubUi((s) => s.setOpen);
 	const problems = useHubUi((s) => s.problems);
+	const sending = useHubUi((s) => s.sending);
+	const selected = useHubUi((s) => s.selected);
+	const setSelected = useHubUi((s) => s.setSelected);
 	const q = useHub(true);
 	const list = q.data;
-	const items = list?.items || [];
+	const items = (0, import_react.useMemo)(() => list?.items || [], [list]);
+	const dq = useHubDevices(true);
+	const remote = (0, import_react.useMemo)(() => remoteItems(dq.data), [dq.data]);
+	const notes = (0, import_react.useMemo)(() => deviceNotes(dq.data), [dq.data]);
+	const all = (0, import_react.useMemo)(() => remote.length ? [...items, ...remote].sort((a, b) => b.added - a.added) : items, [items, remote]);
+	const fromDevices = remote.length > 0 || items.some((i) => i.origin);
 	const ref = (0, import_react.useRef)(null);
 	const fileInput = (0, import_react.useRef)(null);
 	const findRef = (0, import_react.useRef)(null);
+	const allBox = (0, import_react.useRef)(null);
+	const anchor = (0, import_react.useRef)(null);
 	const [dragOver, setDragOver] = (0, import_react.useState)(false);
 	const [busy, setBusy] = (0, import_react.useState)("");
 	const [snippet, setSnippet] = (0, import_react.useState)(null);
@@ -160824,7 +161907,11 @@ function HubDrawer() {
 	const [filter, setFilter] = (0, import_react.useState)("all");
 	const [viewing, setViewing] = (0, import_react.useState)(null);
 	const [clearing, setClearing] = (0, import_react.useState)(false);
+	const [removing, setRemoving] = (0, import_react.useState)(false);
 	const brokenErr = q.isError && q.error?.body?.code === "hub_broken" ? errMsg(q.error) : "";
+	const focused = useUi((s) => s.focused);
+	const targets = hubTargets(useInstances().data);
+	const here = focused && targets.some((t) => t.title === focused) ? focused : "";
 	(0, import_react.useEffect)(() => {
 		q.refetch();
 	}, []);
@@ -160847,7 +161934,7 @@ function HubDrawer() {
 	(0, import_react.useEffect)(() => {
 		const onPaste = (e) => {
 			const inside = !!ref.current?.contains(e.target);
-			if (editable(e.target) || !inside && document.activeElement && document.activeElement !== document.body && !ref.current?.contains(document.activeElement)) return;
+			if (editable(e.target) || useHubUi.getState().sending || !inside && document.activeElement && document.activeElement !== document.body && !ref.current?.contains(document.activeElement)) return;
 			const cd = e.clipboardData;
 			if (!cd) return;
 			const files = Array.from(cd.files || []);
@@ -160873,24 +161960,13 @@ function HubDrawer() {
 		document.addEventListener("paste", onPaste);
 		return () => document.removeEventListener("paste", onPaste);
 	}, []);
-	const onKeyDown = (e) => {
-		if (e.defaultPrevented) return;
-		if (e.key === "Escape") {
-			e.preventDefault();
-			setOpen(false);
-			return;
-		}
-		if (e.key === "/" && !editable(e.target) || e.key === "f" && (e.ctrlKey || e.metaKey)) {
-			e.preventDefault();
-			findRef.current?.focus();
-		}
-	};
 	const hasFiles = (e) => Array.from(e.dataTransfer.types || []).includes("Files");
-	const shown = (0, import_react.useMemo)(() => filterItems(items, filter, find), [
-		items,
+	const shown = (0, import_react.useMemo)(() => filterItems(all, filter, find), [
+		all,
 		filter,
 		find
 	]);
+	const shownIds = (0, import_react.useMemo)(() => shown.map((i) => i.id), [shown]);
 	const days = (0, import_react.useMemo)(() => {
 		const out = [];
 		for (const it of shown) {
@@ -160905,6 +161981,56 @@ function HubDrawer() {
 		return out;
 	}, [shown]);
 	const unpinned = items.filter((i) => !i.pinned).length;
+	const selItems = (0, import_react.useMemo)(() => all.filter((i) => selected.includes(i.id)), [all, selected]);
+	const selLocal = (0, import_react.useMemo)(() => selItems.filter((i) => !i.remote), [selItems]);
+	const selRemote = selItems.length - selLocal.length;
+	const hiddenSel = selItems.filter((i) => !shownIds.includes(i.id)).length;
+	const shownSel = selItems.length - hiddenSel;
+	const allOn = shown.length > 0 && shownSel === shown.length;
+	(0, import_react.useEffect)(() => {
+		if (allBox.current) allBox.current.indeterminate = shownSel > 0 && !allOn;
+	}, [shownSel, allOn]);
+	(0, import_react.useEffect)(() => {
+		if (selItems.length !== selected.length) setSelected(selItems.map((i) => i.id));
+		if (!selItems.length) setRemoving(false);
+	}, [
+		selItems,
+		selected,
+		setSelected
+	]);
+	const tick = (id, on, shift) => {
+		setSelected(rangeSelect(useHubUi.getState().selected, shownIds, anchor.current, id, on, shift));
+		anchor.current = id;
+	};
+	const selectAll = (on) => {
+		const cur = useHubUi.getState().selected;
+		setSelected(on ? [.../* @__PURE__ */ new Set([...cur, ...shownIds])] : cur.filter((x) => !shownIds.includes(x)));
+		anchor.current = null;
+	};
+	const clearSel = () => {
+		setSelected([]);
+		setRemoving(false);
+		anchor.current = null;
+	};
+	const onKeyDown = (e) => {
+		if (e.defaultPrevented) return;
+		if (e.key === "Escape") {
+			e.preventDefault();
+			if (useHubUi.getState().selected.length) clearSel();
+			else setOpen(false);
+			return;
+		}
+		if (sending) return;
+		if (e.key === "/" && !editable(e.target) || e.key === "f" && (e.ctrlKey || e.metaKey)) {
+			e.preventDefault();
+			findRef.current?.focus();
+			return;
+		}
+		if (e.key === "a" && (e.ctrlKey || e.metaKey) && !editable(e.target) && shown.length) {
+			e.preventDefault();
+			selectAll(true);
+		}
+	};
 	const clearUnpinned = async () => {
 		try {
 			const r = await api("/api/hub/clear", { method: "POST" });
@@ -160916,16 +162042,18 @@ function HubDrawer() {
 			setClearing(false);
 		}
 	};
+	const { toPin, toUnpin } = pinSplit(selLocal);
+	const n = selItems.length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 		id: "hub-panel",
 		ref,
 		tabIndex: -1,
 		role: "complementary",
-		"aria-label": "Hub — files and text every session can use",
-		className: dragOver ? "hub-drop" : void 0,
+		"aria-label": "Shared files — files and text every session can use",
+		className: (dragOver ? "hub-drop" : "") + (n ? " has-selection" : "") + (sending ? " is-sending" : ""),
 		onKeyDown,
 		onDragOver: (e) => {
-			if (!hasFiles(e)) return;
+			if (!hasFiles(e) || sending) return;
 			e.preventDefault();
 			e.dataTransfer.dropEffect = "copy";
 			setDragOver(true);
@@ -160934,7 +162062,7 @@ function HubDrawer() {
 			if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false);
 		},
 		onDrop: (e) => {
-			if (!hasFiles(e)) return;
+			if (!hasFiles(e) || sending) return;
 			e.preventDefault();
 			e.stopPropagation();
 			setDragOver(false);
@@ -160945,262 +162073,434 @@ function HubDrawer() {
 				className: "hub-head",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "hub-title",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Hub" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Shared files" }), !sending && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "hub-sub",
 						children: [
 							"Files and text every session can use. Each item has a code like ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "hub:k7m2" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "file:k7m2" }),
 							" — put it in any prompt and the agent gets the file."
 						]
 					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "hub-x",
-					"aria-label": "Close the hub",
+					"aria-label": "Close Shared files",
 					title: "Close (Esc)",
 					onClick: () => setOpen(false),
 					children: "✕"
 				})]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "hub-add",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "hub-btn primary",
-						onClick: () => fileInput.current?.click(),
-						children: "Add files…"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "hub-btn",
-						onClick: () => setSnippet(snippet === null ? "" : null),
-						"aria-expanded": snippet !== null,
-						children: "New snippet"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "hub-add-hint",
-						children: ["or drop here · paste with ", PASTE_KEY]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						ref: fileInput,
-						type: "file",
-						multiple: true,
-						hidden: true,
-						"aria-hidden": "true",
-						tabIndex: -1,
-						onChange: (e) => {
-							const fs = Array.from(e.target.files || []);
-							e.target.value = "";
-							add(fs);
-						}
-					})
-				]
-			}),
-			snippet !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SnippetEditor, {
-				value: snippet,
-				onChange: setSnippet,
-				onDone: () => setSnippet(null)
-			}),
-			busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "hub-busy",
-				role: "status",
-				children: busy
-			}),
-			problems.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "hub-problem",
-				role: "alert",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: p.text }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "hub-confirm-actions",
-					children: [p.raiseTo && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						type: "button",
-						className: "hub-btn primary",
-						onClick: () => {
-							dropProblem(p.id);
-							raiseItemLimit(p.raiseTo);
-						},
-						children: [
-							"Raise the limit to ",
-							p.raiseTo,
-							" MB"
-						]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "hub-btn",
-						onClick: () => dropProblem(p.id),
-						children: "Dismiss"
-					})]
-				})]
-			}, p.id)),
-			secrets.map((f, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "hub-confirm",
-				role: "alertdialog",
-				"aria-label": "Add " + f.name + " anyway?",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [f.name, " looks like a secret"] }), " (an env file, key or credential). Every session can read the hub."] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "hub-confirm-actions",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "hub-btn",
-						onClick: () => {
-							setSecrets((s) => s.filter((_, j) => j !== i));
-							add([f], true);
-						},
-						children: "Add it anyway"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "hub-btn primary",
-						autoFocus: true,
-						onClick: () => setSecrets((s) => s.filter((_, j) => j !== i)),
-						children: "Don't add it"
-					})]
-				})]
-			}, f.name + i)),
-			items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "hub-tools",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "hub-chips",
-					role: "group",
-					"aria-label": "Show",
-					children: FILTERS.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "hub-chip" + (filter === f.key ? " on" : ""),
-						"aria-pressed": filter === f.key,
-						onClick: () => setFilter(f.key),
-						children: f.label
-					}, f.key))
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					ref: findRef,
-					className: "hub-filter",
-					type: "search",
-					placeholder: "Find…  /",
-					"aria-label": "Find an item in the hub (/ or Ctrl+F)",
-					value: find,
-					onChange: (e) => setFind(e.target.value)
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "hub-list-wrap",
-				children: brokenErr ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "hub-problem",
-					role: "alert",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: brokenErr }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "hub-confirm-actions",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "hub-btn primary",
-							onClick: () => void rebuildHub(),
-							children: "Rebuild the list"
-						})
-					})]
-				}) : q.isLoading ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "hub-empty muted",
-					children: "Loading the hub…"
-				}) : q.isError && !list ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "hub-empty",
-					role: "alert",
+			sending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubSendStep, {
+				items: sending,
+				onBack: () => useHubUi.getState().openSend(null),
+				onDone: () => {
+					useHubUi.getState().openSend(null);
+					clearSel();
+				}
+			}, sending.map((i) => i.id).join(",")) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-add",
 					children: [
-						"Couldn't load the hub (",
-						errMsg(q.error),
-						").",
-						" ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "hub-link",
-							onClick: () => void q.refetch(),
-							children: "Try again"
-						})
-					]
-				}) : !items.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "hub-empty-big",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "hub-empty-art",
-							"aria-hidden": "true",
-							children: "⇪"
+							className: "hub-btn primary",
+							onClick: () => fileInput.current?.click(),
+							children: "Add files…"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Nothing in the hub yet." }) }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-							"Drop a file here, paste a screenshot (",
-							PASTE_KEY,
-							"), or add a snippet. Each item gets a code like",
-							" ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "hub:k7m2" }),
-							" — put it in any session's prompt, use ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Send to session…" }),
-							", or drag the item onto a session."
-						] }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "muted",
-							children: "Agents can add files here too."
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "hub-btn",
+							onClick: () => setSnippet(snippet === null ? "" : null),
+							"aria-expanded": snippet !== null,
+							children: "New snippet"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "hub-add-hint",
+							children: ["or drop here · paste with ", PASTE_KEY]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							ref: fileInput,
+							type: "file",
+							multiple: true,
+							hidden: true,
+							"aria-hidden": "true",
+							tabIndex: -1,
+							onChange: (e) => {
+								const fs = Array.from(e.target.files || []);
+								e.target.value = "";
+								add(fs);
+							}
 						})
 					]
-				}) : !shown.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "hub-empty muted",
-					children: [
-						"Nothing here matches",
-						find ? " \"" + find + "\"" : "",
-						"."
-					]
-				}) : days.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-					className: "hub-day",
-					"aria-label": d.label,
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-						className: "hub-day-h",
-						children: d.label
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-						className: "hub-list",
-						children: d.items.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubCard, {
-							item: it,
-							onView: setViewing
-						}, it.id))
-					})]
-				}, d.label))
-			}),
-			list && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("footer", {
-				className: "hub-foot",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: usageLine(list) }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "muted",
-						title: "Settings: hub.keep_days (" + list.keep_days + ")",
+				}),
+				snippet !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SnippetEditor, {
+					value: snippet,
+					onChange: setSnippet,
+					onDone: () => setSnippet(null)
+				}),
+				busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "hub-busy",
+					role: "status",
+					children: busy
+				}),
+				problems.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-problem",
+					role: "alert",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: p.text }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hub-confirm-actions",
 						children: [
-							"Deleted automatically ",
-							list.keep_days,
-							" days after last use — Pin to keep"
-						]
-					}),
-					unpinned > 0 && (clearing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "hub-foot-confirm",
-						role: "alertdialog",
-						"aria-label": "Remove every unpinned item?",
-						children: [
-							"Remove ",
-							unpinned,
-							" unpinned?",
-							" ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							p.confirm && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								className: "hub-link",
-								onClick: () => void clearUnpinned(),
-								children: "Remove"
+								className: "hub-btn",
+								onClick: () => {
+									dropProblem(p.id);
+									p.confirm.run();
+								},
+								children: p.confirm.label
 							}),
-							" ",
+							p.raiseTo && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "hub-btn primary",
+								onClick: () => {
+									dropProblem(p.id);
+									raiseItemLimit(p.raiseTo);
+								},
+								children: [
+									"Raise the limit to ",
+									p.raiseTo,
+									" MB"
+								]
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								className: "hub-link",
-								autoFocus: true,
-								onClick: () => setClearing(false),
-								children: "Keep"
+								className: "hub-btn",
+								onClick: () => dropProblem(p.id),
+								children: "Dismiss"
 							})
 						]
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "hub-link",
-						onClick: () => setClearing(true),
-						children: "Remove unpinned items"
-					}))
-				]
-			}),
+					})]
+				}, p.id)),
+				secrets.map((f, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-confirm",
+					role: "alertdialog",
+					"aria-label": "Add " + f.name + " anyway?",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [f.name, " looks like a secret"] }), " (an env file, key or credential). Every session can read Shared files."] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hub-confirm-actions",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "hub-btn",
+							onClick: () => {
+								setSecrets((s) => s.filter((_, j) => j !== i));
+								add([f], true);
+							},
+							children: "Add it anyway"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "hub-btn primary",
+							autoFocus: true,
+							onClick: () => setSecrets((s) => s.filter((_, j) => j !== i)),
+							children: "Don't add it"
+						})]
+					})]
+				}, f.name + i)),
+				all.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-tools",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "hub-all",
+							title: "Select everything shown (Ctrl+A)",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								ref: allBox,
+								type: "checkbox",
+								className: "hub-check",
+								checked: allOn,
+								disabled: !shown.length,
+								"aria-label": allOn ? "Clear the selection of what is shown" : "Select all " + shown.length + " shown",
+								onChange: (e) => selectAll(e.target.checked)
+							})
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "hub-chips",
+							role: "group",
+							"aria-label": "Show",
+							children: FILTERS.filter((f) => f.key !== "devices" || fromDevices).map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-chip" + (filter === f.key ? " on" : ""),
+								"aria-pressed": filter === f.key,
+								onClick: () => setFilter(f.key),
+								children: f.label
+							}, f.key))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							ref: findRef,
+							className: "hub-filter",
+							type: "search",
+							placeholder: "Find…  /",
+							"aria-label": "Find a shared file (/ or Ctrl+F)",
+							value: find,
+							onChange: (e) => setFind(e.target.value)
+						})
+					]
+				}),
+				notes.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "hub-devnotes",
+					"aria-label": "Your other devices",
+					children: notes.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "hub-devnote is-" + d.state,
+						children: d.note
+					}, d.device))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "hub-list-wrap",
+					children: brokenErr ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hub-problem",
+						role: "alert",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: brokenErr }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "hub-confirm-actions",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn primary",
+								onClick: () => void rebuildHub(),
+								children: "Rebuild the list"
+							})
+						})]
+					}) : q.isLoading ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "hub-empty muted",
+						children: "Loading shared files…"
+					}) : q.isError && !list ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "hub-empty",
+						role: "alert",
+						children: [
+							"Couldn't load shared files (",
+							errMsg(q.error),
+							").",
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-link",
+								onClick: () => void q.refetch(),
+								children: "Try again"
+							})
+						]
+					}) : !all.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hub-empty-big",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "hub-empty-art",
+								"aria-hidden": "true",
+								children: "⇪"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Nothing in Shared files yet." }) }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+								"Drop a file here, paste a screenshot (",
+								PASTE_KEY,
+								"), or add a snippet. Each item gets a code like",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "file:k7m2" }),
+								" — put it in any session's prompt, use ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Send to session…" }),
+								", or drag the item onto a session."
+							] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "muted",
+								children: "Agents can add files here too."
+							})
+						]
+					}) : !shown.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "hub-empty muted",
+						children: [
+							"Nothing here matches",
+							find ? " \"" + find + "\"" : "",
+							"."
+						]
+					}) : days.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						className: "hub-day",
+						"aria-label": d.label,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+							className: "hub-day-h",
+							children: d.label
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+							className: "hub-list",
+							children: d.items.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubCard, {
+								item: it,
+								onView: setViewing,
+								checked: selected.includes(it.id),
+								onTick: (on, shift) => tick(it.id, on, shift),
+								dragItems: () => dragSet(it, all, useHubUi.getState().selected)
+							}, it.id))
+						})]
+					}, d.label))
+				}),
+				n > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-selbar",
+					role: "toolbar",
+					"aria-label": n + " selected",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hub-selbar-top",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [n, " selected"] }),
+							hiddenSel > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "muted",
+								title: "Ticked under another filter or search — the actions include them",
+								children: [
+									" ",
+									"· ",
+									hiddenSel,
+									" not shown by the filter"
+								]
+							}),
+							selRemote > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "muted",
+								title: "Using them fetches them to this device first; pin and remove them on the device they live on",
+								children: [
+									" ",
+									"· ",
+									selRemote,
+									" on ",
+									selRemote === 1 ? "another device" : "other devices"
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-link hub-selbar-clear",
+								onClick: clearSel,
+								title: "Clear the selection (Esc)",
+								children: "Clear"
+							})
+						]
+					}), removing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hub-selbar-confirm",
+						role: "alertdialog",
+						"aria-label": "Remove " + n + (n === 1 ? " item" : " items") + "?",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+							"Remove ",
+							selLocal.length === 1 ? selLocal[0].name : selLocal.length + " items",
+							"?",
+							" ",
+							selLocal.length === 1 ? "Its code stops" : "Their codes stop",
+							" working in every session (Undo right after).",
+							selRemote > 0 && " The " + selRemote + " on other devices stay there."
+						] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "hub-confirm-actions",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "hub-btn danger",
+								onClick: () => {
+									const these = selLocal;
+									clearSel();
+									removeItems(these);
+								},
+								children: ["Remove ", selLocal.length === 1 ? "it" : selLocal.length]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn primary",
+								autoFocus: true,
+								onClick: () => setRemoving(false),
+								children: "Keep"
+							})]
+						})]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hub-selbar-acts",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn primary",
+								onClick: () => useThen(selItems, (here) => useHubUi.getState().openSend(here)),
+								children: "Send to session…"
+							}),
+							here && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "hub-btn",
+								title: "Type " + (n === 1 ? "its code" : "their " + n + " codes") + " into " + displayName(here) + "'s prompt",
+								onClick: () => useThen(selItems, (these) => void putInPrompt(here, these, "", { focus: true })),
+								children: [
+									"Put in ",
+									displayName(here),
+									"'s prompt"
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn",
+								onClick: () => void copyRefs(selItems),
+								children: n === 1 ? "Copy code" : "Copy codes"
+							}),
+							selRemote > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn",
+								title: "Fetch them from the device they are on, into this device's shared files",
+								onClick: () => void saveHere(selItems),
+								children: selRemote === n ? "Save to this device" : "Save " + selRemote + " to this device"
+							}),
+							toPin > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn",
+								title: toUnpin ? toUnpin + " already pinned — this pins the other " + toPin : "Keep them past the automatic clean-up",
+								onClick: () => void pinItems(selLocal.filter((i) => !i.pinned), true),
+								children: toUnpin ? "Pin " + toPin : "Pin"
+							}),
+							toUnpin > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn",
+								title: toPin ? toPin + " not pinned — this unpins the " + toUnpin + " that are" : "Let them go with the automatic clean-up",
+								onClick: () => void pinItems(selLocal.filter((i) => i.pinned), false),
+								children: toPin ? "Unpin " + toUnpin : "Unpin"
+							}),
+							selLocal.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn danger",
+								onClick: () => setRemoving(true),
+								children: "Remove…"
+							})
+						]
+					})]
+				}) : list && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("footer", {
+					className: "hub-foot",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: usageLine(list) }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "muted",
+							title: "Settings: hub.keep_days (" + list.keep_days + ")",
+							children: [
+								"Deleted automatically ",
+								list.keep_days,
+								" days after last use — Pin to keep"
+							]
+						}),
+						(dq.data?.devices.length || 0) > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OfferSwitch, {}),
+						unpinned > 0 && (clearing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "hub-foot-confirm",
+							role: "alertdialog",
+							"aria-label": "Remove every unpinned item?",
+							children: [
+								"Remove ",
+								unpinned,
+								" unpinned?",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "hub-link",
+									onClick: () => void clearUnpinned(),
+									children: "Remove"
+								}),
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "hub-link",
+									autoFocus: true,
+									onClick: () => setClearing(false),
+									children: "Keep"
+								})
+							]
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "hub-link",
+							onClick: () => setClearing(true),
+							children: "Remove unpinned items"
+						}))
+					]
+				})
+			] }),
 			viewing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PictureViewer, {
 				item: viewing,
 				onClose: () => setViewing(null)
@@ -161286,14 +162586,45 @@ function SnippetEditor(props) {
 				className: "hub-btn primary",
 				disabled: !props.value.trim() || saving,
 				onClick: () => void save(),
-				title: "Add it to the hub (Ctrl+Enter)",
+				title: "Add it to Shared files (Ctrl+Enter)",
 				children: "Add snippet"
 			})]
 		})]
 	});
 }
+function OfferSwitch() {
+	const doc = useSettingsDoc(true).data;
+	const on = doc?.hub?.offer_to_devices !== false;
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "hub-offer",
+		title: "Your other devices list this device's shared files and fetch one when it is used. Items you mark “Keep on this device only” never show there.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: on,
+				disabled: busy || !doc,
+				onChange: async (e) => {
+					const want = e.target.checked;
+					setBusy(true);
+					try {
+						const r = await api("/api/settings", { json: { hub: { offer_to_devices: want } } });
+						if (r?.settings) putSettingsDoc(r.settings);
+						say(want ? "Your other devices can see this device's shared files" : "This device's shared files are no longer shown on your other devices");
+					} catch (err) {
+						say("Couldn't change that: " + errMsg(err), { error: true });
+					} finally {
+						setBusy(false);
+					}
+				}
+			}),
+			" ",
+			"Show these on my other devices"
+		]
+	});
+}
 function KindIcon({ item, onView }) {
-	if (item.kind === "image") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+	if (item.kind === "image" && hasThumb(item)) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: "hub-thumb-btn",
 		"aria-label": "View " + item.name + " larger",
@@ -161330,7 +162661,17 @@ function KindIcon({ item, onView }) {
 		})]
 	});
 }
-function HubCard({ item, onView }) {
+function dragLabel(dt, n) {
+	if (n < 2 || typeof document === "undefined" || !dt.setDragImage) return;
+	const el = document.createElement("div");
+	el.className = "hub-drag-label";
+	el.textContent = n + " shared files";
+	document.body.appendChild(el);
+	dt.setDragImage(el, 12, 12);
+	setTimeout(() => el.remove(), 0);
+}
+function HubCard(props) {
+	const { item, onView, checked } = props;
 	const openSend = useHubUi((s) => s.openSend);
 	const [menu, setMenu] = (0, import_react.useState)(false);
 	const [editing, setEditing] = (0, import_react.useState)("");
@@ -161379,33 +162720,46 @@ function HubCard({ item, onView }) {
 		setMenu(false);
 		fn();
 	};
+	const rem = item.remote;
 	const meta = [
 		kindLabel$1(item),
 		humanSize(item.size),
-		whoLabel$1(item),
-		relTime(item.added)
-	].join(" · ");
+		rem ? item.by === "you" ? "" : whoLabel$1(item) : whoLabel$1(item),
+		relTime(item.added),
+		rem?.secret ? "looks like a secret" : "",
+		rem?.tooBig ? "too big for this device" : "",
+		item.local_only ? "kept on this device" : ""
+	].filter(Boolean).join(" · ");
+	const use = (fn) => () => {
+		setMenu(false);
+		useThen([item], (here) => fn(here[0]));
+	};
 	const title = item.kind === "text" ? firstLine(item) : item.name;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		className: "hub-card" + (item.pinned ? " is-pinned" : "") + (compact ? " is-compact" : ""),
+		className: "hub-card" + (item.pinned ? " is-pinned" : "") + (compact ? " is-compact" : "") + (checked ? " is-selected" : "") + (rem ? " is-remote" : ""),
 		draggable: !editing,
 		onDragStart: (e) => {
-			e.dataTransfer.setData(HUB_MIME, JSON.stringify({
-				id: item.id,
-				ref: item.ref,
-				name: item.name
-			}));
-			e.dataTransfer.setData("text/plain", item.ref);
-			e.dataTransfer.effectAllowed = "copy";
+			const these = props.dragItems();
+			startDrag(e.dataTransfer, these);
+			dragLabel(e.dataTransfer, these.length);
 		},
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "hub-card-top",
 				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						className: "hub-check",
+						checked,
+						"aria-label": "Select " + item.name,
+						title: "Select (Shift+click: a range)",
+						onClick: (e) => props.onTick(e.currentTarget.checked, e.shiftKey),
+						onChange: () => {}
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "hub-grip",
 						"aria-hidden": "true",
-						title: "Drag onto a session, its message box or its terminal to use " + item.ref,
+						title: checked ? "Drag onto a session, its message box or its terminal to use every selected item" : "Drag onto a session, its message box or its terminal to use " + item.ref,
 						children: "⠿"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
@@ -161442,6 +162796,11 @@ function HubCard({ item, onView }) {
 								title: item.name,
 								children: title
 							}),
+							rem && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "hub-on",
+								title: "On " + rem.deviceName + " — using it brings it to this device",
+								children: ["on ", rem.deviceName]
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "hub-meta",
 								children: meta
@@ -161465,7 +162824,7 @@ function HubCard({ item, onView }) {
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "hub-actions",
 									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										!rem && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 											type: "button",
 											className: "hub-pin-btn" + (item.pinned ? " on" : ""),
 											"aria-pressed": item.pinned,
@@ -161488,73 +162847,116 @@ function HubCard({ item, onView }) {
 											type: "button",
 											className: "hub-btn",
 											"aria-label": "Send " + item.name + " to a session…",
-											onClick: () => openSend(item),
+											onClick: () => useThen([item], (here) => openSend(here)),
 											title: "Point a session's agent at it, or save a copy in its project folder",
 											children: compact ? "Send…" : "Send to session…"
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 											className: "hub-more",
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												ref: menuBtn,
-												type: "button",
-												className: "hub-btn hub-more-btn",
-												"aria-label": "More for " + item.name,
-												"aria-haspopup": "menu",
-												"aria-expanded": menu,
-												onClick: () => setMenu((v) => !v),
-												children: "⋯"
-											}), menu && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-												className: "hub-menu",
-												role: "menu",
-												ref: menuRef,
-												onKeyDown: menuKey,
-												"aria-label": "More for " + item.name,
-												children: [
-													textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: act(() => void copyItemText(item)),
-														children: "Copy text"
-													}),
-													item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: act(() => void copyImage(item)),
-														children: "Copy image"
-													}),
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: act(() => void copyPath(item)),
-														children: "Copy path"
-													}),
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: act(() => download(item)),
-														children: "Download"
-													}),
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: () => startEdit("name"),
-														children: "Rename"
-													}),
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: () => startEdit("note"),
-														children: item.note ? "Edit note" : "Add a note"
-													}),
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														className: "danger",
-														onClick: act(() => void removeItem$1(item)),
-														children: "Remove"
-													})
-												]
-											})]
+											children: [
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+													ref: menuBtn,
+													type: "button",
+													className: "hub-btn hub-more-btn",
+													"aria-label": "More for " + item.name,
+													"aria-haspopup": "menu",
+													"aria-expanded": menu,
+													onClick: () => setMenu((v) => !v),
+													children: "⋯"
+												}),
+												menu && rem && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+													className: "hub-menu",
+													role: "menu",
+													ref: menuRef,
+													onKeyDown: menuKey,
+													"aria-label": "More for " + item.name,
+													children: [
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: act(() => void saveHere([item])),
+															children: "Save to this device"
+														}),
+														textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: use((h) => void copyItemText(h)),
+															children: "Copy text"
+														}),
+														item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: use((h) => void copyImage(h)),
+															children: "Copy image"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: use((h) => download(h)),
+															children: "Download"
+														})
+													]
+												}),
+												menu && !rem && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+													className: "hub-menu",
+													role: "menu",
+													ref: menuRef,
+													onKeyDown: menuKey,
+													"aria-label": "More for " + item.name,
+													children: [
+														textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: act(() => void copyItemText(item)),
+															children: "Copy text"
+														}),
+														item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: act(() => void copyImage(item)),
+															children: "Copy image"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: act(() => void copyPath(item)),
+															children: "Copy path"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: act(() => download(item)),
+															children: "Download"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: () => startEdit("name"),
+															children: "Rename"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: () => startEdit("note"),
+															children: item.note ? "Edit note" : "Add a note"
+														}),
+														!item.origin && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															title: "Whether your other devices list it (and can fetch it)",
+															onClick: act(() => void updateItem(item, { local_only: !item.local_only })),
+															children: item.local_only ? "Show on my other devices" : "Keep on this device only"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															className: "danger",
+															onClick: act(() => void removeItem$1(item)),
+															children: "Remove"
+														})
+													]
+												})
+											]
 										})
 									]
 								})]
@@ -161592,6 +162994,223 @@ function HubCard({ item, onView }) {
 				children: item.note
 			})
 		]
+	});
+}
+//#endregion
+//#region src/components/feedback/FeedbackDialog.tsx
+function FeedbackDialog() {
+	const open = useFeedbackUi((s) => s.open);
+	const n = useFeedbackUi((s) => s.n);
+	const draftId = useFeedbackUi((s) => s.draftId);
+	(0, import_react.useEffect)(bridgeFeedbackEvents, []);
+	if (!open) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+		want: draftId,
+		onClose: () => useFeedbackUi.getState().close()
+	}, n);
+}
+function Box({ want, onClose }) {
+	const [info, setInfo] = (0, import_react.useState)(null);
+	const [draft, setDraft] = (0, import_react.useState)(null);
+	const [kind, setKind] = (0, import_react.useState)("bug");
+	const [title, setTitle] = (0, import_react.useState)("");
+	const [body, setBody] = (0, import_react.useState)("");
+	const [about, setAbout] = (0, import_react.useState)(true);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [err, setErr] = (0, import_react.useState)("");
+	const touched = (0, import_react.useRef)(false);
+	const bodyRef = (0, import_react.useRef)(null);
+	const take = (d) => {
+		setDraft(d);
+		setKind(d?.kind || "bug");
+		setTitle(d?.title || "");
+		setBody(d?.body || "");
+		touched.current = false;
+	};
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		loadFeedback().then((got) => {
+			if (!live) return;
+			setInfo(got);
+			if (!touched.current) take(pickDraft(got.drafts || [], want));
+		}).catch((e) => live && setErr(errMsg(e)));
+		bodyRef.current?.focus();
+		return () => {
+			live = false;
+		};
+	}, []);
+	const others = (info?.drafts || []).filter((d) => d.id !== draft?.id);
+	const canSend = !busy && (!!title.trim() || !!body.trim());
+	const send = async () => {
+		if (!canSend) return;
+		setBusy(true);
+		setErr("");
+		try {
+			const r = await sendFeedback({
+				title: title.trim(),
+				body: body.trim(),
+				kind,
+				include_about: about,
+				draft_id: draft?.id
+			});
+			if (r.via === "browser") {
+				window.open(r.url, "_blank");
+				if (draft) discardDraft(draft.id).catch(() => void 0);
+			}
+			toast(sentLine$1(r), r.via === "github" ? { action: {
+				label: "Open",
+				onClick: () => window.open(r.url, "_blank")
+			} } : void 0);
+			onClose();
+		} catch (e) {
+			setErr(errMsg(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const discard = async () => {
+		if (!draft || busy) return;
+		setBusy(true);
+		try {
+			await discardDraft(draft.id);
+		} catch {}
+		setBusy(false);
+		if (others.length) {
+			setInfo(info ? {
+				...info,
+				drafts: others
+			} : info);
+			take(others[0]);
+		} else onClose();
+	};
+	const edit = (set) => (v) => {
+		touched.current = true;
+		set(v);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		onClose,
+		className: "feedback-modal",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "feedback-h",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "modal-card feedback-card",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+					id: "feedback-h",
+					children: "Tell us about MindFlock"
+				}),
+				draft && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "feedback-from",
+					role: "status",
+					children: [
+						draft.session ? displayName(draft.session) + "'s agent" : "An agent",
+						" drafted this for you. Read it, change anything, then send it.",
+						draft.removed > 0 && " " + draft.removed + (draft.removed === 1 ? " path or key was" : " paths or keys were") + " replaced."
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "feedback-kinds",
+					role: "radiogroup",
+					"aria-label": "What kind of report",
+					children: Object.keys(KIND_LABEL).map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "feedback-kind" + (k === kind ? " on" : ""),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "radio",
+							name: "feedback-kind",
+							checked: k === kind,
+							onChange: () => edit(setKind)(k)
+						}), KIND_LABEL[k]]
+					}, k))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "feedback-label",
+					htmlFor: "feedback-title",
+					children: ["Title ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "(optional)"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "feedback-title",
+					className: "feedback-input",
+					value: title,
+					maxLength: 200,
+					placeholder: "One line",
+					onChange: (e) => edit(setTitle)(e.target.value)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+					className: "feedback-label",
+					htmlFor: "feedback-body",
+					children: kind === "bug" ? "What happened, and what did you expect?" : "What's on your mind?"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					id: "feedback-body",
+					ref: bodyRef,
+					className: "feedback-input feedback-body",
+					rows: 8,
+					maxLength: 2e4,
+					value: body,
+					onChange: (e) => edit(setBody)(e.target.value),
+					onKeyDown: (e) => {
+						if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+							e.preventDefault();
+							send();
+						}
+					}
+				}),
+				info && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "feedback-about",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						checked: about,
+						onChange: (e) => setAbout(e.target.checked)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Add ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: info.about })] })]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "feedback-where muted",
+					children: [destinationLine(info), " Don't include anything private: your code, company or project names, or keys."]
+				}),
+				err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "feedback-err",
+					role: "alert",
+					children: err
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "feedback-actions",
+					children: [
+						others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "feedback-next",
+							disabled: busy,
+							onClick: () => take(others[0]),
+							children: others.length === 1 ? "1 more draft" : others.length + " more drafts"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "feedback-grow" }),
+						draft && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							disabled: busy,
+							onClick: () => void discard(),
+							children: "Discard draft"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							disabled: busy,
+							onClick: onClose,
+							children: "Cancel"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "primary",
+							disabled: !canSend,
+							title: "Ctrl+Enter",
+							onClick: () => void send(),
+							children: busy ? "Sending…" : info && !info.signed_in ? "Open on GitHub" : "Send"
+						})
+					]
+				})
+			]
+		})
 	});
 }
 //#endregion
@@ -161767,6 +163386,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryConfirm, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatPanel, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubPanel, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FeedbackDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WelcomeTour, {}),

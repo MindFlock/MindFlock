@@ -355,6 +355,8 @@ def test_verify_menu_item_follows_the_desktops_rule_and_posts_verify():
     js = _js()
     src = (
         _between(js, "  var SESSION_STATES = {", "  function poll() {")
+        # The sheet's Scroll speed row (test_mobile_scroll_speed.py).
+        + _between(js, "  var TOUCH_SPEED_STEPS", "  // The server's answer")
         + _between(
             js, "  // --- one session's actions ---", "  // Resume / Restart / Wake"
         )

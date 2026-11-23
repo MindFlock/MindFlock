@@ -33,6 +33,7 @@ from backend import log
 from backend import providers
 from backend import session
 from backend.session import mux
+from backend.web.core import hub as _hub
 from backend.session.tmux.tmux import exact_pane_target
 from backend.session import tmux
 from backend.web.core import agent_io as _agent_io
@@ -358,8 +359,9 @@ def _send_queued_item(title: str, name: str, nxt: dict, rec: dict, now: float) -
     # (server._voice_say); a send that does not land takes the request back.
     say = inst is not None and nxt.get("say") is True
     text = nxt["text"]
-    if not nxt.get("nohub") and "hub:" in text.lower():
-        # hub:<id> references expand as the prompt goes in (core.hub).
+    if not nxt.get("nohub") and _hub.has_code(text):
+        # file:<id> codes (and the first hub:<id> ones) expand as the prompt
+        # goes in (core.hub).
         text = srv._hub_expand(None, inst, text)[0]
     typed = srv._voice_say(inst, title, text) if say else text
     if not srv._send_to_agent(name, typed, submit=True):
@@ -923,6 +925,12 @@ def _drain_one_queue(title: str) -> None:
             return
         if _launch_gate.waiting(title) is not None:
             return  # already waiting for memory (core.launch_gate)
+        if _sleep.boot_asleep(title):
+            # Asleep since the computer was turned off (core.sleep
+            # REASON_SHUTDOWN): only a person wakes it. Its prompts stay
+            # parked until then — a boot starting agents off their queues
+            # would be revive-on-start by the back door.
+            return
         # Nobody asked for this launch, so it asks the launch gate first
         # (memory, agents still warming up, the live cap). On wait it joins
         # the gate's queue, and the queue relaunches it. A held session
@@ -1034,8 +1042,12 @@ def _queue_relaunch(title: str, rec: dict, inst=None) -> Optional[str]:
         if inst is None:
             return "the session was closed"
     if _sleep.is_sleeping(title):
-        # Asleep (core.sleep): the queued prompt is what wakes it.
-        _sleep.ensure_awake(inst, title, "a queued prompt")
+        # Asleep (core.sleep): the queued prompt is what wakes it — unless it
+        # is asleep since a shutdown, which waits for a person (a relaunch
+        # saved in the launch gate from before the shutdown lands here too).
+        _woke, werr = _sleep.ensure_awake(inst, title, "a queued prompt", person=False)
+        if werr == _sleep.BOOT_WAITS:
+            return werr
     _name, err = srv._ensure_agent_session(inst, title)
     if err is None:
         rec["rebooted_at"] = time.time()
