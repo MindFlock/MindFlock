@@ -35,14 +35,46 @@ session's key (``backend.session_key``), so an agent can't act for another:
 * ``POST /api/instances/{title}/hub/remove`` — ``{id}``: remove an item that
   session added (only those).
 
+* ``POST /api/instances/{title}/hub/fetch`` — ``{id}`` (``file@mac-mini:
+  k7m2``, or a ``file:`` code only another device holds): bring an item of
+  another of the person's devices here (logged with the session); never a
+  secret-looking one.
+
+Shared files on the person's OTHER devices (core.hub_remote — on demand,
+never a sync; every request to another device rides ``/api/devices/<device>/
+fwd/…``):
+
+* ``GET /api/hub/devices?fresh=`` — what each of the person's other devices
+  offers right now, or why it can't be asked.
+* ``POST /api/hub/devices/fetch`` — ``{device?, id, secret_ok?}``: bring one
+  here (a normal item that remembers where it came from; found, not fetched
+  again, on a second use).
+* ``GET /api/hub/devices/{device}/items/{id}/thumb`` — a small picture's
+  thumbnail (checked here: its type sniffed, its checksum the listed one).
+
+What THIS device offers them — answered only to another of the person's own
+devices over the device link (the remote marker AND this device's token or
+the fleet key, remote control on, never a guest; ``server.
+_device_link_refusal``), only while ``hub.offer_to_devices`` is on, and never
+an item kept on this device only or one fetched from elsewhere. GET only,
+this store only (no path parameter reaches the disk); these three are the
+forwarding path's hub allow-list (core.remote):
+
+* ``GET /api/hub/offer`` — the list.
+* ``GET /api/hub/offer/{id}/raw?offset=&length=&sha256=`` — a range of one
+  item's bytes (at most core.hub_remote.CHUNK).
+* ``GET /api/hub/offer/{id}/thumb`` — a picture small enough to be its own
+  thumbnail.
+
 Nothing the hub writes into a worktree is ever a file agents follow or that
 runs by itself (CLAUDE.md, AGENTS.md, .mcp.json, git hooks, CI, Makefile,
 package.json, conftest.py … — core.hub._dest_refusal), for anyone.
 
 Never for a guest link (the auth middleware refuses every ``/api/hub`` path
 and the ``hub`` session sub-route to a guest; checked here again), a request
-relayed by another MindFlock, or a shared-folder (peer) session. Every
-refusal is ``{"error", "code"}`` with the next step.
+relayed by another MindFlock (except the "offered" three, which answer ONLY
+those), or a shared-folder (peer) session. Every refusal is ``{"error",
+"code"}`` with the next step.
 """
 
 from __future__ import annotations
@@ -56,6 +88,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from backend.web.core import hub as _hub
+from backend.web.core import hub_remote as _hub_remote
 from backend.web.core.send_session import Refusal
 from backend.web.routes import _server
 
@@ -144,12 +177,9 @@ async def hub_add_file(
         )
     if declared == 0:
         return _bad("that file is empty — there is nothing to add", "empty")
-    if not secret_ok:
-        bad = _hub.secret_refusal(name)
-        if bad is not None:
-            return JSONResponse(
-                {**bad.body(), "can_confirm": True}, status_code=bad.status
-            )
+    bad = _hub.secret_refusal(name)
+    if bad is not None and not secret_ok:
+        return JSONResponse({**bad.body(), "can_confirm": True}, status_code=bad.status)
     try:
         rec = await _hub.add_stream_async(
             request.stream(),
@@ -157,6 +187,7 @@ async def hub_add_file(
             declared=declared,
             by=_SOURCES[source],
             note=note,
+            secret=bad is not None,
         )
     except Refusal as r:
         return JSONResponse(r.body(), status_code=r.status)
@@ -195,9 +226,15 @@ async def hub_expand(request: Request, payload: Optional[dict] = None) -> JSONRe
     if not isinstance(text, str) or len(text) > 200000:
         return _bad("text is the text to expand")
 
+    why = await _hub_remote.prepare_codes(request.scope, text)
+
     def run() -> dict:
         out, _used, unknown = _hub.expand(text)
-        return {"text": out, "unknown": unknown, "note": _hub.unknown_note(unknown)}
+        return {
+            "text": out,
+            "unknown": unknown,
+            "note": _hub.unknown_note(unknown, why),
+        }
 
     return await _run(run)
 
@@ -292,11 +329,18 @@ async def hub_update(
     if refused is not None:
         return refused
     body = payload if isinstance(payload, dict) else {}
-    pinned = body.get("pinned")
+    pinned, local_only = body.get("pinned"), body.get("local_only")
     if pinned is not None and not isinstance(pinned, bool):
         return _bad("pinned is true or false")
+    if local_only is not None and not isinstance(local_only, bool):
+        return _bad("local_only is true or false")
     return await _run(
-        _hub.update, iid, name=body.get("name"), note=body.get("note"), pinned=pinned
+        _hub.update,
+        iid,
+        name=body.get("name"),
+        note=body.get("note"),
+        pinned=pinned,
+        local_only=local_only,
     )
 
 
@@ -412,8 +456,9 @@ async def hub_batch(request: Request, payload: Optional[dict] = None) -> JSONRes
         return refused
     body = payload if isinstance(payload, dict) else {}
     action, ids, title = body.get("action"), body.get("ids"), body.get("session")
-    if action not in _hub.BATCH_ACTIONS:
-        return _bad("action is one of " + ", ".join(_hub.BATCH_ACTIONS))
+    actions = _hub.BATCH_ACTIONS + ("fetch",)
+    if action not in actions:
+        return _bad("action is one of " + ", ".join(actions))
     if (
         not isinstance(ids, list)
         or not ids
@@ -430,7 +475,110 @@ async def hub_batch(request: Request, payload: Optional[dict] = None) -> JSONRes
             return err
     elif title is not None:
         return _bad("session is only for action=copy")
-    return await _run(_hub.batch, action, ids, wt=wt)
+    remote = _remote_ids(ids)
+    if not remote and action != "fetch":
+        return await _run(_hub.batch, action, ids, wt=wt)
+    return await _mixed_batch(request, action, ids, remote, wt)
+
+
+def _remote_ids(ids) -> dict:
+    """``{code as given: (device, id)}`` for the codes that name ANOTHER
+    device's item (``file@mac-mini:k7m2``)."""
+    me = _hub.self_device()
+    out = {}
+    for raw in ids:
+        try:
+            dev, iid = _hub.split_code(raw)
+        except Refusal:
+            continue
+        if dev and dev != me:
+            out[raw] = (dev, iid)
+    return out
+
+
+async def _mixed_batch(request: Request, action: str, ids, remote: dict, wt):
+    """A selection holding items of other devices: ``fetch`` / ``copy`` bring
+    each here first (one at a time, each answered on its own); pin, unpin,
+    remove and restore are this device's — an item of another device is
+    read-only from here and says so. The local rest goes through
+    :func:`hub.batch` as before; the answer keeps the order asked."""
+    results: dict = {}
+    local: list = []
+    for raw in ids:
+        key = str(raw)[:80]
+        if key in results:
+            continue
+        if raw in remote:
+            dev, iid = remote[raw]
+            ref = _hub.device_code(dev, iid)
+            if action not in ("fetch", "copy"):
+                results[key] = {
+                    "id": key,
+                    "ref": ref,
+                    "ok": False,
+                    "code": "read_only",
+                    "error": "%s lives on another of your devices — from here it is "
+                    "read-only; save a copy here first to %s it" % (ref, action),
+                }
+                continue
+            try:
+                got = await _hub_remote.fetch(request.scope, dev, iid)
+            except Refusal as r:
+                results[key] = {"id": key, "ref": ref, "ok": False, **r.body()}
+                continue
+            if action == "fetch":
+                results[key] = {
+                    "id": key,
+                    "ref": ref,
+                    "ok": True,
+                    "item": got,
+                    "already": got.get("already", False),
+                }
+                continue
+            results[key] = {"id": key, "ref": ref, "local": got["id"]}
+            local.append(got["id"])
+        elif action == "fetch":
+            try:
+                rec = await asyncio.to_thread(_hub.get, raw)
+                results[key] = {
+                    "id": key,
+                    "ref": rec["ref"],
+                    "ok": True,
+                    "item": rec,
+                    "already": True,
+                }
+            except Refusal as r:
+                results[key] = {"id": key, "ok": False, **r.body()}
+        else:
+            results[key] = {"id": key, "local": None}
+            local.append(raw)
+    if local and action != "fetch":
+        try:
+            done = await asyncio.to_thread(_hub.batch, action, local, wt=wt)
+        except Refusal as r:
+            return JSONResponse(r.body(), status_code=r.status)
+        by_id = {r["id"]: r for r in done["results"]}
+        for key, res in results.items():
+            if "ok" in res:
+                continue
+            want = res.get("local") or key
+            try:
+                want = _hub.check_id(want)
+            except Refusal:
+                pass
+            hit = by_id.get(want) or by_id.get(str(want)[:40])
+            res.pop("local", None)
+            if hit is None:
+                res.update(ok=False, code="not_found", error="%s was not done" % key)
+            else:
+                res.update({k: v for k, v in hit.items() if k not in ("id",)})
+    out = [results[str(k)[:80]] for k in dict.fromkeys(str(i)[:80] for i in ids)]
+    for res in out:
+        res.pop("local", None)
+    done_n = sum(1 for r in out if r.get("ok"))
+    return JSONResponse(
+        {"action": action, "results": out, "done": done_n, "failed": len(out) - done_n}
+    )
 
 
 @router.get("/api/hub/items/{iid}/free")
@@ -575,6 +723,30 @@ async def hub_take(
     )
 
 
+@router.post("/api/instances/{title}/hub/fetch")
+async def hub_fetch_own(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """An agent brings an item of another of the person's devices HERE (into
+    this device's shared files; then ``take`` copies it into its folder).
+    ``{id}`` — ``file@mac-mini:k7m2``, or ``file:k7m2`` when exactly one
+    reachable device holds it. Logged with the session; never a
+    secret-looking item; nothing on the other device changes."""
+    body = payload if isinstance(payload, dict) else {}
+    _inst, _wt, err = _session(title, request, "shared files", body)
+    if err is not None:
+        return err
+    raw = body.get("id")
+    if not isinstance(raw, str):
+        return _bad("id is the item (file@mac-mini:k7m2)")
+    try:
+        dev, iid = await _hub_remote.locate(request.scope, raw)
+        rec = await _hub_remote.fetch(request.scope, dev, iid, session=title)
+    except Refusal as r:
+        return JSONResponse(r.body(), status_code=r.status)
+    return JSONResponse(rec)
+
+
 @router.post("/api/instances/{title}/hub/remove")
 async def hub_remove_own(
     title: str, request: Request, payload: Optional[dict] = None
@@ -588,3 +760,244 @@ async def hub_remove_own(
     if not isinstance(iid, str):
         return _bad("id is the item (file:k7m2)")
     return await _run(_hub.remove, iid, session=title)
+
+
+# --------------------------------------------------------------------------- #
+# the owner's view of their OTHER devices' shared files (core.hub_remote)
+# --------------------------------------------------------------------------- #
+@router.get("/api/hub/devices")
+async def hub_devices(request: Request, fresh: int = 0) -> JSONResponse:
+    """``{self, devices: [{device, name, state, note, items: [...], dropped,
+    truncated}]}`` — each of the person's other devices and what it offers
+    right now (``state`` ``ok``, or why it can't be asked: ``offline`` /
+    ``old`` / ``off`` / ``private`` / ``not_linked`` / ``refused`` /
+    ``error``, with ``note`` the sentence to show). Items carry ``ref`` (the
+    code to type), ``copy`` (the local copy's id once fetched), ``secret``
+    and ``too_big``."""
+    refused = _refusal(request)
+    if refused is not None:
+        return refused
+    try:
+        return JSONResponse(
+            await _hub_remote.list_all(request.scope, fresh=bool(fresh))
+        )
+    except Refusal as r:
+        return JSONResponse(r.body(), status_code=r.status)
+
+
+@router.post("/api/hub/devices/fetch")
+async def hub_devices_fetch(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """``{id, device?, secret_ok?}`` → the local item (``already`` when it
+    was here already, ``from`` the device's name). ``id`` may carry the
+    device (``file@mac-mini:k7m2``). A secret-looking item needs
+    ``secret_ok`` — the person's confirmation for that one item."""
+    refused = _refusal(request)
+    if refused is not None:
+        return refused
+    body = payload if isinstance(payload, dict) else {}
+    raw, device, secret_ok = body.get("id"), body.get("device"), body.get("secret_ok")
+    if not isinstance(raw, str) or (device is not None and not isinstance(device, str)):
+        return _bad("id is the item (file@mac-mini:k7m2), device the device's name")
+    if secret_ok is not None and not isinstance(secret_ok, bool):
+        return _bad("secret_ok is true or false")
+    try:
+        if device:
+            dev, iid = device, _hub.split_code(raw)[1]
+        else:
+            dev, iid = await _hub_remote.locate(request.scope, raw)
+        rec = await _hub_remote.fetch(
+            request.scope, dev, iid, secret_ok=bool(secret_ok)
+        )
+    except Refusal as r:
+        return JSONResponse(r.body(), status_code=r.status)
+    return JSONResponse(rec)
+
+
+_IMG_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Cache-Control": "private, no-cache",
+}
+
+
+@router.get("/api/hub/devices/{device}/items/{iid}/thumb")
+async def hub_devices_thumb(device: str, iid: str, request: Request) -> Response:
+    """A picture of another device, small enough to be its own thumbnail —
+    its type sniffed HERE from the bytes (an allow-listed image type only),
+    its bytes checked against the listed checksum. 404 ``no_thumb``
+    otherwise (the drawer draws an icon)."""
+    refused = _refusal(request)
+    if refused is not None:
+        return refused
+    try:
+        mime, data = await _hub_remote.thumb(request.scope, device, iid)
+    except Refusal as r:
+        return JSONResponse(r.body(), status_code=r.status)
+    return Response(
+        data,
+        media_type=mime,
+        headers={**_IMG_HEADERS, "Content-Disposition": "inline"},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# what THIS device offers the person's other devices (the forwarding path's
+# hub allow-list: these three GETs, nothing else)
+# --------------------------------------------------------------------------- #
+def _offer_refusal(request: Request) -> Optional[JSONResponse]:
+    """Only another of the person's own devices, over the device link
+    (server._device_link_refusal: the remote marker AND this device's token
+    or the fleet key, remote control on, never a guest, one hop, the same
+    person), and only while this device offers its shared files."""
+    refused = _server()._device_link_refusal(
+        request,
+        guest="Shared files are not part of a guest invite",
+        not_device="this answers only your other devices — open Shared files "
+        "in the app to see this device's",
+        remote_off="Allow remote control is off on this device — turn it on in "
+        "Settings → Your devices → Advanced so your other devices see its "
+        "shared files",
+        same_person=True,
+    )
+    if refused is not None:
+        return refused
+    from backend.config import settings as _settings
+
+    try:
+        on = _settings.load_settings().hub.offer_to_devices is not False
+    except Exception:  # noqa: BLE001 — unreadable settings: offer nothing
+        on = False
+    if not on:
+        return JSONResponse(
+            {
+                "error": "this device keeps its shared files to itself (Settings → "
+                "Shared files → Offer to my other devices)",
+                "code": "not_offered",
+            },
+            status_code=403,
+        )
+    return None
+
+
+@router.get("/api/hub/offer")
+async def hub_offer(request: Request) -> JSONResponse:
+    """``{v, device, items: [{id, name, kind, mime, size, sha256, by,
+    by_name, added, note, textual, preview}]}`` — never a path on this
+    disk."""
+    refused = _offer_refusal(request)
+    if refused is not None:
+        return refused
+
+    def run() -> dict:
+        items = _hub.offered()[: _hub_remote.LIST_ITEMS_MAX]
+        return {"v": _hub_remote.OFFER_V, "device": _hub.self_device(), "items": items}
+
+    return await _run(run)
+
+
+@router.get("/api/hub/offer/{iid}/raw")
+async def hub_offer_raw(
+    iid: str,
+    request: Request,
+    offset: int = 0,
+    length: int = 0,
+    sha256: str = "",
+) -> Response:
+    """``length`` bytes (1 to core.hub_remote.CHUNK) of an offered item from
+    ``offset``; with ``sha256`` only while the item still has those bytes
+    (409 ``changed``). Always ``application/octet-stream``, an attachment,
+    ``nosniff``."""
+    refused = _offer_refusal(request)
+    if refused is not None:
+        return refused
+    if offset < 0 or not 0 < length <= _hub_remote.CHUNK:
+        return _bad("offset is 0 or more, length 1 to %d" % _hub_remote.CHUNK)
+
+    def read() -> bytes:
+        rec, fd = _hub.open_offered(iid)
+        try:
+            if sha256 and sha256 != rec["sha256"]:
+                raise Refusal(
+                    409, "changed", "file:%s is not the item it was" % rec["id"]
+                )
+            size = os.fstat(fd).st_size
+            if size != rec["size"]:
+                raise Refusal(
+                    409, "changed", "file:%s is not the item it was" % rec["id"]
+                )
+            if offset + length > size:
+                raise Refusal(416, "bad_range", "that range is past the item's end")
+            data = os.pread(fd, length, offset) if hasattr(os, "pread") else None
+            if data is None:
+                os.lseek(fd, offset, os.SEEK_SET)
+                data = os.read(fd, length)
+        finally:
+            os.close(fd)
+        if offset == 0:
+            _hub.touch([rec["id"]])
+            _hub_remote._info(
+                "shared files: file:%s offered to device %s",
+                rec["id"],
+                clean_device(request),
+            )
+        return data
+
+    try:
+        data = await asyncio.to_thread(read)
+    except Refusal as r:
+        return JSONResponse(r.body(), status_code=r.status)
+    return Response(
+        data,
+        media_type="application/octet-stream",
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Content-Disposition": "attachment",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+def clean_device(request: Request) -> str:
+    """Who asked (the device the link says, else what the marker claims)."""
+    from backend.web.core.send_session import clean_line
+
+    sender, verified = _server()._transfer_sender(request)
+    return clean_line(sender or "?", 64) + ("" if verified else " (claimed)")
+
+
+@router.get("/api/hub/offer/{iid}/thumb")
+async def hub_offer_thumb(iid: str, request: Request) -> Response:
+    """An offered picture at most core.hub_remote.THUMB_MAX — the picture
+    itself (no image library makes a smaller one); 404 ``no_thumb`` for any
+    other item."""
+    refused = _offer_refusal(request)
+    if refused is not None:
+        return refused
+
+    def read():
+        rec, fd = _hub.open_offered(iid)
+        try:
+            if (
+                rec.get("kind") != "image"
+                or rec.get("mime") not in _hub.IMAGE_TYPES.values()
+                or rec["size"] > _hub_remote.THUMB_MAX
+            ):
+                raise Refusal(404, "no_thumb", "no thumbnail for that item")
+            data = os.read(fd, _hub_remote.THUMB_MAX + 1)
+        finally:
+            os.close(fd)
+        return rec, data
+
+    try:
+        rec, data = await asyncio.to_thread(read)
+    except Refusal as r:
+        return JSONResponse(r.body(), status_code=r.status)
+    return Response(
+        data[: _hub_remote.THUMB_MAX],
+        media_type=rec["mime"],
+        headers={**_IMG_HEADERS, "Content-Disposition": "inline"},
+    )

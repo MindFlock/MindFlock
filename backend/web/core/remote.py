@@ -1487,14 +1487,24 @@ _FWD_ALLOWED = frozenset(
         ("POST", "/api/mkdir"),
         ("POST", "/api/session-plan"),
         ("POST", "/api/instances"),
+        # Shared files across your devices (core.hub_remote): the list THIS
+        # device offers your other devices — read-only, its own store only.
+        ("GET", "/api/hub/offer"),
     }
 )
 
 
 # Allowed fwd routes with one id segment: ``(method, prefix, suffix)``, the id
 # being everything between — a single segment (:data:`_FWD_ID`), never a
-# path. Only the Recently closed reopen; ``…/forget`` and the rest stay off.
-_FWD_ALLOWED_ONE_ID = (("POST", "/api/recently-closed/", "/reopen"),)
+# path. The Recently closed reopen (``…/forget`` and the rest stay off), and
+# one offered shared file's bytes and thumbnail.
+_FWD_ALLOWED_ONE_ID = (
+    ("POST", "/api/recently-closed/", "/reopen"),
+    # One offered shared file's bytes (a range of them) and its thumbnail —
+    # GET only, by id; never a path, never a write (core.hub_remote).
+    ("GET", "/api/hub/offer/", "/raw"),
+    ("GET", "/api/hub/offer/", "/thumb"),
+)
 # One segment of printable text: no slash or backslash, no ``%`` (the path
 # arrives decoded, so a ``%`` left in it was double-encoded), no ``?``/``#``,
 # no control characters. A closed-session id is ``<title>-<ms>``.

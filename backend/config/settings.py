@@ -2359,6 +2359,10 @@ class HubSettings:
     one item can be (None = 100 MB). ``max_items``: how many items it holds
     (None = 300). ``keep_days``: an unpinned item is removed this many days
     after it was added or last used (None = 14); pinned items stay.
+    ``offer_to_devices``: whether this device offers its shared files to
+    the person's other devices (they list them and fetch one on use —
+    :mod:`backend.web.core.hub_remote`); None = on, ``False`` = off. Each
+    item can also be kept on this device only (its "local_only" mark).
     Machine-local: never synced.
     """
 
@@ -2366,11 +2370,12 @@ class HubSettings:
     item_mb: Optional[int] = None
     max_items: Optional[int] = None
     keep_days: Optional[int] = None
+    offer_to_devices: Optional[bool] = None
 
     def to_dict(self) -> dict:
         return {
             k: getattr(self, k)
-            for k in ("max_mb", "item_mb", "max_items", "keep_days")
+            for k in ("max_mb", "item_mb", "max_items", "keep_days", "offer_to_devices")
             if getattr(self, k) is not None
         }
 
@@ -2385,6 +2390,11 @@ class HubSettings:
             item_mb=cap("item_mb", 65536),
             max_items=cap("max_items", 100000),
             keep_days=cap("keep_days", 3650),
+            offer_to_devices=(
+                d.get("offer_to_devices")
+                if isinstance(d.get("offer_to_devices"), bool)
+                else None
+            ),
         )
 
 

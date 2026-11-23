@@ -317,8 +317,9 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
     # What this device sends and accepts from your other devices (limits, its
     # inbox quota, whether secrets may be sent from here) is its own call.
     "transfers": ("max_mb", "max_files", "inbox_mb", "keep_days", "allow_secrets"),
-    # The hub's quota and expiry: what this disk holds.
-    "hub": ("max_mb", "item_mb", "max_items", "keep_days"),
+    # The hub's quota and expiry: what this disk holds; whether THIS device
+    # offers its shared files to the others is its own call.
+    "hub": ("max_mb", "item_mb", "max_items", "keep_days", "offer_to_devices"),
     # Not machine-specific, but never stamped or adopted as an edit: the
     # devices AGREE on one id — the pairing handshake, then
     # :func:`backend.web.core.person.reconcile` on every pass (sync_once).

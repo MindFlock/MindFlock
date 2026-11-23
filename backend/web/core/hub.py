@@ -101,11 +101,19 @@ OLD_PREFIX = "hub:"
 PREFIXES = (PREFIX, OLD_PREFIX)
 #: A code in prompt text (either prefix, any case): not glued to a word or
 #: path before it (``github:x``, ``a/hub:x``, ``profile:x``), not already
-#: expanded (either expansion's wording).
+#: expanded (either expansion's wording). It may name the device that holds
+#: the item — ``file@mac-mini:k7m2`` (a MagicDNS label; core.hub_remote) —
+#: when the same code is on two of the person's devices. Groups: prefix,
+#: device (or None), id. (A MindFlock older than device codes matches no
+#: part of ``file@…:…`` — it needs ``file:`` — so it never reads one as one
+#: of its own items.)
 HANDLE_RE = re.compile(
-    r"(?<![A-Za-z0-9_./:@-])(file|hub):([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])"
+    r"(?<![A-Za-z0-9_./:@-])(file|hub)(?:@([A-Za-z0-9][A-Za-z0-9-]{0,62}))?"
+    r":([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])"
     r"(?! \(MindFlock (?:hub item|shared file))"
 )
+#: What a device part of a code may be: a MagicDNS label.
+DEVICE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 #: The letters a code is made of (ALPHABET, either case): a ``file:`` word
 #: outside them (``file:line``, ``file:config``) is never a code, so it is
 #: left alone and not reported as an unknown code. (``hub:`` keeps its first
@@ -118,12 +126,27 @@ def has_code(text) -> bool:
     if not isinstance(text, str):
         return False
     low = text.lower()
-    return any(p in low for p in PREFIXES)
+    return any(p in low for p in PREFIXES + ("file@", "hub@"))
 
 
 def _code_match(m: "re.Match") -> bool:
     """Whether a :data:`HANDLE_RE` match can be a code at all."""
-    return m.group(1).lower() == "hub" or bool(_CODE_CHARS_RE.match(m.group(2)))
+    return m.group(1).lower() == "hub" or bool(_CODE_CHARS_RE.match(m.group(3)))
+
+
+def device_code(device: str, iid: str) -> str:
+    """The code of item ``iid`` held by ``device``: ``file@mac-mini:k7m2``."""
+    return "%s@%s:%s" % (PREFIX[:-1], device, iid)
+
+
+def split_code(raw) -> Tuple[str, str]:
+    """``(device, id)`` of ``file@dev:k7m2`` / ``file:k7m2`` / ``k7m2``
+    (device ``""`` when the code names none), or a :class:`Refusal` (404)."""
+    v = str(raw or "").strip()
+    m = re.match(r"^(?:file|hub)@([A-Za-z0-9][A-Za-z0-9-]{0,62}):(.*)$", v, re.I)
+    if m:
+        return m.group(1).lower(), check_id(m.group(2))
+    return "", check_id(v)
 
 
 #: Only these are ever served with their own content type (and drawn as a
@@ -501,6 +524,11 @@ def public(rec: dict, lim: Optional[dict] = None) -> dict:
     }
     out["ref"] = PREFIX + rec["id"]
     out["path"] = path_of(rec)
+    out["local_only"] = bool(rec.get("local_only"))
+    out["secret"] = bool(rec.get("secret"))
+    org = origin_of(rec)
+    if org:
+        out["origin"] = org
     out["expires"] = (
         None
         if rec.get("pinned")
@@ -509,6 +537,97 @@ def public(rec: dict, lim: Optional[dict] = None) -> dict:
     if rec.get("removed"):
         out["removed"] = rec["removed"]
     return out
+
+
+def origin_of(rec: dict) -> Optional[dict]:
+    """``{device, name, id, sha256, fetched}`` of an item fetched from another
+    of the person's devices (core.hub_remote), else None. Read back from the
+    index, so checked again (it is shown in the UI)."""
+    o = rec.get("origin")
+    if not isinstance(o, dict):
+        return None
+    dev = str(o.get("device") or "")
+    oid = str(o.get("id") or "")
+    if not DEVICE_RE.match(dev) or not _ID_RE.match(oid):
+        return None
+    sha = str(o.get("sha256") or "")
+    return {
+        "device": dev,
+        "name": clean_line(o.get("name") or dev, 80),
+        "id": oid,
+        "sha256": sha if _SHA_RE.match(sha) else "",
+        "fetched": (
+            float(o.get("fetched") or 0)
+            if isinstance(o.get("fetched"), (int, float))
+            else 0.0
+        ),
+    }
+
+
+def copy_of(device: str, oid: str, sha256: str = "") -> Optional[dict]:
+    """The live local copy (public form) of item ``oid`` fetched from
+    ``device`` — with ``sha256`` only that exact content — else None."""
+    doc = _load()
+    for rec in _live(doc):
+        o = origin_of(rec)
+        if (
+            o
+            and o["device"] == device
+            and o["id"] == oid
+            and (not sha256 or rec.get("sha256") == sha256)
+        ):
+            return public(rec)
+    return None
+
+
+def offered() -> List[dict]:
+    """What this device offers the person's other devices: its live items
+    that are its OWN (never a copy fetched from another device — that one is
+    offered where it lives) and not kept on this device only — the fields
+    another device needs, never a path on this disk. Newest first."""
+    doc = _load()
+    recs = [
+        r
+        for r in _live(doc)
+        if not r.get("local_only") and not origin_of(r) and not r.get("origin")
+    ]
+    recs.sort(key=lambda r: (-(float(r.get("added") or 0)), r.get("id", "")))
+    keep = (
+        "id",
+        "name",
+        "kind",
+        "mime",
+        "size",
+        "sha256",
+        "by",
+        "by_name",
+        "added",
+        "note",
+        "textual",
+        "preview",
+    )
+    out = []
+    for r in recs:
+        row = {k: r.get(k) for k in keep}
+        row["secret"] = bool(r.get("secret")) or _send_files.classify(
+            r.get("name") or ""
+        ) in ("secret", "never")
+        if row["secret"]:
+            row["preview"] = ""
+        out.append(row)
+    return out
+
+
+def offered_rec(raw_id) -> dict:
+    """One offered item's record, or a :class:`Refusal` (404 for one this
+    device does not offer — kept here, fetched from elsewhere, removed —
+    never saying which)."""
+    iid = check_id(raw_id)
+    doc = _load()
+    rec = doc["items"].get(iid)
+    if rec is None or rec.get("removed") or rec.get("local_only") or rec.get("origin"):
+        raise Refusal(404, "not_offered", "file:%s is not offered by this device" % iid)
+    return rec
 
 
 def list_items(*, include_removed: bool = False) -> dict:
@@ -619,12 +738,23 @@ def _snippet_name(text: str) -> str:
 # --------------------------------------------------------------------------- #
 # adding
 # --------------------------------------------------------------------------- #
-def _new_id(doc: dict) -> str:
+#: Ids the person's other devices hold right now (core.hub_remote fills it
+#: from their listings): a new id avoids them too, so one code rarely names
+#: two items across the devices.
+REMOTE_IDS: set = set()
+
+
+def _new_id(doc: dict, want: str = "") -> str:
     taken = set(doc["items"]) | set(doc["gone"])
     try:
         taken |= set(os.listdir(root()))
     except OSError:
         pass
+    if want and _ID_RE.match(want) and want not in taken:
+        # A copy fetched from another device keeps its code when it is free
+        # here: the same code then names the same item on both.
+        return want
+    taken |= set(REMOTE_IDS)
     for length in (ID_LEN, ID_LEN, ID_LEN, ID_LEN + 1, ID_LEN + 2):
         for _ in range(40):
             iid = "".join(secrets.choice(ALPHABET) for _ in range(length))
@@ -764,7 +894,21 @@ class _Add:
         note: str = "",
         snippet: bool = False,
         pinned: bool = False,
+        origin: Optional[dict] = None,
+        want_id: str = "",
+        sha256: str = "",
+        secret: bool = False,
     ) -> dict:
+        if sha256 and self.h.hexdigest() != sha256:
+            # Integrity (core.hub_remote): the bytes are not the ones the
+            # listing named — nothing is kept.
+            self.abort()
+            raise Refusal(
+                422,
+                "checksum_mismatch",
+                "what arrived does not match the checksum the other device "
+                "listed — nothing was saved. Try again",
+            )
         try:
             os.fchmod(self.fd, 0o644)
         except (AttributeError, OSError):
@@ -782,7 +926,7 @@ class _Add:
             with _locked():
                 doc = _load()
                 _room(doc, self.size, self.lim, mine=self.token)
-                iid = _new_id(doc)
+                iid = _new_id(doc, want_id)
                 folder = os.path.join(root(), iid)
                 os.mkdir(folder, 0o755)
                 os.replace(_incoming_path(self.token), os.path.join(folder, name))
@@ -803,6 +947,13 @@ class _Add:
                     "textual": bool(textual),
                     "preview": preview,
                 }
+                if origin:
+                    rec["origin"] = origin
+                if secret:
+                    # Added on purpose although its name looks like a secret
+                    # (the person confirmed): the mark travels in the list
+                    # other devices see (the name may have lost its dot).
+                    rec["secret"] = True
                 doc["items"][iid] = rec
                 _save(doc)
                 _PENDING.pop(self.token, None)
@@ -827,6 +978,7 @@ def add_stream(
     note: str = "",
     snippet: bool = False,
     pinned: bool = False,
+    secret: bool = False,
 ) -> dict:
     """Add one item from ``chunks`` (bytes). → its public record, or a
     :class:`Refusal` (nothing is left behind)."""
@@ -853,7 +1005,13 @@ def add_stream(
             % (human(add.size), human(declared)),
         )
     return add.commit(
-        name, by=_by(by), by_name=by_name, note=note, snippet=snippet, pinned=pinned
+        name,
+        by=_by(by),
+        by_name=by_name,
+        note=note,
+        snippet=snippet,
+        pinned=pinned,
+        secret=secret,
     )
 
 
@@ -1059,6 +1217,20 @@ def add_from_worktree(
 # --------------------------------------------------------------------------- #
 # reading
 # --------------------------------------------------------------------------- #
+def open_offered(raw_id) -> Tuple[dict, int]:
+    """:func:`open_item` for an item this device OFFERS its other devices
+    (:func:`offered_rec`): never one kept here only, fetched from elsewhere
+    or removed."""
+    rec = offered_rec(raw_id)
+    try:
+        fd = _send_files._open_under(_ensure_root(), rec["id"] + "/" + rec["name"])
+    except OSError:
+        raise Refusal(
+            404, "not_offered", "file:%s is not offered by this device" % rec["id"]
+        ) from None
+    return rec, fd
+
+
 def open_item(raw_id) -> Tuple[dict, int]:
     """``(public record, read-only fd)`` of an item's data — opened without
     following a link, a regular file. The caller closes the fd."""
@@ -1094,9 +1266,10 @@ def read_text(raw_id, limit: int = TEXT_MAX) -> dict:
 # --------------------------------------------------------------------------- #
 # changing
 # --------------------------------------------------------------------------- #
-def update(raw_id, *, name=None, note=None, pinned=None) -> dict:
-    """Rename / note / pin an item (owner). Renaming moves the file inside
-    its own folder (the reference never changes)."""
+def update(raw_id, *, name=None, note=None, pinned=None, local_only=None) -> dict:
+    """Rename / note / pin an item, or keep it on this device only (owner).
+    Renaming moves the file inside its own folder (the reference never
+    changes)."""
     iid = check_id(raw_id)
     with _locked():
         doc = _load()
@@ -1121,6 +1294,8 @@ def update(raw_id, *, name=None, note=None, pinned=None) -> dict:
         if pinned is not None:
             rec["pinned"] = bool(pinned)
             rec["used"] = time.time()
+        if local_only is not None:
+            rec["local_only"] = bool(local_only)
         _save(doc)
     _changed()
     return public(rec)
@@ -1686,10 +1861,57 @@ _DONE_RE = re.compile(
 )
 
 
+def self_device() -> str:
+    """This device's key (its MagicDNS label), ``""`` when unknown."""
+    try:
+        from backend.web.core import remote as _remote
+
+        return str(_remote.self_identity().get("key") or "").lower()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def copies(doc: dict, oid: str, device: str = "") -> List[dict]:
+    """The live local copies of item ``oid`` fetched from another device
+    (from ``device`` only, when given), newest first."""
+    out = []
+    for rec in _live(doc):
+        o = origin_of(rec)
+        if o and o["id"] == oid and (not device or o["device"] == device):
+            out.append(rec)
+    out.sort(key=lambda r: -float(r.get("added") or 0))
+    return out
+
+
+def resolve(doc: dict, device: str, iid: str, me: str = "") -> Optional[dict]:
+    """The LOCAL record a code means here, or None (the code names nothing
+    here yet — core.hub_remote may fetch it — or it is ambiguous):
+
+    * ``file@<this device>:k7m2`` and ``file:k7m2`` — this device's own
+      item k7m2 when there is one (an own item always wins);
+    * ``file@mac-mini:k7m2`` — the copy fetched from mac-mini's k7m2;
+    * ``file:k7m2`` with no own k7m2 — the ONE copy fetched from another
+      device's k7m2; copies of two devices' k7m2 are ambiguous (None)."""
+    device = (device or "").lower()
+    if device and device != (me or self_device()):
+        got = copies(doc, iid, device)
+        return got[0] if got else None
+    rec = doc["items"].get(iid)
+    if rec is not None and not rec.get("removed"):
+        return rec
+    if device:
+        return None
+    got = copies(doc, iid)
+    if len({origin_of(r)["device"] for r in got}) == 1:  # type: ignore[index]
+        return got[0]
+    return None
+
+
 def expand(text: str) -> Tuple[str, List[str], List[str]]:
     """``(text with each known code expanded once, ids used, unknown codes as
-    typed)``. Either prefix (``file:`` / the first ``hub:``) is read. A code
-    to nothing (or a removed item) is left exactly as typed and reported."""
+    typed)``. Either prefix (``file:`` / the first ``hub:``) is read, with or
+    without a device (``file@mac-mini:k7m2`` — :func:`resolve`). A code to
+    nothing (or a removed item) is left exactly as typed and reported."""
     if not has_code(text):
         return text, [], []
     try:
@@ -1698,18 +1920,20 @@ def expand(text: str) -> Tuple[str, List[str], List[str]]:
         return text, [], []
     used: List[str] = []
     unknown: List[str] = []
+    me = self_device()
     # Already expanded once (a prompt sent on again): stays as it is.
     done = {m.group(1).lower() for m in _DONE_RE.finditer(text)}
 
     def sub(m: "re.Match") -> str:
         if not _code_match(m):
             return m.group(0)
-        iid = m.group(2).lower()
-        rec = doc["items"].get(iid)
-        if rec is None or rec.get("removed") or not _ID_RE.match(iid):
+        iid = m.group(3).lower()
+        rec = resolve(doc, m.group(2) or "", iid, me) if _ID_RE.match(iid) else None
+        if rec is None:
             if m.group(0) not in unknown:
                 unknown.append(m.group(0))
             return m.group(0)
+        iid = rec["id"]
         if iid in used or iid in done:
             return m.group(0)
         used.append(iid)
@@ -1734,24 +1958,37 @@ def unknown_refs(text: str) -> List[str]:
     except Exception:  # noqa: BLE001
         return []
     out: List[str] = []
+    me = self_device()
     for m in HANDLE_RE.finditer(text):
         if not _code_match(m):
             continue
-        rec = doc["items"].get(m.group(2).lower())
-        if (rec is None or rec.get("removed")) and m.group(0) not in out:
+        iid = m.group(3).lower()
+        rec = resolve(doc, m.group(2) or "", iid, me) if _ID_RE.match(iid) else None
+        if rec is None and m.group(0) not in out:
             out.append(m.group(0))
     return out
 
 
-def unknown_note(unknown: List[str]) -> str:
-    """The sentence a sender sees for codes that matched nothing."""
+def unknown_note(unknown: List[str], why: Optional[Dict[str, str]] = None) -> str:
+    """The sentence a sender sees for codes that matched nothing — with the
+    reason for each one another device was asked about (``why``: code as
+    typed → sentence, core.hub_remote.prepare_codes)."""
     if not unknown:
         return ""
-    return "%s %s not in Shared files, so %s sent as typed — check the code there" % (
-        ", ".join(clean_line(u, 20) for u in unknown[:5]),
-        "is" if len(unknown) == 1 else "are",
-        "it was" if len(unknown) == 1 else "they were",
-    )
+    why = why or {}
+    told = [clean_line(why[u], 300) for u in unknown if u in why][:5]
+    rest = [u for u in unknown if u not in why]
+    parts = list(told)
+    if rest:
+        parts.append(
+            "%s %s not in Shared files, so %s sent as typed — check the code there"
+            % (
+                ", ".join(clean_line(u, 40) for u in rest[:5]),
+                "is" if len(rest) == 1 else "are",
+                "it was" if len(rest) == 1 else "they were",
+            )
+        )
+    return "; ".join(parts)
 
 
 # --------------------------------------------------------------------------- #
