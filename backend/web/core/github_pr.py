@@ -416,6 +416,8 @@ async def find_pr(wt: str, branch: str) -> Optional[dict]:
         "base": base,
         # gh's ``headRefOid``: the commit the PR was at (see _gh_pr_info).
         "head": head,
+        # Who opened it: a review loop never hands its own replies back.
+        "author": str((item.get("user") or {}).get("login") or ""),
     }
 
 

@@ -19,8 +19,9 @@ from backend.ticket_ingestion.models import PRComment, PullRequest
 
 
 def in_thread(c: PRComment) -> bool:
-    """An inline review comment (it has a file): replied to in its thread."""
-    return bool(c.path)
+    """An inline review comment (it has a file): replied to in its thread. A
+    review-body item has a file too, but no thread."""
+    return bool(c.path) and not c.item_key
 
 
 def thread_id(c: PRComment) -> int:
@@ -32,6 +33,8 @@ def label(c: PRComment) -> str:
     """What the request is, in words."""
     if in_thread(c):
         return "inline comment"
+    if c.item_key:
+        return "%s comment in a review body" % (c.section or "review")
     if c.kind == "issue":
         return "conversation comment"
     if (c.review_state or "").upper() in ("COMMENTED", "APPROVED"):
@@ -45,6 +48,11 @@ def where_to_reply(c: PRComment) -> str:
     """One line per request: where its reply goes."""
     if in_thread(c):
         return "reply in its own thread (thread comment id `%d`)" % thread_id(c)
+    if c.item_key:
+        return (
+            "reply in your PR conversation comment (quote its title; it has "
+            "no thread to reply in)"
+        )
     return "reply in your PR conversation comment (quote or link it)"
 
 
@@ -70,7 +78,7 @@ def reply_rules(pr: PullRequest, items: List[PRComment]) -> List[str]:
     ]
     if threads:
         out += [
-            "Inline comments (they have a file) — reply in the comment's OWN "
+            "Inline comments (they have a thread) — reply in the comment's OWN "
             "thread, to its thread comment id:",
             "```sh",
             "gh api -X POST repos/%s/pulls/%d/comments/<thread comment id>/replies "
@@ -79,7 +87,7 @@ def reply_rules(pr: PullRequest, items: List[PRComment]) -> List[str]:
         ]
     if loose:
         out += [
-            "Conversation comments and review bodies (no file) — ONE PR "
+            "Conversation comments and review bodies (no thread) — ONE PR "
             "conversation comment that answers all of them, each quoted "
             "(`> …`) or linked, with its reply under it. Write it to a file "
             "outside the repo first, then:",

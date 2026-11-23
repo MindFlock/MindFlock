@@ -485,6 +485,21 @@ def _no_ambient_github_token(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_own_github_login(monkeypatch):
+    """A Reviews stop asks GitHub who MindFlock's token is (so the agent's own
+    replies are never handed back to it). ``gh auth token`` still answers on
+    a developer's machine, so unstubbed that would be a real api.github.com
+    call from any test that drives a Reviews stop. Tests of the lookup itself
+    re-patch it."""
+    from backend.web.core import flight_driver
+
+    async def _nobody() -> str:
+        return ""
+
+    monkeypatch.setattr(flight_driver, "_own_login", _nobody)
+
+
+@pytest.fixture(autouse=True)
 def _no_tailnet_side_effects(monkeypatch):
     """No test machine has a tailnet, and no test fires a phone-URL push.
 

@@ -6,16 +6,22 @@ Comments authored by the PR author or any user in `skip_authors` are dropped.
 PR intake (docs/pr-review-rounds.md) reads more than the review threads:
 :func:`fetch_pr_requests` adds the PR's conversation comments and every review
 whose body says something, then drops pure noise (auto-generated summaries,
-status/approval-only notes, anything the PR author already answered).
+status/approval-only notes, anything the PR author already answered) and
+pure bot notices (a bot that never reviewed the PR posting a short note: a
+ticket-link or deploy bot). CodeRabbit's review bodies are read item by item
+(:mod:`coderabbit`): the nitpicks, outside-diff-range and duplicate comments
+it posts only there each become a request.
 """
 
 import asyncio
 import logging
 import re
 from datetime import datetime
+from typing import Iterable, Optional
 
 import aiohttp
 
+from backend.ticket_ingestion import coderabbit
 from backend.ticket_ingestion.config import GithubConfig
 from backend.ticket_ingestion.github_auth import resolve_token
 from backend.ticket_ingestion.models import PRComment, PullRequest
@@ -186,16 +192,26 @@ def _headers(token: str) -> dict[str, str]:
 
 
 async def fetch_actionable_comments(
-    pr: PullRequest, config: GithubConfig, *, drop_noise: bool = False
+    pr: PullRequest,
+    config: GithubConfig,
+    *,
+    drop_noise: bool = False,
+    skip: Iterable[str] = (),
+    info: Optional[dict] = None,
 ) -> list[PRComment]:
     """Unresolved, non-outdated review-thread comments. ``drop_noise`` (PR
     intake) also drops status/approval-only ones and any the PR author
     already answered in the same thread (:func:`is_noise`, :func:`answered`).
+    ``skip``: more logins to drop, besides the PR author and the repo's
+    ``skip_authors``. ``info``, when given, is filled with ``open_threads``
+    (unresolved, non-outdated threads a reviewer started) and
+    ``fingerprints`` (:func:`coderabbit.fingerprint` of every thread's first
+    comment, resolved or not).
     """
     owner, name = pr.repo.split("/", 1)
     # Per-repo skip list: a bot that reviews one repo often doesn't touch the
     # next, and each watched repo edits its own list on its own card.
-    skip = {pr.author, *config.skip_authors_for(pr.repo)}
+    skip = {pr.author, *config.skip_authors_for(pr.repo), *skip} - {""}
     token = await resolve_token(config)
     try:
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
@@ -208,6 +224,7 @@ async def fetch_actionable_comments(
                 skip,
                 author=pr.author if drop_noise else "",
                 drop_noise=drop_noise,
+                info=info,
             )
     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         raise PRCommentsFetchError(
@@ -226,6 +243,7 @@ async def _fetch_review_comments(
     *,
     author: str = "",
     drop_noise: bool = False,
+    info: Optional[dict] = None,
 ) -> list[PRComment]:
     payload = {
         "query": _REVIEW_THREADS_QUERY,
@@ -252,16 +270,28 @@ async def _fetch_review_comments(
     )
 
     out: list[PRComment] = []
+    open_threads = 0
+    prints: set[str] = set()
     for thread in threads:
         if not isinstance(thread, dict):
-            continue
-        if thread.get("isResolved") or thread.get("isOutdated"):
             continue
         nodes = [
             c
             for c in (thread.get("comments") or {}).get("nodes", [])
             if isinstance(c, dict)
         ]
+        first = nodes[0] if nodes else {}
+        if first:
+            # Any thread, resolved or not: a body item that repeats it is it.
+            prints.add(
+                coderabbit.fingerprint(
+                    str(first.get("path") or ""), str(first.get("body") or "")
+                )
+            )
+        if thread.get("isResolved") or thread.get("isOutdated"):
+            continue
+        if ((first.get("author") or {}).get("login") or "") not in skip:
+            open_threads += 1
         root = next(
             (c["databaseId"] for c in nodes if isinstance(c.get("databaseId"), int)),
             None,
@@ -301,6 +331,9 @@ async def _fetch_review_comments(
                     reply_to=root,
                 )
             )
+    if info is not None:
+        info["open_threads"] = open_threads
+        info["fingerprints"] = prints
     return out
 
 
@@ -386,7 +419,8 @@ def review_bodies(
 ) -> list[PRComment]:
     """ "Commented" / "approved" reviews whose body says something: a bot's
     findings outside the diff range live there. Noise and bodies the PR author
-    answered later in the conversation are dropped."""
+    answered later in the conversation are dropped. CodeRabbit's are not
+    read whole: :func:`coderabbit_items` reads them item by item."""
     out: list[PRComment] = []
     for r in reviews:
         if not isinstance(r, dict):
@@ -397,6 +431,8 @@ def review_bodies(
         author = (r.get("user") or {}).get("login") or ""
         body = str(r.get("body") or "").strip()
         if author in skip or not body or not isinstance(r.get("id"), int):
+            continue
+        if coderabbit.is_coderabbit(author):
             continue
         said = str(r.get("submitted_at") or "") or None
         if is_noise(body) or answered(said, replies):
@@ -415,11 +451,85 @@ def review_bodies(
     return out
 
 
-def conversation_comments(
-    comments: list, skip: set[str], replies: list[float]
+def coderabbit_items(
+    reviews: list, skip: set[str], head: str, known: Iterable[str] = ()
 ) -> list[PRComment]:
-    """The PR's conversation comments (``kind="issue"``), less noise and those
-    the PR author answered with a newer conversation comment."""
+    """The items CodeRabbit posted only in the body of its NEWEST review on
+    ``head`` (:func:`coderabbit.newest_review`; any commit when ``head`` is
+    ""), one request each (``item_key`` = the item's fingerprint, ``path`` /
+    ``line`` its file and first line, ``id`` the review's). An item whose
+    fingerprint is in ``known`` — one of CodeRabbit's inline threads, open or
+    resolved — is that thread and is left out, so a "Duplicate comments"
+    item is never a second request for a thread already handed over."""
+    r = coderabbit.newest_review(
+        [
+            x
+            for x in reviews
+            if isinstance(x, dict)
+            and ((x.get("user") or {}).get("login") or "") not in skip
+        ],
+        head,
+    )
+    if r is None:
+        return []
+    author = (r.get("user") or {}).get("login") or ""
+    taken = set(known)
+    out: list[PRComment] = []
+    for it in coderabbit.body_items(str(r.get("body") or "")):
+        if it.key in taken:
+            continue
+        taken.add(it.key)
+        out.append(
+            PRComment(
+                id=r["id"],
+                kind="review",
+                author=author,
+                body=it.text,
+                url=str(r.get("html_url") or ""),
+                path=it.path,
+                line=it.line,
+                created_at=str(r.get("submitted_at") or "") or None,
+                review_state=str(r.get("state") or "") or None,
+                item_key=it.key,
+                section=it.section,
+            )
+        )
+    return out
+
+
+#: A bot notice is short: a ticket link, a deploy URL, a coverage line. A
+#: longer comment from a bot that never reviewed may be a review posted as a
+#: conversation comment, and is kept.
+_NOTICE_MAX_CHARS = 600
+
+
+def is_bot_notice(login: str, body: str, reviewers: Iterable[str]) -> bool:
+    """A conversation comment from a bot (``…[bot]``) that is not one of the
+    PR's ``reviewers`` (it never submitted a review or an inline comment
+    there) and is not CodeRabbit, short enough to be a notice
+    (:data:`_NOTICE_MAX_CHARS` of plain text): a ticket-link bot's "This pull
+    request has been linked to …", a deploy bot's preview link. Its words
+    may still look like a request (a linked story's title), so its author is
+    what decides."""
+    login = str(login or "")
+    if not login.lower().endswith("[bot]") or coderabbit.is_coderabbit(login):
+        return False
+    if login in set(reviewers):
+        return False
+    return len(_plain(body)) <= _NOTICE_MAX_CHARS
+
+
+def conversation_comments(
+    comments: list,
+    skip: set[str],
+    replies: list[float],
+    reviewers: Optional[Iterable[str]] = None,
+) -> list[PRComment]:
+    """The PR's conversation comments (``kind="issue"``), less noise, those
+    the PR author answered with a newer conversation comment, and — when
+    ``reviewers`` (the PR's reviewer logins) is given — bot notices
+    (:func:`is_bot_notice`)."""
+    rev = set(reviewers) if reviewers is not None else None
     out: list[PRComment] = []
     for c in comments:
         if not isinstance(c, dict) or not isinstance(c.get("id"), int):
@@ -430,6 +540,8 @@ def conversation_comments(
             continue
         said = str(c.get("created_at") or "") or None
         if is_noise(body) or answered(said, replies):
+            continue
+        if rev is not None and is_bot_notice(author, body, rev):
             continue
         out.append(
             PRComment(
@@ -444,25 +556,65 @@ def conversation_comments(
     return out
 
 
-async def fetch_pr_requests(pr: PullRequest, config: GithubConfig) -> list[PRComment]:
+async def fetch_pr_requests(
+    pr: PullRequest,
+    config: GithubConfig,
+    *,
+    head_sha: Optional[str] = None,
+    skip: Iterable[str] = (),
+    reviewers: Iterable[str] = (),
+    info: Optional[dict] = None,
+) -> list[PRComment]:
     """Everything on the PR that asks for something (docs/pr-review-rounds.md
     "What counts as a request"): "changes requested" reviews, "commented" /
-    "approved" reviews with a body, conversation comments, and unresolved
-    review-thread comments — the PR author's and ``skip_authors``' dropped,
-    noise dropped, and anything the PR author already answered dropped
-    ("changes requested" stays until the reviewer says otherwise). Raises
-    :class:`PRCommentsFetchError` when any of the three fetches fails: a part
-    missing never reads as "no comments"."""
-    skip = {pr.author, *config.skip_authors_for(pr.repo)}
+    "approved" reviews with a body, the items in CodeRabbit's newest review
+    body on the head (:func:`coderabbit_items`), conversation comments, and
+    unresolved review-thread comments — the PR author's, ``skip_authors``'
+    and ``skip``'s (the agent's own account) dropped, noise and bot notices
+    dropped, and anything the PR author already answered dropped ("changes
+    requested" stays until the reviewer says otherwise).
+
+    ``head_sha``: the PR's head commit on GitHub (default ``pr.head_sha``).
+    ``reviewers``: logins that count as reviewers even before they post a
+    review (a route's required reviewer) — a bot's notice is dropped only
+    when it is not one. ``info``, when given, is filled with
+    ``open_threads`` (:func:`fetch_actionable_comments`) and ``coderabbit``
+    (CodeRabbit has posted on the PR). Raises :class:`PRCommentsFetchError`
+    when any of the three fetches fails: a part missing never reads as "no
+    comments"."""
+    extra = {s for s in skip if s}
+    skip_all = {pr.author, *config.skip_authors_for(pr.repo), *extra} - {""}
+    threads: dict = {}
     inline, reviews, issue = await asyncio.gather(
-        fetch_actionable_comments(pr, config, drop_noise=True),
+        fetch_actionable_comments(
+            pr, config, drop_noise=True, skip=extra, info=threads
+        ),
         _fetch_reviews_raw(pr, config),
         _fetch_issue_comments_raw(pr, config),
     )
     replies = _author_replies(issue, pr.author)
+    review_logins = {
+        (r.get("user") or {}).get("login") or "" for r in reviews if isinstance(r, dict)
+    }
+    known_reviewers = review_logins | {c.author for c in inline} | set(reviewers)
+    head = pr.head_sha if head_sha is None else head_sha
+    if info is not None:
+        info["open_threads"] = threads.get("open_threads")
+        info["coderabbit"] = any(
+            coderabbit.is_coderabbit(login)
+            for login in review_logins
+            | {
+                (c.get("user") or {}).get("login") or ""
+                for c in issue
+                if isinstance(c, dict)
+            }
+        )
     return (
-        _changes_requested(reviews, skip)
-        + review_bodies(reviews, skip, replies)
-        + conversation_comments(issue, skip, replies)
+        _changes_requested(reviews, skip_all)
+        + review_bodies(reviews, skip_all, replies)
+        + coderabbit_items(
+            reviews, skip_all, str(head or ""), threads.get("fingerprints") or ()
+        )
+        + conversation_comments(issue, skip_all, replies, known_reviewers)
         + list(inline)
     )

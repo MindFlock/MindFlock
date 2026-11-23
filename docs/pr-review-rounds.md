@@ -19,11 +19,24 @@ round:
 |---|---|---|
 | Inline review comment (unresolved, not outdated thread) | GraphQL `reviewThreads` | `c:<comment id>` |
 | "Changes requested" review | REST `pulls/{n}/reviews` | `r:<review id>` |
-| "Commented" / "approved" review with a body (a bot's findings outside the diff range live there) | REST `pulls/{n}/reviews` | `b:<review id>` |
+| "Commented" / "approved" review with a body (a bot's findings outside the diff range live there), CodeRabbit's excepted | REST `pulls/{n}/reviews` | `b:<review id>` |
+| An item in CodeRabbit's newest review body on the head (see below) | REST `pulls/{n}/reviews` | `n:<fingerprint>` |
 | PR conversation comment | REST `issues/{n}/comments` | `i:<comment id>` |
 
-Always dropped: the PR author's own, and the repo's `skip_authors`. Also
-dropped, as pure noise:
+Always dropped: the PR author's own, the repo's `skip_authors`, and any
+login the caller adds (a route's Reviews stop adds the account MindFlock's
+token acts as: the agent's replies). Also dropped:
+
+- **bot notices**: a short conversation comment (≤ 600 characters of text)
+  from a `…[bot]` account that never submitted a review or an inline comment
+  on the PR, such as a ticket-link bot's "This pull request has been linked
+  to …" or a deploy preview link (`is_bot_notice`). Its words can look like a
+  request (a linked story's title), so the author decides. CodeRabbit, a bot
+  that reviewed, and a route's `require_reviewer` are never notices; a long
+  comment from a bot is kept (it may be a review posted in the
+  conversation).
+
+And dropped as pure noise:
 
 - **auto-generated summaries** — a bot's own `<!-- … auto-generated … -->`
   marker naming a summary, walkthrough or status — unless the body still
@@ -37,6 +50,38 @@ dropped, as pure noise:
 
 A failed fetch of any of the three is a `PRCommentsFetchError`, never "no
 comments": the PR is retried on the next poll.
+
+### CodeRabbit's review bodies
+
+CodeRabbit posts most findings as inline threads, but three kinds live only
+in its review body, each in a `<details>` block with one block per file:
+"Nitpick comments", "Outside diff range comments" and "Duplicate comments".
+The body also carries CodeRabbit's "auto-generated … review status" marker,
+so the noise rule used to drop it whole, items included. `coderabbit.py`
+reads them instead (`fetch_pr_requests` → `coderabbit_items`):
+
+- **Which review**: only CodeRabbit's NEWEST review with a body on the PR's
+  head (`head_sha`; the newest anywhere when the head is unknown). An older
+  review's items were about an older commit. Its thread-reply "reviews"
+  have empty bodies and never count, so they never hide the review that
+  carries the items.
+- **Each item** (`` `12-14`: **Title** … ``) is one request: `path` / `line`
+  its file and first line, `id` and `url` the review's, `section` its block,
+  and `body` its title plus its own "Prompt to fix issue" / "Prompt for AI
+  Agents" text, or its description when it has none. It has a file but no
+  thread, so it is answered in the PR conversation comment with the
+  conversation comments and review bodies. Both CodeRabbit formats are read:
+  today's (icons, `path: N`) and the older one (emoji, `path (N)`, the
+  outside-diff block quoted under a caution).
+- **Handled** is its key, `n:<fingerprint>`: the item's file plus its
+  normalised title (words only, lowercase). The same item gets the same key
+  in every review that repeats it, so once a round or a route's Reviews
+  stop has carried it, it is never sent again. No thread exists to resolve.
+- **Duplicates**: an item whose fingerprint matches one of CodeRabbit's
+  inline threads (its first comment's file and title; the thread open or
+  resolved) is that thread and is left out. Inside one body, a duplicate
+  of a nitpick or outside-diff item is the same item. So a "Duplicate
+  comments" item is handed over only when nothing else on the PR says it.
 
 ## Triage, not blind obedience
 
@@ -93,7 +138,8 @@ for your answer, then every request still gets one.
 ## Bookkeeping
 
 `state.json` `pr_rounds`: `{"<repo>#<n>": {"items": ["c:<comment id>",
-"r:<review id>", "b:<review id>", "i:<comment id>", …], "at": …}}` — what
+"r:<review id>", "b:<review id>", "n:<fingerprint>", "i:<comment id>", …],
+"at": …}}` — what
 the first pass and each round carried (or left to a route), so a request goes
 out once. `c:` and `r:` mean what they always did, so older state stays
 valid. A request older than the PR's first pass (`processed_prs`) counts as
@@ -129,7 +175,7 @@ at a time:
 | That stop is done, skipped, or failed and moved on; the flight finished or was cancelled; or it has no `reviews` stop | **PR intake** | anything the stop delivered (its `seen`) counts as handled and is never sent again |
 
 Both owners read the same requests (`fetch_pr_requests`, same noise rules),
-key them the same way (`c:` / `r:` / `b:` / `i:`), send the same prompt
+key them the same way (`c:` / `r:` / `b:` / `n:` / `i:`), send the same prompt
 (`build_consolidated_pr_prompt(…, reply_all=True)`) and so reply to every
 request. A route's `reviews` stop with `include_bots: false` ignores bots'
 requests, and PR intake leaves them alone while the route owns the PR.

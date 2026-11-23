@@ -560,7 +560,7 @@ editor's palette and forms are driven by the server):
 | `verify` | robot (+you) | `where` (`branch` or an environment's name, default branch); `ready`: `now` \| `on_branch` \| `after_prev` (default now); `ready_minutes` (0..1440, 0 = the environment's deploy minutes); `who`: `both` \| `agent` \| `you` (default both); `notes` (≤2000 chars); `post_to_pr` (bool, default false) — see [Verify stops](#verify-stops); a legacy `wait_live` true reads as `live` + `on_branch` | the session's self-verify `passed` (or a person confirmed it); `needs_you` parks the flight on you until confirmed, `failed` fails the stop, `blocked` parks on you (Retry / Skip) |
 | `you` | you | `text` (what to do), `items` (list of strings, optional checklist), `notify` (bool, default true) | you press **Done** (or **Skip**) in the Sky (its box, or the drawer), the pane strip, or the bell |
 | `wait` | robot | `minutes` (int) or `until` ("HH:MM" local) | the time has passed |
-| `reviews` | robot | `quiet_minutes` (default 10), `max_rounds` (default 5), `include_bots` (default true), `require_reviewer` (default empty), `reviewer_wait_minutes` (default 10), `reply_declined` (default false), `each_round` (default empty) | the PR has had no new unresolved review comments for `quiet_minutes` (with `require_reviewer`: counted from that reviewer's first post, which it waits for); each batch of new comments is sent to the agent (the pipeline's consolidated PR prompt) followed by an automatic push; `max_rounds` reached → fail "comments still open after N rounds — it needs a human review"; the required reviewer silent for `reviewer_wait_minutes` → fail "<reviewer> never reviewed this PR — it needs a human review" (see "Team PR rules as a route"); `each_round` / `reply_declined` add to every round's prompt (see "Reviews: instructions for every round") |
+| `reviews` | robot | `quiet_minutes` (default 10), `max_rounds` (default 5), `include_bots` (default true), `require_reviewer` (default empty), `reviewer_wait_minutes` (default 10), `reply_declined` (default false), `each_round` (default empty) | the PR has had no new unresolved review comments for `quiet_minutes` (with `require_reviewer`: counted from that reviewer's first post, which it waits for); each batch of new comments is sent to the agent (the pipeline's consolidated PR prompt) followed by an automatic push; `max_rounds` reached → fail "comments still open after N rounds — it needs a human review"; the required reviewer silent for `reviewer_wait_minutes` → fail "<reviewer> never reviewed this PR — it needs a human review" (see "Team PR rules as a route"); CodeRabbit on the PR (named or not) is waited for on each new head, and its clean review of a head the last round pushed, with every thread resolved, ends the stop at once (see "Reviews: done when clean"); `each_round` / `reply_declined` add to every round's prompt (see "Reviews: instructions for every round") |
 | `checks` | robot | `timeout_minutes` (default 60) | the PR's checks are all passing; a failing check → fail (so `on_fail: agent` hands the failing check names to the agent and re-waits); checks it can't read for 5 min in a row → fail, "can't read the CI checks: <why> — fix that and Retry, or Skip" (until then it waits saying why) |
 | `command` | robot | `command` (shell, run in the worktree with the session's env), `timeout_minutes` (default 30) | exit 0; non-zero → fail with the tail of the output |
 | `ticket` | robot | `state` (target state name or id, optional), `comment` (text, optional) | the tracker call returned; a flight without a ticket subject skips it |
@@ -1138,7 +1138,7 @@ had to choose. Field and route names are unchanged.
   `push` lane is armed. It reads what PR intake reads
   (`pr_comments.fetch_pr_requests`: review threads, reviews, review bodies
   and conversation comments, noise dropped) and keys them the same way
-  (`c:` / `r:` / `b:` / `i:`; a bare id stored by an older stop reads as
+  (`c:` / `r:` / `b:` / `n:` / `i:`; a bare id stored by an older stop reads as
   `c:<id>`). While the stop is not passed, the route owns the PR's comments
   and PR intake hands it nothing; after it, what the stop delivered (its
   `seen`) stays handled (docs/pr-review-rounds.md "Routes"). A PR whose comments can't be
@@ -8636,3 +8636,96 @@ Nothing is added when no earlier stop has finished: a route's first stop,
 and intake's seeded first prompt, read as before. There is no setting: the
 Agent stop has no per-stop prompt options to hang one on, and the appendix
 is the route's own record, never instructions.
+
+## Reviews: done when clean (2026-11-23)
+
+A route's "CodeRabbit loop" (a `reviews` stop, `require_reviewer` empty) on a
+real PR got stuck twice and handed the agent the wrong things. Four causes,
+all fixed.
+
+### A round the agent pushed itself goes back to watching
+
+The round's prompt (`build_consolidated_pr_prompt(…, reply_all=True)`) tells
+the agent to commit AND push. The stop's `push` phase then armed the lane
+(`_arm(flight, "push")`), which found the branch already on the PR: it waits
+"already at pr — waiting for new work" (`autopilot._ladder`: target reached,
+no commits of its own) until `ARM_WAIT_DEADLINE_S` (2 h) halts it, and the
+stop failed "gave up waiting at agent after 120 min — already at pr — waiting
+for new work". The same happens after a round that changed nothing (the
+agent only replied). Meanwhile the stop is not in `watch`, so the reviewer's
+new comments are never read. The Ship stop had this fix already
+(`agent_did`); the Reviews stop's push phase did not.
+
+Now `observe` adds `obs["git"]` (`_ship_git_obs`) during a Reviews stop's
+push phase too, and `_judge_reviews` goes back to `watch` (`quiet_since`
+restarted, note "pushed by the agent — watching for new comments") when the
+lane has not acted (running, no commits, no step) and `agent_did` says the
+push rung is done: stage `pushed` or `pr` (clean tree, origin holding HEAD)
+and the agent not mid-turn. The action carries `by_agent`, so the driver
+disarms the lane (`_disarm_ours`) as it does for a Ship stop. Uncommitted or
+unpushed work still waits for the lane.
+
+### CodeRabbit's review-body items are requests
+
+CodeRabbit posts its "Nitpick comments", "Outside diff range comments" and
+"Duplicate comments" only in the review body. That body carries
+CodeRabbit's "auto-generated comment … for review status" marker, so
+`is_auto_summary` dropped it whole, and those items never reached the agent.
+`pr_comments.fetch_pr_requests` now reads CodeRabbit's newest review body on
+the PR's head item by item (`coderabbit.py`; docs/pr-review-rounds.md
+"CodeRabbit's review bodies"). Each item becomes a request keyed
+`n:<fingerprint>`. The fingerprint is the item's file plus its normalised
+title, the same whichever review repeats it, so once it is in `seen` it is
+handled: there is no thread to resolve. A "Duplicate comments" item that
+matches one of CodeRabbit's inline threads (open or resolved) is that thread
+and is not handed over a second time. The round's prompt labels it "nitpick
+comment in a review body" with its file and line, and its reply goes in the
+PR conversation comment.
+
+### The agent's own comments and bot notices are not requests
+
+`_pr_of` built the PR with `author=""`, so the PR author's replies (the
+agent's, on the owner's account) came back as requests. It now takes the
+author from `find_pr` (which returns the PR's `author`) and GitHub's head
+for `head_sha`. `_reviews_obs` also passes the token's own login
+(`_own_login`: `github_auth.fetch_user`) as `skip`, for a PR someone else
+opened. With the author known, intake's "already answered" rule applies too.
+A short conversation comment (≤ 600 characters of text) from a `…[bot]`
+account that never reviewed the PR, such as a ticket-link bot's "This pull
+request has been linked to …", is a notice and is dropped
+(`pr_comments.is_bot_notice`). CodeRabbit, any bot that submitted a review
+or inline comment, and the stop's `require_reviewer` are never notices.
+
+### Done when CodeRabbit's review of the head is clean
+
+When CodeRabbit has posted on the PR, `_reviews_obs` asks
+`_reviewer_on_head` about it even with no `require_reviewer`
+(`reviewer_name: "coderabbit"`, `required: false`). The same gate as a
+required reviewer then waits for its review of each new head, so a short
+`quiet_minutes` no longer ends the loop before CodeRabbit has looked at the
+round's push. The gate is not required, so after `reviewer_wait_minutes`
+with no review it opens and the quiet rule decides; it never fails the
+stop. `require_reviewer` keeps its fail.
+
+Once the gate is open and nothing new is left to hand over,
+`_clean_review` ends the stop at once ("coderabbit reviewed abc1234:
+nothing left to address", receipt "N rounds, clean review") when all of
+these hold:
+
+- the reviewer has reviewed the PR's current head (`reviewer_head` ==
+  `head`). Its review's body items were fetched with it: an unhandled one
+  would have been a new request, so a round instead of done;
+- that head is not the one the last round was handed on
+  (`detail.round_head`, set by `_send_reviews` from the reviewer's last
+  known head). A round that pushed nothing has had no review of its work,
+  and the quiet rule waits for the reviewer's answers to its replies;
+- every review thread is resolved (`open_threads` 0, counted by
+  `fetch_actionable_comments`: unresolved, not outdated, started by someone
+  other than the PR author or the agent). Unknown never counts as 0.
+
+Otherwise the quiet rule (`quiet_minutes` without new requests) finishes it
+as before. `max_rounds` is unchanged: each round with new requests (body
+items included) counts, and new requests past it fail the stop. The clean
+finish uses no round. (A `loop` stop's `times=N`, N runs total, is separate:
+it repeats a whole stretch of stops, a Reviews stop among them, and each run
+of the Reviews stop gets its own `max_rounds`.)
