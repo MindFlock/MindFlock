@@ -10,8 +10,9 @@ export const HUB_MIME = "application/x-mf-hub-ref";
  * good). */
 export const CODE_PREFIXES = ["file:", "hub:"] as const;
 /** A code in text: not glued to a word or path before it — the same rule as
- * the server's (core/hub.py HANDLE_RE). */
-export const REF_RE = /(?<![A-Za-z0-9_./:@-])(?:file|hub):([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/i;
+ * the server's (core/hub.py HANDLE_RE). It may name the device that holds
+ * the item (`file@mac-mini:k7m2`); group 1 is always the id. */
+export const REF_RE = /(?<![A-Za-z0-9_./:@-])(?:file|hub)(?:@[A-Za-z0-9][A-Za-z0-9-]{0,62})?:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/i;
 
 /** What a drag carries: one item or the whole selection. */
 export interface DragItem {

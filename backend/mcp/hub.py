@@ -228,6 +228,11 @@ class HubTools:
                 first = err.message
         else:
             first = ""
+        if first:
+            here = str(getattr(self.flock(), "self_title", "") or "")
+            if not here or "::" in here:
+                # Not inside a session: no way to fetch — the plain answer.
+                raise ToolError("hub %s: %s" % (action, first))
         title = self._hub_self(action)
         try:
             rec = (

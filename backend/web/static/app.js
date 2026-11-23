@@ -28677,7 +28677,7 @@ function freshStage(title) {
 //#endregion
 //#region src/lib/hubRef.ts
 var HUB_MIME = "application/x-mf-hub-ref";
-var REF_RE = /(?<![A-Za-z0-9_./:@-])(?:file|hub):([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/i;
+var REF_RE = /(?<![A-Za-z0-9_./:@-])(?:file|hub)(?:@[A-Za-z0-9][A-Za-z0-9-]{0,62})?:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/i;
 function setDragItems(dt, items) {
 	const list = items.map((i) => ({
 		id: i.id,
@@ -30651,6 +30651,141 @@ function useHub(enabled = true) {
 }
 function refreshHub() {
 	queryClient.invalidateQueries({ queryKey: ["hub"] });
+	queryClient.invalidateQueries({ queryKey: ["hub-devices"] });
+}
+function useHubDevices(enabled = true) {
+	return useQuery({
+		queryKey: ["hub-devices"],
+		queryFn: async () => {
+			try {
+				return await api("/api/hub/devices");
+			} catch (err) {
+				if (err?.status === 404) return {
+					self: "",
+					devices: []
+				};
+				throw err;
+			}
+		},
+		enabled,
+		staleTime: 15e3,
+		refetchInterval: 3e4,
+		retry: false
+	});
+}
+function deviceCode(device, id) {
+	return "file@" + device + ":" + id;
+}
+function remoteItems(d) {
+	const out = [];
+	for (const dev of d?.devices || []) {
+		if (dev.state !== "ok") continue;
+		for (const r of dev.items) {
+			if (r.copy) continue;
+			out.push({
+				id: deviceCode(dev.device, r.id),
+				ref: r.ref,
+				name: r.name,
+				kind: r.kind,
+				mime: r.mime,
+				size: r.size,
+				sha256: r.sha256,
+				by: r.by,
+				by_name: r.by_name,
+				added: r.added,
+				used: r.added,
+				note: r.note,
+				pinned: false,
+				textual: r.textual,
+				preview: r.preview,
+				path: "",
+				expires: null,
+				remote: {
+					device: dev.device,
+					deviceName: dev.name,
+					id: r.id,
+					tooBig: r.too_big,
+					secret: r.secret
+				}
+			});
+		}
+	}
+	return out;
+}
+function findByRef(ref, local, remote) {
+	const m = /^(?:file|hub)(?:@([A-Za-z0-9-]+))?:([A-Za-z0-9]{4,8})$/i.exec(ref.trim());
+	if (!m) return void 0;
+	const dev = (m[1] || "").toLowerCase();
+	const id = m[2].toLowerCase();
+	if (dev) return local.find((i) => i.origin?.device === dev && i.origin.id === id) || remote.find((i) => i.remote?.device === dev && i.remote.id === id);
+	const own = local.find((i) => i.id === id);
+	if (own) return own;
+	const copies = local.filter((i) => i.origin?.id === id);
+	if (copies.length) return new Set(copies.map((i) => i.origin.device)).size === 1 ? copies[0] : void 0;
+	const there = remote.filter((i) => i.remote?.id === id);
+	return there.length === 1 ? there[0] : void 0;
+}
+function deviceNotes(d) {
+	return (d?.devices || []).filter((x) => x.state !== "ok").map((x) => ({
+		device: x.device,
+		name: x.name,
+		state: x.state,
+		note: x.note
+	}));
+}
+var REMOTE_THUMB_MAX = 524288;
+function hasThumb(it) {
+	return it.kind === "image" && (!it.remote || it.size <= REMOTE_THUMB_MAX);
+}
+async function bringHere(items, opts = {}) {
+	const rem = items.filter((i) => i.remote);
+	if (!rem.length) return items;
+	const from = [...new Set(rem.map((i) => i.remote.deviceName))].join(" and ");
+	say((rem.length === 1 ? "Fetching " + rem[0].name : "Fetching " + rem.length + " items") + " from " + from + "…", { ms: 6e4 });
+	const got = /* @__PURE__ */ new Map();
+	try {
+		if (opts.secretOk) for (const it of rem) {
+			const rec = await api("/api/hub/devices/fetch", { json: {
+				id: it.id,
+				secret_ok: true
+			} });
+			got.set(it.id, rec);
+		}
+		else {
+			const r = await api("/api/hub/batch", { json: {
+				action: "fetch",
+				ids: rem.map((i) => i.id)
+			} });
+			for (const row of r.results) {
+				const it = rem.find((i) => i.id === row.id);
+				if (!it) continue;
+				if (row.ok && row.item) got.set(it.id, row.item);
+				else if (row.code === "secret") addProblem(it.name + " on " + it.remote.deviceName + " looks like a secret (an env file, key or credential) — it wasn't brought here. Every session here can read Shared files.", void 0, {
+					label: "Bring it anyway",
+					run: () => void bringHere([it], { secretOk: true }).then((l) => l.length && say("Brought " + it.name + " here as " + l[0].ref))
+				});
+				else addProblem("Couldn't fetch " + it.name + " from " + it.remote.deviceName + ": " + (row.error || "error"));
+			}
+		}
+	} catch (err) {
+		say("Couldn't fetch from " + from + ": " + errMsg(err), { error: true });
+		refreshHub();
+		return [];
+	}
+	refreshHub();
+	if (got.size === rem.length) hush();
+	else if (!got.size) say("Couldn't fetch " + (rem.length === 1 ? rem[0].name : rem.length + " items") + " from " + from + " — why is in Shared files", { error: true });
+	else say("Fetched " + got.size + " of " + rem.length + " from " + from + " — why " + (rem.length - got.size) + " couldn't be is in Shared files");
+	const out = [];
+	for (const i of items) if (!i.remote) out.push(i);
+	else if (got.has(i.id)) out.push(got.get(i.id));
+	return out;
+}
+async function saveHere(items) {
+	const rem = items.filter((i) => i.remote);
+	if (!rem.length) return;
+	const got = await bringHere(rem);
+	if (got.length) say(got.length === 1 ? "Saved " + got[0].name + " on this device as " + got[0].ref : batchLine(got.length, rem.length, "Saved") + " on this device");
 }
 var bridged$2 = false;
 function bridgeHubEvents() {
@@ -30708,11 +30843,12 @@ function hush() {
 	useHubUi.setState({ notice: null });
 }
 var _p = 0;
-function addProblem(text, raiseTo) {
+function addProblem(text, raiseTo, confirm) {
 	useHubUi.setState((s) => ({ problems: [...s.problems.slice(-3), {
 		id: ++_p,
 		text,
-		raiseTo
+		raiseTo,
+		confirm
 	}] }));
 }
 function dropProblem(id) {
@@ -30761,6 +30897,8 @@ function humanSize(n) {
 	return (n / 1024 ** 3).toFixed(1) + " GB";
 }
 function whoLabel$1(it) {
+	if (it.origin) return "from " + (it.origin.name || it.origin.device);
+	if (it.by === "session" && it.remote) return "session " + (it.by_name || "?");
 	if (it.by === "session") return "session " + displayName(it.by_name || "?");
 	if (it.by === "device") return "device " + (it.by_name || "?");
 	if (it.by === "phone") return "your phone";
@@ -30779,6 +30917,7 @@ function expiryLabel(it, now = Date.now() / 1e3) {
 	return "Deleted automatically in " + Math.ceil(d) + (Math.ceil(d) === 1 ? " day" : " days") + " unless used — Pin to keep";
 }
 function rawUrl(it, download = false) {
+	if (it.remote) return "/api/hub/devices/" + encodeURIComponent(it.remote.device) + "/items/" + encodeURIComponent(it.remote.id) + "/thumb";
 	return "/api/hub/items/" + encodeURIComponent(it.id) + "/raw" + (download ? "?download=1" : "");
 }
 function usageLine(l) {
@@ -78031,6 +78170,8 @@ function useHubComposer({ box, value, setValue, title }) {
 	const [dropping, setDropping] = (0, import_react.useState)(false);
 	const refsIn = (0, import_react.useMemo)(() => attachedRefs(value), [value]);
 	const hub = useHub(!guest && (!!tok || refsIn.length > 0));
+	const devs = useHubDevices(!guest && refsIn.length > 0);
+	const remote = (0, import_react.useMemo)(() => remoteItems(devs.data), [devs.data]);
 	const [pickAt, setPickAt] = (0, import_react.useState)(null);
 	(0, import_react.useLayoutEffect)(() => {
 		if (!tok) {
@@ -78159,12 +78300,13 @@ function useHubComposer({ box, value, setValue, title }) {
 			className: "hub-att-chips",
 			"aria-label": "From Shared files",
 			children: refsIn.map((ref) => {
-				const it = (hub.data?.items || []).find((i) => i.id === ref.slice(ref.indexOf(":") + 1));
+				const it = findByRef(ref, hub.data?.items || [], remote);
+				const on = it?.remote ? " — on " + it.remote.deviceName + " (brought here when it is sent)" : "";
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "hub-att-chip" + (it ? "" : " is-unknown"),
-					title: it ? it.name + " — " + ref : ref + " is not in Shared files",
+					title: it ? it.name + " — " + ref + on : ref + " is not in Shared files",
 					children: [
-						it?.kind === "image" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+						it && hasThumb(it) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 							src: rawUrl(it),
 							alt: "",
 							className: "hub-att-thumb"
@@ -78175,7 +78317,7 @@ function useHubComposer({ box, value, setValue, title }) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "hub-att-name",
-							children: it ? it.name : ref + " — not in Shared files"
+							children: it ? it.name + (it.remote ? " · on " + it.remote.deviceName : "") : ref + " — not in Shared files"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -78261,15 +78403,17 @@ function useHubComposer({ box, value, setValue, title }) {
 }
 function attachedRefs(text) {
 	const out = [];
-	for (const m of (text || "").matchAll(/(?<![A-Za-z0-9_./:@-])(?:file|hub):([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/gi)) {
-		const ref = "file:" + m[1].toLowerCase();
+	for (const m of (text || "").matchAll(/(?<![A-Za-z0-9_./:@-])(?:file|hub)(?:@([A-Za-z0-9][A-Za-z0-9-]{0,62}))?:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/gi)) {
+		const ref = (m[1] ? "file@" + m[1].toLowerCase() + ":" : "file:") + m[2].toLowerCase();
 		if (!out.includes(ref)) out.push(ref);
 	}
 	return out;
 }
 function removeRef(text, ref) {
-	const id = ref.replace(/^(file|hub):/i, "").replace(/[^A-Za-z0-9]/g, "");
-	const re = new RegExp("(?<![A-Za-z0-9_./:@-])(?:file|hub):" + id + "(?![A-Za-z0-9_]) ?", "gi");
+	const m = /^(?:file|hub)(?:@([A-Za-z0-9-]+))?:(.*)$/i.exec(ref);
+	const dev = (m?.[1] || "").replace(/[^A-Za-z0-9-]/g, "");
+	const id = (m ? m[2] : ref).replace(/[^A-Za-z0-9]/g, "");
+	const re = new RegExp("(?<![A-Za-z0-9_./:@-])(?:file|hub)" + (dev ? "@" + dev : "") + ":" + id + "(?![A-Za-z0-9_]) ?", "gi");
 	return text.replace(re, "").replace(/ {2,}/g, " ");
 }
 function HubAttachButton(props) {
@@ -160925,6 +161069,10 @@ var FILTERS = [
 	{
 		key: "agents",
 		label: "From agents"
+	},
+	{
+		key: "devices",
+		label: "Other devices"
 	}
 ];
 function filterItems(items, f, find) {
@@ -160933,8 +161081,9 @@ function filterItems(items, f, find) {
 		if (f === "pictures" && i.kind !== "image") return false;
 		if (f === "text" && !(i.kind === "text" || i.textual)) return false;
 		if (f === "agents" && i.by !== "session") return false;
+		if (f === "devices" && !(i.remote || i.origin)) return false;
 		if (!q) return true;
-		return i.name.toLowerCase().includes(q) || i.ref.includes(q) || (i.note || "").toLowerCase().includes(q) || whoLabel$1(i).toLowerCase().includes(q) || (i.preview || "").toLowerCase().includes(q);
+		return (i.remote?.deviceName || "").toLowerCase().includes(q) || i.name.toLowerCase().includes(q) || i.ref.includes(q) || (i.note || "").toLowerCase().includes(q) || whoLabel$1(i).toLowerCase().includes(q) || (i.preview || "").toLowerCase().includes(q);
 	});
 }
 function rangeSelect(selected, shownIds, anchor, id, on, shift) {
@@ -160946,6 +161095,15 @@ function rangeSelect(selected, shownIds, anchor, id, on, shift) {
 	for (const x of ids) if (on) set.add(x);
 	else set.delete(x);
 	return [...shownIds.filter((x) => set.has(x)), ...selected.filter((x) => set.has(x) && !shownIds.includes(x))];
+}
+function useThen(items, fn) {
+	if (!items.some((i) => i.remote)) {
+		fn(items);
+		return;
+	}
+	bringHere(items).then((here) => {
+		if (here.length) fn(here);
+	});
 }
 function pinSplit(items) {
 	const pinned = items.filter((i) => i.pinned).length;
@@ -161028,6 +161186,11 @@ function HubDrawer() {
 	const q = useHub(true);
 	const list = q.data;
 	const items = (0, import_react.useMemo)(() => list?.items || [], [list]);
+	const dq = useHubDevices(true);
+	const remote = (0, import_react.useMemo)(() => remoteItems(dq.data), [dq.data]);
+	const notes = (0, import_react.useMemo)(() => deviceNotes(dq.data), [dq.data]);
+	const all = (0, import_react.useMemo)(() => remote.length ? [...items, ...remote].sort((a, b) => b.added - a.added) : items, [items, remote]);
+	const fromDevices = remote.length > 0 || items.some((i) => i.origin);
 	const ref = (0, import_react.useRef)(null);
 	const fileInput = (0, import_react.useRef)(null);
 	const findRef = (0, import_react.useRef)(null);
@@ -161095,8 +161258,8 @@ function HubDrawer() {
 		return () => document.removeEventListener("paste", onPaste);
 	}, []);
 	const hasFiles = (e) => Array.from(e.dataTransfer.types || []).includes("Files");
-	const shown = (0, import_react.useMemo)(() => filterItems(items, filter, find), [
-		items,
+	const shown = (0, import_react.useMemo)(() => filterItems(all, filter, find), [
+		all,
 		filter,
 		find
 	]);
@@ -161115,7 +161278,9 @@ function HubDrawer() {
 		return out;
 	}, [shown]);
 	const unpinned = items.filter((i) => !i.pinned).length;
-	const selItems = (0, import_react.useMemo)(() => items.filter((i) => selected.includes(i.id)), [items, selected]);
+	const selItems = (0, import_react.useMemo)(() => all.filter((i) => selected.includes(i.id)), [all, selected]);
+	const selLocal = (0, import_react.useMemo)(() => selItems.filter((i) => !i.remote), [selItems]);
+	const selRemote = selItems.length - selLocal.length;
 	const hiddenSel = selItems.filter((i) => !shownIds.includes(i.id)).length;
 	const shownSel = selItems.length - hiddenSel;
 	const allOn = shown.length > 0 && shownSel === shown.length;
@@ -161174,7 +161339,7 @@ function HubDrawer() {
 			setClearing(false);
 		}
 	};
-	const { toPin, toUnpin } = pinSplit(selItems);
+	const { toPin, toUnpin } = pinSplit(selLocal);
 	const n = selItems.length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 		id: "hub-panel",
@@ -161280,24 +161445,36 @@ function HubDrawer() {
 					role: "alert",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: p.text }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "hub-confirm-actions",
-						children: [p.raiseTo && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							type: "button",
-							className: "hub-btn primary",
-							onClick: () => {
-								dropProblem(p.id);
-								raiseItemLimit(p.raiseTo);
-							},
-							children: [
-								"Raise the limit to ",
-								p.raiseTo,
-								" MB"
-							]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "hub-btn",
-							onClick: () => dropProblem(p.id),
-							children: "Dismiss"
-						})]
+						children: [
+							p.confirm && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn",
+								onClick: () => {
+									dropProblem(p.id);
+									p.confirm.run();
+								},
+								children: p.confirm.label
+							}),
+							p.raiseTo && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "hub-btn primary",
+								onClick: () => {
+									dropProblem(p.id);
+									raiseItemLimit(p.raiseTo);
+								},
+								children: [
+									"Raise the limit to ",
+									p.raiseTo,
+									" MB"
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn",
+								onClick: () => dropProblem(p.id),
+								children: "Dismiss"
+							})
+						]
 					})]
 				}, p.id)),
 				secrets.map((f, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -161323,7 +161500,7 @@ function HubDrawer() {
 						})]
 					})]
 				}, f.name + i)),
-				items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				all.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "hub-tools",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
@@ -161343,7 +161520,7 @@ function HubDrawer() {
 							className: "hub-chips",
 							role: "group",
 							"aria-label": "Show",
-							children: FILTERS.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							children: FILTERS.filter((f) => f.key !== "devices" || fromDevices).map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "hub-chip" + (filter === f.key ? " on" : ""),
 								"aria-pressed": filter === f.key,
@@ -161361,6 +161538,14 @@ function HubDrawer() {
 							onChange: (e) => setFind(e.target.value)
 						})
 					]
+				}),
+				notes.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "hub-devnotes",
+					"aria-label": "Your other devices",
+					children: notes.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "hub-devnote is-" + d.state,
+						children: d.note
+					}, d.device))
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "hub-list-wrap",
@@ -161394,7 +161579,7 @@ function HubDrawer() {
 								children: "Try again"
 							})
 						]
-					}) : !items.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					}) : !all.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "hub-empty-big",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -161438,7 +161623,7 @@ function HubDrawer() {
 								onView: setViewing,
 								checked: selected.includes(it.id),
 								onTick: (on, shift) => tick(it.id, on, shift),
-								dragItems: () => dragSet(it, items, useHubUi.getState().selected)
+								dragItems: () => dragSet(it, all, useHubUi.getState().selected)
 							}, it.id))
 						})]
 					}, d.label))
@@ -161461,6 +161646,17 @@ function HubDrawer() {
 									" not shown by the filter"
 								]
 							}),
+							selRemote > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "muted",
+								title: "Using them fetches them to this device first; pin and remove them on the device they live on",
+								children: [
+									" ",
+									"· ",
+									selRemote,
+									" on ",
+									selRemote === 1 ? "another device" : "other devices"
+								]
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "hub-link hub-selbar-clear",
@@ -161475,21 +161671,23 @@ function HubDrawer() {
 						"aria-label": "Remove " + n + (n === 1 ? " item" : " items") + "?",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 							"Remove ",
-							n === 1 ? selItems[0].name : n + " items",
-							"? ",
-							n === 1 ? "Its code stops" : "Their codes stop",
-							" working in every session (Undo right after)."
+							selLocal.length === 1 ? selLocal[0].name : selLocal.length + " items",
+							"?",
+							" ",
+							selLocal.length === 1 ? "Its code stops" : "Their codes stop",
+							" working in every session (Undo right after).",
+							selRemote > 0 && " The " + selRemote + " on other devices stay there."
 						] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "hub-confirm-actions",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								type: "button",
 								className: "hub-btn danger",
 								onClick: () => {
-									const these = selItems;
+									const these = selLocal;
 									clearSel();
 									removeItems(these);
 								},
-								children: ["Remove ", n === 1 ? "it" : n]
+								children: ["Remove ", selLocal.length === 1 ? "it" : selLocal.length]
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "hub-btn primary",
@@ -161504,16 +161702,14 @@ function HubDrawer() {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "hub-btn primary",
-								onClick: () => useHubUi.getState().openSend(selItems),
+								onClick: () => useThen(selItems, (here) => useHubUi.getState().openSend(here)),
 								children: "Send to session…"
 							}),
 							here && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								type: "button",
 								className: "hub-btn",
 								title: "Type " + (n === 1 ? "its code" : "their " + n + " codes") + " into " + displayName(here) + "'s prompt",
-								onClick: () => {
-									putInPrompt(here, selItems, "", { focus: true });
-								},
+								onClick: () => useThen(selItems, (these) => void putInPrompt(here, these, "", { focus: true })),
 								children: [
 									"Put in ",
 									displayName(here),
@@ -161526,21 +161722,28 @@ function HubDrawer() {
 								onClick: () => void copyRefs(selItems),
 								children: n === 1 ? "Copy code" : "Copy codes"
 							}),
+							selRemote > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-btn",
+								title: "Fetch them from the device they are on, into this device's shared files",
+								onClick: () => void saveHere(selItems),
+								children: selRemote === n ? "Save to this device" : "Save " + selRemote + " to this device"
+							}),
 							toPin > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "hub-btn",
 								title: toUnpin ? toUnpin + " already pinned — this pins the other " + toPin : "Keep them past the automatic clean-up",
-								onClick: () => void pinItems(selItems.filter((i) => !i.pinned), true),
+								onClick: () => void pinItems(selLocal.filter((i) => !i.pinned), true),
 								children: toUnpin ? "Pin " + toPin : "Pin"
 							}),
 							toUnpin > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "hub-btn",
 								title: toPin ? toPin + " not pinned — this unpins the " + toUnpin + " that are" : "Let them go with the automatic clean-up",
-								onClick: () => void pinItems(selItems.filter((i) => i.pinned), false),
+								onClick: () => void pinItems(selLocal.filter((i) => i.pinned), false),
 								children: toPin ? "Unpin " + toUnpin : "Unpin"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							selLocal.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "hub-btn danger",
 								onClick: () => setRemoving(true),
@@ -161561,6 +161764,7 @@ function HubDrawer() {
 								" days after last use — Pin to keep"
 							]
 						}),
+						(dq.data?.devices.length || 0) > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OfferSwitch, {}),
 						unpinned > 0 && (clearing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "hub-foot-confirm",
 							role: "alertdialog",
@@ -161685,8 +161889,39 @@ function SnippetEditor(props) {
 		})]
 	});
 }
+function OfferSwitch() {
+	const doc = useSettingsDoc(true).data;
+	const on = doc?.hub?.offer_to_devices !== false;
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "hub-offer",
+		title: "Your other devices list this device's shared files and fetch one when it is used. Items you mark “Keep on this device only” never show there.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: on,
+				disabled: busy || !doc,
+				onChange: async (e) => {
+					const want = e.target.checked;
+					setBusy(true);
+					try {
+						const r = await api("/api/settings", { json: { hub: { offer_to_devices: want } } });
+						if (r?.settings) putSettingsDoc(r.settings);
+						say(want ? "Your other devices can see this device's shared files" : "This device's shared files are no longer shown on your other devices");
+					} catch (err) {
+						say("Couldn't change that: " + errMsg(err), { error: true });
+					} finally {
+						setBusy(false);
+					}
+				}
+			}),
+			" ",
+			"Show these on my other devices"
+		]
+	});
+}
 function KindIcon({ item, onView }) {
-	if (item.kind === "image") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+	if (item.kind === "image" && hasThumb(item)) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: "hub-thumb-btn",
 		"aria-label": "View " + item.name + " larger",
@@ -161782,15 +162017,23 @@ function HubCard(props) {
 		setMenu(false);
 		fn();
 	};
+	const rem = item.remote;
 	const meta = [
 		kindLabel$1(item),
 		humanSize(item.size),
-		whoLabel$1(item),
-		relTime(item.added)
-	].join(" · ");
+		rem ? item.by === "you" ? "" : whoLabel$1(item) : whoLabel$1(item),
+		relTime(item.added),
+		rem?.secret ? "looks like a secret" : "",
+		rem?.tooBig ? "too big for this device" : "",
+		item.local_only ? "kept on this device" : ""
+	].filter(Boolean).join(" · ");
+	const use = (fn) => () => {
+		setMenu(false);
+		useThen([item], (here) => fn(here[0]));
+	};
 	const title = item.kind === "text" ? firstLine(item) : item.name;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		className: "hub-card" + (item.pinned ? " is-pinned" : "") + (compact ? " is-compact" : "") + (checked ? " is-selected" : ""),
+		className: "hub-card" + (item.pinned ? " is-pinned" : "") + (compact ? " is-compact" : "") + (checked ? " is-selected" : "") + (rem ? " is-remote" : ""),
 		draggable: !editing,
 		onDragStart: (e) => {
 			const these = props.dragItems();
@@ -161850,6 +162093,11 @@ function HubCard(props) {
 								title: item.name,
 								children: title
 							}),
+							rem && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "hub-on",
+								title: "On " + rem.deviceName + " — using it brings it to this device",
+								children: ["on ", rem.deviceName]
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "hub-meta",
 								children: meta
@@ -161873,7 +162121,7 @@ function HubCard(props) {
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "hub-actions",
 									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										!rem && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 											type: "button",
 											className: "hub-pin-btn" + (item.pinned ? " on" : ""),
 											"aria-pressed": item.pinned,
@@ -161896,73 +162144,116 @@ function HubCard(props) {
 											type: "button",
 											className: "hub-btn",
 											"aria-label": "Send " + item.name + " to a session…",
-											onClick: () => openSend(item),
+											onClick: () => useThen([item], (here) => openSend(here)),
 											title: "Point a session's agent at it, or save a copy in its project folder",
 											children: compact ? "Send…" : "Send to session…"
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 											className: "hub-more",
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												ref: menuBtn,
-												type: "button",
-												className: "hub-btn hub-more-btn",
-												"aria-label": "More for " + item.name,
-												"aria-haspopup": "menu",
-												"aria-expanded": menu,
-												onClick: () => setMenu((v) => !v),
-												children: "⋯"
-											}), menu && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-												className: "hub-menu",
-												role: "menu",
-												ref: menuRef,
-												onKeyDown: menuKey,
-												"aria-label": "More for " + item.name,
-												children: [
-													textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: act(() => void copyItemText(item)),
-														children: "Copy text"
-													}),
-													item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: act(() => void copyImage(item)),
-														children: "Copy image"
-													}),
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: act(() => void copyPath(item)),
-														children: "Copy path"
-													}),
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: act(() => download(item)),
-														children: "Download"
-													}),
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: () => startEdit("name"),
-														children: "Rename"
-													}),
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														onClick: () => startEdit("note"),
-														children: item.note ? "Edit note" : "Add a note"
-													}),
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														role: "menuitem",
-														className: "danger",
-														onClick: act(() => void removeItem$1(item)),
-														children: "Remove"
-													})
-												]
-											})]
+											children: [
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+													ref: menuBtn,
+													type: "button",
+													className: "hub-btn hub-more-btn",
+													"aria-label": "More for " + item.name,
+													"aria-haspopup": "menu",
+													"aria-expanded": menu,
+													onClick: () => setMenu((v) => !v),
+													children: "⋯"
+												}),
+												menu && rem && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+													className: "hub-menu",
+													role: "menu",
+													ref: menuRef,
+													onKeyDown: menuKey,
+													"aria-label": "More for " + item.name,
+													children: [
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: act(() => void saveHere([item])),
+															children: "Save to this device"
+														}),
+														textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: use((h) => void copyItemText(h)),
+															children: "Copy text"
+														}),
+														item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: use((h) => void copyImage(h)),
+															children: "Copy image"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: use((h) => download(h)),
+															children: "Download"
+														})
+													]
+												}),
+												menu && !rem && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+													className: "hub-menu",
+													role: "menu",
+													ref: menuRef,
+													onKeyDown: menuKey,
+													"aria-label": "More for " + item.name,
+													children: [
+														textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: act(() => void copyItemText(item)),
+															children: "Copy text"
+														}),
+														item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: act(() => void copyImage(item)),
+															children: "Copy image"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: act(() => void copyPath(item)),
+															children: "Copy path"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: act(() => download(item)),
+															children: "Download"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: () => startEdit("name"),
+															children: "Rename"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															onClick: () => startEdit("note"),
+															children: item.note ? "Edit note" : "Add a note"
+														}),
+														!item.origin && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															title: "Whether your other devices list it (and can fetch it)",
+															onClick: act(() => void updateItem(item, { local_only: !item.local_only })),
+															children: item.local_only ? "Show on my other devices" : "Keep on this device only"
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+															type: "button",
+															role: "menuitem",
+															className: "danger",
+															onClick: act(() => void removeItem$1(item)),
+															children: "Remove"
+														})
+													]
+												})
+											]
 										})
 									]
 								})]

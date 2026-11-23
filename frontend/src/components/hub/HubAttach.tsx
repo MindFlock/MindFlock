@@ -21,9 +21,13 @@ import {
   addedToast,
   humanSize,
   matchItems,
+  findByRef,
+  hasThumb,
   rawUrl,
+  remoteItems,
   refTokenAt,
   useHub,
+  useHubDevices,
   useHubUi,
   type HubItem,
 } from "../../lib/hub";
@@ -66,6 +70,9 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
   const [dropping, setDropping] = useState(false);
   const refsIn = useMemo(() => attachedRefs(value), [value]);
   const hub = useHub(!guest && (!!tok || refsIn.length > 0));
+  // A code may name an item on another of your devices: its chip says so.
+  const devs = useHubDevices(!guest && refsIn.length > 0);
+  const remote = useMemo(() => remoteItems(devs.data), [devs.data]);
   const [pickAt, setPickAt] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
   // The picker floats above the box (or under it when there is no room),
   // in a portal: never clipped by the pane, never over the box's buttons.
@@ -203,17 +210,18 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
     chips: refsIn.length ? (
       <div className="hub-att-chips" aria-label="From Shared files">
         {refsIn.map((ref) => {
-          const it = (hub.data?.items || []).find((i) => i.id === ref.slice(ref.indexOf(":") + 1));
+          const it = findByRef(ref, hub.data?.items || [], remote);
+          const on = it?.remote ? " — on " + it.remote.deviceName + " (brought here when it is sent)" : "";
           return (
-            <span key={ref} className={"hub-att-chip" + (it ? "" : " is-unknown")} title={it ? it.name + " — " + ref : ref + " is not in Shared files"}>
-              {it?.kind === "image" ? (
+            <span key={ref} className={"hub-att-chip" + (it ? "" : " is-unknown")} title={it ? it.name + " — " + ref + on : ref + " is not in Shared files"}>
+              {it && hasThumb(it) ? (
                 <img src={rawUrl(it)} alt="" className="hub-att-thumb" />
               ) : (
                 <span className="hub-att-ext" aria-hidden="true">
                   {it ? (it.name.match(/\.([A-Za-z0-9]{1,4})$/) || [])[1] || (it.kind === "text" ? "txt" : "file") : "?"}
                 </span>
               )}
-              <span className="hub-att-name">{it ? it.name : ref + " — not in Shared files"}</span>
+              <span className="hub-att-name">{it ? it.name + (it.remote ? " · on " + it.remote.deviceName : "") : ref + " — not in Shared files"}</span>
               <button
                 type="button"
                 className="hub-att-x"
@@ -280,9 +288,10 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
  * item). */
 export function attachedRefs(text: string): string[] {
   const out: string[] = [];
-  const re = /(?<![A-Za-z0-9_./:@-])(?:file|hub):([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/gi;
+  const re = /(?<![A-Za-z0-9_./:@-])(?:file|hub)(?:@([A-Za-z0-9][A-Za-z0-9-]{0,62}))?:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/gi;
   for (const m of (text || "").matchAll(re)) {
-    const ref = "file:" + m[1].toLowerCase();
+    // A device code (file@mac-mini:k7m2) keeps its device: another item.
+    const ref = (m[1] ? "file@" + m[1].toLowerCase() + ":" : "file:") + m[2].toLowerCase();
     if (!out.includes(ref)) out.push(ref);
   }
   return out;
@@ -291,8 +300,10 @@ export function attachedRefs(text: string): string[] {
 /** `text` without the code `ref` (every occurrence, either prefix, and the
  * space after). */
 export function removeRef(text: string, ref: string): string {
-  const id = ref.replace(/^(file|hub):/i, "").replace(/[^A-Za-z0-9]/g, "");
-  const re = new RegExp("(?<![A-Za-z0-9_./:@-])(?:file|hub):" + id + "(?![A-Za-z0-9_]) ?", "gi");
+  const m = /^(?:file|hub)(?:@([A-Za-z0-9-]+))?:(.*)$/i.exec(ref);
+  const dev = (m?.[1] || "").replace(/[^A-Za-z0-9-]/g, "");
+  const id = (m ? m[2] : ref).replace(/[^A-Za-z0-9]/g, "");
+  const re = new RegExp("(?<![A-Za-z0-9_./:@-])(?:file|hub)" + (dev ? "@" + dev : "") + ":" + id + "(?![A-Za-z0-9_]) ?", "gi");
   return text.replace(re, "").replace(/ {2,}/g, " ");
 }
 

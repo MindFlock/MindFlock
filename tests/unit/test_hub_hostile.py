@@ -862,3 +862,17 @@ def test_the_offered_bytes_are_a_bounded_range_of_this_store_only(serving, world
     t = _add_text("words")
     r = client.get("/api/hub/offer/%s/thumb" % t["id"], headers=serving)
     assert r.status_code == 404 and r.json()["code"] == "no_thumb"
+
+
+def test_a_peer_sessions_message_never_fetches_from_my_devices(dev, world):
+    from tests.unit.test_hub import _Inst
+
+    world.inst["beta"] = _Inst(world.wts["beta"], "beta", peer="pal")
+    dev.offer("k7m2", b"mine")
+    r = client.post(
+        "/api/instances/alpha/messages",
+        json={"text": "read file@macmini:k7m2", "from": "beta"},
+    )
+    assert r.status_code in (200, 201, 403, 409), r.text
+    assert not any(c[0].endswith("/raw") for c in dev.calls)
+    assert hub.list_items()["items"] == []

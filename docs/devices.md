@@ -248,6 +248,92 @@ because the receiving machine runs agents:
   with no commits of its own is not auto-closed while its parent is still
   mid-turn (it may be about to send from it).
 
+## Shared files on your other devices
+
+Each device keeps its own Shared files; what the others hold is listed **on
+demand** and fetched **when used** — never synced
+(`backend/web/core/hub_remote.py`; the drawer and phone sheet in
+docs/web-ui.md "Shared files"; the routes in docs/web-api.md "Shared files on
+your other devices").
+
+- **Listing.** The drawer, the phone sheet and the agents' `hub` tool ask
+  each of your OTHER devices — "Your devices" members and devices paired by
+  a pasted token, never a MindFlock that merely shares the tailnet — what it
+  offers right now (`GET /api/hub/offer` there). Each item is marked with
+  its device; a device that can't be asked is named with the reason
+  (offline, an older MindFlock that needs an update, Allow remote control
+  off, not offering, not linked) — never an empty list read as "nothing
+  there". Only the list travels: a picture of 512 KB or less is drawn from
+  its own bytes (checked against its checksum), a bigger one is an icon
+  until used.
+- **Fetching.** Using one — send it, save it, open or download it, or its
+  code in a prompt — fetches it: its bytes come in ranges of at most 4 MiB
+  (each inside the forwarding path's own timeout), stream into this
+  device's store under this device's limits and quota, and are checked
+  against the SHA-256 the listing named before the item appears; anything
+  else (more or fewer bytes, another checksum, a full disk, the device going
+  away mid-way) keeps nothing. It lands as a normal item that remembers
+  where it came from (`origin`), "from ‹device›" in the list; a second use
+  finds it (same device, same id, same checksum) and moves nothing. It keeps
+  its code when that code is free here.
+- **When the origin changes.** The copy is a snapshot: removing the item on
+  its device, or that device going away, leaves the copy here, expiring on
+  this device's own clock. An item's bytes never change on its device; if
+  its id there later names other bytes (re-used after its 30-day
+  tombstone), the checksum differs, so the next use fetches it as a new
+  copy.
+- **Codes.** Ids are made per device, so a new id also avoids every id your
+  reachable devices hold, and when two devices do hold one code the list
+  shows the device form `file@mac-mini:k7m2`. A typed code resolves: this
+  device's own item; else a copy already fetched; else the ONE reachable
+  device holding it (fetched, then expanded). Two holders, or none that can
+  be asked, is a sentence that says so and the code stays as typed — never
+  another item, never nothing said. A MindFlock older than this matches no
+  part of `file@…:…`, so it never reads one as its own item.
+- **This device's say.** Settings `hub.offer_to_devices` (on by default; the
+  drawer footer's **Show these on my other devices**) and an item's **Keep
+  on this device only** are both enforced HERE, where the item lives. A copy
+  fetched from elsewhere is never offered on (no relaying through a third
+  device).
+
+### Shared files: threat notes
+
+- **Only your own devices, over the device link.** The three "offered"
+  routes answer only a request carrying the remote marker AND this device's
+  token or the fleet key (checked even with the gate off), with Allow remote
+  control on, never a guest link — the same check `/api/transfers` uses
+  (`server._device_link_refusal`). A request opened by this device's own
+  token that names another person (`X-MindFlock-Person`) is refused; the
+  person is never a credential. Peers (another person's shared sessions)
+  have no route here at all, and a shared-folder session can't fetch.
+- **One hop, and the narrowest forward.** The forwarding allow-list gains
+  exactly `GET /api/hub/offer`, `GET /api/hub/offer/<id>/raw`, `GET
+  /api/hub/offer/<id>/thumb` (an id is one segment; dot segments and
+  double encoding are refused before anything is forwarded). The device
+  never relays a request that already carries the marker, so nothing
+  reaches a third device. No path parameter reaches the disk: an id names an
+  item of this store or nothing. A guest link is refused every `/api/hub`
+  path and every `fwd/` path by the auth middleware; the phone page is the
+  owner and gets what the drawer gets.
+- **The receiving side trusts nothing.** A listing is read at most 4 MB and
+  1000 items; ids, sizes and checksums that can't be real drop the item;
+  names go through the store's own name cleaning (separators, control and
+  bidi characters, Windows reserved and short names, length); notes and
+  previews are plain text; the declared kind and type are ignored (the
+  bytes are sniffed: an "image" that is HTML is a download). A secret-
+  looking name (by either name, or the other device's own mark) is not
+  brought over unless you confirm that one item — never by an agent.
+- **What it writes.** Only into this device's shared-files store, never over
+  a file; a later copy into a session goes through the same rules as any
+  item (never a file agents follow or that runs by itself — CLAUDE.md,
+  AGENTS.md, .mcp.json, hooks, CI, Makefile, package.json, short names).
+- **Agents.** An agent lists your other devices' items read-only and may
+  bring one here through its own session's route (logged with the session's
+  name); nothing writes to, removes from or pins anything on another device.
+  An agent that calls the owner's routes on its own machine with the access
+  token is outside what the MCP enforces — as for every owner route — and
+  every receiving rule above still applies to that fetch.
+
 ## Sessions another device started here
 
 A session another of your devices started here — `send_session`,

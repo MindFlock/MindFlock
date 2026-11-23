@@ -1646,3 +1646,7 @@ html, body {
 }
 .hub-selbar button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
+
+/* Another of your devices' item (core/hub_remote.py): read-only here; its
+   code brings it to this computer when the message is sent. */
+.hub-row.is-remote { border-style: dashed; }

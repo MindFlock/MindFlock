@@ -8719,6 +8719,10 @@ async def _hub_prefetch(
         or not _hub_may_expand(request, inst)
     ):
         return {}
+    if session and _peer_guard.is_peer_session(ENGINE.instances.get(session)):
+        # Another person's shared-folder session never reaches the owner's
+        # other devices through a message it sends.
+        return {}
     try:
         from backend.web.core import hub_remote as _hub_remote
 

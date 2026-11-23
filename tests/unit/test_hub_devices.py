@@ -531,3 +531,12 @@ def test_a_peer_session_gets_nothing_from_other_devices(dev, world, monkeypatch)
     assert r.status_code in (403, 409), r.text
     r = client.post("/api/instances/alpha/send", json={"text": "file:k7m2"})
     assert dev.calls == [] and hub.list_items()["items"] == []
+
+
+def test_the_mcp_outside_a_session_says_not_found_for_a_typo(dev, world):
+    box = _box(None)
+    with pytest.raises(Exception) as err:
+        box.hub({"action": "get", "id": "file:zzzz"}, None)
+    assert "zzzz" in str(err.value) and "inside a MindFlock session" not in str(
+        err.value
+    )

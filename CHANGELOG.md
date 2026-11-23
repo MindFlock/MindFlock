@@ -23,6 +23,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   route does and answering per item; what could not be done is listed in
   the drawer with the reason, never skipped silently. On the phone, Sessions
   → Shared files has a tick per row and **Add N to message**.
+- **Shared files across your devices.** The drawer, the phone sheet and
+  the agents' `hub` tool also list what your OTHER devices offer right now,
+  in the same list, each marked **on ‹device›** — and a device that can't
+  be asked says why (offline, needs an update, remote control off, not
+  offering), never an empty list. On demand, not a sync: only the list
+  travels to draw it (a remote picture shows a thumbnail only when it is
+  512 KB or less). Using one — Send to session…, Put in a prompt, **Save to
+  this device**, Download, Copy text, or its code in any prompt — fetches it
+  over the existing device forwarding path, checks it against the listed
+  checksum, and keeps it here as a normal item "from ‹device›"; a second
+  use moves nothing. Codes work across devices (`file:k7m2` typed here for
+  the Mac mini's item is fetched, then expanded); when two devices hold one
+  code the list shows `file@mac-mini:k7m2`, and a plain code two devices
+  hold is said, never guessed. Another device's items are read-only from
+  here; a mixed selection pins and removes only this device's, fetches the
+  rest, and lists per item what failed. A secret-looking item (`.env`,
+  keys) is not brought over unless you confirm that one item — never by an
+  agent, whose fetches are logged with its session. **Show these on my
+  other devices** in the drawer footer (`hub.offer_to_devices`, on) and an
+  item's **Keep on this device only** are enforced on the device that holds
+  them. New routes: `GET /api/hub/devices`, `POST /api/hub/devices/fetch`,
+  `GET /api/hub/devices/{device}/items/{id}/thumb`, the session's `POST
+  …/hub/fetch`; what a device offers, `GET /api/hub/offer` (+ `…/{id}/raw`,
+  `…/{id}/thumb`), answers only your own devices over the device link and
+  is the forwarding allow-list's only hub entry (docs/devices.md "Shared
+  files on your other devices").
 
 ### Changed
 

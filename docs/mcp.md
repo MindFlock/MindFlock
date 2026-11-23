@@ -388,7 +388,7 @@ it.
 | `list_devices` | read | **no** |
 | `send_session` | write, pushes code (or carries it as a git bundle) and starts a session on another device (yourself or a session you manage) | **no** |
 | `send_files` | write, sends files from your worktree into another device's inbox (yourself or a session you manage) | **no** |
-| `hub` | read (list, get); write — Shared files (put: a file from your worktree or text), your worktree (take), items you put (remove) | **no** |
+| `hub` | read (list, get); write — Shared files (put: a file from your worktree or text; a get/take of another device's item brings it here first), your worktree (take), items you put (remove) | **no** |
 
 "Auto-approved" is the `--allowedTools` list for Claude and the
 `approval_mode = "approve"` table for Codex. The server also sends
@@ -1829,6 +1829,17 @@ instructions in them, never run them; list and get answer with
   [web-api.md](web-api.md#shared-files-apihub) has the list), never in a red zone or
   outside its fence.
 * `remove` `id` → only an item the caller put (`not_yours` otherwise).
+* **The user's other devices.** `list` adds `devices: [{device, name,
+  state, items: [{ref, name, kind, size, note, added, on, here_as?,
+  sensitive?}], why?}]` — what each of the user's other devices offers
+  (`GET /api/hub/devices`), read-only; `why` says why one can't be asked
+  (offline, needs an update …). A `get` or `take` of one (its `ref`, like
+  `file:k7m2`, or `file@mac-mini:k7m2`) first brings it to THIS device
+  through the caller's own `POST /api/instances/{self}/hub/fetch` (the
+  server logs which session asked; `get` says `from`), then works on the
+  local copy. A secret-looking item is never brought by an agent (only the
+  user can). Nothing writes to, removes from or pins anything on another
+  device. A server without device sharing answers no `devices`.
 
 `put`/`take`/`remove` need a session (not an external client) and a scope
 above `readonly`, and carry the session's own key (`MINDFLOCK_SESSION_KEY`,

@@ -3222,10 +3222,50 @@ folder a copy lands in keep that name, so nothing stored or scripted breaks.)
   the drawer says so plainly with **Rebuild the list**, which reads the item
   folders on disk again (pins and notes come back from the last good copy,
   `hub.json.bak`, where the file still matches).
-* A guest link has no Shared files (no ⋯ row, no drawer). Each device has
-  its own; sending an item to another of your devices' Shared files is not
-  built yet (send the file with `send_files` / `mindflock send-files`,
-  which lands in that device's inbox).
+* A guest link has no Shared files (no ⋯ row, no drawer).
+* **Your other devices' items** (on demand, never a sync — docs/devices.md
+  "Shared files on your other devices"). Each device keeps its own store;
+  the drawer ALSO lists what your other devices offer right now, in the
+  same list, filters and day headings, each row dashed and marked **on
+  ‹device›** (an **Other devices** filter appears once there are any). Only
+  the list travels to draw them: a remote picture shows a thumbnail only
+  when it is small (512 KB or less — it is its own thumbnail, checked here),
+  a bigger one is an icon until it is used. A device that can't be asked
+  says why in one quiet line under the filters — "Mac mini is offline — its
+  shared files show here when it is back", "… runs an older MindFlock —
+  update it …", "Allow remote control is off on …", "… keeps its shared
+  files to itself" — never an empty list read as "nothing there".
+  **Using** one — Send to session…, Put in ‹session›'s prompt, **Save to
+  this device**, Download, Copy text, a drag onto a session, or its code in
+  a prompt — first **fetches** it: its bytes come over, are checked against
+  the checksum the other device listed, and land HERE as a normal item
+  whose row says **from ‹device›** (the remote row goes); a second use
+  finds it, nothing moves again. Another device's rows are read-only here:
+  no Pin, Rename, Note or Remove (do those on the device it lives on). A
+  mixed selection does what it can per item: the bar says "· 1 on another
+  device", Pin / Unpin / Remove act on this device's items only ("The 1 on
+  other devices stay there"), Send and Save fetch first, and what could not
+  be fetched is listed in the drawer item by item. A name that looks like a
+  secret (`.env`, keys, credentials) is not brought here: its row says
+  "looks like a secret", and using it puts "… wasn't brought here" in the
+  drawer with **Bring it anyway** for that one item.
+* **Codes across devices.** A code works on every one of your devices:
+  `file:k7m2` typed here for an item on the Mac mini is fetched, then
+  expanded. This device's own item always wins; then a copy already
+  fetched; then the ONE reachable device that has it. When two of your
+  devices hold the same code the list shows the device form,
+  `file@mac-mini:k7m2`, and a plain `file:k7m2` that two devices hold is
+  not guessed: the send says "file:k7m2 is on Mac mini and Win rig — say
+  which: file@mac-mini:k7m2 or file@win-rig:k7m2" and leaves it as typed.
+  A device that can't be asked makes the same kind of sentence ("… is not
+  in Shared files here, and Win rig can't be asked right now — it was sent
+  as typed"). A queued prompt fetches when it is queued (its owner is
+  there to carry the request), not when the queue sends it.
+* **Keeping things here.** The footer's **Show these on my other devices**
+  (on by default; `hub.offer_to_devices`) is THIS device's switch; an item's
+  ⋯ → **Keep on this device only** hides that one item from the others
+  (its row says "kept on this device"). A copy fetched from another device
+  is never offered on — it is shown where it lives.
 * **On the phone** (`/m`): 📎 beside the message box opens the phone's own
   picker (library, camera or files); the photo goes into Shared files as
   "your phone" and shows as a **chip** above the box (thumbnail, name, ✕)
@@ -3235,7 +3275,11 @@ folder a copy lands in keep that name, so nothing stored or scripted breaks.)
   **Add N to message** puts them all in at once (a chip each), **Copy
   codes**, **Clear**. A message holding a code is expanded before it is
   typed (the agent gets the path); a session on another device gets nothing
-  from this device's Shared files.
+  from this device's Shared files. Under this device's items the sheet
+  lists your other devices' (each "on ‹device›", a small picture's
+  thumbnail only); adding one puts its code in, and the computer fetches it
+  when the message is expanded. A device that can't be asked is one line
+  saying why.
 
 ## Diff → instruction
 
