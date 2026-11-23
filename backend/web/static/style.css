@@ -19151,6 +19151,164 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
   padding-bottom: 2px;
 }
 
+/* The feedback box (components/feedback/FeedbackDialog.tsx). */
+.feedback-card {
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feedback-card h3 {
+  margin: 0 0 2px;
+  font-size: 15px;
+}
+
+.feedback-from {
+  margin: 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 12.5px;
+}
+
+.feedback-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.feedback-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.feedback-kind.on {
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+
+.feedback-kind input {
+  margin: 0;
+}
+
+.feedback-label {
+  margin-top: 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.feedback-label .muted {
+  font-weight: 400;
+}
+
+.feedback-input {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.feedback-body {
+  min-height: 130px;
+  resize: vertical;
+}
+
+.feedback-about {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.feedback-about code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.95em;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--panel-2);
+}
+
+.feedback-where {
+  margin: 0;
+  font-size: 12px;
+}
+
+.feedback-err {
+  margin: 0;
+  color: var(--red);
+  font-size: 13px;
+}
+
+.feedback-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.feedback-grow {
+  flex: 1;
+}
+
+.feedback-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.feedback-actions button.primary:disabled {
+  opacity: 0.5;
+}
+
+.feedback-next {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+/* The top bar's way in: quiet, beside the version. */
+#topbar .tb-feedback {
+  margin-left: 8px;
+  pointer-events: auto;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+#topbar .tb-feedback:hover,
+#topbar .tb-feedback:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
 
 @layer tokens, base, components, theme;
 

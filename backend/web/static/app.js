@@ -30652,12 +30652,12 @@ function useHub(enabled = true) {
 function refreshHub() {
 	queryClient.invalidateQueries({ queryKey: ["hub"] });
 }
-var bridged$2 = false;
+var bridged$3 = false;
 function bridgeHubEvents() {
-	if (bridged$2) return;
+	if (bridged$3) return;
 	const ev = typeof window !== "undefined" ? window.mindflock?.events : void 0;
 	if (!ev) return;
-	bridged$2 = true;
+	bridged$3 = true;
 	ev.subscribe("hub.changed", () => refreshHub());
 }
 var _n = 0;
@@ -51504,7 +51504,7 @@ var SKY_GUIDE_KEYS = [
 	["Ctrl+Y", "Switch between the grid and the sky"],
 	["Ctrl/Alt+N", "A new session on the sky (double-click empty sky does too)"]
 ];
-function Box({ x, y, w = 44, h = 26, cls = "" }) {
+function Box$1({ x, y, w = 44, h = 26, cls = "" }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
 		className: "sg-box " + cls,
 		x,
@@ -51541,7 +51541,7 @@ function Line({ x, y, n = 4, cls = [] }) {
 		y1: y + 27,
 		x2: x + k * 54,
 		y2: y + 27
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 		x: x + k * 54,
 		y: y + 14,
 		cls: k === 0 ? "sg-session" : cls[k] || ""
@@ -51705,7 +51705,7 @@ var SKETCHES = {
 	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
 		label: "A saved route on the sky: one group holding three stops, and its chip on the shelf with a dot per stop",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 12,
 				y: 24,
 				w: 150,
@@ -51718,21 +51718,21 @@ var SKETCHES = {
 				y: 38,
 				children: "Ticket to merge · 2 of 3"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 20,
 				y: 46,
 				w: 40,
 				h: 24,
 				cls: "sg-done"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 66,
 				y: 46,
 				w: 40,
 				h: 24,
 				cls: "sg-here"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 112,
 				y: 46,
 				w: 40,
@@ -51860,11 +51860,11 @@ var SKETCHES = {
 				y: 61,
 				children: "socket"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 94,
 				y: 44
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 148,
 				y: 44
 			}),
@@ -51963,13 +51963,13 @@ var SKETCHES = {
 				y: 12,
 				w: 120
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 12,
 				y: 26,
 				w: 56,
 				cls: "sg-group"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 76,
 				y: 26,
 				w: 56,
@@ -51986,7 +51986,7 @@ var SKETCHES = {
 				y: 12,
 				w: 140
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box$1, {
 				x: 168,
 				y: 26,
 				w: 140,
@@ -52758,6 +52758,74 @@ function WhatsNew() {
 	});
 }
 //#endregion
+//#region src/lib/feedback.ts
+var KIND_LABEL = {
+	bug: "Something is broken",
+	idea: "An idea",
+	feedback: "Other feedback"
+};
+var useFeedbackUi = create((set, get) => ({
+	open: false,
+	draftId: null,
+	n: 0,
+	show: (draftId = null) => set({
+		open: true,
+		draftId,
+		n: get().n + 1
+	}),
+	close: () => set({
+		open: false,
+		draftId: null
+	})
+}));
+function openFeedback(draftId) {
+	useFeedbackUi.getState().show(draftId ?? null);
+}
+function loadFeedback() {
+	return api("/api/feedback");
+}
+function discardDraft(id) {
+	return api("/api/feedback/drafts/" + encodeURIComponent(id), { method: "DELETE" });
+}
+function sendFeedback(body) {
+	return api("/api/feedback/send", { json: body });
+}
+function destinationLine(info) {
+	if (!info) return "";
+	if (info.signed_in && info.login) return "Posted publicly on GitHub (" + info.repo + ") as " + info.login + ".";
+	if (info.signed_in) return "Posted publicly on GitHub (" + info.repo + ").";
+	return "Opens a pre-filled GitHub page (" + info.repo + ") for you to submit. It will be public.";
+}
+function sentLine$1(r) {
+	if (r.via === "github") return "Thanks — filed as issue #" + (r.number ?? "") + ".";
+	return "Opened GitHub with your report filled in — press Submit there.";
+}
+function pickDraft(drafts, want) {
+	if (want) {
+		const hit = drafts.find((d) => d.id === want);
+		if (hit) return hit;
+	}
+	return drafts[0] || null;
+}
+var bridged$2 = false;
+function bridgeFeedbackEvents() {
+	if (bridged$2) return;
+	const ev = typeof window !== "undefined" ? window.mindflock?.events : void 0;
+	if (!ev) return;
+	bridged$2 = true;
+	ev.subscribe("feedback.draft", (env) => {
+		const d = env.data || {};
+		if (useFeedbackUi.getState().open) return;
+		toast("A report about MindFlock is ready for you to review" + (d.title ? ": " + d.title : "."), {
+			action: {
+				label: "Review",
+				onClick: () => openFeedback(d.id || null)
+			},
+			duration: 15e3
+		});
+	});
+}
+//#endregion
 //#region src/components/palette/CommandPalette.tsx
 var PALETTE_ACTIONS = [
 	"rename",
@@ -52961,6 +53029,12 @@ function buildPaletteActions({ config, host, extensions }) {
 	acts.push({
 		label: "Open Doctor",
 		run: () => host.openDoctor()
+	});
+	acts.push({
+		label: "Send feedback or report a problem…",
+		hint: "to the MindFlock developers",
+		keywords: "feedback bug issue report idea github problem broken suggest",
+		run: () => openFeedback()
 	});
 	acts.push({
 		label: "Your devices",
@@ -65269,6 +65343,13 @@ function TopBar() {
 							cursor: "pointer"
 						},
 						children: ["v", version]
+					}),
+					!guest && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "tb-feedback",
+						title: "Tell us about a problem or an idea",
+						onClick: () => openFeedback(),
+						children: "Feedback"
 					})
 				]
 			}),
@@ -162016,6 +162097,223 @@ function HubCard(props) {
 	});
 }
 //#endregion
+//#region src/components/feedback/FeedbackDialog.tsx
+function FeedbackDialog() {
+	const open = useFeedbackUi((s) => s.open);
+	const n = useFeedbackUi((s) => s.n);
+	const draftId = useFeedbackUi((s) => s.draftId);
+	(0, import_react.useEffect)(bridgeFeedbackEvents, []);
+	if (!open) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+		want: draftId,
+		onClose: () => useFeedbackUi.getState().close()
+	}, n);
+}
+function Box({ want, onClose }) {
+	const [info, setInfo] = (0, import_react.useState)(null);
+	const [draft, setDraft] = (0, import_react.useState)(null);
+	const [kind, setKind] = (0, import_react.useState)("bug");
+	const [title, setTitle] = (0, import_react.useState)("");
+	const [body, setBody] = (0, import_react.useState)("");
+	const [about, setAbout] = (0, import_react.useState)(true);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [err, setErr] = (0, import_react.useState)("");
+	const touched = (0, import_react.useRef)(false);
+	const bodyRef = (0, import_react.useRef)(null);
+	const take = (d) => {
+		setDraft(d);
+		setKind(d?.kind || "bug");
+		setTitle(d?.title || "");
+		setBody(d?.body || "");
+		touched.current = false;
+	};
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		loadFeedback().then((got) => {
+			if (!live) return;
+			setInfo(got);
+			if (!touched.current) take(pickDraft(got.drafts || [], want));
+		}).catch((e) => live && setErr(errMsg(e)));
+		bodyRef.current?.focus();
+		return () => {
+			live = false;
+		};
+	}, []);
+	const others = (info?.drafts || []).filter((d) => d.id !== draft?.id);
+	const canSend = !busy && (!!title.trim() || !!body.trim());
+	const send = async () => {
+		if (!canSend) return;
+		setBusy(true);
+		setErr("");
+		try {
+			const r = await sendFeedback({
+				title: title.trim(),
+				body: body.trim(),
+				kind,
+				include_about: about,
+				draft_id: draft?.id
+			});
+			if (r.via === "browser") {
+				window.open(r.url, "_blank");
+				if (draft) discardDraft(draft.id).catch(() => void 0);
+			}
+			toast(sentLine$1(r), r.via === "github" ? { action: {
+				label: "Open",
+				onClick: () => window.open(r.url, "_blank")
+			} } : void 0);
+			onClose();
+		} catch (e) {
+			setErr(errMsg(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const discard = async () => {
+		if (!draft || busy) return;
+		setBusy(true);
+		try {
+			await discardDraft(draft.id);
+		} catch {}
+		setBusy(false);
+		if (others.length) {
+			setInfo(info ? {
+				...info,
+				drafts: others
+			} : info);
+			take(others[0]);
+		} else onClose();
+	};
+	const edit = (set) => (v) => {
+		touched.current = true;
+		set(v);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		onClose,
+		className: "feedback-modal",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "feedback-h",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "modal-card feedback-card",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+					id: "feedback-h",
+					children: "Tell us about MindFlock"
+				}),
+				draft && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "feedback-from",
+					role: "status",
+					children: [
+						draft.session ? displayName(draft.session) + "'s agent" : "An agent",
+						" drafted this for you. Read it, change anything, then send it.",
+						draft.removed > 0 && " " + draft.removed + (draft.removed === 1 ? " path or key was" : " paths or keys were") + " replaced."
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "feedback-kinds",
+					role: "radiogroup",
+					"aria-label": "What kind of report",
+					children: Object.keys(KIND_LABEL).map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "feedback-kind" + (k === kind ? " on" : ""),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "radio",
+							name: "feedback-kind",
+							checked: k === kind,
+							onChange: () => edit(setKind)(k)
+						}), KIND_LABEL[k]]
+					}, k))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "feedback-label",
+					htmlFor: "feedback-title",
+					children: ["Title ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "(optional)"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "feedback-title",
+					className: "feedback-input",
+					value: title,
+					maxLength: 200,
+					placeholder: "One line",
+					onChange: (e) => edit(setTitle)(e.target.value)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+					className: "feedback-label",
+					htmlFor: "feedback-body",
+					children: kind === "bug" ? "What happened, and what did you expect?" : "What's on your mind?"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					id: "feedback-body",
+					ref: bodyRef,
+					className: "feedback-input feedback-body",
+					rows: 8,
+					maxLength: 2e4,
+					value: body,
+					onChange: (e) => edit(setBody)(e.target.value),
+					onKeyDown: (e) => {
+						if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+							e.preventDefault();
+							send();
+						}
+					}
+				}),
+				info && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "feedback-about",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						checked: about,
+						onChange: (e) => setAbout(e.target.checked)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Add ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: info.about })] })]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "feedback-where muted",
+					children: [destinationLine(info), " Don't include anything private: your code, company or project names, or keys."]
+				}),
+				err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "feedback-err",
+					role: "alert",
+					children: err
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "feedback-actions",
+					children: [
+						others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "feedback-next",
+							disabled: busy,
+							onClick: () => take(others[0]),
+							children: others.length === 1 ? "1 more draft" : others.length + " more drafts"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "feedback-grow" }),
+						draft && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							disabled: busy,
+							onClick: () => void discard(),
+							children: "Discard draft"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							disabled: busy,
+							onClick: onClose,
+							children: "Cancel"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "primary",
+							disabled: !canSend,
+							title: "Ctrl+Enter",
+							onClick: () => void send(),
+							children: busy ? "Sending…" : info && !info.signed_in ? "Open on GitHub" : "Send"
+						})
+					]
+				})
+			]
+		})
+	});
+}
+//#endregion
 //#region src/App.tsx
 var GUEST_FOCUS_HEARTBEAT_MS = 3e4;
 function App() {
@@ -162188,6 +162486,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryConfirm, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatPanel, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubPanel, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FeedbackDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WelcomeTour, {}),

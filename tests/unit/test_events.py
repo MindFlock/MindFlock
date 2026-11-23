@@ -139,6 +139,7 @@ def test_event_names_vocabulary_is_complete():
         "flight.notified",
         "todo.due",
         "hub.changed",
+        "feedback.draft",
         "device.join_requested",
         "device.joined",
         "device.removed",

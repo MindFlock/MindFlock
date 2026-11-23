@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the drawer with the reason, never skipped silently. On the phone, Sessions
   → Shared files has a tick per row and **Add N to message**.
 
+- **Feedback: report a MindFlock problem or idea in one step.** **Feedback**
+  beside the version in the top bar (or the palette) opens a box: write a
+  line or two, press Send, and it is filed as a GitHub issue on
+  MindFlock/MindFlock with the GitHub sign-in MindFlock already has (without
+  one, it opens the same report pre-filled in the browser). Or ask the agent
+  you are talking to: the MCP's new `report_issue` drafts the report, a toast
+  offers **Review**, and you read, edit and send it. Agents can only draft.
+  Reports are public, so the box says so, shows the one line MindFlock adds
+  (version and operating system), and paths and anything shaped like a key
+  are replaced before a draft is stored or a report is sent.
+
 ### Changed
 
 - **The Hub is now called Shared files, and lives in the top bar's ⋯

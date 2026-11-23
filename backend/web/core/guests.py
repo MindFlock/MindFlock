@@ -611,7 +611,7 @@ def event_allowed(env: dict, guest: dict) -> bool:
     now = _as_now(guest)
     if now is None:
         return False
-    if str(env.get("event") or "").startswith("hub."):
-        return False  # the owner's hub is never part of an invite
+    if str(env.get("event") or "").startswith(("hub.", "feedback.")):
+        return False  # the owner's hub and feedback drafts: never an invite's
     s = env.get("session") or ""
     return not s or s in reach(now)

@@ -31,6 +31,7 @@ import { THEME_CHANGED } from "../lib/prefs";
 import { setTheme } from "../lib/theme";
 import { hasNativeWindowControls, isFullScreen, onFullScreenChanged } from "../lib/shell";
 import { openSettings } from "../lib/openSettings";
+import { openFeedback } from "../lib/feedback";
 import { inShell } from "../lib/shell";
 import { keymapVersion, subscribeKeymap } from "../lib/keymap";
 import { usableShortcuts } from "./palette/ShortcutsSheet";
@@ -625,6 +626,12 @@ export function TopBar() {
         {version && (
           <button type="button" className="tb-version" title="What's new" onClick={openWhatsNew} style={{ pointerEvents: "auto", background: "none", border: 0, padding: 0, cursor: "pointer" }}>
             v{version}
+          </button>
+        )}
+        {/* Report a problem or an idea (lib/feedback.ts). Not for a guest. */}
+        {!guest && (
+          <button type="button" className="tb-feedback" title="Tell us about a problem or an idea" onClick={() => openFeedback()}>
+            Feedback
           </button>
         )}
       </span>

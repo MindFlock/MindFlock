@@ -464,6 +464,7 @@ NOT_SESSION_KEYED = {
     "settings.json": "settings (no per-session keys)",
     "status.json": "Reach my devices from anywhere's no-secrets status snapshot for the doctor (core.devices_anywhere), no session keys",
     "install.json": "install record",
+    "feedback_drafts.json": "reports about MindFlock an agent drafted (core.feedback), keyed by draft id; `session` is only a label for who drafted it, and a draft is read within minutes",
     "update_auto.json": "what the automatic updater tried and reported, keyed by version",
     "worktree_gc.json": "the worktree garbage collector's notice + last-collection state, no keys",
     "worktree_gc_fetch.json": "disk cleanup's base-fetch throttle, keyed by repository path",

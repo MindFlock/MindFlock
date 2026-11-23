@@ -333,7 +333,7 @@ against every fresh listing.
 
 ## The tools
 
-The 44 tools. Every result is JSON text. Clients that negotiate protocol
+The 45 tools. Every result is JSON text. Clients that negotiate protocol
 `2025-06-18` or later also get `structuredContent`. Arguments are checked
 against each tool's JSON schema, and a violation comes back as a tool error
 with a fix-it message, not a protocol error. The check is lenient about what
@@ -389,6 +389,7 @@ it.
 | `send_session` | write, pushes code (or carries it as a git bundle) and starts a session on another device (yourself or a session you manage) | **no** |
 | `send_files` | write, sends files from your worktree into another device's inbox (yourself or a session you manage) | **no** |
 | `hub` | read (list, get); write — Shared files (put: a file from your worktree or text), your worktree (take), items you put (remove) | **no** |
+| `report_issue` | write — a DRAFT report about MindFlock itself, for the person to read and send (never posts) | yes |
 
 "Auto-approved" is the `--allowedTools` list for Claude and the
 `approval_mode = "approve"` table for Codex. The server also sends
@@ -1839,6 +1840,31 @@ naming it. A session launched before the key existed is refused
 same-user process that deliberately reads another session's MCP config —
 see [web-api.md](web-api.md#shared-files-apihub). In a prompt a code arrives already
 expanded to the path, name and kind.
+
+### `report_issue`
+
+`report_issue(title, body, kind?)` drafts a report about **MindFlock itself**
+(the app, the CLI, this MCP) for the MindFlock developers: a bug the person
+hit, or an idea or feedback they voiced. `kind` is `bug` (default), `idea` or
+`feedback`.
+
+- **It only drafts.** The server stores the draft (`POST
+  /api/feedback/drafts`) and the app offers it in the feedback box; the
+  person reads it, edits it and presses **Send**. An agent cannot file the
+  issue. That is why the tool is auto-approved: the person's Send is the
+  confirmation.
+- **Sent, it is a public GitHub issue** on `MindFlock/MindFlock`, under the
+  person's GitHub account. The description tells the agent to write for
+  strangers and to leave out the person's code, repository and company
+  names, ticket contents, paths, host names and keys.
+- **Scrubbed anyway.** The server writes the home folder as `~`, other
+  users' folders as `<user>` and replaces anything shaped like a key or
+  token with `[removed]`; the answer's `removed` says how many.
+- Returns `{drafted, id, title, tell}`: `tell` is the sentence to say to the
+  person. An older server without the feedback box answers with the
+  `issues/new` link to give them instead.
+
+Not for problems in the person's own project or in the agent CLI.
 
 ### Sessions you started on another device
 
