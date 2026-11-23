@@ -2364,7 +2364,7 @@
 
   // --- HUB -----------------------------------------------------------------
   // The hub (backend core/hub.py; docs/web-ui.md "Hub"): one shared place
-  // per MindFlock home for files, photos and snippets every session can use.
+  // per MindFlock home for files, pictures and snippets every session can use.
   // 📎 beside the compose box: pick a photo or file (the phone's own picker:
   // library, camera or files) → it goes into the hub (source=phone) and its
   // reference (hub:k7m2) into the message → Send. A message holding a

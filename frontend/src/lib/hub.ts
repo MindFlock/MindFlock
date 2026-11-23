@@ -1,5 +1,5 @@
 /** The hub (backend core/hub.py, docs/web-ui.md "Hub"): one shared place
- * for files, images and text snippets every session can use. An ITEM has a
+ * for files, pictures and snippets every session can use. An ITEM has a
  * REFERENCE — `hub:k7m2` — that works in any prompt sent through MindFlock
  * (the server expands it to the item's path, name and kind) and in an agent's
  * terminal (a paste is expanded here, through /api/hub/expand).
@@ -130,8 +130,8 @@ export function whoLabel(it: Pick<HubItem, "by" | "by_name">): string {
 }
 
 export function kindLabel(it: Pick<HubItem, "kind" | "name">): string {
-  if (it.kind === "image") return "Image";
-  if (it.kind === "text") return "Text";
+  if (it.kind === "image") return "Picture";
+  if (it.kind === "text") return "Snippet";
   const ext = (it.name.match(/\.([A-Za-z0-9]{1,6})$/) || [])[1];
   return ext ? ext.toUpperCase() + " file" : "File";
 }

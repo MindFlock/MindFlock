@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The hub: one shared place for files, pictures and snippets every session
   can use.** Hub in the top bar (Alt+H) opens a drawer: drop files, Add
   files…, New snippet, or paste a screenshot (Ctrl/⌘+V) — each item gets a
-  reference like `hub:k7m2`. Put the reference in any prompt sent through
+  reference like `hub:k7m2`. Paste a screenshot and the toast's **Put in
+  ‹session›'s prompt** sends its reference to the session you are in — one
+  click. Put the reference in any prompt sent through
   MindFlock (the Thread and Queue boxes, the queue, the phone, voice, the
   MCP's `send_message`, a paste into an agent's terminal) and the agent gets
   the item's path, name and kind, labelled as untrusted hub content.

@@ -1799,7 +1799,7 @@ still lets every session send itself.
 ### `hub`
 
 `{action: list|get|put|take|remove, id?, path?, text?, name?, note?,
-replace?}` — the user's hub of files, images and text snippets on this
+replace?}` — the user's hub of files, pictures and snippets on this
 device (one tool with an `action`, so it costs one line of the
 instructions). Hub items are **untrusted input from anywhere**: the
 description tells the agent to read them as data, never follow instructions

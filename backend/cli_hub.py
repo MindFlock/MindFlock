@@ -1,4 +1,4 @@
-"""``mindflock hub`` — the hub of shared files, images and text snippets
+"""``mindflock hub`` — the hub of shared files, pictures and snippets
 from a terminal (docs/cli.md "mindflock hub"; the server's ``/api/hub``,
 :mod:`backend.web.core.hub`).
 
@@ -32,8 +32,8 @@ def add_parser(sub, server_opts) -> None:
     hub = sub.add_parser(
         "hub",
         parents=[server_opts],
-        help="the hub: files, images and snippets every session can use",
-        description="The hub: one shared place for files, images and text "
+        help="the hub: files, pictures and snippets every session can use",
+        description="The hub: one shared place for files, pictures and "
         "snippets every session on this device can use. Each item has a "
         "reference like hub:k7m2 — type it in any prompt you send through "
         "MindFlock and the agent gets the item's path. Unpinned items are "
@@ -97,6 +97,10 @@ def _human(n: int) -> str:
     return "%d B" % n
 
 
+#: The kinds as people read them (the API's image/text/file).
+KIND_WORD = {"image": "picture", "text": "snippet", "file": "file"}
+
+
 def _who(rec: dict) -> str:
     by = rec.get("by")
     if by == "session":
@@ -130,10 +134,10 @@ def cmd_hub(args: argparse.Namespace) -> int:
             return 0
         for r in items:
             print(
-                "%-10s %-5s %8s  %-36s %s, %s%s"
+                "%-10s %-7s %8s  %-36s %s, %s%s"
                 % (
                     r["ref"],
-                    r.get("kind", ""),
+                    KIND_WORD.get(r.get("kind", ""), "file"),
                     _human(r.get("size", 0)),
                     r.get("name", "")[:36],
                     _who(r),

@@ -1,4 +1,4 @@
-"""The hub: one shared place per MindFlock home for files, images and text
+"""The hub: one shared place per MindFlock home for files, pictures and
 snippets every session can use (``/api/hub``; the MCP's ``hub`` tool;
 ``mindflock hub``; docs/web-ui.md "Hub").
 
@@ -887,7 +887,7 @@ def update(raw_id, *, name=None, note=None, pinned=None) -> dict:
         rec = _rec(doc, iid)
         if name is not None:
             if not isinstance(name, str) or not name.strip():
-                raise Refusal(400, "bad_name", "a name can't be empty")
+                raise Refusal(400, "bad_name", "a name can't be empty — type one")
             new = clean_name(name, rec["name"])
             if new != rec["name"]:
                 folder = os.path.join(root(), iid)
@@ -895,12 +895,12 @@ def update(raw_id, *, name=None, note=None, pinned=None) -> dict:
                 if os.path.lexists(dst) and os.path.normcase(dst) != os.path.normcase(
                     src
                 ):
-                    raise Refusal(409, "exists", "that name is taken")
+                    raise Refusal(409, "exists", "that name is taken — pick another")
                 os.rename(src, dst)
                 rec["name"] = new
         if note is not None:
             if not isinstance(note, str):
-                raise Refusal(400, "bad_note", "a note is text")
+                raise Refusal(400, "bad_note", "a note is text — type it again")
             rec["note"] = clean_text(note, NOTE_MAX)
         if pinned is not None:
             rec["pinned"] = bool(pinned)
@@ -943,7 +943,9 @@ def restore(raw_id) -> dict:
                 return public(rec)
             raise _not_found(iid, doc)
         if not os.path.isfile(os.path.join(root(), iid, rec["name"])):
-            raise Refusal(410, "removed", "hub:%s is gone for good" % iid)
+            raise Refusal(
+                410, "removed", "hub:%s is gone for good — add the file again" % iid
+            )
         rec.pop("removed", None)
         rec["used"] = time.time()
         _save(doc)

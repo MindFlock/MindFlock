@@ -30637,8 +30637,8 @@ function whoLabel$1(it) {
 	return "you";
 }
 function kindLabel$1(it) {
-	if (it.kind === "image") return "Image";
-	if (it.kind === "text") return "Text";
+	if (it.kind === "image") return "Picture";
+	if (it.kind === "text") return "Snippet";
 	const ext = (it.name.match(/\.([A-Za-z0-9]{1,6})$/) || [])[1];
 	return ext ? ext.toUpperCase() + " file" : "File";
 }

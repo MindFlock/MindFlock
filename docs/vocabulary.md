@@ -62,7 +62,7 @@ the work, check the work, or ask a person**.
 | **Sky** / **Grid** | the two views of the main area | canvas, board (for the Sky itself) |
 | **What's new** | the pop-up that explains a release's features | changelog, release notes (in the UI) |
 | **hub** (**Hub** as the button and panel) | the one shared place per computer for files, pictures and text snippets every session can use | clipboard, shelf, shared drive, inbox, attachments (for the place) |
-| **item** | one thing in the hub: a file, a picture or a **snippet** (text) | attachment, upload, asset, blob, entry |
+| **item** | one thing in the hub: a file, a picture or a **snippet** (text) — its kind reads **Picture**, **Snippet** or "PDF file" | attachment, upload, asset, blob, entry; Image/Text (for the kind) |
 | **reference** (`hub:k7m2`) | the short name of an item you put in any prompt; MindFlock gives the agent its path | handle, token, link, id (in copy) |
 | **Send to session…** · **Put in prompt** · **Copy reference** · **Pin — keep it** | the hub's verbs | Share, Attach (except the composer's paperclip, "Attach from the hub") |
 

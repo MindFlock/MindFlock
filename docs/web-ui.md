@@ -3152,7 +3152,17 @@ server's `core/hub.py`). Drop a screenshot in, then use it in any session:
 * **Kept** 14 days after it was added or last used (`hub.keep_days`); a
   **pinned** item stays. The footer says how full it is. Settings → **Disk
   cleanup** has a Hub line: its size and **Remove unpinned items**.
-* A guest link has no Hub button and no hub. Each device has its own hub.
+* A guest link has no Hub button and no hub. Each device has its own hub;
+  sending an item to another of your devices' hub is not built yet (send the
+  file with `send_files` / `mindflock send-files`, which lands in that
+  device's inbox).
+* **On the phone** (`/m`): 📎 beside the message box opens the phone's own
+  picker (library, camera or files); the photo goes into the hub as "your
+  phone" and its reference into the message — 📎, pick, Send. Sessions →
+  **Hub** lists the items: **Use** puts a reference in the message, **Copy**
+  copies it. A message holding a reference is expanded before it is typed
+  (the agent gets the path); a session on another device gets nothing from
+  this device's hub.
 
 ## Diff → instruction
 
