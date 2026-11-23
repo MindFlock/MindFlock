@@ -415,3 +415,11 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
+/* A tile's second line: what the number leaves out, or what it is a share of.
+   Quieter than the label, since it qualifies the number rather than naming it. */
+.traffic-tile-sub {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.85;
+}

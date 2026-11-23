@@ -7069,6 +7069,44 @@ A few screens got quieter:
   **Off**; **Unused for *N* days** is `cleanup.after_days` (14). The palette
   finds it under "disk space", "cleanup", "old worktrees", "reclaim". The
   older **Recently closed → Remove unused worktrees** sweep is unchanged.
+- **Site traffic** (key `traffic`, `--mindflock-dev` shell only;
+  `screens/Traffic.tsx`, pure rules in `lib/traffic.ts`; reads
+  `GET /api/traffic`, see [web-api.md](web-api.md)). The maintainer's reach
+  dashboard: clicks on the tracked `mindflock.ai/go/*` links and GitHub's
+  counters. **Page views are not measured** — the site runs no analytics — and
+  the screen says so. It leads with the honest figures:
+  - **Clicks and visitors are human-only** once the click Worker classifies
+    clicks (human / unverified / automated, `worker/README.md` in the webpage
+    repo). The First-time visitors, Unique visitors and Tracked link clicks
+    tiles, the funnel, the chart and the By link table all use the Worker's
+    `human` sections; the Clicks tile shows the automated share and the
+    unverified count beside it, and a **Who's clicking** section lists clicks,
+    share and visitors per class plus the top reasons a click was not counted
+    as human. While part of the 90-day window predates classification, every
+    label says *human clicks since ‹date›* and a note says how many earlier
+    clicks are left out. Against a Worker without classification the same
+    tiles show the unfiltered figures labelled *all clicks incl. automated*,
+    with a note that most of it is automated. `clickView()` makes that choice
+    once so no two parts of the screen mix scopes.
+  - **Download clicks from the installer's OS** — the share of download-button
+    clicks whose browser runs the installer's own OS (the Worker's
+    `downloads.os_match`, or folded from the click series against an older
+    Worker); also a *From that OS* column in the funnel's platform table. Not
+    proof of a bot, but a crawler pressing every button matches one in three
+    at best.
+  - **Installer downloads** counts only `MindFlock.dmg`,
+    `MindFlock-Setup.exe` and `MindFlock.AppImage`, with *+N other files*
+    under it; the per-release chart draws installers, and Downloads by
+    version has Installers / Other files / All assets columns and an
+    all-time line per kind. The copy says what the counters are: no identity,
+    and Windows/Linux auto-updates fetch the same `.exe`/`.AppImage`, so they
+    are not people or first installs.
+
+  The screen is dev-shell gated (`isDevShell()`), so `scripts/preview.py`
+  cannot open it on its own: to look at it, run `preview up --detach` and
+  drive Chrome with Playwright, setting `window.mfshell = {dev: true}` in an
+  init script and, for the classified shape, routing `/api/traffic` to a
+  payload carrying `clicks.human` and `clicks.classification`.
 
 **Spacing.** Every screen runs on one rhythm (`--set-rhythm`, 24px, on
 `#settings-panel`): a field's label, control and hint sit 6px apart, the next

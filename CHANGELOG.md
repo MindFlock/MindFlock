@@ -32,6 +32,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switch is now **Bring agents back by themselves after a shutdown or
   crash**, with a note that says both.
 
+- **Site traffic counts people, not crawlers** (Settings, `--mindflock-dev`
+  shell). Most of the 90-day click volume was automated: every link drew about
+  the same count, directory badges included, and phones "clicked" desktop
+  installers hundreds of times. With the classifying click Worker (webpage
+  repo, deployed separately) the visitor, click and funnel figures are
+  human-only, labelled *human clicks since ‹date›* while the window fills, with
+  the automated share beside them and a **Who's clicking** table of classes and
+  reasons. Against the current Worker the same figures are labelled *all
+  clicks incl. automated*, with a note saying most of it is. New tile:
+  **Download clicks from the installer's OS** (24% today). The Downloads tile
+  now counts the three installers only (1,703, not 4,113) with *+N other
+  files: update checks, checksums, packages* under it; the per-release chart
+  and table split installers from the rest. `GET /api/traffic` adds
+  `installer_downloads_total`, `downloads_by_kind`, per-asset `kind`,
+  per-release `installer_downloads`, and passes the Worker's `clicks.human`
+  and `clicks.classification` through.
+
 ### Fixed
 
 - **Opening a grid of sleeping sessions no longer starts every agent at
@@ -62,6 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaves nothing to address and every thread is resolved. With no review yet
   it keeps waiting, up to "Give that reviewer" minutes, then the usual quiet
   rule decides.
+
+- **Site traffic** dates were a day early west of UTC (a `2026-11-24` day key
+  showed as Nov 23), and its copy said the app's updater opens the releases
+  page in a browser — it downloads the installer itself, so updates show up
+  in GitHub's installer counts.
 
 ## [0.14.27] - 2026-11-23
 
