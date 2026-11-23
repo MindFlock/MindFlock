@@ -323,6 +323,24 @@ your other devices").
   bytes are sniffed: an "image" that is HTML is a download). A secret-
   looking name (by either name, or the other device's own mark) is not
   brought over unless you confirm that one item — never by an agent.
+- **No laundering through a cache.** What this device keeps in memory of
+  the others' lists and thumbnails serves only a caller it lends its
+  credential to; anyone else is asked for afresh (and refused there), and
+  never changes what the owner sees. A device's redirect is never
+  followed. A device is named by its exact key first (a host name, which a
+  device picks itself, never shadows another's key; two devices answering
+  to one name is refused). A cross-site page can't make this device ask the
+  others (`Sec-Fetch-Site`). Another device reading an item never extends
+  its life here.
+- **Secrets, honestly.** The secret mark is judged on the name as typed
+  (cleaning takes `.env`'s dot off) and stored; an item from before the
+  mark, or one read again by Rebuild, is judged with that dot. Its text
+  preview never travels. Only the person confirms bringing one over — the
+  agent's tool and session route cannot. An agent making its own HTTP
+  requests to a gate-off server is "this machine" there and has the owner's
+  reach: keep the gate on where that matters.
+- **After a damaged list.** Rebuild keeps every item it reads afresh on this
+  device only (its keep-here mark and origin went with the list).
 - **What it writes.** Only into this device's shared-files store, never over
   a file; a later copy into a session goes through the same rules as any
   item (never a file agents follow or that runs by itself — CLAUDE.md,
@@ -332,7 +350,8 @@ your other devices").
   name); nothing writes to, removes from or pins anything on another device.
   An agent that calls the owner's routes on its own machine with the access
   token is outside what the MCP enforces — as for every owner route — and
-  every receiving rule above still applies to that fetch.
+  every receiving rule above still applies to that fetch. A message between
+  sessions never fetches (its sender is only the message's claim).
 
 ## Sessions another device started here
 

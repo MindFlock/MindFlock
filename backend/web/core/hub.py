@@ -375,8 +375,9 @@ def rebuild() -> dict:
     regular file (never a link) becomes an item again — with its old record
     (pin, note, who, when) from ``hub.json.bak`` when that still matches the
     file, else read afresh (kind sniffed, added = the file's time, by you).
-    The unreadable index is kept as ``hub.json.broken``. → ``{items,
-    restored, read_again, skipped}``."""
+    The unreadable index is kept as ``hub.json.broken``. An item read afresh
+    is kept on this device only (its "keep here" mark and its origin are
+    gone with the list). → ``{items, restored, read_again, skipped}``."""
     with _locked():
         r = root()
         path = os.path.join(r, INDEX)
@@ -436,6 +437,11 @@ def rebuild() -> dict:
                 "pinned": False,
                 "textual": bool(textual),
                 "preview": preview,
+                # Whether it was kept here, or came from another device, is
+                # lost with the list: kept on this device until the person
+                # offers it again (never shared on a guess). No "secret" key:
+                # judged by its name with the dot cleaning took off.
+                "local_only": True,
             }
             doc["gone"].pop(e.name, None)
             read_again += 1
@@ -525,7 +531,7 @@ def public(rec: dict, lim: Optional[dict] = None) -> dict:
     out["ref"] = PREFIX + rec["id"]
     out["path"] = path_of(rec)
     out["local_only"] = bool(rec.get("local_only"))
-    out["secret"] = bool(rec.get("secret"))
+    out["secret"] = stored_secret(rec)
     org = origin_of(rec)
     if org:
         out["origin"] = org
@@ -580,6 +586,27 @@ def copy_of(device: str, oid: str, sha256: str = "") -> Optional[dict]:
     return None
 
 
+def secret_name(raw) -> bool:
+    """Whether a name, as typed (its last path part), looks like a secret or
+    a never-shared file (the device transfer's filter)."""
+    n = re.split(r"[/\\]", str(raw if raw is not None else ""))[-1].strip()
+    return bool(n) and _send_files.classify(n) in ("secret", "never")
+
+
+def stored_secret(rec: dict) -> bool:
+    """Whether an item is secret-looking: its add-time mark (the name as
+    typed — clean_name takes ``.env``'s dot off), else its stored name; a
+    record without the mark (written before it existed, or re-read by
+    :func:`rebuild`) is also judged with the dot clean_name may have taken
+    off (``env`` → ``.env``, ``npmrc`` → ``.npmrc``)."""
+    if rec.get("secret"):
+        return True
+    name = rec.get("name") or ""
+    if secret_name(name):
+        return True
+    return "secret" not in rec and secret_name("." + name)
+
+
 def offered() -> List[dict]:
     """What this device offers the person's other devices: its live items
     that are its OWN (never a copy fetched from another device — that one is
@@ -609,9 +636,7 @@ def offered() -> List[dict]:
     out = []
     for r in recs:
         row = {k: r.get(k) for k in keep}
-        row["secret"] = bool(r.get("secret")) or _send_files.classify(
-            r.get("name") or ""
-        ) in ("secret", "never")
+        row["secret"] = stored_secret(r)
         if row["secret"]:
             row["preview"] = ""
         out.append(row)
@@ -921,6 +946,8 @@ class _Add:
         )
         kind = "text" if snippet else ("image" if mime else "file")
         fallback = {"image": "image", "text": "snippet.txt"}.get(kind, "file")
+        # Judged on the name AS GIVEN: cleaning takes a leading dot off.
+        secret = bool(secret) or secret_name(name)
         name = clean_name(name, fallback)
         try:
             with _locked():
@@ -949,11 +976,11 @@ class _Add:
                 }
                 if origin:
                     rec["origin"] = origin
-                if secret:
-                    # Added on purpose although its name looks like a secret
-                    # (the person confirmed): the mark travels in the list
-                    # other devices see (the name may have lost its dot).
-                    rec["secret"] = True
+                # Whether its name looks like a secret (an add of one is
+                # confirmed by the person): always recorded — the mark
+                # travels in the list other devices see (the name may have
+                # lost its dot), and a record without it is judged with it.
+                rec["secret"] = secret
                 doc["items"][iid] = rec
                 _save(doc)
                 _PENDING.pop(self.token, None)
@@ -1015,6 +1042,26 @@ def add_stream(
     )
 
 
+async def new_add_async(declared: Optional[int], lim: dict) -> "_Add":
+    """:class:`_Add` made in a worker thread (the file lock and the disk
+    never block the event loop). Cancelled while the thread runs — the
+    caller went away — the add the thread still makes is aborted the moment
+    it exists: no reservation, no empty incoming file left behind."""
+    import asyncio
+
+    fut = asyncio.ensure_future(asyncio.to_thread(_Add, declared, lim))
+    try:
+        return await asyncio.shield(fut)
+    except asyncio.CancelledError:
+
+        def drop(f: "asyncio.Future") -> None:
+            if not f.cancelled() and f.exception() is None:
+                f.result().abort()
+
+        fut.add_done_callback(drop)
+        raise
+
+
 async def add_stream_async(
     chunks, name: str, *, declared: Optional[int] = None, **kw
 ) -> dict:
@@ -1027,7 +1074,7 @@ async def add_stream_async(
     lim = await asyncio.to_thread(limits)
     if declared is not None and declared < 0:
         declared = None
-    add = await asyncio.to_thread(_Add, declared, lim)
+    add = await new_add_async(declared, lim)
     buf: List[bytes] = []
     held = 0
     try:

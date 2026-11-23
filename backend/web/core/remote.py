@@ -1760,6 +1760,9 @@ class RemoteProxyMiddleware:
                 data=body or None,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=timeout),
+                # A device's 3xx is its answer, never somewhere this device
+                # then goes (a hostile device could point it at any URL).
+                allow_redirects=False,
             ) as resp:
                 if scope.get("mf_fwd_create") and resp.status in (200, 201, 202):
                     _note_fwd_create(dev, body)

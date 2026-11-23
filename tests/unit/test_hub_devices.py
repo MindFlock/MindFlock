@@ -145,6 +145,16 @@ def dev(world, monkeypatch):
 
     fake.lends = []
     monkeypatch.setattr(remote.RemoteProxyMiddleware, "_proxy_http", hop)
+    real_lend = remote._may_lend_credential
+
+    async def lend(scope):
+        # The TestClient stands for the owner at this machine; any other
+        # scope gets the real rule.
+        if (scope.get("client") or ("",))[0] == "testclient":
+            return True
+        return await real_lend(scope)
+
+    monkeypatch.setattr(remote, "_may_lend_credential", lend)
     monkeypatch.setattr(hub, "self_device", lambda: "laptop")
     hub_remote.forget()
     hub_remote._THUMBS.clear()

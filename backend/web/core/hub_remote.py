@@ -187,10 +187,28 @@ async def _fwd_get(
 
 
 def _json(data: bytes):
+    """``data`` parsed, or None — never an exception (a 400-digit number past
+    Python's digit limit, nesting deep enough to recurse out, bad UTF-8)."""
     try:
         return json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError, MemoryError):
         return None
+    except Exception:  # noqa: BLE001 — another device's body never raises here
+        return None
+
+
+async def _lend(scope: dict) -> bool:
+    """Whether THIS caller may use this device's credential for the others
+    (:func:`remote._may_lend_credential`, the forwarding path's own rule).
+    Every cache here is read and written ONLY for such a caller: what the
+    owner was shown never reaches a caller who could not have asked for it,
+    and such a caller's refusal never becomes what the owner sees."""
+    from backend.web.core import remote as _remote
+
+    try:
+        return bool(await _remote._may_lend_credential(scope or {}))
+    except Exception:  # noqa: BLE001 — fail closed: uncached
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -211,7 +229,9 @@ def devices() -> List[dict]:
     me = str((seen.get("self") or {}).get("device") or "")
     for d in seen.get("devices") or []:
         key = str(d.get("device") or "")
-        if not key or key == me:
+        # Only a plain device label: it is what a code, an origin record and
+        # a forwarded path carry (hub.DEVICE_RE), so a copy is always found.
+        if not key or key == me or not _hub.DEVICE_RE.match(key):
             continue
         if not ((d.get("member") and d.get("same_fleet")) or d.get("has_token")):
             continue
@@ -232,7 +252,7 @@ def devices() -> List[dict]:
     except Exception:  # noqa: BLE001
         members = {}
     for key, m in members.items():
-        if key == me or key in out:
+        if key == me or key in out or not _hub.DEVICE_RE.match(str(key)):
             continue
         out[key] = {
             "device": key,
@@ -250,14 +270,32 @@ def _device(name: str) -> dict:
     or a :class:`Refusal`."""
     from backend.web.core import remote as _remote
 
-    want = _remote.name_key(name)
     mine = devices()
+    raw = str(name or "").strip().lower()
+    # A key is exact and is what codes carry: it always wins. A host name is
+    # chosen by the device itself, so it may never shadow another's key.
     for d in mine:
-        if want and want in (
-            _remote.name_key(d["device"]),
-            _remote.name_key(d["name"]),
-        ):
+        if d["device"] == raw:
             return d
+    want = _remote.name_key(name)
+    hits = [
+        d
+        for d in mine
+        if want and want in (_remote.name_key(d["device"]), _remote.name_key(d["name"]))
+    ]
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        raise Refusal(
+            409,
+            "ambiguous_device",
+            "%s could be %s — use the device's key (%s)"
+            % (
+                clean_line(name, 64),
+                " or ".join("%s (%s)" % (d["name"], d["device"]) for d in hits),
+                " or ".join(d["device"] for d in hits),
+            ),
+        )
     hit = _remote.find_device(name)
     if hit is not None:
         for d in mine:
@@ -281,6 +319,20 @@ def _last_part(raw: str) -> str:
     import re
 
     return re.split(r"[/\\]", raw)[-1]
+
+
+def _bounded_time(v, now: float) -> float:
+    """A listed timestamp as a float in [0, now + 1 day] — 0 for anything
+    else (a bool, NaN, infinity, a number too big for a float)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return 0.0
+    try:
+        f = float(v)
+    except (OverflowError, ValueError):
+        return 0.0
+    if f != f or f in (float("inf"), float("-inf")):
+        return 0.0
+    return min(max(f, 0.0), now + 86400)
 
 
 def clean_item(raw) -> Optional[dict]:
@@ -312,15 +364,8 @@ def clean_item(raw) -> Optional[dict]:
         if n
     )
     mime = raw.get("mime") if raw.get("mime") in _hub.IMAGE_TYPES.values() else ""
-    added = raw.get("added")
     now = time.time()
-    added = (
-        min(max(float(added), 0.0), now + 86400)
-        if isinstance(added, (int, float))
-        and not isinstance(added, bool)
-        and added == added  # not NaN
-        else 0.0
-    )
+    added = _bounded_time(raw.get("added"), now)
     textual = raw.get("textual") is True
     note = raw.get("note") if isinstance(raw.get("note"), str) else ""
     preview = raw.get("preview") if isinstance(raw.get("preview"), str) else ""
@@ -410,9 +455,11 @@ async def list_device(scope: dict, dev: dict, *, fresh: bool = False) -> dict:
     """One device's entry: ``{device, name, state, note, items, dropped,
     truncated, at}`` — ``state`` ``ok`` or why not (``offline`` / ``old`` /
     ``off`` / ``private`` / ``not_linked`` / ``refused`` / ``error``), and
-    ``note`` the sentence to show. Cached :data:`LIST_TTL_S`."""
+    ``note`` the sentence to show. Cached :data:`LIST_TTL_S` — only for a
+    caller this device lends its credential to (:func:`_lend`)."""
     key = dev["device"]
-    hit = _LISTINGS.get(key)
+    lend = await _lend(scope)
+    hit = _LISTINGS.get(key) if lend else None
     now = time.time()
     if hit and not fresh and now - hit[0] < LIST_TTL_S:
         return hit[1]
@@ -452,15 +499,19 @@ async def list_device(scope: dict, dev: dict, *, fresh: bool = False) -> dict:
             if not isinstance(data, dict) or not isinstance(data.get("items"), list):
                 entry["state"] = "error"
             else:
-                items, dropped, truncated = clean_listing(data)
-                entry.update(items=items, dropped=dropped, truncated=truncated)
+                try:
+                    items, dropped, truncated = clean_listing(data)
+                    entry.update(items=items, dropped=dropped, truncated=truncated)
+                except Exception:  # noqa: BLE001 — a hostile list is an error state
+                    entry["state"] = "error"
         elif status is not None:
             entry["state"], detail = _state_from(status, body)
             if entry["state"] == "refused":
                 entry["note"] = _STATES["refused"] % (dev["name"], detail)
     if entry["state"] != "ok" and not entry["note"]:
         entry["note"] = _STATES.get(entry["state"], "%s") % dev["name"]
-    _LISTINGS[key] = (now, entry)
+    if lend:
+        _LISTINGS[key] = (now, entry)
     return entry
 
 
@@ -478,6 +529,7 @@ async def list_all(scope: dict, *, fresh: bool = False) -> dict:
     is held by more than one of the person's devices) and the local copy
     already fetched, if any. → ``{self, devices: [...]}``."""
     mine = devices()
+    lend = await _lend(scope)
     entries = await asyncio.gather(
         *(list_device(scope, d, fresh=fresh) for d in mine), return_exceptions=True
     )
@@ -505,8 +557,9 @@ async def list_all(scope: dict, *, fresh: bool = False) -> dict:
     for e in out:
         for it in e["items"]:
             holders[it["id"]] = holders.get(it["id"], 0) + 1
-    _hub.REMOTE_IDS.clear()
-    _hub.REMOTE_IDS.update(holders)
+    if lend:
+        _hub.REMOTE_IDS.clear()
+        _hub.REMOTE_IDS.update(holders)
     shaped = []
     for e in out:
         rows = []
@@ -671,6 +724,13 @@ async def fetch(
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     _INFLIGHT[key] = fut
     try:
+        # Another fetch of it may have finished between the look above and
+        # taking this slot (it leaves _INFLIGHT when done): look once more,
+        # now that no other fetch of it can start.
+        have = await asyncio.to_thread(_hub.copy_of, dev["device"], iid, it["sha256"])
+        if have is not None:
+            fut.set_result(have)
+            return {**have, "already": True, "from": dev["name"]}
         rec = await _pull(scope, dev, it, session=session)
         fut.set_result(rec)
         return {**rec, "already": False, "from": dev["name"]}
@@ -706,7 +766,7 @@ async def _pull(scope: dict, dev: dict, it: dict, *, session: str) -> dict:
                 _hub.human(lim["item_bytes"]),
             ),
         )
-    add = await asyncio.to_thread(_hub._Add, size, lim)
+    add = await _hub.new_add_async(size, lim)
     started = time.time()
     try:
         off = 0
@@ -744,13 +804,21 @@ async def _pull(scope: dict, dev: dict, it: dict, *, session: str) -> dict:
                     "and try again" % (it["name"], clean_line(str(err), 120)),
                 ) from None
             off += n
+        # The kind comes from the bytes, never from what the device declared:
+        # a "text" item is a snippet only when it IS text (not a picture).
+        snippet = (
+            it["kind"] == "text"
+            and not _hub._sniff_image(add.head)
+            and _hub._text_preview(add.head, "x.txt", size, True)[0]
+        )
         rec = await asyncio.to_thread(
             lambda: add.commit(
                 it["name"],
                 by="device",
                 by_name=dev["name"],
                 note=it["note"],
-                snippet=it["kind"] == "text",
+                snippet=snippet,
+                secret=it["secret"],
                 origin={
                     "device": dev["device"],
                     "name": dev["name"],
@@ -763,7 +831,7 @@ async def _pull(scope: dict, dev: dict, it: dict, *, session: str) -> dict:
             )
         )
     except BaseException:
-        await asyncio.to_thread(add.abort)
+        add.abort()  # quick; never awaited, so a cancellation can't skip it
         raise
     _info(
         "shared files: fetched file:%s (%d bytes) from %s as file:%s for %s in %.1fs",
@@ -789,7 +857,8 @@ async def thumb(scope: dict, device: str, raw_id) -> Tuple[str, bytes]:
     if it["kind"] != "image" or it["size"] > THUMB_MAX:
         raise Refusal(404, "no_thumb", "no thumbnail for that item")
     key = (dev["device"], iid, it["sha256"])
-    hit = _THUMBS.get(key)
+    lend = await _lend(scope)
+    hit = _THUMBS.get(key) if lend else None
     if hit is not None:
         _THUMBS.move_to_end(key)
         return hit
@@ -801,6 +870,8 @@ async def thumb(scope: dict, device: str, raw_id) -> Tuple[str, bytes]:
     mime = _hub._sniff_image(data[:16])
     if not mime or hashlib.sha256(data).hexdigest() != it["sha256"]:
         raise Refusal(404, "no_thumb", "no thumbnail for that item")
+    if not lend:
+        return mime, data
     _THUMBS[key] = (mime, data)
     while len(_THUMBS) > THUMB_CACHE_N or (
         sum(len(v[1]) for v in _THUMBS.values()) > THUMB_CACHE_BYTES

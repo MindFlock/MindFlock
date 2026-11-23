@@ -765,6 +765,25 @@ async def hub_remove_own(
 # --------------------------------------------------------------------------- #
 # the owner's view of their OTHER devices' shared files (core.hub_remote)
 # --------------------------------------------------------------------------- #
+def _cross_site(request: Request) -> Optional[JSONResponse]:
+    """A request a page of ANOTHER site (or another host of the same site —
+    every tailnet host is one site) made the browser send, like an
+    ``<img src>`` (no Origin header, so the gate's origin check can't see
+    it): refused, so no foreign page can make this device ask the others.
+    The app's own requests are ``same-origin``; the CLI, the MCP and tests
+    send no ``Sec-Fetch-Site``."""
+    site = (request.headers.get("sec-fetch-site") or "").strip().lower()
+    if site in ("", "same-origin", "none"):
+        return None
+    return JSONResponse(
+        {
+            "error": "asked from another site — open Shared files in MindFlock itself",
+            "code": "cross_site",
+        },
+        status_code=403,
+    )
+
+
 @router.get("/api/hub/devices")
 async def hub_devices(request: Request, fresh: int = 0) -> JSONResponse:
     """``{self, devices: [{device, name, state, note, items: [...], dropped,
@@ -774,7 +793,7 @@ async def hub_devices(request: Request, fresh: int = 0) -> JSONResponse:
     ``error``, with ``note`` the sentence to show). Items carry ``ref`` (the
     code to type), ``copy`` (the local copy's id once fetched), ``secret``
     and ``too_big``."""
-    refused = _refusal(request)
+    refused = _refusal(request) or _cross_site(request)
     if refused is not None:
         return refused
     try:
@@ -829,7 +848,7 @@ async def hub_devices_thumb(device: str, iid: str, request: Request) -> Response
     its type sniffed HERE from the bytes (an allow-listed image type only),
     its bytes checked against the listed checksum. 404 ``no_thumb``
     otherwise (the drawer draws an icon)."""
-    refused = _refusal(request)
+    refused = _refusal(request) or _cross_site(request)
     if refused is not None:
         return refused
     try:
@@ -937,7 +956,8 @@ async def hub_offer_raw(
         finally:
             os.close(fd)
         if offset == 0:
-            _hub.touch([rec["id"]])
+            # Logged, never "used": another device reading it must not keep
+            # an unpinned item here alive (its expiry is this device's).
             _hub_remote._info(
                 "shared files: file:%s offered to device %s",
                 rec["id"],

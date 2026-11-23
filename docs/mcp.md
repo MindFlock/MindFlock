@@ -1838,8 +1838,14 @@ instructions in them, never run them; list and get answer with
   through the caller's own `POST /api/instances/{self}/hub/fetch` (the
   server logs which session asked; `get` says `from`), then works on the
   local copy. A secret-looking item is never brought by an agent (only the
-  user can). Nothing writes to, removes from or pins anything on another
-  device. A server without device sharing answers no `devices`.
+  user can): this tool and the session route have no way to confirm one.
+  That holds for an agent using its tools; an agent that makes its own
+  HTTP requests to a server whose access gate is off is "this machine" to
+  it and has the owner's reach — keep the gate on where that matters.
+  Nothing writes to, removes from or pins anything on another device. A
+  server without device sharing answers no `devices`. A code for another
+  device's item in `send_message` text is NOT fetched (a message's sender
+  is only its own claim): bring the item here with `get`/`take` first.
 
 `put`/`take`/`remove` need a session (not an external client) and a scope
 above `readonly`, and carry the session's own key (`MINDFLOCK_SESSION_KEY`,

@@ -31028,7 +31028,7 @@ async function rebuildHub() {
 	try {
 		const r = await api("/api/hub/rebuild", { method: "POST" });
 		refreshHub();
-		say("Rebuilt the list: " + r.items + (r.items === 1 ? " item" : " items") + " — nothing was lost");
+		say("Rebuilt the list: " + r.items + (r.items === 1 ? " item" : " items") + " — nothing was lost" + (r.read_again ? ". " + r.read_again + " read again " + (r.read_again === 1 ? "is" : "are") + " kept on this device only — ⋯ → Show on my other devices to share one again" : ""));
 	} catch (err) {
 		say("Couldn't rebuild the list: " + errMsg(err), { error: true });
 	}

@@ -3076,7 +3076,9 @@ code; two holders, or one that can't be asked, leave the code as typed and
 the answer's `hub_note` says why ("file:k7m2 is on Mac mini and Win rig —
 say which: …", "… can't be asked right now — it was sent as typed"). `POST
 …/queue` fetches when the prompt is queued (the drain has no request to
-fetch with). At most 20 codes per text are looked up.
+fetch with); `POST …/messages` never fetches (its `from` is the body's own
+claim) — such a code stays as typed with the usual note. At most 20 codes
+per text are looked up.
 
 ### Shared files on your other devices
 
@@ -3086,7 +3088,19 @@ forwarding path `/api/devices/<device>/fwd/…` — run in-process through the
 forwarding middleware with the caller's own request, so its allow-list,
 one-hop rule, path checks and credential-lending rule apply exactly as to a
 browser. Only your OWN devices are asked: "Your devices" members and devices
-paired by a pasted token — never a MindFlock that merely shares the tailnet.
+paired by a pasted token — never a MindFlock that merely shares the tailnet
+(a device whose key is not a plain DNS label is left out). A device is named
+by its exact key first; a name two devices answer to is **409**
+`ambiguous_device`, never a guess. The lists (15 s) and thumbnails kept in
+memory are read and written only for a caller this device lends its
+credential to (the forwarding path's own rule): a caller it would not lend
+it to is asked for afresh — and refused by the other device — and can never
+change what the owner sees. `GET /api/hub/devices` and the thumbnail refuse
+a request a page of another site made the browser send (`Sec-Fetch-Site`
+`cross-site`/`same-site`: **403** `cross_site`), so a foreign `<img>` can't
+make this device ask the others; POSTs are covered by the gate's Origin
+check. A device's 3xx is handed back as its answer, never followed. A
+remote read never restarts the item's expiry there.
 
 | Method | Path | Notes |
 |---|---|---|

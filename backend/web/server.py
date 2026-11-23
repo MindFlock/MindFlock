@@ -9247,7 +9247,12 @@ async def post_message(
             data["diff_stat"] = stat
     # file:<id> (or hub:<id>) codes → the item's path, name and kind (core.hub); never
     # for a guest's or a relayed message.
-    hub_why = await _hub_prefetch(request, inst, text, session=sender or "")
+    # No cross-device fetch from a message: its "from" is the body's own
+    # claim, so it can't say WHICH session (or whether a peer's shared-folder
+    # session) asked. A code for another device's item stays as typed with
+    # the plain note; an agent brings one here with its hub tool (its own
+    # session key) and sends the code after.
+    hub_why: Dict[str, str] = {}
     text, hub_unknown = await asyncio.to_thread(_hub_expand, request, inst, text)
     # delivery "now" from any local session: one session may direct another
     # without being its parent (the MCP's "steering" rule, mcp/policy.py).

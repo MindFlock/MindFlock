@@ -876,3 +876,294 @@ def test_a_peer_sessions_message_never_fetches_from_my_devices(dev, world):
     assert r.status_code in (200, 201, 403, 409), r.text
     assert not any(c[0].endswith("/raw") for c in dev.calls)
     assert hub.list_items()["items"] == []
+
+
+# =========================================================================== #
+# Review round (09318495..ddf0433a): each finding's PoC, inverted.
+# =========================================================================== #
+import asyncio as _asyncio  # noqa: E402
+
+_STRANGER = {
+    "type": "http",
+    "client": ("100.64.0.99", 5555),
+    "headers": [(b"host", b"laptop.example.ts.net")],
+}
+
+
+def _owner_and_stranger(monkeypatch):
+    real = remote._may_lend_credential
+
+    async def lend(scope):
+        if (scope.get("client") or ("",))[0] == "100.64.0.99":
+            got = await real(scope)
+            assert got is False
+            return got
+        return True
+
+    monkeypatch.setattr(remote, "_may_lend_credential", lend)
+
+
+def test_review1_a_cached_listing_never_reaches_an_unlent_caller(
+    dev, world, monkeypatch
+):
+    _owner_and_stranger(monkeypatch)
+    honest = dev.answer
+
+    def gated(url):
+        if not dev.lends[-1]:
+            return 401, "application/json", [b'{"error":"unauthorized"}']
+        return honest(url)
+
+    dev.answer = gated
+    dev.offer(
+        "k7m2",
+        b"TOP SECRET NOTES",
+        "plan.txt",
+        kind="text",
+        preview="TOP SECRET NOTES",
+        note="private note",
+    )
+    dev.offer("p3qx", PNG, "shot.png", kind="image")
+    from tests.unit.test_hub_devices import _devices
+
+    assert _devices(fresh=1)[DEV]["state"] == "ok"
+    assert client.get("/api/hub/devices/%s/items/p3qx/thumb" % DEV).status_code == 200
+    n = len(dev.lends)
+    out = _asyncio.run(hub_remote.list_all(_STRANGER))
+    assert out["devices"][0]["items"] == []
+    assert out["devices"][0]["state"] == "not_linked"
+    with pytest.raises(Refusal):
+        _asyncio.run(hub_remote.thumb(_STRANGER, DEV, "p3qx"))
+    assert len(dev.lends) > n and not any(dev.lends[n:])  # it asked, un-lent
+    # …and the stranger's refusal never becomes what the owner sees.
+    _asyncio.run(hub_remote.list_device(_STRANGER, hub_remote._device(DEV), fresh=True))
+    assert _devices(fresh=0)[DEV]["state"] == "ok"
+
+
+def test_review2_a_dot_name_stored_without_its_dot_is_still_a_secret(serving, world):
+    rec = hub.add_stream([b"API_KEY=hunter2\n"], name=".env", declared=16)
+    assert rec["name"] == "env" and rec["secret"] is True
+    row = client.get("/api/hub/offer", headers=serving).json()["items"][0]
+    assert row["secret"] is True and row["preview"] == ""
+    assert hub_remote.clean_item(row)["secret"] is True
+
+
+def test_review2_an_item_from_before_the_mark_is_judged_with_its_dot(serving, world):
+    rec = _add_text("TOKEN=abc", name="env.local")
+    doc = hub._load()
+    doc["items"][rec["id"]].pop("secret", None)  # a record written before the mark
+    hub._save(doc)
+    row = client.get("/api/hub/offer", headers=serving).json()["items"][0]
+    assert row["secret"] is True and row["preview"] == ""
+
+
+def test_review4_a_host_name_never_shadows_another_devices_key(dev, world, monkeypatch):
+    remote._DEVICES[DEV]["host"] = "Studio"
+    evil = dict(
+        remote._DEVICES[DEV],
+        key="evil",
+        host="MacMini",
+        ip="100.64.0.8",
+        ips=["100.64.0.8"],
+        dns="evil.example.ts.net",
+        base_url="http://fake-evil",
+    )
+    monkeypatch.setitem(remote._DEVICES, "evil", evil)
+    monkeypatch.setattr(
+        remote, "token_for", lambda k: "paired" if k in (DEV, "evil") else ""
+    )
+    assert hub_remote._device("macmini")["device"] == DEV
+    # Two devices answering to one NAME (not a key) is refused, not guessed.
+    remote._DEVICES[DEV]["host"] = "Desk"
+    evil["host"] = "Desk"
+    with pytest.raises(Refusal) as err:
+        hub_remote._device("desk")
+    assert err.value.code == "ambiguous_device"
+
+
+def test_review8_absurd_numbers_or_nesting_are_an_error_state_not_a_500(dev, world):
+    dev.routes["/api/hub/offer"] = lambda p, q: (
+        200,
+        "application/json",
+        [
+            (
+                '{"v":1,"items":[{"id":"k7m2","name":"a","kind":"file","size":1,"sha256":"%s","added":1%s}]}'
+                % ("0" * 64, "0" * 400)
+            ).encode()
+        ],
+    )
+    r = client.post("/api/hub/devices/fetch", json={"id": "file@macmini:k7m2"})
+    assert r.status_code in (404, 409, 502) and r.json().get("code"), r.text
+    deep = b"[" * 100000 + b"]" * 100000
+    dev.routes["/api/hub/offer"] = lambda p, q: (200, "application/json", [deep])
+    hub_remote.forget()
+    d = client.get("/api/hub/devices?fresh=1").json()["devices"][0]
+    assert d["state"] == "error"
+    r = client.post("/api/hub/devices/fetch", json={"id": "file@macmini:k7m2"})
+    assert r.status_code != 500
+
+
+def test_review5_rebuild_keeps_re_read_items_on_this_device(serving, world):
+    rec = _add_text("private words")
+    client.patch("/api/hub/items/" + rec["id"], json={"local_only": True})
+    (world.home / "hub" / "hub.json").write_text("{broken")
+    (world.home / "hub" / "hub.json.bak").unlink(missing_ok=True)
+    hub.rebuild()
+    assert client.get("/api/hub/offer", headers=serving).json()["items"] == []
+    assert hub.get(rec["id"])["local_only"] is True
+
+
+def test_review6_a_message_never_fetches_from_another_device(dev, world):
+    from tests.unit.test_hub import _Inst
+
+    world.inst["beta"] = _Inst(world.wts["beta"], "beta", peer="pal")
+    dev.offer("k7m2", b"mine")
+    r = client.post(
+        "/api/instances/alpha/messages", json={"text": "read file@macmini:k7m2"}
+    )
+    assert r.status_code in (200, 201), r.text
+    assert not any(c[0].endswith("/raw") for c in dev.calls)
+    assert r.json().get("hub_unknown") == ["file@macmini:k7m2"]
+
+
+def test_review7_a_device_s_redirect_is_never_followed(world, monkeypatch):
+    """A real device (an aiohttp server) answers the listing with a 302 to
+    another URL: the forwarding hop must hand the 302 back, never go there
+    carrying this device's marker and person."""
+    from aiohttp import web
+
+    hits: list = []
+
+    async def go():
+        port = {"n": 0}
+
+        async def offer(req):
+            raise web.HTTPFound("http://127.0.0.1:%d/landed" % port["n"])
+
+        async def landed(req):
+            hits.append(dict(req.headers))
+            return web.json_response({"v": 1, "items": []})
+
+        app = web.Application()
+        app.router.add_get("/api/hub/offer", offer)
+        app.router.add_get("/landed", landed)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port["n"] = site._server.sockets[0].getsockname()[1]
+        monkeypatch.setitem(
+            remote._DEVICES,
+            "redir",
+            {
+                "key": "redir",
+                "host": "Redir",
+                "os": "linux",
+                "ip": "",
+                "ips": [],
+                "dns": "",
+                "version": "x",
+                "reachable": True,
+                "remote_control": True,
+                "auth": False,
+                "base_url": "http://127.0.0.1:%d" % port["n"],
+                "instances": [],
+                "last_seen": time.time(),
+            },
+        )
+        try:
+            status, _ct, _body = await hub_remote._fwd_get(
+                {"type": "http", "headers": []}, "redir", "/api/hub/offer"
+            )
+        finally:
+            await remote.shutdown()
+            await runner.cleanup()
+        return status
+
+    status = _asyncio.run(go())
+    assert status == 302
+    assert hits == []
+
+
+def test_review_info_a_declared_text_that_is_binary_is_a_file(dev, world):
+    dev.offer("k7m2", b"\x00\x01\x02binary\xff", "notes.txt", kind="text")
+    rec = client.post("/api/hub/devices/fetch", json={"id": "file@macmini:k7m2"}).json()
+    assert rec["kind"] == "file"
+
+
+def test_review_info_a_remote_read_never_extends_expiry(serving, world):
+    rec = _add_text("ages")
+    doc = hub._load()
+    doc["items"][rec["id"]]["used"] = 1000.0
+    hub._save(doc)
+    r = client.get(
+        "/api/hub/offer/%s/raw?offset=0&length=2" % rec["id"], headers=serving
+    )
+    assert r.status_code == 200
+    assert hub._load()["items"][rec["id"]]["used"] == 1000.0
+
+
+def test_review_info_a_device_key_that_is_not_a_label_is_not_offered_as_a_device(
+    dev, world, monkeypatch
+):
+    odd = dict(remote._DEVICES[DEV], key="Odd_Key", host="Odd")
+    monkeypatch.setitem(remote._DEVICES, "Odd_Key", odd)
+    monkeypatch.setattr(remote, "token_for", lambda k: "paired")
+    keys = [d["device"] for d in hub_remote.devices()]
+    assert "Odd_Key" not in keys and all(hub.DEVICE_RE.match(k) for k in keys)
+
+
+def test_review_info_a_finished_fetch_racing_a_new_one_is_found_not_repeated(
+    dev, world, monkeypatch
+):
+    dev.offer("k7m2", b"once only")
+    real = hub.copy_of
+    calls = {"n": 0}
+
+    def late(*a, **kw):
+        # The first two looks miss (another fetch was finishing meanwhile).
+        calls["n"] += 1
+        return None if calls["n"] <= 2 else real(*a, **kw)
+
+    monkeypatch.setattr(hub, "copy_of", late)
+    first = _asyncio.run(hub_remote.fetch({"type": "http", "headers": []}, DEV, "k7m2"))
+    calls["n"] = 0
+    second = _asyncio.run(
+        hub_remote.fetch({"type": "http", "headers": []}, DEV, "k7m2")
+    )
+    assert second["id"] == first["id"] and second["already"] is True
+    assert len([c for c in dev.calls if c[0].endswith("/raw")]) == 1
+
+
+def test_review_info_a_cancelled_add_leaves_no_reservation(world):
+    async def go():
+        lim = hub.limits()
+        task = _asyncio.ensure_future(hub.new_add_async(10, lim))
+        await _asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(_asyncio.CancelledError):
+            await task
+        await _asyncio.sleep(0.3)
+
+    _asyncio.run(go())
+    inc = world.home / "hub" / hub.INCOMING
+    assert hub._PENDING == {}
+    assert not inc.exists() or os.listdir(inc) == []
+
+
+def test_review_info_a_cross_site_image_cannot_make_this_device_ask_others(dev, world):
+    dev.offer("p3qx", PNG, "shot.png", kind="image")
+    for path in (
+        "/api/hub/devices?fresh=1",
+        "/api/hub/devices/macmini/items/p3qx/thumb",
+    ):
+        for site in ("cross-site", "same-site"):
+            r = client.get(path, headers={"Sec-Fetch-Site": site})
+            assert r.status_code == 403 and r.json()["code"] == "cross_site", path
+    assert dev.calls == []
+    assert (
+        client.get(
+            "/api/hub/devices?fresh=1", headers={"Sec-Fetch-Site": "same-origin"}
+        ).status_code
+        == 200
+    )

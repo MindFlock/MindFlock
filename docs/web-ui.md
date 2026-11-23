@@ -3221,7 +3221,10 @@ folder a copy lands in keep that name, so nothing stored or scripted breaks.)
 * **If the list can't be read** (`hub.json` damaged): nothing is deleted;
   the drawer says so plainly with **Rebuild the list**, which reads the item
   folders on disk again (pins and notes come back from the last good copy,
-  `hub.json.bak`, where the file still matches).
+  `hub.json.bak`, where the file still matches). An item read afresh is
+  kept on this device only (whether it was, and where it came from, went
+  with the list) — the notice says how many; ⋯ → **Show on my other
+  devices** shares one again.
 * A guest link has no Shared files (no ⋯ row, no drawer).
 * **Your other devices' items** (on demand, never a sync — docs/devices.md
   "Shared files on your other devices"). Each device keeps its own store;
@@ -3248,7 +3251,14 @@ folder a copy lands in keep that name, so nothing stored or scripted breaks.)
   be fetched is listed in the drawer item by item. A name that looks like a
   secret (`.env`, keys, credentials) is not brought here: its row says
   "looks like a secret", and using it puts "… wasn't brought here" in the
-  drawer with **Bring it anyway** for that one item.
+  drawer with **Bring it anyway** for that one item. What that refusal
+  guarantees: an agent working through its MindFlock tool (the MCP `hub`
+  tool, the session-key routes) can never bring one — those paths have no
+  way to confirm. It is not a wall against an agent that makes its own HTTP
+  requests to a server whose access gate is off: to that server such a
+  request comes from "this machine", with the owner's reach (the same is
+  true of confirming a local secret add). Turn the gate on (Settings →
+  Security) where agents run that you don't trust that far.
 * **Codes across devices.** A code works on every one of your devices:
   `file:k7m2` typed here for an item on the Mac mini is fetched, then
   expanded. This device's own item always wins; then a copy already
@@ -3260,7 +3270,10 @@ folder a copy lands in keep that name, so nothing stored or scripted breaks.)
   A device that can't be asked makes the same kind of sentence ("… is not
   in Shared files here, and Win rig can't be asked right now — it was sent
   as typed"). A queued prompt fetches when it is queued (its owner is
-  there to carry the request), not when the queue sends it.
+  there to carry the request), not when the queue sends it. A message one
+  session sends another never fetches (its sender is only the message's
+  claim): the code stays as typed with the usual note — an agent brings
+  the item here with its `hub` tool first.
 * **Keeping things here.** The footer's **Show these on my other devices**
   (on by default; `hub.offer_to_devices`) is THIS device's switch; an item's
   ⋯ → **Keep on this device only** hides that one item from the others
