@@ -1804,6 +1804,18 @@ def _cmd_ls(args: argparse.Namespace) -> int:
         for i in instances
     ]
     print(_render_table(rows, headers))
+    # Sessions another of your devices started here: where they came from
+    # ("from tripwire-send on EthanLaptop2026"), and when one closes itself.
+    for i in instances:
+        origin = i.get("origin") if isinstance(i.get("origin"), dict) else None
+        if not origin or not origin.get("label"):
+            continue
+        ac = i.get("auto_close") if isinstance(i.get("auto_close"), dict) else {}
+        closes = ""
+        if (ac or {}).get("closes_at"):
+            mins = max(0, int((float(ac["closes_at"]) - time.time()) // 60))
+            closes = " · closes in %d min" % mins
+        print("  %s: %s%s" % (i.get("title"), origin["label"], closes))
     return 0
 
 
@@ -2152,6 +2164,9 @@ def _cmd_send(args: argparse.Namespace) -> int:
                     "note": args.note or "",
                     "via": getattr(args, "via", "auto") or "auto",
                     "paths": list(getattr(args, "paths", None) or []),
+                    # A person typed it: the device says "you, from …" and
+                    # never closes that session by itself.
+                    "started_by": "person",
                 },
                 timeout=1800.0,
             )
@@ -2243,6 +2258,7 @@ def _cmd_send_files(args: argparse.Namespace) -> int:
                     "to_session": args.to_session or "",
                     "include_secrets": bool(args.include_secrets),
                     "include_ignored": bool(getattr(args, "include_ignored", False)),
+                    "started_by": "person",
                 },
                 timeout=1800.0,
             )

@@ -245,6 +245,14 @@ def _auto_close(old: str, new: str) -> None:
     m.rename(old, new)
 
 
+def _remote_origin(old: str, new: str) -> None:
+    """Where a session another device started came from (and its turn /
+    report bookkeeping) follows the rename."""
+    from backend.web.core import remote_origin as m
+
+    m.rename(old, new)
+
+
 def _flights(old: str, new: str) -> None:
     """A flight's ``session``, and the workers its join/spawn steps recorded.
     The plan copy (``steps``) is skipped: a step's ``title`` is its label."""
@@ -533,6 +541,7 @@ def install() -> None:
     register("mailbox", _mailbox, files=("mailbox.json",))
     register("finished children", _finished_children, files=("finished_children.json",))
     register("auto-close", _auto_close, files=("auto_close.json",))
+    register("remote origin", _remote_origin, files=("remote_origin.json",))
     register("flights", _flights, files=("flights.json",))
     register("worker order", _worker_order, files=("worker_order.json",))
     register("guest links", _guests, files=("guest_links.json",))

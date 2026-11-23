@@ -1471,6 +1471,14 @@ html, body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Started from another of your devices (mobile.js originRowText). */
+.sess-origin {
+  font-size: 12px;
+  color: var(--muted, var(--text));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ask-notify { margin-top: 10px; }
 .ask-notify .new-muted:empty { display: none; }
 

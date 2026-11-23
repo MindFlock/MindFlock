@@ -1586,6 +1586,28 @@ async def _may_lend_credential(scope) -> bool:
         return False
 
 
+def _note_fwd_create(dev: dict, body: bytes) -> None:
+    """A forwarded create that names its origin session (``origin:
+    {session, by: "agent"}``, a live session HERE): remember that this
+    session started it there, so that device's reports about it are
+    accepted back (core.remote_origin). Never raises."""
+    try:
+        data = json.loads(body.decode("utf-8")) if body else {}
+        origin = data.get("origin") if isinstance(data, dict) else None
+        title = str(data.get("title") or "") if isinstance(data, dict) else ""
+        if not isinstance(origin, dict) or origin.get("by", "agent") != "agent":
+            return
+        session = str(origin.get("session") or "")
+        from backend.web import server as _server
+
+        if title and session and session in _server.ENGINE.instances:
+            from backend.web.core import remote_origin as _remote_origin
+
+            _remote_origin.note_started(str(dev.get("key") or ""), title, session)
+    except Exception:  # noqa: BLE001 — bookkeeping, never the create
+        pass
+
+
 def _device_by_name(name: str) -> Optional[dict]:
     """The LIVE state of the device a forwarded path names: its key, else
     the one device its host or tailnet name means (:func:`match_devices`) —
@@ -1649,6 +1671,8 @@ class RemoteProxyMiddleware:
                 dev = _device_by_name(fwd[0])
                 if dev is not None:
                     send = _refresh_before_done(send, dev)
+                if target == "/api/instances":
+                    scope = dict(scope, mf_fwd_create=True)
         device, target_path = hit
         dev = _device_by_name(device)
         if aiohttp is None or dev is None or not _connected(dev):
@@ -1727,6 +1751,8 @@ class RemoteProxyMiddleware:
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=timeout),
             ) as resp:
+                if scope.get("mf_fwd_create") and resp.status in (200, 201, 202):
+                    _note_fwd_create(dev, body)
                 ctype = resp.headers.get("Content-Type", "application/json")
                 await send(
                     {

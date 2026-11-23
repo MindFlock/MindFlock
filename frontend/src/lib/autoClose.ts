@@ -97,6 +97,27 @@ export function orphanLine(inst: Partial<Instance> | undefined): { text: string;
   };
 }
 
+/** The row's "closes in 9 min" line for a session an agent on ANOTHER device
+ * started here (core.remote_origin), while the sweep has it in its grace
+ * window — with a one-click Keep beside it (`setKeepOpen`). Null otherwise:
+ * a person's session, one kept open, one not finished yet. `now` in ms. */
+export function closingLine(
+  inst: Partial<Instance> | undefined,
+  now: number = Date.now()
+): { text: string; title: string } | null {
+  const ac = inst?.auto_close;
+  if (!ac || ac.keep_open || !ac.closes_at || inst?.device) return null;
+  if (inst?.origin?.by !== "agent") return null;
+  const mins = Math.max(0, Math.ceil((ac.closes_at * 1000 - now) / 60000));
+  return {
+    text: mins <= 0 ? "closes now" : "closes in " + mins + " min",
+    title:
+      "Done and idle: started by an agent on " + (inst.origin.device_name || "another device") +
+      ", it closes by itself (its folder is kept; its last reply stays in Recently closed). " +
+      "Keep leaves it open.",
+  };
+}
+
 /** Turn a session's Keep open on or off. */
 export async function setKeepOpen(title: string, keep: boolean): Promise<void> {
   try {

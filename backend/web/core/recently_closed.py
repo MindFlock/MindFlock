@@ -283,3 +283,17 @@ def closed_hint(title: str, now: "float | None" = None) -> "dict | None":
         "Recently closed in the sidebar) and try again"
         % (title, ago, shlex.quote(title)),
     }
+
+
+def annotate(entry_id: str, **fields) -> bool:
+    """Add ``fields`` to the Recently closed entry ``entry_id`` (e.g. the
+    ``last_reply`` of a session that closed itself). False when not found."""
+    if not entry_id:
+        return False
+    items = _load_recently_closed()
+    for e in items:
+        if isinstance(e, dict) and str(e.get("id") or "") == entry_id:
+            e.update(fields)
+            _save_recently_closed(items)
+            return True
+    return False

@@ -484,6 +484,19 @@
   // How long a press must be held to count as a long press (and not a tap).
   var LONG_PRESS_MS = 500;
 
+  // "from tripwire-send on EthanLaptop2026 · closes in 9 min", or "".
+  function originRowText(inst) {
+    var o = inst && inst.origin;
+    if (!o || !o.label) return "";
+    var ac = inst.auto_close;
+    var out = "↳ " + o.label;
+    if (o.by === "agent" && ac && !ac.keep_open && ac.closes_at) {
+      var mins = Math.max(0, Math.ceil((ac.closes_at * 1000 - Date.now()) / 60000));
+      out += " · " + (mins ? "closes in " + mins + " min" : "closes now");
+    }
+    return out;
+  }
+
   function sessionRow(inst) {
     var title = inst.title;
     var ss = sessionState(inst);
@@ -557,6 +570,15 @@
       q.className = "sess-ask";
       q.textContent = askLine;
       text.appendChild(q);
+    }
+    // Started from another of your devices (core.remote_origin): where from
+    // — "from tripwire-send on EthanLaptop2026" — and when it closes itself.
+    var originLine = originRowText(inst);
+    if (originLine) {
+      var o = document.createElement("span");
+      o.className = "sess-origin";
+      o.textContent = originLine;
+      text.appendChild(o);
     }
     main.appendChild(dot);
     main.appendChild(text);

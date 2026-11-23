@@ -464,6 +464,17 @@ def _prune(live: Iterable[str], tombstoned: Mapping[str, float]) -> None:
         pass
 
 
+def _remote_started(inst) -> bool:
+    """An agent on another device started it (core.remote_origin)."""
+    try:
+        from backend.web.core import remote_origin as _remote_origin
+
+        rec = _remote_origin.record(inst.Title, inst)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(rec and rec.get("by") == "agent")
+
+
 def row_field(inst) -> Optional[dict]:
     """The row's ``auto_close`` field, or None for a session the sweep never
     closes (not agent-spawned). ``{"keep_open": bool, "orphan_of": str,
@@ -472,10 +483,10 @@ def row_field(inst) -> Optional[dict]:
     close"), ``closes_at`` when a finished worker will close (this server's
     sweep's last pass), ``why`` that pass's reason it stays. Dict reads only."""
     try:
-        if not getattr(inst, "Spawned", False):
-            return None  # orphan records are only ever kept for spawned ones
         title = inst.Title
         created = _created(inst)
+        if not getattr(inst, "Spawned", False) and not _remote_started(inst):
+            return None  # orphan records are only ever kept for spawned ones
         orphan = orphan_of(title, created)
         srv = _server()
         parent = getattr(inst, "Parent", "") or ""
@@ -690,6 +701,15 @@ def judge(
     orphan = store.get("orphans", {}).get(title)
     if orphan is not None and not _same(_num(orphan.get("created_at")), created):
         orphan = None
+    # A session an agent on ANOTHER device started here has no parent on
+    # this server: it closes by its own rule (core.remote_origin) — done
+    # and idle past the grace window, nobody attached.
+    from backend.web.core import remote_origin as _remote_origin
+
+    if disk is None or title in getattr(disk, "live", frozenset()):
+        remote = _remote_origin.judge(srv, inst, title, row, now, grace_s)
+        if remote is not None:
+            return remote
     if not getattr(inst, "Spawned", False):
         return KEEP, R_NOT_SUB, None
     stored = getattr(inst, "Parent", "") or ""
@@ -858,6 +878,7 @@ def _close(srv, title: str, parent: str, how: str) -> Optional[str]:
     when the close failed."""
     from backend.web.core import session_end as _session_end
 
+    reply = _remote_reply(srv, title)
     try:
         _session_end.end_session(srv.ENGINE, title, wipe=False)
     except Exception as err:  # noqa: BLE001
@@ -873,10 +894,28 @@ def _close(srv, title: str, parent: str, how: str) -> Optional[str]:
     try:
         for e in srv._load_recently_closed():
             if isinstance(e, dict) and e.get("title") == title:
+                if reply:
+                    from backend.web.core import recently_closed as _rc
+
+                    _rc.annotate(str(e.get("id") or ""), last_reply=reply)
                 return str(e.get("id") or "")
     except Exception:  # noqa: BLE001
         pass
     return ""
+
+
+def _remote_reply(srv, title: str) -> str:
+    """The last reply of a session another device's agent started (kept
+    readable in Recently closed once it closes itself); "" for any other."""
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None or not _remote_started(inst):
+        return ""
+    try:
+        from backend.web.core import remote_origin as _remote_origin
+
+        return _remote_origin._last_reply(srv, title)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def notice_text(parent: str, titles: List[str]) -> str:

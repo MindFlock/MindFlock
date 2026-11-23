@@ -246,6 +246,75 @@ because the receiving machine runs agents:
   with no commits of its own is not auto-closed while its parent is still
   mid-turn (it may be about to send from it).
 
+## Sessions another device started here
+
+A session another of your devices started here — `send_session`,
+`send_files` with a note, `spawn_session(device=…)`, or the New Session
+dialog aimed at this device — says where it came from and, when an AGENT
+started it, finishes by itself and reports back
+(`backend/web/core/remote_origin.py`).
+
+- **Where it came from.** Its row's `origin`: "from tripwire-send on
+  EthanLaptop2026" (an agent session there), "you, from EthanLaptop2026"
+  (a person, or `mindflock send` / `send-files` typed by one) — on the
+  rail (`↳ …`, instead of "↳ agent"), in Sky, on the phone, in `mindflock
+  ls`, and in the MCP's `get_session` / `whoami`. An agent-started
+  session's first prompt ends with the same line and how to report back.
+- **It finishes.** One an agent started, with nobody attached, closes
+  itself once its agent ended its turn and stayed idle for the auto-close
+  grace window (`general.auto_close_grace_minutes`, 10; off with
+  `general.auto_close_children: false`) — like a local finished worker:
+  agent stopped, folder kept, its last reply kept in Recently closed. Never
+  while it asks something, has a background job, a queued prompt or a
+  message waiting, has a to-do of its own open, or once a person has typed
+  into it; never one a person started. Its row says "closes in 9 min ·
+  **Keep**" (one click: Keep open).
+- **It reports back.** Its `report_result`, and every turn it ends (after a
+  minute of quiet, once per turn), go to the origin session's inbox on the
+  origin device as a `result` from `<this device>::<title>` — what
+  `wait_for_session` there waits on.
+- **The origin may act on it — and only on it.** The session that started
+  it may read its state, send it a message (`send_message`, delivery auto)
+  and close it (`kill_session`, close only) — nothing else on this device.
+
+### Threat notes
+
+This is a new cross-device control path, so it is kept narrow:
+
+- **Identity comes from the link, never from the request.** The origin
+  device is the discovered device whose tailnet address the request came
+  from (that address is bound to the node's WireGuard key); without one
+  (a tunnel), the remote marker's claim is recorded and the row says
+  "(unverified)". The origin SESSION's title and "agent or person" are what
+  the origin device says about its own sessions: shown as one cleaned line,
+  labelled as that device's report, never trusted for identity.
+- **Enforced on the receiving side.** `POST /api/origin-control` (status /
+  message / close) needs the device link exactly as a file transfer does —
+  the remote marker, a valid credential (this device's token or the fleet
+  key, checked even with the gate off), **Allow remote control** on, never
+  a guest link — and then the provenance rule, checked HERE: the session
+  was started by an agent, from the device the caller IS (as the link
+  names it, at least as surely as when it was created — a session created
+  over the tailnet can't be controlled by a mere claim), for exactly the
+  origin session the caller names. Anything else is 403 `not_origin`; a
+  person-started session never qualifies.
+- **Not relayable.** The routes are not under `/api/instances/…` (the
+  namespaced-title proxy never forwards them) and not on the `fwd/`
+  allow-list, and a remote-flagged request is never proxied onward: a third
+  device can't relay a request to them through another device's
+  credential.
+- **Reports back are just as narrow.** `POST /api/origin-inbox` on the
+  origin device takes a report only over the link (marker + credential,
+  no guest; a fleet member's needs no Allow remote control there) and only
+  from the device that origin session started it on
+  (recorded when the create went out); it lands as an ordinary agent
+  message from `<device>::<title>`, rate- and hop-limited like any other.
+- **What the origin cannot do.** Type into the session, answer its
+  dialogs, delete its folder, or touch any session it did not start. A
+  forged origin title fails the exact-match check; a stolen fleet key
+  already drives every member, so this path adds no reach beyond "the
+  session that started it".
+
 ## Keys and deep links
 
 The screen keys never changed: `devices`, `mobile`, `peer`, `security`. The

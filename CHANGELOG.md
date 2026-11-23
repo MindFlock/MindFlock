@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Sessions an agent on another device starts here say where they came
+  from, report back, and close when done.** On the receiving device they
+  read "from tripwire-send on EthanLaptop2026" (or "you, from
+  EthanLaptop2026" when a person started them) instead of "agent" — on the
+  rail, in Sky, on the phone, in `mindflock ls` and the MCP's
+  `get_session`/`whoami`. One an agent started closes itself once it is done
+  and idle past the auto-close grace window (its folder kept, its last reply
+  in Recently closed; never while it asks something, has a to-do of its own
+  open, or once you typed into it; never one you started), and its row says
+  "closes in 9 min · Keep". Its `report_result` and each turn it ends go to
+  the starting session's inbox, so `wait_for_session` on
+  `<device>::<title>` works; that session — and only that one, checked on
+  the receiving device — may also message and close it. New
+  `spawn_session(device=…)` starts one there. The origin device is taken from
+  the device link, never from the request (`docs/devices.md` has the threat
+  notes).
+
 ### Fixed
 
 - **A device is found by the name you see.** `mindflock send tripwire

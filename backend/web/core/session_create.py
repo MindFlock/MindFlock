@@ -1893,7 +1893,9 @@ def _log_spawn(payload: dict, resp: JSONResponse, path: str) -> None:
         pass
 
 
-async def create_requested(payload: dict, *, person: str = "") -> JSONResponse:
+async def create_requested(
+    payload: dict, *, person: str = "", link: Optional[dict] = None
+) -> JSONResponse:
     """``POST /api/instances``: a create asks the launch gate, then
     :func:`create`. ``person``: who the request is for (the route stamps it
     from the request, never from the payload).
@@ -1909,7 +1911,19 @@ async def create_requested(payload: dict, *, person: str = "") -> JSONResponse:
     * A team run's member (``run_member``) skips the gate: the run's own
       planner paces its starts.
 
-    ``start_anyway`` is taken out of ``payload`` (it is not a create key)."""
+    ``start_anyway`` is taken out of ``payload`` (it is not a create key).
+
+    ``link``: the device that asked, when the create came over the device
+    link (:func:`remote_origin.link_of`) — its ``origin`` is recorded and an
+    agent origin's prompt says where it came from
+    (:func:`remote_origin.create_over_link`); ``origin`` is dropped from any
+    other create."""
+    if link is not None or "origin" in payload:
+        from backend.web.core import remote_origin as _remote_origin
+
+        return await _remote_origin.create_over_link(
+            payload, link, lambda p: create_requested(p, person=person)
+        )
     start_anyway = payload.pop("start_anyway", None) is True
     if payload.get("run_member"):
         return await create(payload, person=person)

@@ -26210,9 +26210,17 @@ function messageNotif(data, nameOf) {
 		cls: warn ? "n-warn" : "n-done"
 	};
 }
-function lineageMark(parent, spawned, nameOf) {
+function lineageMark(parent, spawned, nameOf, origin) {
 	const p = String(parent || "");
 	const s = !!spawned;
+	if (!p && origin && origin.label) {
+		const agent = origin.by === "agent";
+		return {
+			text: "↳ " + origin.label,
+			title: (agent ? "Started by the agent in “" + origin.session + "” on " + origin.device_name + " (another of your devices) — the session name is as that device reported it. It reports back there and closes itself once it is done." : "Started by you from " + origin.device_name + " (another of your devices).") + (origin.verified ? "" : "\nThe device was not identified by its tailnet address: it only said so."),
+			spawned: agent
+		};
+	}
 	if (!p && !s) return null;
 	if (p) {
 		const name = nameOf(p);
@@ -63115,6 +63123,16 @@ function orphanLine(inst) {
 		title: "“" + displayName(of) + "”, the session that started this worker, was closed while this worker's work was not merged. Review it, merge or ship it, or close it."
 	};
 }
+function closingLine(inst, now = Date.now()) {
+	const ac = inst?.auto_close;
+	if (!ac || ac.keep_open || !ac.closes_at || inst?.device) return null;
+	if (inst?.origin?.by !== "agent") return null;
+	const mins = Math.max(0, Math.ceil((ac.closes_at * 1e3 - now) / 6e4));
+	return {
+		text: mins <= 0 ? "closes now" : "closes in " + mins + " min",
+		title: "Done and idle: started by an agent on " + (inst.origin.device_name || "another device") + ", it closes by itself (its folder is kept; its last reply stays in Recently closed). Keep leaves it open."
+	};
+}
 async function setKeepOpen(title, keep) {
 	try {
 		await instApi(title, "/keep-open", {
@@ -69675,7 +69693,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		const p = queryClient.getQueryData(["instances"])?.find((x) => x.title === t);
 		return p ? sessionLabel(displayTitle(p), p.branch || "").text : t;
 	};
-	const lineage = lineageMark(inst.parent, inst.spawned, nameOf);
+	const lineage = lineageMark(inst.parent, inst.spawned, nameOf, inst.origin);
 	const activity = effectiveActivity(inst);
 	const isWorker = !!inst.parent && parentLive && !pending;
 	const nested = nest.depth > 0;
@@ -69730,8 +69748,9 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const waitText = wait ? waitLine(wait, Date.now()) : "";
 	const failText = ss.startFailed && inst.start_failed ? startFailedHint(inst.start_failed).split("\n")[0] : "";
 	const orphan = orphanLine(inst);
+	const closing = closingLine(inst);
 	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !orphan && !!task;
-	const subline = editing ? !!renameTaken : !!(ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
+	const subline = editing ? !!renameTaken : !!(ship || wline || roll || lline || lineage || closing || taskLine || !!noAgent || !!waitText || !!failText);
 	useNow(wline?.state === "working" || ship?.state === "working" ? 3e4 : false);
 	useNow(wait ? 3e4 : false);
 	useNow(backgroundJobs(inst).some((j) => expectOf(j)) ? 6e4 : false);
@@ -70037,6 +70056,26 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 								className: "lineage orphan-line",
 								title: orphan.title,
 								children: orphan.text
+							}),
+							!editing && closing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "lineage closing-line",
+								title: closing.title,
+								children: [
+									closing.text,
+									" · ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "closing-keep",
+										title: "Keep it open: it won't close by itself",
+										onMouseDown: (e) => e.stopPropagation(),
+										onDoubleClick: (e) => e.stopPropagation(),
+										onClick: (e) => {
+											e.stopPropagation();
+											setKeepOpen(title, true);
+										},
+										children: "Keep"
+									})
+								]
 							}),
 							!editing && taskLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TaskLine, { inst }),
 							!editing && !ship && !lline && !wline && lineage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -153070,7 +153109,8 @@ function SkyLine(p) {
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
 	const agent = agentTitle(row?.provider || row?.program, row?.program);
-	const headSub = row ? firstLine$1(row.task_headline || row.task || "") || firstLine$1(row.last_prompt || "") : "";
+	const doing = row ? firstLine$1(row.task_headline || row.task || "") || firstLine$1(row.last_prompt || "") : "";
+	const headSub = [row?.origin?.label || "", doing].filter(Boolean).join(" · ");
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",
 		title: agent,

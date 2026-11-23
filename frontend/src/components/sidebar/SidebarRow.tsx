@@ -75,7 +75,7 @@ import { SessionMenu, endingLabel } from "./SessionMenu";
 import { RowMenu, type RowMenuOpen } from "./RowMenu";
 import { MidName } from "./MidName";
 import { TaskLine, taskLineOf } from "./TaskLine";
-import { orphanLine } from "../../lib/autoClose";
+import { closingLine, orphanLine, setKeepOpen } from "../../lib/autoClose";
 import { openWalkingSession } from "../../lib/verifyActions";
 // lib/sessionMenu's model, with Verify in it.
 import { sessionMenu } from "./verifyMenu";
@@ -332,7 +332,7 @@ export const SidebarRow = memo(function SidebarRow({
   };
   // Lineage (MindFlock MCP): a muted "↳ <parent>" sub-line under the name of a
   // session another session's agent spawned or adopted.
-  const lineage = lineageMark(inst.parent, inst.spawned, nameOf);
+  const lineage = lineageMark(inst.parent, inst.spawned, nameOf, inst.origin);
   // A family (an orchestrator and the workers it spawned or adopted) says how
   // the split is going right on the rail, with no fetch: a worker swaps the
   // "↳ parent" line for its status ("✓ reported", "? needs your answer" — still
@@ -443,11 +443,14 @@ export const SidebarRow = memo(function SidebarRow({
   const failText = ss.startFailed && inst.start_failed ? startFailedHint(inst.start_failed).split("\n")[0] : "";
   // A worker adrift: its parent closed with its work unmerged (lib/autoClose).
   const orphan = orphanLine(inst);
+  // Started by an agent on another device, done and idle: it closes by
+  // itself — "closes in 9 min · Keep" (lib/autoClose closingLine).
+  const closing = closingLine(inst);
   const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !waitText && !failText && !orphan && !!task;
   // Editing, the only sub-line is a refused rename's reason.
   const subline = editing
     ? !!renameTaken
-    : !!(ship || wline || roll || lline || lineage || taskLine || !!noAgent || !!waitText || !!failText);
+    : !!(ship || wline || roll || lline || lineage || closing || taskLine || !!noAgent || !!waitText || !!failText);
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
   useNow(wline?.state === "working" || ship?.state === "working" ? 30_000 : false);
@@ -846,6 +849,25 @@ export const SidebarRow = memo(function SidebarRow({
               // (lib/autoClose): kept, and said so, rather than closed.
               <span className="lineage orphan-line" title={orphan.title}>
                 {orphan.text}
+              </span>
+            )}
+            {!editing && closing && (
+              <span className="lineage closing-line" title={closing.title}>
+                {closing.text}
+                {" · "}
+                <button
+                  type="button"
+                  className="closing-keep"
+                  title="Keep it open: it won't close by itself"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void setKeepOpen(title, true);
+                  }}
+                >
+                  Keep
+                </button>
               </span>
             )}
             {!editing && taskLine && <TaskLine inst={inst} />}

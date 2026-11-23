@@ -25,9 +25,31 @@ describe("the rail row renders the lineage sub-line", () => {
     expect(lineageMark("", false, id)).toBeNull();
   });
 
+  it("says where a session from another device came from, never just 'agent'", () => {
+    const origin = {
+      label: "from tripwire-send on EthanLaptop2026",
+      by: "agent" as const,
+      session: "tripwire-send",
+      device_name: "EthanLaptop2026",
+      verified: true,
+    };
+    const m = lineageMark("", true, id, origin);
+    expect(m).toMatchObject({ text: "↳ from tripwire-send on EthanLaptop2026", spawned: true });
+    expect(m?.title).toContain("as that device reported it");
+    const you = lineageMark("", false, id, { ...origin, by: "person", session: "", label: "you, from EthanLaptop2026" });
+    expect(you).toMatchObject({ text: "↳ you, from EthanLaptop2026", spawned: false });
+    expect(lineageMark("", true, id, { ...origin, verified: false })?.title).toContain("only said so");
+    // A local parent still wins.
+    expect(lineageMark("orch", true, id, origin)?.text).toBe("↳ orch");
+  });
+
   it("SidebarRow wires the mark into the meta column", () => {
     const row = fn(ROW, "SidebarRow");
-    expect(has(row, "lineageMark(inst.parent, inst.spawned, nameOf)")).toBe(true);
+    expect(has(row, "lineageMark(inst.parent, inst.spawned, nameOf, inst.origin)")).toBe(true);
+    // A session another device's agent started says when it closes itself,
+    // with a one-click Keep (lib/autoClose closingLine).
+    expect(has(row, "const closing = closingLine(inst);")).toBe(true);
+    expect(has(row, "void setKeepOpen(title, true);")).toBe(true);
     expect(has(row, 'className={"lineage" + (lineage.spawned ? " spawned" : "")}')).toBe(true);
     expect(has(row, '<span className={"meta" + (subline ? " has-lineage" : "")}>')).toBe(true);
     const css = normCode("components/sidebar/SidebarRow.css");

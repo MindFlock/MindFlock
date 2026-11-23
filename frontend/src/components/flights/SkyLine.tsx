@@ -600,7 +600,10 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // While ready, ReadyHead (on the frame's bar) says so; the sub never repeats it
   // (the task headline — read from its newest meaningful prompt — else the
   // create task, else the last prompt).
-  const headSub = row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";
+  const doing = row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";
+  // Started from another of your devices: where from, before what it does
+  // ("from tripwire-send on EthanLaptop2026 · install it").
+  const headSub = [row?.origin?.label || "", doing].filter(Boolean).join(" · ");
   const head: ChainHead = useMemo(
     () => ({ kind: "session", title: agent, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode }),
     [agent, headSub, p.title, sessionNode]

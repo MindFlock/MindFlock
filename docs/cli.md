@@ -598,7 +598,10 @@ DIFF  COST`. `REPO` is the session's source repository (its basename), so a
 flock spanning several repos is legible at a glance. `DIFF` shows `+n −m` when
 the server reports a `diff_stat`; `COST` shows the estimated USD spend when
 token pricing is available (both blank otherwise). `--json` dumps the raw
-`/api/instances` payload for scripting.
+`/api/instances` payload for scripting. Under the table, one line per
+session another of your devices started here says where it came from —
+`  tw-install: from tripwire-send on EthanLaptop2026 · closes in 9 min`
+(see [devices.md](devices.md#sessions-another-device-started-here)).
 
 `ACTIVITY` says what the raw `offline` would hide: `sleeping` for a sleeper,
 and `waiting #<position> (<why>)` for a session whose start waits in the

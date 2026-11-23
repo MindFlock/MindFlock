@@ -1079,6 +1079,18 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   color: var(--tone-attention);
 }
 
+/* Started by an agent on another device, done and idle: "closes in 9 min ·
+   Keep" (lib/autoClose closingLine). Keep is a quiet text button. */
+.inst .lineage.closing-line .closing-keep {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent, inherit);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* The ✕ on a session with uncommitted changes asks first — the same calm strip
    as Delete's, under the row. */
 .inst-tail .close-confirm {

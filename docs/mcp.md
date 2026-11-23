@@ -563,7 +563,11 @@ workers use it to reach each other); each errors when there are none, and
 (never your own), in every scope but `readonly`. `to` may be a `<peer>::<title>` row another person
 shares with you: `delivery` must be `auto`, and the entry reads `{to, id,
 delivery: "sent", peer: true, detail}` — see [Across people](#across-people-peer-links).
-A `device::title` row of your own other device is still refused. In Claude
+A `device::title` row of your own other device is reached only when YOU
+started that session there (`send_session`, `send_files`, `spawn_session`
+with `device`): delivery `auto` only, the entry reads `{to, id, delivery,
+remote: true, detail}`, and the device itself refuses any other session
+(`not_origin` — see [Sessions you started on another device](#sessions-you-started-on-another-device)). In Claude
 this is `mcp__mindflock__send_message`, not Claude's built-in `SendMessage`.
 
 ### `check_inbox`
@@ -1738,9 +1742,9 @@ unless every check passed: the device asleep or offline,
 remote control off there, not one of the user's devices, no checkout of the
 repository there (with the `git clone <url>` to run), no remote, a push
 refused (with git's reason and an auth hint), uncommitted work. The new
-session is on another device: it is not the caller's child, `report_result`
-does not reach the caller, and only `read_output` / `get_session` /
-`list_sessions` see it (`<device>::<title>`).
+session is on another device: it is not the caller's child, but it reports
+back to the caller and closes itself there once done — see [Sessions you
+started on another device](#sessions-you-started-on-another-device).
 
 **The bundle way.** When the device has no checkout of the repository (step
 1's lookup finds none), the repository has no remote, or the device cannot
@@ -1790,6 +1794,33 @@ never a team-run member, and never past a Goes as far as the user set below
 `push`. It is the stricter of the two candidates — "message/route any
 session" would let any session push and carry off another's work — and it
 still lets every session send itself.
+
+### Sessions you started on another device
+
+A session that an agent started on another of the user's devices — with
+`send_session`, `send_files` (a note and no `to_session`), or
+`spawn_session(device="ML-Rig-2023", repo_path=<a folder THERE>, prompt)` —
+belongs to the session that started it:
+
+- **There** it says where it came from (`origin`: "from tripwire-send on
+  EthanLaptop2026", in `get_session`, `whoami` and the rows), its prompt
+  ends with that line, its `report_result` goes back to you (it has no
+  local parent there), and it closes itself once it is done and idle
+  (folder kept).
+- **Here** `wait_for_session(titles=["ml-rig-2023-1::tw-install"])` returns
+  on its report or when it ends a turn (both arrive in your inbox as a
+  `result` from `<device>::<title>`); `read_output` reads it;
+  `send_message` (delivery `auto`) and `kill_session` (mode `close`) reach
+  it through `POST /api/instances/<you>/remote-control`. The DEVICE checks
+  that you started it — another session's, a person's, or one you name
+  under a different title is refused (`not_origin`, said as "Sessions on
+  another device are read-only here unless YOU started them").
+
+`spawn_session(device=…)` takes `prompt`, `repo_path` (required: a path on
+that device), `title`, `program` and `in_place`; the rest of
+`spawn_session` (fences, order, worktree forks) applies to local workers
+only. It answers `{title: "<device>::<title>", device, device_name, status,
+remote: true, queued?, hint}`.
 
 ## Messages
 
@@ -2258,7 +2289,9 @@ What "manages" means under `children`:
 - **An external client**: the sessions it spawned in this server process, plus
   their descendants.
 
-Remote `device::title` rows and pending placeholder rows are never managed.
+Remote `device::title` rows and pending placeholder rows are never managed
+(a session you started on another device may be messaged and closed through
+that device's own provenance check — not through this policy).
 A `<peer>::<title>` row another person shares with you is never managed
 either: `send_message` (`auto`) reaches it in every scope but `readonly`
 (their MindFlock decides whether it is shared), and every other write tool

@@ -45,6 +45,7 @@ uses); nothing here opens a file of its own.
 
 from __future__ import annotations
 
+import contextvars
 import difflib
 import os
 import re
@@ -655,18 +656,36 @@ def _title_taken(err: str) -> bool:
     ) or "already named" in e
 
 
+#: Who is sending (set by the routes for the length of one send): the
+#: create on the device carries it as ``origin: {session, by}`` — what the
+#: new session there shows ("from tripwire-send on EthanLaptop2026") and
+#: whom it reports back to (core.remote_origin).
+ORIGIN: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
+    "mindflock_send_origin", default=None
+)
+
+
 async def _create(dev: dict, title: str, body: dict, after: str) -> Tuple[str, dict]:
     """POST the create on the device, stepping the title past a name already
     taken there (``tripwire`` → ``tripwire-2``). → ``(title, response)``.
     ``after``: the sentence saying what already happened (``"The branch IS
     pushed"``), carried by every refusal from here on."""
     key = dev["key"]
+    origin = ORIGIN.get()
+    if origin and "origin" not in body:
+        body = dict(body, origin=dict(origin))
     for n in range(TITLE_TRIES):
         name = title if n == 0 else "%s-%d" % (title, n + 1)
         status, resp = await _remote.post_json(
             dev, "/api/instances", dict(body, title=name), CREATE_TIMEOUT_S
         )
         if status in (200, 201, 202):
+            sent_by = (body.get("origin") or {}).get("session")
+            if sent_by and (body.get("origin") or {}).get("by") == "agent":
+                from backend.web.core import remote_origin as _remote_origin
+
+                # Its reports come back here only from that device.
+                _remote_origin.note_started(key, name, str(sent_by))
             return name, resp if isinstance(resp, dict) else {}
         if status == 0:
             raise _unreachable(key, after)

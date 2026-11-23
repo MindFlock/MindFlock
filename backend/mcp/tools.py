@@ -42,6 +42,7 @@ from backend.mcp.identity import Identity
 from backend.mcp.policy import Flock, Policy, is_peer_row
 from backend.mcp.protocol import Tool, ToolContext, ToolError
 from backend.mcp import devices as _devices
+from backend.mcp.devices import is_device_row
 from backend.mcp import flights as _flights
 from backend.mcp import runs as _runs
 from backend.mcp import ship as _ship
@@ -279,8 +280,10 @@ _D_SEND = (
     'to may be a "<peer>::<title>" row (list_sessions marks it peer): a session '
     "another person shares with you, on their machine: sent over the peer link "
     "(delivery auto only) to their agent, which sees it as from another "
-    "person's agent; the returned id is what their reply names. This "
-    "is not Claude Code's built-in SendMessage."
+    "person's agent; the returned id is what their reply names. A "
+    '"<device>::<title>" on another of the user\'s devices is reached only '
+    "if YOU started it there (send_session, send_files, spawn_session "
+    "device=; delivery auto). This is not Claude Code's built-in SendMessage."
 )
 _D_INBOX = (
     "Your MindFlock messages, oldest first: unread ones by default (sent with "
@@ -372,7 +375,8 @@ _D_KILL = (
     "delete is only for sessions an agent spawned, never in-place ones, and is "
     "refused while the worktree has uncommitted changes or its branch has "
     "commits that are not in your HEAD (the error lists unmerged_commits) "
-    "unless force=true. Merge first, then delete. Never your own session."
+    "unless force=true. Merge first, then delete. Never your own session. A "
+    '"<device>::<title>" YOU started on another device: close only.'
 )
 _D_PARENT = (
     "Make a session your child (adopt it), move it under one of your "
@@ -612,6 +616,14 @@ _S_SPAWN = _obj(
         "report_back": {"type": "boolean", "default": True},
         "wait_ready": {"type": "boolean", "default": True},
         "repo_path": {"type": "string", "maxLength": 4096},
+        "device": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "start it on another of the user's devices "
+            "(list_devices) instead; repo_path is a folder THERE. It is "
+            "<device>::<title>, not your child: it reports back to you and "
+            "closes itself there once done",
+        },
         "after": dict(
             _GLOBS,
             items=_TITLE,
@@ -803,6 +815,9 @@ _COMPACT_OPTIONAL = (
     "background",
     "sleeping",
     "flight",
+    # Started from another of the user's devices: {device, device_name,
+    # session, by, label} — "from tripwire-send on EthanLaptop2026".
+    "origin",
 )
 _MESSAGE_KEYS = ("id", "kind", "from", "ts", "text", "data", "reply_to", "state")
 
@@ -1212,6 +1227,10 @@ class Toolbox(
             out["you_drive"] = None
         # Flock mode: the person wants this session's work done by workers.
         out["flock"] = bool(row.get("flock")) if isinstance(row, dict) else False
+        # Started from another device (by its agent: report_result goes back
+        # to that session there).
+        if isinstance(row, dict) and isinstance(row.get("origin"), dict):
+            out["origin"] = row["origin"]
         fence = fence_view(row_fence(row))
         if fence is not None:
             out["fence"] = fence
@@ -1501,7 +1520,18 @@ class Toolbox(
         delivery = args.get("delivery") or "auto"
         targets = self._recipients(flock, args["to"])
         peers = set()
+        devices = set()
         for t in targets:  # validate every recipient before sending to any
+            if is_device_row(flock.row(t), t) and flock.row(t) is not None:
+                # A session on another of the user's devices: only one THIS
+                # session started there (the device checks), auto delivery.
+                if delivery != "auto":
+                    raise ToolError(
+                        "%r is on another device: only delivery auto reaches "
+                        "it (typed in when that agent is idle)" % t
+                    )
+                devices.add(t)
+                continue
             row = self.policy.require_message(flock, t)
             if is_peer_row(row):
                 if delivery != "auto":
@@ -1525,6 +1555,23 @@ class Toolbox(
         sent: List[dict] = []
         failed: List[dict] = []
         for t in targets:
+            if t in devices:
+                try:
+                    resp = self.remote_control(flock, t, "message", args["text"])
+                except ToolError as err:
+                    failed.append({"to": t, "error": str(err)})
+                    continue
+                sent.append(
+                    {
+                        "to": t,
+                        "id": resp.get("id"),
+                        "delivery": resp.get("delivery") or "pending",
+                        "remote": True,
+                        "detail": "stored on that device; typed in when its "
+                        "agent is idle",
+                    }
+                )
+                continue
             try:
                 resp = self.api.post(self.api.inst_path(t, "/messages"), payload)
             except client.ApiError as err:
@@ -1647,6 +1694,9 @@ class Toolbox(
         me = self._require_self(flock, "report_result")
         self.policy.require_write(flock, "report_result")
         parent = flock.parent_of(me)
+        origin = (flock.local.get(me) or {}).get("origin")
+        if not parent and isinstance(origin, dict) and origin.get("by") == "agent":
+            return self._report_origin(me, flock.local[me], args)
         if not parent:
             raise ToolError(
                 "you have no parent session to report to; use send_message to tell "
@@ -1687,6 +1737,35 @@ class Toolbox(
         if resp.get("detail"):
             out["detail"] = resp["detail"]
         return out
+
+    def _report_origin(self, me: str, row: dict, args: dict) -> dict:
+        """report_result from a session an agent on ANOTHER device started:
+        it goes to that session's inbox there (``/report-origin``)."""
+        folder = str(row.get("folder") or "")
+        text = args["summary"]
+        if args.get("details"):
+            text += "\n\nDetails:\n" + args["details"]
+        data = {
+            "status": args["status"],
+            "branch": row.get("branch") or "",
+            "head_sha": (gitlocal.head_sha(folder) if folder else None) or "",
+        }
+        try:
+            resp = self.api.post(
+                self.api.inst_path(me, "/report-origin"),
+                {"text": text, "data": data},
+                timeout=60.0,
+            )
+        except client.ApiError as err:
+            raise self._api_error(err, "report_result") from None
+        resp = resp if isinstance(resp, dict) else {}
+        return {
+            "sent_to": resp.get("sent_to") or "",
+            "id": resp.get("id"),
+            "delivery": "sent",
+            "status": args["status"],
+            "remote": True,
+        }
 
     # -- spawn ---------------------------------------------------------------- #
     def _default_title(
@@ -1871,6 +1950,8 @@ class Toolbox(
         flock = self.flock()
         me = flock.self_title
         self.policy.require_write(flock, "spawn_session")
+        if str(args.get("device") or "").strip():
+            return self._spawn_on_device(args, flock)
         my_row = flock.local.get(me) if me else None
         payload: Dict[str, Any] = {"spawned": True}
         if me:
@@ -2636,6 +2717,22 @@ class Toolbox(
     def kill_session(self, args: dict, ctx: ToolContext) -> dict:
         flock = self.flock()
         title = args["title"]
+        if is_device_row(flock.row(title), title) and flock.row(title) is not None:
+            # On another device: only a session THIS one started there, only
+            # closed (its folder stays; the device checks who asks).
+            if (args.get("mode") or "close") != "close":
+                raise ToolError(
+                    '%r is on another device: only mode "close" (its folder '
+                    "stays there)" % title
+                )
+            self.remote_control(flock, title, "close")
+            return {
+                "ok": True,
+                "title": title,
+                "mode": "close",
+                "worktree": "kept on that device (reopen it from its Recently "
+                "closed)",
+            }
         row = self.policy.require_managed(flock, title, "kill_session")
         mode = args.get("mode") or "close"
         if mode == "delete":

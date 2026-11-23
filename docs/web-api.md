@@ -3118,6 +3118,50 @@ folder>, in_place: true, prompt, spawned: true, program}` (`title`).
 | the device ones of send-to-device; a device without these routes | as above; **502** `device_too_old` |
 | a guest link; a relayed request; a shared-folder session | **403** `guest`, **400** `remote`, **409** |
 
+### Sessions started from another device
+
+(`core/remote_origin.py`; the rules and threat notes are in
+[devices.md](devices.md#sessions-another-device-started-here).)
+
+- `POST /api/instances` over the device link (the `X-MindFlock-Remote`
+  marker) may carry `origin: {session, by: agent|person}` — informational,
+  never a create key. The receiver records the origin DEVICE from the link
+  (tailnet address → discovered device, else the marker's claim,
+  `verified: false`), and an agent origin's prompt gets a last line saying
+  where it came from and to `report_result`. A local create's `origin` is
+  dropped. `send-to-device` / `send-files` take `from_session?` (the
+  sending session; default the session sent) and `started_by?`
+  (`agent` default, `person` from the CLI) for it. Rows carry `origin:
+  {device, device_name, verified, session, by, label}` or null; an
+  agent-started one also `auto_close` (it closes itself once done: "closes
+  in N min"). Recently closed entries of such a session carry `last_reply`.
+- `POST /api/origin-control` (device to device) `{title, action:
+  status|message|close, text?, origin_session}` → status `{title, closed,
+  activity, activity_since, asking, status, last_reply, closes_at}`,
+  message `{ok, id, delivery}`, close `{ok, closed}`. Guarded like
+  `/api/transfers` (**403** `guest` / `not_a_device` / `remote_control_off`,
+  **401** `not_linked`), then **403** `not_origin` unless an agent session
+  called `origin_session` on the calling device started `title` here;
+  **404** `no_session`.
+- `POST /api/origin-inbox` (device to device) `{to, from, kind: result,
+  text, data?}` → **201** `{ok, id}`: a result from `<device>::<from>` in
+  `to`'s inbox (`data` keeps `status`, `turn_end`, `branch`, `head_sha`).
+  Marker + credential, never a guest (a fleet member's report needs no
+  Allow remote control here; a token-paired device's does, as everywhere);
+  **403** `not_started_here` unless `to` started `from` on that device.
+- `POST /api/instances/{title}/remote-control` `{target:
+  "<device>::<title>", action, text?}` → the device's answer to the above
+  for `title` as the origin (the MCP's `send_message` / `kill_session` /
+  status on a session it started there). **400** `remote` for a relayed
+  request; **502** `device_offline` / `device_too_old`.
+- `POST /api/instances/{title}/report-origin` `{text, data?}` → `{ok,
+  sent_to}`: the session's `report_result` when an agent on another device
+  started it; **409** `no_origin` otherwise, **502** when that device
+  can't be reached or refuses.
+- A forwarded `POST /api/devices/<device>/fwd/api/instances` whose body
+  names `origin: {session: <a live session here>, by: agent}` is recorded
+  here, so that device's reports about it are accepted.
+
 ### Receiving: `/api/transfers`
 
 The device side of both (`core/inbox.py`). Only for another MindFlock: the

@@ -251,7 +251,10 @@ class TestSendRoute:
             "prompt",
             "spawned",
             "program",
+            "origin",
         }
+        # Who started it there (core.remote_origin): the session sent.
+        assert body["origin"] == {"session": TITLE, "by": "agent"}
         assert body["base_ref"] == "origin/" + BRANCH
         assert body["continue_branch"] == BRANCH
         assert body["program"] == "claude" and body["spawned"] is True
@@ -499,7 +502,18 @@ class TestMcpSendSession:
         box, api, clock = make_box(_tree(), me="orch")
         seen = _send_route(api)
         out = box.send_session({"device": "mac", "note": "launchd"}, FakeCtx(clock))
-        assert seen == [("orch", {"device": "mac", "note": "launchd"})]
+        assert seen == [
+            (
+                "orch",
+                {
+                    "device": "mac",
+                    "note": "launchd",
+                    # Who sent it: the device shows "from orch on …".
+                    "from_session": "orch",
+                    "started_by": "agent",
+                },
+            )
+        ]
         assert (
             out["title"] == "mac::orch" and out["ok"] is True and out["sent"] == "orch"
         )

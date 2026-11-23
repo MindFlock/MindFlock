@@ -207,6 +207,7 @@ from backend.web.core import guests as _guests
 from backend.web.core import move_session as _move_session
 from backend.web.core import send_session as _send_session
 from backend.web.core import send_files as _send_files
+from backend.web.core import remote_origin as _remote_origin
 from backend.web.core import inbox as _inbox
 from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import terminal_ws as _terminal_ws
@@ -1049,6 +1050,9 @@ async def lifespan(app: FastAPI):
     # CLOSES sessions.
     if _auto_close_loop_enabled():
         _register_task(_auto_close.run_loop())
+        # Turn ends of sessions an agent on another device started here go
+        # back to that session's inbox there (core.remote_origin).
+        _register_task(_remote_origin.run_loop())
     _register_task(_memory_watch_loop())
     # Per-session memory sampler + logs/memory.jsonl (core.memory_watch), on
     # the ticks' own pool. Off under pytest (ENGINE is the real state there).
@@ -5237,7 +5241,11 @@ async def create_instance(payload: dict, request: Request) -> JSONResponse:
     the run's own planner.
     """
     return await _session_create.create_requested(
-        payload, person=_auth.request_person(request)
+        payload,
+        person=_auth.request_person(request),
+        # Over the device link: who asked (core.remote_origin) — None for
+        # this device's own browser/CLI/agents.
+        link=_remote_origin.link_of(request),
     )
 
 
@@ -5715,19 +5723,35 @@ async def instance_send_to_device(
             return ""
         return text or ""
 
-    status, out = await _send_session.send(
-        inst,
-        title,
-        device,
-        note,
-        via=via,
-        paths=paths[:50],
-        last_reply=_last_reply,
-        breaches=lambda wt: _red_zone_breaches_for(inst, wt, "HEAD"),
-    )
+    token = _send_session.ORIGIN.set(_send_origin(title, body))
+    try:
+        status, out = await _send_session.send(
+            inst,
+            title,
+            device,
+            note,
+            via=via,
+            paths=paths[:50],
+            last_reply=_last_reply,
+            breaches=lambda wt: _red_zone_breaches_for(inst, wt, "HEAD"),
+        )
+    finally:
+        _send_session.ORIGIN.reset(token)
     if status == 200:
         _forget_probes(title)  # its row's pushed/stage probes are stale now
     return JSONResponse(out, status_code=status)
+
+
+def _send_origin(title: str, body: dict) -> dict:
+    """Who a send says started the session on the device (core.
+    remote_origin): ``from_session`` — the session doing the sending, when
+    it is a live one here (an orchestrator sending a worker's work) — else
+    the session sent; ``started_by`` ``person`` (the CLI) or ``agent`` (the
+    MCP, and the default). Informational: the device labels it so."""
+    frm = body.get("from_session")
+    session = frm if isinstance(frm, str) and frm in ENGINE.instances else title
+    by = body.get("started_by")
+    return {"session": session, "by": by if by in ("agent", "person") else "agent"}
 
 
 def _closed_send_refusal(title: str) -> Optional[JSONResponse]:
@@ -5807,17 +5831,21 @@ async def instance_send_files(
             },
             status_code=400,
         )
-    status, out = await _send_files.send(
-        inst,
-        title,
-        device,
-        paths,
-        note=note,
-        to_session=to_session.strip(),
-        include_secrets=secrets_flag,
-        include_ignored=ignored_flag,
-        zone_hits=zone_hits_for_paths,
-    )
+    token = _send_session.ORIGIN.set(_send_origin(title, body))
+    try:
+        status, out = await _send_files.send(
+            inst,
+            title,
+            device,
+            paths,
+            note=note,
+            to_session=to_session.strip(),
+            include_secrets=secrets_flag,
+            include_ignored=ignored_flag,
+            zone_hits=zone_hits_for_paths,
+        )
+    finally:
+        _send_session.ORIGIN.reset(token)
     return JSONResponse(out, status_code=status)
 
 
@@ -5878,6 +5906,374 @@ def _transfer_sender(request: Request) -> Tuple[str, bool]:
     if seen:
         return seen, True
     return request.headers.get(_remote.REMOTE_HEADER, ""), False
+
+
+# --------------------------------------------------------------------------- #
+# Sessions started from another device: control from the origin, and its
+# reports back (core.remote_origin). Neither route is under /api/instances/
+# (the namespaced-title proxy never forwards it) nor on the fwd/ allow-list:
+# no device can relay a third one's request to them.
+# --------------------------------------------------------------------------- #
+_ORIGIN_ACTIONS = ("status", "message", "close")
+
+
+def _origin_status(title: str, inst) -> dict:
+    """What the origin is told about a session it started: its state, its
+    last report there and its last reply."""
+    row = next(
+        (
+            r
+            for r in _events.sessions_snapshot()
+            if isinstance(r, dict) and r.get("title") == title and not r.get("device")
+        ),
+        {},
+    )
+    try:
+        _kind, reply, *_ = _agent_output(inst, title, "last_reply")
+    except Exception:  # noqa: BLE001
+        reply = ""
+    reply = str(reply or "")
+    if len(reply) > 4000:
+        reply = "… " + reply[-4000:]
+    ac = row.get("auto_close") if isinstance(row.get("auto_close"), dict) else {}
+    return {
+        "title": title,
+        "closed": False,
+        "activity": row.get("activity") or "",
+        "activity_since": row.get("activity_since") or 0,
+        "asking": bool(row.get("asking")),
+        "status": row.get("status"),
+        "last_reply": reply,
+        "closes_at": (ac or {}).get("closes_at"),
+    }
+
+
+@app.post("/api/origin-control")
+async def origin_control(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Another of your devices acts on a session IT started here (core.
+    remote_origin): ``{title, action: status|message|close, text?,
+    origin_session}`` → status ``{title, closed, activity, …, last_reply}``,
+    message ``{ok, delivery, id}``, close ``{ok, closed: true}``. Only over
+    the device link (remote marker + this device's token or the fleet key,
+    remote control on, never a guest link) and only for a session that the
+    calling device's ``origin_session`` started — checked here
+    (:func:`remote_origin.control_refusal`): **403** ``not_origin``
+    otherwise. **404** ``no_session`` for a title that is not here (``closed:
+    true`` when it was just closed, for ``status``)."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    body = payload if isinstance(payload, dict) else {}
+    title, action = body.get("title"), body.get("action")
+    origin_session, text = body.get("origin_session"), body.get("text", "")
+    if (
+        not isinstance(title, str)
+        or not isinstance(origin_session, str)
+        or not isinstance(text, str)
+        or action not in _ORIGIN_ACTIONS
+    ):
+        return JSONResponse(
+            {
+                "error": "title and origin_session are strings, action is "
+                "status, message or close",
+                "code": "bad_request",
+            },
+            status_code=400,
+        )
+    who = _remote_origin.caller(request)
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        if action == "status" and _remote_origin.record(title) is not None:
+            from backend.web.core import recently_closed as _rc
+
+            hit = _rc.closed_hint(title)
+            if hit is not None:
+                return JSONResponse(
+                    {"title": title, "closed": True, "closed_at": hit["closed_at"]}
+                )
+        return JSONResponse(
+            {"error": "no session named %s there" % title, "code": "no_session"},
+            status_code=404,
+        )
+    why = _remote_origin.control_refusal(title, inst, who, origin_session)
+    if why is not None:
+        status, code, sentence = why
+        return JSONResponse({"error": sentence, "code": code}, status_code=status)
+    if action == "status":
+        return JSONResponse(await asyncio.to_thread(_origin_status, title, inst))
+    if action == "close":
+        from backend.web.core import session_end as _session_end
+
+        try:
+            await asyncio.to_thread(_session_end.end_session, ENGINE, title, wipe=False)
+        except Exception as err:  # noqa: BLE001
+            return JSONResponse(
+                {"error": "could not close %s: %s" % (title, err), "code": "failed"},
+                status_code=500,
+            )
+        return JSONResponse({"ok": True, "closed": True, "title": title})
+    if not text.strip():
+        return JSONResponse(
+            {"error": "empty message", "code": "bad_request"}, status_code=400
+        )
+    if len(text) > _MSG_MAX_CHARS:
+        return JSONResponse(
+            {"error": "message too long", "code": "bad_request"}, status_code=400
+        )
+    sender = _remote.join_title(who["device"], origin_session)
+    try:
+        msg = await asyncio.to_thread(
+            lambda: _mailbox.post(title, text, sender=sender, delivery="auto")
+        )
+    except ValueError as err:
+        return JSONResponse({"error": str(err), "code": "bad_request"}, status_code=400)
+    _events.BUS.emit(
+        "session.message",
+        session=title,
+        data={
+            "id": msg["id"],
+            "from": sender,
+            "kind": "message",
+            "text": _mailbox.sanitize(text)[:200],
+            "delivery": "pending" if msg["state"] == "pending" else msg["state"],
+        },
+    )
+    return JSONResponse(
+        {"ok": True, "id": msg["id"], "delivery": msg["state"], "title": title}
+    )
+
+
+@app.post("/api/origin-inbox")
+async def origin_inbox(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """A session that one of THIS device's sessions started on another device
+    reports back (its report_result, or a turn it ended): ``{to, from, kind:
+    result, text, data?}`` → **201** ``{ok, id}`` — stored in ``to``'s inbox
+    as a ``result`` from ``<device>::<from>`` (what ``wait_for_session``
+    waits on). Over the device link only (remote marker + a valid
+    credential; never a guest link) and only when ``to`` started ``from`` on
+    the calling device (:func:`remote_origin.started_by`): **403**
+    ``not_started_here`` otherwise. This route does not ask for Allow remote
+    control (starting the session there was this device's own doing); the
+    auth gate still does for a token-paired device that is not a fleet
+    member."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {"error": "not for a guest link", "code": "guest"}, status_code=403
+        )
+    if not _remote.from_remote(request):
+        return JSONResponse(
+            {
+                "error": "reports come only from your other devices",
+                "code": "not_a_device",
+            },
+            status_code=403,
+        )
+    auth = request.headers.get("authorization") or ""
+    tok = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    if not tok or not _auth.token_valid(tok):
+        return JSONResponse(
+            {
+                "error": "this device did not accept the sender's credential",
+                "code": "not_linked",
+            },
+            status_code=401,
+        )
+    body = payload if isinstance(payload, dict) else {}
+    to, frm, text = body.get("to"), body.get("from"), body.get("text")
+    data = body.get("data")
+    if (
+        not isinstance(to, str)
+        or not isinstance(frm, str)
+        or not isinstance(text, str)
+        or not text.strip()
+        or (data is not None and not isinstance(data, dict))
+        or "::" in frm
+    ):
+        return JSONResponse(
+            {"error": "to, from and text are strings", "code": "bad_request"},
+            status_code=400,
+        )
+    who = _remote_origin.caller(request)
+    if not who["device"] or _remote_origin.started_by(who["device"], frm) != to:
+        return JSONResponse(
+            {
+                "error": "%s was not started on that device by %s here" % (frm, to),
+                "code": "not_started_here",
+            },
+            status_code=403,
+        )
+    if to not in ENGINE.instances:
+        return JSONResponse(
+            {"error": "no session named %s here" % to, "code": "no_session"},
+            status_code=404,
+        )
+    clean_data = {}
+    for k in ("status", "turn_end", "branch", "head_sha"):
+        v = (data or {}).get(k)
+        if isinstance(v, (str, bool)) and (not isinstance(v, str) or len(v) <= 200):
+            clean_data[k] = v
+    if len(text) > _MSG_MAX_CHARS:
+        text = text[: _MSG_MAX_CHARS - 2] + " …"
+    sender = _remote.join_title(who["device"], frm)
+    try:
+        msg = await asyncio.to_thread(
+            lambda: _mailbox.post(
+                to, text, sender=sender, kind="result", data=clean_data, delivery="auto"
+            )
+        )
+    except ValueError as err:
+        return JSONResponse({"error": str(err), "code": "bad_request"}, status_code=400)
+    event = {
+        "id": msg["id"],
+        "from": sender,
+        "kind": "result",
+        "text": _mailbox.sanitize(text)[:200],
+        "delivery": msg["state"],
+    }
+    if isinstance(clean_data.get("status"), str):
+        event["status"] = _mailbox.sanitize(clean_data["status"])[:24]
+    _events.BUS.emit("session.message", session=to, data=event)
+    return JSONResponse({"ok": True, "id": msg["id"]}, status_code=201)
+
+
+@app.post("/api/instances/{title}/remote-control")
+async def instance_remote_control(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """``title`` acts on a session IT started on another device: ``{target:
+    "<device>::<title>", action: status|message|close, text?}`` → the
+    device's answer (``/api/origin-control`` there, which checks that
+    ``title`` started it). Refused for a guest link, a relayed request, and
+    a target that isn't ``<device>::<title>`` on one of your devices."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {"error": "not for a guest link", "code": "guest"}, status_code=403
+        )
+    if _remote.from_remote(request):
+        return JSONResponse(
+            {
+                "error": "act from the device the session was started from",
+                "code": "remote",
+            },
+            status_code=400,
+        )
+    if title not in ENGINE.instances:
+        return JSONResponse(
+            {"error": "instance not found: %s" % title}, status_code=404
+        )
+    body = payload if isinstance(payload, dict) else {}
+    target, action, text = body.get("target"), body.get("action"), body.get("text", "")
+    if (
+        not isinstance(target, str)
+        or not _remote.is_remote_title(target)
+        or action not in _ORIGIN_ACTIONS
+        or not isinstance(text, str)
+    ):
+        return JSONResponse(
+            {
+                "error": "target is <device>::<title>; action is status, message "
+                "or close",
+                "code": "bad_request",
+            },
+            status_code=400,
+        )
+    device, _, there = target.partition(_remote.NS)
+    try:
+        dev = _send_session.resolve_device(device)
+    except _send_session.Refusal as r:
+        return JSONResponse(r.body(), status_code=r.status)
+    status, resp = await _remote.post_json(
+        dev,
+        "/api/origin-control",
+        {"title": there, "action": action, "text": text, "origin_session": title},
+        30.0,
+    )
+    if status == 0:
+        return JSONResponse(
+            {"error": "%s is not answering" % dev["key"], "code": "device_offline"},
+            status_code=502,
+        )
+    if status == 404 and not (isinstance(resp, dict) and resp.get("code")):
+        return JSONResponse(
+            {
+                "error": "%s's MindFlock is too old for this — update it" % dev["key"],
+                "code": "device_too_old",
+            },
+            status_code=502,
+        )
+    return JSONResponse(resp if isinstance(resp, dict) else {}, status_code=status)
+
+
+@app.post("/api/instances/{title}/report-origin")
+async def instance_report_origin(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """A session another device's agent started here reports back to the
+    session that started it (its report_result): ``{text, data?}`` →
+    ``{ok, sent_to}`` — posted to ``/api/origin-inbox`` on that device. 409
+    ``no_origin`` for a session no agent on another device started."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {"error": "not for a guest link", "code": "guest"}, status_code=403
+        )
+    if _remote.from_remote(request):
+        return JSONResponse(
+            {"error": "report from this device", "code": "remote"}, status_code=400
+        )
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    rec = _remote_origin.record(title, inst)
+    if not rec or rec.get("by") != "agent" or not rec.get("session"):
+        return JSONResponse(
+            {
+                "error": "%s was not started by a session on another device" % title,
+                "code": "no_origin",
+            },
+            status_code=409,
+        )
+    body = payload if isinstance(payload, dict) else {}
+    text, data = body.get("text"), body.get("data")
+    if (
+        not isinstance(text, str)
+        or not text.strip()
+        or (data is not None and not isinstance(data, dict))
+    ):
+        return JSONResponse(
+            {"error": "text is a string, data an object", "code": "bad_request"},
+            status_code=400,
+        )
+    status, resp = await _remote_origin.deliver(rec, title, text, dict(data or {}))
+    where = "%s on %s" % (
+        rec.get("session"),
+        rec.get("device_name") or rec.get("device"),
+    )
+    if status in (200, 201):
+        _remote_origin.note_reported(title)
+        return JSONResponse({"ok": True, "sent_to": where, "id": resp.get("id")})
+    if status == 0:
+        return JSONResponse(
+            {
+                "error": "%s — the report was not delivered" % resp.get("error"),
+                "code": "device_offline",
+            },
+            status_code=502,
+        )
+    return JSONResponse(
+        {
+            "error": "%s refused the report: %s"
+            % (
+                rec.get("device_name") or rec.get("device"),
+                resp.get("error") or status,
+            ),
+            "code": str(resp.get("code") or "refused"),
+        },
+        status_code=502,
+    )
 
 
 def _inbox_in_use(path: str) -> bool:
@@ -9654,6 +10050,9 @@ def recently_closed() -> JSONResponse:
                 # missing": dropped at load), and whether its branch survives.
                 "reason": e.get("reason") or "",
                 "branch_exists": e.get("branch_exists"),
+                # A session that closed itself when done (started by an
+                # agent on another device): what it said last.
+                **({"last_reply": e["last_reply"]} if e.get("last_reply") else {}),
             }
         )
     return JSONResponse(out)
