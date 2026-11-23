@@ -4630,7 +4630,9 @@ Each row carries both identities — the saved name / branch / session title, th
 badges for what the directory is (`worktree`, `workspace`, `pr`, `in-place`,
 `provisioned`, `worktree gone`, `in use: <session>`), when it was last used
 ("closed 3d ago" for a session, "used 5d ago" for a leftover directory), and its
-size once the second `?sizes=1` pass lands. `Ctrl+F` filters, the sort picker
+size once the second `?sizes=1` pass lands. `Ctrl+F` filters by name, branch,
+path or project folder (a worktree row shows the folder it was cut from, so
+typing a project's name finds everything closed in it), the sort picker
 orders by last used / name / size, and the checkboxes drive the same bulk bar the
 other list dialogs use (**Forget selected** · **Delete from disk**).
 

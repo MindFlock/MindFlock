@@ -146263,6 +146263,8 @@ function rowSearchFields(e, alias = "") {
 		e.title,
 		e.name,
 		e.path,
+		e.repo,
+		projectNote(e),
 		e.kind,
 		e.in_place ? "in-place" : "",
 		e.provisioned ? "provisioned" : "",
@@ -146275,6 +146277,11 @@ function dirNote(e, alias = "") {
 	const base = pathBasename(e.path || "");
 	if (!base) return "";
 	return entryLabel(e, alias).includes(base) || base === e.title ? "" : base;
+}
+function projectNote(e) {
+	const base = pathBasename(e.repo || "").replace(/^_base_/, "");
+	if (!base || base === pathBasename(e.path || "")) return "";
+	return base;
 }
 function sumBytes(rows) {
 	const seen = /* @__PURE__ */ new Set();
@@ -146704,7 +146711,7 @@ function RecentDialog() {
 							id: "recent-filter",
 							value: query,
 							onChange: setQuery,
-							placeholder: "Filter by name, branch, session, or path…  ( Ctrl+F )",
+							placeholder: "Filter by name, branch, folder, or path…  ( Ctrl+F )",
 							onEscape: closeDialog
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SortPicker, {
@@ -146765,6 +146772,7 @@ function RecentDialog() {
 												a ? "Saved name: " + a : "",
 												e.branch ? "Branch: " + e.branch : "",
 												e.title ? "Session: " + e.title : "",
+												e.repo ? "Folder: " + e.repo : "",
 												e.path || ""
 											].filter(Boolean).join("\n"),
 											children: label(e)
@@ -146783,6 +146791,11 @@ function RecentDialog() {
 												dirNote(e, a) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "recent-slug muted",
 													children: dirNote(e, a)
+												}),
+												projectNote(e) && projectNote(e) !== dirNote(e, a) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "recent-slug muted",
+													title: "Folder: " + e.repo,
+													children: projectNote(e)
 												}),
 												e.kind && e.kind !== "in-place" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "ws-badge kind",

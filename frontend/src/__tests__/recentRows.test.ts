@@ -14,6 +14,7 @@ import {
   nothingMessage,
   pruneMessage,
   prunedMessage,
+  projectNote,
   rowSearchFields,
   rowSortValue,
   staleDays,
@@ -101,6 +102,30 @@ describe("rowSearchFields", () => {
     for (const word of ["saved", "in-place", "provisioned", "worktree gone", "unused"]) {
       expect(fields).toContain(word);
     }
+  });
+});
+
+describe("the project folder", () => {
+  const wt = row({
+    path: "/home/u/.mindflock/worktrees/me/fix-login_18ea",
+    branch: "me/fix-login",
+    repo: "/home/u/work/_base_shop-api",
+  });
+
+  it("finds a worktree row by the folder it was cut from", () => {
+    const hay = rowSearchFields(wt).filter(Boolean).join(" ").toLowerCase();
+    expect(hay).toContain("shop-api");
+    expect(hay).toContain("/home/u/work");
+  });
+
+  it("names the folder without MindFlock's own base-clone prefix", () => {
+    expect(projectNote(wt)).toBe("shop-api");
+    expect(projectNote(row({ path: "/x/wt", repo: "/home/u/code/site" }))).toBe("site");
+  });
+
+  it("says nothing when the row's own directory is the folder", () => {
+    expect(projectNote(row({ path: "/home/u/code/site", repo: "" }))).toBe("");
+    expect(projectNote(row({ path: "/home/u/code/site", repo: "/other/site" }))).toBe("");
   });
 });
 

@@ -22,6 +22,9 @@ export interface RecentRow {
   name: string;
   path: string;
   folder: string;
+  /** The project folder the work belongs to (the repository a worktree was
+   * cut from); "" when the row's own directory is that folder. */
+  repo?: string;
   /** base · refresher · pr · tmp · worktree · workspace · in-place ("" unknown). */
   kind: string;
   /** A closed peer-share session (People → Reopen, never the generic Reopen). */
@@ -119,7 +122,9 @@ export function rowSortValue(
 /** Everything the row SHOWS, badges included: "gone", "in-place" and "unused"
  * read as searchable words on screen, so they have to be searchable. The path is
  * in here too even though the row only shows it on hover — a workspace is often
- * easiest to find by the repo directory it sits under. */
+ * easiest to find by the repo directory it sits under. And the project folder
+ * (`repo`): a worktree's own path names its branch, never the project, so
+ * without it "everything I closed in sitecheck" found nothing. */
 export function rowSearchFields(e: RecentRow, alias = ""): Array<string | null | undefined> {
   return [
     alias,
@@ -127,6 +132,8 @@ export function rowSearchFields(e: RecentRow, alias = ""): Array<string | null |
     e.title,
     e.name,
     e.path,
+    e.repo,
+    projectNote(e),
     e.kind,
     e.in_place ? "in-place" : "",
     e.provisioned ? "provisioned" : "",
@@ -146,6 +153,15 @@ export function dirNote(e: RecentRow, alias = ""): string {
   if (!base) return "";
   const shown = entryLabel(e, alias);
   return shown.includes(base) || base === e.title ? "" : base;
+}
+
+/** The project folder's name, for a row whose own directory does not say it
+ * (a worktree). A base clone MindFlock made is `_base_<name>`: the prefix is
+ * ours, not the project's, so it is dropped. "" when there is nothing to add. */
+export function projectNote(e: RecentRow): string {
+  const base = pathBasename(e.repo || "").replace(/^_base_/, "");
+  if (!base || base === pathBasename(e.path || "")) return "";
+  return base;
 }
 
 /** Total bytes over rows, counting each DIRECTORY once.
