@@ -5985,7 +5985,15 @@ async def origin_control(
     who = _remote_origin.caller(request)
     inst = ENGINE.instances.get(title)
     if inst is None:
-        if action == "status" and _remote_origin.record(title) is not None:
+        # Closed? Said only to the session that started it (provenance
+        # first): anyone else learns nothing beyond "no session".
+        if (
+            action == "status"
+            and _remote_origin.control_refusal(
+                title, None, who, origin_session, closed=True
+            )
+            is None
+        ):
             from backend.web.core import recently_closed as _rc
 
             hit = _rc.closed_hint(title)
@@ -6056,32 +6064,12 @@ async def origin_inbox(
     waits on). Over the device link only (remote marker + a valid
     credential; never a guest link) and only when ``to`` started ``from`` on
     the calling device (:func:`remote_origin.started_by`): **403**
-    ``not_started_here`` otherwise. This route does not ask for Allow remote
-    control (starting the session there was this device's own doing); the
-    auth gate still does for a token-paired device that is not a fleet
-    member."""
-    if _guests.scope_guest(request) is not None:
-        return JSONResponse(
-            {"error": "not for a guest link", "code": "guest"}, status_code=403
-        )
-    if not _remote.from_remote(request):
-        return JSONResponse(
-            {
-                "error": "reports come only from your other devices",
-                "code": "not_a_device",
-            },
-            status_code=403,
-        )
-    auth = request.headers.get("authorization") or ""
-    tok = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
-    if not tok or not _auth.token_valid(tok):
-        return JSONResponse(
-            {
-                "error": "this device did not accept the sender's credential",
-                "code": "not_linked",
-            },
-            status_code=401,
-        )
+    ``not_started_here`` otherwise. Guarded like ``/api/transfers`` (Allow
+    remote control included), and only from a device the LINK identifies
+    (its tailnet address): a claim is **403** ``unverified``."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
     body = payload if isinstance(payload, dict) else {}
     to, frm, text = body.get("to"), body.get("from"), body.get("text")
     data = body.get("data")
@@ -6098,7 +6086,21 @@ async def origin_inbox(
             status_code=400,
         )
     who = _remote_origin.caller(request)
-    if not who["device"] or _remote_origin.started_by(who["device"], frm) != to:
+    if not who["verified"]:
+        # A claim (the remote marker, e.g. over a tunnel) is not who sent
+        # it: a report is typed into an agent's terminal — only from the
+        # device the link itself names.
+        return JSONResponse(
+            {
+                "error": "the sending device was not identified by its tailnet "
+                "address; reports come back only over the tailnet",
+                "code": "unverified",
+            },
+            status_code=403,
+        )
+    if not _remote_origin.started_matches(
+        who["device"], frm, to, ENGINE.instances.get(to)
+    ):
         return JSONResponse(
             {
                 "error": "%s was not started on that device by %s here" % (frm, to),
@@ -6186,6 +6188,19 @@ async def instance_remote_control(
         dev = _send_session.resolve_device(device)
     except _send_session.Refusal as r:
         return JSONResponse(r.body(), status_code=r.status)
+    if not _remote_origin.started_matches(
+        dev["key"], there, title, ENGINE.instances.get(title)
+    ):
+        # Checked here too (the device checks it again): this very session
+        # — not a later one that took its name — started it there.
+        return JSONResponse(
+            {
+                "error": "%s did not start %s — only the session that started "
+                "it may act on it" % (title, target),
+                "code": "not_origin",
+            },
+            status_code=403,
+        )
     status, resp = await _remote.post_json(
         dev,
         "/api/origin-control",

@@ -1817,7 +1817,10 @@ belongs to the session that started it:
   another device are read-only here unless YOU started them").
 
 `spawn_session(device=…)` takes `prompt`, `repo_path` (required: a path on
-that device), `title`, `program` and `in_place`; the rest of
+that device), `title`, `program` (only your own) and `in_place`. It is
+refused for a caller with a fence or red zones (that device can't enforce
+them), past a ship lane below `push`, and for a machine that is not one of
+the user's linked devices; the rest of
 `spawn_session` (fences, order, worktree forks) applies to local workers
 only. It answers `{title: "<device>::<title>", device, device_name, status,
 remote: true, queued?, hint}`.

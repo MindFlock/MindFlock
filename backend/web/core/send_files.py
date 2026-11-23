@@ -44,7 +44,6 @@ import fnmatch
 import hashlib
 import json
 import os
-import shlex
 import stat
 import subprocess
 import urllib.parse
@@ -451,13 +450,15 @@ def collect(
                 continue
             if is_git and _is_ignored(root, rel):
                 if not ignored_ok:
+                    # No ready-made bypass in what an agent reads: sending
+                    # an ignored file is the person's own decision (docs/
+                    # devices.md, Send files).
                     raise Refusal(
                         403,
                         "ignored",
                         "%s is ignored by git (build output or a local file), "
-                        "so it is not sent by default. To send this one file "
-                        "the owner runs: mindflock send-files DEVICE %s --from "
-                        "TITLE --include-ignored" % (rel, shlex.quote(rel)),
+                        "so it is not sent. If the user wants this one file on "
+                        "the other device, they send it themselves" % rel,
                     )
                 ignored_sent.append(rel)
             add(rel, real)

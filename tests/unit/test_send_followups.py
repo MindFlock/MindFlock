@@ -64,14 +64,12 @@ def repo(tmp_path):
 # --------------------------------------------------------------------------- #
 # ignored files
 # --------------------------------------------------------------------------- #
-def test_a_named_ignored_file_is_refused_by_default_with_the_flag_named(repo):
+def test_a_named_ignored_file_is_refused_by_default(repo):
     with pytest.raises(Refusal) as err:
         send_files.collect(str(repo), ["electron/dist/Tripwire-Setup.exe"])
     assert err.value.code == "ignored"
-    assert "--include-ignored" in err.value.message
-    assert "mindflock send-files DEVICE electron/dist/Tripwire-Setup.exe" in (
-        err.value.message
-    )
+    # The user's own decision: no ready-made bypass in what an agent reads.
+    assert "--include-ignored" not in err.value.message
 
 
 def test_an_ignored_folder_sends_nothing(repo):

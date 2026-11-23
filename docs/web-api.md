@@ -3146,14 +3146,16 @@ folder>, in_place: true, prompt, spawned: true, program}` (`title`).
 - `POST /api/origin-inbox` (device to device) `{to, from, kind: result,
   text, data?}` → **201** `{ok, id}`: a result from `<device>::<from>` in
   `to`'s inbox (`data` keeps `status`, `turn_end`, `branch`, `head_sha`).
-  Marker + credential, never a guest (a fleet member's report needs no
-  Allow remote control here; a token-paired device's does, as everywhere);
-  **403** `not_started_here` unless `to` started `from` on that device.
+  Guarded like `/api/transfers` (marker, credential, Allow remote control,
+  never a guest); **403** `unverified` unless the link identifies the
+  device by its tailnet address; **403** `not_started_here` unless `to` —
+  this very session, by its creation time — started `from` on that device.
 - `POST /api/instances/{title}/remote-control` `{target:
   "<device>::<title>", action, text?}` → the device's answer to the above
   for `title` as the origin (the MCP's `send_message` / `kill_session` /
-  status on a session it started there). **400** `remote` for a relayed
-  request; **502** `device_offline` / `device_too_old`.
+  status on a session it started there). **403** `not_origin` unless this
+  very session started it there; **400** `remote` for a relayed request;
+  **502** `device_offline` / `device_too_old`.
 - `POST /api/instances/{title}/report-origin` `{text, data?}` → `{ok,
   sent_to}`: the session's `report_result` when an agent on another device
   started it; **409** `no_origin` otherwise, **502** when that device
@@ -3370,7 +3372,10 @@ runs_automation}`; 401 without it, 409 when this device is in another group.
   install already running). A git checkout never takes the tag: it starts
   its own dev update → `{ok, dev: true, ref: <branch>, commit: <its
   upstream tip>, version}`, `{ok, current, dev}` when its branch has nothing
-  new, or 409 `{blocked, install: "editable", error: <its why_not>}`. `GET /api/fleet/update/state` → `{version,
+  new, or 409 `{blocked, install: "editable", error: <its why_not>}`. A
+  checkout with no branch checked out is moved from here only when it sits
+  exactly on a published release tag (`git ls-remote --tags`); any other
+  detached commit is 409 ("run `mindflock update` on that machine"). `GET /api/fleet/update/state` → `{version,
   commit, install, blocked, state, ref, error, restart_pending}`. Both answer
   401 `{error, id, epoch, kfp}` to anything but the current fleet key.
 

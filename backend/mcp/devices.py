@@ -236,6 +236,35 @@ class DeviceTools:
                 "spawn_session(device=) needs a MindFlock session identity: the "
                 "session there reports back to the one that started it"
             )
+        # The ship rule (a lane the user set below push stops it) — and
+        # nothing that would let a bounded session start an UNbounded agent
+        # elsewhere: the receiving device cannot enforce this one's fence or
+        # red zones, so a session that has either may not do it at all.
+        self.policy.require_ship(flock, me, "spawn_session(device=)", depth="push")
+        my_row = flock.local.get(me) or {}
+        order = my_row.get("order") if isinstance(my_row.get("order"), dict) else {}
+        fence = order.get("fence") if isinstance(order, dict) else None
+        if isinstance(fence, dict) and (fence.get("only") or fence.get("keep_out")):
+            raise ToolError(
+                "spawn_session(device=) is refused for a session with a fence: "
+                "another device cannot enforce your fence, so the session there "
+                "would not have it. Ask the user to start it there, or to lift "
+                "your fence first"
+            )
+        rz = my_row.get("redzone") if isinstance(my_row.get("redzone"), dict) else {}
+        if rz.get("zones"):
+            raise ToolError(
+                "spawn_session(device=) is refused while red zones apply to you: "
+                "another device cannot enforce them. Ask the user to start it "
+                "there"
+            )
+        mine = str(my_row.get("program") or "")
+        program = str(args.get("program") or "").strip() or mine
+        if mine and program != mine:
+            raise ToolError(
+                "spawn_session(device=) starts your own program (%s) only — not "
+                "%r" % (mine, program)
+            )
         device = str(args.get("device") or "").strip()
         repo = str(args.get("repo_path") or "").strip()
         if not repo:
@@ -259,7 +288,15 @@ class DeviceTools:
             for d in hits
             if (d.get("member") and d.get("same_fleet")) or d.get("has_token")
         ]
-        hits = linked or hits
+        if hits and not linked:
+            # Never a machine that merely shares the tailnet (a gate-off
+            # MindFlock is drivable without any credential).
+            raise ToolError(
+                "%s is on the tailnet but is not one of the user's devices — "
+                "they add it in Settings → Your devices first"
+                % (hits[0].get("host") or hits[0].get("device"))
+            )
+        hits = linked
         if len(hits) != 1:
             names = ", ".join(
                 "%s (%s)" % (d.get("host"), d.get("device")) for d in hits
@@ -285,8 +322,8 @@ class DeviceTools:
         }
         if args.get("in_place"):
             body["in_place"] = True
-        if args.get("program"):
-            body["program"] = str(args["program"])
+        if program:
+            body["program"] = program
         try:
             resp = self.api.post(
                 "/api/devices/%s/fwd/api/instances" % urllib.parse.quote(key, safe=""),

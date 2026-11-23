@@ -169,12 +169,14 @@ because the receiving machine runs agents:
   resolved; an escape is refused). In folders, symlinks, special files and
   everything git ignores (`node_modules`, `.venv`, build output) are skipped
   and listed; a folder git ignores as a whole (`electron/dist/`) sends
-  nothing, and a NAMED file git ignores is refused with the way to send it:
-  the owner's `mindflock send-files DEVICE <file> --from TITLE
-  --include-ignored`, which lets exactly one named ignored file through (a
-  built installer) — still inside the worktree, still subject to the rules
-  below and the size limits. Agents can't ask for it (the MCP has no such
-  argument). **Never** sent: `.git` internals, agent login/config/transcript
+  nothing, and a NAMED file git ignores is refused (the refusal names no
+  bypass). The person sends one such file — a built installer — with
+  `mindflock send-files DEVICE <file> --from TITLE --include-ignored`, which
+  asks them to confirm at a terminal; exactly one named file, still inside
+  the worktree, still subject to the rules below and the size limits. The
+  MCP has no such argument. (The HTTP field `include_ignored` itself can't
+  tell the person's CLI from an agent holding the same local token: the
+  terminal confirmation is the owner gate.) **Never** sent: `.git` internals, agent login/config/transcript
   folders (`.claude`, `.codex`, `.gemini`, `.aider*`, …), `.ssh`/`.gnupg`/
   cloud credential folders, `.netrc`, `.git-credentials`. **Left out unless
   allowed**: `.env*` (not `.env.example`), keys and certificates (`*.pem`,
@@ -272,15 +274,29 @@ started it, finishes by itself and reports back
 - **It reports back.** Its `report_result`, and every turn it ends (after a
   minute of quiet, once per turn), go to the origin session's inbox on the
   origin device as a `result` from `<this device>::<title>` — what
-  `wait_for_session` there waits on.
+  `wait_for_session` there waits on. Only over the tailnet: a device
+  reached only through the no-Tailscale tunnel can't be identified by its
+  address, so its reports are refused (`wait_for_session` still sees the
+  session go idle).
 - **The origin may act on it — and only on it.** The session that started
   it may read its state, send it a message (`send_message`, delivery auto)
   and close it (`kill_session`, close only) — nothing else on this device.
+- **Starting one with `spawn_session(device=…)`** is refused for a session
+  with a fence or red zones (the other device can't enforce them, so the
+  new session would not have them), past a ship lane the user set below
+  `push`, for any program but the caller's own, and for any machine that
+  is not one of the user's linked devices.
 
 ### Threat notes
 
 This is a new cross-device control path, so it is kept narrow:
 
+- **Exact identities.** Authorization compares exact device keys (folding
+  names is only for what a person types: `a-b` is not `ab`), and every
+  record is pinned to a session's creation time — a later session that
+  takes the same title, here or on the origin device, inherits nothing. A
+  queued create binds only a session made soon after it, agent-spawned when
+  an agent asked, and never after that create failed.
 - **Identity comes from the link, never from the request.** The origin
   device is the discovered device whose tailnet address the request came
   from (that address is bound to the node's WireGuard key); without one
@@ -304,14 +320,19 @@ This is a new cross-device control path, so it is kept narrow:
   device can't relay a request to them through another device's
   credential.
 - **Reports back are just as narrow.** `POST /api/origin-inbox` on the
-  origin device takes a report only over the link (marker + credential,
-  no guest; a fleet member's needs no Allow remote control there) and only
-  from the device that origin session started it on
+  origin device is guarded like a file transfer (marker + credential,
+  Allow remote control on, no guest), takes a report only from a device
+  the LINK identifies (its tailnet address — a claim, e.g. over a tunnel or
+  `tailscale serve`, which arrive from loopback, is refused `unverified`),
+  and only from the device that very origin session started it on
   (recorded when the create went out); it lands as an ordinary agent
-  message from `<device>::<title>`, rate- and hop-limited like any other.
+  message from `<device>::<title>`, rate- and hop-limited like any other,
+  and like any message it is never typed while a dialog is on screen (the
+  delivery lane's screen check).
 - **What the origin cannot do.** Type into the session, answer its
   dialogs, delete its folder, or touch any session it did not start. A
-  forged origin title fails the exact-match check; a stolen fleet key
+  forged origin title fails the exact-match check; the status of a closed
+  session is told only after the same check; a stolen fleet key
   already drives every member, so this path adds no reach beyond "the
   session that started it".
 

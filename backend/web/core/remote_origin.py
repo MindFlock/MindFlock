@@ -83,9 +83,11 @@ __all__ = [
 BYS = ("agent", "person")
 #: How long an origin session title may be (one cleaned line).
 SESSION_CHARS = 120
-#: A create's record matches the session made within this many seconds of it
-#: (a queued create starts later: memory).
-_MATCH_S = 6 * 3600.0
+#: An unpinned (queued) agent create's record matches the session made
+#: within this many seconds of it (the launch gate's queue: memory).
+_MATCH_S = 2 * 3600.0
+#: A person's create is never queued: its session exists at once.
+_PERSON_MATCH_S = 10 * 60.0
 #: Turn ends are delivered after this much quiet (and at most once a turn).
 TURN_SETTLE_S = 60.0
 LOOP_S = 30.0
@@ -225,7 +227,15 @@ async def create_over_link(payload: dict, link: Optional[dict], create):
             except (ValueError, AttributeError):
                 title = ""
         if title:
-            await asyncio.to_thread(note_created, title, link, clean)
+            created = None
+            try:
+                from backend.web import server as _server
+
+                live = _server.ENGINE.instances.get(title)
+                created = _created(live) if live is not None else None
+            except Exception:  # noqa: BLE001
+                created = None
+            await asyncio.to_thread(note_created, title, link, clean, created)
     return resp
 
 
@@ -252,7 +262,9 @@ def clean_origin(raw) -> Optional[dict]:
 # --------------------------------------------------------------------------- #
 # provenance (the receiving side)
 # --------------------------------------------------------------------------- #
-def note_created(title: str, who: dict, origin: Optional[dict]) -> dict:
+def note_created(
+    title: str, who: dict, origin: Optional[dict], created: Optional[float] = None
+) -> dict:
     """Record that ``who`` (:func:`caller`) asked for ``title`` here, with the
     create's ``origin`` (:func:`clean_origin`; None = a person's create from
     that device's New Session dialog). Returns the record."""
@@ -264,7 +276,10 @@ def note_created(title: str, who: dict, origin: Optional[dict]) -> dict:
         "session": o["session"] if o["by"] == "agent" else "",
         "by": o["by"],
         "at": time.time(),
-        "created_at": None,
+        # The session the create made, when it already exists (an admitted
+        # create registers it before answering): pinned at once. A queued
+        # create pins on first sight, under record()'s stricter rules.
+        "created_at": created,
         "turn_sent": 0.0,
         "report_sent": 0.0,
     }
@@ -303,14 +318,36 @@ def record(title: str, inst=None) -> Optional[dict]:
         if created is None:
             return dict(rec) if pinned is not None or inst is None else None
         if pinned is None:
+            # Unpinned: a create that was queued (memory). Bind only a
+            # session that plausibly IS that create: made soon enough after
+            # it, agent-spawned when an agent asked, and no failure of that
+            # create recorded since (a failed one must not lend its origin
+            # to the next session of that name).
             at = float(rec.get("at") or 0.0)
-            if not (at - 120.0 <= created <= at + _MATCH_S):
+            window = _MATCH_S if rec.get("by") == "agent" else _PERSON_MATCH_S
+            if not (at - 120.0 <= created <= at + window):
+                return None
+            if rec.get("by") == "agent" and not getattr(inst, "Spawned", False):
+                return None
+            if _failed_since(title, at):
                 return None
             rec["created_at"] = created
             data["here"][title] = rec
             _save(data)
             return dict(rec)
         return dict(rec) if abs(float(pinned) - created) < 1.0 else None
+
+
+def _failed_since(title: str, at: float) -> bool:
+    """Whether a create of ``title`` failed at or after ``at`` (the
+    server's recent create failures)."""
+    try:
+        from backend.web import server as _server
+
+        rec = _server._CREATE_FAILURES.get(title)
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(rec, dict) and float(rec.get("ts") or 0.0) >= at - 1.0
 
 
 def _update(title: str, **fields) -> None:
@@ -395,11 +432,20 @@ def _started_key(device: str, title: str) -> str:
 
 def note_started(device: str, title: str, origin_session: str) -> None:
     """This device's ``origin_session`` started ``title`` on ``device`` (its
-    key here): what :func:`started_by` checks before a report or a control
-    request about it is accepted."""
+    key here): what :func:`started_matches` checks before a report or a
+    control request about it is accepted. Pinned to that session's creation
+    time, so a later session reusing its title inherits nothing."""
     if not device or not title or not origin_session:
         return
     now = time.time()
+    origin_created = None
+    try:
+        from backend.web import server as _server
+
+        live = _server.ENGINE.instances.get(origin_session)
+        origin_created = _created(live) if live is not None else None
+    except Exception:  # noqa: BLE001
+        origin_created = None
     with _LOCK:
         data = _load()
         data["started"] = {
@@ -409,6 +455,7 @@ def note_started(device: str, title: str, origin_session: str) -> None:
         }
         data["started"][_started_key(device, title)] = {
             "origin": origin_session,
+            "origin_created": origin_created,
             "at": now,
         }
         _save(data)
@@ -422,18 +469,39 @@ def started_by(device: str, title: str) -> str:
     return str(rec.get("origin") or "") if isinstance(rec, dict) else ""
 
 
+def started_matches(device: str, title: str, origin: str, origin_inst) -> bool:
+    """Whether the LIVE session ``origin`` (``origin_inst``) is the one that
+    started ``title`` on ``device`` — its title AND its creation time (a
+    record from before pinning matches by title)."""
+    if not device or not origin or origin_inst is None:
+        return False
+    with _LOCK:
+        rec = _load()["started"].get(_started_key(device, title))
+    if not isinstance(rec, dict) or str(rec.get("origin") or "") != origin:
+        return False
+    pinned = rec.get("origin_created")
+    if pinned is None:
+        return True
+    created = _created(origin_inst)
+    return created is not None and abs(float(pinned) - created) < 1.0
+
+
 # --------------------------------------------------------------------------- #
 # the provenance rule (enforced HERE, on the receiving side)
 # --------------------------------------------------------------------------- #
 def control_refusal(
-    title: str, inst, who: dict, origin_session: str
+    title: str, inst, who: dict, origin_session: str, closed: bool = False
 ) -> Optional[Tuple[int, str, str]]:
     """Why the caller ``who`` (:func:`caller`) may NOT act on ``title`` for
     ``origin_session`` → ``(status, code, sentence)``, or None when it may:
     ``title`` was started here by an agent session of exactly that name on
     exactly that device — as the link identifies it now, at least as surely
     as when it was created."""
-    rec = record(title, inst) if inst is not None else None
+    # ``closed``: the session is gone (asked for its status): its record,
+    # unbound, still decides — nothing about it is said to anyone else.
+    rec = (
+        record(title, inst) if inst is not None else (record(title) if closed else None)
+    )
     if rec is None:
         return (
             403,
@@ -448,11 +516,9 @@ def control_refusal(
             "%s was started by a person, not by a session — it is controlled "
             "from its own device" % title,
         )
-    from backend.web.core import remote as _remote
-
-    if _remote.name_key(str(who.get("device") or "")) != _remote.name_key(
-        str(rec.get("device") or "")
-    ) or not who.get("device"):
+    # Exact keys: folding names is for what a person types, never for
+    # authorization ("a-b" and "ab" are different devices).
+    if not who.get("device") or str(who.get("device")) != str(rec.get("device") or ""):
         return (
             403,
             "not_origin",

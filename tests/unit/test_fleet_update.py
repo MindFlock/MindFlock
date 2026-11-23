@@ -620,6 +620,11 @@ async def test_apply_on_a_checkout_that_can_update_moves_its_branch(monkeypatch)
         "start_dev_update",
         lambda **k: seen.append(k) or {"ok": True},
     )
+    from backend.web.core import dev_update
+
+    # From another device a no-branch checkout moves only when parked on a
+    # published release (tests/unit/test_cross_device_review.py: M4).
+    monkeypatch.setattr(dev_update, "published_release_at", lambda c, r, sha: "v0.7.4")
     out, status = await fleet_update.apply({"tag": "v9.9.9"})
     assert status == 200 and out["ok"] is True and out["dev"] is True
     assert out["commit"] == st["target"] and out["version"] == "9.9.10"

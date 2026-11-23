@@ -737,7 +737,9 @@ and listed; `--include-secrets` sends secrets only when
 `transfers.allow_secrets` is on. `--include-ignored` sends ONE named file
 that git ignores — a built installer in a build-output folder — still only
 from inside the worktree, still never a secret, within the same size
-limits; it is not offered to agents (the MCP has no such argument).
+limits. It asks you to confirm at a terminal ("send … although git ignores
+it? [y/N]") and refuses without one, so a shell an agent runs can't use it;
+the MCP has no such argument.
 `--to-session NAME` tells that session on `DEVICE` what arrived; `--note`
 without it starts a session there in that folder with the note as its task.
 Prints `sent N files from TITLE -> DEVICE:<folder>`, each file's SHA-256

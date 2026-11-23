@@ -22,9 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the starting session's inbox, so `wait_for_session` on
   `<device>::<title>` works; that session — and only that one, checked on
   the receiving device — may also message and close it. New
-  `spawn_session(device=…)` starts one there. The origin device is taken from
-  the device link, never from the request (`docs/devices.md` has the threat
-  notes).
+  `spawn_session(device=…)` starts one there — never for a fenced or
+  red-zoned caller, past its ship lane, with another program, or on an
+  unlinked machine. The origin device is taken from the device link, never
+  from the request; reports back are accepted only from a device the link
+  identifies, and every record is pinned to the sessions' creation times
+  (`docs/devices.md` has the threat notes).
 
 ### Fixed
 
@@ -46,8 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clean and a local `main` (if any) is not ahead, the update now puts the
   checkout on `main` at the commit it is on — no file moves, nothing
   discarded — then fast-forwards as usual; a rollback restores the detached
-  HEAD and the branch exactly. Update all my devices updates such checkouts
-  like any other member, and one that can't says its own reason ("…has
+  HEAD and the branch exactly; it is refused while that branch is checked
+  out in another worktree. Update all my devices updates such checkouts —
+  a no-branch one only when it sits exactly on a published release — and one that can't says its own reason ("…has
   uncommitted changes…") instead of "development checkout".
 - **`mindflock send-files --from TITLE` reads relative paths from that
   session's folder** (or from the current directory when you are inside it)
@@ -61,9 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Naming a folder git ignores as a whole (`electron/dist/`) used to send
   everything in it, and a named ignored file went silently; both are now left
   out. `mindflock send-files DEVICE <file> --include-ignored` sends exactly
-  one named ignored file — a built installer — still only from inside the
-  worktree, never a secret, within the size limits (512 MB per transfer by
-  default; a 190 MB installer fits). Agents can't ask for it.
+  one named ignored file — a built installer — after you confirm it at a
+  terminal, still only from inside the worktree, never a secret, within the
+  size limits (512 MB per transfer by default; a 190 MB installer fits).
+  Agents can't ask for it.
 
 ## [0.14.26] - 2026-11-21
 

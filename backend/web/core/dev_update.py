@@ -172,6 +172,53 @@ def _pyproject_version(checkout: str, rev: str) -> str:
     return str(project.get("version") or "").strip()
 
 
+def checked_out_elsewhere(checkout: str, branch: str) -> bool:
+    """Whether ``branch`` is checked out in a worktree of this repository
+    other than ``checkout``. Unknown (git failed) counts as yes."""
+    rc, out = _git(checkout, "worktree", "list", "--porcelain")
+    if rc != 0:
+        return True
+    here = os.path.realpath(checkout)
+    path = ""
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            path = os.path.realpath(line[len("worktree ") :])
+        elif line == "branch refs/heads/" + branch and path != here:
+            return True
+    return False
+
+
+def published_release_at(checkout: str, remote: str, sha: str) -> str:
+    """The published release tag (``v0.14.25`` on ``remote``) whose commit
+    is ``sha``, "" when none — a checkout "parked on a release". One
+    ``ls-remote``; "" when the remote can't be asked."""
+    import re as _re
+
+    rc, out = _git(
+        checkout, "ls-remote", "--tags", remote or "origin", timeout=NET_TIMEOUT_S
+    )
+    if rc != 0 or not _SHA.match(sha or ""):
+        return ""
+    release = _re.compile(r"^v?[0-9]+(\.[0-9]+){1,3}$")
+    hits: Dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or not parts[1].startswith("refs/tags/"):
+            continue
+        name = parts[1][len("refs/tags/") :]
+        peeled = name.endswith("^{}")
+        name = name[:-3] if peeled else name
+        if not release.match(name):
+            continue
+        # An annotated tag's peeled line names its commit; it wins.
+        if peeled or name not in hits:
+            hits[name] = parts[0]
+    for name, commit in sorted(hits.items()):
+        if commit == sha:
+            return name
+    return ""
+
+
 def attach_plan(checkout: str, head: str, target: str, default: str) -> dict:
     """For a checkout with NO branch checked out: whether the update may
     attach it to ``default`` first → ``{"ok": True, "branch", "create",
@@ -197,6 +244,16 @@ def attach_plan(checkout: str, head: str, target: str, default: str) -> dict:
             "why": "This development checkout has no branch checked out and is "
             "at a commit that is not on %s; switch it to %s (git switch %s) to "
             "get updates." % (default, default, q(default)),
+        }
+    if checked_out_elsewhere(checkout, default):
+        # Moving a branch another worktree has checked out would move that
+        # worktree's HEAD under its index and files (git's own switch
+        # refuses this; update-ref + symbolic-ref would not).
+        return {
+            "ok": False,
+            "why": "This development checkout has no branch checked out, and "
+            "%s is checked out in another worktree; update from that worktree "
+            "instead." % default,
         }
     rc, local = _git(checkout, "rev-parse", "-q", "--verify", "refs/heads/" + default)
     local = local if rc == 0 and _SHA.match(local) else ""
@@ -485,6 +542,12 @@ def _attach_lines(attach: Optional[dict], st: dict) -> List[str]:
         'if [ "$code" -eq 0 ] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then',
         '  code=3; ERR="the checkout has uncommitted changes now"',
         "fi",
+        # This checkout has no branch: any worktree listing the branch is
+        # another one (moving it would move that worktree under its files).
+        'if [ "$code" -eq 0 ] && git worktree list --porcelain | grep -qxF %s; then'
+        % shlex.quote("branch " + ref),
+        '  code=3; ERR="the branch is checked out in another worktree; nothing was changed"',
+        "fi",
     ]
     if attach.get("create"):
         lines += [
@@ -584,6 +647,11 @@ def attach_here(st: dict) -> Tuple[bool, str]:
     rc, porcelain = _git(checkout, "status", "--porcelain", "--untracked-files=no")
     if rc != 0 or porcelain:
         return False, "the checkout has uncommitted changes now; nothing was changed"
+    if checked_out_elsewhere(checkout, name):
+        return (
+            False,
+            "%s is checked out in another worktree; nothing was changed" % name,
+        )
     if _git(checkout, "update-ref", ref, prev, str(attach.get("from") or ""))[0] != 0:
         return (
             False,

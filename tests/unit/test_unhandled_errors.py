@@ -35,7 +35,7 @@ def captured(monkeypatch):
 def test_create_that_raises_answers_the_reason_and_logs_the_traceback(
     monkeypatch, captured
 ):
-    async def _boom(payload, *, person=""):
+    async def _boom(payload, *, person="", link=None):
         raise RuntimeError("the MindFlock session host is not answering")
 
     monkeypatch.setattr(_session_create, "create_requested", _boom)
@@ -59,7 +59,7 @@ def test_a_half_deleted_install_says_so(monkeypatch, captured):
     lazy import raised. The dialog must say the install is damaged and how to
     fix it — a retry cannot help."""
 
-    async def _boom(payload, *, person=""):
+    async def _boom(payload, *, person="", link=None):
         raise ImportError(
             "cannot import name 'preflight' from 'backend.session'",
             name="backend.session",

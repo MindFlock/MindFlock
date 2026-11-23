@@ -345,6 +345,26 @@ def _apply_dev() -> Tuple[dict, int]:
             "dev": True,
             "version": _self_update.installed_version(),
         }, 200
+    if st.get("attach"):
+        # Another device asks: put a no-branch checkout on its branch only
+        # when it is parked exactly on a published release (the machine
+        # left at a release commit). Any other detached commit may be a
+        # deliberate pin — its owner updates it there.
+        from backend.web.core import dev_update as _dev_update
+
+        tag = _dev_update.published_release_at(
+            str(st.get("checkout") or ""), str(st.get("remote") or "origin"), st["head"]
+        )
+        if not tag:
+            return {
+                "ok": False,
+                "blocked": True,
+                "install": "editable",
+                "error": "This development checkout has no branch checked out, "
+                "at a commit that is not a published release — so it is not "
+                "moved from another device. Run `mindflock update` on that "
+                "machine to update it there.",
+            }, 409
     result = _self_update.start_dev_update()
     if not result.get("ok"):
         busy = "already running" in str(result.get("error") or "")

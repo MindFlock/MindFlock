@@ -2202,6 +2202,31 @@ def _title_for_cwd(instances: List[dict]) -> str:
     return best
 
 
+def _stdin_is_tty() -> bool:
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _confirm_ignored(paths: List[str]) -> bool:
+    """``--include-ignored`` is the person's own decision: asked at a
+    terminal ("send dist/Setup.exe although git ignores it? [y/N]"), never
+    taken from a shell an agent runs (no terminal there)."""
+    if not _stdin_is_tty():
+        print(
+            "error: --include-ignored asks you to confirm at a terminal; run it "
+            "yourself in one",
+            file=sys.stderr,
+        )
+        return False
+    try:
+        answer = input("send %s although git ignores it? [y/N] " % ", ".join(paths))
+    except EOFError:
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
 def _paths_for_session(paths: List[str], folder: str) -> Tuple[List[str], str]:
     """``send-files --from TITLE``: where each relative PATH points →
     ``(paths, sentence)``. Absolute paths stay as they are. A relative one is
@@ -2246,6 +2271,9 @@ def _cmd_send_files(args: argparse.Namespace) -> int:
             )
             return 1
         paths = [p if os.path.isabs(p) else os.path.abspath(p) for p in args.paths]
+    if getattr(args, "include_ignored", False) and not _confirm_ignored(args.paths):
+        print("not sent", file=sys.stderr)
+        return 1
     try:
         res = (
             client.post(
