@@ -721,8 +721,12 @@ class RepositorySettings:
     #: Master pause for the whole Verify feature, and the sidebar bar's switch.
     #:
     #: Off means MindFlock does nothing about verification ON ITS OWN: no plan is
-    #: written when a branch lands (``server._verify_auto_for``), and no plan is
-    #: moved to ``due`` by the liveness loop. Nothing is deleted and nothing is
+    #: written when a branch lands (``server._verify_auto_for``), and a plan a
+    #: push wrote is not watched, written or moved to ``due`` by the loop. A
+    #: checklist somebody ASKED for — a route's Verify stop, the Verify button,
+    #: an empty or branch checklist — is still followed until its work ships
+    #: (``test_plans.is_asked_for``, ``test_plans_driver._plans_to_follow``):
+    #: the switch never strands a check that was asked for. Nothing is deleted and nothing is
     #: forgotten — the tracked repos, the plans and their recorded answers all
     #: survive, and turning it back on resumes exactly where it stopped. This is
     #: the twin of ``github.enabled``, and it pauses the same KIND of thing: the
