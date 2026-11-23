@@ -150,6 +150,10 @@ R_GRACE = "in its grace window"
 R_TYPED = "typed in recently"
 R_VIEWED = "open in a terminal"
 R_DIALOG = "dialog on screen"
+#: A worker with nothing to merge stays while its parent is mid-turn: the
+#: parent may be about to use it (send it, read its folder) — the case where
+#: a no-commit worker closed under a parent that was sending from it.
+R_PARENT_BUSY = "its parent is still working"
 
 # Why a close was allowed (the log line).
 W_NO_COMMITS = "no commits of its own"
@@ -594,6 +598,18 @@ def _last_poke(srv, title: str) -> float:
     return max(clocks)
 
 
+def _parent_busy(srv, parent: str) -> bool:
+    """Whether the live session ``parent`` is mid-turn (its agent neither
+    idle nor gone). Unknown counts as busy: a close can always wait a pass."""
+    inst = srv.ENGINE.instances.get(parent)
+    if inst is None:
+        return False
+    try:
+        return srv._agent_activity(inst, parent) not in ("idle", "offline")
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _has_live_children(instances: Mapping, title: str) -> bool:
     return any(
         t != title and (getattr(i, "Parent", "") or "") == title
@@ -778,6 +794,10 @@ def judge(
     ok, how = work_accounted(srv, inst, title, row, parent, orphan)
     if not ok:
         return _stay(how)
+    if how == W_NO_COMMITS and parent and _parent_busy(srv, parent):
+        # Nothing to merge is not "nothing left to do with it": its parent,
+        # still mid-turn, may be about to send it or read its folder.
+        return WAIT, R_PARENT_BUSY, None
 
     # --- 4. the grace window, and nobody looking -------------------------- #
     finished_at = max(rep_ts, since if not asleep else 0.0)

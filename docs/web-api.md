@@ -3086,10 +3086,10 @@ last commit), **422** `bad_bundle` from the device.
 ### Send files to another device
 
 `POST /api/instances/{title}/send-files` `{device, paths: [..],
-note?, to_session?, include_secrets?: bool}` → **200** `{ok, device,
-transfer_id, path, files: [{path, size, sha256}], total_size, total_sha256,
-exec_stripped, uncommitted, skipped: [{path, why}], caveats, messaged?,
-title?}` (`core/send_files.py`; the MCP's `send_files`, the CLI's
+note?, to_session?, include_secrets?: bool, include_ignored?: bool}` →
+**200** `{ok, device, transfer_id, path, files: [{path, size, sha256}],
+total_size, total_sha256, exec_stripped, uncommitted, skipped: [{path,
+why}], ignored?, caveats, messaged?, title?}` (`core/send_files.py`; the MCP's `send_files`, the CLI's
 `mindflock send-files`). `paths` (≤ 100) are files or folders inside the
 session's worktree, relative to it or absolute. Rules (what is skipped,
 never sent, or sent only with `include_secrets` + `transfers.allow_secrets`;
@@ -3106,6 +3106,8 @@ folder>, in_place: true, prompt, spawned: true, program}` (`title`).
 | git could not say which files it ignores (failed / timed out) | **500** `git_failed` (nothing sent) |
 | a file changed or its folder became a symlink while it was read | **409** `changed` |
 | a named secret; `include_secrets` without the setting | **403** `secret`, `secrets_not_allowed` |
+| a named file git ignores (without `include_ignored`, the CLI's `--include-ignored`: then exactly one named file goes and is listed in `ignored`); `include_ignored` with more than one path or a folder | **403** `ignored`; **400** `include_ignored_one_file` |
+| the session is not live but was just closed (`send-to-device` too) | **404** `closed` `{error: "X was closed 3 min ago — reopen it (mindflock reopen X …)", closed_at, reopen: <Recently closed id>}` |
 | in a red zone / outside the session's fence | **409** `red_zone` (`red_zone_breaches`) |
 | over `transfers.max_mb` / `max_files` (here or there) | **413** `too_large`, `too_many_files` |
 | everything was left out | **400** `nothing_to_send` (`skipped`) |

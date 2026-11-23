@@ -30,6 +30,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   HEAD and the branch exactly. Update all my devices updates such checkouts
   like any other member, and one that can't says its own reason ("…has
   uncommitted changes…") instead of "development checkout".
+- **`mindflock send-files --from TITLE` reads relative paths from that
+  session's folder** (or from the current directory when you are inside it)
+  and says which, instead of refusing them as outside the worktree.
+- **Sending from a session that was just closed says so**: "tripwire-w1 was
+  closed 3 min ago — reopen it (mindflock reopen tripwire-w1)" from the API,
+  the CLI and the MCP, instead of "no session named". New `mindflock reopen
+  TITLE`. A worker with no commits of its own is no longer auto-closed while
+  its parent is still mid-turn.
+- **Git-ignored files stay on this device unless you send one on purpose.**
+  Naming a folder git ignores as a whole (`electron/dist/`) used to send
+  everything in it, and a named ignored file went silently; both are now left
+  out. `mindflock send-files DEVICE <file> --include-ignored` sends exactly
+  one named ignored file — a built installer — still only from inside the
+  worktree, never a secret, within the size limits (512 MB per transfer by
+  default; a 190 MB installer fits). Agents can't ask for it.
 
 ## [0.14.26] - 2026-11-21
 

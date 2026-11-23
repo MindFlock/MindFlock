@@ -5685,7 +5685,7 @@ async def instance_send_to_device(
         return _no_git_response()
     inst, err = _inst_or_404(title)
     if err is not None:
-        return err
+        return _closed_send_refusal(title) or err
     peer_err = _peer_guard.refusal(inst, "sending to another device")
     if peer_err is not None:
         return peer_err
@@ -5730,13 +5730,33 @@ async def instance_send_to_device(
     return JSONResponse(out, status_code=status)
 
 
+def _closed_send_refusal(title: str) -> Optional[JSONResponse]:
+    """When ``title`` is not live but was closed recently (an auto-closed
+    worker, say): a 404 that says so — "closed 3 min ago — reopen it" with
+    the command — instead of a bare "instance not found". None otherwise."""
+    from backend.web.core import recently_closed as _rc
+
+    hit = _rc.closed_hint(title)
+    if hit is None:
+        return None
+    return JSONResponse(
+        {
+            "error": hit["sentence"],
+            "code": "closed",
+            "closed_at": hit["closed_at"],
+            "reopen": hit["id"],
+        },
+        status_code=404,
+    )
+
+
 @app.post("/api/instances/{title}/send-files")
 async def instance_send_files(
     title: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
     """Send files or folders from the session's worktree to another of your
     devices: ``{"device", "paths": [..], "note"?, "to_session"?,
-    "include_secrets"?}`` → **200** ``{"ok", "device", "transfer_id",
+    "include_secrets"?, "include_ignored"?}`` → **200** ``{"ok", "device", "transfer_id",
     "path", "files": [{path, size, sha256}], "total_size", "total_sha256",
     "exec_stripped", "uncommitted", "skipped", "caveats", "messaged"?,
     "title"?}`` (:mod:`backend.web.core.send_files`; the device's half is
@@ -5761,7 +5781,7 @@ async def instance_send_files(
         )
     inst, err = _inst_or_404(title)
     if err is not None:
-        return err
+        return _closed_send_refusal(title) or err
     peer_err = _peer_guard.refusal(inst, "sending files to another device")
     if peer_err is not None:
         return peer_err
@@ -5769,6 +5789,7 @@ async def instance_send_files(
     device, paths = body.get("device"), body.get("paths")
     note, to_session = body.get("note", ""), body.get("to_session", "")
     secrets_flag = body.get("include_secrets", False)
+    ignored_flag = body.get("include_ignored", False)
     if (
         not isinstance(device, str)
         or not isinstance(note, str)
@@ -5776,11 +5797,12 @@ async def instance_send_files(
         or not isinstance(paths, list)
         or not all(isinstance(x, str) for x in paths)
         or not isinstance(secrets_flag, bool)
+        or not isinstance(ignored_flag, bool)
     ):
         return JSONResponse(
             {
                 "error": "device, note and to_session must be strings, paths a "
-                "list of strings, include_secrets a boolean",
+                "list of strings, include_secrets and include_ignored booleans",
                 "code": "bad_request",
             },
             status_code=400,
@@ -5793,6 +5815,7 @@ async def instance_send_files(
         note=note,
         to_session=to_session.strip(),
         include_secrets=secrets_flag,
+        include_ignored=ignored_flag,
         zone_hits=zone_hits_for_paths,
     )
     return JSONResponse(out, status_code=status)

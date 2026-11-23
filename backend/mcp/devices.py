@@ -66,9 +66,11 @@ D_SEND_FILES = (
     "devices over the device link. They land in a NEW folder there, "
     "<mindflock home>/inbox/<this device>/<id>/, SHA-256 checked, never "
     "run, executable bits removed (listed). paths: inside your worktree "
-    "(folders recurse; git-ignored files, symlinks, .git, agent "
-    "config/logins and secrets such as .env and keys are left out and "
-    "listed; include_secrets only if the user allowed it in Settings). "
+    "(folders recurse; git-ignored files — named ones too —, symlinks, "
+    ".git, agent config/logins and secrets such as .env and keys are left "
+    "out and listed; include_secrets only if the user allowed it in "
+    "Settings; one ignored build artifact only by the user's own `mindflock "
+    "send-files … --include-ignored`). "
     "Uncommitted files go too (listed). to_session: a session there to "
     "tell what arrived. note without to_session: starts a session there "
     "in that folder with the note as its task. Returns {path, files: "
@@ -165,7 +167,29 @@ S_SEND_FILES = _obj(
 
 
 class DeviceTools:
-    """The two handlers; mixed into ``Toolbox``."""
+    """The device handlers; mixed into ``Toolbox``."""
+
+    def _require_sendable(self, flock, title: str, action: str) -> None:
+        """The ship rule — but a session that is not live because it was
+        just closed (an auto-closed worker) says so, with the command that
+        reopens it, instead of "no session named"."""
+        if flock.row(title) is None:
+            try:
+                closed = self.api.get("/api/recently-closed", timeout=10.0)
+            except client.ApiError:
+                closed = []
+            hits = [
+                e
+                for e in (closed if isinstance(closed, list) else [])
+                if isinstance(e, dict) and e.get("title") == title
+            ]
+            if hits:
+                raise ToolError(
+                    "%s was closed (it is in Recently closed) — ask the user to "
+                    "reopen it (`mindflock reopen %s`, or Recently closed in "
+                    "the sidebar), then %s again" % (title, title, action)
+                )
+        self.policy.require_ship(flock, title, action, depth="push")
 
     def list_devices(self, args: dict, ctx: ToolContext) -> dict:
         try:
@@ -212,7 +236,7 @@ class DeviceTools:
             raise ToolError(
                 "%r already runs on another device; send it from there" % title
             )
-        self.policy.require_ship(flock, title, "send_session", depth="push")
+        self._require_sendable(flock, title, "send_session")
         body = {"device": str(args["device"]).strip(), "note": args.get("note") or ""}
         if args.get("via"):
             body["via"] = str(args["via"])
@@ -266,7 +290,7 @@ class DeviceTools:
             raise ToolError(
                 "%r runs on another device; send its files from there" % title
             )
-        self.policy.require_ship(flock, title, "send_files", depth="push")
+        self._require_sendable(flock, title, "send_files")
         body: Dict[str, Any] = {
             "device": str(args["device"]).strip(),
             "paths": [str(x) for x in args.get("paths") or []],

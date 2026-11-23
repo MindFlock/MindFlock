@@ -238,3 +238,48 @@ def record_missing_workspace(data) -> None:
             log.ErrorLog.Printf(
                 "record missing workspace %s: %v", getattr(data, "title", "?"), err
             )
+
+
+def closed_hint(title: str, now: "float | None" = None) -> "dict | None":
+    """The newest Recently closed entry for ``title`` → ``{id, closed_at,
+    minutes, sentence}`` — what a send that names a session which just left
+    (an auto-closed worker) answers with: "tripwire-w1 was closed 3 min ago
+    — reopen it (mindflock reopen tripwire-w1, or Recently closed in the
+    sidebar) and try again". None when no entry has that title. Never
+    raises."""
+    import shlex
+
+    try:
+        entries = [
+            e
+            for e in _load_recently_closed()
+            if isinstance(e, dict) and e.get("title") == title
+        ]
+    except Exception:  # noqa: BLE001
+        return None
+    if not entries:
+        return None
+    entry = max(entries, key=lambda e: str(e.get("closed_at") or ""))
+    when = str(entry.get("closed_at") or "")
+    minutes = None
+    try:
+        at = _datetime.datetime.fromisoformat(when).timestamp()
+        minutes = max(0, int(((time.time() if now is None else now) - at) // 60))
+    except (TypeError, ValueError):
+        pass
+    if minutes is None:
+        ago = ""
+    elif minutes == 0:
+        ago = " just now"
+    elif minutes < 120:
+        ago = " %d min ago" % minutes
+    else:
+        ago = " %d h ago" % (minutes // 60)
+    return {
+        "id": str(entry.get("id") or ""),
+        "closed_at": when,
+        "minutes": minutes,
+        "sentence": "%s was closed%s — reopen it (mindflock reopen %s, or "
+        "Recently closed in the sidebar) and try again"
+        % (title, ago, shlex.quote(title)),
+    }

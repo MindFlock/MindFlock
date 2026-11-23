@@ -168,7 +168,13 @@ because the receiving machine runs agents:
 - **What may leave.** Only paths inside the session's own worktree (symlinks
   resolved; an escape is refused). In folders, symlinks, special files and
   everything git ignores (`node_modules`, `.venv`, build output) are skipped
-  and listed. **Never** sent: `.git` internals, agent login/config/transcript
+  and listed; a folder git ignores as a whole (`electron/dist/`) sends
+  nothing, and a NAMED file git ignores is refused with the way to send it:
+  the owner's `mindflock send-files DEVICE <file> --from TITLE
+  --include-ignored`, which lets exactly one named ignored file through (a
+  built installer) — still inside the worktree, still subject to the rules
+  below and the size limits. Agents can't ask for it (the MCP has no such
+  argument). **Never** sent: `.git` internals, agent login/config/transcript
   folders (`.claude`, `.codex`, `.gemini`, `.aider*`, …), `.ssh`/`.gnupg`/
   cloud credential folders, `.netrc`, `.git-credentials`. **Left out unless
   allowed**: `.env*` (not `.env.example`), keys and certificates (`*.pem`,
@@ -192,7 +198,10 @@ because the receiving machine runs agents:
   each and one over the lot) opens the transfer; each file follows in 4 MB
   chunks at offsets the receiver confirms (a lost answer resumes from what
   arrived; anything else cancels the transfer there). Limits per transfer:
-  `transfers.max_mb` (512) and `max_files` (5000), checked on both sides.
+  `transfers.max_mb` (512) and `max_files` (5000), checked on both sides —
+  a 190 MB installer goes in about 48 chunks; the inbox quota
+  (`transfers.inbox_mb`, 4096) is the other ceiling, and the MCP gives a
+  file send 30 minutes.
 - **The receiving device** accepts a transfer only from another MindFlock
   presenting a valid credential (checked even with its token gate off) and
   only while **Allow remote control** is on there; guest links never. It
@@ -230,7 +239,12 @@ because the receiving machine runs agents:
   sender's own words, labelled.
 - **Who may send.** As `send_session`: a session sends from itself or one it
   manages; guest links, relayed requests and shared-folder (peer) sessions
-  are refused. Every refusal is a sentence with a `code` and the next step.
+  are refused. Every refusal is a sentence with a `code` and the next step —
+  a session that was just closed (an auto-closed worker) answers `closed`:
+  "tripwire-w1 was closed 3 min ago — reopen it (mindflock reopen
+  tripwire-w1, or Recently closed in the sidebar) and try again". A worker
+  with no commits of its own is not auto-closed while its parent is still
+  mid-turn (it may be about to send from it).
 
 ## Keys and deep links
 

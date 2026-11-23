@@ -716,23 +716,40 @@ the push. `DEVICE` is a name `mindflock devices` lists — its host name
 spaces-vs-hyphens ignored; `TITLE` resolves like `close`. See
 [devices.md](devices.md#send-a-session-to-another-device).
 
-### `mindflock send-files DEVICE PATH… [--from TITLE] [--note TEXT] [--to-session NAME] [--include-secrets]`
+### `mindflock send-files DEVICE PATH… [--from TITLE] [--note TEXT] [--to-session NAME] [--include-secrets] [--include-ignored]`
 
 Sends files or folders from a session's worktree to another of your devices
 (`POST /api/instances/{title}/send-files`, the MCP's `send_files`). The
 session is `--from TITLE`, else the one whose folder holds the current
-directory; relative `PATH`s are resolved from the current directory and must
-be inside that worktree. They land in a new folder in `DEVICE`'s inbox,
+directory. Absolute `PATH`s are used as they are. Without `--from`, a
+relative `PATH` is read from the current directory; with `--from`, from the
+current directory when that is inside the session's folder, else from the
+session's folder (the command says which) — every path must be inside that
+worktree. They land in a new folder in `DEVICE`'s inbox,
 `<mindflock home>/inbox/<this device>/<id>/`, SHA-256 checked, never run,
-executable bits removed. Git-ignored files, symlinks, `.git`, agent
-config/logins and secrets (`.env`, keys, credentials) are left out and
-listed; `--include-secrets` sends secrets only when `transfers.allow_secrets`
-is on. `--to-session NAME` tells that session on `DEVICE` what arrived;
-`--note` without it starts a session there in that folder with the note as
-its task. Prints `sent N files from TITLE -> DEVICE:<folder>`, each file's
-SHA-256 (first 16 hex), the whole transfer's SHA-256, then what was left
-out, uncommitted or stripped (stderr). A refusal is an error with the next
-step (exit 1). See [devices.md](devices.md#send-files-to-another-device).
+executable bits removed. Git-ignored files (in a folder, a folder git
+ignores as a whole, and a named ignored file alike), symlinks, `.git`,
+agent config/logins and secrets (`.env`, keys, credentials) are left out
+and listed; `--include-secrets` sends secrets only when
+`transfers.allow_secrets` is on. `--include-ignored` sends ONE named file
+that git ignores — a built installer in a build-output folder — still only
+from inside the worktree, still never a secret, within the same size
+limits; it is not offered to agents (the MCP has no such argument).
+`--to-session NAME` tells that session on `DEVICE` what arrived; `--note`
+without it starts a session there in that folder with the note as its task.
+Prints `sent N files from TITLE -> DEVICE:<folder>`, each file's SHA-256
+(first 16 hex), the whole transfer's SHA-256, then what was left out, sent
+although ignored, uncommitted or stripped (stderr). A refusal is an error
+with the next step (exit 1); a `--from` session that was just closed says
+"TITLE was closed 3 min ago — reopen it: mindflock reopen TITLE" (`send`
+does the same). See [devices.md](devices.md#send-files-to-another-device).
+
+### `mindflock reopen TITLE`
+
+Reopens the most recently closed session called `TITLE` from Recently
+closed (`POST /api/recently-closed/{id}/reopen`): its kept worktree and
+branch, its agent resumed. Exact title only. Prints `reopened TITLE`; a
+title that is not in Recently closed is an error (exit 1).
 
 ### `mindflock open TITLE`
 

@@ -91,6 +91,7 @@ import functools
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -479,6 +480,23 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also send .env/keys/credentials (needs transfers.allow_secrets)",
     )
+    sendf_.add_argument(
+        "--include-ignored",
+        action="store_true",
+        help="send ONE named file even though git ignores it (a built "
+        "installer in a build-output folder); still inside the worktree, "
+        "still no secrets, same size limits",
+    )
+
+    reopen_ = sub.add_parser(
+        "reopen",
+        parents=[server_opts],
+        help="reopen a closed session (Recently closed) where it left off",
+        description="Reopen the most recently closed session called TITLE "
+        "from Recently closed: its kept worktree and branch, its agent "
+        "resumed (`POST /api/recently-closed/{id}/reopen`).",
+    )
+    reopen_.add_argument("title", metavar="TITLE")
 
     open_ = sub.add_parser(
         "open",
@@ -1179,6 +1197,7 @@ _HELP_GROUPS = (
             "send",
             "send-files",
             "close",
+            "reopen",
             "delete",
             "rm",
             "open",
@@ -2044,11 +2063,84 @@ def _cmd_rename(args: argparse.Namespace) -> int:
     return 0
 
 
+def _closed_or_raise(base: str, instances: list, needle: str) -> dict:
+    """:func:`_resolve_title`, but a session that was just closed (an
+    auto-closed worker) says so — "closed 3 min ago — reopen it (mindflock
+    reopen X)" — instead of "no session named"."""
+    try:
+        return _resolve_title(instances, needle)
+    except client.ClientError:
+        try:
+            closed = client.get(base, "/api/recently-closed") or []
+        except client.ApiError:
+            closed = []
+        hits = [
+            e
+            for e in closed
+            if isinstance(e, dict) and str(e.get("title") or "") == needle
+        ]
+        if not hits:
+            raise
+        newest = max(hits, key=lambda e: str(e.get("closed_at") or ""))
+        ago = ""
+        try:
+            import datetime as _dt
+
+            at = _dt.datetime.fromisoformat(str(newest.get("closed_at")))
+            mins = max(0, int((time.time() - at.timestamp()) // 60))
+            ago = " just now" if mins == 0 else " %d min ago" % mins
+        except (TypeError, ValueError):
+            pass
+        raise client.ClientError(
+            "%s was closed%s — reopen it: mindflock reopen %s (then send again)"
+            % (needle, ago, shlex.quote(needle))
+        ) from None
+
+
+def _cmd_reopen(args: argparse.Namespace) -> int:
+    """``reopen TITLE``: the newest Recently closed entry of that title."""
+    base = client.discover(args.host, args.port)
+    closed = client.get(base, "/api/recently-closed") or []
+    hits = [
+        e
+        for e in closed
+        if isinstance(e, dict) and str(e.get("title") or "") == args.title
+    ]
+    if not hits:
+        print(
+            "error: nothing called %r in Recently closed" % args.title,
+            file=sys.stderr,
+        )
+        return 1
+    newest = max(hits, key=lambda e: str(e.get("closed_at") or ""))
+    try:
+        res = (
+            client.post(
+                base,
+                "/api/recently-closed/%s/reopen"
+                % urllib.parse.quote(str(newest.get("id") or ""), safe=""),
+                {},
+                timeout=120.0,
+            )
+            or {}
+        )
+    except client.ApiError as err:
+        print(
+            "error: could not reopen %s: %s" % (args.title, err.message),
+            file=sys.stderr,
+        )
+        return 1
+    print("reopened %s" % (res.get("title") or args.title))
+    return 0
+
+
 def _cmd_send(args: argparse.Namespace) -> int:
     """``send TITLE DEVICE``: ``POST /api/instances/{title}/send-to-device``."""
     base = client.discover(args.host, args.port)
     title = str(
-        _resolve_title(client.get(base, "/api/instances") or [], args.title)["title"]
+        _closed_or_raise(base, client.get(base, "/api/instances") or [], args.title)[
+            "title"
+        ]
     )
     try:
         res = (
@@ -2095,12 +2187,41 @@ def _title_for_cwd(instances: List[dict]) -> str:
     return best
 
 
+def _paths_for_session(paths: List[str], folder: str) -> Tuple[List[str], str]:
+    """``send-files --from TITLE``: where each relative PATH points →
+    ``(paths, sentence)``. Absolute paths stay as they are. A relative one is
+    read against the CURRENT directory when that is inside the session's
+    folder (what the shell would mean), else against the session's folder —
+    not against wherever the command happened to run (which put every path
+    outside the worktree). The sentence says which, "" when all are
+    absolute."""
+    rel = [p for p in paths if not os.path.isabs(p)]
+    if not rel:
+        return list(paths), ""
+    here = os.path.realpath(os.getcwd())
+    root = os.path.realpath(folder) if folder else ""
+    if not root or here == root or here.startswith(root + os.sep):
+        return [p if os.path.isabs(p) else os.path.abspath(p) for p in paths], (
+            "relative paths are read from the current directory (inside that "
+            "session's folder)"
+            if root
+            else ""
+        )
+    return [p if os.path.isabs(p) else os.path.join(root, p) for p in paths], (
+        "relative paths are read from the session's folder %s" % root
+    )
+
+
 def _cmd_send_files(args: argparse.Namespace) -> int:
     """``send-files DEVICE PATH…``: ``POST /api/instances/{title}/send-files``."""
     base = client.discover(args.host, args.port)
     instances = client.get(base, "/api/instances") or []
     if args.title:
-        title = str(_resolve_title(instances, args.title)["title"])
+        inst = _closed_or_raise(base, instances, args.title)
+        title = str(inst["title"])
+        paths, how = _paths_for_session(args.paths, str(inst.get("folder") or ""))
+        if how:
+            print(how)
     else:
         title = _title_for_cwd(instances)
         if not title:
@@ -2109,7 +2230,7 @@ def _cmd_send_files(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-    paths = [p if os.path.isabs(p) else os.path.abspath(p) for p in args.paths]
+        paths = [p if os.path.isabs(p) else os.path.abspath(p) for p in args.paths]
     try:
         res = (
             client.post(
@@ -2121,6 +2242,7 @@ def _cmd_send_files(args: argparse.Namespace) -> int:
                     "note": args.note or "",
                     "to_session": args.to_session or "",
                     "include_secrets": bool(args.include_secrets),
+                    "include_ignored": bool(getattr(args, "include_ignored", False)),
                 },
                 timeout=1800.0,
             )
@@ -2156,6 +2278,8 @@ def _cmd_send_files(args: argparse.Namespace) -> int:
             "  executable bit removed there: %s" % ", ".join(res["exec_stripped"][:20]),
             file=sys.stderr,
         )
+    for p in res.get("ignored") or []:
+        print("  sent although git ignores it: %s" % p, file=sys.stderr)
     if res.get("messaged"):
         print("  told %s" % res["messaged"])
     if res.get("title"):
@@ -4431,6 +4555,7 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "rename": _cmd_rename,
     "send": _cmd_send,
     "send-files": _cmd_send_files,
+    "reopen": _cmd_reopen,
     "open": _cmd_open,
     "events": _cmd_events,
     "msg": _cmd_msg,
