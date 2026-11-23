@@ -87,6 +87,8 @@ THUMB_MAX = 512 * 1024
 #: Thumbnails kept in memory (most recent), and their total bytes.
 THUMB_CACHE_N = 128
 THUMB_CACHE_BYTES = 24 * 1024 * 1024
+#: A refusal's body (``{"error", "code"}``) read at most this big.
+ERROR_BODY_MAX = 64 * 1024
 #: At most this many codes in one text are looked up on other devices.
 CODES_MAX = 20
 OFFER_V = 1
@@ -165,7 +167,10 @@ async def _fwd_get(
                     state["ctype"] = v.decode("latin-1", "replace")
         elif msg.get("type") == "http.response.body":
             chunk = msg.get("body") or b""
-            if len(body) + len(chunk) > cap:
+            # The cap is for the answer asked for; a refusal's own body (a
+            # short JSON sentence) has its own small bound.
+            limit = cap if state["status"] == 200 else ERROR_BODY_MAX
+            if len(body) + len(chunk) > limit:
                 raise _Overrun()
             body.extend(chunk)
 
@@ -584,6 +589,17 @@ def _refusal_from(dev: dict, iid: str, status: int, body: bytes) -> Refusal:
 
 
 async def _entry_for(scope: dict, dev: dict, iid: str, fresh: bool) -> dict:
+    """The listed item ``iid`` of ``dev`` — a miss in the cached listing asks
+    the device again (it may be newer than the cache)."""
+    try:
+        return await _entry_once(scope, dev, iid, fresh)
+    except Refusal as r:
+        if fresh or r.code != "not_found":
+            raise
+    return await _entry_once(scope, dev, iid, True)
+
+
+async def _entry_once(scope: dict, dev: dict, iid: str, fresh: bool) -> dict:
     entry = await list_device(scope, dev, fresh=fresh)
     if entry["state"] != "ok":
         raise Refusal(
