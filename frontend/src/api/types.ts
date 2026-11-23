@@ -227,6 +227,23 @@ export interface AutoCloseInfo {
   why: string;
 }
 
+/** A row's `origin` (core.remote_origin.row_field): another of your devices
+ * started this session here. */
+export interface OriginInfo {
+  /** That device's key, as this device's link names it. */
+  device: string;
+  /** Its host name ("EthanLaptop2026"). */
+  device_name: string;
+  /** Named by the link's tailnet address (false: only what it claimed). */
+  verified: boolean;
+  /** The session there that started it ("" for a person). Informational:
+   * that device says it. */
+  session: string;
+  by: "agent" | "person";
+  /** "from tripwire-send on EthanLaptop2026" / "you, from EthanLaptop2026". */
+  label: string;
+}
+
 export interface Instance {
   title: string;
   branch: string;
@@ -452,6 +469,9 @@ export interface Instance {
    * set on an agent-spawned session (and a worker orphaned by its parent),
    * null on any other. Optional: an older server doesn't send it. */
   auto_close?: AutoCloseInfo | null;
+  /** Started from another of your devices (core.remote_origin): who started
+   * it there. Null otherwise; optional: an older server doesn't send it. */
+  origin?: OriginInfo | null;
   /** A shared-folder (peer-link) session: it runs sandboxed, and the server
    * refuses ship / push / PR / the shell pane / the IDE / rename / copies for
    * it (backend core/peer_guard.py). Optional: an older server doesn't send

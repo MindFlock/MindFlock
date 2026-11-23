@@ -357,7 +357,11 @@ def _send_queued_item(title: str, name: str, nxt: dict, rec: dict, now: float) -
     # A ``say`` item asks for its spoken reply only now, as it goes in
     # (server._voice_say); a send that does not land takes the request back.
     say = inst is not None and nxt.get("say") is True
-    typed = srv._voice_say(inst, title, nxt["text"]) if say else nxt["text"]
+    text = nxt["text"]
+    if not nxt.get("nohub") and "hub:" in text.lower():
+        # hub:<id> references expand as the prompt goes in (core.hub).
+        text = srv._hub_expand(None, inst, text)[0]
+    typed = srv._voice_say(inst, title, text) if say else text
     if not srv._send_to_agent(name, typed, submit=True):
         if say:
             srv._voice_say_cancel(title)

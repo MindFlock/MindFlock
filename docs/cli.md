@@ -598,7 +598,10 @@ DIFF  COST`. `REPO` is the session's source repository (its basename), so a
 flock spanning several repos is legible at a glance. `DIFF` shows `+n −m` when
 the server reports a `diff_stat`; `COST` shows the estimated USD spend when
 token pricing is available (both blank otherwise). `--json` dumps the raw
-`/api/instances` payload for scripting.
+`/api/instances` payload for scripting. Under the table, one line per
+session another of your devices started here says where it came from —
+`  tw-install: from tripwire-send on EthanLaptop2026 · closes in 9 min`
+(see [devices.md](devices.md#sessions-another-device-started-here)).
 
 `ACTIVITY` says what the raw `offline` would hide: `sleeping` for a sleeper,
 and `waiting #<position> (<why>)` for a session whose start waits in the
@@ -711,27 +714,68 @@ secrets. Prints `sent TITLE -> DEVICE::TITLE (branch B, via git|bundle)`,
 then the one-line `how`, and any caveat on stderr. Uncommitted changes, a
 device that is asleep or not one of yours, or a refused push is an error
 with the next step (exit 1); nothing is pushed for a refusal found before
-the push. `mindflock devices` lists the device names (matched
-case-insensitively); `TITLE` resolves like `close`. See
+the push. `DEVICE` is a name `mindflock devices` lists — its host name
+(`ML-Rig-2023`) or its key (`ml-rig-2023-1`), case, punctuation and
+spaces-vs-hyphens ignored; `TITLE` resolves like `close`. See
 [devices.md](devices.md#send-a-session-to-another-device).
 
-### `mindflock send-files DEVICE PATH… [--from TITLE] [--note TEXT] [--to-session NAME] [--include-secrets]`
+### `mindflock hub ls|add|get|cp|rm|pin`
+
+The hub from a terminal (`/api/hub`; [web-ui.md](web-ui.md#hub)): files,
+pictures and snippets every session on this device can use. `REF` is an
+item's code, `hub:k7m2` (or `k7m2`).
+
+* `mindflock hub ls [--json]` — the items, newest first: reference, kind,
+  size, name, who added it, when, pinned; then how full the hub is.
+* `mindflock hub add FILE… [--note N] [--name NAME] [--pin] [--secret-ok]` —
+  add files; `--text "…"` adds a snippet and `-` reads one from stdin. Prints
+  each reference. A file that looks like a secret (`.env`, a key) is refused
+  unless `--secret-ok` — every session can read the hub.
+* `mindflock hub get REF [--text]` — the item's path (or its text).
+* `mindflock hub cp REF [DEST] [--to TITLE] [--replace]` — copy it here
+  (default `./<name>`), or with `--to` save a copy in that session's folder
+  (`POST /api/hub/items/{id}/copy-to`; DEST relative to it, default
+  `hub/<name>`; never a file agents follow or that runs by itself). Never
+  over an existing file without `--replace`.
+* `mindflock hub rm REF…` — remove (Undo in the app for 10 minutes).
+* `mindflock hub pin REF [--off]` — keep it past the expiry (or stop).
+
+### `mindflock send-files DEVICE PATH… [--from TITLE] [--note TEXT] [--to-session NAME] [--include-secrets] [--include-ignored]`
 
 Sends files or folders from a session's worktree to another of your devices
 (`POST /api/instances/{title}/send-files`, the MCP's `send_files`). The
 session is `--from TITLE`, else the one whose folder holds the current
-directory; relative `PATH`s are resolved from the current directory and must
-be inside that worktree. They land in a new folder in `DEVICE`'s inbox,
+directory. Absolute `PATH`s are used as they are. Without `--from`, a
+relative `PATH` is read from the current directory; with `--from`, from the
+current directory when that is inside the session's folder, else from the
+session's folder (the command says which) — every path must be inside that
+worktree. They land in a new folder in `DEVICE`'s inbox,
 `<mindflock home>/inbox/<this device>/<id>/`, SHA-256 checked, never run,
-executable bits removed. Git-ignored files, symlinks, `.git`, agent
-config/logins and secrets (`.env`, keys, credentials) are left out and
-listed; `--include-secrets` sends secrets only when `transfers.allow_secrets`
-is on. `--to-session NAME` tells that session on `DEVICE` what arrived;
-`--note` without it starts a session there in that folder with the note as
-its task. Prints `sent N files from TITLE -> DEVICE:<folder>`, each file's
-SHA-256 (first 16 hex), the whole transfer's SHA-256, then what was left
-out, uncommitted or stripped (stderr). A refusal is an error with the next
-step (exit 1). See [devices.md](devices.md#send-files-to-another-device).
+executable bits removed. Git-ignored files (in a folder, a folder git
+ignores as a whole, and a named ignored file alike), symlinks, `.git`,
+agent config/logins and secrets (`.env`, keys, credentials) are left out
+and listed; `--include-secrets` sends secrets only when
+`transfers.allow_secrets` is on. `--include-ignored` sends ONE named file
+that git ignores — a built installer in a build-output folder — still only
+from inside the worktree, still never a secret, within the same size
+limits. It asks you to confirm at a terminal ("send … although git ignores
+it? [y/N]") and refuses without one, so a shell an agent runs can't use it;
+the MCP has no such argument.
+`--to-session NAME` tells that session on `DEVICE` what arrived; `--note`
+without it starts a session there in that folder with the note as its task.
+Prints `sent N files from TITLE -> DEVICE:<folder>`, each file's SHA-256
+(first 16 hex), the whole transfer's SHA-256, then what was left out, sent
+although ignored, uncommitted or stripped (stderr). A refusal is an error
+with the next step (exit 1); a `--from` session that was just closed says
+"TITLE was closed 3 min ago — reopen it: mindflock reopen TITLE" (`send`
+does the same). See [devices.md](devices.md#send-files-to-another-device).
+
+### `mindflock reopen TITLE`
+
+Reopens the most recently closed session called `TITLE` from Recently
+closed (`POST /api/recently-closed/{id}/reopen`): its kept worktree and
+branch, its agent resumed. Exact title only. Prints `reopened TITLE`; a
+title that is not in Recently closed is an error (exit 1).
 
 ### `mindflock open TITLE`
 

@@ -7,6 +7,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The hub: one shared place for files, pictures and snippets every session
+  can use.** Hub in the top bar (Alt+H) opens a drawer: drop files, Add
+  files…, New snippet, or paste a screenshot (Ctrl/⌘+V) — each item gets a
+  reference like `hub:k7m2`. Paste a screenshot and the toast's **Put in
+  ‹session›'s prompt** sends its reference to the session you are in — one
+  click. Put the reference in any prompt sent through
+  MindFlock (the Thread and Queue boxes, the queue, the phone, voice, the
+  MCP's `send_message`, a paste into an agent's terminal) and the agent gets
+  the item's path, name and kind, labelled as untrusted hub content.
+  **Send to session…** puts it in a session's prompt or copies the file into
+  its folder (never over a file unless you say so); drag an item onto a
+  session's row, message box or terminal; typing `hub:` in a message box
+  offers the items, and its paperclip attaches or uploads. Copy reference,
+  Copy text, Copy image, Download, Rename, note, Pin, Remove with Undo. **+
+  Hub** on a file in the Diff tab. On the phone, 📎 beside the message box:
+  pick a photo, it is in the hub and its reference in your message — Send.
+  Agents get one MCP tool, `hub` (list / get / put / take / remove): put only
+  a file from their own worktree (no secrets, their fence and red zones
+  respected), copy only into it, remove only what they put. `mindflock hub
+  ls|add|get|cp|rm|pin` for the terminal. Unpinned items go 14 days after
+  their last use; a quota (1 GB), a per-item limit (100 MB) and an item
+  limit (300) — `hub.*` in settings; Disk cleanup has a Hub line. Pictures
+  are shown only for PNG, JPEG, GIF and WebP (sniffed from the bytes);
+  everything else — SVG and HTML included — downloads, never opens in the
+  app. Guest links, peer-shared sessions and other devices' relayed requests
+  get nothing from the hub.
+- **The hub, after its security and usability reviews.** The session routes
+  an agent uses (put, take, remove) answer only that session's own
+  MindFlock tool: each session's MCP is handed a per-session key at launch
+  (a session started earlier gets it on restart). An agent's copy lands only
+  under `hub/` in its own folder and never replaces a file; nothing the hub
+  writes, for anyone, is a file agents follow or that runs by itself
+  (`CLAUDE.md`, `.mcp.json`, git hooks, CI, `Makefile`, `package.json`,
+  Windows short names …). A damaged `hub.json` no longer reads as an empty
+  hub: nothing is deleted, the drawer offers **Rebuild the list**, and every
+  write keeps a backup. Names can't close the label of an expanded code;
+  uploads never block the server; a FIFO swapped in can't hang it; removed
+  pictures are never served from cache. In the app: the code is called a
+  **code** (`hub:k7m2 · Copy code`); Send to session… offers **Point the
+  agent at it** or **Save a copy in its project folder** (and tells the
+  agent where), shows each session's state, and keeps one button label;
+  what the hub says appears at the top of the window, not over the prompt
+  it just filled, and the session rings; the top-bar count shows only what
+  an agent or your phone added since you looked; the list has day headings,
+  All · Pictures · Text · From agents, compact text rows, a visible Pin, a
+  drag grip and a picture viewer; message boxes show a chip per attached
+  item; a too-big file offers **Raise the limit**. On the phone the attached
+  photo shows as a chip above the box.
+
+- **Sessions an agent on another device starts here say where they came
+  from, report back, and close when done.** On the receiving device they
+  read "from tripwire-send on EthanLaptop2026" (or "you, from
+  EthanLaptop2026" when a person started them) instead of "agent" — on the
+  rail, in Sky, on the phone, in `mindflock ls` and the MCP's
+  `get_session`/`whoami`. One an agent started closes itself once it is done
+  and idle past the auto-close grace window (its folder kept, its last reply
+  in Recently closed; never while it asks something, has a to-do of its own
+  open, or once you typed into it; never one you started), and its row says
+  "closes in 9 min · Keep". Its `report_result` and each turn it ends go to
+  the starting session's inbox, so `wait_for_session` on
+  `<device>::<title>` works; that session — and only that one, checked on
+  the receiving device — may also message and close it. New
+  `spawn_session(device=…)` starts one there — never for a fenced or
+  red-zoned caller, past its ship lane, with another program, or on an
+  unlinked machine. The origin device is taken from the device link, never
+  from the request; reports back are accepted only from a device the link
+  identifies, and every record is pinned to the sessions' creation times
+  (`docs/devices.md` has the threat notes).
+
+### Fixed
+
+- **A device is found by the name you see.** `mindflock send tripwire
+  ML-Rig-2023` was refused as "not one of your devices" when the device's key
+  was `ml-rig-2023-1` (an older tailnet node held the plain name) — the
+  unlinked node's key won over the linked device's host name. Sending
+  sessions and files, and the device forwarding routes, now accept the key,
+  the host name or the tailnet name, ignoring case, punctuation, spaces vs
+  hyphens and curly apostrophes ("Ethan’s Mac mini"); a linked device always
+  wins over an unlinked one, and a real tie is a "did you mean" naming both.
+  `mindflock devices` and the MCP `list_devices` show the name to type and
+  the key.
+- **A MindFlock that runs from a git checkout with no branch checked out can
+  update.** A machine left on a detached HEAD at a release commit (here: a
+  `uv tool install -e` of a checkout nobody develops in) was skipped by
+  Update all my devices as a "development checkout" and refused by its own
+  updater. When HEAD is on the default branch's upstream, tracked files are
+  clean and a local `main` (if any) is not ahead, the update now puts the
+  checkout on `main` at the commit it is on — no file moves, nothing
+  discarded — then fast-forwards as usual; a rollback restores the detached
+  HEAD and the branch exactly; it is refused while that branch is checked
+  out in another worktree. Update all my devices updates such checkouts —
+  a no-branch one only when it sits exactly on a published release — and one that can't says its own reason ("…has
+  uncommitted changes…") instead of "development checkout".
+- **`mindflock send-files --from TITLE` reads relative paths from that
+  session's folder** (or from the current directory when you are inside it)
+  and says which, instead of refusing them as outside the worktree.
+- **Sending from a session that was just closed says so**: "tripwire-w1 was
+  closed 3 min ago — reopen it (mindflock reopen tripwire-w1)" from the API,
+  the CLI and the MCP, instead of "no session named". New `mindflock reopen
+  TITLE`. A worker with no commits of its own is no longer auto-closed while
+  its parent is still mid-turn.
+- **Git-ignored files stay on this device unless you send one on purpose.**
+  Naming a folder git ignores as a whole (`electron/dist/`) used to send
+  everything in it, and a named ignored file went silently; both are now left
+  out. `mindflock send-files DEVICE <file> --include-ignored` sends exactly
+  one named ignored file — a built installer — after you confirm it at a
+  terminal, still only from inside the worktree, never a secret, within the
+  size limits (512 MB per transfer by default; a 190 MB installer fits).
+  Agents can't ask for it.
+
 ## [0.14.26] - 2026-11-21
 
 ### Added

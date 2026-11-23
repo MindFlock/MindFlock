@@ -14,6 +14,7 @@ import subprocess
 import pytest
 
 from backend import client
+from backend import client as api_client
 from backend.mcp import tools as mcp_tools
 from backend.mcp.protocol import Cancelled, SchemaError, ToolError
 from backend.mcp.tools import INSTRUCTIONS, build_tools, report_footer, split_diff
@@ -40,7 +41,7 @@ def _ctx(clock, **kw):
 # Text budgets and registry
 # --------------------------------------------------------------------------- #
 class TestRegistry:
-    def test_forty_three_tools_with_annotations(self):
+    def test_forty_four_tools_with_annotations(self):
         box, _, _ = make_box(_tree())
         tools = build_tools(box)
         assert [t.name for t in tools] == [
@@ -87,8 +88,9 @@ class TestRegistry:
             "list_devices",
             "send_session",
             "send_files",
+            "hub",
         ]
-        assert len(tools) == 43
+        assert len(tools) == 44
         by = {t.name: t for t in tools}
         for name in (
             "whoami",
@@ -491,6 +493,13 @@ class TestSendMessage:
         box, api, clock = make_box(_tree())
         with pytest.raises(ToolError, match="yourself"):
             box.send_message({"to": "orch", "text": "x"}, _ctx(clock))
+        # A session on another device: the device refuses one this session
+        # did not start (core.remote_origin) — said as such.
+        api.errors[("POST", "/api/instances/orch/remote-control")] = (
+            api_client.ApiError(
+                403, "dev::far was not started from …", {"code": "not_origin"}
+            )
+        )
         with pytest.raises(ToolError, match="another device"):
             box.send_message({"to": "dev::far", "text": "x"}, _ctx(clock))
         with pytest.raises(ToolError, match="no session named"):

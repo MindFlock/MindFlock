@@ -198,6 +198,12 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_AUTO_CLOSE_FILE", str(tmp_path / "mindflock" / "auto_close.json")
     )
+    # Where sessions another device started came from (``~/.mindflock/
+    # remote_origin.json``, core.remote_origin): every row reads it.
+    monkeypatch.setenv(
+        "MINDFLOCK_REMOTE_ORIGIN_FILE",
+        str(tmp_path / "mindflock" / "remote_origin.json"),
+    )
     # The held-offline records (``~/.mindflock/held.json``, core.held): every
     # row reads them and _ensure_agent_session REFUSES a session they name.
     monkeypatch.setenv("MINDFLOCK_HELD_FILE", str(tmp_path / "mindflock" / "held.json"))

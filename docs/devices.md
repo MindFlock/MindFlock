@@ -60,6 +60,13 @@ hands it a short brief as its first prompt: what the session was for, its
 commits and changed files, its last reply, and an optional note ("install it
 here as a launchd service").
 
+- **Name it as you like.** `ML-Rig-2023`, `ml rig 2023` and its key
+  `ml-rig-2023-1` all find the same device: the key, the host name and the
+  tailnet name match ignoring case, punctuation, spaces vs hyphens and curly
+  vs straight apostrophes. A linked device beats an unlinked tailnet machine
+  of a similar name; two linked ones that both fit are refused with a "did
+  you mean" naming both. `mindflock devices` and `list_devices` show the
+  name to type and the key.
 - **Only your devices.** The target must be one of **Your devices** (or a
   device paired by pasted token) and reachable with remote control on — the
   same trust the sidebar's `<device>::<title>` rows ride. No new trust path:
@@ -161,7 +168,15 @@ because the receiving machine runs agents:
 - **What may leave.** Only paths inside the session's own worktree (symlinks
   resolved; an escape is refused). In folders, symlinks, special files and
   everything git ignores (`node_modules`, `.venv`, build output) are skipped
-  and listed. **Never** sent: `.git` internals, agent login/config/transcript
+  and listed; a folder git ignores as a whole (`electron/dist/`) sends
+  nothing, and a NAMED file git ignores is refused (the refusal names no
+  bypass). The person sends one such file — a built installer — with
+  `mindflock send-files DEVICE <file> --from TITLE --include-ignored`, which
+  asks them to confirm at a terminal; exactly one named file, still inside
+  the worktree, still subject to the rules below and the size limits. The
+  MCP has no such argument. (The HTTP field `include_ignored` itself can't
+  tell the person's CLI from an agent holding the same local token: the
+  terminal confirmation is the owner gate.) **Never** sent: `.git` internals, agent login/config/transcript
   folders (`.claude`, `.codex`, `.gemini`, `.aider*`, …), `.ssh`/`.gnupg`/
   cloud credential folders, `.netrc`, `.git-credentials`. **Left out unless
   allowed**: `.env*` (not `.env.example`), keys and certificates (`*.pem`,
@@ -185,7 +200,10 @@ because the receiving machine runs agents:
   each and one over the lot) opens the transfer; each file follows in 4 MB
   chunks at offsets the receiver confirms (a lost answer resumes from what
   arrived; anything else cancels the transfer there). Limits per transfer:
-  `transfers.max_mb` (512) and `max_files` (5000), checked on both sides.
+  `transfers.max_mb` (512) and `max_files` (5000), checked on both sides —
+  a 190 MB installer goes in about 48 chunks; the inbox quota
+  (`transfers.inbox_mb`, 4096) is the other ceiling, and the MCP gives a
+  file send 30 minutes.
 - **The receiving device** accepts a transfer only from another MindFlock
   presenting a valid credential (checked even with its token gate off) and
   only while **Allow remote control** is on there; guest links never. It
@@ -223,7 +241,100 @@ because the receiving machine runs agents:
   sender's own words, labelled.
 - **Who may send.** As `send_session`: a session sends from itself or one it
   manages; guest links, relayed requests and shared-folder (peer) sessions
-  are refused. Every refusal is a sentence with a `code` and the next step.
+  are refused. Every refusal is a sentence with a `code` and the next step —
+  a session that was just closed (an auto-closed worker) answers `closed`:
+  "tripwire-w1 was closed 3 min ago — reopen it (mindflock reopen
+  tripwire-w1, or Recently closed in the sidebar) and try again". A worker
+  with no commits of its own is not auto-closed while its parent is still
+  mid-turn (it may be about to send from it).
+
+## Sessions another device started here
+
+A session another of your devices started here — `send_session`,
+`send_files` with a note, `spawn_session(device=…)`, or the New Session
+dialog aimed at this device — says where it came from and, when an AGENT
+started it, finishes by itself and reports back
+(`backend/web/core/remote_origin.py`).
+
+- **Where it came from.** Its row's `origin`: "from tripwire-send on
+  EthanLaptop2026" (an agent session there), "you, from EthanLaptop2026"
+  (a person, or `mindflock send` / `send-files` typed by one) — on the
+  rail (`↳ …`, instead of "↳ agent"), in Sky, on the phone, in `mindflock
+  ls`, and in the MCP's `get_session` / `whoami`. An agent-started
+  session's first prompt ends with the same line and how to report back.
+- **It finishes.** One an agent started, with nobody attached, closes
+  itself once its agent ended its turn and stayed idle for the auto-close
+  grace window (`general.auto_close_grace_minutes`, 10; off with
+  `general.auto_close_children: false`) — like a local finished worker:
+  agent stopped, folder kept, its last reply kept in Recently closed. Never
+  while it asks something, has a background job, a queued prompt or a
+  message waiting, has a to-do of its own open, or once a person has typed
+  into it; never one a person started. Its row says "closes in 9 min ·
+  **Keep**" (one click: Keep open).
+- **It reports back.** Its `report_result`, and every turn it ends (after a
+  minute of quiet, once per turn), go to the origin session's inbox on the
+  origin device as a `result` from `<this device>::<title>` — what
+  `wait_for_session` there waits on. Only over the tailnet: a device
+  reached only through the no-Tailscale tunnel can't be identified by its
+  address, so its reports are refused (`wait_for_session` still sees the
+  session go idle).
+- **The origin may act on it — and only on it.** The session that started
+  it may read its state, send it a message (`send_message`, delivery auto)
+  and close it (`kill_session`, close only) — nothing else on this device.
+- **Starting one with `spawn_session(device=…)`** is refused for a session
+  with a fence or red zones (the other device can't enforce them, so the
+  new session would not have them), past a ship lane the user set below
+  `push`, for any program but the caller's own, and for any machine that
+  is not one of the user's linked devices.
+
+### Threat notes
+
+This is a new cross-device control path, so it is kept narrow:
+
+- **Exact identities.** Authorization compares exact device keys (folding
+  names is only for what a person types: `a-b` is not `ab`), and every
+  record is pinned to a session's creation time — a later session that
+  takes the same title, here or on the origin device, inherits nothing. A
+  queued create binds only a session made soon after it, agent-spawned when
+  an agent asked, and never after that create failed.
+- **Identity comes from the link, never from the request.** The origin
+  device is the discovered device whose tailnet address the request came
+  from (that address is bound to the node's WireGuard key); without one
+  (a tunnel), the remote marker's claim is recorded and the row says
+  "(unverified)". The origin SESSION's title and "agent or person" are what
+  the origin device says about its own sessions: shown as one cleaned line,
+  labelled as that device's report, never trusted for identity.
+- **Enforced on the receiving side.** `POST /api/origin-control` (status /
+  message / close) needs the device link exactly as a file transfer does —
+  the remote marker, a valid credential (this device's token or the fleet
+  key, checked even with the gate off), **Allow remote control** on, never
+  a guest link — and then the provenance rule, checked HERE: the session
+  was started by an agent, from the device the caller IS (as the link
+  names it, at least as surely as when it was created — a session created
+  over the tailnet can't be controlled by a mere claim), for exactly the
+  origin session the caller names. Anything else is 403 `not_origin`; a
+  person-started session never qualifies.
+- **Not relayable.** The routes are not under `/api/instances/…` (the
+  namespaced-title proxy never forwards them) and not on the `fwd/`
+  allow-list, and a remote-flagged request is never proxied onward: a third
+  device can't relay a request to them through another device's
+  credential.
+- **Reports back are just as narrow.** `POST /api/origin-inbox` on the
+  origin device is guarded like a file transfer (marker + credential,
+  Allow remote control on, no guest), takes a report only from a device
+  the LINK identifies (its tailnet address — a claim, e.g. over a tunnel or
+  `tailscale serve`, which arrive from loopback, is refused `unverified`),
+  and only from the device that very origin session started it on
+  (recorded when the create went out); it lands as an ordinary agent
+  message from `<device>::<title>`, rate- and hop-limited like any other,
+  and like any message it is never typed while a dialog is on screen (the
+  delivery lane's screen check).
+- **What the origin cannot do.** Type into the session, answer its
+  dialogs, delete its folder, or touch any session it did not start. A
+  forged origin title fails the exact-match check; the status of a closed
+  session is told only after the same check; a stolen fleet key
+  already drives every member, so this path adds no reach beyond "the
+  session that started it".
 
 ## Keys and deep links
 

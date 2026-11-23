@@ -761,6 +761,107 @@ html, body {
   user-select: none;
 }
 #send:active { background: rgba(var(--accent-rgb), 0.75); }
+/* The hub's 📎 (mobile.js HUB section): beside the compose box. */
+#hub-attach {
+  flex: 0 0 auto;
+  min-width: 42px;
+  height: 42px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 18px;
+  font-family: inherit;
+}
+#hub-attach:active { background: var(--border); }
+#hub-attach:disabled { opacity: 0.5; }
+#hub-chips {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px 0 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+#hub-chips.hidden { display: none; }
+.hub-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 4px 3px 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+}
+.hub-chip-thumb {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 26px;
+  border-radius: 5px;
+  object-fit: cover;
+  background: var(--bg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.hub-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hub-chip-x {
+  flex: 0 0 auto;
+  min-width: 30px;
+  min-height: 30px;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+.hub-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+.hub-row-thumb {
+  flex: 0 0 auto;
+  width: 54px;
+  height: 42px;
+  border-radius: 5px;
+  object-fit: cover;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.hub-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.hub-row-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hub-row-meta { font-size: 12px; color: var(--muted); }
+.hub-row-ref { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text); }
+.hub-row-btns { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; }
+.hub-row-btns button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.hub-row-btns button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
 /* --- soft-key bar (bottommost: carries the home-bar safe-area inset) --- */
 #keys {
@@ -1467,6 +1568,14 @@ html, body {
 .sess-ask {
   font-size: 12px;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Started from another of your devices (mobile.js originRowText). */
+.sess-origin {
+  font-size: 12px;
+  color: var(--muted, var(--text));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

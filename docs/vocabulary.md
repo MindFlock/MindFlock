@@ -61,6 +61,10 @@ the work, check the work, or ask a person**.
 | **Finished** / **Merged today** | the strip of work that landed | Landing, Landed today |
 | **Sky** / **Grid** | the two views of the main area | canvas, board (for the Sky itself) |
 | **What's new** | the pop-up that explains a release's features | changelog, release notes (in the UI) |
+| **hub** (**Hub** as the button and panel) | the one shared place per computer for files and text every session can use | clipboard, shelf, shared drive, inbox, attachments (for the place) |
+| **item** | one thing in the hub: a file, a picture or a **snippet** (text) — its kind reads **Picture**, **Snippet** or "PDF file" | attachment, upload, asset, blob, entry; Image/Text (for the kind) |
+| **code** (`hub:k7m2`; "Copy code", "code copied to clipboard") | the short name of an item you put in any prompt; MindFlock gives the agent its path. Changed 2026-11-23 from "reference" after the usability review: people read "Copy" on its own as four different things | reference, handle, token, link, id (in copy) |
+| **Send to session…** → **Point the agent at it** (it reads the file from the hub) · **Save a copy in its project folder** (**Save copy**; you still commit it) · **Copy code** · **Pin** · **Add to message** (the phone) | the hub's verbs | Share, Attach (except the composer's paperclip, "Attach from the hub"), Put in prompt (as an option name), Copy (alone) |
 
 Bird flavour stays where it explains itself — the bird that moves along a route
 to show where the work is, "takes off" as a verb in a sentence, the Sky — but a

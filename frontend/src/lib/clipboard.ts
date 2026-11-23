@@ -6,6 +6,7 @@
 
 import type { Terminal } from "@xterm/xterm";
 import { api } from "../api/client";
+import { HUB_MIME, REF_RE, expandRefs, typeIntoAgent } from "./hubRef";
 import { toast } from "./toast";
 
 declare global {
@@ -228,13 +229,38 @@ export function attachFileDrop(
       pasteFilesAsPaths(files, term, session, canSend);
     } else if (text) {
       if (canSend && !canSend()) return;
+      if (REF_RE.test(text)) {
+        // A hub code (hub:k7m2): the agent gets the item's path, name and
+        // kind. In a session's terminal it goes through the server's
+        // dialog-safe typing — never into a prompt that opened meanwhile.
+        if (session) {
+          void typeIntoAgent(session, text).then((r) => {
+            toast(r.ok ? r.note || "Pasted with the hub item's path" : r.note);
+          });
+        } else {
+          void expandRefs(text).then((r) => {
+            term.paste(r.text);
+            toast(r.note || "Pasted " + text.length + " chars");
+          });
+        }
+        return;
+      }
       term.paste(text);
       toast("Pasted " + text.length + " chars");
     } else {
       pasteClipboard(term, session, canSend);
     }
   };
+  const isHub = (ev: DragEvent) => Array.from(ev.dataTransfer?.types || []).includes(HUB_MIME);
   const onDragOver = (ev: DragEvent) => {
+    if (isHub(ev)) {
+      // A hub item from the Hub panel: its reference, expanded, is typed in.
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.dataTransfer!.dropEffect = "copy";
+      host.classList.add("file-drop");
+      return;
+    }
     if (!dtHasFiles(ev.dataTransfer)) return;
     ev.preventDefault();
     ev.stopPropagation();
@@ -245,6 +271,24 @@ export function attachFileDrop(
     if (!host.contains(ev.relatedTarget as Node)) host.classList.remove("file-drop");
   };
   const onDrop = (ev: DragEvent) => {
+    if (isHub(ev)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      host.classList.remove("file-drop");
+      if (canSend && !canSend()) return;
+      const ref = ev.dataTransfer!.getData("text/plain");
+      if (session) {
+        void typeIntoAgent(session, ref + " ").then((r) => {
+          toast(r.ok ? r.note || ref + " is in the prompt — add your words and press Enter" : r.note);
+        });
+      } else {
+        void expandRefs(ref).then((r) => {
+          term.paste(r.text + " ");
+          toast(r.note || "Put " + ref + " in the prompt — add your words and press Enter");
+        });
+      }
+      return;
+    }
     if (!dtHasFiles(ev.dataTransfer)) return;
     // Stopped as well as prevented: the grid's panes carry their own drop
     // handler for rearranging windows, and a file dropped on a terminal is not

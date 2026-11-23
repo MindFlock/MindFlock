@@ -2961,6 +2961,98 @@ and uncommitted files only), this keeps work that exists only in local commits.
 | POST | `/api/cleanup/remove` | Body `{id, confirm, even_unchecked?}` — one item of the last report, re-classified first. A safe item goes as above. Anything else needs `confirm: true` (**409** `{needs_confirm: true, error}` without it) and its work is saved FIRST in a new folder under `~/.mindflock/kept-work/`: `changes.patch` (tracked + untracked, binary-safe — `git apply --index` it on the branch), `commits.bundle` for a clone's unpushed commits and stash, a `mindflock-kept/<name>-<time>` branch for a detached HEAD's unmerged commits, and `info.json`; an unmerged branch is never deleted; if saving fails nothing is removed. A folder whose files can't be checked (`kind: orphan`, `state: unchecked`) can't be saved: it is looked inside first (as `/api/cleanup/inspect`) and goes at once when nothing in it could be lost (`safe`), else only with `even_unchecked: true` (exactly `true`) — **409** `{needs_confirm: true, unchecked: true, facts, error}` without it, whatever `confirm` says. It is deleted **permanently** (MindFlock has no trash or holding folder) → `{ok, permanent: true, verdict, deleted: {files, work_files, bytes}}`, and only when it lies strictly inside the worktrees root or a session-clone root (symlinks resolved) and MindFlock made it; never a symlink, a mount point or a folder on another filesystem than its parent, one git still knows as a worktree, one holding other worktree folders (`<name>_<hex>`) or another checkout, or one with a filesystem mounted inside; the deletion is fd-relative, removes a symlink as a link without following it, and never enters another filesystem (`-xdev`; what it can't delete is left and said). Collection — the button, `--collect`, the background pass — never removes one. Never removed, even confirmed: anything in use, a locked worktree, a folder with another git checkout inside it (git would delete an ignored one with it) → `{ok, saved: {dir, patch, bundle, kept_branch}, branch_deleted, item}`. **404** when the id isn't in the last report, **422** `{error}` when git refused, **400** without an id. **Owner only** |
 | POST | `/api/cleanup/settings` | Body `{mode?: "auto"\|"ask"\|"off", after_days?: 1..3650}` → `{mode, after_days}` (`cleanup.*` in settings.json). **Owner only**; **400** for any other value; **409** when settings.json can't be read |
 
+## Hub (`/api/hub`)
+
+The hub (`core/hub.py`, routes in `routes/hub.py`): files, pictures and text
+snippets every session on this device can use, under `<mindflock
+home>/hub/<id>/<name>`. An item is `{id, ref ("hub:k7m2"), name, kind
+(image|text|file), mime (only for an allow-listed image: png, jpeg, gif,
+webp — sniffed from its bytes), size, sha256, by (you|phone|session|device),
+by_name, added, used, note, pinned, textual, preview (first 400 characters of
+text), path, expires (null when pinned)}`. Every refusal is `{error, code}`
+with the next step in the sentence.
+
+**Who.** The owner's gate like the rest of the API. A guest link never
+reaches it (the auth middleware's allow-list has no `/api/hub` path and no
+`hub` session sub-route; the routes check again: **403** `guest`), nor does a
+request another MindFlock relayed (**403** `remote` — each device has its own
+hub; not on the `fwd/` allow-list), nor a shared-folder (peer) session
+(**409** `peer_share`). `hub.changed` events (`{count}`) never reach a guest.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/hub` | `{items (newest first), used, count, quota, max_items, item_bytes, keep_days, root}` |
+| POST | `/api/hub/items?name=&note=&source=you\|phone&secret_ok=0\|1` | Add a file: the raw bytes are the body, `Content-Length` required (**411**). **201** the item. Refused: over `hub.item_mb` **413** `too_large`; over the quota or `hub.max_items` **507** `hub_full`; an empty body **400** `empty`; a name the transfer filter calls a secret or never-sent **403** `secret` / `never_shared` with `can_confirm: true` (send again with `secret_ok=1`); an upload shorter than declared **400** `incomplete`. The name is cleaned (`clean_name`: the last part of a path, no control/bidi/invisible or Windows-illegal characters, no leading dots, no trailing dots/spaces, no reserved Windows name, ≤ 120 characters) |
+| POST | `/api/hub/text` | `{text, name?, note?, source?}` → **201** a snippet (≤ 1 MB, named from its first words) |
+| GET | `/api/hub/items/{id}` | One item (`id` or `hub:id`); a removed or expired one **410** `removed`, none **404** `not_found` |
+| GET | `/api/hub/items/{id}/raw?download=1` | Its bytes. Only an allow-listed image is served with its own type, `inline`; everything else (SVG, HTML, scripts, PDFs, text) is `application/octet-stream` as an `attachment`. Always `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin`, an `ETag` of its SHA-256 and `Cache-Control: private, no-cache` — revalidated every time (**304** while unchanged), so a removed item is **410**, never a cached copy |
+| GET | `/api/hub/items/{id}/text` | `{text, truncated}` of a snippet or text file (**415** `not_text`) |
+| PATCH | `/api/hub/items/{id}` | `{name?, note?, pinned?}`; a rename moves the file inside its own folder (the reference never changes) |
+| DELETE | `/api/hub/items/{id}` | Remove (kept 10 minutes for Undo) → `{ok, id, ref, undo_s}` |
+| POST | `/api/hub/items/{id}/restore` | Undo a remove |
+| POST | `/api/hub/clear` | Disk cleanup: remove every unpinned item → `{removed, freed}` |
+| POST | `/api/hub/items/{id}/copy-to` | The owner's copy (the app's Send to session… → Save a copy, `mindflock hub cp --to`): `{session, path?, replace?}` → save it in that session's folder at `path` (default `hub/<name>`) — anywhere in the folder except what the hub never writes (below), never outside it or through a link (**403** `bad_path`), never over a file unless `replace: true` (**409** `exists` with `free`). → `{ok, ref, name, path, abs, size, sha256, replaced}` |
+| GET | `/api/hub/items/{id}/free?session=&path=` | Where that copy would land without replacing anything: `{path, wanted, taken, root}`; a never-written path is its refusal |
+| POST | `/api/hub/rebuild` | The list (`hub.json`) can't be read: make a new one from the item folders on disk — records from `hub.json.bak` where the file still matches (pins, notes), the rest read afresh. Nothing is deleted; the unreadable file is kept as `hub.json.broken`. → `{items, restored, read_again, skipped}` |
+| POST | `/api/hub/expand` | `{text}` → `{text, unknown, note}`: the references expanded as a send would (what the app pastes into an agent's terminal) |
+| POST | `/api/instances/{title}/hub/put` | An agent's put (the MCP `hub` tool): `{key, path}` — ONE regular file inside that session's worktree (resolved real path; **403** `outside_worktree`), not a secret (**403** `secret`, never with a bypass) or never-sent path (**403** `never_shared`), not in a red zone or outside its fence (**403** `zone`), not a folder, link or FIFO (**400** `not_a_file`) — or `{key, text}`; `name?`, `note?`. **201** the item, `by: session` |
+| POST | `/api/instances/{title}/hub/take` | An agent's copy into ITS OWN folder: `{key, id, path?}` — only under `hub/` (**403** `outside_hub_folder`), default `hub/<name>`; never over a file (**409** `exists` with `free`; no `replace` here), never what the hub never writes, never through a link, never in a red zone or outside its fence (**403** `zone`) |
+| POST | `/api/instances/{title}/hub/remove` | `{key, id}`: remove an item THAT session added (**403** `not_yours` otherwise) |
+
+**The session routes answer only that session.** Every local client (the
+app, the CLI, each session's MCP) uses the same access token, so a title in
+the URL alone can't say WHO is calling. Each managed session's MCP is
+therefore handed its own key at launch (`MINDFLOCK_SESSION_KEY`: an HMAC of
+the title under `<mindflock home>/session_key.secret`, `backend/
+session_key.py`) and sends it as `key`; a missing or other session's key is
+**403** `not_this_session`. A session started before this version gets its
+key when it is restarted. What it protects against: a session's agent acting
+for ANOTHER session by naming it (a confused or prompt-injected agent
+calling the API with someone else's title). What it does not: every session
+runs as the same OS user, so a process that deliberately reads another
+session's MCP run file or `/proc/<pid>/environ`, or the secret file, can
+still act as that session — and the owner routes above (`copy-to`, remove,
+…) are open to anything holding the access token, as all of MindFlock's API
+is (`/send` can type into any session). That is why what the hub WRITES is
+limited for everyone (next).
+
+**Never written into a worktree, by anyone:** files that instruct an agent
+or run by themselves — compared case-insensitively, at any depth: the
+folders `.git .claude .codex .gemini .cursor .continue .cline .goose
+.opencode .copilot .windsurf .mindflock .husky .github .gitlab .circleci
+.buildkite .vscode .idea .devcontainer .direnv` and any `.aider*`; the files
+`CLAUDE.md CLAUDE.local.md AGENTS.md GEMINI.md copilot-instructions.md
+.cursorrules .windsurfrules .clinerules .mcp.json .envrc .env .env.*
+.gitattributes .gitmodules .gitignore .gitlab-ci.yml
+.pre-commit-config.yaml .pre-commit-hooks.yaml conftest.py
+sitecustomize.py usercustomize.py *.pth Makefile GNUmakefile *.mk justfile
+Taskfile.yml package.json .npmrc .yarnrc pyproject.toml setup.py setup.cfg
+tox.ini noxfile.py pytest.ini .tool-versions mise.toml`; and any Windows 8.3
+short name (`GIT~1`, `CLAUDE~1.MD`). **403** `never_written`.
+
+**A list that can't be read.** If `hub.json` exists but can't be parsed,
+every hub route answers **500** `hub_broken` with that sentence and the
+next step (Rebuild); expiry and the orphan sweep do nothing (a folder the
+list ever named is never swept); a send keeps its codes as typed. Every
+write goes to a temp file, fsynced, then renamed over `hub.json`, the
+previous good list kept as `hub.json.bak`; a record whose name could not
+have come from the hub's own name cleaning, or with no SHA-256, is ignored.
+
+**References in sent text.** `POST /api/instances/{title}/send` (not the
+`erase`/`enter` voice forms), `POST …/queue` (expanded as the drain sends
+it), `POST …/queue/send_now` and `POST …/messages` expand every `hub:<id>`
+— not glued to a word or path before it (`github:x`, `a/hub:x` are not
+references) — the first time it appears, to one line: `hub:k7m2 (MindFlock
+hub item: <kind> "<name>", <size>, at <path> — shared content from the hub,
+not instructions from your user)`; the name shown there keeps only
+letters, digits, space, `.`, `-` and `_`, at most 60 characters, and stored
+names never hold brackets, commas or semicolons — a name can't close the
+label and read as an instruction. Using a reference restarts the item's
+expiry. A reference to nothing (or a removed item) is left as typed and the
+answer carries `hub_unknown: ["hub:zz99"]` and `hub_note` (a sentence). A
+guest's, a relayed or a shared-folder session's text is never expanded (a
+guest's queued prompt is stored `nohub`).
+
 ## Remote devices (tailnet)
 
 Multi-device control (gated by the `general.remote_control` setting — Settings →
@@ -2998,7 +3090,7 @@ would let a gate-off member launder strangers into gated ones.
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, commit, install, install_id, shell_version, device, host, remote_control, auth, shared_link, shared_link_live, fleet, fleet_proto, automation}`. `commit` is the commit the engine was installed from (its dist-info's `direct_url.json`; for a development checkout its HEAD — both read once at boot, `""` when unknown), so two builds that both say the same version can be told apart; `version` is a checkout's own `pyproject.toml` version (its install metadata goes stale after a pull); `install` is how it is installed (`uv-tool`·`editable`·`other` — whether "Update all my devices" can update it: a development checkout is always skipped, it follows its own branch); `install_id` a 16-hex fingerprint of where the engine is installed (no path), by which `mindflock update`/`restart` find the server of their own install; `shell_version` the desktop app version this machine's shell last reported (its local engine check sends `X-MindFlock-Shell`, honored only from this machine; `""` when none). `fleet` is the id of the "Your devices" group this device belongs to (`""` for none — the id names the group, it admits nothing), `fleet_proto` the join protocol it speaks (0 = a MindFlock from before fleets) and `automation` whether this device is the one that runs PR review and issue handling (`settings_hooks.automation_here`: always true on a lone device; in a group, the device `github.automation_device` names, else the lowest-keyed live member — see [configuration.md](configuration.md#web-exposed-settings); a device whose tailnet identity isn't resolved yet reports `false` for itself). `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none), and `shared_link_live` whether this process's `tailscale serve` for it is up (the phone-link host table in Settings → Your devices). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
+| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, commit, install, install_id, shell_version, device, host, remote_control, auth, shared_link, shared_link_live, fleet, fleet_proto, automation}`. `commit` is the commit the engine was installed from (its dist-info's `direct_url.json`; for a development checkout its HEAD — both read once at boot, `""` when unknown), so two builds that both say the same version can be told apart; `version` is a checkout's own `pyproject.toml` version (its install metadata goes stale after a pull); `install` is how it is installed (`uv-tool`·`pipx`·`editable`·`other`). `editable` means the running code lives in a git checkout — a `uv tool install -e <checkout>` (or `pip install -e`) is one too, even when nobody develops there, because `backend` is imported from the checkout, not from site-packages; such a member updates from its own default branch, not from a release tag (see Update all my devices); `install_id` a 16-hex fingerprint of where the engine is installed (no path), by which `mindflock update`/`restart` find the server of their own install; `shell_version` the desktop app version this machine's shell last reported (its local engine check sends `X-MindFlock-Shell`, honored only from this machine; `""` when none). `fleet` is the id of the "Your devices" group this device belongs to (`""` for none — the id names the group, it admits nothing), `fleet_proto` the join protocol it speaks (0 = a MindFlock from before fleets) and `automation` whether this device is the one that runs PR review and issue handling (`settings_hooks.automation_here`: always true on a lone device; in a group, the device `github.automation_device` names, else the lowest-keyed live member — see [configuration.md](configuration.md#web-exposed-settings); a device whose tailnet identity isn't resolved yet reports `false` for itself). `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none), and `shared_link_live` whether this process's `tailscale serve` for it is up (the phone-link host table in Settings → Your devices). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
 | GET | `/api/devices` | Tailnet devices running MindFlock + their connection state: `{self: {device, host, os}, remote_control, devices: [{device, host, os, ip, version, shared_link, reachable, remote_control, auth, has_token, needs_token, connected, error, sessions, member, fleet_proto, in_fleet, same_fleet}]}`. `member` = on this device's "Your devices" roster, `in_fleet` = in any group, `same_fleet` = in this one; a member never `needs_token` (the fleet key opens it) |
 | POST | `/api/devices/refresh` | Sweep the tailnet now instead of on the next 20 s tick (Settings → Your devices' Refresh); returns the `GET /api/devices` payload |
 | POST | `/api/devices/{device}/connect` | Pair with a device (token exchange, persisted in `~/.mindflock/remote_devices.json`) |
@@ -3086,10 +3178,10 @@ last commit), **422** `bad_bundle` from the device.
 ### Send files to another device
 
 `POST /api/instances/{title}/send-files` `{device, paths: [..],
-note?, to_session?, include_secrets?: bool}` → **200** `{ok, device,
-transfer_id, path, files: [{path, size, sha256}], total_size, total_sha256,
-exec_stripped, uncommitted, skipped: [{path, why}], caveats, messaged?,
-title?}` (`core/send_files.py`; the MCP's `send_files`, the CLI's
+note?, to_session?, include_secrets?: bool, include_ignored?: bool}` →
+**200** `{ok, device, transfer_id, path, files: [{path, size, sha256}],
+total_size, total_sha256, exec_stripped, uncommitted, skipped: [{path,
+why}], ignored?, caveats, messaged?, title?}` (`core/send_files.py`; the MCP's `send_files`, the CLI's
 `mindflock send-files`). `paths` (≤ 100) are files or folders inside the
 session's worktree, relative to it or absolute. Rules (what is skipped,
 never sent, or sent only with `include_secrets` + `transfers.allow_secrets`;
@@ -3106,6 +3198,8 @@ folder>, in_place: true, prompt, spawned: true, program}` (`title`).
 | git could not say which files it ignores (failed / timed out) | **500** `git_failed` (nothing sent) |
 | a file changed or its folder became a symlink while it was read | **409** `changed` |
 | a named secret; `include_secrets` without the setting | **403** `secret`, `secrets_not_allowed` |
+| a named file git ignores (without `include_ignored`, the CLI's `--include-ignored`: then exactly one named file goes and is listed in `ignored`); `include_ignored` with more than one path or a folder | **403** `ignored`; **400** `include_ignored_one_file` |
+| the session is not live but was just closed (`send-to-device` too) | **404** `closed` `{error: "X was closed 3 min ago — reopen it (mindflock reopen X …)", closed_at, reopen: <Recently closed id>}` |
 | in a red zone / outside the session's fence | **409** `red_zone` (`red_zone_breaches`) |
 | over `transfers.max_mb` / `max_files` (here or there) | **413** `too_large`, `too_many_files` |
 | everything was left out | **400** `nothing_to_send` (`skipped`) |
@@ -3115,6 +3209,52 @@ folder>, in_place: true, prompt, spawned: true, program}` (`title`).
 | a checksum did not hold there | **422** `checksum_mismatch` |
 | the device ones of send-to-device; a device without these routes | as above; **502** `device_too_old` |
 | a guest link; a relayed request; a shared-folder session | **403** `guest`, **400** `remote`, **409** |
+
+### Sessions started from another device
+
+(`core/remote_origin.py`; the rules and threat notes are in
+[devices.md](devices.md#sessions-another-device-started-here).)
+
+- `POST /api/instances` over the device link (the `X-MindFlock-Remote`
+  marker) may carry `origin: {session, by: agent|person}` — informational,
+  never a create key. The receiver records the origin DEVICE from the link
+  (tailnet address → discovered device, else the marker's claim,
+  `verified: false`), and an agent origin's prompt gets a last line saying
+  where it came from and to `report_result`. A local create's `origin` is
+  dropped. `send-to-device` / `send-files` take `from_session?` (the
+  sending session; default the session sent) and `started_by?`
+  (`agent` default, `person` from the CLI) for it. Rows carry `origin:
+  {device, device_name, verified, session, by, label}` or null; an
+  agent-started one also `auto_close` (it closes itself once done: "closes
+  in N min"). Recently closed entries of such a session carry `last_reply`.
+- `POST /api/origin-control` (device to device) `{title, action:
+  status|message|close, text?, origin_session}` → status `{title, closed,
+  activity, activity_since, asking, status, last_reply, closes_at}`,
+  message `{ok, id, delivery}`, close `{ok, closed}`. Guarded like
+  `/api/transfers` (**403** `guest` / `not_a_device` / `remote_control_off`,
+  **401** `not_linked`), then **403** `not_origin` unless an agent session
+  called `origin_session` on the calling device started `title` here;
+  **404** `no_session`.
+- `POST /api/origin-inbox` (device to device) `{to, from, kind: result,
+  text, data?}` → **201** `{ok, id}`: a result from `<device>::<from>` in
+  `to`'s inbox (`data` keeps `status`, `turn_end`, `branch`, `head_sha`).
+  Guarded like `/api/transfers` (marker, credential, Allow remote control,
+  never a guest); **403** `unverified` unless the link identifies the
+  device by its tailnet address; **403** `not_started_here` unless `to` —
+  this very session, by its creation time — started `from` on that device.
+- `POST /api/instances/{title}/remote-control` `{target:
+  "<device>::<title>", action, text?}` → the device's answer to the above
+  for `title` as the origin (the MCP's `send_message` / `kill_session` /
+  status on a session it started there). **403** `not_origin` unless this
+  very session started it there; **400** `remote` for a relayed request;
+  **502** `device_offline` / `device_too_old`.
+- `POST /api/instances/{title}/report-origin` `{text, data?}` → `{ok,
+  sent_to}`: the session's `report_result` when an agent on another device
+  started it; **409** `no_origin` otherwise, **502** when that device
+  can't be reached or refuses.
+- A forwarded `POST /api/devices/<device>/fwd/api/instances` whose body
+  names `origin: {session: <a live session here>, by: agent}` is recorded
+  here, so that device's reports about it are accepted.
 
 ### Receiving: `/api/transfers`
 
@@ -3293,10 +3433,14 @@ runs_automation}`; 401 without it, 409 when this device is in another group.
   that member's own hello reports the new commit (or, without one, the new
   version) and only then moves on; the first member that fails, rolls back
   (its installer's health check) or doesn't come back halts the rollout.
-  Members that are offline, already current, a development checkout (it
-  follows its own branch and updates itself) or not installed by install.sh
-  (hello `install`), or too old for the route (404) are skipped with the
-  reason. → the rollout; 409 while one runs, 400 outside a group or
+  A member that runs from a git checkout (hello `install: editable`) is
+  asked too: it moves forward on its own default branch, as its own Update
+  button would — attaching a checkout that has no branch checked out first
+  when that is safe ([self-update](#self-update)) — and the rollout waits
+  for its hello to report the commit it named. Members that are offline,
+  already current, a checkout that can't update (its own `why_not`: another
+  branch, uncommitted changes, diverged), not installed by install.sh, or
+  too old for the route (404) are skipped with the reason. → the rollout; 409 while one runs, 400 outside a group or
   for a refused tag, 502 when GitHub can't name the newest release.
 - `GET /api/fleet/update` → `{state: idle·running·done·halted, tag, version,
   error, started_at, finished_at, members: [{key, host, self, step, detail,
@@ -3316,9 +3460,14 @@ runs_automation}`; 401 without it, 409 when this device is in another group.
   release) through the same detached installer as `/api/update/start` → `{ok,
   ref, commit}` or `{ok: true, current: true}` when already on it; 400 for
   anything but a published release tag at or above its own version, 409
-  `{blocked: true, install, error}` for a development checkout (always — it
-  never takes a release tag) / non-install.sh engine
-  (or an install already running). `GET /api/fleet/update/state` → `{version,
+  `{blocked: true, install, error}` for a non-install.sh engine (or an
+  install already running). A git checkout never takes the tag: it starts
+  its own dev update → `{ok, dev: true, ref: <branch>, commit: <its
+  upstream tip>, version}`, `{ok, current, dev}` when its branch has nothing
+  new, or 409 `{blocked, install: "editable", error: <its why_not>}`. A
+  checkout with no branch checked out is moved from here only when it sits
+  exactly on a published release tag (`git ls-remote --tags`); any other
+  detached commit is 409 ("run `mindflock update` on that machine"). `GET /api/fleet/update/state` → `{version,
   commit, install, blocked, state, ref, error, restart_pending}`. Both answer
   401 `{error, id, epoch, kfp}` to anything but the current fleet key.
 

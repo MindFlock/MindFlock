@@ -326,6 +326,8 @@ def rows(engine=None) -> list:
                 "last_report": None,
                 # Not agent-spawned: the auto-close sweep never touches it.
                 "auto_close": None,
+                # Not started from another device until it is live.
+                "origin": None,
                 "stage": "provisioning",
                 "pr_url": None,
                 "merge_state": None,

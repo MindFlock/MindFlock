@@ -17,6 +17,16 @@ from git, never from the installer:
   files, and not diverged (a fast-forward must be possible). Otherwise
   :func:`status` says why in one plain sentence (``why_not``) and nothing
   anywhere nags about it.
+* **No branch checked out** (a detached HEAD — left at a release commit by
+  hand, say) can update too when nothing would be lost: HEAD is an ancestor
+  of (or equal to) the default branch's upstream tip, nothing uncommitted in
+  tracked files, and a local default branch, if there is one, is an
+  ancestor of HEAD or equal to it. The update first ATTACHES the checkout to
+  that branch at the current commit (:func:`attach_plan`: the branch is
+  created there, or fast-forwarded to HEAD — files never move, nothing is
+  discarded), then runs the ordinary fast-forward. A rollback puts it back
+  exactly: detached at the old commit, the local branch where it was (or
+  gone again).
 * **The update** (:func:`install_lines`, run by self_update's detached
   script, and :func:`apply_here` for ``mindflock update``): ``git fetch``,
   ``git merge --ff-only <the fetched tip>``, then refresh the install
@@ -162,6 +172,102 @@ def _pyproject_version(checkout: str, rev: str) -> str:
     return str(project.get("version") or "").strip()
 
 
+def checked_out_elsewhere(checkout: str, branch: str) -> bool:
+    """Whether ``branch`` is checked out in a worktree of this repository
+    other than ``checkout``. Unknown (git failed) counts as yes."""
+    rc, out = _git(checkout, "worktree", "list", "--porcelain")
+    if rc != 0:
+        return True
+    here = os.path.realpath(checkout)
+    path = ""
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            path = os.path.realpath(line[len("worktree ") :])
+        elif line == "branch refs/heads/" + branch and path != here:
+            return True
+    return False
+
+
+def published_release_at(checkout: str, remote: str, sha: str) -> str:
+    """The published release tag (``v0.14.25`` on ``remote``) whose commit
+    is ``sha``, "" when none — a checkout "parked on a release". One
+    ``ls-remote``; "" when the remote can't be asked."""
+    import re as _re
+
+    rc, out = _git(
+        checkout, "ls-remote", "--tags", remote or "origin", timeout=NET_TIMEOUT_S
+    )
+    if rc != 0 or not _SHA.match(sha or ""):
+        return ""
+    release = _re.compile(r"^v?[0-9]+(\.[0-9]+){1,3}$")
+    hits: Dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or not parts[1].startswith("refs/tags/"):
+            continue
+        name = parts[1][len("refs/tags/") :]
+        peeled = name.endswith("^{}")
+        name = name[:-3] if peeled else name
+        if not release.match(name):
+            continue
+        # An annotated tag's peeled line names its commit; it wins.
+        if peeled or name not in hits:
+            hits[name] = parts[0]
+    for name, commit in sorted(hits.items()):
+        if commit == sha:
+            return name
+    return ""
+
+
+def attach_plan(checkout: str, head: str, target: str, default: str) -> dict:
+    """For a checkout with NO branch checked out: whether the update may
+    attach it to ``default`` first → ``{"ok": True, "branch", "create",
+    "from"}`` or ``{"ok": False, "why"}`` (one plain sentence saying what to
+    do). Dirty tracked files are checked by the caller.
+
+    Safe means nothing is left behind and no file moves: HEAD is reachable
+    from the upstream tip ``target`` (so it holds no commit of its own), and
+    a local ``default`` branch, when there is one, is HEAD or behind it (so
+    moving it up to HEAD only fast-forwards it). ``from`` is that branch's
+    sha now ("" = it doesn't exist and is created)."""
+    q = shlex.quote
+    if not default or not _SHA.match(head or "") or not _SHA.match(target or ""):
+        return {
+            "ok": False,
+            "why": "This development checkout has no branch checked out; switch "
+            "it to %s (git switch %s) to get updates."
+            % (default or "main", q(default or "main")),
+        }
+    if _git(checkout, "merge-base", "--is-ancestor", head, target)[0] != 0:
+        return {
+            "ok": False,
+            "why": "This development checkout has no branch checked out and is "
+            "at a commit that is not on %s; switch it to %s (git switch %s) to "
+            "get updates." % (default, default, q(default)),
+        }
+    if checked_out_elsewhere(checkout, default):
+        # Moving a branch another worktree has checked out would move that
+        # worktree's HEAD under its index and files (git's own switch
+        # refuses this; update-ref + symbolic-ref would not).
+        return {
+            "ok": False,
+            "why": "This development checkout has no branch checked out, and "
+            "%s is checked out in another worktree; update from that worktree "
+            "instead." % default,
+        }
+    rc, local = _git(checkout, "rev-parse", "-q", "--verify", "refs/heads/" + default)
+    local = local if rc == 0 and _SHA.match(local) else ""
+    if local and local != head:
+        if _git(checkout, "merge-base", "--is-ancestor", local, head)[0] != 0:
+            return {
+                "ok": False,
+                "why": "This development checkout has no branch checked out, and "
+                "its own %s has commits that are not here; switch to it (git "
+                "switch %s) and update from there." % (default, q(default)),
+            }
+    return {"ok": True, "branch": default, "create": not local, "from": local}
+
+
 def why_not_sentence(
     branch: str, default: str, dirty: bool, diverged: bool, remote: bool
 ) -> str:
@@ -171,6 +277,12 @@ def why_not_sentence(
     if not remote:
         return "This development checkout has no remote to update from."
     if not branch:
+        if dirty:
+            return (
+                "This development checkout has no branch checked out and has "
+                "uncommitted changes; commit or undo them, then switch it to "
+                "%s (git switch %s) to get updates." % (target, shlex.quote(target))
+            )
         return "This is a development checkout with no branch checked out. " + tail
     if default and branch != default:
         return "This is a development checkout on branch %s. %s" % (branch, tail)
@@ -244,6 +356,14 @@ def status(
             ahead, behind = int(parts[0]), int(parts[1])
     diverged = ahead > 0 and behind > 0
     why_not = why_not_sentence(branch, default, dirty, diverged, bool(target))
+    attach: Optional[dict] = None
+    if not branch and target and not dirty:
+        plan = attach_plan(checkout, head, target, default)
+        if plan.get("ok"):
+            attach = {k: plan[k] for k in ("branch", "create", "from")}
+            why_not = ""
+        else:
+            why_not = str(plan.get("why") or why_not)
     return {
         "checkout": checkout,
         "branch": branch,
@@ -258,6 +378,9 @@ def status(
         "head": head,
         "target": target,
         "target_version": _pyproject_version(checkout, target) if behind > 0 else "",
+        # No branch checked out, but it may attach to its default branch
+        # first (attach_plan): {branch, create, from}. None otherwise.
+        "attach": attach,
     }
 
 
@@ -317,16 +440,21 @@ def install_lines(st: dict, refresh: Optional[List[str]]) -> List[str]:
     Re-checks what :func:`status` checked — minutes may have passed (the
     automatic path waits for a quiet moment) and someone may have switched
     branches or started editing since."""
-    branch = st.get("branch") or ""
+    attach = st.get("attach") or None
+    branch = st.get("branch") or (attach or {}).get("branch") or ""
     remote = st.get("remote") or "origin"
     refresh_line = _q(refresh) if refresh else ""
     lines = [
         "code=0; ERR=''",
+        *_undo_attach_fn(attach),
         'if ! cd %s; then code=1; ERR="the checkout is gone"; fi'
         % shlex.quote(st["checkout"]),
         'if [ "$code" -eq 0 ]; then',
         '  git fetch --quiet %s >> "$LOG" 2>&1 || printf "=== fetch failed; using what is already here ===\\n" >> "$LOG"'
         % shlex.quote(remote),
+        "fi",
+        *_attach_lines(attach, st),
+        'if [ "$code" -eq 0 ]; then',
         # The branch is quoted for the test, and never put into ERR: it ends
         # up inside a double-quoted string and then the state file's JSON.
         '  if [ "$(git symbolic-ref -q --short HEAD)" != %s ]; then code=3; ERR="the checkout is no longer on its branch"; fi'
@@ -341,6 +469,8 @@ def install_lines(st: dict, refresh: Optional[List[str]]) -> List[str]:
         'if [ "$code" -eq 0 ]; then',
         '  git merge --ff-only "$COMMIT" >> "$LOG" 2>&1 || { code=$?; ERR="the checkout could not move forward"; }',
         "fi",
+        # Refused after the attach: back to no branch, as it was found.
+        'if [ "$code" -ne 0 ] && [ -n "$ATTACHED" ]; then undo_attach; fi',
     ]
     if refresh_line:
         lines += [
@@ -348,7 +478,7 @@ def install_lines(st: dict, refresh: Optional[List[str]]) -> List[str]:
             '  %s >> "$LOG" 2>&1 || {' % refresh_line,
             "    code=$?",
             '    ERR="the new dependencies could not be installed, so the checkout was moved back"',
-            '    git reset --quiet --keep "$PREV" >> "$LOG" 2>&1 || ERR="the new dependencies could not be installed"',
+            '    if git reset --quiet --keep "$PREV" >> "$LOG" 2>&1; then undo_attach; else ATTACHED=\'\'; ERR="the new dependencies could not be installed"; fi',
             "  }",
             "fi",
         ]
@@ -356,6 +486,107 @@ def install_lines(st: dict, refresh: Optional[List[str]]) -> List[str]:
         lines += [
             '[ "$code" -eq 0 ] && printf "=== no uv or pip here: the install was not refreshed ===\\n" >> "$LOG"',
         ]
+    return lines
+
+
+def _undo_attach_fn(attach: Optional[dict]) -> List[str]:
+    """The shell function ``undo_attach`` the rollbacks call after moving
+    the branch back to ``$PREV``: for a checkout the update attached, detach
+    HEAD at ``$PREV`` again (same commit: no file moves) and put the local
+    branch back — deleted when the update created it, else reset to where it
+    was. A no-op for a checkout that was already on its branch, and until
+    the attach actually happened (``ATTACHED``)."""
+    if not attach:
+        return ["undo_attach() { :; }"]
+    ref = "refs/heads/" + str(attach["branch"])
+    restore = (
+        'git branch --quiet -D %s >> "$LOG" 2>&1' % shlex.quote(str(attach["branch"]))
+        if attach.get("create")
+        else 'git update-ref %s %s >> "$LOG" 2>&1'
+        % (shlex.quote(ref), shlex.quote(str(attach.get("from") or "")))
+    )
+    return [
+        "ATTACHED=''",
+        "undo_attach() {",
+        '  [ -n "$ATTACHED" ] || return 0',
+        # Only ever from the very commit it was attached at: no file moves.
+        '  [ "$(git rev-parse HEAD)" = "$PREV" ] || return 1',
+        '  git checkout --quiet --detach "$PREV" >> "$LOG" 2>&1 || return 1',
+        "  %s || return 1" % restore,
+        "  ATTACHED=''",
+        "}",
+    ]
+
+
+def _attach_lines(attach: Optional[dict], st: dict) -> List[str]:
+    """The lines that attach a no-branch checkout to its default branch at
+    ``$PREV`` before the fast-forward — after re-checking what
+    :func:`attach_plan` checked (still no branch, still at ``$PREV``, still
+    clean, the local branch still where it was). Never moves a file:
+    the branch is made to point at the very commit HEAD is on, then HEAD is
+    pointed at the branch (``git symbolic-ref``)."""
+    if not attach:
+        return []
+    name = str(attach["branch"])
+    ref = "refs/heads/" + name
+    upstream = "%s/%s" % (st.get("remote") or "origin", name)
+    if st.get("upstream"):
+        upstream = str(st["upstream"])
+    lines = [
+        'if [ "$code" -eq 0 ] && git symbolic-ref -q HEAD >/dev/null 2>&1; then',
+        '  code=3; ERR="the checkout is on a branch now; nothing was changed"',
+        "fi",
+        'if [ "$code" -eq 0 ] && [ "$(git rev-parse HEAD)" != "$PREV" ]; then',
+        '  code=3; ERR="the checkout moved while the update waited"',
+        "fi",
+        'if [ "$code" -eq 0 ] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then',
+        '  code=3; ERR="the checkout has uncommitted changes now"',
+        "fi",
+        # This checkout has no branch: any worktree listing the branch is
+        # another one (moving it would move that worktree under its files).
+        'if [ "$code" -eq 0 ] && git worktree list --porcelain | grep -qxF %s; then'
+        % shlex.quote("branch " + ref),
+        '  code=3; ERR="the branch is checked out in another worktree; nothing was changed"',
+        "fi",
+    ]
+    if attach.get("create"):
+        lines += [
+            'if [ "$code" -eq 0 ] && git rev-parse -q --verify %s >/dev/null 2>&1; then'
+            % shlex.quote(ref),
+            '  code=3; ERR="a local branch appeared while the update waited; nothing was changed"',
+            "fi",
+            'if [ "$code" -eq 0 ]; then',
+            # Create it AT the current commit; then point HEAD at it.
+            '  git update-ref %s "$PREV" "" >> "$LOG" 2>&1 || { code=3; ERR="could not create the local branch"; }'
+            % shlex.quote(ref),
+            "fi",
+        ]
+    else:
+        lines += [
+            'if [ "$code" -eq 0 ]; then',
+            # Compare-and-swap: only from where status saw it (a fast-forward
+            # up to HEAD — attach_plan checked it is an ancestor).
+            '  git update-ref %s "$PREV" %s >> "$LOG" 2>&1 || { code=3; ERR="the local branch moved while the update waited; nothing was changed"; }'
+            % (shlex.quote(ref), shlex.quote(str(attach.get("from") or ""))),
+            "fi",
+        ]
+    lines += [
+        'if [ "$code" -eq 0 ]; then',
+        '  git symbolic-ref HEAD %s >> "$LOG" 2>&1 || code=3' % shlex.quote(ref),
+        '  if [ "$code" -eq 0 ]; then ATTACHED=1; else ERR="could not put the checkout on its branch"; fi',
+        "fi",
+    ]
+    if attach.get("create"):
+        lines += [
+            '[ "$code" -eq 0 ] && { git branch --quiet --set-upstream-to=%s %s >> "$LOG" 2>&1 || true; }'
+            % (shlex.quote(upstream), shlex.quote(name)),
+        ]
+    lines += [
+        '[ "$code" -eq 0 ] && printf "=== attached the checkout to %%s at %%s ===\\n" %s "$PREV" >> "$LOG"'
+        % shlex.quote(name),
+        # A failure after the attach must leave it as it was found.
+        'if [ "$code" -ne 0 ] && [ -n "$ATTACHED" ]; then undo_attach; fi',
+    ]
     return lines
 
 
@@ -372,6 +603,9 @@ def rollback_lines(refresh: Optional[List[str]]) -> List[str]:
         "fi",
         'git reset --quiet --keep "$PREV" >> "$LOG" 2>&1',
         "rc=$?",
+        # A checkout that was attached to its branch by the update goes back
+        # to no branch at the old commit (undo_attach: install_lines).
+        '[ "$rc" -eq 0 ] && { undo_attach || rc=$?; }',
     ]
     if refresh:
         lines.append('[ "$rc" -eq 0 ] && { %s >> "$LOG" 2>&1 || true; }' % _q(refresh))
@@ -394,21 +628,94 @@ def _run(argv: List[str], cwd: str, timeout: float = NET_TIMEOUT_S) -> int:
         return 1
 
 
+def attach_here(st: dict) -> Tuple[bool, str]:
+    """Attach a no-branch checkout to its default branch at the current
+    commit (``st["attach"]``, :func:`attach_plan`) — re-checking first that
+    nothing changed since :func:`status` looked. Never moves a file: the
+    branch is pointed at HEAD's commit, then HEAD at the branch.
+    ``(ok, sentence)``; ``(True, "")`` when there is nothing to attach."""
+    attach = st.get("attach") or None
+    if not attach:
+        return True, ""
+    checkout, prev = st["checkout"], st.get("head") or ""
+    name = str(attach["branch"])
+    ref = "refs/heads/" + name
+    if _git(checkout, "symbolic-ref", "-q", "HEAD")[0] == 0:
+        return False, "the checkout is on a branch now; nothing was changed"
+    if head(checkout) != prev:
+        return False, "the checkout moved since it was checked; nothing was changed"
+    rc, porcelain = _git(checkout, "status", "--porcelain", "--untracked-files=no")
+    if rc != 0 or porcelain:
+        return False, "the checkout has uncommitted changes now; nothing was changed"
+    if checked_out_elsewhere(checkout, name):
+        return (
+            False,
+            "%s is checked out in another worktree; nothing was changed" % name,
+        )
+    if _git(checkout, "update-ref", ref, prev, str(attach.get("from") or ""))[0] != 0:
+        return (
+            False,
+            "the local %s moved since it was checked; nothing was changed" % name,
+        )
+    if _git(checkout, "symbolic-ref", "HEAD", ref)[0] != 0:
+        _restore_branch(checkout, attach)
+        return False, "could not put the checkout on %s; nothing was changed" % name
+    if attach.get("create") and st.get("upstream"):
+        _git(checkout, "branch", "--quiet", "--set-upstream-to=" + st["upstream"], name)
+    print(
+        "put the checkout on %s at %s (it had no branch checked out)" % (name, prev[:7])
+    )
+    return True, ""
+
+
+def _restore_branch(checkout: str, attach: dict) -> bool:
+    name = str(attach["branch"])
+    if attach.get("create"):
+        return _git(checkout, "branch", "--quiet", "-D", name)[0] == 0
+    return (
+        _git(
+            checkout, "update-ref", "refs/heads/" + name, str(attach.get("from") or "")
+        )[0]
+        == 0
+    )
+
+
+def detach_back(checkout: str, prev: str, attach: Optional[dict]) -> bool:
+    """Undo :func:`attach_here` once the branch is back at ``prev``: HEAD
+    detached at ``prev`` again (the same commit: no file moves) and the local
+    branch deleted (it was created) or put back where it was. False — and
+    nothing touched — when HEAD is not at ``prev``."""
+    if not attach:
+        return True
+    if head(checkout) != prev:
+        return False
+    if _git(checkout, "checkout", "--quiet", "--detach", prev)[0] != 0:
+        return False
+    return _restore_branch(checkout, attach)
+
+
 def apply_here(st: dict) -> Tuple[bool, str]:
     """Move the checkout ``st`` describes to its upstream's tip and refresh
     the install, in the foreground. ``(ok, sentence)``; on a failed refresh
-    the checkout is moved back."""
+    the checkout is moved back (and a checkout that had no branch checked
+    out goes back to having none)."""
     checkout = st["checkout"]
     target = st.get("target") or ""
+    prev = st.get("head") or ""
+    attach = st.get("attach") or None
     if not st.get("can_update") or not _SHA.match(target):
         return False, st.get("why_not") or "nothing to update to"
     if _run(["git", "fetch", "--quiet", st.get("remote") or "origin"], checkout) != 0:
         print("fetch failed; using what is already here")
+    ok, why = attach_here(st)
+    if not ok:
+        return False, why
     if _run(["git", "merge", "--ff-only", target], checkout) != 0:
+        detach_back(checkout, prev, attach)
         return False, "the checkout could not move forward"
     refresh = refresh_command(checkout)
     if refresh and _run(refresh, checkout, timeout=30 * 60) != 0:
-        moved = move_back(checkout, st.get("head") or "", refresh=False)
+        moved = move_back(checkout, prev, refresh=False, attach=attach)
         return False, (
             "the new dependencies could not be installed"
             + (", so the checkout was moved back" if moved else "")
@@ -416,9 +723,13 @@ def apply_here(st: dict) -> Tuple[bool, str]:
     return True, ""
 
 
-def move_back(checkout: str, prev: str, refresh: bool = True) -> bool:
+def move_back(
+    checkout: str, prev: str, refresh: bool = True, attach: Optional[dict] = None
+) -> bool:
     """``git reset --keep <prev>`` when the tree is clean (then refresh the
-    install again). False when it wasn't clean or the reset failed."""
+    install again); with ``attach`` (the update attached a no-branch
+    checkout) HEAD is detached at ``prev`` again and the branch put back.
+    False when it wasn't clean or the reset failed."""
     if not _SHA.match(prev or ""):
         return False
     rc, porcelain = _git(checkout, "status", "--porcelain", "--untracked-files=no")
@@ -426,6 +737,7 @@ def move_back(checkout: str, prev: str, refresh: bool = True) -> bool:
         return False
     if _run(["git", "reset", "--quiet", "--keep", prev], checkout) != 0:
         return False
+    detach_back(checkout, prev, attach)
     cmd = refresh_command(checkout) if refresh else None
     if cmd:
         _run(cmd, checkout, timeout=30 * 60)

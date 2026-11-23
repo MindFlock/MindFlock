@@ -68,6 +68,8 @@ modules under
     send_files       sending files from a session's worktree to another of
                      your devices (manifest + checksummed chunks)
     inbox            receiving them: /api/transfers, the inbox, bundles
+    hub              the hub: shared files/images/snippets every session can
+                     use, hub:<id> references expanded in sent prompts
     session_bundle   a branch as a standalone git bundle (export / unpack)
     mobile_access    phone access: tailscale URLs, QR codes, startup banner
     pane_find        in-place Ctrl+F in a live pane (tmux copy-mode search)
@@ -166,7 +168,7 @@ import time
 import traceback
 import weakref
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
@@ -207,7 +209,9 @@ from backend.web.core import guests as _guests
 from backend.web.core import move_session as _move_session
 from backend.web.core import send_session as _send_session
 from backend.web.core import send_files as _send_files
+from backend.web.core import remote_origin as _remote_origin
 from backend.web.core import inbox as _inbox
+from backend.web.core import hub as _hub
 from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import terminal_ws as _terminal_ws
 from backend.web.core import guest_tunnel as _guest_tunnel
@@ -725,6 +729,7 @@ from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
 from backend.web.routes import memory as _memory_routes
 from backend.web.routes import cleanup as _cleanup_routes
+from backend.web.routes import hub as _hub_routes
 from backend.web.routes import flock as _flock_routes
 from backend.web.routes.peer import (
     _peer_body,
@@ -1049,6 +1054,9 @@ async def lifespan(app: FastAPI):
     # CLOSES sessions.
     if _auto_close_loop_enabled():
         _register_task(_auto_close.run_loop())
+        # Turn ends of sessions an agent on another device started here go
+        # back to that session's inbox there (core.remote_origin).
+        _register_task(_remote_origin.run_loop())
     _register_task(_memory_watch_loop())
     # Per-session memory sampler + logs/memory.jsonl (core.memory_watch), on
     # the ticks' own pool. Off under pytest (ENGINE is the real state there).
@@ -2859,6 +2867,11 @@ async def _inbox_partials_loop() -> None:
         try:
             await asyncio.to_thread(_inbox.prune_partials)
         except Exception:  # noqa: BLE001 — housekeeping must never die
+            pass
+        try:
+            # The hub on the same timer: expiry, Undo's window, stale uploads.
+            await asyncio.to_thread(_hub.prune)
+        except Exception:  # noqa: BLE001
             pass
 
 
@@ -5237,7 +5250,11 @@ async def create_instance(payload: dict, request: Request) -> JSONResponse:
     the run's own planner.
     """
     return await _session_create.create_requested(
-        payload, person=_auth.request_person(request)
+        payload,
+        person=_auth.request_person(request),
+        # Over the device link: who asked (core.remote_origin) — None for
+        # this device's own browser/CLI/agents.
+        link=_remote_origin.link_of(request),
     )
 
 
@@ -5685,7 +5702,7 @@ async def instance_send_to_device(
         return _no_git_response()
     inst, err = _inst_or_404(title)
     if err is not None:
-        return err
+        return _closed_send_refusal(title) or err
     peer_err = _peer_guard.refusal(inst, "sending to another device")
     if peer_err is not None:
         return peer_err
@@ -5715,19 +5732,55 @@ async def instance_send_to_device(
             return ""
         return text or ""
 
-    status, out = await _send_session.send(
-        inst,
-        title,
-        device,
-        note,
-        via=via,
-        paths=paths[:50],
-        last_reply=_last_reply,
-        breaches=lambda wt: _red_zone_breaches_for(inst, wt, "HEAD"),
-    )
+    token = _send_session.ORIGIN.set(_send_origin(title, body))
+    try:
+        status, out = await _send_session.send(
+            inst,
+            title,
+            device,
+            note,
+            via=via,
+            paths=paths[:50],
+            last_reply=_last_reply,
+            breaches=lambda wt: _red_zone_breaches_for(inst, wt, "HEAD"),
+        )
+    finally:
+        _send_session.ORIGIN.reset(token)
     if status == 200:
         _forget_probes(title)  # its row's pushed/stage probes are stale now
     return JSONResponse(out, status_code=status)
+
+
+def _send_origin(title: str, body: dict) -> dict:
+    """Who a send says started the session on the device (core.
+    remote_origin): ``from_session`` — the session doing the sending, when
+    it is a live one here (an orchestrator sending a worker's work) — else
+    the session sent; ``started_by`` ``person`` (the CLI) or ``agent`` (the
+    MCP, and the default). Informational: the device labels it so."""
+    frm = body.get("from_session")
+    session = frm if isinstance(frm, str) and frm in ENGINE.instances else title
+    by = body.get("started_by")
+    return {"session": session, "by": by if by in ("agent", "person") else "agent"}
+
+
+def _closed_send_refusal(title: str) -> Optional[JSONResponse]:
+    """When ``title`` is not live but was closed recently (an auto-closed
+    worker, say): a 404 that says so — "closed 3 min ago — reopen it" with
+    the command — instead of a bare "instance not found". None otherwise."""
+    from backend.web.core import recently_closed as _rc
+
+    hit = _rc.closed_hint(title)
+    if hit is None:
+        return None
+    return JSONResponse(
+        {
+            "error": hit["sentence"],
+            "code": "closed",
+            "closed_at": hit["closed_at"],
+            "reopen": hit["id"],
+        },
+        status_code=404,
+    )
 
 
 @app.post("/api/instances/{title}/send-files")
@@ -5736,7 +5789,7 @@ async def instance_send_files(
 ) -> JSONResponse:
     """Send files or folders from the session's worktree to another of your
     devices: ``{"device", "paths": [..], "note"?, "to_session"?,
-    "include_secrets"?}`` → **200** ``{"ok", "device", "transfer_id",
+    "include_secrets"?, "include_ignored"?}`` → **200** ``{"ok", "device", "transfer_id",
     "path", "files": [{path, size, sha256}], "total_size", "total_sha256",
     "exec_stripped", "uncommitted", "skipped", "caveats", "messaged"?,
     "title"?}`` (:mod:`backend.web.core.send_files`; the device's half is
@@ -5761,7 +5814,7 @@ async def instance_send_files(
         )
     inst, err = _inst_or_404(title)
     if err is not None:
-        return err
+        return _closed_send_refusal(title) or err
     peer_err = _peer_guard.refusal(inst, "sending files to another device")
     if peer_err is not None:
         return peer_err
@@ -5769,6 +5822,7 @@ async def instance_send_files(
     device, paths = body.get("device"), body.get("paths")
     note, to_session = body.get("note", ""), body.get("to_session", "")
     secrets_flag = body.get("include_secrets", False)
+    ignored_flag = body.get("include_ignored", False)
     if (
         not isinstance(device, str)
         or not isinstance(note, str)
@@ -5776,25 +5830,31 @@ async def instance_send_files(
         or not isinstance(paths, list)
         or not all(isinstance(x, str) for x in paths)
         or not isinstance(secrets_flag, bool)
+        or not isinstance(ignored_flag, bool)
     ):
         return JSONResponse(
             {
                 "error": "device, note and to_session must be strings, paths a "
-                "list of strings, include_secrets a boolean",
+                "list of strings, include_secrets and include_ignored booleans",
                 "code": "bad_request",
             },
             status_code=400,
         )
-    status, out = await _send_files.send(
-        inst,
-        title,
-        device,
-        paths,
-        note=note,
-        to_session=to_session.strip(),
-        include_secrets=secrets_flag,
-        zone_hits=zone_hits_for_paths,
-    )
+    token = _send_session.ORIGIN.set(_send_origin(title, body))
+    try:
+        status, out = await _send_files.send(
+            inst,
+            title,
+            device,
+            paths,
+            note=note,
+            to_session=to_session.strip(),
+            include_secrets=secrets_flag,
+            include_ignored=ignored_flag,
+            zone_hits=zone_hits_for_paths,
+        )
+    finally:
+        _send_session.ORIGIN.reset(token)
     return JSONResponse(out, status_code=status)
 
 
@@ -5855,6 +5915,389 @@ def _transfer_sender(request: Request) -> Tuple[str, bool]:
     if seen:
         return seen, True
     return request.headers.get(_remote.REMOTE_HEADER, ""), False
+
+
+# --------------------------------------------------------------------------- #
+# Sessions started from another device: control from the origin, and its
+# reports back (core.remote_origin). Neither route is under /api/instances/
+# (the namespaced-title proxy never forwards it) nor on the fwd/ allow-list:
+# no device can relay a third one's request to them.
+# --------------------------------------------------------------------------- #
+_ORIGIN_ACTIONS = ("status", "message", "close")
+
+
+def _origin_status(title: str, inst) -> dict:
+    """What the origin is told about a session it started: its state, its
+    last report there and its last reply."""
+    row = next(
+        (
+            r
+            for r in _events.sessions_snapshot()
+            if isinstance(r, dict) and r.get("title") == title and not r.get("device")
+        ),
+        {},
+    )
+    try:
+        _kind, reply, *_ = _agent_output(inst, title, "last_reply")
+    except Exception:  # noqa: BLE001
+        reply = ""
+    reply = str(reply or "")
+    if len(reply) > 4000:
+        reply = "… " + reply[-4000:]
+    ac = row.get("auto_close") if isinstance(row.get("auto_close"), dict) else {}
+    return {
+        "title": title,
+        "closed": False,
+        "activity": row.get("activity") or "",
+        "activity_since": row.get("activity_since") or 0,
+        "asking": bool(row.get("asking")),
+        "status": row.get("status"),
+        "last_reply": reply,
+        "closes_at": (ac or {}).get("closes_at"),
+    }
+
+
+@app.post("/api/origin-control")
+async def origin_control(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Another of your devices acts on a session IT started here (core.
+    remote_origin): ``{title, action: status|message|close, text?,
+    origin_session}`` → status ``{title, closed, activity, …, last_reply}``,
+    message ``{ok, delivery, id}``, close ``{ok, closed: true}``. Only over
+    the device link (remote marker + this device's token or the fleet key,
+    remote control on, never a guest link) and only for a session that the
+    calling device's ``origin_session`` started — checked here
+    (:func:`remote_origin.control_refusal`): **403** ``not_origin``
+    otherwise. **404** ``no_session`` for a title that is not here (``closed:
+    true`` when it was just closed, for ``status``)."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    body = payload if isinstance(payload, dict) else {}
+    title, action = body.get("title"), body.get("action")
+    origin_session, text = body.get("origin_session"), body.get("text", "")
+    if (
+        not isinstance(title, str)
+        or not isinstance(origin_session, str)
+        or not isinstance(text, str)
+        or action not in _ORIGIN_ACTIONS
+    ):
+        return JSONResponse(
+            {
+                "error": "title and origin_session are strings, action is "
+                "status, message or close",
+                "code": "bad_request",
+            },
+            status_code=400,
+        )
+    who = _remote_origin.caller(request)
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        # Closed? Said only to the session that started it (provenance
+        # first): anyone else learns nothing beyond "no session".
+        if (
+            action == "status"
+            and _remote_origin.control_refusal(
+                title, None, who, origin_session, closed=True
+            )
+            is None
+        ):
+            from backend.web.core import recently_closed as _rc
+
+            hit = _rc.closed_hint(title)
+            if hit is not None:
+                return JSONResponse(
+                    {"title": title, "closed": True, "closed_at": hit["closed_at"]}
+                )
+        return JSONResponse(
+            {"error": "no session named %s there" % title, "code": "no_session"},
+            status_code=404,
+        )
+    why = _remote_origin.control_refusal(title, inst, who, origin_session)
+    if why is not None:
+        status, code, sentence = why
+        return JSONResponse({"error": sentence, "code": code}, status_code=status)
+    if action == "status":
+        return JSONResponse(await asyncio.to_thread(_origin_status, title, inst))
+    if action == "close":
+        from backend.web.core import session_end as _session_end
+
+        try:
+            await asyncio.to_thread(_session_end.end_session, ENGINE, title, wipe=False)
+        except Exception as err:  # noqa: BLE001
+            return JSONResponse(
+                {"error": "could not close %s: %s" % (title, err), "code": "failed"},
+                status_code=500,
+            )
+        return JSONResponse({"ok": True, "closed": True, "title": title})
+    if not text.strip():
+        return JSONResponse(
+            {"error": "empty message", "code": "bad_request"}, status_code=400
+        )
+    if len(text) > _MSG_MAX_CHARS:
+        return JSONResponse(
+            {"error": "message too long", "code": "bad_request"}, status_code=400
+        )
+    sender = _remote.join_title(who["device"], origin_session)
+    try:
+        msg = await asyncio.to_thread(
+            lambda: _mailbox.post(title, text, sender=sender, delivery="auto")
+        )
+    except ValueError as err:
+        return JSONResponse({"error": str(err), "code": "bad_request"}, status_code=400)
+    _events.BUS.emit(
+        "session.message",
+        session=title,
+        data={
+            "id": msg["id"],
+            "from": sender,
+            "kind": "message",
+            "text": _mailbox.sanitize(text)[:200],
+            "delivery": "pending" if msg["state"] == "pending" else msg["state"],
+        },
+    )
+    return JSONResponse(
+        {"ok": True, "id": msg["id"], "delivery": msg["state"], "title": title}
+    )
+
+
+@app.post("/api/origin-inbox")
+async def origin_inbox(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """A session that one of THIS device's sessions started on another device
+    reports back (its report_result, or a turn it ended): ``{to, from, kind:
+    result, text, data?}`` → **201** ``{ok, id}`` — stored in ``to``'s inbox
+    as a ``result`` from ``<device>::<from>`` (what ``wait_for_session``
+    waits on). Over the device link only (remote marker + a valid
+    credential; never a guest link) and only when ``to`` started ``from`` on
+    the calling device (:func:`remote_origin.started_by`): **403**
+    ``not_started_here`` otherwise. Guarded like ``/api/transfers`` (Allow
+    remote control included), and only from a device the LINK identifies
+    (its tailnet address): a claim is **403** ``unverified``."""
+    refused = _transfer_refusal(request)
+    if refused is not None:
+        return refused
+    body = payload if isinstance(payload, dict) else {}
+    to, frm, text = body.get("to"), body.get("from"), body.get("text")
+    data = body.get("data")
+    if (
+        not isinstance(to, str)
+        or not isinstance(frm, str)
+        or not isinstance(text, str)
+        or not text.strip()
+        or (data is not None and not isinstance(data, dict))
+        or "::" in frm
+    ):
+        return JSONResponse(
+            {"error": "to, from and text are strings", "code": "bad_request"},
+            status_code=400,
+        )
+    who = _remote_origin.caller(request)
+    if not who["verified"]:
+        # A claim (the remote marker, e.g. over a tunnel) is not who sent
+        # it: a report is typed into an agent's terminal — only from the
+        # device the link itself names.
+        return JSONResponse(
+            {
+                "error": "the sending device was not identified by its tailnet "
+                "address; reports come back only over the tailnet",
+                "code": "unverified",
+            },
+            status_code=403,
+        )
+    if not _remote_origin.started_matches(
+        who["device"], frm, to, ENGINE.instances.get(to)
+    ):
+        return JSONResponse(
+            {
+                "error": "%s was not started on that device by %s here" % (frm, to),
+                "code": "not_started_here",
+            },
+            status_code=403,
+        )
+    if to not in ENGINE.instances:
+        return JSONResponse(
+            {"error": "no session named %s here" % to, "code": "no_session"},
+            status_code=404,
+        )
+    clean_data = {}
+    for k in ("status", "turn_end", "branch", "head_sha"):
+        v = (data or {}).get(k)
+        if isinstance(v, (str, bool)) and (not isinstance(v, str) or len(v) <= 200):
+            clean_data[k] = v
+    if len(text) > _MSG_MAX_CHARS:
+        text = text[: _MSG_MAX_CHARS - 2] + " …"
+    sender = _remote.join_title(who["device"], frm)
+    try:
+        msg = await asyncio.to_thread(
+            lambda: _mailbox.post(
+                to, text, sender=sender, kind="result", data=clean_data, delivery="auto"
+            )
+        )
+    except ValueError as err:
+        return JSONResponse({"error": str(err), "code": "bad_request"}, status_code=400)
+    event = {
+        "id": msg["id"],
+        "from": sender,
+        "kind": "result",
+        "text": _mailbox.sanitize(text)[:200],
+        "delivery": msg["state"],
+    }
+    if isinstance(clean_data.get("status"), str):
+        event["status"] = _mailbox.sanitize(clean_data["status"])[:24]
+    _events.BUS.emit("session.message", session=to, data=event)
+    return JSONResponse({"ok": True, "id": msg["id"]}, status_code=201)
+
+
+@app.post("/api/instances/{title}/remote-control")
+async def instance_remote_control(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """``title`` acts on a session IT started on another device: ``{target:
+    "<device>::<title>", action: status|message|close, text?}`` → the
+    device's answer (``/api/origin-control`` there, which checks that
+    ``title`` started it). Refused for a guest link, a relayed request, and
+    a target that isn't ``<device>::<title>`` on one of your devices."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {"error": "not for a guest link", "code": "guest"}, status_code=403
+        )
+    if _remote.from_remote(request):
+        return JSONResponse(
+            {
+                "error": "act from the device the session was started from",
+                "code": "remote",
+            },
+            status_code=400,
+        )
+    if title not in ENGINE.instances:
+        return JSONResponse(
+            {"error": "instance not found: %s" % title}, status_code=404
+        )
+    body = payload if isinstance(payload, dict) else {}
+    target, action, text = body.get("target"), body.get("action"), body.get("text", "")
+    if (
+        not isinstance(target, str)
+        or not _remote.is_remote_title(target)
+        or action not in _ORIGIN_ACTIONS
+        or not isinstance(text, str)
+    ):
+        return JSONResponse(
+            {
+                "error": "target is <device>::<title>; action is status, message "
+                "or close",
+                "code": "bad_request",
+            },
+            status_code=400,
+        )
+    device, _, there = target.partition(_remote.NS)
+    try:
+        dev = _send_session.resolve_device(device)
+    except _send_session.Refusal as r:
+        return JSONResponse(r.body(), status_code=r.status)
+    if not _remote_origin.started_matches(
+        dev["key"], there, title, ENGINE.instances.get(title)
+    ):
+        # Checked here too (the device checks it again): this very session
+        # — not a later one that took its name — started it there.
+        return JSONResponse(
+            {
+                "error": "%s did not start %s — only the session that started "
+                "it may act on it" % (title, target),
+                "code": "not_origin",
+            },
+            status_code=403,
+        )
+    status, resp = await _remote.post_json(
+        dev,
+        "/api/origin-control",
+        {"title": there, "action": action, "text": text, "origin_session": title},
+        30.0,
+    )
+    if status == 0:
+        return JSONResponse(
+            {"error": "%s is not answering" % dev["key"], "code": "device_offline"},
+            status_code=502,
+        )
+    if status == 404 and not (isinstance(resp, dict) and resp.get("code")):
+        return JSONResponse(
+            {
+                "error": "%s's MindFlock is too old for this — update it" % dev["key"],
+                "code": "device_too_old",
+            },
+            status_code=502,
+        )
+    return JSONResponse(resp if isinstance(resp, dict) else {}, status_code=status)
+
+
+@app.post("/api/instances/{title}/report-origin")
+async def instance_report_origin(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """A session another device's agent started here reports back to the
+    session that started it (its report_result): ``{text, data?}`` →
+    ``{ok, sent_to}`` — posted to ``/api/origin-inbox`` on that device. 409
+    ``no_origin`` for a session no agent on another device started."""
+    if _guests.scope_guest(request) is not None:
+        return JSONResponse(
+            {"error": "not for a guest link", "code": "guest"}, status_code=403
+        )
+    if _remote.from_remote(request):
+        return JSONResponse(
+            {"error": "report from this device", "code": "remote"}, status_code=400
+        )
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    rec = _remote_origin.record(title, inst)
+    if not rec or rec.get("by") != "agent" or not rec.get("session"):
+        return JSONResponse(
+            {
+                "error": "%s was not started by a session on another device" % title,
+                "code": "no_origin",
+            },
+            status_code=409,
+        )
+    body = payload if isinstance(payload, dict) else {}
+    text, data = body.get("text"), body.get("data")
+    if (
+        not isinstance(text, str)
+        or not text.strip()
+        or (data is not None and not isinstance(data, dict))
+    ):
+        return JSONResponse(
+            {"error": "text is a string, data an object", "code": "bad_request"},
+            status_code=400,
+        )
+    status, resp = await _remote_origin.deliver(rec, title, text, dict(data or {}))
+    where = "%s on %s" % (
+        rec.get("session"),
+        rec.get("device_name") or rec.get("device"),
+    )
+    if status in (200, 201):
+        _remote_origin.note_reported(title)
+        return JSONResponse({"ok": True, "sent_to": where, "id": resp.get("id")})
+    if status == 0:
+        return JSONResponse(
+            {
+                "error": "%s — the report was not delivered" % resp.get("error"),
+                "code": "device_offline",
+            },
+            status_code=502,
+        )
+    return JSONResponse(
+        {
+            "error": "%s refused the report: %s"
+            % (
+                rec.get("device_name") or rec.get("device"),
+                resp.get("error") or status,
+            ),
+            "code": str(resp.get("code") or "refused"),
+        },
+        status_code=502,
+    )
 
 
 def _inbox_in_use(path: str) -> bool:
@@ -7518,10 +7961,19 @@ _SEND_IN_DIALOG = "Answer its prompt first — typing now would answer the dialo
 _SEND_WAKING = "It was asleep — waking it now; send again in a few seconds"
 
 
+#: Set by ``/send`` for a guest's / relayed / shared-session prompt: if it
+#: is queued, its hub references stay as typed when the drain sends it.
+_HUB_NOHUB = contextvars.ContextVar("hub_nohub", default=False)
+
+
 def _say_kw(say: bool) -> dict:
     """``enqueue``'s ``say`` keyword, passed only when true: a queued text
-    asks for a spoken reply only when its ``/send`` did."""
-    return {"say": True} if say else {}
+    asks for a spoken reply only when its ``/send`` did. (And ``nohub`` when
+    :data:`_HUB_NOHUB` says the sender may not use the hub.)"""
+    kw = {"say": True} if say else {}
+    if _HUB_NOHUB.get():
+        kw["nohub"] = True
+    return kw
 
 
 def _deliver_to_sleeper(
@@ -8104,6 +8556,12 @@ async def instance_send(
             },
             status_code=409,
         )
+    hub_unknown: List[str] = []
+    _HUB_NOHUB.set(not _hub_may_expand(request, inst))
+    if not enter and not dictating:
+        # hub:<id> → the item's path, name and kind, one labelled line each
+        # (core.hub.expand); a reference to nothing stays as typed.
+        text, hub_unknown = await asyncio.to_thread(_hub_expand, request, inst, text)
     asleep = _sleep.is_sleeping(title)
     held = await asyncio.to_thread(_held_down, title)
     if enter:
@@ -8148,7 +8606,7 @@ async def instance_send(
         body = {"sent": False, "queued": True, "submitted": False}
         if asleep:
             body["woke"] = True  # it was asleep: it goes in once the agent is back
-        return JSONResponse(body)
+        return JSONResponse(_hub_flag(body, hub_unknown))
     if enter or (submit and not dictating):
         # A prompt went in: a ready chain waiting on the next prompt takes
         # off after its turn (docs/flights.md "Round 19"). A queued one does
@@ -8158,7 +8616,47 @@ async def instance_send(
         return JSONResponse({"sent": True, "submitted": True, "entered": True})
     if dictating:
         return JSONResponse({"sent": True, "submitted": False, "erased": erase})
-    return JSONResponse({"sent": True, "submitted": submit})
+    return JSONResponse(_hub_flag({"sent": True, "submitted": submit}, hub_unknown))
+
+
+def _hub_changed() -> None:
+    try:
+        n = _hub.usage()["items"]
+    except Exception:  # noqa: BLE001
+        n = None
+    _events.BUS.emit("hub.changed", session="", data={"count": n})
+
+
+_hub.on_change(_hub_changed)
+
+
+def _hub_may_expand(request: Optional[Request], inst) -> bool:
+    """Whether ``hub:<id>`` references in text sent by this request are
+    expanded: the owner (or a local agent / the CLI) yes; a guest link, a
+    request another MindFlock relayed, or a shared-folder (peer) session
+    never — the hub is this device's owner's."""
+    if inst is not None and _peer_guard.is_peer_session(inst):
+        return False
+    if request is None:
+        return True
+    return _guests.scope_guest(request) is None and not _remote.from_remote(request)
+
+
+def _hub_expand(request: Optional[Request], inst, text: str) -> Tuple[str, List[str]]:
+    """``(text with its hub references expanded, unknown references)`` —
+    unchanged when :func:`_hub_may_expand` says no."""
+    if not text or "hub:" not in text.lower() or not _hub_may_expand(request, inst):
+        return text, []
+    out, _used, unknown = _hub.expand(text)
+    return out, unknown
+
+
+def _hub_flag(body: dict, unknown: List[str]) -> dict:
+    """The send answer's word on references that matched nothing."""
+    if unknown:
+        body["hub_unknown"] = unknown
+        body["hub_note"] = _hub.unknown_note(unknown)
+    return body
 
 
 def _queue_state_json(title: str) -> dict:
@@ -8219,10 +8717,12 @@ def post_queue(title: str, payload: dict, request: Request = None) -> JSONRespon
     busy = _driven_elsewhere(request, title, payload)
     if busy is not None:
         return busy
+    # A guest's (or a relayed) prompt keeps its hub references as typed.
+    nohub = not _hub_may_expand(request, ENGINE.instances.get(title))
     texts = payload.get("texts")
     if isinstance(texts, list):
         entry, added, skipped = _prompt_queue.enqueue_many(
-            title, [str(t) for t in texts]
+            title, [str(t) for t in texts], nohub=nohub
         )
         if not added and not skipped:
             return JSONResponse({"error": "no prompts in payload"}, status_code=400)
@@ -8242,11 +8742,13 @@ def post_queue(title: str, payload: dict, request: Request = None) -> JSONRespon
         except (TypeError, ValueError):
             index = None
     try:
-        _prompt_queue.enqueue(title, text, index=index)
+        _prompt_queue.enqueue(title, text, index=index, nohub=nohub)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
     _emit_queue_changed(title)
-    return JSONResponse(_queue_state_json(title))
+    # Told now, while the sender is here: a reference to nothing in the hub.
+    unknown = [] if nohub else _hub.unknown_refs(text)
+    return JSONResponse(_hub_flag(_queue_state_json(title), unknown))
 
 
 @app.post("/api/instances/{title}/queue/flags")
@@ -8297,14 +8799,19 @@ def post_queue_reorder(title: str, payload: dict) -> JSONResponse:
 
 
 @app.post("/api/instances/{title}/queue/edit")
-def post_queue_edit(title: str, payload: dict) -> JSONResponse:
+def post_queue_edit(title: str, payload: dict, request: Request = None) -> JSONResponse:
     """Replace one queued item's text in place. ``{"id": "...", "text": "..."}``.
     The item keeps its id and position, so editing never loses its turn."""
     payload = payload or {}
     text = str(payload.get("text", ""))
     if not text.strip():
         return JSONResponse({"error": "empty prompt"}, status_code=400)
-    _prompt_queue.update_item(title, str(payload.get("id", "")), text)
+    _prompt_queue.update_item(
+        title,
+        str(payload.get("id", "")),
+        text,
+        nohub=not _hub_may_expand(request, ENGINE.instances.get(title)),
+    )
     _emit_queue_changed(title)
     return JSONResponse(_queue_state_json(title))
 
@@ -8371,6 +8878,8 @@ async def post_queue_send_now(
     _note_human_input(title)  # the user clicked Send now
     say = it.get("say") is True or _voice.say_all()
     typed = it["text"]
+    if not it.get("nohub"):
+        typed = (await asyncio.to_thread(_hub_expand, None, inst, typed))[0]
     if say:
         typed = await asyncio.to_thread(_voice_say, inst, title, typed)
     ok = await asyncio.to_thread(_send_to_agent, name, typed, True)
@@ -8651,6 +9160,9 @@ async def post_message(
         if stat is not None:
             data = dict(data or {})
             data["diff_stat"] = stat
+    # hub:<id> references → the item's path, name and kind (core.hub); never
+    # for a guest's or a relayed message.
+    text, hub_unknown = await asyncio.to_thread(_hub_expand, request, inst, text)
     # delivery "now" from any local session: one session may direct another
     # without being its parent (the MCP's "steering" rule, mcp/policy.py).
     detail = ""
@@ -8701,7 +9213,7 @@ async def post_message(
     body = {"message": msg, "delivery": result}
     if detail:
         body["detail"] = detail
-    return JSONResponse(body, status_code=201)
+    return JSONResponse(_hub_flag(body, hub_unknown), status_code=201)
 
 
 @app.get("/api/instances/{title}/messages")
@@ -9631,6 +10143,9 @@ def recently_closed() -> JSONResponse:
                 # missing": dropped at load), and whether its branch survives.
                 "reason": e.get("reason") or "",
                 "branch_exists": e.get("branch_exists"),
+                # A session that closed itself when done (started by an
+                # agent on another device): what it said last.
+                **({"last_reply": e["last_reply"]} if e.get("last_reply") else {}),
             }
         )
     return JSONResponse(out)
@@ -11161,6 +11676,9 @@ app.include_router(_memory_routes.router)
 
 # --- Disk cleanup (the worktree garbage collector): routes/cleanup.py ---------
 app.include_router(_cleanup_routes.router)
+
+# --- The hub (shared files, images and snippets): routes/hub.py -------------
+app.include_router(_hub_routes.router)
 
 
 # --- Forced PR review (Intake → Pull requests) ----------------------------------

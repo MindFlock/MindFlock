@@ -9,10 +9,16 @@ Two halves, the same two audiences as the rest of "Your devices"
   keeps ``/api/update/*`` out on purpose), and it installs only a published
   release tag at or above what runs here (default: the newest release) — one
   member must not be able to downgrade another, or move it onto a branch. A
-  dev checkout (it follows its own branch and updates itself —
-  :mod:`backend.web.core.dev_update`) or an engine not installed by
-  ``install.sh`` answers 409 with why, which the rollout reports as
-  "skipped", not as a failure. The install itself is the
+  member that runs from a git checkout (an editable install — ``uv tool
+  install -e``, ``pip install -e``: :mod:`backend.web.core.dev_update`)
+  never takes the tag: it follows its own default branch, so it is moved
+  forward on that branch exactly as its own Update button would (including
+  attaching a checkout that has no branch checked out, when that is safe)
+  and the answer names the commit to wait for. One that can't update — on
+  another branch, uncommitted changes, diverged — answers 409 with ITS OWN
+  sentence (``why_not``), and so does an engine not installed by
+  ``install.sh``; the rollout reports those as "skipped", not as a
+  failure. The install itself is the
   same detached :func:`~backend.web.core.self_update.start_update` the
   Settings → Advanced button runs, and the receiver's own watcher
   (:mod:`backend.web.core.update_watch`) restarts it onto the new build.
@@ -79,10 +85,24 @@ STEPS = (
 _LOCK = asyncio.Lock()
 _TASK: dict = {"task": None}
 
+#: What a skipped member's row says when it gave no reason of its own (a
+#: MindFlock from before members answered with their checkout's sentence).
 _BLOCKED_COPY = {
-    "editable": "development checkout — it updates from its own branch",
+    "editable": "runs from a git checkout that can't update from here — update it there",
     "other": "not installed by install.sh — update it there",
 }
+
+
+def _dev_status(refresh: bool = False) -> Tuple[Optional[dict], str]:
+    """THIS device's checkout (an editable install) → ``(status, why_not)``
+    (:func:`backend.web.core.dev_update.status`); ``(None, why)`` when the
+    checkout can't be found."""
+    from backend.web.core import dev_update
+
+    st = dev_update.status(refresh=refresh, force=refresh)
+    if st is None:
+        return None, "This development checkout could not be found."
+    return st, str(st.get("why_not") or "")
 
 
 def _path() -> Path:
@@ -283,12 +303,10 @@ async def apply(body: Optional[dict]) -> Tuple[dict, int]:
     if reason:
         return {"ok": False, "error": reason}, status
     install = _self_update.install_kind()
-    # A checkout never takes a release tag: it follows its own branch.
-    blocked = (
-        _BLOCKED_COPY["editable"]
-        if install == "editable"
-        else _self_update.blocked_reason()
-    )
+    if install == "editable":
+        # A checkout never takes a release tag: it follows its own branch.
+        return await asyncio.to_thread(_apply_dev)
+    blocked = _self_update.blocked_reason()
     if blocked:
         return {
             "ok": False,
@@ -306,6 +324,62 @@ async def apply(body: Optional[dict]) -> Tuple[dict, int]:
     return result, 200
 
 
+def _apply_dev() -> Tuple[dict, int]:
+    """:func:`apply` for a checkout: move it forward on its default branch
+    (its own Update button's path, :func:`self_update.start_dev_update`) →
+    ``{ok, dev: true, commit, version}`` — the commit the rollout waits for
+    this member's hello to report — or 409 ``blocked`` with the checkout's
+    own sentence."""
+    st, why = _dev_status(refresh=True)
+    if st is None or why:
+        return {
+            "ok": False,
+            "blocked": True,
+            "install": "editable",
+            "error": why or _BLOCKED_COPY["editable"],
+        }, 409
+    if int(st.get("behind") or 0) <= 0 or not st.get("target"):
+        return {
+            "ok": True,
+            "current": True,
+            "dev": True,
+            "version": _self_update.installed_version(),
+        }, 200
+    if st.get("attach"):
+        # Another device asks: put a no-branch checkout on its branch only
+        # when it is parked exactly on a published release (the machine
+        # left at a release commit). Any other detached commit may be a
+        # deliberate pin — its owner updates it there.
+        from backend.web.core import dev_update as _dev_update
+
+        tag = _dev_update.published_release_at(
+            str(st.get("checkout") or ""), str(st.get("remote") or "origin"), st["head"]
+        )
+        if not tag:
+            return {
+                "ok": False,
+                "blocked": True,
+                "install": "editable",
+                "error": "This development checkout has no branch checked out, "
+                "at a commit that is not a published release — so it is not "
+                "moved from another device. Run `mindflock update` on that "
+                "machine to update it there.",
+            }, 409
+    result = _self_update.start_dev_update()
+    if not result.get("ok"):
+        busy = "already running" in str(result.get("error") or "")
+        return result, 409 if busy else 400
+    branch = st.get("branch") or str((st.get("attach") or {}).get("branch") or "")
+    return {
+        **result,
+        "ok": True,
+        "dev": True,
+        "ref": branch,
+        "commit": st["target"],
+        "version": st.get("target_version") or _self_update.installed_version(),
+    }, 200
+
+
 def member_state() -> dict:
     """What a rollout asks a member while it updates (fleet key only):
     its version and commit, how it is installed, and the update state."""
@@ -317,9 +391,7 @@ def member_state() -> dict:
         "commit": _self_update.installed_commit(),
         "install": install,
         "blocked": (
-            _BLOCKED_COPY["editable"]
-            if install == "editable"
-            else _self_update.blocked_reason()
+            _dev_status()[1] if install == "editable" else _self_update.blocked_reason()
         ),
         "state": st.get("state", "idle"),
         "ref": st.get("ref", ""),
@@ -379,9 +451,11 @@ async def _update_member(doc: dict, row: dict, tag: str, version: str) -> bool:
         step("skipped", "not reachable under its recorded name")
         return True
     install = str(dev.get("install") or "")
-    if install in _BLOCKED_COPY:
+    if install == "other":
         step("skipped", _BLOCKED_COPY[install])
         return True
+    # A checkout ("editable") is asked like any other member: it answers
+    # with the commit its own branch moves to, or why it can't.
     status, resp = await _remote.post_json(
         dev,
         "/api/fleet/update/apply",
@@ -397,16 +471,28 @@ async def _update_member(doc: dict, row: dict, tag: str, version: str) -> bool:
         return True
     if status == 409 and resp.get("blocked"):
         install = str(resp.get("install") or "")
-        step("skipped", _BLOCKED_COPY.get(install) or str(resp.get("error") or ""))
+        # The member's own sentence ("…has uncommitted changes…"), never a
+        # generic label for it.
+        step("skipped", str(resp.get("error") or "") or _BLOCKED_COPY.get(install, ""))
         return True
     if status != 200 or not resp.get("ok"):
         step("failed", str(resp.get("error") or _fleet._err_text(status, resp, dev)))
         return False
     if resp.get("current"):
-        step("current", "already on v%s" % (resp.get("version") or version))
+        step(
+            "current",
+            (
+                "up to date with its own branch"
+                if resp.get("dev")
+                else "already on v%s" % (resp.get("version") or version)
+            ),
+        )
         return True
     commit = str(resp.get("commit") or "")
-    step("updating")
+    if resp.get("dev"):
+        # A checkout moves to its own branch's tip, whatever version that is.
+        version = str(resp.get("version") or version)
+    step("updating", "moving its git checkout forward" if resp.get("dev") else "")
     deadline = time.monotonic() + MEMBER_TIMEOUT_S
     done_at = 0.0
     while time.monotonic() < deadline:
@@ -468,15 +554,18 @@ async def _run(doc: dict) -> None:
     if me is not None:
         current = _self_update.installed_version()
         install = _self_update.install_kind()
-        blocked = (
-            _BLOCKED_COPY["editable"]
-            if install == "editable"
-            else _self_update.blocked_reason()
-        )
-        if not _self_update.is_newer(version, current):
+        dev_st: Optional[dict] = None
+        if install == "editable":
+            dev_st, blocked = await asyncio.to_thread(_dev_status, True)
+            blocked = blocked or ("" if dev_st else _BLOCKED_COPY["editable"])
+        else:
+            blocked = _self_update.blocked_reason()
+        if dev_st is not None and not blocked and int(dev_st.get("behind") or 0) <= 0:
+            me.update(step="current", detail="up to date with its own branch")
+        elif dev_st is None and not _self_update.is_newer(version, current):
             me.update(step="current", detail="already on v%s" % current)
         elif blocked:
-            me.update(step="skipped", detail=_BLOCKED_COPY.get(install) or blocked)
+            me.update(step="skipped", detail=blocked)
         else:
             result = await asyncio.to_thread(_self_update.start_update, tag)
             if result.get("ok"):

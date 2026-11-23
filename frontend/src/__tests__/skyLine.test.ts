@@ -197,7 +197,9 @@ describe("the line", () => {
 
   it("the agent tile says what the agent is doing; where the flight is goes on the frame's bar", () => {
     const src = code("components/flights/SkyLine.tsx");
-    expect(src).toContain('const headSub = row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";');
+    expect(src).toContain('const doing = row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";');
+    // A session another device started says where from, before what it does.
+    expect(src).toContain('const headSub = [row?.origin?.label || "", doing].filter(Boolean).join(" · ");');
     expect(src).toContain('<span className="skl-where" title={where}>');
     expect(src).toContain('<span className="skl-where skl-clock" title={clock.title}>');
     // The agent tile's chip is the agent's own state, never the route's wait.

@@ -7,7 +7,7 @@ recipe, so no ``playwright install`` download is needed.
 * ``sky`` (default: the Sky's "All" tab), ``sky/<session>`` (that
   session's route), ``grid``;
 * ``settings`` or ``settings/<screen>`` (general, appearance, providers, …);
-* ``intake``, ``schedule``, ``new``;
+* ``intake``, ``schedule``, ``new``, ``hub`` (the Hub panel open);
 * ``phone`` — the phone page ``/m`` (390 px wide unless ``--width``);
 * ``#<anything>`` — a raw URL hash.
 
@@ -94,6 +94,7 @@ VIEWS = (
     "intake",
     "schedule",
     "new",
+    "hub",
     "phone",
     "#<hash>",
 )
@@ -171,7 +172,7 @@ def resolve_view(view: str) -> Dict[str, Any]:
             "local": local,
             "phone": False,
         }
-    if head in ("schedule", "new"):
+    if head in ("schedule", "new", "hub"):
         return {"path": "/", "hash": "#" + head, "local": local, "phone": False}
     raise PreviewError("unknown view %r; one of: %s" % (view, ", ".join(VIEWS)))
 

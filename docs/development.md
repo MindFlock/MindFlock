@@ -87,6 +87,28 @@ build — do not defeat the check). It updates from git instead
   development checkout on branch foo. Updates apply when it is on main with
   nothing uncommitted."). Working on a feature branch in the same checkout is
   therefore always safe.
+- **No branch checked out** (a detached HEAD — a machine left at a release
+  commit by hand) updates too when nothing can be lost: HEAD is an ancestor
+  of (or equal to) the default branch's upstream tip, nothing uncommitted in
+  tracked files, and a local default branch, if any, is HEAD or behind it.
+  The update first attaches the checkout to that branch AT the commit it is
+  on (the branch is created there, or fast-forwarded up to HEAD; then HEAD
+  points at it — no file moves, nothing is discarded), then fast-forwards as
+  above; a rollback puts it back exactly (detached at the old commit, the
+  local branch deleted again or where it was). Refused while the default
+  branch is checked out in another worktree (moving it would move that
+  worktree under its files). Anything else keeps the
+  refusal, with one sentence saying what to do ("…is at a commit that is not
+  on main; switch it to main (git switch main) to get updates."). The same
+  rule lets **Update all my devices** update such a machine: a member that
+  runs from a checkout (a `uv tool install -e <checkout>` counts — the code
+  runs from the checkout) moves forward on its own branch, and one that
+  can't says its own reason instead of "development checkout". From another
+  device, a checkout with no branch checked out is attached only when it
+  sits exactly on a published release tag (a machine parked on a release);
+  any other detached commit may be a deliberate pin, so the fleet leaves it
+  and says to run `mindflock update` on that machine, where the full rule
+  applies.
 - **The update**: `git fetch`, `git merge --ff-only <the fetched tip>`, then
   `uv pip install --python <the server's interpreter> --reinstall-package
   mindflock -e "<checkout>[web]"` (pip when there is no uv) — it adds new
@@ -607,9 +629,10 @@ errors the browser reported under each file.
 | `routes` | one route per state: running at a Wait stop, waiting for me, paused at a halt point, a failed Command stop (with Retry/Skip), finished, a gone session's route, a session-less route |
 | `routes-failed` | just the failed stop and the halt point |
 | `empty` / `empty-first-run` | no sessions; onboarded / the very first launch |
+| `hub` / `hub-full` / `hub-empty` | the hub: a screenshot, a log, a snippet, a PDF, a phone screenshot and a picture an agent put, beside three sessions / 30 items / empty (view `hub` opens the panel) |
 
 **Views** (`--view`): `sky` (the All tab), `sky/<session>`, `grid`,
-`settings`, `settings/<screen>`, `intake`, `schedule`, `new`, `phone`, or a
+`settings`, `settings/<screen>`, `intake`, `schedule`, `new`, `hub`, `phone`, or a
 raw `#hash`. `--theme dark|light|all`, `--surface <name>|all` (Settings →
 Appearance; several combinations write `name-<theme>-<surface>.png`),
 `--width`/`--height`/`--scale`, `--full-page`, `--click 'text=Stops'`

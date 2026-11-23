@@ -137,10 +137,215 @@ def test_a_diverged_checkout_cannot_move_forward_by_itself(repos):
     assert st["can_update"] is False and "cannot move forward" in st["why_not"]
 
 
-def test_a_detached_head_is_quiet_too(repos):
-    _git(repos.work, "checkout", "--detach")
+# --------------------------------------------------------------------------- #
+# No branch checked out (a detached HEAD)
+# --------------------------------------------------------------------------- #
+def _detach_at(repos, rev="HEAD", drop_main=False):
+    _git(repos.work, "checkout", "-q", "--detach", rev)
+    if drop_main:
+        _git(repos.work, "branch", "-D", "main")
+    return _git(repos.work, "rev-parse", "HEAD")
+
+
+def _branch_of(repos) -> str:
+    cp = subprocess.run(
+        ["git", "symbolic-ref", "-q", "--short", "HEAD"],
+        cwd=str(repos.work),
+        capture_output=True,
+        text=True,
+    )
+    return cp.stdout.strip()
+
+
+def _local_main(repos) -> str:
+    cp = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "refs/heads/main"],
+        cwd=str(repos.work),
+        capture_output=True,
+        text=True,
+    )
+    return cp.stdout.strip()
+
+
+def test_detached_at_the_tip_can_update_and_has_nothing_new(repos):
+    _detach_at(repos)
     st = dev_update.status(str(repos.work))
-    assert st["can_update"] is False and "no branch checked out" in st["why_not"]
+    assert st["branch"] == "" and st["can_update"] is True and st["why_not"] == ""
+    assert st["attach"] == {"branch": "main", "create": False, "from": st["head"]}
+
+
+def test_detached_at_an_ancestor_with_no_local_main_can_update(repos):
+    """The ML-Rig-2023 case: detached exactly at a release commit that is an
+    ancestor of origin/main, tracked files clean, no local main."""
+    old = _detach_at(repos, drop_main=True)
+    tip = repos.publish(version="0.2.0")
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    assert st["can_update"] is True and st["why_not"] == ""
+    assert st["behind"] == 1 and st["target"] == tip and st["head"] == old
+    assert st["attach"] == {"branch": "main", "create": True, "from": ""}
+    # Looking changes nothing.
+    assert _branch_of(repos) == "" and _local_main(repos) == ""
+
+
+def test_detached_at_a_commit_not_on_main_is_refused_with_what_to_do(repos):
+    _detach_at(repos)
+    (repos.work / "b.txt").write_text("mine\n")
+    _git(repos.work, "add", "b.txt")
+    _git(repos.work, "commit", "-m", "a local commit on no branch")
+    repos.publish()
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    assert st["can_update"] is False and st["attach"] is None
+    assert st["why_not"] == (
+        "This development checkout has no branch checked out and is at a "
+        "commit that is not on main; switch it to main (git switch main) to "
+        "get updates."
+    )
+
+
+def test_detached_with_uncommitted_tracked_changes_is_refused(repos):
+    _detach_at(repos, drop_main=True)
+    repos.publish()
+    (repos.work / "a.txt").write_text("edited\n")
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    assert st["can_update"] is False and st["attach"] is None
+    assert "uncommitted changes" in st["why_not"]
+    assert "git switch main" in st["why_not"]
+    # Untracked files are not "uncommitted changes to tracked files".
+    _git(repos.work, "checkout", "--", "a.txt")
+    (repos.work / "scratch.txt").write_text("x")
+    assert dev_update.status(str(repos.work))["can_update"] is True
+
+
+def test_detached_with_a_local_main_that_is_ahead_is_refused(repos):
+    first = repos.head()
+    (repos.work / "b.txt").write_text("mine\n")
+    _git(repos.work, "add", "b.txt")
+    _git(repos.work, "commit", "-m", "only on local main")
+    _detach_at(repos, first)
+    repos.publish()
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    assert st["can_update"] is False and st["attach"] is None
+    assert "its own main has commits that are not here" in st["why_not"]
+
+
+def test_detached_ahead_of_a_local_main_that_is_behind_can_update(repos):
+    c2 = repos.publish()
+    tip = repos.publish()
+    _git(repos.work, "fetch", "-q", "origin")
+    first = _local_main(repos)
+    _detach_at(repos, c2)
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    assert st["can_update"] is True
+    assert st["attach"] == {"branch": "main", "create": False, "from": first}
+    assert st["target"] == tip
+
+
+def test_the_script_attaches_then_fast_forwards(repos, tmp_path, monkeypatch):
+    old = _detach_at(repos, drop_main=True)
+    tip = repos.publish(version="0.2.0")
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    before = {"app": "mindflock", "version": "0.1.0", "commit": old}
+    after = {"app": "mindflock", "version": "0.2.0", "commit": tip}
+    cp, state, refreshes = _run_dev_script(
+        tmp_path, monkeypatch, st, curl_bodies=[before, after]
+    )
+    assert cp.returncode == 0, cp.stderr
+    assert state["state"] == "done" and state["healthy"] is True
+    assert _branch_of(repos) == "main" and repos.head() == tip
+    upstream = _git(repos.work, "rev-parse", "--abbrev-ref", "main@{upstream}")
+    assert upstream == "origin/main"
+    assert len(refreshes) == 1
+
+
+def test_the_script_rollback_restores_no_branch_at_the_old_commit(
+    repos, tmp_path, monkeypatch
+):
+    old = _detach_at(repos, drop_main=True)
+    repos.publish()
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    before = {"app": "mindflock", "version": "0.1.0", "commit": old}
+    cp, state, refreshes = _run_dev_script(
+        tmp_path, monkeypatch, st, curl_bodies=[before, None]
+    )
+    assert state["state"] == "rolled_back", (cp.stdout, cp.stderr)
+    assert repos.head() == old and _branch_of(repos) == ""
+    # The branch the update created is gone again.
+    assert _local_main(repos) == ""
+    assert len(refreshes) == 2
+
+
+def test_the_script_rollback_puts_an_existing_local_main_back(
+    repos, tmp_path, monkeypatch
+):
+    c2 = repos.publish()
+    repos.publish()
+    _git(repos.work, "fetch", "-q", "origin")
+    first = _local_main(repos)
+    _detach_at(repos, c2)
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    before = {"app": "mindflock", "version": "0.1.0", "commit": c2}
+    cp, state, _ = _run_dev_script(
+        tmp_path, monkeypatch, st, curl_bodies=[before, None]
+    )
+    assert state["state"] == "rolled_back"
+    assert repos.head() == c2 and _branch_of(repos) == ""
+    assert _local_main(repos) == first
+
+
+def test_a_failed_refresh_after_the_attach_restores_no_branch(
+    repos, tmp_path, monkeypatch
+):
+    old = _detach_at(repos, drop_main=True)
+    repos.publish()
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    cp, state, _ = _run_dev_script(
+        tmp_path, monkeypatch, st, curl_bodies=[None], refresh_rc=5
+    )
+    assert state["state"] == "failed" and "moved back" in state["error"]
+    assert repos.head() == old and _branch_of(repos) == ""
+    assert _local_main(repos) == ""
+
+
+def test_a_branch_that_appeared_while_it_waited_stops_it(repos, tmp_path, monkeypatch):
+    old = _detach_at(repos, drop_main=True)
+    repos.publish()
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    _git(repos.work, "branch", "main", old)  # someone made it meanwhile
+    cp, state, refreshes = _run_dev_script(
+        tmp_path, monkeypatch, st, curl_bodies=[None]
+    )
+    assert state["state"] == "failed" and "nothing was changed" in state["error"]
+    assert repos.head() == old and _branch_of(repos) == "" and refreshes == []
+
+
+def test_switching_to_a_branch_while_it_waited_stops_it(repos, tmp_path, monkeypatch):
+    _detach_at(repos)
+    repos.publish()
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    _git(repos.work, "checkout", "-q", "main")
+    cp, state, _ = _run_dev_script(tmp_path, monkeypatch, st, curl_bodies=[None])
+    assert state["state"] == "failed" and "on a branch now" in state["error"]
+
+
+def test_apply_here_attaches_and_move_back_detaches(repos, monkeypatch, capsys):
+    old = _detach_at(repos, drop_main=True)
+    tip = repos.publish()
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    monkeypatch.setattr(dev_update, "refresh_command", lambda checkout, python="": None)
+    assert dev_update.apply_here(st) == (True, "")
+    assert repos.head() == tip and _branch_of(repos) == "main"
+    assert dev_update.move_back(str(repos.work), old, attach=st["attach"]) is True
+    assert repos.head() == old and _branch_of(repos) == "" and _local_main(repos) == ""
+
+
+def test_apply_here_refuses_when_the_checkout_moved(repos, monkeypatch):
+    _detach_at(repos, drop_main=True)
+    repos.publish()
+    st = dev_update.status(str(repos.work), refresh=True, force=True)
+    _git(repos.work, "checkout", "-q", "-b", "elsewhere")
+    ok, why = dev_update.apply_here(st)
+    assert ok is False and "nothing was changed" in why
+    assert _local_main(repos) == ""
 
 
 def test_the_default_branch_comes_from_origin_head(repos):

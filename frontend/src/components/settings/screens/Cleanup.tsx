@@ -44,6 +44,7 @@ import {
   type InspectResult,
   type RemoveResult,
 } from "../../../lib/cleanup";
+import { HubCleanup } from "../../hub/HubCleanup";
 import "./cleanup.css";
 
 export function Cleanup({ active }: ScreenProps) {
@@ -156,6 +157,7 @@ export function Cleanup({ active }: ScreenProps) {
   };
 
   return (
+    <>
     <CleanupView
       rep={rep}
       busy={busy}
@@ -177,6 +179,9 @@ export function Cleanup({ active }: ScreenProps) {
       onRemove={(it, ok) => void remove(it, ok)}
       onCancel={() => setAsking(null)}
     />
+    {/* The hub's own line (components/hub/HubCleanup). */}
+    <HubCleanup />
+    </>
   );
 }
 

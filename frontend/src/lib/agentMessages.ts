@@ -17,7 +17,7 @@
  *    the parent's waiting / wrap-up chip (`parentChip`).
  */
 
-import type { Instance, LastReport } from "../api/types";
+import type { Instance, LastReport, OriginInfo } from "../api/types";
 import { relTime } from "./format";
 
 /** The fields of a `session.message` event's `data` the UI reads. `status` is
@@ -107,10 +107,27 @@ export function messageNotif(
 export function lineageMark(
   parent: string | undefined,
   spawned: boolean | undefined,
-  nameOf: (t: string) => string
+  nameOf: (t: string) => string,
+  origin?: Pick<OriginInfo, "label" | "by" | "session" | "device_name" | "verified"> | null
 ): { text: string; title: string; spawned: boolean } | null {
   const p = String(parent || "");
   const s = !!spawned;
+  // Started from another of your devices (core.remote_origin): say where,
+  // never the bare "agent".
+  if (!p && origin && origin.label) {
+    const agent = origin.by === "agent";
+    return {
+      text: "↳ " + origin.label,
+      title:
+        (agent
+          ? "Started by the agent in “" + origin.session + "” on " + origin.device_name +
+            " (another of your devices) — the session name is as that device reported it. " +
+            "It reports back there and closes itself once it is done."
+          : "Started by you from " + origin.device_name + " (another of your devices).") +
+        (origin.verified ? "" : "\nThe device was not identified by its tailnet address: it only said so."),
+      spawned: agent,
+    };
+  }
   if (!p && !s) return null;
   if (p) {
     const name = nameOf(p);

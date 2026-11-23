@@ -570,6 +570,11 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # "orphan_of", "closes_at", "why"} for an agent-spawned session, null
         # for any other. Dict reads only.
         "auto_close": _auto_close_row(inst),
+        # Who started it, when another of your devices did (core.
+        # remote_origin): {"device", "device_name", "verified", "session",
+        # "by": agent|person, "label"} — "from tripwire-send on
+        # EthanLaptop2026" — or null. A cached file read.
+        "origin": _origin_row(inst),
     }
 
 
@@ -649,6 +654,16 @@ def _row_verify(title: str):
         if out is not None:
             out.setdefault("queued", queued)
         return out
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
+
+
+def _origin_row(inst):
+    """``remote_origin.row_field(inst)``, never raising into the row build."""
+    try:
+        from backend.web.core import remote_origin
+
+        return remote_origin.row_field(inst)
     except Exception:  # noqa: BLE001 — enrichment only
         return None
 

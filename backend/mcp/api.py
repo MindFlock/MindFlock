@@ -168,9 +168,13 @@ class Api:
             except client.ServerNotFound as err:
                 last = err
             except client.ApiError as err:
-                if err.status in (401, 403):
+                if err.status in (401, 403) and not (
+                    isinstance(err.payload, dict) and err.payload.get("code")
+                ):
                     # A server that refuses our token is THERE: never retried,
-                    # never reported as "not reachable".
+                    # never reported as "not reachable". (A route's own refusal
+                    # carries a ``code`` — a secret file, not your item — and
+                    # is the tool's to explain.)
                     raise ToolError(_auth_error(err, path, self.describe())) from None
                 raise
             # Connection-level failure: forget the address (a restarted server

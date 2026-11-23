@@ -114,6 +114,7 @@ TOOL_NAMES = (
     "list_devices",
     "send_session",
     "send_files",
+    "hub",
 )
 
 #: First line of a launch prompt decorated with ``split`` — also how

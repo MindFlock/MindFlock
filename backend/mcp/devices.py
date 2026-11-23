@@ -21,7 +21,8 @@ send ITSELF — the case the owner asks for ("send tripwire to my Mac").
 
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+import urllib.parse
+from typing import Any, Dict, Optional, Tuple
 
 from backend import client
 from backend.mcp.protocol import ToolContext, ToolError
@@ -36,9 +37,12 @@ FILES_TIMEOUT_S = 1800.0
 
 D_LIST_DEVICES = (
     "List the user's other MindFlock devices (Settings → Your devices) for "
-    "send_session/send_files: {device, os, online, can_send, linked, "
-    "sessions} plus this_device. can_send = linked, answering and taking "
-    "sessions from here. Names match case-insensitively."
+    "send_session/send_files: {name, device, os, online, can_send, linked, "
+    "sessions} plus this_device. name is what the user calls it, device its "
+    "key (<device>::<title> rows); either works, case and punctuation "
+    "ignored. can_send = linked, answering and taking sessions from here. "
+    "spawn_session(device=) starts a new session on one; a <device>::<title> "
+    "you started there you may message, wait for and close."
 )
 D_SEND_SESSION = (
     "Send a session to another of the user's devices, e.g. \"send tripwire to "
@@ -65,9 +69,11 @@ D_SEND_FILES = (
     "devices over the device link. They land in a NEW folder there, "
     "<mindflock home>/inbox/<this device>/<id>/, SHA-256 checked, never "
     "run, executable bits removed (listed). paths: inside your worktree "
-    "(folders recurse; git-ignored files, symlinks, .git, agent "
-    "config/logins and secrets such as .env and keys are left out and "
-    "listed; include_secrets only if the user allowed it in Settings). "
+    "(folders recurse; git-ignored files — named ones too —, symlinks, "
+    ".git, agent config/logins and secrets such as .env and keys are left "
+    "out and listed; include_secrets only if the user allowed it in "
+    "Settings; one ignored build artifact only by the user's own `mindflock "
+    "send-files … --include-ignored`). "
     "Uncommitted files go too (listed). to_session: a session there to "
     "tell what arrived. note without to_session: starts a session there "
     "in that folder with the note as its task. Returns {path, files: "
@@ -163,8 +169,207 @@ S_SEND_FILES = _obj(
 )
 
 
+_QUOTES = str.maketrans(
+    {c: "'" for c in "\u2018\u2019\u201a\u201b\u2032\u02bc\uff07`\u00b4"}
+)
+
+
+def name_key(name: str) -> str:
+    """How a device name compares (the server's ``remote.name_key``; this
+    package stays stdlib-only): case, punctuation, spaces vs hyphens and
+    curly quotes ignored."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", str(name or "")).translate(_QUOTES)
+    return "".join(ch for ch in text.casefold() if ch.isalnum())
+
+
+def is_device_row(row: Optional[dict], title: str) -> bool:
+    """A ``<device>::<title>`` row of one of the user's OWN devices (not a
+    session another person shares over a peer link)."""
+    return "::" in str(title or "") and not (
+        isinstance(row, dict) and row.get("remote_peer") is True
+    )
+
+
 class DeviceTools:
-    """The two handlers; mixed into ``Toolbox``."""
+    """The device handlers; mixed into ``Toolbox``."""
+
+    # -- sessions THIS session started on another device ------------------- #
+    def remote_control(self, flock, target: str, action: str, text: str = "") -> dict:
+        """Act on ``<device>::<title>`` that the caller started there:
+        ``status`` / ``message`` / ``close`` — through this server's
+        ``/api/instances/{me}/remote-control``; the device checks that this
+        session started it and refuses anything else."""
+        me = flock.self_title
+        if not me:
+            raise ToolError(
+                "acting on %r needs a MindFlock session identity: only the "
+                "session that started it there may" % target
+            )
+        self.policy.require_write(flock, "acting on a session on another device")
+        try:
+            resp = self.api.post(
+                self.api.inst_path(me, "/remote-control"),
+                {"target": target, "action": action, "text": text},
+                timeout=60.0,
+            )
+        except client.ApiError as err:
+            code = err.payload.get("code") if isinstance(err.payload, dict) else ""
+            if code == "not_origin":
+                raise ToolError(
+                    "%s: %s. Sessions on another device are read-only here "
+                    "unless YOU started them (send_session, send_files, "
+                    "spawn_session device=)." % (target, err.message)
+                ) from None
+            raise ToolError("%s(%s): %s" % (action, target, err.message)) from None
+        return resp if isinstance(resp, dict) else {}
+
+    def _spawn_on_device(self, args: dict, flock) -> dict:
+        """``spawn_session(device=…)``: start a session on another of the
+        user's devices, as THIS session's — it reports back here and closes
+        itself there once done. Not a local child: address it as
+        ``<device>::<title>``."""
+        me = flock.self_title
+        if not me:
+            raise ToolError(
+                "spawn_session(device=) needs a MindFlock session identity: the "
+                "session there reports back to the one that started it"
+            )
+        # The ship rule (a lane the user set below push stops it) — and
+        # nothing that would let a bounded session start an UNbounded agent
+        # elsewhere: the receiving device cannot enforce this one's fence or
+        # red zones, so a session that has either may not do it at all.
+        self.policy.require_ship(flock, me, "spawn_session(device=)", depth="push")
+        my_row = flock.local.get(me) or {}
+        order = my_row.get("order") if isinstance(my_row.get("order"), dict) else {}
+        fence = order.get("fence") if isinstance(order, dict) else None
+        if isinstance(fence, dict) and (fence.get("only") or fence.get("keep_out")):
+            raise ToolError(
+                "spawn_session(device=) is refused for a session with a fence: "
+                "another device cannot enforce your fence, so the session there "
+                "would not have it. Ask the user to start it there, or to lift "
+                "your fence first"
+            )
+        rz = my_row.get("redzone") if isinstance(my_row.get("redzone"), dict) else {}
+        if rz.get("zones"):
+            raise ToolError(
+                "spawn_session(device=) is refused while red zones apply to you: "
+                "another device cannot enforce them. Ask the user to start it "
+                "there"
+            )
+        mine = str(my_row.get("program") or "")
+        program = str(args.get("program") or "").strip() or mine
+        if mine and program != mine:
+            raise ToolError(
+                "spawn_session(device=) starts your own program (%s) only — not "
+                "%r" % (mine, program)
+            )
+        device = str(args.get("device") or "").strip()
+        repo = str(args.get("repo_path") or "").strip()
+        if not repo:
+            raise ToolError(
+                "spawn_session(device=) needs repo_path: a folder ON %s (its "
+                "repository there — that device's paths, not yours)" % device
+            )
+        try:
+            listing = self.api.get("/api/devices", timeout=15.0)
+        except client.ApiError as err:
+            raise self._api_error(err, "spawn_session") from None
+        want = name_key(device)
+        hits = [
+            d
+            for d in (listing or {}).get("devices") or []
+            if isinstance(d, dict)
+            and want in {name_key(d.get("device") or ""), name_key(d.get("host") or "")}
+        ]
+        linked = [
+            d
+            for d in hits
+            if (d.get("member") and d.get("same_fleet")) or d.get("has_token")
+        ]
+        if hits and not linked:
+            # Never a machine that merely shares the tailnet (a gate-off
+            # MindFlock is drivable without any credential).
+            raise ToolError(
+                "%s is on the tailnet but is not one of the user's devices — "
+                "they add it in Settings → Your devices first"
+                % (hits[0].get("host") or hits[0].get("device"))
+            )
+        hits = linked
+        if len(hits) != 1:
+            names = ", ".join(
+                "%s (%s)" % (d.get("host"), d.get("device")) for d in hits
+            )
+            raise ToolError(
+                "no single device named %r%s — list_devices names them"
+                % (device, ": did you mean " + names if names else "")
+            )
+        dev = hits[0]
+        if not dev.get("connected"):
+            raise ToolError(
+                "%s is not answering or does not take sessions from here right "
+                "now (list_devices: can_send)" % (dev.get("host") or dev.get("device"))
+            )
+        key = str(dev.get("device") or "")
+        title = str(args.get("title") or "").strip() or "%s-remote" % me[:38]
+        body: Dict[str, Any] = {
+            "title": title,
+            "repo_path": repo,
+            "prompt": args["prompt"],
+            "spawned": True,
+            "origin": {"session": me, "by": "agent"},
+        }
+        if args.get("in_place"):
+            body["in_place"] = True
+        if program:
+            body["program"] = program
+        try:
+            resp = self.api.post(
+                "/api/devices/%s/fwd/api/instances" % urllib.parse.quote(key, safe=""),
+                body,
+                timeout=SEND_TIMEOUT_S,
+            )
+        except client.ApiError as err:
+            raise ToolError(
+                "spawn_session on %s: %s" % (dev.get("host") or key, err.message)
+            ) from None
+        resp = resp if isinstance(resp, dict) else {}
+        out = {
+            "title": "%s::%s" % (key, resp.get("title") or title),
+            "device": key,
+            "device_name": dev.get("host") or key,
+            "status": resp.get("status") or "",
+            "remote": True,
+            "hint": "not your child: wait_for_session / read_output / "
+            "send_message / kill_session on this <device>::<title>; it "
+            "reports back here and closes itself there once done",
+        }
+        if resp.get("queued"):
+            out["queued"] = True
+        return out
+
+    def _require_sendable(self, flock, title: str, action: str) -> None:
+        """The ship rule — but a session that is not live because it was
+        just closed (an auto-closed worker) says so, with the command that
+        reopens it, instead of "no session named"."""
+        if flock.row(title) is None:
+            try:
+                closed = self.api.get("/api/recently-closed", timeout=10.0)
+            except client.ApiError:
+                closed = []
+            hits = [
+                e
+                for e in (closed if isinstance(closed, list) else [])
+                if isinstance(e, dict) and e.get("title") == title
+            ]
+            if hits:
+                raise ToolError(
+                    "%s was closed (it is in Recently closed) — ask the user to "
+                    "reopen it (`mindflock reopen %s`, or Recently closed in "
+                    "the sidebar), then %s again" % (title, title, action)
+                )
+        self.policy.require_ship(flock, title, action, depth="push")
 
     def list_devices(self, args: dict, ctx: ToolContext) -> dict:
         try:
@@ -181,6 +386,7 @@ class DeviceTools:
             )
             out.append(
                 {
+                    "name": d.get("host") or d.get("device"),
                     "device": d.get("device"),
                     "os": d.get("os") or "",
                     "online": bool(d.get("reachable")),
@@ -191,7 +397,13 @@ class DeviceTools:
                 }
             )
         me = resp.get("self") if isinstance(resp.get("self"), dict) else {}
-        return {"this_device": me.get("device") or "", "devices": out}
+        # Linked devices first: the ones a send can reach.
+        out.sort(key=lambda d: (not d["linked"], str(d.get("name") or "").lower()))
+        return {
+            "this_device": me.get("device") or "",
+            "this_device_name": me.get("host") or me.get("device") or "",
+            "devices": out,
+        }
 
     def send_session(self, args: dict, ctx: ToolContext) -> dict:
         flock = self.flock()
@@ -204,8 +416,15 @@ class DeviceTools:
             raise ToolError(
                 "%r already runs on another device; send it from there" % title
             )
-        self.policy.require_ship(flock, title, "send_session", depth="push")
-        body = {"device": str(args["device"]).strip(), "note": args.get("note") or ""}
+        self._require_sendable(flock, title, "send_session")
+        body = {
+            "device": str(args["device"]).strip(),
+            "note": args.get("note") or "",
+            # Who sent it (the device shows "from <you> on <this device>",
+            # and its reports come back to you).
+            "from_session": flock.self_title or title,
+            "started_by": "agent",
+        }
         if args.get("via"):
             body["via"] = str(args["via"])
         if args.get("paths"):
@@ -258,13 +477,15 @@ class DeviceTools:
             raise ToolError(
                 "%r runs on another device; send its files from there" % title
             )
-        self.policy.require_ship(flock, title, "send_files", depth="push")
+        self._require_sendable(flock, title, "send_files")
         body: Dict[str, Any] = {
             "device": str(args["device"]).strip(),
             "paths": [str(x) for x in args.get("paths") or []],
             "note": args.get("note") or "",
             "to_session": str(args.get("to_session") or "").strip(),
             "include_secrets": args.get("include_secrets") is True,
+            "from_session": flock.self_title or title,
+            "started_by": "agent",
         }
         try:
             resp = self.api.post(

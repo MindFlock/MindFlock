@@ -59,6 +59,7 @@ import { installVerifyRedirect } from "./lib/behaviorsFocus";
 import { installViewFlip } from "./lib/viewMode";
 import { SkyView } from "./components/flights/SkyView";
 import { RouteStartMenu } from "./components/flights/RouteStartMenu";
+import { HubPanel } from "./components/hub/HubPanel";
 
 /** At or under this window width the main screen goes single-column. */
 const NARROW_PX = 760;
@@ -356,6 +357,8 @@ export default function App() {
       <MemoryConfirm />
       {/* The people on a session talking (lib/chat.ts): pops up by itself. */}
       <ChatPanel />
+      {/* The hub drawer + its Send to session… dialog (components/hub). */}
+      <HubPanel />
       <CommandPalette host={host} />
       <ShortcutsSheet />
       <WelcomeTour />

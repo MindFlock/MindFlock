@@ -30,6 +30,7 @@ import { useUi } from "../state/store";
 import { openBehaviors } from "./behaviorsFocus";
 import { jumpToNeedsYou } from "./needsYou";
 import { newSession, toggleView } from "./viewMode";
+import { useHubUi } from "./hub";
 
 /** One key combination as matched by the dispatcher and stored in the
  * "mf_keymap" overrides ({key, mod, shift, alt}). `mod` true = Ctrl/⌘;
@@ -634,6 +635,16 @@ export const KEYMAP: KeymapEntry[] = [
     help: ["Navigation", "Alt+S", "Schedule — templates that start sessions on their own"],
     when: () => !isEditingTarget(document.activeElement),
     run: () => useUi.getState().openDialogFor("schedule"),
+  },
+  {
+    // The hub (components/hub): open or close it. Guarded like Alt+S — a
+    // text field or terminal keeps the key (Option+H types ˙ on macOS).
+    key: "h",
+    alt: true,
+    id: "hub",
+    help: ["Navigation", "Alt+H", "Hub — files, pictures and snippets every session can use"],
+    when: () => !isEditingTarget(document.activeElement),
+    run: () => useHubUi.getState().toggle(),
   },
   {
     // Talk to the focused session through the top-bar mic. Unlike Alt+I / V /

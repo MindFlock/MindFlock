@@ -222,6 +222,19 @@ body #mf-winctl {
   color: var(--red-ink);
 }
 
+/* The hub's count: what an agent or your phone added since you last looked —
+   "new", in the accent, never in the bell's red (nothing in it needs you). */
+#topbar .tb-count.is-new {
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: 0 5px;
+}
+
+#topbar .tb-hub-icon {
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+
 /* A checklist FAILED: the count is red, not the usual accent. */
 #topbar .tb-count.is-failing {
   background: var(--red);

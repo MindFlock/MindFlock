@@ -119,10 +119,17 @@ def test_needs_a_session_identity():
         box.send_message({"to": "Bob::fix-login", "text": "x"}, FakeCtx(clock))
 
 
-def test_a_device_row_is_still_read_only():
-    box, _, clock = _box()
+def test_a_device_row_is_still_read_only_unless_you_started_it():
+    box, api, clock = _box()
+    # The device decides (core.remote_origin): not started by this session.
+    me = box.flock().self_title
+    api.errors[("POST", "/api/instances/%s/remote-control" % me)] = client.ApiError(
+        403, "dev::far was not started from another device", {"code": "not_origin"}
+    )
     with pytest.raises(ToolError, match="another device"):
         box.send_message({"to": "dev::far", "text": "x"}, FakeCtx(clock))
+    # Never the peer path.
+    assert not [c for c in api.calls if c[1] == PEER_PATH]
 
 
 def test_a_peer_row_is_never_managed():

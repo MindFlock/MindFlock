@@ -10,6 +10,7 @@ import { toast } from "../../lib/toast";
 import { heldQueuedText, heldWasQueued, isHeldRefusal } from "../../lib/heldOffline";
 import { dropIndex, hoverSlot, reorderItems } from "./queueDnd";
 import { promptsFromFile } from "./queueImport";
+import { useHubComposer } from "../hub/HubAttach";
 
 interface QueueItem {
   id: string;
@@ -50,6 +51,9 @@ function qApi<T = QueueStatePayload>(title: string, path: string, opts?: Request
 export function QueueTab({ title, active }: { title: string; active: boolean }) {
   const [state, setState] = useState<QueueStatePayload | null>(queueCache.get(title) || null);
   const [draft, setDraft] = useState("");
+  const draftBox = useRef<HTMLTextAreaElement | null>(null);
+  // The hub in this box: hub: picker, paperclip, pasted files (HubAttach).
+  const hubc = useHubComposer({ box: draftBox, value: draft, setValue: setDraft, title });
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   // Drag-and-drop reorder: the id in flight and the insertion slot the pointer
   // is over (0..items.length). A ref mirrors the drag so the poll can't yank
@@ -175,9 +179,10 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
     const text = draft.trim();
     if (!text) return;
     try {
-      await qApi(title, "/send", { json: { text } });
+      const r = (await qApi(title, "/send", { json: { text } })) as { hub_note?: string } | null;
       setDraft("");
-      toast("Sent to " + displayName(title));
+      // A hub: reference to nothing went as typed: say so (lib/hub).
+      toast(r?.hub_note ? "Sent to " + displayName(title) + " — " + r.hub_note : "Sent to " + displayName(title));
       reload();
     } catch (err) {
       // Held offline after a crash: the server queued it, sent after Start.
@@ -194,10 +199,11 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
     const text = draft.trim();
     if (!text) return;
     try {
-      const st = await qApi(title, "/queue", { json: { text } });
+      const st: QueueStatePayload & { hub_note?: string } = await qApi(title, "/queue", { json: { text } });
       queueCache.set(title, st);
       setDraft("");
       setState(st);
+      if (st.hub_note) toast(st.hub_note);
     } catch (err) {
       toast("Queue failed: " + ((err as Error).message || ""));
     }
@@ -319,14 +325,29 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
           here to queue every row as its own prompt.
         </span>
       </div>
+      <div
+        className="queue-input-wrap"
+        data-hub-drop={hubc.dropping ? "" : undefined}
+        onDragOver={hubc.onDragOver}
+        onDragLeave={hubc.onDragLeave}
+        onDrop={hubc.onDrop}
+      >
+      {hubc.popup}
+      {hubc.chips}
       <textarea
+        ref={draftBox}
         className="queue-input"
         rows={3}
         placeholder="Type a prompt — Add to queue (Alt+Enter), or Send now (Ctrl+Enter)"
         aria-label={"Prompt for " + displayName(title)}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          hubc.onInput(e.target);
+        }}
+        onPaste={hubc.onPaste}
         onKeyDown={(e) => {
+          if (hubc.onKeyDown(e)) return;
           const k = composerKey(e);
           if (!k) return;
           e.preventDefault();
@@ -334,7 +355,9 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
           void (k === "send" ? send() : add());
         }}
       />
+      </div>
       <div className="queue-actions">
+        {hubc.attach}
         <button className="queue-add primary" type="button" title="Add to queue (Alt+Enter)" disabled={sending} onClick={add}>
           Add to queue
         </button>

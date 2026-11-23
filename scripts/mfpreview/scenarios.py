@@ -343,6 +343,25 @@ ALL_SESSIONS = list(SESSIONS)
 ROUTE_SESSIONS = [r["session"] for r in ROUTES.values() if r["session"]]
 
 SCENARIOS: Dict[str, Dict[str, Any]] = {
+    "hub": {
+        "summary": "The hub (Hub in the top bar, #hub): a screenshot, a log, an SQL "
+        "snippet with a note, a PDF, a phone screenshot and a picture an agent "
+        "put — beside three sessions to send them to.",
+        "sessions": ["api-auth", "billing-export", "docs-refresh"],
+        "routes": [],
+        "hub": True,
+    },
+    "hub-full": {
+        "summary": "The hub with 30 items (the find box, a long list).",
+        "sessions": ["api-auth", "docs-refresh"],
+        "routes": [],
+        "hub": "full",
+    },
+    "hub-empty": {
+        "summary": "Two sessions and an empty hub (its first-run state).",
+        "sessions": ["api-auth", "docs-refresh"],
+        "routes": [],
+    },
     "sky": {
         "summary": "Everything: sessions in every state, a parent with workers, "
         "routes in every state, to-dos and bell items.",
@@ -537,6 +556,10 @@ def seed(sb: Sandbox, name: str) -> Dict[str, Any]:
             )
             if status >= 400:
                 log.append("todos refused %s %s" % (status, body))
+    if sc.get("hub"):
+        from mfpreview.hubseed import seed_hub
+
+        made["hub"] = seed_hub(sb, made["sessions"], log, full=sc["hub"] == "full")
     if sc.get("worker_report") and {"orchestrator", "worker-api"} <= set(
         made["sessions"]
     ):

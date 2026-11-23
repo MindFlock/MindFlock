@@ -243,6 +243,39 @@ def _git_lines(root: str, *args: str) -> Optional[List[str]]:
     return [x for x in cp.stdout.decode("utf-8", "surrogateescape").split("\x00") if x]
 
 
+def _is_ignored(root: str, rel: str) -> bool:
+    """Whether git ignores ``rel`` in the worktree ``root``: an untracked
+    file it ignores, or (``rel`` ending in ``/``) a folder it ignores as a
+    whole (``dist/``). A tracked file never is. Asked through ``ls-files``
+    with literal pathspecs (``check-ignore`` can't take them, and a folder
+    named ``:(icase)x`` must stay a path). Fails closed: when git can't
+    answer, a :class:`Refusal` (nothing is sent)."""
+    folder = rel.endswith("/")
+    name = rel.rstrip("/")
+    rows = _git_lines(
+        root,
+        "ls-files",
+        "-z",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        *(["--directory"] if folder else []),
+        "--",
+        name,
+    )
+    if rows is None:
+        raise Refusal(
+            500,
+            "git_failed",
+            "could not ask git whether %s is ignored (git failed or timed out) "
+            "— nothing was sent; send again" % name,
+        )
+    if not folder:
+        return name in rows
+    # git names the outermost ignored folder: ``dist/`` for ``dist/sub``.
+    return any(r.endswith("/") and (name + "/").startswith(r) for r in rows)
+
+
 def _open_under(root: str, rel: str) -> int:
     """A read-only fd for ``root/rel`` that never follows a symlink at ANY
     component: each folder is opened relative to the one before it with
@@ -254,6 +287,7 @@ def _open_under(root: str, rel: str) -> int:
     if not parts or any(p in (".", "..") for p in parts):
         raise OSError("not a path inside the worktree: %r" % rel)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
     if os.open in getattr(os, "supports_dir_fd", set()) and nofollow:
         dirfd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
@@ -265,18 +299,22 @@ def _open_under(root: str, rel: str) -> int:
                 )
                 os.close(dirfd)
                 dirfd = nxt
-            fd = os.open(parts[-1], os.O_RDONLY | nofollow, dir_fd=dirfd)
+            # Non-blocking: a FIFO swapped in after a caller's lstat opens at
+            # once (and is refused below) instead of hanging the thread.
+            fd = os.open(parts[-1], os.O_RDONLY | nofollow | nonblock, dir_fd=dirfd)
         finally:
             os.close(dirfd)
     else:
         full = os.path.join(root, *parts)
-        fd = os.open(full, os.O_RDONLY | nofollow)
+        fd = os.open(full, os.O_RDONLY | nofollow | nonblock)
         if os.path.realpath(full) != os.path.normpath(full):
             os.close(fd)
             raise OSError("%s now leads outside the worktree" % rel)
     if not stat.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)
         raise OSError("%s is no longer a regular file" % rel)
+    if nonblock and hasattr(os, "set_blocking"):
+        os.set_blocking(fd, True)
     return fd
 
 
@@ -316,12 +354,21 @@ def collect(
     paths: List[str],
     *,
     secrets_ok: bool = False,
+    ignored_ok: bool = False,
     max_files: int = 5000,
     max_bytes: int = 512 * 1024 * 1024,
 ) -> dict:
     """What would travel → ``{root, files: [{path, abs, size, sha256,
-    exec}], skipped: [{path, why}], uncommitted: [path], total}``, or a
-    :class:`Refusal`. Blocking (walks and hashes)."""
+    exec}], skipped: [{path, why}], uncommitted: [path], ignored: [path],
+    total}``, or a :class:`Refusal`. Blocking (walks and hashes).
+
+    Whatever git ignores stays: inside a folder it is skipped and listed; a
+    folder that is itself ignored (``dist/``) sends nothing; a NAMED file
+    that git ignores is refused — unless ``ignored_ok`` (the owner's
+    ``--include-ignored``), which lets exactly one named file through (a
+    built installer in a build-output folder), still subject to the
+    never/secret rules and the size limits. Never anything outside the
+    worktree."""
     root = os.path.realpath(wt)
     extra = baseline_paths(root)
     is_git = _git_lines(root, "rev-parse", "--show-toplevel") is not None
@@ -378,6 +425,15 @@ def collect(
             "exec": bool(st.st_mode & 0o111),
         }
 
+    if ignored_ok and len(paths) != 1:
+        raise Refusal(
+            400,
+            "include_ignored_one_file",
+            "include_ignored sends ONE named file that git ignores — name just "
+            "that file (send the rest separately, without it)",
+        )
+    ignored_sent: List[str] = []
+
     for raw in paths:
         if not isinstance(raw, str) or not raw.strip() or "\x00" in raw:
             raise Refusal(400, "bad_path", "every path must be a non-empty string")
@@ -397,11 +453,36 @@ def collect(
         if stat.S_ISREG(st.st_mode):
             if rel == "." or not gate(rel, True):
                 continue
+            if is_git and _is_ignored(root, rel):
+                if not ignored_ok:
+                    # No ready-made bypass in what an agent reads: sending
+                    # an ignored file is the person's own decision (docs/
+                    # devices.md, Send files).
+                    raise Refusal(
+                        403,
+                        "ignored",
+                        "%s is ignored by git (build output or a local file), "
+                        "so it is not sent. If the user wants this one file on "
+                        "the other device, they send it themselves" % rel,
+                    )
+                ignored_sent.append(rel)
             add(rel, real)
             continue
         if not stat.S_ISDIR(st.st_mode):
             raise Refusal(400, "not_a_file", "%s is not a regular file or folder" % raw)
+        if ignored_ok:
+            raise Refusal(
+                400,
+                "include_ignored_one_file",
+                "include_ignored sends one named file, not a folder — name the "
+                "file inside %s" % raw,
+            )
         if rel != "." and not gate(rel, True):
+            continue
+        if is_git and rel != "." and _is_ignored(root, rel + "/"):
+            # The folder itself is ignored (dist/, node_modules/): git lists
+            # it as one entry, so the walk below would not know its files are.
+            skip(rel + "/", "ignored by git")
             continue
         ignored: set = set()
         if is_git:
@@ -496,6 +577,8 @@ def collect(
         "files": files,
         "skipped": skipped,
         "uncommitted": uncommitted,
+        # Sent although git ignores it: the owner's include_ignored.
+        "ignored": ignored_sent,
         "total": sum(f["size"] for f in files),
         "git": is_git,
     }
@@ -684,6 +767,7 @@ async def send(
     note: str = "",
     to_session: str = "",
     include_secrets: bool = False,
+    include_ignored: bool = False,
     zone_hits: Callable[[str, List[str]], list] = lambda wt, rels: [],
     to_thread=None,
 ) -> Tuple[int, dict]:
@@ -729,6 +813,7 @@ async def send(
             wt,
             paths,
             secrets_ok=bool(include_secrets and lim["allow_secrets"]),
+            ignored_ok=include_ignored is True,
             max_files=lim["max_files"],
             max_bytes=lim["max_bytes"],
         )
@@ -859,6 +944,9 @@ async def send(
         "skipped": plan["skipped"][:100],
         "caveats": caveats,
     }
+    if plan.get("ignored"):
+        # Sent on the owner's include_ignored, though git ignores it.
+        out["ignored"] = list(plan["ignored"])
     if messaged:
         out["messaged"] = _remote.join_title(dev["key"], messaged)
     if started_title:

@@ -431,8 +431,8 @@ class TestSendFiles:
         r = _send(["README.md"], device="MLRIG2O23")
         assert r.status_code == 404
         assert r.json()["code"] == "no_device"
-        assert r.json()["did_you_mean"] == "mlrig2023"
-        assert "did you mean mlrig2023?" in r.json()["error"]
+        assert r.json()["did_you_mean"] == "MLRIG2023"
+        assert "did you mean MLRIG2023?" in r.json()["error"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1055,6 +1055,8 @@ class TestMcpSendFiles:
                     "note": "spin it up",
                     "to_session": "",
                     "include_secrets": False,
+                    "from_session": "orch",
+                    "started_by": "agent",
                 },
             )
         ]
@@ -1096,7 +1098,14 @@ class TestMcpSendFiles:
             {"device": "m", "via": "bundle", "paths": ["tripwire"]}, FakeCtx(clock)
         )
         assert seen == [
-            {"device": "m", "note": "", "via": "bundle", "paths": ["tripwire"]}
+            {
+                "device": "m",
+                "note": "",
+                "from_session": "orch",
+                "started_by": "agent",
+                "via": "bundle",
+                "paths": ["tripwire"],
+            }
         ]
         assert out["via"] == "bundle" and out["how"] == "…"
 

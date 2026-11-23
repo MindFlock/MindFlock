@@ -255,6 +255,14 @@ class McpSpec:
             env["MINDFLOCK_MCP_MANAGED"] = "1"
             if self.title:
                 env["MINDFLOCK_SESSION_TITLE"] = self.title
+                # The session routes that act FOR this session (the hub's
+                # put/take/remove) answer only this key (backend.session_key).
+                try:
+                    from backend import session_key
+
+                    env[session_key.ENV] = session_key.key_for(self.title)
+                except Exception:  # noqa: BLE001 — a launch never fails over it
+                    pass
         if self.pythonpath:
             env["PYTHONPATH"] = self.pythonpath
         if self.settings_file:

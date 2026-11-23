@@ -134,3 +134,31 @@ describe("the setting", () => {
     expect(src).toContain("<AutoCloseRows />");
   });
 });
+
+describe("a session another device's agent started closes itself, and says so", () => {
+  const origin = {
+    device: "ethanlaptop2026",
+    device_name: "EthanLaptop2026",
+    verified: true,
+    session: "tripwire-send",
+    by: "agent" as const,
+    label: "from tripwire-send on EthanLaptop2026",
+  };
+  const now = 1_800_000_000_000;
+  const at = now / 1000 + 9 * 60;
+  const ac = { keep_open: false, orphan_of: "", closes_at: at, why: "" };
+
+  it("closes in N min, only for an agent's session in its grace window", async () => {
+    const { closingLine } = await import("../lib/autoClose");
+    expect(closingLine({ title: "rw", origin, auto_close: ac } as Partial<Instance>, now)?.text).toBe(
+      "closes in 9 min"
+    );
+    // A person's session, one kept open, one not finished, a mirrored row: none.
+    expect(closingLine({ origin: { ...origin, by: "person" }, auto_close: ac } as Partial<Instance>, now)).toBeNull();
+    expect(closingLine({ origin, auto_close: { ...ac, keep_open: true } } as Partial<Instance>, now)).toBeNull();
+    expect(closingLine({ origin, auto_close: { ...ac, closes_at: null } } as Partial<Instance>, now)).toBeNull();
+    expect(closingLine({ origin, auto_close: ac, device: "rig" } as Partial<Instance>, now)).toBeNull();
+    // A local worker keeps today's row (no closing line).
+    expect(closingLine({ auto_close: ac } as Partial<Instance>, now)).toBeNull();
+  });
+});

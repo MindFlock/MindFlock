@@ -2,6 +2,7 @@
  * entry point for every UI action. Arrow keys + Enter run, Esc closes,
  * typed text filters (substring beats subsequence). */
 
+import { useHubUi } from "../../lib/hub";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { newSession, setView } from "../../lib/viewMode";
 import { useConfig, useExtensions } from "../../state/queries";
@@ -140,6 +141,13 @@ export function buildPaletteActions({ config, host, extensions }: PaletteSources
     label: "Intake: Auto-start",
     hint: "what starts on its own",
     run: () => ui.openDialogFor("intake", "autostart"),
+  });
+  // The hub: shared files, pictures and snippets (components/hub).
+  acts.push({
+    label: "Hub…",
+    hint: "Alt+H",
+    keywords: "files share paste screenshot image snippet clipboard attach upload reference",
+    run: () => useHubUi.getState().setOpen(true),
   });
   // The other end of the same arc, so it sits with the Intake entries rather
   // than down among the settings screens.

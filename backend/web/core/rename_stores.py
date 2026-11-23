@@ -22,6 +22,12 @@ from backend.web.core import rename as _rename
 from backend.web.core.rename import move_key, register, replace_value
 
 
+def m_hub_index() -> str:
+    from backend.web.core import hub
+
+    return hub.INDEX
+
+
 def _server():
     from backend.web import server
 
@@ -245,6 +251,14 @@ def _auto_close(old: str, new: str) -> None:
     m.rename(old, new)
 
 
+def _remote_origin(old: str, new: str) -> None:
+    """Where a session another device started came from (and its turn /
+    report bookkeeping) follows the rename."""
+    from backend.web.core import remote_origin as m
+
+    m.rename(old, new)
+
+
 def _flights(old: str, new: str) -> None:
     """A flight's ``session``, and the workers its join/spawn steps recorded.
     The plan copy (``steps``) is skipped: a step's ``title`` is its label."""
@@ -320,6 +334,14 @@ def _template_runs(old: str, new: str) -> None:
         runs = m.load_runs(path)
         if _swap_fields(runs, old, new, ("last_session", "session")):
             m.save_runs(runs, path)
+
+
+def _hub(old: str, new: str) -> None:
+    """A hub item a session added keeps saying who: the agent may still
+    remove its own items under its new title."""
+    from backend.web.core import hub as m
+
+    m.rename_session(old, new)
 
 
 def _team_runs(old: str, new: str) -> None:
@@ -533,6 +555,7 @@ def install() -> None:
     register("mailbox", _mailbox, files=("mailbox.json",))
     register("finished children", _finished_children, files=("finished_children.json",))
     register("auto-close", _auto_close, files=("auto_close.json",))
+    register("remote origin", _remote_origin, files=("remote_origin.json",))
     register("flights", _flights, files=("flights.json",))
     register("worker order", _worker_order, files=("worker_order.json",))
     register("guest links", _guests, files=("guest_links.json",))
@@ -543,6 +566,7 @@ def install() -> None:
         files=("template_runs.json", "schedule_runs.json"),
     )
     register("team runs", _team_runs)
+    register("hub", _hub, files=(m_hub_index(),))
     register("job expectations", _job_expectations, files=("job_expectations.json",))
     register("session fences", _session_fences, files=("red_zones.json",), keyed="tmux")
     register("memory", _memory)

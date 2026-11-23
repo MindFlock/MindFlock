@@ -484,6 +484,19 @@
   // How long a press must be held to count as a long press (and not a tap).
   var LONG_PRESS_MS = 500;
 
+  // "from tripwire-send on EthanLaptop2026 · closes in 9 min", or "".
+  function originRowText(inst) {
+    var o = inst && inst.origin;
+    if (!o || !o.label) return "";
+    var ac = inst.auto_close;
+    var out = "↳ " + o.label;
+    if (o.by === "agent" && ac && !ac.keep_open && ac.closes_at) {
+      var mins = Math.max(0, Math.ceil((ac.closes_at * 1000 - Date.now()) / 60000));
+      out += " · " + (mins ? "closes in " + mins + " min" : "closes now");
+    }
+    return out;
+  }
+
   function sessionRow(inst) {
     var title = inst.title;
     var ss = sessionState(inst);
@@ -557,6 +570,15 @@
       q.className = "sess-ask";
       q.textContent = askLine;
       text.appendChild(q);
+    }
+    // Started from another of your devices (core.remote_origin): where from
+    // — "from tripwire-send on EthanLaptop2026" — and when it closes itself.
+    var originLine = originRowText(inst);
+    if (originLine) {
+      var o = document.createElement("span");
+      o.className = "sess-origin";
+      o.textContent = originLine;
+      text.appendChild(o);
     }
     main.appendChild(dot);
     main.appendChild(text);
@@ -2303,13 +2325,24 @@
       // later: a TUI like claude treats a rapid burst as a paste, and a \r
       // inside a paste becomes a newline in its input box instead of a
       // submit. The gap ends the paste burst so the Enter actually sends.
-      send(text);
-      setTimeout(function () { send("\r"); }, 150);
+      // A hub reference (hub:k7m2) goes in expanded: the agent gets the
+      // item's path, name and kind (HUB section).
+      hubAttached = {};
+      if (HUB_REF_RE.test(text) && hubHere()) {
+        hubExpand(text).then(function (typed) {
+          send(typed);
+          setTimeout(function () { send("\r"); }, 150);
+        });
+      } else {
+        send(text);
+        setTimeout(function () { send("\r"); }, 150);
+      }
     } else {
       send("\r");        // empty Send = bare Enter — confirms TUI prompts
     }
     composeEl.value = "";
     autosizeCompose();
+    hubRenderChips();
     composeEl.focus();   // keep the keyboard up for the next message
   }
   // Grow with the draft (paste a paragraph and still see it) up to ~5 rows.
@@ -2330,6 +2363,258 @@
     ev.preventDefault();
     sendCompose();
   });
+
+  // --- HUB -----------------------------------------------------------------
+  // The hub (backend core/hub.py; docs/web-ui.md "Hub"): one shared place
+  // per MindFlock home for files, pictures and snippets every session can use.
+  // 📎 beside the compose box: pick a photo or file (the phone's own picker:
+  // library, camera or files) → it goes into the hub (source=phone) and its
+  // reference (hub:k7m2) into the message → Send. A message holding a
+  // reference is expanded (POST /api/hub/expand) before it goes down the
+  // PTY, so the agent gets the item's path, name and kind. The hub is THIS
+  // computer's: a session on another device gets nothing from it.
+  var hubAttachBtn = document.getElementById("hub-attach");
+  var hubFileEl = document.getElementById("hub-file");
+  var hubSheet = document.getElementById("hub-sheet");
+  var hubListEl = document.getElementById("hub-list");
+  var hubErrEl = document.getElementById("hub-error");
+  var hubChipsEl = document.getElementById("hub-chips");
+  // What the message carries from the hub: ref -> item, shown as chips
+  // (thumbnail, name, ✕) above the box — the confirmation a status line
+  // drawn over the terminal never was.
+  var hubAttached = {};
+  function hubChipThumb(it) {
+    var t;
+    if (it.kind === "image") {
+      t = document.createElement("img");
+      t.src = "/api/hub/items/" + encodeURIComponent(it.id) + "/raw";
+      t.alt = "";
+    } else {
+      t = document.createElement("span");
+      var m = /\.([A-Za-z0-9]{1,4})$/.exec(it.name || "");
+      t.textContent = m ? m[1] : (it.kind === "text" ? "txt" : "file");
+    }
+    t.className = "hub-chip-thumb";
+    return t;
+  }
+  function hubRenderChips() {
+    var text = composeEl.value || "";
+    hubChipsEl.innerHTML = "";
+    var shown = 0;
+    Object.keys(hubAttached).forEach(function (ref) {
+      if (text.toLowerCase().indexOf(ref) < 0) { delete hubAttached[ref]; return; }
+      var it = hubAttached[ref];
+      var chip = document.createElement("span");
+      chip.className = "hub-chip";
+      chip.appendChild(hubChipThumb(it));
+      var nm = document.createElement("span");
+      nm.className = "hub-chip-name";
+      nm.textContent = it.name;
+      chip.appendChild(nm);
+      var x = document.createElement("button");
+      x.type = "button";
+      x.className = "hub-chip-x";
+      x.textContent = "✕";
+      x.setAttribute("aria-label", "Take " + it.name + " out of the message");
+      x.addEventListener("click", function () {
+        var re = new RegExp("(^|[^A-Za-z0-9_./:@-])" + ref + "(?![A-Za-z0-9_]) ?", "gi");
+        composeEl.value = composeEl.value.replace(re, "$1").replace(/ {2,}/g, " ");
+        delete hubAttached[ref];
+        hubRenderChips();
+        autosizeCompose();
+        composeEl.focus();
+      });
+      chip.appendChild(x);
+      hubChipsEl.appendChild(chip);
+      shown++;
+    });
+    hubChipsEl.classList.toggle("hidden", !shown);
+    fitSoon();
+  }
+  function hubAttach(it) {
+    hubAttached[it.ref] = it;
+    insertIntoCompose((composeEl.value && !/\s$/.test(composeEl.value) ? " " : "") + it.ref + " ");
+    hubRenderChips();
+  }
+  composeEl.addEventListener("input", hubRenderChips);
+  // A reference, not glued to a word or path before it (the server's rule).
+  var HUB_REF_RE = /(^|[^A-Za-z0-9_./:@-])hub:[A-Za-z0-9]{4,8}(?![A-Za-z0-9_])/i;
+  function hubHere() { return !current || String(current).indexOf("::") < 0; }
+  function hubSize(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + " bytes";
+    if (n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + " KB";
+    return (n / 1048576).toFixed(1) + " MB";
+  }
+  function hubWho(it) {
+    if (it.by === "session") return "session " + (it.by_name || "?");
+    if (it.by === "device") return "device " + (it.by_name || "?");
+    return it.by === "phone" ? "your phone" : "you";
+  }
+  function hubUpload(file) {
+    var q = "?source=phone&name=" + encodeURIComponent(file.name || "photo");
+    return fetch("/api/hub/items" + q, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: file,
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || "couldn't add it (" + r.status + ")");
+        return j;
+      });
+    });
+  }
+  function hubAddFiles(files, intoCompose) {
+    var list = Array.prototype.slice.call(files || []);
+    if (!list.length) return Promise.resolve([]);
+    flashStatus("adding " + (list.length === 1 ? (list[0].name || "the photo") : list.length + " files") + " to the hub…");
+    var refs = [];
+    var chain = Promise.resolve();
+    list.forEach(function (f) {
+      chain = chain.then(function () {
+        return hubUpload(f).then(function (it) { refs.push(it); });
+      });
+    });
+    return chain.then(function () {
+      if (intoCompose && refs.length) {
+        // The chips above the box say what is attached: no status line.
+        refs.forEach(hubAttach);
+        setStatus("");
+      } else if (refs.length) {
+        flashStatus("added " + (refs.length === 1 ? refs[0].name + " — " + refs[0].ref : refs.length + " files"));
+      }
+      return refs;
+    }).catch(function (err) {
+      setStatus("couldn't add it to the hub: " + errText(err, "error"));
+      hubErr(errText(err, "couldn't add it to the hub"));
+      return refs;
+    });
+  }
+  function hubErr(msg) {
+    hubErrEl.textContent = msg || "";
+    hubErrEl.classList.toggle("hidden", !msg);
+  }
+  // A message's references, expanded the way a send through MindFlock does;
+  // the text as it is when there are none (or the server can't).
+  function hubExpand(text) {
+    if (!HUB_REF_RE.test(text) || !hubHere()) return Promise.resolve(text);
+    return fetch("/api/hub/expand", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text }),
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.note) flashStatus(j.note);
+        return j && typeof j.text === "string" ? j.text : text;
+      })
+      .catch(function () { return text; });
+  }
+  hubAttachBtn.addEventListener("click", function () {
+    if (!hubHere()) {
+      flashStatus("the hub is on this computer — this session runs on another device");
+      return;
+    }
+    hubFileEl.click();
+  });
+  hubFileEl.addEventListener("change", function () {
+    var files = hubFileEl.files;
+    var fromSheet = !hubSheet.classList.contains("hidden");
+    hubAddFiles(files, !fromSheet).then(function () {
+      hubFileEl.value = "";
+      if (fromSheet) loadHubSheet();
+      else composeEl.focus();
+    });
+  });
+  function hubRow(it) {
+    var row = document.createElement("div");
+    row.className = "hub-row";
+    var thumb;
+    if (it.kind === "image") {
+      thumb = document.createElement("img");
+      thumb.src = "/api/hub/items/" + encodeURIComponent(it.id) + "/raw";
+      thumb.alt = "";
+      thumb.loading = "lazy";
+    } else {
+      thumb = document.createElement("span");
+      var m = /\.([A-Za-z0-9]{1,4})$/.exec(it.name || "");
+      thumb.textContent = m ? m[1] : (it.kind === "text" ? "txt" : "file");
+    }
+    thumb.className = "hub-row-thumb";
+    var main = document.createElement("div");
+    main.className = "hub-row-main";
+    var name = document.createElement("span");
+    name.className = "hub-row-name";
+    name.textContent = it.name;
+    var meta = document.createElement("span");
+    meta.className = "hub-row-meta";
+    meta.textContent = hubSize(it.size) + " · " + hubWho(it);
+    var ref = document.createElement("span");
+    ref.className = "hub-row-ref";
+    ref.textContent = it.ref;
+    main.appendChild(name);
+    main.appendChild(meta);
+    main.appendChild(ref);
+    var btns = document.createElement("div");
+    btns.className = "hub-row-btns";
+    var use = document.createElement("button");
+    use.type = "button";
+    use.className = "primary";
+    use.textContent = "Add to message";
+    use.setAttribute("aria-label", "Add " + it.name + " (" + it.ref + ") to the message");
+    use.addEventListener("click", function () {
+      closeSheet(hubSheet);
+      hubAttach(it);
+      composeEl.focus();
+    });
+    var copy = document.createElement("button");
+    copy.type = "button";
+    copy.textContent = "Copy code";
+    copy.setAttribute("aria-label", "Copy the code " + it.ref);
+    copy.addEventListener("click", function () {
+      copyPlain(it.ref).then(function (ok) {
+        flashStatus(ok ? "code copied to clipboard — paste " + it.ref + " in any message" : "the code is " + it.ref);
+      });
+    });
+    btns.appendChild(use);
+    btns.appendChild(copy);
+    row.appendChild(thumb);
+    row.appendChild(main);
+    row.appendChild(btns);
+    return row;
+  }
+  function loadHubSheet() {
+    hubErr("");
+    hubListEl.innerHTML = "";
+    hubListEl.appendChild(folderNote("Loading the hub…"));
+    fetch("/api/hub")
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) throw new Error((j && j.error) || "couldn't read the hub (" + r.status + ")");
+          return j;
+        });
+      })
+      .then(function (j) {
+        hubListEl.innerHTML = "";
+        var items = (j && j.items) || [];
+        if (!items.length) {
+          hubListEl.appendChild(folderNote("Nothing in the hub yet. Add a photo or file above — or on the computer, drop or paste one on the Hub panel."));
+          return;
+        }
+        items.slice(0, 60).forEach(function (it) { hubListEl.appendChild(hubRow(it)); });
+      })
+      .catch(function (err) {
+        hubListEl.innerHTML = "";
+        hubErr(errText(err, "couldn't read the hub"));
+      });
+  }
+  function openHubSheet() {
+    closeSheet(sessionsSheet);
+    openSheet(hubSheet);
+    loadHubSheet();
+  }
+  document.getElementById("hub-add").addEventListener("click", function () { hubFileEl.click(); });
+  document.getElementById("hub-done").addEventListener("click", function () { closeSheet(hubSheet); });
 
   // --- image paste -----------------------------------------------------------
   // A pasted image can't go down the PTY as keystrokes, and the agent CLI runs
@@ -3712,6 +3997,7 @@
 
   document.getElementById("more-btn").addEventListener("click", function () { openActSheet(current); });
   document.getElementById("sessions-recent").addEventListener("click", openRecentSheet);
+  document.getElementById("sessions-hub").addEventListener("click", openHubSheet);
   document.getElementById("sessions-new").addEventListener("click", function () {
     closeSheet(sessionsSheet);
     openNewSheet();
