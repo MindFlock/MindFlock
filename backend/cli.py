@@ -424,7 +424,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "prompt (what the session was for, its commits, its last reply, your "
         "--note). Only git and the brief travel — no logins, no chat history. "
         "Uncommitted changes are refused: commit first. TITLE may be any "
-        "unambiguous prefix; `mindflock devices` lists DEVICE names.",
+        "unambiguous prefix; DEVICE is a name `mindflock devices` lists (its "
+        "host name or its key; case and punctuation don't matter).",
     )
     send_.add_argument("title", metavar="TITLE")
     send_.add_argument("device", metavar="DEVICE")
@@ -3543,7 +3544,13 @@ def _print_devices(st: dict) -> None:
                 state += " — %s" % m["error"]
             if m.get("automation"):
                 state += " · runs PR review & issues"
-            print("  %s %-20s %s" % (glyph, m.get("host") or m.get("key"), state))
+            host = str(m.get("host") or m.get("key") or "")
+            key = str(m.get("key") or "")
+            if key and host.lower() != key.lower() and not m.get("self"):
+                # The name to type, and the key its sessions are shown under
+                # (<key>::<title>) — either one works in send / send-files.
+                state += " · key %s" % key
+            print("  %s %-20s %s" % (glyph, host, state))
         _print_automation_hint(members)
         if st.get("stale_key"):
             print(

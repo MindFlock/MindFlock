@@ -431,8 +431,8 @@ class TestSendFiles:
         r = _send(["README.md"], device="MLRIG2O23")
         assert r.status_code == 404
         assert r.json()["code"] == "no_device"
-        assert r.json()["did_you_mean"] == "mlrig2023"
-        assert "did you mean mlrig2023?" in r.json()["error"]
+        assert r.json()["did_you_mean"] == "MLRIG2023"
+        assert "did you mean MLRIG2023?" in r.json()["error"]
 
 
 # --------------------------------------------------------------------------- #

@@ -36,9 +36,10 @@ FILES_TIMEOUT_S = 1800.0
 
 D_LIST_DEVICES = (
     "List the user's other MindFlock devices (Settings → Your devices) for "
-    "send_session/send_files: {device, os, online, can_send, linked, "
-    "sessions} plus this_device. can_send = linked, answering and taking "
-    "sessions from here. Names match case-insensitively."
+    "send_session/send_files: {name, device, os, online, can_send, linked, "
+    "sessions} plus this_device. name is what the user calls it, device its "
+    "key (<device>::<title> rows); either works, case and punctuation "
+    "ignored. can_send = linked, answering and taking sessions from here."
 )
 D_SEND_SESSION = (
     "Send a session to another of the user's devices, e.g. \"send tripwire to "
@@ -181,6 +182,7 @@ class DeviceTools:
             )
             out.append(
                 {
+                    "name": d.get("host") or d.get("device"),
                     "device": d.get("device"),
                     "os": d.get("os") or "",
                     "online": bool(d.get("reachable")),
@@ -191,7 +193,13 @@ class DeviceTools:
                 }
             )
         me = resp.get("self") if isinstance(resp.get("self"), dict) else {}
-        return {"this_device": me.get("device") or "", "devices": out}
+        # Linked devices first: the ones a send can reach.
+        out.sort(key=lambda d: (not d["linked"], str(d.get("name") or "").lower()))
+        return {
+            "this_device": me.get("device") or "",
+            "this_device_name": me.get("host") or me.get("device") or "",
+            "devices": out,
+        }
 
     def send_session(self, args: dict, ctx: ToolContext) -> dict:
         flock = self.flock()

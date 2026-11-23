@@ -472,10 +472,17 @@ def build_brief(
 # the device
 # --------------------------------------------------------------------------- #
 def _device_names() -> List[str]:
+    """Each listed device by the name a person types (its host name) — and
+    its key too when that differs."""
+    out: List[str] = []
     try:
-        return [d["device"] for d in _remote.devices_json().get("devices") or []]
+        for d in _remote.devices_json().get("devices") or []:
+            for n in (d.get("host"), d.get("device")):
+                if n and n not in out:
+                    out.append(str(n))
     except Exception:  # noqa: BLE001
-        return []
+        return out
+    return out
 
 
 def resolve_device(name: str) -> dict:
@@ -485,17 +492,33 @@ def resolve_device(name: str) -> dict:
         raise Refusal(400, "no_device", "name the device to send it to (list_devices)")
     if "::" in want or "/" in want:
         raise Refusal(400, "no_device", "%r is not a device name" % want)
-    dev = _remote.find_device(want)
+    hits = _remote.match_devices(want)
+    if len(hits) > 1:
+        names = [_remote.describe_device(d) for d in hits]
+        raise Refusal(
+            409,
+            "ambiguous_device",
+            "%s matches more than one device — did you mean %s? Name it by "
+            "its key (in brackets)" % (want, " or ".join(names)),
+            candidates=[str(d.get("key") or "") for d in hits],
+        )
+    dev = hits[0] if hits else None
     if dev is None:
-        if want.lower() == str(_remote.self_identity().get("key") or "").lower():
+        me = _remote.self_identity()
+        if _remote.name_key(want) in {
+            _remote.name_key(n) for n in (me.get("key"), me.get("host")) if n
+        }:
             raise Refusal(
                 400, "same_device", "%s is this device — pick another one" % want
             )
         names = _device_names()
         close = difflib.get_close_matches(
-            want.lower(), [n.lower() for n in names], n=1, cutoff=0.6
+            _remote.name_key(want),
+            [_remote.name_key(n) for n in names],
+            n=1,
+            cutoff=0.6,
         )
-        guess = [n for n in names if close and n.lower() == close[0]]
+        guess = [n for n in names if close and _remote.name_key(n) == close[0]]
         raise Refusal(
             404,
             "no_device",
@@ -516,7 +539,7 @@ def resolve_device(name: str) -> dict:
             "not_linked",
             "%s is on your tailnet but is not one of your devices — add it in "
             "Settings → Your devices first; a session's work only goes to your "
-            "own linked devices" % key,
+            "own linked devices" % _remote.describe_device(dev),
         )
     if not dev.get("reachable"):
         raise Refusal(

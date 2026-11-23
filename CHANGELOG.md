@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A device is found by the name you see.** `mindflock send tripwire
+  ML-Rig-2023` was refused as "not one of your devices" when the device's key
+  was `ml-rig-2023-1` (an older tailnet node held the plain name) — the
+  unlinked node's key won over the linked device's host name. Sending
+  sessions and files, and the device forwarding routes, now accept the key,
+  the host name or the tailnet name, ignoring case, punctuation, spaces vs
+  hyphens and curly apostrophes ("Ethan’s Mac mini"); a linked device always
+  wins over an unlinked one, and a real tie is a "did you mean" naming both.
+  `mindflock devices` and the MCP `list_devices` show the name to type and
+  the key.
+
 ## [0.14.26] - 2026-11-21
 
 ### Added

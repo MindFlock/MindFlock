@@ -1683,13 +1683,24 @@ thin call of it, and the CLI's `mindflock send TITLE DEVICE` is the same.
 
 ### `list_devices`
 
-`{}` → `{this_device, devices: [{device, os, online, can_send, linked,
-sessions, error?}]}` from `GET /api/devices`. `linked` = on this device's
-"Your devices" roster (and saying so itself) or paired by a pasted token;
-`can_send` = linked and drivable from here now (answering, remote control
-on, a credential for it). Use the `device` value with `send_session` /
-`send_files`; names match case-insensitively (`MLRIG2023` = `mlrig2023`),
-and a near miss is refused with "did you mean …" (`did_you_mean`).
+`{}` → `{this_device, this_device_name, devices: [{name, device, os,
+online, can_send, linked, sessions, error?}]}` from `GET /api/devices`,
+linked devices first. `name` is the device's host name — what the user
+calls it ("ML-Rig-2023") — and `device` its key, the MagicDNS label its
+sessions are shown under (`ml-rig-2023-1::<title>`; a `-1` appears when an
+older tailnet node already held the plain label). `linked` = on this
+device's "Your devices" roster (and saying so itself) or paired by a pasted
+token; `can_send` = linked and drivable from here now (answering, remote
+control on, a credential for it).
+
+`send_session` / `send_files` (and `/api/devices/<name>/fwd/…`) take either
+name: the key, the host name or the full tailnet name, compared ignoring
+case, punctuation, spaces vs hyphens and curly vs straight apostrophes
+(`Ethan’s Mac mini` = `ethans-mac-mini`). A linked device always wins over
+an unlinked tailnet machine of a similar name; two linked devices that both
+fit are refused with `ambiguous_device` listing both ("did you mean
+ML-Rig-2023 (ml-rig-2023-1) or …"), and a near miss with "did you mean …"
+(`did_you_mean`).
 
 ### `send_session`
 

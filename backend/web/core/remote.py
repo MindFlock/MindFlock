@@ -902,19 +902,84 @@ def connected_devices() -> List[dict]:
     return [dict(d) for d in _DEVICES.values() if _connected(d)]
 
 
-def find_device(name: str) -> Optional[dict]:
-    """A snapshot of the discovered device called ``name`` — its key, else
-    its host name, case-insensitively — or None."""
-    want = str(name or "").strip().lower()
+#: Apostrophe/quote look-alikes folded before a name is compared ("Ethan’s
+#: Mac mini" typed with a straight one).
+_QUOTES = str.maketrans({c: "'" for c in "‘’‚‛′ʼ＇`´"})
+
+
+def name_key(name: str) -> str:
+    """How a device name compares: case-folded, curly quotes made straight,
+    then every character that isn't a letter or digit dropped — so
+    ``ML-Rig-2023``, ``ml rig 2023`` and ``ml_rig_2023`` are one name, and
+    ``Ethan’s Mac mini`` is ``ethans-mac-mini`` (its MagicDNS label)."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", str(name or "")).translate(_QUOTES)
+    return "".join(ch for ch in text.casefold() if ch.isalnum())
+
+
+def device_names(dev: dict) -> List[str]:
+    """Every name a person or an agent may call ``dev`` by: its key (the
+    MagicDNS label), its host name and its full tailnet name."""
+    out = []
+    for raw in (dev.get("key"), dev.get("host"), dev.get("dns")):
+        val = str(raw or "").strip().rstrip(".")
+        if val and val not in out:
+            out.append(val)
+    return out
+
+
+def match_devices(name: str) -> List[dict]:
+    """Snapshots of the discovered devices ``name`` may mean, best first —
+    usually one. A device matches when ``name`` is its key, host name or
+    tailnet name, compared by :func:`name_key` (case, punctuation, spaces vs
+    hyphens and curly vs straight quotes don't matter).
+
+    One of the person's LINKED devices (:func:`is_linked`) always wins over
+    an unlinked tailnet machine with a similar name — the case where the
+    linked one's MagicDNS label got a ``-1`` because an older node already
+    held the plain name. Among the rest an exact (case-insensitive) key
+    match wins, then an exact host name. More than one left = ambiguous: the
+    caller lists them ("did you mean …")."""
+    raw = str(name or "").strip()
+    want = name_key(raw)
     if not want:
-        return None
-    for dev in _DEVICES.values():
-        if str(dev.get("key") or "").lower() == want:
-            return dict(dev)
-    for dev in _DEVICES.values():
-        if str(dev.get("host") or "").lower() == want:
-            return dict(dev)
-    return None
+        return []
+    hits = [
+        dict(d)
+        for d in list(_DEVICES.values())
+        if any(name_key(n) == want for n in device_names(d))
+        or name_key(_dns_label(str(d.get("dns") or ""))) == want
+    ]
+    if len(hits) <= 1:
+        return hits
+    linked = [d for d in hits if is_linked(d)]
+    if len(linked) == 1:
+        return linked
+    pool = linked or hits
+    low = raw.lower()
+    for field in ("key", "host"):
+        exact = [d for d in pool if str(d.get(field) or "").lower() == low]
+        if len(exact) == 1:
+            return exact
+    return sorted(pool, key=lambda d: (not is_linked(d), str(d.get("key") or "")))
+
+
+def find_device(name: str) -> Optional[dict]:
+    """A snapshot of THE discovered device called ``name`` (see
+    :func:`match_devices`), or None when none — or more than one — matches."""
+    hits = match_devices(name)
+    return hits[0] if len(hits) == 1 else None
+
+
+def describe_device(dev: dict) -> str:
+    """``ML-Rig-2023 (ml-rig-2023-1)`` — the name to type and the key, or
+    just one when they are the same name."""
+    key = str(dev.get("key") or "")
+    host = str(dev.get("host") or "")
+    if host and name_key(host) != name_key(key):
+        return "%s (%s)" % (host, key)
+    return host or key
 
 
 def device_for_ip(ip: str) -> str:
@@ -1521,6 +1586,17 @@ async def _may_lend_credential(scope) -> bool:
         return False
 
 
+def _device_by_name(name: str) -> Optional[dict]:
+    """The LIVE state of the device a forwarded path names: its key, else
+    the one device its host or tailnet name means (:func:`match_devices`) —
+    ``/api/devices/ML-Rig-2023/fwd/…`` reaches ``ml-rig-2023-1``."""
+    dev = _DEVICES.get(name)
+    if dev is not None:
+        return dev
+    hit = find_device(name)
+    return _DEVICES.get(str(hit.get("key") or "")) if hit else None
+
+
 class RemoteProxyMiddleware:
     """Forward ``/api/instances/<device>::<title>/…`` (HTTP + websocket) to the
     device that owns the session. Mounted INSIDE the auth gate, so the local
@@ -1570,11 +1646,11 @@ class RemoteProxyMiddleware:
             if method == "POST" and (
                 target == "/api/instances" or target.endswith("/reopen")
             ):
-                dev = _DEVICES.get(fwd[0])
+                dev = _device_by_name(fwd[0])
                 if dev is not None:
                     send = _refresh_before_done(send, dev)
         device, target_path = hit
-        dev = _DEVICES.get(device)
+        dev = _device_by_name(device)
         if aiohttp is None or dev is None or not _connected(dev):
             await self._reject_not_connected(scope, receive, send, device)
             return

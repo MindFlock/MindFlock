@@ -60,6 +60,13 @@ hands it a short brief as its first prompt: what the session was for, its
 commits and changed files, its last reply, and an optional note ("install it
 here as a launchd service").
 
+- **Name it as you like.** `ML-Rig-2023`, `ml rig 2023` and its key
+  `ml-rig-2023-1` all find the same device: the key, the host name and the
+  tailnet name match ignoring case, punctuation, spaces vs hyphens and curly
+  vs straight apostrophes. A linked device beats an unlinked tailnet machine
+  of a similar name; two linked ones that both fit are refused with a "did
+  you mean" naming both. `mindflock devices` and `list_devices` show the
+  name to type and the key.
 - **Only your devices.** The target must be one of **Your devices** (or a
   device paired by pasted token) and reachable with remote control on — the
   same trust the sidebar's `<device>::<title>` rows ride. No new trust path:

@@ -711,8 +711,9 @@ secrets. Prints `sent TITLE -> DEVICE::TITLE (branch B, via git|bundle)`,
 then the one-line `how`, and any caveat on stderr. Uncommitted changes, a
 device that is asleep or not one of yours, or a refused push is an error
 with the next step (exit 1); nothing is pushed for a refusal found before
-the push. `mindflock devices` lists the device names (matched
-case-insensitively); `TITLE` resolves like `close`. See
+the push. `DEVICE` is a name `mindflock devices` lists — its host name
+(`ML-Rig-2023`) or its key (`ml-rig-2023-1`), case, punctuation and
+spaces-vs-hyphens ignored; `TITLE` resolves like `close`. See
 [devices.md](devices.md#send-a-session-to-another-device).
 
 ### `mindflock send-files DEVICE PATH… [--from TITLE] [--note TEXT] [--to-session NAME] [--include-secrets]`
