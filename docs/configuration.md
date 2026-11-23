@@ -1317,18 +1317,22 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   back on — seeded"); a field unset here is stamped older still, so it never
   clears another device's value. Otherwise sync stays off (logged once) until
   the device joins your others again.
-- **Bring agents back by themselves after a crash** (`general.revive_on_start`;
-  Settings → General, note: "Off: sessions whose agent died stay Offline until
-  you press Start, so a crash can't refill memory."). Unset = **off** (since
-  2026-11-04): a session whose agent died — at a server restart, or killed by
-  the OOM killer / crashed while the server runs — is **held offline**
+- **Bring agents back by themselves after a shutdown or crash**
+  (`general.revive_on_start`; Settings → General, note: "Off: after the computer was turned off, sessions come back asleep and wake when you open them; after a crash they stay Offline until you press Start, so a crash can't refill memory."). Unset = **off**
+  (since 2026-11-04): a session whose agent died in a crash — killed by the
+  OOM killer, crashed, or (found at a server restart) its machine went down
+  with memory in distress — is **held offline**
   ([session-engine.md](session-engine.md#held-offline-the-default-after-a-crash)):
   nothing relaunches it, not a pane attaching, a sent or queued prompt, a
   wake or a sweep, until someone presses Start (the Offline chip, the pane's
-  Start button, Start all). A prompt sent to it waits on its queue. `true`
-  opts in to the old behaviour: the startup revive sweep relaunches every
-  agent that was running, and the auto-revive brings back one the OOM killer
-  took once memory recovers; nothing is held. Per device: never synced (it is
+  Start button, Start all). A prompt sent to it waits on its queue. A session
+  whose agent simply went down with the computer (no sign of a crash) comes
+  back **asleep** instead
+  ([session-engine.md](session-engine.md#asleep-after-a-shutdown)): opening
+  it or sending it something wakes it; nothing automatic does. `true` opts in
+  to the old behaviour: the startup revive sweep relaunches every agent that
+  was running, and the auto-revive brings back one the OOM killer took once
+  memory recovers; nothing is held or slept at boot. Per device: never synced (it is
   about what THIS machine relaunches when its own server boots). Read at boot
   and per death.
 - **Sleeping agents** (`general.sleep_idle_minutes`; Settings → General →

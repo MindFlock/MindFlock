@@ -1251,7 +1251,10 @@
       return st("starting", { hint: "Provisioning workspace" });
     if (inst.sleeping)
       return st("idle", { label: "Sleeping", tone: "muted",
-                          hint: "Asleep to free memory — opening it or sending it anything wakes it" });
+                          hint: (inst.sleeping.reason === "shutdown"
+                                  ? "Asleep since the computer was turned off"
+                                  : "Asleep to free memory") +
+                                " — opening it or sending it anything wakes it" });
     if (inst.setup && inst.setup.state === "running")
       return st("starting", { hint: "Worktree setup running" });
     if (inst.setup && inst.setup.state === "failed")

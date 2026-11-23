@@ -146,13 +146,15 @@ describe("#5 a disconnected pane", () => {
     expect(notSentLine("disconnected")).toBe("Reconnecting — that wasn't sent");
     expect(notSentLine("error")).toBe("Reconnecting — that wasn't sent");
     expect(notSentLine("waiting")).toBe("Waiting its turn — that wasn't sent");
+    expect(notSentLine("waiting", "turn")).toBe("Waiting its turn — that wasn't sent");
+    expect(notSentLine("waiting", "memory")).toBe("Waiting for memory — that wasn't sent");
     expect(notSentLine("failed")).toBe("Not connected — that wasn't sent");
   });
 
   it("routes typing, pastes and drops through the socket check", () => {
     const src = code("lib/terminals.ts");
     expect(src).toContain("if (canSend()) ws!.send(data);");
-    expect(src).toContain("showTermNotice(container, notSentLine(state));");
+    expect(src).toContain("showTermNotice(container, notSentLine(state, waitingFor));");
     expect(src).toContain("attachFileDrop(host, term, session, opts.canSend);");
     expect(src).toContain("pasteClipboard(term, session, opts.canSend);");
   });

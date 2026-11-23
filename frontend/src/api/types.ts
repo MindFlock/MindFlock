@@ -196,8 +196,13 @@ export interface BackgroundJob {
 export interface SleepInfo {
   /** Epoch seconds it fell asleep. */
   since: number;
-  /** "idle" (the sweep), "memory" (the sweep, sooner: memory was low), "manual". */
+  /** "idle" (the sweep), "memory" (the sweep, sooner: memory was low),
+   * "manual", "shutdown" (found down at server start with no sign of a
+   * crash: the computer was turned off — only a person wakes it). */
   reason: string;
+  /** A "shutdown" sleeper whose agent was cut off mid-turn: its wake queues
+   * a "continue where you left off". */
+  mid_turn?: boolean;
   /** Roughly how much memory stopping it gave back, in MB (0 = unknown). */
   freed_mb: number;
 }

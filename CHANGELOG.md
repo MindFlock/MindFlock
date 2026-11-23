@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **After the computer was turned off, sessions come back Sleeping, not
+  Offline.** Before, every session whose agent went down with the machine
+  was held offline at the next start, so the morning after a power-off the
+  whole rail read "Offline" though nothing was broken. Now only what looks
+  like a crash is held: an exit marker from the OOM killer or a crash, or —
+  for the no-marker / hang-up stop that a power-off and an abrupt WSL death
+  under memory pressure both leave — memory history (`logs/memory.jsonl`)
+  whose last 5 minutes before the stop read low/critical, show an OOM kill,
+  or had distress pending. Those are held with the new reason *memory was
+  running out when it stopped*. Everything else is **Sleeping** (*the
+  computer was turned off or restarted*): no bell, not in the Offline count
+  or the "stayed offline" notice, and opening it or sending it something
+  wakes it, resuming its conversation. No memory history at all (a fresh
+  install, the sampler off) reads as a plain shutdown. Only a person wakes
+  such a session: its queued prompts, messages and flight steps wait for
+  that, so a boot never starts agents by itself (that stays
+  `general.revive_on_start`, off by default). A session cut off mid-task is
+  asked to continue where it left off when it wakes; an idle one is not.
+  Existing holds stay held. An orderly server stop now writes
+  `clean_stop.json`, used only as supporting evidence. Settings → General's
+  switch is now **Bring agents back by themselves after a shutdown or
+  crash**, with a note that says both.
+
+### Fixed
+
+- **Opening a grid of sleeping sessions no longer starts every agent at
+  once.** A pane attaching woke its sleeper without asking the launch gate,
+  so a grid of nine sleepers started nine agents together whatever memory
+  read. The wake now goes through the gate: they start one at a time as
+  memory allows, and a pane still waiting says **Waiting for memory** with
+  **Start anyway**.
+
 ## [0.14.27] - 2026-11-23
 
 ### Added

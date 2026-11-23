@@ -917,6 +917,69 @@ def history(minutes: float = 60.0, now: Optional[float] = None) -> List[dict]:
     return out
 
 
+#: How much of each history file's end :func:`tail` reads (a line is ~1-3 KB;
+#: a few minutes of two servers' lines fit many times over).
+TAIL_BYTES = 1024 * 1024
+
+
+def _tail_lines(path: str, max_bytes: int) -> Tuple[List[dict], bool]:
+    """The parsed lines in the last ``max_bytes`` of ``path`` (oldest first)
+    and whether that was the whole file. Missing / unreadable → ``([],
+    True)``."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            start = max(0, size - max_bytes)
+            fh.seek(start)
+            data = fh.read()
+    except OSError:
+        return [], True
+    lines = data.split(b"\n")
+    if start > 0 and lines:
+        lines = lines[1:]  # the first one was cut in half by the seek
+    out: List[dict] = []
+    for line in lines:
+        if not _AT_RE.match(line):
+            continue
+        try:
+            row = json.loads(line)
+            row["at"] = float(row["at"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        out.append(row)
+    return out, start == 0
+
+
+def tail(before: float, seconds: float, max_bytes: Optional[int] = None) -> List[dict]:
+    """The history's LAST stretch before ``before``, whatever its age: the
+    lines from ``seconds`` before the newest line written before ``before``
+    up to it, oldest first (the rotated file too when the live one is short).
+    ``[]`` when there is no history. The boot pass reads it to see how the
+    previous run ended (:func:`backend.web.core.revive.stop_evidence`) —
+    :func:`history` would find nothing after a night with the laptop off.
+    Never raises."""
+    cap = TAIL_BYTES if max_bytes is None else int(max_bytes)
+    try:
+        path = history_path()
+    except Exception:  # noqa: BLE001
+        return []
+    rows: List[dict] = []
+    for p in (path, path + ".1"):
+        got, whole = _tail_lines(p, cap)
+        rows = [r for r in got if r["at"] < before] + rows
+        if not whole:
+            break  # a long file: the window (minutes) is in its last MB
+        ats = [r["at"] for r in rows]
+        if ats and min(ats) <= max(ats) - seconds:
+            break  # this file alone reaches back far enough
+    if not rows:
+        return []
+    rows.sort(key=lambda r: r["at"])
+    last = rows[-1]["at"]
+    return [r for r in rows if r["at"] >= last - seconds]
+
+
 # --------------------------------------------------------------------------- #
 # the loop
 # --------------------------------------------------------------------------- #

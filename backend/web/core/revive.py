@@ -30,13 +30,23 @@ a reboot every session not on screen sat Offline until someone clicked it.
 * **Held offline** (``general.revive_on_start`` off, the default) — a crash
   must not refill the memory that just ran out, so nothing relaunches an agent
   that died: :func:`hold_on_boot` (run by the lifespan BEFORE the server
-  answers anything) holds every session the sweep would have revived
-  (:mod:`backend.web.core.held`), and :func:`observe` holds an agent that dies
+  answers anything) holds every session the sweep would have revived whose
+  stop looks like a crash (:mod:`backend.web.core.held`) — an exit marker
+  from the OOM killer or a crash, or memory history that ends in distress
+  (:func:`stop_evidence`) — and :func:`observe` holds an agent that dies
   uncleanly while the server runs. A held session is refused by
   ``_ensure_agent_session`` and skipped by every sweep (``held offline``)
   until a person's Start (``/revive``, ``/revive-all``) releases it.
   :func:`announce_held` says once, after the boot quiet window, how many
   stayed offline.
+* **Asleep after a shutdown** — the rest of what :func:`hold_on_boot` finds
+  down (no marker or a hang-up, with calm memory history, or none at all:
+  the computer was simply turned off) is put to SLEEP instead
+  (:mod:`backend.web.core.sleep`, reason ``shutdown``): painted Sleeping, no
+  bell, not counted by :func:`announce_held`, and woken — resuming the
+  conversation, through the launch gate — when a person opens it or sends it
+  something. Nothing automatic wakes it (its queue stays parked until then),
+  and an agent cut off mid-turn gets the continue below on that wake.
 
 * **Memory** — reviving a dozen agents straight after the OOM killer took
   them down is how it happens again. Before each launch the sweep checks
@@ -388,7 +398,7 @@ def _revive_one(
     return True, (CONTINUED if continued else "")
 
 
-def died_mid_turn(srv, inst, title: str) -> bool:
+def died_mid_turn(srv, inst, title: str, as_of: Optional[float] = None) -> bool:
     """Whether ``title``'s agent is dead AND died in the middle of a turn, so a
     relaunch should be told to carry on. All of:
 
@@ -403,7 +413,10 @@ def died_mid_turn(srv, inst, title: str) -> bool:
     * the CLI's own hook marker last said ``working``: the turn began
       (UserPromptSubmit / tool hooks) and never ended (no Stop / SessionEnd —
       a SIGKILL fires neither). A marker over 6 hours old reads as no signal,
-      so an agent that died long ago is not prodded.
+      so an agent that died long ago is not prodded. ``as_of``: the moment
+      that age is measured from (default now) — :func:`hold_on_boot` asks as
+      of when the previous run stopped, so a night with the laptop off does
+      not age the marker out.
 
     Blocking (tmux + file reads). Never raises — any doubt answers False."""
     try:
@@ -424,7 +437,9 @@ def died_mid_turn(srv, inst, title: str) -> bool:
             return False
         if provider.is_natural_exit(srv._read_exit_marker(name)):
             return False
-        return activity_markers.read_activity_marker(name) == "working"
+        if as_of is None:
+            return activity_markers.read_activity_marker(name) == "working"
+        return activity_markers.read_activity_marker(name, now=as_of) == "working"
     except Exception:  # noqa: BLE001
         return False
 
@@ -1239,24 +1254,206 @@ def _boot_probe(srv, title: str) -> str:
         return "unknown"
 
 
+# --------------------------------------------------------------------------- #
+# How did the previous run end? (the boot's crash-or-shutdown call)
+# --------------------------------------------------------------------------- #
+#: How far back from the last memory-history line written before this boot
+#: :func:`stop_evidence` looks for distress: the minutes an abrupt death under
+#: memory pressure builds up over (stalls, swap-in, the OOM killer) — the span
+#: :data:`OOM_EVIDENCE_SECONDS` already uses.
+STOP_WINDOW_SECONDS = 300.0
+#: History before that window fed to the replay first, so its sustain and
+#: hysteresis start from how memory really read rather than from "ok".
+STOP_LEAD_SECONDS = 120.0
+_DISTRESS = ("low", "critical")
+
+#: Test seam: the clean-stop marker (None = ``<config dir>/clean_stop.json``).
+CLEAN_STOP_PATH: Optional[str] = None
+
+
+def _clean_stop_path() -> str:
+    if CLEAN_STOP_PATH:
+        return CLEAN_STOP_PATH
+    from backend import config
+
+    return os.path.join(config.GetConfigDir(), "clean_stop.json")
+
+
+def note_clean_stop(now: Optional[float] = None) -> None:
+    """Stamp an orderly server stop (the lifespan's shutdown runs this):
+    ``<config dir>/clean_stop.json`` = ``{"at", "pid"}``. Supporting evidence
+    only (:func:`stop_evidence`): a laptop switched off kills WSL with no
+    orderly stop at all, and systemd stopping the server over an OOM kill is
+    orderly too — so its absence never means a crash and its presence never
+    outweighs memory history that ends in distress. Never raises."""
+    try:
+        from backend.fsutil import atomic_write_json
+
+        atomic_write_json(
+            _clean_stop_path(),
+            {"at": time.time() if now is None else float(now), "pid": os.getpid()},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def clean_stop_at() -> Optional[float]:
+    """When a server on this config dir last stopped in an orderly way, or
+    None. Never raises."""
+    try:
+        from backend.fsutil import read_json
+
+        doc = read_json(_clean_stop_path(), None, expect=dict)
+        at = float((doc or {}).get("at") or 0.0)
+        return at if at > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _clock(at: float) -> str:
+    try:
+        return time.strftime("%H:%M", time.localtime(float(at)))
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
+def stop_evidence(now: Optional[float] = None) -> dict:
+    """How the previous run ended, from the memory history it wrote
+    (``logs/memory.jsonl``, a line every ~30 s — core.memory_watch) →
+    ``{"crash": bool, "why": str, "stopped_at": epoch | None}``.
+
+    An abrupt WSL/VM death under memory pressure leaves the same marks on the
+    agents as a laptop being switched off (no exit marker, or a hang-up), so
+    the history is what tells them apart: its last stretch before this boot
+    — :data:`STOP_WINDOW_SECONDS` back from its newest line, whatever that
+    line's age — is replayed through :func:`memory_pressure.replay` (the
+    live level's own rule, with :data:`STOP_LEAD_SECONDS` of lead-in), and
+    the stop reads as a CRASH when any line in it reads ``low`` /
+    ``critical`` (replayed, or as logged live), shows an OOM kill, or — the
+    very last line — had distress pending (a death can cut the 30 s sustain
+    short).
+
+    Which way it fails: NO history at all (a fresh install, the sampler off,
+    a non-Linux box with nothing to read) reads as an ordinary shutdown —
+    holding every session after every power-off is the confusion this
+    replaces, and the sampler is on wherever memory can be read, so a machine
+    that ran out of memory has the lines that say so. History that ends long
+    before the last orderly stop (:func:`clean_stop_at` — the sampler
+    stopped writing while the server ran on) says nothing about the stop and
+    reads the same. History that ends in distress always holds, clean stop
+    or not. ``stopped_at``: the previous run's last sign of life (its last
+    line, or a later clean stop), None when unknown. Never raises."""
+    if now is None:
+        now = time.time()
+    out: dict = {"crash": False, "why": "", "stopped_at": None}
+    try:
+        from backend.web.core import memory_watch as _mw
+
+        clean = clean_stop_at()
+        if clean is not None and clean >= now:
+            clean = None  # this boot's own, or a clock jump: not evidence
+        rows = _mw.tail(now, STOP_WINDOW_SECONDS + STOP_LEAD_SECONDS)
+        if not rows:
+            out["stopped_at"] = clean
+            out["why"] = "no memory history to say otherwise"
+            return out
+        last = float(rows[-1]["at"])
+        out["stopped_at"] = max(last, clean or 0.0)
+        if clean is not None and clean - last > STOP_WINDOW_SECONDS:
+            out["why"] = (
+                "the memory history ends at %s, before the orderly stop at %s"
+                % (_clock(last), _clock(clean))
+            )
+            return out
+        systems = [dict(r.get("system") or {}, at=float(r["at"])) for r in rows]
+        replayed = memory_pressure.replay(systems)
+        hits: List[str] = []
+        for i, (sysrow, rep) in enumerate(zip(systems, replayed)):
+            at = sysrow["at"]
+            if at < last - STOP_WINDOW_SECONDS:
+                continue
+            level = (
+                rep.get("level")
+                if rep.get("level") in _DISTRESS
+                else sysrow.get("level")
+            )
+            if level in _DISTRESS:
+                why = list(rep.get("why") or sysrow.get("why") or [])
+                hits.append(
+                    "memory read %s at %s%s"
+                    % (level, _clock(at), (" (%s)" % "; ".join(why)) if why else "")
+                )
+            elif int(sysrow.get("oom_kills") or 0) > 0:
+                hits.append("the OOM killer ran shortly before %s" % _clock(at))
+            elif i == len(systems) - 1 and sysrow.get("pending") in _DISTRESS:
+                hits.append(
+                    "memory was turning %s at %s" % (sysrow["pending"], _clock(at))
+                )
+        if hits:
+            out["crash"] = True
+            out["why"] = hits[-1]
+        else:
+            out["why"] = "memory read fine until %s" % _clock(last)
+    except Exception as err:  # noqa: BLE001 — undecidable reads as a shutdown
+        out["why"] = "the memory history could not be read (%s)" % err
+    return out
+
+
+def _sleep_on_boot(srv, inst, title: str, stopped_at: Optional[float]) -> bool:
+    """Put ``title`` to sleep as a boot-sleeper (core.sleep REASON_SHUTDOWN),
+    noting whether its agent was cut off mid-turn (:func:`died_mid_turn` as
+    of ``stopped_at``) so its wake queues the continue. False when a hold
+    won meanwhile (another server on this config dir). Never raises."""
+    from backend.web.core import held as _held
+    from backend.web.core import sleep as _sleep
+
+    try:
+        mid = bool(died_mid_turn(srv, inst, title, as_of=stopped_at))
+    except Exception:  # noqa: BLE001 — no continue beats no sleep
+        mid = False
+    try:
+        _sleep.mark(title, _sleep.REASON_SHUTDOWN, mid_turn=mid)
+        if _held.is_held(title):
+            _sleep.reconcile([title])  # a hold outranks a sleep
+            return False
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def hold_on_boot(srv=None, now: Optional[float] = None) -> dict:
-    """The server-start half of "held offline" (:mod:`backend.web.core.held`),
+    """The server-start pass over the agents that died with the last run,
     run by the lifespan BEFORE the server answers anything (a pane attaching
-    a millisecond later must already be refused). With
-    ``general.revive_on_start`` off (the default) every session whose
-    persisted state says its agent was running — exactly the ones the
+    a millisecond later must already find the session held or asleep). With
+    ``general.revive_on_start`` off (the default) it looks at every session
+    whose persisted state says its agent was running — exactly the ones the
     startup sweep would have revived, a usage-limited one included — and
     whose agent tmux is CONFIRMED gone (tmux answered; a probe that timed
-    out holds nothing) is held, with the reason its exit marker gives
-    (:func:`boot_reason`). Holds already on disk stay; those of sessions no
-    longer in the engine go. With the setting on, every hold is dropped
-    instead (old behaviour: the sweep revives them). → ``{"held": [new
-    titles], "total": n, "released": n}``. Blocking (tmux reads) — run it off
-    the event loop. Never raises."""
+    out decides nothing), and splits them:
+
+    * **held offline** (core.held) when the stop looks like a crash: its exit
+      marker says the OOM killer took it or it crashed (:func:`boot_reason`
+      ``REASON_KILLED`` / ``REASON_CRASH``), or the memory history the
+      previous run wrote ends in distress (:func:`stop_evidence` → held with
+      ``REASON_MEMORY_STOP``);
+    * **asleep** (core.sleep ``REASON_SHUTDOWN``) otherwise — the computer was
+      turned off or restarted: no exit marker, a hang-up, a clean quit's
+      code. Opening it or sending it something wakes it, its trip through
+      Offline rings no bell, and a turn it was cut off in gets the continue
+      on wake.
+
+    Holds already on disk stay (a hold outranks a sleep; nothing converts
+    them); those of sessions no longer in the engine go. With the setting on,
+    every hold and every boot-sleep is dropped instead (old behaviour: the
+    sweep revives them). → ``{"held": [new titles], "asleep": [titles],
+    "total": n held, "released": n, "evidence": stop_evidence() | None}``.
+    Blocking (tmux + file reads) — run it off the event loop. Never
+    raises."""
     from backend.session import tmux as _tmux
     from backend.web.core import held as _held
+    from backend.web.core import sleep as _sleep
 
-    out: dict = {"held": [], "total": 0, "released": 0}
+    out: dict = {"held": [], "asleep": [], "total": 0, "released": 0, "evidence": None}
     if srv is None:
         srv = _server()
     if now is None:
@@ -1264,15 +1461,19 @@ def hold_on_boot(srv=None, now: Optional[float] = None) -> dict:
     try:
         if enabled():
             out["released"] = _held.release_all()
-            if out["released"]:
+            woken = _sleep.drop_boot_sleeps()
+            if out["released"] or woken:
                 _info(
-                    "held: released %d (general.revive_on_start is on)",
+                    "held: released %d, boot-sleeps dropped %d "
+                    "(general.revive_on_start is on)",
                     out["released"],
+                    woken,
                 )
             return out
         with srv.ENGINE.lock:
             items = list(srv.ENGINE.instances.items())
         _held.prune([t for t, _ in items])
+        evidence: Optional[dict] = None
         for title, inst in items:
             try:
                 if _held.is_held(title) or not _should_run(inst):
@@ -1299,12 +1500,38 @@ def hold_on_boot(srv=None, now: Optional[float] = None) -> dict:
                 except Exception:  # noqa: BLE001
                     code = None
                 reason = boot_reason(srv, inst, code, now)
+                if reason not in (_held.REASON_KILLED, _held.REASON_CRASH):
+                    # Nothing on the agent says crash: ask how the machine
+                    # went down (once per boot — it is one answer for all).
+                    if evidence is None:
+                        evidence = stop_evidence(now)
+                        out["evidence"] = evidence
+                        _info(
+                            "boot: the last run %s (%s)",
+                            (
+                                "went down under memory distress"
+                                if evidence["crash"]
+                                else "stopped like a shutdown"
+                            ),
+                            evidence["why"],
+                        )
+                    if not evidence["crash"]:
+                        if _sleep_on_boot(srv, inst, title, evidence["stopped_at"]):
+                            out["asleep"].append(title)
+                        continue
+                    reason = _held.REASON_MEMORY_STOP
                 if _held.hold(title, reason):
                     out["held"].append(title)
             except Exception:  # noqa: BLE001 — one bad session
                 continue
         live = {t for t, _ in items}
         out["total"] = sum(1 for t in _held.held() if t in live)
+        if out["asleep"]:
+            _info(
+                "boot: %d session(s) asleep since the computer was turned off — "
+                "opening one wakes it",
+                len(out["asleep"]),
+            )
         if out["total"]:
             _info(
                 "held: %d session(s) stay offline until someone presses Start "

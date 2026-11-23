@@ -7,11 +7,18 @@ prompt — refilled the memory that had just run out, and the machine went down
 again. So, while ``general.revive_on_start`` is off (the default), a session
 whose agent DIED is **held**: nothing starts it but a person's explicit Start.
 
-* **When** — at server start, every session whose persisted state says its
-  agent was running but whose agent tmux is gone
-  (:func:`backend.web.core.revive.hold_on_boot`); and while the server runs,
-  an agent it saw running that dies uncleanly (:func:`backend.web.core.revive.
-  observe`). A clean quit, a pause and a sleep are never held.
+* **When** — at server start, a session whose persisted state says its agent
+  was running but whose agent tmux is gone AND whose stop looks like a crash
+  (:func:`backend.web.core.revive.hold_on_boot`): its exit marker says the
+  OOM killer took it or it crashed, or the memory history the previous run
+  wrote ends in distress (:func:`backend.web.core.revive.stop_evidence` —
+  an abrupt WSL/VM death under memory pressure leaves no marker, just like a
+  laptop being switched off). Every other such session — the computer was
+  simply turned off or restarted — comes back ASLEEP instead
+  (:mod:`backend.web.core.sleep`, reason ``shutdown``): no hold, no bell,
+  and opening it wakes it. While the server runs: an agent it saw running
+  that dies uncleanly (:func:`backend.web.core.revive.observe`). A clean
+  quit, a pause and a sleep are never held.
 * **What it does** — :func:`backend.web.core.agent_sessions.
   _ensure_agent_session` refuses a held session with ``HELD_REFUSED`` (the
   terminal socket closes 4424, ``/send`` queues the prompt and answers 409
@@ -46,9 +53,21 @@ from backend.web.core import title_store
 REASON_RESTART = "the server restarted"
 REASON_KILLED = "out of memory (killed)"
 REASON_CRASH = "the agent crashed"
-#: A boot found it down and its exit marker says nothing about why.
+#: A boot found it down and its exit marker says nothing about why. (Since
+#: boot-sleep a boot never holds with it — such a session is put to sleep, or
+#: held with :data:`REASON_MEMORY_STOP` — but holds on disk still carry it.)
 REASON_NOT_RUNNING = "it was not running when the server started"
-REASONS = (REASON_RESTART, REASON_KILLED, REASON_CRASH, REASON_NOT_RUNNING)
+#: A boot found it down with no exit marker to explain it, and the memory
+#: history the previous run wrote ends in distress (low/critical, OOM kills):
+#: the machine most likely went down for want of memory.
+REASON_MEMORY_STOP = "memory was running out when it stopped"
+REASONS = (
+    REASON_RESTART,
+    REASON_KILLED,
+    REASON_CRASH,
+    REASON_NOT_RUNNING,
+    REASON_MEMORY_STOP,
+)
 
 _LOCK = threading.Lock()
 

@@ -1311,17 +1311,21 @@ class GeneralSettings:
     (never set) reads as ON — the whole point of the limit gate is that running
     out is temporary. ``False`` turns it off.
 
-    ``revive_on_start`` ("Bring agents back by themselves after a crash"):
-    whether the server relaunches, in the background after it boots, every
-    session whose agent was running when it stopped
+    ``revive_on_start`` ("Bring agents back by themselves after a shutdown or
+    crash"): whether the server relaunches, in the background after it boots,
+    every session whose agent was running when it stopped
     (:mod:`backend.web.core.revive`), and brings back an agent the OOM killer
     took once memory recovers (the auto-revive, rate-limited per session).
-    ``None`` (never set) reads as OFF, like ``False``: a session whose agent
-    died is instead HELD offline (:mod:`backend.web.core.held`) — nothing
-    starts it, not a pane attaching nor a queued prompt, until a person
-    presses Start — so a crash can't refill memory. ``True`` opts in to the
-    old behaviour (and nothing is held). ``POST /api/server/revive-all``
-    runs the sweep on demand either way.
+    ``None`` (never set) reads as OFF, like ``False``: at boot, a session
+    whose agent died in what looks like a CRASH (its exit marker, or memory
+    history that ends in distress — ``revive.stop_evidence``) is HELD offline
+    (:mod:`backend.web.core.held`) — nothing starts it, not a pane attaching
+    nor a queued prompt, until a person presses Start — so a crash can't
+    refill memory; one that went down in a plain shutdown (the computer
+    turned off) comes back ASLEEP (:mod:`backend.web.core.sleep`, reason
+    ``shutdown``) and wakes when a person opens it or sends it something.
+    ``True`` opts in to the old behaviour (nothing is held or slept at boot).
+    ``POST /api/server/revive-all`` runs the sweep on demand either way.
 
     ``sleep_idle_minutes``: put an agent to sleep (:mod:`backend.web.core.sleep`
     — its CLI and MCP servers stopped to give their memory back, the session,

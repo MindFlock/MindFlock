@@ -29,6 +29,7 @@ import {
   type TermHandle,
 } from "../../lib/terminals";
 import { startSession } from "../../lib/revive";
+import { startWaiting } from "../../lib/launchGate";
 import { isShown, repaintTerm, trackRepaint } from "../../lib/wsTerm";
 import { toast } from "../../lib/toast";
 import { copyPaneHistory } from "../../lib/paneHistory";
@@ -1743,6 +1744,28 @@ export function TermCover({
       <div className="term-loading">
         <div className="spinner" />
         <p>{kind === "shell" ? "Loading shell…" : "Loading session…"}</p>
+      </div>
+    );
+  if (cover === "waiting" && h?.waitingFor === "memory")
+    return (
+      <div className="term-loading term-cover" role="status">
+        <p className="term-cover-head">Waiting for memory</p>
+        <p>It wakes by itself once there is room — other agents start first, one at a time.</p>
+        <button
+          type="button"
+          disabled={busy}
+          title="Wake it now, past the launch gate"
+          onClick={(e) => {
+            e.stopPropagation();
+            setBusy(true);
+            void startWaiting(title).then((r) => {
+              setBusy(false);
+              if (r) peekTerm(title, kind)?.retry();
+            });
+          }}
+        >
+          {busy ? "Starting…" : "▶ Start anyway"}
+        </button>
       </div>
     );
   if (cover === "waiting")

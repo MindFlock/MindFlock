@@ -1140,6 +1140,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # An orderly stop: supporting evidence for the next boot's
+        # crash-or-shutdown call (core.revive.stop_evidence). Off under
+        # pytest like the boot pass — the config dir is the developer's.
+        if _hold_on_start_enabled():
+            _revive.note_clean_stop()
         try:
             await _guest_tunnel.stop()
         except Exception:  # noqa: BLE001
@@ -8007,7 +8012,11 @@ def _deliver_to_sleeper(
         "a prompt was sent" if boot else "MindFlock sent it a message",
         auto=auto,
     )
-    waiting = auto and err == _launch_gate.WAITING_FOR_MEMORY
+    # A boot-sleeper (core.sleep REASON_SHUTDOWN) wakes only for a person: a
+    # message MindFlock composed is QUEUED for it, like a held session's.
+    waiting = (
+        auto and err == _launch_gate.WAITING_FOR_MEMORY
+    ) or err == _sleep.BOOT_WAITS
     if err is not None and not waiting:
         return False, err
     if not submit or _prompt_queue.get_state(title)["loop"]:
@@ -8962,6 +8971,10 @@ _MSG_LAUNCH_QUEUE_FULL = (
     "the recipient is asleep and can't wake yet (%s) — the message stays in "
     "its inbox and is typed in once it is running"
 )
+_MSG_BOOT_ASLEEP = (
+    "the recipient is asleep since the computer was turned off and wakes only "
+    "when someone opens it — the message stays in its inbox until then"
+)
 _MSG_HUMAN_TYPING = (
     "someone is typing in the recipient's pane — it is typed in once they stop"
 )
@@ -9014,6 +9027,8 @@ def _mail_deliver_now(inst, title: str, msg: dict, activities=_MSG_NOW_ACTIVITIE
         _woke, werr = _sleep.ensure_awake(inst, title, "a message arrived", auto=True)
         if werr == _launch_gate.WAITING_FOR_MEMORY:
             return "pending", _MSG_WAITING_FOR_MEMORY
+        if werr == _sleep.BOOT_WAITS:
+            return "pending", _MSG_BOOT_ASLEEP
         if werr is not None and "already waiting for memory" in werr:
             # The gate's queue is full (core.launch_gate.QueueFull): say so,
             # not "isn't running" — the wake is asked again next pass.
@@ -16031,7 +16046,12 @@ def ensure_terminal_session(inst, title: str):
     (:data:`PAUSED_REFUSED` for a paused one). Shared with the peer-link
     terminal bridge (backend.peer.sessions_bridge), which attaches to the
     same tmux session for a peer."""
-    _woke, err = _sleep.ensure_awake(inst, title, "terminal opened")
+    # A person opened it (so a boot-sleeper wakes), but through the launch
+    # gate like an automatic start: a grid of sleepers restoring at once must
+    # not start every agent at once. A wait answers WAITING_FOR_MEMORY.
+    _woke, err = _sleep.ensure_awake(
+        inst, title, "terminal opened", auto=True, person=True
+    )
     if err is not None:
         return None, err
     return _ensure_agent_session(inst, title)
@@ -16068,8 +16088,14 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     if err is not None:
         paused = err == PAUSED_REFUSED
         held = err == HELD_REFUSED
-        waiting = err == WAITING_TURN_REFUSED
+        # Its wake waits in the launch gate (a sleeper opened while memory is
+        # short, or right behind other starts): not final — the pane checks
+        # again like a worker waiting its turn, and says "Waiting for memory".
+        memory = err == _launch_gate.WAITING_FOR_MEMORY
+        waiting = err == WAITING_TURN_REFUSED or memory
         frame = {"type": "error", "message": err}
+        if memory:
+            frame["waiting_for_memory"] = True
         if paused:
             frame["paused"] = True
         if held:
@@ -16077,7 +16103,9 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
             frame.update(_held.row_fields(title))
         await ws.send_text(json.dumps(frame))
         if waiting:
-            await ws.close(code=4410, reason="waiting its turn")
+            await ws.close(
+                code=4410, reason="waiting for memory" if memory else "waiting its turn"
+            )
         else:
             await ws.close(code=4423 if paused else 4424 if held else 4409)
         return

@@ -40,6 +40,10 @@ export interface TermHandle {
   retry(): void;
   /** The last "[error] …" the server sent, for the "failed" cover. */
   readonly error: string;
+  /** While "waiting": what for — "turn" (an ordered worker before its turn)
+   * or "memory" (a sleeper's wake waits in the launch gate: memory is short,
+   * or other agents are starting first). "" otherwise. */
+  readonly waitingFor: "" | "turn" | "memory";
   /** When this terminal lost its socket (or, before the first attach, when
    * it was made); 0 while a socket is open. The pane's cover turns into
    * "Can't reach the session" after UNREACHABLE_MS of it. */
@@ -581,6 +585,7 @@ function makeTerm(
   // written into the terminal (never written twice in a row).
   let errorRuns = 0;
   let lastError = "";
+  let waitingFor: "" | "turn" | "memory" = "";
   let downSince = Date.now();
   let notSentAt = 0;
   // Input to a socket that isn't open is dropped: say so over the pane
@@ -591,7 +596,7 @@ function makeTerm(
     const now = Date.now();
     if (now - notSentAt > NOT_SENT_THROTTLE_MS) {
       notSentAt = now;
-      showTermNotice(container, notSentLine(state));
+      showTermNotice(container, notSentLine(state, waitingFor));
     }
     return false;
   };
@@ -607,6 +612,9 @@ function makeTerm(
     },
     get error() {
       return lastError;
+    },
+    get waitingFor() {
+      return waitingFor;
     },
     get downSince() {
       return downSince;
@@ -656,9 +664,11 @@ function makeTerm(
       // error did the server send before closing it.
       let attached = false;
       let errorHere = "";
+      let memoryHere = false;
       const markAttached = () => {
         if (attached) return;
         attached = true;
+        waitingFor = "";
         reconnectAttempt = 0;
         errorRuns = 0;
         lastError = "";
@@ -692,6 +702,7 @@ function makeTerm(
               // line already on screen: a retry loop adds no new lines, and a
               // waiting worker's refusal is the pane's cover, not a line.
               errorHere = String(j.message ?? "");
+              memoryHere = j.waiting_for_memory === true;
               return;
             }
             // Another person drives (core.ownership): say so over the pane.
@@ -717,6 +728,7 @@ function makeTerm(
         if (closeAction(code) !== "waiting") handle._setState("disconnected");
         if (closed) return;
         if (closeAction(code) === "waiting") {
+          waitingFor = memoryHere ? "memory" : "turn";
           handle._setState("waiting");
           reconnectTimer = setTimeout(() => {
             if (!closed) handle.connect();
@@ -825,8 +837,8 @@ const NOT_SENT_THROTTLE_MS = 1500;
 
 /** The notice over a terminal when typed or pasted input was dropped because
  * its socket isn't open, by the terminal's state. Pure, for the node tests. */
-export function notSentLine(state: string): string {
-  if (state === "waiting") return "Waiting its turn — that wasn't sent";
+export function notSentLine(state: string, waitingFor: string = ""): string {
+  if (state === "waiting") return (waitingFor === "memory" ? "Waiting for memory" : "Waiting its turn") + " — that wasn't sent";
   if (state === "failed" || state === "gone") return "Not connected — that wasn't sent";
   return "Reconnecting — that wasn't sent";
 }
