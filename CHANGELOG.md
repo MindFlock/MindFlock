@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (MindFlock shared file: …)`; a prompt already expanded the old way is not
   expanded twice.
 
+- **Recently closed can be searched by project folder.** A session that ran
+  in a worktree was only findable by its branch, name or worktree path, none
+  of which name the project it was for. Each row now carries the folder it
+  was cut from: the filter matches it (type the project's name), the row
+  shows it, and hovering gives the full path.
+
 ### Fixed
 
 - **Send to session… no longer hides under the drawer.** It was a dialog in

@@ -437,6 +437,46 @@ def test_recent_rows_merges_closed_and_disk_and_hides_protected(wt_world, monkey
     assert data["hidden"]["protected_names"] == ["_base_repo"]
 
 
+def test_recent_rows_name_the_project_folder(wt_world, monkeypatch, tmp_path):
+    """A worktree's own path names its branch, never the project: each row
+    says which folder it was cut from, so the page can be searched by it."""
+    closed = wt_world.add("feature/closed", "feature/closed_a1")
+    on_disk = wt_world.add("feature/disk", "feature/disk_b2")
+    own = tmp_path / "own-repo"
+    own.mkdir()
+    monkeypatch.setattr(
+        server,
+        "_load_recently_closed",
+        lambda: [
+            {
+                "id": "c1",
+                "title": "wt",
+                "branch": "feature/closed",
+                "folder": closed,
+                "closed_at": "2026-01-01T00:00:00+00:00",
+                # The session's own record wins: it outlives the directory.
+                "data": {"worktree": {"repo_path": "/somewhere/shop-api"}},
+            },
+            {
+                "id": "c2",
+                "title": "inplace",
+                "branch": "main",
+                "folder": str(own),
+                "in_place": True,
+                "closed_at": "2026-01-01T00:00:00+00:00",
+                "data": {"path": str(own)},
+            },
+        ],
+    )
+    rows = {r["id"]: r for r in ws.recent_rows(days=7)["rows"]}
+    assert rows["c1"]["repo"] == "/somewhere/shop-api"
+    # Its own directory IS the folder: nothing to say twice.
+    assert rows["c2"]["repo"] == ""
+    # A leftover worktree no session accounts for: read from its gitdir.
+    disk = rows["disk:" + on_disk]
+    assert os.path.realpath(disk["repo"]) == os.path.realpath(str(tmp_path / "base"))
+
+
 def test_recent_rows_hides_what_a_live_session_is_using(wt_world, monkeypatch):
     live = wt_world.add("feature/busy", "feature/busy_i9")
     inst = SimpleNamespace(Title="busy", GetWorktreePath=lambda: live)
