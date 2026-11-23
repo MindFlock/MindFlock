@@ -629,9 +629,10 @@ errors the browser reported under each file.
 | `routes` | one route per state: running at a Wait stop, waiting for me, paused at a halt point, a failed Command stop (with Retry/Skip), finished, a gone session's route, a session-less route |
 | `routes-failed` | just the failed stop and the halt point |
 | `empty` / `empty-first-run` | no sessions; onboarded / the very first launch |
+| `hub` / `hub-full` / `hub-empty` | the hub: a screenshot, a log, a snippet, a PDF, a phone screenshot and a picture an agent put, beside three sessions / 30 items / empty (view `hub` opens the panel) |
 
 **Views** (`--view`): `sky` (the All tab), `sky/<session>`, `grid`,
-`settings`, `settings/<screen>`, `intake`, `schedule`, `new`, `phone`, or a
+`settings`, `settings/<screen>`, `intake`, `schedule`, `new`, `hub`, `phone`, or a
 raw `#hash`. `--theme dark|light|all`, `--surface <name>|all` (Settings →
 Appearance; several combinations write `name-<theme>-<surface>.png`),
 `--width`/`--height`/`--scale`, `--full-page`, `--click 'text=Stops'`

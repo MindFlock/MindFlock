@@ -70,7 +70,7 @@ function SendDialog({ item, onClose }: { item: HubItem; onClose(): void }) {
     setErr("");
     try {
       if (mode === "prompt") {
-        if (await putInPrompt(title, item, message)) onClose();
+        if (await putInPrompt(title, item, message, { focus: true })) onClose();
       } else {
         const dest = taken && !replace ? taken : path.trim();
         await copyInto(title, item, dest, replace);

@@ -219,13 +219,14 @@ export async function addFiles(files: File[], opts: { source?: "you" | "phone"; 
   return out;
 }
 
-/** "image.png" from a clipboard → "screenshot 14-32-05.png". */
+/** "image.png" from a clipboard → "screenshot-14-32-05.png". */
 export function renamePasted(f: File, now = new Date()): File {
   if (!/^image\.(png|jpe?g|gif|webp)$/i.test(f.name || "") && f.name) return f;
   const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
   const hh = (n: number) => String(n).padStart(2, "0");
+  // No spaces: the path an agent is handed needs no quoting.
   const name =
-    "screenshot " + hh(now.getHours()) + "-" + hh(now.getMinutes()) + "-" + hh(now.getSeconds()) + "." + ext;
+    "screenshot-" + hh(now.getHours()) + "-" + hh(now.getMinutes()) + "-" + hh(now.getSeconds()) + "." + ext;
   try {
     return new File([f], name, { type: f.type });
   } catch {
@@ -239,11 +240,28 @@ export async function addText(text: string, name = ""): Promise<HubItem> {
   return it;
 }
 
-/** What the panel says after an add: one item names its reference. */
+/** What the panel says after an add: one item names its reference (copied)
+ * and, when a session is focused, offers to put it straight into that
+ * session's prompt — paste a screenshot, one click, done. */
 export function addedToast(r: AddResult): void {
   if (r.added.length === 1) {
-    toast("Added " + r.added[0].name + " — reference " + r.added[0].ref + " (copied)");
-    void copyText(r.added[0].ref);
+    const it = r.added[0];
+    void copyText(it.ref);
+    const focused = useUi.getState().focused;
+    const here = focused && !focused.includes("::") ? focused : "";
+    toast(
+      "Added " + it.name + " — reference " + it.ref + " (copied)",
+      here
+        ? {
+            duration: 9000,
+            action: {
+              label: "Put in " + displayName(here) + "'s prompt",
+              ariaLabel: "Put " + it.ref + " in " + displayName(here) + "'s prompt",
+              onClick: () => void putInPrompt(here, it, "", { focus: true }),
+            },
+          }
+        : undefined
+    );
   } else if (r.added.length > 1) toast("Added " + r.added.length + " items to the hub");
   const plain = r.refused.filter((x) => !x.secret);
   if (plain.length) toast("Couldn't add " + plain.map((x) => x.file.name + ": " + x.error).join("; "), { error: true });
@@ -320,7 +338,12 @@ export function download(it: HubItem): void {
  * Enter (the server expands it to the path, name and kind): the person adds
  * their words there. With `message`, it is sent: "<message> <ref>". A session
  * on a dialog gets it in its Thread box instead. */
-export async function putInPrompt(title: string, it: Pick<HubItem, "ref" | "name">, message = ""): Promise<boolean> {
+export async function putInPrompt(
+  title: string,
+  it: Pick<HubItem, "ref" | "name">,
+  message = "",
+  opts: { focus?: boolean } = {}
+): Promise<boolean> {
   const msg = message.trim();
   const text = msg ? msg + " " + it.ref : it.ref + " ";
   try {
@@ -328,8 +351,18 @@ export async function putInPrompt(title: string, it: Pick<HubItem, "ref" | "name
       json: msg ? { text, dialog_safe: true } : { text, submit: false, dialog_safe: true },
     });
     if (msg)
-      toast((r?.queued ? "Queued for " : "Sent to ") + displayName(title) + " with " + it.ref);
+      toast(
+        r?.queued
+          ? displayName(title) + " is busy — your message with " + it.ref + " is queued; it gets it when it's free"
+          : "Sent to " + displayName(title) + " with " + it.ref
+      );
     else toast(it.ref + " is in " + displayName(title) + "'s prompt — add your words there and press Enter");
+    if (opts.focus && !msg) {
+      // The person types next, in that session: the drawer would cover it.
+      useHubUi.getState().setOpen(false);
+      const { selectSession } = await import("./sessionActions");
+      selectSession(title);
+    }
     return true;
   } catch (err) {
     if ((err as ApiError)?.status === 409) {

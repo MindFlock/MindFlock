@@ -167,8 +167,8 @@ function HubDrawer() {
         <div className="hub-title">
           <h2>Hub</h2>
           <p className="hub-sub">
-            Files, pictures and snippets every session can use. Put <code>hub:</code> and an item's code in any prompt
-            and the agent gets the file.
+            Files, pictures and snippets every session can use. Each item has a reference like <code>hub:k7m2</code> —
+            put it in any prompt and the agent gets the file.
           </p>
         </div>
         <button type="button" className="hub-x" aria-label="Close the hub" title="Close (Esc)" onClick={() => setOpen(false)}>
@@ -454,15 +454,70 @@ function HubCard({ item }: { item: HubItem }) {
             </span>
           )}
           <span className="hub-meta">{meta}</span>
-          <button
-            type="button"
-            className="hub-ref"
-            title={"Copy the reference — paste it in any prompt or terminal. " + expiryLabel(item)}
-            aria-label={"Copy reference " + item.ref}
-            onClick={() => void copyRef(item)}
-          >
-            {item.ref}
-          </button>
+          <div className="hub-row2">
+            <button
+              type="button"
+              className="hub-ref"
+              title={"Copy the reference — paste it in any prompt or terminal. " + expiryLabel(item)}
+              aria-label={"Copy reference " + item.ref}
+              onClick={() => void copyRef(item)}
+            >
+              <span className="hub-ref-code">{item.ref}</span>
+              <span className="hub-ref-copy" aria-hidden="true">
+                Copy
+              </span>
+            </button>
+            <div className="hub-actions">
+              <button type="button" className="hub-btn" onClick={() => openSend(item)} title="Put it in a session's prompt, or copy the file into its folder">
+                Send to session…
+              </button>
+              <div className="hub-more">
+                <button
+                  ref={menuBtn}
+                  type="button"
+                  className="hub-btn hub-more-btn"
+                  aria-label={"More for " + item.name}
+                  aria-haspopup="menu"
+                  aria-expanded={menu}
+                  onClick={() => setMenu((v) => !v)}
+                >
+                  ⋯
+                </button>
+                {menu && (
+                  <div className="hub-menu" role="menu" ref={menuRef} onKeyDown={menuKey} aria-label={"More for " + item.name}>
+                    {textual && (
+                      <button type="button" role="menuitem" onClick={act(() => void copyItemText(item))}>
+                        Copy text
+                      </button>
+                    )}
+                    {item.kind === "image" && canCopyImage() && (
+                      <button type="button" role="menuitem" onClick={act(() => void copyImage(item))}>
+                        Copy image
+                      </button>
+                    )}
+                    <button type="button" role="menuitem" onClick={act(() => void copyPath(item))}>
+                      Copy path
+                    </button>
+                    <button type="button" role="menuitem" onClick={act(() => download(item))}>
+                      Download
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => startEdit("name")}>
+                      Rename
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => startEdit("note")}>
+                      {item.note ? "Edit note" : "Add a note"}
+                    </button>
+                    <button type="button" role="menuitem" onClick={act(() => void updateItem(item, { pinned: !item.pinned }))}>
+                      {item.pinned ? "Unpin" : "Pin — keep it"}
+                    </button>
+                    <button type="button" role="menuitem" className="danger" onClick={act(() => void removeItem(item))}>
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       {textual && item.preview && <pre className="hub-preview">{item.preview}</pre>}
@@ -491,61 +546,6 @@ function HubCard({ item }: { item: HubItem }) {
       ) : (
         item.note && <p className="hub-note">{item.note}</p>
       )}
-      {
-        <div className="hub-actions">
-          <button type="button" className="hub-btn primary" onClick={() => openSend(item)} title="Put it in a session's prompt, or copy the file into its folder">
-            Send to session…
-          </button>
-          <button type="button" className="hub-btn" onClick={() => void copyRef(item)}>
-            Copy reference
-          </button>
-          <div className="hub-more">
-            <button
-              ref={menuBtn}
-              type="button"
-              className="hub-btn hub-more-btn"
-              aria-label={"More for " + item.name}
-              aria-haspopup="menu"
-              aria-expanded={menu}
-              onClick={() => setMenu((v) => !v)}
-            >
-              ⋯
-            </button>
-            {menu && (
-              <div className="hub-menu" role="menu" ref={menuRef} onKeyDown={menuKey} aria-label={"More for " + item.name}>
-                {textual && (
-                  <button type="button" role="menuitem" onClick={act(() => void copyItemText(item))}>
-                    Copy text
-                  </button>
-                )}
-                {item.kind === "image" && canCopyImage() && (
-                  <button type="button" role="menuitem" onClick={act(() => void copyImage(item))}>
-                    Copy image
-                  </button>
-                )}
-                <button type="button" role="menuitem" onClick={act(() => void copyPath(item))}>
-                  Copy path
-                </button>
-                <button type="button" role="menuitem" onClick={act(() => download(item))}>
-                  Download
-                </button>
-                <button type="button" role="menuitem" onClick={() => startEdit("name")}>
-                  Rename
-                </button>
-                <button type="button" role="menuitem" onClick={() => startEdit("note")}>
-                  {item.note ? "Edit note" : "Add a note"}
-                </button>
-                <button type="button" role="menuitem" onClick={act(() => void updateItem(item, { pinned: !item.pinned }))}>
-                  {item.pinned ? "Unpin" : "Pin — keep it"}
-                </button>
-                <button type="button" role="menuitem" className="danger" onClick={act(() => void removeItem(item))}>
-                  Remove
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      }
     </li>
   );
 }

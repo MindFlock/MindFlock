@@ -443,8 +443,8 @@ def _room(doc: dict, more: int, lim: dict, *, mine: str = "") -> None:
         raise Refusal(
             413,
             "too_large",
-            "that is %s — one hub item can be at most %s (raise hub.item_mb in "
-            "Settings, or share a smaller file)"
+            "that is %s — one hub item can be at most %s. Share a smaller file, "
+            "or raise the limit (hub.item_mb in ~/.mindflock/settings.json)"
             % (human(more), human(lim["item_bytes"])),
         )
     if count + npend + 1 > lim["max_items"]:
@@ -459,7 +459,7 @@ def _room(doc: dict, more: int, lim: dict, *, mine: str = "") -> None:
             507,
             "hub_full",
             "the hub has %s free and that is %s — remove some items in the Hub "
-            "panel (or raise hub.max_mb in Settings), then add again"
+            "panel (or raise hub.max_mb in ~/.mindflock/settings.json), then add again"
             % (human(max(lim["quota_bytes"] - used - pend, 0)), human(more)),
         )
 
@@ -519,15 +519,16 @@ class _Add:
                 raise Refusal(
                     413,
                     "too_large",
-                    "that is over %s, the most one hub item can be (raise "
-                    "hub.item_mb in Settings, or share a smaller file)"
+                    "that is over %s, the most one hub item can be. Share a smaller "
+                    "file, or raise the limit (hub.item_mb in ~/.mindflock/settings.json)"
                     % human(self.lim["item_bytes"]),
                 )
             raise Refusal(
                 507,
                 "hub_full",
                 "the hub ran out of room while adding that — remove some items "
-                "in the Hub panel (or raise hub.max_mb in Settings), then add again",
+                "in the Hub panel (or raise hub.max_mb in ~/.mindflock/settings.json), "
+                "then add again",
             )
         if len(self.head) < 8192:
             self.head += data[: 8192 - len(self.head)]

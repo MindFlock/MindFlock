@@ -6,6 +6,15 @@ var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
+var __exportAll = (all, no_symbols) => {
+	let target = {};
+	for (var name in all) __defProp(target, name, {
+		get: all[name],
+		enumerable: true
+	});
+	if (!no_symbols) __defProp(target, Symbol.toStringTag, { value: "Module" });
+	return target;
+};
 var __copyProps = (to, from, except, desc) => {
 	if (from && typeof from === "object" || typeof from === "function") for (var keys = __getOwnPropNames(from), i = 0, n = keys.length, key; i < n; i++) {
 		key = keys[i];
@@ -30480,6 +30489,103 @@ function withVerifyVerdict(menu, inst, plan = cachedPlanFor(inst)) {
 	};
 }
 //#endregion
+//#region \0vite/preload-helper.js
+var scriptRel = "modulepreload";
+var assetsURL = function(dep) {
+	return "/" + dep;
+};
+var seen = {};
+var isCssPreloadUrl = function isCssPreloadUrl(url) {
+	return url.pathname.endsWith(".css");
+};
+var preloadOnce = function preloadOnce(seen, href, preload) {
+	if (href in seen) return seen[href];
+	const promise = preload();
+	if (!promise) {
+		seen[href] = void 0;
+		return;
+	}
+	const preloadPromise = promise.then(() => {
+		seen[href] = void 0;
+	}, (err) => {
+		seen[href] = void 0;
+		throw err;
+	});
+	seen[href] = preloadPromise;
+	return preloadPromise;
+};
+var __vitePreload = function preload(baseModule, deps, importerUrl) {
+	let promise = Promise.resolve();
+	if (deps && deps.length > 0) {
+		let preloadedHrefs;
+		const cspNonceMeta = document.querySelector("meta[property=csp-nonce]");
+		const cspNonce = cspNonceMeta?.nonce || cspNonceMeta?.getAttribute("nonce");
+		function allSettled(promises) {
+			return Promise.all(promises.map((p) => Promise.resolve(p).then((value) => ({
+				status: "fulfilled",
+				value
+			}), (reason) => ({
+				status: "rejected",
+				reason
+			}))));
+		}
+		function importMetaResolve(specifier) {
+			if (import.meta.resolve) return new URL(import.meta.resolve(specifier));
+			return new URL(specifier, import.meta.url);
+		}
+		promise = allSettled(deps.map((depString) => {
+			depString = assetsURL(depString, importerUrl);
+			const dep = importMetaResolve(depString);
+			const isCss = isCssPreloadUrl(dep);
+			return preloadOnce(seen, dep.href, () => {
+				if (preloadedHrefs === void 0) {
+					preloadedHrefs = {
+						all: /* @__PURE__ */ new Set(),
+						styles: /* @__PURE__ */ new Set()
+					};
+					const links = document.getElementsByTagName("link");
+					for (let i = links.length - 1; i >= 0; i--) {
+						const link = links[i];
+						preloadedHrefs.all.add(link.href);
+						if (link.rel === "stylesheet") preloadedHrefs.styles.add(link.href);
+					}
+				}
+				if ((isCss ? preloadedHrefs.styles : preloadedHrefs.all).has(dep.href)) return;
+				const link = document.createElement("link");
+				link.rel = isCss ? "stylesheet" : scriptRel;
+				if (!isCss) link.as = "script";
+				link.crossOrigin = "";
+				link.href = dep.href;
+				if (cspNonce) link.setAttribute("nonce", cspNonce);
+				document.head.appendChild(link);
+				if (isCss) return new Promise((res, rej) => {
+					const handleSettle = (e) => {
+						link.removeEventListener("load", handleSettle);
+						link.removeEventListener("error", handleSettle);
+						if (e.type === "error") rej(/* @__PURE__ */ new Error(`Unable to preload CSS for ${dep}`));
+						else res(e);
+					};
+					link.addEventListener("load", handleSettle);
+					link.addEventListener("error", handleSettle);
+				});
+			});
+		}).filter((p) => p !== void 0));
+	}
+	function handlePreloadError(err) {
+		const e = new Event("vite:preloadError", { cancelable: true });
+		e.payload = err;
+		window.dispatchEvent(e);
+		if (!e.defaultPrevented) throw err;
+	}
+	return promise.then((res) => {
+		for (const item of res || []) {
+			if (item.status !== "rejected") continue;
+			handlePreloadError(item.reason);
+		}
+		return baseModule().catch(handlePreloadError);
+	});
+};
+//#endregion
 //#region src/lib/hub.ts
 var UNDO_MS = 1e4;
 function useHub(enabled = true) {
@@ -30606,7 +30712,7 @@ function renamePasted(f, now = /* @__PURE__ */ new Date()) {
 	if (!/^image\.(png|jpe?g|gif|webp)$/i.test(f.name || "") && f.name) return f;
 	const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
 	const hh = (n) => String(n).padStart(2, "0");
-	const name = "screenshot " + hh(now.getHours()) + "-" + hh(now.getMinutes()) + "-" + hh(now.getSeconds()) + "." + ext;
+	const name = "screenshot-" + hh(now.getHours()) + "-" + hh(now.getMinutes()) + "-" + hh(now.getSeconds()) + "." + ext;
 	try {
 		return new File([f], name, { type: f.type });
 	} catch {
@@ -30623,8 +30729,18 @@ async function addText(text, name = "") {
 }
 function addedToast(r) {
 	if (r.added.length === 1) {
-		toast("Added " + r.added[0].name + " — reference " + r.added[0].ref + " (copied)");
-		copyText(r.added[0].ref);
+		const it = r.added[0];
+		copyText(it.ref);
+		const focused = useUi.getState().focused;
+		const here = focused && !focused.includes("::") ? focused : "";
+		toast("Added " + it.name + " — reference " + it.ref + " (copied)", here ? {
+			duration: 9e3,
+			action: {
+				label: "Put in " + displayName(here) + "'s prompt",
+				ariaLabel: "Put " + it.ref + " in " + displayName(here) + "'s prompt",
+				onClick: () => void putInPrompt(here, it, "", { focus: true })
+			}
+		} : void 0);
 	} else if (r.added.length > 1) toast("Added " + r.added.length + " items to the hub");
 	const plain = r.refused.filter((x) => !x.secret);
 	if (plain.length) toast("Couldn't add " + plain.map((x) => x.file.name + ": " + x.error).join("; "), { error: true });
@@ -30676,7 +30792,7 @@ function download(it) {
 	a.click();
 	a.remove();
 }
-async function putInPrompt(title, it, message = "") {
+async function putInPrompt(title, it, message = "", opts = {}) {
 	const msg = message.trim();
 	const text = msg ? msg + " " + it.ref : it.ref + " ";
 	try {
@@ -30688,8 +30804,16 @@ async function putInPrompt(title, it, message = "") {
 			submit: false,
 			dialog_safe: true
 		} });
-		if (msg) toast((r?.queued ? "Queued for " : "Sent to ") + displayName(title) + " with " + it.ref);
+		if (msg) toast(r?.queued ? displayName(title) + " is busy — your message with " + it.ref + " is queued; it gets it when it's free" : "Sent to " + displayName(title) + " with " + it.ref);
 		else toast(it.ref + " is in " + displayName(title) + "'s prompt — add your words there and press Enter");
+		if (opts.focus && !msg) {
+			useHubUi.getState().setOpen(false);
+			const { selectSession } = await __vitePreload(async () => {
+				const { selectSession } = await Promise.resolve().then(() => sessionActions_exports);
+				return { selectSession };
+			}, void 0);
+			selectSession(title);
+		}
 		return true;
 	} catch (err) {
 		if (err?.status === 409) {
@@ -31770,6 +31894,67 @@ function focusTerm(title, kind = "agent") {
 }
 //#endregion
 //#region src/lib/sessionActions.ts
+var sessionActions_exports = /* @__PURE__ */ __exportAll({
+	CLOSED_UNDO_HINT: () => CLOSED_UNDO_HINT,
+	MAX_TITLE_LEN: () => MAX_TITLE_LEN,
+	MOVE_MID_TURN: () => MOVE_MID_TURN,
+	PR_FALLBACK_HINT: () => PR_FALLBACK_HINT,
+	PR_REMEDY: () => PR_REMEDY,
+	addPendingSession: () => addPendingSession,
+	branchSession: () => branchSession,
+	cleanupMissing: () => cleanupMissing,
+	clearStaleAlias: () => clearStaleAlias,
+	closeSession: () => closeSession,
+	closedToastText: () => closedToastText,
+	commitNow: () => commitNow,
+	commitSession: () => commitSession,
+	copySession: () => copySession,
+	copyTitle: () => copyTitle,
+	deleteConfirmText: () => deleteConfirmText,
+	deleteManyConfirmText: () => deleteManyConfirmText,
+	deleteMenuTitle: () => deleteMenuTitle,
+	deleteSession: () => deleteSession,
+	deletedToastText: () => deletedToastText,
+	divergedPush: () => divergedPush,
+	failPendingSession: () => failPendingSession,
+	folderInUse: () => folderInUse,
+	folderInUseText: () => folderInUseText,
+	hasPrSupport: () => hasPrSupport,
+	hideSession: () => hideSession,
+	ideSession: () => ideSession,
+	instances: () => instances$2,
+	keptRunningText: () => keptRunningText,
+	landPendingSession: () => landPendingSession,
+	makePrSession: () => makePrSession,
+	mergeSession: () => mergeSession,
+	mergedText: () => mergedText,
+	moveErrorText: () => moveErrorText,
+	moveRefusal: () => moveRefusal,
+	moveSession: () => moveSession,
+	newestEntries: () => newestEntries,
+	offerRedZoneOverride: () => offerRedZoneOverride,
+	offerUrl: () => offerUrl,
+	openMoveSession: () => openMoveSession,
+	pauseSession: () => pauseSession,
+	pushSession: () => pushSession,
+	rebaseRemoteAndPush: () => rebaseRemoteAndPush,
+	redZoneBreaches: () => redZoneBreaches,
+	rememberClosed: () => rememberClosed,
+	reopenClosed: () => reopenClosed$1,
+	reopenedManyText: () => reopenedManyText,
+	requireGit: () => requireGit,
+	rerunSetup: () => rerunSetup,
+	resetStage: () => resetStage,
+	resumeSession: () => resumeSession,
+	selectRailKey: () => selectRailKey,
+	selectSession: () => selectSession,
+	selectWindow: () => selectWindow,
+	showSetupLog: () => showSetupLog,
+	startPendingCreate: () => startPendingCreate,
+	submitMakePr: () => submitMakePr,
+	undoLastClose: () => undoLastClose,
+	whileEnding: () => whileEnding
+});
 function caps() {
 	return queryClient.getQueryData(["config"])?.caps ?? {
 		git: true,
@@ -41378,103 +41563,6 @@ function onSessionRenamedEvent(env, replay = false) {
 	if (replay) return;
 	pullAliases().catch(() => {});
 }
-//#endregion
-//#region \0vite/preload-helper.js
-var scriptRel = "modulepreload";
-var assetsURL = function(dep) {
-	return "/" + dep;
-};
-var seen = {};
-var isCssPreloadUrl = function isCssPreloadUrl(url) {
-	return url.pathname.endsWith(".css");
-};
-var preloadOnce = function preloadOnce(seen, href, preload) {
-	if (href in seen) return seen[href];
-	const promise = preload();
-	if (!promise) {
-		seen[href] = void 0;
-		return;
-	}
-	const preloadPromise = promise.then(() => {
-		seen[href] = void 0;
-	}, (err) => {
-		seen[href] = void 0;
-		throw err;
-	});
-	seen[href] = preloadPromise;
-	return preloadPromise;
-};
-var __vitePreload = function preload(baseModule, deps, importerUrl) {
-	let promise = Promise.resolve();
-	if (deps && deps.length > 0) {
-		let preloadedHrefs;
-		const cspNonceMeta = document.querySelector("meta[property=csp-nonce]");
-		const cspNonce = cspNonceMeta?.nonce || cspNonceMeta?.getAttribute("nonce");
-		function allSettled(promises) {
-			return Promise.all(promises.map((p) => Promise.resolve(p).then((value) => ({
-				status: "fulfilled",
-				value
-			}), (reason) => ({
-				status: "rejected",
-				reason
-			}))));
-		}
-		function importMetaResolve(specifier) {
-			if (import.meta.resolve) return new URL(import.meta.resolve(specifier));
-			return new URL(specifier, import.meta.url);
-		}
-		promise = allSettled(deps.map((depString) => {
-			depString = assetsURL(depString, importerUrl);
-			const dep = importMetaResolve(depString);
-			const isCss = isCssPreloadUrl(dep);
-			return preloadOnce(seen, dep.href, () => {
-				if (preloadedHrefs === void 0) {
-					preloadedHrefs = {
-						all: /* @__PURE__ */ new Set(),
-						styles: /* @__PURE__ */ new Set()
-					};
-					const links = document.getElementsByTagName("link");
-					for (let i = links.length - 1; i >= 0; i--) {
-						const link = links[i];
-						preloadedHrefs.all.add(link.href);
-						if (link.rel === "stylesheet") preloadedHrefs.styles.add(link.href);
-					}
-				}
-				if ((isCss ? preloadedHrefs.styles : preloadedHrefs.all).has(dep.href)) return;
-				const link = document.createElement("link");
-				link.rel = isCss ? "stylesheet" : scriptRel;
-				if (!isCss) link.as = "script";
-				link.crossOrigin = "";
-				link.href = dep.href;
-				if (cspNonce) link.setAttribute("nonce", cspNonce);
-				document.head.appendChild(link);
-				if (isCss) return new Promise((res, rej) => {
-					const handleSettle = (e) => {
-						link.removeEventListener("load", handleSettle);
-						link.removeEventListener("error", handleSettle);
-						if (e.type === "error") rej(/* @__PURE__ */ new Error(`Unable to preload CSS for ${dep}`));
-						else res(e);
-					};
-					link.addEventListener("load", handleSettle);
-					link.addEventListener("error", handleSettle);
-				});
-			});
-		}).filter((p) => p !== void 0));
-	}
-	function handlePreloadError(err) {
-		const e = new Event("vite:preloadError", { cancelable: true });
-		e.payload = err;
-		window.dispatchEvent(e);
-		if (!e.defaultPrevented) throw err;
-	}
-	return promise.then((res) => {
-		for (const item of res || []) {
-			if (item.status !== "rejected") continue;
-			handlePreloadError(item.reason);
-		}
-		return baseModule().catch(handlePreloadError);
-	});
-};
 //#endregion
 //#region src/extensions/host.ts
 var HOST_API_VERSION = 2;
@@ -160121,7 +160209,7 @@ function SendDialog({ item, onClose }) {
 		setErr("");
 		try {
 			if (mode === "prompt") {
-				if (await putInPrompt(title, item, message)) onClose();
+				if (await putInPrompt(title, item, message, { focus: true })) onClose();
 			} else {
 				const dest = taken && !replace ? taken : path.trim();
 				await copyInto(title, item, dest, replace);
@@ -160412,9 +160500,9 @@ function HubDrawer() {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Hub" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "hub-sub",
 						children: [
-							"Files, pictures and snippets every session can use. Put ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "hub:" }),
-							" and an item's code in any prompt and the agent gets the file."
+							"Files, pictures and snippets every session can use. Each item has a reference like ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "hub:k7m2" }),
+							" — put it in any prompt and the agent gets the file."
 						]
 					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -160767,13 +160855,101 @@ function HubCard({ item }) {
 							className: "hub-meta",
 							children: meta
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "hub-ref",
-							title: "Copy the reference — paste it in any prompt or terminal. " + expiryLabel(item),
-							"aria-label": "Copy reference " + item.ref,
-							onClick: () => void copyRef(item),
-							children: item.ref
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "hub-row2",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "hub-ref",
+								title: "Copy the reference — paste it in any prompt or terminal. " + expiryLabel(item),
+								"aria-label": "Copy reference " + item.ref,
+								onClick: () => void copyRef(item),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hub-ref-code",
+									children: item.ref
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hub-ref-copy",
+									"aria-hidden": "true",
+									children: "Copy"
+								})]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "hub-actions",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "hub-btn",
+									onClick: () => openSend(item),
+									title: "Put it in a session's prompt, or copy the file into its folder",
+									children: "Send to session…"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "hub-more",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										ref: menuBtn,
+										type: "button",
+										className: "hub-btn hub-more-btn",
+										"aria-label": "More for " + item.name,
+										"aria-haspopup": "menu",
+										"aria-expanded": menu,
+										onClick: () => setMenu((v) => !v),
+										children: "⋯"
+									}), menu && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "hub-menu",
+										role: "menu",
+										ref: menuRef,
+										onKeyDown: menuKey,
+										"aria-label": "More for " + item.name,
+										children: [
+											textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												role: "menuitem",
+												onClick: act(() => void copyItemText(item)),
+												children: "Copy text"
+											}),
+											item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												role: "menuitem",
+												onClick: act(() => void copyImage(item)),
+												children: "Copy image"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												role: "menuitem",
+												onClick: act(() => void copyPath(item)),
+												children: "Copy path"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												role: "menuitem",
+												onClick: act(() => download(item)),
+												children: "Download"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												role: "menuitem",
+												onClick: () => startEdit("name"),
+												children: "Rename"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												role: "menuitem",
+												onClick: () => startEdit("note"),
+												children: item.note ? "Edit note" : "Add a note"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												role: "menuitem",
+												onClick: act(() => void updateItem(item, { pinned: !item.pinned })),
+												children: item.pinned ? "Unpin" : "Pin — keep it"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												role: "menuitem",
+												className: "danger",
+												onClick: act(() => void removeItem$1(item)),
+												children: "Remove"
+											})
+										]
+									})]
+								})]
+							})]
 						})
 					]
 				})]
@@ -160805,94 +160981,6 @@ function HubCard({ item }) {
 			}) : item.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "hub-note",
 				children: item.note
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "hub-actions",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "hub-btn primary",
-						onClick: () => openSend(item),
-						title: "Put it in a session's prompt, or copy the file into its folder",
-						children: "Send to session…"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "hub-btn",
-						onClick: () => void copyRef(item),
-						children: "Copy reference"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "hub-more",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							ref: menuBtn,
-							type: "button",
-							className: "hub-btn hub-more-btn",
-							"aria-label": "More for " + item.name,
-							"aria-haspopup": "menu",
-							"aria-expanded": menu,
-							onClick: () => setMenu((v) => !v),
-							children: "⋯"
-						}), menu && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "hub-menu",
-							role: "menu",
-							ref: menuRef,
-							onKeyDown: menuKey,
-							"aria-label": "More for " + item.name,
-							children: [
-								textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									role: "menuitem",
-									onClick: act(() => void copyItemText(item)),
-									children: "Copy text"
-								}),
-								item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									role: "menuitem",
-									onClick: act(() => void copyImage(item)),
-									children: "Copy image"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									role: "menuitem",
-									onClick: act(() => void copyPath(item)),
-									children: "Copy path"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									role: "menuitem",
-									onClick: act(() => download(item)),
-									children: "Download"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									role: "menuitem",
-									onClick: () => startEdit("name"),
-									children: "Rename"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									role: "menuitem",
-									onClick: () => startEdit("note"),
-									children: item.note ? "Edit note" : "Add a note"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									role: "menuitem",
-									onClick: act(() => void updateItem(item, { pinned: !item.pinned })),
-									children: item.pinned ? "Unpin" : "Pin — keep it"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									role: "menuitem",
-									className: "danger",
-									onClick: act(() => void removeItem$1(item)),
-									children: "Remove"
-								})
-							]
-						})]
-					})
-				]
 			})
 		]
 	});

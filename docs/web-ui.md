@@ -3114,8 +3114,9 @@ server's `core/hub.py`). Drop a screenshot in, then use it in any session:
 * **Adding.** Drop files anywhere on the drawer, **Add files…**, **New
   snippet** (a text box; Ctrl/⌘+Enter adds it), or **paste** (Ctrl/⌘+V) a
   screenshot or text while the drawer has focus — a pasted screenshot is
-  named by the time it was pasted ("screenshot 14-32-05.png"). One added item
-  copies its reference to the clipboard. Also: **+ Hub** on a file in a
+  named by the time it was pasted (`screenshot-14-32-05.png`). One added item
+  copies its reference to the clipboard, and its toast offers **Put in
+  ‹focused session›'s prompt** — paste a screenshot, one click, done. Also: **+ Hub** on a file in a
   session's Diff tab (that session's file goes in, its fence and red zones
   respected), **Add to hub** on the "Copied" toast when you select text in a
   terminal while the drawer is open, and a picture or file pasted into a
@@ -3125,12 +3126,14 @@ server's `core/hub.py`). Drop a screenshot in, then use it in any session:
 * **Each item** shows a thumbnail (a picture) or the first lines (a snippet
   or a text file) or an icon with its type, then its kind, size, who added it
   (you · your phone · session *name* · device *name*) and when, its note, and
-  its **reference** — `hub:k7m2`, a button that copies it.
+  its **reference** — `hub:k7m2 · Copy`, the one button that copies it.
 * **Using.** **Send to session…** (pick a session, then **Put hub:k7m2 in its
-  prompt** — typed in, not sent, unless you write a message to send with it —
+  prompt** — typed in, not sent, unless you write a message to send with it;
+  the drawer closes and that session takes focus so you can finish the
+  prompt there; a session on a question gets it in its Thread box —
   or **Copy the file into its folder** at `hub/<name>` by default; a path
   that is taken is said before you press Copy, the copy goes beside it
-  unless you tick **Replace it**). **Copy reference**. The ⋯ menu: Copy text
+  unless you tick **Replace it**). The ⋯ menu: Copy text
   (a snippet or text file), Copy image (where the browser allows it), Copy
   path, Download, Rename, Add a note, Pin — keep it / Unpin, Remove (gone at
   once, **Undo** on the toast; the server keeps it 10 minutes). **Drag** an
