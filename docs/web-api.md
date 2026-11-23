@@ -2967,6 +2967,30 @@ and uncommitted files only), this keeps work that exists only in local commits.
 | POST | `/api/cleanup/remove` | Body `{id, confirm, even_unchecked?}` — one item of the last report, re-classified first. A safe item goes as above. Anything else needs `confirm: true` (**409** `{needs_confirm: true, error}` without it) and its work is saved FIRST in a new folder under `~/.mindflock/kept-work/`: `changes.patch` (tracked + untracked, binary-safe — `git apply --index` it on the branch), `commits.bundle` for a clone's unpushed commits and stash, a `mindflock-kept/<name>-<time>` branch for a detached HEAD's unmerged commits, and `info.json`; an unmerged branch is never deleted; if saving fails nothing is removed. A folder whose files can't be checked (`kind: orphan`, `state: unchecked`) can't be saved: it is looked inside first (as `/api/cleanup/inspect`) and goes at once when nothing in it could be lost (`safe`), else only with `even_unchecked: true` (exactly `true`) — **409** `{needs_confirm: true, unchecked: true, facts, error}` without it, whatever `confirm` says. It is deleted **permanently** (MindFlock has no trash or holding folder) → `{ok, permanent: true, verdict, deleted: {files, work_files, bytes}}`, and only when it lies strictly inside the worktrees root or a session-clone root (symlinks resolved) and MindFlock made it; never a symlink, a mount point or a folder on another filesystem than its parent, one git still knows as a worktree, one holding other worktree folders (`<name>_<hex>`) or another checkout, or one with a filesystem mounted inside; the deletion is fd-relative, removes a symlink as a link without following it, and never enters another filesystem (`-xdev`; what it can't delete is left and said). Collection — the button, `--collect`, the background pass — never removes one. Never removed, even confirmed: anything in use, a locked worktree, a folder with another git checkout inside it (git would delete an ignored one with it) → `{ok, saved: {dir, patch, bundle, kept_branch}, branch_deleted, item}`. **404** when the id isn't in the last report, **422** `{error}` when git refused, **400** without an id. **Owner only** |
 | POST | `/api/cleanup/settings` | Body `{mode?: "auto"\|"ask"\|"off", after_days?: 1..3650}` → `{mode, after_days}` (`cleanup.*` in settings.json). **Owner only**; **400** for any other value; **409** when settings.json can't be read |
 
+## Feedback (`/api/feedback`)
+
+Report a problem or an idea about MindFlock itself
+(`backend/web/core/feedback.py`, `routes/feedback.py`). Owner only, on this
+device: a guest link and a request another MindFlock relayed get 403.
+
+- `GET /api/feedback` → `{repo, about, drafts, signed_in, login}`. `about`
+  is the one line MindFlock would add to a report (version and operating
+  system); `login` the GitHub account it would be filed as; `drafts` the
+  reports agents drafted, newest first (`{id, title, body, kind, session,
+  created, removed}`).
+- `POST /api/feedback/drafts` `{title, body, kind?, session?}` → 201 the
+  draft (the MCP's `report_issue`). Stored scrubbed in `<mindflock
+  home>/feedback_drafts.json` (at most 20; the same title replaces the older
+  draft). Emits `feedback.draft` (`{id, title, kind}`). Sends nothing.
+- `DELETE /api/feedback/drafts/{id}` → `{ok}`; 404 when it is already gone.
+- `POST /api/feedback/send` `{title, body, kind?, include_about?,
+  draft_id?}` → `{ok, via: "github", url, number}` when GitHub took the
+  issue (the draft is removed), or `{ok, via: "browser", url, why}`: a
+  pre-filled `issues/new` link to open, when MindFlock has no GitHub sign-in
+  or GitHub refused it. `kind` is `bug`, `idea` or `feedback`; a body with no
+  title uses its first line. 400 when both are empty. Keys and tokens are
+  replaced with `[removed]` before anything is sent.
+
 ## Shared files (`/api/hub`)
 
 Shared files (internally "the hub": `core/hub.py`, routes in

@@ -152,6 +152,10 @@ AUTO_APPROVED_TOOLS = (
     # list exists to spare them. Changing an item still asks.
     "add_todo",
     "list_todos",
+    # A report about MindFlock itself: the tool only stores a draft that the
+    # person reads and sends from the app, so asking first would be a second
+    # confirmation of the same thing.
+    "report_issue",
 )
 
 #: Management scopes the MCP server understands, narrowest first; the attach

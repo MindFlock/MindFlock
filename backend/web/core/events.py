@@ -285,6 +285,11 @@ EVENT_NAMES = (
     # expired (core.hub is the one emitter; ``session`` is always "";
     # data: {"count": int}). For UI refetch only; never sent to a guest.
     "hub.changed",
+    # An agent drafted a report about MindFlock itself for the person to
+    # send (routes/feedback.py; ``session`` is the drafting session or "";
+    # data: {"id", "title", "kind"}). The app offers the draft; never sent
+    # to a guest.
+    "feedback.draft",
     # Template runs (core.template_schedule is their one emitter). A template
     # started a fresh session — Run now or its schedule (``session`` is the
     # new one; data: {"template", "trigger": "manual"|"schedule"}). For UI

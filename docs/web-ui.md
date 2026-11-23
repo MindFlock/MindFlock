@@ -3110,6 +3110,23 @@ what any other surface (the guest pill) calls. Messages load from
 every 15 s while a window is up; nothing is persisted — see
 [people.md](people.md#a-small-chat).
 
+## Feedback
+
+**Feedback**, beside the version in the top bar (and "Send feedback or report
+a problem…" in the palette), opens one box for telling the MindFlock
+developers about a problem or an idea: pick what kind, write a line or two,
+**Send**. The box says where it goes before you send — a public GitHub issue
+on `MindFlock/MindFlock`, filed as your GitHub account — and shows the one
+line MindFlock adds (its version and your operating system), which you can
+untick. Without a GitHub sign-in the button reads **Open on GitHub** and
+opens the same report pre-filled in the browser.
+
+An agent can write the report for you: ask it to report the problem and it
+drafts one (the MCP's `report_issue`). A toast offers **Review**; the box
+opens on the draft, saying which session wrote it and how many paths or keys
+were replaced. Nothing is sent until you press Send. **Discard draft** throws
+it away. Not shown to a guest.
+
 ## Shared files
 
 **One shared place for files and text every session on this computer can

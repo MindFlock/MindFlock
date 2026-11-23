@@ -59,6 +59,8 @@ _TOOLS = (
     # The person's To-do list: adding to it never asks.
     "add_todo",
     "list_todos",
+    # A draft for the person to send: never asks.
+    "report_issue",
 )
 
 
@@ -848,6 +850,7 @@ def test_every_auto_approved_tool_is_a_read_or_the_report():
             "propose_run_plan",
             "report_integrated",
             "add_todo",
+            "report_issue",
         ):
             assert by[name].annotations["readOnlyHint"] is True, name
     assert "list_tickets" in mcp_attach.AUTO_APPROVED_TOOLS

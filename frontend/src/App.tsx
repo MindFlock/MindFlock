@@ -60,6 +60,7 @@ import { installViewFlip } from "./lib/viewMode";
 import { SkyView } from "./components/flights/SkyView";
 import { RouteStartMenu } from "./components/flights/RouteStartMenu";
 import { HubPanel } from "./components/hub/HubPanel";
+import { FeedbackDialog } from "./components/feedback/FeedbackDialog";
 
 /** At or under this window width the main screen goes single-column. */
 const NARROW_PX = 760;
@@ -359,6 +360,8 @@ export default function App() {
       <ChatPanel />
       {/* The Shared files drawer (its Send to session… is a step inside it; components/hub). */}
       <HubPanel />
+      {/* Feedback about MindFlock itself (lib/feedback.ts). */}
+      <FeedbackDialog />
       <CommandPalette host={host} />
       <ShortcutsSheet />
       <WelcomeTour />

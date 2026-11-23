@@ -39,6 +39,7 @@ import { replayTour } from "../onboarding/replayTour";
 import { openSkyGuide } from "../flights/SkyGuide";
 import { replayPeopleTour } from "../settings/screens/peer/replayPeopleTour";
 import { openWhatsNew } from "../whatsNew/WhatsNew";
+import { openFeedback } from "../../lib/feedback";
 
 /** The focused session's entries, in palette order (the table holds what
  * each one says and when it applies). Pause and Resume never both apply;
@@ -242,6 +243,12 @@ export function buildPaletteActions({ config, host, extensions }: PaletteSources
     });
   acts.push({ label: "Open Settings", top: TOP.settings, run: () => openSettings() });
   acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
+  acts.push({
+    label: "Send feedback or report a problem…",
+    hint: "to the MindFlock developers",
+    keywords: "feedback bug issue report idea github problem broken suggest",
+    run: () => openFeedback(),
+  });
   acts.push({
     label: "Your devices",
     hint: "add a computer you own, or join one; settings sync",
