@@ -140829,6 +140829,91 @@ function niceTicks(rawMax, targetCount = 4) {
 		ticks
 	};
 }
+function clickView(data) {
+	const clicks = data?.clicks;
+	if (!clicks) return null;
+	const c = clicks.classification;
+	const h = clicks.human;
+	if (!c || !h) return {
+		state: "old-worker",
+		scope: "all",
+		since: null,
+		series: clicks.series ?? [],
+		visitors_by_day: clicks.visitors_by_day ?? [],
+		visitors_by_slug: clicks.visitors_by_slug ?? [],
+		totals: clicks.totals ?? null,
+		downloads: clicks.downloads ?? null,
+		classified: null
+	};
+	const zero = {
+		clicks: 0,
+		visitors: 0
+	};
+	const human = c.by_class?.human ?? zero;
+	const unverified = c.by_class?.unverified ?? zero;
+	const automated = c.by_class?.automated ?? zero;
+	return {
+		state: !c.since ? "pending" : c.unclassified_clicks > 0 ? "partial" : "full",
+		scope: "human",
+		since: c.since ?? null,
+		series: h.series ?? [],
+		visitors_by_day: h.visitors_by_day ?? [],
+		visitors_by_slug: h.visitors_by_slug ?? [],
+		totals: h.totals ?? null,
+		downloads: h.downloads ?? null,
+		classified: {
+			clicks: human.clicks + unverified.clicks + automated.clicks,
+			human,
+			unverified,
+			automated
+		}
+	};
+}
+var INSTALLER_SLUG_OS = {
+	mac: "mac",
+	windows: "windows",
+	linux: "linux"
+};
+function osMatchedDownloads(series, fromWorker) {
+	if (fromWorker && typeof fromWorker.clicks === "number") return fromWorker;
+	const by = new Map(Object.keys(INSTALLER_SLUG_OS).map((slug) => [slug, {
+		slug,
+		clicks: 0,
+		matched: 0
+	}]));
+	for (const r of series) {
+		const b = by.get(r.slug);
+		if (!b) continue;
+		b.clicks += r.clicks;
+		if (r.os === INSTALLER_SLUG_OS[r.slug]) b.matched += r.clicks;
+	}
+	const by_slug = Array.from(by.values());
+	return {
+		clicks: by_slug.reduce((n, b) => n + b.clicks, 0),
+		matched: by_slug.reduce((n, b) => n + b.matched, 0),
+		by_slug
+	};
+}
+function releaseDownloads(data) {
+	const installers = data?.installer_downloads_total;
+	if (typeof installers !== "number") return {
+		installers: null,
+		other: null,
+		byKind: null
+	};
+	return {
+		installers,
+		other: Math.max(0, (data?.downloads_total ?? 0) - installers),
+		byKind: data?.downloads_by_kind ?? null
+	};
+}
+function sharePct(part, whole) {
+	if (!whole || !Number.isFinite(part) || !Number.isFinite(whole)) return null;
+	const pct = Math.round(part / whole * 100);
+	if (part > 0 && pct === 0) return 1;
+	if (part < whole && pct === 100) return 99;
+	return pct;
+}
 //#endregion
 //#region src/components/settings/screens/Traffic.tsx
 var DAYS_OPTIONS = [30, 90];
@@ -140840,8 +140925,41 @@ var SLUG_LABEL = {
 	releases: "Releases page",
 	latest: "Latest release",
 	producthunt: "Product Hunt",
-	nxgn: "NxGn Tools"
+	nxgn: "NxGn Tools",
+	viberank: "VibeRank",
+	launchbuff: "LaunchBuff"
 };
+var TRAFFIC_REASON_LABEL = {
+	navigation: "browser link click",
+	"bot-ua": "declared bot or crawler",
+	prefetch: "prefetch / link preview",
+	head: "HEAD request (link checker)",
+	"automation-ua": "automation tool or HTTP library",
+	"verified-bot": "Cloudflare verified bot",
+	"bot-score": "Cloudflare bot score",
+	"no-fetch-meta": "claims a modern browser, sends no browser headers",
+	datacenter: "hosting / cloud network",
+	"not-navigation": "not a page navigation",
+	insecure: "plain HTTP",
+	"old-browser": "old browser or in-app webview",
+	direct: "typed, bookmarked or opened from an app",
+	"no-user-activation": "no user gesture",
+	accept: "not asking for a page",
+	"no-accept-language": "no Accept-Language"
+};
+var TRAFFIC_CLASS_LABEL = {
+	human: "Human",
+	unverified: "Unverified",
+	automated: "Automated"
+};
+function scopeTag(view, days) {
+	switch (view.state) {
+		case "old-worker": return `${days}d, all clicks incl. automated`;
+		case "pending": return "human clicks — none recorded yet";
+		case "partial": return `human clicks since ${fmtDate(view.since)}`;
+		default: return `human clicks, ${days}d`;
+	}
+}
 function slugLabel(slug) {
 	return SLUG_LABEL[slug] || slug;
 }
@@ -140852,7 +140970,8 @@ function fmtInt(n) {
 function fmtDate(iso) {
 	if (!iso) return "—";
 	try {
-		return new Date(iso).toLocaleDateString(void 0, {
+		const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+		return (day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])) : new Date(iso)).toLocaleDateString(void 0, {
 			year: "numeric",
 			month: "short",
 			day: "numeric"
@@ -140867,6 +140986,13 @@ function fmtPct(part, whole) {
 }
 function plural$1(n, word) {
 	return `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
+}
+function fmtShare(part, whole) {
+	const pct = sharePct(part, whole);
+	return pct == null ? "—" : `${pct}%`;
+}
+function releaseCount(r) {
+	return r.installer_downloads ?? r.total_downloads;
 }
 var CHART_W = 640;
 var CHART_H = 160;
@@ -141024,7 +141150,7 @@ function ReleasesChart({ releases }) {
 		className: "set-hint",
 		children: "No published releases yet."
 	});
-	const { max, ticks } = niceTicks(Math.max(...chrono.map((r) => r.total_downloads)));
+	const { max, ticks } = niceTicks(Math.max(...chrono.map(releaseCount)));
 	const scale = scaleFor(max);
 	const barGap = 3;
 	const barW = Math.max(1, 636 / chrono.length - barGap);
@@ -141043,7 +141169,7 @@ function ReleasesChart({ releases }) {
 					viewBox: `0 0 ${CHART_W} ${CHART_H}`,
 					preserveAspectRatio: "none",
 					role: "img",
-					"aria-label": `Downloads per release, ${chrono[0].tag} through ${chrono[chrono.length - 1].tag}, on a vertical scale of 0 to ${fmtInt(max)} downloads`,
+					"aria-label": `Installer downloads per release, ${chrono[0].tag} through ${chrono[chrono.length - 1].tag}, on a vertical scale of 0 to ${fmtInt(max)} downloads`,
 					onMouseLeave: () => setHover(null),
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Gridlines, {
@@ -141051,7 +141177,7 @@ function ReleasesChart({ releases }) {
 							yAt: (v) => PLOT_H - scale(v)
 						}),
 						chrono.map((r, i) => {
-							const barH = Math.max(1, scale(r.total_downloads));
+							const barH = Math.max(1, scale(releaseCount(r)));
 							const x = PAD_L + i * (barW + barGap);
 							const y = PLOT_H - barH;
 							return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
@@ -141087,9 +141213,7 @@ function ReleasesChart({ releases }) {
 				fmtDate(hovered.published_at),
 				") —",
 				" ",
-				fmtInt(hovered.total_downloads),
-				" download",
-				hovered.total_downloads === 1 ? "" : "s",
+				hovered.installer_downloads != null ? `${plural$1(hovered.installer_downloads, "installer download")} of ${fmtInt(hovered.total_downloads)} asset downloads` : plural$1(hovered.total_downloads, "download"),
 				hovered.assets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "traffic-tooltip-detail",
 					children: [
@@ -141237,8 +141361,9 @@ function VisitorsChart({ days }) {
 		]
 	});
 }
-function DownloadFunnel({ funnel, days }) {
+function DownloadFunnel({ funnel, scope, osMatch }) {
 	const { new_visitors: total, new_visitors_clicked: clicked } = funnel;
+	const matchBySlug = new Map(osMatch.by_slug.map((m) => [m.slug, m]));
 	if (!total) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "set-hint",
 		children: "No first-time visitors recorded in this window yet — the funnel fills in as the tracked links get clicked."
@@ -141309,6 +141434,10 @@ function DownloadFunnel({ funnel, days }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
 						className: "num",
 						children: "Clicks"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+						className: "num",
+						children: "From that OS"
 					})
 				] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: funnel.by_slug.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: slugLabel(s.slug) }),
@@ -141323,6 +141452,10 @@ function DownloadFunnel({ funnel, days }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
 						className: "num",
 						children: fmtInt(s.clicks)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+						className: "num",
+						children: fmtShare(matchBySlug.get(s.slug)?.matched ?? 0, matchBySlug.get(s.slug)?.clicks ?? 0)
 					})
 				] }, s.slug)) })]
 			}),
@@ -141331,11 +141464,12 @@ function DownloadFunnel({ funnel, days }) {
 				children: [
 					"Download ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "intent" }),
-					", not installs, over the last ",
-					days,
-					" days: someone pressing a platform button on mindflock.ai. It misses anyone who downloaded straight from the GitHub repo page, and a click is not a finished install. Per-platform first-timers can overlap (one person pressing both macOS and Linux is in both rows), so they may add up to more than the ",
+					", not installs (",
+					scope,
+					"): someone pressing a platform button on mindflock.ai. It misses anyone who downloaded straight from the GitHub repo page, and a click is not a finished install. Per-platform first-timers can overlap (one person pressing both macOS and Linux is in both rows), so they may add up to more than the",
+					" ",
 					fmtInt(clicked),
-					" above — that figure is the deduplicated one."
+					" above — that figure is the deduplicated one. \"From that OS\" is the share of that button's clicks whose browser runs the installer's own OS: people do fetch an installer for another machine, but a crawler pressing every button can't match more than one in three."
 				]
 			})
 		]
@@ -141428,23 +141562,127 @@ function ClicksChart({ series }) {
 		})]
 	});
 }
+function WhoIsClicking({ c, scope }) {
+	const classes = [
+		"human",
+		"unverified",
+		"automated"
+	];
+	const total = classes.reduce((n, k) => n + (c.by_class?.[k]?.clicks ?? 0), 0);
+	const reasons = (c.reasons ?? []).filter((r) => r.class !== "human" && r.clicks > 0).slice(0, 6);
+	if (!total) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "set-hint",
+		children: "No classified clicks yet. Every click recorded from now on is labelled human, unverified or automated."
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
+			className: "traffic-table",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "Class" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+					className: "num",
+					children: "Clicks"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+					className: "num",
+					children: "Share"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+					className: "num",
+					children: "Visitors"
+				})
+			] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: classes.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: TRAFFIC_CLASS_LABEL[k] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+					className: "num",
+					children: fmtInt(c.by_class?.[k]?.clicks ?? 0)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+					className: "num",
+					children: fmtShare(c.by_class?.[k]?.clicks ?? 0, total)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+					className: "num",
+					children: fmtInt(c.by_class?.[k]?.visitors ?? 0)
+				})
+			] }, k)) })]
+		}),
+		reasons.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
+			className: "traffic-table",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "Why not counted as human" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "Class" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+					className: "num",
+					children: "Clicks"
+				})
+			] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: reasons.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: TRAFFIC_REASON_LABEL[r.reason] || r.reason }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: TRAFFIC_CLASS_LABEL[r.class] || r.class }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+					className: "num",
+					children: fmtInt(r.clicks)
+				})
+			] }, `${r.class}|${r.reason}`)) })]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"Classified by the click Worker from the headers a browser sends with a real link click (Fetch Metadata, Accept-Language) and the network it came from (",
+				scope,
+				"). ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Human" }),
+				" ",
+				"needs all of it. ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Unverified" }),
+				" is real-browser-shaped but unproven: typed or bookmarked URLs, links opened from Slack or a terminal, old browsers, VPNs.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Automated" }),
+				" has positive evidence of a machine. Visitors are distinct within each class and don't add up across them. Rule and blind spots: ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "worker/README.md" }),
+				" in the webpage repo."
+			]
+		})
+	] });
+}
 function Traffic(_) {
 	const [days, setDays] = (0, import_react.useState)(90);
 	const [metric, setMetric] = (0, import_react.useState)("people");
 	const [refreshing, setRefreshing] = (0, import_react.useState)(false);
 	const q = useTraffic(true, days);
 	const data = q.data;
-	const clickTotalsSorted = (0, import_react.useMemo)(() => {
-		if (!data) return [];
-		return Object.entries(data.clicks.totals_by_slug).sort((a, b) => b[1] - a[1]);
-	}, [data]);
-	const visitorsBySlug = (0, import_react.useMemo)(() => {
-		const map = /* @__PURE__ */ new Map();
-		for (const row of data?.clicks.visitors_by_slug ?? []) map.set(row.slug, row);
-		return map;
-	}, [data]);
-	const people = data?.clicks.totals ?? null;
-	const funnel = data?.clicks.downloads ?? null;
+	const view = (0, import_react.useMemo)(() => clickView(data), [data]);
+	const classification = data?.clicks.classification ?? null;
+	const linkRows = (0, import_react.useMemo)(() => {
+		if (!data || !view) return [];
+		const visitors = new Map(view.visitors_by_slug.map((r) => [r.slug, r]));
+		if (view.scope === "all") return Object.entries(data.clicks.totals_by_slug).sort((a, b) => b[1] - a[1]).map(([slug, n]) => ({
+			slug,
+			clicks: n,
+			visitors: visitors.get(slug),
+			unverified: null,
+			automated: null
+		}));
+		const human = /* @__PURE__ */ new Map();
+		for (const r of view.series) human.set(r.slug, (human.get(r.slug) || 0) + r.clicks);
+		const other = new Map((classification?.by_slug ?? []).map((r) => [r.slug, r]));
+		const slugs = /* @__PURE__ */ new Set([...human.keys(), ...other.keys()]);
+		return Array.from(slugs).map((slug) => ({
+			slug,
+			clicks: human.get(slug) ?? 0,
+			visitors: visitors.get(slug),
+			unverified: other.get(slug)?.unverified ?? 0,
+			automated: other.get(slug)?.automated ?? 0
+		})).sort((a, b) => b.clicks - a.clicks || b.automated - a.automated);
+	}, [
+		data,
+		view,
+		classification
+	]);
+	const people = view?.totals ?? null;
+	const funnel = view?.downloads ?? null;
+	const osMatch = (0, import_react.useMemo)(() => osMatchedDownloads(view?.series ?? [], view?.downloads?.os_match), [view]);
+	const dl = releaseDownloads(data);
 	const shown = shownMetric(metric, data);
 	const doRefresh = async () => {
 		setRefreshing(true);
@@ -141455,6 +141693,8 @@ function Traffic(_) {
 			setRefreshing(false);
 		}
 	};
+	const tag = view && data ? scopeTag(view, data.clicks.days) : "";
+	const cls = view?.classified ?? null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -141462,7 +141702,7 @@ function Traffic(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
-			children: "Reach across mindflock.ai and the GitHub repo — pulled live from GitHub's API and the click-tracking Worker on mindflock.ai/go/*. Visible in this dev build only."
+			children: "Clicks on the tracked links on mindflock.ai (download buttons, GitHub, directory badges — mindflock.ai/go/*) and GitHub's own counters, pulled live from GitHub's API and the click-tracking Worker. Page views aren't measured at all: the site runs no analytics. Visible in this dev build only."
 		}),
 		q.isLoading && !data && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
@@ -141483,7 +141723,7 @@ function Traffic(_) {
 				})
 			]
 		}),
-		data && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		data && view && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			(data.errors.github || data.errors.clicks) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "traffic-warn",
 				children: [data.errors.github && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: ["GitHub: ", data.errors.github] }), data.errors.clicks && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: ["Click tracking: ", data.errors.clicks] })]
@@ -141500,38 +141740,107 @@ function Traffic(_) {
 							className: "traffic-tile-label",
 							children: [
 								"First-time visitors (",
-								data.clicks.days,
-								"d)"
+								tag,
+								")"
 							]
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "traffic-tile",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "traffic-tile-num",
-							children: fmtInt(people?.visitors)
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "traffic-tile-label",
-							children: [
-								"Unique visitors (",
-								data.clicks.days,
-								"d)"
-							]
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "traffic-tile-num",
+								children: fmtInt(people?.visitors)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-label",
+								children: [
+									"Unique visitors (",
+									tag,
+									")"
+								]
+							}),
+							cls && cls.clicks > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-sub",
+								children: [plural$1(cls.automated.visitors, "automated visitor"), " left out"]
+							})
+						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "traffic-tile",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "traffic-tile-num",
-							children: fmtInt(people?.clicks ?? clickTotalsSorted.reduce((s, [, n]) => s + n, 0))
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "traffic-tile-label",
-							children: [
-								"Tracked link clicks (",
-								data.clicks.days,
-								"d)"
-							]
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "traffic-tile-num",
+								children: fmtInt(people?.clicks ?? view.series.reduce((n, r) => n + r.clicks, 0))
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-label",
+								children: [
+									"Tracked link clicks (",
+									tag,
+									")"
+								]
+							}),
+							cls && cls.clicks > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-sub",
+								children: [
+									"+",
+									fmtInt(cls.automated.clicks),
+									" automated (",
+									fmtShare(cls.automated.clicks, cls.clicks),
+									"),",
+									" ",
+									fmtInt(cls.unverified.clicks),
+									" unverified"
+								]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "traffic-tile",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "traffic-tile-num",
+								children: fmtShare(osMatch.matched, osMatch.clicks)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-label",
+								children: [
+									"Download clicks from the installer's OS (",
+									tag,
+									")"
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-sub",
+								children: [
+									fmtInt(osMatch.matched),
+									" of ",
+									plural$1(osMatch.clicks, "download click")
+								]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "traffic-tile",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "traffic-tile-num",
+								children: fmtInt(dl.installers ?? data.downloads_total)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "traffic-tile-label",
+								children: dl.installers != null ? "Installer downloads (GitHub, all-time)" : "Release asset downloads (GitHub, all-time)"
+							}),
+							dl.other != null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "traffic-tile-sub",
+								children: [
+									"+",
+									fmtInt(dl.other),
+									" other files: update checks, checksums, packages"
+								]
+							})
+						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "traffic-tile",
@@ -141552,20 +141861,40 @@ function Traffic(_) {
 							className: "traffic-tile-label",
 							children: "Forks"
 						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "traffic-tile",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "traffic-tile-num",
-							children: fmtInt(data.downloads_total)
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "traffic-tile-label",
-							children: "Downloads (all releases, all-time)"
-						})]
 					})
 				]
 			}),
-			!people && !data.errors.clicks && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			!data.errors.clicks && view.state === "old-worker" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				id: "traffic-scope-note",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "These click and visitor figures are unfiltered." }),
+					" The click Worker on mindflock.ai doesn't yet tell people from automated traffic, and most of this is automated: every link draws about the same count, and phones \"click\" desktop installers. Deploy the classifying Worker (",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "worker/README.md" }),
+					" in the webpage repo) for human-only figures; they cover clicks from the deploy onwards."
+				]
+			}),
+			!data.errors.clicks && view.state === "pending" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				id: "traffic-scope-note",
+				children: "The click Worker classifies clicks, but none have been recorded since it was deployed. The figures above fill in as people click."
+			}),
+			!data.errors.clicks && view.state === "partial" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				id: "traffic-scope-note",
+				children: [
+					"Click and visitor figures count ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "human clicks only" }),
+					", from",
+					" ",
+					fmtDate(view.since),
+					" — when the Worker started classifying. The",
+					" ",
+					fmtInt(classification?.unclassified_clicks ?? 0),
+					" clicks before then in this window can't be told apart and are left out."
+				]
+			}),
+			!people && !data.errors.clicks && view.state === "old-worker" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
 					"Visitor counts are empty because the click Worker hasn't been redeployed with visitor attribution yet (see ",
@@ -141575,20 +141904,28 @@ function Traffic(_) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "VISITORS" }),
 					" KV namespace and the ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "VISITOR_SALT" }),
-					" secret). Clicks below are unaffected. Numbers start accumulating at deploy time, so expect visitors to trail clicks until the window fills in."
+					" secret). Clicks below are unaffected."
 				]
 			}),
+			classification && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "set-section-title",
+				children: "Who's clicking"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WhoIsClicking, {
+				c: classification,
+				scope: view.state === "partial" ? `since ${fmtDate(view.since)}` : `last ${data.clicks.days} days`
+			})] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 				className: "set-section-title",
 				children: [
 					"New user funnel (",
-					data.clicks.days,
-					"d)"
+					tag,
+					")"
 				]
 			}),
 			funnel ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DownloadFunnel, {
 				funnel,
-				days: data.clicks.days
+				scope: tag,
+				osMatch
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "set-hint",
 				children: "Not available until the click Worker reports visitor attribution. GitHub's download counters can't stand in for it — they're opaque tallies that include updates and re-downloads, with no way to tell one person from another."
@@ -141598,9 +141935,14 @@ function Traffic(_) {
 				children: "GitHub stars over time"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StarsChart, { points: data.star_history ?? [] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 				className: "set-section-title",
-				children: shown === "people" ? "Visitors over time" : "Clicks over time"
+				children: [
+					shown === "people" ? "Visitors over time" : "Clicks over time",
+					" (",
+					tag,
+					")"
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-row traffic-range-row",
@@ -141614,7 +141956,7 @@ function Traffic(_) {
 							onClick: () => setDays(d),
 							children: [d, "d"]
 						}, d))
-					}), people && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					}), data.clicks.totals ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "usage-periods traffic-range",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -141627,7 +141969,7 @@ function Traffic(_) {
 							onClick: () => setMetric("clicks"),
 							children: "Clicks"
 						})]
-					})]
+					}) : null]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "test-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -141642,14 +141984,14 @@ function Traffic(_) {
 					})]
 				})]
 			}),
-			shown === "people" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VisitorsChart, { days: data.clicks.visitors_by_day }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ClicksChart, { series: data.clicks.series }),
-			clickTotalsSorted.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			shown === "people" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VisitorsChart, { days: view.visitors_by_day }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ClicksChart, { series: view.series }),
+			linkRows.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 					className: "set-section-title",
 					children: [
 						"By link (",
-						data.clicks.days,
-						"d)"
+						tag,
+						")"
 					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
@@ -141667,31 +142009,47 @@ function Traffic(_) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
 							className: "num",
 							children: "Clicks"
+						}),
+						view.scope === "human" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+							className: "num",
+							children: "Unverified"
+						}),
+						view.scope === "human" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+							className: "num",
+							children: "Automated"
 						})
-					] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: clickTotalsSorted.map(([slug, n]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: slugLabel(slug) }),
+					] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: linkRows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: slugLabel(r.slug) }),
 						people && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
 							className: "num",
-							children: fmtInt(visitorsBySlug.get(slug)?.new_visitors)
+							children: fmtInt(r.visitors?.new_visitors ?? 0)
 						}),
 						people && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
 							className: "num",
-							children: fmtInt(visitorsBySlug.get(slug)?.visitors)
+							children: fmtInt(r.visitors?.visitors ?? 0)
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
 							className: "num",
-							children: fmtInt(n)
+							children: fmtInt(r.clicks)
+						}),
+						view.scope === "human" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+							className: "num",
+							children: fmtInt(r.unverified)
+						}),
+						view.scope === "human" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+							className: "num",
+							children: fmtInt(r.automated)
 						})
-					] }, slug)) })]
+					] }, r.slug)) })]
 				}),
-				people && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				people && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "set-hint",
-					children: "Visitor columns are deduplicated per link over the window, so they don't add up down the column — one person clicking two links is one visitor on each row and one visitor overall."
+					children: ["Visitor columns are deduplicated per link over the window, so they don't add up down the column — one person clicking two links is one visitor on each row and one visitor overall.", view.scope === "all" && " Near-equal counts on every link, the directory badges included, are the sign of something following every link on the page."]
 				})
 			] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 				className: "set-section-title",
-				children: "Downloads over time"
+				children: "Installer downloads over time"
 			}),
 			data.releases.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "set-hint",
@@ -141704,9 +142062,45 @@ function Traffic(_) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
-					"GitHub's raw asset counters. These are ",
+					"GitHub's raw asset counters, which are ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "not" }),
-					" people: they include updates and repeat downloads, and GitHub attaches no identity to them, so there is no way to split them into new versus returning users. For new-user numbers use the funnel above. Note too that MindFlock's updater opens the releases page in a browser rather than fetching the asset itself, so an update looks exactly like a first-time download here."
+					" people: GitHub attaches no identity, so nothing here can be split into new versus returning users, or people versus crawlers.",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: " Installers" }),
+					" are ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "MindFlock.dmg" }),
+					", ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "MindFlock-Setup.exe" }),
+					" ",
+					"and ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "MindFlock.AppImage" }),
+					" — but the app's auto-updater downloads the same .exe and .AppImage to update an existing install, so on Windows and Linux an update looks exactly like a first download. ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Other files" }),
+					" are the ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "latest*.yml" }),
+					" ",
+					"every running app reads when it checks for an update, the macOS update",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "MindFlock.zip" }),
+					" and block maps, checksums, and the Python packages. Near-equal installer counts for all three platforms on a release are more likely a crawler fetching every file than three sets of people."
+				]
+			}),
+			dl.byKind && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"All-time: ",
+					fmtInt(dl.byKind.installer),
+					" installers · ",
+					fmtInt(dl.byKind.update),
+					" update files · ",
+					fmtInt(dl.byKind.update_check),
+					" update checks · ",
+					fmtInt(dl.byKind.checksum),
+					" ",
+					"checksums · ",
+					fmtInt(dl.byKind.package),
+					" Python packages",
+					dl.byKind.other ? ` · ${fmtInt(dl.byKind.other)} other` : "",
+					"."
 				]
 			}),
 			data.releases.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -141717,9 +142111,17 @@ function Traffic(_) {
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "Version" }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "Published" }),
+					dl.installers != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+						className: "num",
+						children: "Installers"
+					}),
+					dl.installers != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+						className: "num",
+						children: "Other files"
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
 						className: "num",
-						children: "Downloads"
+						children: "All assets"
 					})
 				] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: data.releases.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("td", { children: [r.tag, r.prerelease && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -141727,6 +142129,14 @@ function Traffic(_) {
 						children: " pre-release"
 					})] }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: fmtDate(r.published_at) }),
+					dl.installers != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+						className: "num",
+						children: fmtInt(r.installer_downloads ?? 0)
+					}),
+					dl.installers != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
+						className: "num",
+						children: fmtInt(r.total_downloads - (r.installer_downloads ?? 0))
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", {
 						className: "num",
 						children: fmtInt(r.total_downloads)

@@ -308,3 +308,201 @@ def test_malformed_visitor_sections_are_dropped(stub_http, monkeypatch):
     assert clicks["downloads"] is None
     # A good section alongside the bad ones still survives.
     assert clicks["visitors_by_slug"][0]["slug"] == "mac"
+
+
+def test_old_worker_has_no_human_or_classification(stub_http, monkeypatch):
+    """The app ships independently of the Worker deploy, so a Worker from
+    before click classification must answer with ``human``/``classification``
+    absent (``None``) — the screen's cue to label its figures as unfiltered —
+    and the failure shape must carry both keys too."""
+    stub_http(
+        {
+            "/stargazers": (200, []),
+            "/releases": _RELEASES_OK,
+            "/repos/MindFlock/MindFlock": _REPO_OK,
+            "/go/_stats": _clicks_with_visitors(),
+        }
+    )
+
+    async def _token():
+        return "ghp_x"
+
+    monkeypatch.setattr(traffic, "_token", _token)
+    clicks = asyncio.run(traffic.TrafficAddon()._payload(days=7, refresh=True))[
+        "clicks"
+    ]
+    assert clicks["human"] is None
+    assert clicks["classification"] is None
+    # The visitor-era sections are still there, unchanged.
+    assert clicks["totals"]["visitors"] == 4
+
+    empty = traffic._empty_clicks(7, "down")
+    assert empty["human"] is None and empty["classification"] is None
+
+
+def test_classified_sections_are_passed_through(stub_http, monkeypatch):
+    """``human`` and ``classification`` are counted by the Worker per grain and
+    must reach the screen as-is; a wrong type degrades to ``None``."""
+    human = {
+        "series": [{"day": "2026-11-25", "slug": "mac", "os": "mac", "clicks": 2}],
+        "visitors_by_day": [],
+        "visitors_by_slug": [],
+        "totals": {"clicks": 2, "visitors": 1, "new_visitors": 1},
+        "downloads": {
+            "new_visitors": 1,
+            "new_visitors_clicked": 1,
+            "by_slug": [],
+            "os_match": {"clicks": 2, "matched": 2, "by_slug": []},
+        },
+    }
+    classification = {
+        "since": "2026-11-25",
+        "unclassified_clicks": 40,
+        "by_class": {
+            "human": {"clicks": 2, "visitors": 1},
+            "unverified": {"clicks": 1, "visitors": 1},
+            "automated": {"clicks": 30, "visitors": 12},
+        },
+        "reasons": [{"class": "automated", "reason": "no-fetch-meta", "clicks": 30}],
+        "by_slug": [],
+    }
+    stub_http(
+        {
+            "/stargazers": (200, []),
+            "/releases": _RELEASES_OK,
+            "/repos/MindFlock/MindFlock": _REPO_OK,
+            "/go/_stats": _clicks_with_visitors(
+                human=human, classification=classification
+            ),
+        }
+    )
+
+    async def _token():
+        return "ghp_x"
+
+    monkeypatch.setattr(traffic, "_token", _token)
+    clicks = asyncio.run(traffic.TrafficAddon()._payload(days=7, refresh=True))[
+        "clicks"
+    ]
+    assert clicks["human"] == human
+    assert clicks["classification"] == classification
+
+    stub_http(
+        {
+            "/stargazers": (200, []),
+            "/releases": _RELEASES_OK,
+            "/repos/MindFlock/MindFlock": _REPO_OK,
+            "/go/_stats": _clicks_with_visitors(human=[], classification="v2"),
+        }
+    )
+    clicks = asyncio.run(traffic.TrafficAddon()._payload(days=7, refresh=True))[
+        "clicks"
+    ]
+    assert clicks["human"] is None
+    assert clicks["classification"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Release assets: installers versus everything else
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "name,kind",
+    [
+        ("MindFlock.dmg", "installer"),
+        ("MindFlock-Setup.exe", "installer"),
+        ("MindFlock.AppImage", "installer"),
+        # The macOS auto-update payload: never what a person installs from.
+        ("MindFlock.zip", "update"),
+        ("MindFlock-Setup.exe.blockmap", "update"),
+        ("MindFlock.zip.blockmap", "update"),
+        ("latest.yml", "update_check"),
+        ("latest-mac.yml", "update_check"),
+        ("latest-linux.yml", "update_check"),
+        ("MindFlock.dmg.sha256", "checksum"),
+        ("SHA256SUMS", "checksum"),
+        ("mindflock-0.14.27-py3-none-any.whl", "package"),
+        ("mindflock-0.14.27.tar.gz", "package"),
+        ("notes.txt", "other"),
+        ("", "other"),
+    ],
+)
+def test_asset_kind(name, kind):
+    assert traffic.asset_kind(name) == kind
+
+
+def test_installer_downloads_are_split_from_the_rest(stub_http, monkeypatch):
+    """``downloads_total`` keeps meaning every asset (compatibility); the
+    installer figure and the per-kind split are reported beside it, per
+    release and all-time."""
+    stub_http(
+        {
+            "/stargazers": (200, []),
+            "/releases": (
+                200,
+                [
+                    {
+                        "tag_name": "v0.14.27",
+                        "assets": [
+                            {"name": "MindFlock.dmg", "download_count": 9},
+                            {"name": "MindFlock-Setup.exe", "download_count": 8},
+                            {"name": "MindFlock.AppImage", "download_count": 9},
+                            {"name": "MindFlock.zip", "download_count": 5},
+                            {"name": "latest-mac.yml", "download_count": 190},
+                            {"name": "MindFlock.dmg.sha256", "download_count": 1},
+                            {"name": "SHA256SUMS", "download_count": 2},
+                            {"name": "mindflock-0.14.27.tar.gz", "download_count": 1},
+                        ],
+                    },
+                    {
+                        "tag_name": "v0.14.26",
+                        "assets": [{"name": "MindFlock.dmg", "download_count": 3}],
+                    },
+                ],
+            ),
+            "/repos/MindFlock/MindFlock": _REPO_OK,
+            "/go/_stats": _CLICKS_OK,
+        }
+    )
+
+    async def _token():
+        return "ghp_x"
+
+    monkeypatch.setattr(traffic, "_token", _token)
+    payload = asyncio.run(traffic.TrafficAddon()._payload(days=7, refresh=True))
+
+    assert payload["downloads_total"] == 228
+    assert payload["installer_downloads_total"] == 29
+    assert payload["downloads_by_kind"] == {
+        "installer": 29,
+        "update": 5,
+        "update_check": 190,
+        "checksum": 3,
+        "package": 1,
+        "other": 0,
+    }
+    assert sum(payload["downloads_by_kind"].values()) == payload["downloads_total"]
+    newest = payload["releases"][0]
+    assert newest["installer_downloads"] == 26
+    assert newest["total_downloads"] == 225
+    assert {a["name"]: a["kind"] for a in newest["assets"]}["MindFlock.zip"] == "update"
+
+
+def test_failed_releases_lookup_reports_zero_kinds(stub_http, monkeypatch):
+    stub_http(
+        {
+            "/stargazers": (200, []),
+            "/releases": (403, {"message": "rate limited"}),
+            "/repos/MindFlock/MindFlock": _REPO_OK,
+            "/go/_stats": _CLICKS_OK,
+        }
+    )
+
+    async def _token():
+        return ""
+
+    monkeypatch.setattr(traffic, "_token", _token)
+    payload = asyncio.run(traffic.TrafficAddon()._payload(days=7, refresh=True))
+    assert payload["releases"] == []
+    assert payload["installer_downloads_total"] == 0
+    assert set(payload["downloads_by_kind"]) == set(traffic.ASSET_KINDS)
+    assert "rate limited" in payload["errors"]["github"]

@@ -4190,8 +4190,10 @@ GitHub integration here it resolves no workspace remote: it always means
   "generated": 1755100000.0,
   "repo": {"stars": 0, "forks": 0, "open_issues": 0, "url": "…"},  // or null
   "star_history": [{"day": "2026-08-10", "stars": 42}],            // cumulative
-  "releases": [{"tag", "published_at", "prerelease", "assets": [{"name", "downloads"}], "total_downloads"}],
-  "downloads_total": 0,
+  "releases": [{"tag", "published_at", "prerelease", "assets": [{"name", "downloads", "kind"}], "total_downloads", "installer_downloads"}],
+  "downloads_total": 0,             // every asset of every release — NOT installs
+  "installer_downloads_total": 0,   // MindFlock.dmg + MindFlock-Setup.exe + MindFlock.AppImage
+  "downloads_by_kind": {"installer", "update", "update_check", "checksum", "package", "other"},
   "clicks": {
     "days": 90,
     "series": [{"day", "slug", "os", "clicks"}],
@@ -4199,7 +4201,9 @@ GitHub integration here it resolves no workspace remote: it always means
     "visitors_by_day": [{"day", "visitors", "new_visitors", "returning_visitors", "unknown_visitors"}],
     "visitors_by_slug": [{"slug", "visitors", "new_visitors", "clicks"}],
     "totals": {"clicks", "visitors", "new_visitors"},              // or null
-    "downloads": {"new_visitors", "new_visitors_clicked", "by_slug": [...]},  // or null
+    "downloads": {"new_visitors", "new_visitors_clicked", "by_slug": [...], "os_match"?},  // or null
+    "human": {"series", "visitors_by_day", "visitors_by_slug", "totals", "downloads"},  // or null
+    "classification": {"since", "unclassified_clicks", "by_class", "reasons", "by_slug"},  // or null
     "error": ""
   },
   "errors": {"github": null, "clicks": null}
@@ -4227,6 +4231,42 @@ wrong produces plausible, wrong numbers rather than an obvious failure:
   count a grain, so the server passes these sections through rather than
   deriving them, and so should any consumer. `new_visitors` is the one field
   that sums across days, since a first sighting happens on exactly one date.
+
+**Release asset kinds.** Each asset carries a `kind` from its file name
+(`asset_kind()` in `backend/web/addons/traffic.py`): `installer` (the three
+desktop installers), `update` (`MindFlock.zip`, the macOS auto-update payload,
+and every `.blockmap`), `update_check` (`latest*.yml`, read by every running
+app's update check), `checksum` (`*.sha256`, `SHA256SUMS`), `package` (the
+wheel and sdist) and `other`. `MindFlock.zip` is deliberately an update, not
+an installer: electron-updater on macOS fetches it and nobody installs from it
+by hand. `installer_downloads_total` is still not people or first installs —
+GitHub attaches no identity, and electron-updater fetches the same `.exe` and
+`.AppImage` to update Windows and Linux installs. `downloads_total` keeps its
+old meaning (every asset) and `downloads_by_kind` sums to it.
+
+**Human-only click sections.** A click Worker that classifies clicks (human /
+unverified / automated, from Fetch Metadata headers and the network; rule and
+blind spots in `worker/README.md` of the webpage repo) adds two sections,
+passed through untouched like the visitor ones:
+
+- `human` repeats `series`, `visitors_by_day`, `visitors_by_slug`, `totals`
+  and `downloads` over human-classified clicks only, each counted by the
+  Worker at its own grain.
+- `classification`: `since` (first classified UTC day in the window, `null`
+  before any), `unclassified_clicks` (clicks in the window from before
+  classification; non-zero means `human` covers `since` onwards only),
+  `by_class` (`human`/`unverified`/`automated` → `{clicks, visitors}`;
+  visitors are distinct within a class and don't sum), `reasons`
+  (`[{class, reason, clicks}]`) and `by_slug` (`[{slug, human, unverified,
+  automated}]` clicks).
+
+The original sections keep their meaning against either Worker: every click
+the pre-classification Worker counted, automated traffic included. Both new
+keys are `null` against an older Worker — the screen's cue to label its
+figures as unfiltered — and in the failure payload. `downloads.os_match`
+(`{clicks, matched, by_slug}`: download-button clicks, and how many came from a
+UA on the installer's OS) appears in both scopes from the classifying Worker
+on.
 
 **Cross-repo prerequisite.** The visitor sections come from the `webpage/worker`
 Cloudflare Worker in the *marketing-site* repo (it derives a pseudonymous
