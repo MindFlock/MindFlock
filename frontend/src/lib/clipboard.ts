@@ -6,7 +6,7 @@
 
 import type { Terminal } from "@xterm/xterm";
 import { api } from "../api/client";
-import { HUB_MIME, REF_RE, expandRefs } from "./hubRef";
+import { HUB_MIME, REF_RE, expandRefs, typeIntoAgent } from "./hubRef";
 import { toast } from "./toast";
 
 declare global {
@@ -230,12 +230,19 @@ export function attachFileDrop(
     } else if (text) {
       if (canSend && !canSend()) return;
       if (REF_RE.test(text)) {
-        // A hub reference (hub:k7m2): the agent gets the item's path, name
-        // and kind, the way a prompt sent through MindFlock does (lib/hub).
-        void expandRefs(text).then((r) => {
-          term.paste(r.text);
-          toast(r.note || (r.text !== text ? "Pasted with the hub item's path" : "Pasted " + text.length + " chars"));
-        });
+        // A hub code (hub:k7m2): the agent gets the item's path, name and
+        // kind. In a session's terminal it goes through the server's
+        // dialog-safe typing — never into a prompt that opened meanwhile.
+        if (session) {
+          void typeIntoAgent(session, text).then((r) => {
+            toast(r.ok ? r.note || "Pasted with the hub item's path" : r.note);
+          });
+        } else {
+          void expandRefs(text).then((r) => {
+            term.paste(r.text);
+            toast(r.note || "Pasted " + text.length + " chars");
+          });
+        }
         return;
       }
       term.paste(text);
@@ -270,10 +277,16 @@ export function attachFileDrop(
       host.classList.remove("file-drop");
       if (canSend && !canSend()) return;
       const ref = ev.dataTransfer!.getData("text/plain");
-      void expandRefs(ref).then((r) => {
-        term.paste(r.text + " ");
-        toast(r.note || "Put " + ref + " in the prompt — add your words and press Enter");
-      });
+      if (session) {
+        void typeIntoAgent(session, ref + " ").then((r) => {
+          toast(r.ok ? r.note || ref + " is in the prompt — add your words and press Enter" : r.note);
+        });
+      } else {
+        void expandRefs(ref).then((r) => {
+          term.paste(r.text + " ");
+          toast(r.note || "Put " + ref + " in the prompt — add your words and press Enter");
+        });
+      }
       return;
     }
     if (!dtHasFiles(ev.dataTransfer)) return;

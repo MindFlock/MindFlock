@@ -167,6 +167,16 @@ def _folder(sb: Sandbox, title: str) -> str:
     return ""
 
 
+def _session_key(sb: Sandbox, title: str) -> str:
+    """``title``'s session key in the SCRATCH home (backend.session_key),
+    the one its own MCP is handed at launch."""
+    from backend import session_key
+
+    session_key._home = lambda: str(sb.mf_home)  # this process only
+    session_key.reset_cache()
+    return session_key.key_for(title)
+
+
 def seed_hub(sb: Sandbox, sessions: List[str], log: List[str], full: bool = False) -> List[str]:
     """Add the sample items; returns their references (oldest first)."""
     refs: List[str] = []
@@ -201,7 +211,12 @@ def seed_hub(sb: Sandbox, sessions: List[str], log: List[str], full: bool = Fals
                 sb.base_url,
                 "POST",
                 "/api/instances/%s/hub/put" % urllib.parse.quote(agent),
-                {"path": "test-output/dashboard-after.png", "note": "after the chart fix"},
+                {
+                    "path": "test-output/dashboard-after.png",
+                    "note": "after the chart fix",
+                    # What that session's own MCP would send (its key).
+                    "key": _session_key(sb, agent),
+                },
             )
             done("agent put", st, body)
         else:

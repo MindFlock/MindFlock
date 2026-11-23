@@ -36,7 +36,7 @@ export function withHubDrop<T extends RowDnd>(title: string, dnd: T, enabled = t
       (ev.currentTarget as HTMLElement).classList.remove("hub-drop-target");
       try {
         const it = JSON.parse(ev.dataTransfer.getData(HUB_MIME)) as { ref: string; name: string };
-        if (it?.ref) void putInPrompt(title, it);
+        if (it?.ref) void putInPrompt(title, it, "", { focus: true });
       } catch {
         /* not a hub item */
       }

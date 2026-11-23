@@ -16,7 +16,6 @@ import { queryClient } from "../state/queries";
 import { displayName, useUi } from "../state/store";
 import { copyText } from "./clipboard";
 import { errMsg } from "./format";
-import { toast } from "./toast";
 
 export type HubKind = "image" | "text" | "file";
 
@@ -87,7 +86,27 @@ export function bridgeHubEvents(): void {
 // --------------------------------------------------------------------------
 // The panel, the Send dialog and the composer hand-off
 // --------------------------------------------------------------------------
+/** One line the hub says, at the TOP of the window (never over a session's
+ * prompt line, where the bottom toasts sit), with up to two actions. */
+export interface HubNotice {
+  text: string;
+  error?: boolean;
+  actions?: { label: string; run(): void }[];
+  n: number;
+  ms: number;
+}
+
+/** A problem shown IN the drawer (a refused add), until dismissed. */
+export interface HubProblem {
+  id: number;
+  text: string;
+  /** Too big for the per-item limit: the MB a one-click raise would set. */
+  raiseTo?: number;
+}
+
 interface HubUi {
+  notice: HubNotice | null;
+  problems: HubProblem[];
   open: boolean;
   setOpen(v: boolean): void;
   toggle(): void;
@@ -101,14 +120,95 @@ interface HubUi {
 
 let _n = 0;
 export const useHubUi = create<HubUi>((set, get) => ({
+  notice: null,
+  problems: [],
   open: false,
-  setOpen: (v) => set({ open: v }),
-  toggle: () => set({ open: !get().open }),
+  setOpen: (v) => {
+    if (v) markHubSeen();
+    set({ open: v });
+  },
+  toggle: () => {
+    if (!get().open) markHubSeen();
+    set({ open: !get().open });
+  },
   sending: null,
-  openSend: (item) => set({ sending: item }),
+  // Opening Send to session… retires a "Put in X's prompt" notice: two
+  // live ways to send the same item is how it gets sent twice.
+  openSend: (item) => set(item ? { sending: item, notice: null } : { sending: null }),
   insert: null,
   insertInto: (title, text) => set({ insert: { title, text, n: ++_n } }),
 }));
+
+/** Say one thing at the top of the window (replaces what was there). */
+export function say(text: string, opts: { error?: boolean; actions?: HubNotice["actions"]; ms?: number } = {}): void {
+  const ms = opts.ms ?? (opts.actions?.length ? 9000 : Math.max(2500, Math.min(7000, 1200 + text.length * 45)));
+  useHubUi.setState({ notice: { text, error: !!opts.error, actions: opts.actions, n: ++_n, ms } });
+}
+
+export function hush(): void {
+  useHubUi.setState({ notice: null });
+}
+
+let _p = 0;
+export function addProblem(text: string, raiseTo?: number): void {
+  useHubUi.setState((s) => ({ problems: [...s.problems.slice(-3), { id: ++_p, text, raiseTo }] }));
+}
+
+export function dropProblem(id: number): void {
+  useHubUi.setState((s) => ({ problems: s.problems.filter((p) => p.id !== id) }));
+}
+
+/** Briefly ring the session a hub item just went to — its pane and its rail
+ * row — so you see where it landed. */
+export function flashTarget(title: string): void {
+  if (typeof document === "undefined") return;
+  const esc = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(title) : title.replace(/["\\]/g, "\\$&");
+  const sel = '[data-title="' + esc + '"]';
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
+    el.classList.remove("hub-flash");
+    void el.offsetWidth;
+    el.classList.add("hub-flash");
+    setTimeout(() => el.classList.remove("hub-flash"), 1800);
+  }
+}
+
+// --------------------------------------------------------------------------
+// What's new since you last looked (the top-bar count)
+// --------------------------------------------------------------------------
+const SEEN_KEY = "mf_hub_seen";
+
+export function hubSeen(): number {
+  try {
+    return Number(localStorage.getItem(SEEN_KEY) || 0) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function markHubSeen(now = Date.now() / 1000): void {
+  try {
+    localStorage.setItem(SEEN_KEY, String(now));
+  } catch {
+    /* private mode: the count just stays */
+  }
+}
+
+/** Items an AGENT or your PHONE added since you last opened the hub — the
+ * ones you haven't seen. What you added yourself is never "new". */
+export function newCount(items: Pick<HubItem, "by" | "added">[], seen = hubSeen()): number {
+  return items.filter((i) => i.by !== "you" && i.added > seen).length;
+}
+
+/** A session's state in a word, for the Send dialog's list. */
+export function stateWord(activity: string | undefined): string {
+  const a = String(activity || "");
+  if (a === "working") return "Working";
+  if (a === "clarify" || a === "ask" || a === "question") return "Question";
+  if (a === "limit") return "Waiting on limit";
+  if (a === "offline") return "Offline";
+  if (a === "starting" || a === "loading") return "Starting";
+  return "Idle";
+}
 
 // --------------------------------------------------------------------------
 // Words
@@ -138,10 +238,10 @@ export function kindLabel(it: Pick<HubItem, "kind" | "name">): string {
 
 /** "expires in 9 days" / "pinned" — when an unpinned item goes. */
 export function expiryLabel(it: Pick<HubItem, "pinned" | "expires">, now = Date.now() / 1000): string {
-  if (it.pinned || !it.expires) return "pinned — kept";
+  if (it.pinned || !it.expires) return "Pinned — kept until you remove it";
   const d = Math.max(0, (it.expires - now) / 86400);
-  if (d < 1) return "goes today unless used";
-  return "goes in " + Math.ceil(d) + (Math.ceil(d) === 1 ? " day" : " days") + " unless used";
+  if (d < 1) return "Deleted automatically today unless used — Pin to keep";
+  return "Deleted automatically in " + Math.ceil(d) + (Math.ceil(d) === 1 ? " day" : " days") + " unless used — Pin to keep";
 }
 
 export function rawUrl(it: Pick<HubItem, "id">, download = false): string {
@@ -183,7 +283,7 @@ export interface AddResult {
   added: HubItem[];
   /** Refused files, each with the server's sentence; `secret` ones may be
    * added anyway (the owner confirms in the panel). */
-  refused: { file: File; error: string; secret: boolean }[];
+  refused: { file: File; error: string; secret: boolean; raiseTo?: number }[];
 }
 
 export async function addFile(file: File, opts: { source?: "you" | "phone"; secretOk?: boolean; note?: string } = {}): Promise<HubItem> {
@@ -212,7 +312,10 @@ export async function addFiles(files: File[], opts: { source?: "you" | "phone"; 
       out.added.push(await addFile(f, opts));
     } catch (err) {
       const body = (err as ApiError)?.body as { code?: string } | null;
-      out.refused.push({ file: f, error: errMsg(err), secret: body?.code === "secret" });
+      // Too big for the per-item limit: offer the next round size up (MB).
+      const raiseTo =
+        body?.code === "too_large" && f.size > 0 ? Math.min(65536, Math.ceil(f.size / (1024 * 1024) / 50) * 50 + 50) : undefined;
+      out.refused.push({ file: f, error: errMsg(err), secret: body?.code === "secret", raiseTo });
     }
   }
   if (out.added.length) refreshHub();
@@ -240,31 +343,50 @@ export async function addText(text: string, name = ""): Promise<HubItem> {
   return it;
 }
 
-/** What the panel says after an add: one item names its reference (copied)
- * and, when a session is focused, offers to put it straight into that
- * session's prompt — paste a screenshot, one click, done. */
+/** What the panel says after an add: one item names its code (copied to
+ * the clipboard) and, when a session is focused, offers to put it straight
+ * into that session's prompt — paste a screenshot, one click, done. A
+ * refused add is shown IN the drawer (addProblem), never only in passing. */
 export function addedToast(r: AddResult): void {
   if (r.added.length === 1) {
     const it = r.added[0];
     void copyText(it.ref);
     const focused = useUi.getState().focused;
     const here = focused && !focused.includes("::") ? focused : "";
-    toast(
-      "Added " + it.name + " — reference " + it.ref + " (copied)",
+    say(
+      "Added " + it.name + " — code " + it.ref + " copied to clipboard",
       here
-        ? {
-            duration: 9000,
-            action: {
-              label: "Put in " + displayName(here) + "'s prompt",
-              ariaLabel: "Put " + it.ref + " in " + displayName(here) + "'s prompt",
-              onClick: () => void putInPrompt(here, it, "", { focus: true }),
-            },
-          }
-        : undefined
+        ? { actions: [{ label: "Put in " + displayName(here) + "'s prompt", run: () => void putInPrompt(here, it, "", { focus: true }) }] }
+        : {}
     );
-  } else if (r.added.length > 1) toast("Added " + r.added.length + " items to the hub");
-  const plain = r.refused.filter((x) => !x.secret);
-  if (plain.length) toast("Couldn't add " + plain.map((x) => x.file.name + ": " + x.error).join("; "), { error: true });
+  } else if (r.added.length > 1) say("Added " + r.added.length + " items to the hub");
+  for (const x of r.refused.filter((x) => !x.secret)) {
+    addProblem("Couldn't add " + x.file.name + ": " + x.error, x.raiseTo);
+  }
+}
+
+/** Raise the per-item limit (the owner's one click on a too-big refusal). */
+export async function raiseItemLimit(mb: number): Promise<boolean> {
+  try {
+    await api("/api/settings", { json: { hub: { item_mb: mb } } });
+    refreshHub();
+    say("Each item can now be up to " + mb + " MB — add the file again");
+    return true;
+  } catch (err) {
+    say("Couldn't raise the limit: " + errMsg(err), { error: true });
+    return false;
+  }
+}
+
+/** Rebuild the hub's list from the folders on disk (hub_broken). */
+export async function rebuildHub(): Promise<void> {
+  try {
+    const r = await api<{ items: number; restored: number; read_again: number }>("/api/hub/rebuild", { method: "POST" });
+    refreshHub();
+    say("Rebuilt the hub: " + r.items + (r.items === 1 ? " item" : " items") + " — nothing was lost");
+  } catch (err) {
+    say("Couldn't rebuild the hub: " + errMsg(err), { error: true });
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -272,12 +394,14 @@ export function addedToast(r: AddResult): void {
 // --------------------------------------------------------------------------
 export async function copyRef(it: HubItem): Promise<void> {
   const ok = await copyText(it.ref);
-  toast(ok ? "Copied " + it.ref + " — paste it into any prompt or terminal" : "Couldn't copy — the reference is " + it.ref);
+  say(ok ? "Code copied to clipboard — paste " + it.ref + " into any prompt or terminal" : "Couldn't copy — the code is " + it.ref, {
+    error: !ok,
+  });
 }
 
 export async function copyPath(it: HubItem): Promise<void> {
   const ok = await copyText(it.path);
-  toast(ok ? "Copied the path of " + it.name : "Couldn't copy — the path is " + it.path);
+  say(ok ? "Path of " + it.name + " copied to clipboard" : "Couldn't copy — the path is " + it.path, { error: !ok });
 }
 
 export async function copyItemText(it: HubItem): Promise<void> {
@@ -286,9 +410,11 @@ export async function copyItemText(it: HubItem): Promise<void> {
       "/api/hub/items/" + encodeURIComponent(it.id) + "/text"
     );
     const ok = await copyText(r.text);
-    toast(ok ? (r.truncated ? "Copied the first 1 MB of " : "Copied the text of ") + it.name : "Couldn't copy the text");
+    say(ok ? (r.truncated ? "The first 1 MB of " : "The text of ") + it.name + " copied to clipboard" : "Couldn't copy the text", {
+      error: !ok,
+    });
   } catch (err) {
-    toast("Couldn't copy the text: " + errMsg(err));
+    say("Couldn't copy the text: " + errMsg(err), { error: true });
   }
 }
 
@@ -309,9 +435,9 @@ export async function copyImage(it: HubItem): Promise<void> {
     if (blob.type !== "image/png") blob = await toPng(blob);
     const Item = (globalThis as unknown as { ClipboardItem: new (x: Record<string, Blob>) => ClipboardItem }).ClipboardItem;
     await navigator.clipboard.write([new Item({ "image/png": blob })]);
-    toast("Copied the image " + it.name);
+    say("The image " + it.name + " copied to clipboard");
   } catch (err) {
-    toast("Couldn't copy the image here (" + errMsg(err) + ") — use Download, or Copy reference");
+    say("Couldn't copy the image here (" + errMsg(err) + ") — use Download, or Copy code", { error: true });
   }
 }
 
@@ -334,10 +460,19 @@ export function download(it: HubItem): void {
   a.remove();
 }
 
-/** Type the reference into the session's agent prompt WITHOUT pressing
- * Enter (the server expands it to the path, name and kind): the person adds
- * their words there. With `message`, it is sent: "<message> <ref>". A session
- * on a dialog gets it in its Thread box instead. */
+/** Open a session's Queue tab (a queued send's "Open queue"). */
+export async function openQueue(title: string): Promise<void> {
+  useUi.getState().setLastTab(title, "queue");
+  const { selectSession } = await import("./sessionActions");
+  selectSession(title);
+}
+
+/** Point a session's agent at an item: its code is typed into the agent's
+ * prompt WITHOUT pressing Enter (the server expands it to the path, name and
+ * kind) — the person adds their words there. With `message`, it is sent:
+ * "<message> <code>" (queued when the session is busy: "Open queue"). A
+ * session on a dialog gets it in its Thread box instead. `focus`: close the
+ * drawer and bring that session forward (the person types next). */
 export async function putInPrompt(
   title: string,
   it: Pick<HubItem, "ref" | "name">,
@@ -346,32 +481,35 @@ export async function putInPrompt(
 ): Promise<boolean> {
   const msg = message.trim();
   const text = msg ? msg + " " + it.ref : it.ref + " ";
+  const name = displayName(title);
   try {
     const r = await instApi<{ queued?: boolean }>(title, "/send", {
       json: msg ? { text, dialog_safe: true } : { text, submit: false, dialog_safe: true },
     });
-    if (msg)
-      toast(
-        r?.queued
-          ? displayName(title) + " is busy — your message with " + it.ref + " is queued; it gets it when it's free"
-          : "Sent to " + displayName(title) + " with " + it.ref
-      );
-    else toast(it.ref + " is in " + displayName(title) + "'s prompt — add your words there and press Enter");
-    if (opts.focus && !msg) {
+    if (msg && r?.queued)
+      say(name + " is busy — your message with " + it.ref + " is queued; it gets it when it's free", {
+        actions: [{ label: "Open queue", run: () => void openQueue(title) }],
+      });
+    else if (msg) say("Sent to " + name + " with " + it.ref);
+    else say(it.ref + " is in " + name + "'s prompt — add your words there and press Enter");
+    if (opts.focus) {
       // The person types next, in that session: the drawer would cover it.
       useHubUi.getState().setOpen(false);
       const { selectSession } = await import("./sessionActions");
       selectSession(title);
     }
+    flashTarget(title);
     return true;
   } catch (err) {
     if ((err as ApiError)?.status === 409) {
       useHubUi.getState().insertInto(title, text);
       useUi.getState().threadOpen(title);
-      toast(displayName(title) + " is busy with a prompt — " + it.ref + " is in its Thread box; send it from there");
+      if (opts.focus) useHubUi.getState().setOpen(false);
+      flashTarget(title);
+      say(name + " is answering a question — " + it.ref + " is in its Thread box; send it from there");
       return true;
     }
-    toast("Couldn't send " + it.ref + " to " + displayName(title) + ": " + errMsg(err));
+    say("Couldn't send " + it.ref + " to " + name + ": " + errMsg(err), { error: true });
     return false;
   }
 }
@@ -382,18 +520,50 @@ export interface TakeResult {
   replaced: boolean;
 }
 
-export async function copyInto(title: string, it: HubItem, path: string, replace: boolean): Promise<TakeResult> {
-  const r = await instApi<TakeResult>(title, "/hub/take", { json: { id: it.id, path, replace } });
-  toast(
-    (r.replaced ? "Replaced " : "Copied " + it.name + " into ") +
-      displayName(title) +
-      (r.replaced ? "'s " + r.path : " at " + r.path)
+/** Save a copy of an item in a session's project folder (the owner's copy:
+ * any path there except files agents follow or that run by themselves).
+ * `tell`: then tell that session's agent where it is. */
+export async function copyInto(
+  title: string,
+  it: HubItem,
+  path: string,
+  replace: boolean,
+  tell = false
+): Promise<TakeResult> {
+  const r = await api<TakeResult>("/api/hub/items/" + encodeURIComponent(it.id) + "/copy-to", {
+    json: { session: title, path, replace },
+  });
+  const name = displayName(title);
+  let told = false;
+  if (tell) {
+    try {
+      await instApi(title, "/send", {
+        json: {
+          text: "I saved " + it.name + " in your project folder at " + r.path + " (from the MindFlock hub; you can read it there).",
+          dialog_safe: true,
+        },
+      });
+      told = true;
+    } catch {
+      told = false;
+    }
+  }
+  flashTarget(title);
+  say(
+    (r.replaced ? "Replaced " + r.path + " in " + name + "'s folder" : "Saved a copy at " + r.path + " in " + name + "'s folder") +
+      (tell ? (told ? " — and told " + name : " — couldn't tell " + name + " (it may be offline)") : "")
   );
   return r;
 }
 
 export async function freePath(title: string, it: HubItem, path = ""): Promise<{ path: string; wanted: string; taken: boolean }> {
-  return instApi(title, "/hub/free?id=" + encodeURIComponent(it.id) + (path ? "&path=" + encodeURIComponent(path) : ""));
+  return api(
+    "/api/hub/items/" +
+      encodeURIComponent(it.id) +
+      "/free?session=" +
+      encodeURIComponent(title) +
+      (path ? "&path=" + encodeURIComponent(path) : "")
+  );
 }
 
 export async function updateItem(it: HubItem, patch: Partial<Pick<HubItem, "name" | "note" | "pinned">>): Promise<HubItem | null> {
@@ -402,7 +572,7 @@ export async function updateItem(it: HubItem, patch: Partial<Pick<HubItem, "name
     refreshHub();
     return r;
   } catch (err) {
-    toast("Couldn't change " + it.name + ": " + errMsg(err));
+    say("Couldn't change " + it.name + ": " + errMsg(err), { error: true });
     return null;
   }
 }
@@ -411,24 +581,25 @@ export async function removeItem(it: HubItem): Promise<void> {
   try {
     await api("/api/hub/items/" + encodeURIComponent(it.id), { method: "DELETE" });
   } catch (err) {
-    toast("Couldn't remove " + it.name + ": " + errMsg(err));
+    say("Couldn't remove " + it.name + ": " + errMsg(err), { error: true });
     return;
   }
   refreshHub();
-  toast("Removed " + it.name + " from the hub", {
-    duration: UNDO_MS,
-    action: {
-      label: "Undo",
-      ariaLabel: "Undo removing " + it.name,
-      onClick: () => {
-        void api("/api/hub/items/" + encodeURIComponent(it.id) + "/restore", { method: "POST" })
-          .then(() => {
-            refreshHub();
-            toast("Put " + it.name + " back");
-          })
-          .catch((err) => toast("Couldn't put it back: " + errMsg(err)));
+  say("Removed " + it.name + " from the hub", {
+    actions: [
+      {
+        label: "Undo",
+        run: () => {
+          void api("/api/hub/items/" + encodeURIComponent(it.id) + "/restore", { method: "POST" })
+            .then(() => {
+              refreshHub();
+              say("Put " + it.name + " back");
+            })
+            .catch((err) => say("Couldn't put it back: " + errMsg(err), { error: true }));
+        },
       },
-    },
+    ],
+    ms: UNDO_MS,
   });
 }
 

@@ -723,7 +723,7 @@ spaces-vs-hyphens ignored; `TITLE` resolves like `close`. See
 
 The hub from a terminal (`/api/hub`; [web-ui.md](web-ui.md#hub)): files,
 pictures and snippets every session on this device can use. `REF` is an
-item's reference, `hub:k7m2` (or `k7m2`).
+item's code, `hub:k7m2` (or `k7m2`).
 
 * `mindflock hub ls [--json]` — the items, newest first: reference, kind,
   size, name, who added it, when, pinned; then how full the hub is.
@@ -733,9 +733,10 @@ item's reference, `hub:k7m2` (or `k7m2`).
   unless `--secret-ok` — every session can read the hub.
 * `mindflock hub get REF [--text]` — the item's path (or its text).
 * `mindflock hub cp REF [DEST] [--to TITLE] [--replace]` — copy it here
-  (default `./<name>`), or with `--to` into that session's folder (DEST
-  relative to it, default `hub/<name>`). Never over an existing file without
-  `--replace`.
+  (default `./<name>`), or with `--to` save a copy in that session's folder
+  (`POST /api/hub/items/{id}/copy-to`; DEST relative to it, default
+  `hub/<name>`; never a file agents follow or that runs by itself). Never
+  over an existing file without `--replace`.
 * `mindflock hub rm REF…` — remove (Undo in the app for 10 minutes).
 * `mindflock hub pin REF [--off]` — keep it past the expiry (or stop).
 

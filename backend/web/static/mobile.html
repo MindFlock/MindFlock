@@ -141,9 +141,12 @@
          tappable for raw keystroke mode. Text box above the key bar (user
          preference); both stay visible while typing because applyViewport
          clamps + polls the app height while the keyboard settles. -->
+    <!-- What the message carries from the hub: one chip per item (its
+         thumbnail, name and ✕), right above the box (mobile.js HUB section). -->
+    <div id="hub-chips" class="hidden" aria-label="From the hub"></div>
     <div id="composer">
       <!-- The hub (mobile.js HUB section): a photo or file from this phone
-           goes into the hub and its reference (hub:k7m2) into the message —
+           goes into the hub and its code (hub:k7m2) into the message —
            📎, pick, Send. -->
       <button type="button" id="hub-attach" aria-label="Add a photo or file to the hub and put it in your message">📎</button>
       <input type="file" id="hub-file" hidden multiple aria-hidden="true" tabindex="-1">
@@ -233,7 +236,7 @@
     <div id="hub-sheet" class="sheet hidden" role="dialog" aria-labelledby="hub-title">
       <div class="sheet-box">
         <div class="sheet-title" id="hub-title">Hub</div>
-        <div class="new-muted">Files, pictures and snippets every session can use. Put an item's reference (like hub:k7m2) in a message and the agent gets the file.</div>
+        <div class="new-muted">Files and text every session can use. Put an item's code (like hub:k7m2) in a message and the agent gets the file.</div>
         <button type="button" id="hub-add" class="new-row">📷 Add a photo or file</button>
         <div id="hub-list" class="sheet-list"></div>
         <div id="hub-error" class="new-error hidden" aria-live="polite"></div>

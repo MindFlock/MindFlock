@@ -1,15 +1,18 @@
-/** "Send to session…" for one hub item (lib/hub.ts): pick a session, then
- * either put the item's reference in its prompt (typed in, not sent — or
- * sent at once with a message), or copy the file into its folder at a path
- * (default hub/<name>; a taken path is never overwritten unless "Replace it"
- * is ticked). One dialog, three clicks: open it, pick, Send. */
+/** "Send to session…" for one hub item (lib/hub.ts): pick a session (each
+ * says Idle / Working / Question, so a queued send is no surprise), then
+ * either POINT ITS AGENT AT IT (the code goes into its prompt — typed in for
+ * you to finish there, or sent at once with a message) or SAVE A COPY IN ITS
+ * PROJECT FOLDER at a path (default hub/<name>; a taken path is said before
+ * you press Save copy, and never overwritten unless "Replace it" is ticked),
+ * telling the agent where it is. One dialog: open it, pick, Send. */
 
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../Modal";
 import { useInstances } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
-import { copyInto, freePath, putInPrompt, useHubUi, type HubItem } from "../../lib/hub";
+import { effectiveActivity } from "../../lib/stage";
+import { copyInto, freePath, putInPrompt, stateWord, useHubUi, type HubItem } from "../../lib/hub";
 import type { Instance } from "../../api/types";
 
 /** Sessions an item can go to: this device's own, not a shared-folder one. */
@@ -36,27 +39,40 @@ function SendDialog({ item, onClose }: { item: HubItem; onClose(): void }) {
   const [message, setMessage] = useState("");
   const [path, setPath] = useState("hub/" + item.name);
   const [replace, setReplace] = useState(false);
+  const [tell, setTell] = useState(true);
   const [taken, setTaken] = useState<string>("");
+  const [pathErr, setPathErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [find, setFind] = useState("");
+  const name = title ? displayName(title) : "the session";
 
   const shown = useMemo(() => {
     const f = find.trim().toLowerCase();
     return f ? sessions.filter((s) => (displayName(s.title) + " " + s.title).toLowerCase().includes(f)) : sessions;
   }, [sessions, find]);
 
-  // Where a copy would land: say so BEFORE Send when the path is taken.
+  // Where a copy would land: say so BEFORE Save copy when the path is taken
+  // (or is a file the hub never writes).
   useEffect(() => {
     if (mode !== "copy" || !title || !path.trim()) {
       setTaken("");
+      setPathErr("");
       return;
     }
     let live = true;
     const t = setTimeout(() => {
       freePath(title, item, path.trim())
-        .then((r) => live && setTaken(r.taken ? r.path : ""))
-        .catch(() => live && setTaken(""));
+        .then((r) => {
+          if (!live) return;
+          setTaken(r.taken ? r.path : "");
+          setPathErr("");
+        })
+        .catch((e) => {
+          if (!live) return;
+          setTaken("");
+          setPathErr(errMsg(e));
+        });
     }, 200);
     return () => {
       live = false;
@@ -73,7 +89,7 @@ function SendDialog({ item, onClose }: { item: HubItem; onClose(): void }) {
         if (await putInPrompt(title, item, message, { focus: true })) onClose();
       } else {
         const dest = taken && !replace ? taken : path.trim();
-        await copyInto(title, item, dest, replace);
+        await copyInto(title, item, dest, replace, tell);
         onClose();
       }
     } catch (e) {
@@ -82,6 +98,8 @@ function SendDialog({ item, onClose }: { item: HubItem; onClose(): void }) {
       setBusy(false);
     }
   };
+
+  const dest = taken && !replace ? taken : path.trim();
 
   return (
     <Modal onClose={onClose} className="hub-send-modal" role="dialog" aria-modal="true" aria-labelledby="hub-send-h">
@@ -104,18 +122,17 @@ function SendDialog({ item, onClose }: { item: HubItem; onClose(): void }) {
               />
             )}
             <div className="hub-send-list" role="radiogroup" aria-label="Session">
-              {shown.map((s) => (
-                <label key={s.title} className={"hub-send-row" + (s.title === title ? " on" : "")}>
-                  <input
-                    type="radio"
-                    name="hub-send-session"
-                    checked={s.title === title}
-                    onChange={() => setTitle(s.title)}
-                  />
-                  <span className="hub-send-title">{displayName(s.title)}</span>
-                  <span className="hub-send-sub muted">{s.repo || s.folder_label || ""}</span>
-                </label>
-              ))}
+              {shown.map((s) => {
+                const st = stateWord(effectiveActivity(s));
+                return (
+                  <label key={s.title} className={"hub-send-row" + (s.title === title ? " on" : "")}>
+                    <input type="radio" name="hub-send-session" checked={s.title === title} onChange={() => setTitle(s.title)} />
+                    <span className="hub-send-title">{displayName(s.title)}</span>
+                    <span className={"hub-send-state is-" + st.toLowerCase().replace(/\s+/g, "-")}>{st}</span>
+                    <span className="hub-send-sub muted">{s.repo || s.folder_label || ""}</span>
+                  </label>
+                );
+              })}
               {!shown.length && <p className="muted">No session matches "{find}".</p>}
             </div>
             <fieldset className="hub-send-how">
@@ -123,53 +140,70 @@ function SendDialog({ item, onClose }: { item: HubItem; onClose(): void }) {
               <label className="hub-send-opt">
                 <input type="radio" name="hub-send-mode" checked={mode === "prompt"} onChange={() => setMode("prompt")} />
                 <span>
-                  <strong>Put {item.ref} in its prompt</strong>
-                  <span className="muted"> — the agent gets the file's path; nothing is copied</span>
+                  <strong>Point the agent at it</strong>
+                  <span className="muted"> — it reads the file from the hub.</span>
                 </span>
               </label>
               {mode === "prompt" && (
-                <textarea
-                  className="hub-send-msg"
-                  rows={2}
-                  aria-label="Message to send with it (optional)"
-                  placeholder="Optional: a message to send with it now, e.g. “fix the layout in this screenshot”. Leave empty to type the reference into its prompt and finish it there."
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                      e.preventDefault();
-                      void go();
-                    }
-                  }}
-                />
+                <div className="hub-send-msg-wrap">
+                  <label className="hub-send-label" htmlFor="hub-send-msg">
+                    Add a message (optional)
+                  </label>
+                  <textarea
+                    id="hub-send-msg"
+                    className="hub-send-msg"
+                    rows={2}
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        void go();
+                      }
+                    }}
+                  />
+                  <p className="hub-send-help muted">
+                    With a message, it is sent now{name ? " to " + name : ""}
+                    {" "}(queued if it is busy). Without one, {item.ref} is typed into its prompt for you to finish there.
+                  </p>
+                </div>
               )}
               <label className="hub-send-opt">
                 <input type="radio" name="hub-send-mode" checked={mode === "copy"} onChange={() => setMode("copy")} />
                 <span>
-                  <strong>Copy the file into its folder</strong>
-                  <span className="muted"> — for a file the work needs to keep (it is not committed for you)</span>
+                  <strong>Save a copy in its project folder</strong>
+                  <span className="muted"> — stays with the work; you still commit it.</span>
                 </span>
               </label>
               {mode === "copy" && (
                 <div className="hub-send-path">
-                  <label>
-                    <span>at</span>
-                    <input
-                      value={path}
-                      aria-label="Where in the session's folder"
-                      spellCheck={false}
-                      onChange={(e) => setPath(e.target.value)}
-                    />
+                  <label className="hub-send-label" htmlFor="hub-send-path">
+                    Save as (inside {name}'s folder)
                   </label>
-                  {taken && (
-                    <p className="hub-send-taken" role="status">
-                      {path.trim()} already exists there —{" "}
-                      {replace ? "it will be replaced." : "the copy goes to " + taken + "."}{" "}
-                      <label className="hub-send-replace">
-                        <input type="checkbox" checked={replace} onChange={(e) => setReplace(e.target.checked)} /> Replace it
-                      </label>
+                  <input
+                    id="hub-send-path"
+                    value={path}
+                    spellCheck={false}
+                    aria-invalid={!!pathErr}
+                    onChange={(e) => setPath(e.target.value)}
+                  />
+                  {pathErr ? (
+                    <p className="hub-send-err" role="alert">
+                      {pathErr}
                     </p>
+                  ) : (
+                    taken && (
+                      <p className="hub-send-taken" role="status">
+                        {path.trim()} already exists there — {replace ? "it will be replaced." : "the copy goes to " + taken + "."}
+                        <label className="hub-send-replace">
+                          <input type="checkbox" checked={replace} onChange={(e) => setReplace(e.target.checked)} /> Replace it
+                        </label>
+                      </p>
+                    )
                   )}
+                  <label className="hub-send-replace">
+                    <input type="checkbox" checked={tell} onChange={(e) => setTell(e.target.checked)} /> Tell {name} it's at {dest || "…"}
+                  </label>
                 </div>
               )}
             </fieldset>
@@ -184,8 +218,13 @@ function SendDialog({ item, onClose }: { item: HubItem; onClose(): void }) {
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="primary" disabled={!title || busy || (mode === "copy" && !path.trim())} onClick={() => void go()}>
-            {busy ? "Sending…" : mode === "copy" ? "Copy" : message.trim() ? "Send" : "Put in prompt"}
+          <button
+            type="button"
+            className="primary"
+            disabled={!title || busy || (mode === "copy" && (!path.trim() || !!pathErr))}
+            onClick={() => void go()}
+          >
+            {busy ? "Sending…" : mode === "copy" ? "Save copy" : "Send"}
           </button>
         </div>
       </div>

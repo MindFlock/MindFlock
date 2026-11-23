@@ -10,7 +10,8 @@
  *
  * `useHubComposer` wires a controlled <textarea>; it never owns the text. */
 
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { spliceAtCaret } from "../../lib/fileDropTextarea";
 import {
   HUB_MIME,
@@ -18,13 +19,13 @@ import {
   addedToast,
   humanSize,
   matchItems,
+  rawUrl,
   refTokenAt,
   useHub,
   useHubUi,
   type HubItem,
 } from "../../lib/hub";
 import { useConfig } from "../../state/queries";
-import { toast } from "../../lib/toast";
 
 interface Opts {
   box: RefObject<HTMLTextAreaElement | null>;
@@ -47,8 +48,11 @@ export interface HubComposer {
   /** Insert text at the caret. */
   insert(text: string): void;
   dropping: boolean;
-  /** The picker popup (render inside a position:relative box). */
+  /** The picker popup (a portal: render it anywhere). */
   popup: ReactNode;
+  /** One chip per hub item the text points at: thumbnail, name, ✕ (render
+   * just above the box). */
+  chips: ReactNode;
   /** The paperclip (render in the composer's footer). */
   attach: ReactNode;
 }
@@ -58,7 +62,25 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
   const [tok, setTok] = useState<{ start: number; query: string } | null>(null);
   const [sel, setSel] = useState(0);
   const [dropping, setDropping] = useState(false);
-  const hub = useHub(!guest && !!tok);
+  const refsIn = useMemo(() => attachedRefs(value), [value]);
+  const hub = useHub(!guest && (!!tok || refsIn.length > 0));
+  const [pickAt, setPickAt] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  // The picker floats above the box (or under it when there is no room),
+  // in a portal: never clipped by the pane, never over the box's buttons.
+  useLayoutEffect(() => {
+    if (!tok) {
+      setPickAt(null);
+      return;
+    }
+    const r = box.current?.getBoundingClientRect();
+    if (!r) return;
+    const width = Math.min(380, Math.max(240, r.width - 16));
+    setPickAt(
+      r.top > 300
+        ? { left: r.left + 8, bottom: window.innerHeight - r.top + 4, width }
+        : { left: r.left + 8, top: r.bottom + 4, width }
+    );
+  }, [tok, box]);
   const matches = useMemo(() => (tok ? matchItems(hub.data?.items || [], tok.query) : []), [tok, hub.data]);
   const valueRef = useRef(value);
   valueRef.current = value;
@@ -106,10 +128,7 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
     addedToast({ added: [], refused: r.refused });
     if (r.added.length) {
       insert(r.added.map((a) => a.ref).join(" "));
-      toast(
-        (r.added.length === 1 ? r.added[0].name + " is" : r.added.length + " files are") +
-          " in the hub — the reference is in your message"
-      );
+      // The chips above the box show what is attached: no toast over it.
     }
     if (r.refused.some((x) => x.secret))
       useHubUi.getState().setOpen(true);
@@ -183,11 +202,46 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
         /* not ours */
       }
     },
+    chips: refsIn.length ? (
+      <div className="hub-att-chips" aria-label="From the hub">
+        {refsIn.map((ref) => {
+          const it = (hub.data?.items || []).find((i) => i.ref === ref);
+          return (
+            <span key={ref} className={"hub-att-chip" + (it ? "" : " is-unknown")} title={it ? it.name + " — " + ref : ref + " is not in the hub"}>
+              {it?.kind === "image" ? (
+                <img src={rawUrl(it)} alt="" className="hub-att-thumb" />
+              ) : (
+                <span className="hub-att-ext" aria-hidden="true">
+                  {it ? (it.name.match(/\.([A-Za-z0-9]{1,4})$/) || [])[1] || (it.kind === "text" ? "txt" : "file") : "?"}
+                </span>
+              )}
+              <span className="hub-att-name">{it ? it.name : ref + " — not in the hub"}</span>
+              <button
+                type="button"
+                className="hub-att-x"
+                aria-label={"Take " + (it ? it.name : ref) + " out of the message"}
+                onClick={() => {
+                  setValue(removeRef(valueRef.current, ref));
+                  setTimeout(() => box.current?.focus(), 0);
+                }}
+              >
+                ✕
+              </button>
+            </span>
+          );
+        })}
+      </div>
+    ) : null,
     popup:
-      tok && matches.length ? (
-        <ul className="hub-pick" role="listbox" aria-label="Hub items — Enter or Tab puts the reference in">
+      tok && matches.length && pickAt ? createPortal(
+        <ul
+          className="hub-pick hub-pick-float"
+          role="listbox"
+          aria-label="Hub items — Enter or Tab puts the code in"
+          style={{ left: pickAt.left, top: pickAt.top, bottom: pickAt.bottom, width: pickAt.width }}
+        >
           <li className="hub-pick-head" role="presentation" aria-hidden="true">
-            Hub items · Enter puts the reference in
+            Hub items · Enter puts the code in
           </li>
           {matches.map((it, i) => (
             <li
@@ -199,21 +253,46 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
                 choose(it);
               }}
             >
-              <span className="hub-pick-ref">{it.ref}</span>
+              {it.kind === "image" ? (
+                <img src={rawUrl(it)} alt="" className="hub-pick-thumb" loading="lazy" />
+              ) : (
+                <span className="hub-pick-thumb hub-pick-thumb-file" aria-hidden="true" />
+              )}
               <span className="hub-pick-name">{it.name}</span>
+              <span className="hub-pick-ref">{it.ref}</span>
               <span className="hub-pick-ref">{humanSize(it.size)}</span>
             </li>
           ))}
-        </ul>
-      ) : tok && hub.data && !hub.data.items.length ? (
-        <ul className="hub-pick" role="listbox" aria-label="Hub items">
+        </ul>,
+        document.body
+      ) : tok && hub.data && !hub.data.items.length && pickAt ? createPortal(
+        <ul className="hub-pick hub-pick-float" role="listbox" aria-label="Hub items" style={{ left: pickAt.left, top: pickAt.top, bottom: pickAt.bottom, width: pickAt.width }}>
           <li className="hub-pick-head" role="presentation">
             The hub is empty — paste a file here, or use the paperclip
           </li>
-        </ul>
+        </ul>,
+        document.body
       ) : null,
     attach: guest ? null : <HubAttachButton onInsert={insert} onUpload={upload} />,
   };
+}
+
+/** The hub codes a message points at, in order, each once. */
+export function attachedRefs(text: string): string[] {
+  const out: string[] = [];
+  const re = /(?<![A-Za-z0-9_./:@-])hub:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/gi;
+  for (const m of (text || "").matchAll(re)) {
+    const ref = "hub:" + m[1].toLowerCase();
+    if (!out.includes(ref)) out.push(ref);
+  }
+  return out;
+}
+
+/** `text` without the code `ref` (every occurrence, and the space after). */
+export function removeRef(text: string, ref: string): string {
+  const id = ref.replace(/^hub:/i, "");
+  const re = new RegExp("(?<![A-Za-z0-9_./:@-])hub:" + id + "(?![A-Za-z0-9_]) ?", "gi");
+  return text.replace(re, "").replace(/ {2,}/g, " ");
 }
 
 /** The paperclip: attach an item from the hub, or upload into it. */

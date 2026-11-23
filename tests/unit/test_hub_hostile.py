@@ -20,6 +20,7 @@ import pytest
 from backend.web.core import hub
 from backend.web.core.send_session import Refusal
 from tests.unit.test_hub import (
+    K,
     PNG,
     _add_png,
     _add_text,
@@ -94,7 +95,9 @@ def test_an_item_folder_swapped_for_a_link_is_never_followed(world):
     assert r.status_code == 410 and b"SECRET" not in r.content
     r = client.get("/api/hub/items/%s/text" % rec["id"])
     assert r.status_code == 410
-    r = client.post("/api/instances/beta/hub/take", json={"id": rec["id"]})
+    r = client.post(
+        "/api/instances/beta/hub/take", json={"key": K("beta"), "id": rec["id"]}
+    )
     assert r.status_code == 410
     # Expiry removes the LINK, never what it points at.
     doc = hub._load()
@@ -121,7 +124,11 @@ def test_an_agent_put_of_a_fifo_is_refused_without_blocking(world):
     done = []
 
     def go():
-        done.append(client.post("/api/instances/alpha/hub/put", json={"path": "pipe"}))
+        done.append(
+            client.post(
+                "/api/instances/alpha/hub/put", json={"key": K("alpha"), "path": "pipe"}
+            )
+        )
 
     t = threading.Thread(target=go, daemon=True)
     t.start()
@@ -143,14 +150,23 @@ def test_the_incoming_folder_as_a_link_is_refused(world):
     assert os.listdir(target) == []
 
 
-def test_take_into_a_dot_folder_works_but_never_into_git_or_agent_config(world):
+def test_take_into_a_harmless_dot_folder_works_but_never_into_git_or_agent_config(
+    world,
+):
     rec = _add_png()
+    # A harmless dot-folder: under hub/ for an agent, anywhere for the owner.
     r = client.post(
         "/api/instances/beta/hub/take",
-        json={"id": rec["id"], "path": ".github/shot.png"},
+        json={"key": K("beta"), "id": rec["id"], "path": "hub/.assets/shot.png"},
+    )
+    assert r.status_code == 200
+    r = client.post(
+        "/api/hub/items/%s/copy-to" % rec["id"],
+        json={"session": "beta", "path": ".storybook/shot.png"},
     )
     assert (
-        r.status_code == 200 and (world.wts["beta"] / ".github" / "shot.png").exists()
+        r.status_code == 200
+        and (world.wts["beta"] / ".storybook" / "shot.png").exists()
     )
     for bad in (
         ".git/x.png",
@@ -160,7 +176,8 @@ def test_take_into_a_dot_folder_works_but_never_into_git_or_agent_config(world):
         "CON/x.png",
     ):
         r = client.post(
-            "/api/instances/beta/hub/take", json={"id": rec["id"], "path": bad}
+            "/api/instances/beta/hub/take",
+            json={"key": K("beta"), "id": rec["id"], "path": bad},
         )
         assert r.status_code in (400, 403), bad
 
@@ -173,7 +190,8 @@ def test_take_replace_never_follows_a_link_at_the_destination(world):
     dest.mkdir()
     os.symlink(victim, dest / "shot.png")
     r = client.post(
-        "/api/instances/beta/hub/take", json={"id": rec["id"], "replace": True}
+        "/api/instances/beta/hub/take",
+        json={"key": K("beta"), "id": rec["id"], "replace": True},
     )
     assert r.status_code == 409
     assert victim.read_text() == "keep me"
@@ -308,9 +326,14 @@ def test_hub_routes_are_never_forwarded_to_another_device(world):
 
 
 def test_an_agent_cannot_remove_by_spoofing_its_title_case(world):
-    rec = client.post("/api/instances/alpha/hub/put", json={"text": "mine"}).json()
-    r = client.delete("/api/instances/ALPHA/hub/items/" + rec["id"])
-    assert r.status_code == 403
+    rec = client.post(
+        "/api/instances/alpha/hub/put", json={"key": K("alpha"), "text": "mine"}
+    ).json()
+    r = client.post(
+        "/api/instances/ALPHA/hub/remove", json={"id": rec["id"], "key": K("ALPHA")}
+    )
+    assert r.status_code in (403, 404)
+    assert hub.get(rec["id"])
 
 
 # --------------------------------------------------------------------------- #

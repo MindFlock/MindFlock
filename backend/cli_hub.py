@@ -272,23 +272,19 @@ def _pin_if(base: str, args: argparse.Namespace, rec: dict) -> None:
 
 def _cp(base: str, args: argparse.Namespace) -> int:
     if args.session:
-        body = {"id": args.ref, "replace": bool(args.replace)}
+        body = {"session": args.session, "replace": bool(args.replace)}
         if args.dest:
             body["path"] = args.dest
         res = (
             client.post(
-                base,
-                "/api/instances/%s/hub/take"
-                % urllib.parse.quote(args.session, safe=""),
-                body,
-                timeout=300.0,
+                base, "/api/hub/items/%s/copy-to" % _id(args.ref), body, timeout=300.0
             )
             or {}
         )
         print(
-            "%s %s into %s: %s"
+            "%s %s in %s's folder at %s"
             % (
-                "replaced" if res.get("replaced") else "copied",
+                "replaced" if res.get("replaced") else "saved a copy of",
                 args.ref,
                 args.session,
                 res.get("path"),

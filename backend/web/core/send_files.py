@@ -287,6 +287,7 @@ def _open_under(root: str, rel: str) -> int:
     if not parts or any(p in (".", "..") for p in parts):
         raise OSError("not a path inside the worktree: %r" % rel)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
     if os.open in getattr(os, "supports_dir_fd", set()) and nofollow:
         dirfd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
@@ -298,18 +299,22 @@ def _open_under(root: str, rel: str) -> int:
                 )
                 os.close(dirfd)
                 dirfd = nxt
-            fd = os.open(parts[-1], os.O_RDONLY | nofollow, dir_fd=dirfd)
+            # Non-blocking: a FIFO swapped in after a caller's lstat opens at
+            # once (and is refused below) instead of hanging the thread.
+            fd = os.open(parts[-1], os.O_RDONLY | nofollow | nonblock, dir_fd=dirfd)
         finally:
             os.close(dirfd)
     else:
         full = os.path.join(root, *parts)
-        fd = os.open(full, os.O_RDONLY | nofollow)
+        fd = os.open(full, os.O_RDONLY | nofollow | nonblock)
         if os.path.realpath(full) != os.path.normpath(full):
             os.close(fd)
             raise OSError("%s now leads outside the worktree" % rel)
     if not stat.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)
         raise OSError("%s is no longer a regular file" % rel)
+    if nonblock and hasattr(os, "set_blocking"):
+        os.set_blocking(fd, True)
     return fd
 
 

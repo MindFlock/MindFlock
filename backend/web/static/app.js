@@ -24257,7 +24257,7 @@ function pathBasename(p) {
 	const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
 	return i >= 0 ? s.slice(i + 1) : s;
 }
-function firstLine$1(text) {
+function firstLine$2(text) {
 	for (const l of String(text || "").split("\n")) {
 		const t = l.trim();
 		if (t) return t;
@@ -28696,6 +28696,28 @@ async function expandRefs(text) {
 		};
 	}
 }
+async function typeIntoAgent(session, text) {
+	try {
+		return {
+			ok: true,
+			note: (await instApi(session, "/send", { json: {
+				text,
+				submit: false,
+				dialog_safe: true
+			} }))?.hub_note || ""
+		};
+	} catch (err) {
+		const e = err;
+		if (e?.status === 409 && e.body?.in_dialog) return {
+			ok: false,
+			note: "The agent is asking something on screen — answer it first; nothing was typed"
+		};
+		return {
+			ok: false,
+			note: "Couldn't type it into the agent: " + (e?.message || "error")
+		};
+	}
+}
 //#endregion
 //#region src/lib/clipboard.ts
 function copyText(text) {
@@ -28807,9 +28829,12 @@ function attachFileDrop(host, term, session, canSend) {
 		else if (text) {
 			if (canSend && !canSend()) return;
 			if (REF_RE.test(text)) {
-				expandRefs(text).then((r) => {
+				if (session) typeIntoAgent(session, text).then((r) => {
+					toast(r.ok ? r.note || "Pasted with the hub item's path" : r.note);
+				});
+				else expandRefs(text).then((r) => {
 					term.paste(r.text);
-					toast(r.note || (r.text !== text ? "Pasted with the hub item's path" : "Pasted " + text.length + " chars"));
+					toast(r.note || "Pasted " + text.length + " chars");
 				});
 				return;
 			}
@@ -28842,7 +28867,10 @@ function attachFileDrop(host, term, session, canSend) {
 			host.classList.remove("file-drop");
 			if (canSend && !canSend()) return;
 			const ref = ev.dataTransfer.getData("text/plain");
-			expandRefs(ref).then((r) => {
+			if (session) typeIntoAgent(session, ref + " ").then((r) => {
+				toast(r.ok ? r.note || ref + " is in the prompt — add your words and press Enter" : r.note);
+			});
+			else expandRefs(ref).then((r) => {
 				term.paste(r.text + " ");
 				toast(r.note || "Put " + ref + " in the prompt — add your words and press Enter");
 			});
@@ -30611,11 +30639,22 @@ function bridgeHubEvents() {
 }
 var _n = 0;
 var useHubUi = create((set, get) => ({
+	notice: null,
+	problems: [],
 	open: false,
-	setOpen: (v) => set({ open: v }),
-	toggle: () => set({ open: !get().open }),
+	setOpen: (v) => {
+		if (v) markHubSeen();
+		set({ open: v });
+	},
+	toggle: () => {
+		if (!get().open) markHubSeen();
+		set({ open: !get().open });
+	},
 	sending: null,
-	openSend: (item) => set({ sending: item }),
+	openSend: (item) => set(item ? {
+		sending: item,
+		notice: null
+	} : { sending: null }),
 	insert: null,
 	insertInto: (title, text) => set({ insert: {
 		title,
@@ -30623,6 +30662,65 @@ var useHubUi = create((set, get) => ({
 		n: ++_n
 	} })
 }));
+function say(text, opts = {}) {
+	const ms = opts.ms ?? (opts.actions?.length ? 9e3 : Math.max(2500, Math.min(7e3, 1200 + text.length * 45)));
+	useHubUi.setState({ notice: {
+		text,
+		error: !!opts.error,
+		actions: opts.actions,
+		n: ++_n,
+		ms
+	} });
+}
+function hush() {
+	useHubUi.setState({ notice: null });
+}
+var _p = 0;
+function addProblem(text, raiseTo) {
+	useHubUi.setState((s) => ({ problems: [...s.problems.slice(-3), {
+		id: ++_p,
+		text,
+		raiseTo
+	}] }));
+}
+function dropProblem(id) {
+	useHubUi.setState((s) => ({ problems: s.problems.filter((p) => p.id !== id) }));
+}
+function flashTarget(title) {
+	if (typeof document === "undefined") return;
+	const sel = "[data-title=\"" + (typeof CSS !== "undefined" && CSS.escape ? CSS.escape(title) : title.replace(/["\\]/g, "\\$&")) + "\"]";
+	for (const el of Array.from(document.querySelectorAll(sel))) {
+		el.classList.remove("hub-flash");
+		el.offsetWidth;
+		el.classList.add("hub-flash");
+		setTimeout(() => el.classList.remove("hub-flash"), 1800);
+	}
+}
+var SEEN_KEY = "mf_hub_seen";
+function hubSeen() {
+	try {
+		return Number(localStorage.getItem(SEEN_KEY) || 0) || 0;
+	} catch {
+		return 0;
+	}
+}
+function markHubSeen(now = Date.now() / 1e3) {
+	try {
+		localStorage.setItem(SEEN_KEY, String(now));
+	} catch {}
+}
+function newCount(items, seen = hubSeen()) {
+	return items.filter((i) => i.by !== "you" && i.added > seen).length;
+}
+function stateWord(activity) {
+	const a = String(activity || "");
+	if (a === "working") return "Working";
+	if (a === "clarify" || a === "ask" || a === "question") return "Question";
+	if (a === "limit") return "Waiting on limit";
+	if (a === "offline") return "Offline";
+	if (a === "starting" || a === "loading") return "Starting";
+	return "Idle";
+}
 function humanSize(n) {
 	if (!(n > 0)) return "0 bytes";
 	if (n < 1024) return n + (n === 1 ? " byte" : " bytes");
@@ -30643,10 +30741,10 @@ function kindLabel$1(it) {
 	return ext ? ext.toUpperCase() + " file" : "File";
 }
 function expiryLabel(it, now = Date.now() / 1e3) {
-	if (it.pinned || !it.expires) return "pinned — kept";
+	if (it.pinned || !it.expires) return "Pinned — kept until you remove it";
 	const d = Math.max(0, (it.expires - now) / 86400);
-	if (d < 1) return "goes today unless used";
-	return "goes in " + Math.ceil(d) + (Math.ceil(d) === 1 ? " day" : " days") + " unless used";
+	if (d < 1) return "Deleted automatically today unless used — Pin to keep";
+	return "Deleted automatically in " + Math.ceil(d) + (Math.ceil(d) === 1 ? " day" : " days") + " unless used — Pin to keep";
 }
 function rawUrl(it, download = false) {
 	return "/api/hub/items/" + encodeURIComponent(it.id) + "/raw" + (download ? "?download=1" : "");
@@ -30698,10 +30796,12 @@ async function addFiles(files, opts = {}) {
 			out.added.push(await addFile(f, opts));
 		} catch (err) {
 			const body = err?.body;
+			const raiseTo = body?.code === "too_large" && f.size > 0 ? Math.min(65536, Math.ceil(f.size / 1048576 / 50) * 50 + 50) : void 0;
 			out.refused.push({
 				file: f,
 				error: errMsg(err),
-				secret: body?.code === "secret"
+				secret: body?.code === "secret",
+				raiseTo
 			});
 		}
 	}
@@ -30733,30 +30833,48 @@ function addedToast(r) {
 		copyText(it.ref);
 		const focused = useUi.getState().focused;
 		const here = focused && !focused.includes("::") ? focused : "";
-		toast("Added " + it.name + " — reference " + it.ref + " (copied)", here ? {
-			duration: 9e3,
-			action: {
-				label: "Put in " + displayName(here) + "'s prompt",
-				ariaLabel: "Put " + it.ref + " in " + displayName(here) + "'s prompt",
-				onClick: () => void putInPrompt(here, it, "", { focus: true })
-			}
-		} : void 0);
-	} else if (r.added.length > 1) toast("Added " + r.added.length + " items to the hub");
-	const plain = r.refused.filter((x) => !x.secret);
-	if (plain.length) toast("Couldn't add " + plain.map((x) => x.file.name + ": " + x.error).join("; "), { error: true });
+		say("Added " + it.name + " — code " + it.ref + " copied to clipboard", here ? { actions: [{
+			label: "Put in " + displayName(here) + "'s prompt",
+			run: () => void putInPrompt(here, it, "", { focus: true })
+		}] } : {});
+	} else if (r.added.length > 1) say("Added " + r.added.length + " items to the hub");
+	for (const x of r.refused.filter((x) => !x.secret)) addProblem("Couldn't add " + x.file.name + ": " + x.error, x.raiseTo);
+}
+async function raiseItemLimit(mb) {
+	try {
+		await api("/api/settings", { json: { hub: { item_mb: mb } } });
+		refreshHub();
+		say("Each item can now be up to " + mb + " MB — add the file again");
+		return true;
+	} catch (err) {
+		say("Couldn't raise the limit: " + errMsg(err), { error: true });
+		return false;
+	}
+}
+async function rebuildHub() {
+	try {
+		const r = await api("/api/hub/rebuild", { method: "POST" });
+		refreshHub();
+		say("Rebuilt the hub: " + r.items + (r.items === 1 ? " item" : " items") + " — nothing was lost");
+	} catch (err) {
+		say("Couldn't rebuild the hub: " + errMsg(err), { error: true });
+	}
 }
 async function copyRef(it) {
-	toast(await copyText(it.ref) ? "Copied " + it.ref + " — paste it into any prompt or terminal" : "Couldn't copy — the reference is " + it.ref);
+	const ok = await copyText(it.ref);
+	say(ok ? "Code copied to clipboard — paste " + it.ref + " into any prompt or terminal" : "Couldn't copy — the code is " + it.ref, { error: !ok });
 }
 async function copyPath(it) {
-	toast(await copyText(it.path) ? "Copied the path of " + it.name : "Couldn't copy — the path is " + it.path);
+	const ok = await copyText(it.path);
+	say(ok ? "Path of " + it.name + " copied to clipboard" : "Couldn't copy — the path is " + it.path, { error: !ok });
 }
 async function copyItemText(it) {
 	try {
 		const r = await api("/api/hub/items/" + encodeURIComponent(it.id) + "/text");
-		toast(await copyText(r.text) ? (r.truncated ? "Copied the first 1 MB of " : "Copied the text of ") + it.name : "Couldn't copy the text");
+		const ok = await copyText(r.text);
+		say(ok ? (r.truncated ? "The first 1 MB of " : "The text of ") + it.name + " copied to clipboard" : "Couldn't copy the text", { error: !ok });
 	} catch (err) {
-		toast("Couldn't copy the text: " + errMsg(err));
+		say("Couldn't copy the text: " + errMsg(err), { error: true });
 	}
 }
 function canCopyImage() {
@@ -30770,9 +30888,9 @@ async function copyImage(it) {
 		if (blob.type !== "image/png") blob = await toPng(blob);
 		const Item = globalThis.ClipboardItem;
 		await navigator.clipboard.write([new Item({ "image/png": blob })]);
-		toast("Copied the image " + it.name);
+		say("The image " + it.name + " copied to clipboard");
 	} catch (err) {
-		toast("Couldn't copy the image here (" + errMsg(err) + ") — use Download, or Copy reference");
+		say("Couldn't copy the image here (" + errMsg(err) + ") — use Download, or Copy code", { error: true });
 	}
 }
 async function toPng(blob) {
@@ -30792,9 +30910,18 @@ function download(it) {
 	a.click();
 	a.remove();
 }
+async function openQueue(title) {
+	useUi.getState().setLastTab(title, "queue");
+	const { selectSession } = await __vitePreload(async () => {
+		const { selectSession } = await Promise.resolve().then(() => sessionActions_exports);
+		return { selectSession };
+	}, void 0);
+	selectSession(title);
+}
 async function putInPrompt(title, it, message = "", opts = {}) {
 	const msg = message.trim();
 	const text = msg ? msg + " " + it.ref : it.ref + " ";
+	const name = displayName(title);
 	try {
 		const r = await instApi(title, "/send", { json: msg ? {
 			text,
@@ -30804,9 +30931,13 @@ async function putInPrompt(title, it, message = "", opts = {}) {
 			submit: false,
 			dialog_safe: true
 		} });
-		if (msg) toast(r?.queued ? displayName(title) + " is busy — your message with " + it.ref + " is queued; it gets it when it's free" : "Sent to " + displayName(title) + " with " + it.ref);
-		else toast(it.ref + " is in " + displayName(title) + "'s prompt — add your words there and press Enter");
-		if (opts.focus && !msg) {
+		if (msg && r?.queued) say(name + " is busy — your message with " + it.ref + " is queued; it gets it when it's free", { actions: [{
+			label: "Open queue",
+			run: () => void openQueue(title)
+		}] });
+		else if (msg) say("Sent to " + name + " with " + it.ref);
+		else say(it.ref + " is in " + name + "'s prompt — add your words there and press Enter");
+		if (opts.focus) {
 			useHubUi.getState().setOpen(false);
 			const { selectSession } = await __vitePreload(async () => {
 				const { selectSession } = await Promise.resolve().then(() => sessionActions_exports);
@@ -30814,29 +30945,44 @@ async function putInPrompt(title, it, message = "", opts = {}) {
 			}, void 0);
 			selectSession(title);
 		}
+		flashTarget(title);
 		return true;
 	} catch (err) {
 		if (err?.status === 409) {
 			useHubUi.getState().insertInto(title, text);
 			useUi.getState().threadOpen(title);
-			toast(displayName(title) + " is busy with a prompt — " + it.ref + " is in its Thread box; send it from there");
+			if (opts.focus) useHubUi.getState().setOpen(false);
+			flashTarget(title);
+			say(name + " is answering a question — " + it.ref + " is in its Thread box; send it from there");
 			return true;
 		}
-		toast("Couldn't send " + it.ref + " to " + displayName(title) + ": " + errMsg(err));
+		say("Couldn't send " + it.ref + " to " + name + ": " + errMsg(err), { error: true });
 		return false;
 	}
 }
-async function copyInto(title, it, path, replace) {
-	const r = await instApi(title, "/hub/take", { json: {
-		id: it.id,
+async function copyInto(title, it, path, replace, tell = false) {
+	const r = await api("/api/hub/items/" + encodeURIComponent(it.id) + "/copy-to", { json: {
+		session: title,
 		path,
 		replace
 	} });
-	toast((r.replaced ? "Replaced " : "Copied " + it.name + " into ") + displayName(title) + (r.replaced ? "'s " + r.path : " at " + r.path));
+	const name = displayName(title);
+	let told = false;
+	if (tell) try {
+		await instApi(title, "/send", { json: {
+			text: "I saved " + it.name + " in your project folder at " + r.path + " (from the MindFlock hub; you can read it there).",
+			dialog_safe: true
+		} });
+		told = true;
+	} catch {
+		told = false;
+	}
+	flashTarget(title);
+	say((r.replaced ? "Replaced " + r.path + " in " + name + "'s folder" : "Saved a copy at " + r.path + " in " + name + "'s folder") + (tell ? told ? " — and told " + name : " — couldn't tell " + name + " (it may be offline)" : ""));
 	return r;
 }
 async function freePath(title, it, path = "") {
-	return instApi(title, "/hub/free?id=" + encodeURIComponent(it.id) + (path ? "&path=" + encodeURIComponent(path) : ""));
+	return api("/api/hub/items/" + encodeURIComponent(it.id) + "/free?session=" + encodeURIComponent(title) + (path ? "&path=" + encodeURIComponent(path) : ""));
 }
 async function updateItem(it, patch) {
 	try {
@@ -30847,7 +30993,7 @@ async function updateItem(it, patch) {
 		refreshHub();
 		return r;
 	} catch (err) {
-		toast("Couldn't change " + it.name + ": " + errMsg(err));
+		say("Couldn't change " + it.name + ": " + errMsg(err), { error: true });
 		return null;
 	}
 }
@@ -30855,22 +31001,21 @@ async function removeItem$1(it) {
 	try {
 		await api("/api/hub/items/" + encodeURIComponent(it.id), { method: "DELETE" });
 	} catch (err) {
-		toast("Couldn't remove " + it.name + ": " + errMsg(err));
+		say("Couldn't remove " + it.name + ": " + errMsg(err), { error: true });
 		return;
 	}
 	refreshHub();
-	toast("Removed " + it.name + " from the hub", {
-		duration: UNDO_MS,
-		action: {
+	say("Removed " + it.name + " from the hub", {
+		actions: [{
 			label: "Undo",
-			ariaLabel: "Undo removing " + it.name,
-			onClick: () => {
+			run: () => {
 				api("/api/hub/items/" + encodeURIComponent(it.id) + "/restore", { method: "POST" }).then(() => {
 					refreshHub();
-					toast("Put " + it.name + " back");
-				}).catch((err) => toast("Couldn't put it back: " + errMsg(err)));
+					say("Put " + it.name + " back");
+				}).catch((err) => say("Couldn't put it back: " + errMsg(err), { error: true }));
 			}
-		}
+		}],
+		ms: UNDO_MS
 	});
 }
 //#endregion
@@ -34940,7 +35085,7 @@ function runChordAction(id, title) {
 }
 //#endregion
 //#region src/lib/splitRun.ts
-function firstLine(text, max = 120) {
+function firstLine$1(text, max = 120) {
 	const s = String(text || "").trim().split(/\r?\n/)[0].trim();
 	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
 }
@@ -34961,9 +35106,9 @@ function pieceLabel(t, run) {
 	const p = t.kind === "piece" && ix >= 0 ? pieces[ix] : void 0;
 	if (p) return {
 		name: p.title,
-		what: firstLine(p.prompt, 90)
+		what: firstLine$1(p.prompt, 90)
 	};
-	const what = firstLine(t.text, 90);
+	const what = firstLine$1(t.text, 90);
 	return {
 		name: t.title || what || t.id,
 		what: t.title && what !== t.title ? what : ""
@@ -64507,7 +64652,7 @@ function fitTopBar({ room, fixed, brand, items, more }) {
 		shown
 	};
 }
-var HUB_TITLE = "Hub — files, pictures and snippets every session can use: drop or paste them here, then put their reference (hub:…) in any prompt";
+var HUB_TITLE = "Hub — files and text every session can use";
 function TopBar() {
 	const ui = useUi(useShallow((s) => ({
 		narrow: s.narrow,
@@ -64522,8 +64667,9 @@ function TopBar() {
 	const sched = useScheduleStatus();
 	const schedFailing = failingSchedules(sched.templates, sched.status).length;
 	const guest = !!useConfig().data?.guest;
-	const hubCount = useHub(!guest).data?.count || 0;
 	const hubOpen = useHubUi((s) => s.open);
+	const hubItems = useHub(!guest).data?.items;
+	const hubCount = hubOpen ? 0 : newCount(hubItems || []);
 	const perch = needsYouBadge(useNeedsYou());
 	const quiet = topBarQuiet({
 		calm: useCalm(),
@@ -64582,7 +64728,7 @@ function TopBar() {
 		},
 		!guest && {
 			key: "hub",
-			label: hubCount ? "Hub · " + hubCount : "Hub",
+			label: hubCount ? "Hub · " + hubCount + " new" : "Hub",
 			title: HUB_TITLE + keys("hub"),
 			count: 0,
 			failing: false,
@@ -64833,12 +64979,28 @@ function TopBar() {
 							type: "button",
 							title: HUB_TITLE + keys("hub"),
 							"aria-pressed": hubOpen,
-							"aria-label": hubCount ? "Hub, " + hubCount + (hubCount === 1 ? " item" : " items") : "Hub",
+							"aria-label": hubCount ? "Hub, " + hubCount + " new" : "Hub",
 							onClick: () => useHubUi.getState().toggle(),
-							children: ["Hub", hubCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "tb-count is-quiet",
-								children: hubCount
-							})]
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+									className: "tb-hub-icon",
+									viewBox: "0 0 24 24",
+									width: "14",
+									height: "14",
+									fill: "none",
+									stroke: "currentColor",
+									strokeWidth: "2",
+									strokeLinejoin: "round",
+									"aria-hidden": "true",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 8l9-5 9 5-9 5z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 13l9 5 9-5" })]
+								}),
+								"Hub",
+								hubCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "tb-count is-new",
+									title: hubCount + " added by an agent or your phone since you last looked",
+									children: [hubCount, " new"]
+								})
+							]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							id: "settings-btn",
@@ -65999,7 +66161,7 @@ function withHubDrop(title, dnd, enabled = true) {
 			ev.currentTarget.classList.remove("hub-drop-target");
 			try {
 				const it = JSON.parse(ev.dataTransfer.getData(HUB_MIME));
-				if (it?.ref) putInPrompt(title, it);
+				if (it?.ref) putInPrompt(title, it, "", { focus: true });
 			} catch {}
 		}
 	};
@@ -68409,7 +68571,7 @@ function MidName({ text }) {
 //#endregion
 //#region src/components/sidebar/TaskLine.tsx
 function taskLineOf(inst) {
-	const text = String(inst.task_headline || inst.last_prompt || firstLine$1(inst.task) || "").trim();
+	const text = String(inst.task_headline || inst.last_prompt || firstLine$2(inst.task) || "").trim();
 	return {
 		text,
 		title: String(inst.task_headline_prompt || inst.last_prompt_full || inst.last_prompt || inst.task || text).trim()
@@ -71910,7 +72072,7 @@ function bulkEscape(ask) {
 	return ask ? "cancel-ask" : "leave";
 }
 function shortReason$1(msg, max = 80) {
-	const line = firstLine$1(msg) || "error";
+	const line = firstLine$2(msg) || "error";
 	return line.length > max ? line.slice(0, max - 1).trimEnd() + "…" : line;
 }
 function bulkFailText(failed) {
@@ -77724,7 +77886,27 @@ function useHubComposer({ box, value, setValue, title }) {
 	const [tok, setTok] = (0, import_react.useState)(null);
 	const [sel, setSel] = (0, import_react.useState)(0);
 	const [dropping, setDropping] = (0, import_react.useState)(false);
-	const hub = useHub(!guest && !!tok);
+	const refsIn = (0, import_react.useMemo)(() => attachedRefs(value), [value]);
+	const hub = useHub(!guest && (!!tok || refsIn.length > 0));
+	const [pickAt, setPickAt] = (0, import_react.useState)(null);
+	(0, import_react.useLayoutEffect)(() => {
+		if (!tok) {
+			setPickAt(null);
+			return;
+		}
+		const r = box.current?.getBoundingClientRect();
+		if (!r) return;
+		const width = Math.min(380, Math.max(240, r.width - 16));
+		setPickAt(r.top > 300 ? {
+			left: r.left + 8,
+			bottom: window.innerHeight - r.top + 4,
+			width
+		} : {
+			left: r.left + 8,
+			top: r.bottom + 4,
+			width
+		});
+	}, [tok, box]);
 	const matches = (0, import_react.useMemo)(() => tok ? matchItems(hub.data?.items || [], tok.query) : [], [tok, hub.data]);
 	const valueRef = (0, import_react.useRef)(value);
 	valueRef.current = value;
@@ -77764,10 +77946,7 @@ function useHubComposer({ box, value, setValue, title }) {
 			added: [],
 			refused: r.refused
 		});
-		if (r.added.length) {
-			insert(r.added.map((a) => a.ref).join(" "));
-			toast((r.added.length === 1 ? r.added[0].name + " is" : r.added.length + " files are") + " in the hub — the reference is in your message");
-		}
+		if (r.added.length) insert(r.added.map((a) => a.ref).join(" "));
 		if (r.refused.some((x) => x.secret)) useHubUi.getState().setOpen(true);
 	};
 	const isHub = (e) => Array.from(e.dataTransfer.types || []).includes(HUB_MIME);
@@ -77835,15 +78014,57 @@ function useHubComposer({ box, value, setValue, title }) {
 				if (it?.ref) insert(it.ref);
 			} catch {}
 		},
-		popup: tok && matches.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
-			className: "hub-pick",
+		chips: refsIn.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "hub-att-chips",
+			"aria-label": "From the hub",
+			children: refsIn.map((ref) => {
+				const it = (hub.data?.items || []).find((i) => i.ref === ref);
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "hub-att-chip" + (it ? "" : " is-unknown"),
+					title: it ? it.name + " — " + ref : ref + " is not in the hub",
+					children: [
+						it?.kind === "image" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+							src: rawUrl(it),
+							alt: "",
+							className: "hub-att-thumb"
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "hub-att-ext",
+							"aria-hidden": "true",
+							children: it ? (it.name.match(/\.([A-Za-z0-9]{1,4})$/) || [])[1] || (it.kind === "text" ? "txt" : "file") : "?"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "hub-att-name",
+							children: it ? it.name : ref + " — not in the hub"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "hub-att-x",
+							"aria-label": "Take " + (it ? it.name : ref) + " out of the message",
+							onClick: () => {
+								setValue(removeRef(valueRef.current, ref));
+								setTimeout(() => box.current?.focus(), 0);
+							},
+							children: "✕"
+						})
+					]
+				}, ref);
+			})
+		}) : null,
+		popup: tok && matches.length && pickAt ? (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+			className: "hub-pick hub-pick-float",
 			role: "listbox",
-			"aria-label": "Hub items — Enter or Tab puts the reference in",
+			"aria-label": "Hub items — Enter or Tab puts the code in",
+			style: {
+				left: pickAt.left,
+				top: pickAt.top,
+				bottom: pickAt.bottom,
+				width: pickAt.width
+			},
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 				className: "hub-pick-head",
 				role: "presentation",
 				"aria-hidden": "true",
-				children: "Hub items · Enter puts the reference in"
+				children: "Hub items · Enter puts the code in"
 			}), matches.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 				role: "option",
 				"aria-selected": i === sel,
@@ -77852,9 +78073,14 @@ function useHubComposer({ box, value, setValue, title }) {
 					choose(it);
 				},
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "hub-pick-ref",
-						children: it.ref
+					it.kind === "image" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+						src: rawUrl(it),
+						alt: "",
+						className: "hub-pick-thumb",
+						loading: "lazy"
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "hub-pick-thumb hub-pick-thumb-file",
+						"aria-hidden": "true"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "hub-pick-name",
@@ -77862,25 +78088,48 @@ function useHubComposer({ box, value, setValue, title }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "hub-pick-ref",
+						children: it.ref
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "hub-pick-ref",
 						children: humanSize(it.size)
 					})
 				]
 			}, it.id))]
-		}) : tok && hub.data && !hub.data.items.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-			className: "hub-pick",
+		}), document.body) : tok && hub.data && !hub.data.items.length && pickAt ? (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "hub-pick hub-pick-float",
 			role: "listbox",
 			"aria-label": "Hub items",
+			style: {
+				left: pickAt.left,
+				top: pickAt.top,
+				bottom: pickAt.bottom,
+				width: pickAt.width
+			},
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 				className: "hub-pick-head",
 				role: "presentation",
 				children: "The hub is empty — paste a file here, or use the paperclip"
 			})
-		}) : null,
+		}), document.body) : null,
 		attach: guest ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubAttachButton, {
 			onInsert: insert,
 			onUpload: upload
 		})
 	};
+}
+function attachedRefs(text) {
+	const out = [];
+	for (const m of (text || "").matchAll(/(?<![A-Za-z0-9_./:@-])hub:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/gi)) {
+		const ref = "hub:" + m[1].toLowerCase();
+		if (!out.includes(ref)) out.push(ref);
+	}
+	return out;
+}
+function removeRef(text, ref) {
+	const id = ref.replace(/^hub:/i, "");
+	const re = new RegExp("(?<![A-Za-z0-9_./:@-])hub:" + id + "(?![A-Za-z0-9_]) ?", "gi");
+	return text.replace(re, "").replace(/ {2,}/g, " ");
 }
 function HubAttachButton(props) {
 	const [open, setOpen] = (0, import_react.useState)(false);
@@ -78270,27 +78519,31 @@ function QueueTab$1({ title, active }) {
 				onDragOver: hubc.onDragOver,
 				onDragLeave: hubc.onDragLeave,
 				onDrop: hubc.onDrop,
-				children: [hubc.popup, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-					ref: draftBox,
-					className: "queue-input",
-					rows: 3,
-					placeholder: "Type a prompt — Add to queue (Alt+Enter), or Send now (Ctrl+Enter)",
-					"aria-label": "Prompt for " + displayName(title),
-					value: draft,
-					onChange: (e) => {
-						setDraft(e.target.value);
-						hubc.onInput(e.target);
-					},
-					onPaste: hubc.onPaste,
-					onKeyDown: (e) => {
-						if (hubc.onKeyDown(e)) return;
-						const k = composerKey(e);
-						if (!k) return;
-						e.preventDefault();
-						e.stopPropagation();
-						k === "send" ? send() : add();
-					}
-				})]
+				children: [
+					hubc.popup,
+					hubc.chips,
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+						ref: draftBox,
+						className: "queue-input",
+						rows: 3,
+						placeholder: "Type a prompt — Add to queue (Alt+Enter), or Send now (Ctrl+Enter)",
+						"aria-label": "Prompt for " + displayName(title),
+						value: draft,
+						onChange: (e) => {
+							setDraft(e.target.value);
+							hubc.onInput(e.target);
+						},
+						onPaste: hubc.onPaste,
+						onKeyDown: (e) => {
+							if (hubc.onKeyDown(e)) return;
+							const k = composerKey(e);
+							if (!k) return;
+							e.preventDefault();
+							e.stopPropagation();
+							k === "send" ? send() : add();
+						}
+					})
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "queue-actions",
@@ -80427,6 +80680,7 @@ function ThreadTab({ title, active }) {
 						children: c.label
 					}, c.key))]
 				}),
+				hubc.chips,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
 					ref: box,
 					className: "thread-input",
@@ -102800,7 +103054,7 @@ function agentTitle(provider, program) {
 }
 function agentDoing(row) {
 	if (!row) return "";
-	return firstLine$1(row.task_headline || row.task || "") || firstLine$1(row.last_prompt || "");
+	return firstLine$2(row.task_headline || row.task || "") || firstLine$2(row.last_prompt || "");
 }
 var MINI = 18;
 var MINI_GAP = 6;
@@ -109557,7 +109811,7 @@ function PaneImpl({ inst, drag = NO_DRAG, dragging = false, embedded = false }) 
 	const ghostCore = (ghost || "").replace(/[…]+\s*$/, "").replace(/\s+/g, " ").trim();
 	const fullNorm = (inst.last_prompt_full || "").replace(/\s+/g, " ");
 	const ghostIsLatest = !ghost || !!fullNorm && fullNorm.includes(ghostCore.slice(0, 80));
-	const createTask = firstLine$1(inst.task);
+	const createTask = firstLine$2(inst.task);
 	const task = inst.last_prompt || createTask || null;
 	const pinLine = ghost ?? task;
 	const [lookup, setLookup] = (0, import_react.useState)(null);
@@ -154044,7 +154298,7 @@ function SkyLine(p) {
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
 	const agent = agentTitle(row?.provider || row?.program, row?.program);
-	const doing = row ? firstLine$1(row.task_headline || row.task || "") || firstLine$1(row.last_prompt || "") : "";
+	const doing = row ? firstLine$2(row.task_headline || row.task || "") || firstLine$2(row.last_prompt || "") : "";
 	const headSub = [row?.origin?.label || "", doing].filter(Boolean).join(" · ");
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",
@@ -160176,10 +160430,13 @@ function SendDialog({ item, onClose }) {
 	const [message, setMessage] = (0, import_react.useState)("");
 	const [path, setPath] = (0, import_react.useState)("hub/" + item.name);
 	const [replace, setReplace] = (0, import_react.useState)(false);
+	const [tell, setTell] = (0, import_react.useState)(true);
 	const [taken, setTaken] = (0, import_react.useState)("");
+	const [pathErr, setPathErr] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [err, setErr] = (0, import_react.useState)("");
 	const [find, setFind] = (0, import_react.useState)("");
+	const name = title ? displayName(title) : "the session";
 	const shown = (0, import_react.useMemo)(() => {
 		const f = find.trim().toLowerCase();
 		return f ? sessions.filter((s) => (displayName(s.title) + " " + s.title).toLowerCase().includes(f)) : sessions;
@@ -160187,11 +160444,20 @@ function SendDialog({ item, onClose }) {
 	(0, import_react.useEffect)(() => {
 		if (mode !== "copy" || !title || !path.trim()) {
 			setTaken("");
+			setPathErr("");
 			return;
 		}
 		let live = true;
 		const t = setTimeout(() => {
-			freePath(title, item, path.trim()).then((r) => live && setTaken(r.taken ? r.path : "")).catch(() => live && setTaken(""));
+			freePath(title, item, path.trim()).then((r) => {
+				if (!live) return;
+				setTaken(r.taken ? r.path : "");
+				setPathErr("");
+			}).catch((e) => {
+				if (!live) return;
+				setTaken("");
+				setPathErr(errMsg(e));
+			});
 		}, 200);
 		return () => {
 			live = false;
@@ -160212,7 +160478,7 @@ function SendDialog({ item, onClose }) {
 				if (await putInPrompt(title, item, message, { focus: true })) onClose();
 			} else {
 				const dest = taken && !replace ? taken : path.trim();
-				await copyInto(title, item, dest, replace);
+				await copyInto(title, item, dest, replace, tell);
 				onClose();
 			}
 		} catch (e) {
@@ -160221,6 +160487,7 @@ function SendDialog({ item, onClose }) {
 			setBusy(false);
 		}
 	};
+	const dest = taken && !replace ? taken : path.trim();
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		onClose,
 		className: "hub-send-modal",
@@ -160257,25 +160524,32 @@ function SendDialog({ item, onClose }) {
 						className: "hub-send-list",
 						role: "radiogroup",
 						"aria-label": "Session",
-						children: [shown.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-							className: "hub-send-row" + (s.title === title ? " on" : ""),
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "radio",
-									name: "hub-send-session",
-									checked: s.title === title,
-									onChange: () => setTitle(s.title)
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "hub-send-title",
-									children: displayName(s.title)
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "hub-send-sub muted",
-									children: s.repo || s.folder_label || ""
-								})
-							]
-						}, s.title)), !shown.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						children: [shown.map((s) => {
+							const st = stateWord(effectiveActivity(s));
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "hub-send-row" + (s.title === title ? " on" : ""),
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										type: "radio",
+										name: "hub-send-session",
+										checked: s.title === title,
+										onChange: () => setTitle(s.title)
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "hub-send-title",
+										children: displayName(s.title)
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "hub-send-state is-" + st.toLowerCase().replace(/\s+/g, "-"),
+										children: st
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "hub-send-sub muted",
+										children: s.repo || s.folder_label || ""
+									})
+								]
+							}, s.title);
+						}), !shown.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 							className: "muted",
 							children: [
 								"No session matches \"",
@@ -160295,28 +160569,44 @@ function SendDialog({ item, onClose }) {
 									name: "hub-send-mode",
 									checked: mode === "prompt",
 									onChange: () => setMode("prompt")
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
-									"Put ",
-									item.ref,
-									" in its prompt"
-								] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Point the agent at it" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "muted",
-									children: " — the agent gets the file's path; nothing is copied"
+									children: " — it reads the file from the hub."
 								})] })]
 							}),
-							mode === "prompt" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-								className: "hub-send-msg",
-								rows: 2,
-								"aria-label": "Message to send with it (optional)",
-								placeholder: "Optional: a message to send with it now, e.g. “fix the layout in this screenshot”. Leave empty to type the reference into its prompt and finish it there.",
-								value: message,
-								onChange: (e) => setMessage(e.target.value),
-								onKeyDown: (e) => {
-									if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-										e.preventDefault();
-										go();
-									}
-								}
+							mode === "prompt" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "hub-send-msg-wrap",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+										className: "hub-send-label",
+										htmlFor: "hub-send-msg",
+										children: "Add a message (optional)"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+										id: "hub-send-msg",
+										className: "hub-send-msg",
+										rows: 2,
+										value: message,
+										onChange: (e) => setMessage(e.target.value),
+										onKeyDown: (e) => {
+											if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+												e.preventDefault();
+												go();
+											}
+										}
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+										className: "hub-send-help muted",
+										children: [
+											"With a message, it is sent now",
+											name ? " to " + name : "",
+											" ",
+											"(queued if it is busy). Without one, ",
+											item.ref,
+											" is typed into its prompt for you to finish there."
+										]
+									})
+								]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 								className: "hub-send-opt",
@@ -160325,37 +160615,66 @@ function SendDialog({ item, onClose }) {
 									name: "hub-send-mode",
 									checked: mode === "copy",
 									onChange: () => setMode("copy")
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Copy the file into its folder" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Save a copy in its project folder" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "muted",
-									children: " — for a file the work needs to keep (it is not committed for you)"
+									children: " — stays with the work; you still commit it."
 								})] })]
 							}),
 							mode === "copy" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "hub-send-path",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "at" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									value: path,
-									"aria-label": "Where in the session's folder",
-									spellCheck: false,
-									onChange: (e) => setPath(e.target.value)
-								})] }), taken && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-									className: "hub-send-taken",
-									role: "status",
-									children: [
-										path.trim(),
-										" already exists there —",
-										" ",
-										replace ? "it will be replaced." : "the copy goes to " + taken + ".",
-										" ",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-											className: "hub-send-replace",
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+										className: "hub-send-label",
+										htmlFor: "hub-send-path",
+										children: [
+											"Save as (inside ",
+											name,
+											"'s folder)"
+										]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										id: "hub-send-path",
+										value: path,
+										spellCheck: false,
+										"aria-invalid": !!pathErr,
+										onChange: (e) => setPath(e.target.value)
+									}),
+									pathErr ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+										className: "hub-send-err",
+										role: "alert",
+										children: pathErr
+									}) : taken && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+										className: "hub-send-taken",
+										role: "status",
+										children: [
+											path.trim(),
+											" already exists there — ",
+											replace ? "it will be replaced." : "the copy goes to " + taken + ".",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+												className: "hub-send-replace",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+													type: "checkbox",
+													checked: replace,
+													onChange: (e) => setReplace(e.target.checked)
+												}), " Replace it"]
+											})
+										]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+										className: "hub-send-replace",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 												type: "checkbox",
-												checked: replace,
-												onChange: (e) => setReplace(e.target.checked)
-											}), " Replace it"]
-										})
-									]
-								})]
+												checked: tell,
+												onChange: (e) => setTell(e.target.checked)
+											}),
+											" Tell ",
+											name,
+											" it's at ",
+											dest || "…"
+										]
+									})
+								]
 							})
 						]
 					})
@@ -160374,9 +160693,9 @@ function SendDialog({ item, onClose }) {
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "primary",
-						disabled: !title || busy || mode === "copy" && !path.trim(),
+						disabled: !title || busy || mode === "copy" && (!path.trim() || !!pathErr),
 						onClick: () => void go(),
-						children: busy ? "Sending…" : mode === "copy" ? "Copy" : message.trim() ? "Send" : "Put in prompt"
+						children: busy ? "Sending…" : mode === "copy" ? "Save copy" : "Send"
 					})]
 				})
 			]
@@ -160390,27 +160709,125 @@ function editable(t) {
 	if (!el || !el.tagName) return false;
 	return el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "INPUT" && el.type !== "button";
 }
+var PASTE_KEY = typeof navigator !== "undefined" && navigator.platform?.startsWith("Mac") ? "⌘V" : "Ctrl+V";
+var FILTERS = [
+	{
+		key: "all",
+		label: "All"
+	},
+	{
+		key: "pictures",
+		label: "Pictures"
+	},
+	{
+		key: "text",
+		label: "Text"
+	},
+	{
+		key: "agents",
+		label: "From agents"
+	}
+];
+function filterItems(items, f, find) {
+	const q = find.trim().toLowerCase();
+	return items.filter((i) => {
+		if (f === "pictures" && i.kind !== "image") return false;
+		if (f === "text" && !(i.kind === "text" || i.textual)) return false;
+		if (f === "agents" && i.by !== "session") return false;
+		if (!q) return true;
+		return i.name.toLowerCase().includes(q) || i.ref.includes(q) || (i.note || "").toLowerCase().includes(q) || whoLabel$1(i).toLowerCase().includes(q) || (i.preview || "").toLowerCase().includes(q);
+	});
+}
+function dayLabel(ts, now = Date.now() / 1e3) {
+	const d = /* @__PURE__ */ new Date(ts * 1e3);
+	const n = /* @__PURE__ */ new Date(now * 1e3);
+	const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+	const diff = Math.round((day(n) - day(d)) / 864e5);
+	if (diff <= 0) return "Today";
+	if (diff === 1) return "Yesterday";
+	return d.toLocaleDateString(void 0, {
+		weekday: "short",
+		day: "numeric",
+		month: "short"
+	});
+}
+function firstLine(it) {
+	return ((it.preview || "").split("\n").find((x) => x.trim()) || "").trim() || it.name;
+}
 function HubPanel() {
 	const open = useHubUi((s) => s.open);
 	const guest = !!useConfig().data?.guest;
 	(0, import_react.useEffect)(() => {
 		if (location.hash === "#hub") useHubUi.getState().setOpen(true);
 	}, []);
-	if (!open || guest) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubSendDialog, {});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubDrawer, {}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubSendDialog, {})] });
+	if (guest) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubDrawer, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubSendDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubNoticeBar, {})
+	] });
+}
+function HubNoticeBar() {
+	const n = useHubUi((s) => s.notice);
+	const drawer = useHubUi((s) => s.open);
+	(0, import_react.useEffect)(() => {
+		if (!n) return;
+		const t = setTimeout(() => {
+			if (useHubUi.getState().notice?.n === n.n) hush();
+		}, n.ms);
+		return () => clearTimeout(t);
+	}, [n]);
+	if (!n) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "hub-notice",
+		className: (n.error ? "is-error" : "") + (drawer ? " beside-drawer" : ""),
+		role: n.error ? "alert" : "status",
+		"aria-live": n.error ? "assertive" : "polite",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "hub-notice-text",
+				children: n.text
+			}),
+			(n.actions || []).map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "hub-notice-act",
+				onClick: () => {
+					hush();
+					a.run();
+				},
+				children: a.label
+			}, a.label)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "hub-notice-x",
+				"aria-label": "Dismiss",
+				onClick: hush,
+				children: "✕"
+			})
+		]
+	});
 }
 function HubDrawer() {
 	const setOpen = useHubUi((s) => s.setOpen);
+	const problems = useHubUi((s) => s.problems);
 	const q = useHub(true);
 	const list = q.data;
 	const items = list?.items || [];
 	const ref = (0, import_react.useRef)(null);
 	const fileInput = (0, import_react.useRef)(null);
+	const findRef = (0, import_react.useRef)(null);
 	const [dragOver, setDragOver] = (0, import_react.useState)(false);
 	const [busy, setBusy] = (0, import_react.useState)("");
 	const [snippet, setSnippet] = (0, import_react.useState)(null);
 	const [secrets, setSecrets] = (0, import_react.useState)([]);
-	const [filter, setFilter] = (0, import_react.useState)("");
+	const [find, setFind] = (0, import_react.useState)("");
+	const [filter, setFilter] = (0, import_react.useState)("all");
+	const [viewing, setViewing] = (0, import_react.useState)(null);
+	const [clearing, setClearing] = (0, import_react.useState)(false);
+	const brokenErr = q.isError && q.error?.body?.code === "hub_broken" ? errMsg(q.error) : "";
+	(0, import_react.useEffect)(() => {
+		q.refetch();
+	}, []);
 	(0, import_react.useEffect)(() => {
 		const prev = document.activeElement;
 		ref.current?.focus({ preventScroll: true });
@@ -160447,7 +160864,7 @@ function HubDrawer() {
 					added: [],
 					refused: [{
 						file: new File([], "the text"),
-						error: String(err?.message || err),
+						error: errMsg(err),
 						secret: false
 					}]
 				})).finally(() => setBusy(""));
@@ -160457,23 +160874,54 @@ function HubDrawer() {
 		return () => document.removeEventListener("paste", onPaste);
 	}, []);
 	const onKeyDown = (e) => {
-		if (e.key === "Escape" && !e.defaultPrevented) {
+		if (e.defaultPrevented) return;
+		if (e.key === "Escape") {
 			e.preventDefault();
 			setOpen(false);
+			return;
+		}
+		if (e.key === "/" && !editable(e.target) || e.key === "f" && (e.ctrlKey || e.metaKey)) {
+			e.preventDefault();
+			findRef.current?.focus();
 		}
 	};
 	const hasFiles = (e) => Array.from(e.dataTransfer.types || []).includes("Files");
-	const shown = (0, import_react.useMemo)(() => {
-		const f = filter.trim().toLowerCase();
-		if (!f) return items;
-		return items.filter((i) => i.name.toLowerCase().includes(f) || i.ref.includes(f) || (i.note || "").toLowerCase().includes(f) || whoLabel$1(i).toLowerCase().includes(f));
-	}, [items, filter]);
+	const shown = (0, import_react.useMemo)(() => filterItems(items, filter, find), [
+		items,
+		filter,
+		find
+	]);
+	const days = (0, import_react.useMemo)(() => {
+		const out = [];
+		for (const it of shown) {
+			const label = dayLabel(it.added);
+			const last = out[out.length - 1];
+			if (last && last.label === label) last.items.push(it);
+			else out.push({
+				label,
+				items: [it]
+			});
+		}
+		return out;
+	}, [shown]);
+	const unpinned = items.filter((i) => !i.pinned).length;
+	const clearUnpinned = async () => {
+		try {
+			const r = await api("/api/hub/clear", { method: "POST" });
+			say("Removed " + r.removed + (r.removed === 1 ? " item" : " items") + " — " + humanSize(r.freed) + " freed");
+			refreshHub();
+		} catch (err) {
+			say("Couldn't remove them: " + errMsg(err), { error: true });
+		} finally {
+			setClearing(false);
+		}
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 		id: "hub-panel",
 		ref,
 		tabIndex: -1,
 		role: "complementary",
-		"aria-label": "Hub — files, pictures and snippets every session can use",
+		"aria-label": "Hub — files and text every session can use",
 		className: dragOver ? "hub-drop" : void 0,
 		onKeyDown,
 		onDragOver: (e) => {
@@ -160500,7 +160948,7 @@ function HubDrawer() {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Hub" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "hub-sub",
 						children: [
-							"Files, pictures and snippets every session can use. Each item has a reference like ",
+							"Files and text every session can use. Each item has a code like ",
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "hub:k7m2" }),
 							" — put it in any prompt and the agent gets the file."
 						]
@@ -160532,11 +160980,7 @@ function HubDrawer() {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "hub-add-hint",
-						children: [
-							"or drop here · paste with ",
-							navigator.platform?.startsWith("Mac") ? "⌘" : "Ctrl+",
-							"V"
-						]
+						children: ["or drop here · paste with ", PASTE_KEY]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						ref: fileInput,
@@ -160563,6 +161007,31 @@ function HubDrawer() {
 				role: "status",
 				children: busy
 			}),
+			problems.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "hub-problem",
+				role: "alert",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: p.text }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-confirm-actions",
+					children: [p.raiseTo && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "hub-btn primary",
+						onClick: () => {
+							dropProblem(p.id);
+							raiseItemLimit(p.raiseTo);
+						},
+						children: [
+							"Raise the limit to ",
+							p.raiseTo,
+							" MB"
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "hub-btn",
+						onClick: () => dropProblem(p.id),
+						children: "Dismiss"
+					})]
+				})]
+			}, p.id)),
 			secrets.map((f, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "hub-confirm",
 				role: "alertdialog",
@@ -160572,38 +161041,67 @@ function HubDrawer() {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "hub-btn",
-						autoFocus: true,
-						onClick: () => setSecrets((s) => s.filter((_, j) => j !== i)),
-						children: "Don't add it"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "hub-btn danger",
 						onClick: () => {
 							setSecrets((s) => s.filter((_, j) => j !== i));
 							add([f], true);
 						},
 						children: "Add it anyway"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "hub-btn primary",
+						autoFocus: true,
+						onClick: () => setSecrets((s) => s.filter((_, j) => j !== i)),
+						children: "Don't add it"
 					})]
 				})]
 			}, f.name + i)),
-			items.length > 6 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				className: "hub-filter",
-				type: "search",
-				placeholder: "Find an item…",
-				"aria-label": "Find an item in the hub",
-				value: filter,
-				onChange: (e) => setFilter(e.target.value)
+			items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "hub-tools",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "hub-chips",
+					role: "group",
+					"aria-label": "Show",
+					children: FILTERS.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "hub-chip" + (filter === f.key ? " on" : ""),
+						"aria-pressed": filter === f.key,
+						onClick: () => setFilter(f.key),
+						children: f.label
+					}, f.key))
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					ref: findRef,
+					className: "hub-filter",
+					type: "search",
+					placeholder: "Find…  /",
+					"aria-label": "Find an item in the hub (/ or Ctrl+F)",
+					value: find,
+					onChange: (e) => setFind(e.target.value)
+				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "hub-list-wrap",
-				children: q.isLoading ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				children: brokenErr ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-problem",
+					role: "alert",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: brokenErr }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "hub-confirm-actions",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "hub-btn primary",
+							onClick: () => void rebuildHub(),
+							children: "Rebuild the list"
+						})
+					})]
+				}) : q.isLoading ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "hub-empty muted",
 					children: "Loading the hub…"
 				}) : q.isError && !list ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "hub-empty",
 					role: "alert",
 					children: [
-						"Couldn't load the hub.",
+						"Couldn't load the hub (",
+						errMsg(q.error),
+						").",
 						" ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -160623,44 +161121,114 @@ function HubDrawer() {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Nothing in the hub yet." }) }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 							"Drop a file here, paste a screenshot (",
-							navigator.platform?.startsWith("Mac") ? "⌘" : "Ctrl+",
-							"V), or add a snippet. Each item gets a reference like ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "hub:k7m2" }),
-							" — put it in any session's prompt, or use",
+							PASTE_KEY,
+							"), or add a snippet. Each item gets a code like",
 							" ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Send to session…" })
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "hub:k7m2" }),
+							" — put it in any session's prompt, use ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Send to session…" }),
+							", or drag the item onto a session."
 						] }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "muted",
-							children: "Agents can add files here too (the MindFlock tool \"hub\")."
+							children: "Agents can add files here too."
 						})
 					]
 				}) : !shown.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "hub-empty muted",
 					children: [
-						"Nothing matches \"",
-						filter,
-						"\"."
+						"Nothing here matches",
+						find ? " \"" + find + "\"" : "",
+						"."
 					]
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-					className: "hub-list",
-					"aria-label": "Hub items, newest first",
-					children: shown.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubCard, { item: it }, it.id))
-				})
+				}) : days.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+					className: "hub-day",
+					"aria-label": d.label,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+						className: "hub-day-h",
+						children: d.label
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "hub-list",
+						children: d.items.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubCard, {
+							item: it,
+							onView: setViewing
+						}, it.id))
+					})]
+				}, d.label))
 			}),
 			list && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("footer", {
 				className: "hub-foot",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: usageLine(list) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "muted",
-					title: "Settings: hub.keep_days (" + list.keep_days + "). Pin an item to keep it.",
-					children: [
-						"Unpinned items go ",
-						list.keep_days,
-						" days after their last use"
-					]
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: usageLine(list) }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "muted",
+						title: "Settings: hub.keep_days (" + list.keep_days + ")",
+						children: [
+							"Deleted automatically ",
+							list.keep_days,
+							" days after last use — Pin to keep"
+						]
+					}),
+					unpinned > 0 && (clearing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "hub-foot-confirm",
+						role: "alertdialog",
+						"aria-label": "Remove every unpinned item?",
+						children: [
+							"Remove ",
+							unpinned,
+							" unpinned?",
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-link",
+								onClick: () => void clearUnpinned(),
+								children: "Remove"
+							}),
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "hub-link",
+								autoFocus: true,
+								onClick: () => setClearing(false),
+								children: "Keep"
+							})
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "hub-link",
+						onClick: () => setClearing(true),
+						children: "Remove unpinned items"
+					}))
+				]
+			}),
+			viewing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PictureViewer, {
+				item: viewing,
+				onClose: () => setViewing(null)
 			})
 		]
+	});
+}
+function PictureViewer({ item, onClose }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		onClose,
+		className: "hub-viewer",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-label": item.name,
+		portal: true,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("figure", {
+			className: "hub-viewer-card",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+				src: rawUrl(item),
+				alt: item.name
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("figcaption", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: item.name }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "hub-btn",
+				autoFocus: true,
+				onClick: onClose,
+				children: "Close"
+			})] })]
+		})
 	});
 }
 function SnippetEditor(props) {
@@ -160679,7 +161247,7 @@ function SnippetEditor(props) {
 				added: [],
 				refused: [{
 					file: new File([], "the snippet"),
-					error: String(err?.message || err),
+					error: errMsg(err),
 					secret: false
 				}]
 			});
@@ -160724,13 +161292,20 @@ function SnippetEditor(props) {
 		})]
 	});
 }
-function KindIcon({ item }) {
-	if (item.kind === "image") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
-		className: "hub-thumb",
-		src: rawUrl(item),
-		alt: "",
-		loading: "lazy",
-		draggable: false
+function KindIcon({ item, onView }) {
+	if (item.kind === "image") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "hub-thumb-btn",
+		"aria-label": "View " + item.name + " larger",
+		title: "View larger",
+		onClick: () => onView?.(item),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+			className: "hub-thumb",
+			src: rawUrl(item),
+			alt: "",
+			loading: "lazy",
+			draggable: false
+		})
 	});
 	const ext = (item.name.match(/\.([A-Za-z0-9]{1,5})$/) || [])[1] || (item.kind === "text" ? "txt" : "");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -160738,8 +161313,8 @@ function KindIcon({ item }) {
 		"aria-hidden": "true",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 			viewBox: "0 0 24 24",
-			width: "22",
-			height: "22",
+			width: "20",
+			height: "20",
 			fill: "none",
 			stroke: "currentColor",
 			strokeWidth: "1.6",
@@ -160755,11 +161330,14 @@ function KindIcon({ item }) {
 		})]
 	});
 }
-function HubCard({ item }) {
+function HubCard({ item, onView }) {
 	const openSend = useHubUi((s) => s.openSend);
 	const [menu, setMenu] = (0, import_react.useState)(false);
 	const [editing, setEditing] = (0, import_react.useState)("");
 	const [val, setVal] = (0, import_react.useState)("");
+	const textual = item.kind === "text" || item.textual;
+	const [openText, setOpenText] = (0, import_react.useState)(false);
+	const compact = textual && !openText;
 	const menuRef = (0, import_react.useRef)(null);
 	const menuBtn = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
@@ -160773,6 +161351,7 @@ function HubCard({ item }) {
 	}, [menu]);
 	const startEdit = (what) => {
 		setMenu(false);
+		setOpenText(true);
 		setVal(what === "name" ? item.name : item.note || "");
 		setEditing(what);
 	};
@@ -160800,15 +161379,15 @@ function HubCard({ item }) {
 		setMenu(false);
 		fn();
 	};
-	const textual = item.kind === "text" || item.textual;
 	const meta = [
 		kindLabel$1(item),
 		humanSize(item.size),
 		whoLabel$1(item),
 		relTime(item.added)
 	].join(" · ");
+	const title = item.kind === "text" ? firstLine(item) : item.name;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		className: "hub-card" + (item.pinned ? " is-pinned" : ""),
+		className: "hub-card" + (item.pinned ? " is-pinned" : "") + (compact ? " is-compact" : ""),
 		draggable: !editing,
 		onDragStart: (e) => {
 			e.dataTransfer.setData(HUB_MIME, JSON.stringify({
@@ -160819,142 +161398,172 @@ function HubCard({ item }) {
 			e.dataTransfer.setData("text/plain", item.ref);
 			e.dataTransfer.effectAllowed = "copy";
 		},
-		title: "Drag onto a session, its message box or its terminal to use " + item.ref,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "hub-card-top",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, { item }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "hub-card-main",
-					children: [
-						editing === "name" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							className: "hub-edit",
-							autoFocus: true,
-							"aria-label": "New name",
-							value: val,
-							onChange: (e) => setVal(e.target.value),
-							onBlur: () => void saveEdit(),
-							onKeyDown: (e) => {
-								if (e.key === "Enter") saveEdit();
-								if (e.key === "Escape") {
-									e.preventDefault();
-									e.stopPropagation();
-									setEditing("");
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "hub-grip",
+						"aria-hidden": "true",
+						title: "Drag onto a session, its message box or its terminal to use " + item.ref,
+						children: "⠿"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, {
+						item,
+						onView
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hub-card-main",
+						children: [
+							editing === "name" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								className: "hub-edit",
+								autoFocus: true,
+								"aria-label": "New name",
+								value: val,
+								onChange: (e) => setVal(e.target.value),
+								onBlur: () => void saveEdit(),
+								onKeyDown: (e) => {
+									if (e.key === "Enter") saveEdit();
+									if (e.key === "Escape") {
+										e.preventDefault();
+										e.stopPropagation();
+										setEditing("");
+									}
 								}
-							}
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "hub-name",
-							title: item.name,
-							children: [item.pinned && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "hub-pin",
-								title: "Pinned — kept past the expiry",
-								"aria-label": "Pinned",
-								children: "📌"
-							}), item.name]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "hub-meta",
-							children: meta
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "hub-row2",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							}) : textual ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								className: "hub-ref",
-								title: "Copy the reference — paste it in any prompt or terminal. " + expiryLabel(item),
-								"aria-label": "Copy reference " + item.ref,
-								onClick: () => void copyRef(item),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "hub-ref-code",
-									children: item.ref
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "hub-ref-copy",
-									"aria-hidden": "true",
-									children: "Copy"
-								})]
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "hub-actions",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "hub-name hub-name-btn",
+								"aria-expanded": openText,
+								title: openText ? "Show less" : "Show the text",
+								onClick: () => setOpenText((v) => !v),
+								children: title
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "hub-name",
+								title: item.name,
+								children: title
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "hub-meta",
+								children: meta
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "hub-row2",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									type: "button",
-									className: "hub-btn",
-									onClick: () => openSend(item),
-									title: "Put it in a session's prompt, or copy the file into its folder",
-									children: "Send to session…"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "hub-more",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-										ref: menuBtn,
-										type: "button",
-										className: "hub-btn hub-more-btn",
-										"aria-label": "More for " + item.name,
-										"aria-haspopup": "menu",
-										"aria-expanded": menu,
-										onClick: () => setMenu((v) => !v),
-										children: "⋯"
-									}), menu && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "hub-menu",
-										role: "menu",
-										ref: menuRef,
-										onKeyDown: menuKey,
-										"aria-label": "More for " + item.name,
-										children: [
-											textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												role: "menuitem",
-												onClick: act(() => void copyItemText(item)),
-												children: "Copy text"
-											}),
-											item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												role: "menuitem",
-												onClick: act(() => void copyImage(item)),
-												children: "Copy image"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												role: "menuitem",
-												onClick: act(() => void copyPath(item)),
-												children: "Copy path"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												role: "menuitem",
-												onClick: act(() => download(item)),
-												children: "Download"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												role: "menuitem",
-												onClick: () => startEdit("name"),
-												children: "Rename"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												role: "menuitem",
-												onClick: () => startEdit("note"),
-												children: item.note ? "Edit note" : "Add a note"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												role: "menuitem",
-												onClick: act(() => void updateItem(item, { pinned: !item.pinned })),
-												children: item.pinned ? "Unpin" : "Pin — keep it"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												role: "menuitem",
-												className: "danger",
-												onClick: act(() => void removeItem$1(item)),
-												children: "Remove"
-											})
-										]
+									className: "hub-ref",
+									title: "Copy the code — paste it in any prompt or terminal",
+									"aria-label": "Copy code " + item.ref,
+									onClick: () => void copyRef(item),
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "hub-ref-code",
+										children: item.ref
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "hub-ref-copy",
+										"aria-hidden": "true",
+										children: "Copy code"
 									})]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "hub-actions",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "hub-pin-btn" + (item.pinned ? " on" : ""),
+											"aria-pressed": item.pinned,
+											"aria-label": item.pinned ? "Unpin " + item.name : "Pin " + item.name + " — keep it",
+											title: expiryLabel(item),
+											onClick: () => void updateItem(item, { pinned: !item.pinned }),
+											children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+												viewBox: "0 0 24 24",
+												width: "14",
+												height: "14",
+												fill: item.pinned ? "currentColor" : "none",
+												stroke: "currentColor",
+												strokeWidth: "1.8",
+												strokeLinejoin: "round",
+												"aria-hidden": "true",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M9 3h6l-1 6 4 4H6l4-4z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 13v8" })]
+											})
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "hub-btn",
+											"aria-label": "Send " + item.name + " to a session…",
+											onClick: () => openSend(item),
+											title: "Point a session's agent at it, or save a copy in its project folder",
+											children: compact ? "Send…" : "Send to session…"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "hub-more",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												ref: menuBtn,
+												type: "button",
+												className: "hub-btn hub-more-btn",
+												"aria-label": "More for " + item.name,
+												"aria-haspopup": "menu",
+												"aria-expanded": menu,
+												onClick: () => setMenu((v) => !v),
+												children: "⋯"
+											}), menu && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+												className: "hub-menu",
+												role: "menu",
+												ref: menuRef,
+												onKeyDown: menuKey,
+												"aria-label": "More for " + item.name,
+												children: [
+													textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														role: "menuitem",
+														onClick: act(() => void copyItemText(item)),
+														children: "Copy text"
+													}),
+													item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														role: "menuitem",
+														onClick: act(() => void copyImage(item)),
+														children: "Copy image"
+													}),
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														role: "menuitem",
+														onClick: act(() => void copyPath(item)),
+														children: "Copy path"
+													}),
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														role: "menuitem",
+														onClick: act(() => download(item)),
+														children: "Download"
+													}),
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														role: "menuitem",
+														onClick: () => startEdit("name"),
+														children: "Rename"
+													}),
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														role: "menuitem",
+														onClick: () => startEdit("note"),
+														children: item.note ? "Edit note" : "Add a note"
+													}),
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														role: "menuitem",
+														className: "danger",
+														onClick: act(() => void removeItem$1(item)),
+														children: "Remove"
+													})
+												]
+											})]
+										})
+									]
 								})]
-							})]
-						})
-					]
-				})]
+							})
+						]
+					})
+				]
 			}),
-			textual && item.preview && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+			textual && openText && item.preview && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
 				className: "hub-preview",
 				children: item.preview
 			}),
@@ -160978,7 +161587,7 @@ function HubCard({ item }) {
 						setEditing("");
 					}
 				}
-			}) : item.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			}) : item.note && !compact && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "hub-note",
 				children: item.note
 			})

@@ -2327,6 +2327,7 @@
       // submit. The gap ends the paste burst so the Enter actually sends.
       // A hub reference (hub:k7m2) goes in expanded: the agent gets the
       // item's path, name and kind (HUB section).
+      hubAttached = {};
       if (HUB_REF_RE.test(text) && hubHere()) {
         hubExpand(text).then(function (typed) {
           send(typed);
@@ -2341,6 +2342,7 @@
     }
     composeEl.value = "";
     autosizeCompose();
+    hubRenderChips();
     composeEl.focus();   // keep the keyboard up for the next message
   }
   // Grow with the draft (paste a paragraph and still see it) up to ~5 rows.
@@ -2376,6 +2378,65 @@
   var hubSheet = document.getElementById("hub-sheet");
   var hubListEl = document.getElementById("hub-list");
   var hubErrEl = document.getElementById("hub-error");
+  var hubChipsEl = document.getElementById("hub-chips");
+  // What the message carries from the hub: ref -> item, shown as chips
+  // (thumbnail, name, ✕) above the box — the confirmation a status line
+  // drawn over the terminal never was.
+  var hubAttached = {};
+  function hubChipThumb(it) {
+    var t;
+    if (it.kind === "image") {
+      t = document.createElement("img");
+      t.src = "/api/hub/items/" + encodeURIComponent(it.id) + "/raw";
+      t.alt = "";
+    } else {
+      t = document.createElement("span");
+      var m = /\.([A-Za-z0-9]{1,4})$/.exec(it.name || "");
+      t.textContent = m ? m[1] : (it.kind === "text" ? "txt" : "file");
+    }
+    t.className = "hub-chip-thumb";
+    return t;
+  }
+  function hubRenderChips() {
+    var text = composeEl.value || "";
+    hubChipsEl.innerHTML = "";
+    var shown = 0;
+    Object.keys(hubAttached).forEach(function (ref) {
+      if (text.toLowerCase().indexOf(ref) < 0) { delete hubAttached[ref]; return; }
+      var it = hubAttached[ref];
+      var chip = document.createElement("span");
+      chip.className = "hub-chip";
+      chip.appendChild(hubChipThumb(it));
+      var nm = document.createElement("span");
+      nm.className = "hub-chip-name";
+      nm.textContent = it.name;
+      chip.appendChild(nm);
+      var x = document.createElement("button");
+      x.type = "button";
+      x.className = "hub-chip-x";
+      x.textContent = "✕";
+      x.setAttribute("aria-label", "Take " + it.name + " out of the message");
+      x.addEventListener("click", function () {
+        var re = new RegExp("(^|[^A-Za-z0-9_./:@-])" + ref + "(?![A-Za-z0-9_]) ?", "gi");
+        composeEl.value = composeEl.value.replace(re, "$1").replace(/ {2,}/g, " ");
+        delete hubAttached[ref];
+        hubRenderChips();
+        autosizeCompose();
+        composeEl.focus();
+      });
+      chip.appendChild(x);
+      hubChipsEl.appendChild(chip);
+      shown++;
+    });
+    hubChipsEl.classList.toggle("hidden", !shown);
+    fitSoon();
+  }
+  function hubAttach(it) {
+    hubAttached[it.ref] = it;
+    insertIntoCompose((composeEl.value && !/\s$/.test(composeEl.value) ? " " : "") + it.ref + " ");
+    hubRenderChips();
+  }
+  composeEl.addEventListener("input", hubRenderChips);
   // A reference, not glued to a word or path before it (the server's rule).
   var HUB_REF_RE = /(^|[^A-Za-z0-9_./:@-])hub:[A-Za-z0-9]{4,8}(?![A-Za-z0-9_])/i;
   function hubHere() { return !current || String(current).indexOf("::") < 0; }
@@ -2416,10 +2477,9 @@
     });
     return chain.then(function () {
       if (intoCompose && refs.length) {
-        insertIntoCompose((composeEl.value && !/\s$/.test(composeEl.value) ? " " : "") +
-          refs.map(function (it) { return it.ref; }).join(" ") + " ");
-        flashStatus((refs.length === 1 ? refs[0].name + " is" : refs.length + " files are") +
-          " in the hub — add your words and Send");
+        // The chips above the box say what is attached: no status line.
+        refs.forEach(hubAttach);
+        setStatus("");
       } else if (refs.length) {
         flashStatus("added " + (refs.length === 1 ? refs[0].name + " — " + refs[0].ref : refs.length + " files"));
       }
@@ -2500,21 +2560,20 @@
     var use = document.createElement("button");
     use.type = "button";
     use.className = "primary";
-    use.textContent = "Use";
-    use.setAttribute("aria-label", "Put " + it.ref + " (" + it.name + ") in the message");
+    use.textContent = "Add to message";
+    use.setAttribute("aria-label", "Add " + it.name + " (" + it.ref + ") to the message");
     use.addEventListener("click", function () {
       closeSheet(hubSheet);
-      insertIntoCompose((composeEl.value && !/\s$/.test(composeEl.value) ? " " : "") + it.ref + " ");
+      hubAttach(it);
       composeEl.focus();
-      flashStatus(it.ref + " is in your message — add your words and Send");
     });
     var copy = document.createElement("button");
     copy.type = "button";
-    copy.textContent = "Copy";
-    copy.setAttribute("aria-label", "Copy the reference " + it.ref);
+    copy.textContent = "Copy code";
+    copy.setAttribute("aria-label", "Copy the code " + it.ref);
     copy.addEventListener("click", function () {
       copyPlain(it.ref).then(function (ok) {
-        flashStatus(ok ? "copied " + it.ref + " — paste it in any message" : "the reference is " + it.ref);
+        flashStatus(ok ? "code copied to clipboard — paste " + it.ref + " in any message" : "the code is " + it.ref);
       });
     });
     btns.appendChild(use);

@@ -31,6 +31,8 @@ if (typeof g.document === "undefined")
 
 const hub = await import("../lib/hub");
 const { hubTargets } = await import("../components/hub/HubSendDialog");
+const panel = await import("../components/hub/HubPanel");
+const attach = await import("../components/hub/HubAttach");
 
 const item = (over: Partial<import("../lib/hub").HubItem> = {}) =>
   ({
@@ -86,8 +88,8 @@ describe("words", () => {
     expect(hub.humanSize(1)).toBe("1 byte");
     expect(hub.whoLabel({ by: "phone", by_name: "" })).toBe("your phone");
     expect(hub.whoLabel({ by: "you", by_name: "" })).toBe("you");
-    expect(hub.expiryLabel(item({ pinned: true }))).toBe("pinned — kept");
-    expect(hub.expiryLabel(item(), 1000 + 5 * 86400)).toBe("goes in 9 days unless used");
+    expect(hub.expiryLabel(item({ pinned: true }))).toBe("Pinned — kept until you remove it");
+    expect(hub.expiryLabel(item(), 1000 + 5 * 86400)).toBe("Deleted automatically in 9 days unless used — Pin to keep");
     expect(hub.usageLine({ count: 1, used: 2048, quota: 1024 ** 3 })).toBe("1 item · 2.0 KB of 1.0 GB");
   });
   it("a pasted screenshot is named by the time, with no space in its path", () => {
@@ -123,7 +125,9 @@ describe("wiring", () => {
   it("the Hub button sits in the top bar with a calm count, never for a guest", () => {
     expect(TOPBAR).toContain('id="hub-btn"');
     expect(TOPBAR).toContain('data-fold="hub"');
-    expect(TOPBAR).toContain('className="tb-count is-quiet"');
+    expect(TOPBAR).toContain('className="tb-count is-new"');
+    expect(TOPBAR).toContain("newCount(hubItems || [])");
+    expect(TOPBAR).toContain('"Hub — files and text every session can use"');
     expect(TOPBAR).toContain("{!guest && (");
   });
   it("Alt+H opens it, guarded in text fields", () => {
@@ -147,10 +151,69 @@ describe("wiring", () => {
   });
   it("the panel: paste while open, never out of a text field; dialogs are in-page", () => {
     expect(PANEL).toContain('document.addEventListener("paste", onPaste)');
-    expect(PANEL).toContain("if (editable(e.target)");
+    expect(PANEL).toMatch(/if \(\s*editable\(e\.target\)/);
     expect(PANEL + SEND + ATTACH).not.toMatch(/window\.(prompt|confirm|alert)\(/);
   });
   it("every colour is a theme token", () => {
     expect(PANEL_CSS).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+  });
+});
+
+describe("round 4: what the owner sees", () => {
+  it("the top-bar count is only what an agent or your phone added since you looked", () => {
+    const items = [
+      item({ by: "you", added: 5000 }),
+      item({ by: "session", added: 5000 }),
+      item({ by: "phone", added: 5000 }),
+      item({ by: "session", added: 100 }),
+    ];
+    expect(hub.newCount(items, 1000)).toBe(2);
+    expect(hub.newCount(items, 9000)).toBe(0);
+  });
+  it("each session in Send to session… says its state", () => {
+    expect(hub.stateWord("working")).toBe("Working");
+    expect(hub.stateWord("clarify")).toBe("Question");
+    expect(hub.stateWord("idle")).toBe("Idle");
+    expect(hub.stateWord(undefined)).toBe("Idle");
+  });
+  it("filters, day headings and a snippet's first line", () => {
+    const items = [
+      item({ id: "a1a1", kind: "image", by: "you" }),
+      item({ id: "b2b2", kind: "text", by: "session", name: "note.txt", preview: "\nSELECT 1;\nmore" }),
+      item({ id: "c3c3", kind: "file", textual: true, by: "phone", name: "x.log" }),
+    ];
+    expect(panel.filterItems(items, "pictures", "").map((i) => i.id)).toEqual(["a1a1"]);
+    expect(panel.filterItems(items, "text", "").map((i) => i.id)).toEqual(["b2b2", "c3c3"]);
+    expect(panel.filterItems(items, "agents", "").map((i) => i.id)).toEqual(["b2b2"]);
+    expect(panel.filterItems(items, "all", "select").map((i) => i.id)).toEqual(["b2b2"]);
+    expect(panel.firstLine(items[1])).toBe("SELECT 1;");
+    const now = new Date(2026, 10, 22, 12).getTime() / 1000;
+    expect(panel.dayLabel(now - 3600, now)).toBe("Today");
+    expect(panel.dayLabel(now - 86400, now)).toBe("Yesterday");
+  });
+  it("the composer's chips come from the codes in the text; ✕ takes one out", () => {
+    expect(attach.attachedRefs("see hub:K7M2 and hub:zz11, hub:k7m2 again; github:abcd")).toEqual(["hub:k7m2", "hub:zz11"]);
+    expect(attach.removeRef("see hub:k7m2 and hub:zz11 ok", "hub:k7m2")).toBe("see and hub:zz11 ok");
+  });
+  it("one wording: code, Point the agent at it, Save a copy", () => {
+    expect(PANEL).toContain("Copy code");
+    expect(SEND).toContain("Point the agent at it");
+    expect(SEND).toContain("Save a copy in its project folder");
+    expect(SEND).toContain('"Save copy"');
+    expect(SEND).toContain("Add a message (optional)");
+    expect(SEND).toContain("Save as (inside {name}'s folder)");
+    expect(SEND).toContain("Tell {name} it's at");
+    expect(PANEL + SEND).not.toMatch(/Copy reference/);
+  });
+  it("hub notices sit at the top; the Send dialog retires a stale one", () => {
+    expect(PANEL_CSS).toMatch(/#hub-notice \{[^}]*top: calc\(var\(--topbar-h/);
+    hub.say("Added x — Put in api's prompt", { actions: [{ label: "Put in api's prompt", run: () => {} }] });
+    expect(hub.useHubUi.getState().notice).not.toBeNull();
+    hub.useHubUi.getState().openSend(item());
+    expect(hub.useHubUi.getState().notice).toBeNull();
+  });
+  it("a terminal paste or drop of a code goes through the dialog-safe send", () => {
+    expect(CLIP).toContain("typeIntoAgent(session, text)");
+    expect(HUBREF).toContain("submit: false, dialog_safe: true");
   });
 });

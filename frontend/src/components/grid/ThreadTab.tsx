@@ -589,6 +589,7 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
             </button>
           ))}
         </div>
+        {hubc.chips}
         <textarea
           ref={box}
           className="thread-input"

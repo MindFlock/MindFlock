@@ -333,6 +333,7 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
         onDrop={hubc.onDrop}
       >
       {hubc.popup}
+      {hubc.chips}
       <textarea
         ref={draftBox}
         className="queue-input"

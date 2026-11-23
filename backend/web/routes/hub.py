@@ -16,15 +16,24 @@ The owner's hub, from the app, the phone page and the CLI:
 * ``POST /api/hub/expand`` — ``{text}`` → the text with its references
   expanded (what the app pastes into an agent's terminal).
 
-A session's agent (the MCP ``hub`` tool), under the session it speaks for:
+* ``POST /api/hub/items/{id}/copy-to`` — ``{session, path?, replace?}``: the
+  owner's copy into a session's folder (``GET …/free?session=&path=`` says
+  where it would land); ``POST /api/hub/rebuild`` — a new list from the
+  folders on disk when hub.json can't be read.
+
+A session's own agent (the MCP ``hub`` tool) — every call carries that
+session's key (``backend.session_key``), so an agent can't act for another:
 
 * ``POST /api/instances/{title}/hub/put`` — ``{path}`` (one file inside that
   session's worktree) or ``{text}``; ``name?``, ``note?``.
-* ``POST /api/instances/{title}/hub/take`` — ``{id, path?, replace?}``: copy
-  an item INTO that session's worktree (default ``hub/<name>``) — also the
-  app's "Send to session… → copy into its folder".
-* ``DELETE /api/instances/{title}/hub/items/{id}`` — remove an item that
+* ``POST /api/instances/{title}/hub/take`` — ``{id, path?}``: copy an item
+  INTO that session's folder, only under ``hub/``, never over a file.
+* ``POST /api/instances/{title}/hub/remove`` — ``{id}``: remove an item that
   session added (only those).
+
+Nothing the hub writes into a worktree is ever a file agents follow or that
+runs by itself (CLAUDE.md, AGENTS.md, .mcp.json, git hooks, CI, Makefile,
+package.json, conftest.py … — core.hub._dest_refusal), for anyone.
 
 Never for a guest link (the auth middleware refuses every ``/api/hub`` path
 and the ``hub`` session sub-route to a guest; checked here again), a request
@@ -230,6 +239,15 @@ async def hub_raw(iid: str, request: Request, download: int = 0) -> Response:
         rec, fd = await asyncio.to_thread(_hub.open_item, iid)
     except Refusal as r:
         return JSONResponse(r.body(), status_code=r.status)
+    etag = '"%s"' % rec["sha256"]
+    if request.headers.get("if-none-match") == etag:
+        # Revalidated every time (no-cache): a removed item is 410 above,
+        # never a day-old copy from the browser's cache.
+        os.close(fd)
+        return Response(
+            status_code=304,
+            headers={"ETag": etag, "Cache-Control": "private, no-cache"},
+        )
     inline = (
         bool(rec.get("mime"))
         and rec["mime"] in _hub.IMAGE_TYPES.values()
@@ -242,8 +260,8 @@ async def hub_raw(iid: str, request: Request, download: int = 0) -> Response:
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; sandbox",
         "Cross-Origin-Resource-Policy": "same-origin",
-        "Cache-Control": "private, max-age=86400",
-        "ETag": '"%s"' % rec["sha256"],
+        "Cache-Control": "private, no-cache",
+        "ETag": etag,
         "Content-Length": str(os.fstat(fd).st_size),
     }
 
@@ -303,11 +321,109 @@ async def hub_clear(request: Request) -> JSONResponse:
     return await _run(_hub.clear_unpinned)
 
 
+@router.post("/api/hub/rebuild")
+async def hub_rebuild(request: Request) -> JSONResponse:
+    """A list (hub.json) that can't be read: make a new one from the item
+    folders on disk (core.hub.rebuild). Nothing is deleted."""
+    refused = _refusal(request)
+    if refused is not None:
+        return refused
+    return await _run(_hub.rebuild)
+
+
 # --------------------------------------------------------------------------- #
-# a session's agent
+# the owner's copy into a session (the app's Send to session…, the CLI)
 # --------------------------------------------------------------------------- #
-def _session(title: str, request: Request, what: str):
-    """``(inst, worktree, None)`` or ``(None, None, error response)``."""
+def _target(title: str, what: str):
+    """``(worktree, None)`` or ``(None, error response)`` for a session the
+    owner copies INTO (no key: the owner names any session of theirs)."""
+    srv = _server()
+    inst, err = srv._inst_or_404(title)
+    if err is not None:
+        return None, srv._closed_send_refusal(title) or err
+    from backend.web.core import peer_guard as _peer_guard
+
+    peer_err = _peer_guard.refusal(inst, what)
+    if peer_err is not None:
+        return None, peer_err
+    try:
+        wt = inst.GetWorktreePath() or ""
+    except Exception:  # noqa: BLE001
+        wt = ""
+    if not wt or not os.path.isdir(wt):
+        return None, JSONResponse(
+            {
+                "error": "%s has no folder on disk yet (it may still be starting) "
+                "— try again once it is running" % title,
+                "code": "no_workspace",
+            },
+            status_code=409,
+        )
+    return wt, None
+
+
+@router.post("/api/hub/items/{iid}/copy-to")
+async def hub_copy_to(
+    iid: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """``{session, path?, replace?}``: save a copy of an item in that
+    session's folder (default ``hub/<name>``) — the app's Send to session…
+    and ``mindflock hub cp --to``. Any path inside the folder except what the
+    hub never writes (core.hub._dest_refusal); ``replace`` only on purpose."""
+    refused = _refusal(request)
+    if refused is not None:
+        return refused
+    body = payload if isinstance(payload, dict) else {}
+    title, dest, replace = (
+        body.get("session"),
+        body.get("path"),
+        body.get("replace", False),
+    )
+    if (
+        not isinstance(title, str)
+        or not title
+        or (dest is not None and not isinstance(dest, str))
+    ):
+        return _bad("session is the session's name, path where in its folder")
+    if not isinstance(replace, bool):
+        return _bad("replace is true or false")
+    wt, err = _target(title, "copying a hub item in")
+    if err is not None:
+        return err
+    return await _run(_hub.take, iid, wt, dest, replace=replace)
+
+
+@router.get("/api/hub/items/{iid}/free")
+async def hub_free(
+    iid: str, request: Request, session: str = "", path: str = ""
+) -> JSONResponse:
+    """Where a copy into ``session``'s folder would land without replacing
+    anything: ``{path, wanted, taken, root}`` (``path`` default
+    ``hub/<name>``); a path the hub never writes is the refusal."""
+    refused = _refusal(request)
+    if refused is not None:
+        return refused
+    wt, err = _target(session, "copying a hub item in")
+    if err is not None:
+        return err
+
+    def free() -> dict:
+        rec = _hub.get(iid)
+        want = path or _hub.default_dest(rec)
+        got = _hub.free_dest(wt, want)
+        return {"path": got, "wanted": want, "taken": got != want, "root": wt}
+
+    return await _run(free)
+
+
+# --------------------------------------------------------------------------- #
+# a session's own agent (the MCP hub tool) — bound to that session
+# --------------------------------------------------------------------------- #
+def _session(title: str, request: Request, what: str, body: dict):
+    """``(inst, worktree, None)`` or ``(None, None, error response)``. The
+    request must carry THIS session's key (``backend.session_key``): the one
+    its own MindFlock MCP was handed at launch — so an agent can't act for
+    another session by writing that session's name in the URL."""
     refused = _refusal(request)
     if refused is not None:
         return None, None, refused
@@ -320,6 +436,22 @@ def _session(title: str, request: Request, what: str):
     peer_err = _peer_guard.refusal(inst, what)
     if peer_err is not None:
         return None, None, peer_err
+    from backend import session_key as _session_key
+
+    if not _session_key.verify(title, body.get("key")):
+        return (
+            None,
+            None,
+            JSONResponse(
+                {
+                    "error": "this answers only %s's own MindFlock tool (hub, from "
+                    "inside that session). A session started before this MindFlock "
+                    "version gets its key when it is restarted" % title,
+                    "code": "not_this_session",
+                },
+                status_code=403,
+            ),
+        )
     try:
         wt = inst.GetWorktreePath() or ""
     except Exception:  # noqa: BLE001
@@ -344,10 +476,10 @@ def _session(title: str, request: Request, what: str):
 async def hub_put(
     title: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
-    _inst, wt, err = _session(title, request, "the hub")
+    body = payload if isinstance(payload, dict) else {}
+    _inst, wt, err = _session(title, request, "the hub", body)
     if err is not None:
         return err
-    body = payload if isinstance(payload, dict) else {}
     path, text = body.get("path"), body.get("text")
     name, note = body.get("name", "") or "", body.get("note", "") or ""
     if not isinstance(name, str) or not isinstance(note, str):
@@ -386,44 +518,33 @@ async def hub_put(
 async def hub_take(
     title: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
-    _inst, wt, err = _session(title, request, "copying a hub item in")
+    """An agent's copy into ITS OWN folder: only under ``hub/``, never over a
+    file (no ``replace`` here — that is the owner's, on /copy-to), never in a
+    red zone or outside its fence."""
+    body = payload if isinstance(payload, dict) else {}
+    _inst, wt, err = _session(title, request, "copying a hub item in", body)
     if err is not None:
         return err
-    body = payload if isinstance(payload, dict) else {}
-    iid, dest, replace = body.get("id"), body.get("path"), body.get("replace", False)
+    iid, dest = body.get("id"), body.get("path")
     if not isinstance(iid, str) or (dest is not None and not isinstance(dest, str)):
-        return _bad("id is the item (hub:k7m2), path where in the worktree")
-    if not isinstance(replace, bool):
-        return _bad("replace is true or false")
+        return _bad("id is the item (hub:k7m2), path where under hub/ in your folder")
     from backend.web.core.red_zone_driver import zone_hits_for_paths
 
     return await _run(
-        _hub.take, iid, wt, dest, replace=replace, zone_hits=zone_hits_for_paths
+        _hub.take, iid, wt, dest, zone_hits=zone_hits_for_paths, agent=True
     )
 
 
-@router.get("/api/instances/{title}/hub/free")
-async def hub_free(
-    title: str, request: Request, id: str = "", path: str = ""
+@router.post("/api/instances/{title}/hub/remove")
+async def hub_remove_own(
+    title: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
-    """Where a copy would land without replacing anything: ``{path, taken}``
-    for ``path`` (default ``hub/<name>``) in that session's worktree."""
-    _inst, wt, err = _session(title, request, "copying a hub item in")
+    """Remove an item THIS session added (only those)."""
+    body = payload if isinstance(payload, dict) else {}
+    _inst, _wt, err = _session(title, request, "the hub", body)
     if err is not None:
         return err
-
-    def free() -> dict:
-        rec = _hub.get(id)
-        want = path or _hub.default_dest(rec)
-        got = _hub.free_dest(wt, want)
-        return {"path": got, "wanted": want, "taken": got != want, "root": wt}
-
-    return await _run(free)
-
-
-@router.delete("/api/instances/{title}/hub/items/{iid}")
-async def hub_remove_own(title: str, iid: str, request: Request) -> JSONResponse:
-    refused = _refusal(request)
-    if refused is not None:
-        return refused
+    iid = body.get("id")
+    if not isinstance(iid, str):
+        return _bad("id is the item (hub:k7m2)")
     return await _run(_hub.remove, iid, session=title)

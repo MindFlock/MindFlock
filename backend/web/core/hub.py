@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -54,7 +55,7 @@ import unicodedata
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from backend.config import config
-from backend.fsutil import atomic_write_json, read_json
+from backend.fsutil import atomic_write_json
 from backend.web.core import send_files as _send_files
 from backend.web.core.send_session import Refusal, clean_line, clean_text
 
@@ -210,8 +211,72 @@ def _locked() -> Iterator[None]:
 # --------------------------------------------------------------------------- #
 # the index
 # --------------------------------------------------------------------------- #
-def _load() -> dict:
-    doc = read_json(os.path.join(root(), INDEX), {}, expect=dict) or {}
+_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+BACKUP = INDEX + ".bak"
+
+
+def broken_refusal() -> Refusal:
+    return Refusal(
+        500,
+        "hub_broken",
+        "The hub's list (hub.json) can't be read. Nothing was deleted — every file "
+        "is still in %s. Rebuild the list from those files to get them back "
+        "(Rebuild the list in the Hub panel)." % root(),
+    )
+
+
+def _read_index(path: str):
+    """The parsed index at ``path``: ``{}`` when the file is missing, None
+    when it exists but can't be read as one (never treated as empty)."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        return None
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _path_safe(name) -> bool:
+    """A file name the hub may join onto an item folder: one plain segment
+    (no separator, control/bidi character, leading dot, ``.``/``..``)."""
+    return (
+        isinstance(name, str)
+        and 0 < len(name) <= 255
+        and "/" not in name
+        and "\\" not in name
+        and not name.startswith(".")
+        and not _BAD_NAME.search(name)
+        and name not in (".", "..")
+    )
+
+
+def _raw_ids() -> set:
+    """Every id the index names, valid record or not — the orphan sweep never
+    touches these (a record dropped as unsafe keeps its folder)."""
+    doc = _read_index(os.path.join(root(), INDEX))
+    items = (doc or {}).get("items")
+    return set(items) if isinstance(items, dict) else set()
+
+
+def _valid(iid: str, rec) -> bool:
+    """A record the hub may build a path from: its id, a name that survives
+    :func:`clean_name` unchanged, a SHA-256, a size."""
+    if not isinstance(rec, dict) or not _ID_RE.match(str(iid)) or rec.get("id") != iid:
+        return False
+    if not _path_safe(rec.get("name")):
+        return False
+    if not isinstance(rec.get("sha256"), str) or not _SHA_RE.match(rec["sha256"]):
+        return False
+    return isinstance(rec.get("size"), int) and rec["size"] >= 0
+
+
+def _normal(doc: dict) -> dict:
     items = doc.get("items")
     gone = doc.get("gone")
     return {
@@ -219,7 +284,7 @@ def _load() -> dict:
         "items": {
             k: v
             for k, v in (items.items() if isinstance(items, dict) else [])
-            if isinstance(v, dict) and _ID_RE.match(str(k))
+            if _valid(k, v)
         },
         "gone": {
             k: v
@@ -229,8 +294,103 @@ def _load() -> dict:
     }
 
 
+def _load() -> dict:
+    """The index. A file that exists but can't be read raises the
+    ``hub_broken`` :class:`Refusal` — it is NEVER read as an empty hub
+    (expiry would then sweep every item folder as unknown)."""
+    doc = _read_index(os.path.join(root(), INDEX))
+    if doc is None:
+        raise broken_refusal()
+    return _normal(doc)
+
+
 def _save(doc: dict) -> None:
-    atomic_write_json(os.path.join(root(), INDEX), doc, mode=0o644)
+    """Write the index atomically (temp + fsync + rename), the previous good
+    one kept as ``hub.json.bak``."""
+    path = os.path.join(root(), INDEX)
+    prev = _read_index(path)
+    if prev:
+        atomic_write_json(os.path.join(root(), BACKUP), prev, mode=0o644)
+    atomic_write_json(path, doc, mode=0o644)
+
+
+def rebuild() -> dict:
+    """Make a new index from what is on disk: each item folder holding one
+    regular file (never a link) becomes an item again — with its old record
+    (pin, note, who, when) from ``hub.json.bak`` when that still matches the
+    file, else read afresh (kind sniffed, added = the file's time, by you).
+    The unreadable index is kept as ``hub.json.broken``. → ``{items,
+    restored, read_again, skipped}``."""
+    with _locked():
+        r = root()
+        path = os.path.join(r, INDEX)
+        old = _read_index(path)
+        if old is None:
+            os.replace(path, path + ".broken")
+        backup = _read_index(os.path.join(r, BACKUP)) or {}
+        known = _normal(old) if old else {"items": {}, "gone": {}}
+        prior = dict(_normal(backup)["items"])
+        prior.update(known["items"])
+        doc = {"v": 1, "items": {}, "gone": dict(_normal(backup)["gone"])}
+        doc["gone"].update(known["gone"])
+        restored = read_again = 0
+        skipped: List[str] = []
+        for e in _scandir(r):
+            if not _ID_RE.match(e.name) or not e.is_dir(follow_symlinks=False):
+                continue
+            files = [f for f in _scandir(e.path)]
+            regular = [f for f in files if f.is_file(follow_symlinks=False)]
+            if len(files) != 1 or len(regular) != 1 or not _path_safe(regular[0].name):
+                skipped.append(e.name)
+                continue
+            f = regular[0]
+            fd = _send_files._open_under(r, e.name + "/" + f.name)
+            h = hashlib.sha256()
+            head = b""
+            with os.fdopen(fd, "rb") as fh:
+                while True:
+                    b = fh.read(1024 * 1024)
+                    if not b:
+                        break
+                    if len(head) < 8192:
+                        head += b[: 8192 - len(head)]
+                    h.update(b)
+            st = f.stat(follow_symlinks=False)
+            rec = prior.get(e.name)
+            if rec and rec["name"] == f.name and rec["sha256"] == h.hexdigest():
+                doc["items"][e.name] = rec
+                restored += 1
+                continue
+            mime = _sniff_image(head)
+            textual, preview = (
+                (False, "") if mime else _text_preview(head, f.name, st.st_size, False)
+            )
+            doc["items"][e.name] = {
+                "id": e.name,
+                "name": f.name,
+                "kind": "image" if mime else "file",
+                "mime": mime,
+                "size": st.st_size,
+                "sha256": h.hexdigest(),
+                "by": "you",
+                "by_name": "",
+                "added": st.st_mtime,
+                "used": time.time(),
+                "note": "",
+                "pinned": False,
+                "textual": bool(textual),
+                "preview": preview,
+            }
+            doc["gone"].pop(e.name, None)
+            read_again += 1
+        atomic_write_json(path, doc, mode=0o644)
+    _changed()
+    return {
+        "items": len(doc["items"]),
+        "restored": restored,
+        "read_again": read_again,
+        "skipped": skipped,
+    }
 
 
 def _live(doc: dict) -> List[dict]:
@@ -363,6 +523,9 @@ def clean_name(raw, fallback: str = "item") -> str:
     # A path (``C:\\fakepath\\shot.png``, ``../../x``) names its last part.
     v = re.split(r"[/\\]", v)[-1]
     v = _BAD_NAME.sub("-", v)
+    # Brackets, commas and semicolons: a name must not be able to close the
+    # label it is shown inside when a reference is expanded (describe).
+    v = re.sub(r"[()\[\]{};,]", "-", v)
     v = re.sub(r"\s+", " ", v).strip()
     v = v.lstrip(". ").rstrip(". ")
     v = re.sub(r"-{2,}", "-", v)
@@ -658,18 +821,31 @@ def add_stream(
 async def add_stream_async(
     chunks, name: str, *, declared: Optional[int] = None, **kw
 ) -> dict:
-    """:func:`add_stream` from an async byte iterator (a request body).
-    File writes are small and local; the lock is held only to reserve and
-    to commit."""
-    lim = limits()
+    """:func:`add_stream` from an async byte iterator (a request body). The
+    reservation, every write and the commit run in a worker thread — the
+    file lock and disk writes never block the event loop; chunks are
+    gathered to ~1 MB per hop."""
+    import asyncio
+
+    lim = await asyncio.to_thread(limits)
     if declared is not None and declared < 0:
         declared = None
-    add = _Add(declared, lim)
+    add = await asyncio.to_thread(_Add, declared, lim)
+    buf: List[bytes] = []
+    held = 0
     try:
         async for c in chunks:
-            add.write(c)
+            if not c:
+                continue
+            buf.append(c)
+            held += len(c)
+            if held >= 1024 * 1024:
+                await asyncio.to_thread(add.write, b"".join(buf))
+                buf, held = [], 0
+        if buf:
+            await asyncio.to_thread(add.write, b"".join(buf))
     except BaseException:
-        add.abort()
+        await asyncio.to_thread(add.abort)
         raise
     if declared is not None and add.size != declared:
         add.abort()
@@ -680,7 +856,7 @@ async def add_stream_async(
             % (human(add.size), human(declared)),
         )
     by = kw.pop("by", "you")
-    return add.commit(name, by=_by(by), **kw)
+    return await asyncio.to_thread(lambda: add.commit(name, by=_by(by), **kw))
 
 
 def add_text(
@@ -984,10 +1160,112 @@ def touch(ids: Iterable[str]) -> None:
 # copying into a session's worktree
 # --------------------------------------------------------------------------- #
 def default_dest(rec: dict) -> str:
-    return "hub/" + rec["name"]
+    return HUB_DIR + "/" + rec["name"]
 
 
-def _check_dest(dest: str) -> List[str]:
+#: Where an AGENT's copy may land: only under this folder of its worktree.
+HUB_DIR = "hub"
+
+#: Never written into a worktree by the hub — not by an agent, not by the
+#: owner's copy: files that INSTRUCT an agent or RUN BY THEMSELVES (agent
+#: instructions and config, git's control files and hooks, CI, editor tasks,
+#: direnv, pre-commit, Python's startup hooks and pytest's conftest, make /
+#: just / task files, package and build manifests whose scripts run on
+#: install). Compared case-insensitively. Folders: at any depth.
+_NEVER_DIRS = frozenset(
+    {
+        ".git",
+        ".claude",
+        ".codex",
+        ".gemini",
+        ".cursor",
+        ".continue",
+        ".cline",
+        ".goose",
+        ".opencode",
+        ".copilot",
+        ".windsurf",
+        ".mindflock",
+        ".husky",
+        ".github",
+        ".gitlab",
+        ".circleci",
+        ".buildkite",
+        ".vscode",
+        ".idea",
+        ".devcontainer",
+        ".direnv",
+    }
+)
+#: File names (any depth), lower-case; ``*`` patterns via fnmatch.
+_NEVER_NAMES = (
+    "claude.md",
+    "claude.local.md",
+    "agents.md",
+    "gemini.md",
+    "copilot-instructions.md",
+    ".cursorrules",
+    ".windsurfrules",
+    ".clinerules",
+    ".mcp.json",
+    ".aider*",
+    ".envrc",
+    ".env",
+    ".env.*",
+    ".gitattributes",
+    ".gitmodules",
+    ".gitignore",
+    ".gitlab-ci.yml",
+    ".pre-commit-config.yaml",
+    ".pre-commit-hooks.yaml",
+    "conftest.py",
+    "sitecustomize.py",
+    "usercustomize.py",
+    "*.pth",
+    "makefile",
+    "gnumakefile",
+    "*.mk",
+    "justfile",
+    ".justfile",
+    "taskfile.yml",
+    "taskfile.yaml",
+    "package.json",
+    ".npmrc",
+    ".yarnrc",
+    ".yarnrc.yml",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "tox.ini",
+    "noxfile.py",
+    "pytest.ini",
+    ".tool-versions",
+    "mise.toml",
+    ".mise.toml",
+)
+#: A Windows 8.3 short name (``GIT~1``, ``CLAUDE~1.MD``) can stand in for any
+#: of the above there: never written.
+_SHORT_NAME = re.compile(r"~\d", re.I)
+
+
+def _dest_refusal(parts: List[str]) -> Optional[str]:
+    """Why the hub never writes ``parts`` (a worktree-relative path), or None."""
+    import fnmatch
+
+    low = [p.lower() for p in parts]
+    for p in low:
+        if _SHORT_NAME.search(p):
+            return "a Windows short name (like GIT~1)"
+        if p in _NEVER_DIRS or p.startswith(".aider"):
+            return "agent, git, CI or editor configuration"
+    if any(fnmatch.fnmatchcase(low[-1], pat) for pat in _NEVER_NAMES):
+        return "a file agents follow or that runs by itself"
+    return None
+
+
+def _check_dest(dest: str, *, agent: bool = False) -> List[str]:
+    """``dest`` as safe worktree-relative parts, or a :class:`Refusal`. An
+    agent's copy (``agent``) lands only under ``hub/``."""
     if not isinstance(dest, str) or not dest.strip() or "\x00" in dest:
         raise Refusal(400, "bad_path", "say where in the worktree, like hub/shot.png")
     d = dest.strip().replace("\\", "/")
@@ -1004,7 +1282,6 @@ def _check_dest(dest: str) -> List[str]:
     for p in parts:
         if (
             p in (".", "..")
-            or p.lower() == ".git"
             or len(p) > 255
             or _BAD_NAME.search(p)
             or p != p.strip()
@@ -1014,22 +1291,31 @@ def _check_dest(dest: str) -> List[str]:
             raise Refusal(
                 400,
                 "bad_path",
-                "%s is not a plain path inside the worktree (no .., .git, or "
-                "special characters)" % clean_line(dest, 200),
+                "%s is not a plain path inside the worktree (no .., or special "
+                "characters)" % clean_line(dest, 200),
             )
-    if _send_files.classify("/".join(parts)) == "never":
+    why = _dest_refusal(parts)
+    if why is not None or _send_files.classify("/".join(parts)) == "never":
         raise Refusal(
             403,
-            "never_shared",
-            "%s is a place MindFlock never writes (git internals, agent config, "
-            "credentials) — pick another path" % clean_line(dest, 200),
+            "never_written",
+            "%s is %s — the hub never writes it. Save the copy under hub/ instead"
+            % (clean_line(dest, 200), why or "git internals or agent config"),
+        )
+    if agent and (len(parts) < 2 or parts[0].lower() != HUB_DIR):
+        raise Refusal(
+            403,
+            "outside_hub_folder",
+            "an agent's copy lands only under hub/ in its own folder (like "
+            "hub/%s) — move it from there yourself if the work needs it elsewhere"
+            % clean_line(parts[-1], 80),
         )
     return parts
 
 
-def free_dest(wt: str, dest: str) -> str:
+def free_dest(wt: str, dest: str, *, agent: bool = False) -> str:
     """``dest``, or the first ``name-2.ext`` / ``name-3.ext`` … not taken."""
-    parts = _check_dest(dest)
+    parts = _check_dest(dest, agent=agent)
     base = os.path.realpath(wt)
     stem, ext = os.path.splitext(parts[-1])
     for n in range(1, 1000):
@@ -1040,17 +1326,18 @@ def free_dest(wt: str, dest: str) -> str:
     return "/".join(parts)
 
 
+#: Whether this platform opens files relative to a folder fd (POSIX). Where
+#: it doesn't (Windows), the copy goes through real paths checked at each step.
+_HAS_DIR_FD = bool(
+    os.open in getattr(os, "supports_dir_fd", set()) and getattr(os, "O_NOFOLLOW", 0)
+)
+
+
 def _open_parent(base: str, parts: List[str]) -> int:
     """An fd of ``base/parts[:-1]``, each folder made if missing and none
-    followed through a symlink."""
+    followed through a symlink (POSIX: :data:`_HAS_DIR_FD`)."""
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     odir = getattr(os, "O_DIRECTORY", 0)
-    if os.open not in getattr(os, "supports_dir_fd", set()) or not nofollow:
-        full = os.path.join(base, *parts[:-1])
-        os.makedirs(full, exist_ok=True)
-        if os.path.realpath(full) != os.path.normpath(full):
-            raise OSError("a folder on the way is a link")
-        return os.open(full, os.O_RDONLY)
     dirfd = os.open(base, os.O_RDONLY | odir)
     try:
         for name in parts[:-1]:
@@ -1067,6 +1354,25 @@ def _open_parent(base: str, parts: List[str]) -> int:
     return dirfd
 
 
+def _make_parent_by_path(base: str, parts: List[str]) -> str:
+    """Without dir_fd: make ``base/parts[:-1]`` one folder at a time, each
+    checked to be a real folder (not a link, not a junction) inside ``base``.
+    → the folder's path, or ``OSError``."""
+    cur = base
+    for name in parts[:-1]:
+        cur = os.path.join(cur, name)
+        try:
+            os.mkdir(cur, 0o755)
+        except FileExistsError:
+            pass
+        st = os.lstat(cur)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+            raise OSError("%s is a link or a file" % cur)
+        if os.path.realpath(cur) != os.path.normpath(cur):
+            raise OSError("%s leads somewhere else" % cur)
+    return cur
+
+
 def take(
     raw_id,
     wt: str,
@@ -1074,13 +1380,18 @@ def take(
     *,
     replace: bool = False,
     zone_hits: Optional[Callable[[str, List[str]], list]] = None,
+    agent: bool = False,
 ) -> dict:
     """Copy an item INTO the worktree ``wt`` at ``dest`` (relative; default
-    ``hub/<name>``). Never outside it, never through a link, never over an
-    existing file unless ``replace`` (then said in the answer). With
-    ``zone_hits`` (an agent's copy): refused in a red zone or outside its
-    fence. → ``{ok, ref, path, abs, size, sha256, replaced}``."""
+    ``hub/<name>``). Never outside it, never through a link, never into a
+    file agents follow or that runs by itself (:func:`_dest_refusal`), never
+    over an existing file unless ``replace`` (then said in the answer).
+    ``agent`` (a session's own copy): only under ``hub/``, never ``replace``,
+    and with ``zone_hits`` refused in a red zone or outside its fence.
+    → ``{ok, ref, path, abs, size, sha256, replaced}``."""
     iid = check_id(raw_id)
+    if agent:
+        replace = False
     with _locked():
         doc = _load()
         rec = dict(_rec(doc, iid))
@@ -1089,7 +1400,7 @@ def take(
         _save(doc)
     try:
         dest = dest if isinstance(dest, str) and dest.strip() else default_dest(rec)
-        parts = _check_dest(dest)
+        parts = _check_dest(dest, agent=agent)
         rel = "/".join(parts)
         base = os.path.realpath(wt)
         if not os.path.isdir(base):
@@ -1104,13 +1415,18 @@ def take(
         full = os.path.join(base, *parts)
         existed = os.path.lexists(full)
         if existed and not replace:
+            free = free_dest(wt, rel, agent=agent)
             raise Refusal(
                 409,
                 "exists",
                 "%s already exists in the worktree — pick another path (%s is "
-                "free), or replace it on purpose"
-                % (clean_line(rel), free_dest(wt, rel)),
-                free=free_dest(wt, rel),
+                "free)%s"
+                % (
+                    clean_line(rel),
+                    free,
+                    "" if agent else ", or replace it on purpose",
+                ),
+                free=free,
             )
         try:
             src_fd = _send_files._open_under(_ensure_root(), iid + "/" + rec["name"])
@@ -1118,77 +1434,21 @@ def take(
             raise Refusal(
                 410, "missing", "hub:%s's file is missing — add it again" % iid
             ) from None
-        h = hashlib.sha256()
-        size = 0
-        tmp = ".%s.hub-%s" % (parts[-1][:60], secrets.token_hex(4))
         try:
-            pfd = _open_parent(base, parts)
-        except OSError:
-            os.close(src_fd)
-            raise Refusal(
-                403,
-                "bad_path",
-                "a folder on the way to %s is a link or a file — pick another path"
-                % clean_line(rel),
-            ) from None
-        try:
-            if existed:
-                try:
-                    st = os.stat(parts[-1], dir_fd=pfd, follow_symlinks=False)
-                except (TypeError, NotImplementedError):
-                    st = os.lstat(full)
-                if not stat.S_ISREG(st.st_mode):
-                    raise Refusal(
-                        409,
-                        "exists",
-                        "%s exists and is not a plain file — pick another path"
-                        % clean_line(rel),
-                    )
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-            out = os.open(tmp, flags, 0o644, dir_fd=pfd) if pfd is not None else None
-            try:
-                with os.fdopen(src_fd, "rb") as src:
-                    src_fd = None
-                    while True:
-                        b = src.read(1024 * 1024)
-                        if not b:
-                            break
-                        h.update(b)
-                        size += len(b)
-                        view = memoryview(b)
-                        while view:
-                            view = view[os.write(out, view) :]
-                os.fchmod(out, 0o644)
-            finally:
-                os.close(out)
-            if h.hexdigest() != rec["sha256"]:
-                os.unlink(tmp, dir_fd=pfd)
-                raise Refusal(
-                    409,
-                    "changed",
-                    "hub:%s's file no longer matches its checksum — remove it and "
-                    "add it again" % iid,
-                )
-            if not replace and os.path.lexists(full):
-                os.unlink(tmp, dir_fd=pfd)
-                raise Refusal(
-                    409,
-                    "exists",
-                    "%s appeared meanwhile — pick another path" % rel,
-                    free=free_dest(wt, rel),
-                )
-            if replace:
-                os.replace(tmp, parts[-1], src_dir_fd=pfd, dst_dir_fd=pfd)
+            if _HAS_DIR_FD:
+                size, digest = _write_at(src_fd, base, parts, existed, replace)
             else:
-                # link(2) fails if the name was taken meanwhile: no overwrite.
-                try:
-                    os.link(tmp, parts[-1], src_dir_fd=pfd, dst_dir_fd=pfd)
-                finally:
-                    os.unlink(tmp, dir_fd=pfd)
+                size, digest = _write_by_path(src_fd, base, parts, existed, replace)
         finally:
             if src_fd is not None:
                 os.close(src_fd)
-            os.close(pfd)
+        if digest != rec["sha256"]:
+            raise Refusal(
+                409,
+                "changed",
+                "hub:%s's file no longer matches its checksum — remove it and add "
+                "it again" % iid,
+            )
     except FileExistsError:
         raise Refusal(
             409, "exists", "%s appeared meanwhile — pick another path" % dest
@@ -1207,15 +1467,158 @@ def take(
         "path": rel,
         "abs": full,
         "size": size,
-        "sha256": h.hexdigest(),
+        "sha256": digest,
         "replaced": bool(existed and replace),
     }
+
+
+def _copy_fd(src_fd: int, out: int) -> Tuple[int, str]:
+    h = hashlib.sha256()
+    size = 0
+    with os.fdopen(src_fd, "rb", closefd=False) as src:
+        while True:
+            b = src.read(1024 * 1024)
+            if not b:
+                break
+            h.update(b)
+            size += len(b)
+            view = memoryview(b)
+            while view:
+                view = view[os.write(out, view) :]
+    try:
+        os.fchmod(out, 0o644)
+    except (AttributeError, OSError):
+        pass
+    return size, h.hexdigest()
+
+
+def _bad_way(rel: str) -> Refusal:
+    return Refusal(
+        403,
+        "bad_path",
+        "a folder on the way to %s is a link or a file — pick another path"
+        % clean_line(rel),
+    )
+
+
+def _write_at(src_fd: int, base: str, parts: List[str], existed: bool, replace: bool):
+    """The copy through folder fds (POSIX). ``src_fd`` stays the caller's."""
+    rel = "/".join(parts)
+    try:
+        pfd = _open_parent(base, parts)
+    except OSError:
+        raise _bad_way(rel) from None
+    tmp = ".%s.hub-%s" % (parts[-1][:60], secrets.token_hex(4))
+    try:
+        if existed:
+            st = os.stat(parts[-1], dir_fd=pfd, follow_symlinks=False)
+            if not stat.S_ISREG(st.st_mode):
+                raise Refusal(
+                    409,
+                    "exists",
+                    "%s exists and is not a plain file — pick another path"
+                    % clean_line(rel),
+                )
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        out = os.open(tmp, flags, 0o644, dir_fd=pfd)
+        try:
+            size, digest = _copy_fd(src_fd, out)
+        finally:
+            os.close(out)
+        if replace:
+            os.replace(tmp, parts[-1], src_dir_fd=pfd, dst_dir_fd=pfd)
+        else:
+            # link(2) fails if the name was taken meanwhile: no overwrite.
+            try:
+                os.link(tmp, parts[-1], src_dir_fd=pfd, dst_dir_fd=pfd)
+            finally:
+                os.unlink(tmp, dir_fd=pfd)
+        return size, digest
+    except BaseException:
+        try:
+            os.unlink(tmp, dir_fd=pfd)
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(pfd)
+
+
+def _write_by_path(
+    src_fd: int, base: str, parts: List[str], existed: bool, replace: bool
+):
+    """The copy where folder fds don't exist (Windows): every folder on the
+    way made and checked by :func:`_make_parent_by_path`, the file created
+    exclusively, then moved into place — never over a file unless
+    ``replace`` (``os.rename`` refuses an existing target on Windows; on POSIX
+    ``os.link`` does)."""
+    rel = "/".join(parts)
+    try:
+        parent = _make_parent_by_path(base, parts)
+    except OSError:
+        raise _bad_way(rel) from None
+    full = os.path.join(parent, parts[-1])
+    if existed:
+        st = os.lstat(full)
+        if not stat.S_ISREG(st.st_mode):
+            raise Refusal(
+                409,
+                "exists",
+                "%s exists and is not a plain file — pick another path" % rel,
+            )
+    tmp = os.path.join(parent, ".%s.hub-%s" % (parts[-1][:60], secrets.token_hex(4)))
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        out = os.open(tmp, flags, 0o644)
+    except OSError:
+        raise _bad_way(rel) from None
+    try:
+        try:
+            size, digest = _copy_fd(src_fd, out)
+        finally:
+            os.close(out)
+        if os.path.realpath(parent) != os.path.normpath(parent):
+            raise _bad_way(rel)
+        if replace:
+            os.replace(tmp, full)
+        elif os.name == "nt":
+            os.rename(tmp, full)  # FileExistsError when taken meanwhile
+        else:
+            try:
+                os.link(tmp, full)
+            finally:
+                os.unlink(tmp)
+        return size, digest
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # --------------------------------------------------------------------------- #
 # references in prompt text
 # --------------------------------------------------------------------------- #
 _KIND_WORD = {"image": "image", "text": "text snippet", "file": "file"}
+
+
+#: The name as the expanded line shows it: letters, digits, space, dot, dash
+#: and underscore only, at most this long (the extension kept).
+SHOWN_NAME_MAX = 60
+
+
+def shown_name(name) -> str:
+    """A short, safe form of an item's name for the expanded line: nothing
+    that could close the label or read as a sentence's punctuation."""
+    v = re.sub(r"[^\w .-]+", "-", str(name or ""), flags=re.UNICODE)
+    v = re.sub(r"\s+", " ", v).strip() or "item"
+    if len(v) > SHOWN_NAME_MAX:
+        stem, ext = os.path.splitext(v)
+        ext = ext if 0 < len(ext) <= 10 else ""
+        v = stem[: SHOWN_NAME_MAX - len(ext) - 1].rstrip() + "…" + ext
+    return v
 
 
 def describe(rec: dict) -> str:
@@ -1230,7 +1633,7 @@ def describe(rec: dict) -> str:
             PREFIX,
             rec["id"],
             _KIND_WORD.get(rec.get("kind"), "file"),
-            clean_line(rec.get("name"), 120),
+            shown_name(rec.get("name")),
             human(int(rec.get("size") or 0)),
             clean_line(shown, 400),
         )
@@ -1321,7 +1724,11 @@ def prune(now: Optional[float] = None) -> dict:
     except Refusal:
         return {"expired": [], "purged": []}
     with _locked():
-        doc = _load()
+        try:
+            doc = _load()
+        except Refusal:
+            # An unreadable index: expire nothing, sweep nothing (hub_broken).
+            return {"expired": [], "purged": []}
         for iid, rec in list(doc["items"].items()):
             if _BUSY.get(iid):
                 continue
@@ -1344,7 +1751,7 @@ def prune(now: Optional[float] = None) -> dict:
         for iid in expired + purged:
             _rmtree(os.path.join(root(), iid))
         # Folders the index doesn't know (a crash between mkdir and save).
-        known = set(doc["items"])
+        known = set(doc["items"]) | _raw_ids()
         for entry in _scandir(root()):
             if (
                 _ID_RE.match(entry.name)

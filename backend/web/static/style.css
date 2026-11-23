@@ -17816,7 +17816,7 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
   right: 0;
   bottom: 0;
   z-index: 55;
-  width: min(420px, 100vw);
+  width: min(460px, 100vw);
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -18523,11 +18523,6 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
   position: relative;
 }
 
-/* The Queue box sits at the top of its tab: its picker opens downward. */
-.queue-input-wrap > .hub-pick {
-  top: calc(100% + 4px);
-  bottom: auto;
-}
 
 /* The reference and the item's actions share one line. */
 .hub-row2 {
@@ -18554,6 +18549,438 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
 .hub-send-path .hub-send-replace input {
   width: auto;
   margin: 0;
+}
+
+/* --- Round 4 ---------------------------------------------------------------- */
+
+/* What the hub says: at the TOP centre, never over a session's prompt line. */
+#hub-notice {
+  position: fixed;
+  top: calc(var(--topbar-h, 40px) + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1001;
+  max-width: min(640px, calc(100vw - 24px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--accent);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+}
+
+#hub-notice.is-error {
+  border-color: var(--red);
+}
+
+.hub-notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.hub-notice-act {
+  flex: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hub-notice-x {
+  flex: none;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+}
+
+.hub-notice-act:focus-visible,
+.hub-notice-x:focus-visible,
+.hub-chip:focus-visible,
+.hub-pin-btn:focus-visible,
+.hub-thumb-btn:focus-visible,
+.hub-name-btn:focus-visible,
+.hub-att-x:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Where an item just went: its pane and rail row ring briefly. */
+.hub-flash {
+  animation: hub-flash 1.6s ease-out 1;
+}
+
+@keyframes hub-flash {
+  0%,
+  60% {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* A refused add, shown in the drawer until dismissed. */
+.hub-problem {
+  margin: 8px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 12.5px;
+}
+
+.hub-problem p {
+  margin: 0;
+}
+
+.hub-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px 0;
+}
+
+.hub-tools .hub-filter {
+  margin: 0;
+  flex: 1 1 120px;
+  width: auto;
+}
+
+.hub-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.hub-chip {
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.hub-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.hub-day + .hub-day {
+  margin-top: 10px;
+}
+
+.hub-day-h {
+  margin: 2px 2px 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.hub-grip {
+  flex: none;
+  align-self: center;
+  color: var(--muted);
+  cursor: grab;
+  font-size: 13px;
+  line-height: 1;
+  user-select: none;
+}
+
+.hub-thumb-btn {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+  border-radius: 5px;
+}
+
+.hub-name-btn {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-pin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.hub-pin-btn.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* A text item until opened: one line — icon, its first line, its actions. */
+.hub-card.is-compact {
+  padding: 6px 10px;
+}
+
+.hub-card.is-compact .hub-card-top {
+  align-items: center;
+}
+
+.hub-card.is-compact .hub-icon {
+  width: 40px;
+  height: 30px;
+}
+
+.hub-card.is-compact .hub-card-main {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.hub-card.is-compact .hub-name-btn {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.hub-card.is-compact .hub-meta {
+  display: none;
+}
+
+.hub-card.is-compact .hub-row2 {
+  flex: none;
+  flex-wrap: nowrap;
+  margin: 0;
+}
+
+.hub-card.is-compact .hub-ref-copy {
+  display: none;
+}
+
+.hub-foot-confirm {
+  font-size: 12px;
+}
+
+/* The picture viewer. */
+.modal.hub-viewer {
+  z-index: 1100;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.hub-viewer-card {
+  margin: 0;
+  max-width: 92vw;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.hub-viewer-card img {
+  max-width: calc(92vw - 20px);
+  max-height: calc(88vh - 70px);
+  object-fit: contain;
+  background: var(--bg);
+}
+
+.hub-viewer-card figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+/* Send to session…: each session's state, the labels and help. */
+.hub-send-state {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.hub-send-state.is-working {
+  color: var(--green-ink, var(--text));
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.hub-send-state.is-question {
+  color: var(--gold-ink, var(--text));
+  background: var(--gold);
+  border-color: var(--gold);
+}
+
+.hub-send-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 2px 0 4px;
+}
+
+.hub-send-msg-wrap {
+  margin-left: 24px;
+}
+
+.hub-send-msg-wrap .hub-send-msg {
+  margin-left: 0;
+  width: 100%;
+}
+
+.hub-send-help {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.hub-send-path > label.hub-send-label {
+  display: block;
+}
+
+/* The composer's attached items: a thumbnail chip per code in the text. */
+.hub-att-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 6px;
+}
+
+.hub-att-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 2px 4px 2px 2px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.hub-att-chip.is-unknown {
+  border-color: var(--red);
+}
+
+.hub-att-thumb,
+.hub-att-ext {
+  flex: none;
+  width: 28px;
+  height: 22px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--bg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hub-att-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-att-x {
+  flex: none;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+/* The hub: picker floats in a portal: fixed, above everything in a pane. */
+.hub-pick.hub-pick-float {
+  position: fixed;
+  z-index: 1002;
+}
+
+.hub-pick-thumb {
+  flex: none;
+  width: 30px;
+  height: 22px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--bg);
+}
+
+.hub-pick-thumb-file {
+  border: 1px solid var(--border);
+}
+
+/* Pin sits in the card's corner, so the code and the actions share a line. */
+.hub-card {
+  position: relative;
+}
+
+.hub-card:not(.is-compact) .hub-pin-btn {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+}
+
+.hub-card:not(.is-compact) .hub-name {
+  padding-right: 30px;
+}
+
+/* With the drawer open, what the hub says centres over the space beside it. */
+#hub-notice.beside-drawer {
+  left: calc((100vw - min(460px, 100vw)) / 2);
+}
+
+@media (max-width: 560px) {
+  #hub-notice.beside-drawer {
+    left: 50%;
+  }
+}
+
+.hub-card.is-compact .hub-pin-btn {
+  display: none;
 }
 
 @layer tokens, base, components, theme;
@@ -19325,12 +19752,17 @@ body #mf-winctl {
   color: var(--red-ink);
 }
 
-/* The hub's item count: how much is in it, not something that wants you —
-   so it is drawn calm, never in the bell's red. */
-#topbar .tb-count.is-quiet {
-  background: var(--panel-2);
-  color: var(--text);
-  box-shadow: inset 0 0 0 1px var(--border);
+/* The hub's count: what an agent or your phone added since you last looked —
+   "new", in the accent, never in the bell's red (nothing in it needs you). */
+#topbar .tb-count.is-new {
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: 0 5px;
+}
+
+#topbar .tb-hub-icon {
+  margin-right: 4px;
+  vertical-align: -2px;
 }
 
 /* A checklist FAILED: the count is red, not the usual accent. */

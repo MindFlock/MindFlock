@@ -35,6 +35,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   everything else — SVG and HTML included — downloads, never opens in the
   app. Guest links, peer-shared sessions and other devices' relayed requests
   get nothing from the hub.
+- **The hub, after its security and usability reviews.** The session routes
+  an agent uses (put, take, remove) answer only that session's own
+  MindFlock tool: each session's MCP is handed a per-session key at launch
+  (a session started earlier gets it on restart). An agent's copy lands only
+  under `hub/` in its own folder and never replaces a file; nothing the hub
+  writes, for anyone, is a file agents follow or that runs by itself
+  (`CLAUDE.md`, `.mcp.json`, git hooks, CI, `Makefile`, `package.json`,
+  Windows short names …). A damaged `hub.json` no longer reads as an empty
+  hub: nothing is deleted, the drawer offers **Rebuild the list**, and every
+  write keeps a backup. Names can't close the label of an expanded code;
+  uploads never block the server; a FIFO swapped in can't hang it; removed
+  pictures are never served from cache. In the app: the code is called a
+  **code** (`hub:k7m2 · Copy code`); Send to session… offers **Point the
+  agent at it** or **Save a copy in its project folder** (and tells the
+  agent where), shows each session's state, and keeps one button label;
+  what the hub says appears at the top of the window, not over the prompt
+  it just filled, and the session rings; the top-bar count shows only what
+  an agent or your phone added since you looked; the list has day headings,
+  All · Pictures · Text · From agents, compact text rows, a visible Pin, a
+  drag grip and a picture viewer; message boxes show a chip per attached
+  item; a too-big file offers **Raise the limit**. On the phone the attached
+  photo shows as a chip above the box.
 
 - **Sessions an agent on another device starts here say where they came
   from, report back, and close when done.** On the receiving device they

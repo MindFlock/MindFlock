@@ -18,7 +18,7 @@ import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useUi } from "../state/store";
 import { useConfig, useDoctor, useTestPlans } from "../state/queries";
-import { useHub, useHubUi } from "../lib/hub";
+import { newCount, useHub, useHubUi } from "../lib/hub";
 import { needsYouBadge, useNeedsYou } from "../lib/needsYou";
 import { Bird } from "./flights/Bird";
 import { GridGlyph } from "./ViewGlyphs";
@@ -88,8 +88,7 @@ export function fitTopBar({ room, fixed, brand, items, more }: BarWidths): BarFi
 }
 
 /** The Hub button's tooltip (and its ⋯ row's). */
-const HUB_TITLE =
-  "Hub — files, pictures and snippets every session can use: drop or paste them here, then put their reference (hub:…) in any prompt";
+const HUB_TITLE = "Hub — files and text every session can use";
 
 export function TopBar() {
   // Only the fields the bar reads: a bare useUi() re-rendered it on every
@@ -125,11 +124,13 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
-  // The hub (lib/hub): its button wears how many items it holds — a calm
-  // count, not a "needs you" one. A guest link has no hub.
+  // The hub (lib/hub): its button counts only what is NEW to you — items an
+  // agent or your phone added since you last opened it — drawn as "new",
+  // never as a "needs you" badge. A guest link has no hub.
   const guest = !!useConfig().data?.guest;
-  const hubCount = useHub(!guest).data?.count || 0;
   const hubOpen = useHubUi((s) => s.open);
+  const hubItems = useHub(!guest).data?.items;
+  const hubCount = hubOpen ? 0 : newCount(hubItems || []);
   // The Sky toggle's badge: everything that needs you — THE one list
   // (lib/needsYou), the bell's badge and the Sky's Needs you strip count the
   // same rows; red while a route is halted.
@@ -239,7 +240,7 @@ export function TopBar() {
       key: "hub",
       // Its count is not a "needs you" count: it rides in the label, never
       // in the ⋯ badge.
-      label: hubCount ? "Hub · " + hubCount : "Hub",
+      label: hubCount ? "Hub · " + hubCount + " new" : "Hub",
       title: HUB_TITLE + keys("hub"),
       count: 0,
       failing: false,
@@ -502,11 +503,19 @@ export function TopBar() {
               type="button"
               title={HUB_TITLE + keys("hub")}
               aria-pressed={hubOpen}
-              aria-label={hubCount ? "Hub, " + hubCount + (hubCount === 1 ? " item" : " items") : "Hub"}
+              aria-label={hubCount ? "Hub, " + hubCount + " new" : "Hub"}
               onClick={() => useHubUi.getState().toggle()}
             >
+              <svg className="tb-hub-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 8l9-5 9 5-9 5z" />
+                <path d="M3 13l9 5 9-5" />
+              </svg>
               Hub
-              {hubCount > 0 && <span className="tb-count is-quiet">{hubCount}</span>}
+              {hubCount > 0 && (
+                <span className="tb-count is-new" title={hubCount + " added by an agent or your phone since you last looked"}>
+                  {hubCount} new
+                </span>
+              )}
             </button>
           )}
           <button
