@@ -126,7 +126,7 @@ class _Srv(SimpleNamespace):
 def _fresh(monkeypatch):
     revive._auto_reset_for_tests()
     monkeypatch.setattr(revive.memory_pressure, "is_low", lambda **kw: False)
-    monkeypatch.setattr(revive, "died_mid_turn", lambda srv, inst, title: False)
+    monkeypatch.setattr(revive, "died_mid_turn", lambda srv, inst, title, **kw: False)
     # No OOM kill anywhere unless a test says so (the real counters move).
     monkeypatch.setattr(revive, "_fleet_oom_kills", lambda: None)
     monkeypatch.setattr(revive, "_machine_oom_kills", lambda: 0)
@@ -228,7 +228,10 @@ def test_the_instance_row_carries_the_hold(h):
 # --------------------------------------------------------------------------- #
 # when a session becomes held: at boot
 # --------------------------------------------------------------------------- #
-def test_the_boot_holds_every_session_whose_agent_died(wt, tmp_path):
+def test_the_boot_holds_a_crash_and_puts_the_rest_to_sleep(wt, tmp_path):
+    """A session whose agent died with the last run: held when its marker
+    says crash (137 here), asleep otherwise (no marker; no memory history in
+    this test, which reads as an ordinary shutdown — core.revive.stop_evidence)."""
     gone = str(tmp_path / "gone")
     srv = _Srv(
         {
@@ -249,13 +252,17 @@ def test_the_boot_holds_every_session_whose_agent_died(wt, tmp_path):
     )
     sleep.mark("asleep", sleep.REASON_IDLE)
     out = revive.hold_on_boot(srv)
-    assert sorted(out["held"]) == ["killed", "limited", "restarted"]
-    assert out["total"] == 3
-    assert held.info("restarted")["reason"] == held.REASON_NOT_RUNNING
+    assert out["held"] == ["killed"]
+    assert out["total"] == 1
     assert held.info("killed")["reason"] == held.REASON_KILLED
-    # A usage-limited session is held like any other: the limit watch would
-    # otherwise relaunch it the moment the window reopens.
-    assert held.info("limited")["reason"] == held.REASON_NOT_RUNNING
+    # A usage-limited session is decided like any other (asleep here: only a
+    # person wakes a boot-sleeper, so the limit watch can't relaunch it).
+    assert sorted(out["asleep"]) == ["limited", "restarted"]
+    for t in ("limited", "restarted"):
+        assert not held.is_held(t)
+        assert sleep.info(t)["reason"] == sleep.REASON_SHUTDOWN
+    # The idle sleeper keeps its own record.
+    assert sleep.info("asleep")["reason"] == sleep.REASON_IDLE
     assert srv.launched == []
 
 
@@ -274,11 +281,11 @@ def test_the_boot_hold_names_the_real_reason(wt, monkeypatch):
         },
         markers={"crashed": 1, "hangup": 129, "termed": 143},
     )
-    revive.hold_on_boot(srv)
-    not_running = getattr(held, "REASON_NOT_RUNNING", held.REASON_RESTART)
+    out = revive.hold_on_boot(srv)
     assert held.info("crashed")["reason"] == held.REASON_CRASH
-    assert held.info("nomarker")["reason"] == not_running
-    assert held.info("hangup")["reason"] == not_running
+    # No marker / a hang-up with nothing saying crash: the computer went off.
+    assert sorted(out["asleep"]) == ["hangup", "nomarker"]
+    assert not held.is_held("nomarker") and not held.is_held("hangup")
     # A plain SIGTERM with no OOM kill seen is an unnatural exit: crashed.
     assert held.info("termed")["reason"] == held.REASON_CRASH
 
@@ -296,8 +303,8 @@ def test_the_boot_never_holds_on_a_probe_tmux_did_not_answer(wt):
     srv = _Srv({"slow": _Inst(wt), "dead": _Inst(wt)})
     srv.unanswered = ("slow",)
     out = revive.hold_on_boot(srv)
-    assert out["held"] == ["dead"]
-    assert not held.is_held("slow")
+    assert out["asleep"] == ["dead"]
+    assert not held.is_held("slow") and not sleep.is_sleeping("slow")
 
 
 def test_the_boot_probe_without_a_server_probe_uses_tmux_exactly(monkeypatch):
@@ -329,21 +336,34 @@ def test_with_revive_on_start_on_nothing_is_held(wt):
     """The opt-in old behaviour: holds are dropped and the sweep revives."""
     S.update_settings(general={"revive_on_start": True})
     held.hold("old", held.REASON_KILLED)
-    srv = _Srv({"a": _Inst(wt), "old": _Inst(wt)})
+    # A boot-sleep left by an earlier boot with the setting off is dropped
+    # too (the sweep revives it); an idle sleeper keeps its sleep.
+    sleep.mark("slept", sleep.REASON_SHUTDOWN)
+    sleep.mark("idle", sleep.REASON_IDLE)
+    srv = _Srv(
+        {"a": _Inst(wt), "old": _Inst(wt), "slept": _Inst(wt), "idle": _Inst(wt)}
+    )
     out = revive.hold_on_boot(srv)
-    assert out == {"held": [], "total": 0, "released": 1}
+    assert out == {
+        "held": [],
+        "asleep": [],
+        "total": 0,
+        "released": 1,
+        "evidence": None,
+    }
     assert held.held() == {}
+    assert not sleep.is_sleeping("slept") and sleep.is_sleeping("idle")
     swept = _run(revive.run_on_start(srv))
-    assert sorted(swept["revived"]) == ["a", "old"]
+    assert sorted(swept["revived"]) == ["a", "old", "slept"]
 
 
 def test_the_setting_defaults_off_so_the_startup_sweep_relaunches_nothing(wt):
     assert S.load_settings().general.revive_on_start is None
     assert revive.enabled() is False
-    srv = _Srv({"a": _Inst(wt)})
+    srv = _Srv({"a": _Inst(wt), "k": _Inst(wt)}, markers={"k": 137})
     revive.hold_on_boot(srv)
     assert _run(revive.run_on_start(srv)) is None
-    assert srv.launched == [] and held.is_held("a")
+    assert srv.launched == [] and held.is_held("k") and sleep.is_sleeping("a")
 
 
 def test_the_boot_hold_is_off_under_pytest():

@@ -829,13 +829,15 @@ def test_opening_the_terminal_wakes_it(woken, monkeypatch):
     monkeypatch.setattr(
         sleep,
         "ensure_awake",
-        lambda inst, title, why, srv=None: seen.append(why) or (True, "stop here"),
+        lambda inst, title, why, srv=None, **kw: seen.append((why, kw))
+        or (True, "stop here"),
     )
     with TestClient(woken.server.app).websocket_connect(
         "/api/instances/zz/terminal"
     ) as ws:
         assert "stop here" in ws.receive_text()
-    assert seen == ["terminal opened"]
+    # A person's wake (so a boot-sleeper wakes), through the launch gate.
+    assert seen == [("terminal opened", {"auto": True, "person": True})]
 
 
 def test_wake_route(woken):

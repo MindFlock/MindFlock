@@ -462,6 +462,7 @@ NOT_SESSION_KEYED = {
     "config.json": "engine config",
     "streaming_config.json": "a Moonshine model file in the voice dir (core.speech_moonshine.MODEL_FILES), not a store",
     "settings.json": "settings (no per-session keys)",
+    "clean_stop.json": "when a server last stopped in an orderly way ({at, pid}; core.revive.note_clean_stop), no session keys",
     "status.json": "Reach my devices from anywhere's no-secrets status snapshot for the doctor (core.devices_anywhere), no session keys",
     "install.json": "install record",
     "update_auto.json": "what the automatic updater tried and reported, keyed by version",

@@ -923,6 +923,12 @@ def _drain_one_queue(title: str) -> None:
             return
         if _launch_gate.waiting(title) is not None:
             return  # already waiting for memory (core.launch_gate)
+        if _sleep.boot_asleep(title):
+            # Asleep since the computer was turned off (core.sleep
+            # REASON_SHUTDOWN): only a person wakes it. Its prompts stay
+            # parked until then — a boot starting agents off their queues
+            # would be revive-on-start by the back door.
+            return
         # Nobody asked for this launch, so it asks the launch gate first
         # (memory, agents still warming up, the live cap). On wait it joins
         # the gate's queue, and the queue relaunches it. A held session
@@ -1034,8 +1040,12 @@ def _queue_relaunch(title: str, rec: dict, inst=None) -> Optional[str]:
         if inst is None:
             return "the session was closed"
     if _sleep.is_sleeping(title):
-        # Asleep (core.sleep): the queued prompt is what wakes it.
-        _sleep.ensure_awake(inst, title, "a queued prompt")
+        # Asleep (core.sleep): the queued prompt is what wakes it — unless it
+        # is asleep since a shutdown, which waits for a person (a relaunch
+        # saved in the launch gate from before the shutdown lands here too).
+        _woke, werr = _sleep.ensure_awake(inst, title, "a queued prompt", person=False)
+        if werr == _sleep.BOOT_WAITS:
+            return werr
     _name, err = srv._ensure_agent_session(inst, title)
     if err is None:
         rec["rebooted_at"] = time.time()

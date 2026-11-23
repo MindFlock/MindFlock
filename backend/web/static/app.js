@@ -25798,6 +25798,18 @@ function sleepingState(info, now) {
 	const freed = Number(info.freed_mb) || 0;
 	let hint = "Asleep";
 	if (since > 0) hint += " since " + fmtClock(since) + " (" + spanWord(now / 1e3 - since) + ")";
+	if (info.reason === "shutdown") {
+		hint += " — the computer was turned off or restarted";
+		if (info.mid_turn) hint += " in the middle of its work; when it wakes it is asked to continue where it left off";
+		return {
+			state: "idle",
+			label: SLEEPING_LABEL,
+			tone: "muted",
+			inBell: false,
+			restartable: false,
+			hint: hint + ". Opening it or sending it anything wakes it, resuming the conversation."
+		};
+	}
 	hint += info.reason === "memory" ? " — memory was low" : info.reason === "manual" ? "" : " — it was idle";
 	if (freed > 0) hint += "; freed ~" + (freed >= 1024 ? (freed / 1024).toFixed(1) + " GB" : freed + " MB");
 	hint += ". Opening it or sending it anything wakes it, resuming the conversation.";
@@ -31731,6 +31743,7 @@ function makeTerm(title, wsPath, interactive) {
 	let state = "connecting";
 	let errorRuns = 0;
 	let lastError = "";
+	let waitingFor = "";
 	let downSince = Date.now();
 	let notSentAt = 0;
 	const canSend = () => {
@@ -31738,7 +31751,7 @@ function makeTerm(title, wsPath, interactive) {
 		const now = Date.now();
 		if (now - notSentAt > NOT_SENT_THROTTLE_MS) {
 			notSentAt = now;
-			showTermNotice(container, notSentLine(state));
+			showTermNotice(container, notSentLine(state, waitingFor));
 		}
 		return false;
 	};
@@ -31753,6 +31766,9 @@ function makeTerm(title, wsPath, interactive) {
 		},
 		get error() {
 			return lastError;
+		},
+		get waitingFor() {
+			return waitingFor;
 		},
 		get downSince() {
 			return downSince;
@@ -31799,9 +31815,11 @@ function makeTerm(title, wsPath, interactive) {
 			sentSize = "";
 			let attached = false;
 			let errorHere = "";
+			let memoryHere = false;
 			const markAttached = () => {
 				if (attached) return;
 				attached = true;
+				waitingFor = "";
 				reconnectAttempt = 0;
 				errorRuns = 0;
 				lastError = "";
@@ -31827,6 +31845,7 @@ function makeTerm(title, wsPath, interactive) {
 					const j = JSON.parse(ev.data);
 					if (j.type === "error") {
 						errorHere = String(j.message ?? "");
+						memoryHere = j.waiting_for_memory === true;
 						return;
 					}
 					const ctl = controlNotice(j);
@@ -31849,6 +31868,7 @@ function makeTerm(title, wsPath, interactive) {
 				if (closeAction(code) !== "waiting") handle._setState("disconnected");
 				if (closed) return;
 				if (closeAction(code) === "waiting") {
+					waitingFor = memoryHere ? "memory" : "turn";
 					handle._setState("waiting");
 					reconnectTimer = setTimeout(() => {
 						if (!closed) handle.connect();
@@ -31924,8 +31944,8 @@ var WAITING_RETRY_MS = 5e3;
 var ERROR_RETRY_LIMIT = 5;
 var UNREACHABLE_MS = 1e4;
 var NOT_SENT_THROTTLE_MS = 1500;
-function notSentLine(state) {
-	if (state === "waiting") return "Waiting its turn — that wasn't sent";
+function notSentLine(state, waitingFor = "") {
+	if (state === "waiting") return (waitingFor === "memory" ? "Waiting for memory" : "Waiting its turn") + " — that wasn't sent";
 	if (state === "failed" || state === "gone") return "Not connected — that wasn't sent";
 	return "Reconnecting — that wasn't sent";
 }
@@ -110862,6 +110882,31 @@ function TermCover({ title, kind, state, booted }) {
 		className: "term-loading",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "spinner" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: kind === "shell" ? "Loading shell…" : "Loading session…" })]
 	});
+	if (cover === "waiting" && h?.waitingFor === "memory") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "term-loading term-cover",
+		role: "status",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "term-cover-head",
+				children: "Waiting for memory"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "It wakes by itself once there is room — other agents start first, one at a time." }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				disabled: busy,
+				title: "Wake it now, past the launch gate",
+				onClick: (e) => {
+					e.stopPropagation();
+					setBusy(true);
+					startWaiting(title).then((r) => {
+						setBusy(false);
+						if (r) peekTerm(title, kind)?.retry();
+					});
+				},
+				children: busy ? "Starting…" : "▶ Start anyway"
+			})
+		]
+	});
 	if (cover === "waiting") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "term-loading term-cover",
 		role: "status",
@@ -127455,8 +127500,8 @@ function ResumeOnUsageResetRow() {
 		})]
 	});
 }
-var REVIVE_LABEL = "Bring agents back by themselves after a crash";
-var REVIVE_NOTE = "Off: sessions whose agent died stay Offline until you press Start, so a crash can't refill memory.";
+var REVIVE_LABEL = "Bring agents back by themselves after a shutdown or crash";
+var REVIVE_NOTE = "Off: after the computer was turned off, sessions come back asleep and wake when you open them; after a crash they stay Offline until you press Start, so a crash can't refill memory.";
 function ReviveOnStartRow() {
 	const s = useSettings();
 	const on = s.get("general", "revive_on_start") === true;

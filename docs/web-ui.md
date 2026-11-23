@@ -1301,12 +1301,21 @@ HTTP error keep their wording, and after 5 minutes without an answer the card
 goes back to the plain *isn't answering* text: the OOM killer can take the
 server too.
 
-**After a server restart, sessions stay offline until you start them.** By
-default the sessions whose agents died with the server are held offline
-(above), so a crash can't refill the memory that just ran out; one
-notification says how many (*N sessions stayed offline after the restart —
-press Start on the ones you need.*). Settings → General → **Bring agents back
-by themselves after a crash** (`general.revive_on_start`, **off by default**)
+**After the computer was off, sessions are asleep; after a crash, offline
+until you start them.** By default a session whose agent went down with the
+computer (no exit marker or a hang-up, and memory read fine until the end)
+comes back **Sleeping** — *Asleep since 08:59 — the computer was turned off or
+restarted* — and wakes, resuming its conversation, when you open it or send it
+something; nothing else starts it, and it rings no bell. One that was cut off
+mid-task is asked to continue where it left off when it wakes. A session whose
+agent crashed — the OOM killer, a crash, or a machine that went down with
+memory in distress — is held offline (above), so a crash can't refill the
+memory that just ran out; one notification says how many (*N sessions stayed
+offline after the restart — press Start on the ones you need.*). Opening a
+grid of sleepers wakes them one at a time as memory allows: a pane whose turn
+has not come says **Waiting for memory** with **Start anyway**. Settings →
+General → **Bring agents back by themselves after a shutdown or crash**
+(`general.revive_on_start`, **off by default**)
 opts in to the old behaviour: once the server has booted (past its 30 s quiet
 window) it relaunches in the background every session whose agent was running
 when it went down — two at a time, oldest first, through the same path as
@@ -7217,14 +7226,14 @@ labels above the inputs.
   [Send a message / prompt queue](#send-a-message--prompt-queue--per-pane) for
   the gate it shares with `wait_for_limit`). Off leaves it parked; the "Usage comes back"
   notification fires either way.
-- **General → Bring agents back by themselves after a crash**
-  (`general.revive_on_start`, **default off**; note: *Off: sessions whose
-  agent died stay Offline until you press Start, so a crash can't refill
-  memory.*) — on, the server relaunches, in the background after it boots,
-  every session whose agent was running when it went down (see
-  [One session state](#one-session-state)), and an agent the system killed
-  for memory once memory recovers. Off (the default) holds them **Offline**
-  until you press **Start**.
+- **General → Bring agents back by themselves after a shutdown or crash**
+  (`general.revive_on_start`, **default off**; note: *Off: after the computer was turned off, sessions come back asleep and wake when you open them; after a crash they stay Offline until you press Start, so a crash can't refill memory.*) — on, the server
+  relaunches, in the background after it boots, every session whose agent was
+  running when it went down (see [One session state](#one-session-state)),
+  and an agent the system killed for memory once memory recovers. Off (the
+  default) brings them back **Sleeping** after a plain shutdown (opening one
+  wakes it) and holds them **Offline** after a crash until you press
+  **Start**.
 - **Agent orchestration → Close finished sub-sessions automatically**
   (`general.auto_close_children`, on by default) and **Minutes a finished
   worker stays open first** (`general.auto_close_grace_minutes`, 10): a worker

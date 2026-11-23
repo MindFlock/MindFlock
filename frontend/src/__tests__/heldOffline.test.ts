@@ -279,9 +279,9 @@ describe("the rail and the Sky", () => {
 
 describe("Settings → General", () => {
   it("names the switch for what it does, and reads unset as off", () => {
-    expect(REVIVE_LABEL).toBe("Bring agents back by themselves after a crash");
+    expect(REVIVE_LABEL).toBe("Bring agents back by themselves after a shutdown or crash");
     expect(REVIVE_NOTE).toBe(
-      "Off: sessions whose agent died stay Offline until you press Start, so a crash can't refill memory."
+      "Off: after the computer was turned off, sessions come back asleep and wake when you open them; after a crash they stay Offline until you press Start, so a crash can't refill memory."
     );
     expect(code("components/settings/screens/General.tsx")).toContain(
       'const on = s.get("general", "revive_on_start") === true;'

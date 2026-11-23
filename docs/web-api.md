@@ -69,7 +69,7 @@ List all sessions. Each item:
   "memory": {"mb": 812, "peak_mb": 1340, "agent_mb": 402, "mcp_mb": 236,
              "other_mb": 174, "procs": 9, "at": 1762300000.0},  // or null
   "workspace_missing": false,  // L1(c): started but its directory vanished
-  "sleeping": null,            // or {"since", "reason": "idle"|"memory"|"manual", "freed_mb"}: agent asleep
+  "sleeping": null,            // or {"since", "reason": "idle"|"memory"|"manual"|"shutdown", "freed_mb", "mid_turn"?}: agent asleep ("shutdown": found down at boot, no crash — only a person wakes it; mid_turn: its wake queues a continue)
   "auto_close": null,          // an agent-spawned worker: {"keep_open", "orphan_of", "closes_at", "why"} —
                                // finished workers close themselves (mcp.md#finished-workers-close-themselves);
                                // orphan_of names a closed parent ("parent closed — review or close")
@@ -228,7 +228,9 @@ relaunched by any of these: its terminal socket closes with 4423, and `/send`
 and Send now answer 409 `{paused: true}` — only `/resume` starts its agent.
 
 `held_offline: true` (with `held_since`, epoch seconds, and `held_reason`:
-`the server restarted` \| `out of memory (killed)` \| `the agent crashed`)
+`the server restarted` \| `out of memory (killed)` \| `the agent crashed` \|
+`it was not running when the server started` \| `memory was running out when
+it stopped`)
 marks a session **held offline**
 ([session-engine.md](session-engine.md#held-offline-the-default-after-a-crash)):
 its agent died in a crash and, with `general.revive_on_start` off (the
@@ -2892,7 +2894,11 @@ Protocol (shared by all terminal sockets, implemented in
   `paused: true`), **4424** session held offline after a crash (agent
   terminal only: nothing relaunches it until someone presses Start —
   `POST /api/instances/{title}/revive` — preceded by an error frame with
-  `held: true` plus `held_offline`/`held_since`/`held_reason`), **4500**
+  `held: true` plus `held_offline`/`held_since`/`held_reason`), **4410**
+  waiting (agent terminal only, not final — check again every ~5 s): an
+  ordered worker before its turn, or a sleeper whose wake waits in the launch
+  gate (the error frame carries `waiting_for_memory: true`; `POST
+  /api/launch-gate/{title}/start` starts it anyway), **4500**
   spawn failure — clients stop reconnecting on 4404/4409/4423/4424,
   otherwise retry ~2.5 s
 - auth close codes (any websocket, from the middleware): **4401**
@@ -4667,10 +4673,14 @@ warmed for N session(s)`. Shutdown reverses addon
 hooks and cancels background tasks. tmux sessions are *not* touched — they
 outlive the server.
 
-**Held offline (default).** With `general.revive_on_start` off — its default —
-the server, before it answers its first request, holds every session whose
-agent was running when it stopped and whose agent tmux is gone (`held_offline`
-on its row, see above), and while it runs holds an agent that dies uncleanly.
+**Held offline or asleep (default).** With `general.revive_on_start` off — its
+default — the server, before it answers its first request, looks at every
+session whose agent was running when it stopped and whose agent tmux is gone:
+it holds the ones whose stop looks like a crash (an OOM/crash exit marker, or
+memory history ending in distress — `held_offline` on its row, see above) and
+puts the rest to sleep (`sleeping.reason: "shutdown"`; see
+[session-engine.md](session-engine.md#asleep-after-a-shutdown)); while it runs
+it holds an agent that dies uncleanly.
 Nothing relaunches a held session until someone presses Start, so a crash
 can't refill memory. When anything is held at boot, one `system.sessions_held`
 event follows the boot quiet window (`data: {count, titles, detail}`; the

@@ -293,7 +293,7 @@ def _session_obs(flight: dict, now: float, agent: bool) -> dict:
         "present": inst is not None,
         "pending": pending,
         "status": status,
-        "sleeping": bool(row.get("sleeping")),
+        "sleeping": _asleep_turn_over(row),
         "activity": activity,
         "branch": str(row.get("branch") or getattr(inst, "Branch", "") or ""),
         "pr_url": str(row.get("pr_url") or ""),
@@ -1450,7 +1450,7 @@ def _children_obs(flight: dict, step: dict) -> List[dict]:
                 "status": status,
                 "activity": str(row.get("activity") or ""),
                 "activity_since": row.get("activity_since") or 0.0,
-                "sleeping": bool(row.get("sleeping")),
+                "sleeping": _asleep_turn_over(row),
                 "held": order.get("state") == "held",
                 "queue_pending": int(queue.get("pending") or 0) > 0,
                 "background_waiting": _mcp_tools.background_waiting(
@@ -1463,6 +1463,15 @@ def _children_obs(flight: dict, step: dict) -> List[dict]:
             }
         )
     return out
+
+
+def _asleep_turn_over(row: dict) -> bool:
+    """The row's ``sleeping`` as the flight rules read it: asleep AND its turn
+    over. The sleep sweep only stops an idle agent, but a boot-sleeper cut off
+    mid-turn (core.sleep ``mid_turn`` — the computer went off while it
+    worked) has NOT finished: it reads as its plain offline instead."""
+    info = row.get("sleeping")
+    return bool(info) and not (isinstance(info, dict) and info.get("mid_turn"))
 
 
 # --------------------------------------------------------------------------- #
@@ -1478,8 +1487,13 @@ def _deliver(title: str, text: str) -> None:
     try:
         from backend.web.core import sleep as _sleep
 
-        _woke, err = _sleep.ensure_awake(inst, title, "a flight step", srv)
-        if err:
+        # Not a person: a boot-sleeper (asleep since the computer was turned
+        # off) stays asleep and the step waits in its queue for someone to
+        # open it — as it did while such sessions were held offline.
+        _woke, err = _sleep.ensure_awake(
+            inst, title, "a flight step", srv, person=False
+        )
+        if err and err != _sleep.BOOT_WAITS:
             raise _StepFailed(str(err))
     except _StepFailed:
         raise

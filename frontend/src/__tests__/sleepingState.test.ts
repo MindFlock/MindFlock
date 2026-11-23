@@ -120,6 +120,20 @@ describe("deriveSessionState — a sleeping agent", () => {
     expect(mem).toContain("2.0 GB");
   });
 
+  it("after a shutdown: says the computer was off, and whether it will be asked to continue", () => {
+    const off = { since: NOW / 1000 - 120, reason: "shutdown", freed_mb: 0 };
+    const ss = deriveSessionState(row({ activity: "offline", sleeping: off }), { now: NOW });
+    expect(ss.label).toBe("Sleeping");
+    expect(ss.inBell).toBe(false);
+    expect(ss.restartable).toBe(false);
+    expect(ss.hint).toContain("the computer was turned off or restarted");
+    expect(ss.hint).not.toContain("idle");
+    expect(ss.hint).not.toContain("continue");
+    expect(ss.hint).toContain("wakes it");
+    const mid = deriveSessionState(row({ activity: "offline", sleeping: { ...off, mid_turn: true } }), { now: NOW }).hint;
+    expect(mid).toContain("continue where it left off");
+  });
+
   it("paused and missing still win (neither is a sleep)", () => {
     expect(deriveSessionState(row({ status: "paused", sleeping: asleep })).label).toBe("Paused");
     expect(deriveSessionState(row({ workspace_missing: true, sleeping: asleep })).label).toBe("Missing");
@@ -164,6 +178,11 @@ describe("offlineRows — the Start all bar", () => {
       row({ title: "ok", activity: "idle" }),
     ];
     expect(offlineRows(rows).map((i) => i.title)).toEqual(["dead1", "dead2"]);
+  });
+
+  it("never counts a session asleep since a shutdown", () => {
+    const off = { since: NOW / 1000 - 120, reason: "shutdown", freed_mb: 0 };
+    expect(offlineRows([row({ title: "a", activity: "offline", sleeping: off })])).toEqual([]);
   });
 
   it("an all-asleep flock shows no bar at all", () => {

@@ -207,6 +207,21 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     # The held-offline records (``~/.mindflock/held.json``, core.held): every
     # row reads them and _ensure_agent_session REFUSES a session they name.
     monkeypatch.setenv("MINDFLOCK_HELD_FILE", str(tmp_path / "mindflock" / "held.json"))
+    # The memory history (``~/.mindflock/logs/memory.jsonl``) and the
+    # clean-stop marker: the boot pass (core.revive.stop_evidence) reads both
+    # to tell a crash from a shutdown, and the owner's real history would
+    # decide a test's sessions held or asleep.
+    from backend.web.core import memory_watch as _memory_watch
+    from backend.web.core import revive as _revive
+
+    monkeypatch.setattr(
+        _memory_watch,
+        "HISTORY_PATH",
+        str(tmp_path / "mindflock" / "logs" / "memory.jsonl"),
+    )
+    monkeypatch.setattr(
+        _revive, "CLEAN_STOP_PATH", str(tmp_path / "mindflock" / "clean_stop.json")
+    )
     # The Usage Optimizer's sample store (``~/.mindflock/usage_optimizer.jsonl``):
     # a live server's sampler appends there every minute, and a test that
     # forces a sample would otherwise land in the owner's real history.
