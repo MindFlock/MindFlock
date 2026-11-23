@@ -22,6 +22,14 @@ measures it:
   subtree (``npm exec`` → node); ``other_mb`` is the rest (launcher shells,
   the Bash tool's shells, test runs, dev servers).
 
+* **What the launch gate reads** — :func:`session_agent_mb` /
+  :func:`session_agent_peak_mb`: ``agent_mb + mcp_mb`` per session and its
+  peak this incarnation, the cost of one more session's AGENT. ``other_mb``
+  is left out on purpose (2026-11-12): a test run in one pane moved the
+  gate's per-session cost 637 → 1,780 MB in a minute and held back sessions
+  the machine had room for. What it really takes still shows, once, in the
+  machine's available memory and pressure readings.
+
 * **PSS, on a budget** — memory is PSS (``smaps_rollup``: shared pages split
   between their users) where the kernel reports it, else RSS. Reading
   ``smaps_rollup`` makes the kernel walk the process's page tables, ~1 ms of
@@ -595,6 +603,7 @@ _STATE: Dict[str, object] = {
     "tick_ms": None,
     "tick_cpu_ms": None,
     "source": "",
+    "agent_peaks": {},  # title -> agent + MCP peak mb (the launch gate's)
 }
 
 
@@ -606,6 +615,32 @@ def session_mb() -> Dict[str, int]:
     return {
         t: int(r["mb"]) for t, r in rows.items() if isinstance(r, dict) and r.get("mb")
     }
+
+
+def session_agent_mb() -> Dict[str, int]:
+    """{title: agent_mb + mcp_mb} from the last reading: what the session's
+    agent CLI and the MCP servers it started take, without whatever else
+    runs in its panes (``other_mb``). The launch gate's per-session cost
+    (``core.launch_gate``'s agent sizes seam)."""
+    with _LOCK:
+        rows = dict(_STATE["sessions"])  # type: ignore[arg-type]
+    out: Dict[str, int] = {}
+    for t, r in rows.items():
+        if not isinstance(r, dict):
+            continue
+        n = int(r.get("agent_mb") or 0) + int(r.get("mcp_mb") or 0)
+        if n:
+            out[t] = n
+    return out
+
+
+def session_agent_peak_mb() -> Dict[str, int]:
+    """{title: peak of agent_mb + mcp_mb} this incarnation, from the last
+    reading (the gate counts a warming agent at the learned agent peak)."""
+    with _LOCK:
+        rows = dict(_STATE["sessions"])  # type: ignore[arg-type]
+        peaks = dict(_STATE.get("agent_peaks") or {})  # type: ignore[call-overload]
+    return {t: int(v) for t, v in peaks.items() if t in rows and v}
 
 
 def session_peak_mb() -> Dict[str, int]:
@@ -620,8 +655,9 @@ def session_peak_mb() -> Dict[str, int]:
     }
 
 
-#: title -> (roots tuple, peak mb): the peak resets with a new incarnation.
-_PEAKS: Dict[str, Tuple[Tuple[int, ...], int]] = {}
+#: title -> (roots tuple, peak mb, agent + MCP peak mb): both peaks reset
+#: with a new incarnation.
+_PEAKS: Dict[str, Tuple[Tuple[int, ...], int, int]] = {}
 _HIST = {"last": 0.0, "failed": False}
 _TICK_LOCK = threading.Lock()
 
@@ -728,6 +764,7 @@ def sample(
     )[: OTHERS_TOP * 2]
     kb = _measure(table, list(in_session) + [p.pid for p in cands], source, root)
     rows: Dict[str, dict] = {}
+    agent_peaks: Dict[str, int] = {}
     live_titles = set()
     for title, (roots, cls) in per.items():
         live_titles.add(title)
@@ -735,9 +772,13 @@ def sample(
         for pid, c in cls.items():
             sums[c] += kb.get(pid, 0)
         total = _mb(sum(sums.values()))
+        agent = _mb(sums["agent"]) + _mb(sums["mcp"])
         prev = _PEAKS.get(title)
-        peak = max(total, prev[1]) if prev and prev[0] == roots else total
-        _PEAKS[title] = (roots, peak)
+        same = bool(prev) and prev[0] == roots  # type: ignore[index]
+        peak = max(total, prev[1]) if same else total  # type: ignore[index]
+        agent_peak = max(agent, prev[2]) if same else agent  # type: ignore[index]
+        _PEAKS[title] = (roots, peak, agent_peak)
+        agent_peaks[title] = agent_peak
         rows[title] = {
             "mb": total,
             "peak_mb": peak,
@@ -772,6 +813,7 @@ def sample(
     }
     with _LOCK:
         _STATE.update(result)
+        _STATE["agent_peaks"] = agent_peaks
     return result
 
 

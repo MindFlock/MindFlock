@@ -67,6 +67,6 @@ def test_a_queued_spawn_says_what_one_more_needs():
         "short_mb": 400,
         "hint": "no room",
     }
-    assert "One more session needs ~950 MB; 400 MB more would have to be free." in (
+    assert "One more agent needs ~950 MB; 400 MB more would have to be free." in (
         out["hint"]
     )

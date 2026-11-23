@@ -141,6 +141,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was cut from: the filter matches it (type the project's name), the row
   shows it, and hovering gives the full path.
 
+- **The memory gate sizes a new session by its agent, not by everything
+  running in sessions' terminals.** "Room for N more sessions" used to drop
+  sharply whenever one session ran a test suite, a build or a dev server:
+  that work was counted twice, once as memory really in use and again as
+  the assumed cost of every future session. A 4 GB test run in one of four
+  sessions took room from 18 to 4; it now takes it to 12, which is what
+  4 GB really costs. The estimate ("~M MB per agent") stays steady while
+  such work starts and stops. Memory in use is still counted in full, and
+  the pressure readings, the reserve, the spacing between starts and the
+  cap on live sessions still hold a start whatever the arithmetic says.
+  This does let more sessions start than before while heavy work is
+  running in others: up to 7 where the old rule allowed none, in the worst
+  case measured.
+
 ### Fixed
 
 - **Opening a grid of sleeping sessions no longer starts every agent at
