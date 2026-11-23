@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A route's CodeRabbit loop finishes by itself and hands the agent the
+  right things.** On a real PR, the Reviews stop failed after two hours
+  with "gave up waiting at agent after 120 min — already at pr — waiting
+  for new work", and later sat at that note with every thread resolved.
+  The agent pushes each round itself (its prompt says to), or a round
+  changes nothing, and the stop's push then waited on a lane with nothing
+  left to push. The stop now sees that git already has the round, goes back
+  to watching and turns the lane off. CodeRabbit's "Nitpick comments",
+  "Outside diff range comments" and "Duplicate comments" live only in its
+  review body, which was dropped whole as a summary. Each item in its newest
+  review of the PR's current commit now goes to the agent as its own request,
+  once: it is keyed by file and title, and a duplicate of an inline thread
+  is never sent a second time. The agent's own replies (the PR author's
+  account, and the account MindFlock's token acts as) and short notices from
+  bots that never reviewed the PR (a Shortcut link, a deploy preview) are no
+  longer requests. CodeRabbit itself always counts. When CodeRabbit has
+  posted on the PR, the loop waits for its review of each new commit, even
+  without "Wait for this reviewer". It finishes at once when that review
+  leaves nothing to address and every thread is resolved. With no review yet
+  it keeps waiting, up to "Give that reviewer" minutes, then the usual quiet
+  rule decides.
+
 ## [0.14.27] - 2026-11-23
 
 ### Added

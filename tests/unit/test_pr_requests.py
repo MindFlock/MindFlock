@@ -123,7 +123,7 @@ def test_answered_needs_a_newer_reply_and_a_known_time():
 # fetch_pr_requests: all four kinds, the rules kept
 # --------------------------------------------------------------------------- #
 def _fetch(monkeypatch, *, inline=(), reviews=(), issue=(), cfg=None):
-    async def _inline(pr, config, *, drop_noise=False):
+    async def _inline(pr, config, *, drop_noise=False, **_kw):
         assert drop_noise is True  # intake always drops noise in threads
         return list(inline)
 

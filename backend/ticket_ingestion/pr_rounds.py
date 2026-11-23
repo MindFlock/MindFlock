@@ -47,8 +47,12 @@ def comment_key(c: PRComment) -> str:
     """The request's bookkeeping id in ``state.json`` ``pr_rounds``:
     ``c:<id>`` an inline review comment, ``i:<id>`` a PR conversation
     comment, ``b:<id>`` a "commented" / "approved" review's body, ``r:<id>``
-    a "changes requested" review (it has no file). ``c:`` and ``r:`` are what
-    they always were, so stored rounds stay valid."""
+    a "changes requested" review (it has no file), ``n:<fingerprint>`` an
+    item CodeRabbit posted only in a review body (``item_key``: the same key
+    whichever review repeats it). ``c:`` and ``r:`` are what they always
+    were, so stored rounds stay valid."""
+    if c.item_key:
+        return "n:%s" % c.item_key
     if c.path:
         return "c:%d" % c.id
     if c.kind == "issue":

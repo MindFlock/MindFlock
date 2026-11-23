@@ -253,6 +253,15 @@ class PRComment:
     #: A review (no file): its state — ``CHANGES_REQUESTED``, ``COMMENTED``
     #: or ``APPROVED`` (pr_rounds.comment_key gives each its own prefix).
     review_state: str | None = None
+    #: An item a reviewer posted only INSIDE a review's body (CodeRabbit's
+    #: "Nitpick comments" / "Outside diff range comments" / "Duplicate
+    #: comments" — :mod:`coderabbit`): its fingerprint (file + title), which
+    #: is its bookkeeping key ``n:<item_key>`` (pr_rounds.comment_key). It has
+    #: a file but no thread: it is answered in the PR conversation comment.
+    item_key: str | None = None
+    #: …and the block it came from ("nitpick", "outside diff range",
+    #: "duplicate").
+    section: str | None = None
 
 
 @dataclass

@@ -590,7 +590,9 @@ def _confirm_line(step: dict, entry: dict, left: Optional[str] = None) -> str:
 
 async def _pr_of(sess: dict, flight: dict):
     """The session's PR as an ingestion ``PullRequest`` + its repo slug, or
-    ``(None, "")``."""
+    ``(None, "")``. ``author`` is the PR's (so its replies are never handed
+    back as requests); ``head_sha`` is GitHub's head of the PR (the commit
+    its reviews are about), the worktree's HEAD when GitHub did not say."""
     from backend.ticket_ingestion.models import PullRequest
     from backend.web.core import github_pr as _gh
 
@@ -601,11 +603,12 @@ async def _pr_of(sess: dict, flight: dict):
     found = await _gh.find_pr(wt, branch)
     if ref is None or not found or not found.get("number"):
         return None, ""
-    head = ""
-    try:
-        head = await asyncio.to_thread(_server()._git_head_sha, wt) or ""
-    except Exception:  # noqa: BLE001
-        head = ""
+    head = str(found.get("head") or "")
+    if not head:
+        try:
+            head = await asyncio.to_thread(_server()._git_head_sha, wt) or ""
+        except Exception:  # noqa: BLE001
+            head = ""
     pr = PullRequest(
         number=int(found["number"]),
         head_ref=branch,
@@ -613,11 +616,28 @@ async def _pr_of(sess: dict, flight: dict):
         base_ref=str(found.get("base") or ""),
         title=flight["subject"].get("title") or branch,
         url=str(found.get("url") or sess.get("pr_url") or ""),
-        author="",
+        author=str(found.get("author") or ""),
         created_at=_dt.datetime.now(_dt.timezone.utc),
         repo=ref.slug,
     )
     return pr, ref.slug
+
+
+async def _own_login() -> str:
+    """The GitHub login MindFlock's token acts as — the account the agent
+    replies on the PR with (``gh`` / the token) — or "" when it can't be told.
+    Cached per token by ``github_auth.fetch_user``."""
+    from backend.web.core import github_auth as _auth
+    from backend.web.core import github_pr as _gh
+
+    try:
+        token = await _gh.api_token()
+        if not token:
+            return ""
+        who = await asyncio.to_thread(_auth.fetch_user, token)
+        return str((who or {}).get("login") or "")
+    except Exception:  # noqa: BLE001 — unknown: the PR author still filters
+        return ""
 
 
 def _is_bot(author: str) -> bool:
@@ -783,19 +803,27 @@ async def _reviewer_on_head(pr, who: str, known: str, known_since: float, now: f
 
 
 async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict:
-    """``{"ids", "created"}`` of the PR's requests (``ids`` None = could not
-    ask, with ``why``; ``created``: id -> epoch seconds, 0.0 when unknown),
-    fetched at most once a minute per flight — and afresh once the stop's
-    quiet clock restarts (its own push: the head moved). With
-    ``require_reviewer``, also ``reviewer``: :func:`_reviewer_on_head`'s
-    answer for the PR's current head (None = could not ask).
+    """``{"ids", "created", "open_threads"}`` of the PR's requests (``ids``
+    None = could not ask, with ``why``; ``created``: id -> epoch seconds, 0.0
+    when unknown; ``open_threads``: unresolved review threads, None when
+    unknown), fetched at most once a minute per flight — and afresh once the
+    stop's quiet clock restarts (its own push: the head moved).
+
+    ``reviewer``: :func:`_reviewer_on_head`'s answer for the PR's current
+    head (None = could not ask), for ``reviewer_name`` — the stop's
+    ``require_reviewer`` (``required`` true), else CodeRabbit once it has
+    posted on the PR (``required`` false: the stop waits for its review of
+    each head, but never fails over it — docs/flights.md "Reviews: done when
+    clean"). No ``reviewer`` key when there is neither.
 
     The requests are PR intake's, read the same way
     (``pr_comments.fetch_pr_requests``: review threads, reviews, review
-    bodies, conversation comments, noise dropped) and keyed the same way
-    (``pr_rounds.comment_key``: ``c:`` / ``r:`` / ``b:`` / ``i:``), so
-    whichever of the two owns the PR (docs/pr-review-rounds.md "Routes")
-    sees the same requests and the other can tell what it handled."""
+    bodies — CodeRabbit's item by item —, conversation comments, noise and
+    bot notices dropped, the PR author's and the agent's own account's
+    dropped) and keyed the same way (``pr_rounds.comment_key``: ``c:`` /
+    ``r:`` / ``b:`` / ``n:`` / ``i:``), so whichever of the two owns the PR
+    (docs/pr-review-rounds.md "Routes") sees the same requests and the other
+    can tell what it handled."""
     from backend.ticket_ingestion import pr_comments as _prc
     from backend.ticket_ingestion import pr_rounds as _rounds
     from backend.web.core import github_pr as _gh
@@ -805,11 +833,12 @@ async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict
     cache = _REVIEWS.get(flight["id"])
     fresh = _flights._float(d.get("quiet_since"))
     if cache and now - cache["at"] < _REVIEWS_EVERY_S and cache["at"] >= fresh:
-        return _reviews_out(cache, bool(who))
+        return _reviews_out(cache)
     ids = None
     why = ""
     created: Dict[str, float] = {}
     comments: Dict[str, object] = {}
+    info: dict = {}
     pr = None
     rv: Optional[dict] = None
     try:
@@ -819,7 +848,14 @@ async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict
                 sess.get("branch") or "?"
             )
         else:
-            got = await _prc.fetch_pr_requests(pr, _gh._github_config())
+            own = await _own_login()
+            got = await _prc.fetch_pr_requests(
+                pr,
+                _gh._github_config(),
+                skip=[own] if own else [],
+                reviewers=[who] if who else [],
+                info=info,
+            )
             for c in got:
                 if not step["config"].get("include_bots", True) and _is_bot(c.author):
                     continue
@@ -831,17 +867,19 @@ async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict
         _warn("flight %s: review comments unavailable: %v", flight["id"], err)
         ids = None
         why = "couldn't ask GitHub: %s" % _error_line(err)
-    if who and pr is not None:
+    # CodeRabbit on the PR is the reviewer a loop waits for even unnamed.
+    name = who or ("coderabbit" if info.get("coderabbit") else "")
+    if name and pr is not None:
         try:
             rv = await _reviewer_on_head(
                 pr,
-                who,
+                name,
                 str(d.get("head") or ""),
                 _flights._float(d.get("head_since")),
                 now,
             )
         except Exception as err:  # noqa: BLE001 — unknown, not "never posted"
-            _log("flight %s: %s's reviews unavailable: %v", flight["id"], who, err)
+            _log("flight %s: %s's reviews unavailable: %v", flight["id"], name, err)
             rv = None
     _REVIEWS[flight["id"]] = {
         "at": now,
@@ -851,16 +889,25 @@ async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict
         "comments": comments,
         "pr": pr,
         "reviewer": rv,
+        "reviewer_name": name,
+        "required": bool(who),
+        "open_threads": info.get("open_threads"),
     }
-    return _reviews_out(_REVIEWS[flight["id"]], bool(who))
+    return _reviews_out(_REVIEWS[flight["id"]])
 
 
-def _reviews_out(cache: dict, ask: bool) -> dict:
-    out = {"ids": cache["ids"], "created": dict(cache.get("created") or {})}
+def _reviews_out(cache: dict) -> dict:
+    out = {
+        "ids": cache["ids"],
+        "created": dict(cache.get("created") or {}),
+        "open_threads": cache.get("open_threads"),
+    }
     if cache["ids"] is None:
         out["why"] = cache.get("why") or ""
-    if ask:
+    if cache.get("reviewer_name"):
         out["reviewer"] = cache.get("reviewer")
+        out["reviewer_name"] = cache["reviewer_name"]
+        out["required"] = bool(cache.get("required"))
     return out
 
 
@@ -1170,8 +1217,14 @@ async def observe(flight: dict, now: float) -> dict:
     )
     sess = await asyncio.to_thread(_session_obs, flight, now, agent)
     obs: dict = {"now": now, "session": sess}
-    if kind == "ship" and ss["state"] in ("pending", "running") and sess.get("present"):
-        # What git says is already done (the agent may have shipped itself).
+    pushing = kind == "reviews" and ss["detail"].get("phase") == "push"
+    if (
+        (kind == "ship" or pushing)
+        and ss["state"] in ("pending", "running")
+        and sess.get("present")
+    ):
+        # What git says is already done (the agent may have shipped itself —
+        # a review round's prompt tells it to commit and push).
         obs["git"] = await asyncio.to_thread(_ship_git_obs, flight["session"])
     if ss["state"] in ("pending", "running"):
         await _guard_obs(flight, sess, now, obs)
@@ -2080,6 +2133,7 @@ async def _send_reviews(flight: dict, step: dict, action: dict, now: float) -> d
         # The stop's first round also says what the route did so far.
         text = _flights.with_route_so_far(text, flight, step)
     await asyncio.to_thread(_deliver, flight["session"], text)
+    rv = cache.get("reviewer") if isinstance(cache.get("reviewer"), dict) else {}
     return dict(
         action,
         detail={
@@ -2089,6 +2143,10 @@ async def _send_reviews(flight: dict, step: dict, action: dict, now: float) -> d
             "review_rounds": int(d.get("review_rounds") or 0) + 1,
             "idle_since": None,
             "worked_at": 0.0,
+            # The PR head this round was about: a clean review of the SAME
+            # head is not a review of the round's work (flights.
+            # _judge_reviews' clean finish).
+            "round_head": str(rv.get("head") or d.get("head") or ""),
         },
     )
 
@@ -2901,9 +2959,14 @@ async def _step_member(
         after = await asyncio.to_thread(_apply_if_unchanged, fid, f, action, now, i)
     if after is None or _same(f, after):
         return None
-    if action.get("by_agent") and cur is not None and cur["kind"] == "ship":
+    if (
+        action.get("by_agent")
+        and cur is not None
+        and cur["kind"] in ("ship", "reviews")
+    ):
         # Done by the agent while this stop's lane waited "for new work": the
-        # lane has nothing left to do for this flight.
+        # lane has nothing left to do for this flight (a Reviews stop's push
+        # of a round the agent pushed itself, or that changed nothing).
         await asyncio.to_thread(_disarm_ours, fid, f["session"])
     if (
         cur is not None

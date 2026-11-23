@@ -164,7 +164,7 @@ def test_the_driver_sends_the_open_comments_end_to_end(monkeypatch):
     async def _pr_of(s, flight):
         return pr, "o/r"
 
-    async def _fetch(p, cfg):
+    async def _fetch(p, cfg, **_kw):
         return list(got)
 
     monkeypatch.setattr(D, "_pr_of", _pr_of)
@@ -523,7 +523,7 @@ def test_the_stop_reads_conversation_comments_and_review_bodies(monkeypatch):
     async def _pr_of(s, flight):
         return pr, "o/r"
 
-    async def _fetch(p, cfg):
+    async def _fetch(p, cfg, **_kw):
         return list(got)
 
     monkeypatch.setattr(D, "_pr_of", _pr_of)

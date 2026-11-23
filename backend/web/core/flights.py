@@ -4745,6 +4745,26 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
                 quiet_since=now,
                 idle_since=None,
             )
+        if (
+            rec.get("state") == "running"
+            and not int(rec.get("commits") or 0)
+            and not rec.get("step")
+            and agent_did({"config": {"lane": "push"}}, obs) is not None
+        ):
+            # The lane has not acted ("already at pr — waiting for new work")
+            # and git says there is nothing to push: the agent pushed the
+            # round itself (its prompt tells it to commit and push), or the
+            # round changed nothing (it only replied). Waiting on the lane
+            # here sat out its 2-hour arm deadline and failed the stop while
+            # the reviewer's new comments went unread: watch again instead.
+            out = _wait(
+                "pushed by the agent — watching for new comments",
+                phase="watch",
+                quiet_since=now,
+                idle_since=None,
+            )
+            out["by_agent"] = True
+            return out
         return _wait(rec.get("note") or "pushing the review fixes")
     r = obs.get("reviews") or {}
     ids = r.get("ids")
@@ -4784,10 +4804,16 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
             % (len(new), "" if len(new) == 1 else "s"),
             "comments": new,
         }
-    if who:
-        held = _required_reviewer(cfg, d, r.get("reviewer"), now)
+    name = str(r.get("reviewer_name") or who)
+    if name:
+        held = _required_reviewer(
+            cfg, d, r.get("reviewer"), now, who=name, required=bool(who)
+        )
         if held is not None:
             return held
+        clean = _clean_review(d, r, name)
+        if clean is not None:
+            return clean
     quiet_since = float(d.get("quiet_since") or ss["since"])
     quiet = cfg["quiet_minutes"] * 60.0
     if now - quiet_since >= quiet:
@@ -4853,20 +4879,32 @@ def _handed_comments(flight: dict, step: dict, ids: list, r: dict) -> List[str]:
     return out
 
 
-def _required_reviewer(cfg: dict, d: dict, rv, now: float) -> Optional[dict]:
-    """A reviews stop's ``require_reviewer`` gate: None (open) once that
-    reviewer has reviewed the PR's CURRENT head (``detail.reviewer_head`` ==
-    ``detail.head``); else a wait, failing once ``reviewer_wait_minutes``
-    have passed since this stop first saw that head (``head_since``, else
-    ``pr_since``). Every new head — the first one seen, each push of the
-    stop's own fixes — closes the gate again. Its review restarts the quiet
-    clock: ``quiet_minutes`` is the wait after its review of this head,
-    never a settle on a commit it has not looked at yet.
+def _required_reviewer(
+    cfg: dict,
+    d: dict,
+    rv,
+    now: float,
+    who: Optional[str] = None,
+    required: bool = True,
+) -> Optional[dict]:
+    """A reviews stop's reviewer gate: None (open) once the reviewer ``who``
+    (default ``require_reviewer``) has reviewed the PR's CURRENT head
+    (``detail.reviewer_head`` == ``detail.head``); else a wait, failing once
+    ``reviewer_wait_minutes`` have passed since this stop first saw that head
+    (``head_since``, else ``pr_since``). Every new head — the first one seen,
+    each push of the stop's own fixes — closes the gate again. Its review
+    restarts the quiet clock: ``quiet_minutes`` is the wait after its review
+    of this head, never a settle on a commit it has not looked at yet.
+
+    ``required`` false is CodeRabbit found on the PR with no
+    ``require_reviewer`` named (docs/flights.md "Reviews: done when clean"):
+    the same wait, but once ``reviewer_wait_minutes`` pass without its review
+    the gate opens (the quiet rule decides) instead of failing the stop.
 
     ``rv`` is the driver's :func:`flight_driver._reviewer_on_head` answer
     ``{"head", "since", "reviewed", "any", "skipped"}``, or None (GitHub
     could not be asked)."""
-    who = cfg["require_reviewer"]
+    who = who or cfg["require_reviewer"]
     rv = rv if isinstance(rv, dict) else None
     head = str((rv or {}).get("head") or "")
     known = str(d.get("head") or "")
@@ -4894,6 +4932,8 @@ def _required_reviewer(cfg: dict, d: dict, rv, now: float) -> Optional[dict]:
             "waiting for %s to review%s%s (%s of %d min)"
             % (who, " " + short if short else "", instead, _mins(now - since), limit)
         )
+    if not required:
+        return None
     if rv is None:
         return {
             "action": "fail",
@@ -4910,6 +4950,34 @@ def _required_reviewer(cfg: dict, d: dict, rv, now: float) -> Optional[dict]:
         "reason": "%s never reviewed %s%s — it needs a human review"
         % (who, what, instead),
     }
+
+
+def _clean_review(d: dict, r: dict, who: str) -> Optional[dict]:
+    """A Reviews stop's clean finish (docs/flights.md "Reviews: done when
+    clean"), checked once nothing new is left to hand over and the reviewer
+    gate is open: ``done`` when ``who`` has reviewed the PR's CURRENT head
+    (``reviewer_head`` == ``head``), that head is not the one the last round
+    was handed on (``round_head``: a round that pushed nothing has had no
+    review of its work — the quiet rule waits for the reviewer's answers to
+    its replies), and every review thread is resolved (``open_threads`` 0;
+    unknown never is). Its review's body items were read with it: an
+    actionable one would have been a new request. None otherwise."""
+    head = str(d.get("head") or "")
+    if not head or d.get("reviewer_head") != head:
+        return None
+    if head == str(d.get("round_head") or ""):
+        return None
+    threads = r.get("open_threads")
+    if isinstance(threads, bool) or not isinstance(threads, int) or threads:
+        return None
+    rounds = int(d.get("review_rounds") or 0)
+    return _receipt(
+        {
+            "action": "done",
+            "note": "%s reviewed %s: nothing left to address" % (who, head[:7]),
+        },
+        "%s, clean review" % (plural(rounds, "round") if rounds else "no rounds"),
+    )
 
 
 #: A CI checks stop whose checks can't be read this long in a row fails
