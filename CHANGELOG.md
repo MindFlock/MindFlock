@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.27] - 2026-11-23
+
 ### Added
 
 - **The hub: one shared place for files, pictures and snippets every session
@@ -7357,7 +7359,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.26...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.27...HEAD
+[0.14.27]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.27
 [0.14.26]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.26
 [0.14.25]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.25
 [0.14.24]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.24
