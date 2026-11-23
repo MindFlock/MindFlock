@@ -17,7 +17,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useUi } from "../state/store";
-import { useDoctor, useTestPlans } from "../state/queries";
+import { useConfig, useDoctor, useTestPlans } from "../state/queries";
+import { useHub, useHubUi } from "../lib/hub";
 import { needsYouBadge, useNeedsYou } from "../lib/needsYou";
 import { Bird } from "./flights/Bird";
 import { GridGlyph } from "./ViewGlyphs";
@@ -86,6 +87,10 @@ export function fitTopBar({ room, fixed, brand, items, more }: BarWidths): BarFi
   return { brand: false, shown };
 }
 
+/** The Hub button's tooltip (and its ⋯ row's). */
+const HUB_TITLE =
+  "Hub — files, pictures and snippets every session can use: drop or paste them here, then put their reference (hub:…) in any prompt";
+
 export function TopBar() {
   // Only the fields the bar reads: a bare useUi() re-rendered it on every
   // store write (a filter keystroke, a tab switch, a Thread "seen" mark).
@@ -120,6 +125,11 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
+  // The hub (lib/hub): its button wears how many items it holds — a calm
+  // count, not a "needs you" one. A guest link has no hub.
+  const guest = !!useConfig().data?.guest;
+  const hubCount = useHub(!guest).data?.count || 0;
+  const hubOpen = useHubUi((s) => s.open);
   // The Sky toggle's badge: everything that needs you — THE one list
   // (lib/needsYou), the bell's badge and the Sky's Needs you strip count the
   // same rows; red while a route is halted.
@@ -224,6 +234,16 @@ export function TopBar() {
       count: schedFailing,
       failing: true,
       open: () => ui.openDialogFor("schedule"),
+    },
+    !guest && {
+      key: "hub",
+      // Its count is not a "needs you" count: it rides in the label, never
+      // in the ⋯ badge.
+      label: hubCount ? "Hub · " + hubCount : "Hub",
+      title: HUB_TITLE + keys("hub"),
+      count: 0,
+      failing: false,
+      open: () => useHubUi.getState().toggle(),
     },
     { key: "settings", label: "Settings", title: "Settings", count: 0, failing: false, open: () => openSettings() },
   ].filter((f) => !!f);
@@ -471,6 +491,24 @@ export function TopBar() {
                 rule the Intake counts keep. */}
             {schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}
           </button>
+          {/* The hub: files, pictures and snippets every session can use
+              (components/hub). Its count is how many items it holds, drawn
+              calm — nothing in it needs you. */}
+          {!guest && (
+            <button
+              id="hub-btn"
+              className={"tb-item" + (hubOpen ? " active" : "") + (isFolded("hub") ? " tb-folded" : "")}
+              data-fold="hub"
+              type="button"
+              title={HUB_TITLE + keys("hub")}
+              aria-pressed={hubOpen}
+              aria-label={hubCount ? "Hub, " + hubCount + (hubCount === 1 ? " item" : " items") : "Hub"}
+              onClick={() => useHubUi.getState().toggle()}
+            >
+              Hub
+              {hubCount > 0 && <span className="tb-count is-quiet">{hubCount}</span>}
+            </button>
+          )}
           <button
             id="settings-btn"
             className={"tb-item" + (isFolded("settings") ? " tb-folded" : "")}

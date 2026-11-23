@@ -68,6 +68,8 @@ modules under
     send_files       sending files from a session's worktree to another of
                      your devices (manifest + checksummed chunks)
     inbox            receiving them: /api/transfers, the inbox, bundles
+    hub              the hub: shared files/images/snippets every session can
+                     use, hub:<id> references expanded in sent prompts
     session_bundle   a branch as a standalone git bundle (export / unpack)
     mobile_access    phone access: tailscale URLs, QR codes, startup banner
     pane_find        in-place Ctrl+F in a live pane (tmux copy-mode search)
@@ -166,7 +168,7 @@ import time
 import traceback
 import weakref
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
@@ -209,6 +211,7 @@ from backend.web.core import send_session as _send_session
 from backend.web.core import send_files as _send_files
 from backend.web.core import remote_origin as _remote_origin
 from backend.web.core import inbox as _inbox
+from backend.web.core import hub as _hub
 from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import terminal_ws as _terminal_ws
 from backend.web.core import guest_tunnel as _guest_tunnel
@@ -726,6 +729,7 @@ from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
 from backend.web.routes import memory as _memory_routes
 from backend.web.routes import cleanup as _cleanup_routes
+from backend.web.routes import hub as _hub_routes
 from backend.web.routes import flock as _flock_routes
 from backend.web.routes.peer import (
     _peer_body,
@@ -2863,6 +2867,11 @@ async def _inbox_partials_loop() -> None:
         try:
             await asyncio.to_thread(_inbox.prune_partials)
         except Exception:  # noqa: BLE001 — housekeeping must never die
+            pass
+        try:
+            # The hub on the same timer: expiry, Undo's window, stale uploads.
+            await asyncio.to_thread(_hub.prune)
+        except Exception:  # noqa: BLE001
             pass
 
 
@@ -7952,10 +7961,19 @@ _SEND_IN_DIALOG = "Answer its prompt first — typing now would answer the dialo
 _SEND_WAKING = "It was asleep — waking it now; send again in a few seconds"
 
 
+#: Set by ``/send`` for a guest's / relayed / shared-session prompt: if it
+#: is queued, its hub references stay as typed when the drain sends it.
+_HUB_NOHUB = contextvars.ContextVar("hub_nohub", default=False)
+
+
 def _say_kw(say: bool) -> dict:
     """``enqueue``'s ``say`` keyword, passed only when true: a queued text
-    asks for a spoken reply only when its ``/send`` did."""
-    return {"say": True} if say else {}
+    asks for a spoken reply only when its ``/send`` did. (And ``nohub`` when
+    :data:`_HUB_NOHUB` says the sender may not use the hub.)"""
+    kw = {"say": True} if say else {}
+    if _HUB_NOHUB.get():
+        kw["nohub"] = True
+    return kw
 
 
 def _deliver_to_sleeper(
@@ -8538,6 +8556,12 @@ async def instance_send(
             },
             status_code=409,
         )
+    hub_unknown: List[str] = []
+    _HUB_NOHUB.set(not _hub_may_expand(request, inst))
+    if not enter and not dictating:
+        # hub:<id> → the item's path, name and kind, one labelled line each
+        # (core.hub.expand); a reference to nothing stays as typed.
+        text, hub_unknown = await asyncio.to_thread(_hub_expand, request, inst, text)
     asleep = _sleep.is_sleeping(title)
     held = await asyncio.to_thread(_held_down, title)
     if enter:
@@ -8582,7 +8606,7 @@ async def instance_send(
         body = {"sent": False, "queued": True, "submitted": False}
         if asleep:
             body["woke"] = True  # it was asleep: it goes in once the agent is back
-        return JSONResponse(body)
+        return JSONResponse(_hub_flag(body, hub_unknown))
     if enter or (submit and not dictating):
         # A prompt went in: a ready chain waiting on the next prompt takes
         # off after its turn (docs/flights.md "Round 19"). A queued one does
@@ -8592,7 +8616,47 @@ async def instance_send(
         return JSONResponse({"sent": True, "submitted": True, "entered": True})
     if dictating:
         return JSONResponse({"sent": True, "submitted": False, "erased": erase})
-    return JSONResponse({"sent": True, "submitted": submit})
+    return JSONResponse(_hub_flag({"sent": True, "submitted": submit}, hub_unknown))
+
+
+def _hub_changed() -> None:
+    try:
+        n = _hub.usage()["items"]
+    except Exception:  # noqa: BLE001
+        n = None
+    _events.BUS.emit("hub.changed", session="", data={"count": n})
+
+
+_hub.on_change(_hub_changed)
+
+
+def _hub_may_expand(request: Optional[Request], inst) -> bool:
+    """Whether ``hub:<id>`` references in text sent by this request are
+    expanded: the owner (or a local agent / the CLI) yes; a guest link, a
+    request another MindFlock relayed, or a shared-folder (peer) session
+    never — the hub is this device's owner's."""
+    if inst is not None and _peer_guard.is_peer_session(inst):
+        return False
+    if request is None:
+        return True
+    return _guests.scope_guest(request) is None and not _remote.from_remote(request)
+
+
+def _hub_expand(request: Optional[Request], inst, text: str) -> Tuple[str, List[str]]:
+    """``(text with its hub references expanded, unknown references)`` —
+    unchanged when :func:`_hub_may_expand` says no."""
+    if not text or "hub:" not in text.lower() or not _hub_may_expand(request, inst):
+        return text, []
+    out, _used, unknown = _hub.expand(text)
+    return out, unknown
+
+
+def _hub_flag(body: dict, unknown: List[str]) -> dict:
+    """The send answer's word on references that matched nothing."""
+    if unknown:
+        body["hub_unknown"] = unknown
+        body["hub_note"] = _hub.unknown_note(unknown)
+    return body
 
 
 def _queue_state_json(title: str) -> dict:
@@ -8653,10 +8717,12 @@ def post_queue(title: str, payload: dict, request: Request = None) -> JSONRespon
     busy = _driven_elsewhere(request, title, payload)
     if busy is not None:
         return busy
+    # A guest's (or a relayed) prompt keeps its hub references as typed.
+    nohub = not _hub_may_expand(request, ENGINE.instances.get(title))
     texts = payload.get("texts")
     if isinstance(texts, list):
         entry, added, skipped = _prompt_queue.enqueue_many(
-            title, [str(t) for t in texts]
+            title, [str(t) for t in texts], nohub=nohub
         )
         if not added and not skipped:
             return JSONResponse({"error": "no prompts in payload"}, status_code=400)
@@ -8676,11 +8742,13 @@ def post_queue(title: str, payload: dict, request: Request = None) -> JSONRespon
         except (TypeError, ValueError):
             index = None
     try:
-        _prompt_queue.enqueue(title, text, index=index)
+        _prompt_queue.enqueue(title, text, index=index, nohub=nohub)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
     _emit_queue_changed(title)
-    return JSONResponse(_queue_state_json(title))
+    # Told now, while the sender is here: a reference to nothing in the hub.
+    unknown = [] if nohub else _hub.unknown_refs(text)
+    return JSONResponse(_hub_flag(_queue_state_json(title), unknown))
 
 
 @app.post("/api/instances/{title}/queue/flags")
@@ -8731,14 +8799,19 @@ def post_queue_reorder(title: str, payload: dict) -> JSONResponse:
 
 
 @app.post("/api/instances/{title}/queue/edit")
-def post_queue_edit(title: str, payload: dict) -> JSONResponse:
+def post_queue_edit(title: str, payload: dict, request: Request = None) -> JSONResponse:
     """Replace one queued item's text in place. ``{"id": "...", "text": "..."}``.
     The item keeps its id and position, so editing never loses its turn."""
     payload = payload or {}
     text = str(payload.get("text", ""))
     if not text.strip():
         return JSONResponse({"error": "empty prompt"}, status_code=400)
-    _prompt_queue.update_item(title, str(payload.get("id", "")), text)
+    _prompt_queue.update_item(
+        title,
+        str(payload.get("id", "")),
+        text,
+        nohub=not _hub_may_expand(request, ENGINE.instances.get(title)),
+    )
     _emit_queue_changed(title)
     return JSONResponse(_queue_state_json(title))
 
@@ -8805,6 +8878,8 @@ async def post_queue_send_now(
     _note_human_input(title)  # the user clicked Send now
     say = it.get("say") is True or _voice.say_all()
     typed = it["text"]
+    if not it.get("nohub"):
+        typed = (await asyncio.to_thread(_hub_expand, None, inst, typed))[0]
     if say:
         typed = await asyncio.to_thread(_voice_say, inst, title, typed)
     ok = await asyncio.to_thread(_send_to_agent, name, typed, True)
@@ -9085,6 +9160,9 @@ async def post_message(
         if stat is not None:
             data = dict(data or {})
             data["diff_stat"] = stat
+    # hub:<id> references → the item's path, name and kind (core.hub); never
+    # for a guest's or a relayed message.
+    text, hub_unknown = await asyncio.to_thread(_hub_expand, request, inst, text)
     # delivery "now" from any local session: one session may direct another
     # without being its parent (the MCP's "steering" rule, mcp/policy.py).
     detail = ""
@@ -9135,7 +9213,7 @@ async def post_message(
     body = {"message": msg, "delivery": result}
     if detail:
         body["detail"] = detail
-    return JSONResponse(body, status_code=201)
+    return JSONResponse(_hub_flag(body, hub_unknown), status_code=201)
 
 
 @app.get("/api/instances/{title}/messages")
@@ -11598,6 +11676,9 @@ app.include_router(_memory_routes.router)
 
 # --- Disk cleanup (the worktree garbage collector): routes/cleanup.py ---------
 app.include_router(_cleanup_routes.router)
+
+# --- The hub (shared files, images and snippets): routes/hub.py -------------
+app.include_router(_hub_routes.router)
 
 
 # --- Forced PR review (Intake → Pull requests) ----------------------------------

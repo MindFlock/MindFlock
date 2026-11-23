@@ -41,7 +41,7 @@ def _ctx(clock, **kw):
 # Text budgets and registry
 # --------------------------------------------------------------------------- #
 class TestRegistry:
-    def test_forty_three_tools_with_annotations(self):
+    def test_forty_four_tools_with_annotations(self):
         box, _, _ = make_box(_tree())
         tools = build_tools(box)
         assert [t.name for t in tools] == [
@@ -88,8 +88,9 @@ class TestRegistry:
             "list_devices",
             "send_session",
             "send_files",
+            "hub",
         ]
-        assert len(tools) == 43
+        assert len(tools) == 44
         by = {t.name: t for t in tools}
         for name in (
             "whoami",

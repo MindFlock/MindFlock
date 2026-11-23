@@ -719,6 +719,26 @@ the push. `DEVICE` is a name `mindflock devices` lists — its host name
 spaces-vs-hyphens ignored; `TITLE` resolves like `close`. See
 [devices.md](devices.md#send-a-session-to-another-device).
 
+### `mindflock hub ls|add|get|cp|rm|pin`
+
+The hub from a terminal (`/api/hub`; [web-ui.md](web-ui.md#hub)): files,
+pictures and snippets every session on this device can use. `REF` is an
+item's reference, `hub:k7m2` (or `k7m2`).
+
+* `mindflock hub ls [--json]` — the items, newest first: reference, kind,
+  size, name, who added it, when, pinned; then how full the hub is.
+* `mindflock hub add FILE… [--note N] [--name NAME] [--pin] [--secret-ok]` —
+  add files; `--text "…"` adds a snippet and `-` reads one from stdin. Prints
+  each reference. A file that looks like a secret (`.env`, a key) is refused
+  unless `--secret-ok` — every session can read the hub.
+* `mindflock hub get REF [--text]` — the item's path (or its text).
+* `mindflock hub cp REF [DEST] [--to TITLE] [--replace]` — copy it here
+  (default `./<name>`), or with `--to` into that session's folder (DEST
+  relative to it, default `hub/<name>`). Never over an existing file without
+  `--replace`.
+* `mindflock hub rm REF…` — remove (Undo in the app for 10 minutes).
+* `mindflock hub pin REF [--off]` — keep it past the expiry (or stop).
+
 ### `mindflock send-files DEVICE PATH… [--from TITLE] [--note TEXT] [--to-session NAME] [--include-secrets] [--include-ignored]`
 
 Sends files or folders from a session's worktree to another of your devices

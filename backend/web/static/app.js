@@ -20949,7 +20949,7 @@ var pe = class {
 	}
 };
 var Yi = [];
-var _n$1 = class {
+var _n$2 = class {
 	constructor() {
 		this._handlers = Object.create(null);
 		this._active = Yi;
@@ -21109,7 +21109,7 @@ var bn = class extends D {
 		};
 		this.initialState = 0, this.currentState = this.initialState, this._params = new ci(), this._params.addParam(0), this._collect = 0, this.precedingJoinState = 0, this._printHandlerFb = (i, r, n) => {}, this._executeHandlerFb = (i) => {}, this._csiHandlerFb = (i, r) => {}, this._escHandlerFb = (i) => {}, this._errorHandlerFb = (i) => i, this._printHandler = this._printHandlerFb, this._executeHandlers = Object.create(null), this._csiHandlers = Object.create(null), this._escHandlers = Object.create(null), this._register(C(() => {
 			this._csiHandlers = Object.create(null), this._executeHandlers = Object.create(null), this._escHandlers = Object.create(null);
-		})), this._oscParser = this._register(new mn()), this._dcsParser = this._register(new _n$1()), this._errorHandler = this._errorHandlerFb, this.registerEscHandler({ final: "\\" }, () => !0);
+		})), this._oscParser = this._register(new mn()), this._dcsParser = this._register(new _n$2()), this._errorHandler = this._errorHandlerFb, this.registerEscHandler({ final: "\\" }, () => !0);
 	}
 	_identifier(e, i = [64, 126]) {
 		let r = 0;
@@ -24237,7 +24237,7 @@ function displayBranch(inst) {
 	if (m) return m[1];
 	return full || inst.program || "";
 }
-function humanSize(bytes) {
+function humanSize$1(bytes) {
 	if (bytes < 1024) return bytes + " B";
 	if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
 	if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
@@ -27767,7 +27767,7 @@ function fitDecision(cur, avail, need, hyst = FIT_HYSTERESIS_PX) {
 }
 //#endregion
 //#region src/lib/behaviorsFocus.ts
-var _n = 0;
+var _n$1 = 0;
 var useBehaviorsFocus = create((set) => ({
 	request: null,
 	openPlan: "",
@@ -27781,7 +27781,7 @@ function openBehaviors(target = { board: true }) {
 	useBehaviorsFocus.setState({
 		request: {
 			...target,
-			n: ++_n
+			n: ++_n$1
 		},
 		...target.board ? { boardRequested: true } : {}
 	});
@@ -28666,6 +28666,28 @@ function freshStage(title) {
 	return p;
 }
 //#endregion
+//#region src/lib/hubRef.ts
+var HUB_MIME = "application/x-mf-hub-ref";
+var REF_RE = /(?<![A-Za-z0-9_./:@-])hub:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/i;
+async function expandRefs(text) {
+	if (!REF_RE.test(text)) return {
+		text,
+		note: ""
+	};
+	try {
+		const r = await api("/api/hub/expand", { json: { text } });
+		return {
+			text: r.text,
+			note: r.note || ""
+		};
+	} catch {
+		return {
+			text,
+			note: ""
+		};
+	}
+}
+//#endregion
 //#region src/lib/clipboard.ts
 function copyText(text) {
 	if (!text) return Promise.resolve(false);
@@ -28775,11 +28797,26 @@ function attachFileDrop(host, term, session, canSend) {
 		if (files.length && !(text && onlyImages)) pasteFilesAsPaths(files, term, session, canSend);
 		else if (text) {
 			if (canSend && !canSend()) return;
+			if (REF_RE.test(text)) {
+				expandRefs(text).then((r) => {
+					term.paste(r.text);
+					toast(r.note || (r.text !== text ? "Pasted with the hub item's path" : "Pasted " + text.length + " chars"));
+				});
+				return;
+			}
 			term.paste(text);
 			toast("Pasted " + text.length + " chars");
 		} else pasteClipboard(term, session, canSend);
 	};
+	const isHub = (ev) => Array.from(ev.dataTransfer?.types || []).includes(HUB_MIME);
 	const onDragOver = (ev) => {
+		if (isHub(ev)) {
+			ev.preventDefault();
+			ev.stopPropagation();
+			ev.dataTransfer.dropEffect = "copy";
+			host.classList.add("file-drop");
+			return;
+		}
 		if (!dtHasFiles(ev.dataTransfer)) return;
 		ev.preventDefault();
 		ev.stopPropagation();
@@ -28790,6 +28827,18 @@ function attachFileDrop(host, term, session, canSend) {
 		if (!host.contains(ev.relatedTarget)) host.classList.remove("file-drop");
 	};
 	const onDrop = (ev) => {
+		if (isHub(ev)) {
+			ev.preventDefault();
+			ev.stopPropagation();
+			host.classList.remove("file-drop");
+			if (canSend && !canSend()) return;
+			const ref = ev.dataTransfer.getData("text/plain");
+			expandRefs(ref).then((r) => {
+				term.paste(r.text + " ");
+				toast(r.note || "Put " + ref + " in the prompt — add your words and press Enter");
+			});
+			return;
+		}
 		if (!dtHasFiles(ev.dataTransfer)) return;
 		ev.preventDefault();
 		ev.stopPropagation();
@@ -30431,6 +30480,276 @@ function withVerifyVerdict(menu, inst, plan = cachedPlanFor(inst)) {
 	};
 }
 //#endregion
+//#region src/lib/hub.ts
+var UNDO_MS = 1e4;
+function useHub(enabled = true) {
+	(0, import_react.useEffect)(bridgeHubEvents, []);
+	return useQuery({
+		queryKey: ["hub"],
+		queryFn: () => api("/api/hub"),
+		enabled,
+		staleTime: 1e4,
+		refetchInterval: 6e4
+	});
+}
+function refreshHub() {
+	queryClient.invalidateQueries({ queryKey: ["hub"] });
+}
+var bridged$2 = false;
+function bridgeHubEvents() {
+	if (bridged$2) return;
+	const ev = typeof window !== "undefined" ? window.mindflock?.events : void 0;
+	if (!ev) return;
+	bridged$2 = true;
+	ev.subscribe("hub.changed", () => refreshHub());
+}
+var _n = 0;
+var useHubUi = create((set, get) => ({
+	open: false,
+	setOpen: (v) => set({ open: v }),
+	toggle: () => set({ open: !get().open }),
+	sending: null,
+	openSend: (item) => set({ sending: item }),
+	insert: null,
+	insertInto: (title, text) => set({ insert: {
+		title,
+		text,
+		n: ++_n
+	} })
+}));
+function humanSize(n) {
+	if (!(n > 0)) return "0 bytes";
+	if (n < 1024) return n + (n === 1 ? " byte" : " bytes");
+	if (n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + " KB";
+	if (n < 1024 ** 3) return (n / 1024 ** 2).toFixed(1) + " MB";
+	return (n / 1024 ** 3).toFixed(1) + " GB";
+}
+function whoLabel$1(it) {
+	if (it.by === "session") return "session " + displayName(it.by_name || "?");
+	if (it.by === "device") return "device " + (it.by_name || "?");
+	if (it.by === "phone") return "your phone";
+	return "you";
+}
+function kindLabel$1(it) {
+	if (it.kind === "image") return "Image";
+	if (it.kind === "text") return "Text";
+	const ext = (it.name.match(/\.([A-Za-z0-9]{1,6})$/) || [])[1];
+	return ext ? ext.toUpperCase() + " file" : "File";
+}
+function expiryLabel(it, now = Date.now() / 1e3) {
+	if (it.pinned || !it.expires) return "pinned — kept";
+	const d = Math.max(0, (it.expires - now) / 86400);
+	if (d < 1) return "goes today unless used";
+	return "goes in " + Math.ceil(d) + (Math.ceil(d) === 1 ? " day" : " days") + " unless used";
+}
+function rawUrl(it, download = false) {
+	return "/api/hub/items/" + encodeURIComponent(it.id) + "/raw" + (download ? "?download=1" : "");
+}
+function usageLine(l) {
+	return l.count + (l.count === 1 ? " item" : " items") + " · " + humanSize(l.used) + " of " + humanSize(l.quota);
+}
+function refTokenAt(text, caret) {
+	const m = text.slice(0, caret).match(/(^|[\s([{"'`])hub:([A-Za-z0-9._ -]{0,40})$/i);
+	if (!m) return null;
+	const query = m[2];
+	if (/\s\s/.test(query) || query.length > 40) return null;
+	return {
+		start: caret - query.length - 4,
+		query
+	};
+}
+function matchItems(items, query, most = 8) {
+	const q = query.trim().toLowerCase();
+	if (!q) return items.slice(0, most);
+	const byId = items.filter((i) => i.id.startsWith(q));
+	const byName = items.filter((i) => !byId.includes(i) && i.name.toLowerCase().includes(q));
+	return [...byId, ...byName].slice(0, most);
+}
+async function addFile(file, opts = {}) {
+	const q = new URLSearchParams({
+		name: file.name || "pasted",
+		source: opts.source || "you"
+	});
+	if (opts.secretOk) q.set("secret_ok", "1");
+	if (opts.note) q.set("note", opts.note);
+	const r = await apiRaw("/api/hub/items?" + q.toString(), {
+		method: "POST",
+		headers: { "Content-Type": "application/octet-stream" },
+		body: file
+	});
+	const body = await r.json().catch(() => null);
+	if (!r.ok) throw new ApiError(r.status, body && body.error || "Couldn't add " + file.name, body);
+	return body;
+}
+async function addFiles(files, opts = {}) {
+	const out = {
+		added: [],
+		refused: []
+	};
+	for (const raw of files) {
+		const f = renamePasted(raw);
+		try {
+			out.added.push(await addFile(f, opts));
+		} catch (err) {
+			const body = err?.body;
+			out.refused.push({
+				file: f,
+				error: errMsg(err),
+				secret: body?.code === "secret"
+			});
+		}
+	}
+	if (out.added.length) refreshHub();
+	return out;
+}
+function renamePasted(f, now = /* @__PURE__ */ new Date()) {
+	if (!/^image\.(png|jpe?g|gif|webp)$/i.test(f.name || "") && f.name) return f;
+	const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+	const hh = (n) => String(n).padStart(2, "0");
+	const name = "screenshot " + hh(now.getHours()) + "-" + hh(now.getMinutes()) + "-" + hh(now.getSeconds()) + "." + ext;
+	try {
+		return new File([f], name, { type: f.type });
+	} catch {
+		return f;
+	}
+}
+async function addText(text, name = "") {
+	const it = await api("/api/hub/text", { json: {
+		text,
+		name
+	} });
+	refreshHub();
+	return it;
+}
+function addedToast(r) {
+	if (r.added.length === 1) {
+		toast("Added " + r.added[0].name + " — reference " + r.added[0].ref + " (copied)");
+		copyText(r.added[0].ref);
+	} else if (r.added.length > 1) toast("Added " + r.added.length + " items to the hub");
+	const plain = r.refused.filter((x) => !x.secret);
+	if (plain.length) toast("Couldn't add " + plain.map((x) => x.file.name + ": " + x.error).join("; "), { error: true });
+}
+async function copyRef(it) {
+	toast(await copyText(it.ref) ? "Copied " + it.ref + " — paste it into any prompt or terminal" : "Couldn't copy — the reference is " + it.ref);
+}
+async function copyPath(it) {
+	toast(await copyText(it.path) ? "Copied the path of " + it.name : "Couldn't copy — the path is " + it.path);
+}
+async function copyItemText(it) {
+	try {
+		const r = await api("/api/hub/items/" + encodeURIComponent(it.id) + "/text");
+		toast(await copyText(r.text) ? (r.truncated ? "Copied the first 1 MB of " : "Copied the text of ") + it.name : "Couldn't copy the text");
+	} catch (err) {
+		toast("Couldn't copy the text: " + errMsg(err));
+	}
+}
+function canCopyImage() {
+	return typeof navigator !== "undefined" && !!navigator.clipboard?.write && typeof globalThis.ClipboardItem === "function";
+}
+async function copyImage(it) {
+	try {
+		const r = await apiRaw(rawUrl(it));
+		if (!r.ok) throw new Error("the image could not be read");
+		let blob = await r.blob();
+		if (blob.type !== "image/png") blob = await toPng(blob);
+		const Item = globalThis.ClipboardItem;
+		await navigator.clipboard.write([new Item({ "image/png": blob })]);
+		toast("Copied the image " + it.name);
+	} catch (err) {
+		toast("Couldn't copy the image here (" + errMsg(err) + ") — use Download, or Copy reference");
+	}
+}
+async function toPng(blob) {
+	const bmp = await createImageBitmap(blob);
+	const c = document.createElement("canvas");
+	c.width = bmp.width;
+	c.height = bmp.height;
+	c.getContext("2d").drawImage(bmp, 0, 0);
+	return await new Promise((res, rej) => c.toBlob((b) => b ? res(b) : rej(/* @__PURE__ */ new Error("no PNG")), "image/png"));
+}
+function download(it) {
+	const a = document.createElement("a");
+	a.href = rawUrl(it, true);
+	a.download = it.name;
+	a.rel = "noopener";
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
+}
+async function putInPrompt(title, it, message = "") {
+	const msg = message.trim();
+	const text = msg ? msg + " " + it.ref : it.ref + " ";
+	try {
+		const r = await instApi(title, "/send", { json: msg ? {
+			text,
+			dialog_safe: true
+		} : {
+			text,
+			submit: false,
+			dialog_safe: true
+		} });
+		if (msg) toast((r?.queued ? "Queued for " : "Sent to ") + displayName(title) + " with " + it.ref);
+		else toast(it.ref + " is in " + displayName(title) + "'s prompt — add your words there and press Enter");
+		return true;
+	} catch (err) {
+		if (err?.status === 409) {
+			useHubUi.getState().insertInto(title, text);
+			useUi.getState().threadOpen(title);
+			toast(displayName(title) + " is busy with a prompt — " + it.ref + " is in its Thread box; send it from there");
+			return true;
+		}
+		toast("Couldn't send " + it.ref + " to " + displayName(title) + ": " + errMsg(err));
+		return false;
+	}
+}
+async function copyInto(title, it, path, replace) {
+	const r = await instApi(title, "/hub/take", { json: {
+		id: it.id,
+		path,
+		replace
+	} });
+	toast((r.replaced ? "Replaced " : "Copied " + it.name + " into ") + displayName(title) + (r.replaced ? "'s " + r.path : " at " + r.path));
+	return r;
+}
+async function freePath(title, it, path = "") {
+	return instApi(title, "/hub/free?id=" + encodeURIComponent(it.id) + (path ? "&path=" + encodeURIComponent(path) : ""));
+}
+async function updateItem(it, patch) {
+	try {
+		const r = await api("/api/hub/items/" + encodeURIComponent(it.id), {
+			method: "PATCH",
+			json: patch
+		});
+		refreshHub();
+		return r;
+	} catch (err) {
+		toast("Couldn't change " + it.name + ": " + errMsg(err));
+		return null;
+	}
+}
+async function removeItem$1(it) {
+	try {
+		await api("/api/hub/items/" + encodeURIComponent(it.id), { method: "DELETE" });
+	} catch (err) {
+		toast("Couldn't remove " + it.name + ": " + errMsg(err));
+		return;
+	}
+	refreshHub();
+	toast("Removed " + it.name + " from the hub", {
+		duration: UNDO_MS,
+		action: {
+			label: "Undo",
+			ariaLabel: "Undo removing " + it.name,
+			onClick: () => {
+				api("/api/hub/items/" + encodeURIComponent(it.id) + "/restore", { method: "POST" }).then(() => {
+					refreshHub();
+					toast("Put " + it.name + " back");
+				}).catch((err) => toast("Couldn't put it back: " + errMsg(err)));
+			}
+		}
+	});
+}
+//#endregion
 //#region src/lib/claudeCopy.ts
 var BULLET = /^(\s*)(?:[-*•]|\d{1,3}[.)])\s+/;
 var MESSAGE = /^\s*[⏺●❯](?:\s|$)/;
@@ -30900,7 +31219,13 @@ function attachCopyOnSelect(host, term, opts) {
 		const sel = forClipboard(isLive ? live : captured, isLive ? startCol() : capturedCol);
 		if (sel && sel.trim()) {
 			copyText(sel).then((ok) => {
-				if (ok) toast("Copied " + sel.length + " chars");
+				if (!ok) return;
+				if (useHubUi.getState().open) toast("Copied " + sel.length + " chars", { action: {
+					label: "Add to hub",
+					ariaLabel: "Add the selected text to the hub as a snippet",
+					onClick: () => void addText(sel).then((it) => toast("Added a snippet to the hub — " + it.ref)).catch((err) => toast("Couldn't add it to the hub: " + errMsg(err)))
+				} });
+				else toast("Copied " + sel.length + " chars");
 			});
 			return true;
 		}
@@ -39262,6 +39587,18 @@ var KEYMAP = [
 		],
 		when: () => !isEditingTarget(document.activeElement),
 		run: () => useUi.getState().openDialogFor("schedule")
+	},
+	{
+		key: "h",
+		alt: true,
+		id: "hub",
+		help: [
+			"Navigation",
+			"Alt+H",
+			"Hub — files, pictures and snippets every session can use"
+		],
+		when: () => !isEditingTarget(document.activeElement),
+		run: () => useHubUi.getState().toggle()
 	},
 	{
 		key: "t",
@@ -52136,6 +52473,12 @@ function buildPaletteActions({ config, host, extensions }) {
 		run: () => ui.openDialogFor("intake", "autostart")
 	});
 	acts.push({
+		label: "Hub…",
+		hint: "Alt+H",
+		keywords: "files share paste screenshot image snippet clipboard attach upload reference",
+		run: () => useHubUi.getState().setOpen(true)
+	});
+	acts.push({
 		label: "Verify — next that needs you",
 		hint: "Alt+V",
 		top: TOP.verify,
@@ -64076,6 +64419,7 @@ function fitTopBar({ room, fixed, brand, items, more }) {
 		shown
 	};
 }
+var HUB_TITLE = "Hub — files, pictures and snippets every session can use: drop or paste them here, then put their reference (hub:…) in any prompt";
 function TopBar() {
 	const ui = useUi(useShallow((s) => ({
 		narrow: s.narrow,
@@ -64089,6 +64433,9 @@ function TopBar() {
 	useTestPlans();
 	const sched = useScheduleStatus();
 	const schedFailing = failingSchedules(sched.templates, sched.status).length;
+	const guest = !!useConfig().data?.guest;
+	const hubCount = useHub(!guest).data?.count || 0;
+	const hubOpen = useHubUi((s) => s.open);
 	const perch = needsYouBadge(useNeedsYou());
 	const quiet = topBarQuiet({
 		calm: useCalm(),
@@ -64144,6 +64491,14 @@ function TopBar() {
 			count: schedFailing,
 			failing: true,
 			open: () => ui.openDialogFor("schedule")
+		},
+		!guest && {
+			key: "hub",
+			label: hubCount ? "Hub · " + hubCount : "Hub",
+			title: HUB_TITLE + keys("hub"),
+			count: 0,
+			failing: false,
+			open: () => useHubUi.getState().toggle()
 		},
 		{
 			key: "settings",
@@ -64381,6 +64736,20 @@ function TopBar() {
 							children: ["Schedule", schedFailing > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "tb-count is-failing",
 								children: schedFailing
+							})]
+						}),
+						!guest && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							id: "hub-btn",
+							className: "tb-item" + (hubOpen ? " active" : "") + (isFolded("hub") ? " tb-folded" : ""),
+							"data-fold": "hub",
+							type: "button",
+							title: HUB_TITLE + keys("hub"),
+							"aria-pressed": hubOpen,
+							"aria-label": hubCount ? "Hub, " + hubCount + (hubCount === 1 ? " item" : " items") : "Hub",
+							onClick: () => useHubUi.getState().toggle(),
+							children: ["Hub", hubCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "tb-count is-quiet",
+								children: hubCount
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -65516,6 +65885,36 @@ function deviceLabel(d, all, selfHost = "") {
 }
 function canDisconnect(d) {
 	return !!d.has_token && !d.member;
+}
+//#endregion
+//#region src/components/hub/hubDrop.ts
+var isHub = (ev) => Array.from(ev.dataTransfer?.types || []).includes(HUB_MIME);
+function withHubDrop(title, dnd, enabled = true) {
+	if (!enabled) return dnd;
+	return {
+		...dnd,
+		onDragOver: (ev) => {
+			if (!isHub(ev)) return dnd.onDragOver(ev);
+			ev.preventDefault();
+			ev.dataTransfer.dropEffect = "copy";
+			ev.currentTarget.classList.add("hub-drop-target");
+		},
+		onDragLeave: (ev) => {
+			const el = ev.currentTarget;
+			if (!el.contains(ev.relatedTarget)) el.classList.remove("hub-drop-target");
+			dnd.onDragLeave(ev);
+		},
+		onDrop: (ev) => {
+			if (!isHub(ev)) return dnd.onDrop(ev);
+			ev.preventDefault();
+			ev.stopPropagation();
+			ev.currentTarget.classList.remove("hub-drop-target");
+			try {
+				const it = JSON.parse(ev.dataTransfer.getData(HUB_MIME));
+				if (it?.ref) putInPrompt(title, it);
+			} catch {}
+		}
+	};
 }
 //#endregion
 //#region src/components/sidebar/rowDnd.ts
@@ -69876,11 +70275,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 					e.stopPropagation();
 				}
 			},
-			...rowDndProps(title, {
+			...withHubDrop(title, rowDndProps(title, {
 				onDragState,
 				onDropCue,
 				onDropRow
-			}, !editing),
+			}, !editing), !pending && !offlinePeer),
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "inst-row",
 				onMouseDown: (e) => {
@@ -75304,6 +75703,34 @@ function TabIcon({ name }) {
 	});
 }
 //#endregion
+//#region src/components/hub/HubAddButton.tsx
+async function addSessionFile(title, path) {
+	try {
+		const it = await instApi(title, "/hub/put", { json: { path } });
+		refreshHub();
+		const ok = await copyText(it.ref);
+		toast("Added " + it.name + " to the hub — " + it.ref + (ok ? " (copied)" : ""));
+		return it;
+	} catch (err) {
+		toast("Couldn't add " + path + " to the hub: " + errMsg(err));
+		return null;
+	}
+}
+function HubAddButton({ title, path }) {
+	if (!!useConfig().data?.guest) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "diff-file-map diff-file-hub",
+		title: "Add " + path + " to the hub — every session can use it",
+		"aria-label": "Add " + path + " to the hub",
+		onClick: (ev) => {
+			ev.stopPropagation();
+			addSessionFile(title, path);
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "+ Hub" })
+	});
+}
+//#endregion
 //#region src/lib/diff.ts
 function parseUnifiedDiff(text) {
 	return text.split("\n").map((line) => {
@@ -75691,6 +76118,10 @@ function DiffTabImpl({ title, active, stamp = "" }) {
 					path: file,
 					onClick: () => showOnMap(file)
 				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubAddButton, {
+					title,
+					path: file
+				}),
 				reloadButton,
 				modeButtons
 			]
@@ -75759,6 +76190,10 @@ function DiffTabImpl({ title, active, stamp = "" }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MapButton, {
 						path: seg.file,
 						onClick: () => showOnMap(seg.file)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubAddButton, {
+						title,
+						path: seg.file
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "diff-file-caret",
@@ -77100,6 +77535,398 @@ function promptsFromFile(name, text) {
 	return lines.map((l) => l.trim()).filter(Boolean);
 }
 //#endregion
+//#region src/lib/fileDropTextarea.ts
+var TEXTAREA_DROP_CLASS = "ta-file-drop";
+function setControlledValue(ta, next) {
+	const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(ta), "value");
+	if (desc?.set) desc.set.call(ta, next);
+	else ta.value = next;
+	ta.dispatchEvent(new Event("input", { bubbles: true }));
+}
+function revealTextarea(ta) {
+	for (let el = ta.parentElement; el; el = el.parentElement) if (el.tagName === "DETAILS" && !el.open) el.open = true;
+}
+function spliceAtCaret(value, start, end, insert) {
+	const s = Math.max(0, Math.min(start, value.length));
+	const e = Math.max(s, Math.min(end, value.length));
+	const before = value.slice(0, s);
+	const after = value.slice(e);
+	const lead = before && !/\s$/.test(before) ? " " : "";
+	const tail = after && /^\s/.test(after) ? "" : " ";
+	const body = lead + insert + tail;
+	return {
+		value: before + body + after,
+		caret: before.length + body.length
+	};
+}
+function attachFileDropZone(zone, opts) {
+	const box = () => zone.querySelector("textarea");
+	const shut = () => {
+		const ta = box();
+		if (!ta) return !opts().onInsert;
+		return ta.readOnly || ta.disabled;
+	};
+	const onDragOver = (ev) => {
+		if (shut() || !dtHasFiles(ev.dataTransfer)) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		ev.dataTransfer.dropEffect = "copy";
+		zone.classList.add(TEXTAREA_DROP_CLASS);
+	};
+	const onDragLeave = (ev) => {
+		if (!zone.contains(ev.relatedTarget)) zone.classList.remove(TEXTAREA_DROP_CLASS);
+	};
+	const onDrop = (ev) => {
+		if (shut() || !dtHasFiles(ev.dataTransfer)) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		zone.classList.remove(TEXTAREA_DROP_CLASS);
+		const host = box();
+		if (!host) {
+			const { session: sess, onInsert } = opts();
+			uploadFilesAsPathText(ev.dataTransfer.files, sess).then((text) => {
+				if (text) onInsert?.(text);
+			});
+			return;
+		}
+		const focused = typeof document !== "undefined" && document.activeElement === host;
+		const start = focused ? host.selectionStart ?? host.value.length : host.value.length;
+		const end = focused ? host.selectionEnd ?? start : host.value.length;
+		const files = ev.dataTransfer.files;
+		const { session } = opts();
+		uploadFilesAsPathText(files, session).then((text) => {
+			if (!text) return;
+			const next = spliceAtCaret(host.value, start, end, text);
+			setControlledValue(host, next.value);
+			revealTextarea(host);
+			const restore = () => {
+				try {
+					host.focus();
+					host.setSelectionRange(next.caret, next.caret);
+				} catch {}
+			};
+			if (typeof requestAnimationFrame === "function") requestAnimationFrame(restore);
+			else restore();
+		});
+	};
+	zone.addEventListener("dragover", onDragOver);
+	zone.addEventListener("dragleave", onDragLeave);
+	zone.addEventListener("drop", onDrop);
+	return () => {
+		zone.removeEventListener("dragover", onDragOver);
+		zone.removeEventListener("dragleave", onDragLeave);
+		zone.removeEventListener("drop", onDrop);
+		zone.classList.remove(TEXTAREA_DROP_CLASS);
+	};
+}
+function useFileDropTextarea(opts) {
+	const latest = (0, import_react.useRef)(opts);
+	latest.current = opts;
+	const detach = (0, import_react.useRef)(null);
+	return (0, import_react.useCallback)((el) => {
+		detach.current?.();
+		detach.current = null;
+		if (el) detach.current = attachFileDropZone(el, () => latest.current);
+	}, []);
+}
+//#endregion
+//#region src/components/hub/HubAttach.tsx
+function useHubComposer({ box, value, setValue, title }) {
+	const guest = !!useConfig().data?.guest;
+	const [tok, setTok] = (0, import_react.useState)(null);
+	const [sel, setSel] = (0, import_react.useState)(0);
+	const [dropping, setDropping] = (0, import_react.useState)(false);
+	const hub = useHub(!guest && !!tok);
+	const matches = (0, import_react.useMemo)(() => tok ? matchItems(hub.data?.items || [], tok.query) : [], [tok, hub.data]);
+	const valueRef = (0, import_react.useRef)(value);
+	valueRef.current = value;
+	const place = (next, caret) => {
+		setValue(next);
+		setTimeout(() => {
+			const el = box.current;
+			if (!el) return;
+			el.focus();
+			el.setSelectionRange(caret, caret);
+		}, 0);
+	};
+	const insert = (text) => {
+		const el = box.current;
+		const v = valueRef.current;
+		const r = spliceAtCaret(v, el ? el.selectionStart ?? v.length : v.length, el ? el.selectionEnd ?? v.length : v.length, text.trim());
+		place(r.value, r.caret);
+	};
+	const pending = useHubUi((s) => title && s.insert?.title === title ? s.insert : null);
+	const seen = (0, import_react.useRef)(0);
+	(0, import_react.useEffect)(() => {
+		if (!pending || pending.n === seen.current) return;
+		seen.current = pending.n;
+		insert(pending.text);
+	}, [pending?.n]);
+	const choose = (it) => {
+		if (!tok) return;
+		const v = valueRef.current;
+		const caret = tok.start + 4 + tok.query.length;
+		const ins = it.ref + " ";
+		place(v.slice(0, tok.start) + ins + v.slice(caret).replace(/^ /, ""), tok.start + ins.length);
+		setTok(null);
+	};
+	const upload = async (files) => {
+		const r = await addFiles(files);
+		addedToast({
+			added: [],
+			refused: r.refused
+		});
+		if (r.added.length) {
+			insert(r.added.map((a) => a.ref).join(" "));
+			toast((r.added.length === 1 ? r.added[0].name + " is" : r.added.length + " files are") + " in the hub — the reference is in your message");
+		}
+		if (r.refused.some((x) => x.secret)) useHubUi.getState().setOpen(true);
+	};
+	const isHub = (e) => Array.from(e.dataTransfer.types || []).includes(HUB_MIME);
+	return {
+		insert,
+		dropping,
+		onInput(el) {
+			if (guest) return;
+			const t = refTokenAt(el.value, el.selectionStart ?? el.value.length);
+			setTok(t);
+			setSel(0);
+		},
+		onKeyDown(e) {
+			if (!tok || !matches.length) {
+				if (tok && e.key === "Escape") {
+					e.preventDefault();
+					e.stopPropagation();
+					setTok(null);
+					return true;
+				}
+				return false;
+			}
+			if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+				e.preventDefault();
+				setSel((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + matches.length) % matches.length);
+				return true;
+			}
+			if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey || e.key === "Tab") {
+				e.preventDefault();
+				choose(matches[Math.min(sel, matches.length - 1)]);
+				return true;
+			}
+			if (e.key === "Escape") {
+				e.preventDefault();
+				e.stopPropagation();
+				setTok(null);
+				return true;
+			}
+			return false;
+		},
+		onPaste(e) {
+			if (guest) return;
+			const files = Array.from(e.clipboardData?.files || []);
+			if (!files.length) return;
+			e.preventDefault();
+			upload(files);
+		},
+		onDragOver(e) {
+			if (guest || !isHub(e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			e.dataTransfer.dropEffect = "copy";
+			setDropping(true);
+		},
+		onDragLeave(e) {
+			if (!e.currentTarget.contains(e.relatedTarget)) setDropping(false);
+		},
+		onDrop(e) {
+			if (guest || !isHub(e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			setDropping(false);
+			try {
+				const it = JSON.parse(e.dataTransfer.getData(HUB_MIME));
+				if (it?.ref) insert(it.ref);
+			} catch {}
+		},
+		popup: tok && matches.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+			className: "hub-pick",
+			role: "listbox",
+			"aria-label": "Hub items — Enter or Tab puts the reference in",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+				className: "hub-pick-head",
+				role: "presentation",
+				"aria-hidden": "true",
+				children: "Hub items · Enter puts the reference in"
+			}), matches.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+				role: "option",
+				"aria-selected": i === sel,
+				onMouseDown: (e) => {
+					e.preventDefault();
+					choose(it);
+				},
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "hub-pick-ref",
+						children: it.ref
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "hub-pick-name",
+						children: it.name
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "hub-pick-ref",
+						children: humanSize(it.size)
+					})
+				]
+			}, it.id))]
+		}) : tok && hub.data && !hub.data.items.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "hub-pick",
+			role: "listbox",
+			"aria-label": "Hub items",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+				className: "hub-pick-head",
+				role: "presentation",
+				children: "The hub is empty — paste a file here, or use the paperclip"
+			})
+		}) : null,
+		attach: guest ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubAttachButton, {
+			onInsert: insert,
+			onUpload: upload
+		})
+	};
+}
+function HubAttachButton(props) {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const hub = useHub(open);
+	const wrap = (0, import_react.useRef)(null);
+	const file = (0, import_react.useRef)(null);
+	const items = (hub.data?.items || []).slice(0, 8);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		wrap.current?.querySelector("[data-first]")?.focus();
+		const onDown = (e) => {
+			if (!wrap.current?.contains(e.target)) setOpen(false);
+		};
+		document.addEventListener("mousedown", onDown);
+		return () => document.removeEventListener("mousedown", onDown);
+	}, [open]);
+	const onKey = (e) => {
+		if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			setOpen(false);
+			return;
+		}
+		if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+		const rows = Array.from(wrap.current?.querySelectorAll(".hub-pick button") || []);
+		if (!rows.length) return;
+		e.preventDefault();
+		rows[(rows.indexOf(document.activeElement) + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length].focus();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "hub-attach",
+		ref: wrap,
+		onKeyDown: onKey,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "hub-attach-btn",
+				"aria-haspopup": "menu",
+				"aria-expanded": open,
+				"aria-label": "Attach from the hub",
+				title: "Attach from the hub — or paste a picture or file straight into the box",
+				onClick: () => setOpen((v) => !v),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+					viewBox: "0 0 24 24",
+					width: "14",
+					height: "14",
+					fill: "none",
+					stroke: "currentColor",
+					strokeWidth: "2",
+					strokeLinecap: "round",
+					strokeLinejoin: "round",
+					"aria-hidden": "true",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M20.5 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" })
+				}), "Hub"]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				ref: file,
+				type: "file",
+				multiple: true,
+				hidden: true,
+				"aria-hidden": "true",
+				tabIndex: -1,
+				onChange: (e) => {
+					const fs = Array.from(e.target.files || []);
+					e.target.value = "";
+					setOpen(false);
+					props.onUpload(fs);
+				}
+			}),
+			open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+				className: "hub-pick",
+				role: "menu",
+				"aria-label": "Attach from the hub",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						role: "none",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							role: "menuitem",
+							"data-first": "",
+							onClick: () => file.current?.click(),
+							children: "Upload files to the hub…"
+						})
+					}),
+					items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "hub-pick-head",
+						role: "presentation",
+						children: "Recent in the hub"
+					}),
+					items.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						role: "none",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							role: "menuitem",
+							onClick: () => {
+								setOpen(false);
+								props.onInsert(it.ref);
+							},
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hub-pick-ref",
+									children: it.ref
+								}),
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hub-pick-name",
+									children: it.name
+								})
+							]
+						})
+					}, it.id)),
+					hub.data && !items.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "hub-pick-head",
+						role: "presentation",
+						children: "The hub is empty"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						role: "none",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							role: "menuitem",
+							onClick: () => {
+								setOpen(false);
+								useHubUi.getState().setOpen(true);
+							},
+							children: "Open the hub"
+						})
+					})
+				]
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/grid/QueueTab.tsx
 var queueCache = /* @__PURE__ */ new Map();
 function composerKey(e) {
@@ -77114,6 +77941,13 @@ function qApi(title, path, opts) {
 function QueueTab$1({ title, active }) {
 	const [state, setState] = (0, import_react.useState)(queueCache.get(title) || null);
 	const [draft, setDraft] = (0, import_react.useState)("");
+	const draftBox = (0, import_react.useRef)(null);
+	const hubc = useHubComposer({
+		box: draftBox,
+		value: draft,
+		setValue: setDraft,
+		title
+	});
 	const [editing, setEditing] = (0, import_react.useState)(null);
 	const [dragId, setDragId] = (0, import_react.useState)(null);
 	const [dropSlot, setDropSlot] = (0, import_react.useState)(null);
@@ -77209,9 +78043,9 @@ function QueueTab$1({ title, active }) {
 		const text = draft.trim();
 		if (!text) return;
 		try {
-			await qApi(title, "/send", { json: { text } });
+			const r = await qApi(title, "/send", { json: { text } });
 			setDraft("");
-			toast("Sent to " + displayName(title));
+			toast(r?.hub_note ? "Sent to " + displayName(title) + " — " + r.hub_note : "Sent to " + displayName(title));
 			reload();
 		} catch (err) {
 			if (isHeldRefusal(err)) {
@@ -77231,6 +78065,7 @@ function QueueTab$1({ title, active }) {
 			queueCache.set(title, st);
 			setDraft("");
 			setState(st);
+			if (st.hub_note) toast(st.hub_note);
 		} catch (err) {
 			toast("Queue failed: " + (err.message || ""));
 		}
@@ -77341,38 +78176,55 @@ function QueueTab$1({ title, active }) {
 					children: "Send a prompt now, or queue prompts to auto-run when the agent goes idle — the run keeps going unattended and resumes when usage limits reset. Drop a .csv or .txt file anywhere here to queue every row as its own prompt."
 				})]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				className: "queue-input",
-				rows: 3,
-				placeholder: "Type a prompt — Add to queue (Alt+Enter), or Send now (Ctrl+Enter)",
-				"aria-label": "Prompt for " + displayName(title),
-				value: draft,
-				onChange: (e) => setDraft(e.target.value),
-				onKeyDown: (e) => {
-					const k = composerKey(e);
-					if (!k) return;
-					e.preventDefault();
-					e.stopPropagation();
-					k === "send" ? send() : add();
-				}
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "queue-input-wrap",
+				"data-hub-drop": hubc.dropping ? "" : void 0,
+				onDragOver: hubc.onDragOver,
+				onDragLeave: hubc.onDragLeave,
+				onDrop: hubc.onDrop,
+				children: [hubc.popup, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					ref: draftBox,
+					className: "queue-input",
+					rows: 3,
+					placeholder: "Type a prompt — Add to queue (Alt+Enter), or Send now (Ctrl+Enter)",
+					"aria-label": "Prompt for " + displayName(title),
+					value: draft,
+					onChange: (e) => {
+						setDraft(e.target.value);
+						hubc.onInput(e.target);
+					},
+					onPaste: hubc.onPaste,
+					onKeyDown: (e) => {
+						if (hubc.onKeyDown(e)) return;
+						const k = composerKey(e);
+						if (!k) return;
+						e.preventDefault();
+						e.stopPropagation();
+						k === "send" ? send() : add();
+					}
+				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "queue-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "queue-add primary",
-					type: "button",
-					title: "Add to queue (Alt+Enter)",
-					disabled: sending,
-					onClick: add,
-					children: "Add to queue"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "queue-send",
-					type: "button",
-					title: "Send now (Ctrl+Enter)",
-					disabled: sending,
-					onClick: send,
-					children: "Send now"
-				})]
+				children: [
+					hubc.attach,
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						className: "queue-add primary",
+						type: "button",
+						title: "Add to queue (Alt+Enter)",
+						disabled: sending,
+						onClick: add,
+						children: "Add to queue"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						className: "queue-send",
+						type: "button",
+						title: "Send now (Ctrl+Enter)",
+						disabled: sending,
+						onClick: send,
+						children: "Send now"
+					})
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "queue-flags",
@@ -79126,6 +79978,12 @@ function ThreadTab({ title, active }) {
 	};
 	const [sending, setSending] = (0, import_react.useState)(false);
 	const box = (0, import_react.useRef)(null);
+	const hubc = useHubComposer({
+		box,
+		value: draft,
+		setValue: setDraft,
+		title
+	});
 	const chips = composeChips(title, parent, children.map((c) => c.title), nameOf);
 	const chip = chipFor(chips, toKey);
 	const plan = sendPlan(chip.titles, actOf);
@@ -79185,6 +80043,8 @@ function ThreadTab({ title, active }) {
 			(i < plannedNow.length && !queuedByServer ? now : later).push(who[i]);
 		});
 		setDraft("");
+		const hubNote = results.map((r) => r.status === "fulfilled" ? r.value?.hub_note : "").find(Boolean);
+		if (hubNote) setTimeout(() => toast(hubNote), 2500);
 		const names = (ts) => ts.length > 2 ? ts.length + " sessions" : ts.map(nameOf).join(" and ");
 		const said = [];
 		if (now.length) said.push("Sent to " + names(now));
@@ -79460,7 +80320,12 @@ function ThreadTab({ title, active }) {
 			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "thread-compose",
+			"data-hub-drop": hubc.dropping ? "" : void 0,
+			onDragOver: hubc.onDragOver,
+			onDragLeave: hubc.onDragLeave,
+			onDrop: hubc.onDrop,
 			children: [
+				hubc.popup,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "th-to",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -79480,8 +80345,13 @@ function ThreadTab({ title, active }) {
 					rows: 3,
 					placeholder: composePlaceholder(chip),
 					value: draft,
-					onChange: (e) => setDraft(e.target.value),
+					onChange: (e) => {
+						setDraft(e.target.value);
+						hubc.onInput(e.target);
+					},
+					onPaste: hubc.onPaste,
 					onKeyDown: (e) => {
+						if (hubc.onKeyDown(e)) return;
 						if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
 							e.preventDefault();
 							send("now");
@@ -79494,6 +80364,7 @@ function ThreadTab({ title, active }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "th-compose-foot",
 					children: [
+						hubc.attach,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "th-hint",
 							children: plan.later.length ? (plan.later.length === 1 ? nameOf(plan.later[0]) + " is on a prompt" : plan.later.length + " are on a prompt") + " — queued for when it's free · Ctrl+Enter · Alt+Enter when idle" : "Typed in as you, like the Queue tab · Ctrl+Enter sends now · Alt+Enter when idle"
@@ -114998,101 +115869,6 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 	})] });
 }
 //#endregion
-//#region src/lib/fileDropTextarea.ts
-var TEXTAREA_DROP_CLASS = "ta-file-drop";
-function setControlledValue(ta, next) {
-	const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(ta), "value");
-	if (desc?.set) desc.set.call(ta, next);
-	else ta.value = next;
-	ta.dispatchEvent(new Event("input", { bubbles: true }));
-}
-function revealTextarea(ta) {
-	for (let el = ta.parentElement; el; el = el.parentElement) if (el.tagName === "DETAILS" && !el.open) el.open = true;
-}
-function spliceAtCaret(value, start, end, insert) {
-	const s = Math.max(0, Math.min(start, value.length));
-	const e = Math.max(s, Math.min(end, value.length));
-	const before = value.slice(0, s);
-	const after = value.slice(e);
-	const lead = before && !/\s$/.test(before) ? " " : "";
-	const tail = after && /^\s/.test(after) ? "" : " ";
-	const body = lead + insert + tail;
-	return {
-		value: before + body + after,
-		caret: before.length + body.length
-	};
-}
-function attachFileDropZone(zone, opts) {
-	const box = () => zone.querySelector("textarea");
-	const shut = () => {
-		const ta = box();
-		if (!ta) return !opts().onInsert;
-		return ta.readOnly || ta.disabled;
-	};
-	const onDragOver = (ev) => {
-		if (shut() || !dtHasFiles(ev.dataTransfer)) return;
-		ev.preventDefault();
-		ev.stopPropagation();
-		ev.dataTransfer.dropEffect = "copy";
-		zone.classList.add(TEXTAREA_DROP_CLASS);
-	};
-	const onDragLeave = (ev) => {
-		if (!zone.contains(ev.relatedTarget)) zone.classList.remove(TEXTAREA_DROP_CLASS);
-	};
-	const onDrop = (ev) => {
-		if (shut() || !dtHasFiles(ev.dataTransfer)) return;
-		ev.preventDefault();
-		ev.stopPropagation();
-		zone.classList.remove(TEXTAREA_DROP_CLASS);
-		const host = box();
-		if (!host) {
-			const { session: sess, onInsert } = opts();
-			uploadFilesAsPathText(ev.dataTransfer.files, sess).then((text) => {
-				if (text) onInsert?.(text);
-			});
-			return;
-		}
-		const focused = typeof document !== "undefined" && document.activeElement === host;
-		const start = focused ? host.selectionStart ?? host.value.length : host.value.length;
-		const end = focused ? host.selectionEnd ?? start : host.value.length;
-		const files = ev.dataTransfer.files;
-		const { session } = opts();
-		uploadFilesAsPathText(files, session).then((text) => {
-			if (!text) return;
-			const next = spliceAtCaret(host.value, start, end, text);
-			setControlledValue(host, next.value);
-			revealTextarea(host);
-			const restore = () => {
-				try {
-					host.focus();
-					host.setSelectionRange(next.caret, next.caret);
-				} catch {}
-			};
-			if (typeof requestAnimationFrame === "function") requestAnimationFrame(restore);
-			else restore();
-		});
-	};
-	zone.addEventListener("dragover", onDragOver);
-	zone.addEventListener("dragleave", onDragLeave);
-	zone.addEventListener("drop", onDrop);
-	return () => {
-		zone.removeEventListener("dragover", onDragOver);
-		zone.removeEventListener("dragleave", onDragLeave);
-		zone.removeEventListener("drop", onDrop);
-		zone.classList.remove(TEXTAREA_DROP_CLASS);
-	};
-}
-function useFileDropTextarea(opts) {
-	const latest = (0, import_react.useRef)(opts);
-	latest.current = opts;
-	const detach = (0, import_react.useRef)(null);
-	return (0, import_react.useCallback)((el) => {
-		detach.current?.();
-		detach.current = null;
-		if (el) detach.current = attachFileDropZone(el, () => latest.current);
-	}, []);
-}
-//#endregion
 //#region src/components/dialogs/NewTicketPane.tsx
 var MIN_BRIEF = 6;
 var MAX_BRIEF = 2e3;
@@ -134729,6 +135505,77 @@ function PrReviewRoute() {
 	});
 }
 //#endregion
+//#region src/components/hub/HubCleanup.tsx
+function HubCleanup() {
+	const q = useHub(true);
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const l = q.data;
+	if (!l) return null;
+	const pinned = l.items.filter((i) => i.pinned).length;
+	const unpinned = l.items.length - pinned;
+	const clear = async () => {
+		setBusy(true);
+		try {
+			const r = await api("/api/hub/clear", { method: "POST" });
+			toast("Removed " + r.removed + (r.removed === 1 ? " item" : " items") + " from the hub — " + humanSize(r.freed) + " freed");
+			refreshHub();
+		} catch (err) {
+			toast("Couldn't clear the hub: " + errMsg(err));
+		} finally {
+			setBusy(false);
+			setAsking(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row",
+		id: "cleanup-hub",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Hub"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cleanup-summary",
+				children: l.count ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					l.count,
+					" ",
+					l.count === 1 ? "item" : "items",
+					", ",
+					humanSize(l.used),
+					pinned ? " (" + pinned + " pinned)" : "",
+					" — unpinned items go by themselves ",
+					l.keep_days,
+					" days after their last use."
+				] }) : "The hub is empty."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "test-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					onClick: () => useHubUi.getState().setOpen(true),
+					children: "Open the hub"
+				}), unpinned > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy,
+					onClick: () => setAsking(true),
+					children: "Remove unpinned items"
+				})]
+			}),
+			asking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Remove " + unpinned + " unpinned " + (unpinned === 1 ? "item" : "items") + "?",
+				body: "Their references stop working in every session. Pinned items stay.",
+				confirmLabel: "Remove them",
+				busy,
+				onConfirm: () => void clear(),
+				onCancel: () => setAsking(false)
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/settings/screens/Cleanup.tsx
 function Cleanup({ active }) {
 	const [rep, setRep] = (0, import_react.useState)(null);
@@ -134841,7 +135688,7 @@ function Cleanup({ active }) {
 			load();
 		}
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CleanupView, {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CleanupView, {
 		rep,
 		busy,
 		asking,
@@ -134864,7 +135711,7 @@ function Cleanup({ active }) {
 		onCollect: () => void collect(),
 		onRemove: (it, ok) => void remove(it, ok),
 		onCancel: () => setAsking(null)
-	});
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubCleanup, {})] });
 }
 function CleanupView(p) {
 	const { rep } = p;
@@ -144399,7 +145246,7 @@ function nothingMessage(r) {
 function pruneMessage(r) {
 	const n = r.candidates.length;
 	const days = Math.round(r.days);
-	const size = r.total_bytes ? ` (${humanSize(r.total_bytes)})` : "";
+	const size = r.total_bytes ? ` (${humanSize$1(r.total_bytes)})` : "";
 	const dirty = r.dirty_count || 0;
 	return `Delete ${n} unused ${plural(n, "worktree")}${size}?\n\n` + previewList(r.candidates.map((c) => c.name)) + `
 
@@ -144427,7 +145274,7 @@ function prunedMessage(r) {
 	const n = r.removed_count || 0;
 	return [
 		n ? `Removed ${n} ${plural(n, "worktree")}` : "Removed nothing",
-		r.freed_bytes ? humanSize(r.freed_bytes) + " freed" : "",
+		r.freed_bytes ? humanSize$1(r.freed_bytes) + " freed" : "",
 		r.kept_dirty && r.kept_dirty.length ? `kept ${r.kept_dirty.length} with uncommitted work` : "",
 		r.failed && r.failed.length ? `${r.failed.length} failed` : ""
 	].filter(Boolean).join(" · ");
@@ -144558,7 +145405,7 @@ function RecentDialog() {
 	const picked = sel.keys.map((id) => byId.get(id)).filter(Boolean);
 	const label = (e) => entryLabel(e, aliasOf(e));
 	const hidden = data?.hidden;
-	const hiddenNote = [hidden?.protected ? `${hidden.protected} protected` + (hidden.protected_bytes ? ` (${humanSize(hidden.protected_bytes)})` : "") : "", hidden?.active ? `${hidden.active} in use` : ""].filter(Boolean).join(" + ");
+	const hiddenNote = [hidden?.protected ? `${hidden.protected} protected` + (hidden.protected_bytes ? ` (${humanSize$1(hidden.protected_bytes)})` : "") : "", hidden?.active ? `${hidden.active} in use` : ""].filter(Boolean).join(" + ");
 	const removeOne = (e) => e.source === "closed" ? api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe: true } }) : api("/api/workspaces/delete", { json: { path: e.path } });
 	const runBulk = async (targets, verb, act) => {
 		if (!targets.length) return;
@@ -144585,7 +145432,7 @@ function RecentDialog() {
 		}
 		const sized = targets.filter((e) => e.size_bytes != null);
 		const sum = sumBytes(sized);
-		const msg = `Permanently delete ${targets.length} director${targets.length === 1 ? "y" : "ies"}` + (sized.length ? ` (${humanSize(sum)}${sized.length < targets.length ? "+" : ""})` : "") + "?\n\n" + previewList(targets.map(label)) + "\n" + (skipped ? `\n${skipped} selected row${skipped === 1 ? " has" : "s have"} no directory this app may delete (an in-place session runs in your own repo, and one may be gone already or still in use by a running session) — ${skipped === 1 ? "it" : "they"} will be left alone.\n` : "") + (targets.every((e) => e.worktree) ? "\nA worktree's branch and commits stay in the repository it came from; anything uncommitted, and anything git ignores, does not.\n" : "\nSome of these are clones, not worktrees — for those, everything goes with the directory, committed or not.\n") + "\nThis cannot be undone.";
+		const msg = `Permanently delete ${targets.length} director${targets.length === 1 ? "y" : "ies"}` + (sized.length ? ` (${humanSize$1(sum)}${sized.length < targets.length ? "+" : ""})` : "") + "?\n\n" + previewList(targets.map(label)) + "\n" + (skipped ? `\n${skipped} selected row${skipped === 1 ? " has" : "s have"} no directory this app may delete (an in-place session runs in your own repo, and one may be gone already or still in use by a running session) — ${skipped === 1 ? "it" : "they"} will be left alone.\n` : "") + (targets.every((e) => e.worktree) ? "\nA worktree's branch and commits stay in the repository it came from; anything uncommitted, and anything git ignores, does not.\n" : "\nSome of these are clones, not worktrees — for those, everything goes with the directory, committed or not.\n") + "\nThis cannot be undone.";
 		setAsk({
 			text: msg,
 			okLabel: `Delete ${targets.length}`,
@@ -144686,7 +145533,7 @@ function RecentDialog() {
 								query ? `${shown.length} of ${all.length}` : all.length,
 								" item",
 								(query ? all.length : shown.length) === 1 ? "" : "s",
-								totalBytes ? ` · ${humanSize(totalBytes)}` : "",
+								totalBytes ? ` · ${humanSize$1(totalBytes)}` : "",
 								hiddenNote ? ` · ${hiddenNote} hidden` : ""
 							]
 						}),
@@ -144892,7 +145739,7 @@ function RecentDialog() {
 												}),
 												e.size_bytes != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "recent-size muted",
-													children: humanSize(e.size_bytes)
+													children: humanSize$1(e.size_bytes)
 												})
 											]
 										}),
@@ -144934,7 +145781,7 @@ function RecentDialog() {
 											disabled: busy,
 											title: e.worktree ? "Permanently delete this worktree directory (its branch and commits stay in the repository it came from)" : "Permanently delete this directory",
 											onClick: () => setAsk({
-												text: `Permanently delete '${label(e)}'` + (e.size_bytes != null ? ` (${humanSize(e.size_bytes)})` : "") + "?\nThis cannot be undone.",
+												text: `Permanently delete '${label(e)}'` + (e.size_bytes != null ? ` (${humanSize$1(e.size_bytes)})` : "") + "?\nThis cannot be undone.",
 												okLabel: "Delete",
 												danger: true,
 												run: async () => {
@@ -159220,6 +160067,837 @@ function RouteStartMenu() {
 	}), document.body);
 }
 //#endregion
+//#region src/components/hub/HubSendDialog.tsx
+function hubTargets(list) {
+	return (list || []).filter((i) => !!i.title && !i.title.includes("::") && !i.peer_share && !i.locked);
+}
+function HubSendDialog() {
+	const item = useHubUi((s) => s.sending);
+	const close = () => useHubUi.getState().openSend(null);
+	if (!item) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SendDialog, {
+		item,
+		onClose: close
+	}, item.id);
+}
+function SendDialog({ item, onClose }) {
+	const sessions = hubTargets(useInstances().data);
+	const focused = useUi((s) => s.focused);
+	const [title, setTitle] = (0, import_react.useState)(() => focused && sessions.some((s) => s.title === focused) ? focused : sessions[0]?.title || "");
+	const [mode, setMode] = (0, import_react.useState)("prompt");
+	const [message, setMessage] = (0, import_react.useState)("");
+	const [path, setPath] = (0, import_react.useState)("hub/" + item.name);
+	const [replace, setReplace] = (0, import_react.useState)(false);
+	const [taken, setTaken] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [err, setErr] = (0, import_react.useState)("");
+	const [find, setFind] = (0, import_react.useState)("");
+	const shown = (0, import_react.useMemo)(() => {
+		const f = find.trim().toLowerCase();
+		return f ? sessions.filter((s) => (displayName(s.title) + " " + s.title).toLowerCase().includes(f)) : sessions;
+	}, [sessions, find]);
+	(0, import_react.useEffect)(() => {
+		if (mode !== "copy" || !title || !path.trim()) {
+			setTaken("");
+			return;
+		}
+		let live = true;
+		const t = setTimeout(() => {
+			freePath(title, item, path.trim()).then((r) => live && setTaken(r.taken ? r.path : "")).catch(() => live && setTaken(""));
+		}, 200);
+		return () => {
+			live = false;
+			clearTimeout(t);
+		};
+	}, [
+		mode,
+		title,
+		path,
+		item
+	]);
+	const go = async () => {
+		if (!title || busy) return;
+		setBusy(true);
+		setErr("");
+		try {
+			if (mode === "prompt") {
+				if (await putInPrompt(title, item, message)) onClose();
+			} else {
+				const dest = taken && !replace ? taken : path.trim();
+				await copyInto(title, item, dest, replace);
+				onClose();
+			}
+		} catch (e) {
+			setErr(errMsg(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		onClose,
+		className: "hub-send-modal",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "hub-send-h",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "modal-card hub-send",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+					id: "hub-send-h",
+					children: [
+						"Send ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "hub-send-name",
+							children: item.name
+						}),
+						" to a session"
+					]
+				}),
+				!sessions.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "hub-empty",
+					children: "No sessions are running here yet — start one with New, then send it."
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					sessions.length > 6 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "hub-filter",
+						type: "search",
+						placeholder: "Find a session…",
+						"aria-label": "Find a session",
+						value: find,
+						onChange: (e) => setFind(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hub-send-list",
+						role: "radiogroup",
+						"aria-label": "Session",
+						children: [shown.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "hub-send-row" + (s.title === title ? " on" : ""),
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "radio",
+									name: "hub-send-session",
+									checked: s.title === title,
+									onChange: () => setTitle(s.title)
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hub-send-title",
+									children: displayName(s.title)
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "hub-send-sub muted",
+									children: s.repo || s.folder_label || ""
+								})
+							]
+						}, s.title)), !shown.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "muted",
+							children: [
+								"No session matches \"",
+								find,
+								"\"."
+							]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
+						className: "hub-send-how",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", { children: "How" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "hub-send-opt",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "radio",
+									name: "hub-send-mode",
+									checked: mode === "prompt",
+									onChange: () => setMode("prompt")
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
+									"Put ",
+									item.ref,
+									" in its prompt"
+								] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "muted",
+									children: " — the agent gets the file's path; nothing is copied"
+								})] })]
+							}),
+							mode === "prompt" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+								className: "hub-send-msg",
+								rows: 2,
+								"aria-label": "Message to send with it (optional)",
+								placeholder: "Optional: a message to send with it now, e.g. “fix the layout in this screenshot”. Leave empty to type the reference into its prompt and finish it there.",
+								value: message,
+								onChange: (e) => setMessage(e.target.value),
+								onKeyDown: (e) => {
+									if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+										e.preventDefault();
+										go();
+									}
+								}
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "hub-send-opt",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "radio",
+									name: "hub-send-mode",
+									checked: mode === "copy",
+									onChange: () => setMode("copy")
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Copy the file into its folder" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "muted",
+									children: " — for a file the work needs to keep (it is not committed for you)"
+								})] })]
+							}),
+							mode === "copy" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "hub-send-path",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "at" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									value: path,
+									"aria-label": "Where in the session's folder",
+									spellCheck: false,
+									onChange: (e) => setPath(e.target.value)
+								})] }), taken && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "hub-send-taken",
+									role: "status",
+									children: [
+										path.trim(),
+										" already exists there —",
+										" ",
+										replace ? "it will be replaced." : "the copy goes to " + taken + ".",
+										" ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+											className: "hub-send-replace",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+												type: "checkbox",
+												checked: replace,
+												onChange: (e) => setReplace(e.target.checked)
+											}), " Replace it"]
+										})
+									]
+								})]
+							})
+						]
+					})
+				] }),
+				err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "hub-send-err",
+					role: "alert",
+					children: err
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "modal-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: onClose,
+						children: "Cancel"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "primary",
+						disabled: !title || busy || mode === "copy" && !path.trim(),
+						onClick: () => void go(),
+						children: busy ? "Sending…" : mode === "copy" ? "Copy" : message.trim() ? "Send" : "Put in prompt"
+					})]
+				})
+			]
+		})
+	});
+}
+//#endregion
+//#region src/components/hub/HubPanel.tsx
+function editable(t) {
+	const el = t;
+	if (!el || !el.tagName) return false;
+	return el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "INPUT" && el.type !== "button";
+}
+function HubPanel() {
+	const open = useHubUi((s) => s.open);
+	const guest = !!useConfig().data?.guest;
+	(0, import_react.useEffect)(() => {
+		if (location.hash === "#hub") useHubUi.getState().setOpen(true);
+	}, []);
+	if (!open || guest) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubSendDialog, {});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubDrawer, {}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubSendDialog, {})] });
+}
+function HubDrawer() {
+	const setOpen = useHubUi((s) => s.setOpen);
+	const q = useHub(true);
+	const list = q.data;
+	const items = list?.items || [];
+	const ref = (0, import_react.useRef)(null);
+	const fileInput = (0, import_react.useRef)(null);
+	const [dragOver, setDragOver] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [snippet, setSnippet] = (0, import_react.useState)(null);
+	const [secrets, setSecrets] = (0, import_react.useState)([]);
+	const [filter, setFilter] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		const prev = document.activeElement;
+		ref.current?.focus({ preventScroll: true });
+		return () => {
+			if (prev && prev.isConnected && prev !== document.body) prev.focus({ preventScroll: true });
+		};
+	}, []);
+	const add = async (files, secretOk = false) => {
+		if (!files.length) return;
+		setBusy(files.length === 1 ? "Adding " + (files[0].name || "the file") + "…" : "Adding " + files.length + " files…");
+		const r = await addFiles(files, { secretOk });
+		setBusy("");
+		addedToast(r);
+		const s = r.refused.filter((x) => x.secret).map((x) => x.file);
+		if (s.length) setSecrets((prev) => [...prev, ...s]);
+	};
+	(0, import_react.useEffect)(() => {
+		const onPaste = (e) => {
+			const inside = !!ref.current?.contains(e.target);
+			if (editable(e.target) || !inside && document.activeElement && document.activeElement !== document.body && !ref.current?.contains(document.activeElement)) return;
+			const cd = e.clipboardData;
+			if (!cd) return;
+			const files = Array.from(cd.files || []);
+			const text = cd.getData("text/plain");
+			if (!files.length && !text.trim()) return;
+			e.preventDefault();
+			if (files.length) add(files);
+			else {
+				setBusy("Adding the text…");
+				addText(text).then((it) => addedToast({
+					added: [it],
+					refused: []
+				})).catch((err) => addedToast({
+					added: [],
+					refused: [{
+						file: new File([], "the text"),
+						error: String(err?.message || err),
+						secret: false
+					}]
+				})).finally(() => setBusy(""));
+			}
+		};
+		document.addEventListener("paste", onPaste);
+		return () => document.removeEventListener("paste", onPaste);
+	}, []);
+	const onKeyDown = (e) => {
+		if (e.key === "Escape" && !e.defaultPrevented) {
+			e.preventDefault();
+			setOpen(false);
+		}
+	};
+	const hasFiles = (e) => Array.from(e.dataTransfer.types || []).includes("Files");
+	const shown = (0, import_react.useMemo)(() => {
+		const f = filter.trim().toLowerCase();
+		if (!f) return items;
+		return items.filter((i) => i.name.toLowerCase().includes(f) || i.ref.includes(f) || (i.note || "").toLowerCase().includes(f) || whoLabel$1(i).toLowerCase().includes(f));
+	}, [items, filter]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
+		id: "hub-panel",
+		ref,
+		tabIndex: -1,
+		role: "complementary",
+		"aria-label": "Hub — files, pictures and snippets every session can use",
+		className: dragOver ? "hub-drop" : void 0,
+		onKeyDown,
+		onDragOver: (e) => {
+			if (!hasFiles(e)) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "copy";
+			setDragOver(true);
+		},
+		onDragLeave: (e) => {
+			if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false);
+		},
+		onDrop: (e) => {
+			if (!hasFiles(e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			setDragOver(false);
+			add(Array.from(e.dataTransfer.files || []));
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+				className: "hub-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-title",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Hub" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "hub-sub",
+						children: [
+							"Files, pictures and snippets every session can use. Put ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "hub:" }),
+							" and an item's code in any prompt and the agent gets the file."
+						]
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "hub-x",
+					"aria-label": "Close the hub",
+					title: "Close (Esc)",
+					onClick: () => setOpen(false),
+					children: "✕"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "hub-add",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "hub-btn primary",
+						onClick: () => fileInput.current?.click(),
+						children: "Add files…"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "hub-btn",
+						onClick: () => setSnippet(snippet === null ? "" : null),
+						"aria-expanded": snippet !== null,
+						children: "New snippet"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "hub-add-hint",
+						children: [
+							"or drop here · paste with ",
+							navigator.platform?.startsWith("Mac") ? "⌘" : "Ctrl+",
+							"V"
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						ref: fileInput,
+						type: "file",
+						multiple: true,
+						hidden: true,
+						"aria-hidden": "true",
+						tabIndex: -1,
+						onChange: (e) => {
+							const fs = Array.from(e.target.files || []);
+							e.target.value = "";
+							add(fs);
+						}
+					})
+				]
+			}),
+			snippet !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SnippetEditor, {
+				value: snippet,
+				onChange: setSnippet,
+				onDone: () => setSnippet(null)
+			}),
+			busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "hub-busy",
+				role: "status",
+				children: busy
+			}),
+			secrets.map((f, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "hub-confirm",
+				role: "alertdialog",
+				"aria-label": "Add " + f.name + " anyway?",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [f.name, " looks like a secret"] }), " (an env file, key or credential). Every session can read the hub."] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-confirm-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "hub-btn",
+						autoFocus: true,
+						onClick: () => setSecrets((s) => s.filter((_, j) => j !== i)),
+						children: "Don't add it"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "hub-btn danger",
+						onClick: () => {
+							setSecrets((s) => s.filter((_, j) => j !== i));
+							add([f], true);
+						},
+						children: "Add it anyway"
+					})]
+				})]
+			}, f.name + i)),
+			items.length > 6 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				className: "hub-filter",
+				type: "search",
+				placeholder: "Find an item…",
+				"aria-label": "Find an item in the hub",
+				value: filter,
+				onChange: (e) => setFilter(e.target.value)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "hub-list-wrap",
+				children: q.isLoading ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "hub-empty muted",
+					children: "Loading the hub…"
+				}) : q.isError && !list ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "hub-empty",
+					role: "alert",
+					children: [
+						"Couldn't load the hub.",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "hub-link",
+							onClick: () => void q.refetch(),
+							children: "Try again"
+						})
+					]
+				}) : !items.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-empty-big",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "hub-empty-art",
+							"aria-hidden": "true",
+							children: "⇪"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Nothing in the hub yet." }) }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+							"Drop a file here, paste a screenshot (",
+							navigator.platform?.startsWith("Mac") ? "⌘" : "Ctrl+",
+							"V), or add a snippet. Each item gets a reference like ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "hub:k7m2" }),
+							" — put it in any session's prompt, or use",
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Send to session…" })
+						] }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "muted",
+							children: "Agents can add files here too (the MindFlock tool \"hub\")."
+						})
+					]
+				}) : !shown.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "hub-empty muted",
+					children: [
+						"Nothing matches \"",
+						filter,
+						"\"."
+					]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "hub-list",
+					"aria-label": "Hub items, newest first",
+					children: shown.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubCard, { item: it }, it.id))
+				})
+			}),
+			list && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("footer", {
+				className: "hub-foot",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: usageLine(list) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "muted",
+					title: "Settings: hub.keep_days (" + list.keep_days + "). Pin an item to keep it.",
+					children: [
+						"Unpinned items go ",
+						list.keep_days,
+						" days after their last use"
+					]
+				})]
+			})
+		]
+	});
+}
+function SnippetEditor(props) {
+	const [saving, setSaving] = (0, import_react.useState)(false);
+	const save = async () => {
+		if (!props.value.trim() || saving) return;
+		setSaving(true);
+		try {
+			addedToast({
+				added: [await addText(props.value)],
+				refused: []
+			});
+			props.onDone();
+		} catch (err) {
+			addedToast({
+				added: [],
+				refused: [{
+					file: new File([], "the snippet"),
+					error: String(err?.message || err),
+					secret: false
+				}]
+			});
+		} finally {
+			setSaving(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "hub-snippet",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+			autoFocus: true,
+			rows: 5,
+			"aria-label": "The snippet's text",
+			placeholder: "Paste or type text to share — a log line, a command, a note for an agent…",
+			value: props.value,
+			onChange: (e) => props.onChange(e.target.value),
+			onKeyDown: (e) => {
+				if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+					e.preventDefault();
+					save();
+				} else if (e.key === "Escape") {
+					e.preventDefault();
+					e.stopPropagation();
+					props.onDone();
+				}
+			}
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "hub-snippet-actions",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "hub-btn",
+				onClick: props.onDone,
+				children: "Cancel"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "hub-btn primary",
+				disabled: !props.value.trim() || saving,
+				onClick: () => void save(),
+				title: "Add it to the hub (Ctrl+Enter)",
+				children: "Add snippet"
+			})]
+		})]
+	});
+}
+function KindIcon({ item }) {
+	if (item.kind === "image") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+		className: "hub-thumb",
+		src: rawUrl(item),
+		alt: "",
+		loading: "lazy",
+		draggable: false
+	});
+	const ext = (item.name.match(/\.([A-Za-z0-9]{1,5})$/) || [])[1] || (item.kind === "text" ? "txt" : "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "hub-icon" + (item.kind === "text" ? " is-text" : ""),
+		"aria-hidden": "true",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+			viewBox: "0 0 24 24",
+			width: "22",
+			height: "22",
+			fill: "none",
+			stroke: "currentColor",
+			strokeWidth: "1.6",
+			strokeLinejoin: "round",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 2.8h8l4.5 4.5v13.9H6z" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M14 2.8v4.5h4.5" }),
+				item.kind === "text" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M8.6 12h7M8.6 15h7M8.6 18h4.5" })
+			]
+		}), ext && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "hub-ext",
+			children: ext.slice(0, 4)
+		})]
+	});
+}
+function HubCard({ item }) {
+	const openSend = useHubUi((s) => s.openSend);
+	const [menu, setMenu] = (0, import_react.useState)(false);
+	const [editing, setEditing] = (0, import_react.useState)("");
+	const [val, setVal] = (0, import_react.useState)("");
+	const menuRef = (0, import_react.useRef)(null);
+	const menuBtn = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (!menu) return;
+		menuRef.current?.querySelector("[role=\"menuitem\"]")?.focus();
+		const onDown = (e) => {
+			if (!menuRef.current?.contains(e.target) && e.target !== menuBtn.current) setMenu(false);
+		};
+		document.addEventListener("mousedown", onDown);
+		return () => document.removeEventListener("mousedown", onDown);
+	}, [menu]);
+	const startEdit = (what) => {
+		setMenu(false);
+		setVal(what === "name" ? item.name : item.note || "");
+		setEditing(what);
+	};
+	const saveEdit = async () => {
+		if (editing === "name" && !val.trim()) return;
+		const patch = editing === "name" ? { name: val } : { note: val };
+		setEditing("");
+		await updateItem(item, patch);
+	};
+	const menuKey = (e) => {
+		if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			setMenu(false);
+			menuBtn.current?.focus();
+			return;
+		}
+		if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+		const rows = Array.from(menuRef.current?.querySelectorAll("[role=\"menuitem\"]") || []);
+		if (!rows.length) return;
+		e.preventDefault();
+		rows[(rows.indexOf(document.activeElement) + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length].focus();
+	};
+	const act = (fn) => () => {
+		setMenu(false);
+		fn();
+	};
+	const textual = item.kind === "text" || item.textual;
+	const meta = [
+		kindLabel$1(item),
+		humanSize(item.size),
+		whoLabel$1(item),
+		relTime(item.added)
+	].join(" · ");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "hub-card" + (item.pinned ? " is-pinned" : ""),
+		draggable: !editing,
+		onDragStart: (e) => {
+			e.dataTransfer.setData(HUB_MIME, JSON.stringify({
+				id: item.id,
+				ref: item.ref,
+				name: item.name
+			}));
+			e.dataTransfer.setData("text/plain", item.ref);
+			e.dataTransfer.effectAllowed = "copy";
+		},
+		title: "Drag onto a session, its message box or its terminal to use " + item.ref,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "hub-card-top",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KindIcon, { item }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hub-card-main",
+					children: [
+						editing === "name" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							className: "hub-edit",
+							autoFocus: true,
+							"aria-label": "New name",
+							value: val,
+							onChange: (e) => setVal(e.target.value),
+							onBlur: () => void saveEdit(),
+							onKeyDown: (e) => {
+								if (e.key === "Enter") saveEdit();
+								if (e.key === "Escape") {
+									e.preventDefault();
+									e.stopPropagation();
+									setEditing("");
+								}
+							}
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "hub-name",
+							title: item.name,
+							children: [item.pinned && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "hub-pin",
+								title: "Pinned — kept past the expiry",
+								"aria-label": "Pinned",
+								children: "📌"
+							}), item.name]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "hub-meta",
+							children: meta
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "hub-ref",
+							title: "Copy the reference — paste it in any prompt or terminal. " + expiryLabel(item),
+							"aria-label": "Copy reference " + item.ref,
+							onClick: () => void copyRef(item),
+							children: item.ref
+						})
+					]
+				})]
+			}),
+			textual && item.preview && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+				className: "hub-preview",
+				children: item.preview
+			}),
+			editing === "note" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				className: "hub-edit hub-note-edit",
+				autoFocus: true,
+				rows: 2,
+				"aria-label": "Note",
+				placeholder: "A note for you (agents see it too)",
+				value: val,
+				onChange: (e) => setVal(e.target.value),
+				onBlur: () => void saveEdit(),
+				onKeyDown: (e) => {
+					if (e.key === "Enter" && !e.shiftKey) {
+						e.preventDefault();
+						saveEdit();
+					}
+					if (e.key === "Escape") {
+						e.preventDefault();
+						e.stopPropagation();
+						setEditing("");
+					}
+				}
+			}) : item.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "hub-note",
+				children: item.note
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "hub-actions",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "hub-btn primary",
+						onClick: () => openSend(item),
+						title: "Put it in a session's prompt, or copy the file into its folder",
+						children: "Send to session…"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "hub-btn",
+						onClick: () => void copyRef(item),
+						children: "Copy reference"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hub-more",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							ref: menuBtn,
+							type: "button",
+							className: "hub-btn hub-more-btn",
+							"aria-label": "More for " + item.name,
+							"aria-haspopup": "menu",
+							"aria-expanded": menu,
+							onClick: () => setMenu((v) => !v),
+							children: "⋯"
+						}), menu && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "hub-menu",
+							role: "menu",
+							ref: menuRef,
+							onKeyDown: menuKey,
+							"aria-label": "More for " + item.name,
+							children: [
+								textual && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									role: "menuitem",
+									onClick: act(() => void copyItemText(item)),
+									children: "Copy text"
+								}),
+								item.kind === "image" && canCopyImage() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									role: "menuitem",
+									onClick: act(() => void copyImage(item)),
+									children: "Copy image"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									role: "menuitem",
+									onClick: act(() => void copyPath(item)),
+									children: "Copy path"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									role: "menuitem",
+									onClick: act(() => download(item)),
+									children: "Download"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									role: "menuitem",
+									onClick: () => startEdit("name"),
+									children: "Rename"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									role: "menuitem",
+									onClick: () => startEdit("note"),
+									children: item.note ? "Edit note" : "Add a note"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									role: "menuitem",
+									onClick: act(() => void updateItem(item, { pinned: !item.pinned })),
+									children: item.pinned ? "Unpin" : "Pin — keep it"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									role: "menuitem",
+									className: "danger",
+									onClick: act(() => void removeItem$1(item)),
+									children: "Remove"
+								})
+							]
+						})]
+					})
+				]
+			})
+		]
+	});
+}
+//#endregion
 //#region src/App.tsx
 var GUEST_FOCUS_HEARTBEAT_MS = 3e4;
 function App() {
@@ -159391,6 +161069,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryConfirm, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatPanel, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubPanel, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WelcomeTour, {}),

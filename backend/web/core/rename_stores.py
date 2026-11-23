@@ -22,6 +22,12 @@ from backend.web.core import rename as _rename
 from backend.web.core.rename import move_key, register, replace_value
 
 
+def m_hub_index() -> str:
+    from backend.web.core import hub
+
+    return hub.INDEX
+
+
 def _server():
     from backend.web import server
 
@@ -330,6 +336,14 @@ def _template_runs(old: str, new: str) -> None:
             m.save_runs(runs, path)
 
 
+def _hub(old: str, new: str) -> None:
+    """A hub item a session added keeps saying who: the agent may still
+    remove its own items under its new title."""
+    from backend.web.core import hub as m
+
+    m.rename_session(old, new)
+
+
 def _team_runs(old: str, new: str) -> None:
     from backend.web.core import team_runs as m
 
@@ -552,6 +566,7 @@ def install() -> None:
         files=("template_runs.json", "schedule_runs.json"),
     )
     register("team runs", _team_runs)
+    register("hub", _hub, files=(m_hub_index(),))
     register("job expectations", _job_expectations, files=("job_expectations.json",))
     register("session fences", _session_fences, files=("red_zones.json",), keyed="tmux")
     register("memory", _memory)

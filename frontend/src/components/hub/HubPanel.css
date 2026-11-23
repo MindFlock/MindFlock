@@ -1,0 +1,688 @@
+/* The Hub panel (HubPanel.tsx): a drawer on the right, under the top bar.
+   Every colour is a theme token, so it follows dark / light / the coloured
+   sets (themeContrast.test.ts checks the tokens themselves). */
+
+#hub-panel {
+  position: fixed;
+  top: var(--topbar-h, 40px);
+  right: 0;
+  bottom: 0;
+  z-index: 55;
+  width: min(420px, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  color: var(--text);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+  outline: none;
+}
+
+#hub-panel.hub-drop {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+#hub-panel.hub-drop::after {
+  content: "Drop to add to the hub";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  pointer-events: none;
+}
+
+.hub-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px 6px;
+}
+
+.hub-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.hub-title h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.hub-sub {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+#hub-panel code,
+.hub-send code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.95em;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--panel-2);
+}
+
+.hub-x {
+  flex: none;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+}
+
+.hub-x:hover,
+.hub-x:focus-visible {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.hub-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hub-add-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hub-btn {
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.hub-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.hub-btn:focus-visible,
+.hub-ref:focus-visible,
+.hub-menu button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.hub-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.hub-btn.danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--red-ink);
+}
+
+.hub-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.hub-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
+.hub-snippet {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hub-snippet textarea,
+.hub-filter,
+.hub-edit,
+.hub-send-msg,
+.hub-send-path input {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.hub-snippet textarea {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  resize: vertical;
+}
+
+.hub-snippet-actions,
+.hub-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.hub-filter {
+  margin: 8px 14px 0;
+  width: calc(100% - 28px);
+}
+
+.hub-busy {
+  margin: 8px 14px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hub-confirm {
+  margin: 8px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 12.5px;
+}
+
+.hub-confirm p {
+  margin: 0;
+}
+
+.hub-list-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px 12px;
+}
+
+.hub-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hub-card {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+  padding: 9px 10px;
+  cursor: grab;
+}
+
+.hub-card.is-pinned {
+  border-color: var(--gold, var(--accent));
+}
+
+.hub-card-top {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.hub-thumb {
+  flex: none;
+  width: 64px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.hub-icon {
+  flex: none;
+  position: relative;
+  width: 64px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.hub-icon.is-text {
+  color: var(--accent);
+}
+
+.hub-ext {
+  position: absolute;
+  bottom: 2px;
+  right: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.hub-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hub-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-pin {
+  margin-right: 4px;
+  font-size: 11px;
+}
+
+.hub-meta {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.hub-ref {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: copy;
+}
+
+.hub-ref:hover {
+  border-color: var(--accent);
+}
+
+.hub-preview {
+  margin: 7px 0 0;
+  max-height: 4.6em;
+  overflow: hidden;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: var(--bg);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.3;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.hub-note {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  font-style: italic;
+}
+
+.hub-note-edit {
+  margin-top: 6px;
+}
+
+.hub-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.hub-more {
+  position: relative;
+  margin-left: auto;
+}
+
+.hub-more-btn {
+  min-width: 32px;
+}
+
+.hub-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 5;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.hub-menu button {
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  padding: 6px 9px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.hub-menu button:hover {
+  background: var(--panel-2);
+}
+
+.hub-menu button.danger {
+  color: var(--red);
+}
+
+.hub-empty {
+  margin: 14px 6px;
+  font-size: 13px;
+}
+
+.hub-empty-big {
+  margin: 18px 8px;
+  padding: 22px 16px;
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.hub-empty-big p {
+  margin: 4px 0;
+}
+
+.hub-empty-art {
+  font-size: 30px;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.hub-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+}
+
+/* --- Send to session… ------------------------------------------------------ */
+.hub-send {
+  width: min(520px, calc(100vw - 24px));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hub-send h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.hub-send-name {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.95em;
+  overflow-wrap: anywhere;
+}
+
+.hub-send-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.hub-send-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.hub-send-row.on {
+  background: var(--panel-2);
+  outline: 1px solid var(--accent);
+}
+
+.hub-send-title {
+  font-weight: 600;
+}
+
+.hub-send-sub {
+  margin-left: auto;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-send-how {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hub-send-how legend {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.hub-send-opt {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.hub-send-msg {
+  margin-left: 24px;
+  width: calc(100% - 24px);
+  resize: vertical;
+}
+
+.hub-send-path {
+  margin-left: 24px;
+  font-size: 13px;
+}
+
+.hub-send-path label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hub-send-path input {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12.5px;
+}
+
+.hub-send-taken {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+}
+
+.hub-send-replace {
+  display: inline-flex !important;
+  gap: 4px;
+  font-weight: 600;
+}
+
+.hub-send-err {
+  margin: 0;
+  color: var(--red);
+  font-size: 13px;
+}
+
+.hub-send .modal-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* --- The composer: picker + paperclip (HubAttach.tsx) ---------------------- */
+.hub-pick {
+  position: absolute;
+  z-index: 40;
+  left: 8px;
+  bottom: calc(100% + 4px);
+  width: min(360px, calc(100% - 16px));
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  list-style: none;
+  margin: 0;
+}
+
+.hub-pick li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.hub-pick li[aria-selected="true"] {
+  background: var(--panel-2);
+  outline: 1px solid var(--accent);
+}
+
+.hub-pick .hub-pick-ref {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.hub-pick .hub-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-pick-head {
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.hub-attach {
+  position: relative;
+  display: inline-flex;
+}
+
+.hub-attach-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 3px 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.hub-attach-btn:hover,
+.hub-attach-btn:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.hub-attach .hub-pick {
+  left: 0;
+  width: 320px;
+}
+
+.hub-attach .hub-pick button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* A hub item dragged over a place that takes it (a rail row, a composer, a
+   terminal). */
+.hub-drop-target,
+[data-hub-drop] {
+  outline: 2px dashed var(--accent) !important;
+  outline-offset: -2px;
+}
+
+@media (max-width: 560px) {
+  #hub-panel {
+    width: 100vw;
+    border-left: 0;
+  }
+
+  .hub-actions .hub-btn {
+    flex: 1 1 auto;
+  }
+}
+
+/* The composers the picker pops up from (ThreadTab, QueueTab). */
+.thread-compose,
+.queue-input-wrap {
+  position: relative;
+}

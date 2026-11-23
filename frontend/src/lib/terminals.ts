@@ -12,6 +12,8 @@
  * would normally hand the mouse to the app and break native selection, so we
  * swallow the DECSET mouse enables and synthesize wheel events ourselves. */
 
+import { addText, useHubUi } from "./hub";
+import { errMsg } from "./format";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -217,7 +219,22 @@ export function attachCopyOnSelect(
     const sel = forClipboard(isLive ? live : captured, isLive ? startCol() : capturedCol);
     if (sel && sel.trim()) {
       copyText(sel).then((ok) => {
-        if (ok) toast("Copied " + sel.length + " chars");
+        if (!ok) return;
+        // With the hub open, the copy offers to keep the text there too
+        // (a snippet every session can use) — never otherwise: copying is
+        // too frequent for an action toast each time.
+        if (useHubUi.getState().open)
+          toast("Copied " + sel.length + " chars", {
+            action: {
+              label: "Add to hub",
+              ariaLabel: "Add the selected text to the hub as a snippet",
+              onClick: () =>
+                void addText(sel)
+                  .then((it) => toast("Added a snippet to the hub — " + it.ref))
+                  .catch((err) => toast("Couldn't add it to the hub: " + errMsg(err))),
+            },
+          });
+        else toast("Copied " + sel.length + " chars");
       });
       return true;
     }

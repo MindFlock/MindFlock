@@ -2343,6 +2343,51 @@ class TransfersSettings:
         )
 
 
+#: Defaults of :class:`HubSettings` (docs/configuration.md "hub").
+HUB_MAX_MB = 1024
+HUB_ITEM_MB = 100
+HUB_MAX_ITEMS = 300
+HUB_KEEP_DAYS = 14
+
+
+@dataclass
+class HubSettings:
+    """The hub: files, images and text snippets every session can use
+    (:mod:`backend.web.core.hub`, docs/web-ui.md "Hub").
+
+    ``max_mb``: the whole hub's quota (None = 1024 MB). ``item_mb``: the most
+    one item can be (None = 100 MB). ``max_items``: how many items it holds
+    (None = 300). ``keep_days``: an unpinned item is removed this many days
+    after it was added or last used (None = 14); pinned items stay.
+    Machine-local: never synced.
+    """
+
+    max_mb: Optional[int] = None
+    item_mb: Optional[int] = None
+    max_items: Optional[int] = None
+    keep_days: Optional[int] = None
+
+    def to_dict(self) -> dict:
+        return {
+            k: getattr(self, k)
+            for k in ("max_mb", "item_mb", "max_items", "keep_days")
+            if getattr(self, k) is not None
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "HubSettings":
+        def cap(key: str, hi: int) -> Optional[int]:
+            n = _opt_pos_int(d.get(key))
+            return min(n, hi) if n is not None else None
+
+        return cls(
+            max_mb=cap("max_mb", 1048576),
+            item_mb=cap("item_mb", 65536),
+            max_items=cap("max_items", 100000),
+            keep_days=cap("keep_days", 3650),
+        )
+
+
 @dataclass
 class Settings:
     """The whole user settings document. All groups default to empty.
@@ -2375,6 +2420,7 @@ class Settings:
     updates: UpdatesSettings = field(default_factory=UpdatesSettings)
     cleanup: CleanupSettings = field(default_factory=CleanupSettings)
     transfers: TransfersSettings = field(default_factory=TransfersSettings)
+    hub: HubSettings = field(default_factory=HubSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -2411,6 +2457,7 @@ class Settings:
             "updates": self.updates,
             "cleanup": self.cleanup,
             "transfers": self.transfers,
+            "hub": self.hub,
         }
 
     @classmethod
@@ -2459,6 +2506,7 @@ class Settings:
             updates=UpdatesSettings.from_dict(_group(d, "updates")),
             cleanup=CleanupSettings.from_dict(_group(d, "cleanup")),
             transfers=TransfersSettings.from_dict(_group(d, "transfers")),
+            hub=HubSettings.from_dict(_group(d, "hub")),
             schema_version=version,
         )
         _derive_setup_from_store(obj)

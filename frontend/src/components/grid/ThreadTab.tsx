@@ -61,6 +61,7 @@ import { OrderDiagram } from "./OrderDiagram";
 import { composerKey } from "./QueueTab";
 import { fenceChips, orderWorthShowing } from "../../lib/order";
 import { onSessionRenamed, renameMapKey } from "../../lib/renameSession";
+import { useHubComposer } from "../hub/HubAttach";
 
 /** How often an open, visible Thread re-reads the family (events refresh it
  * sooner; this catches what no event announces, like a spawn). */
@@ -228,6 +229,8 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
   };
   const [sending, setSending] = useState(false);
   const box = useRef<HTMLTextAreaElement | null>(null);
+  // The hub in this box: hub: picker, paperclip, pasted files (HubAttach).
+  const hubc = useHubComposer({ box, value: draft, setValue: setDraft, title });
   const chips = composeChips(
     title,
     parent,
@@ -311,6 +314,11 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
       (i < plannedNow.length && !queuedByServer ? now : later).push(who[i]);
     });
     setDraft("");
+    // A hub: reference to nothing went as typed: say so (lib/hub).
+    const hubNote = results
+      .map((r) => (r.status === "fulfilled" ? (r.value as { hub_note?: string } | null)?.hub_note : ""))
+      .find(Boolean);
+    if (hubNote) setTimeout(() => toast(hubNote), 2500);
     const names = (ts: string[]) => (ts.length > 2 ? ts.length + " sessions" : ts.map(nameOf).join(" and "));
     const said: string[] = [];
     if (now.length) said.push("Sent to " + names(now));
@@ -559,7 +567,14 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
         </section>
       </div>
 
-      <div className="thread-compose">
+      <div
+        className="thread-compose"
+        data-hub-drop={hubc.dropping ? "" : undefined}
+        onDragOver={hubc.onDragOver}
+        onDragLeave={hubc.onDragLeave}
+        onDrop={hubc.onDrop}
+      >
+        {hubc.popup}
         <div className="th-to">
           <span className="th-to-label">To</span>
           {chips.map((c) => (
@@ -580,8 +595,13 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
           rows={3}
           placeholder={composePlaceholder(chip)}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            hubc.onInput(e.target);
+          }}
+          onPaste={hubc.onPaste}
           onKeyDown={(e) => {
+            if (hubc.onKeyDown(e)) return;
             if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
               e.preventDefault();
               void send("now");
@@ -593,6 +613,7 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
           }}
         />
         <div className="th-compose-foot">
+          {hubc.attach}
           <span className="th-hint">
             {plan.later.length
               ? (plan.later.length === 1

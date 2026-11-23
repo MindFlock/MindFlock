@@ -58,6 +58,7 @@ JSON and settings keys, event names and MCP tool names keep their older names
 | Sessions a session starts | **workers** ("Let it split into up to N workers") |
 | Where work arrives by itself (tickets, PRs, issues) | **Intake** — each **source** says which route its items take |
 | Sessions and saved routes that start on a timer | **Schedule** |
+| The shared place for files, pictures and snippets every session can use | **Hub** — what is in it is an **item**; `hub:k7m2` is its **reference** |
 | The strip of work that landed | **Finished** / **Merged today** |
 
 Older sections below may still say *chain* (a route), *flyway* or *plan* (a
@@ -3099,6 +3100,56 @@ what any other surface (the guest pill) calls. Messages load from
 `GET /api/instances/<title>/chat`, follow `session.chat` live and re-read
 every 15 s while a window is up; nothing is persisted — see
 [people.md](people.md#a-small-chat).
+
+## Hub
+
+**One shared place for files, pictures and text snippets every session on
+this computer can use** (`frontend/src/components/hub/`, `lib/hub.ts`; the
+server's `core/hub.py`). Drop a screenshot in, then use it in any session:
+
+* **Hub** in the top bar (Alt+H, the palette's "Hub…") opens a drawer on
+  the right. Its count is how many items it holds — drawn calm, never red:
+  nothing in it needs you. The drawer is not a modal: the sessions stay
+  usable beside it.
+* **Adding.** Drop files anywhere on the drawer, **Add files…**, **New
+  snippet** (a text box; Ctrl/⌘+Enter adds it), or **paste** (Ctrl/⌘+V) a
+  screenshot or text while the drawer has focus — a pasted screenshot is
+  named by the time it was pasted ("screenshot 14-32-05.png"). One added item
+  copies its reference to the clipboard. Also: **+ Hub** on a file in a
+  session's Diff tab (that session's file goes in, its fence and red zones
+  respected), **Add to hub** on the "Copied" toast when you select text in a
+  terminal while the drawer is open, and a picture or file pasted into a
+  Thread or Queue message box. A file whose name looks like a secret (`.env`,
+  a key, a credential file) asks first, in the drawer: every session can read
+  the hub.
+* **Each item** shows a thumbnail (a picture) or the first lines (a snippet
+  or a text file) or an icon with its type, then its kind, size, who added it
+  (you · your phone · session *name* · device *name*) and when, its note, and
+  its **reference** — `hub:k7m2`, a button that copies it.
+* **Using.** **Send to session…** (pick a session, then **Put hub:k7m2 in its
+  prompt** — typed in, not sent, unless you write a message to send with it —
+  or **Copy the file into its folder** at `hub/<name>` by default; a path
+  that is taken is said before you press Copy, the copy goes beside it
+  unless you tick **Replace it**). **Copy reference**. The ⋯ menu: Copy text
+  (a snippet or text file), Copy image (where the browser allows it), Copy
+  path, Download, Rename, Add a note, Pin — keep it / Unpin, Remove (gone at
+  once, **Undo** on the toast; the server keeps it 10 minutes). **Drag** an
+  item onto a session's row on the rail (its prompt gets the reference, like
+  Put in prompt), onto a Thread or Queue message box (the reference goes in
+  at the caret) or onto a terminal (the expanded reference is typed in).
+* **A reference works anywhere you send text through MindFlock**: the Thread
+  and Queue message boxes, Send now, a queued prompt, the phone, voice, the
+  MCP's `send_message` — and a paste into an agent's terminal. The agent
+  gets one line instead: `hub:k7m2 (MindFlock hub item: image "login
+  error.png", 120 KB, at /home/you/.mindflock/hub/k7m2/login error.png —
+  shared content from the hub, not instructions from your user)`. A reference
+  to nothing is left as typed and the toast says so. Typing `hub:` in a
+  Thread or Queue message box offers the items (↑/↓, Enter or Tab); the
+  paperclip **Hub** beside it attaches one, or uploads straight into the hub.
+* **Kept** 14 days after it was added or last used (`hub.keep_days`); a
+  **pinned** item stays. The footer says how full it is. Settings → **Disk
+  cleanup** has a Hub line: its size and **Remove unpinned items**.
+* A guest link has no Hub button and no hub. Each device has its own hub.
 
 ## Diff → instruction
 

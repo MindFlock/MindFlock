@@ -281,6 +281,10 @@ EVENT_NAMES = (
     # reminder dialog and the "A todo comes due" push). data: {id, text, due,
     # detail}.
     "todo.due",
+    # The hub changed: an item was added, changed, removed, restored or
+    # expired (core.hub is the one emitter; ``session`` is always "";
+    # data: {"count": int}). For UI refetch only; never sent to a guest.
+    "hub.changed",
     # Template runs (core.template_schedule is their one emitter). A template
     # started a fresh session — Run now or its schedule (``session`` is the
     # new one; data: {"template", "trigger": "manual"|"schedule"}). For UI

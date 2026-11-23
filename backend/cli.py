@@ -488,6 +488,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "still no secrets, same size limits",
     )
 
+    from backend import cli_hub as _cli_hub
+
+    _cli_hub.add_parser(sub, server_opts)
+
     reopen_ = sub.add_parser(
         "reopen",
         parents=[server_opts],
@@ -4599,6 +4603,7 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "rename": _cmd_rename,
     "send": _cmd_send,
     "send-files": _cmd_send_files,
+    "hub": lambda args: _cli_hub_mod().cmd_hub(args),
     "reopen": _cmd_reopen,
     "open": _cmd_open,
     "events": _cmd_events,
@@ -4614,6 +4619,12 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "update": lambda args: _cli_update().cmd_update(args),
     "restart": lambda args: _cli_update().cmd_restart(args),
 }
+
+
+def _cli_hub_mod():
+    from backend import cli_hub
+
+    return cli_hub
 
 
 def _cli_update():

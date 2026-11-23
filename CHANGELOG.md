@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The hub: one shared place for files, pictures and snippets every session
+  can use.** Hub in the top bar (Alt+H) opens a drawer: drop files, Add
+  files…, New snippet, or paste a screenshot (Ctrl/⌘+V) — each item gets a
+  reference like `hub:k7m2`. Put the reference in any prompt sent through
+  MindFlock (the Thread and Queue boxes, the queue, the phone, voice, the
+  MCP's `send_message`, a paste into an agent's terminal) and the agent gets
+  the item's path, name and kind, labelled as untrusted hub content.
+  **Send to session…** puts it in a session's prompt or copies the file into
+  its folder (never over a file unless you say so); drag an item onto a
+  session's row, message box or terminal; typing `hub:` in a message box
+  offers the items, and its paperclip attaches or uploads. Copy reference,
+  Copy text, Copy image, Download, Rename, note, Pin, Remove with Undo. **+
+  Hub** on a file in the Diff tab. On the phone, 📎 beside the message box:
+  pick a photo, it is in the hub and its reference in your message — Send.
+  Agents get one MCP tool, `hub` (list / get / put / take / remove): put only
+  a file from their own worktree (no secrets, their fence and red zones
+  respected), copy only into it, remove only what they put. `mindflock hub
+  ls|add|get|cp|rm|pin` for the terminal. Unpinned items go 14 days after
+  their last use; a quota (1 GB), a per-item limit (100 MB) and an item
+  limit (300) — `hub.*` in settings; Disk cleanup has a Hub line. Pictures
+  are shown only for PNG, JPEG, GIF and WebP (sniffed from the bytes);
+  everything else — SVG and HTML included — downloads, never opens in the
+  app. Guest links, peer-shared sessions and other devices' relayed requests
+  get nothing from the hub.
+
 - **Sessions an agent on another device starts here say where they came
   from, report back, and close when done.** On the receiving device they
   read "from tripwire-send on EthanLaptop2026" (or "you, from

@@ -761,6 +761,60 @@ html, body {
   user-select: none;
 }
 #send:active { background: rgba(var(--accent-rgb), 0.75); }
+/* The hub's 📎 (mobile.js HUB section): beside the compose box. */
+#hub-attach {
+  flex: 0 0 auto;
+  min-width: 42px;
+  height: 42px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 18px;
+  font-family: inherit;
+}
+#hub-attach:active { background: var(--border); }
+#hub-attach:disabled { opacity: 0.5; }
+.hub-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+.hub-row-thumb {
+  flex: 0 0 auto;
+  width: 54px;
+  height: 42px;
+  border-radius: 5px;
+  object-fit: cover;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.hub-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.hub-row-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hub-row-meta { font-size: 12px; color: var(--muted); }
+.hub-row-ref { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text); }
+.hub-row-btns { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; }
+.hub-row-btns button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.hub-row-btns button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
 /* --- soft-key bar (bottommost: carries the home-bar safe-area inset) --- */
 #keys {

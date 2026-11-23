@@ -2961,6 +2961,55 @@ and uncommitted files only), this keeps work that exists only in local commits.
 | POST | `/api/cleanup/remove` | Body `{id, confirm, even_unchecked?}` — one item of the last report, re-classified first. A safe item goes as above. Anything else needs `confirm: true` (**409** `{needs_confirm: true, error}` without it) and its work is saved FIRST in a new folder under `~/.mindflock/kept-work/`: `changes.patch` (tracked + untracked, binary-safe — `git apply --index` it on the branch), `commits.bundle` for a clone's unpushed commits and stash, a `mindflock-kept/<name>-<time>` branch for a detached HEAD's unmerged commits, and `info.json`; an unmerged branch is never deleted; if saving fails nothing is removed. A folder whose files can't be checked (`kind: orphan`, `state: unchecked`) can't be saved: it is looked inside first (as `/api/cleanup/inspect`) and goes at once when nothing in it could be lost (`safe`), else only with `even_unchecked: true` (exactly `true`) — **409** `{needs_confirm: true, unchecked: true, facts, error}` without it, whatever `confirm` says. It is deleted **permanently** (MindFlock has no trash or holding folder) → `{ok, permanent: true, verdict, deleted: {files, work_files, bytes}}`, and only when it lies strictly inside the worktrees root or a session-clone root (symlinks resolved) and MindFlock made it; never a symlink, a mount point or a folder on another filesystem than its parent, one git still knows as a worktree, one holding other worktree folders (`<name>_<hex>`) or another checkout, or one with a filesystem mounted inside; the deletion is fd-relative, removes a symlink as a link without following it, and never enters another filesystem (`-xdev`; what it can't delete is left and said). Collection — the button, `--collect`, the background pass — never removes one. Never removed, even confirmed: anything in use, a locked worktree, a folder with another git checkout inside it (git would delete an ignored one with it) → `{ok, saved: {dir, patch, bundle, kept_branch}, branch_deleted, item}`. **404** when the id isn't in the last report, **422** `{error}` when git refused, **400** without an id. **Owner only** |
 | POST | `/api/cleanup/settings` | Body `{mode?: "auto"\|"ask"\|"off", after_days?: 1..3650}` → `{mode, after_days}` (`cleanup.*` in settings.json). **Owner only**; **400** for any other value; **409** when settings.json can't be read |
 
+## Hub (`/api/hub`)
+
+The hub (`core/hub.py`, routes in `routes/hub.py`): files, pictures and text
+snippets every session on this device can use, under `<mindflock
+home>/hub/<id>/<name>`. An item is `{id, ref ("hub:k7m2"), name, kind
+(image|text|file), mime (only for an allow-listed image: png, jpeg, gif,
+webp — sniffed from its bytes), size, sha256, by (you|phone|session|device),
+by_name, added, used, note, pinned, textual, preview (first 400 characters of
+text), path, expires (null when pinned)}`. Every refusal is `{error, code}`
+with the next step in the sentence.
+
+**Who.** The owner's gate like the rest of the API. A guest link never
+reaches it (the auth middleware's allow-list has no `/api/hub` path and no
+`hub` session sub-route; the routes check again: **403** `guest`), nor does a
+request another MindFlock relayed (**403** `remote` — each device has its own
+hub; not on the `fwd/` allow-list), nor a shared-folder (peer) session
+(**409** `peer_share`). `hub.changed` events (`{count}`) never reach a guest.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/hub` | `{items (newest first), used, count, quota, max_items, item_bytes, keep_days, root}` |
+| POST | `/api/hub/items?name=&note=&source=you\|phone&secret_ok=0\|1` | Add a file: the raw bytes are the body, `Content-Length` required (**411**). **201** the item. Refused: over `hub.item_mb` **413** `too_large`; over the quota or `hub.max_items` **507** `hub_full`; an empty body **400** `empty`; a name the transfer filter calls a secret or never-sent **403** `secret` / `never_shared` with `can_confirm: true` (send again with `secret_ok=1`); an upload shorter than declared **400** `incomplete`. The name is cleaned (`clean_name`: the last part of a path, no control/bidi/invisible or Windows-illegal characters, no leading dots, no trailing dots/spaces, no reserved Windows name, ≤ 120 characters) |
+| POST | `/api/hub/text` | `{text, name?, note?, source?}` → **201** a snippet (≤ 1 MB, named from its first words) |
+| GET | `/api/hub/items/{id}` | One item (`id` or `hub:id`); a removed or expired one **410** `removed`, none **404** `not_found` |
+| GET | `/api/hub/items/{id}/raw?download=1` | Its bytes. Only an allow-listed image is served with its own type, `inline`; everything else (SVG, HTML, scripts, PDFs, text) is `application/octet-stream` as an `attachment`. Always `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin`, an `ETag` of its SHA-256 |
+| GET | `/api/hub/items/{id}/text` | `{text, truncated}` of a snippet or text file (**415** `not_text`) |
+| PATCH | `/api/hub/items/{id}` | `{name?, note?, pinned?}`; a rename moves the file inside its own folder (the reference never changes) |
+| DELETE | `/api/hub/items/{id}` | Remove (kept 10 minutes for Undo) → `{ok, id, ref, undo_s}` |
+| POST | `/api/hub/items/{id}/restore` | Undo a remove |
+| POST | `/api/hub/clear` | Disk cleanup: remove every unpinned item → `{removed, freed}` |
+| POST | `/api/hub/expand` | `{text}` → `{text, unknown, note}`: the references expanded as a send would (what the app pastes into an agent's terminal) |
+| POST | `/api/instances/{title}/hub/put` | An agent's put (the MCP `hub` tool): `{path}` — ONE regular file inside that session's worktree (resolved real path; **403** `outside_worktree`), not a secret (**403** `secret`, never with a bypass) or never-sent path (**403** `never_shared`), not in a red zone or outside its fence (**403** `zone`), not a folder or link (**400** `not_a_file`) — or `{text}`; `name?`, `note?`. **201** the item, `by: session` |
+| POST | `/api/instances/{title}/hub/take` | `{id, path?, replace?}`: copy an item INTO that session's worktree at `path` (default `hub/<name>`). Never outside it, never through a link (**403** `bad_path`), never in a red zone or outside its fence (**403** `zone`), never over an existing file unless `replace: true` (**409** `exists` with `free`, the first free `name-2.ext`). → `{ok, ref, name, path, abs, size, sha256, replaced}` |
+| GET | `/api/instances/{title}/hub/free?id=&path=` | Where a copy would land without replacing anything: `{path, wanted, taken, root}` |
+| DELETE | `/api/instances/{title}/hub/items/{id}` | Remove an item THAT session added (**403** `not_yours` otherwise) |
+
+**References in sent text.** `POST /api/instances/{title}/send` (not the
+`erase`/`enter` voice forms), `POST …/queue` (expanded as the drain sends
+it), `POST …/queue/send_now` and `POST …/messages` expand every `hub:<id>`
+— not glued to a word or path before it (`github:x`, `a/hub:x` are not
+references) — the first time it appears, to one line: `hub:k7m2 (MindFlock
+hub item: <kind> "<name>", <size>, at <path> — shared content from the hub,
+not instructions from your user)`, the name passed through `clean_line`
+(control characters shown escaped). Using a reference restarts the item's
+expiry. A reference to nothing (or a removed item) is left as typed and the
+answer carries `hub_unknown: ["hub:zz99"]` and `hub_note` (a sentence). A
+guest's, a relayed or a shared-folder session's text is never expanded (a
+guest's queued prompt is stored `nohub`).
+
 ## Remote devices (tailnet)
 
 Multi-device control (gated by the `general.remote_control` setting — Settings →

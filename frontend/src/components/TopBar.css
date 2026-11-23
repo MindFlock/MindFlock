@@ -222,6 +222,14 @@ body #mf-winctl {
   color: var(--red-ink);
 }
 
+/* The hub's item count: how much is in it, not something that wants you —
+   so it is drawn calm, never in the bell's red. */
+#topbar .tb-count.is-quiet {
+  background: var(--panel-2);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
 /* A checklist FAILED: the count is red, not the usual accent. */
 #topbar .tb-count.is-failing {
   background: var(--red);

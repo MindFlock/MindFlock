@@ -1,6 +1,7 @@
 /** One session row (ports app.js section 9's _createSidebarRow /
  * _updateSidebarRow / _instActionsHtml / _rowAction). */
 
+import { withHubDrop } from "../hub/hubDrop";
 import {
   memo,
   useCallback,
@@ -637,11 +638,15 @@ export const SidebarRow = memo(function SidebarRow({
             e.stopPropagation();
           }
         }}
-        {...rowDndProps(
+        {...withHubDrop(
           title,
-          { onDragState, onDropCue, onDropRow },
-          // Row drag would hijack text selection inside the rename input.
-          !editing
+          rowDndProps(
+            title,
+            { onDragState, onDropCue, onDropRow },
+            // Row drag would hijack text selection inside the rename input.
+            !editing
+          ),
+          !pending && !offlinePeer
         )}
       >
         <div

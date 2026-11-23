@@ -129,6 +129,9 @@ def _normalize(entry) -> dict:
                     }
                     if it.get("say") is True:
                         item["say"] = True
+                    if it.get("nohub") is True:
+                        # Typed by a guest: its hub references stay as typed.
+                        item["nohub"] = True
                     items.append(item)
             e["items"] = items[:_MAX_ITEMS]
         e["loop"] = bool(entry.get("loop", False))
@@ -174,7 +177,11 @@ def list_queue(title: str) -> List[dict]:
 
 
 def enqueue(
-    title: str, text: str, index: Optional[int] = None, say: bool = False
+    title: str,
+    text: str,
+    index: Optional[int] = None,
+    say: bool = False,
+    nohub: bool = False,
 ) -> dict:
     """Add a prompt to ``title``'s queue. Returns the new entry.
 
@@ -197,6 +204,8 @@ def enqueue(
             item = {"id": _new_id(), "text": text, "added": time.time()}
             if say:
                 item["say"] = True
+            if nohub:
+                item["nohub"] = True
             if index is None:
                 entry["items"].append(item)
             else:
@@ -209,7 +218,7 @@ def enqueue(
         return entry
 
 
-def enqueue_many(title: str, texts) -> tuple:
+def enqueue_many(title: str, texts, nohub: bool = False) -> tuple:
     """Append several prompts to ``title``'s queue in one write — the bulk
     path behind dropping a CSV/text file on the Queue tab (one prompt per
     row). Blank/whitespace rows are skipped; rows beyond the queue cap are
@@ -226,7 +235,10 @@ def enqueue_many(title: str, texts) -> tuple:
         take = cleaned[:room]
         now = time.time()
         for t in take:
-            entry["items"].append({"id": _new_id(), "text": t, "added": now})
+            item = {"id": _new_id(), "text": t, "added": now}
+            if nohub:
+                item["nohub"] = True
+            entry["items"].append(item)
         if take:
             if not entry.get("held"):
                 entry["enabled"] = True
@@ -235,7 +247,7 @@ def enqueue_many(title: str, texts) -> tuple:
         return entry, len(take), len(cleaned) - len(take)
 
 
-def update_item(title: str, item_id: str, text: str) -> dict:
+def update_item(title: str, item_id: str, text: str, nohub: bool = False) -> dict:
     """Replace the text of one pending item (id and position are kept, so an
     edit never loses the item's place in line).
 
@@ -250,6 +262,8 @@ def update_item(title: str, item_id: str, text: str) -> dict:
             for it in entry["items"]:
                 if it["id"] == item_id:
                     it["text"] = text
+                    if nohub:
+                        it["nohub"] = True
                     data[title] = entry
                     _save(data)
                     break
