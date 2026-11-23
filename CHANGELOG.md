@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   route does and answering per item; what could not be done is listed in
   the drawer with the reason, never skipped silently. On the phone, Sessions
   → Shared files has a tick per row and **Add N to message**.
+
 - **Shared files across your devices.** The drawer, the phone sheet and
   the agents' `hub` tool also list what your OTHER devices offer right now,
   in the same list, each marked **on ‹device›** — and a device that can't
@@ -51,6 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `…/{id}/thumb`), answers only your own devices over the device link and
   is the forwarding allow-list's only hub entry (docs/devices.md "Shared
   files on your other devices").
+
+- **Feedback: report a MindFlock problem or idea in one step.** **Feedback**
+  beside the version in the top bar (or the palette) opens a box: write a
+  line or two, press Send, and it is filed as a GitHub issue on
+  MindFlock/MindFlock with the GitHub sign-in MindFlock already has (without
+  one, it opens the same report pre-filled in the browser). Or ask the agent
+  you are talking to: the MCP's new `report_issue` drafts the report, a toast
+  offers **Review**, and you read, edit and send it. Agents can only draft.
+  Reports are public, so the box says so, shows the one line MindFlock adds
+  (version and operating system), and paths and anything shaped like a key
+  are replaced before a draft is stored or a report is sent.
 
 ### Changed
 
@@ -113,6 +125,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not open the picker. The line an agent gets now reads `file:k7m2
   (MindFlock shared file: …)`; a prompt already expanded the old way is not
   expanded twice.
+
+- **Recently closed can be searched by project folder.** A session that ran
+  in a worktree was only findable by its branch, name or worktree path, none
+  of which name the project it was for. Each row now carries the folder it
+  was cut from: the filter matches it (type the project's name), the row
+  shows it, and hovering gives the full path.
 
 ### Fixed
 
