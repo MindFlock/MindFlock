@@ -74,8 +74,10 @@ Status codes, in the order they are checked:
   ``{"committed", "partial": ""}`` plus ``{"final", "final_ms",
   "final_wait_ms", "final_early", "same"}`` when the accurate pass ran
   (``core.speech_stream``'s two tiers) — a Moonshine stream adds
-  ``"heard"`` and ``"final_by"`` (``core.speech_moonshine``) — and the
-  stream is gone.
+  ``"heard"`` and ``"final_by"`` (``core.speech_moonshine``), or, when
+  whisper wrote no text for words Moonshine heard, ``"heard"`` and
+  ``"final_missed"`` (the reason) with no ``final`` and no ``committed``
+  words: nothing of that phrase is typed — and the stream is gone.
   ``DELETE stream/{id}`` — 204, always.
 * ``wake`` — ``transcribe``'s codes; 200 ``{"wake", "reason", "rest", "text",
   "plain", "word", "backend", "ms"}``. ``GET wake/recent`` — 200, the last
@@ -1237,10 +1239,16 @@ async def voice_stream_end(sid: str) -> JSONResponse:
     with), ``"final_ms"`` (the pass's time), ``"final_wait_ms"`` (how long
     this call waited for it), ``"final_early"`` and ``"same"`` (``final``
     only differs in case, spacing or punctuation) — absent when it was off,
-    skipped, failed or timed out (``core.speech_stream``). A Moonshine
-    stream always has a ``"final"`` once words were heard, plus ``"heard"``
-    (Moonshine's own text: read the control words off it) and
-    ``"final_by"`` (``core.speech_moonshine``). The stream is gone
+    skipped, failed or timed out (``core.speech_stream``: the fast
+    whisper words stand). A Moonshine stream adds ``"heard"`` (Moonshine's
+    own text: read the control words off it) and ``"final_by"``
+    (``"whisper"``, or ``"moonshine"`` for a phrase that is only a control
+    phrase) — and when whisper wrote no text for the words it heard (the
+    pass off, skipped, failed, timed out or empty), no ``"final"`` and no
+    ``"committed"`` words but ``"final_missed"``, the reason
+    (``core.speech_moonshine.MISSED_REASONS``): Moonshine's words are never
+    a phrase's text, so the client takes back what it typed of them and
+    types nothing (``core.speech_moonshine``). The stream is gone
     afterwards (404 for a second ``end``)."""
     stream = _stream.close_stream(sid)
     if stream is None:

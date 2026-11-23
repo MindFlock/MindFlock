@@ -70,8 +70,11 @@ live words come from Moonshine tiny-streaming instead
 (:func:`stream_engine`, :meth:`LocalSTT.stream_engine`): Moonshine hears
 the control words (live, and its own text of the phrase at the end), and
 the whisper accurate pass writes every phrase's final text — Moonshine's
-stands only when that pass fails or times out, or the phrase is nothing
-but a control phrase ("stop", "over", a switch). ``voice.stt_stream_model``: ``""``
+words are never typed: a phrase that pass does not write (off, failed, timed
+out) types nothing, and only a phrase that is nothing but a control phrase
+("stop", "over", a switch) acts on Moonshine's words. So with
+``voice.stt_final`` ``off`` and Moonshine live, dictation types nothing
+(``describe()``'s ``final_model`` is ``""``). ``voice.stt_stream_model``: ``""``
 picks Moonshine when it is installed, ``"moonshine"`` the same, a whisper
 name keeps whisper. Its model is cached under ``moonshine:tiny-streaming``
 beside the whisper keys (:func:`is_stt_key`), warmed, kept resident and
@@ -3471,7 +3474,7 @@ def describe(probe: bool = True) -> dict:
                     "recognizers": [culture tags],
                     "stt_quality": "basic"|"good"|"none"},
          "stream_model": str, "stream_engine": "moonshine"|"whisper"|"",
-         "stream_label": str,
+         "stream_label": str, "final_model": str,
          "moonshine": {"available": bool, "reason": str},
          "kokoro": {"available": bool, "reason": str, "loaded": bool,
                     "voice": id},
@@ -3484,7 +3487,10 @@ def describe(probe: bool = True) -> dict:
     for English (``""`` when it does not stream): ``stream_engine`` is
     ``moonshine`` (``stream_model`` ``tiny-streaming``) or ``whisper``
     (``base.en`` …), ``stream_label`` the same for people ("Moonshine",
-    "Whisper base.en"); ``moonshine`` says whether the Moonshine lane could
+    "Whisper base.en"); ``final_model`` the accurate pass's model for English
+    while it streams (:meth:`LocalSTT.final_model_name`; ``""`` when it does
+    not stream or ``voice.stt_final`` is ``off`` — with Moonshine live, no
+    phrase is then typed: Settings → Voice says so); ``moonshine`` says whether the Moonshine lane could
     run here at all (``speech_moonshine.available``; ``reason`` why not —
     what Settings' install button and ``mindflock doctor`` show, whichever
     backend is configured); ``kokoro`` the same for the built-in Kokoro
@@ -3500,7 +3506,7 @@ def describe(probe: bool = True) -> dict:
     """
     ready: dict = {}
     lines: List[str] = []
-    stream_model = stream_engine_ = stream_label = ""
+    stream_model = stream_engine_ = stream_label = final_model = ""
     for kind in ("stt", "tts"):
         backend, detail = select(kind)
         ready[kind] = backend is not None
@@ -3523,8 +3529,10 @@ def describe(probe: bool = True) -> dict:
                         stream_model = _moon.ARCH
                     labeler = getattr(backend, "stream_label", None)
                     stream_label = str(labeler()) if labeler else ""
+                    finaler = getattr(backend, "final_model_name", None)
+                    final_model = str(finaler()) if callable(finaler) else ""
                 except Exception:  # noqa: BLE001 — a label, never a failure
-                    stream_model = stream_engine_ = stream_label = ""
+                    stream_model = stream_engine_ = stream_label = final_model = ""
         word = KIND_WORD[kind]
         lines.append(
             "Server %s ready (%s): %s" % (word, backend.id, detail)
@@ -3543,6 +3551,7 @@ def describe(probe: bool = True) -> dict:
         "stream_model": stream_model,
         "stream_engine": stream_engine_,
         "stream_label": stream_label,
+        "final_model": final_model,
         "moonshine": _moonshine_status(),
         "kokoro": _kokoro_status(),
         "warm": {k: _WARMED.get(k, ("", "", 0.0))[0] for k in ("stt", "tts")},

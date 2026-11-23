@@ -487,7 +487,7 @@ describe("the wiring and the copy", () => {
     expect(MIC).toMatch(/if \(idles\.current\)\s+idleTimer\.current = setTimeout/);
     expect(MIC).toMatch(/title,\s*hint,\s*continuous: false,/); // listenFor
     expect(MIC).toMatch(/\{ hint: WAKE_HINT, idle: false \}/);
-    expect(MIC).toMatch(/\{ hint: opts\.hint, continuous \}/);
+    expect(MIC).toMatch(/\{ hint: [^\n]*opts\.hint, continuous \}/);
   });
 
   it("the confirmations are wired: the dictation's, a switch's line, made ahead on a gesture", () => {

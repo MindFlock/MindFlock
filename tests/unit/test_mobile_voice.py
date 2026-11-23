@@ -670,7 +670,10 @@ def test_mobile_js_wider_vocabulary_numbers_stops_and_answers():
     assert "voiceSend" not in stopper
     stt = _fn(js, "ServerSTT")
     words = stt.split("function streamWords(g, mine, committed, partial) {")[1]
-    assert 'if (tail && tail.kind === "stop") {' in words
+    assert (
+        'if (tail && tail.kind === "stop" && !(g.moon && String(tail.text || "").trim())) {'
+        in words
+    )
     # A guess holds back what may start a control phrase — the answers too
     # while the session is asking (not into the ask sheet's field).
     assert "Math.min(VOICE_TAIL_MAX, words.length)" in _fn(js, "voiceHoldBack")
@@ -1208,7 +1211,9 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     )
     fail = stt.split("function streamFail(g, mine, why) {")[1].split("\n    }\n")[0]
     assert 'g.mode = "clip";' in fail and "streamDelete(sid);" in fail
-    assert "g.lead = voiceJoin(g.pend, g.partial);" in fail
+    # (A Moonshine stream's words lead nothing: they are no text.)
+    assert "var said = voiceJoin(g.pend, g.partial);" in fail
+    assert 'g.lead = g.moon && said ? "" : said;' in fail
     assert "if (g.ending && token === mine) clipSend(g, mine);" in fail
     assert (
         'upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine, g.lead, g.spokeAt);'
@@ -2037,7 +2042,7 @@ def test_guess_control_under_node():
     # (voiceEndBudgetMs), never a fixed 2.5 s — none when the fast words
     # settled and the finals here seldom change them (voiceFastStands).
     assert (
-        "var budget = !g.partial && voiceFastStands(voice.rec.finals) ? 0 : voiceEndBudgetMs(voice.rec.endMs);"
+        "var budget = g.moon ? 0 : !g.partial && voiceFastStands(voice.rec.finals) ? 0 : voiceEndBudgetMs(voice.rec.endMs);"
         in fire
     )
     assert "voice.rec.ctl.budget = budget;" in fire
