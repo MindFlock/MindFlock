@@ -19151,6 +19151,68 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
   padding-bottom: 2px;
 }
 
+
+/* ---- Your other devices' items (lib/hub.ts remoteItems) ---------------- */
+/* A row of another device: read-only here, marked with where it lives. */
+.hub-card.is-remote {
+  border-style: dashed;
+}
+
+.hub-on {
+  align-self: flex-start;
+  flex: none;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* A device that can't be asked right now: one quiet line each. */
+.hub-devnotes {
+  list-style: none;
+  margin: 6px 14px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hub-devnote {
+  font-size: 11.5px;
+  color: var(--muted);
+  padding-left: 14px;
+  position: relative;
+}
+
+.hub-devnote::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.hub-devnote.is-old::before,
+.hub-devnote.is-not_linked::before,
+.hub-devnote.is-error::before,
+.hub-devnote.is-refused::before {
+  background: var(--gold);
+}
+
+.hub-offer {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  cursor: pointer;
+}
 /* The feedback box (components/feedback/FeedbackDialog.tsx). */
 .feedback-card {
   width: min(560px, calc(100vw - 24px));
@@ -19308,68 +19370,6 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
 #topbar .tb-feedback:focus-visible {
   color: var(--text);
   text-decoration: underline;
-}
-
-/* ---- Your other devices' items (lib/hub.ts remoteItems) ---------------- */
-/* A row of another device: read-only here, marked with where it lives. */
-.hub-card.is-remote {
-  border-style: dashed;
-}
-
-.hub-on {
-  align-self: flex-start;
-  flex: none;
-  font-size: 11px;
-  line-height: 1.5;
-  padding: 0 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-/* A device that can't be asked right now: one quiet line each. */
-.hub-devnotes {
-  list-style: none;
-  margin: 6px 14px 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.hub-devnote {
-  font-size: 11.5px;
-  color: var(--muted);
-  padding-left: 14px;
-  position: relative;
-}
-
-.hub-devnote::before {
-  content: "";
-  position: absolute;
-  left: 2px;
-  top: 0.55em;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--border);
-}
-
-.hub-devnote.is-old::before,
-.hub-devnote.is-not_linked::before,
-.hub-devnote.is-error::before,
-.hub-devnote.is-refused::before {
-  background: var(--gold);
-}
-
-.hub-offer {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--muted);
-  cursor: pointer;
 }
 
 @layer tokens, base, components, theme;
