@@ -1,12 +1,13 @@
-/** The hub in a composer (the Thread and Queue tabs' message boxes):
+/** Shared files in a composer (the Thread and Queue tabs' message boxes):
  *
- *  - typing `hub:` offers a picker of hub items (↑/↓, Enter or Tab picks,
- *    Esc closes) — the reference goes in as `hub:k7m2`, expanded by the server
- *    when the message is sent;
- *  - the paperclip attaches an item from the hub, or uploads files straight
- *    into it, and puts their references in;
- *  - a picture or file PASTED into the box goes into the hub, its reference
- *    into the text; a hub item DRAGGED onto the box drops its reference.
+ *  - typing `file:` (or the first codes' `hub:`) offers a picker of shared
+ *    files (↑/↓, Enter or Tab picks, Esc closes) — the code goes in as
+ *    `file:k7m2`, expanded by the server when the message is sent;
+ *  - the paperclip attaches a shared file, or uploads files straight into
+ *    Shared files, and puts their codes in;
+ *  - a picture or file PASTED into the box goes into Shared files, its code
+ *    into the text; shared files DRAGGED onto the box (one, or a selection)
+ *    drop their codes.
  *
  * `useHubComposer` wires a controlled <textarea>; it never owns the text. */
 
@@ -16,6 +17,7 @@ import { spliceAtCaret } from "../../lib/fileDropTextarea";
 import {
   HUB_MIME,
   addFiles,
+  dragItems,
   addedToast,
   humanSize,
   matchItems,
@@ -59,7 +61,7 @@ export interface HubComposer {
 
 export function useHubComposer({ box, value, setValue, title }: Opts): HubComposer {
   const guest = !!useConfig().data?.guest;
-  const [tok, setTok] = useState<{ start: number; query: string } | null>(null);
+  const [tok, setTok] = useState<{ start: number; prefix: string; query: string } | null>(null);
   const [sel, setSel] = useState(0);
   const [dropping, setDropping] = useState(false);
   const refsIn = useMemo(() => attachedRefs(value), [value]);
@@ -117,7 +119,7 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
   const choose = (it: HubItem) => {
     if (!tok) return;
     const v = valueRef.current;
-    const caret = tok.start + 4 + tok.query.length;
+    const caret = tok.start + tok.prefix.length + tok.query.length;
     const ins = it.ref + " ";
     place(v.slice(0, tok.start) + ins + v.slice(caret).replace(/^ /, ""), tok.start + ins.length);
     setTok(null);
@@ -195,19 +197,15 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
       e.preventDefault();
       e.stopPropagation();
       setDropping(false);
-      try {
-        const it = JSON.parse(e.dataTransfer.getData(HUB_MIME)) as { ref: string };
-        if (it?.ref) insert(it.ref);
-      } catch {
-        /* not ours */
-      }
+      const items = dragItems(e.dataTransfer);
+      if (items.length) insert(items.map((i) => i.ref).join(" "));
     },
     chips: refsIn.length ? (
-      <div className="hub-att-chips" aria-label="From the hub">
+      <div className="hub-att-chips" aria-label="From Shared files">
         {refsIn.map((ref) => {
-          const it = (hub.data?.items || []).find((i) => i.ref === ref);
+          const it = (hub.data?.items || []).find((i) => i.id === ref.slice(ref.indexOf(":") + 1));
           return (
-            <span key={ref} className={"hub-att-chip" + (it ? "" : " is-unknown")} title={it ? it.name + " — " + ref : ref + " is not in the hub"}>
+            <span key={ref} className={"hub-att-chip" + (it ? "" : " is-unknown")} title={it ? it.name + " — " + ref : ref + " is not in Shared files"}>
               {it?.kind === "image" ? (
                 <img src={rawUrl(it)} alt="" className="hub-att-thumb" />
               ) : (
@@ -215,7 +213,7 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
                   {it ? (it.name.match(/\.([A-Za-z0-9]{1,4})$/) || [])[1] || (it.kind === "text" ? "txt" : "file") : "?"}
                 </span>
               )}
-              <span className="hub-att-name">{it ? it.name : ref + " — not in the hub"}</span>
+              <span className="hub-att-name">{it ? it.name : ref + " — not in Shared files"}</span>
               <button
                 type="button"
                 className="hub-att-x"
@@ -237,11 +235,11 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
         <ul
           className="hub-pick hub-pick-float"
           role="listbox"
-          aria-label="Hub items — Enter or Tab puts the code in"
+          aria-label="Shared files — Enter or Tab puts the code in"
           style={{ left: pickAt.left, top: pickAt.top, bottom: pickAt.bottom, width: pickAt.width }}
         >
           <li className="hub-pick-head" role="presentation" aria-hidden="true">
-            Hub items · Enter puts the code in
+            Shared files · Enter puts the code in
           </li>
           {matches.map((it, i) => (
             <li
@@ -266,9 +264,9 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
         </ul>,
         document.body
       ) : tok && hub.data && !hub.data.items.length && pickAt ? createPortal(
-        <ul className="hub-pick hub-pick-float" role="listbox" aria-label="Hub items" style={{ left: pickAt.left, top: pickAt.top, bottom: pickAt.bottom, width: pickAt.width }}>
+        <ul className="hub-pick hub-pick-float" role="listbox" aria-label="Shared files" style={{ left: pickAt.left, top: pickAt.top, bottom: pickAt.bottom, width: pickAt.width }}>
           <li className="hub-pick-head" role="presentation">
-            The hub is empty — paste a file here, or use the paperclip
+            Nothing in Shared files yet — paste a file here, or use the paperclip
           </li>
         </ul>,
         document.body
@@ -277,25 +275,28 @@ export function useHubComposer({ box, value, setValue, title }: Opts): HubCompos
   };
 }
 
-/** The hub codes a message points at, in order, each once. */
+/** The shared-file codes a message points at, in order, each once — as
+ * `file:<id>` whichever prefix was typed (an old `hub:` code is the same
+ * item). */
 export function attachedRefs(text: string): string[] {
   const out: string[] = [];
-  const re = /(?<![A-Za-z0-9_./:@-])hub:([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/gi;
+  const re = /(?<![A-Za-z0-9_./:@-])(?:file|hub):([A-Za-z0-9]{4,8})(?![A-Za-z0-9_])/gi;
   for (const m of (text || "").matchAll(re)) {
-    const ref = "hub:" + m[1].toLowerCase();
+    const ref = "file:" + m[1].toLowerCase();
     if (!out.includes(ref)) out.push(ref);
   }
   return out;
 }
 
-/** `text` without the code `ref` (every occurrence, and the space after). */
+/** `text` without the code `ref` (every occurrence, either prefix, and the
+ * space after). */
 export function removeRef(text: string, ref: string): string {
-  const id = ref.replace(/^hub:/i, "");
-  const re = new RegExp("(?<![A-Za-z0-9_./:@-])hub:" + id + "(?![A-Za-z0-9_]) ?", "gi");
+  const id = ref.replace(/^(file|hub):/i, "").replace(/[^A-Za-z0-9]/g, "");
+  const re = new RegExp("(?<![A-Za-z0-9_./:@-])(?:file|hub):" + id + "(?![A-Za-z0-9_]) ?", "gi");
   return text.replace(re, "").replace(/ {2,}/g, " ");
 }
 
-/** The paperclip: attach an item from the hub, or upload into it. */
+/** The paperclip: attach a shared file, or upload into Shared files. */
 export function HubAttachButton(props: { onInsert(text: string): void; onUpload(files: File[]): Promise<void> }) {
   const [open, setOpen] = useState(false);
   const hub = useHub(open);
@@ -335,14 +336,14 @@ export function HubAttachButton(props: { onInsert(text: string): void; onUpload(
         className="hub-attach-btn"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Attach from the hub"
-        title="Attach from the hub — or paste a picture or file straight into the box"
+        aria-label="Attach from Shared files"
+        title="Attach from Shared files — or paste a picture or file straight into the box"
         onClick={() => setOpen((v) => !v)}
       >
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M20.5 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" />
         </svg>
-        Hub
+        Shared files
       </button>
       <input
         ref={file}
@@ -359,15 +360,15 @@ export function HubAttachButton(props: { onInsert(text: string): void; onUpload(
         }}
       />
       {open && (
-        <ul className="hub-pick" role="menu" aria-label="Attach from the hub">
+        <ul className="hub-pick" role="menu" aria-label="Attach from Shared files">
           <li role="none">
             <button type="button" role="menuitem" data-first="" onClick={() => file.current?.click()}>
-              Upload files to the hub…
+              Upload files to Shared files…
             </button>
           </li>
           {items.length > 0 && (
             <li className="hub-pick-head" role="presentation">
-              Recent in the hub
+              Recent in Shared files
             </li>
           )}
           {items.map((it) => (
@@ -386,7 +387,7 @@ export function HubAttachButton(props: { onInsert(text: string): void; onUpload(
           ))}
           {hub.data && !items.length && (
             <li className="hub-pick-head" role="presentation">
-              The hub is empty
+              Nothing in Shared files yet
             </li>
           )}
           <li role="none">
@@ -398,7 +399,7 @@ export function HubAttachButton(props: { onInsert(text: string): void; onUpload(
                 useHubUi.getState().setOpen(true);
               }}
             >
-              Open the hub
+              Open Shared files
             </button>
           </li>
         </ul>

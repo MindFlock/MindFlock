@@ -637,12 +637,13 @@ export const KEYMAP: KeymapEntry[] = [
     run: () => useUi.getState().openDialogFor("schedule"),
   },
   {
-    // The hub (components/hub): open or close it. Guarded like Alt+S — a
-    // text field or terminal keeps the key (Option+H types ˙ on macOS).
+    // Shared files (components/hub): open or close the drawer. Guarded like
+    // Alt+S — a text field or terminal keeps the key (Option+H types ˙ on
+    // macOS). The id stays "hub": a rebinding saved under it keeps working.
     key: "h",
     alt: true,
     id: "hub",
-    help: ["Navigation", "Alt+H", "Hub — files, pictures and snippets every session can use"],
+    help: ["Navigation", "Alt+H", "Shared files — files, pictures and snippets every session can use"],
     when: () => !isEditingTarget(document.activeElement),
     run: () => useHubUi.getState().toggle(),
   },

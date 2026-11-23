@@ -149,7 +149,7 @@ def _set(**hubkw):
 def test_add_image_text_and_file_then_list_newest_first(world):
     img = _add_png()
     assert img["kind"] == "image" and img["mime"] == "image/png"
-    assert img["ref"] == "hub:" + img["id"] and len(img["id"]) == 4
+    assert img["ref"] == "file:" + img["id"] and len(img["id"]) == 4
     assert img["path"] == str(world.home / "hub" / img["id"] / "shot.png")
     assert img["sha256"] == hashlib.sha256(PNG).hexdigest()
     assert img["by"] == "you" and not img["pinned"]
@@ -243,7 +243,7 @@ def test_rename_note_pin_remove_restore(world):
 
 def test_unknown_and_malformed_ids_are_plain_404s(world):
     r = client.get("/api/hub/items/zzzz")
-    assert r.status_code == 404 and "hub:zzzz" in r.json()["error"]
+    assert r.status_code == 404 and "file:zzzz" in r.json()["error"]
     r = client.get("/api/hub/items/..%2F..%2Fetc")
     assert r.status_code == 404
 
@@ -637,7 +637,7 @@ def test_send_expands_a_reference_to_path_name_and_kind(world):
     )
     assert r.status_code == 200 and "hub_unknown" not in r.json()
     ((_t, text),) = world.typed
-    assert text.startswith("look at %s (MindFlock hub item: image " % rec["ref"])
+    assert text.startswith("look at %s (MindFlock shared file: image " % rec["ref"])
     assert '"login error.png"' in text and rec["path"] in text
     assert "not instructions from your user" in text and text.endswith(" please")
     assert "\n" not in text
@@ -648,7 +648,10 @@ def test_unknown_references_stay_as_typed_and_are_flagged(world):
         "/api/instances/alpha/send", json={"text": "see hub:zz99 and HUB:Qq22"}
     )
     body = r.json()
-    assert body["hub_unknown"] == ["hub:zz99"] and "not in the hub" in body["hub_note"]
+    assert (
+        body["hub_unknown"] == ["hub:zz99"]
+        and "not in Shared files" in body["hub_note"]
+    )
     assert world.typed[-1][1] == "see hub:zz99 and HUB:Qq22"
 
 
@@ -663,7 +666,7 @@ def test_references_glued_to_words_are_not_references(world):
     ):
         assert hub.expand(text)[0] == text
     out, used, _ = hub.expand("(hub:%s) and hub:%s." % (iid, iid))
-    assert used == [iid] and out.count("MindFlock hub item") == 1
+    assert used == [iid] and out.count("MindFlock shared file") == 1
     # Expanding twice changes nothing more.
     assert hub.expand(out)[0] == out
 
@@ -735,7 +738,7 @@ def test_queue_keeps_the_reference_and_expands_as_it_drains(world, monkeypatch):
 
     monkeypatch.setattr(queue_driver, "_dialog_on_screen", lambda i, n: False)
     queue_driver._send_queued_item("alpha", "mf_alpha", item, {}, time.time())
-    assert sent and "MindFlock hub item" in sent[0] and rec["path"] in sent[0]
+    assert sent and "MindFlock shared file" in sent[0] and rec["path"] in sent[0]
 
 
 def test_a_guests_queued_prompt_never_expands(world, monkeypatch):
@@ -772,7 +775,7 @@ def test_messages_expand_for_local_senders(world, monkeypatch):
     )
     assert r.status_code == 201, r.text
     assert r.json()["hub_unknown"] == ["hub:nope"]
-    assert "MindFlock hub item" in r.json()["message"]["text"]
+    assert "MindFlock shared file" in r.json()["message"]["text"]
 
 
 def test_using_a_reference_restarts_its_expiry(world):
@@ -892,7 +895,7 @@ def test_mcp_hub_put_list_get_take_remove(world):
     box = _box("alpha")
     (world.wts["alpha"] / "trace.log").write_text("boom at line 3\n")
     put = box.hub({"action": "put", "path": "trace.log", "note": "the crash"}, None)
-    assert put["ok"] and put["ref"].startswith("hub:") and put["by"] == "session alpha"
+    assert put["ok"] and put["ref"].startswith("file:") and put["by"] == "session alpha"
     lst = box.hub({"action": "list"}, None)
     assert [i["ref"] for i in lst["items"]] == [put["ref"]] and lst["count"] == 1
     got = box.hub({"action": "get", "id": put["ref"]}, None)
@@ -923,7 +926,7 @@ def test_mcp_hub_refusals_are_plain(world):
     with pytest.raises(ToolError):
         box.hub({"action": "put", "path": "a", "text": "b"}, None)
     empty = box.hub({"action": "list"}, None)
-    assert empty["items"] == [] and "empty" in empty["hint"]
+    assert empty["items"] == [] and "nothing in Shared files" in empty["hint"]
     outside = _box(None)
     with pytest.raises(ToolError) as e:
         outside.hub({"action": "put", "text": "x"}, None)
@@ -975,7 +978,7 @@ def test_cli_hub_add_ls_get_cp_rm(world, monkeypatch, capsys, tmp_path):
     )
     out = capsys.readouterr().out
     ref = out.split()[1]
-    assert ref.startswith("hub:") and "notes.md" in out
+    assert ref.startswith("file:") and "notes.md" in out
     assert hub.get(ref)["pinned"]
     assert run(hub_command="ls", json=False) == 0
     assert ref in capsys.readouterr().out

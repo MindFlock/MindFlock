@@ -1,5 +1,5 @@
-/** "Add to hub" on a file a session shows (the Diff tab's file rows): the
- * file goes from that session's folder into the hub (POST /api/instances/
+/** "+ Shared" on a file a session shows (the Diff tab's file rows): the
+ * file goes from that session's folder into Shared files (POST /api/instances/
  * {title}/hub/put — inside its folder only, no secrets, its fence and red
  * zones respected) and its reference is copied. */
 
@@ -15,10 +15,10 @@ export async function addSessionFile(title: string, path: string): Promise<HubIt
     const it = await instApi<HubItem>(title, "/hub/put", { json: { path } });
     refreshHub();
     const ok = await copyText(it.ref);
-    toast("Added " + it.name + " to the hub — " + it.ref + (ok ? " (copied)" : ""));
+    toast("Added " + it.name + " to Shared files — " + it.ref + (ok ? " (copied)" : ""));
     return it;
   } catch (err) {
-    toast("Couldn't add " + path + " to the hub: " + errMsg(err));
+    toast("Couldn't add " + path + " to Shared files: " + errMsg(err));
     return null;
   }
 }
@@ -30,14 +30,14 @@ export function HubAddButton({ title, path }: { title: string; path: string }) {
     <button
       type="button"
       className="diff-file-map diff-file-hub"
-      title={"Add " + path + " to the hub — every session can use it"}
-      aria-label={"Add " + path + " to the hub"}
+      title={"Add " + path + " to Shared files — every session can use it"}
+      aria-label={"Add " + path + " to Shared files"}
       onClick={(ev) => {
         ev.stopPropagation();
         void addSessionFile(title, path);
       }}
     >
-      <span>+ Hub</span>
+      <span>+ Shared</span>
     </button>
   );
 }

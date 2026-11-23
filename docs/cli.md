@@ -721,16 +721,17 @@ spaces-vs-hyphens ignored; `TITLE` resolves like `close`. See
 
 ### `mindflock hub ls|add|get|cp|rm|pin`
 
-The hub from a terminal (`/api/hub`; [web-ui.md](web-ui.md#hub)): files,
-pictures and snippets every session on this device can use. `REF` is an
-item's code, `hub:k7m2` (or `k7m2`).
+Shared files from a terminal (`/api/hub`; [web-ui.md](web-ui.md#shared-files)):
+files, pictures and snippets every session on this device can use. The
+command keeps its first name, `hub` (scripts call it). `REF` is an item's code, `file:k7m2` (the first `hub:k7m2`, or just
+`k7m2`).
 
 * `mindflock hub ls [--json]` — the items, newest first: reference, kind,
-  size, name, who added it, when, pinned; then how full the hub is.
+  size, name, who added it, when, pinned; then how full Shared files is.
 * `mindflock hub add FILE… [--note N] [--name NAME] [--pin] [--secret-ok]` —
   add files; `--text "…"` adds a snippet and `-` reads one from stdin. Prints
   each reference. A file that looks like a secret (`.env`, a key) is refused
-  unless `--secret-ok` — every session can read the hub.
+  unless `--secret-ok` — every session can read Shared files.
 * `mindflock hub get REF [--text]` — the item's path (or its text).
 * `mindflock hub cp REF [DEST] [--to TITLE] [--replace]` — copy it here
   (default `./<name>`), or with `--to` save a copy in that session's folder

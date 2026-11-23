@@ -1,6 +1,8 @@
-"""The hub's routes (:mod:`backend.web.core.hub`; docs/web-api.md "Hub").
+"""Shared files' routes (internally "the hub": :mod:`backend.web.core.hub`;
+docs/web-api.md "Shared files"). The paths keep ``hub`` — clients of every
+version and agents' tools call them.
 
-The owner's hub, from the app, the phone page and the CLI:
+The owner's shared files, from the app, the phone page and the CLI:
 
 * ``GET /api/hub`` — the items, newest first, with the quota.
 * ``POST /api/hub/items?name=&note=&source=&secret_ok=`` — add a file: the
@@ -13,6 +15,8 @@ The owner's hub, from the app, the phone page and the CLI:
 * ``PATCH /api/hub/items/{id}`` — ``{name?, note?, pinned?}``.
 * ``DELETE /api/hub/items/{id}`` — remove (Undo: ``POST …/restore``).
 * ``POST /api/hub/clear`` — Disk cleanup: remove every unpinned item.
+* ``POST /api/hub/batch`` — ``{action, ids, session?}``: pin / unpin /
+  remove / restore / copy several items in one request, answered per item.
 * ``POST /api/hub/expand`` — ``{text}`` → the text with its references
   expanded (what the app pastes into an agent's terminal).
 
@@ -70,14 +74,14 @@ def _refusal(request: Optional[Request]) -> Optional[JSONResponse]:
 
     if _guests.scope_guest(request) is not None:
         return JSONResponse(
-            {"error": "the hub is not part of a guest invite", "code": "guest"},
+            {"error": "Shared files are not part of a guest invite", "code": "guest"},
             status_code=403,
         )
     if _remote.from_remote(request):
         return JSONResponse(
             {
-                "error": "the hub is used on the device it lives on — open "
-                "MindFlock there (each device has its own hub)",
+                "error": "Shared files are used on the device they live on — "
+                "open MindFlock there (each device has its own)",
                 "code": "remote",
             },
             status_code=403,
@@ -182,7 +186,7 @@ async def hub_add_text(
 async def hub_expand(request: Request, payload: Optional[dict] = None) -> JSONResponse:
     """``{text}`` → ``{text, unknown}``: the text with its references
     expanded as a send would — what the app pastes into an agent's terminal
-    when the pasted text holds a ``hub:`` reference."""
+    when the pasted text holds a code (``file:`` or the first ``hub:``)."""
     refused = _refusal(request)
     if refused is not None:
         return refused
@@ -387,10 +391,46 @@ async def hub_copy_to(
         return _bad("session is the session's name, path where in its folder")
     if not isinstance(replace, bool):
         return _bad("replace is true or false")
-    wt, err = _target(title, "copying a hub item in")
+    wt, err = _target(title, "copying a shared file in")
     if err is not None:
         return err
     return await _run(_hub.take, iid, wt, dest, replace=replace)
+
+
+@router.post("/api/hub/batch")
+async def hub_batch(request: Request, payload: Optional[dict] = None) -> JSONResponse:
+    """``{action, ids, session?}``: several items in ONE request — the app's
+    selection bar (Pin, Unpin, Remove and its Undo, Save copies in a
+    session's folder). ``action`` is pin | unpin | remove | restore | copy
+    (``copy`` needs ``session``: each item lands at ``hub/<name>`` there, or
+    the next free path, never over a file). Each item is checked as its
+    one-item route checks it and answered on its own: 200 ``{action,
+    results: [{id, ref, ok, …} | {id, ok: false, error, code}], done,
+    failed}`` — a partial batch says which items, and why."""
+    refused = _refusal(request)
+    if refused is not None:
+        return refused
+    body = payload if isinstance(payload, dict) else {}
+    action, ids, title = body.get("action"), body.get("ids"), body.get("session")
+    if action not in _hub.BATCH_ACTIONS:
+        return _bad("action is one of " + ", ".join(_hub.BATCH_ACTIONS))
+    if (
+        not isinstance(ids, list)
+        or not ids
+        or len(ids) > _hub.BATCH_MAX
+        or not all(isinstance(i, str) for i in ids)
+    ):
+        return _bad("ids is a list of 1 to %d codes (file:k7m2)" % _hub.BATCH_MAX)
+    wt = None
+    if action == "copy":
+        if not isinstance(title, str) or not title:
+            return _bad("session is the session to copy into")
+        wt, err = _target(title, "copying shared files in")
+        if err is not None:
+            return err
+    elif title is not None:
+        return _bad("session is only for action=copy")
+    return await _run(_hub.batch, action, ids, wt=wt)
 
 
 @router.get("/api/hub/items/{iid}/free")
@@ -403,7 +443,7 @@ async def hub_free(
     refused = _refusal(request)
     if refused is not None:
         return refused
-    wt, err = _target(session, "copying a hub item in")
+    wt, err = _target(session, "copying a shared file in")
     if err is not None:
         return err
 
@@ -444,8 +484,8 @@ def _session(title: str, request: Request, what: str, body: dict):
             None,
             JSONResponse(
                 {
-                    "error": "this answers only %s's own MindFlock tool (hub, from "
-                    "inside that session). A session started before this MindFlock "
+                    "error": "this answers only %s's own MindFlock tool (shared "
+                    "files, from inside that session). A session started before this MindFlock "
                     "version gets its key when it is restarted" % title,
                     "code": "not_this_session",
                 },
@@ -477,7 +517,7 @@ async def hub_put(
     title: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
     body = payload if isinstance(payload, dict) else {}
-    _inst, wt, err = _session(title, request, "the hub", body)
+    _inst, wt, err = _session(title, request, "shared files", body)
     if err is not None:
         return err
     path, text = body.get("path"), body.get("text")
@@ -522,12 +562,12 @@ async def hub_take(
     file (no ``replace`` here — that is the owner's, on /copy-to), never in a
     red zone or outside its fence."""
     body = payload if isinstance(payload, dict) else {}
-    _inst, wt, err = _session(title, request, "copying a hub item in", body)
+    _inst, wt, err = _session(title, request, "copying a shared file in", body)
     if err is not None:
         return err
     iid, dest = body.get("id"), body.get("path")
     if not isinstance(iid, str) or (dest is not None and not isinstance(dest, str)):
-        return _bad("id is the item (hub:k7m2), path where under hub/ in your folder")
+        return _bad("id is the item (file:k7m2), path where under hub/ in your folder")
     from backend.web.core.red_zone_driver import zone_hits_for_paths
 
     return await _run(
@@ -541,10 +581,10 @@ async def hub_remove_own(
 ) -> JSONResponse:
     """Remove an item THIS session added (only those)."""
     body = payload if isinstance(payload, dict) else {}
-    _inst, _wt, err = _session(title, request, "the hub", body)
+    _inst, _wt, err = _session(title, request, "shared files", body)
     if err is not None:
         return err
     iid = body.get("id")
     if not isinstance(iid, str):
-        return _bad("id is the item (hub:k7m2)")
+        return _bad("id is the item (file:k7m2)")
     return await _run(_hub.remove, iid, session=title)

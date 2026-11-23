@@ -1,6 +1,7 @@
-"""``mindflock hub`` — the hub of shared files, pictures and snippets
-from a terminal (docs/cli.md "mindflock hub"; the server's ``/api/hub``,
-:mod:`backend.web.core.hub`).
+"""``mindflock hub`` — Shared files: files, pictures and snippets every
+session can use, from a terminal (docs/cli.md "mindflock hub"; the server's
+``/api/hub``, :mod:`backend.web.core.hub`). The command keeps its first
+name, ``hub``: scripts call it.
 
     mindflock hub ls                     the items, newest first
     mindflock hub add FILE… [--note N]   add files (or --text "…", or - for stdin)
@@ -11,7 +12,7 @@ from a terminal (docs/cli.md "mindflock hub"; the server's ``/api/hub``,
     mindflock hub rm REF                 remove it (Undo in the app for 10 min)
     mindflock hub pin REF [--off]        keep it past the expiry
 
-REF is the item's reference, ``hub:k7m2`` (or just ``k7m2``).
+REF is the item's code, ``file:k7m2`` (an older ``hub:k7m2``, or just ``k7m2``).
 """
 
 from __future__ import annotations
@@ -32,12 +33,13 @@ def add_parser(sub, server_opts) -> None:
     hub = sub.add_parser(
         "hub",
         parents=[server_opts],
-        help="the hub: files, pictures and snippets every session can use",
-        description="The hub: one shared place for files, pictures and "
+        help="Shared files: files, pictures and snippets every session can use",
+        description="Shared files: one place for files, pictures and "
         "snippets every session on this device can use. Each item has a "
-        "reference like hub:k7m2 — type it in any prompt you send through "
-        "MindFlock and the agent gets the item's path. Unpinned items are "
-        "removed hub.keep_days (14) after they were added or last used.",
+        "code like file:k7m2 (older ones read hub:k7m2; both work) — type it "
+        "in any prompt you send through MindFlock and the agent gets the "
+        "item's path. Unpinned items are removed hub.keep_days (14) after "
+        "they were added or last used.",
     )
     hs = hub.add_subparsers(dest="hub_command")
     ls_ = hs.add_parser("ls", help="list the items, newest first")
@@ -57,7 +59,7 @@ def add_parser(sub, server_opts) -> None:
         "--secret-ok",
         action="store_true",
         help="add a file that looks like a secret (.env, a key) anyway — every "
-        "session can read the hub",
+        "session can read shared files",
     )
     get_ = hs.add_parser("get", help="print an item's path (or its text)")
     get_.add_argument("ref", metavar="REF")
@@ -83,8 +85,10 @@ def add_parser(sub, server_opts) -> None:
 
 def _id(ref: str) -> str:
     v = ref.strip()
-    if v.lower().startswith("hub:"):
-        v = v[4:]
+    for p in ("file:", "hub:"):
+        if v.lower().startswith(p):
+            v = v[len(p) :]
+            break
     return urllib.parse.quote(v.lower(), safe="")
 
 
@@ -128,8 +132,8 @@ def cmd_hub(args: argparse.Namespace) -> int:
             return 0
         if not items:
             print(
-                "The hub is empty. Add something: mindflock hub add FILE "
-                "(or drop/paste it on the Hub panel in the app)."
+                "Nothing in Shared files yet. Add something: mindflock hub add FILE "
+                "(or drop/paste it in the app: ⋯ → Shared files)."
             )
             return 0
         for r in items:
@@ -177,7 +181,9 @@ def cmd_hub(args: argparse.Namespace) -> int:
         for ref in args.refs:
             try:
                 client.delete(base, "/api/hub/items/%s" % _id(ref))
-                print("removed %s (Undo in the app's Hub panel for 10 minutes)" % ref)
+                print(
+                    "removed %s (Undo in the app's Shared files for 10 minutes)" % ref
+                )
             except client.ApiError as err:
                 print("error: %s" % err.message, file=sys.stderr)
                 rc = 1

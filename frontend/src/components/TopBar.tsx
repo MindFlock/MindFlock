@@ -5,7 +5,8 @@
  *
  * Only the daily loop is on the bar. Everything that waits on you is the
  * bell's (one badge); saved prompts are a tab of Customize (the sidebar
- * footer); Recently closed sits under the session list.
+ * footer); Recently closed sits under the session list; Shared files is a
+ * row of the ⋯ menu (at every width), whose calm "new" count rides on ⋯.
  *
  * On macOS the whole thing mirrors: the window shows the native traffic lights
  * top-left (electron/main.js `titleBarStyle: 'hidden'`), so the bar leaves room
@@ -87,8 +88,8 @@ export function fitTopBar({ room, fixed, brand, items, more }: BarWidths): BarFi
   return { brand: false, shown };
 }
 
-/** The Hub button's tooltip (and its ⋯ row's). */
-const HUB_TITLE = "Hub — files and text every session can use";
+/** The ⋯ menu's Shared files row's tooltip. */
+const HUB_TITLE = "Shared files — files, pictures and text every session can use";
 
 export function TopBar() {
   // Only the fields the bar reads: a bare useUi() re-rendered it on every
@@ -124,9 +125,10 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
-  // The hub (lib/hub): its button counts only what is NEW to you — items an
-  // agent or your phone added since you last opened it — drawn as "new",
-  // never as a "needs you" badge. A guest link has no hub.
+  // Shared files (lib/hub): a row of the ⋯ menu, never a standing button
+  // (the owner: not that important). ⋯ carries a calm count of what is NEW
+  // to you — items an agent or your phone added since you last opened it —
+  // in the accent, never as a "needs you" badge. A guest link has none.
   const guest = !!useConfig().data?.guest;
   const hubOpen = useHubUi((s) => s.open);
   const hubItems = useHub(!guest).data?.items;
@@ -236,21 +238,15 @@ export function TopBar() {
       failing: true,
       open: () => ui.openDialogFor("schedule"),
     },
-    !guest && {
-      key: "hub",
-      // Its count is not a "needs you" count: it rides in the label, never
-      // in the ⋯ badge.
-      label: hubCount ? "Hub · " + hubCount + " new" : "Hub",
-      title: HUB_TITLE + keys("hub"),
-      count: 0,
-      failing: false,
-      open: () => useHubUi.getState().toggle(),
-    },
     { key: "settings", label: "Settings", title: "Settings", count: 0, failing: false, open: () => openSettings() },
   ].filter((f) => !!f);
   const [fit, setFit] = useState<BarFit>({ brand: true, shown: Infinity });
   const folded = foldable.slice(fit.shown);
   const isFolded = (key: string) => folded.some((f) => f.key === key);
+  // ⋯ is always on the bar when it holds Shared files (everyone but a
+  // guest): then it is part of the fixed width, never a reserve the fold
+  // adds; for a guest it appears only when something folds.
+  const moreAlways = !guest;
   const barRef = useRef<HTMLDivElement>(null);
   const startRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLElement>(null);
@@ -271,7 +267,7 @@ export function TopBar() {
     const menuGap = gap(menu);
     let fixed = 0;
     for (const el of Array.from(menu.children) as HTMLElement[]) {
-      const key = el.dataset.fold || (el.classList.contains("tb-more") ? "more" : "");
+      const key = el.dataset.fold || (el.classList.contains("tb-more") && !moreAlways ? "more" : "");
       const width = w(el);
       if (!key) fixed += width + menuGap;
       else if (width > 0) seen[key] = width;
@@ -292,8 +288,9 @@ export function TopBar() {
       fixed: w(start.firstElementChild) + gap(start) + fixed - menuGap + barGap + (end ? barGap + w(end) : 0),
       brand: (seen.brand || 0) + barGap,
       items: foldable.map((f) => (seen[f.key] || 0) + menuGap),
-      // Never measured yet: the palette icon's box, which ⋯ shares.
-      more: (seen.more || w(document.getElementById("palette-btn"))) + menuGap,
+      // Never measured yet: the palette icon's box, which ⋯ shares. A ⋯
+      // that is always there is already in `fixed`.
+      more: moreAlways ? 0 : (seen.more || w(document.getElementById("palette-btn"))) + menuGap,
     });
     setFit((prev) => {
       if (prev.brand === next.brand && prev.shown === next.shown) return prev;
@@ -320,9 +317,10 @@ export function TopBar() {
   const moreRef = useRef<HTMLDivElement>(null);
   const moreBtn = useRef<HTMLButtonElement>(null);
   const hasFolded = folded.length > 0;
+  const showMore = moreAlways || hasFolded;
   useEffect(() => {
-    if (!hasFolded) setMoreOpen(false);
-  }, [hasFolded]);
+    if (!showMore) setMoreOpen(false);
+  }, [showMore]);
   useEffect(() => {
     if (!moreOpen) return;
     moreRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
@@ -492,32 +490,6 @@ export function TopBar() {
                 rule the Intake counts keep. */}
             {schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}
           </button>
-          {/* The hub: files, pictures and snippets every session can use
-              (components/hub). Its count is how many items it holds, drawn
-              calm — nothing in it needs you. */}
-          {!guest && (
-            <button
-              id="hub-btn"
-              className={"tb-item" + (hubOpen ? " active" : "") + (isFolded("hub") ? " tb-folded" : "")}
-              data-fold="hub"
-              type="button"
-              title={HUB_TITLE + keys("hub")}
-              aria-pressed={hubOpen}
-              aria-label={hubCount ? "Hub, " + hubCount + " new" : "Hub"}
-              onClick={() => useHubUi.getState().toggle()}
-            >
-              <svg className="tb-hub-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true">
-                <path d="M3 8l9-5 9 5-9 5z" />
-                <path d="M3 13l9 5 9-5" />
-              </svg>
-              Hub
-              {hubCount > 0 && (
-                <span className="tb-count is-new" title={hubCount + " added by an agent or your phone since you last looked"}>
-                  {hubCount} new
-                </span>
-              )}
-            </button>
-          )}
           <button
             id="settings-btn"
             className={"tb-item" + (isFolded("settings") ? " tb-folded" : "")}
@@ -529,18 +501,25 @@ export function TopBar() {
           >
             Settings
           </button>
-          {/* What a narrow window folded (fitTopBar): one ⋯ where the folded
-              items stood, carrying their counts, so a red badge is never lost
-              with its word. The ids above stay on the (hidden) bar buttons. */}
-          {hasFolded && (
+          {/* ⋯: Shared files' home at every width (a guest has none), and
+              what a narrow window folded (fitTopBar), carrying their counts so
+              a red badge is never lost with its word. The ids above stay on
+              the (hidden) bar buttons. What an agent or your phone added to
+              Shared files since you last looked rides on ⋯ as a small calm
+              "new" count — the accent, never the bell's red. */}
+          {showMore && (
             <div className="tb-more" ref={moreRef}>
               <button
                 id="more-btn"
                 ref={moreBtn}
                 className="tb-item"
                 type="button"
-                title={"More — " + folded.map((f) => f.label).join(", ")}
-                aria-label="More actions"
+                title={
+                  "More — " +
+                  [...(moreAlways ? ["Shared files"] : []), ...folded.map((f) => f.label)].join(", ") +
+                  (hubCount > 0 ? "\n" + hubCount + " new in Shared files (added by an agent or your phone)" : "")
+                }
+                aria-label={hubCount > 0 ? "More actions, " + hubCount + " new in Shared files" : "More actions"}
                 aria-haspopup="menu"
                 aria-expanded={moreOpen}
                 onClick={() => setMoreOpen((v) => !v)}
@@ -553,9 +532,37 @@ export function TopBar() {
                 {foldedCount > 0 && (
                   <span className={"tb-count" + (foldedFailing ? " is-failing" : "")}>{foldedCount}</span>
                 )}
+                {hubCount > 0 && (
+                  <span className="tb-new-dot" aria-hidden="true">
+                    {hubCount > 9 ? "9+" : hubCount}
+                  </span>
+                )}
               </button>
               {moreOpen && (
                 <div className="tb-more-menu" role="menu" aria-label="More actions">
+                  {moreAlways && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={"tb-more-item tb-more-files" + (hubOpen ? " is-on" : "")}
+                      data-fold-item="hub"
+                      title={HUB_TITLE + keys("hub")}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        useHubUi.getState().toggle();
+                      }}
+                    >
+                      <span>Shared files</span>
+                      {hubCount > 0 ? (
+                        <span className="tb-count is-new" title={hubCount + " added by an agent or your phone since you last looked"}>
+                          {hubCount} new
+                        </span>
+                      ) : (
+                        keys("hub") && <span className="tb-more-key">{keys("hub").replace(/^ \((.*)\)$/, "$1")}</span>
+                      )}
+                    </button>
+                  )}
+                  {moreAlways && folded.length > 0 && <div className="tb-more-sep" role="separator" />}
                   {folded.map((f) => (
                     <button
                       key={f.key}

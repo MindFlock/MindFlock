@@ -558,20 +558,21 @@ never synced. Owner-only through `POST /api/settings` (`{"transfers":
 | `keep_days` | integer 1–3650 (unset = 14) | A received transfer no live session works in is removed after this many days — checked on the next receive. An unfinished transfer goes after 6 h, or 1 h with nothing written (also on a 5-minute timer) |
 | `allow_secrets` | bool (default false) | Whether a sender on this device may pass `include_secrets` at all. Off: `.env*`, keys, certificates, credential files and the files `.secrets.baseline` names are left out of every send (and of every commit of a bundle). A name-based guardrail, not a content scan. Never covers `.git`, agent login/config/transcripts or credential stores — those are never sent |
 
-### Hub (`hub`, settings store only)
+### Shared files (`hub`, settings store only)
 
 The `hub` group of `~/.mindflock/settings.json` (`HubSettings` in
-`backend/config/settings.py`): the limits of this device's hub
-(`~/.mindflock/hub`, [web-ui.md](web-ui.md#hub)). Machine-local: never
+`backend/config/settings.py`): the limits of this device's Shared files
+(`~/.mindflock/hub`, [web-ui.md](web-ui.md#shared-files); the group keeps its
+first name, so saved settings keep working). Machine-local: never
 synced. Through `POST /api/settings` (`{"hub": {"max_mb": 2048}}`); there is
 no Settings screen for it — Settings → Disk cleanup shows how full it is.
 
 | Key | Values | Notes |
 |---|---|---|
-| `max_mb` | integer 1–1048576 (unset = 1024) | The whole hub's quota, in MB. Removed items still in their 10-minute Undo window count. An add that would pass it is refused (`hub_full`) before a byte is written; adds in flight count at their declared size |
+| `max_mb` | integer 1–1048576 (unset = 1024) | The quota of all shared files, in MB. Removed items still in their 10-minute Undo window count. An add that would pass it is refused (`hub_full`) before a byte is written; adds in flight count at their declared size |
 | `item_mb` | integer 1–65536 (unset = 100) | The most one item can be (`too_large`) |
-| `max_items` | integer (unset = 300) | How many items the hub holds (`hub_full`) |
-| `keep_days` | integer 1–3650 (unset = 14) | An unpinned item is removed this many days after it was added or last used (a reference sent, a copy into a session, a pin) — on the server's 5-minute timer. Pinned items stay |
+| `max_items` | integer (unset = 300) | How many items Shared files holds (`hub_full`) |
+| `keep_days` | integer 1–3650 (unset = 14) | An unpinned item is removed this many days after it was added or last used (a code sent, a copy into a session, a pin) — on the server's 5-minute timer. Pinned items stay |
 
 ### Auth profiles (`[auth_profiles]`, settings store only)
 

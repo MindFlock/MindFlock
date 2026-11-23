@@ -344,7 +344,7 @@ ROUTE_SESSIONS = [r["session"] for r in ROUTES.values() if r["session"]]
 
 SCENARIOS: Dict[str, Dict[str, Any]] = {
     "hub": {
-        "summary": "The hub (Hub in the top bar, #hub): a screenshot, a log, an SQL "
+        "summary": "Shared files (the ⋯ menu, #hub): a screenshot, a log, an SQL "
         "snippet with a note, a PDF, a phone screenshot and a picture an agent "
         "put — beside three sessions to send them to.",
         "sessions": ["api-auth", "billing-export", "docs-refresh"],
@@ -352,13 +352,13 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
         "hub": True,
     },
     "hub-full": {
-        "summary": "The hub with 30 items (the find box, a long list).",
+        "summary": "Shared files with 30 items (the find box, a long list).",
         "sessions": ["api-auth", "docs-refresh"],
         "routes": [],
         "hub": "full",
     },
     "hub-empty": {
-        "summary": "Two sessions and an empty hub (its first-run state).",
+        "summary": "Two sessions and empty Shared files (its first-run state).",
         "sessions": ["api-auth", "docs-refresh"],
         "routes": [],
     },

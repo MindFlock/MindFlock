@@ -142,11 +142,12 @@ export function buildPaletteActions({ config, host, extensions }: PaletteSources
     hint: "what starts on its own",
     run: () => ui.openDialogFor("intake", "autostart"),
   });
-  // The hub: shared files, pictures and snippets (components/hub).
+  // Shared files: files, pictures and snippets every session can use
+  // (components/hub). "hub" stays a keyword: its first name, still typed.
   acts.push({
-    label: "Hub…",
+    label: "Shared files…",
     hint: "Alt+H",
-    keywords: "files share paste screenshot image snippet clipboard attach upload reference",
+    keywords: "hub files share shared paste screenshot image picture snippet clipboard attach upload code reference",
     run: () => useHubUi.getState().setOpen(true),
   });
   // The other end of the same arc, so it sits with the Intake entries rather

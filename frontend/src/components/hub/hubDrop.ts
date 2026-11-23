@@ -1,10 +1,11 @@
-/** A hub item dropped on a session's rail row (components/hub, lib/hub): its
- * reference goes into that session's prompt — typed in, not sent — the same
- * as "Send to session… → Put in prompt". Wraps the row's own drag props
- * (rowDnd: reordering rows), which ignore every foreign drag. */
+/** Shared files dropped on a session's rail row (components/hub, lib/hub):
+ * their codes go into that session's prompt — typed in, not sent — the same
+ * as "Send to session… → Point the agent at it". A dragged selection carries
+ * every item in it. Wraps the row's own drag props (rowDnd: reordering
+ * rows), which ignore every foreign drag. */
 
 import type { DragEvent } from "react";
-import { HUB_MIME, putInPrompt } from "../../lib/hub";
+import { HUB_MIME, dragItems, putInPrompt } from "../../lib/hub";
 
 interface RowDnd {
   onDragOver(ev: DragEvent): void;
@@ -34,12 +35,8 @@ export function withHubDrop<T extends RowDnd>(title: string, dnd: T, enabled = t
       ev.preventDefault();
       ev.stopPropagation();
       (ev.currentTarget as HTMLElement).classList.remove("hub-drop-target");
-      try {
-        const it = JSON.parse(ev.dataTransfer.getData(HUB_MIME)) as { ref: string; name: string };
-        if (it?.ref) void putInPrompt(title, it, "", { focus: true });
-      } catch {
-        /* not a hub item */
-      }
+      const items = dragItems(ev.dataTransfer);
+      if (items.length) void putInPrompt(title, items, "", { focus: true });
     },
   };
 }

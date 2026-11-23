@@ -3340,11 +3340,12 @@ def build_tools(box: Toolbox) -> List[Tool]:
             box.send_files,
             _WRITE_WORLD,
         ),
-        # The hub: list/get read; put/take write your worktree or the hub
-        # (local only, not openWorld).
+        # Shared files (the tool keeps its first name, hub): list/get read;
+        # put/take write your worktree or the shared files (local only, not
+        # openWorld).
         Tool(
             "hub",
-            "The hub of shared files",
+            "Shared files",
             _hub.D_HUB,
             _hub.S_HUB,
             box.hub,
